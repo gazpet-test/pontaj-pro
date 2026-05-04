@@ -17,8 +17,21 @@ function AuthProvider({ children }) {
   const fetchProfile = async (userId) => {
     try {
       const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-      if (data) setProfile(data)
-      else setTimeout(async () => { const { data: d2 } = await supabase.from('profiles').select('*').eq('id', userId).single(); if (d2) setProfile(d2) }, 1000)
+      if (data) {
+        // Load all sites for this manager
+        const { data: ps } = await supabase.from('profile_sites').select('site_id').eq('profile_id', userId)
+        data.site_ids = (ps || []).map(x => x.site_id)
+        setProfile(data)
+      } else {
+        setTimeout(async () => {
+          const { data: d2 } = await supabase.from('profiles').select('*').eq('id', userId).single()
+          if (d2) {
+            const { data: ps } = await supabase.from('profile_sites').select('site_id').eq('profile_id', userId)
+            d2.site_ids = (ps || []).map(x => x.site_id)
+            setProfile(d2)
+          }
+        }, 1000)
+      }
     } catch (e) { console.error(e) }
   }
   const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password })
@@ -174,8 +187,11 @@ function DashboardPage() {
     setLoad(true)
     const today=todayStr()
     let eq=supabase.from('employees').select('*,sites(name)').eq('active',true)
-    if (!isAdmin&&profile?.site_id) eq=eq.eq('site_id',profile.site_id)
-    else if (!isAdmin) { setLoad(false); return }
+    if (!isAdmin){
+      const siteIds=profile?.site_ids||[]
+      if(siteIds.length===0){setLoad(false);return}
+      eq=eq.in('site_id',siteIds)
+    }
     const {data:emps}=await eq; if(!emps){setLoad(false);return}
     setUnalloc(emps.filter(e=>!e.site_id))
     const {data:recs}=await supabase.from('pontaj_records').select('*,employees(name,department,sites(name))').eq('date',today).in('employee_id',emps.map(e=>e.id)).order('check_in',{ascending:false})
@@ -359,7 +375,15 @@ function PontajPage() {
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
-  const loadEmps=async()=>{ let q=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name'); if(!isAdmin&&profile?.site_id) q=q.eq('site_id',profile.site_id); else if(!isAdmin){setEmps([]);setLoad(false);return}; const {data}=await q; setEmps(data||[]) }
+  const loadEmps=async()=>{
+    let q=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
+    if(!isAdmin){
+      const siteIds=profile?.site_ids||[]
+      if(siteIds.length===0){setEmps([]);setLoad(false);return}
+      q=q.in('site_id',siteIds)
+    }
+    const {data}=await q; setEmps(data||[])
+  }
   const loadRecs=async()=>{ setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); const m={}; (data||[]).forEach(r=>{m[r.employee_id]=r}); setRecs(m); setLoad(false) }
 
   const saveRecord = async (emp, fields) => {
@@ -434,7 +458,10 @@ function ReportsPage() {
     setLoad(true)
     const {y,m,from,to,days}=getRange()
     let eq=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
-    if (!isAdmin&&profile?.site_id) eq=eq.eq('site_id',profile.site_id)
+    if (!isAdmin){
+      const siteIds=profile?.site_ids||[]
+      if(siteIds.length>0) eq=eq.in('site_id',siteIds)
+    }
     if (deptF!=='Toate'&&isAdmin) eq=eq.eq('department',deptF)
     if (siteF!=='Toate'&&isAdmin) eq=eq.eq('site_id',siteF)
     const {data:emps}=await eq; if(!emps){setLoad(false);return}
@@ -588,7 +615,10 @@ function ReportsPage() {
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setExpD(true)
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
-    if(!isAdmin&&profile?.site_id) eq=eq.eq('site_id',profile.site_id)
+    if(!isAdmin){
+      const siteIds=profile?.site_ids||[]
+      if(siteIds.length>0) eq=eq.in('site_id',siteIds)
+    }
     const {data:emps}=await eq
     const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
     const st=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*diurnaAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
@@ -702,17 +732,23 @@ function AdminPage() {
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [addingE,setAddingE]=useState(false)
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
 
+  const [calYear,setCalYear]=useState(new Date().getFullYear())
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st]=await Promise.all([
+    const [s,p,e,c,st,ps]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
       supabase.from('calendar_days').select('*').order('date').limit(60),
       supabase.from('settings').select('*'),
+      supabase.from('profile_sites').select('*'),
     ])
-    setSites(s.data||[]); setManagers(p.data||[]); setEmployees(e.data||[]); setCalDays(c.data||[])
+    setSites(s.data||[])
+    // Attach site_ids to each manager
+    const mgrs=(p.data||[]).map(m=>({...m,site_ids:(ps.data||[]).filter(x=>x.profile_id===m.id).map(x=>x.site_id)}))
+    setManagers(mgrs)
+    setEmployees(e.data||[]); setCalDays(c.data||[])
     const sm={}; (st.data||[]).forEach(x=>{sm[x.key]=x.value}); setSettings(sm)
     setLoad(false)
   }
@@ -728,8 +764,15 @@ function AdminPage() {
   }
   const saveEditMgr=async()=>{
     if(!editMgr) return
-    const {error}=await supabase.from('profiles').update({name:editMgr.name,role:editMgr.role,site_id:editMgr.role==='admin'?null:(editMgr.site_id?Number(editMgr.site_id):null)}).eq('id',editMgr.id)
-    if(!error){showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll()} else showToast('Eroare','error')
+    const {error}=await supabase.from('profiles').update({name:editMgr.name,role:editMgr.role}).eq('id',editMgr.id)
+    if(!error){
+      // Update sites in profile_sites table
+      await supabase.from('profile_sites').delete().eq('profile_id',editMgr.id)
+      if(editMgr.role!=='admin'&&editMgr.site_ids?.length>0){
+        await supabase.from('profile_sites').insert(editMgr.site_ids.map(sid=>({profile_id:editMgr.id,site_id:sid})))
+      }
+      showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll()
+    } else showToast('Eroare','error')
   }
   const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
 
@@ -738,7 +781,11 @@ function AdminPage() {
     setCreating(true)
     const {data:au,error:ae}=await supabase.auth.signUp({email:nEmail,password:nPwd})
     if(ae){showToast(ae.message,'error');setCreating(false);return}
-    if(au.user){await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,site_id:nRole==='admin'?null:(nSite?Number(nSite):null)}); showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()}
+    if(au.user){
+      await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole})
+      if(nRole==='manager'&&nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
+      showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()
+    }
     setCreating(false)
   }
 
@@ -862,7 +909,7 @@ function AdminPage() {
       {/* Edit manager modal */}
       {editMgr&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:420}}>
+          <div style={{...S.card,padding:28,width:440}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Manager</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet</Lbl><input style={S.input} value={editMgr.name||''} onChange={e=>setEditMgr({...editMgr,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Rol</Lbl>
@@ -871,12 +918,32 @@ function AdminPage() {
                 <option value="admin">⚙ Admin</option>
               </select>
             </div>
-            {editMgr.role==='manager'&&<div style={{marginBottom:18}}><Lbl>Șantier Alocat</Lbl>
-              <select value={editMgr.site_id||''} onChange={e=>setEditMgr({...editMgr,site_id:e.target.value?Number(e.target.value):null})} style={{width:'100%'}}>
-                <option value="">— fără șantier —</option>
-                {sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>}
+            {editMgr.role==='manager'&&(
+              <div style={{marginBottom:18}}>
+                <Lbl>Șantiere Alocate (poate selecta mai multe)</Lbl>
+                <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:200,overflowY:'auto',padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border2}`}}>
+                  {sites.map(s=>(
+                    <label key={s.id} style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',fontSize:13}}>
+                      <input type="checkbox"
+                        checked={(editMgr.site_ids||[]).includes(s.id)}
+                        onChange={e=>{
+                          const current=editMgr.site_ids||[]
+                          const updated=e.target.checked?[...current,s.id]:current.filter(id=>id!==s.id)
+                          setEditMgr({...editMgr,site_ids:updated})
+                        }}
+                        style={{accentColor:G.blue,width:16,height:16}}
+                      />
+                      <span style={{color:(editMgr.site_ids||[]).includes(s.id)?G.blue:G.text}}>{s.name}</span>
+                    </label>
+                  ))}
+                </div>
+                <div style={{fontSize:11,color:G.muted,marginTop:6}}>
+                  {(editMgr.site_ids||[]).length>0
+                    ? `✓ ${(editMgr.site_ids||[]).length} șantier(e) selectat(e)`
+                    : '⚠ Niciun șantier selectat'}
+                </div>
+              </div>
+            )}
             <div style={{display:'flex',gap:10}}>
               <button onClick={()=>setEditMgr(null)} style={{...S.btnS,flex:1}}>Anulează</button>
               <button onClick={saveEditMgr} style={{...S.btnP,flex:1}}>✓ Salvează</button>
@@ -917,7 +984,7 @@ function AdminPage() {
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
                 <td><span className={`badge ${m.role==='admin'?'ba':'bm'}`}>{m.role==='admin'?'⚙ Admin':'👤 Manager'}</span></td>
-                <td style={{fontSize:12,color:G.purple}}>{sites.find(s=>s.id===m.site_id)?.name||'—'}</td>
+                <td style={{fontSize:11,color:G.purple}}>{(m.site_ids||[]).length>0?m.site_ids.map(id=>sites.find(s=>s.id===id)?.name).filter(Boolean).join(', '):'—'}</td>
                 <td><button onClick={()=>setEditMgr({...m})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
@@ -999,13 +1066,19 @@ function AdminPage() {
               <span style={{fontSize:13,fontWeight:700}}>Zile Speciale</span>
               <span style={{fontSize:11,color:G.muted}}>{calDays.length} zile înregistrate</span>
             </div>
-            {/* Working days per month summary */}
-            <div style={{padding:'12px 14px',borderBottom:`1px solid ${G.border}`,display:'flex',gap:8,flexWrap:'wrap'}}>
+            {/* Year nav + working days */}
+            <div style={{padding:'12px 14px',borderBottom:`1px solid ${G.border}`}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <button onClick={()=>setCalYear(y=>y-1)} style={{background:G.surface,border:`1px solid ${G.border}`,color:G.text,borderRadius:7,padding:'4px 10px',cursor:'pointer',fontWeight:700}}>◀</button>
+                <span style={{fontSize:15,fontWeight:800,color:G.blue,minWidth:50,textAlign:'center'}}>{calYear}</span>
+                <button onClick={()=>setCalYear(y=>y+1)} style={{background:G.surface,border:`1px solid ${G.border}`,color:G.text,borderRadius:7,padding:'4px 10px',cursor:'pointer',fontWeight:700}}>▶</button>
+                <span style={{fontSize:11,color:G.muted}}>zile lucrătoare per lună</span>
+              </div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
               {Array.from({length:12},(_,i)=>{
-                const year=new Date().getFullYear()
+                const year=calYear
                 const month=i+1
                 const daysInMonth=new Date(year,month,0).getDate()
-                // Only subtract legal days that fall on WEEKDAYS (not Sat/Sun)
                 const legalOnWeekdays=calDays.filter(d=>{
                   const dm=new Date(d.date+'T12:00:00')
                   return dm.getFullYear()===year&&dm.getMonth()===i&&d.type==='legal'&&dm.getDay()!==0&&dm.getDay()!==6
@@ -1021,14 +1094,15 @@ function AdminPage() {
                   </div>
                 )
               })}
+              </div>
             </div>
             <div style={{maxHeight:300,overflowY:'auto'}}>
               <table><thead><tr style={{background:G.bg}}><th>Data</th><th>Tip</th><th>Descriere</th></tr></thead>
-              <tbody>{calDays.map(d=>(
+              <tbody>{calDays.filter(d=>new Date(d.date+'T12:00:00').getFullYear()===calYear).map(d=>(
                 <tr key={d.id}><td style={{fontWeight:600,fontSize:12}}>{d.date}</td>
                 <td><span style={{padding:'2px 7px',borderRadius:12,fontSize:11,fontWeight:700,background:d.type==='legal'?G.redDim:G.yellowDim,color:d.type==='legal'?G.red:G.yellow}}>{d.type}</span></td>
                 <td style={{fontSize:11,color:G.muted}}>{d.description}</td></tr>
-              ))}{!calDays.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Nicio zi</td></tr>}</tbody></table>
+              ))}{!calDays.filter(d=>new Date(d.date+'T12:00:00').getFullYear()===calYear).length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Nicio zi pentru {calYear}</td></tr>}</tbody></table>
             </div>
           </div>
           <div style={{...S.card,padding:20}}>
