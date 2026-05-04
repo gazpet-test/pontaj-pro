@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
-import * as XLSX from 'xlsx'
+import * as XLSX from 'xlsx-js-style'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -495,16 +495,19 @@ function ReportsPage() {
           const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
           const {we,leg}=isOff(d)
           const rec=emp.records?.find(r=>r.date===ds)
-          if(we||leg){
-            rCI.push(''); rCO.push(''); rPM.push(''); rOL.push(leg?'SL':'')
-          } else if(rec?.norma){
+          if(rec?.norma){
+            // Norma - always shown regardless of day type
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
+            // Has pontaj - show it even on weekends/holidays
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
             const mins=netMins(rec.check_in,rec.check_out,rec.lunch_break!==false)
             rCI.push(fmt24(rec.check_in)); rCO.push(rec.check_out?fmt24(rec.check_out):'')
             rPM.push(hp?1:''); rOL.push(+(mins/60).toFixed(1))
             tz++; to+=mins
+          } else if(we||leg){
+            // No pontaj, it's a day off
+            rCI.push(''); rCO.push(''); rPM.push(''); rOL.push(leg?'SL':'')
           } else {
             rCI.push(''); rCO.push(''); rPM.push(''); rOL.push('')
           }
@@ -528,8 +531,9 @@ function ReportsPage() {
 
       // Day names row (6)
       DNR.forEach((v,c)=>{
-        const d=c-2; const isWE=c>=3&&c<3+days&&new Date(y,m-1,d).getDay()%6===0
-        sc(6,c,{fill:{fgColor:{rgb:isWE?'BFBFBF':'4472C4'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:alC})
+        const isWE=c>=3&&c<3+days&&(()=>{const d=c-2;const dt=new Date(y,m-1,d);return dt.getDay()===0||dt.getDay()===6})()
+        const isLeg=c>=3&&c<3+days&&legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(c-2).padStart(2,'0')}`)
+        sc(6,c,{fill:{fgColor:{rgb:isWE?'BFBFBF':isLeg?'FF8888':'4472C4'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:alC})
       })
 
       // Employee rows starting at 7
@@ -550,10 +554,13 @@ function ReportsPage() {
               const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
               const {we,leg}=isOff(d)
               const rec=emp.records?.find(r=>r.date===ds)
+              const hasWork=rec?.check_in&&!rec?.norma
+              const hasNorma=rec?.norma
               let rgb=null
-              if(we) rgb='C0C0C0'
-              else if(leg) rgb='FFAAAA'
-              else if(rec?.norma) rgb='FFFF00'
+              if(hasWork&&(we||leg)) rgb='FFC000'      // lucrat in zi libera = portocaliu
+              else if(hasNorma) rgb='FFFF00'            // norma = galben
+              else if(we) rgb='C0C0C0'                  // weekend fara pontaj = gri
+              else if(leg) rgb='FFAAAA'                 // sarbatoare fara pontaj = rosu deschis
               s={...(rgb?{fill:{fgColor:{rgb}}}:{}),border:bd,alignment:alC,font:{sz:9}}
             } else { // Totals
               s={fill:{fgColor:{rgb:ro===0?'D9E1F2':'F5F5F5'}},font:ro===0?{bold:true}:{sz:9},border:bd,alignment:alC}
