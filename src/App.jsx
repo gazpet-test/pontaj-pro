@@ -804,7 +804,35 @@ function AdminPage() {
     reader.readAsArrayBuffer(file)
   }
 
-  const dlCalTemplate=()=>{ const ws=XLSX.utils.aoa_to_sheet([['Data (YYYY-MM-DD)','Tip','Descriere'],['2026-05-01','legal','Ziua Muncii'],['2026-08-15','legal','Sf. Maria'],['2026-06-15','holiday','Zi libera firma']]); ws['!cols']=[{wch:20},{wch:20},{wch:28}]; const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Calendar'); XLSX.writeFile(wb,'template_calendar.xlsx') }
+  const dlCalTemplate=()=>{
+    const rows=[
+      ['Data (YYYY-MM-DD)','Tip (legal/holiday)','Descriere'],
+      // 2027 Zile libere legale Romania
+      ['2027-01-01','legal','Anul Nou'],
+      ['2027-01-02','legal','Anul Nou'],
+      ['2027-01-06','legal','Boboteaza'],
+      ['2027-01-07','legal','Sfantul Ioan'],
+      ['2027-01-24','legal','Ziua Unirii Principatelor'],
+      ['2027-04-30','legal','Vinerea Mare'],
+      ['2027-05-02','legal','Pastele Ortodox'],
+      ['2027-05-03','legal','Pastele Ortodox'],
+      ['2027-05-01','legal','Ziua Muncii'],
+      ['2027-06-20','legal','Rusalii'],
+      ['2027-06-21','legal','A doua zi de Rusalii'],
+      ['2027-08-15','legal','Adormirea Maicii Domnului'],
+      ['2027-11-30','legal','Sfantul Andrei'],
+      ['2027-12-01','legal','Ziua Nationala a Romaniei'],
+      ['2027-12-25','legal','Craciunul'],
+      ['2027-12-26','legal','Craciunul'],
+      // Puteti adauga zile libere specifice firmei
+      ['2027-06-15','holiday','Exemplu: Zi libera firma'],
+    ]
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols']=[{wch:22},{wch:22},{wch:34}]
+    const wb=XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb,ws,'Calendar 2027')
+    XLSX.writeFile(wb,'template_calendar_2027.xlsx')
+  }
 
   const tabs=[['sites','🏗️ Șantiere'],['managers','👤 Manageri'],['employees','👥 Angajați'],['calendar','📅 Calendar'],['settings','⚙️ Setări']]
 
@@ -977,10 +1005,14 @@ function AdminPage() {
                 const year=new Date().getFullYear()
                 const month=i+1
                 const daysInMonth=new Date(year,month,0).getDate()
-                const legalInMonth=calDays.filter(d=>{const dm=new Date(d.date);return dm.getFullYear()===year&&dm.getMonth()===i&&d.type==='legal'}).length
+                // Only subtract legal days that fall on WEEKDAYS (not Sat/Sun)
+                const legalOnWeekdays=calDays.filter(d=>{
+                  const dm=new Date(d.date+'T12:00:00')
+                  return dm.getFullYear()===year&&dm.getMonth()===i&&d.type==='legal'&&dm.getDay()!==0&&dm.getDay()!==6
+                }).length
                 let workDays=0
                 for(let d=1;d<=daysInMonth;d++){const dt=new Date(year,i,d);if(dt.getDay()!==0&&dt.getDay()!==6)workDays++}
-                workDays-=legalInMonth
+                workDays-=legalOnWeekdays
                 return(
                   <div key={i} style={{background:'#0D1117',border:`1px solid ${G.border}`,borderRadius:8,padding:'6px 10px',textAlign:'center',minWidth:70}}>
                     <div style={{fontSize:10,color:G.muted,fontWeight:600}}>{new Date(year,i).toLocaleString('ro-RO',{month:'short'}).toUpperCase()}</div>
