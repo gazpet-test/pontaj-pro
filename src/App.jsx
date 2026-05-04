@@ -455,28 +455,113 @@ function ReportsPage() {
     const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
     const wb=XLSX.utils.book_new()
     const dayNums=Array.from({length:days},(_,i)=>i+1)
-    const dayHdr=dayNums.map(d=>{const dt=new Date(y,m-1,d);return `${d}\n${['D','L','Ma','Mi','J','V','S'][dt.getDay()]}`})
-    const rows=[
-      ['S.C. GAZPET INSTAL S.R.L.','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
-      ['RO 22029920; J2007001650296','','Tel./Fax 0244/435005  E-mail office@gazpet.ro'],
-      [],[`PONTAJ LUNAR - ${mName.toUpperCase()}`],[],
-      ['Nr.','Nume și Prenume','Departament','Șantier','Funcție',...dayHdr,'Zile','Ore Nete','Diurne','Norme'],
-      ...data.map((emp,i)=>{
-        const row=[i+1,emp.name,emp.department,emp.sites?.name||'',emp.position||'']
-        let z=0,o=0
-        for(let d=1;d<=days;d++){
-          const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-          const r=emp.records?.find(x=>x.date===ds)
-          if(!r||(!r.check_in&&!r.norma)){const dt=new Date(y,m-1,d);row.push(dt.getDay()===0||dt.getDay()===6?'W':'')}
-          else if(r.norma) row.push(r.norma)
-          else{const mins=netMins(r.check_in,r.check_out,r.lunch_break!==false);row.push(+(mins/60).toFixed(1));z++;o+=mins}
+
+    // Get legal holidays for this month
+    const legalDates=new Set(detailedRecords.filter(()=>true)) // placeholder
+    const {data:calData}=await supabase.from('calendar_days').select('date,type').eq('type','legal').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
+    const legalSet=new Set((calData||[]).map(c=>c.date))
+
+    const rows=[]
+    // Header
+    rows.push(['S.C. GAZPET INSTAL S.R.L.','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
+    rows.push(['RO 22029920; J2007001650296','','Tel./Fax 0244/435005  office@gazpet.ro'])
+    rows.push([])
+    rows.push([`FOAIE COLECTIVĂ DE PREZENȚĂ — ${mName.toUpperCase()}`])
+    rows.push([])
+
+    // Column headers row
+    const hdrs=['NUME ȘI PRENUME SALARIAT','FUNCȚIA',...dayNums,'TOTAL ZILE','TOTAL ORE','DIURNE']
+    rows.push(hdrs)
+    const headerRowIdx=rows.length // 1-based
+
+    // Per employee: 6 rows
+    const empStartRows={}
+    data.forEach((emp)=>{
+      const startRow=rows.length
+      empStartRows[emp.id]=startRow
+
+      const row1=['',''] // Rând 1: numerele zilelor (puse în header)
+      const row2=[emp.name,emp.position||''] // Rând 2: intrare
+      const row3=['','']                      // Rând 3: ieșire
+      const row4=['','']                      // Rând 4: pauza masă
+      const row5=['','']                      // Rând 5: ore nete / normă
+      const row6=['','']                      // Rând 6: separator
+
+      let totalZile=0, totalOre=0
+      for(let d=1;d<=days;d++){
+        const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+        const dt=new Date(y,m-1,d)
+        const isWeekend=dt.getDay()===0||dt.getDay()===6
+        const isLegal=legalSet.has(dateStr)
+        const rec=emp.records?.find(r=>r.date===dateStr)
+
+        if(isWeekend||isLegal){
+          row1.push(d); row2.push(''); row3.push(''); row4.push(''); row5.push(isLegal?'SL':''); row6.push('')
+        } else if(rec?.norma){
+          row1.push(d); row2.push(''); row3.push(''); row4.push(''); row5.push(rec.norma); row6.push('')
+        } else if(rec?.check_in){
+          const ci=fmt24(rec.check_in); const co=rec.check_out?fmt24(rec.check_out):''
+          const hasPauza=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
+          const mins=netMins(rec.check_in,rec.check_out,rec.lunch_break!==false)
+          const ore=+(mins/60).toFixed(1)
+          row1.push(d); row2.push(ci); row3.push(co); row4.push(hasPauza?1:''); row5.push(ore); row6.push('')
+          totalZile++; totalOre+=mins
+        } else {
+          row1.push(d); row2.push(''); row3.push(''); row4.push(''); row5.push(''); row6.push('')
         }
-        row.push(z,+(o/60).toFixed(1),emp.diurnaDays,Object.entries(emp.norme||{}).map(([k,v])=>`${k}:${v}`).join(' ')||'-')
-        return row
-      })
-    ]
+      }
+      // Totals
+      row2.push(totalZile,'',emp.diurnaDays)
+      row3.push('',+(totalOre/60).toFixed(1),'')
+      row4.push('','',''); row5.push('','',''); row6.push('','','')
+
+      rows.push(row1,row2,row3,row4,row5,row6)
+    })
+
     const ws=XLSX.utils.aoa_to_sheet(rows)
-    ws['!cols']=[{wch:4},{wch:26},{wch:12},{wch:14},{wch:18},...dayNums.map(()=>({wch:5})),{wch:5},{wch:8},{wch:7},{wch:18}]
+
+    // Column widths
+    ws['!cols']=[{wch:24},{wch:20},...dayNums.map(()=>({wch:6})),{wch:10},{wch:10},{wch:8}]
+
+    // Apply styles using cell-level formatting
+    // We need to set cell styles for weekends (grey) and norms (yellow)
+    const GREY_FILL={fgColor:{rgb:'CCCCCC'}}
+    const YELLOW_FILL={fgColor:{rgb:'FFFF00'}}
+    const GREEN_FILL={fgColor:{rgb:'92D050'}}
+
+    // Style the header row (row index 5 = 0-based)
+    const hdrRowIdx=5
+    for(let c=0;c<hdrs.length;c++){
+      const cellAddr=XLSX.utils.encode_cell({r:hdrRowIdx,c})
+      if(!ws[cellAddr]) ws[cellAddr]={v:hdrs[c],t:'s'}
+      ws[cellAddr].s={font:{bold:true},fill:{fgColor:{rgb:'1F497D'}},font2:{color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',wrapText:true}}
+    }
+
+    // Style employee rows
+    let rIdx=6 // start after header rows
+    data.forEach(emp=>{
+      for(let d=1;d<=days;d++){
+        const colIdx=d+1 // col 0=name, col 1=functia, col 2=day1...
+        const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+        const dt=new Date(y,m-1,d)
+        const isWeekend=dt.getDay()===0||dt.getDay()===6
+        const isLegal=legalSet.has(dateStr)
+        const rec=emp.records?.find(r=>r.date===dateStr)
+        const hasNorma=rec?.norma
+
+        for(let rowOffset=0;rowOffset<6;rowOffset++){
+          const cellAddr=XLSX.utils.encode_cell({r:rIdx+rowOffset,c:colIdx})
+          if(!ws[cellAddr]) ws[cellAddr]={v:'',t:'s'}
+          if(isWeekend||isLegal) ws[cellAddr].s={fill:GREY_FILL}
+          else if(hasNorma) ws[cellAddr].s={fill:YELLOW_FILL,alignment:{horizontal:'center'}}
+        }
+      }
+      // Style name cells
+      const nameCell=XLSX.utils.encode_cell({r:rIdx+1,c:0})
+      if(ws[nameCell]) ws[nameCell].s={font:{bold:true}}
+      rIdx+=6
+    })
+
     XLSX.utils.book_append_sheet(wb,ws,'Pontaj ITM')
     XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
     showToast(`✓ Export ITM gata!`); setExpITM(false)
@@ -594,7 +679,9 @@ function AdminPage() {
   const [load,setLoad]=useState(true); const [toast,showToast]=useToast()
   const fileRef=useRef(null); const calRef=useRef(null)
   const [siteName,setSiteName]=useState(''); const [addingSite,setAddingSite]=useState(false)
+  const [deletingSite,setDeletingSite]=useState(null) // site being confirmed for delete
   const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [creating,setCreating]=useState(false)
+  const [editMgr,setEditMgr]=useState(null) // manager being edited
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [addingE,setAddingE]=useState(false)
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
 
@@ -615,6 +702,18 @@ function AdminPage() {
 
   const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
+  const deleteSite=async(s)=>{
+    // Check if any employees are on this site
+    const {data:emps}=await supabase.from('employees').select('id').eq('site_id',s.id).limit(1)
+    if(emps?.length>0){showToast('Nu poți șterge — există angajați alocați pe acest șantier!','error');setDeletingSite(null);return}
+    const {error}=await supabase.from('sites').delete().eq('id',s.id)
+    if(!error){showToast(`✓ Șantier "${s.name}" șters`);setDeletingSite(null);loadAll()} else showToast('Eroare la ștergere','error')
+  }
+  const saveEditMgr=async()=>{
+    if(!editMgr) return
+    const {error}=await supabase.from('profiles').update({name:editMgr.name,role:editMgr.role,site_id:editMgr.role==='admin'?null:(editMgr.site_id?Number(editMgr.site_id):null)}).eq('id',editMgr.id)
+    if(!error){showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll()} else showToast('Eroare','error')
+  }
   const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
 
   const createManager=async()=>{
@@ -700,15 +799,59 @@ function AdminPage() {
         {tabs.map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{...S.btnS,background:tab===v?'#21262D':G.bg,color:tab===v?G.text:G.muted,fontSize:12}}>{l}</button>)}
       </div>
 
+      {/* Delete site confirmation modal */}
+      {deletingSite&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
+            <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Ștergi șantierul?</div>
+            <div style={{fontSize:13,color:G.muted,marginBottom:22}}>„{deletingSite.name}" va fi șters permanent. Această acțiune nu poate fi anulată.</div>
+            <div style={{display:'flex',gap:10,justifyContent:'center'}}>
+              <button onClick={()=>setDeletingSite(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+              <button onClick={()=>deleteSite(deletingSite)} style={{...S.btnP,flex:1,background:G.red}}>Șterge</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit manager modal */}
+      {editMgr&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{...S.card,padding:28,width:420}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Manager</div>
+            <div style={{marginBottom:12}}><Lbl>Nume complet</Lbl><input style={S.input} value={editMgr.name||''} onChange={e=>setEditMgr({...editMgr,name:e.target.value})}/></div>
+            <div style={{marginBottom:12}}><Lbl>Rol</Lbl>
+              <select value={editMgr.role} onChange={e=>setEditMgr({...editMgr,role:e.target.value})} style={{width:'100%'}}>
+                <option value="manager">👤 Manager</option>
+                <option value="admin">⚙ Admin</option>
+              </select>
+            </div>
+            {editMgr.role==='manager'&&<div style={{marginBottom:18}}><Lbl>Șantier Alocat</Lbl>
+              <select value={editMgr.site_id||''} onChange={e=>setEditMgr({...editMgr,site_id:e.target.value?Number(e.target.value):null})} style={{width:'100%'}}>
+                <option value="">— fără șantier —</option>
+                {sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>}
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setEditMgr(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+              <button onClick={saveEditMgr} style={{...S.btnP,flex:1}}>✓ Salvează</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab==='sites'&&(
         <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
           <div style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-              <table><thead><tr style={{background:G.bg}}><th>Șantier / Sediu</th><th>Status</th><th></th></tr></thead>
+              <table><thead><tr style={{background:G.bg}}><th>Șantier / Sediu</th><th>Status</th><th>Acțiuni</th></tr></thead>
               <tbody>{sites.map(s=>(
                 <tr key={s.id}><td style={{fontWeight:600}}>{s.name}</td>
                 <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:s.active?G.greenDim:G.redDim,color:s.active?G.green:G.red,border:`1px solid ${s.active?G.green:G.red}44`}}>{s.active?'● Activ':'○ Inactiv'}</span></td>
-                <td><button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button></td></tr>
+                <td style={{display:'flex',gap:6}}>
+                  <button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button>
+                  <button onClick={()=>setDeletingSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11,color:G.red,borderColor:G.red+'44'}}>🗑️</button>
+                </td></tr>
               ))}{!sites.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Niciun șantier</td></tr>}</tbody></table>
             )}
           </div>
@@ -724,11 +867,13 @@ function AdminPage() {
         <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
           <div style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier</th></tr></thead>
+              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier</th><th></th></tr></thead>
               <tbody>{managers.map(m=>(
-                <tr key={m.id}><td style={{fontWeight:600}}>{m.name}</td><td style={{color:G.muted,fontSize:12}}>{m.email}</td>
+                <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
+                <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
                 <td><span className={`badge ${m.role==='admin'?'ba':'bm'}`}>{m.role==='admin'?'⚙ Admin':'👤 Manager'}</span></td>
-                <td style={{fontSize:12,color:G.purple}}>{sites.find(s=>s.id===m.site_id)?.name||'—'}</td></tr>
+                <td style={{fontSize:12,color:G.purple}}>{sites.find(s=>s.id===m.site_id)?.name||'—'}</td>
+                <td><button onClick={()=>setEditMgr({...m})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
           </div>
@@ -809,7 +954,26 @@ function AdminPage() {
               <span style={{fontSize:13,fontWeight:700}}>Zile Speciale</span>
               <span style={{fontSize:11,color:G.muted}}>{calDays.length} zile înregistrate</span>
             </div>
-            <div style={{maxHeight:420,overflowY:'auto'}}>
+            {/* Working days per month summary */}
+            <div style={{padding:'12px 14px',borderBottom:`1px solid ${G.border}`,display:'flex',gap:8,flexWrap:'wrap'}}>
+              {Array.from({length:12},(_,i)=>{
+                const year=new Date().getFullYear()
+                const month=i+1
+                const daysInMonth=new Date(year,month,0).getDate()
+                const legalInMonth=calDays.filter(d=>{const dm=new Date(d.date);return dm.getFullYear()===year&&dm.getMonth()===i&&d.type==='legal'}).length
+                let workDays=0
+                for(let d=1;d<=daysInMonth;d++){const dt=new Date(year,i,d);if(dt.getDay()!==0&&dt.getDay()!==6)workDays++}
+                workDays-=legalInMonth
+                return(
+                  <div key={i} style={{background:'#0D1117',border:`1px solid ${G.border}`,borderRadius:8,padding:'6px 10px',textAlign:'center',minWidth:70}}>
+                    <div style={{fontSize:10,color:G.muted,fontWeight:600}}>{new Date(year,i).toLocaleString('ro-RO',{month:'short'}).toUpperCase()}</div>
+                    <div style={{fontSize:18,fontWeight:800,color:G.blue}}>{workDays}</div>
+                    <div style={{fontSize:9,color:G.dim}}>zile lucr.</div>
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{maxHeight:300,overflowY:'auto'}}>
               <table><thead><tr style={{background:G.bg}}><th>Data</th><th>Tip</th><th>Descriere</th></tr></thead>
               <tbody>{calDays.map(d=>(
                 <tr key={d.id}><td style={{fontWeight:600,fontSize:12}}>{d.date}</td>
