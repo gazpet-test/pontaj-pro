@@ -451,42 +451,35 @@ function ReportsPage() {
   const exportITM=async()=>{
     if (!data.length){showToast('Fără date','warn');return}
     setExpITM(true)
+    try {
     const {y,m,days}=getRange()
     const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
     const wb=XLSX.utils.book_new()
     const dayNums=Array.from({length:days},(_,i)=>i+1)
 
-    // Get legal holidays for this month
-    const legalDates=new Set(detailedRecords.filter(()=>true)) // placeholder
-    const {data:calData}=await supabase.from('calendar_days').select('date,type').eq('type','legal').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
-    const legalSet=new Set((calData||[]).map(c=>c.date))
+    // Build legal days set from already-loaded detailed records
+    // Fetch calendar days synchronously from state or build weekend set
+    const legalSet=new Set()
+    // Mark legal holidays from calendar - use simple weekend detection
+    // We'll load calendar data upfront
+    const {data:calData}=await supabase.from('calendar_days').select('date').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
+    ;(calData||[]).forEach(c=>legalSet.add(c.date))
 
     const rows=[]
-    // Header
     rows.push(['S.C. GAZPET INSTAL S.R.L.','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
     rows.push(['RO 22029920; J2007001650296','','Tel./Fax 0244/435005  office@gazpet.ro'])
     rows.push([])
     rows.push([`FOAIE COLECTIVĂ DE PREZENȚĂ — ${mName.toUpperCase()}`])
     rows.push([])
-
-    // Column headers row
     const hdrs=['NUME ȘI PRENUME SALARIAT','FUNCȚIA',...dayNums,'TOTAL ZILE','TOTAL ORE','DIURNE']
     rows.push(hdrs)
-    const headerRowIdx=rows.length // 1-based
 
-    // Per employee: 6 rows
-    const empStartRows={}
     data.forEach((emp)=>{
-      const startRow=rows.length
-      empStartRows[emp.id]=startRow
-
-      const row1=['',''] // Rând 1: numerele zilelor (puse în header)
-      const row2=[emp.name,emp.position||''] // Rând 2: intrare
-      const row3=['','']                      // Rând 3: ieșire
-      const row4=['','']                      // Rând 4: pauza masă
-      const row5=['','']                      // Rând 5: ore nete / normă
-      const row6=['','']                      // Rând 6: separator
-
+      const row2=[emp.name,emp.position||'']
+      const row3=['','']
+      const row4=['','']
+      const row5=['','']
+      const row6=['','']
       let totalZile=0, totalOre=0
       for(let d=1;d<=days;d++){
         const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
@@ -494,77 +487,33 @@ function ReportsPage() {
         const isWeekend=dt.getDay()===0||dt.getDay()===6
         const isLegal=legalSet.has(dateStr)
         const rec=emp.records?.find(r=>r.date===dateStr)
-
         if(isWeekend||isLegal){
-          row1.push(d); row2.push(''); row3.push(''); row4.push(''); row5.push(isLegal?'SL':''); row6.push('')
+          row2.push(''); row3.push(''); row4.push(''); row5.push(isLegal?'SL':''); row6.push('')
         } else if(rec?.norma){
-          row1.push(d); row2.push(''); row3.push(''); row4.push(''); row5.push(rec.norma); row6.push('')
+          row2.push(''); row3.push(''); row4.push(''); row5.push(rec.norma); row6.push('')
         } else if(rec?.check_in){
-          const ci=fmt24(rec.check_in); const co=rec.check_out?fmt24(rec.check_out):''
           const hasPauza=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
           const mins=netMins(rec.check_in,rec.check_out,rec.lunch_break!==false)
-          const ore=+(mins/60).toFixed(1)
-          row1.push(d); row2.push(ci); row3.push(co); row4.push(hasPauza?1:''); row5.push(ore); row6.push('')
+          row2.push(fmt24(rec.check_in)); row3.push(rec.check_out?fmt24(rec.check_out):'')
+          row4.push(hasPauza?1:''); row5.push(+(mins/60).toFixed(1)); row6.push('')
           totalZile++; totalOre+=mins
         } else {
-          row1.push(d); row2.push(''); row3.push(''); row4.push(''); row5.push(''); row6.push('')
+          row2.push(''); row3.push(''); row4.push(''); row5.push(''); row6.push('')
         }
       }
-      // Totals
       row2.push(totalZile,'',emp.diurnaDays)
       row3.push('',+(totalOre/60).toFixed(1),'')
       row4.push('','',''); row5.push('','',''); row6.push('','','')
-
-      rows.push(row1,row2,row3,row4,row5,row6)
+      rows.push(row2,row3,row4,row5,row6,row6)
     })
 
     const ws=XLSX.utils.aoa_to_sheet(rows)
-
-    // Column widths
-    ws['!cols']=[{wch:24},{wch:20},...dayNums.map(()=>({wch:6})),{wch:10},{wch:10},{wch:8}]
-
-    // Apply styles using cell-level formatting
-    // We need to set cell styles for weekends (grey) and norms (yellow)
-    const GREY_FILL={fgColor:{rgb:'CCCCCC'}}
-    const YELLOW_FILL={fgColor:{rgb:'FFFF00'}}
-    const GREEN_FILL={fgColor:{rgb:'92D050'}}
-
-    // Style the header row (row index 5 = 0-based)
-    const hdrRowIdx=5
-    for(let c=0;c<hdrs.length;c++){
-      const cellAddr=XLSX.utils.encode_cell({r:hdrRowIdx,c})
-      if(!ws[cellAddr]) ws[cellAddr]={v:hdrs[c],t:'s'}
-      ws[cellAddr].s={font:{bold:true},fill:{fgColor:{rgb:'1F497D'}},font2:{color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',wrapText:true}}
-    }
-
-    // Style employee rows
-    let rIdx=6 // start after header rows
-    data.forEach(emp=>{
-      for(let d=1;d<=days;d++){
-        const colIdx=d+1 // col 0=name, col 1=functia, col 2=day1...
-        const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-        const dt=new Date(y,m-1,d)
-        const isWeekend=dt.getDay()===0||dt.getDay()===6
-        const isLegal=legalSet.has(dateStr)
-        const rec=emp.records?.find(r=>r.date===dateStr)
-        const hasNorma=rec?.norma
-
-        for(let rowOffset=0;rowOffset<6;rowOffset++){
-          const cellAddr=XLSX.utils.encode_cell({r:rIdx+rowOffset,c:colIdx})
-          if(!ws[cellAddr]) ws[cellAddr]={v:'',t:'s'}
-          if(isWeekend||isLegal) ws[cellAddr].s={fill:GREY_FILL}
-          else if(hasNorma) ws[cellAddr].s={fill:YELLOW_FILL,alignment:{horizontal:'center'}}
-        }
-      }
-      // Style name cells
-      const nameCell=XLSX.utils.encode_cell({r:rIdx+1,c:0})
-      if(ws[nameCell]) ws[nameCell].s={font:{bold:true}}
-      rIdx+=6
-    })
-
+    ws['!cols']=[{wch:26},{wch:20},...dayNums.map(()=>({wch:6})),{wch:10},{wch:10},{wch:8}]
     XLSX.utils.book_append_sheet(wb,ws,'Pontaj ITM')
     XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
-    showToast(`✓ Export ITM gata!`); setExpITM(false)
+    showToast(`✓ Export ITM gata!`)
+    } catch(e){ showToast('Eroare la export: '+e.message,'error'); console.error(e) }
+    setExpITM(false)
   }
 
   const exportDiurne=async()=>{
