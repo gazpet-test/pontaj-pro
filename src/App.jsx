@@ -182,7 +182,7 @@ function DashboardPage() {
   const [unalloc,setUnalloc]=useState([])
   const [load,setLoad]=useState(true)
   const isAdmin=profile?.role==='admin'
-  useEffect(()=>{ load&&loadData() },[profile])
+  useEffect(()=>{ if(profile!==null) loadData() },[profile])
   const loadData = async () => {
     setLoad(true)
     const today=todayStr()
