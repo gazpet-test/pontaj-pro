@@ -456,63 +456,162 @@ function ReportsPage() {
     const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
     const wb=XLSX.utils.book_new()
     const dayNums=Array.from({length:days},(_,i)=>i+1)
+    const dayNames=['D','L','Ma','Mi','J','V','S']
 
-    // Build legal days set from already-loaded detailed records
-    // Fetch calendar days synchronously from state or build weekend set
-    const legalSet=new Set()
-    // Mark legal holidays from calendar - use simple weekend detection
-    // We'll load calendar data upfront
+    // Load calendar holidays
     const {data:calData}=await supabase.from('calendar_days').select('date').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
-    ;(calData||[]).forEach(c=>legalSet.add(c.date))
+    const legalSet=new Set((calData||[]).map(c=>c.date))
+
+    // Border style helper
+    const border={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    const cellS=(v,opts={})=>({v,t:typeof v==='number'?'n':'s',...opts})
 
     const rows=[]
+
+    // ── Antet firmă ──
     rows.push(['S.C. GAZPET INSTAL S.R.L.','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
     rows.push(['RO 22029920; J2007001650296','','Tel./Fax 0244/435005  office@gazpet.ro'])
     rows.push([])
     rows.push([`FOAIE COLECTIVĂ DE PREZENȚĂ — ${mName.toUpperCase()}`])
     rows.push([])
-    const hdrs=['NUME ȘI PRENUME SALARIAT','FUNCȚIA',...dayNums,'TOTAL ZILE','TOTAL ORE','DIURNE']
-    rows.push(hdrs)
 
+    // ── Rând 1: Header coloane fixe + numerele zilelor ──
+    const hdrRow=['NUME ȘI PRENUME SALARIAT','FUNCȚIA',...dayNums,'TOTAL ZILE','TOTAL ORE']
+    rows.push(hdrRow)
+
+    // ── Rând 2: Ziua săptămânii (L, Ma, Mi...) ──
+    const dayNameRow=['','', ...dayNums.map(d=>{const dt=new Date(y,m-1,d);return dayNames[dt.getDay()]}), '', '']
+    rows.push(dayNameRow)
+
+    // ── Rânduri per angajat ──
     data.forEach((emp)=>{
-      const row2=[emp.name,emp.position||'']
-      const row3=['','']
-      const row4=['','']
-      const row5=['','']
-      const row6=['','']
+      const rowCI  =[emp.name, emp.position||'']   // Ora Intrare
+      const rowCO  =['Ora Ieșire','']              // Ora Ieșire
+      const rowPM  =['Pauza Masă','']              // Pauza Masă
+      const rowOL  =['Ore Lucrate','']             // Ore Lucrate
+      const rowSep =['','']                         // separator gol
+
+      // Fix: first row labels
+      rowCI[0]=emp.name
+      rowCI[1]=emp.position||''
+      // We need to add label column - but we have name+functia in col 0,1
+      // For rows 2-4, col 0 = label, col 1 = empty
+      // Actually let's do: row1 col0=name, col1=functia
+      //                    row2 col0='Ora Ieșire', col1=''
+      //                    row3 col0='Pauza Masă', col1=''  
+      //                    row4 col0='Ore Lucrate', col1=''
+
       let totalZile=0, totalOre=0
+
       for(let d=1;d<=days;d++){
         const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
         const dt=new Date(y,m-1,d)
         const isWeekend=dt.getDay()===0||dt.getDay()===6
         const isLegal=legalSet.has(dateStr)
         const rec=emp.records?.find(r=>r.date===dateStr)
+
         if(isWeekend||isLegal){
-          row2.push(''); row3.push(''); row4.push(''); row5.push(isLegal?'SL':''); row6.push('')
+          rowCI.push(isLegal?'SL':''); rowCO.push(''); rowPM.push(''); rowOL.push('')
         } else if(rec?.norma){
-          row2.push(''); row3.push(''); row4.push(''); row5.push(rec.norma); row6.push('')
+          rowCI.push(rec.norma); rowCO.push(''); rowPM.push(''); rowOL.push('')
         } else if(rec?.check_in){
           const hasPauza=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
           const mins=netMins(rec.check_in,rec.check_out,rec.lunch_break!==false)
-          row2.push(fmt24(rec.check_in)); row3.push(rec.check_out?fmt24(rec.check_out):'')
-          row4.push(hasPauza?1:''); row5.push(+(mins/60).toFixed(1)); row6.push('')
+          rowCI.push(fmt24(rec.check_in))
+          rowCO.push(rec.check_out?fmt24(rec.check_out):'')
+          rowPM.push(hasPauza?'1':'')
+          rowOL.push(+(mins/60).toFixed(1))
           totalZile++; totalOre+=mins
         } else {
-          row2.push(''); row3.push(''); row4.push(''); row5.push(''); row6.push('')
+          rowCI.push(''); rowCO.push(''); rowPM.push(''); rowOL.push('')
         }
       }
-      row2.push(totalZile,'',emp.diurnaDays)
-      row3.push('',+(totalOre/60).toFixed(1),'')
-      row4.push('','',''); row5.push('','',''); row6.push('','','')
-      rows.push(row2,row3,row4,row5,row6,row6)
+
+      rowCI.push(totalZile, +(totalOre/60).toFixed(1))
+      rowCO.push('',''); rowPM.push('',''); rowOL.push('','')
+      rowSep.push(...Array(days+2).fill(''))
+
+      rows.push(rowCI, rowCO, rowPM, rowOL, rowSep)
     })
 
     const ws=XLSX.utils.aoa_to_sheet(rows)
-    ws['!cols']=[{wch:26},{wch:20},...dayNums.map(()=>({wch:6})),{wch:10},{wch:10},{wch:8}]
+
+    // Column widths
+    ws['!cols']=[{wch:26},{wch:18},...dayNums.map(()=>({wch:5.5})),{wch:10},{wch:10}]
+
+    // Row heights
+    ws['!rows']=Array.from({length:rows.length},(_,i)=>({hpx: i<5?14:i===5?22:i===6?16:14}))
+
+    // Apply cell styles
+    const hdrFill={fgColor:{rgb:'1F497D'}}
+    const hdrFont={bold:true,color:{rgb:'FFFFFF'}}
+    const subHdrFill={fgColor:{rgb:'4472C4'}}
+    const subHdrFont={bold:true,color:{rgb:'FFFFFF'}}
+    const weekendFill={fgColor:{rgb:'C0C0C0'}}
+    const legalFill={fgColor:{rgb:'FF0000'}}
+    const normeFill={fgColor:{rgb:'FFFF00'}}
+    const nameFill={fgColor:{rgb:'E2EFDA'}}
+    const labelFill={fgColor:{rgb:'F2F2F2'}}
+    const al={horizontal:'center',vertical:'center'}
+    const alL={horizontal:'left',vertical:'center'}
+
+    // Style header row (row index 5)
+    const hdrRowIdx=5
+    hdrRow.forEach((v,c)=>{
+      const addr=XLSX.utils.encode_cell({r:hdrRowIdx,c})
+      ws[addr]={v,t:'s',s:{fill:hdrFill,font:hdrFont,border,alignment:c<2?alL:al}}
+    })
+
+    // Style day names row (row index 6)
+    const dnRowIdx=6
+    dayNameRow.forEach((v,c)=>{
+      const addr=XLSX.utils.encode_cell({r:dnRowIdx,c})
+      if(!ws[addr]) ws[addr]={v,t:'s'}
+      ws[addr].s={fill:subHdrFill,font:subHdrFont,border,alignment:al}
+      // Color weekend columns
+      if(c>=2&&c<2+days){const d=c-1;const dt=new Date(y,m-1,d);if(dt.getDay()===0||dt.getDay()===6) ws[addr].s.fill=weekendFill}
+    })
+
+    // Style employee rows
+    let rIdx=7
+    data.forEach(emp=>{
+      const rowLabels=['Ora Intrare','Ora Ieșire','Pauza Masă','Ore Lucrate']
+      for(let rowOff=0;rowOff<4;rowOff++){
+        for(let c=0;c<2+days+2;c++){
+          const addr=XLSX.utils.encode_cell({r:rIdx+rowOff,c})
+          if(!ws[addr]) ws[addr]={v:'',t:'s'}
+
+          if(c===0){
+            // Name or label
+            if(rowOff===0){ws[addr].s={fill:nameFill,font:{bold:true},border,alignment:alL}}
+            else {ws[addr].v=rowLabels[rowOff]; ws[addr].s={fill:labelFill,font:{bold:true,sz:8},border,alignment:alL}}
+          } else if(c===1){
+            ws[addr].s={fill:rowOff===0?nameFill:labelFill,border,alignment:alL}
+          } else if(c>=2&&c<2+days){
+            const d=c-1
+            const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+            const dt=new Date(y,m-1,d)
+            const isWeekend=dt.getDay()===0||dt.getDay()===6
+            const isLegal=legalSet.has(dateStr)
+            const rec=emp.records?.find(r=>r.date===dateStr)
+            let fill=null
+            if(isWeekend) fill=weekendFill
+            else if(isLegal) fill={fgColor:{rgb:'FF9999'}}
+            else if(rec?.norma) fill=normeFill
+            ws[addr].s={...(fill?{fill}:{}),border,alignment:al}
+          } else {
+            ws[addr].s={fill:rowOff===0?{fgColor:{rgb:'D9E1F2'}}:labelFill,font:rowOff===0?{bold:true}:{},border,alignment:al}
+          }
+        }
+      }
+      // Separator row - no border
+      rIdx+=5
+    })
+
     XLSX.utils.book_append_sheet(wb,ws,'Pontaj ITM')
     XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
-    showToast(`✓ Export ITM gata!`)
-    } catch(e){ showToast('Eroare la export: '+e.message,'error'); console.error(e) }
+    showToast('✓ Export ITM gata!')
+    } catch(e){ showToast('Eroare: '+e.message,'error'); console.error(e) }
     setExpITM(false)
   }
 
