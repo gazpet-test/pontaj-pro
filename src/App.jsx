@@ -3,40 +3,27 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx'
 
-// ─── Auth Context ─────────────────────────────────────────────────────────────
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
 function AuthProvider({ children }) {
-  const [session, setSession] = useState(undefined) // undefined = loading
+  const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
-
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      if (session) fetchProfile(session.user.id)
-    })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
-      setSession(session)
-      if (session) fetchProfile(session.user.id)
-      else setProfile(null)
-    })
+    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id) })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { setSession(session); if (session) fetchProfile(session.user.id); else setProfile(null) })
     return () => subscription.unsubscribe()
   }, [])
-
   const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    setProfile(data)
+    try {
+      const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+      if (data) setProfile(data)
+      else setTimeout(async () => { const { data: d2 } = await supabase.from('profiles').select('*').eq('id', userId).single(); if (d2) setProfile(d2) }, 1000)
+    } catch (e) { console.error(e) }
   }
-
   const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password })
   const signOut = () => supabase.auth.signOut()
-
-  return (
-    <AuthContext.Provider value={{ session, profile, signIn, signOut, fetchProfile }}>
-      {children}
-    </AuthContext.Provider>
-  )
+  return <AuthContext.Provider value={{ session, profile, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
 }
 
 function ProtectedRoute({ children, adminOnly = false }) {
@@ -48,228 +35,126 @@ function ProtectedRoute({ children, adminOnly = false }) {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const DEPARTMENTS = ['IT', 'Vânzări', 'HR', 'Financiar', 'Producție', 'Logistică', 'Marketing', 'Administrație']
-
-const LUNCH_START = 12   // 12:00
-const LUNCH_END   = 13   // 13:00
-const LUNCH_MINS  = (LUNCH_END - LUNCH_START) * 60  // 60 minute
-
+const DEPARTMENTS = ['Execuție', 'Logistică', 'TESA']
+const NORME = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
+const NORME_LABELS = { BO:'Boală Obișnuită', BP:'Boală Profesională', AM:'Accident de Muncă', CO:'Concediu Odihnă', CFP:'Concediu Fără Plată', CM:'Concediu Medical', M:'Maternitate', O:'Obligații Cetățenești', N:'Absențe Nemotivate', PRM:'Prog.Redus Maternitate', PRB:'Prog.Redus Boală', LL:'Liber Legal' }
+const LUNCH_START = 12; const LUNCH_END = 13; const LUNCH_MINS = 60
 const todayStr = () => new Date().toISOString().split('T')[0]
-const fmt = (ts) => ts ? new Date(ts).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' }) : '—'
+const fmt24 = (ts) => ts ? new Date(ts).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
 const diffMins = (a, b) => a && b ? Math.max(0, Math.floor((new Date(b) - new Date(a)) / 60000)) : 0
-const minsToHM = (m) => { const mm = Math.abs(m); return `${Math.floor(mm / 60)}h ${mm % 60}m` }
+const minsToHM = (m) => { const mm = Math.abs(m); return `${Math.floor(mm/60)}h${mm%60>0?' '+mm%60+'m':''}` }
+const spansLunch = (ci, co) => { if (!ci||!co) return false; const a=new Date(ci),b=new Date(co),d=a.toDateString(); return a<=new Date(`${d} 12:00:00`)&&b>=new Date(`${d} 13:00:00`) }
+const netMins = (ci, co, lb) => { const g=diffMins(ci,co); return g ? Math.max(0,g-(lb&&spansLunch(ci,co)?LUNCH_MINS:0)):0 }
+const dateToISO = (date, time) => time ? new Date(`${date}T${time}:00`).toISOString() : null
 
-// Verifica daca angajatul a lucrat in intervalul 12:00-13:00
-const spansLunch = (checkIn, checkOut) => {
-  if (!checkIn || !checkOut) return false
-  const ci = new Date(checkIn)
-  const co = new Date(checkOut)
-  const base = ci.toDateString()
-  const lunchStart = new Date(`${base} ${LUNCH_START}:00:00`)
-  const lunchEnd   = new Date(`${base} ${LUNCH_END}:00:00`)
-  return ci <= lunchStart && co >= lunchEnd
-}
-
-// Ore nete = ore brute - pauza de masa (daca se aplica)
-const netMins = (checkIn, checkOut, lunchBreak) => {
-  const gross = diffMins(checkIn, checkOut)
-  if (!gross) return 0
-  const deduct = lunchBreak && spansLunch(checkIn, checkOut) ? LUNCH_MINS : 0
-  return Math.max(0, gross - deduct)
-}
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
-const G = {
-  bg: '#0D1117', surface: '#161B22', border: '#21262D', border2: '#30363D',
-  text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
-  blue: '#58A6FF', green: '#3FB950', red: '#F85149', yellow: '#D29922', purple: '#BC8CFF',
-  blueDim: '#1F6FEB22', greenDim: '#1A3A1A', redDim: '#3A1A1A', yellowDim: '#3A2A0A',
-}
+const G = { bg:'#0D1117',surface:'#161B22',border:'#21262D',border2:'#30363D',text:'#E6EDF3',muted:'#8B949E',dim:'#6E7681',blue:'#58A6FF',green:'#3FB950',red:'#F85149',yellow:'#D29922',purple:'#BC8CFF',orange:'#F0883E',greenDim:'#1A3A1A',redDim:'#3A1A1A',yellowDim:'#3A2A0A' }
 const S = {
-  page: { fontFamily: "'Syne', 'Barlow', sans-serif", background: G.bg, minHeight: '100vh', color: G.text },
-  card: { background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12 },
-  input: { background: G.bg, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '10px 14px', fontFamily: 'inherit', fontSize: 14, outline: 'none', width: '100%' },
-  btnPrimary: { background: '#1F6FEB', color: 'white', border: 'none', borderRadius: 8, padding: '11px 22px', fontFamily: 'inherit', fontSize: 14, fontWeight: 700, cursor: 'pointer' },
-  btnSecondary: { background: G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, padding: '9px 18px', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
-  btnGhost: { background: 'none', color: G.muted, border: 'none', borderRadius: 8, padding: '9px 16px', fontFamily: 'inherit', fontSize: 14, fontWeight: 600, cursor: 'pointer' },
+  page: { fontFamily:"'Syne','Barlow',sans-serif",background:G.bg,minHeight:'100vh',color:G.text },
+  card: { background:G.surface,border:`1px solid ${G.border}`,borderRadius:12 },
+  input: { background:G.bg,border:`1px solid ${G.border2}`,color:G.text,borderRadius:8,padding:'8px 12px',fontFamily:'inherit',fontSize:13,outline:'none',width:'100%' },
+  btnP: { background:'#1F6FEB',color:'white',border:'none',borderRadius:8,padding:'9px 18px',fontFamily:'inherit',fontSize:13,fontWeight:700,cursor:'pointer' },
+  btnS: { background:G.surface,color:G.text,border:`1px solid ${G.border}`,borderRadius:8,padding:'7px 14px',fontFamily:'inherit',fontSize:12,fontWeight:600,cursor:'pointer' },
 }
-
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Barlow:wght@300;400;500;600&display=swap');
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #161B22; } ::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }
-  input:focus { border-color: #1F6FEB !important; box-shadow: 0 0 0 3px #1F6FEB22; }
-  select { background: #0D1117; border: 1px solid #30363D; color: #E6EDF3; border-radius: 8px; padding: 9px 14px; font-family: inherit; font-size: 14px; outline: none; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; padding: 10px 14px; font-size: 11px; font-weight: 700; color: #8B949E; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #21262D; }
-  td { padding: 12px 14px; font-size: 14px; border-bottom: 1px solid #161B22; vertical-align: middle; }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: #1C2128; }
-  .nav-link { background: none; border: none; cursor: pointer; padding: 9px 16px; border-radius: 8px; font-family: inherit; font-size: 13px; font-weight: 600; color: #8B949E; display: flex; align-items: center; gap: 8px; transition: all 0.2s; text-decoration: none; }
-  .nav-link:hover, .nav-link.active { background: #21262D; color: #E6EDF3; }
-  .nav-link.active { color: #58A6FF; background: #1F6FEB15; }
-  .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
-  .badge-dept { background: #1F3A5A; color: #79C0FF; }
-  .badge-admin { background: #2D1F4A; color: #BC8CFF; }
-  .badge-manager { background: #1F3A2D; color: #56D364; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-  .fade-in { animation: fadeIn 0.3s ease; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .spinner { width: 20px; height: 20px; border: 2px solid #30363D; border-top-color: #1F6FEB; border-radius: 50%; animation: spin 0.7s linear infinite; }
-  .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 600; z-index: 9999; box-shadow: 0 8px 32px rgba(0,0,0,0.5); animation: fadeIn 0.3s ease; }
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Barlow:wght@300;400;500;600&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#161B22}::-webkit-scrollbar-thumb{background:#30363D;border-radius:3px}
+input:focus,select:focus{border-color:#1F6FEB!important;box-shadow:0 0 0 3px #1F6FEB22}
+select{background:#0D1117;border:1px solid #30363D;color:#E6EDF3;border-radius:8px;padding:7px 11px;font-family:inherit;font-size:13px;outline:none}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:#8B949E;text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid #21262D}
+td{padding:9px 12px;font-size:13px;border-bottom:1px solid #161B22;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#1C2128}
+.nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s}
+.nl:hover,.nl.active{background:#21262D;color:#E6EDF3}
+.nl.active{color:#58A6FF;background:#1F6FEB15}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
+.bd{background:#1F3A5A;color:#79C0FF}.bs{background:#2D1F4A;color:#BC8CFF}.ba{background:#2D1F4A;color:#BC8CFF}.bm{background:#1F3A2D;color:#56D364}
+@keyframes fi{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.fi{animation:fi .3s ease}
+@keyframes sp{to{transform:rotate(360deg)}}
+.sp{width:16px;height:16px;border:2px solid #30363D;border-top-color:#1F6FEB;border-radius:50%;animation:sp .7s linear infinite}
+.toast{position:fixed;bottom:18px;right:18px;padding:10px 16px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.5);animation:fi .3s ease}
 `
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function Avatar({ name, id = 1, size = 38 }) {
-  const hue = ((name?.charCodeAt(0) || 0) * 37 + id * 13) % 360
-  const initials = name?.split(' ').map(n => n[0]).join('').slice(0, 2) || '?'
-  return (
-    <div style={{ width: size, height: size, borderRadius: '50%', background: `hsl(${hue},50%,22%)`, color: `hsl(${hue},70%,72%)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: size * 0.33, fontWeight: 700, flexShrink: 0 }}>
-      {initials}
-    </div>
-  )
+function Avatar({ name, id=1, size=34 }) {
+  const hue = ((name?.charCodeAt(0)||0)*37+id*13)%360
+  return <div style={{width:size,height:size,borderRadius:'50%',background:`hsl(${hue},50%,22%)`,color:`hsl(${hue},70%,72%)`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:size*.32,fontWeight:700,flexShrink:0}}>{name?.split(' ').map(n=>n[0]).join('').slice(0,2)||'?'}</div>
 }
-
 function Toast({ toast }) {
   if (!toast) return null
-  const colors = { success: [G.greenDim, G.green], error: [G.redDim, G.red], warn: [G.yellowDim, G.yellow] }
-  const [bg, color] = colors[toast.type] || colors.success
-  return <div className="toast" style={{ background: bg, color, border: `1px solid ${color}44` }}>{toast.msg}</div>
+  const c={success:[G.greenDim,G.green],error:[G.redDim,G.red],warn:[G.yellowDim,G.yellow]}
+  const [bg,col]=c[toast.type]||c.success
+  return <div className="toast" style={{background:bg,color:col,border:`1px solid ${col}44`}}>{toast.msg}</div>
 }
-
 function useToast() {
-  const [toast, setToast] = useState(null)
-  const show = useCallback((msg, type = 'success') => {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3000)
-  }, [])
-  return [toast, show]
+  const [t,setT]=useState(null)
+  const show=useCallback((msg,type='success')=>{setT({msg,type});setTimeout(()=>setT(null),3500)},[])
+  return [t,show]
 }
-
 function LoadingScreen() {
-  return (
-    <div style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
-      <style>{css}</style>
-      <div className="spinner" style={{ width: 36, height: 36 }} />
-      <div style={{ color: G.muted, fontSize: 14 }}>Se încarcă...</div>
-    </div>
-  )
+  return <div style={{...S.page,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}><style>{css}</style><div className="sp" style={{width:34,height:34}}/><div style={{color:G.muted,fontSize:13}}>Se încarcă...</div></div>
 }
+function Lbl({children}) { return <label style={{fontSize:11,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',display:'block',marginBottom:5}}>{children}</label> }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 function Layout({ children }) {
   const { profile, signOut } = useAuth()
-  const navigate = useNavigate()
-  const location = useLocation()
+  const nav = useNavigate(); const loc = useLocation()
   const [now, setNow] = useState(new Date())
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
-  const isAdmin = profile?.role === 'admin'
-
-  const navItems = [
-    { path: '/', icon: '📊', label: 'Panou' },
-    { path: '/pontaj', icon: '👥', label: 'Pontaj' },
-    { path: '/rapoarte', icon: '📈', label: 'Rapoarte' },
-    ...(isAdmin ? [{ path: '/admin', icon: '⚙️', label: 'Admin' }] : []),
-  ]
-
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
+  const isAdmin = profile?.role==='admin'
+  const items = [{p:'/',i:'📊',l:'Panou'},{p:'/pontaj',i:'👥',l:'Pontaj'},{p:'/rapoarte',i:'📈',l:'Rapoarte'},...(isAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]) ]
   return (
-    <div style={S.page}>
-      <style>{css}</style>
-      <div style={{ background: G.surface, borderBottom: `1px solid ${G.border}`, padding: '0 28px', display: 'flex', alignItems: 'center', height: 60, gap: 24, position: 'sticky', top: 0, zIndex: 100 }}>
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 8 }}>
-          <div style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #1F6FEB, #388BFD)', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>⏱</div>
-          <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '-0.3px' }}>PontajPRO</span>
+    <div style={S.page}><style>{css}</style>
+      <div style={{background:G.surface,borderBottom:`1px solid ${G.border}`,padding:'0 22px',display:'flex',alignItems:'center',height:56,gap:18,position:'sticky',top:0,zIndex:100}}>
+        <div style={{display:'flex',alignItems:'center',gap:9,marginRight:6}}>
+          <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
+          <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
-        {/* Nav */}
-        {navItems.map(item => (
-          <button key={item.path} className={`nav-link ${location.pathname === item.path ? 'active' : ''}`} onClick={() => navigate(item.path)}>
-            {item.icon} {item.label}
-          </button>
-        ))}
-        {/* Right */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: G.blue, fontVariantNumeric: 'tabular-nums' }}>
-              {now.toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </div>
-            <div style={{ fontSize: 10, color: G.muted }}>
-              {now.toLocaleDateString('ro-RO', { weekday: 'short', day: 'numeric', month: 'short' })}
-            </div>
+        {items.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
+          <div style={{textAlign:'right'}}>
+            <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
+            <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
           </div>
-          <div style={{ width: 1, height: 32, background: G.border }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Avatar name={profile?.name} id={1} size={32} />
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>{profile?.name || profile?.email?.split('@')[0]}</div>
-              <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
-                <span className={`badge ${isAdmin ? 'badge-admin' : 'badge-manager'}`}>{isAdmin ? '⚙ Admin' : '👤 Manager'}</span>
-                {!isAdmin && profile?.department && <span className="badge badge-dept">{profile.department}</span>}
-              </div>
-            </div>
+          <div style={{width:1,height:28,background:G.border}}/>
+          <Avatar name={profile?.name} id={1} size={28}/>
+          <div>
+            <div style={{fontSize:12,fontWeight:600,lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
+            <span className={`badge ${isAdmin?'ba':'bm'}`}>{isAdmin?'⚙ Admin':'👤 Manager'}</span>
           </div>
-          <button className="nav-link" onClick={signOut} style={{ color: G.red }}>⎋ Ieșire</button>
+          <button className="nl" onClick={signOut} style={{color:G.red,padding:'5px 8px'}}>⎋</button>
         </div>
       </div>
-      <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }} className="fade-in">
-        {children}
-      </div>
+      <div style={{padding:'22px 26px',maxWidth:1500,margin:'0 auto'}} className="fi">{children}</div>
     </div>
   )
 }
 
-// ─── Login Page ───────────────────────────────────────────────────────────────
+// ─── Login ────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const { signIn, session } = useAuth()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  if (session) return <Navigate to="/" replace />
-
-  const handleLogin = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    const { error } = await signIn(email, password)
-    if (error) setError(error.message === 'Invalid login credentials' ? 'Email sau parolă incorectă' : error.message)
-    setLoading(false)
-  }
-
+  const [email,setEmail]=useState(''); const [pass,setPass]=useState(''); const [load,setLoad]=useState(false); const [err,setErr]=useState('')
+  if (session) return <Navigate to="/" replace/>
+  const go = async e => { e.preventDefault(); setLoad(true); setErr(''); const {error}=await signIn(email,pass); if(error) setErr('Email sau parolă incorectă'); setLoad(false) }
   return (
-    <div style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-      <style>{css}</style>
-      <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse at 30% 40%, #1F6FEB08 0%, transparent 60%), radial-gradient(ellipse at 70% 60%, #3FB95008 0%, transparent 60%)' }} />
-      <div style={{ ...S.card, padding: 40, width: 420, position: 'relative' }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ width: 56, height: 56, background: 'linear-gradient(135deg, #1F6FEB, #388BFD)', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 16px' }}>⏱</div>
-          <div style={{ fontSize: 26, fontWeight: 800 }}>PontajPRO</div>
-          <div style={{ color: G.muted, fontSize: 14, marginTop: 6 }}>Sistem de evidență a prezenței</div>
+    <div style={{...S.page,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}><style>{css}</style>
+      <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 30% 40%,#1F6FEB08 0%,transparent 60%)'}}/>
+      <div style={{...S.card,padding:38,width:390,position:'relative'}}>
+        <div style={{textAlign:'center',marginBottom:26}}>
+          <div style={{width:50,height:50,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:13,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,margin:'0 auto 12px'}}>⏱</div>
+          <div style={{fontSize:22,fontWeight:800}}>PontajPRO</div>
+          <div style={{color:G.muted,fontSize:12,marginTop:4}}>S.C. Gazpet Instal S.R.L.</div>
         </div>
-
-        <form onSubmit={handleLogin}>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 12, color: G.muted, fontWeight: 600, display: 'block', marginBottom: 7, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Email</label>
-            <input style={S.input} type="email" placeholder="manager@companie.ro" value={email} onChange={e => setEmail(e.target.value)} required autoFocus />
-          </div>
-          <div style={{ marginBottom: 24 }}>
-            <label style={{ fontSize: 12, color: G.muted, fontWeight: 600, display: 'block', marginBottom: 7, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Parolă</label>
-            <input style={S.input} type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
-          </div>
-          {error && <div style={{ background: G.redDim, color: G.red, border: `1px solid ${G.red}33`, borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 16 }}>⚠ {error}</div>}
-          <button style={{ ...S.btnPrimary, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }} type="submit" disabled={loading}>
-            {loading ? <><div className="spinner" />Se conectează...</> : '→ Conectare'}
-          </button>
+        <form onSubmit={go}>
+          <div style={{marginBottom:13}}><Lbl>Email</Lbl><input style={S.input} type="email" placeholder="email@gazpet.ro" value={email} onChange={e=>setEmail(e.target.value)} required autoFocus/></div>
+          <div style={{marginBottom:18}}><Lbl>Parolă</Lbl><input style={S.input} type="password" placeholder="••••••••" value={pass} onChange={e=>setPass(e.target.value)} required/></div>
+          {err&&<div style={{background:G.redDim,color:G.red,border:`1px solid ${G.red}33`,borderRadius:8,padding:'8px 12px',fontSize:12,marginBottom:12}}>⚠ {err}</div>}
+          <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} type="submit" disabled={load}>{load?<><div className="sp"/>...</>:'→ Conectare'}</button>
         </form>
-        <div style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: G.dim }}>
-          Contactați administratorul pentru acces
-        </div>
+        <div style={{textAlign:'center',marginTop:16,fontSize:11,color:G.dim}}>Contactați administratorul pentru acces</div>
       </div>
     </div>
   )
@@ -278,105 +163,73 @@ function LoginPage() {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 function DashboardPage() {
   const { profile } = useAuth()
-  const [stats, setStats] = useState({ present: 0, checkedOut: 0, total: 0, avgMins: 0 })
-  const [deptStats, setDeptStats] = useState([])
-  const [recent, setRecent] = useState([])
-  const [loading, setLoading] = useState(true)
-  const isAdmin = profile?.role === 'admin'
-
-  useEffect(() => { loadData() }, [profile])
-
+  const [stats,setStats]=useState({present:0,checkedOut:0,total:0,avgMins:0,diurna:0})
+  const [deptStats,setDeptStats]=useState([])
+  const [recent,setRecent]=useState([])
+  const [unalloc,setUnalloc]=useState([])
+  const [load,setLoad]=useState(true)
+  const isAdmin=profile?.role==='admin'
+  useEffect(()=>{ load&&loadData() },[profile])
   const loadData = async () => {
-    setLoading(true)
-    const today = todayStr()
-    let empQuery = supabase.from('employees').select('id, name, department').eq('active', true)
-    if (!isAdmin) empQuery = empQuery.eq('department', profile?.department)
-    const { data: employees } = await empQuery
-
-    if (!employees) { setLoading(false); return }
-
-    const empIds = employees.map(e => e.id)
-    const { data: records } = await supabase.from('pontaj_records').select('*, employees(name, department)').eq('date', today).in('employee_id', empIds).order('check_in', { ascending: false })
-
-    const present = records?.filter(r => r.check_in).length || 0
-    const checkedOut = records?.filter(r => r.check_out).length || 0
-    const totalMins = records?.reduce((s, r) => s + diffMins(r.check_in, r.check_out), 0) || 0
-    setStats({ present, checkedOut, total: employees.length, avgMins: present > 0 ? Math.round(totalMins / present) : 0 })
-    setRecent(records?.slice(0, 10) || [])
-
-    const depts = isAdmin ? DEPARTMENTS : [profile?.department]
-    setDeptStats(depts.map(dept => {
-      const deptEmps = employees.filter(e => e.department === dept)
-      const deptPresent = records?.filter(r => r.employees?.department === dept && r.check_in).length || 0
-      return { dept, total: deptEmps.length, present: deptPresent }
-    }).filter(d => d.total > 0))
-
-    setLoading(false)
+    setLoad(true)
+    const today=todayStr()
+    let eq=supabase.from('employees').select('*,sites(name)').eq('active',true)
+    if (!isAdmin&&profile?.site_id) eq=eq.eq('site_id',profile.site_id)
+    else if (!isAdmin) { setLoad(false); return }
+    const {data:emps}=await eq; if(!emps){setLoad(false);return}
+    setUnalloc(emps.filter(e=>!e.site_id))
+    const {data:recs}=await supabase.from('pontaj_records').select('*,employees(name,department,sites(name))').eq('date',today).in('employee_id',emps.map(e=>e.id)).order('check_in',{ascending:false})
+    const present=(recs||[]).filter(r=>r.check_in&&!r.norma).length
+    const checkedOut=(recs||[]).filter(r=>r.check_out&&!r.norma).length
+    const diurna=(recs||[]).filter(r=>r.diurna).length
+    const totalMins=(recs||[]).reduce((s,r)=>s+netMins(r.check_in,r.check_out,r.lunch_break!==false),0)
+    setStats({present,checkedOut,total:emps.length,avgMins:present>0?Math.round(totalMins/present):0,diurna})
+    setRecent((recs||[]).slice(0,8))
+    setDeptStats(DEPARTMENTS.map(dept=>({dept,total:emps.filter(e=>e.department===dept).length,present:(recs||[]).filter(r=>r.employees?.department===dept&&r.check_in&&!r.norma).length})).filter(d=>d.total>0))
+    setLoad(false)
   }
-
-  if (loading) return <Layout><LoadingScreen /></Layout>
-
-  const statCards = [
-    { label: 'Total Angajați', val: stats.total, icon: '👥', color: G.blue, sub: 'activi în sistem' },
-    { label: 'Prezenți Azi', val: stats.present, icon: '✅', color: G.green, sub: `din ${stats.total}` },
-    { label: 'Au Plecat', val: stats.checkedOut, icon: '🚪', color: G.yellow, sub: 'ieșire înregistrată' },
-    { label: 'Medie Ore/Om', val: minsToHM(stats.avgMins), icon: '⏱', color: G.purple, sub: 'pentru cei prezenți' },
-  ]
-
+  if (load) return <Layout><div style={{display:'flex',justifyContent:'center',padding:80}}><div className="sp" style={{width:30,height:30}}/></div></Layout>
   return (
     <Layout>
-      <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 24 }}>
-        Bun venit{profile?.name ? `, ${profile.name.split(' ')[0]}` : ''}! 👋
-        {!isAdmin && <span style={{ fontSize: 14, color: G.muted, fontWeight: 400, marginLeft: 12 }}>Departament: {profile?.department}</span>}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        {statCards.map(s => (
-          <div key={s.label} style={{ ...S.card, padding: '20px 24px', transition: 'transform 0.2s, border-color 0.2s' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ fontSize: 12, color: G.muted, marginBottom: 8, fontWeight: 600 }}>{s.label}</div>
-                <div style={{ fontSize: 34, fontWeight: 800, color: s.color, lineHeight: 1 }}>{s.val}</div>
-                <div style={{ fontSize: 12, color: G.dim, marginTop: 6 }}>{s.sub}</div>
-              </div>
-              <div style={{ fontSize: 28 }}>{s.icon}</div>
+      <div style={{fontSize:19,fontWeight:800,marginBottom:18}}>Bun venit{profile?.name?`, ${profile.name.split(' ')[0]}`:''}! 👋</div>
+      {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:10,padding:'10px 16px',marginBottom:16,display:'flex',alignItems:'center',gap:10}}>
+        <span style={{fontSize:18}}>⚠️</span>
+        <div><div style={{fontSize:12,fontWeight:700,color:G.red}}>{unalloc.length} angajați nealocați pe niciun șantier!</div>
+        <div style={{fontSize:11,color:'#F8514999'}}>{unalloc.slice(0,4).map(e=>e.name).join(', ')}{unalloc.length>4?` +${unalloc.length-4}`:''}</div></div>
+      </div>}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:13,marginBottom:20}}>
+        {[{l:'Total Angajați',v:stats.total,i:'👥',c:G.blue,s:'activi'},{l:'Prezenți Azi',v:stats.present,i:'✅',c:G.green,s:`din ${stats.total}`},{l:'Au Plecat',v:stats.checkedOut,i:'🚪',c:G.yellow,s:'ieșire'},{l:'Medie Ore',v:minsToHM(stats.avgMins),i:'⏱',c:G.purple,s:'azi'},{l:'Cu Diurnă',v:stats.diurna,i:'💰',c:G.orange,s:'azi'}].map(x=>(
+          <div key={x.l} style={{...S.card,padding:'16px 18px'}}>
+            <div style={{display:'flex',justifyContent:'space-between'}}>
+              <div><div style={{fontSize:10,color:G.muted,marginBottom:6,fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px'}}>{x.l}</div>
+              <div style={{fontSize:28,fontWeight:800,color:x.c,lineHeight:1}}>{x.v}</div>
+              <div style={{fontSize:10,color:G.dim,marginTop:4}}>{x.s}</div></div>
+              <div style={{fontSize:22}}>{x.i}</div>
             </div>
           </div>
         ))}
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: isAdmin ? '1fr 1fr' : '1fr', gap: 20 }}>
-        {isAdmin && (
-          <div style={{ ...S.card, padding: 24 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 20 }}>Prezență pe Departamente</div>
-            {deptStats.map(d => (
-              <div key={d.dept} style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ fontSize: 13 }}>{d.dept}</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: G.blue }}>{d.present}/{d.total}</span>
-                </div>
-                <div style={{ height: 5, background: '#21262D', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${d.total ? (d.present / d.total) * 100 : 0}%`, background: d.present / d.total > 0.7 ? G.green : d.present / d.total > 0.4 ? G.yellow : G.red, borderRadius: 3, transition: 'width 0.5s' }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        <div style={{ ...S.card, padding: 24 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Activitate Recentă</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {recent.length === 0 ? (
-              <div style={{ textAlign: 'center', color: G.muted, padding: '24px 0', fontSize: 13 }}>Nicio activitate înregistrată azi</div>
-            ) : recent.map(r => (
-              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: '#1C2128', borderRadius: 8 }}>
-                <Avatar name={r.employees?.name} size={32} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{r.employees?.name}</div>
-                  <div style={{ fontSize: 11, color: G.muted }}>{r.employees?.department}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  {r.check_in && <div style={{ fontSize: 12, color: G.green }}>⬇ {fmt(r.check_in)}</div>}
-                  {r.check_out && <div style={{ fontSize: 12, color: G.red }}>⬆ {fmt(r.check_out)}</div>}
+      <div style={{display:'grid',gridTemplateColumns:isAdmin?'1fr 1fr':'1fr',gap:16}}>
+        {isAdmin&&<div style={{...S.card,padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:16}}>Prezență pe Departamente</div>
+          {deptStats.map(d=>(
+            <div key={d.dept} style={{marginBottom:11}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:12}}>{d.dept}</span><span style={{fontSize:12,fontWeight:700,color:G.blue}}>{d.present}/{d.total}</span></div>
+              <div style={{height:4,background:'#21262D',borderRadius:2}}><div style={{height:'100%',width:`${d.total?(d.present/d.total)*100:0}%`,background:d.present/d.total>.7?G.green:d.present/d.total>.4?G.yellow:G.red,borderRadius:2,transition:'width .5s'}}/></div>
+            </div>
+          ))}
+        </div>}
+        <div style={{...S.card,padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:13}}>Activitate Recentă</div>
+          <div style={{display:'flex',flexDirection:'column',gap:7}}>
+            {recent.length===0?<div style={{textAlign:'center',color:G.muted,padding:'18px 0',fontSize:12}}>Nicio activitate azi</div>
+            :recent.map(r=>(
+              <div key={r.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',background:'#1C2128',borderRadius:8}}>
+                <Avatar name={r.employees?.name} size={26}/>
+                <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{r.employees?.name}</div><div style={{fontSize:10,color:G.muted}}>{r.employees?.sites?.name||r.employees?.department}</div></div>
+                <div style={{textAlign:'right',fontSize:11}}>
+                  {r.norma?<span style={{color:G.yellow,fontWeight:700}}>{r.norma}</span>:<>{r.check_in&&<div style={{color:G.green}}>⬇ {fmt24(r.check_in)}</div>}{r.check_out&&<div style={{color:G.red}}>⬆ {fmt24(r.check_out)}</div>}</>}
+                  {r.diurna&&<span style={{color:G.orange}}> 💰</span>}
                 </div>
               </div>
             ))}
@@ -384,506 +237,346 @@ function DashboardPage() {
         </div>
       </div>
     </Layout>
+  )
+}
+
+// ─── Pontaj Row ───────────────────────────────────────────────────────────────
+function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt }) {
+  const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
+  const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
+  const [norma,setNorma]=useState(rec?.norma||'')
+  const [diurna,setDiurna]=useState(rec?.diurna||false)
+  const [mode,setMode]=useState(rec?.norma?'norma':'ore') // ore | norma
+  const [exp,setExp]=useState(false)
+  useEffect(()=>{
+    setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
+    setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
+    setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setMode(rec?.norma?'norma':'ore')
+  },[rec])
+  const previewNet = () => { if(!ci) return null; const a=dateToISO(selectedDate,ci),b=co?dateToISO(selectedDate,co):null; return b?netMins(a,b,true):null }
+  const pNet=previewNet()
+  const recNet=netMins(rec?.check_in,rec?.check_out,rec?.lunch_break!==false)
+  const hasRec=rec?.check_in||rec?.norma
+  const save = () => {
+    if (mode==='norma'&&norma) onSave(emp,{norma,check_in:null,check_out:null,lunch_break:false,diurna})
+    else if (mode==='ore'&&ci) onSave(emp,{check_in:dateToISO(selectedDate,ci),check_out:co?dateToISO(selectedDate,co):null,norma:null,lunch_break:true,diurna})
+    else onSave(emp,{...(rec||{}),diurna,norma:rec?.norma||null,check_in:rec?.check_in||null,check_out:rec?.check_out||null})
+  }
+  return (
+    <div style={{...S.card,padding:'10px 14px',transition:'border-color .2s'}}>
+      <div style={{display:'flex',alignItems:'center',gap:11,flexWrap:'nowrap'}}>
+        <Avatar name={emp.name} id={emp.id} size={34}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{emp.name}</div>
+          <div style={{fontSize:10,color:G.muted,display:'flex',gap:5,alignItems:'center'}}>
+            {emp.department&&<span className="badge bd" style={{fontSize:9,padding:'1px 5px'}}>{emp.department}</span>}
+            {emp.position&&<span>{emp.position}</span>}
+          </div>
+        </div>
+
+        {/* Santier */}
+        <div style={{minWidth:130}}>
+          {emp.site_id?<span className="badge bs" style={{fontSize:10,display:'block',marginBottom:3}}>{emp.sites?.name||'Șantier'}</span>
+          :<span style={{fontSize:10,color:G.red,fontWeight:700,display:'block',marginBottom:3}}>⚠ Nealocate</span>}
+          {isAdmin&&<select value={emp.site_id||''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
+            <option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>}
+        </div>
+
+        {/* Status actual */}
+        {hasRec&&!exp&&<div style={{textAlign:'center',minWidth:80}}>
+          {rec?.norma?<span style={{background:G.yellowDim,color:G.yellow,border:`1px solid ${G.yellow}44`,padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700}}>{rec.norma}</span>
+          :<>{rec?.check_in&&<div style={{fontSize:11,color:G.green,fontWeight:600}}>⬇ {fmt24(rec.check_in)}</div>}{rec?.check_out&&<div style={{fontSize:11,color:G.red,fontWeight:600}}>⬆ {fmt24(rec.check_out)}</div>}</>}
+        </div>}
+
+        {/* Ore nete */}
+        {recNet>0&&!rec?.norma&&!exp&&<div style={{minWidth:65,textAlign:'center'}}>
+          <div style={{fontSize:12,fontWeight:700,color:G.yellow}}>{minsToHM(recNet)}</div>
+          {spansLunch(rec?.check_in,rec?.check_out)&&<div style={{fontSize:10,color:'#79C0FF'}}>☕−1h</div>}
+        </div>}
+
+        {/* Diurna */}
+        <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',minWidth:55}}>
+          <input type="checkbox" checked={diurna} onChange={e=>setDiurna(e.target.checked)} style={{width:15,height:15,accentColor:G.orange}}/>
+          <span style={{fontSize:9,color:diurna?G.orange:G.dim,fontWeight:600}}>{diurna?`💰${diurnaAmt}RON`:'💰 Diurnă'}</span>
+        </label>
+
+        {/* Edit toggle */}
+        <button onClick={()=>setExp(!exp)} style={{background:'none',border:`1px solid ${G.border}`,borderRadius:7,padding:'4px 9px',cursor:'pointer',color:G.muted,fontSize:11}}>{exp?'▲':'✏️'}</button>
+
+        {/* Save */}
+        <button onClick={save} disabled={saving} style={{...S.btnP,padding:'6px 13px',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{saving?<div className="sp"/>:'💾'}</button>
+      </div>
+
+      {exp&&<div style={{marginTop:11,padding:13,background:'#0D1117',borderRadius:8,border:`1px solid ${G.border}`}}>
+        <div style={{display:'flex',gap:14,alignItems:'flex-start',flexWrap:'wrap'}}>
+          <div>
+            <Lbl>Tip</Lbl>
+            <div style={{display:'flex',gap:12}}>
+              <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
+                <input type="radio" name={`m${emp.id}`} checked={mode==='ore'} onChange={()=>{setMode('ore');setNorma('')}} style={{accentColor:G.blue}}/> Ore lucrate
+              </label>
+              <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
+                <input type="radio" name={`m${emp.id}`} checked={mode==='norma'} onChange={()=>{setMode('norma');setCi('');setCo('')}} style={{accentColor:G.yellow}}/> Normă specială
+              </label>
+            </div>
+          </div>
+          {mode==='ore'?(
+            <>
+              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:110}}/></div>
+              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:110}}/></div>
+              {pNet!==null&&<div style={{paddingTop:18,fontSize:12,color:G.yellow,fontWeight:700}}>{minsToHM(pNet)} net</div>}
+            </>
+          ):(
+            <div><Lbl>Normă</Lbl>
+              <select value={norma} onChange={e=>setNorma(e.target.value)} style={{width:230}}>
+                <option value="">— Selectează —</option>
+                {NORME.map(n=><option key={n} value={n}>{n} — {NORME_LABELS[n]}</option>)}
+              </select>
+            </div>
+          )}
+          <div style={{paddingTop:18}}>
+            <label style={{display:'flex',alignItems:'center',gap:7,fontSize:12,cursor:'pointer'}}>
+              <input type="checkbox" checked={diurna} onChange={e=>setDiurna(e.target.checked)} style={{accentColor:G.orange}}/> 💰 Diurnă ({diurnaAmt} RON)
+            </label>
+          </div>
+        </div>
+      </div>}
+    </div>
   )
 }
 
 // ─── Pontaj Page ──────────────────────────────────────────────────────────────
 function PontajPage() {
   const { profile } = useAuth()
-  const [employees, setEmployees] = useState([])
-  const [records, setRecords] = useState({})
-  const [search, setSearch] = useState('')
-  const [deptFilter, setDeptFilter] = useState('Toate')
-  const [selectedDate, setSelectedDate] = useState(todayStr())
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(null)
-  const [toast, showToast] = useToast()
-  const isAdmin = profile?.role === 'admin'
-  const isToday = selectedDate === todayStr()
+  const [emps,setEmps]=useState([]); const [recs,setRecs]=useState({}); const [sites,setSites]=useState([])
+  const [search,setSearch]=useState(''); const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
+  const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
+  const [diurnaAmt,setDiurnaAmt]=useState(50); const [toast,showToast]=useToast()
+  const isAdmin=profile?.role==='admin'
+  useEffect(()=>{ loadSites(); loadSettings() },[])
+  useEffect(()=>{ loadEmps() },[profile,sites])
+  useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
+  const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)) }
+  const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
+  const loadEmps=async()=>{ let q=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name'); if(!isAdmin&&profile?.site_id) q=q.eq('site_id',profile.site_id); else if(!isAdmin){setEmps([]);setLoad(false);return}; const {data}=await q; setEmps(data||[]) }
+  const loadRecs=async()=>{ setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); const m={}; (data||[]).forEach(r=>{m[r.employee_id]=r}); setRecs(m); setLoad(false) }
 
-  useEffect(() => { loadEmployees() }, [profile])
-  useEffect(() => { if (employees.length > 0) loadRecords() }, [employees, selectedDate])
-
-  const loadEmployees = async () => {
-    let q = supabase.from('employees').select('*').eq('active', true).order('name')
-    if (!isAdmin) q = q.eq('department', profile?.department)
-    const { data } = await q
-    setEmployees(data || [])
-  }
-
-  const loadRecords = async () => {
-    setLoading(true)
-    const ids = employees.map(e => e.id)
-    const { data } = await supabase.from('pontaj_records').select('*').eq('date', selectedDate).in('employee_id', ids)
-    const map = {}
-    data?.forEach(r => { map[r.employee_id] = r })
-    setRecords(map)
-    setLoading(false)
-  }
-
-  const handleCheckIn = async (emp) => {
-    if (records[emp.id]?.check_in) return
+  const saveRecord = async (emp, fields) => {
     setSaving(emp.id)
-    const { data, error } = await supabase.from('pontaj_records').upsert({
-      employee_id: emp.id, date: selectedDate, check_in: new Date().toISOString(), check_out: null
-    }, { onConflict: 'employee_id,date' }).select().single()
-    if (!error) { setRecords(prev => ({ ...prev, [emp.id]: data })); showToast(`✓ Intrare: ${emp.name}`) }
-    else showToast('Eroare la salvare', 'error')
+    if (!fields.norma && !emp.site_id) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
+    const uid=(await supabase.auth.getUser()).data.user?.id
+    const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:emp.site_id,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
+    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`)} else showToast('Eroare la salvare','error')
     setSaving(null)
   }
-
-  const handleCheckOut = async (emp) => {
-    const rec = records[emp.id]
-    if (!rec?.check_in || rec?.check_out) return
-    setSaving(emp.id)
-    const { data, error } = await supabase.from('pontaj_records').update({ check_out: new Date().toISOString() }).eq('id', rec.id).select().single()
-    if (!error) { setRecords(prev => ({ ...prev, [emp.id]: data })); showToast(`✓ Ieșire: ${emp.name}`) }
-    else showToast('Eroare la salvare', 'error')
-    setSaving(null)
+  const allocate = async (emp, siteId) => {
+    await supabase.from('employees').update({site_id:siteId||null}).eq('id',emp.id)
+    setEmps(prev=>prev.map(e=>e.id===emp.id?{...e,site_id:siteId||null,sites:sites.find(s=>s.id===siteId)||null}:e))
+    showToast(siteId?`✓ Alocat: ${sites.find(s=>s.id===siteId)?.name}`:'Dezalocat','warn')
   }
-
-  const handleManualSave = async (emp, checkIn, checkOut) => {
-    if (!checkIn) return
-    setSaving(emp.id)
-    const ciISO = new Date(`${selectedDate}T${checkIn}:00`).toISOString()
-    const coISO = checkOut ? new Date(`${selectedDate}T${checkOut}:00`).toISOString() : null
-    const { data, error } = await supabase.from('pontaj_records').upsert({
-      employee_id: emp.id, date: selectedDate, check_in: ciISO, check_out: coISO
-    }, { onConflict: 'employee_id,date' }).select().single()
-    if (!error) { setRecords(prev => ({ ...prev, [emp.id]: data })); showToast(`✓ Salvat: ${emp.name}`) }
-    else showToast('Eroare la salvare', 'error')
-    setSaving(null)
-  }
-
-  const handleToggleLunch = async (emp) => {
-    const rec = records[emp.id]
-    if (!rec?.check_in || !rec?.check_out) return
-    if (!spansLunch(rec.check_in, rec.check_out)) return
-    setSaving(emp.id)
-    const newVal = rec.lunch_break === false ? true : false
-    const { data, error } = await supabase.from('pontaj_records').update({ lunch_break: newVal }).eq('id', rec.id).select().single()
-    if (!error) { setRecords(prev => ({ ...prev, [emp.id]: data })); showToast(newVal ? '☕ Pauză masă activată' : '⚡ Pauză masă dezactivată', 'warn') }
-    setSaving(null)
-  }
-
-  const depts = isAdmin ? ['Toate', ...DEPARTMENTS] : [profile?.department || 'Toate']
-
-  const filtered = employees.filter(e => {
-    const ms = e.name.toLowerCase().includes(search.toLowerCase()) || e.department.toLowerCase().includes(search.toLowerCase())
-    const md = deptFilter === 'Toate' || e.department === deptFilter
-    return ms && md
+  const filtered=emps.filter(e=>{
+    const ms=e.name.toLowerCase().includes(search.toLowerCase())
+    const md=deptF==='Toate'||e.department===deptF
+    const ms2=siteF==='Toate'||String(e.site_id)===String(siteF)
+    return ms&&md&&ms2
   })
-
-  // Stats for header
-  const presentCount = filtered.filter(e => records[e.id]?.check_in).length
-
+  const unalloc=emps.filter(e=>!e.site_id)
   return (
     <Layout>
-      <Toast toast={toast} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>Pontaj</div>
-          <div style={{ fontSize: 13, color: G.muted, marginTop: 4 }}>
-            {presentCount} prezenți din {filtered.length} angajați
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ ...S.input, width: 'auto', padding: '8px 12px' }} />
-          <input placeholder="🔍 Caută..." value={search} onChange={e => setSearch(e.target.value)} style={{ ...S.input, width: 200 }} />
-          {isAdmin && (
-            <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
-              {depts.map(d => <option key={d}>{d}</option>)}
-            </select>
-          )}
+      <Toast toast={toast}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <div><div style={{fontSize:19,fontWeight:800}}>Pontaj</div><div style={{fontSize:11,color:G.muted,marginTop:2}}>{filtered.length} angajați · {Object.values(recs).filter(r=>r.check_in||r.norma).length} înreg.</div></div>
+        <div style={{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
+          <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px'}}/>
+          <input placeholder="🔍 Caută..." value={search} onChange={e=>setSearch(e.target.value)} style={{...S.input,width:170}}/>
+          <select value={deptF} onChange={e=>setDeptF(e.target.value)}><option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select>
+          {isAdmin&&<select value={siteF} onChange={e=>setSiteF(e.target.value)}><option value="Toate">Toate șantierele</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
         </div>
       </div>
-
-      {/* Lunch info banner */}
-      <div style={{ background: '#1A2A3A', border: `1px solid #58A6FF33`, borderRadius: 10, padding: '10px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
-        <span style={{ fontSize: 18 }}>☕</span>
-        <span style={{ color: '#79C0FF' }}>
-          <strong>Pauză masă automată 12:00–13:00</strong> — se scade 1 oră dacă angajatul a lucrat în intervalul 12:00–13:00. Poți dezactiva individual cu butonul ☕.
-        </span>
+      <div style={{background:'#1A2A3A',border:`1px solid ${G.blue}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:'#79C0FF'}}>
+        ☕ Pauza masă 12–13 se scade automat &nbsp;·&nbsp; 💰 Diurnă {diurnaAmt} RON/zi &nbsp;·&nbsp; Șantierul obligatoriu la ore
       </div>
-
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" style={{ width: 32, height: 32 }} /></div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {filtered.map(emp => {
-            const rec = records[emp.id]
-            const isIn = rec?.check_in && !rec?.check_out
-            const isDone = rec?.check_in && rec?.check_out
-            const isSav = saving === emp.id
-            const lunchApplies = spansLunch(rec?.check_in, rec?.check_out)
-            const lunchActive = rec?.lunch_break !== false && lunchApplies
-            const gross = diffMins(rec?.check_in, rec?.check_out)
-            const net = netMins(rec?.check_in, rec?.check_out, rec?.lunch_break !== false)
-
-            return (
-              <div key={emp.id} style={{ ...S.card, padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14, transition: 'border-color 0.2s' }}>
-                <Avatar name={emp.name} id={emp.id} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{emp.name}</div>
-                  <div style={{ fontSize: 12, color: G.muted }}>{emp.position}</div>
-                </div>
-                <span className="badge badge-dept">{emp.department}</span>
-
-                {/* Times */}
-                <div style={{ textAlign: 'center', minWidth: 100 }}>
-                  {rec?.check_in ? <div style={{ fontSize: 12, color: G.green, fontWeight: 600 }}>⬇ {fmt(rec.check_in)}</div> : <div style={{ fontSize: 12, color: G.dim }}>—</div>}
-                  {rec?.check_out ? <div style={{ fontSize: 12, color: G.red, fontWeight: 600 }}>⬆ {fmt(rec.check_out)}</div> : null}
-                </div>
-
-                {/* Hours + lunch */}
-                <div style={{ minWidth: 120, textAlign: 'center' }}>
-                  {gross > 0 ? (
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: G.yellow }}>{minsToHM(net)}</div>
-                      {lunchApplies && (
-                        <div style={{ fontSize: 10, color: lunchActive ? '#79C0FF' : G.dim }}>
-                          {lunchActive ? `☕ −1h pauză` : `⚡ brut ${minsToHM(gross)}`}
-                        </div>
-                      )}
-                    </div>
-                  ) : isIn ? <span style={{ fontSize: 12, color: G.green }}>● activ</span> : null}
-                </div>
-
-                {/* Lunch toggle (only if has check_out and spans lunch) */}
-                {isDone && lunchApplies && (
-                  <button
-                    onClick={() => handleToggleLunch(emp)}
-                    disabled={isSav}
-                    title={lunchActive ? 'Dezactivează pauza de masă' : 'Activează pauza de masă'}
-                    style={{ background: lunchActive ? '#1A2A3A' : '#2A1A1A', color: lunchActive ? '#79C0FF' : G.dim, border: `1px solid ${lunchActive ? '#58A6FF44' : G.border}`, borderRadius: 7, padding: '5px 10px', cursor: 'pointer', fontSize: 14, transition: 'all 0.2s' }}>
-                    ☕
-                  </button>
-                )}
-
-                {/* Action buttons */}
-                {isToday ? (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {!rec?.check_in && (
-                      <button disabled={isSav} onClick={() => handleCheckIn(emp)}
-                        style={{ background: G.greenDim, color: G.green, border: `1px solid ${G.green}44`, borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700 }}>
-                        {isSav ? '...' : 'Intrare'}
-                      </button>
-                    )}
-                    {isIn && (
-                      <button disabled={isSav} onClick={() => handleCheckOut(emp)}
-                        style={{ background: G.redDim, color: G.red, border: `1px solid ${G.red}44`, borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 700 }}>
-                        {isSav ? '...' : 'Ieșire'}
-                      </button>
-                    )}
-                    {isDone && <span style={{ fontSize: 12, color: G.muted, padding: '7px 0' }}>✓ Complet</span>}
-                  </div>
-                ) : (
-                  <ManualTimeInputRow emp={emp} rec={rec} onSave={handleManualSave} saving={isSav} />
-                )}
-              </div>
-            )
-          })}
-          {filtered.length === 0 && (
-            <div style={{ textAlign: 'center', color: G.muted, padding: '60px 0', fontSize: 14 }}>Niciun angajat găsit</div>
-          )}
-        </div>
-      )}
+      {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:G.red}}>⚠️ <strong>{unalloc.length} nealocați:</strong> {unalloc.slice(0,4).map(e=>e.name).join(', ')}{unalloc.length>4?'...':''}</div>}
+      {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
+      :<div style={{display:'flex',flexDirection:'column',gap:5}}>
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt}/>)}
+        {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
+      </div>}
     </Layout>
-  )
-}
-
-function ManualTimeInputRow({ emp, rec, onSave, saving }) {
-  const existIn = rec?.check_in ? new Date(rec.check_in).toTimeString().slice(0, 5) : ''
-  const existOut = rec?.check_out ? new Date(rec.check_out).toTimeString().slice(0, 5) : ''
-  const [ci, setCi] = useState(existIn)
-  const [co, setCo] = useState(existOut)
-  useEffect(() => { setCi(existIn); setCo(existOut) }, [existIn, existOut])
-  return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-      <input type="time" value={ci} onChange={e => setCi(e.target.value)} style={{ ...S.input, width: 100, padding: '6px 10px', fontSize: 12 }} />
-      <span style={{ color: G.dim, fontSize: 12 }}>—</span>
-      <input type="time" value={co} onChange={e => setCo(e.target.value)} style={{ ...S.input, width: 100, padding: '6px 10px', fontSize: 12 }} />
-      <button disabled={saving || !ci} onClick={() => onSave(emp, ci, co)}
-        style={{ background: '#1F6FEB22', color: G.blue, border: `1px solid #1F6FEB44`, borderRadius: 7, padding: '6px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
-        {saving ? '...' : '💾'}
-      </button>
-    </div>
   )
 }
 
 // ─── Reports Page ─────────────────────────────────────────────────────────────
 function ReportsPage() {
   const { profile } = useAuth()
-  const now = new Date()
-  const [selectedMonth, setSelectedMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
-  const [deptFilter, setDeptFilter] = useState('Toate')
-  const [data, setData] = useState([])
-  const [detailedRecords, setDetailedRecords] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [exporting, setExporting] = useState(false)
-  const [viewMode, setViewMode] = useState('summary') // 'summary' | 'detailed'
-  const [toast, showToast] = useToast()
-  const isAdmin = profile?.role === 'admin'
+  const now=new Date()
+  const [month,setMonth]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`)
+  const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
+  const [sites,setSites]=useState([]); const [data,setData]=useState([]); const [detailed,setDetailed]=useState([])
+  const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false)
+  const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50)
+  const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
+  const [toast,showToast]=useToast()
+  const isAdmin=profile?.role==='admin'
+  useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value))}) },[])
+  useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
 
-  useEffect(() => { loadReport() }, [selectedMonth, deptFilter, profile])
+  const getRange=()=>{ const [y,m]=month.split('-').map(Number); return {y,m,from:new Date(y,m-1,1).toISOString().split('T')[0],to:new Date(y,m,0).toISOString().split('T')[0],days:new Date(y,m,0).getDate()} }
 
-  const getMonthRange = () => {
-    const [year, month] = selectedMonth.split('-').map(Number)
-    const from = new Date(year, month - 1, 1)
-    const to = new Date(year, month, 0) // last day of month
-    return {
-      fromStr: from.toISOString().split('T')[0],
-      toStr: to.toISOString().split('T')[0],
-      daysInMonth: to.getDate()
-    }
-  }
-
-  const loadReport = async () => {
-    setLoading(true)
-    const { fromStr, toStr, daysInMonth } = getMonthRange()
-
-    let empQ = supabase.from('employees').select('*').eq('active', true).order('name')
-    if (!isAdmin) empQ = empQ.eq('department', profile?.department)
-    else if (deptFilter !== 'Toate') empQ = empQ.eq('department', deptFilter)
-    const { data: employees } = await empQ
-    if (!employees) { setLoading(false); return }
-
-    const { data: records } = await supabase.from('pontaj_records').select('*')
-      .gte('date', fromStr).lte('date', toStr).in('employee_id', employees.map(e => e.id))
-
-    // Summary per employee — ore nete (cu pauza de masa scazuta)
-    const stats = employees.map(emp => {
-      const empRecs = records?.filter(r => r.employee_id === emp.id) || []
-      const daysPresent = empRecs.filter(r => r.check_in).length
-      const totalMins = empRecs.reduce((s, r) => s + netMins(r.check_in, r.check_out, r.lunch_break !== false), 0)
-      const totalGross = empRecs.reduce((s, r) => s + diffMins(r.check_in, r.check_out), 0)
-      const lunchDays = empRecs.filter(r => r.lunch_break !== false && spansLunch(r.check_in, r.check_out)).length
-      const avgMins = daysPresent > 0 ? Math.round(totalMins / daysPresent) : 0
-      return { ...emp, daysPresent, totalMins, totalGross, lunchDays, avgMins, daysInMonth }
-    }).sort((a, b) => b.totalMins - a.totalMins)
+  const loadReport=async()=>{
+    setLoad(true)
+    const {y,m,from,to,days}=getRange()
+    let eq=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
+    if (!isAdmin&&profile?.site_id) eq=eq.eq('site_id',profile.site_id)
+    if (deptF!=='Toate'&&isAdmin) eq=eq.eq('department',deptF)
+    if (siteF!=='Toate'&&isAdmin) eq=eq.eq('site_id',siteF)
+    const {data:emps}=await eq; if(!emps){setLoad(false);return}
+    const {data:recs}=await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).in('employee_id',emps.map(e=>e.id))
+    const stats=emps.map(emp=>{
+      const er=(recs||[]).filter(r=>r.employee_id===emp.id)
+      const workDays=er.filter(r=>r.check_in&&!r.norma).length
+      const totalMins=er.reduce((s,r)=>s+netMins(r.check_in,r.check_out,r.lunch_break!==false),0)
+      const totalGross=er.reduce((s,r)=>s+diffMins(r.check_in,r.check_out),0)
+      const lunchDays=er.filter(r=>r.lunch_break!==false&&spansLunch(r.check_in,r.check_out)).length
+      const diurnaDays=er.filter(r=>r.diurna).length
+      const norme={}; er.forEach(r=>{if(r.norma)norme[r.norma]=(norme[r.norma]||0)+1})
+      return {...emp,workDays,totalMins,totalGross,lunchDays,diurnaDays,norme,avgMins:workDays>0?Math.round(totalMins/workDays):0,days,records:er}
+    }).sort((a,b)=>a.name.localeCompare(b.name))
     setData(stats)
-
-    // Detailed records with employee info
-    const detailed = (records || []).map(r => {
-      const emp = employees.find(e => e.id === r.employee_id)
-      return { ...r, empName: emp?.name || '?', empDept: emp?.department || '?', empPos: emp?.position || '' }
-    }).sort((a, b) => a.date.localeCompare(b.date) || a.empName.localeCompare(b.empName))
-    setDetailedRecords(detailed)
-
-    setLoading(false)
+    setDetailed((recs||[]).map(r=>{const e=emps.find(x=>x.id===r.employee_id);return {...r,empName:e?.name||'?',empDept:e?.department||'',empPos:e?.position||'',empSite:e?.sites?.name||''}}).sort((a,b)=>a.date.localeCompare(b.date)||a.empName.localeCompare(b.empName)))
+    setLoad(false)
   }
 
-  const exportToExcel = async () => {
-    if (data.length === 0) { showToast('Nu există date de exportat', 'warn'); return }
-    setExporting(true)
-    const [year, month] = selectedMonth.split('-').map(Number)
-    const monthName = new Date(year, month - 1).toLocaleString('ro-RO', { month: 'long', year: 'numeric' })
-
-    const wb = XLSX.utils.book_new()
-
-    // ── Sheet 1: Rezumat ──
-    const summaryRows = [
-      [`Pontaj ${monthName}${deptFilter !== 'Toate' ? ` — ${deptFilter}` : ''}`],
-      [`Notă: Orele nete exclud pauza de masă 12:00-13:00 (1 oră) acolo unde se aplică`],
-      [],
-      ['Angajat', 'Departament', 'Funcție', 'Zile Prezent', `Zile Lucratoare (${getMonthRange().daysInMonth})`, 'Zile cu Pauza Masa', 'Ore Brute', 'Ore Nete', 'Medie Ore Nete/Zi', 'Overtime'],
-      ...data.map(emp => [
-        emp.name,
-        emp.department,
-        emp.position || '',
-        emp.daysPresent,
-        emp.daysInMonth,
-        emp.lunchDays,
-        +(emp.totalGross / 60).toFixed(2),
-        +(emp.totalMins / 60).toFixed(2),
-        +(emp.avgMins / 60).toFixed(2),
-        emp.avgMins > 510 ? 'DA' : 'NU'
-      ])
-    ]
-    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows)
-    wsSummary['!cols'] = [{ wch: 28 }, { wch: 16 }, { wch: 20 }, { wch: 14 }, { wch: 20 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 10 }]
-    XLSX.utils.book_append_sheet(wb, wsSummary, 'Rezumat')
-
-    // ── Sheet 2: Detaliat (fiecare zi) ──
-    const detailRows = [
-      [`Pontaj Detaliat — ${monthName}`],
-      [],
-      ['Data', 'Angajat', 'Departament', 'Funcție', 'Oră Intrare', 'Oră Ieșire', 'Ore Brute', 'Pauza Masa', 'Ore Nete', 'Note'],
-      ...detailedRecords.filter(r => r.check_in).map(r => {
-        const gross = diffMins(r.check_in, r.check_out)
-        const lunchOn = r.lunch_break !== false && spansLunch(r.check_in, r.check_out)
-        const net = netMins(r.check_in, r.check_out, r.lunch_break !== false)
-        return [
-          r.date,
-          r.empName,
-          r.empDept,
-          r.empPos,
-          r.check_in ? new Date(r.check_in).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' }) : '',
-          r.check_out ? new Date(r.check_out).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' }) : 'Lipsă ieșire',
-          +(gross / 60).toFixed(2),
-          lunchOn ? '12:00-13:00 (−1h)' : 'Nu',
-          +(net / 60).toFixed(2),
-          r.notes || ''
-        ]
+  const exportITM=async()=>{
+    if (!data.length){showToast('Fără date','warn');return}
+    setExpITM(true)
+    const {y,m,days}=getRange()
+    const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
+    const wb=XLSX.utils.book_new()
+    const dayNums=Array.from({length:days},(_,i)=>i+1)
+    const dayHdr=dayNums.map(d=>{const dt=new Date(y,m-1,d);return `${d}\n${['D','L','Ma','Mi','J','V','S'][dt.getDay()]}`})
+    const rows=[
+      ['S.C. GAZPET INSTAL S.R.L.','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
+      ['RO 22029920; J2007001650296','','Tel./Fax 0244/435005  E-mail office@gazpet.ro'],
+      [],[`PONTAJ LUNAR - ${mName.toUpperCase()}`],[],
+      ['Nr.','Nume și Prenume','Departament','Șantier','Funcție',...dayHdr,'Zile','Ore Nete','Diurne','Norme'],
+      ...data.map((emp,i)=>{
+        const row=[i+1,emp.name,emp.department,emp.sites?.name||'',emp.position||'']
+        let z=0,o=0
+        for(let d=1;d<=days;d++){
+          const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+          const r=emp.records?.find(x=>x.date===ds)
+          if(!r||(!r.check_in&&!r.norma)){const dt=new Date(y,m-1,d);row.push(dt.getDay()===0||dt.getDay()===6?'W':'')}
+          else if(r.norma) row.push(r.norma)
+          else{const mins=netMins(r.check_in,r.check_out,r.lunch_break!==false);row.push(+(mins/60).toFixed(1));z++;o+=mins}
+        }
+        row.push(z,+(o/60).toFixed(1),emp.diurnaDays,Object.entries(emp.norme||{}).map(([k,v])=>`${k}:${v}`).join(' ')||'-')
+        return row
       })
     ]
-    const wsDetail = XLSX.utils.aoa_to_sheet(detailRows)
-    wsDetail['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 16 }, { wch: 20 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 20 }]
-    XLSX.utils.book_append_sheet(wb, wsDetail, 'Detaliat pe Zile')
-
-    // ── Sheet 3: Calendar prezenta (angajat x zi) — ore nete ──
-    const { daysInMonth } = getMonthRange()
-    const days = Array.from({ length: daysInMonth }, (_, i) => {
-      const d = new Date(year, month - 1, i + 1)
-      return `${String(i + 1).padStart(2, '0')} ${['Du', 'Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ'][d.getDay()]}`
-    })
-    const calHeader = ['Angajat', 'Departament', ...days, 'TOTAL ORE NETE']
-    const calRows = data.map(emp => {
-      const row = [emp.name, emp.department]
-      let total = 0
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-        const rec = detailedRecords.find(r => r.employee_id === emp.id && r.date === dateStr)
-        const mins = rec ? netMins(rec.check_in, rec.check_out, rec.lunch_break !== false) : 0
-        total += mins
-        if (!rec?.check_in) row.push('')
-        else if (!rec?.check_out) row.push('P')
-        else row.push(+(mins / 60).toFixed(1))
-      }
-      row.push(+(total / 60).toFixed(2))
-      return row
-    })
-    const wsCalendar = XLSX.utils.aoa_to_sheet([calHeader, ...calRows])
-    wsCalendar['!cols'] = [{ wch: 28 }, { wch: 14 }, ...days.map(() => ({ wch: 6 })), { wch: 16 }]
-    XLSX.utils.book_append_sheet(wb, wsCalendar, 'Calendar Prezenta')
-
-    XLSX.writeFile(wb, `Pontaj_${monthName.replace(' ', '_')}.xlsx`)
-    showToast(`✓ Export Excel: Pontaj_${monthName}.xlsx`)
-    setExporting(false)
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols']=[{wch:4},{wch:26},{wch:12},{wch:14},{wch:18},...dayNums.map(()=>({wch:5})),{wch:5},{wch:8},{wch:7},{wch:18}]
+    XLSX.utils.book_append_sheet(wb,ws,'Pontaj ITM')
+    XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
+    showToast(`✓ Export ITM gata!`); setExpITM(false)
   }
 
-  const monthLabel = () => {
-    const [y, m] = selectedMonth.split('-').map(Number)
-    return new Date(y, m - 1).toLocaleString('ro-RO', { month: 'long', year: 'numeric' })
+  const exportDiurne=async()=>{
+    if(!df||!dt){showToast('Selectează perioada','warn');return}
+    setExpD(true)
+    let eq=supabase.from('employees').select('*').eq('active',true).order('name')
+    if(!isAdmin&&profile?.site_id) eq=eq.eq('site_id',profile.site_id)
+    const {data:emps}=await eq
+    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+    const st=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*diurnaAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
+    if(!st.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
+    const from=new Date(df).toLocaleDateString('ro-RO'),to=new Date(dt).toLocaleDateString('ro-RO')
+    const rows=[
+      ['S.C. GAZPET INSTAL S.R.L.'],[`Situație Diurne: ${from} — ${to}`],[],
+      ['Nr.','Prenume','Nume','Departament','Funcție','Zile Deplasare',`Diurnă/zi (RON)`,'TOTAL RON'],
+      ...st.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,diurnaAmt,e.val]}),
+      [],[,'','','','TOTAL',st.reduce((s,e)=>s+e.zile,0),diurnaAmt,st.reduce((s,e)=>s+e.val,0)]
+    ]
+    const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:4},{wch:18},{wch:18},{wch:12},{wch:18},{wch:14},{wch:14},{wch:14}]
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Diurne')
+    XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
+    showToast(`✓ ${st.length} angajați exportați`); setExpD(false)
   }
+
+  const mLabel=()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})}
 
   return (
     <Layout>
-      <Toast toast={toast} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>Rapoarte</div>
-          <div style={{ fontSize: 13, color: G.muted, marginTop: 4 }}>
-            {data.filter(e => e.daysPresent > 0).length} angajați activi în {monthLabel()}
+      <Toast toast={toast}/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+        <div style={{fontSize:19,fontWeight:800}}>Rapoarte</div>
+        <div style={{display:'flex',gap:7,flexWrap:'wrap',alignItems:'center'}}>
+          <input type="month" value={month} onChange={e=>setMonth(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px'}}/>
+          {isAdmin&&<><select value={deptF} onChange={e=>setDeptF(e.target.value)}><option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select>
+          <select value={siteF} onChange={e=>setSiteF(e.target.value)}><option value="Toate">Toate</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></>}
+          <div style={{display:'flex',background:G.surface,border:`1px solid ${G.border}`,borderRadius:8,overflow:'hidden'}}>
+            {[['summary','📊'],['detailed','📋']].map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?'#21262D':'none',color:view===v?G.text:G.muted,border:'none',padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700}}>{l}</button>)}
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          {/* Month picker */}
-          <input type="month" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
-            style={{ ...S.input, width: 'auto', padding: '8px 12px', fontSize: 14 }} />
-          {isAdmin && (
-            <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
-              <option>Toate</option>
-              {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
-            </select>
-          )}
-          {/* View toggle */}
-          <div style={{ display: 'flex', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, overflow: 'hidden' }}>
-            {[['summary', '📊 Rezumat'], ['detailed', '📋 Detaliat']].map(([v, l]) => (
-              <button key={v} onClick={() => setViewMode(v)} style={{ background: viewMode === v ? '#21262D' : 'none', color: viewMode === v ? G.text : G.muted, border: 'none', padding: '8px 14px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>{l}</button>
-            ))}
-          </div>
-          {/* Export button */}
-          <button onClick={exportToExcel} disabled={exporting || loading || data.length === 0}
-            style={{ ...S.btnPrimary, display: 'flex', alignItems: 'center', gap: 8, background: '#1A6B1A', opacity: data.length === 0 ? 0.5 : 1 }}>
-            {exporting ? <><div className="spinner" />Export...</> : '⬇ Export Excel'}
-          </button>
+          <button onClick={exportITM} disabled={expITM||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expITM?<><div className="sp"/>...</>:'📄 Export ITM'}</button>
         </div>
       </div>
 
-      {/* Info banner */}
-      <div style={{ background: '#1F3A1F', border: `1px solid ${G.green}33`, borderRadius: 10, padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12, fontSize: 13 }}>
-        <span style={{ fontSize: 18 }}>📥</span>
-        <span style={{ color: '#8FD490' }}>Exportul Excel conține <strong>3 foi</strong>: Rezumat, Detaliat pe Zile și Calendar Prezență (cu ore per zi per angajat)</span>
+      {/* Export Diurne */}
+      <div style={{...S.card,padding:14,marginBottom:16,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        <span style={{fontSize:12,fontWeight:700,color:G.orange}}>💰 Export Diurne</span>
+        <span style={{fontSize:11,color:G.muted}}>De la:</span>
+        <input type="date" value={df} onChange={e=>setDf(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
+        <span style={{fontSize:11,color:G.muted}}>Până la:</span>
+        <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
+        <button onClick={exportDiurne} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
       </div>
 
-      {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" style={{ width: 32, height: 32 }} /></div>
-      ) : viewMode === 'summary' ? (
-        <div style={{ ...S.card, overflow: 'hidden' }}>
+      {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
+      :view==='summary'?(
+        <div style={{...S.card,overflow:'hidden'}}>
           <table>
-            <thead>
-              <tr style={{ background: G.bg }}>
-                <th>Angajat</th><th>Departament</th><th>Zile Prezent</th>
-                <th>Ore Brute</th><th>☕ Pauze Masă</th><th>Ore Nete</th><th>Medie / Zi</th><th>Overtime</th>
-              </tr>
-            </thead>
+            <thead><tr style={{background:G.bg}}><th>Angajat</th><th>Dept.</th><th>Șantier</th><th>Zile Lucrate</th><th>Ore Brute</th><th>☕</th><th>Ore Nete</th><th>💰 Diurne</th><th>Norme</th><th>Status</th></tr></thead>
             <tbody>
-              {data.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: 'center', color: G.muted, padding: 48 }}>Nicio dată pentru luna selectată</td></tr>
-              ) : data.map(emp => {
-                const isOver = emp.avgMins > 510
-                const lunchDeduct = emp.lunchDays * LUNCH_MINS
-                return (
-                  <tr key={emp.id}>
-                    <td><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={emp.name} id={emp.id} size={30} /><span style={{ fontWeight: 600 }}>{emp.name}</span></div></td>
-                    <td><span className="badge badge-dept">{emp.department}</span></td>
-                    <td>
-                      <span style={{ color: G.blue, fontWeight: 700 }}>{emp.daysPresent}</span>
-                      <span style={{ color: G.dim, fontSize: 12 }}> / {emp.daysInMonth}</span>
-                      <div style={{ marginTop: 4, height: 3, width: 60, background: '#21262D', borderRadius: 2 }}>
-                        <div style={{ height: '100%', width: `${(emp.daysPresent / emp.daysInMonth) * 100}%`, background: G.blue, borderRadius: 2 }} />
-                      </div>
-                    </td>
-                    <td style={{ color: G.muted }}>{minsToHM(emp.totalGross)}</td>
-                    <td>
-                      {emp.lunchDays > 0
-                        ? <span style={{ fontSize: 12, color: '#79C0FF' }}>☕ {emp.lunchDays}× (−{minsToHM(lunchDeduct)})</span>
-                        : <span style={{ fontSize: 12, color: G.dim }}>—</span>}
-                    </td>
-                    <td style={{ fontWeight: 800, color: G.yellow }}>{minsToHM(emp.totalMins)}</td>
-                    <td style={{ color: isOver ? G.yellow : G.text }}>{minsToHM(emp.avgMins)}</td>
-                    <td>
-                      <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: isOver ? G.yellowDim : G.greenDim, color: isOver ? G.yellow : G.green, border: `1px solid ${isOver ? G.yellow : G.green}44` }}>
-                        {isOver ? '⚡ Ore extra' : '✓ Normal'}
-                      </span>
-                    </td>
-                  </tr>
-                )
+              {!data.length?<tr><td colSpan={10} style={{textAlign:'center',color:G.muted,padding:40}}>Nicio dată</td></tr>
+              :data.map(emp=>{
+                const over=emp.avgMins>510
+                return <tr key={emp.id}>
+                  <td><div style={{display:'flex',alignItems:'center',gap:8}}><Avatar name={emp.name} id={emp.id} size={26}/><span style={{fontWeight:600,fontSize:12}}>{emp.name}</span></div></td>
+                  <td><span className="badge bd">{emp.department}</span></td>
+                  <td style={{fontSize:11,color:G.purple}}>{emp.sites?.name||'—'}</td>
+                  <td><span style={{color:G.blue,fontWeight:700}}>{emp.workDays}</span><span style={{color:G.dim,fontSize:11}}> /{emp.days}</span></td>
+                  <td style={{color:G.muted,fontSize:11}}>{minsToHM(emp.totalGross)}</td>
+                  <td style={{fontSize:11}}>{emp.lunchDays>0?<span style={{color:'#79C0FF'}}>☕{emp.lunchDays}×</span>:'—'}</td>
+                  <td style={{fontWeight:800,color:G.yellow}}>{minsToHM(emp.totalMins)}</td>
+                  <td style={{color:G.orange,fontWeight:700,fontSize:12}}>{emp.diurnaDays>0?`${emp.diurnaDays}z·${emp.diurnaDays*diurnaAmt}RON`:'—'}</td>
+                  <td style={{fontSize:11}}>{Object.entries(emp.norme||{}).map(([k,v])=><span key={k} style={{color:G.yellow,marginRight:3}}>{k}:{v}</span>)}</td>
+                  <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:over?G.yellowDim:G.greenDim,color:over?G.yellow:G.green,border:`1px solid ${over?G.yellow:G.green}44`}}>{over?'⚡Extra':'✓Normal'}</span></td>
+                </tr>
               })}
             </tbody>
           </table>
         </div>
-      ) : (
-        <div style={{ ...S.card, overflow: 'hidden' }}>
+      ):(
+        <div style={{...S.card,overflow:'hidden'}}>
           <table>
-            <thead>
-              <tr style={{ background: G.bg }}>
-                <th>Data</th><th>Angajat</th><th>Departament</th>
-                <th>Intrare</th><th>Ieșire</th><th>Pauză Masă</th><th>Ore Nete</th>
-              </tr>
-            </thead>
+            <thead><tr style={{background:G.bg}}><th>Data</th><th>Angajat</th><th>Dept.</th><th>Intrare</th><th>Ieșire</th><th>Pauză</th><th>Net</th><th>Normă</th><th>💰</th></tr></thead>
             <tbody>
-              {detailedRecords.filter(r => r.check_in).length === 0 ? (
-                <tr><td colSpan={7} style={{ textAlign: 'center', color: G.muted, padding: 48 }}>Nicio înregistrare</td></tr>
-              ) : detailedRecords.filter(r => r.check_in).map(r => {
-                const lunchOn = r.lunch_break !== false && spansLunch(r.check_in, r.check_out)
-                const net = netMins(r.check_in, r.check_out, r.lunch_break !== false)
-                return (
-                  <tr key={r.id}>
-                    <td style={{ fontWeight: 600, color: G.blue }}>{new Date(r.date).toLocaleDateString('ro-RO', { weekday: 'short', day: '2-digit', month: '2-digit' })}</td>
-                    <td><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Avatar name={r.empName} size={26} /><span style={{ fontWeight: 600, fontSize: 13 }}>{r.empName}</span></div></td>
-                    <td><span className="badge badge-dept">{r.empDept}</span></td>
-                    <td style={{ color: G.green, fontWeight: 600 }}>⬇ {fmt(r.check_in)}</td>
-                    <td style={{ color: r.check_out ? G.red : G.yellow, fontWeight: 600 }}>{r.check_out ? `⬆ ${fmt(r.check_out)}` : '— lipsă'}</td>
-                    <td>
-                      {lunchOn
-                        ? <span style={{ fontSize: 12, color: '#79C0FF' }}>☕ 12:00–13:00</span>
-                        : <span style={{ fontSize: 12, color: G.dim }}>—</span>}
-                    </td>
-                    <td style={{ fontWeight: 700, color: G.yellow }}>{net > 0 ? minsToHM(net) : '—'}</td>
-                  </tr>
-                )
+              {!detailed.length?<tr><td colSpan={9} style={{textAlign:'center',color:G.muted,padding:40}}>Nicio înregistrare</td></tr>
+              :detailed.map(r=>{
+                const net=netMins(r.check_in,r.check_out,r.lunch_break!==false)
+                const lo=r.lunch_break!==false&&spansLunch(r.check_in,r.check_out)
+                return <tr key={r.id}>
+                  <td style={{fontWeight:600,color:G.blue,fontSize:11}}>{new Date(r.date+'T12:00').toLocaleDateString('ro-RO',{weekday:'short',day:'2-digit',month:'2-digit'})}</td>
+                  <td><div style={{display:'flex',alignItems:'center',gap:6}}><Avatar name={r.empName} size={22}/><span style={{fontWeight:600,fontSize:12}}>{r.empName}</span></div></td>
+                  <td><span className="badge bd">{r.empDept}</span></td>
+                  <td style={{color:G.green,fontWeight:600,fontSize:11}}>{r.check_in?`⬇ ${fmt24(r.check_in)}`:'—'}</td>
+                  <td style={{color:r.check_out?G.red:G.yellow,fontWeight:600,fontSize:11}}>{r.check_out?`⬆ ${fmt24(r.check_out)}`:r.check_in?'lipsă':'—'}</td>
+                  <td style={{fontSize:11}}>{lo?<span style={{color:'#79C0FF'}}>☕</span>:'—'}</td>
+                  <td style={{fontWeight:700,color:G.yellow,fontSize:12}}>{net>0?minsToHM(net):'—'}</td>
+                  <td>{r.norma?<span style={{background:G.yellowDim,color:G.yellow,padding:'2px 6px',borderRadius:12,fontSize:11,fontWeight:700}}>{r.norma}</span>:'—'}</td>
+                  <td>{r.diurna?<span style={{color:G.orange}}>💰</span>:'—'}</td>
+                </tr>
               })}
             </tbody>
           </table>
@@ -895,363 +588,266 @@ function ReportsPage() {
 
 // ─── Admin Page ───────────────────────────────────────────────────────────────
 function AdminPage() {
-  const [tab, setTab] = useState('managers')
-  const [managers, setManagers] = useState([])
-  const [employees, setEmployees] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [toast, showToast] = useToast()
+  const [tab,setTab]=useState('sites')
+  const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
+  const [calDays,setCalDays]=useState([]); const [settings,setSettings]=useState({diurna_amount:'50',work_hours_per_day:'8'})
+  const [load,setLoad]=useState(true); const [toast,showToast]=useToast()
+  const fileRef=useRef(null); const calRef=useRef(null)
+  const [siteName,setSiteName]=useState(''); const [addingSite,setAddingSite]=useState(false)
+  const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [creating,setCreating]=useState(false)
+  const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [addingE,setAddingE]=useState(false)
+  const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
 
-  // New manager form
-  const [newEmail, setNewEmail] = useState('')
-  const [newName, setNewName] = useState('')
-  const [newDept, setNewDept] = useState(DEPARTMENTS[0])
-  const [newRole, setNewRole] = useState('manager')
-  const [newPwd, setNewPwd] = useState('')
-  const [creating, setCreating] = useState(false)
-
-  // New employee form
-  const [empName, setEmpName] = useState('')
-  const [empDept, setEmpDept] = useState(DEPARTMENTS[0])
-  const [empPos, setEmpPos] = useState('')
-  const [addingEmp, setAddingEmp] = useState(false)
-
-  // Import state
-  const [importPreview, setImportPreview] = useState(null) // array of rows
-  const [importErrors, setImportErrors] = useState([])
-  const [importing, setImporting] = useState(false)
-  const fileInputRef = useRef(null)
-
-  useEffect(() => { loadData() }, [tab])
-
-  const loadData = async () => {
-    setLoading(true)
-    if (tab === 'managers') {
-      const { data } = await supabase.from('profiles').select('*').order('name')
-      setManagers(data || [])
-    } else {
-      const { data } = await supabase.from('employees').select('*').order('name')
-      setEmployees(data || [])
-    }
-    setLoading(false)
+  useEffect(()=>{ loadAll() },[tab])
+  const loadAll=async()=>{
+    setLoad(true)
+    const [s,p,e,c,st]=await Promise.all([
+      supabase.from('sites').select('*').order('name'),
+      supabase.from('profiles').select('*').order('name'),
+      supabase.from('employees').select('*,sites(name)').order('name'),
+      supabase.from('calendar_days').select('*').order('date').limit(60),
+      supabase.from('settings').select('*'),
+    ])
+    setSites(s.data||[]); setManagers(p.data||[]); setEmployees(e.data||[]); setCalDays(c.data||[])
+    const sm={}; (st.data||[]).forEach(x=>{sm[x.key]=x.value}); setSettings(sm)
+    setLoad(false)
   }
 
-  const createManager = async () => {
-    if (!newEmail || !newPwd || !newName) { showToast('Completați toate câmpurile', 'warn'); return }
+  const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
+  const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
+  const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
+
+  const createManager=async()=>{
+    if(!nEmail||!nPwd||!nName){showToast('Completați toate câmpurile','warn');return}
     setCreating(true)
-    const { data: authData, error: authErr } = await supabase.auth.signUp({ email: newEmail, password: newPwd })
-    if (authErr) { showToast(authErr.message, 'error'); setCreating(false); return }
-    if (authData.user) {
-      await supabase.from('profiles').upsert({ id: authData.user.id, email: newEmail, name: newName, role: newRole, department: newRole === 'admin' ? null : newDept })
-      showToast(`✓ Manager creat: ${newName}`)
-      setNewEmail(''); setNewName(''); setNewPwd('')
-      loadData()
-    }
+    const {data:au,error:ae}=await supabase.auth.signUp({email:nEmail,password:nPwd})
+    if(ae){showToast(ae.message,'error');setCreating(false);return}
+    if(au.user){await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,site_id:nRole==='admin'?null:(nSite?Number(nSite):null)}); showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()}
     setCreating(false)
   }
 
-  const addEmployee = async () => {
-    if (!empName) { showToast('Introduceți numele', 'warn'); return }
-    setAddingEmp(true)
-    const { error } = await supabase.from('employees').insert({ name: empName, department: empDept, position: empPos, active: true })
-    if (!error) { showToast(`✓ Angajat adăugat: ${empName}`); setEmpName(''); setEmpPos(''); loadData() }
-    else showToast('Eroare la adăugare', 'error')
-    setAddingEmp(false)
-  }
+  const addEmployee=async()=>{ if(!eName.trim()){showToast('Introduceți numele','warn');return}; setAddingE(true); const {error}=await supabase.from('employees').insert({name:eName.trim(),department:eDept,position:ePos||null,site_id:eSite?Number(eSite):null,active:true}); if(!error){showToast(`✓ ${eName}`);setEName('');setEPos('');loadAll()} else showToast('Eroare','error'); setAddingE(false) }
+  const toggleEmp=async(emp)=>{ await supabase.from('employees').update({active:!emp.active}).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,active:!e.active}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
 
-  const toggleEmployeeActive = async (emp) => {
-    await supabase.from('employees').update({ active: !emp.active }).eq('id', emp.id)
-    setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, active: !e.active } : e))
-    showToast(emp.active ? `${emp.name} dezactivat` : `${emp.name} reactivat`, emp.active ? 'warn' : 'success')
-  }
-
-  // ── Import Excel / CSV ──
-  const handleFileSelect = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-    setImportErrors([])
-    setImportPreview(null)
-    const ext = file.name.split('.').pop().toLowerCase()
-
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        let rows = []
-        if (ext === 'csv') {
-          const text = ev.target.result
-          const lines = text.split('\n').filter(l => l.trim())
-          rows = lines.map(l => l.split(',').map(c => c.replace(/^"|"$/g, '').trim()))
-        } else {
-          const wb = XLSX.read(ev.target.result, { type: 'array' })
-          const ws = wb.Sheets[wb.SheetNames[0]]
-          rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-        }
-
-        if (rows.length < 2) { showToast('Fișierul este gol sau are doar antet', 'warn'); return }
-
-        // Auto-detect columns (case-insensitive)
-        const header = rows[0].map(h => String(h).toLowerCase().trim())
-        const colIdx = {
-          name: header.findIndex(h => ['nume', 'name', 'angajat', 'prenume_nume', 'nume complet'].some(k => h.includes(k))),
-          dept: header.findIndex(h => ['departament', 'department', 'dept'].some(k => h.includes(k))),
-          pos:  header.findIndex(h => ['functie', 'funcție', 'position', 'post', 'rol'].some(k => h.includes(k))),
-        }
-
-        const errors = []
-        if (colIdx.name === -1) errors.push('Coloana "Nume" nu a fost găsită. Asigurați-vă că există o coloană cu antetul "Nume" sau "Angajat".')
-        if (colIdx.dept === -1) errors.push('Coloana "Departament" nu a fost găsită.')
-        if (errors.length > 0) { setImportErrors(errors); return }
-
-        const preview = rows.slice(1)
-          .filter(row => row[colIdx.name]?.toString().trim())
-          .map(row => ({
-            name: row[colIdx.name]?.toString().trim(),
-            department: row[colIdx.dept]?.toString().trim() || '',
-            position: colIdx.pos >= 0 ? row[colIdx.pos]?.toString().trim() : '',
-            valid: !!row[colIdx.name]?.toString().trim() && !!row[colIdx.dept]?.toString().trim()
-          }))
-
-        const invalid = preview.filter(r => !r.valid)
-        if (invalid.length > 0) errors.push(`${invalid.length} rânduri fără departament și vor fi ignorate.`)
-        setImportErrors(errors)
-        setImportPreview(preview.filter(r => r.valid))
-      } catch (err) {
-        showToast('Eroare la citirea fișierului: ' + err.message, 'error')
-      }
+  const handleImport=e=>{
+    const file=e.target.files[0]; if(!file) return
+    const ext=file.name.split('.').pop().toLowerCase()
+    const reader=new FileReader()
+    reader.onload=ev=>{
+      try{
+        let rows=[]
+        if(ext==='csv') rows=ev.target.result.split('\n').filter(l=>l.trim()).map(l=>l.split(',').map(c=>c.replace(/^"|"$/g,'').trim()))
+        else{const wb=XLSX.read(ev.target.result,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''})}
+        const hdr=rows[0].map(h=>String(h).toLowerCase().trim())
+        const ni=hdr.findIndex(h=>['nume','name','angajat'].some(k=>h.includes(k)))
+        const di=hdr.findIndex(h=>['departament','department'].some(k=>h.includes(k)))
+        const pi=hdr.findIndex(h=>['functie','funcție','position'].some(k=>h.includes(k)))
+        const si=hdr.findIndex(h=>['santier','șantier','site'].some(k=>h.includes(k)))
+        if(ni===-1){showToast('Coloana Nume lipsă!','error');return}
+        setImpPrev(rows.slice(1).filter(r=>r[ni]?.toString().trim()).map(r=>({name:r[ni]?.toString().trim(),department:di>=0?r[di]?.toString().trim():'',position:pi>=0?r[pi]?.toString().trim():'',siteName:si>=0?r[si]?.toString().trim():''})))
+      }catch(err){showToast('Eroare: '+err.message,'error')}
+      e.target.value=''
     }
-
-    if (ext === 'csv') reader.readAsText(file, 'UTF-8')
-    else reader.readAsArrayBuffer(file)
-
-    // Reset input so same file can be re-selected
-    e.target.value = ''
+    if(ext==='csv') reader.readAsText(file,'UTF-8'); else reader.readAsArrayBuffer(file)
   }
 
-  const confirmImport = async () => {
-    if (!importPreview?.length) return
+  const confirmImport=async()=>{
+    if(!impPrev?.length) return
     setImporting(true)
-    const toInsert = importPreview.map(r => ({ name: r.name, department: r.department, position: r.position || null, active: true }))
-
-    // Insert in batches of 50
-    let imported = 0
-    for (let i = 0; i < toInsert.length; i += 50) {
-      const batch = toInsert.slice(i, i + 50)
-      const { error } = await supabase.from('employees').insert(batch)
-      if (!error) imported += batch.length
-    }
-    showToast(`✓ ${imported} angajați importați cu succes!`)
-    setImportPreview(null)
-    setImportErrors([])
-    loadData()
+    const ins=impPrev.map(r=>{const site=sites.find(s=>s.name.toLowerCase()===r.siteName?.toLowerCase());return {name:r.name,department:r.department||DEPARTMENTS[0],position:r.position||null,site_id:site?.id||null,active:true}})
+    let imported=0
+    for(let i=0;i<ins.length;i+=50){const {error}=await supabase.from('employees').insert(ins.slice(i,i+50));if(!error)imported+=Math.min(50,ins.length-i)}
+    showToast(`✓ ${imported} importați!`); setImpPrev(null); loadAll()
     setImporting(false)
   }
 
-  const downloadTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Nume', 'Departament', 'Functie'],
-      ['Ion Popescu', 'IT', 'Senior Developer'],
-      ['Maria Ionescu', 'Vânzări', 'Sales Rep'],
-      ['Ana Constantin', 'HR', 'HR Specialist'],
-    ])
-    ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 22 }]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Angajati')
-    XLSX.writeFile(wb, 'template_import_angajati.xlsx')
+  const dlTemplate=()=>{ const ws=XLSX.utils.aoa_to_sheet([['Nume','Departament','Functie','Santier'],['Ion Popescu','Execuție','Sudor Electric','Santier 1'],['Maria Ionescu','TESA','Inginer','Sediu']]); ws['!cols']=[{wch:28},{wch:14},{wch:22},{wch:18}]; const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Angajati'); XLSX.writeFile(wb,'template_angajati.xlsx') }
+
+  const handleCalImport=e=>{
+    const file=e.target.files[0]; if(!file) return
+    const reader=new FileReader()
+    reader.onload=async ev=>{
+      try{
+        const wb=XLSX.read(ev.target.result,{type:'array'}); const ws=wb.Sheets[wb.SheetNames[0]]; const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''})
+        const hdr=rows[0].map(h=>String(h).toLowerCase().trim())
+        const di=hdr.findIndex(h=>h.includes('data')||h.includes('date'))
+        const ti=hdr.findIndex(h=>h.includes('tip')||h.includes('type'))
+        const desi=hdr.findIndex(h=>h.includes('descriere')||h.includes('desc'))
+        if(di===-1){showToast('Coloana Data lipsă!','error');return}
+        const ins=rows.slice(1).filter(r=>r[di]).map(r=>{
+          let date=r[di]
+          if(typeof date==='number') date=new Date(Math.round((date-25569)*86400*1000)).toISOString().split('T')[0]
+          else date=String(date).trim()
+          return {date,type:ti>=0?r[ti]?.toString().trim()||'holiday':'holiday',description:desi>=0?r[desi]?.toString().trim():''}
+        }).filter(r=>r.date.match(/^\d{4}-\d{2}-\d{2}$/))
+        const {error}=await supabase.from('calendar_days').upsert(ins,{onConflict:'date'})
+        if(!error){showToast(`✓ ${ins.length} zile importate!`);loadAll()} else showToast('Eroare','error')
+      }catch(err){showToast('Eroare: '+err.message,'error')}
+      e.target.value=''
+    }
+    reader.readAsArrayBuffer(file)
   }
+
+  const dlCalTemplate=()=>{ const ws=XLSX.utils.aoa_to_sheet([['Data (YYYY-MM-DD)','Tip','Descriere'],['2026-05-01','legal','Ziua Muncii'],['2026-08-15','legal','Sf. Maria'],['2026-06-15','holiday','Zi libera firma']]); ws['!cols']=[{wch:20},{wch:20},{wch:28}]; const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Calendar'); XLSX.writeFile(wb,'template_calendar.xlsx') }
+
+  const tabs=[['sites','🏗️ Șantiere'],['managers','👤 Manageri'],['employees','👥 Angajați'],['calendar','📅 Calendar'],['settings','⚙️ Setări']]
 
   return (
     <Layout>
-      <Toast toast={toast} />
-      <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 24 }}>⚙ Administrare</div>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-        {[['managers', '👤 Manageri'], ['employees', '👥 Angajați']].map(([v, l]) => (
-          <button key={v} onClick={() => setTab(v)} style={{ ...S.btnSecondary, background: tab === v ? '#21262D' : G.bg, color: tab === v ? G.text : G.muted }}>
-            {l}
-          </button>
-        ))}
+      <Toast toast={toast}/>
+      <div style={{fontSize:19,fontWeight:800,marginBottom:18}}>⚙ Administrare</div>
+      <div style={{display:'flex',gap:6,marginBottom:20,borderBottom:`1px solid ${G.border}`,paddingBottom:10}}>
+        {tabs.map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{...S.btnS,background:tab===v?'#21262D':G.bg,color:tab===v?G.text:G.muted,fontSize:12}}>{l}</button>)}
       </div>
 
-      {tab === 'managers' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 20 }}>
-          <div style={{ ...S.card, overflow: 'hidden' }}>
-            {loading ? <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner" style={{ margin: '0 auto' }} /></div> : (
-              <table>
-                <thead><tr style={{ background: G.bg }}><th>Nume</th><th>Email</th><th>Rol</th><th>Departament</th></tr></thead>
-                <tbody>
-                  {managers.map(m => (
-                    <tr key={m.id}>
-                      <td><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={m.name} size={28} /><span style={{ fontWeight: 600 }}>{m.name}</span></div></td>
-                      <td style={{ color: G.muted, fontSize: 13 }}>{m.email}</td>
-                      <td><span className={`badge ${m.role === 'admin' ? 'badge-admin' : 'badge-manager'}`}>{m.role === 'admin' ? '⚙ Admin' : '👤 Manager'}</span></td>
-                      <td>{m.department ? <span className="badge badge-dept">{m.department}</span> : <span style={{ color: G.dim, fontSize: 12 }}>Toate</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {tab==='sites'&&(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
+          <div style={{...S.card,overflow:'hidden'}}>
+            {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
+              <table><thead><tr style={{background:G.bg}}><th>Șantier / Sediu</th><th>Status</th><th></th></tr></thead>
+              <tbody>{sites.map(s=>(
+                <tr key={s.id}><td style={{fontWeight:600}}>{s.name}</td>
+                <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:s.active?G.greenDim:G.redDim,color:s.active?G.green:G.red,border:`1px solid ${s.active?G.green:G.red}44`}}>{s.active?'● Activ':'○ Inactiv'}</span></td>
+                <td><button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button></td></tr>
+              ))}{!sites.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Niciun șantier</td></tr>}</tbody></table>
             )}
           </div>
-          <div style={{ ...S.card, padding: 24 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 20 }}>Adaugă Manager</div>
-            {[
-              ['Nume complet', newName, setNewName, 'text', 'Ion Popescu'],
-              ['Email', newEmail, setNewEmail, 'email', 'ion.popescu@firma.ro'],
-              ['Parolă temporară', newPwd, setNewPwd, 'password', '••••••••'],
-            ].map(([label, val, set, type, ph]) => (
-              <div key={label} style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>{label}</label>
-                <input style={S.input} type={type} placeholder={ph} value={val} onChange={e => set(e.target.value)} />
-              </div>
-            ))}
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>Rol</label>
-              <select value={newRole} onChange={e => setNewRole(e.target.value)} style={{ width: '100%' }}>
-                <option value="manager">👤 Manager</option>
-                <option value="admin">⚙ Admin</option>
-              </select>
-            </div>
-            {newRole === 'manager' && (
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>Departament</label>
-                <select value={newDept} onChange={e => setNewDept(e.target.value)} style={{ width: '100%' }}>
-                  {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
-                </select>
-              </div>
-            )}
-            <button style={{ ...S.btnPrimary, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }} onClick={createManager} disabled={creating}>
-              {creating ? <><div className="spinner" />Se creează...</> : '+ Adaugă Manager'}
-            </button>
+          <div style={{...S.card,padding:20}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Șantier</div>
+            <div style={{marginBottom:14}}><Lbl>Nume</Lbl><input style={S.input} placeholder="ex: Șantier Ploiești" value={siteName} onChange={e=>setSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSite()}/></div>
+            <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addSite} disabled={addingSite}>{addingSite?<><div className="sp"/>...</>:'+ Adaugă'}</button>
           </div>
         </div>
       )}
 
-      {tab === 'employees' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
-          {/* Left: table + import preview */}
-          <div>
-            <div style={{ ...S.card, overflow: 'hidden', marginBottom: importPreview ? 16 : 0 }}>
-              {loading ? <div style={{ padding: 40, textAlign: 'center' }}><div className="spinner" style={{ margin: '0 auto' }} /></div> : (
-                <table>
-                  <thead><tr style={{ background: G.bg }}><th>Nume</th><th>Departament</th><th>Funcție</th><th>Status</th><th>Acțiune</th></tr></thead>
-                  <tbody>
-                    {employees.map(emp => (
-                      <tr key={emp.id}>
-                        <td><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar name={emp.name} id={emp.id} size={28} /><span style={{ fontWeight: 600 }}>{emp.name}</span></div></td>
-                        <td><span className="badge badge-dept">{emp.department}</span></td>
-                        <td style={{ color: G.muted, fontSize: 13 }}>{emp.position || '—'}</td>
-                        <td>
-                          <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: emp.active ? G.greenDim : G.redDim, color: emp.active ? G.green : G.red, border: `1px solid ${emp.active ? G.green : G.red}44` }}>
-                            {emp.active ? '● Activ' : '○ Inactiv'}
-                          </span>
-                        </td>
-                        <td>
-                          <button onClick={() => toggleEmployeeActive(emp)} style={{ ...S.btnSecondary, padding: '5px 12px', fontSize: 12 }}>
-                            {emp.active ? 'Dezactivează' : 'Activează'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            {/* Import Preview */}
-            {importPreview && (
-              <div style={{ ...S.card, padding: 20, border: `1px solid ${G.green}44` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: G.green }}>✓ Previzualizare import — {importPreview.length} angajați</div>
-                    <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Verificați datele înainte de confirmare</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => setImportPreview(null)} style={{ ...S.btnSecondary, fontSize: 12 }}>✕ Anulează</button>
-                    <button onClick={confirmImport} disabled={importing} style={{ ...S.btnPrimary, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, background: '#1A6B1A' }}>
-                      {importing ? <><div className="spinner" />Se importă...</> : `⬆ Confirmă import (${importPreview.length})`}
-                    </button>
-                  </div>
-                </div>
-                {importErrors.length > 0 && (
-                  <div style={{ background: G.yellowDim, border: `1px solid ${G.yellow}44`, borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 12, color: G.yellow }}>
-                    {importErrors.map((e, i) => <div key={i}>⚠ {e}</div>)}
-                  </div>
-                )}
-                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
-                  <table>
-                    <thead><tr style={{ background: G.bg }}><th>#</th><th>Nume</th><th>Departament</th><th>Funcție</th></tr></thead>
-                    <tbody>
-                      {importPreview.slice(0, 50).map((r, i) => (
-                        <tr key={i}>
-                          <td style={{ color: G.dim, fontSize: 12 }}>{i + 1}</td>
-                          <td style={{ fontWeight: 600 }}>{r.name}</td>
-                          <td><span className="badge badge-dept">{r.department}</span></td>
-                          <td style={{ color: G.muted, fontSize: 13 }}>{r.position || '—'}</td>
-                        </tr>
-                      ))}
-                      {importPreview.length > 50 && <tr><td colSpan={4} style={{ textAlign: 'center', color: G.muted, fontSize: 12 }}>... și încă {importPreview.length - 50} angajați</td></tr>}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+      {tab==='managers'&&(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
+          <div style={{...S.card,overflow:'hidden'}}>
+            {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
+              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier</th></tr></thead>
+              <tbody>{managers.map(m=>(
+                <tr key={m.id}><td style={{fontWeight:600}}>{m.name}</td><td style={{color:G.muted,fontSize:12}}>{m.email}</td>
+                <td><span className={`badge ${m.role==='admin'?'ba':'bm'}`}>{m.role==='admin'?'⚙ Admin':'👤 Manager'}</span></td>
+                <td style={{fontSize:12,color:G.purple}}>{sites.find(s=>s.id===m.site_id)?.name||'—'}</td></tr>
+              ))}</tbody></table>
             )}
           </div>
+          <div style={{...S.card,padding:20}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Manager</div>
+            {[['Nume complet',nName,setNName,'text','Ion Popescu'],['Email',nEmail,setNEmail,'email','ion@gazpet.ro'],['Parolă temporară',nPwd,setNPwd,'password','••••••']].map(([l,v,s,t,ph])=>(
+              <div key={l} style={{marginBottom:10}}><Lbl>{l}</Lbl><input style={S.input} type={t} placeholder={ph} value={v} onChange={e=>s(e.target.value)}/></div>
+            ))}
+            <div style={{marginBottom:10}}><Lbl>Rol</Lbl><select value={nRole} onChange={e=>setNRole(e.target.value)} style={{width:'100%'}}><option value="manager">👤 Manager</option><option value="admin">⚙ Admin</option></select></div>
+            {nRole==='manager'&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
+            <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={createManager} disabled={creating}>{creating?<><div className="sp"/>...</>:'+ Adaugă Manager'}</button>
+          </div>
+        </div>
+      )}
 
-          {/* Right: Add single + Import */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {/* Import Card */}
-            <div style={{ ...S.card, padding: 24, border: `1px solid #1F6FEB44` }}>
-              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>📥 Import din Excel / CSV</div>
-              <div style={{ fontSize: 12, color: G.muted, marginBottom: 16, lineHeight: 1.6 }}>
-                Importă toți angajații dintr-un fișier. Fișierul trebuie să aibă coloanele: <strong>Nume</strong>, <strong>Departament</strong>, Functie (opțional).
-              </div>
-
-              {/* Template download */}
-              <button onClick={downloadTemplate} style={{ ...S.btnSecondary, width: '100%', fontSize: 12, marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                ⬇ Descarcă template Excel
-              </button>
-
-              {/* File drop zone */}
-              <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handleFileSelect} />
-              <div
-                onClick={() => fileInputRef.current?.click()}
-                onDragOver={e => e.preventDefault()}
-                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) { const dt = new DataTransfer(); dt.items.add(f); fileInputRef.current.files = dt.files; handleFileSelect({ target: fileInputRef.current }) } }}
-                style={{ border: `2px dashed ${G.border2}`, borderRadius: 10, padding: '24px 16px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = G.blue}
-                onMouseLeave={e => e.currentTarget.style.borderColor = G.border2}
-              >
-                <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: G.text }}>Click sau drag & drop</div>
-                <div style={{ fontSize: 11, color: G.muted, marginTop: 4 }}>.xlsx, .xls, .csv</div>
-              </div>
-
-              {importErrors.length > 0 && !importPreview && (
-                <div style={{ background: G.redDim, border: `1px solid ${G.red}44`, borderRadius: 8, padding: '10px 14px', marginTop: 12, fontSize: 12, color: G.red }}>
-                  {importErrors.map((e, i) => <div key={i}>⚠ {e}</div>)}
-                </div>
+      {tab==='employees'&&(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
+          <div>
+            <div style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
+              {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
+                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Status</th><th></th></tr></thead>
+                <tbody>{employees.map(emp=>(
+                  <tr key={emp.id}>
+                    <td><div style={{display:'flex',alignItems:'center',gap:7}}><Avatar name={emp.name} id={emp.id} size={24}/><span style={{fontWeight:600,fontSize:12}}>{emp.name}</span></div></td>
+                    <td><span className="badge bd">{emp.department}</span></td>
+                    <td style={{color:G.muted,fontSize:11}}>{emp.position||'—'}</td>
+                    <td style={{fontSize:11,color:G.purple}}>{emp.sites?.name||<span style={{color:G.red}}>⚠ Nealocate</span>}</td>
+                    <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
+                    <td><button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button></td>
+                  </tr>
+                ))}</tbody></table>
               )}
             </div>
-
-            {/* Add single employee */}
-            <div style={{ ...S.card, padding: 24 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>+ Adaugă Angajat Manual</div>
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>Nume complet *</label>
-                <input style={S.input} placeholder="Ana Ionescu" value={empName} onChange={e => setEmpName(e.target.value)} />
+            {impPrev&&<div style={{...S.card,padding:16,border:`1px solid ${G.green}44`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div style={{fontSize:12,fontWeight:700,color:G.green}}>✓ {impPrev.length} angajați pregătiți pentru import</div>
+                <div style={{display:'flex',gap:7}}>
+                  <button onClick={()=>setImpPrev(null)} style={{...S.btnS,fontSize:11}}>Anulează</button>
+                  <button onClick={confirmImport} disabled={importing} style={{...S.btnP,fontSize:11,background:'#1A6B1A',display:'flex',alignItems:'center',gap:5}}>{importing?<><div className="sp"/>...</>:`Confirmă (${impPrev.length})`}</button>
+                </div>
               </div>
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>Departament</label>
-                <select value={empDept} onChange={e => setEmpDept(e.target.value)} style={{ width: '100%' }}>
-                  {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
-                </select>
+              <div style={{maxHeight:180,overflowY:'auto'}}>
+                <table><thead><tr style={{background:G.bg}}><th>#</th><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th></tr></thead>
+                <tbody>{impPrev.slice(0,30).map((r,i)=><tr key={i}><td style={{fontSize:10,color:G.dim}}>{i+1}</td><td style={{fontWeight:600,fontSize:12}}>{r.name}</td><td style={{fontSize:11}}>{r.department}</td><td style={{fontSize:11}}>{r.position||'—'}</td><td style={{fontSize:11,color:G.purple}}>{r.siteName||'—'}</td></tr>)}</tbody></table>
               </div>
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'block', marginBottom: 6 }}>Funcție</label>
-                <input style={S.input} placeholder="Specialist, Senior, Manager..." value={empPos} onChange={e => setEmpPos(e.target.value)} />
+            </div>}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:13}}>
+            <div style={{...S.card,padding:18,border:`1px solid #1F6FEB44`}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:9}}>📥 Import Excel / CSV</div>
+              <div style={{fontSize:11,color:G.muted,marginBottom:11,lineHeight:1.5}}>Coloane: <strong>Nume</strong>, Departament, Functie, Santier</div>
+              <button onClick={dlTemplate} style={{...S.btnS,width:'100%',fontSize:11,marginBottom:9,display:'flex',alignItems:'center',justifyContent:'center',gap:5}}>⬇ Template Excel</button>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{display:'none'}} onChange={handleImport}/>
+              <div onClick={()=>fileRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f){const dt=new DataTransfer();dt.items.add(f);fileRef.current.files=dt.files;handleImport({target:fileRef.current})}}}
+                style={{border:`2px dashed ${G.border2}`,borderRadius:9,padding:'16px 12px',textAlign:'center',cursor:'pointer'}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=G.blue} onMouseLeave={e=>e.currentTarget.style.borderColor=G.border2}>
+                <div style={{fontSize:22,marginBottom:5}}>📂</div>
+                <div style={{fontSize:11,fontWeight:600}}>Click sau drag & drop</div>
+                <div style={{fontSize:10,color:G.muted,marginTop:2}}>.xlsx .xls .csv</div>
               </div>
-              <button style={{ ...S.btnPrimary, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }} onClick={addEmployee} disabled={addingEmp}>
-                {addingEmp ? <><div className="spinner" />Se adaugă...</> : '+ Adaugă Angajat'}
-              </button>
             </div>
+            <div style={{...S.card,padding:18}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:13}}>+ Adaugă Manual</div>
+              <div style={{marginBottom:9}}><Lbl>Nume *</Lbl><input style={S.input} placeholder="Ana Ionescu" value={eName} onChange={e=>setEName(e.target.value)}/></div>
+              <div style={{marginBottom:9}}><Lbl>Funcție</Lbl><input style={S.input} placeholder="Inginer" value={ePos} onChange={e=>setEPos(e.target.value)}/></div>
+              <div style={{marginBottom:9}}><Lbl>Departament</Lbl><select value={eDept} onChange={e=>setEDept(e.target.value)} style={{width:'100%'}}>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select></div>
+              <div style={{marginBottom:14}}><Lbl>Șantier</Lbl><select value={eSite} onChange={e=>setESite(e.target.value)} style={{width:'100%'}}><option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+              <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addEmployee} disabled={addingE}>{addingE?<><div className="sp"/>...</>:'+ Adaugă'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==='calendar'&&(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
+          <div style={{...S.card,overflow:'hidden'}}>
+            <div style={{padding:'12px 14px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontSize:13,fontWeight:700}}>Zile Speciale</span>
+              <span style={{fontSize:11,color:G.muted}}>{calDays.length} zile înregistrate</span>
+            </div>
+            <div style={{maxHeight:420,overflowY:'auto'}}>
+              <table><thead><tr style={{background:G.bg}}><th>Data</th><th>Tip</th><th>Descriere</th></tr></thead>
+              <tbody>{calDays.map(d=>(
+                <tr key={d.id}><td style={{fontWeight:600,fontSize:12}}>{d.date}</td>
+                <td><span style={{padding:'2px 7px',borderRadius:12,fontSize:11,fontWeight:700,background:d.type==='legal'?G.redDim:G.yellowDim,color:d.type==='legal'?G.red:G.yellow}}>{d.type}</span></td>
+                <td style={{fontSize:11,color:G.muted}}>{d.description}</td></tr>
+              ))}{!calDays.length&&<tr><td colSpan={3} style={{textAlign:'center',color:G.muted,padding:28,fontSize:12}}>Nicio zi</td></tr>}</tbody></table>
+            </div>
+          </div>
+          <div style={{...S.card,padding:20}}>
+            <div style={{fontSize:12,fontWeight:700,marginBottom:9}}>📅 Import Calendar</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:12,lineHeight:1.5}}>Coloane: <strong>Data</strong> (YYYY-MM-DD), Tip (legal/holiday), Descriere</div>
+            <button onClick={dlCalTemplate} style={{...S.btnS,width:'100%',fontSize:11,marginBottom:9,display:'flex',alignItems:'center',justifyContent:'center',gap:5}}>⬇ Template Calendar</button>
+            <input ref={calRef} type="file" accept=".xlsx,.csv" style={{display:'none'}} onChange={handleCalImport}/>
+            <div onClick={()=>calRef.current?.click()} style={{border:`2px dashed ${G.border2}`,borderRadius:9,padding:'16px 12px',textAlign:'center',cursor:'pointer',marginBottom:12}}
+              onMouseEnter={e=>e.currentTarget.style.borderColor=G.blue} onMouseLeave={e=>e.currentTarget.style.borderColor=G.border2}>
+              <div style={{fontSize:22,marginBottom:5}}>📅</div>
+              <div style={{fontSize:11,fontWeight:600}}>Click pentru import</div>
+            </div>
+            <div style={{padding:10,background:G.greenDim,borderRadius:8,border:`1px solid ${G.green}33`,fontSize:11,color:'#8FD490'}}>
+              ✓ Zile legale 2026 preîncărcate
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==='settings'&&(
+        <div style={{maxWidth:460}}>
+          <div style={{...S.card,padding:22}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:18}}>Setări Generale</div>
+            {[['Valoare Diurnă (RON/zi)','diurna_amount','number','50'],['Ore normale/zi','work_hours_per_day','number','8']].map(([l,k,t,ph])=>(
+              <div key={k} style={{marginBottom:18}}>
+                <Lbl>{l}</Lbl>
+                <div style={{display:'flex',gap:9}}>
+                  <input style={S.input} type={t} value={settings[k]||ph} onChange={e=>setSettings(prev=>({...prev,[k]:e.target.value}))} min="0" step={k==='diurna_amount'?5:1}/>
+                  <button onClick={()=>saveSetting(k,settings[k])} style={{...S.btnP,whiteSpace:'nowrap'}}>Salvează</button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1259,17 +855,16 @@ function AdminPage() {
   )
 }
 
-// ─── App Root ─────────────────────────────────────────────────────────────────
 export default function App() {
   return (
     <AuthProvider>
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-        <Route path="/pontaj" element={<ProtectedRoute><PontajPage /></ProtectedRoute>} />
-        <Route path="/rapoarte" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage /></ProtectedRoute>} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/login" element={<LoginPage/>}/>
+        <Route path="/" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/>
+        <Route path="/pontaj" element={<ProtectedRoute><PontajPage/></ProtectedRoute>}/>
+        <Route path="/rapoarte" element={<ProtectedRoute><ReportsPage/></ProtectedRoute>}/>
+        <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
+        <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
     </AuthProvider>
   )
