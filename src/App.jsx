@@ -388,7 +388,13 @@ function PontajPage() {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <div><div style={{fontSize:19,fontWeight:800}}>Pontaj</div><div style={{fontSize:11,color:G.muted,marginTop:2}}>{filtered.length} angajați · {Object.values(recs).filter(r=>r.check_in||r.norma).length} înreg.</div></div>
         <div style={{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
-          <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px'}}/>
+          <div style={{display:'flex',alignItems:'center',gap:4}}>
+            <button onClick={()=>{ const d=new Date(date); d.setDate(d.getDate()-1); setDate(d.toISOString().split('T')[0]) }}
+              style={{background:G.surface,border:`1px solid ${G.border}`,color:G.text,borderRadius:7,padding:'6px 10px',cursor:'pointer',fontSize:14,fontWeight:700}}>◀</button>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px'}}/>
+            <button onClick={()=>{ const d=new Date(date); d.setDate(d.getDate()+1); setDate(d.toISOString().split('T')[0]) }}
+              style={{background:G.surface,border:`1px solid ${G.border}`,color:G.text,borderRadius:7,padding:'6px 10px',cursor:'pointer',fontSize:14,fontWeight:700}}>▶</button>
+          </div>
           <input placeholder="🔍 Caută..." value={search} onChange={e=>setSearch(e.target.value)} style={{...S.input,width:170}}/>
           <select value={deptF} onChange={e=>setDeptF(e.target.value)}><option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select>
           {isAdmin&&<select value={siteF} onChange={e=>setSiteF(e.target.value)}><option value="Toate">Toate șantierele</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
