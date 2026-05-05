@@ -713,63 +713,104 @@ function ReportsPage() {
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setExpD(true)
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
-    if(!isAdmin){
-      const siteIds=profile?.site_ids||[]
-      if(siteIds.length>0) eq=eq.in('site_id',siteIds)
-    }
+    if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
-    // Fetch site names for records
     const {data:recs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+
+    // Build per-employee, per-site stats
     const empStats=(emps||[]).map(emp=>{
       const er=(recs||[]).filter(r=>r.employee_id===emp.id)
-      // Group by site
+      if(!er.length) return null
       const siteMap={}
-      er.forEach(r=>{
-        const siteName=r.sites?.name||'—'
-        siteMap[siteName]=(siteMap[siteName]||0)+1
-      })
-      const siteStr=Object.entries(siteMap).map(([s,n])=>n>1?`${s}(${n}z)`:s).join(', ')
-      return {...emp,zile:er.length,val:er.length*diurnaAmt,siteStr}
-    }).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
+      er.forEach(r=>{const s=r.sites?.name||'Nealocate'; siteMap[s]=(siteMap[s]||0)+1})
+      const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
+      const p=emp.name.split(' ')
+      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:er.length,totalVal:er.length*diurnaAmt}
+    }).filter(Boolean).sort((a,b)=>(a.nume+a.prenume).localeCompare(b.nume+b.prenume))
+
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
+
     const from=new Date(df).toLocaleDateString('ro-RO'), to=new Date(dt).toLocaleDateString('ro-RO')
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    const HFILL='1F497D'; const TFILL='D9E1F2'; const GFILL='1F497D'
     const wb=XLSX.utils.book_new()
     const hdrCols=['Nr.','Prenume','Nume','Șantier','Zile Deplasare','Diurnă/zi (RON)','TOTAL RON']
-    const rows=[
-      ['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
-      ['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'],
-      [],
-      [`SITUAȚIE DIURNE: ${from} — ${to}`],
-      [],
-      hdrCols,
-      ...empStats.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.siteStr,e.zile,diurnaAmt,e.val]}),
-      [],
-      ['','','','TOTAL',empStats.reduce((s,e)=>s+e.zile,0),diurnaAmt,empStats.reduce((s,e)=>s+e.val,0)]
-    ]
-    const ws=XLSX.utils.aoa_to_sheet(rows)
-    ws['!cols']=[{wch:5},{wch:18},{wch:18},{wch:30},{wch:16},{wch:14},{wch:14}]
-    // Header row style (row 5)
+
+    const wsData=[]
+    wsData.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
+    wsData.push(['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'])
+    wsData.push([])
+    wsData.push([`SITUAȚIE DIURNE: ${from} — ${to}`])
+    wsData.push([])
+    wsData.push(hdrCols) // row index 5
+
+    let rowIdx=6; let nr=1
+    const siteRowIdxs=[]
+    const totalRowIdxs=[]
+    const empRanges=[] // {start, end} for merging
+
+    empStats.forEach(emp=>{
+      const startRow=rowIdx
+      emp.sites.forEach((site,si)=>{
+        wsData.push([si===0?nr:'', si===0?emp.prenume:'', si===0?emp.nume:'', site.name, site.zile, diurnaAmt, site.val])
+        siteRowIdxs.push({row:rowIdx,isAlt:si%2===1})
+        rowIdx++
+      })
+      // Total per angajat
+      wsData.push(['','',`Total ${emp.prenume} ${emp.nume}`,'',emp.totalZile,'',emp.totalVal])
+      totalRowIdxs.push(rowIdx)
+      empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
+      rowIdx++; nr++
+    })
+
+    // Total general
+    wsData.push([])
+    const totalGenZile=empStats.reduce((s,e)=>s+e.totalZile,0)
+    const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
+    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal])
+    const totalGenRow=rowIdx+1
+
+    const ws=XLSX.utils.aoa_to_sheet(wsData)
+    ws['!cols']=[{wch:5},{wch:16},{wch:18},{wch:32},{wch:16},{wch:14},{wch:14}]
+
+    const sc=(r,c,s)=>{ const a=XLSX.utils.encode_cell({r,c}); if(!ws[a]) ws[a]={v:'',t:'s'}; ws[a].s=s }
+
+    // Style header (row 5)
     hdrCols.forEach((_,c)=>{
       const a=XLSX.utils.encode_cell({r:5,c})
       if(!ws[a]) ws[a]={v:hdrCols[c],t:'s'}
-      ws[a].s={fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
+      ws[a].s={fill:{fgColor:{rgb:HFILL}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
     })
-    // Data rows
-    empStats.forEach((_,i)=>{
-      for(let c=0;c<8;c++){
-        const a=XLSX.utils.encode_cell({r:6+i,c})
-        if(!ws[a]) ws[a]={v:'',t:'s'}
-        ws[a].s={fill:{fgColor:{rgb:i%2===0?'FFFFFF':'F5F5F5'}},border:bd,alignment:{horizontal:c===0||c>=5?'center':'left',vertical:'center'},font:{sz:10}}
+
+    // Style site rows
+    siteRowIdxs.forEach(({row,isAlt})=>{
+      for(let c=0;c<7;c++){
+        sc(row,c,{fill:{fgColor:{rgb:isAlt?'F5F5F5':'FFFFFF'}},border:bd,alignment:{horizontal:c===0||c>=4?'center':'left',vertical:'center'},font:{sz:10}})
       }
     })
-    // Total row
-    const tr=6+empStats.length+1
-    for(let c=0;c<8;c++){
-      const a=XLSX.utils.encode_cell({r:tr,c})
-      if(!ws[a]) ws[a]={v:'',t:'s'}
-      ws[a].s={fill:{fgColor:{rgb:'D9E1F2'}},font:{bold:true,sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
+
+    // Style total per angajat rows
+    totalRowIdxs.forEach(r=>{
+      for(let c=0;c<7;c++){
+        sc(r,c,{fill:{fgColor:{rgb:TFILL}},font:{bold:true,sz:10,color:{rgb:'1F497D'}},border:bd,alignment:{horizontal:c===0||c>=4?'center':'left',vertical:'center'}})
+      }
+    })
+
+    // Style total general row
+    for(let c=0;c<7;c++){
+      sc(totalGenRow,c,{fill:{fgColor:{rgb:GFILL}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center'}})
     }
+
+    // Merge cells for Nr, Prenume, Nume per employee
+    ws['!merges']=ws['!merges']||[]
+    empRanges.forEach(({start,end,rows})=>{
+      if(rows>1){
+        [0,1,2].forEach(c=>{
+          ws['!merges'].push({s:{r:start,c},e:{r:end,c}})
+        })
+      }
+    })
+
     XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     showToast(`✓ ${empStats.length} angajați exportați`); setExpD(false)
