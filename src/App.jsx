@@ -1677,6 +1677,8 @@ function SalariiPage() {
     </Layout>
   )
 }
+
+export default function App() {
   return (
     <AuthProvider>
       <Routes>
