@@ -53,3 +53,10 @@ INSERT INTO public.settings (key, value) VALUES
   ('default_income_tax', '10'),
   ('default_construction_fund', '0')
 ON CONFLICT (key) DO NOTHING;
+
+-- Adauga deducere personala
+ALTER TABLE public.employee_salaries ADD COLUMN IF NOT EXISTS personal_deduction numeric(10,2) DEFAULT 587;
+
+-- Adauga default in settings
+INSERT INTO public.settings (key, value) VALUES ('default_personal_deduction', '587') ON CONFLICT (key) DO NOTHING;
+

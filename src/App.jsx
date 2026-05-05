@@ -1497,7 +1497,8 @@ function SalariiPage() {
       construction_fund:e.construction_fund??defaults.fond,
       other_deductions:e.other_deductions||0,
       other_deductions_desc:e.other_deductions_desc||'',
-      unlimited_contract:e.contract_expiry?false:true,
+      personal_deduction:e.personal_deduction??587,
+      use_personal_deduction:e.personal_deduction!=null&&e.personal_deduction>0,
       notes:e.notes||''
     })
   }
@@ -1521,7 +1522,8 @@ function SalariiPage() {
       cas_employer:Number(editSal.cas_employer)||4,
       tax_exempt:editSal.tax_exempt,
       income_tax:Number(editSal.income_tax)||10,
-      construction_fund:Number(editSal.construction_fund)||1.5,
+      construction_fund:0,
+      personal_deduction:Number(editSal.personal_deduction)||587,
       other_deductions:Number(editSal.other_deductions)||0,
       other_deductions_desc:editSal.other_deductions_desc||null,
       notes:editSal.notes||null,
@@ -1615,12 +1617,15 @@ function SalariiPage() {
                       const net=Number(editSal.salary_net)||0
                       const cas=Number(editSal.cas_employee)/100
                       const cass=Number(editSal.cass_employee)/100
-                      const fond=Number(editSal.construction_fund)/100
+                      const fond=0 // Eliminat din 2025
                       const tax=editSal.tax_exempt?0:Number(editSal.income_tax)/100
-                      // Net = Brut*(1-cas-cass-fond) - Brut*(1-cas-cass)*tax
-                      // Net = Brut*[(1-cas-cass-fond) - (1-cas-cass)*tax]
-                      const factor=(1-cas-cass-fond)-(1-cas-cass)*tax
-                      const brut=factor>0?net/factor:0
+                      const dp=(!editSal.tax_exempt&&editSal.use_personal_deduction)?Number(editSal.personal_deduction)||0:0
+                      // Net = Brut - Brut*cas - Brut*cass - (Brut*(1-cas-cass) - dp) * tax
+                      // Net = Brut*(1-cas-cass) - (Brut*(1-cas-cass) - dp)*tax
+                      // Net = Brut*(1-cas-cass)*(1-tax) + dp*tax
+                      // Brut = (Net - dp*tax) / ((1-cas-cass)*(1-tax))
+                      const factor=(1-cas-cass)*(1-tax)
+                      const brut=factor>0?(net-dp*tax)/factor:0
                       setEditSal(prev=>({...prev,salary_gross:Math.round(brut*100)/100}))
                     }} style={{...S.btnS,whiteSpace:'nowrap',fontSize:11,color:G.blue,borderColor:G.blue+'44'}}>
                       ⟵ Calc. Brut
@@ -1657,8 +1662,23 @@ function SalariiPage() {
                 {f(editSal.cas_employee,v=>setEditSal({...editSal,cas_employee:v}),'CAS Angajat (%)')}
                 {f(editSal.cass_employee,v=>setEditSal({...editSal,cass_employee:v}),'CASS Angajat (%)')}
                 {f(editSal.cas_employer,v=>setEditSal({...editSal,cas_employer:v}),'CAM Angajator (%)')}
-                {f(editSal.construction_fund,v=>setEditSal({...editSal,construction_fund:v}),'Fond Construcții (%)')}
+                <div style={{marginBottom:10}}>
+                  <Lbl>Fond Construcții (%)</Lbl>
+                  <input style={{...S.input,opacity:.5,cursor:'not-allowed'}} type="number" value="0" disabled/>
+                  <div style={{fontSize:10,color:G.dim,marginTop:3}}>Eliminat din 2025 — OUG 156/2024</div>
+                </div>
                 {!editSal.tax_exempt&&f(editSal.income_tax,v=>setEditSal({...editSal,income_tax:v}),'Impozit Venit (%)')}
+                <div style={{marginBottom:10}}>
+                  <Lbl>Deducere Personală (RON/lună)</Lbl>
+                  <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',marginBottom:7}}>
+                    <input type="checkbox" checked={editSal.use_personal_deduction||false} onChange={e=>setEditSal({...editSal,use_personal_deduction:e.target.checked})} style={{accentColor:G.blue,width:15,height:15}}/>
+                    <span style={{fontSize:12,color:editSal.use_personal_deduction?G.blue:G.muted,fontWeight:600}}>Aplică Deducere Personală</span>
+                  </label>
+                  {editSal.use_personal_deduction&&<>
+                    <input style={S.input} type="number" step="1" value={editSal.personal_deduction} onChange={e=>setEditSal({...editSal,personal_deduction:e.target.value})}/>
+                    <div style={{fontSize:10,color:G.dim,marginTop:3}}>587 RON pentru salariul minim 2026 · variază după salariu</div>
+                  </>}
+                </div>
                 {f(editSal.other_deductions,v=>setEditSal({...editSal,other_deductions:v}),'Alte Rețineri (RON)')}
                 <div style={{marginBottom:10}}><Lbl>Descriere alte rețineri</Lbl><input style={S.input} type="text" placeholder="ex: Poprire, Avans..." value={editSal.other_deductions_desc} onChange={e=>setEditSal({...editSal,other_deductions_desc:e.target.value})}/></div>
                 <div style={{marginBottom:10}}><Lbl>Note</Lbl><input style={S.input} type="text" value={editSal.notes} onChange={e=>setEditSal({...editSal,notes:e.target.value})}/></div>
@@ -1670,17 +1690,16 @@ function SalariiPage() {
                     const brut=Number(editSal.salary_gross)||0
                     const cas=brut*Number(editSal.cas_employee)/100
                     const cass=brut*Number(editSal.cass_employee)/100
-                    const fond=brut*Number(editSal.construction_fund)/100
-                    // Formula corecta: impozit pe baza impozabila (brut - cas - cass)
-                    const bazaImpozit=Math.max(0,brut-cas-cass)
+                    const dp=(!editSal.tax_exempt&&editSal.use_personal_deduction)?Number(editSal.personal_deduction)||0:0
+                    const bazaImpozit=Math.max(0,brut-cas-cass-dp)
                     const impozit=editSal.tax_exempt?0:(bazaImpozit*Number(editSal.income_tax)/100)
                     const altele=Number(editSal.other_deductions)||0
-                    const net=brut-cas-cass-fond-impozit-altele
+                    const net=brut-cas-cass-impozit-altele
                     return <>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>Salariu Brut</span><span style={{fontWeight:700}}>{brut.toFixed(2)} RON</span></div>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− CAS ({editSal.cas_employee}%)</span><span style={{color:G.red}}>-{cas.toFixed(2)} RON</span></div>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− CASS ({editSal.cass_employee}%)</span><span style={{color:G.red}}>-{cass.toFixed(2)} RON</span></div>
-                      {Number(editSal.construction_fund)>0&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Fond Const. ({editSal.construction_fund}%)</span><span style={{color:G.red}}>-{fond.toFixed(2)} RON</span></div>}
+                      {!editSal.tax_exempt&&dp>0&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Deducere Personală</span><span style={{color:G.blue}}>-{dp.toFixed(2)} RON</span></div>}
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4,opacity:.7}}><span style={{color:G.muted}}>  Bază impozabilă</span><span>{bazaImpozit.toFixed(2)} RON</span></div>
                       {!editSal.tax_exempt
                         ?<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Impozit venit ({editSal.income_tax}%)</span><span style={{color:G.red}}>-{impozit.toFixed(2)} RON</span></div>
