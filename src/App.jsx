@@ -142,6 +142,9 @@ function Layout({ children }) {
         </div>
       </div>
       <div style={{padding:'22px 26px',maxWidth:1500,margin:'0 auto'}} className="fi">{children}</div>
+      <div style={{textAlign:'center',padding:'12px',fontSize:10,color:'#333',borderTop:`1px solid ${G.border}`,marginTop:20}}>
+        Made by Trusu Razvan - Administrator Gazpet Instal
+      </div>
     </div>
   )
 }
@@ -155,11 +158,11 @@ function LoginPage() {
   return (
     <div style={{...S.page,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}><style>{css}</style>
       <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 30% 40%,#1F6FEB08 0%,transparent 60%)'}}/>
-      <div style={{...S.card,padding:38,width:390,position:'relative'}}>
+      <div style={{...S.card,padding:38,width:420,position:'relative'}}>
         <div style={{textAlign:'center',marginBottom:26}}>
-          <div style={{width:50,height:50,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:13,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,margin:'0 auto 12px'}}>⏱</div>
+          <img src="/logo_gazpet.jpg" alt="Gazpet Instal" style={{width:220,borderRadius:8,marginBottom:14,opacity:.9}}/>
           <div style={{fontSize:22,fontWeight:800}}>PontajPRO</div>
-          <div style={{color:G.muted,fontSize:12,marginTop:4}}>S.C. Gazpet Instal S.R.L.</div>
+          <div style={{color:G.muted,fontSize:12,marginTop:4}}>Sistem de evidență a prezenței</div>
         </div>
         <form onSubmit={go}>
           <div style={{marginBottom:13}}><Lbl>Email</Lbl><input style={S.input} type="email" placeholder="email@gazpet.ro" value={email} onChange={e=>setEmail(e.target.value)} required autoFocus/></div>
@@ -168,6 +171,7 @@ function LoginPage() {
           <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} type="submit" disabled={load}>{load?<><div className="sp"/>...</>:'→ Conectare'}</button>
         </form>
         <div style={{textAlign:'center',marginTop:16,fontSize:11,color:G.dim}}>Contactați administratorul pentru acces</div>
+        <div style={{textAlign:'center',marginTop:8,fontSize:10,color:'#444'}}>Made by Trusu Razvan - Administrator Gazpet Instal</div>
       </div>
     </div>
   )
@@ -304,26 +308,27 @@ function DashboardPage() {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt }) {
+function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt }) {
   const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
   const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
   const [norma,setNorma]=useState(rec?.norma||'')
   const [diurna,setDiurna]=useState(rec?.diurna||false)
-  const [mode,setMode]=useState(rec?.norma?'norma':'ore') // ore | norma
+  const [supl,setSupl]=useState(rec?.meal_supplement||false)
+  const [mode,setMode]=useState(rec?.norma?'norma':'ore')
   const [exp,setExp]=useState(false)
   useEffect(()=>{
     setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
     setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
-    setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setMode(rec?.norma?'norma':'ore')
+    setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setSupl(rec?.meal_supplement||false); setMode(rec?.norma?'norma':'ore')
   },[rec])
   const previewNet = () => { if(!ci) return null; const a=dateToISO(selectedDate,ci),b=co?dateToISO(selectedDate,co):null; return b?netMins(a,b,true):null }
   const pNet=previewNet()
   const recNet=netMins(rec?.check_in,rec?.check_out,rec?.lunch_break!==false)
   const hasRec=rec?.check_in||rec?.norma
   const save = () => {
-    if (mode==='norma'&&norma) onSave(emp,{norma,check_in:null,check_out:null,lunch_break:false,diurna})
-    else if (mode==='ore'&&ci) onSave(emp,{check_in:dateToISO(selectedDate,ci),check_out:co?dateToISO(selectedDate,co):null,norma:null,lunch_break:true,diurna})
-    else onSave(emp,{...(rec||{}),diurna,norma:rec?.norma||null,check_in:rec?.check_in||null,check_out:rec?.check_out||null})
+    if (mode==='norma'&&norma) onSave(emp,{norma,check_in:null,check_out:null,lunch_break:false,diurna,meal_supplement:supl})
+    else if (mode==='ore'&&ci) onSave(emp,{check_in:dateToISO(selectedDate,ci),check_out:co?dateToISO(selectedDate,co):null,norma:null,lunch_break:true,diurna,meal_supplement:supl})
+    else onSave(emp,{...(rec||{}),diurna,meal_supplement:supl,norma:rec?.norma||null,check_in:rec?.check_in||null,check_out:rec?.check_out||null})
   }
   return (
     <div style={{...S.card,padding:'10px 14px',transition:'border-color .2s'}}>
@@ -362,6 +367,12 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
         <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',minWidth:55}}>
           <input type="checkbox" checked={diurna} onChange={e=>setDiurna(e.target.checked)} style={{width:15,height:15,accentColor:G.orange}}/>
           <span style={{fontSize:9,color:diurna?G.orange:G.dim,fontWeight:600}}>{diurna?`💰${diurnaAmt}RON`:'💰 Diurnă'}</span>
+        </label>
+
+        {/* Supliment Hrana */}
+        <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',minWidth:55}}>
+          <input type="checkbox" checked={supl} onChange={e=>setSupl(e.target.checked)} style={{width:15,height:15,accentColor:'#56D364'}}/>
+          <span style={{fontSize:9,color:supl?'#56D364':G.dim,fontWeight:600}}>{supl?`🍔${suplAmt}RON`:'🍔 Hrană'}</span>
         </label>
 
         {/* Edit toggle */}
@@ -403,6 +414,11 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
               <input type="checkbox" checked={diurna} onChange={e=>setDiurna(e.target.checked)} style={{accentColor:G.orange}}/> 💰 Diurnă ({diurnaAmt} RON)
             </label>
           </div>
+          <div style={{paddingTop:18}}>
+            <label style={{display:'flex',alignItems:'center',gap:7,fontSize:12,cursor:'pointer'}}>
+              <input type="checkbox" checked={supl} onChange={e=>setSupl(e.target.checked)} style={{accentColor:'#56D364'}}/> 🍔 Supliment Hrană ({suplAmt} RON)
+            </label>
+          </div>
         </div>
       </div>}
     </div>
@@ -416,12 +432,12 @@ function PontajPage() {
   const [search,setSearch]=useState(''); const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [onlyDiurna,setOnlyDiurna]=useState(false)
   const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
-  const [diurnaAmt,setDiurnaAmt]=useState(50); const [toast,showToast]=useToast()
+  const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
   const isAdmin=profile?.role==='admin'
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
-  const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)) }
+  const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
     let q=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
@@ -482,7 +498,7 @@ function PontajPage() {
       {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:G.red}}>⚠️ <strong>{unalloc.length} nealocați:</strong> {unalloc.slice(0,4).map(e=>e.name).join(', ')}{unalloc.length>4?'...':''}</div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
     </Layout>
@@ -496,12 +512,13 @@ function ReportsPage() {
   const [month,setMonth]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`)
   const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [sites,setSites]=useState([]); const [data,setData]=useState([]); const [detailed,setDetailed]=useState([])
-  const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false)
-  const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50)
+  const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false); const [expS,setExpS]=useState(false)
+  const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15)
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
+  const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
   const [toast,showToast]=useToast()
   const isAdmin=profile?.role==='admin'
-  useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value))}) },[])
+  useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
 
   const getRange=()=>{ const [y,m]=month.split('-').map(Number); return {y,m,from:new Date(y,m-1,1).toISOString().split('T')[0],to:new Date(y,m,0).toISOString().split('T')[0],days:new Date(y,m,0).getDate()} }
@@ -688,6 +705,28 @@ function ReportsPage() {
     showToast(`✓ ${st.length} angajați exportați`); setExpD(false)
   }
 
+  const exportSupl=async()=>{
+    if(!sf||!st2){showToast('Selectează perioada','warn');return}
+    setExpS(true)
+    let eq=supabase.from('employees').select('*').eq('active',true).order('name')
+    if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
+    const {data:emps}=await eq
+    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id))
+    const st=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*suplAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
+    if(!st.length){showToast('Nu există suplimente în perioadă','warn');setExpS(false);return}
+    const from=new Date(sf).toLocaleDateString('ro-RO'),to=new Date(st2).toLocaleDateString('ro-RO')
+    const rows=[
+      ['S.C. GAZPET INSTAL S.R.L.'],[`Situație Supliment Hrană: ${from} — ${to}`],[],
+      ['Nr.','Prenume','Nume','Departament','Funcție','Zile Supliment',`Valoare/zi (RON)`,'TOTAL RON'],
+      ...st.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,suplAmt,e.val]}),
+      [],[,'','','','TOTAL',st.reduce((s,e)=>s+e.zile,0),suplAmt,st.reduce((s,e)=>s+e.val,0)]
+    ]
+    const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:4},{wch:18},{wch:18},{wch:12},{wch:18},{wch:16},{wch:14},{wch:14}]
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Supliment Hrana')
+    XLSX.writeFile(wb,`Supliment_Hrana_${from.replace(/\//g,'-')}.xlsx`)
+    showToast(`✓ ${st.length} angajați exportați`); setExpS(false)
+  }
+
   const mLabel=()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})}
 
   return (
@@ -706,14 +745,24 @@ function ReportsPage() {
         </div>
       </div>
 
-      {/* Export Diurne */}
-      <div style={{...S.card,padding:14,marginBottom:16,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-        <span style={{fontSize:12,fontWeight:700,color:G.orange}}>💰 Export Diurne</span>
-        <span style={{fontSize:11,color:G.muted}}>De la:</span>
-        <input type="date" value={df} onChange={e=>setDf(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
-        <span style={{fontSize:11,color:G.muted}}>Până la:</span>
-        <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
-        <button onClick={exportDiurne} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+      {/* Export Diurne + Supliment Hrana */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div style={{...S.card,padding:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <span style={{fontSize:12,fontWeight:700,color:G.orange}}>💰 Export Diurne</span>
+          <span style={{fontSize:11,color:G.muted}}>De la:</span>
+          <input type="date" value={df} onChange={e=>setDf(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
+          <span style={{fontSize:11,color:G.muted}}>Până la:</span>
+          <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
+          <button onClick={exportDiurne} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+        </div>
+        <div style={{...S.card,padding:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <span style={{fontSize:12,fontWeight:700,color:'#56D364'}}>🍔 Export Supliment Hrană</span>
+          <span style={{fontSize:11,color:G.muted}}>De la:</span>
+          <input type="date" value={sf} onChange={e=>setSf(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
+          <span style={{fontSize:11,color:G.muted}}>Până la:</span>
+          <input type="date" value={st2} onChange={e=>setSt2(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
+          <button onClick={exportSupl} disabled={expS} style={{...S.btnP,background:'#1A3A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expS?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+        </div>
       </div>
 
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
@@ -778,6 +827,7 @@ function AdminPage() {
   const [load,setLoad]=useState(true); const [toast,showToast]=useToast()
   const fileRef=useRef(null); const calRef=useRef(null)
   const [siteName,setSiteName]=useState(''); const [addingSite,setAddingSite]=useState(false)
+  const [editSiteItem,setEditSiteItem]=useState(null); const [editSiteName,setEditSiteName]=useState('')
   const [deletingSite,setDeletingSite]=useState(null) // site being confirmed for delete
   const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
@@ -807,6 +857,7 @@ function AdminPage() {
 
   const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
+  const saveSiteName=async()=>{ if(!editSiteItem||!editSiteName.trim()) return; const {error}=await supabase.from('sites').update({name:editSiteName.trim()}).eq('id',editSiteItem.id); if(!error){showToast(`✓ Redenumit: ${editSiteName}`);setEditSiteItem(null);loadAll()} else showToast('Eroare','error') }
   const deleteSite=async(s)=>{
     // Check if any employees are on this site
     const {data:emps}=await supabase.from('employees').select('id').eq('site_id',s.id).limit(1)
@@ -943,7 +994,19 @@ function AdminPage() {
         {tabs.map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{...S.btnS,background:tab===v?'#21262D':G.bg,color:tab===v?G.text:G.muted,fontSize:12}}>{l}</button>)}
       </div>
 
-      {/* Delete site confirmation modal */}
+      {/* Edit site name modal */}
+      {editSiteItem&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{...S.card,padding:28,width:380}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Redenumește Șantier</div>
+            <div style={{marginBottom:18}}><Lbl>Nume nou</Lbl><input style={S.input} value={editSiteName} onChange={e=>setEditSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&saveSiteName()} autoFocus/></div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setEditSiteItem(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+              <button onClick={saveSiteName} style={{...S.btnP,flex:1}}>✓ Salvează</button>
+            </div>
+          </div>
+        </div>
+      )}
       {deletingSite&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
           <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
@@ -1013,6 +1076,7 @@ function AdminPage() {
                 <tr key={s.id}><td style={{fontWeight:600}}>{s.name}</td>
                 <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:s.active?G.greenDim:G.redDim,color:s.active?G.green:G.red,border:`1px solid ${s.active?G.green:G.red}44`}}>{s.active?'● Activ':'○ Inactiv'}</span></td>
                 <td style={{display:'flex',gap:6}}>
+                  <button onClick={()=>{setEditSiteItem(s);setEditSiteName(s.name)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️</button>
                   <button onClick={()=>toggleSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{s.active?'Dezact.':'Activ.'}</button>
                   <button onClick={()=>setDeletingSite(s)} style={{...S.btnS,padding:'3px 9px',fontSize:11,color:G.red,borderColor:G.red+'44'}}>🗑️</button>
                 </td></tr>
@@ -1178,11 +1242,11 @@ function AdminPage() {
         <div style={{maxWidth:460}}>
           <div style={{...S.card,padding:22}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:18}}>Setări Generale</div>
-            {[['Valoare Diurnă (RON/zi)','diurna_amount','number','50'],['Ore normale/zi','work_hours_per_day','number','8']].map(([l,k,t,ph])=>(
+            {[['Valoare Diurnă (RON/zi)','diurna_amount','50'],['Ore normale/zi','work_hours_per_day','8'],['Valoare Supliment Hrană (RON/zi)','meal_supplement_amount','15']].map(([l,k,ph])=>(
               <div key={k} style={{marginBottom:18}}>
                 <Lbl>{l}</Lbl>
                 <div style={{display:'flex',gap:9}}>
-                  <input style={S.input} type={t} value={settings[k]||ph} onChange={e=>setSettings(prev=>({...prev,[k]:e.target.value}))} min="0" step={k==='diurna_amount'?5:1}/>
+                  <input style={S.input} type="number" value={settings[k]||ph} onChange={e=>setSettings(prev=>({...prev,[k]:e.target.value}))} min="0" step={k==='work_hours_per_day'?1:5}/>
                   <button onClick={()=>saveSetting(k,settings[k])} style={{...S.btnP,whiteSpace:'nowrap'}}>Salvează</button>
                 </div>
               </div>
