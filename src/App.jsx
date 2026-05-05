@@ -810,6 +810,16 @@ function ReportsPage() {
     // Get diurna records for the export period only
     const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
 
+    // Get previously paid diurne in same month (period_to < current period start)
+    const {data:prevPayments}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,days)').gte('period_from',monthStart).lt('period_to',df)
+    // Build map: employee_id -> total days already paid this month
+    const prevPaidMap={}
+    ;(prevPayments||[]).forEach(payment=>{
+      ;(payment.diurna_payment_details||[]).forEach(det=>{
+        prevPaidMap[det.employee_id]=(prevPaidMap[det.employee_id]||0)+det.days
+      })
+    })
+
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
       const er=(diurnaRecs||[]).filter(r=>r.employee_id===emp.id)
@@ -819,8 +829,11 @@ function ReportsPage() {
       const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma))
       const normeCumulate=normeRecs.length
 
-      // Diurna maxima = zile lucratoare calendar - norme cumulate
-      const diurnaMax=Math.max(0,calWorkDays-normeCumulate)
+      // Zile deja platite in aceeasi luna (din plati anterioare)
+      const zilePlatiteAnterior=prevPaidMap[emp.id]||0
+
+      // Diurna maxima = zile lucratoare calendar - norme cumulate - zile deja platite anterior
+      const diurnaMax=Math.max(0,calWorkDays-normeCumulate-zilePlatiteAnterior)
 
       // Diurna reala = zile cu bifa diurna in perioada exportata
       const diurnaReala=er.length
@@ -833,7 +846,7 @@ function ReportsPage() {
       er.forEach(r=>{const s=r.sites?.name||'Nealocate'; siteMap[s]=(siteMap[s]||0)+1})
       const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
       const p=emp.name.split(' ')
-      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,pesteLimita}
+      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita}
     }).filter(Boolean).sort((a,b)=>(a.nume+a.prenume).localeCompare(b.nume+b.prenume))
 
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
@@ -1026,11 +1039,21 @@ function ReportsPage() {
                   const isSelected=selectedPayment?.id===p.id
                   return <div key={p.id} onClick={()=>{setSelectedPayment(p);loadPaymentDetails(p.id)}}
                     style={{padding:'12px 16px',cursor:'pointer',background:isSelected?'#1C2128':'transparent',borderBottom:`1px solid ${G.border}`,transition:'background .15s'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,alignItems:'flex-start'}}>
                       <span style={{fontSize:12,fontWeight:700,color:G.blue}}>
                         {new Date(p.period_from).toLocaleDateString('ro-RO')} — {new Date(p.period_to).toLocaleDateString('ro-RO')}
                       </span>
-                      <span style={{fontSize:11,color:G.muted}}>{new Date(p.payment_date).toLocaleDateString('ro-RO')}</span>
+                      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                        <span style={{fontSize:11,color:G.muted}}>{new Date(p.payment_date).toLocaleDateString('ro-RO')}</span>
+                        <button onClick={async(e)=>{
+                          e.stopPropagation()
+                          if(!window.confirm(`Ștergi plata ${new Date(p.period_from).toLocaleDateString('ro-RO')} — ${new Date(p.period_to).toLocaleDateString('ro-RO')}?`)) return
+                          await supabase.from('diurna_payments').delete().eq('id',p.id)
+                          if(selectedPayment?.id===p.id){setSelectedPayment(null);setPaymentDetails([])}
+                          loadPayments()
+                          showToast('✓ Plată ștearsă')
+                        }} style={{background:'none',border:`1px solid ${G.red}44`,borderRadius:6,padding:'2px 7px',cursor:'pointer',color:G.red,fontSize:11}}>🗑️</button>
+                      </div>
                     </div>
                     <div style={{display:'flex',gap:12,fontSize:11}}>
                       <span style={{color:G.muted}}>👥 {p.total_employees} ang.</span>
