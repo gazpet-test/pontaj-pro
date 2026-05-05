@@ -822,30 +822,23 @@ function ReportsPage() {
     // Get diurna records for the export period only
     const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
 
-    // Get previously paid diurne in same month (period_to < current period start)
-    const {data:prevPayments}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,days)').gte('period_from',monthStart).lt('period_to',df)
-    // Build map: employee_id -> total days already paid this month
-    const prevPaidMap={}
-    ;(prevPayments||[]).forEach(payment=>{
-      ;(payment.diurna_payment_details||[]).forEach(det=>{
-        prevPaidMap[det.employee_id]=(prevPaidMap[det.employee_id]||0)+det.days
-      })
-    })
-
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
       const er=(diurnaRecs||[]).filter(r=>r.employee_id===emp.id)
       if(!er.length) return null
 
-      // Norme cumulate de la inceputul lunii pana la sfarsitul perioadei
-      // Bug 2 fix: numaram norme DOAR pe zile lucrătoare (excludem weekend/sarbatori)
+      // Norme cumulate: DOAR pe zile lucrătoare (exclude weekend/sărbători)
       const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma)&&workDaySet.has(r.date))
       const normeCumulate=normeRecs.length
 
-      // Zile deja platite in aceeasi luna (din plati anterioare)
-      const zilePlatiteAnterior=prevPaidMap[emp.id]||0
+      // FIX CASCADĂ: numărăm diurne legitime ÎNAINTE de df direct din allRecs,
+      // DOAR pe zile lucrătoare (workDaySet). Astfel, zilele "peste limită" din
+      // perioadele anterioare NU mai consumă din capacitatea lunară a perioadelor următoare.
+      const zilePlatiteAnterior=(allRecs||[]).filter(r=>
+        r.employee_id===emp.id&&r.diurna===true&&r.date<df&&workDaySet.has(r.date)
+      ).length
 
-      // Bug 1 fix: diurnaMax = min(capacitate lunara ramasa, capacitate reala a perioadei df→dt)
+      // diurnaMax = min(capacitate lunară rămasă, capacitate reală a perioadei df→dt)
       const monthlyRemaining=Math.max(0,calWorkDays-normeCumulate-zilePlatiteAnterior)
       const normeInPeriod=(normeRecs||[]).filter(r=>r.date>=df&&r.date<=dt).length
       const periodCapacity=Math.max(0,workDaysInPeriod-normeInPeriod)
