@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, createContext, useContext, useRef } f
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
+import LOGO_B64 from './logo.js'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -142,7 +143,7 @@ function Layout({ children }) {
         </div>
       </div>
       <div style={{padding:'22px 26px',maxWidth:1500,margin:'0 auto'}} className="fi">{children}</div>
-      <div style={{textAlign:'center',padding:'12px',fontSize:10,color:'#333',borderTop:`1px solid ${G.border}`,marginTop:20}}>
+      <div style={{textAlign:'center',padding:'12px',fontSize:12,color:'#E53935',fontWeight:700,borderTop:`1px solid ${G.border}`,marginTop:20,letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
       </div>
     </div>
@@ -160,7 +161,7 @@ function LoginPage() {
       <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 30% 40%,#1F6FEB08 0%,transparent 60%)'}}/>
       <div style={{...S.card,padding:38,width:420,position:'relative'}}>
         <div style={{textAlign:'center',marginBottom:26}}>
-          <img src="/logo_gazpet.jpg" alt="Gazpet Instal" style={{width:220,borderRadius:8,marginBottom:14,opacity:.9}}/>
+          <img src={LOGO_B64} alt="Gazpet Instal" style={{width:220,borderRadius:8,marginBottom:14,opacity:.9}}/>
           <div style={{fontSize:22,fontWeight:800}}>PontajPRO</div>
           <div style={{color:G.muted,fontSize:12,marginTop:4}}>Sistem de evidență a prezenței</div>
         </div>
@@ -171,7 +172,7 @@ function LoginPage() {
           <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} type="submit" disabled={load}>{load?<><div className="sp"/>...</>:'→ Conectare'}</button>
         </form>
         <div style={{textAlign:'center',marginTop:16,fontSize:11,color:G.dim}}>Contactați administratorul pentru acces</div>
-        <div style={{textAlign:'center',marginTop:8,fontSize:10,color:'#444'}}>Made by Trusu Razvan - Administrator Gazpet Instal</div>
+        <div style={{textAlign:'center',marginTop:8,fontSize:11,color:'#E53935',fontWeight:700}}>Made by Trusu Razvan - Administrator Gazpet Instal</div>
       </div>
     </div>
   )
@@ -690,19 +691,49 @@ function ReportsPage() {
     }
     const {data:emps}=await eq
     const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
-    const st=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*diurnaAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
-    if(!st.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
-    const from=new Date(df).toLocaleDateString('ro-RO'),to=new Date(dt).toLocaleDateString('ro-RO')
+    const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*diurnaAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
+    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
+    const from=new Date(df).toLocaleDateString('ro-RO'), to=new Date(dt).toLocaleDateString('ro-RO')
+    const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    const wb=XLSX.utils.book_new()
+    const hdrCols=['Nr.','Prenume','Nume','Departament','Funcție','Zile Deplasare','Diurnă/zi (RON)','TOTAL RON']
     const rows=[
-      ['S.C. GAZPET INSTAL S.R.L.'],[`Situație Diurne: ${from} — ${to}`],[],
-      ['Nr.','Prenume','Nume','Departament','Funcție','Zile Deplasare',`Diurnă/zi (RON)`,'TOTAL RON'],
-      ...st.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,diurnaAmt,e.val]}),
-      [],[,'','','','TOTAL',st.reduce((s,e)=>s+e.zile,0),diurnaAmt,st.reduce((s,e)=>s+e.val,0)]
+      ['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
+      ['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'],
+      [],
+      [`SITUAȚIE DIURNE: ${from} — ${to}`],
+      [],
+      hdrCols,
+      ...empStats.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,diurnaAmt,e.val]}),
+      [],
+      ['','','','','TOTAL',empStats.reduce((s,e)=>s+e.zile,0),diurnaAmt,empStats.reduce((s,e)=>s+e.val,0)]
     ]
-    const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:4},{wch:18},{wch:18},{wch:12},{wch:18},{wch:14},{wch:14},{wch:14}]
-    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Diurne')
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols']=[{wch:5},{wch:18},{wch:18},{wch:14},{wch:20},{wch:16},{wch:14},{wch:14}]
+    // Header row style (row 5)
+    hdrCols.forEach((_,c)=>{
+      const a=XLSX.utils.encode_cell({r:5,c})
+      if(!ws[a]) ws[a]={v:hdrCols[c],t:'s'}
+      ws[a].s={fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
+    })
+    // Data rows
+    empStats.forEach((_,i)=>{
+      for(let c=0;c<8;c++){
+        const a=XLSX.utils.encode_cell({r:6+i,c})
+        if(!ws[a]) ws[a]={v:'',t:'s'}
+        ws[a].s={fill:{fgColor:{rgb:i%2===0?'FFFFFF':'F5F5F5'}},border:bd,alignment:{horizontal:c===0||c>=5?'center':'left',vertical:'center'},font:{sz:10}}
+      }
+    })
+    // Total row
+    const tr=6+empStats.length+1
+    for(let c=0;c<8;c++){
+      const a=XLSX.utils.encode_cell({r:tr,c})
+      if(!ws[a]) ws[a]={v:'',t:'s'}
+      ws[a].s={fill:{fgColor:{rgb:'D9E1F2'}},font:{bold:true,sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
+    }
+    XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
-    showToast(`✓ ${st.length} angajați exportați`); setExpD(false)
+    showToast(`✓ ${empStats.length} angajați exportați`); setExpD(false)
   }
 
   const exportSupl=async()=>{
@@ -712,19 +743,46 @@ function ReportsPage() {
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
     const {data:recs}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id))
-    const st=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*suplAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
-    if(!st.length){showToast('Nu există suplimente în perioadă','warn');setExpS(false);return}
+    const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*suplAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
+    if(!empStats.length){showToast('Nu există suplimente în perioadă','warn');setExpS(false);return}
     const from=new Date(sf).toLocaleDateString('ro-RO'),to=new Date(st2).toLocaleDateString('ro-RO')
+    const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    const wb=XLSX.utils.book_new()
+    const hdrCols=['Nr.','Prenume','Nume','Departament','Funcție','Zile Supliment','Valoare/zi (RON)','TOTAL RON']
     const rows=[
-      ['S.C. GAZPET INSTAL S.R.L.'],[`Situație Supliment Hrană: ${from} — ${to}`],[],
-      ['Nr.','Prenume','Nume','Departament','Funcție','Zile Supliment',`Valoare/zi (RON)`,'TOTAL RON'],
-      ...st.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,suplAmt,e.val]}),
-      [],[,'','','','TOTAL',st.reduce((s,e)=>s+e.zile,0),suplAmt,st.reduce((s,e)=>s+e.val,0)]
+      ['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
+      ['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'],
+      [],
+      [`SITUAȚIE SUPLIMENT HRANĂ: ${from} — ${to}`],
+      [],
+      hdrCols,
+      ...empStats.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,suplAmt,e.val]}),
+      [],
+      ['','','','','TOTAL',empStats.reduce((s,e)=>s+e.zile,0),suplAmt,empStats.reduce((s,e)=>s+e.val,0)]
     ]
-    const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:4},{wch:18},{wch:18},{wch:12},{wch:18},{wch:16},{wch:14},{wch:14}]
-    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Supliment Hrana')
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols']=[{wch:5},{wch:18},{wch:18},{wch:14},{wch:20},{wch:16},{wch:14},{wch:14}]
+    hdrCols.forEach((_,c)=>{
+      const a=XLSX.utils.encode_cell({r:5,c})
+      if(!ws[a]) ws[a]={v:hdrCols[c],t:'s'}
+      ws[a].s={fill:{fgColor:{rgb:'1A6B1A'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
+    })
+    empStats.forEach((_,i)=>{
+      for(let c=0;c<8;c++){
+        const a=XLSX.utils.encode_cell({r:6+i,c})
+        if(!ws[a]) ws[a]={v:'',t:'s'}
+        ws[a].s={fill:{fgColor:{rgb:i%2===0?'FFFFFF':'F5F5F5'}},border:bd,alignment:{horizontal:c===0||c>=5?'center':'left',vertical:'center'},font:{sz:10}}
+      }
+    })
+    const tr=6+empStats.length+1
+    for(let c=0;c<8;c++){
+      const a=XLSX.utils.encode_cell({r:tr,c})
+      if(!ws[a]) ws[a]={v:'',t:'s'}
+      ws[a].s={fill:{fgColor:{rgb:'D9F2D9'}},font:{bold:true,sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
+    }
+    XLSX.utils.book_append_sheet(wb,ws,'Supliment Hrana')
     XLSX.writeFile(wb,`Supliment_Hrana_${from.replace(/\//g,'-')}.xlsx`)
-    showToast(`✓ ${st.length} angajați exportați`); setExpS(false)
+    showToast(`✓ ${empStats.length} angajați exportați`); setExpS(false)
   }
 
   const mLabel=()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})}
