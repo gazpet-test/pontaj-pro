@@ -804,6 +804,18 @@ function ReportsPage() {
       d.setDate(d.getDate()+1)
     }
 
+    // Build set of actual working days in the month (Mon-Fri, not legal holidays)
+    // Used to filter norme correctly (Bug 2 fix: exclude norme on non-working days)
+    const workDaySet=new Set()
+    const wd=new Date(monthStart)
+    while(wd<=endDate){const wds=wd.toISOString().split('T')[0];if(wd.getDay()!==0&&wd.getDay()!==6&&!legalSet.has(wds))workDaySet.add(wds);wd.setDate(wd.getDate()+1)}
+
+    // Calculate working days ONLY within the export window df→dt (Bug 1 fix)
+    let workDaysInPeriod=0
+    const pd=new Date(df)
+    const periodEnd=new Date(dt)
+    while(pd<=periodEnd){const pds=pd.toISOString().split('T')[0];if(pd.getDay()!==0&&pd.getDay()!==6&&!legalSet.has(pds))workDaysInPeriod++;pd.setDate(pd.getDate()+1)}
+
     // Get all pontaj records from start of month to end of period (for norme cumulate)
     const {data:allRecs}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id))
 
@@ -826,14 +838,18 @@ function ReportsPage() {
       if(!er.length) return null
 
       // Norme cumulate de la inceputul lunii pana la sfarsitul perioadei
-      const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma))
+      // Bug 2 fix: numaram norme DOAR pe zile lucrătoare (excludem weekend/sarbatori)
+      const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma)&&workDaySet.has(r.date))
       const normeCumulate=normeRecs.length
 
       // Zile deja platite in aceeasi luna (din plati anterioare)
       const zilePlatiteAnterior=prevPaidMap[emp.id]||0
 
-      // Diurna maxima = zile lucratoare calendar - norme cumulate - zile deja platite anterior
-      const diurnaMax=Math.max(0,calWorkDays-normeCumulate-zilePlatiteAnterior)
+      // Bug 1 fix: diurnaMax = min(capacitate lunara ramasa, capacitate reala a perioadei df→dt)
+      const monthlyRemaining=Math.max(0,calWorkDays-normeCumulate-zilePlatiteAnterior)
+      const normeInPeriod=(normeRecs||[]).filter(r=>r.date>=df&&r.date<=dt).length
+      const periodCapacity=Math.max(0,workDaysInPeriod-normeInPeriod)
+      const diurnaMax=Math.min(monthlyRemaining,periodCapacity)
 
       // Diurna reala = zile cu bifa diurna in perioada exportata
       const diurnaReala=er.length
