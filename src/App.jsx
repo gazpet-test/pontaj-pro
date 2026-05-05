@@ -960,9 +960,56 @@ function ReportsPage() {
     // Row heights
     ws['!rows']=[...Array(6).fill({hpx:14}),{hpx:22}]
 
+    // ── NOTĂ SALARIALĂ ──────────────────────────────────────────────────────
+    const angajatiPeste=empStats.filter(e=>e.pesteLimita>0)
+    if(angajatiPeste.length>0){
+      let nr2=totalGenRow+2
+      ws['!merges']=ws['!merges']||[]
+
+      // Titlu
+      const tc=XLSX.utils.encode_cell({r:nr2,c:0})
+      ws[tc]={v:'NOTA SALARIALA — Zile diurna peste limita admisa (se adauga in salariu)',t:'s'}
+      ws[tc].s={fill:{fgColor:{rgb:'C00000'}},font:{bold:true,sz:11,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'left',vertical:'center'}}
+      ws['!merges'].push({s:{r:nr2,c:0},e:{r:nr2,c:8}})
+      nr2++
+
+      // Sub-titlu
+      const sc2=XLSX.utils.encode_cell({r:nr2,c:0})
+      ws[sc2]={v:`Perioada: ${from} — ${to}  |  Zilele de mai jos depasesc nr. maxim de zile lucratoare si NU pot fi acordate ca diurna neimpozabila. Se impoziteaza ca venit salarial.`,t:'s'}
+      ws[sc2].s={fill:{fgColor:{rgb:'FCE4D6'}},font:{italic:true,sz:9,color:{rgb:'843C0C'}},alignment:{horizontal:'left',vertical:'center',wrapText:true}}
+      ws['!merges'].push({s:{r:nr2,c:0},e:{r:nr2,c:8}})
+      nr2++
+
+      // Header
+      const nh=['Nr.','Prenume','Nume','Zile diurna reale','Zile max. admise','Zile PESTE LIMITA','Diurna/zi (RON)','SUMA DE ADAUGAT IN SALARIU','']
+      nh.forEach((h,c)=>{const a=XLSX.utils.encode_cell({r:nr2,c});ws[a]={v:h,t:'s'};ws[a].s={fill:{fgColor:{rgb:'843C0C'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center',wrapText:true}}})
+      nr2++
+
+      // Randuri angajati
+      angajatiPeste.forEach((emp,i)=>{
+        const suma=emp.pesteLimita*diurnaAmt
+        const row=[i+1,emp.prenume,emp.nume,emp.totalZile,emp.diurnaMax,emp.pesteLimita,diurnaAmt,suma,'']
+        row.forEach((v,c)=>{
+          const a=XLSX.utils.encode_cell({r:nr2,c})
+          ws[a]={v,t:typeof v==='number'?'n':'s'}
+          const isKey=c===5||c===7
+          ws[a].s={fill:{fgColor:{rgb:i%2===0?'FCE4D6':'FFF2CC'}},font:{bold:isKey,sz:10,color:{rgb:isKey?'843C0C':'000000'}},border:bd,alignment:{horizontal:c===0||c>=3?'center':'left',vertical:'center'}}
+        })
+        nr2++
+      })
+
+      // Total
+      const totPeste=angajatiPeste.reduce((s,e)=>s+e.pesteLimita,0)
+      const totSuma=angajatiPeste.reduce((s,e)=>s+e.pesteLimita*diurnaAmt,0)
+      const totRow=['','','TOTAL','','',totPeste,diurnaAmt,totSuma,'']
+      totRow.forEach((v,c)=>{const a=XLSX.utils.encode_cell({r:nr2,c});ws[a]={v,t:typeof v==='number'?'n':'s'};ws[a].s={fill:{fgColor:{rgb:'C00000'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:c===0||c>=3?'center':'left',vertical:'center'}}})
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
-    showToast(`✓ ${empStats.length} angajați · ${calWorkDays} zile lucr. cumulate`); setExpD(false)
+    const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
+    showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`); setExpD(false)
   }
 
   const exportSupl=async()=>{
