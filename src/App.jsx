@@ -718,13 +718,24 @@ function ReportsPage() {
       if(siteIds.length>0) eq=eq.in('site_id',siteIds)
     }
     const {data:emps}=await eq
-    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
-    const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*diurnaAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
+    // Fetch site names for records
+    const {data:recs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+    const empStats=(emps||[]).map(emp=>{
+      const er=(recs||[]).filter(r=>r.employee_id===emp.id)
+      // Group by site
+      const siteMap={}
+      er.forEach(r=>{
+        const siteName=r.sites?.name||'—'
+        siteMap[siteName]=(siteMap[siteName]||0)+1
+      })
+      const siteStr=Object.entries(siteMap).map(([s,n])=>n>1?`${s}(${n}z)`:s).join(', ')
+      return {...emp,zile:er.length,val:er.length*diurnaAmt,siteStr}
+    }).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
     const from=new Date(df).toLocaleDateString('ro-RO'), to=new Date(dt).toLocaleDateString('ro-RO')
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
     const wb=XLSX.utils.book_new()
-    const hdrCols=['Nr.','Prenume','Nume','Departament','Funcție','Zile Deplasare','Diurnă/zi (RON)','TOTAL RON']
+    const hdrCols=['Nr.','Prenume','Nume','Șantier','Zile Deplasare','Diurnă/zi (RON)','TOTAL RON']
     const rows=[
       ['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
       ['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'],
@@ -732,12 +743,12 @@ function ReportsPage() {
       [`SITUAȚIE DIURNE: ${from} — ${to}`],
       [],
       hdrCols,
-      ...empStats.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.department,e.position||'',e.zile,diurnaAmt,e.val]}),
+      ...empStats.map((e,i)=>{const p=e.name.split(' ');return [i+1,p[0],p.slice(1).join(' '),e.siteStr,e.zile,diurnaAmt,e.val]}),
       [],
-      ['','','','','TOTAL',empStats.reduce((s,e)=>s+e.zile,0),diurnaAmt,empStats.reduce((s,e)=>s+e.val,0)]
+      ['','','','TOTAL',empStats.reduce((s,e)=>s+e.zile,0),diurnaAmt,empStats.reduce((s,e)=>s+e.val,0)]
     ]
     const ws=XLSX.utils.aoa_to_sheet(rows)
-    ws['!cols']=[{wch:5},{wch:18},{wch:18},{wch:14},{wch:20},{wch:16},{wch:14},{wch:14}]
+    ws['!cols']=[{wch:5},{wch:18},{wch:18},{wch:30},{wch:16},{wch:14},{wch:14}]
     // Header row style (row 5)
     hdrCols.forEach((_,c)=>{
       const a=XLSX.utils.encode_cell({r:5,c})
