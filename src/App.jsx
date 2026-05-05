@@ -40,11 +40,12 @@ function AuthProvider({ children }) {
   return <AuthContext.Provider value={{ session, profile, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
 }
 
-function ProtectedRoute({ children, adminOnly = false }) {
+function ProtectedRoute({ children, adminOnly = false, salaryAccess = false }) {
   const { session, profile } = useAuth()
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
-  if (adminOnly && profile?.role !== 'admin') return <Navigate to="/" replace />
+  if (adminOnly && !['admin','superadmin'].includes(profile?.role)) return <Navigate to="/" replace />
+  if (salaryAccess && !['superadmin','contabil'].includes(profile?.role)) return <Navigate to="/" replace />
   return children
 }
 
@@ -118,8 +119,17 @@ function Layout({ children }) {
   const nav = useNavigate(); const loc = useLocation()
   const [now, setNow] = useState(new Date())
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
-  const isAdmin = profile?.role==='admin'
-  const items = [{p:'/',i:'📊',l:'Panou'},{p:'/pontaj',i:'👥',l:'Pontaj'},{p:'/rapoarte',i:'📈',l:'Rapoarte'},...(isAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]) ]
+  const isAdmin = ['admin','superadmin'].includes(profile?.role)
+  const isSuperAdmin = profile?.role==='superadmin'
+  const isContabil = profile?.role==='contabil'
+  const hasSalaryAccess = isSuperAdmin || isContabil
+  const navItems = [
+    {p:'/',i:'📊',l:'Panou'},
+    {p:'/pontaj',i:'👥',l:'Pontaj'},
+    {p:'/rapoarte',i:'📈',l:'Rapoarte'},
+    ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
+    ...(isAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
+  ]
   return (
     <div style={S.page}><style>{css}</style>
       <div style={{background:G.surface,borderBottom:`1px solid ${G.border}`,padding:'0 22px',display:'flex',alignItems:'center',height:56,gap:18,position:'sticky',top:0,zIndex:100}}>
@@ -127,7 +137,7 @@ function Layout({ children }) {
           <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
           <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
-        {items.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
+        {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
@@ -137,7 +147,7 @@ function Layout({ children }) {
           <Avatar name={profile?.name} id={1} size={28}/>
           <div>
             <div style={{fontSize:12,fontWeight:600,lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
-            <span className={`badge ${isAdmin?'ba':'bm'}`}>{isAdmin?'⚙ Admin':'👤 Manager'}</span>
+            <span className={`badge ${isAdmin?'ba':profile?.role==='contabil'?'bs':'bm'}`}>{profile?.role==='superadmin'?'⭐ Super Admin':isAdmin?'⚙ Admin':profile?.role==='contabil'?'💵 Contabil':'👤 Manager'}</span>
           </div>
           <button className="nl" onClick={signOut} style={{color:G.red,padding:'5px 8px'}}>⎋</button>
         </div>
@@ -192,7 +202,8 @@ function DashboardPage() {
   const [recent,setRecent]=useState([])
   const [unalloc,setUnalloc]=useState([])
   const [load,setLoad]=useState(true)
-  const isAdmin=profile?.role==='admin'
+  const isAdmin=(['admin','superadmin'].includes(profile?.role))
+  const [expiringContracts,setExpiringContracts]=useState([])
   useEffect(()=>{ if(profile!==null) loadData() },[profile])
   const loadData = async () => {
     setLoad(true)
@@ -218,13 +229,24 @@ function DashboardPage() {
     // All departments, even those with 0 present
     setDeptStats(DEPARTMENTS.map(dept=>({dept,total:emps.filter(e=>e.department===dept).length,present:(recs||[]).filter(r=>r.employees?.department===dept&&r.check_in&&!r.norma).length})))
     setLoad(false)
+    // Check expiring contracts (next 30 days) - only for admin/superadmin
+    if(['admin','superadmin'].includes(profile?.role)){
+      const in30=new Date(); in30.setDate(in30.getDate()+30)
+      const {data:expiring}=await supabase.from('employee_salaries').select('*,employees(name)').not('contract_expiry','is',null).lte('contract_expiry',in30.toISOString().split('T')[0]).gte('contract_expiry',todayStr())
+      setExpiringContracts(expiring||[])
+    }
   }
   if (load) return <Layout><div style={{display:'flex',justifyContent:'center',padding:80}}><div className="sp" style={{width:30,height:30}}/></div></Layout>
   return (
     <Layout>
       <div style={{fontSize:19,fontWeight:800,marginBottom:18}}>Bun venit{profile?.name?`, ${profile.name.split(' ')[0]}`:''}! 👋</div>
 
-      {/* Alerta angajati nealocati */}
+      {/* Alerta contracte care expira */}
+      {expiringContracts.length>0&&<div style={{background:'#1A1A3A',border:`1px solid ${G.purple}44`,borderRadius:10,padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
+        <span style={{fontSize:18}}>📋</span>
+        <div><div style={{fontSize:12,fontWeight:700,color:G.purple}}>{expiringContracts.length} contracte expiră în următoarele 30 zile!</div>
+        <div style={{fontSize:11,color:G.purple+'99'}}>{expiringContracts.slice(0,3).map(e=>`${e.employees?.name} (${new Date(e.contract_expiry).toLocaleDateString('ro-RO')})`).join(', ')}{expiringContracts.length>3?` +${expiringContracts.length-3}`:''}</div></div>
+      </div>}
       {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:10,padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
         <span style={{fontSize:18}}>⚠️</span>
         <div><div style={{fontSize:12,fontWeight:700,color:G.red}}>{unalloc.length} angajați nealocați pe niciun șantier!</div>
@@ -440,7 +462,7 @@ function PontajPage() {
   const [onlyDiurna,setOnlyDiurna]=useState(false)
   const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
-  const isAdmin=profile?.role==='admin'
+  const isAdmin=['admin','superadmin'].includes(profile?.role)
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
@@ -524,7 +546,7 @@ function ReportsPage() {
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
   const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
   const [toast,showToast]=useToast()
-  const isAdmin=profile?.role==='admin'
+  const isAdmin=['admin','superadmin'].includes(profile?.role)
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
 
@@ -1150,8 +1172,10 @@ function AdminPage() {
             <div style={{marginBottom:12}}><Lbl>Nume complet</Lbl><input style={S.input} value={editMgr.name||''} onChange={e=>setEditMgr({...editMgr,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Rol</Lbl>
               <select value={editMgr.role} onChange={e=>setEditMgr({...editMgr,role:e.target.value})} style={{width:'100%'}}>
-                <option value="manager">👤 Manager</option>
+                <option value="manager">👤 Manager Proiect</option>
                 <option value="admin">⚙ Admin</option>
+                <option value="superadmin">⭐ Super Admin</option>
+                <option value="contabil">💵 Contabil</option>
               </select>
             </div>
             {editMgr.role==='manager'&&(
@@ -1220,7 +1244,7 @@ function AdminPage() {
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
-                <td><span className={`badge ${m.role==='admin'?'ba':'bm'}`}>{m.role==='admin'?'⚙ Admin':'👤 Manager'}</span></td>
+                <td><span className={`badge ${['admin','superadmin'].includes(m.role)?'ba':m.role==='contabil'?'bs':'bm'}`}>{m.role==='superadmin'?'⭐ Super Admin':m.role==='admin'?'⚙ Admin':m.role==='contabil'?'💵 Contabil':'👤 Manager'}</span></td>
                 <td style={{fontSize:11,color:G.purple}}>{(m.site_ids||[]).length>0?m.site_ids.map(id=>sites.find(s=>s.id===id)?.name).filter(Boolean).join(', '):'—'}</td>
                 <td><button onClick={()=>setEditMgr({...m})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
@@ -1231,7 +1255,12 @@ function AdminPage() {
             {[['Nume complet',nName,setNName,'text','Ion Popescu'],['Email',nEmail,setNEmail,'email','ion@gazpet.ro'],['Parolă temporară',nPwd,setNPwd,'password','••••••']].map(([l,v,s,t,ph])=>(
               <div key={l} style={{marginBottom:10}}><Lbl>{l}</Lbl><input style={S.input} type={t} placeholder={ph} value={v} onChange={e=>s(e.target.value)}/></div>
             ))}
-            <div style={{marginBottom:10}}><Lbl>Rol</Lbl><select value={nRole} onChange={e=>setNRole(e.target.value)} style={{width:'100%'}}><option value="manager">👤 Manager</option><option value="admin">⚙ Admin</option></select></div>
+            <div style={{marginBottom:10}}><Lbl>Rol</Lbl><select value={nRole} onChange={e=>setNRole(e.target.value)} style={{width:'100%'}}>
+              <option value="manager">👤 Manager Proiect</option>
+              <option value="admin">⚙ Admin</option>
+              <option value="superadmin">⭐ Super Admin</option>
+              <option value="contabil">💵 Contabil</option>
+            </select></div>
             {nRole==='manager'&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={createManager} disabled={creating}>{creating?<><div className="sp"/>...</>:'+ Adaugă Manager'}</button>
           </div>
@@ -1394,7 +1423,260 @@ function AdminPage() {
   )
 }
 
-export default function App() {
+// ─── Salarii Page ─────────────────────────────────────────────────────────────
+function SalariiPage() {
+  const { profile } = useAuth()
+  const [employees,setEmployees]=useState([])
+  const [salaries,setSalaries]=useState({})
+  const [search,setSearch]=useState('')
+  const [deptF,setDeptF]=useState('Toate')
+  const [load,setLoad]=useState(true)
+  const [editSal,setEditSal]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [toast,showToast]=useToast()
+  const [tab,setTab]=useState('list') // list | import
+
+  useEffect(()=>{ loadData() },[])
+
+  const loadData=async()=>{
+    setLoad(true)
+    const {data:emps}=await supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
+    setEmployees(emps||[])
+    const {data:sals}=await supabase.from('employee_salaries').select('*')
+    const m={}; (sals||[]).forEach(s=>{m[s.employee_id]=s})
+    setSalaries(m)
+    setLoad(false)
+  }
+
+  const openEdit=(emp)=>{
+    const existing=salaries[emp.id]||{}
+    setEditSal({
+      employee_id:emp.id, empName:emp.name, empDept:emp.department, empEmail:emp.email||'',
+      contract_number:existing.contract_number||'',
+      contract_date:existing.contract_date||'',
+      contract_expiry:existing.contract_expiry||'',
+      salary_gross:existing.salary_gross||0,
+      salary_net:existing.salary_net||0,
+      work_hours_per_day:existing.work_hours_per_day||8,
+      cas_employee:existing.cas_employee??25,
+      cass_employee:existing.cass_employee??10,
+      cas_employer:existing.cas_employer??4,
+      tax_exempt:existing.tax_exempt!==false,
+      income_tax:existing.income_tax??10,
+      construction_fund:existing.construction_fund??1.5,
+      other_deductions:existing.other_deductions||0,
+      other_deductions_desc:existing.other_deductions_desc||'',
+      notes:existing.notes||''
+    })
+  }
+
+  const saveSalary=async()=>{
+    setSaving(true)
+    // Update email on employee
+    if(editSal.empEmail!==undefined){
+      await supabase.from('employees').update({email:editSal.empEmail}).eq('id',editSal.employee_id)
+    }
+    const payload={
+      employee_id:editSal.employee_id,
+      contract_number:editSal.contract_number||null,
+      contract_date:editSal.contract_date||null,
+      contract_expiry:editSal.contract_expiry||null,
+      salary_gross:Number(editSal.salary_gross)||0,
+      salary_net:Number(editSal.salary_net)||0,
+      work_hours_per_day:Number(editSal.work_hours_per_day)||8,
+      cas_employee:Number(editSal.cas_employee)||25,
+      cass_employee:Number(editSal.cass_employee)||10,
+      cas_employer:Number(editSal.cas_employer)||4,
+      tax_exempt:editSal.tax_exempt,
+      income_tax:Number(editSal.income_tax)||10,
+      construction_fund:Number(editSal.construction_fund)||1.5,
+      other_deductions:Number(editSal.other_deductions)||0,
+      other_deductions_desc:editSal.other_deductions_desc||null,
+      notes:editSal.notes||null,
+      updated_at:new Date().toISOString()
+    }
+    const {error}=await supabase.from('employee_salaries').upsert(payload,{onConflict:'employee_id'})
+    if(!error){showToast(`✓ Salvat: ${editSal.empName}`);setEditSal(null);loadData()}
+    else showToast('Eroare la salvare','error')
+    setSaving(false)
+  }
+
+  const exportBanca=()=>{ showToast('Format bancă — configurare în curând!','warn') }
+
+  const filtered=employees.filter(e=>{
+    const ms=e.name.toLowerCase().includes(search.toLowerCase())
+    const md=deptF==='Toate'||e.department===deptF
+    return ms&&md
+  })
+
+  const today=todayStr()
+  const in30=new Date(); in30.setDate(in30.getDate()+30); const in30str=in30.toISOString().split('T')[0]
+  const isExpiring=(date)=>date&&date>=today&&date<=in30str
+  const isExpired=(date)=>date&&date<today
+
+  const f=(v,set,label,type='number',step='0.1')=>(
+    <div style={{marginBottom:10}}>
+      <Lbl>{label}</Lbl>
+      <input style={S.input} type={type} step={step} value={v} onChange={e=>set(e.target.value)}/>
+    </div>
+  )
+
+  return (
+    <Layout>
+      <Toast toast={toast}/>
+      {/* Edit modal */}
+      {editSal&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',overflow:'auto',padding:20}}>
+          <div style={{...S.card,padding:28,width:700,maxHeight:'90vh',overflowY:'auto'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800}}>{editSal.empName}</div>
+                <span className="badge bd">{editSal.empDept}</span>
+              </div>
+              <button onClick={()=>setEditSal(null)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
+            </div>
+
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+              {/* Coloana stanga */}
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📧 Contact</div>
+                <div style={{marginBottom:16}}>
+                  <Lbl>Email angajat</Lbl>
+                  <input style={S.input} type="email" placeholder="email@gazpet.ro" value={editSal.empEmail} onChange={e=>setEditSal({...editSal,empEmail:e.target.value})}/>
+                </div>
+
+                <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📋 Contract</div>
+                {f(editSal.contract_number,v=>setEditSal({...editSal,contract_number:v}),'Nr. Contract','text','any')}
+                <div style={{marginBottom:10}}><Lbl>Data Contract</Lbl><input style={S.input} type="date" value={editSal.contract_date} onChange={e=>setEditSal({...editSal,contract_date:e.target.value})}/></div>
+                <div style={{marginBottom:16}}>
+                  <Lbl>Valabilitate Contract</Lbl>
+                  <input style={{...S.input,borderColor:isExpired(editSal.contract_expiry)?G.red:isExpiring(editSal.contract_expiry)?G.yellow:G.border2}} type="date" value={editSal.contract_expiry} onChange={e=>setEditSal({...editSal,contract_expiry:e.target.value})}/>
+                  {isExpired(editSal.contract_expiry)&&<div style={{fontSize:10,color:G.red,marginTop:3}}>⚠ Contract expirat!</div>}
+                  {isExpiring(editSal.contract_expiry)&&<div style={{fontSize:10,color:G.yellow,marginTop:3}}>⚠ Expiră în curând!</div>}
+                </div>
+
+                <div style={{fontSize:12,fontWeight:700,color:G.green,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>💰 Salariu</div>
+                {f(editSal.salary_gross,v=>setEditSal({...editSal,salary_gross:v}),'Salariu Brut (RON)')}
+                {f(editSal.salary_net,v=>setEditSal({...editSal,salary_net:v}),'Salariu Net (RON)')}
+                <div style={{marginBottom:16}}>
+                  <Lbl>Normă Lucru (ore/zi)</Lbl>
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                    <button onClick={()=>setEditSal({...editSal,work_hours_per_day:Math.max(1,Number(editSal.work_hours_per_day)-0.5)})} style={{...S.btnS,padding:'6px 12px',fontWeight:800,fontSize:16}}>−</button>
+                    <input style={{...S.input,textAlign:'center',width:80}} type="number" step="0.5" min="1" max="12" value={editSal.work_hours_per_day} onChange={e=>setEditSal({...editSal,work_hours_per_day:e.target.value})}/>
+                    <button onClick={()=>setEditSal({...editSal,work_hours_per_day:Math.min(12,Number(editSal.work_hours_per_day)+0.5)})} style={{...S.btnS,padding:'6px 12px',fontWeight:800,fontSize:16}}>+</button>
+                    <span style={{fontSize:12,color:G.muted}}>ore/zi</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Coloana dreapta - Retineri */}
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:G.yellow,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📊 Rețineri (Construcții)</div>
+
+                <div style={{marginBottom:14,padding:12,background:'#1A2A1A',borderRadius:8,border:`1px solid ${G.green}33`}}>
+                  <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer'}}>
+                    <input type="checkbox" checked={editSal.tax_exempt} onChange={e=>setEditSal({...editSal,tax_exempt:e.target.checked})} style={{accentColor:G.green,width:16,height:16}}/>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700,color:G.green}}>✓ Scutit Impozit Venit</div>
+                      <div style={{fontSize:10,color:G.muted}}>OUG 114/2018 — Construcții</div>
+                    </div>
+                  </label>
+                </div>
+
+                {f(editSal.cas_employee,v=>setEditSal({...editSal,cas_employee:v}),'CAS Angajat (%)')}
+                {f(editSal.cass_employee,v=>setEditSal({...editSal,cass_employee:v}),'CASS Angajat (%)')}
+                {f(editSal.cas_employer,v=>setEditSal({...editSal,cas_employer:v}),'CAM Angajator (%)')}
+                {f(editSal.construction_fund,v=>setEditSal({...editSal,construction_fund:v}),'Fond Construcții (%)')}
+                {!editSal.tax_exempt&&f(editSal.income_tax,v=>setEditSal({...editSal,income_tax:v}),'Impozit Venit (%)')}
+                {f(editSal.other_deductions,v=>setEditSal({...editSal,other_deductions:v}),'Alte Rețineri (RON)')}
+                <div style={{marginBottom:10}}><Lbl>Descriere alte rețineri</Lbl><input style={S.input} type="text" placeholder="ex: Poprire, Avans..." value={editSal.other_deductions_desc} onChange={e=>setEditSal({...editSal,other_deductions_desc:e.target.value})}/></div>
+                <div style={{marginBottom:10}}><Lbl>Note</Lbl><input style={S.input} type="text" value={editSal.notes} onChange={e=>setEditSal({...editSal,notes:e.target.value})}/></div>
+
+                {/* Calcul estimativ */}
+                <div style={{padding:12,background:'#0D1117',borderRadius:8,border:`1px solid ${G.border}`,marginTop:8}}>
+                  <div style={{fontSize:11,color:G.muted,fontWeight:700,marginBottom:8,textTransform:'uppercase'}}>Calcul Estimativ</div>
+                  {(()=>{
+                    const brut=Number(editSal.salary_gross)||0
+                    const cas=(brut*Number(editSal.cas_employee)/100)
+                    const cass=(brut*Number(editSal.cass_employee)/100)
+                    const fond=(brut*Number(editSal.construction_fund)/100)
+                    const bazaImpozit=brut-cas-cass-fond
+                    const impozit=editSal.tax_exempt?0:(bazaImpozit*Number(editSal.income_tax)/100)
+                    const altele=Number(editSal.other_deductions)||0
+                    const net=brut-cas-cass-fond-impozit-altele
+                    return <>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>Salariu Brut</span><span style={{fontWeight:700}}>{brut.toFixed(2)} RON</span></div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− CAS ({editSal.cas_employee}%)</span><span style={{color:G.red}}>-{cas.toFixed(2)} RON</span></div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− CASS ({editSal.cass_employee}%)</span><span style={{color:G.red}}>-{cass.toFixed(2)} RON</span></div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Fond Const. ({editSal.construction_fund}%)</span><span style={{color:G.red}}>-{fond.toFixed(2)} RON</span></div>
+                      {!editSal.tax_exempt&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Impozit ({editSal.income_tax}%)</span><span style={{color:G.red}}>-{impozit.toFixed(2)} RON</span></div>}
+                      {altele>0&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Alte rețineri</span><span style={{color:G.red}}>-{altele.toFixed(2)} RON</span></div>}
+                      <div style={{borderTop:`1px solid ${G.border}`,marginTop:6,paddingTop:6,display:'flex',justifyContent:'space-between',fontSize:13,fontWeight:800}}><span style={{color:G.green}}>= Net Calculat</span><span style={{color:G.green}}>{net.toFixed(2)} RON</span></div>
+                    </>
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            <div style={{display:'flex',gap:10,marginTop:20}}>
+              <button onClick={()=>setEditSal(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+              <button onClick={saveSalary} disabled={saving} style={{...S.btnP,flex:2,display:'flex',alignItems:'center',justifyContent:'center',gap:7}}>{saving?<><div className="sp"/>Se salvează...</>:'💾 Salvează'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div>
+          <div style={{fontSize:19,fontWeight:800}}>💵 Salarii</div>
+          <div style={{fontSize:11,color:G.muted,marginTop:3}}>{filtered.length} angajați · {Object.keys(salaries).length} cu date salariale</div>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <input placeholder="🔍 Caută..." value={search} onChange={e=>setSearch(e.target.value)} style={{...S.input,width:180}}/>
+          <select value={deptF} onChange={e=>setDeptF(e.target.value)}>
+            <option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
+          </select>
+          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',display:'flex',alignItems:'center',gap:6}}>🏦 Export Bancă</button>
+        </div>
+      </div>
+
+      {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:30,height:30}}/></div>
+      :<div style={{...S.card,overflow:'hidden'}}>
+        <table>
+          <thead><tr style={{background:G.bg}}>
+            <th>Angajat</th><th>Dept.</th><th>Nr. Contract</th><th>Valabilitate</th>
+            <th>Salariu Brut</th><th>Salariu Net</th><th>Normă</th><th>Email</th><th></th>
+          </tr></thead>
+          <tbody>
+            {filtered.length===0?<tr><td colSpan={9} style={{textAlign:'center',color:G.muted,padding:40}}>Niciun angajat</td></tr>
+            :filtered.map(emp=>{
+              const sal=salaries[emp.id]
+              const expiring=isExpiring(sal?.contract_expiry)
+              const expired=isExpired(sal?.contract_expiry)
+              return <tr key={emp.id}>
+                <td><div style={{display:'flex',alignItems:'center',gap:8}}><Avatar name={emp.name} id={emp.id} size={28}/><span style={{fontWeight:600,fontSize:12}}>{emp.name}</span></div></td>
+                <td><span className="badge bd">{emp.department}</span></td>
+                <td style={{fontSize:12,color:G.muted}}>{sal?.contract_number||'—'}</td>
+                <td>
+                  {sal?.contract_expiry
+                    ?<span style={{fontSize:11,fontWeight:700,color:expired?G.red:expiring?G.yellow:G.green}}>
+                      {expired?'⚠ ':expiring?'⏰ ':''}{new Date(sal.contract_expiry+'T12:00').toLocaleDateString('ro-RO')}
+                    </span>
+                    :<span style={{fontSize:11,color:G.dim}}>—</span>}
+                </td>
+                <td style={{fontWeight:700,color:sal?.salary_gross?G.text:G.dim}}>{sal?.salary_gross?`${Number(sal.salary_gross).toLocaleString('ro-RO')} RON`:'—'}</td>
+                <td style={{fontWeight:700,color:sal?.salary_net?G.green:G.dim}}>{sal?.salary_net?`${Number(sal.salary_net).toLocaleString('ro-RO')} RON`:'—'}</td>
+                <td style={{fontSize:12,color:G.muted}}>{sal?.work_hours_per_day||8}h/zi</td>
+                <td style={{fontSize:11,color:G.muted}}>{emp.email||'—'}</td>
+                <td><button onClick={()=>openEdit(emp)} style={{...S.btnS,padding:'4px 10px',fontSize:11}}>✏️ Edit</button></td>
+              </tr>
+            })}
+          </tbody>
+        </table>
+      </div>}
+    </Layout>
+  )
+}
   return (
     <AuthProvider>
       <Routes>
@@ -1402,6 +1684,7 @@ export default function App() {
         <Route path="/" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/>
         <Route path="/pontaj" element={<ProtectedRoute><PontajPage/></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute><ReportsPage/></ProtectedRoute>}/>
+        <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
