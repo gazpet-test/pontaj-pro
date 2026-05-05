@@ -161,15 +161,15 @@ function LoginPage() {
       <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 30% 40%,#1F6FEB08 0%,transparent 60%)'}}/>
       <div style={{...S.card,padding:38,width:420,position:'relative'}}>
         <div style={{textAlign:'center',marginBottom:26}}>
-          <div style={{fontSize:32,fontWeight:800,letterSpacing:'2px',color:G.text,marginBottom:4}}>
+          <div style={{fontSize:24,fontWeight:800,letterSpacing:'3px',color:G.text,marginBottom:4}}>
             <span style={{color:'#1F6FEB'}}>GAZPET</span>
-            <span style={{color:G.muted,fontWeight:300,margin:'0 8px'}}>|</span>
+            <span style={{color:G.muted,fontWeight:300,margin:'0 6px'}}>|</span>
             <span style={{color:G.text}}>INSTAL</span>
           </div>
-          <div style={{fontSize:11,color:G.muted,letterSpacing:'3px',textTransform:'uppercase',marginBottom:18}}>S.C. Gazpet Instal S.R.L.</div>
-          <div style={{width:40,height:2,background:'linear-gradient(90deg,#1F6FEB,#388BFD)',borderRadius:2,margin:'0 auto 16px'}}/>
-          <div style={{fontSize:20,fontWeight:700}}>PontajPRO</div>
-          <div style={{color:G.muted,fontSize:12,marginTop:4}}>Sistem de evidență a prezenței</div>
+          <div style={{fontSize:10,color:G.muted,letterSpacing:'2px',textTransform:'uppercase',marginBottom:14}}>S.C. Gazpet Instal S.R.L.</div>
+          <div style={{width:36,height:2,background:'linear-gradient(90deg,#1F6FEB,#388BFD)',borderRadius:2,margin:'0 auto 14px'}}/>
+          <div style={{fontSize:18,fontWeight:700}}>PontajPRO</div>
+          <div style={{color:G.muted,fontSize:12,marginTop:3}}>Sistem de evidență a prezenței</div>
         </div>
         <form onSubmit={go}>
           <div style={{marginBottom:13}}><Lbl>Email</Lbl><input style={S.input} type="email" placeholder="email@gazpet.ro" value={email} onChange={e=>setEmail(e.target.value)} required autoFocus/></div>
