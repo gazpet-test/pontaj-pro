@@ -1497,6 +1497,7 @@ function SalariiPage() {
       construction_fund:e.construction_fund??defaults.fond,
       other_deductions:e.other_deductions||0,
       other_deductions_desc:e.other_deductions_desc||'',
+      unlimited_contract:e.contract_expiry?false:true,
       notes:e.notes||''
     })
   }
@@ -1579,16 +1580,55 @@ function SalariiPage() {
                 <div style={{fontSize:12,fontWeight:700,color:G.blue,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📋 Contract</div>
                 {f(editSal.contract_number,v=>setEditSal({...editSal,contract_number:v}),'Nr. Contract','text','any')}
                 <div style={{marginBottom:10}}><Lbl>Data Contract</Lbl><input style={S.input} type="date" value={editSal.contract_date} onChange={e=>setEditSal({...editSal,contract_date:e.target.value})}/></div>
-                <div style={{marginBottom:16}}>
-                  <Lbl>Valabilitate Contract</Lbl>
-                  <input style={{...S.input,borderColor:isExpired(editSal.contract_expiry)?G.red:isExpiring(editSal.contract_expiry)?G.yellow:G.border2}} type="date" value={editSal.contract_expiry} onChange={e=>setEditSal({...editSal,contract_expiry:e.target.value})}/>
-                  {isExpired(editSal.contract_expiry)&&<div style={{fontSize:10,color:G.red,marginTop:3}}>⚠ Contract expirat!</div>}
-                  {isExpiring(editSal.contract_expiry)&&<div style={{fontSize:10,color:G.yellow,marginTop:3}}>⚠ Expiră în curând!</div>}
+                
+                {/* Bifa perioada nelimitata */}
+                <div style={{marginBottom:10}}>
+                  <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',marginBottom:8}}>
+                    <input type="checkbox" checked={editSal.unlimited_contract||false} onChange={e=>setEditSal({...editSal,unlimited_contract:e.target.checked,contract_expiry:e.target.checked?'':editSal.contract_expiry})} style={{accentColor:G.blue,width:15,height:15}}/>
+                    <span style={{fontSize:12,color:editSal.unlimited_contract?G.blue:G.muted,fontWeight:600}}>∞ Perioadă Nelimitată</span>
+                  </label>
+                  {!editSal.unlimited_contract&&(
+                    <div>
+                      <Lbl>Valabilitate Contract</Lbl>
+                      <input style={{...S.input,borderColor:isExpired(editSal.contract_expiry)?G.red:isExpiring(editSal.contract_expiry)?G.yellow:G.border2}} type="date" value={editSal.contract_expiry} onChange={e=>setEditSal({...editSal,contract_expiry:e.target.value})}/>
+                      {isExpired(editSal.contract_expiry)&&<div style={{fontSize:10,color:G.red,marginTop:3}}>⚠ Contract expirat!</div>}
+                      {isExpiring(editSal.contract_expiry)&&<div style={{fontSize:10,color:G.yellow,marginTop:3}}>⚠ Expiră în curând!</div>}
+                    </div>
+                  )}
+                  {editSal.unlimited_contract&&<div style={{fontSize:10,color:G.blue,padding:'5px 8px',background:'#1A2A3A',borderRadius:6}}>∞ Contract pe perioadă nedeterminată</div>}
                 </div>
 
                 <div style={{fontSize:12,fontWeight:700,color:G.green,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>💰 Salariu</div>
-                {f(editSal.salary_gross,v=>setEditSal({...editSal,salary_gross:v}),'Salariu Brut (RON)')}
-                {f(editSal.salary_net,v=>setEditSal({...editSal,salary_net:v}),'Salariu Net (RON)')}
+                
+                {/* Salariu Brut cu calcul din net */}
+                <div style={{marginBottom:10}}>
+                  <Lbl>Salariu Brut (RON)</Lbl>
+                  <input style={S.input} type="number" step="1" value={editSal.salary_gross} onChange={e=>setEditSal({...editSal,salary_gross:e.target.value})}/>
+                </div>
+                
+                {/* Salariu Net cu buton calcul brut */}
+                <div style={{marginBottom:10}}>
+                  <Lbl>Salariu Net (RON)</Lbl>
+                  <div style={{display:'flex',gap:8}}>
+                    <input style={S.input} type="number" step="1" value={editSal.salary_net} onChange={e=>setEditSal({...editSal,salary_net:e.target.value})}/>
+                    <button onClick={()=>{
+                      const net=Number(editSal.salary_net)||0
+                      const cas=Number(editSal.cas_employee)/100
+                      const cass=Number(editSal.cass_employee)/100
+                      const fond=Number(editSal.construction_fund)/100
+                      const tax=editSal.tax_exempt?0:Number(editSal.income_tax)/100
+                      // Net = Brut*(1-cas-cass-fond) - Brut*(1-cas-cass)*tax
+                      // Net = Brut*[(1-cas-cass-fond) - (1-cas-cass)*tax]
+                      const factor=(1-cas-cass-fond)-(1-cas-cass)*tax
+                      const brut=factor>0?net/factor:0
+                      setEditSal(prev=>({...prev,salary_gross:Math.round(brut*100)/100}))
+                    }} style={{...S.btnS,whiteSpace:'nowrap',fontSize:11,color:G.blue,borderColor:G.blue+'44'}}>
+                      ⟵ Calc. Brut
+                    </button>
+                  </div>
+                  <div style={{fontSize:10,color:G.dim,marginTop:3}}>Introduce net → click "Calc. Brut" pentru calcul automat</div>
+                </div>
+
                 <div style={{marginBottom:16}}>
                   <Lbl>Normă Lucru (ore/zi)</Lbl>
                   <div style={{display:'flex',gap:8,alignItems:'center'}}>
@@ -1695,11 +1735,11 @@ function SalariiPage() {
                 <td><span className="badge bd">{emp.department}</span></td>
                 <td style={{fontSize:12,color:G.muted}}>{sal?.contract_number||'—'}</td>
                 <td>
-                  {sal?.contract_expiry
-                    ?<span style={{fontSize:11,fontWeight:700,color:expired?G.red:expiring?G.yellow:G.green}}>
+                  {!sal?.contract_expiry
+                    ?<span style={{fontSize:11,fontWeight:700,color:sal?G.blue:G.dim}}>{sal?'∞ Nelimitat':'—'}</span>
+                    :<span style={{fontSize:11,fontWeight:700,color:expired?G.red:expiring?G.yellow:G.green}}>
                       {expired?'⚠ ':expiring?'⏰ ':''}{new Date(sal.contract_expiry+'T12:00').toLocaleDateString('ro-RO')}
-                    </span>
-                    :<span style={{fontSize:11,color:G.dim}}>—</span>}
+                    </span>}
                 </td>
                 <td style={{fontWeight:700,color:sal?.salary_gross?G.text:G.dim}}>{sal?.salary_gross?`${Number(sal.salary_gross).toLocaleString('ro-RO')} RON`:'—'}</td>
                 <td style={{fontWeight:700,color:sal?.salary_net?G.green:G.dim}}>{sal?.salary_net?`${Number(sal.salary_net).toLocaleString('ro-RO')} RON`:'—'}</td>
