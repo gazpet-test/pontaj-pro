@@ -896,6 +896,9 @@ function AdminPage() {
   const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [addingE,setAddingE]=useState(false)
+  const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
+  const [editEmp,setEditEmp]=useState(null)
+  const [deleteEmpItem,setDeleteEmpItem]=useState(null)
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
 
   const [calYear,setCalYear]=useState(new Date().getFullYear())
@@ -958,6 +961,17 @@ function AdminPage() {
 
   const addEmployee=async()=>{ if(!eName.trim()){showToast('Introduceți numele','warn');return}; setAddingE(true); const {error}=await supabase.from('employees').insert({name:eName.trim(),department:eDept,position:ePos||null,site_id:eSite?Number(eSite):null,active:true}); if(!error){showToast(`✓ ${eName}`);setEName('');setEPos('');loadAll()} else showToast('Eroare','error'); setAddingE(false) }
   const toggleEmp=async(emp)=>{ await supabase.from('employees').update({active:!emp.active}).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,active:!e.active}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
+  const saveEditEmp=async()=>{
+    if(!editEmp) return
+    const {error}=await supabase.from('employees').update({name:editEmp.name,position:editEmp.position||null,department:editEmp.department,site_id:editEmp.site_id||null}).eq('id',editEmp.id)
+    if(!error){showToast(`✓ Salvat: ${editEmp.name}`);setEditEmp(null);loadAll()} else showToast('Eroare','error')
+  }
+  const deleteEmp=async()=>{
+    if(!deleteEmpItem) return
+    if(deleteEmpItem.active){showToast('Nu poți șterge un angajat activ!','error');setDeleteEmpItem(null);return}
+    const {error}=await supabase.from('employees').delete().eq('id',deleteEmpItem.id)
+    if(!error){showToast(`✓ ${deleteEmpItem.name} șters`);setDeleteEmpItem(null);loadAll()} else showToast('Eroare la ștergere','error')
+  }
 
   const handleImport=e=>{
     const file=e.target.files[0]; if(!file) return
@@ -1085,7 +1099,50 @@ function AdminPage() {
         </div>
       )}
 
-      {/* Edit manager modal */}
+      {/* Edit employee modal */}
+      {editEmp&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{...S.card,padding:28,width:420}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
+            <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
+            <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
+            <div style={{marginBottom:12}}><Lbl>Departament</Lbl>
+              <select value={editEmp.department} onChange={e=>setEditEmp({...editEmp,department:e.target.value})} style={{width:'100%'}}>
+                {DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
+              </select>
+            </div>
+            <div style={{marginBottom:18}}><Lbl>Șantier</Lbl>
+              <select value={editEmp.site_id||''} onChange={e=>setEditEmp({...editEmp,site_id:e.target.value?Number(e.target.value):null})} style={{width:'100%'}}>
+                <option value="">— fără șantier —</option>
+                {sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setEditEmp(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+              <button onClick={saveEditEmp} style={{...S.btnP,flex:1}}>✓ Salvează</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete employee modal */}
+      {deleteEmpItem&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
+            <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Ștergi angajatul?</div>
+            <div style={{fontSize:13,color:G.muted,marginBottom:8}}>„{deleteEmpItem.name}"</div>
+            {deleteEmpItem.active
+              ? <div style={{background:G.redDim,color:G.red,border:`1px solid ${G.red}33`,borderRadius:8,padding:'10px',fontSize:12,marginBottom:16}}>⚠ Nu poți șterge un angajat activ! Dezactivează-l mai întâi.</div>
+              : <div style={{fontSize:12,color:G.muted,marginBottom:16}}>Această acțiune este permanentă și nu poate fi anulată. Istoricul pontajului va fi șters.</div>
+            }
+            <div style={{display:'flex',gap:10,justifyContent:'center'}}>
+              <button onClick={()=>setDeleteEmpItem(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+              {!deleteEmpItem.active&&<button onClick={deleteEmp} style={{...S.btnP,flex:1,background:G.red}}>Șterge definitiv</button>}
+            </div>
+          </div>
+        </div>
+      )}
       {editMgr&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
           <div style={{...S.card,padding:28,width:440}}>
@@ -1184,17 +1241,32 @@ function AdminPage() {
       {tab==='employees'&&(
         <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
           <div>
+            {/* Status filter */}
+            <div style={{display:'flex',gap:7,marginBottom:12,alignItems:'center'}}>
+              {[['active','● Activi'],['inactive','○ Inactivi'],['all','Toți']].map(([v,l])=>(
+                <button key={v} onClick={()=>setEmpStatusFilter(v)} style={{...S.btnS,fontSize:11,background:empStatusFilter===v?'#21262D':G.bg,color:empStatusFilter===v?G.text:G.muted,borderColor:empStatusFilter===v?G.border2:G.border}}>
+                  {l}
+                </button>
+              ))}
+              <span style={{fontSize:11,color:G.muted,marginLeft:'auto'}}>
+                {employees.filter(e=>empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active).length} angajați
+              </span>
+            </div>
             <div style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
               {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Status</th><th></th></tr></thead>
-                <tbody>{employees.map(emp=>(
+                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Status</th><th>Acțiuni</th></tr></thead>
+                <tbody>{employees.filter(e=>empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active).map(emp=>(
                   <tr key={emp.id}>
                     <td><div style={{display:'flex',alignItems:'center',gap:7}}><Avatar name={emp.name} id={emp.id} size={24}/><span style={{fontWeight:600,fontSize:12}}>{emp.name}</span></div></td>
                     <td><span className="badge bd">{emp.department}</span></td>
                     <td style={{color:G.muted,fontSize:11}}>{emp.position||'—'}</td>
                     <td style={{fontSize:11,color:G.purple}}>{emp.sites?.name||<span style={{color:G.red}}>⚠ Nealocate</span>}</td>
                     <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
-                    <td><button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button></td>
+                    <td><div style={{display:'flex',gap:5'}}>
+                      <button onClick={()=>setEditEmp({...emp})} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
+                      <button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button>
+                      {!emp.active&&<button onClick={()=>setDeleteEmpItem(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10,color:G.red,borderColor:G.red+'44'}}>🗑️</button>}
+                    </div></td>
                   </tr>
                 ))}</tbody></table>
               )}
