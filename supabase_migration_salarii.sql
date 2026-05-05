@@ -43,3 +43,13 @@ ALTER TABLE public.employee_salaries DISABLE ROW LEVEL SECURITY;
 INSERT INTO public.settings (key, value)
 VALUES ('contract_alert_days', '30')
 ON CONFLICT (key) DO NOTHING;
+
+-- Procente salariale implicite 2025-2026
+INSERT INTO public.settings (key, value) VALUES
+  ('contract_alert_days', '30'),
+  ('default_cas_employee', '25'),
+  ('default_cass_employee', '10'),
+  ('default_cam_employer', '2.25'),
+  ('default_income_tax', '10'),
+  ('default_construction_fund', '0')
+ON CONFLICT (key) DO NOTHING;

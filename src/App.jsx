@@ -1404,9 +1404,9 @@ function AdminPage() {
       )}
 
       {tab==='settings'&&(
-        <div style={{maxWidth:460}}>
-          <div style={{...S.card,padding:22}}>
-            <div style={{fontSize:13,fontWeight:700,marginBottom:18}}>Setări Generale</div>
+        <div style={{maxWidth:500}}>
+          <div style={{...S.card,padding:22,marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:18}}>⚙️ Setări Generale</div>
             {[['Valoare Diurnă (RON/zi)','diurna_amount','50'],['Ore normale/zi','work_hours_per_day','8'],['Valoare Supliment Hrană (RON/zi)','meal_supplement_amount','15']].map(([l,k,ph])=>(
               <div key={k} style={{marginBottom:18}}>
                 <Lbl>{l}</Lbl>
@@ -1416,6 +1416,32 @@ function AdminPage() {
                 </div>
               </div>
             ))}
+          </div>
+
+          <div style={{...S.card,padding:22}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6}}>📊 Procente Salariale Implicite</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:16,lineHeight:1.6}}>
+              Valorile implicite folosite la crearea unui salariat nou. Pot fi modificate individual per angajat.<br/>
+              <span style={{color:G.yellow}}>⚠ Actualizează când se schimbă legislația!</span>
+            </div>
+            {[
+              ['CAS Angajat (%)','default_cas_employee','25'],
+              ['CASS Angajat (%)','default_cass_employee','10'],
+              ['CAM Angajator (%)','default_cam_employer','2.25'],
+              ['Impozit Venit (%)','default_income_tax','10'],
+              ['Fond Construcții (%)','default_construction_fund','0'],
+            ].map(([l,k,ph])=>(
+              <div key={k} style={{marginBottom:14}}>
+                <Lbl>{l}</Lbl>
+                <div style={{display:'flex',gap:9}}>
+                  <input style={S.input} type="number" value={settings[k]!==undefined?settings[k]:ph} onChange={e=>setSettings(prev=>({...prev,[k]:e.target.value}))} min="0" step="0.25" max="100"/>
+                  <button onClick={()=>saveSetting(k,settings[k]!==undefined?settings[k]:ph)} style={{...S.btnP,whiteSpace:'nowrap'}}>Salvează</button>
+                </div>
+              </div>
+            ))}
+            <div style={{padding:12,background:'#1A2A1A',borderRadius:8,border:`1px solid ${G.green}33`,fontSize:11,color:'#8FD490',marginTop:8}}>
+              ✓ Valori curente 2025-2026 conform OUG 156/2024 (scutire impozit eliminată)
+            </div>
           </div>
         </div>
       )}
@@ -1428,45 +1454,50 @@ function SalariiPage() {
   const { profile } = useAuth()
   const [employees,setEmployees]=useState([])
   const [salaries,setSalaries]=useState({})
+  const [defaults,setDefaults]=useState({cas:25,cass:10,cam:2.25,tax:10,fond:0})
   const [search,setSearch]=useState('')
   const [deptF,setDeptF]=useState('Toate')
   const [load,setLoad]=useState(true)
   const [editSal,setEditSal]=useState(null)
   const [saving,setSaving]=useState(false)
   const [toast,showToast]=useToast()
-  const [tab,setTab]=useState('list') // list | import
 
   useEffect(()=>{ loadData() },[])
 
   const loadData=async()=>{
     setLoad(true)
-    const {data:emps}=await supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
+    const [{data:emps},{data:sals},{data:st}]=await Promise.all([
+      supabase.from('employees').select('*,sites(name)').eq('active',true).order('name'),
+      supabase.from('employee_salaries').select('*'),
+      supabase.from('settings').select('*')
+    ])
     setEmployees(emps||[])
-    const {data:sals}=await supabase.from('employee_salaries').select('*')
-    const m={}; (sals||[]).forEach(s=>{m[s.employee_id]=s})
-    setSalaries(m)
+    const m={}; (sals||[]).forEach(s=>{m[s.employee_id]=s}); setSalaries(m)
+    // Load defaults from settings
+    const g=(k,d)=>{ const f=(st||[]).find(x=>x.key===k); return f?Number(f.value):d }
+    setDefaults({cas:g('default_cas_employee',25),cass:g('default_cass_employee',10),cam:g('default_cam_employer',2.25),tax:g('default_income_tax',10),fond:g('default_construction_fund',0)})
     setLoad(false)
   }
 
   const openEdit=(emp)=>{
-    const existing=salaries[emp.id]||{}
+    const e=salaries[emp.id]||{}
     setEditSal({
       employee_id:emp.id, empName:emp.name, empDept:emp.department, empEmail:emp.email||'',
-      contract_number:existing.contract_number||'',
-      contract_date:existing.contract_date||'',
-      contract_expiry:existing.contract_expiry||'',
-      salary_gross:existing.salary_gross||0,
-      salary_net:existing.salary_net||0,
-      work_hours_per_day:existing.work_hours_per_day||8,
-      cas_employee:existing.cas_employee??25,
-      cass_employee:existing.cass_employee??10,
-      cas_employer:existing.cas_employer??4,
-      tax_exempt:existing.tax_exempt!==false,
-      income_tax:existing.income_tax??10,
-      construction_fund:existing.construction_fund??1.5,
-      other_deductions:existing.other_deductions||0,
-      other_deductions_desc:existing.other_deductions_desc||'',
-      notes:existing.notes||''
+      contract_number:e.contract_number||'',
+      contract_date:e.contract_date||'',
+      contract_expiry:e.contract_expiry||'',
+      salary_gross:e.salary_gross||0,
+      salary_net:e.salary_net||0,
+      work_hours_per_day:e.work_hours_per_day||8,
+      cas_employee:e.cas_employee??defaults.cas,
+      cass_employee:e.cass_employee??defaults.cass,
+      cas_employer:e.cas_employer??defaults.cam,
+      tax_exempt:e.tax_exempt??false, // default FALSE din 2025
+      income_tax:e.income_tax??defaults.tax,
+      construction_fund:e.construction_fund??defaults.fond,
+      other_deductions:e.other_deductions||0,
+      other_deductions_desc:e.other_deductions_desc||'',
+      notes:e.notes||''
     })
   }
 
@@ -1573,12 +1604,12 @@ function SalariiPage() {
               <div>
                 <div style={{fontSize:12,fontWeight:700,color:G.yellow,marginBottom:12,textTransform:'uppercase',letterSpacing:'.5px'}}>📊 Rețineri (Construcții)</div>
 
-                <div style={{marginBottom:14,padding:12,background:'#1A2A1A',borderRadius:8,border:`1px solid ${G.green}33`}}>
+                <div style={{marginBottom:14,padding:12,background:editSal.tax_exempt?'#1A2A1A':'#2A1A1A',borderRadius:8,border:`1px solid ${editSal.tax_exempt?G.green:G.red}33`}}>
                   <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer'}}>
                     <input type="checkbox" checked={editSal.tax_exempt} onChange={e=>setEditSal({...editSal,tax_exempt:e.target.checked})} style={{accentColor:G.green,width:16,height:16}}/>
                     <div>
-                      <div style={{fontSize:12,fontWeight:700,color:G.green}}>✓ Scutit Impozit Venit</div>
-                      <div style={{fontSize:10,color:G.muted}}>OUG 114/2018 — Construcții</div>
+                      <div style={{fontSize:12,fontWeight:700,color:editSal.tax_exempt?G.green:G.muted}}>{editSal.tax_exempt?'✓ Scutit Impozit Venit':'✗ Impozit Venit aplicabil'}</div>
+                      <div style={{fontSize:10,color:G.muted}}>OUG 114/2018 — eliminat din 2025 (OUG 156/2024)</div>
                     </div>
                   </label>
                 </div>
@@ -1597,10 +1628,11 @@ function SalariiPage() {
                   <div style={{fontSize:11,color:G.muted,fontWeight:700,marginBottom:8,textTransform:'uppercase'}}>Calcul Estimativ</div>
                   {(()=>{
                     const brut=Number(editSal.salary_gross)||0
-                    const cas=(brut*Number(editSal.cas_employee)/100)
-                    const cass=(brut*Number(editSal.cass_employee)/100)
-                    const fond=(brut*Number(editSal.construction_fund)/100)
-                    const bazaImpozit=brut-cas-cass-fond
+                    const cas=brut*Number(editSal.cas_employee)/100
+                    const cass=brut*Number(editSal.cass_employee)/100
+                    const fond=brut*Number(editSal.construction_fund)/100
+                    // Formula corecta: impozit pe baza impozabila (brut - cas - cass)
+                    const bazaImpozit=Math.max(0,brut-cas-cass)
                     const impozit=editSal.tax_exempt?0:(bazaImpozit*Number(editSal.income_tax)/100)
                     const altele=Number(editSal.other_deductions)||0
                     const net=brut-cas-cass-fond-impozit-altele
@@ -1608,9 +1640,14 @@ function SalariiPage() {
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>Salariu Brut</span><span style={{fontWeight:700}}>{brut.toFixed(2)} RON</span></div>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− CAS ({editSal.cas_employee}%)</span><span style={{color:G.red}}>-{cas.toFixed(2)} RON</span></div>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− CASS ({editSal.cass_employee}%)</span><span style={{color:G.red}}>-{cass.toFixed(2)} RON</span></div>
-                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Fond Const. ({editSal.construction_fund}%)</span><span style={{color:G.red}}>-{fond.toFixed(2)} RON</span></div>
-                      {!editSal.tax_exempt&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Impozit ({editSal.income_tax}%)</span><span style={{color:G.red}}>-{impozit.toFixed(2)} RON</span></div>}
+                      {Number(editSal.construction_fund)>0&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Fond Const. ({editSal.construction_fund}%)</span><span style={{color:G.red}}>-{fond.toFixed(2)} RON</span></div>}
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4,opacity:.7}}><span style={{color:G.muted}}>  Bază impozabilă</span><span>{bazaImpozit.toFixed(2)} RON</span></div>
+                      {!editSal.tax_exempt
+                        ?<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Impozit venit ({editSal.income_tax}%)</span><span style={{color:G.red}}>-{impozit.toFixed(2)} RON</span></div>
+                        :<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Impozit venit</span><span style={{color:G.green}}>Scutit</span></div>
+                      }
                       {altele>0&&<div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4}}><span style={{color:G.muted}}>− Alte rețineri</span><span style={{color:G.red}}>-{altele.toFixed(2)} RON</span></div>}
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:4,paddingTop:4,borderTop:`1px solid ${G.border}`}}><span style={{color:G.muted}}>CAM angajator ({editSal.cas_employer}%)</span><span style={{color:G.orange}}>{(brut*Number(editSal.cas_employer)/100).toFixed(2)} RON</span></div>
                       <div style={{borderTop:`1px solid ${G.border}`,marginTop:6,paddingTop:6,display:'flex',justifyContent:'space-between',fontSize:13,fontWeight:800}}><span style={{color:G.green}}>= Net Calculat</span><span style={{color:G.green}}>{net.toFixed(2)} RON</span></div>
                     </>
                   })()}
