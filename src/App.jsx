@@ -715,18 +715,162 @@ function ReportsPage() {
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
-    const {data:recs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
 
-    // Build per-employee, per-site stats
+    // Determine month range: from 1st of month to end of export period
+    const endDate=new Date(dt)
+    const monthStart=`${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-01`
+    const monthEnd=dt
+
+    // Get working days from calendar for this month (up to end date)
+    const {data:calData}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
+    const legalSet=new Set((calData||[]).filter(d=>d.type==='legal').map(d=>d.date))
+    // Count working days (Mon-Fri, not legal holidays) from 1st to end of period
+    let calWorkDays=0
+    const d=new Date(monthStart)
+    while(d<=endDate){
+      const ds=d.toISOString().split('T')[0]
+      if(d.getDay()!==0&&d.getDay()!==6&&!legalSet.has(ds)) calWorkDays++
+      d.setDate(d.getDate()+1)
+    }
+
+    // Get all pontaj records from start of month to end of period (for norme cumulate)
+    const {data:allRecs}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id))
+
+    // Get diurna records for the export period only
+    const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+
+    // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
-      const er=(recs||[]).filter(r=>r.employee_id===emp.id)
+      const er=(diurnaRecs||[]).filter(r=>r.employee_id===emp.id)
       if(!er.length) return null
+
+      // Norme cumulate de la inceputul lunii pana la sfarsitul perioadei
+      const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma))
+      const normeCumulate=normeRecs.length
+
+      // Diurna maxima = zile lucratoare calendar - norme cumulate
+      const diurnaMax=Math.max(0,calWorkDays-normeCumulate)
+
+      // Diurna reala = zile cu bifa diurna in perioada exportata
+      const diurnaReala=er.length
+
+      // Peste limita
+      const pesteLimita=Math.max(0,diurnaReala-diurnaMax)
+
+      // Group by site
       const siteMap={}
       er.forEach(r=>{const s=r.sites?.name||'Nealocate'; siteMap[s]=(siteMap[s]||0)+1})
       const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
       const p=emp.name.split(' ')
-      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:er.length,totalVal:er.length*diurnaAmt}
+      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,pesteLimita}
     }).filter(Boolean).sort((a,b)=>(a.nume+a.prenume).localeCompare(b.nume+b.prenume))
+
+    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
+
+    const from=new Date(df).toLocaleDateString('ro-RO'), to=new Date(dt).toLocaleDateString('ro-RO')
+    const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    const HFILL='1F497D'; const TFILL='D9E1F2'; const GFILL='1F497D'; const WFILL='FFF2CC'
+    const wb=XLSX.utils.book_new()
+    const hdrCols=['Nr.','Prenume','Nume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită']
+
+    const wsData=[]
+    wsData.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
+    wsData.push(['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'])
+    wsData.push([])
+    wsData.push([`SITUAȚIE DIURNE: ${from} — ${to} (zile lucrătoare cumulate lună: ${calWorkDays})`])
+    wsData.push([])
+    wsData.push(hdrCols)
+
+    let rowIdx=6; let nr=1
+    const siteRowIdxs=[]
+    const totalRowIdxs=[]
+    const empRanges=[]
+
+    empStats.forEach(emp=>{
+      const startRow=rowIdx
+      emp.sites.forEach((site,si)=>{
+        // Only show diurnaMax and pesteLimita on first row per employee
+        wsData.push([
+          si===0?nr:'',
+          si===0?emp.prenume:'',
+          si===0?emp.nume:'',
+          site.name,
+          site.zile,
+          diurnaAmt,
+          site.val,
+          si===0?emp.diurnaMax:'',
+          si===0?(emp.pesteLimita>0?emp.pesteLimita:''):''
+        ])
+        siteRowIdxs.push({row:rowIdx,isAlt:si%2===1,hasPeste:si===0&&emp.pesteLimita>0})
+        rowIdx++
+      })
+      // Total per angajat
+      wsData.push(['','',`Total ${emp.prenume} ${emp.nume}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0])
+      totalRowIdxs.push({row:rowIdx,hasPeste:emp.pesteLimita>0})
+      empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
+      rowIdx++; nr++
+    })
+
+    wsData.push([])
+    const totalGenZile=empStats.reduce((s,e)=>s+e.totalZile,0)
+    const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
+    const totalPeste=empStats.reduce((s,e)=>s+e.pesteLimita,0)
+    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0])
+    const totalGenRow=rowIdx+1
+
+    const ws=XLSX.utils.aoa_to_sheet(wsData)
+    ws['!cols']=[{wch:5},{wch:16},{wch:18},{wch:28},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18}]
+
+    const sc=(r,c,s)=>{ const a=XLSX.utils.encode_cell({r,c}); if(!ws[a]) ws[a]={v:'',t:'s'}; ws[a].s=s }
+
+    // Header row
+    hdrCols.forEach((_,c)=>{
+      const a=XLSX.utils.encode_cell({r:5,c})
+      if(!ws[a]) ws[a]={v:hdrCols[c],t:'s'}
+      const isWarn=c>=7
+      ws[a].s={fill:{fgColor:{rgb:isWarn?'7F6000':HFILL}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center',wrapText:true}}
+    })
+
+    // Site rows
+    siteRowIdxs.forEach(({row,isAlt,hasPeste})=>{
+      for(let c=0;c<9;c++){
+        const isWarnCol=c>=7
+        let fill=isAlt?'F5F5F5':'FFFFFF'
+        if(isWarnCol&&hasPeste) fill='FFF2CC'
+        sc(row,c,{fill:{fgColor:{rgb:fill}},border:bd,alignment:{horizontal:c===0||c>=4?'center':'left',vertical:'center'},font:{sz:10,bold:isWarnCol&&hasPeste,color:{rgb:isWarnCol&&hasPeste?'7F6000':'000000'}}})
+      }
+    })
+
+    // Total per angajat rows
+    totalRowIdxs.forEach(({row,hasPeste})=>{
+      for(let c=0;c<9;c++){
+        const isWarnCol=c>=7
+        sc(row,c,{fill:{fgColor:{rgb:isWarnCol&&hasPeste?'FFE699':TFILL}},font:{bold:true,sz:10,color:{rgb:isWarnCol&&hasPeste?'7F6000':'1F497D'}},border:bd,alignment:{horizontal:c===0||c>=4?'center':'left',vertical:'center'}})
+      }
+    })
+
+    // Total general row
+    for(let c=0;c<9;c++){
+      sc(totalGenRow,c,{fill:{fgColor:{rgb:c>=7&&totalPeste>0?'FF0000':GFILL}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center'}})
+    }
+
+    // Merge cells
+    ws['!merges']=ws['!merges']||[]
+    empRanges.forEach(({start,end,rows})=>{
+      if(rows>1){
+        [0,1,2,7,8].forEach(c=>{
+          ws['!merges'].push({s:{r:start,c},e:{r:end,c}})
+        })
+      }
+    })
+
+    // Row heights
+    ws['!rows']=[...Array(6).fill({hpx:14}),{hpx:22}]
+
+    XLSX.utils.book_append_sheet(wb,ws,'Diurne')
+    XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
+    showToast(`✓ ${empStats.length} angajați · ${calWorkDays} zile lucr. cumulate`); setExpD(false)
+  }
 
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
 
