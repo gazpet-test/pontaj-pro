@@ -161,8 +161,14 @@ function LoginPage() {
       <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 30% 40%,#1F6FEB08 0%,transparent 60%)'}}/>
       <div style={{...S.card,padding:38,width:420,position:'relative'}}>
         <div style={{textAlign:'center',marginBottom:26}}>
-          <img src={LOGO_B64} alt="Gazpet Instal" style={{width:220,borderRadius:8,marginBottom:14,opacity:.9}}/>
-          <div style={{fontSize:22,fontWeight:800}}>PontajPRO</div>
+          <div style={{fontSize:32,fontWeight:800,letterSpacing:'2px',color:G.text,marginBottom:4}}>
+            <span style={{color:'#1F6FEB'}}>GAZPET</span>
+            <span style={{color:G.muted,fontWeight:300,margin:'0 8px'}}>|</span>
+            <span style={{color:G.text}}>INSTAL</span>
+          </div>
+          <div style={{fontSize:11,color:G.muted,letterSpacing:'3px',textTransform:'uppercase',marginBottom:18}}>S.C. Gazpet Instal S.R.L.</div>
+          <div style={{width:40,height:2,background:'linear-gradient(90deg,#1F6FEB,#388BFD)',borderRadius:2,margin:'0 auto 16px'}}/>
+          <div style={{fontSize:20,fontWeight:700}}>PontajPRO</div>
           <div style={{color:G.muted,fontSize:12,marginTop:4}}>Sistem de evidență a prezenței</div>
         </div>
         <form onSubmit={go}>
