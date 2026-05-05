@@ -1003,6 +1003,11 @@ function ReportsPage() {
       const totSuma=angajatiPeste.reduce((s,e)=>s+e.pesteLimita*diurnaAmt,0)
       const totRow=['','','TOTAL','','',totPeste,diurnaAmt,totSuma,'']
       totRow.forEach((v,c)=>{const a=XLSX.utils.encode_cell({r:nr2,c});ws[a]={v,t:typeof v==='number'?'n':'s'};ws[a].s={fill:{fgColor:{rgb:'C00000'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:c===0||c>=3?'center':'left',vertical:'center'}}})
+      // Extinde !ref ca SheetJS sa includa randurile noi in export
+      const rng=XLSX.utils.decode_range(ws['!ref']||'A1')
+      rng.e.r=Math.max(rng.e.r,nr2)
+      rng.e.c=Math.max(rng.e.c,8)
+      ws['!ref']=XLSX.utils.encode_range(rng)
     }
     // ────────────────────────────────────────────────────────────────────────
 
