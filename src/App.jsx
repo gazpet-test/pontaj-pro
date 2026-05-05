@@ -1262,7 +1262,7 @@ function AdminPage() {
                     <td style={{color:G.muted,fontSize:11}}>{emp.position||'—'}</td>
                     <td style={{fontSize:11,color:G.purple}}>{emp.sites?.name||<span style={{color:G.red}}>⚠ Nealocate</span>}</td>
                     <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
-                    <td><div style={{display:'flex',gap:5'}}>
+                    <td><div style={{display:'flex',gap:5}}>
                       <button onClick={()=>setEditEmp({...emp})} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
                       <button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button>
                       {!emp.active&&<button onClick={()=>setDeleteEmpItem(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10,color:G.red,borderColor:G.red+'44'}}>🗑️</button>}
