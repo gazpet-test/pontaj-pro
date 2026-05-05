@@ -545,10 +545,81 @@ function ReportsPage() {
   const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15)
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
   const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
+  const [savingPayment,setSavingPayment]=useState(false)
+  const [payments,setPayments]=useState([])
+  const [selectedPayment,setSelectedPayment]=useState(null)
+  const [paymentDetails,setPaymentDetails]=useState([])
+  const [showIstoric,setShowIstoric]=useState(false)
   const [toast,showToast]=useToast()
   const isAdmin=['admin','superadmin'].includes(profile?.role)
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
+  useEffect(()=>{ if(showIstoric) loadPayments() },[showIstoric])
+
+  const loadPayments=async()=>{
+    const {data}=await supabase.from('diurna_payments').select('*').order('payment_date',{ascending:false}).limit(50)
+    setPayments(data||[])
+  }
+
+  const loadPaymentDetails=async(paymentId)=>{
+    const {data}=await supabase.from('diurna_payment_details').select('*').eq('payment_id',paymentId).order('employee_name')
+    setPaymentDetails(data||[])
+  }
+
+  const savePayment=async()=>{
+    if(!df||!dt){showToast('Selectează perioada','warn');return}
+    setSavingPayment(true)
+    // Check for overlap
+    const {data:existing}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
+    if(existing?.length>0){
+      showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
+      setSavingPayment(false); return
+    }
+    // Get diurna data
+    let eq=supabase.from('employees').select('*').eq('active',true)
+    if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
+    const {data:emps}=await eq
+    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+    const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return er.length?{id:emp.id,name:emp.name,days:er.length,amount:er.length*diurnaAmt}:null}).filter(Boolean)
+    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setSavingPayment(false);return}
+    const uid=(await supabase.auth.getUser()).data.user?.id
+    const {data:payment,error}=await supabase.from('diurna_payments').insert({
+      period_from:df,period_to:dt,payment_date:todayStr(),
+      total_employees:empStats.length,total_days:empStats.reduce((s,e)=>s+e.days,0),
+      total_amount:empStats.reduce((s,e)=>s+e.amount,0),created_by:uid
+    }).select().single()
+    if(!error&&payment){
+      await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
+      showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
+    } else showToast('Eroare la salvare','error')
+    setSavingPayment(false)
+  }
+
+  const reexportPayment=async(payment)=>{
+    const {data:details}=await supabase.from('diurna_payment_details').select('*').eq('payment_id',payment.id).order('employee_name')
+    if(!details?.length){showToast('Nicio dată','warn');return}
+    const from=new Date(payment.period_from).toLocaleDateString('ro-RO')
+    const to=new Date(payment.period_to).toLocaleDateString('ro-RO')
+    const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    const hdr=['Nr.','Prenume','Nume','Zile','Diurnă/zi (RON)','TOTAL RON']
+    const rows=[
+      ['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
+      ['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'],
+      [],
+      [`SITUAȚIE DIURNE: ${from} — ${to}`],
+      [],
+      hdr,
+      ...details.map((d,i)=>{const p=d.employee_name.split(' ');return [i+1,p[0],p.slice(1).join(' '),d.days,diurnaAmt,d.amount]}),
+      [],
+      ['','','TOTAL',details.reduce((s,d)=>s+d.days,0),diurnaAmt,details.reduce((s,d)=>s+d.amount,0)]
+    ]
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols']=[{wch:5},{wch:16},{wch:18},{wch:10},{wch:14},{wch:14}]
+    hdr.forEach((_,c)=>{const a=XLSX.utils.encode_cell({r:5,c});if(!ws[a])ws[a]={v:hdr[c],t:'s'};ws[a].s={fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}})
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Diurne')
+    XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}_${to.replace(/\//g,'-')}.xlsx`)
+    showToast('✓ Export gata!')
+  }
 
   const getRange=()=>{ const [y,m]=month.split('-').map(Number); return {y,m,from:new Date(y,m-1,1).toISOString().split('T')[0],to:new Date(y,m,0).toISOString().split('T')[0],days:new Date(y,m,0).getDate()} }
 
@@ -939,6 +1010,74 @@ function ReportsPage() {
         </div>
       </div>
 
+      {/* Istoric modal */}
+      {showIstoric&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{...S.card,width:900,maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
+            <div style={{padding:'16px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontSize:15,fontWeight:800}}>📋 Istoric Plăți Diurne</div>
+              <button onClick={()=>{setShowIstoric(false);setSelectedPayment(null);setPaymentDetails([])}} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1.5fr',flex:1,overflow:'hidden'}}>
+              {/* Lista plati */}
+              <div style={{borderRight:`1px solid ${G.border}`,overflowY:'auto'}}>
+                {!payments.length?<div style={{padding:30,textAlign:'center',color:G.muted,fontSize:12}}>Nicio plată înregistrată</div>
+                :payments.map(p=>{
+                  const isSelected=selectedPayment?.id===p.id
+                  return <div key={p.id} onClick={()=>{setSelectedPayment(p);loadPaymentDetails(p.id)}}
+                    style={{padding:'12px 16px',cursor:'pointer',background:isSelected?'#1C2128':'transparent',borderBottom:`1px solid ${G.border}`,transition:'background .15s'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                      <span style={{fontSize:12,fontWeight:700,color:G.blue}}>
+                        {new Date(p.period_from).toLocaleDateString('ro-RO')} — {new Date(p.period_to).toLocaleDateString('ro-RO')}
+                      </span>
+                      <span style={{fontSize:11,color:G.muted}}>{new Date(p.payment_date).toLocaleDateString('ro-RO')}</span>
+                    </div>
+                    <div style={{display:'flex',gap:12,fontSize:11}}>
+                      <span style={{color:G.muted}}>👥 {p.total_employees} ang.</span>
+                      <span style={{color:G.muted}}>📅 {p.total_days} zile</span>
+                      <span style={{color:G.green,fontWeight:700}}>{Number(p.total_amount).toLocaleString('ro-RO')} RON</span>
+                    </div>
+                  </div>
+                })}
+              </div>
+              {/* Detalii plata selectata */}
+              <div style={{overflowY:'auto',padding:16}}>
+                {!selectedPayment?<div style={{textAlign:'center',color:G.muted,padding:40,fontSize:12}}>← Selectează o plată</div>
+                :<>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                    <div style={{fontSize:13,fontWeight:700}}>
+                      {new Date(selectedPayment.period_from).toLocaleDateString('ro-RO')} — {new Date(selectedPayment.period_to).toLocaleDateString('ro-RO')}
+                    </div>
+                    <button onClick={()=>reexportPayment(selectedPayment)} style={{...S.btnP,background:'#1A6B1A',fontSize:11,padding:'5px 12px'}}>⬇ Reexportă Excel</button>
+                  </div>
+                  <table style={{width:'100%',fontSize:12}}>
+                    <thead><tr style={{background:G.bg}}><th>Prenume</th><th>Nume</th><th style={{textAlign:'center'}}>Zile</th><th style={{textAlign:'right'}}>Sumă</th></tr></thead>
+                    <tbody>
+                      {paymentDetails.map((d,i)=>{
+                        const p=d.employee_name.split(' ')
+                        return <tr key={d.id} style={{background:i%2===0?'transparent':'#1C2128'}}>
+                          <td style={{padding:'6px 8px'}}>{p[0]}</td>
+                          <td style={{padding:'6px 8px',fontWeight:600}}>{p.slice(1).join(' ')}</td>
+                          <td style={{padding:'6px 8px',textAlign:'center',color:G.blue}}>{d.days}</td>
+                          <td style={{padding:'6px 8px',textAlign:'right',color:G.green,fontWeight:700}}>{Number(d.amount).toLocaleString('ro-RO')} RON</td>
+                        </tr>
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{background:'#1C2128',fontWeight:700}}>
+                        <td colSpan={2} style={{padding:'8px',color:G.muted}}>TOTAL</td>
+                        <td style={{padding:'8px',textAlign:'center',color:G.blue}}>{selectedPayment.total_days}</td>
+                        <td style={{padding:'8px',textAlign:'right',color:G.green}}>{Number(selectedPayment.total_amount).toLocaleString('ro-RO')} RON</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Export Diurne + Supliment Hrana */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
         <div style={{...S.card,padding:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -948,6 +1087,8 @@ function ReportsPage() {
           <span style={{fontSize:11,color:G.muted}}>Până la:</span>
           <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
           <button onClick={exportDiurne} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+          <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
+          <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>
         </div>
         <div style={{...S.card,padding:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <span style={{fontSize:12,fontWeight:700,color:'#56D364'}}>🍔 Export Supliment Hrană</span>

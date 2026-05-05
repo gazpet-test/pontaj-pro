@@ -60,3 +60,32 @@ ALTER TABLE public.employee_salaries ADD COLUMN IF NOT EXISTS personal_deduction
 -- Adauga default in settings
 INSERT INTO public.settings (key, value) VALUES ('default_personal_deduction', '587') ON CONFLICT (key) DO NOTHING;
 
+
+-- ============================================================
+-- Jurnal Plati Diurne
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.diurna_payments (
+  id            serial primary key,
+  period_from   date not null,
+  period_to     date not null,
+  payment_date  date not null default current_date,
+  total_employees integer default 0,
+  total_days    integer default 0,
+  total_amount  numeric(10,2) default 0,
+  notes         text,
+  created_by    uuid references auth.users(id),
+  created_at    timestamptz default now()
+);
+
+CREATE TABLE IF NOT EXISTS public.diurna_payment_details (
+  id            serial primary key,
+  payment_id    integer references public.diurna_payments(id) on delete cascade,
+  employee_id   integer references public.employees(id),
+  employee_name text not null,
+  days          integer default 0,
+  amount        numeric(10,2) default 0
+);
+
+ALTER TABLE public.diurna_payments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.diurna_payment_details DISABLE ROW LEVEL SECURITY;
