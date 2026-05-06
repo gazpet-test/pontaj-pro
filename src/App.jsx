@@ -124,7 +124,8 @@ function Layout({ children }) {
   const isContabil = profile?.role==='contabil'
   const hasSalaryAccess = isSuperAdmin || isContabil
   const navItems = [
-    {p:'/',i:'📊',l:'Panou'},
+    {p:'/',i:'🏠',l:'Acasă'},
+    {p:'/panou',i:'📊',l:'Panou'},
     {p:'/pontaj',i:'👥',l:'Pontaj'},
     {p:'/rapoarte',i:'📈',l:'Rapoarte'},
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
@@ -154,6 +155,108 @@ function Layout({ children }) {
       </div>
       <div style={{padding:'22px 26px',maxWidth:1500,margin:'0 auto'}} className="fi">{children}</div>
       <div style={{textAlign:'center',padding:'12px',fontSize:12,color:'#E53935',fontWeight:700,borderTop:`1px solid ${G.border}`,marginTop:20,letterSpacing:'.3px'}}>
+        Made by Trusu Razvan - Administrator Gazpet Instal
+      </div>
+    </div>
+  )
+}
+
+
+// ─── Home Dashboard (Module Selector) ─────────────────────────────────────────
+function HomeDashboard() {
+  const { profile, signOut } = useAuth()
+  const nav = useNavigate()
+  const [now, setNow] = useState(new Date())
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
+  const isSuperAdmin = profile?.role==='superadmin'
+  const isAdmin = ['admin','superadmin'].includes(profile?.role)
+  const isContabil = profile?.role==='contabil'
+  const hasSalaryAccess = isSuperAdmin || isContabil
+
+  const modules = [
+    { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true },
+    { path:null,        icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi · Cash flow · Bugete',     active:false },
+    { path:null,        icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:false },
+    { path:null,        icon:'📦', label:'Comercial',   color:'#A371F7', desc:'Oferte · Contracte · CRM',         active:false },
+    { path:null,        icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing',active:false },
+    { path:null,        icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Recrutare · Evaluări · Training',  active:false },
+    { path:'/panou',    icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
+  ]
+
+  return (
+    <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column'}}>
+      <style>{css}</style>
+      {/* Header */}
+      <div style={{background:'#161B22',borderBottom:'1px solid #30363D',padding:'0 32px',height:60,display:'flex',alignItems:'center',gap:16,position:'sticky',top:0,zIndex:100}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flex:1}}>
+          <div style={{width:32,height:32,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>⏱</div>
+          <span style={{fontWeight:800,fontSize:16,letterSpacing:'-.3px',color:'#E6EDF3'}}>Gazpet</span>
+          <span style={{fontWeight:300,fontSize:16,color:'#8B949E'}}>ERP</span>
+        </div>
+        <div style={{textAlign:'right',marginRight:16}}>
+          <div style={{fontSize:18,fontWeight:800,color:'#58A6FF',fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
+          <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <Avatar name={profile?.name} id={1} size={32}/>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
+            <span className={`badge ${isAdmin?'ba':profile?.role==='contabil'?'bs':'bm'}`}>{profile?.role==='superadmin'?'⭐ Super Admin':isAdmin?'⚙ Admin':profile?.role==='contabil'?'💵 Contabil':'👤 Manager'}</span>
+          </div>
+          <button onClick={signOut} style={{background:'transparent',border:'1px solid #30363D',color:'#8B949E',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12,marginLeft:8}}>Ieșire</button>
+        </div>
+      </div>
+
+      {/* Hero */}
+      <div style={{textAlign:'center',padding:'52px 32px 32px'}}>
+        <div style={{fontSize:28,fontWeight:800,color:'#E6EDF3',marginBottom:8,letterSpacing:'-.5px'}}>
+          Bună{profile?.name?`, ${profile.name.split(' ')[0]}`:''}! 👋
+        </div>
+        <div style={{fontSize:15,color:'#8B949E'}}>Alege modulul cu care vrei să lucrezi</div>
+      </div>
+
+      {/* Module grid */}
+      <div style={{maxWidth:1100,margin:'0 auto',padding:'0 32px 60px',width:'100%'}}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:16}}>
+          {modules.map((m,i)=>(
+            <div key={i}
+              onClick={()=>m.path&&nav(m.path)}
+              style={{
+                background: m.active ? '#161B22' : '#0D1117',
+                border: `1px solid ${m.active ? m.color+'55' : '#21262D'}`,
+                borderRadius:12,
+                padding:'28px 24px',
+                cursor: m.active ? 'pointer' : 'default',
+                transition:'all .18s ease',
+                position:'relative',
+                overflow:'hidden',
+              }}
+              onMouseEnter={e=>{if(m.active){e.currentTarget.style.borderColor=m.color+'99';e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow=`0 8px 24px ${m.color}22`}}}
+              onMouseLeave={e=>{if(m.active){e.currentTarget.style.borderColor=m.color+'55';e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}}
+            >
+              {/* Glow accent */}
+              {m.active&&<div style={{position:'absolute',top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,transparent,${m.color},transparent)`,borderRadius:'12px 12px 0 0'}}/>}
+
+              <div style={{fontSize:36,marginBottom:12,lineHeight:1}}>{m.icon}</div>
+              <div style={{fontSize:17,fontWeight:700,color: m.active ? '#E6EDF3' : '#484F58',marginBottom:6,letterSpacing:'-.2px'}}>{m.label}</div>
+              <div style={{fontSize:12,color: m.active ? '#8B949E' : '#30363D',lineHeight:1.5}}>{m.desc}</div>
+
+              {!m.active&&(
+                <div style={{marginTop:12,display:'inline-block',background:'#21262D',color:'#484F58',fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:4,letterSpacing:'.5px',textTransform:'uppercase'}}>
+                  În curând
+                </div>
+              )}
+              {m.active&&(
+                <div style={{marginTop:14,display:'inline-flex',alignItems:'center',gap:5,color:m.color,fontSize:12,fontWeight:600}}>
+                  Deschide <span style={{fontSize:14}}>→</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{textAlign:'center',padding:'16px',fontSize:11,color:'#E53935',fontWeight:700,borderTop:'1px solid #21262D',marginTop:'auto',letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
       </div>
     </div>
@@ -2287,7 +2390,8 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage/>}/>
-        <Route path="/" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/>
+        <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
+        <Route path="/panou" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/>
         <Route path="/pontaj" element={<ProtectedRoute><PontajPage/></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
