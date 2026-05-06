@@ -805,12 +805,13 @@ function ReportsPage() {
       XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
       playBeep(660,0.15); showToast('✓ Export ITM gata!')
     } catch(e){ showToast('Eroare: '+e.message,'error'); console.error(e) }
-    setExpITM(false)
+    finally{ setExpITM(false) }
   }
 
   const exportDiurne=async()=>{
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setExpD(true)
+    try{
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
@@ -1101,7 +1102,8 @@ function ReportsPage() {
     XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
-    playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`); setExpD(false)
+    playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`)
+    }catch(e){showToast('Eroare la export diurne','error')}finally{setExpD(false)}
   }
 
   const exportBancaDiurne=async()=>{
@@ -1170,13 +1172,13 @@ function ReportsPage() {
       const totalConfirmat=rows.reduce((s,r)=>s+r[6],0)
       const msg=faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:' ✓'
       playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
-    }catch(e){showToast('Eroare export BT','error')}
-    setExpBT(false)
+    }catch(e){showToast('Eroare export BT','error')}finally{setExpBT(false)}
   }
 
   const exportSupl=async()=>{
     if(!sf||!st2){showToast('Selectează perioada','warn');return}
     setExpS(true)
+    try{
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
@@ -1220,7 +1222,8 @@ function ReportsPage() {
     }
     XLSX.utils.book_append_sheet(wb,ws,'Supliment Hrana')
     XLSX.writeFile(wb,`Supliment_Hrana_${from.replace(/\//g,'-')}.xlsx`)
-    playBeep(); showToast(`✓ ${empStats.length} angajați exportați`); setExpS(false)
+    playBeep(); showToast(`✓ ${empStats.length} angajați exportați`)
+    }catch(e){showToast('Eroare la export supliment','error')}finally{setExpS(false)}
   }
 
   const mLabel=()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})}
