@@ -350,14 +350,10 @@ function DashboardPage() {
         <div><div style={{fontSize:12,fontWeight:700,color:G.purple}}>{expiringContracts.length} contracte expiră în următoarele 30 zile!</div>
         <div style={{fontSize:11,color:G.purple+'99'}}>{expiringContracts.slice(0,3).map(e=>`${e.employees?.name} (${new Date(e.contract_expiry).toLocaleDateString('ro-RO')})`).join(', ')}{expiringContracts.length>3?` +${expiringContracts.length-3}`:''}</div></div>
       </div>}
-      {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:10,padding:'12px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:12,overflow:'hidden'}}>
-        <style>{`@keyframes marquee{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}`}</style>
-        <span style={{fontSize:22,flexShrink:0}}>⚠️</span>
-        <div style={{overflow:'hidden',flex:1}}>
-          <div style={{fontSize:14,fontWeight:700,color:G.red,whiteSpace:'nowrap',animation:'marquee 18s linear infinite'}}>
-            {unalloc.length} angajați nealocați pe niciun șantier! &nbsp;&nbsp;&nbsp;—&nbsp;&nbsp;&nbsp; {unalloc.map(e=>e.name).join(' • ')}
-          </div>
-        </div>
+      {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}44`,borderRadius:10,padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
+        <span style={{fontSize:18}}>⚠️</span>
+        <div><div style={{fontSize:12,fontWeight:700,color:G.red}}>{unalloc.length} angajați nealocați pe niciun șantier!</div>
+        <div style={{fontSize:11,color:'#F8514999'}}>{unalloc.slice(0,4).map(e=>e.name).join(', ')}{unalloc.length>4?` +${unalloc.length-4}`:''}</div></div>
       </div>}
 
       {/* Alerta diurne > prezenti */}
