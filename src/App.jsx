@@ -607,9 +607,9 @@ function ReportsPage() {
       // Salvam DOAR suma confirmata (in limita bugetului) — surplusul merge in salariu
       const sumaConfirmata=Math.min(sumaExport,restBuget)
       return {id:emp.id,name:emp.name,days:er.length,amount:sumaConfirmata}
-    }).filter(Boolean).filter(e=>e.amount>0)  // excludem angajatii cu 0 RON confirmat
+    }).filter(Boolean).filter(e=>e.days>0)  // includem toti cu diurne, chiar daca suma confirmata=0 (tot merge in salariu)
 
-    if(!empStats.length){showToast('Nu există diurne confirmate în perioadă','warn');setSavingPayment(false);return}
+    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setSavingPayment(false);return}
     const uid=(await supabase.auth.getUser()).data.user?.id
     const {data:payment,error}=await supabase.from('diurna_payments').insert({
       period_from:df,period_to:dt,payment_date:todayStr(),
@@ -618,7 +618,7 @@ function ReportsPage() {
     }).select().single()
     if(!error&&payment){
       await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
-      showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
+      playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
     } else showToast('Eroare la salvare','error')
     setSavingPayment(false)
   }
@@ -803,7 +803,7 @@ function ReportsPage() {
 
       XLSX.utils.book_append_sheet(wb,ws,'Pontaj ITM')
       XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
-      showToast('✓ Export ITM gata!')
+      playBeep(660,0.15); showToast('✓ Export ITM gata!')
     } catch(e){ showToast('Eroare: '+e.message,'error'); console.error(e) }
     setExpITM(false)
   }
@@ -1101,7 +1101,7 @@ function ReportsPage() {
     XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
-    showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`); setExpD(false)
+    playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`); setExpD(false)
   }
 
   const exportBancaDiurne=async()=>{
@@ -1169,7 +1169,7 @@ function ReportsPage() {
       XLSX.writeFile(wb,`BT_Diurne_${df}_${dt}.xlsx`)
       const totalConfirmat=rows.reduce((s,r)=>s+r[6],0)
       const msg=faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:' ✓'
-      showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
+      playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
     }catch(e){showToast('Eroare export BT','error')}
     setExpBT(false)
   }
@@ -1220,7 +1220,7 @@ function ReportsPage() {
     }
     XLSX.utils.book_append_sheet(wb,ws,'Supliment Hrana')
     XLSX.writeFile(wb,`Supliment_Hrana_${from.replace(/\//g,'-')}.xlsx`)
-    showToast(`✓ ${empStats.length} angajați exportați`); setExpS(false)
+    playBeep(); showToast(`✓ ${empStats.length} angajați exportați`); setExpS(false)
   }
 
   const mLabel=()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})}
