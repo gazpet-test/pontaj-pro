@@ -582,7 +582,11 @@ function ReportsPage() {
     const mE=new Date(monthStart);mE.setMonth(mE.getMonth()+1);mE.setDate(0)
     const monthEnd=mE.toISOString().split('T')[0]
     const {data:calDat}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
-    const bugetLunar=(calDat||[]).filter(d=>d.type==='work').length*diurnaAmt
+    const legalSetSave=new Set((calDat||[]).filter(d=>d.type==='legal').map(d=>d.date))
+    let bugetZileSave=0
+    const bwS=new Date(monthStart),bwE=new Date(monthEnd)
+    while(bwS<=bwE){const s=bwS.toISOString().split('T')[0];if(bwS.getDay()!==0&&bwS.getDay()!==6&&!legalSetSave.has(s))bugetZileSave++;bwS.setDate(bwS.getDate()+1)}
+    const bugetLunar=bugetZileSave*diurnaAmt
 
     // Transe anterioare din aceeasi luna (pentru rest buget per angajat)
     const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
@@ -822,9 +826,24 @@ function ReportsPage() {
     const {data:calData}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
     const legalSet=new Set((calData||[]).filter(d=>d.type==='legal').map(d=>d.date))
 
-    // Zile lucrătoare din calendar (type='work') — setate de Admin, sursa de adevăr
-    // Acestea formează bugetul lunar: nr_zile_lucr × diurnă/zi
-    const calWorkDaysInMonth=(calData||[]).filter(d=>d.type==='work').length
+    // Zile lucrătoare TOATĂ luna = Luni-Vineri minus sărbători legale (din calendar)
+    // Nu folosim type='work' — calendarul stochează doar zilele non-lucrătoare
+    let totalMonthWorkDays=0
+    const mWd=new Date(monthStart)
+    while(mWd<=mEnd){
+      const s=mWd.toISOString().split('T')[0]
+      if(mWd.getDay()!==0&&mWd.getDay()!==6&&!legalSet.has(s)) totalMonthWorkDays++
+      mWd.setDate(mWd.getDate()+1)
+    }
+
+    // workDaySet pentru filtrarea normelor (Bug 2 fix)
+    const workDaySet=new Set()
+    const mWd2=new Date(monthStart)
+    while(mWd2<=mEnd){
+      const s=mWd2.toISOString().split('T')[0]
+      if(mWd2.getDay()!==0&&mWd2.getDay()!==6&&!legalSet.has(s)) workDaySet.add(s)
+      mWd2.setDate(mWd2.getDate()+1)
+    }
 
     // Count working days from 1st to end of export period (dt) — pentru diurnaMax per perioadă
     let calWorkDays=0
@@ -834,12 +853,6 @@ function ReportsPage() {
       if(d.getDay()!==0&&d.getDay()!==6&&!legalSet.has(ds)) calWorkDays++
       d.setDate(d.getDate()+1)
     }
-
-    // workDaySet pentru filtrarea normelor (Bug 2 fix) — tot din calendar type='work'
-    const workDaySet=new Set((calData||[]).filter(d=>d.type==='work').map(d=>d.date))
-
-    // Plafon lunar = zile lucrătoare din Admin→Calendar × diurnă/zi
-    const totalMonthWorkDays=calWorkDaysInMonth
 
     // Calculate working days ONLY within the export window df→dt (Bug 1 fix)
     let workDaysInPeriod=0
@@ -1103,15 +1116,18 @@ function ReportsPage() {
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
       const {data:emps}=await eq
       const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
-      const {data:calData2}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
-      const legalSet=new Set((calData2||[]).filter(d=>d.type==='legal').map(d=>d.date))
       const {data:st}=await supabase.from('settings').select('*')
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
       const diurnaAmt=Number(getSetting('diurna_amount',50))
       const ibanFirma=getSetting('iban_firma','RO25BTRLRONCRT0T18017E01')
+      const {data:calData2}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
+      const legalSet=new Set((calData2||[]).filter(d=>d.type==='legal').map(d=>d.date))
 
-      // Buget lunar din Admin→Calendar (type='work') — sursa de adevăr
-      const bugetLunar=(calData2||[]).filter(d=>d.type==='work').length*diurnaAmt
+      // Buget lunar = Luni-Vineri minus sărbători legale, toată luna
+      let bugetZile=0
+      const bWd=new Date(monthStart),bEnd=new Date(monthEnd)
+      while(bWd<=bEnd){const s=bWd.toISOString().split('T')[0];if(bWd.getDay()!==0&&bWd.getDay()!==6&&!legalSet.has(s))bugetZile++;bWd.setDate(bWd.getDate()+1)}
+      const bugetLunar=bugetZile*diurnaAmt
 
       // Transe anterioare platite in aceeasi luna
       const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
