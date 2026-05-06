@@ -990,14 +990,6 @@ function ReportsPage() {
       ws['!merges'].push({s:{r:nr2,c:0},e:{r:nr2,c:8}})
       nr2++
 
-      // Rand ATENTIE - rosu aprins, deasupra titlului
-      const ac=XLSX.utils.encode_cell({r:nr2,c:0})
-      ws[ac]={v:'⚠  ATENTIE CONTABILITATE  ⚠  —  Verificati angajatii de mai jos inainte de procesarea salariilor  —  ⚠  ATENTIE CONTABILITATE  ⚠',t:'s'}
-      ws[ac].s={fill:{fgColor:{rgb:'FF0000'}},font:{bold:true,sz:12,color:{rgb:'FFFFFF'}},alignment:{horizontal:'center',vertical:'center'}}
-      ws['!merges']=ws['!merges']||[]
-      ws['!merges'].push({s:{r:nr2,c:0},e:{r:nr2,c:8}})
-      nr2++
-
       // Titlu
       const tc=XLSX.utils.encode_cell({r:nr2,c:0})
       ws[tc]={v:'NOTA SALARIALA — Zile diurna peste limita admisa (se adauga in salariu)',t:'s'}
