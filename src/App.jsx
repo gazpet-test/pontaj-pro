@@ -575,13 +575,37 @@ function ReportsPage() {
       showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
       setSavingPayment(false); return
     }
+
+    // Calculeaza bugetul lunar din Admin→Calendar (type='work')
+    const d0=new Date(df)
+    const monthStart=`${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}-01`
+    const mE=new Date(monthStart);mE.setMonth(mE.getMonth()+1);mE.setDate(0)
+    const monthEnd=mE.toISOString().split('T')[0]
+    const {data:calDat}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
+    const bugetLunar=(calDat||[]).filter(d=>d.type==='work').length*diurnaAmt
+
+    // Transe anterioare din aceeasi luna (pentru rest buget per angajat)
+    const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+
     // Get diurna data
     let eq=supabase.from('employees').select('*').eq('active',true)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
     const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
-    const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return er.length?{id:emp.id,name:emp.name,days:er.length,amount:er.length*diurnaAmt}:null}).filter(Boolean)
-    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setSavingPayment(false);return}
+
+    const empStats=(emps||[]).map(emp=>{
+      const er=(recs||[]).filter(r=>r.employee_id===emp.id)
+      if(!er.length) return null
+      const sumaExport=er.length*diurnaAmt
+      // Suma platita anterior din aceeasi luna pentru acest angajat
+      const platitAnt=(prevPay||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?d.amount:0)},0)
+      const restBuget=Math.max(0,bugetLunar-platitAnt)
+      // Salvam DOAR suma confirmata (in limita bugetului) — surplusul merge in salariu
+      const sumaConfirmata=Math.min(sumaExport,restBuget)
+      return {id:emp.id,name:emp.name,days:er.length,amount:sumaConfirmata}
+    }).filter(Boolean).filter(e=>e.amount>0)  // excludem angajatii cu 0 RON confirmat
+
+    if(!empStats.length){showToast('Nu există diurne confirmate în perioadă','warn');setSavingPayment(false);return}
     const uid=(await supabase.auth.getUser()).data.user?.id
     const {data:payment,error}=await supabase.from('diurna_payments').insert({
       period_from:df,period_to:dt,payment_date:todayStr(),
@@ -787,15 +811,22 @@ function ReportsPage() {
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
 
-    // Determine month range: from 1st of month to end of export period
+    // Determine month range
     const endDate=new Date(dt)
     const monthStart=`${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-01`
-    const monthEnd=dt
+    // monthEnd = ultimă zi reală a lunii (nu dt!)
+    const mEnd=new Date(monthStart);mEnd.setMonth(mEnd.getMonth()+1);mEnd.setDate(0)
+    const monthEnd=mEnd.toISOString().split('T')[0]
 
-    // Get working days from calendar for this month (up to end date)
+    // Get working days from calendar for FULL month (not just to dt)
     const {data:calData}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
     const legalSet=new Set((calData||[]).filter(d=>d.type==='legal').map(d=>d.date))
-    // Count working days (Mon-Fri, not legal holidays) from 1st to end of period
+
+    // Zile lucrătoare din calendar (type='work') — setate de Admin, sursa de adevăr
+    // Acestea formează bugetul lunar: nr_zile_lucr × diurnă/zi
+    const calWorkDaysInMonth=(calData||[]).filter(d=>d.type==='work').length
+
+    // Count working days from 1st to end of export period (dt) — pentru diurnaMax per perioadă
     let calWorkDays=0
     const d=new Date(monthStart)
     while(d<=endDate){
@@ -804,14 +835,11 @@ function ReportsPage() {
       d.setDate(d.getDate()+1)
     }
 
-    // Build set of actual working days in the month (Mon-Fri, not legal holidays)
-    // Used to filter norme correctly (Bug 2 fix: exclude norme on non-working days)
-    const workDaySet=new Set()
-    const wd=new Date(monthStart)
-    while(wd<=endDate){const wds=wd.toISOString().split('T')[0];if(wd.getDay()!==0&&wd.getDay()!==6&&!legalSet.has(wds))workDaySet.add(wds);wd.setDate(wd.getDate()+1)}
+    // workDaySet pentru filtrarea normelor (Bug 2 fix) — tot din calendar type='work'
+    const workDaySet=new Set((calData||[]).filter(d=>d.type==='work').map(d=>d.date))
 
-    // Plafon lunar complet (toate zilele lucrătoare din lună, indiferent de dt)
-    const totalMonthWorkDays=workDaySet.size
+    // Plafon lunar = zile lucrătoare din Admin→Calendar × diurnă/zi
+    const totalMonthWorkDays=calWorkDaysInMonth
 
     // Calculate working days ONLY within the export window df→dt (Bug 1 fix)
     let workDaysInPeriod=0
@@ -1075,18 +1103,15 @@ function ReportsPage() {
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
       const {data:emps}=await eq
       const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
-      const {data:legalDays}=await supabase.from('calendar_days').select('date').eq('is_working',false)
-      const legalSet=new Set((legalDays||[]).map(d=>d.date))
+      const {data:calData2}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
+      const legalSet=new Set((calData2||[]).filter(d=>d.type==='legal').map(d=>d.date))
       const {data:st}=await supabase.from('settings').select('*')
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
       const diurnaAmt=Number(getSetting('diurna_amount',50))
       const ibanFirma=getSetting('iban_firma','RO25BTRLRONCRT0T18017E01')
 
-      // Zile lucratoare din luna (pentru buget)
-      const wdSet=new Set()
-      const wdC=new Date(monthStart),wdE=new Date(monthEnd)
-      while(wdC<=wdE){const s=wdC.toISOString().split('T')[0];if(wdC.getDay()!==0&&wdC.getDay()!==6&&!legalSet.has(s))wdSet.add(s);wdC.setDate(wdC.getDate()+1)}
-      const bugetLunar=wdSet.size*diurnaAmt
+      // Buget lunar din Admin→Calendar (type='work') — sursa de adevăr
+      const bugetLunar=(calData2||[]).filter(d=>d.type==='work').length*diurnaAmt
 
       // Transe anterioare platite in aceeasi luna
       const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
@@ -1995,113 +2020,7 @@ function SalariiPage() {
     setSaving(false)
   }
 
-  const exportBanca=async()=>{
-    // Export format exact Banca Transilvania (import plăți multiple BT Connect)
-    // Coloane: OrderNumber | SourceAccount | TargetAccount(IBAN) | BeneficiaryName | BIC | FiscalCode(gol) | Amount | PaymentRef1 | PaymentRef2 | ValueDate(serial Excel) | Urgent
-    const luna=prompt('Luna export (YYYY-MM, ex: 2026-05):'); if(!luna||!/^\d{4}-\d{2}$/.test(luna)){showToast('Format invalid','warn');return}
-    const monthStart=luna+'-01'
-    const d0=new Date(luna+'-01'); d0.setMonth(d0.getMonth()+1); d0.setDate(0)
-    const monthEnd=d0.toISOString().split('T')[0]
-
-    const {data:emps}=await supabase.from('employees').select('*').eq('active',true)
-    const {data:recs}=await supabase.from('pontaj_records').select('*').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id))
-    const {data:legalDays}=await supabase.from('calendar_days').select('date').eq('is_working',false)
-    const legalSet=new Set((legalDays||[]).map(d=>d.date))
-    const {data:st}=await supabase.from('settings').select('*')
-    const getSetting=(k,def)=>{ const f=st?.find(x=>x.key===k); return f?f.value:def }
-    const diurnaAmt=Number(getSetting('diurna_amount',50))
-    const suplAmt=Number(getSetting('meal_supplement_amount',35))
-    const ibanFirma=getSetting('iban_firma','RO25BTRLRONCRT0T18017E01')
-
-    // Zile lucratoare luna
-    const wdSet=new Set()
-    const wdC=new Date(monthStart), wdE=new Date(monthEnd)
-    while(wdC<=wdE){const s=wdC.toISOString().split('T')[0];if(wdC.getDay()!==0&&wdC.getDay()!==6&&!legalSet.has(s))wdSet.add(s);wdC.setDate(wdC.getDate()+1)}
-    const totalMonthWD=wdSet.size
-
-    // Data export → serial Excel (zile de la 1899-12-30)
-    const today=new Date(); today.setHours(0,0,0,0)
-    const excelDate=Math.floor((today-new Date('1899-12-30'))/(1000*60*60*24))
-
-    // BIC lookup din primele 4 caractere ale IBAN-ului (după RO + 2 check digits)
-    const BIC_MAP={
-      BTRL:'BTRLRO22XXX', INGB:'INGBROBUXX', RNCB:'RNCBROBUXX',
-      BRDE:'BRDEROBUXX', BACX:'BACXROBUXX', RZBR:'RZBRROBUXX',
-      CECE:'CECEROBUXX', BRMA:'BRMAROBUXX', UGBI:'UGBIROBUXX',
-      OTPV:'OTPVROBUXX', PORL:'PIRBROBUXX', BPOS:'BPOSROBUXX',
-      CRBA:'CRBAROBUXX', TCCL:'TCCLGB3L',   FIBL:'FIBLDEFFXXX'
-    }
-    const getBIC=(iban)=>{ if(!iban) return ''; const code=(iban||'').replace(/\s/g,'').substring(4,8).toUpperCase(); return BIC_MAP[code]||code+'ROBUXX' }
-
-    const wb=XLSX.utils.book_new()
-    const HDR=['OrderNumber','SourceAccountNumber','TargetAccountNumber','BeneficiaryName','BeneficiaryBankBIC','BeneficiaryFiscalCode','Amount','PaymentRef1','PaymentRef2','ValueDate','Urgent']
-
-    // ── HELPER: sheet BT cu format exact ──────────────────────────────────
-    const buildBTSheet=(rows, ref1, ref2)=>{
-      const data=[HDR]
-      rows.forEach((r,i)=>{
-        data.push([
-          i+1,                    // A: OrderNumber
-          ibanFirma,              // B: SourceAccountNumber (IBAN firma)
-          r.iban||'',            // C: TargetAccountNumber (IBAN angajat)
-          r.nume,                 // D: BeneficiaryName
-          getBIC(r.iban),         // E: BIC
-          '',                     // F: FiscalCode — mereu gol
-          r.suma,                 // G: Amount
-          ref1,                   // H: PaymentRef1
-          ref2,                   // I: PaymentRef2
-          excelDate,              // J: ValueDate (serial Excel = data azi)
-          'F'                     // K: Urgent — F=normal
-        ])
-      })
-      const ws=XLSX.utils.aoa_to_sheet(data)
-      ws['!cols']=[{wch:12},{wch:28},{wch:28},{wch:38},{wch:14},{wch:16},{wch:10},{wch:16},{wch:16},{wch:12},{wch:8}]
-
-      // Format coloane numeric si data
-      const range=XLSX.utils.decode_range(ws['!ref'])
-      for(let r=1;r<=range.e.r;r++){
-        const gCell=XLSX.utils.encode_cell({r,c:6})  // G = Amount
-        const jCell=XLSX.utils.encode_cell({r,c:9})  // J = ValueDate
-        if(ws[gCell]&&typeof ws[gCell].v==='number') ws[gCell].t='n'
-        if(ws[jCell]&&typeof ws[jCell].v==='number'){ws[jCell].t='n';ws[jCell].z='DD/MM/YYYY'}
-      }
-      return ws
-    }
-
-    // ── 1. DIURNE în limita plafonului lunar ──────────────────────────────
-    let diurneRows=[]
-    ;(emps||[]).forEach(emp=>{
-      const empRecs=(recs||[]).filter(r=>r.employee_id===emp.id&&r.diurna===true)
-      if(!empRecs.length) return
-      const totalDiurne=empRecs.length
-      const diurneLegit=Math.min(empRecs.filter(r=>wdSet.has(r.date)).length, totalMonthWD)
-      if(diurneLegit<=0) return
-      const suma=diurneLegit*diurnaAmt
-      diurneRows.push({nume:emp.name,iban:emp.iban,suma})
-    })
-
-    // ── 2. Supliment Hrană ────────────────────────────────────────────────
-    let suplRows=[]
-    ;(emps||[]).forEach(emp=>{
-      const zile=(recs||[]).filter(r=>r.employee_id===emp.id&&r.meal_supplement===true).length
-      if(!zile) return
-      suplRows.push({nume:emp.name,iban:emp.iban,suma:zile*suplAmt})
-    })
-
-    const luna_label=new Date(luna+'-15').toLocaleDateString('ro-RO',{month:'long',year:'numeric'})
-
-    if(diurneRows.length) XLSX.utils.book_append_sheet(wb,buildBTSheet(diurneRows,'diurna','diurna'),'DIURNE')
-    if(suplRows.length) XLSX.utils.book_append_sheet(wb,buildBTSheet(suplRows,'supliment hrana','supliment hrana'),'SUPLIMENT HRANA')
-
-    // Avertizare angajati fara IBAN
-    const faraIBAN=[...diurneRows,...suplRows].filter(r=>!r.iban).map(r=>r.nume)
-    const unici=[...new Set(faraIBAN)]
-
-    if(!wb.SheetNames.length){showToast('Nu există date de plată pentru această lună','warn');return}
-    XLSX.writeFile(wb,`BT_Plati_Diurne_${luna}.xlsx`)
-    const msg=unici.length>0?` · ⚠ IBAN lipsă: ${unici.join(', ')}`:' · Toate IBAN-urile completate ✓'
-    showToast(`✓ Export BT generat — ${luna_label}${msg}`)
-  }
+  const exportBanca=()=>{ showToast('❤️','warn') }
 
   const filtered=employees.filter(e=>{
     const ms=e.name.toLowerCase().includes(search.toLowerCase())
