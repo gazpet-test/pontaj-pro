@@ -66,9 +66,9 @@ const G = { bg:'#0D1117',surface:'#161B22',border:'#21262D',border2:'#30363D',te
 const S = {
   page: { fontFamily:"'Syne','Barlow',sans-serif",background:G.bg,minHeight:'100vh',color:G.text },
   card: { background:G.surface,border:`1px solid ${G.border}`,borderRadius:12 },
-  input: { background:G.bg,border:`1px solid ${G.border2}`,color:G.text,borderRadius:8,padding:'8px 12px',fontFamily:'inherit',fontSize:13,outline:'none',width:'100%' },
-  btnP: { background:'#1F6FEB',color:'white',border:'none',borderRadius:8,padding:'9px 18px',fontFamily:'inherit',fontSize:13,fontWeight:700,cursor:'pointer' },
-  btnS: { background:G.surface,color:G.text,border:`1px solid ${G.border}`,borderRadius:8,padding:'7px 14px',fontFamily:'inherit',fontSize:12,fontWeight:600,cursor:'pointer' },
+  input: { background:G.bg,border:`1px solid ${G.border2}`,color:G.text,borderRadius:8,padding:'8px 12px',fontFamily:'inherit',fontSize:15,outline:'none',width:'100%' },
+  btnP: { background:'#1F6FEB',color:'white',border:'none',borderRadius:8,padding:'9px 18px',fontFamily:'inherit',fontSize:15,fontWeight:700,cursor:'pointer' },
+  btnS: { background:G.surface,color:G.text,border:`1px solid ${G.border}`,borderRadius:8,padding:'7px 14px',fontFamily:'inherit',fontSize:14,fontWeight:600,cursor:'pointer' },
 }
 const css = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Barlow:wght@300;400;500;600&display=swap');
@@ -111,7 +111,7 @@ function useToast() {
 function LoadingScreen() {
   return <div style={{...S.page,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:16}}><style>{css}</style><div className="sp" style={{width:34,height:34}}/><div style={{color:G.muted,fontSize:13}}>Se încarcă...</div></div>
 }
-function Lbl({children}) { return <label style={{fontSize:11,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',display:'block',marginBottom:5}}>{children}</label> }
+function Lbl({children}) { return <label style={{fontSize:13,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',display:'block',marginBottom:5}}>{children}</label> }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 function Layout({ children }) {
@@ -569,6 +569,7 @@ function ReportsPage() {
   const savePayment=async()=>{
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setSavingPayment(true)
+    try{
     // Check for overlap
     const {data:existing}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
     if(existing?.length>0){
@@ -620,7 +621,7 @@ function ReportsPage() {
       await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
       playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
     } else showToast('Eroare la salvare','error')
-    setSavingPayment(false)
+  }catch(e){showToast('Eroare la salvare','error')}finally{setSavingPayment(false)}
   }
 
   const reexportPayment=async(payment)=>{
@@ -1139,9 +1140,10 @@ function ReportsPage() {
       // BIC lookup
       const BIC_MAP={BTRL:'BTRLRO22XXX',INGB:'INGBROBUXX',RNCB:'RNCBROBUXX',BRDE:'BRDEROBUXX',BACX:'BACXROBUXX',RZBR:'RZBRROBUXX',CECE:'CECEROBUXX',BRMA:'BRMAROBUXX',UGBI:'UGBIROBUXX',OTPV:'OTPVROBUXX',TCCL:'TCCLGB3L'}
       const getBIC=(iban)=>{if(!iban)return '';const code=(iban||'').replace(/\s/g,'').substring(4,8).toUpperCase();return BIC_MAP[code]||code+'ROBUXX'}
-      const today=new Date();today.setHours(0,0,0,0)
-      const excelDate=Math.floor((today-new Date('1899-12-30'))/(1000*60*60*24))
+      const today=new Date()
+      const excelDateStr=`${String(today.getDate()).padStart(2,'0')}/${String(today.getMonth()+1).padStart(2,'0')}/${today.getFullYear()}`
 
+      const _td=new Date(); const excelDateStr2=`${String(_td.getDate()).padStart(2,'0')}/${String(_td.getMonth()+1).padStart(2,'0')}/${_td.getFullYear()}`
       const HDR=['OrderNumber','SourceAccountNumber','TargetAccountNumber','BeneficiaryName','BeneficiaryBankBIC','BeneficiaryFiscalCode','Amount','PaymentRef1','PaymentRef2','ValueDate','Urgent']
       const rows=[];let nr=1
       const faraIBAN=[]
@@ -1158,7 +1160,7 @@ function ReportsPage() {
         if(sumaConfirmata<=0) return  // tot surplusul — nu apare in BT diurne
 
         if(!emp.iban) faraIBAN.push(emp.name)
-        rows.push([nr++,ibanFirma,emp.iban||'',emp.name,getBIC(emp.iban),'',sumaConfirmata,'diurna','diurna',excelDate,'F'])
+        rows.push([nr++,ibanFirma,emp.iban||'',emp.name,getBIC(emp.iban),'',sumaConfirmata,'diurna','diurna',excelDateStr2,'F'])
       })
 
       if(!rows.length){showToast('Nu există diurne confirmate de plătit în această perioadă','warn');setExpBT(false);return}
