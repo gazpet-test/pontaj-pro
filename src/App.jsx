@@ -541,7 +541,7 @@ function ReportsPage() {
   const [month,setMonth]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`)
   const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [sites,setSites]=useState([]); const [data,setData]=useState([]); const [detailed,setDetailed]=useState([])
-  const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false); const [expS,setExpS]=useState(false)
+  const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false); const [expS,setExpS]=useState(false); const [expBT,setExpBT]=useState(false)
   const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15)
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
   const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
@@ -824,7 +824,7 @@ function ReportsPage() {
 
     // Transe anterioare din aceeași lună — pentru calculul surplusului deja plătit
     // Luăm toate plățile cu period_from în aceeași lună ȘI period_to < df (perioadele deja finalizate)
-    const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+    const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
 
     // Get diurna records for the export period only
     const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
@@ -857,42 +857,32 @@ function ReportsPage() {
       // Peste limita (per perioadă - folosit în tabelul principal)
       const pesteLimita=Math.max(0,diurnaReala-diurnaMax)
 
-      // ── LOGICĂ CUMULATIVĂ LUNARĂ ──────────────────────────────────────────
-      // Toate diurnele colectate ÎNAINTE de această perioadă (inclusiv weekend/sărbători)
-      const totalDiurneAnterioare=(allRecs||[]).filter(r=>
-        r.employee_id===emp.id&&r.diurna===true&&r.date<df
-      ).length
-      // Câte zile mai rămân din plafonul lunar (20 pentru Mai)
-      const zileRamaseCumulat=Math.max(0,totalMonthWorkDays-totalDiurneAnterioare)
-      // Depășire cumulată: diurne din această perioadă care depășesc plafonul lunar
-      const pesteCumulat=Math.max(0,diurnaReala-zileRamaseCumulat)
-      // Flag: angajatul epuizează sau depășește plafonul lunar în această perioadă
-      const depasesteLunar=(totalDiurneAnterioare+diurnaReala)>totalMonthWorkDays
-      // ─────────────────────────────────────────────────────────────────────
+      // ── BUGET LUNAR & SURPLUS ────────────────────────────────────────────
+      // Buget lunar = zile lucratoare din luna × diurna/zi (ex: 20 × 50 = 1000 RON)
+      const bugetLunar=totalMonthWorkDays*diurnaAmt
 
-      // ── SURPLUS PLĂTIT ÎN TRANSE ANTERIOARE ────────────────────────────
-      // Pentru fiecare plată anterioară din aceeași lună, recalculăm surplusul
-      // folosind aceeași logică cumulativă, ca să știm câte zile-surplus
-      // au fost deja incluse în salarii în tranșele precedente.
-      let surplusPlătitZile=0
-      let cumDiurneBefore=0  // diurne acumulate înainte de fiecare tranșă anterioară
-      ;(prevPaymentsInMonth||[]).forEach(payment=>{
-        const pfrom=payment.period_from
-        const pto=payment.period_to
-        // Diurne reale ale acestui angajat în perioada tranșei anterioare (din allRecs)
-        const diurneInTransa=(allRecs||[]).filter(r=>
-          r.employee_id===emp.id&&r.diurna===true&&r.date>=pfrom&&r.date<=pto
-        ).length
-        // Câte zile rămăseseră din plafon la momentul acelei tranșe
-        const ramaseAtunci=Math.max(0,totalMonthWorkDays-cumDiurneBefore)
-        // Surplusul din acea tranșă
-        const surplusInTransa=Math.max(0,diurneInTransa-ramaseAtunci)
-        surplusPlătitZile+=surplusInTransa
-        cumDiurneBefore+=diurneInTransa
-      })
-      const surplusPlătitSuma=surplusPlătitZile*diurnaAmt
-      // Rest de plată = surplus curent - ce s-a plătit deja ca surplus în lunile anterioare
-      const restDePlata=Math.max(0,pesteCumulat*diurnaAmt-surplusPlătitSuma)
+      // Suma deja platita pentru acest angajat in tranșele anterioare din aceeași lună
+      // Luam direct din diurna_payment_details (salvat la fiecare "Salvează Plată")
+      const platitAnteriorSuma=(prevPaymentsInMonth||[]).reduce((sum,payment)=>{
+        const det=(payment.diurna_payment_details||[]).find(d=>d.employee_id===emp.id)
+        return sum+(det?det.amount:0)
+      },0)
+
+      // Rest buget disponibil pentru această tranșă
+      const restBuget=Math.max(0,bugetLunar-platitAnteriorSuma)
+
+      // Suma acestui export pentru angajat
+      const sumaAcestExport=diurnaReala*diurnaAmt
+
+      // Depășire = cât din această tranșă depășește bugetul rămas
+      const pesteBuget=Math.max(0,sumaAcestExport-restBuget)
+
+      // Flag: există depășire de buget în această tranșă
+      const depasesteLunar=pesteBuget>0
+
+      // Alias pentru compatibilitate cu tabelul nota
+      const pesteCumulat=pesteBuget
+      const restDePlata=pesteBuget  // e deja net, fără deduceri (bugetul e sursa de adevăr)
       // ─────────────────────────────────────────────────────────────────────
 
       // Group by site
@@ -900,7 +890,7 @@ function ReportsPage() {
       er.forEach(r=>{const s=r.sites?.name||'Nealocate'; siteMap[s]=(siteMap[s]||0)+1})
       const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
       const p=emp.name.split(' ')
-      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita,totalDiurneAnterioare,zileRamaseCumulat,pesteCumulat,depasesteLunar,surplusPlătitZile,surplusPlătitSuma,restDePlata}
+      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata}
     }).filter(Boolean).sort((a,b)=>(a.nume+a.prenume).localeCompare(b.nume+b.prenume))
 
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
@@ -1034,28 +1024,28 @@ function ReportsPage() {
       nr2++
 
       // Header
-      const nh=['Nr.','Prenume','Nume','Total diurne cumulate','Plafon lunar','Zile ramase','Zile PESTE LIMITA CUMULAT','Diurna/zi (RON)','SUMA DE ADAUGAT IN SALARIU','Rest de plata (dupa deducere transe anterioare)']
+      const nh=['Nr.','Prenume','Nume','Buget lunar (RON)','Platit anterior (RON)','Rest buget (RON)','Suma acest export (RON)','PESTE BUGET (RON)','→ DE ADAUGAT IN SALARIU (RON)']
       nh.forEach((h,c)=>{const a=XLSX.utils.encode_cell({r:nr2,c});ws[a]={v:h,t:'s'};ws[a].s={fill:{fgColor:{rgb:'843C0C'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center',wrapText:true}}})
       nr2++
 
       // Randuri angajati
       angajatiPeste.forEach((emp,i)=>{
-        const suma=emp.pesteCumulat*diurnaAmt
-        const row=[i+1,emp.prenume,emp.nume,emp.totalDiurneAnterioare+emp.totalZile,totalMonthWorkDays,emp.zileRamaseCumulat,emp.pesteCumulat,diurnaAmt,suma,emp.restDePlata]
+        const row=[i+1,emp.prenume,emp.nume,emp.bugetLunar,emp.platitAnteriorSuma,emp.restBuget,emp.sumaAcestExport,emp.pesteCumulat,emp.restDePlata]
         row.forEach((v,c)=>{
           const a=XLSX.utils.encode_cell({r:nr2,c})
           ws[a]={v,t:typeof v==='number'?'n':'s'}
-          const isKey=c===6||c===8||c===9
-          ws[a].s={fill:{fgColor:{rgb:c===9?'C6EFCE':i%2===0?'FCE4D6':'FFF2CC'}},font:{bold:isKey,sz:10,color:{rgb:c===9?'375623':isKey?'843C0C':'000000'}},border:bd,alignment:{horizontal:c===0||c>=3?'center':'left',vertical:'center'}}
+          const isKey=c===7||c===8
+          ws[a].s={fill:{fgColor:{rgb:c===8?'C6EFCE':c===7?'FCE4D6':i%2===0?'FFFFFF':'F5F5F5'}},font:{bold:isKey,sz:10,color:{rgb:c===8?'375623':c===7?'843C0C':'000000'}},border:bd,alignment:{horizontal:c===0||c>=3?'center':'left',vertical:'center'}}
         })
         nr2++
       })
 
       // Total
+      const totPlatitAnt=angajatiPeste.reduce((s,e)=>s+e.platitAnteriorSuma,0)
+      const totSumaExport=angajatiPeste.reduce((s,e)=>s+e.sumaAcestExport,0)
       const totPeste=angajatiPeste.reduce((s,e)=>s+e.pesteCumulat,0)
-      const totSuma=angajatiPeste.reduce((s,e)=>s+e.pesteCumulat*diurnaAmt,0)
-      const totRestDePlata=angajatiPeste.reduce((s,e)=>s+e.restDePlata,0)
-      const totRow=['','','TOTAL','','','',totPeste,diurnaAmt,totSuma,totRestDePlata]
+      const totRest=angajatiPeste.reduce((s,e)=>s+e.restDePlata,0)
+      const totRow=['','','TOTAL','-',totPlatitAnt,'-',totSumaExport,totPeste,totRest]
       totRow.forEach((v,c)=>{const a=XLSX.utils.encode_cell({r:nr2,c});ws[a]={v,t:typeof v==='number'?'n':'s'};ws[a].s={fill:{fgColor:{rgb:'C00000'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:c===0||c>=3?'center':'left',vertical:'center'}}})
       // Extinde !ref ca SheetJS sa includa randurile noi in export
       const rng=XLSX.utils.decode_range(ws['!ref']||'A1')
@@ -1069,6 +1059,76 @@ function ReportsPage() {
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
     showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`); setExpD(false)
+  }
+
+  const exportBancaDiurne=async()=>{
+    // Export BT format — DOAR suma confirmată de diurnă (în limita bugetului lunar)
+    // Surplusul care merge în salariu NU se include aici
+    if(!df||!dt){showToast('Selectează perioada pentru diurne','warn');return}
+    setExpBT(true)
+    try{
+      const d0=new Date(df); const monthStart=`${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}-01`
+      const d1=new Date(monthStart); d1.setMonth(d1.getMonth()+1); d1.setDate(0)
+      const monthEnd=d1.toISOString().split('T')[0]
+
+      let eq=supabase.from('employees').select('*').eq('active',true)
+      if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
+      const {data:emps}=await eq
+      const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+      const {data:legalDays}=await supabase.from('calendar_days').select('date').eq('is_working',false)
+      const legalSet=new Set((legalDays||[]).map(d=>d.date))
+      const {data:st}=await supabase.from('settings').select('*')
+      const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
+      const diurnaAmt=Number(getSetting('diurna_amount',50))
+      const ibanFirma=getSetting('iban_firma','RO25BTRLRONCRT0T18017E01')
+
+      // Zile lucratoare din luna (pentru buget)
+      const wdSet=new Set()
+      const wdC=new Date(monthStart),wdE=new Date(monthEnd)
+      while(wdC<=wdE){const s=wdC.toISOString().split('T')[0];if(wdC.getDay()!==0&&wdC.getDay()!==6&&!legalSet.has(s))wdSet.add(s);wdC.setDate(wdC.getDate()+1)}
+      const bugetLunar=wdSet.size*diurnaAmt
+
+      // Transe anterioare platite in aceeasi luna
+      const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+
+      // BIC lookup
+      const BIC_MAP={BTRL:'BTRLRO22XXX',INGB:'INGBROBUXX',RNCB:'RNCBROBUXX',BRDE:'BRDEROBUXX',BACX:'BACXROBUXX',RZBR:'RZBRROBUXX',CECE:'CECEROBUXX',BRMA:'BRMAROBUXX',UGBI:'UGBIROBUXX',OTPV:'OTPVROBUXX',TCCL:'TCCLGB3L'}
+      const getBIC=(iban)=>{if(!iban)return '';const code=(iban||'').replace(/\s/g,'').substring(4,8).toUpperCase();return BIC_MAP[code]||code+'ROBUXX'}
+      const today=new Date();today.setHours(0,0,0,0)
+      const excelDate=Math.floor((today-new Date('1899-12-30'))/(1000*60*60*24))
+
+      const HDR=['OrderNumber','SourceAccountNumber','TargetAccountNumber','BeneficiaryName','BeneficiaryBankBIC','BeneficiaryFiscalCode','Amount','PaymentRef1','PaymentRef2','ValueDate','Urgent']
+      const rows=[];let nr=1
+      const faraIBAN=[]
+
+      ;(emps||[]).forEach(emp=>{
+        const diurneReale=(recs||[]).filter(r=>r.employee_id===emp.id).length
+        if(!diurneReale) return
+        const sumaExport=diurneReale*diurnaAmt
+        // Suma platita anterior din aceeasi luna pentru acest angajat
+        const platitAnt=(prevPay||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?d.amount:0)},0)
+        const restBuget=Math.max(0,bugetLunar-platitAnt)
+        // Suma confirmata = doar ce incape in buget
+        const sumaConfirmata=Math.min(sumaExport,restBuget)
+        if(sumaConfirmata<=0) return  // tot surplusul — nu apare in BT diurne
+
+        if(!emp.iban) faraIBAN.push(emp.name)
+        rows.push([nr++,ibanFirma,emp.iban||'',emp.name,getBIC(emp.iban),'',sumaConfirmata,'diurna','diurna',excelDate,'F'])
+      })
+
+      if(!rows.length){showToast('Nu există diurne confirmate de plătit în această perioadă','warn');setExpBT(false);return}
+
+      const data=[HDR,...rows]
+      const ws=XLSX.utils.aoa_to_sheet(data)
+      ws['!cols']=[{wch:12},{wch:28},{wch:28},{wch:38},{wch:14},{wch:16},{wch:12},{wch:10},{wch:10},{wch:12},{wch:8}]
+      const wb=XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb,ws,'DIURNE')
+      XLSX.writeFile(wb,`BT_Diurne_${df}_${dt}.xlsx`)
+      const totalConfirmat=rows.reduce((s,r)=>s+r[6],0)
+      const msg=faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:' ✓'
+      showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
+    }catch(e){showToast('Eroare export BT','error')}
+    setExpBT(false)
   }
 
   const exportSupl=async()=>{
@@ -1226,6 +1286,7 @@ function ReportsPage() {
           <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
           <button onClick={exportDiurne} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
           <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
+          <button onClick={exportBancaDiurne} disabled={expBT} style={{...S.btnP,background:'#0A3A6A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expBT?<><div className="sp"/>...</>:'🏦 Export Bancă'}</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>
         </div>
         <div style={{...S.card,padding:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -2237,7 +2298,7 @@ function SalariiPage() {
           <select value={deptF} onChange={e=>setDeptF(e.target.value)}>
             <option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
           </select>
-          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',display:'flex',alignItems:'center',gap:6}}>🏦 Export Bancă</button>
+          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',display:'flex',alignItems:'center',gap:6}}>🏦 Export Bancă Salarii</button>
         </div>
       </div>
 
