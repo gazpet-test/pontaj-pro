@@ -902,12 +902,14 @@ function ReportsPage() {
       // Buget lunar = zile lucratoare din luna × diurna/zi (ex: 20 × 50 = 1000 RON)
       const bugetLunar=totalMonthWorkDays*diurnaAmt
 
-      // Suma deja platita pentru acest angajat in tranșele anterioare din aceeași lună
-      // Luam direct din diurna_payment_details (salvat la fiecare "Salvează Plată")
-      const platitAnteriorSuma=(prevPaymentsInMonth||[]).reduce((sum,payment)=>{
-        const det=(payment.diurna_payment_details||[]).find(d=>d.employee_id===emp.id)
-        return sum+(det?det.amount:0)
-      },0)
+      // Diurne bifate ÎNAINTE de această perioadă (din allRecs, indiferent dacă au fost salvate)
+      // Folosim allRecs, NU diurna_payments — astfel funcționează corect chiar dacă
+      // o perioadă anterioară nu a fost salvată (ex: export fără "Salvează Plată")
+      const totalDiurneBefore=(allRecs||[]).filter(r=>
+        r.employee_id===emp.id&&r.diurna===true&&r.date<df
+      ).length
+      // Plafonam la bugetLunar ca sa nu ajungem la rest negativ
+      const platitAnteriorSuma=Math.min(bugetLunar,totalDiurneBefore*diurnaAmt)
 
       // Rest buget disponibil pentru această tranșă
       const restBuget=Math.max(0,bugetLunar-platitAnteriorSuma)
@@ -923,7 +925,7 @@ function ReportsPage() {
 
       // Alias pentru compatibilitate cu tabelul nota
       const pesteCumulat=pesteBuget
-      const restDePlata=pesteBuget  // e deja net, fără deduceri (bugetul e sursa de adevăr)
+      const restDePlata=pesteBuget
       // ─────────────────────────────────────────────────────────────────────
 
       // Group by site
