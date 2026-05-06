@@ -305,6 +305,8 @@ function DashboardPage() {
   const [recent,setRecent]=useState([])
   const [unalloc,setUnalloc]=useState([])
   const [load,setLoad]=useState(true)
+  const [weekStats,setWeekStats]=useState(null)
+  const [monthStats,setMonthStats]=useState(null)
   const isAdmin=(['admin','superadmin'].includes(profile?.role))
   const [expiringContracts,setExpiringContracts]=useState([])
   useEffect(()=>{ if(profile!==null) loadData() },[profile])
@@ -332,6 +334,31 @@ function DashboardPage() {
     // All departments, even those with 0 present
     setDeptStats(DEPARTMENTS.map(dept=>({dept,total:emps.filter(e=>e.department===dept).length,present:(recs||[]).filter(r=>r.employees?.department===dept&&r.check_in&&!r.norma).length})))
     setLoad(false)
+
+    // Raport saptamanal si lunar
+    const now = new Date()
+    // Saptamana curenta: luni -> azi
+    const dayOfWeek = now.getDay()===0 ? 6 : now.getDay()-1
+    const weekStart = new Date(now); weekStart.setDate(now.getDate()-dayOfWeek); weekStart.setHours(0,0,0,0)
+    const weekStartStr = weekStart.toISOString().split('T')[0]
+    // Luna curenta: 1 -> azi
+    const monthStartStr = now.toISOString().split('T')[0].slice(0,7)+'-01'
+    const empIds = emps.map(e=>e.id)
+    const [{data:weekRecs},{data:monthRecs}] = await Promise.all([
+      supabase.from('pontaj_records').select('*').gte('date',weekStartStr).lte('date',todayStr()).in('employee_id',empIds),
+      supabase.from('pontaj_records').select('*').gte('date',monthStartStr).lte('date',todayStr()).in('employee_id',empIds)
+    ])
+    const calcStats = (r) => {
+      const present=(r||[]).filter(x=>x.check_in&&!x.norma).length
+      const diurnaC=(r||[]).filter(x=>x.diurna).length
+      const normeC={}
+      NORME.forEach(n=>{ const c=(r||[]).filter(x=>x.norma===n).length; if(c>0) normeC[n]=c })
+      const totalDays=[...new Set((r||[]).map(x=>x.date))].length
+      return {present,diurna:diurnaC,norme:normeC,totalDays}
+    }
+    setWeekStats(calcStats(weekRecs))
+    setMonthStats(calcStats(monthRecs))
+
     // Check expiring contracts (next 30 days) - only for admin/superadmin
     if(['admin','superadmin'].includes(profile?.role)){
       const in30=new Date(); in30.setDate(in30.getDate()+30)
@@ -420,6 +447,56 @@ function DashboardPage() {
             </div>
           </div>
         </div>
+
+        {/* Raport Saptamanal */}
+        {weekStats&&<div style={{...S.card,padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:16}}>📅 Raport Săptămânal — <span style={{color:G.blue,fontWeight:500}}>săpt. curentă</span></div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:G.greenDim,borderRadius:8,border:`1px solid ${G.green}22`}}>
+              <span style={{fontSize:12,fontWeight:600,color:G.green}}>✅ Prezențe totale</span>
+              <span style={{fontSize:14,fontWeight:800,color:G.green}}>{weekStats.present}</span>
+            </div>
+            {Object.entries(weekStats.norme||{}).map(([norma,cnt])=>(
+              <div key={norma} style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:G.yellowDim,borderRadius:8,border:`1px solid ${G.yellow}22`}}>
+                <span style={{fontSize:12,color:G.yellow}}><strong>{norma}</strong> — {NORME_LABELS[norma]}</span>
+                <span style={{fontSize:13,fontWeight:800,color:G.yellow}}>{cnt}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:'#1A1A2A',borderRadius:8}}>
+              <span style={{fontSize:12,color:G.muted}}>💰 Diurne acordate</span>
+              <span style={{fontSize:13,fontWeight:800,color:G.orange}}>{weekStats.diurna}</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:'#1A1A2A',borderRadius:8}}>
+              <span style={{fontSize:12,color:G.muted}}>📆 Zile lucrate (cu prezențe)</span>
+              <span style={{fontSize:13,fontWeight:800,color:G.blue}}>{weekStats.totalDays}</span>
+            </div>
+          </div>
+        </div>}
+
+        {/* Raport Lunar */}
+        {monthStats&&<div style={{...S.card,padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:16}}>🗓️ Raport Lunar — <span style={{color:G.purple,fontWeight:500}}>{new Date().toLocaleDateString('ro-RO',{month:'long',year:'numeric'})}</span></div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:G.greenDim,borderRadius:8,border:`1px solid ${G.green}22`}}>
+              <span style={{fontSize:12,fontWeight:600,color:G.green}}>✅ Prezențe totale</span>
+              <span style={{fontSize:14,fontWeight:800,color:G.green}}>{monthStats.present}</span>
+            </div>
+            {Object.entries(monthStats.norme||{}).map(([norma,cnt])=>(
+              <div key={norma} style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:G.yellowDim,borderRadius:8,border:`1px solid ${G.yellow}22`}}>
+                <span style={{fontSize:12,color:G.yellow}}><strong>{norma}</strong> — {NORME_LABELS[norma]}</span>
+                <span style={{fontSize:13,fontWeight:800,color:G.yellow}}>{cnt}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:'#1A1A2A',borderRadius:8}}>
+              <span style={{fontSize:12,color:G.muted}}>💰 Diurne acordate</span>
+              <span style={{fontSize:13,fontWeight:800,color:G.orange}}>{monthStats.diurna}</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:'#1A1A2A',borderRadius:8}}>
+              <span style={{fontSize:12,color:G.muted}}>📆 Zile cu activitate</span>
+              <span style={{fontSize:13,fontWeight:800,color:G.purple}}>{monthStats.totalDays}</span>
+            </div>
+          </div>
+        </div>}
 
         {/* Activitate recenta */}
         <div style={{...S.card,padding:20}}>
@@ -1525,6 +1602,9 @@ function AdminPage() {
   const [editMgr,setEditMgr]=useState(null) // manager being edited
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [addingE,setAddingE]=useState(false)
   const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
+  const [empSearch,setEmpSearch]=useState('')
+  const [empDeptFilter,setEmpDeptFilter]=useState('all')
+  const [empPosFilter,setEmpPosFilter]=useState('all')
   const [editEmp,setEditEmp]=useState(null)
   const [deleteEmpItem,setDeleteEmpItem]=useState(null)
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
@@ -1877,21 +1957,47 @@ function AdminPage() {
       {tab==='employees'&&(
         <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
           <div>
-            {/* Status filter */}
-            <div style={{display:'flex',gap:7,marginBottom:12,alignItems:'center'}}>
+            {/* Filters row */}
+            <div style={{display:'flex',gap:7,marginBottom:10,alignItems:'center',flexWrap:'wrap'}}>
               {[['active','● Activi'],['inactive','○ Inactivi'],['all','Toți']].map(([v,l])=>(
                 <button key={v} onClick={()=>setEmpStatusFilter(v)} style={{...S.btnS,fontSize:11,background:empStatusFilter===v?'#21262D':G.bg,color:empStatusFilter===v?G.text:G.muted,borderColor:empStatusFilter===v?G.border2:G.border}}>
                   {l}
                 </button>
               ))}
-              <span style={{fontSize:11,color:G.muted,marginLeft:'auto'}}>
-                {employees.filter(e=>empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active).length} angajați
+              <div style={{position:'relative',flex:'1',minWidth:160,maxWidth:260}}>
+                <span style={{position:'absolute',left:9,top:'50%',transform:'translateY(-50%)',fontSize:13,pointerEvents:'none'}}>🔍</span>
+                <input value={empSearch} onChange={e=>setEmpSearch(e.target.value)} placeholder="Caută după nume..." style={{...S.input,paddingLeft:30,margin:0,fontSize:11,height:30}}/>
+              </div>
+              <select value={empDeptFilter} onChange={e=>setEmpDeptFilter(e.target.value)} style={{...S.input,margin:0,fontSize:11,height:30,minWidth:130,maxWidth:170}}>
+                <option value="all">Toate dept.</option>
+                {DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}
+              </select>
+              <select value={empPosFilter} onChange={e=>setEmpPosFilter(e.target.value)} style={{...S.input,margin:0,fontSize:11,height:30,minWidth:130,maxWidth:170}}>
+                <option value="all">Toate funcțiile</option>
+                {[...new Set(employees.map(e=>e.position).filter(Boolean))].sort().map(p=><option key={p} value={p}>{p}</option>)}
+              </select>
+              <span style={{fontSize:11,color:G.muted,marginLeft:'auto',whiteSpace:'nowrap'}}>
+                {employees.filter(e=>{
+                  const s=empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active
+                  const q=empSearch.trim().toLowerCase()
+                  const n=!q||e.name?.toLowerCase().includes(q)
+                  const d=empDeptFilter==='all'||e.department===empDeptFilter
+                  const p=empPosFilter==='all'||e.position===empPosFilter
+                  return s&&n&&d&&p
+                }).length} angajați
               </span>
             </div>
             <div style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
               {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
                 <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Status</th><th>Acțiuni</th></tr></thead>
-                <tbody>{employees.filter(e=>empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active).map(emp=>(
+                <tbody>{employees.filter(e=>{
+                  const s=empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active
+                  const q=empSearch.trim().toLowerCase()
+                  const n=!q||e.name?.toLowerCase().includes(q)
+                  const d=empDeptFilter==='all'||e.department===empDeptFilter
+                  const p=empPosFilter==='all'||e.position===empPosFilter
+                  return s&&n&&d&&p
+                }).map(emp=>(
                   <tr key={emp.id}>
                     <td><div style={{display:'flex',alignItems:'center',gap:7}}><Avatar name={emp.name} id={emp.id} size={24}/><span style={{fontWeight:600,fontSize:12}}>{emp.name}</span></div></td>
                     <td><span className="badge bd">{emp.department}</span></td>
