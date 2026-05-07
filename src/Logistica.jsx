@@ -155,6 +155,8 @@ function FieldTextarea({ label, value, onChange, rows=2, readonly, mono }) {
 function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
   const [form, setForm] = useState({
     data_revizie: new Date().toISOString().split('T')[0],
+    data_expirare: '',
+    numar_document: '',
     ore_la_revizie: plan?.urmatoarea_ore || '',
     km_la_revizie: plan?.urmatoarea_km || '',
     tip_revizie: 'revizie',
@@ -165,8 +167,47 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
   const [saving, setSaving] = useState(false)
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
   
+  // Tip e DOCUMENT (ITP/RCA/CASCO) sau MECANIC (revizie/reparatie)
+  const isDocument = ['ITP', 'RCA', 'CASCO'].includes(form.tip_revizie)
+  const isMecanic = ['revizie', 'reparatie'].includes(form.tip_revizie)
+  
+  // Calculez auto data expirare default pentru documente
+  useEffect(() => {
+    if (isDocument && form.data_revizie && !form.data_expirare) {
+      // ITP = 1 an pentru auto noi/2 ani vechi, RCA/CASCO = 1 an default
+      const luniValabilitate = form.tip_revizie === 'ITP' ? 12 : 12
+      const d = new Date(form.data_revizie)
+      d.setMonth(d.getMonth() + luniValabilitate)
+      setField('data_expirare', d.toISOString().split('T')[0])
+    }
+  }, [form.tip_revizie, form.data_revizie])
+  
+  // Reset câmpuri irelevante la schimbarea tipului
+  useEffect(() => {
+    if (isDocument) {
+      setField('ore_la_revizie', '')
+      setField('km_la_revizie', '')
+    }
+    if (isMecanic) {
+      setField('data_expirare', '')
+      setField('numar_document', '')
+    }
+  }, [form.tip_revizie])
+  
+  // Label-uri dinamice
+  const labels = {
+    revizie:    { titlu: '✅ Revizie efectuată',         data: 'Data efectuării',  service: 'Service / Furnizor',   placeholder: 'ex: Service Auto Ploiești' },
+    reparatie:  { titlu: '🔧 Reparație efectuată',       data: 'Data efectuării',  service: 'Service / Furnizor',   placeholder: 'ex: Service Auto Ploiești' },
+    ITP:        { titlu: '📋 ITP înregistrat',           data: 'Data emiterii',    service: 'Stație ITP',           placeholder: 'ex: ITP Ploiești - Pop Auto' },
+    RCA:        { titlu: '🛡️ Asigurare RCA',             data: 'Data emiterii',    service: 'Asigurător',           placeholder: 'ex: Allianz Țiriac, Groupama, Omniasig' },
+    CASCO:      { titlu: '🛡️ Asigurare CASCO',           data: 'Data emiterii',    service: 'Asigurător',           placeholder: 'ex: Allianz Țiriac, Groupama, Omniasig' },
+    altele:     { titlu: '📝 Înregistrare',              data: 'Data',             service: 'Furnizor / Prestator', placeholder: '' },
+  }
+  const L = labels[form.tip_revizie] || labels.altele
+  
   const handleSave = async () => {
     if (!form.data_revizie) { showToast('Selectează data', 'error'); return }
+    if (isDocument && !form.data_expirare) { showToast('Pentru documente trebuie data expirării', 'error'); return }
     
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -175,6 +216,8 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
     const istoricPayload = {
       active_id: activ.id,
       data_revizie: form.data_revizie,
+      data_expirare: form.data_expirare || null,
+      numar_document: form.numar_document.trim() || null,
       ore_la_revizie: form.ore_la_revizie ? Number(form.ore_la_revizie) : null,
       km_la_revizie: form.km_la_revizie ? Number(form.km_la_revizie) : null,
       tip_revizie: form.tip_revizie,
@@ -194,62 +237,63 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
       return
     }
     
-    // 2. UPDATE plan (calculez urmatoarea automat)
-    const updateFields = {
-      ultima_revizie_data: form.data_revizie,
-      ultima_revizie_ore: form.ore_la_revizie ? Number(form.ore_la_revizie) : null,
-      ultima_revizie_km: form.km_la_revizie ? Number(form.km_la_revizie) : null,
-      updated_by: user?.id,
-    }
-    
-    // Calculez următoarea
-    const intervalOre = plan?.interval_ore || null
-    const intervalKm = plan?.interval_km || null
-    
-    if (intervalOre && form.ore_la_revizie) {
-      updateFields.urmatoarea_ore = Number(form.ore_la_revizie) + intervalOre
-    }
-    if (intervalKm && form.km_la_revizie) {
-      updateFields.urmatoarea_km = Number(form.km_la_revizie) + intervalKm
-    }
-    
-    // Data următoare: default + 365 zile (sau folosește interval_ore proporțional dacă e disponibil)
-    const newDate = new Date(form.data_revizie)
-    if (intervalOre && form.ore_la_revizie) {
-      // Estimare: 8h/zi de utilizare → days = interval_ore / 8
-      const daysEstimate = Math.round(intervalOre / 8)
-      newDate.setDate(newDate.getDate() + Math.min(daysEstimate, 365))
-    } else {
-      newDate.setDate(newDate.getDate() + 365)  // default 1 an
-    }
-    updateFields.urmatoarea_data = newDate.toISOString().split('T')[0]
-    
-    let upErr
-    if (plan?.id) {
-      const r = await supabase.from('logistica_mentenanta_plan').update(updateFields).eq('id', plan.id)
-      upErr = r.error
-    } else {
-      const r = await supabase.from('logistica_mentenanta_plan').insert({ active_id: activ.id, ...updateFields })
-      upErr = r.error
+    // 2. UPDATE plan DOAR pentru revizie/reparație (nu pentru documente)
+    if (isMecanic) {
+      const updateFields = {
+        ultima_revizie_data: form.data_revizie,
+        ultima_revizie_ore: form.ore_la_revizie ? Number(form.ore_la_revizie) : null,
+        ultima_revizie_km: form.km_la_revizie ? Number(form.km_la_revizie) : null,
+        updated_by: user?.id,
+      }
+      const intervalOre = plan?.interval_ore || null
+      const intervalKm = plan?.interval_km || null
+      if (intervalOre && form.ore_la_revizie) {
+        updateFields.urmatoarea_ore = Number(form.ore_la_revizie) + intervalOre
+      }
+      if (intervalKm && form.km_la_revizie) {
+        updateFields.urmatoarea_km = Number(form.km_la_revizie) + intervalKm
+      }
+      const newDate = new Date(form.data_revizie)
+      if (intervalOre && form.ore_la_revizie) {
+        const daysEstimate = Math.round(intervalOre / 8)
+        newDate.setDate(newDate.getDate() + Math.min(daysEstimate, 365))
+      } else {
+        newDate.setDate(newDate.getDate() + 365)
+      }
+      updateFields.urmatoarea_data = newDate.toISOString().split('T')[0]
+      
+      let upErr
+      if (plan?.id) {
+        const r = await supabase.from('logistica_mentenanta_plan').update(updateFields).eq('id', plan.id)
+        upErr = r.error
+      } else {
+        const r = await supabase.from('logistica_mentenanta_plan').insert({ active_id: activ.id, ...updateFields })
+        upErr = r.error
+      }
+      if (upErr) {
+        setSaving(false)
+        showToast(`Înregistrat, dar eroare la actualizare plan: ${upErr.message}`, 'warn')
+        onSaved()
+        return
+      }
     }
     
     setSaving(false)
-    if (upErr) {
-      showToast(`Mentenanță înregistrată, dar eroare la actualizare plan: ${upErr.message}`, 'warn')
-    } else {
-      showToast('✓ Mentenanță înregistrată cu succes!', 'success')
-    }
+    const successMsg = isDocument 
+      ? `✓ ${form.tip_revizie} înregistrat (valabil până la ${new Date(form.data_expirare).toLocaleDateString('ro-RO')})`
+      : '✓ Mentenanță înregistrată cu succes!'
+    showToast(successMsg, 'success')
     onSaved()
   }
   
   return (
     <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto'}}>
-      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 600, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.green}`}} className="fi">
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 600, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${isDocument ? G.blue : G.green}`}} className="fi">
         
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${G.border}`}}>
           <div>
             <div style={{fontSize: 18, fontWeight: 800, color: G.text, marginBottom: 4}}>
-              ✅ Mentenanță efectuată
+              {L.titlu}
             </div>
             <div style={{fontSize: 12, color: G.muted}}>
               {activ.marca} {activ.model} {activ.cod_intern && `· ${activ.cod_intern}`}
@@ -258,21 +302,53 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
           <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
         </div>
         
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 14}}>
-          <FieldText label="Data efectuării" value={form.data_revizie} onChange={v => setField('data_revizie', v)} type="date" required />
+        {/* Tip — întotdeauna primul */}
+        <div style={{marginBottom: 12}}>
           <FieldSelect label="Tip" value={form.tip_revizie} onChange={v => setField('tip_revizie', v)} options={['revizie', 'reparatie', 'ITP', 'RCA', 'CASCO', 'altele']} required />
-          <FieldText label="Ore funcționare la revizie" value={form.ore_la_revizie} onChange={v => setField('ore_la_revizie', v)} type="number" placeholder="ex: 1250" />
-          <FieldText label="Kilometri la revizie" value={form.km_la_revizie} onChange={v => setField('km_la_revizie', v)} type="number" placeholder="ex: 145000" />
-          <FieldText label="Cost (RON)" value={form.cost} onChange={v => setField('cost', v)} type="number" placeholder="ex: 1250.50" />
-          <FieldText label="Service / Furnizor" value={form.service_furnizor} onChange={v => setField('service_furnizor', v)} placeholder="ex: Service Auto Ploiești" />
         </div>
+        
+        {/* Câmpuri DINAMICE pe baza tipului */}
+        {isMecanic && (
+          <>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+              <FieldText label={L.data} value={form.data_revizie} onChange={v => setField('data_revizie', v)} type="date" required />
+              <FieldText label={L.service} value={form.service_furnizor} onChange={v => setField('service_furnizor', v)} placeholder={L.placeholder} />
+              <FieldText label="Ore funcționare la revizie" value={form.ore_la_revizie} onChange={v => setField('ore_la_revizie', v)} type="number" placeholder="ex: 1250" />
+              <FieldText label="Kilometri la revizie" value={form.km_la_revizie} onChange={v => setField('km_la_revizie', v)} type="number" placeholder="ex: 145000" />
+              <FieldText label="Cost (RON)" value={form.cost} onChange={v => setField('cost', v)} type="number" placeholder="ex: 1250.50" />
+              <div></div>
+            </div>
+          </>
+        )}
+        
+        {isDocument && (
+          <>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+              <FieldText label={L.data} value={form.data_revizie} onChange={v => setField('data_revizie', v)} type="date" required />
+              <FieldText label={`📅 Data expirării ${form.tip_revizie}`} value={form.data_expirare} onChange={v => setField('data_expirare', v)} type="date" required />
+              <FieldText label={L.service} value={form.service_furnizor} onChange={v => setField('service_furnizor', v)} placeholder={L.placeholder} />
+              <FieldText label={`Număr ${form.tip_revizie === 'ITP' ? 'proces verbal' : 'poliță'}`} value={form.numar_document} onChange={v => setField('numar_document', v)} placeholder={form.tip_revizie === 'ITP' ? 'ex: PV-2026-1234' : 'ex: AGG-12345678'} />
+              <FieldText label="Cost (RON)" value={form.cost} onChange={v => setField('cost', v)} type="number" placeholder="ex: 850" />
+              <div></div>
+            </div>
+          </>
+        )}
+        
+        {form.tip_revizie === 'altele' && (
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+            <FieldText label={L.data} value={form.data_revizie} onChange={v => setField('data_revizie', v)} type="date" required />
+            <FieldText label="Data expirare (opțional)" value={form.data_expirare} onChange={v => setField('data_expirare', v)} type="date" />
+            <FieldText label={L.service} value={form.service_furnizor} onChange={v => setField('service_furnizor', v)} placeholder={L.placeholder} />
+            <FieldText label="Cost (RON)" value={form.cost} onChange={v => setField('cost', v)} type="number" placeholder="ex: 250" />
+          </div>
+        )}
         
         <div style={{marginBottom: 14}}>
           <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} />
         </div>
         
-        {/* Preview urmatoarea revizie */}
-        {(plan?.interval_ore || plan?.interval_km) && (form.ore_la_revizie || form.km_la_revizie) && (
+        {/* Preview pentru REVIZIE: următoarea calculată */}
+        {isMecanic && (plan?.interval_ore || plan?.interval_km) && (form.ore_la_revizie || form.km_la_revizie) && (
           <div style={{padding: 10, background: G.greenDim, border: `1px solid ${G.green}33`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
             <strong style={{color: G.green}}>📅 Următoarea revizie va fi calculată:</strong>
             <div style={{marginTop: 4, color: G.muted}}>
@@ -283,10 +359,25 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
           </div>
         )}
         
+        {/* Preview pentru DOCUMENTE: avertizare scadență */}
+        {isDocument && form.data_expirare && (() => {
+          const days = daysUntil(form.data_expirare)
+          const color = days < 30 ? G.red : days < 90 ? G.orange : G.green
+          const bg = days < 30 ? G.redDim : days < 90 ? G.yellowDim : G.greenDim
+          return (
+            <div style={{padding: 10, background: bg, border: `1px solid ${color}33`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
+              <strong style={{color}}>📅 Documentul va fi valabil până pe {new Date(form.data_expirare).toLocaleDateString('ro-RO')}</strong>
+              <div style={{marginTop: 4, color: G.muted}}>
+                {days > 0 ? `· ${days} zile de la data introdusă` : `· EXPIRAT! cu ${Math.abs(days)} zile`}
+              </div>
+            </div>
+          )
+        })()}
+        
         <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
           <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
-          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: G.green, opacity: saving ? .6 : 1, cursor: saving ? 'wait' : 'pointer'}}>
-            {saving ? '⏳ Se salvează...' : '✓ Înregistrează mentenanța'}
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: isDocument ? G.blue : G.green, opacity: saving ? .6 : 1, cursor: saving ? 'wait' : 'pointer'}}>
+            {saving ? '⏳ Se salvează...' : (isDocument ? `✓ Înregistrează ${form.tip_revizie}` : '✓ Înregistrează mentenanța')}
           </button>
         </div>
       </div>
@@ -561,6 +652,9 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                   'RCA': G.purple, 'CASCO': G.purple, 'altele': G.muted
                 }
                 const tipColor = tipColors[i.tip_revizie] || G.muted
+                const isDoc = ['ITP', 'RCA', 'CASCO'].includes(i.tip_revizie)
+                const expDays = i.data_expirare ? daysUntil(i.data_expirare) : null
+                const expColor = expDays !== null ? (expDays < 0 ? G.red : expDays < 30 ? G.orange : expDays < 90 ? G.yellow : G.green) : G.muted
                 return (
                   <div key={i.id} style={{
                     padding: '10px 14px',
@@ -581,8 +675,16 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                     }}>{i.tip_revizie}</span>
                     <div style={{color: G.muted, fontSize: 11}}>
                       {i.service_furnizor && <span style={{color: G.text}}>{i.service_furnizor}</span>}
-                      {i.ore_la_revizie && <> · {i.ore_la_revizie.toLocaleString('ro-RO')} ore</>}
-                      {i.km_la_revizie && <> · {i.km_la_revizie.toLocaleString('ro-RO')} km</>}
+                      {i.numar_document && <span style={{color: G.muted, fontFamily: 'monospace'}}> · {i.numar_document}</span>}
+                      {!isDoc && i.ore_la_revizie && <> · {i.ore_la_revizie.toLocaleString('ro-RO')} ore</>}
+                      {!isDoc && i.km_la_revizie && <> · {i.km_la_revizie.toLocaleString('ro-RO')} km</>}
+                      {isDoc && i.data_expirare && (
+                        <span style={{color: expColor, fontWeight: 700, marginLeft: 4}}>
+                          {' · '}valabil până {fmtDate(i.data_expirare)}
+                          {expDays !== null && expDays >= 0 && expDays <= 90 && ` (${expDays}z)`}
+                          {expDays !== null && expDays < 0 && ` ⚠️ EXPIRAT`}
+                        </span>
+                      )}
                       {i.observatii && <div style={{marginTop: 2, fontStyle: 'italic'}}>{i.observatii}</div>}
                     </div>
                     <div style={{color: G.green, fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontSize: 13}}>
