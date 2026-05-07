@@ -132,6 +132,114 @@ function LoadingScreen() {
 function Lbl({children}) { return <label style={{fontSize:13,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',display:'block',marginBottom:5}}>{children}</label> }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
+// ─── Change Password Modal ───────────────────────────────────────────────────
+function ChangePasswordModal({ onClose }) {
+  const [oldPwd, setOldPwd] = useState('')
+  const [newPwd, setNewPwd] = useState('')
+  const [confirmPwd, setConfirmPwd] = useState('')
+  const [show1, setShow1] = useState(false)
+  const [show2, setShow2] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+  const [success, setSuccess] = useState(false)
+  
+  const handleSubmit = async (e) => {
+    e?.preventDefault()
+    setErr('')
+    if (!oldPwd) { setErr('Completează parola veche'); return }
+    if (newPwd.length < 8) { setErr('Parola nouă trebuie minim 8 caractere'); return }
+    if (newPwd !== confirmPwd) { setErr('Parolele nu se potrivesc'); return }
+    if (newPwd === oldPwd) { setErr('Parola nouă trebuie să fie diferită de cea veche'); return }
+    
+    setSaving(true)
+    
+    // Verific parola veche prin re-auth
+    const { data: userData } = await supabase.auth.getUser()
+    const userEmail = userData?.user?.email
+    if (!userEmail) {
+      setErr('Sesiune invalidă, deconectează-te și reintră')
+      setSaving(false); return
+    }
+    const { error: signInErr } = await supabase.auth.signInWithPassword({ email: userEmail, password: oldPwd })
+    if (signInErr) {
+      setErr('Parola veche este incorectă')
+      setSaving(false); return
+    }
+    
+    // Update parola
+    const { error } = await supabase.auth.updateUser({ password: newPwd })
+    setSaving(false)
+    if (error) { setErr(`Eroare: ${error.message}`); return }
+    
+    setSuccess(true)
+    setOldPwd(''); setNewPwd(''); setConfirmPwd('')
+    setTimeout(onClose, 2500)
+  }
+  
+  if (success) {
+    return (
+      <div style={{position:'fixed',inset:0,background:'#000000aa',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div style={{...S.card,padding:36,maxWidth:420,textAlign:'center'}} className="fi">
+          <div style={{fontSize:64,marginBottom:14}}>✅</div>
+          <div style={{fontSize:18,fontWeight:800,color:G.green,marginBottom:6}}>Parola schimbată cu succes!</div>
+          <div style={{fontSize:13,color:G.muted}}>Folosește-o data viitoare când te conectezi.</div>
+        </div>
+      </div>
+    )
+  }
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'#000000aa',zIndex:300,display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'60px 16px'}}>
+      <div onClick={e=>e.stopPropagation()} style={{...S.card,padding:24,width:'100%',maxWidth:440,boxShadow:'0 20px 80px rgba(0,0,0,.6)'}} className="fi">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:18}}>
+          <div>
+            <div style={{fontSize:18,fontWeight:800,color:G.text,marginBottom:4}}>🔑 Schimbă parola</div>
+            <div style={{fontSize:12,color:G.muted}}>Minim 8 caractere</div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer',padding:4}}>×</button>
+        </div>
+        
+        <form onSubmit={handleSubmit}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div>
+              <div style={{fontSize:11,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',marginBottom:5}}>Parola veche</div>
+              <input type="password" value={oldPwd} onChange={e=>setOldPwd(e.target.value)} autoFocus style={S.input} placeholder="••••••••"/>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',marginBottom:5}}>Parola nouă</div>
+              <div style={{position:'relative'}}>
+                <input type={show1?'text':'password'} value={newPwd} onChange={e=>setNewPwd(e.target.value)} style={{...S.input,paddingRight:38}} placeholder="minim 8 caractere"/>
+                <button type="button" onClick={()=>setShow1(!show1)} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',color:G.muted,fontSize:14}}>{show1?'🙈':'👁️'}</button>
+              </div>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',marginBottom:5}}>Confirmă parola nouă</div>
+              <div style={{position:'relative'}}>
+                <input type={show2?'text':'password'} value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} style={{...S.input,paddingRight:38}} placeholder="repetă noua parolă"/>
+                <button type="button" onClick={()=>setShow2(!show2)} style={{position:'absolute',right:8,top:'50%',transform:'translateY(-50%)',background:'transparent',border:'none',cursor:'pointer',color:G.muted,fontSize:14}}>{show2?'🙈':'👁️'}</button>
+              </div>
+              {confirmPwd && newPwd && (
+                <div style={{fontSize:11,marginTop:4,color:newPwd===confirmPwd?G.green:G.red}}>
+                  {newPwd===confirmPwd?'✓ se potrivesc':'✗ nu se potrivesc'}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {err && <div style={{marginTop:14,padding:10,background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:8,fontSize:12,color:G.red,fontWeight:600}}>⚠️ {err}</div>}
+          
+          <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:18,paddingTop:14,borderTop:`1px solid ${G.border}`}}>
+            <button type="button" onClick={onClose} style={{...S.btnS,fontSize:13,color:G.muted}} disabled={saving}>Anulează</button>
+            <button type="submit" disabled={saving||!oldPwd||!newPwd||!confirmPwd} style={{...S.btnP,opacity:(saving||!oldPwd||!newPwd||!confirmPwd)?.5:1}}>
+              {saving?'⏳ Se salvează...':'✓ Schimbă parola'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function Layout({ children }) {
   const { profile, signOut } = useAuth()
   const nav = useNavigate(); const loc = useLocation()
@@ -141,6 +249,7 @@ function Layout({ children }) {
   const isSuperAdmin = profile?.role==='superadmin'
   const isContabil = profile?.role==='contabil'
   const hasSalaryAccess = isSuperAdmin || isContabil
+  const [showPwd, setShowPwd] = useState(false)
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
     ...(hasModuleAccess(profile, 'Pontaj') ? [
@@ -169,15 +278,17 @@ function Layout({ children }) {
           <Avatar name={profile?.name} id={1} size={28}/>
           <div>
             <div style={{fontSize:12,fontWeight:600,lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
-            <span className={`badge ${isAdmin?'ba':profile?.role==='contabil'?'bs':'bm'}`}>{profile?.role==='superadmin'?'⭐ Super Admin':isAdmin?'⚙ Admin':profile?.role==='contabil'?'💵 Contabil':'👤 Manager'}</span>
+            <span className={`badge ${isAdmin?'ba':profile?.role==='contabil'?'bs':profile?.role==='sef_santier'?'bd':'bm'}`}>{profile?.role==='superadmin'?'⭐ Super Admin':isAdmin?'⚙ Admin':profile?.role==='contabil'?'💵 Contabil':profile?.role==='sef_santier'?'🏗️ Șef Șantier':'👤 Manager'}</span>
           </div>
-          <button className="nl" onClick={signOut} style={{color:G.red,padding:'5px 8px'}}>⎋</button>
+          <button className="nl" onClick={()=>setShowPwd(true)} title="Schimbă parola" style={{padding:'5px 8px',color:G.muted}}>🔑</button>
+          <button className="nl" onClick={signOut} title="Ieșire" style={{color:G.red,padding:'5px 8px'}}>⎋</button>
         </div>
       </div>
       <div style={{padding:'22px 26px',maxWidth:1500,margin:'0 auto'}} className="fi">{children}</div>
       <div style={{textAlign:'center',padding:'12px',fontSize:12,color:'#E53935',fontWeight:700,borderTop:`1px solid ${G.border}`,marginTop:20,letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
       </div>
+      {showPwd && <ChangePasswordModal onClose={()=>setShowPwd(false)} />}
     </div>
   )
 }
