@@ -135,7 +135,11 @@ function FieldSelect({ label, value, onChange, options, required, readonly, plac
       <select value={value || ''} onChange={e => onChange(e.target.value)} disabled={readonly}
         style={{...S.input, padding: '7px 11px', fontSize: 13, background: readonly ? G.surface : G.bg, color: readonly ? G.muted : G.text, cursor: readonly ? 'default' : 'pointer'}}>
         {placeholder && <option value="">{placeholder}</option>}
-        {options.map(o => <option key={o} value={o}>{o || '— niciuna —'}</option>)}
+        {options.map((o, i) => (
+          typeof o === 'object' && o !== null
+            ? <option key={`${o.value}-${i}`} value={o.value}>{o.label}</option>
+            : <option key={`${o}-${i}`} value={o}>{o || '— niciuna —'}</option>
+        ))}
       </select>
     </div>
   )
