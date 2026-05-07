@@ -307,6 +307,7 @@ function DashboardPage() {
   const [load,setLoad]=useState(true)
   const [weekStats,setWeekStats]=useState(null)
   const [monthStats,setMonthStats]=useState(null)
+  const [absent3,setAbsent3]=useState([])
   const isAdmin=(['admin','superadmin'].includes(profile?.role))
   const [expiringContracts,setExpiringContracts]=useState([])
   useEffect(()=>{ if(profile!==null) loadData() },[profile])
@@ -359,6 +360,20 @@ function DashboardPage() {
     setWeekStats(calcStats(weekRecs))
     setMonthStats(calcStats(monthRecs))
 
+    // Angajati fara pontaj 3 zile consecutive
+    const last3 = []
+    for(let i=1;i<=3;i++){const d=new Date(now);d.setDate(d.getDate()-i);const ds=d.toISOString().split('T')[0];const dow=d.getDay();if(dow!==0&&dow!==6)last3.push(ds)}
+    if(last3.length>=3){
+      const {data:last3Recs}=await supabase.from('pontaj_records').select('employee_id,date,check_in,norma').in('date',last3).in('employee_id',empIds)
+      const absentEmps=emps.filter(e=>{
+        return last3.every(day=>{
+          const r=(last3Recs||[]).find(x=>x.employee_id===e.id&&x.date===day)
+          return !r||(r.norma===null&&r.check_in===null)
+        })
+      })
+      setAbsent3(absentEmps)
+    }
+
     // Check expiring contracts (next 30 days) - only for admin/superadmin
     if(['admin','superadmin'].includes(profile?.role)){
       const in30=new Date(); in30.setDate(in30.getDate()+30)
@@ -384,6 +399,14 @@ function DashboardPage() {
           <div style={{fontSize:14,fontWeight:700,color:G.red,whiteSpace:'nowrap',animation:'marquee 18s linear infinite'}}>
             {unalloc.length} angajați nealocați pe niciun șantier! &nbsp;&nbsp;&nbsp;—&nbsp;&nbsp;&nbsp; {unalloc.map(e=>e.name).join(' • ')}
           </div>
+        </div>
+      </div>}
+
+      {/* Alerta 3 zile fara pontaj */}
+      {absent3.length>0&&<div style={{background:'#2A1A2A',border:`1px solid ${G.purple}55`,borderRadius:10,padding:'10px 14px',marginBottom:12}}>
+        <div style={{fontSize:12,fontWeight:700,color:G.purple,marginBottom:5}}>🚨 {absent3.length} angajați fără pontaj 3 zile consecutive!</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:'3px 10px'}}>
+          {absent3.map(e=><span key={e.id} style={{fontSize:11,color:G.purple+'CC',whiteSpace:'nowrap'}}>• {e.name}</span>)}
         </div>
       </div>}
 
@@ -441,9 +464,9 @@ function DashboardPage() {
               <span style={{fontSize:12,color:G.muted}}>💰 Cu diurnă</span>
               <span style={{fontSize:13,fontWeight:800,color:G.orange}}>{stats.diurna}</span>
             </div>
-            <div style={{display:'flex',justifyContent:'space-between',padding:'7px 10px',background:'#1A1A2A',borderRadius:8}}>
-              <span style={{fontSize:12,color:G.muted}}>❓ Fără pontaj</span>
-              <span style={{fontSize:13,fontWeight:800,color:G.red}}>{stats.total-stats.present-Object.values(stats.normeStats||{}).reduce((s,v)=>s+v,0)}</span>
+            <div style={{display:'flex',justifyContent:'space-between',padding:'9px 12px',background:G.redDim,borderRadius:8,border:`1px solid ${G.red}33`}}>
+              <span style={{fontSize:14,fontWeight:700,color:G.red}}>‼️ Fără pontaj</span>
+              <span style={{fontSize:16,fontWeight:900,color:G.red}}>{stats.total-stats.present-Object.values(stats.normeStats||{}).reduce((s,v)=>s+v,0)}</span>
             </div>
           </div>
         </div>
@@ -708,7 +731,12 @@ function PontajPage() {
       <div style={{background:'#1A2A3A',border:`1px solid ${G.blue}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:'#79C0FF'}}>
         ☕ Pauza masă 12–13 se scade automat &nbsp;·&nbsp; 💰 Diurnă {diurnaAmt} RON/zi &nbsp;·&nbsp; Șantierul obligatoriu la ore
       </div>
-      {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:G.red}}>⚠️ <strong>{unalloc.length} nealocați:</strong> {unalloc.slice(0,4).map(e=>e.name).join(', ')}{unalloc.length>4?'...':''}</div>}
+      {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
+        <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier:</div>
+        <div style={{fontSize:11,lineHeight:1.7,flexWrap:'wrap',display:'flex',gap:'4px 10px'}}>
+          {unalloc.map(e=><span key={e.id} style={{whiteSpace:'nowrap'}}>• {e.name}</span>)}
+        </div>
+      </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
         {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt}/>)}
