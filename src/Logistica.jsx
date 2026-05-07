@@ -152,9 +152,10 @@ function FieldTextarea({ label, value, onChange, rows=2, readonly, mono }) {
 }
 
 // ─── Modal Alimentare Combustibil ────────────────────────────────────────────
-const STATII = ['', 'Petrom', 'OMV', 'MOL', 'Rompetrol', 'Lukoil', 'Gazprom', 'Socar', 'Tinmar', 'Altele']
+const STATII = ['', 'Gazpet - Oscar (vrac propriu)', 'Petrom', 'OMV', 'MOL', 'Rompetrol', 'Lukoil', 'Gazprom', 'Socar', 'Tinmar', 'Altele']
+const STATIE_GAZPET = 'Gazpet - Oscar (vrac propriu)'  // identifier pentru detectare
 
-function AlimentareModal({ activ, onClose, onSaved, showToast }) {
+function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, sites, pretMotorina }) {
   const [form, setForm] = useState({
     data_alimentare: new Date().toISOString().split('T')[0],
     cantitate_litri: '',
@@ -167,11 +168,16 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
     pret_per_litru: '',
     numar_factura: '',
     observatii: '',
+    site_id: '',
   })
   const [saving, setSaving] = useState(false)
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
   
-  // Auto-calc preț per litru când se schimbă pret_total sau cantitate
+  const isGazpet = form.statie_combustibil === STATIE_GAZPET
+  const stocCurent = rezervorGazpet?.stoc_curent_litri ? Number(rezervorGazpet.stoc_curent_litri) : 0
+  const stocAfter = isGazpet && form.cantitate_litri ? stocCurent - Number(form.cantitate_litri) : null
+  
+  // Auto-calc preț per litru
   useEffect(() => {
     if (form.pret_total && form.cantitate_litri && Number(form.cantitate_litri) > 0) {
       const ppl = (Number(form.pret_total) / Number(form.cantitate_litri)).toFixed(4)
@@ -179,9 +185,21 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
     }
   }, [form.pret_total, form.cantitate_litri])
   
+  // Auto-fill cost când se introduce cantitatea (dacă nu există preț total introdus manual)
+  useEffect(() => {
+    if (form.cantitate_litri && pretMotorina && !form.pret_total) {
+      const costEstimat = (Number(form.cantitate_litri) * Number(pretMotorina)).toFixed(2)
+      setField('pret_total', costEstimat)
+    }
+  }, [form.cantitate_litri])
+  
   const handleSave = async () => {
     if (!form.data_alimentare) { showToast('Selectează data', 'error'); return }
     if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) { showToast('Cantitatea trebuie > 0', 'error'); return }
+    if (isGazpet && stocAfter !== null && stocAfter < 0) {
+      const ok = window.confirm(`⚠️ ATENȚIE: Stocul rezervorului Gazpet va deveni NEGATIV (${stocAfter.toFixed(1)} L).\n\nVerifică dacă ai înregistrat toate achizițiile vrac.\n\nContinui oricum?`)
+      if (!ok) return
+    }
     
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -199,6 +217,8 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
       pret_per_litru: form.pret_per_litru ? Number(form.pret_per_litru) : null,
       numar_factura: form.numar_factura.trim() || null,
       observatii: form.observatii.trim() || null,
+      rezervor_id: isGazpet && rezervorGazpet ? rezervorGazpet.id : null,
+      site_id: form.site_id ? Number(form.site_id) : null,
       created_by: user?.id,
     }
     
@@ -207,7 +227,7 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
     
     if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
     
-    showToast(`✓ Alimentare înregistrată: ${form.cantitate_litri} L`, 'success')
+    showToast(`✓ Alimentare înregistrată: ${form.cantitate_litri} L${isGazpet ? ' (din Gazpet vrac)' : ''}`, 'success')
     onSaved()
   }
   
@@ -229,13 +249,36 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
           <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
         </div>
         
-        {/* Cantitate & data */}
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
           <FieldText label="Data alimentării" value={form.data_alimentare} onChange={v => setField('data_alimentare', v)} type="date" required />
           <FieldText label="Cantitate (litri)" value={form.cantitate_litri} onChange={v => setField('cantitate_litri', v)} type="number" placeholder="ex: 50.5" required />
         </div>
         
-        {/* Citiri bord & ore lucrate */}
+        <div style={{marginBottom: 4}}>
+          <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
+            🏪 Sursa & alocare
+          </div>
+        </div>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+          <FieldSelect label="Stație combustibil" value={form.statie_combustibil} onChange={v => setField('statie_combustibil', v)} options={STATII} placeholder="— alege stația —" />
+          <FieldSelect label={isGazpet ? "Șantier (obligatoriu pt. Gazpet)" : "Șantier (opțional)"} value={form.site_id} onChange={v => setField('site_id', v)} options={[{label:'— niciun șantier —', value:''}, ...(sites||[]).map(s => ({label: s.name, value: String(s.id)}))]} placeholder="— niciun șantier —" />
+        </div>
+        
+        {/* Banner Gazpet */}
+        {isGazpet && rezervorGazpet && (
+          <div style={{padding: 10, marginBottom: 12, background: G.purple + '15', border: `1px solid ${G.purple}55`, borderRadius: 8, fontSize: 12, color: G.text}}>
+            <strong style={{color: G.purple}}>📦 Rezervor Gazpet — Oscar</strong>
+            <div style={{marginTop: 4, color: G.muted, fontSize: 11, lineHeight: 1.6}}>
+              Stoc curent: <strong style={{color: G.text}}>{stocCurent.toFixed(1)} L</strong> din {Number(rezervorGazpet.capacitate_litri).toFixed(0)} L total
+              {form.cantitate_litri && stocAfter !== null && (
+                <> · <strong style={{color: stocAfter < 0 ? G.red : stocAfter < (Number(rezervorGazpet.capacitate_litri) * Number(rezervorGazpet.prag_alerta_procent) / 100) ? G.orange : G.green}}>
+                  După alimentare: {stocAfter.toFixed(1)} L
+                </strong></>
+              )}
+            </div>
+          </div>
+        )}
+        
         <div style={{marginBottom: 4}}>
           <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
             📊 Citiri pentru analiză consum
@@ -247,35 +290,21 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
           <FieldText label="Ore lucrate efectiv" value={form.ore_lucrate_efectiv} onChange={v => setField('ore_lucrate_efectiv', v)} type="number" placeholder="ex: 8" />
         </div>
         
-        {/* Stație & financiar */}
         <div style={{marginBottom: 4}}>
           <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
-            💳 Date stație & cost
+            💳 Cost {pretMotorina && !isGazpet && <span style={{fontSize: 10, color: G.muted, fontWeight: 500, textTransform: 'none', letterSpacing: 0}}>(auto-fill din preț setat: {pretMotorina} RON/L)</span>}
           </div>
         </div>
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 14}}>
-          <FieldSelect label="Stație combustibil" value={form.statie_combustibil} onChange={v => setField('statie_combustibil', v)} options={STATII} placeholder="— alege stația —" />
           <FieldText label="Card combustibil" value={form.card_combustibil} onChange={v => setField('card_combustibil', v)} placeholder="ex: 7059-XXXX-1234" />
           <FieldText label="Cost total (RON)" value={form.pret_total} onChange={v => setField('pret_total', v)} type="number" placeholder="ex: 380.50" />
           <FieldText label="Preț/litru (auto)" value={form.pret_per_litru} onChange={v => setField('pret_per_litru', v)} type="number" placeholder="auto-calculat" />
           <FieldText label="Număr factură" value={form.numar_factura} onChange={v => setField('numar_factura', v)} placeholder="ex: F-2026-1234" />
-          <div></div>
         </div>
         
         <div style={{marginBottom: 14}}>
           <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} />
         </div>
-        
-        {/* Info: analiza vine în window */}
-        {form.cantitate_litri && (
-          <div style={{padding: 10, background: G.yellowDim + '88', border: `1px solid ${G.yellow}33`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
-            <strong style={{color: G.yellow}}>💡 Analiza consum</strong>
-            <div style={{marginTop: 4, color: G.muted, fontSize: 11, lineHeight: 1.5}}>
-              Diferența între consum teoretic și efectiv NU se calculează la o singură alimentare (rezervorul reține motorină).
-              <br/>Analiza apare automat după minimum 5 alimentări înregistrate, în secțiunea "📊 Analiză consum" din detaliul activului.
-            </div>
-          </div>
-        )}
         
         <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
           <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
@@ -287,6 +316,154 @@ function AlimentareModal({ activ, onClose, onSaved, showToast }) {
     </div>
   )
 }
+
+// ─── Modal Achiziție Vrac ────────────────────────────────────────────────────
+function AchizitieVracModal({ rezervor, onClose, onSaved, showToast }) {
+  const [form, setForm] = useState({
+    data_achizitie: new Date().toISOString().split('T')[0],
+    cantitate_litri: '',
+    furnizor: '',
+    numar_factura: '',
+    cost_total: '',
+    pret_per_litru: '',
+    observatii: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  
+  const stocCurent = rezervor?.stoc_curent_litri ? Number(rezervor.stoc_curent_litri) : 0
+  const capacitate = rezervor?.capacitate_litri ? Number(rezervor.capacitate_litri) : 0
+  const stocAfter = form.cantitate_litri ? stocCurent + Number(form.cantitate_litri) : null
+  const overflow = stocAfter !== null && capacitate > 0 && stocAfter > capacitate
+  
+  useEffect(() => {
+    if (form.cost_total && form.cantitate_litri && Number(form.cantitate_litri) > 0) {
+      const ppl = (Number(form.cost_total) / Number(form.cantitate_litri)).toFixed(4)
+      if (form.pret_per_litru !== ppl) setField('pret_per_litru', ppl)
+    }
+  }, [form.cost_total, form.cantitate_litri])
+  
+  const handleSave = async () => {
+    if (!form.data_achizitie) { showToast('Selectează data', 'error'); return }
+    if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) { showToast('Cantitatea trebuie > 0', 'error'); return }
+    if (overflow) {
+      const ok = window.confirm(`⚠️ Cantitatea introdusă va depăși capacitatea rezervorului!\nStoc final: ${stocAfter.toFixed(1)} L · Capacitate: ${capacitate} L\n\nContinui oricum?`)
+      if (!ok) return
+    }
+    
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    const { error } = await supabase.from('logistica_achizitii_vrac').insert({
+      rezervor_id: rezervor.id,
+      data_achizitie: form.data_achizitie,
+      cantitate_litri: Number(form.cantitate_litri),
+      furnizor: form.furnizor.trim() || null,
+      numar_factura: form.numar_factura.trim() || null,
+      cost_total: form.cost_total ? Number(form.cost_total) : null,
+      pret_per_litru: form.pret_per_litru ? Number(form.pret_per_litru) : null,
+      observatii: form.observatii.trim() || null,
+      created_by: user?.id,
+    })
+    
+    setSaving(false)
+    if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
+    
+    showToast(`✓ Achiziție vrac: +${form.cantitate_litri} L în ${rezervor.nume}`, 'success')
+    onSaved()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 600, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.purple}`}} className="fi">
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: G.text, marginBottom: 4}}>
+              📦 Achiziție vrac în rezervor
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              {rezervor.nume} · stoc curent: <strong style={{color: G.text}}>{stocCurent.toFixed(1)} L</strong> din {capacitate.toFixed(0)} L
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+        </div>
+        
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+          <FieldText label="Data achiziției" value={form.data_achizitie} onChange={v => setField('data_achizitie', v)} type="date" required />
+          <FieldText label="Cantitate (litri)" value={form.cantitate_litri} onChange={v => setField('cantitate_litri', v)} type="number" placeholder="ex: 8000" required />
+          <FieldText label="Furnizor" value={form.furnizor} onChange={v => setField('furnizor', v)} placeholder="ex: Petrom Distribution" />
+          <FieldText label="Număr factură" value={form.numar_factura} onChange={v => setField('numar_factura', v)} placeholder="ex: F-2026-0123" />
+          <FieldText label="Cost total (RON)" value={form.cost_total} onChange={v => setField('cost_total', v)} type="number" placeholder="ex: 60000" />
+          <FieldText label="Preț/litru (auto)" value={form.pret_per_litru} onChange={v => setField('pret_per_litru', v)} type="number" placeholder="auto-calculat" />
+        </div>
+        
+        <div style={{marginBottom: 14}}>
+          <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} />
+        </div>
+        
+        {form.cantitate_litri && stocAfter !== null && (
+          <div style={{padding: 10, background: overflow ? G.redDim : G.greenDim, border: `1px solid ${overflow ? G.red : G.green}33`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
+            <strong style={{color: overflow ? G.red : G.green}}>
+              {overflow ? '⚠️ DEPĂȘIRE CAPACITATE!' : '✓ Stoc după achiziție:'}
+            </strong>
+            <div style={{marginTop: 4, color: G.muted, fontSize: 11}}>
+              {stocCurent.toFixed(1)} L + {Number(form.cantitate_litri).toFixed(1)} L = <strong style={{color: G.text}}>{stocAfter.toFixed(1)} L</strong>
+              {capacitate > 0 && <> ({(stocAfter / capacitate * 100).toFixed(1)}% din capacitate)</>}
+            </div>
+          </div>
+        )}
+        
+        <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: G.purple, opacity: saving ? .6 : 1, cursor: saving ? 'wait' : 'pointer'}}>
+            {saving ? '⏳ Se salvează...' : '✓ Înregistrează achiziția'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal setări preț motorină ──────────────────────────────────────────────
+function SetariMotorinaModal({ pret, dataActualizat, onClose, onSaved, showToast }) {
+  const [val, setVal] = useState(pret || '7.50')
+  const [saving, setSaving] = useState(false)
+  
+  const handleSave = async () => {
+    if (!val || isNaN(Number(val)) || Number(val) <= 0) { showToast('Preț invalid', 'error'); return }
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const today = new Date().toISOString().split('T')[0]
+    await supabase.from('logistica_setari').upsert([
+      { key: 'pret_motorina_ron', value: String(val), updated_at: new Date().toISOString(), updated_by: user?.id },
+      { key: 'pret_motorina_actualizat', value: today, updated_at: new Date().toISOString(), updated_by: user?.id },
+    ])
+    setSaving(false)
+    showToast(`✓ Preț actualizat: ${val} RON/L`, 'success')
+    onSaved()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px 16px'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 460, boxShadow: '0 20px 80px rgba(0,0,0,.6)'}} className="fi">
+        <div style={{fontSize: 17, fontWeight: 800, color: G.text, marginBottom: 4}}>💰 Preț motorină</div>
+        <div style={{fontSize: 11, color: G.muted, marginBottom: 16}}>
+          Folosit la auto-fill cost în formularul de alimentare. Ultima actualizare: {dataActualizat || '—'}
+        </div>
+        <FieldText label="Preț motorină (RON/L)" value={val} onChange={v => setVal(v)} type="number" placeholder="ex: 7.50" />
+        <div style={{padding: 10, background: G.bg, borderRadius: 8, marginTop: 14, fontSize: 11, color: G.muted, lineHeight: 1.6}}>
+          💡 În viitor: auto-update zilnic de pe sites publice (ANRE, Petrom, OMV). Pentru moment, actualizare manuală.
+        </div>
+        <div style={{display:'flex', justifyContent:'flex-end', gap: 8, marginTop: 18, paddingTop: 12, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={S.btnP}>{saving ? '⏳' : '✓ Salvează'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal Mentenanță Făcută ─────────────────────────────────────────────────
 
 // ─── Modal Mentenanță Făcută ─────────────────────────────────────────────────
 function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
@@ -523,7 +700,7 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
 }
 
 // ─── Modal Form (View / Edit / Create) ───────────────────────────────────────
-function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast }) {
+function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervorGazpet, sites, pretMotorina }) {
   const [mode, setMode] = useState(initialMode)
   const [saving, setSaving] = useState(false)
   
@@ -1023,6 +1200,9 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       {showAlim && (
         <AlimentareModal 
           activ={activ}
+          rezervorGazpet={rezervorGazpet}
+          sites={sites}
+          pretMotorina={pretMotorina}
           onClose={() => setShowAlim(false)}
           onSaved={() => {
             setShowAlim(false)
@@ -1054,6 +1234,12 @@ export default function LogisticaPage() {
   const [stareF, setStareF] = useState('Toate')
   const [sortBy, setSortBy] = useState({ col: 'marca', dir: 'asc' })  // sortare tabel
   const [modal, setModal] = useState(null)
+  const [rezervor, setRezervor] = useState(null)         // rezervorul Gazpet Oscar
+  const [sites, setSites] = useState([])                  // pentru alocare alimentare pe șantier
+  const [pretMotorina, setPretMotorina] = useState(null) // preț curent
+  const [pretMotorinaActualizat, setPretMotorinaActualizat] = useState(null)
+  const [showAchizitie, setShowAchizitie] = useState(false)
+  const [showSetariPret, setShowSetariPret] = useState(false)
   const [toast, showToast] = useToast()
   
   useEffect(() => {
@@ -1075,16 +1261,24 @@ export default function LogisticaPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [activeRes, catRes, kpiRes] = await Promise.all([
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
       supabase.from('logistica_categorii').select('*').order('tip').order('subcategorie'),
-      supabase.from('v_kpi_logistica').select('*').single()
+      supabase.from('v_kpi_logistica').select('*').single(),
+      supabase.from('logistica_rezervoare').select('*').eq('nume', 'Gazpet - Oscar').maybeSingle(),
+      supabase.from('sites').select('id, name').order('name'),
+      supabase.from('logistica_setari').select('key, value').in('key', ['pret_motorina_ron', 'pret_motorina_actualizat']),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
     setKpi(kpiRes.data || null)
+    setRezervor(rezRes.data || null)
+    setSites(sitesRes.data || [])
+    const setariMap = Object.fromEntries((setariRes.data || []).map(s => [s.key, s.value]))
+    setPretMotorina(setariMap.pret_motorina_ron || null)
+    setPretMotorinaActualizat(setariMap.pret_motorina_actualizat || null)
     setLoad(false)
   }
   
@@ -1443,7 +1637,75 @@ export default function LogisticaPage() {
         </div>
       )}
       
-      {/* Widget alerte mentenanță */}
+      {/* Widget Rezervor Gazpet + Preț motorină */}
+      <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
+        {rezervor && (() => {
+          const stoc = Number(rezervor.stoc_curent_litri || 0)
+          const cap = Number(rezervor.capacitate_litri || 0)
+          const pragProc = Number(rezervor.prag_alerta_procent || 10)
+          const pragLitri = cap * pragProc / 100
+          const procentUmplere = cap > 0 ? (stoc / cap) * 100 : 0
+          const isLow = stoc <= pragLitri
+          const isCritic = stoc <= pragLitri / 2
+          
+          let barColor, statusText, statusColor
+          if (isCritic) { barColor = G.red; statusText = '🚨 STOC CRITIC — comandă urgent!'; statusColor = G.red }
+          else if (isLow) { barColor = G.orange; statusText = '⚠️ Sub pragul de alertă'; statusColor = G.orange }
+          else if (procentUmplere > 90) { barColor = G.green; statusText = '✓ Rezervor plin'; statusColor = G.green }
+          else { barColor = G.blue; statusText = '✓ Stoc normal'; statusColor = G.blue }
+          
+          return (
+            <div style={{...S.card, padding: '12px 16px', flex: 2, minWidth: 360, borderLeft: `3px solid ${barColor}`}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8}}>
+                <div>
+                  <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+                    📦 {rezervor.nume}
+                  </div>
+                  <div style={{fontSize: 22, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 2}}>
+                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 1, maximumFractionDigits: 1})} <span style={{fontSize: 12, color: G.muted, fontWeight: 600}}>L</span>
+                    <span style={{fontSize: 12, color: G.muted, fontWeight: 600, marginLeft: 8}}>/ {cap.toFixed(0)} L</span>
+                  </div>
+                </div>
+                {canEdit && (
+                  <button onClick={() => setShowAchizitie(true)} style={{...S.btnS, fontSize: 11, color: G.purple, borderColor: G.purple + '55', padding: '5px 10px'}}>
+                    + Achiziție vrac
+                  </button>
+                )}
+              </div>
+              <div style={{height: 8, background: G.bg, borderRadius: 4, overflow: 'hidden', marginBottom: 6}}>
+                <div style={{
+                  width: `${Math.min(procentUmplere, 100)}%`,
+                  height: '100%',
+                  background: barColor,
+                  transition: 'width .3s'
+                }}/>
+              </div>
+              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11}}>
+                <span style={{color: statusColor, fontWeight: 600}}>{statusText}</span>
+                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}% · prag alertă: {pragProc}%</span>
+              </div>
+            </div>
+          )
+        })()}
+        
+        {/* Card preț motorină */}
+        <div style={{...S.card, padding: '12px 16px', flex: 1, minWidth: 200, borderLeft: `3px solid ${G.green}`}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4}}>
+            <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+              💰 Preț motorină
+            </div>
+            {canEdit && (
+              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 14, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
+            )}
+          </div>
+          <div style={{fontSize: 22, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums'}}>
+            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'} <span style={{fontSize: 12, color: G.muted, fontWeight: 600}}>RON/L</span>
+          </div>
+          <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+            actualizat: {pretMotorinaActualizat || '—'}
+          </div>
+        </div>
+      </div>
       {(alerteMentenanta.intarziate.length > 0 || alerteMentenanta.urgente.length > 0) && (
         <div style={{
           ...S.card,
@@ -1607,8 +1869,32 @@ export default function LogisticaPage() {
           initialMode={modal.mode}
           categorii={categorii}
           accessLevel={accessLevel}
+          rezervorGazpet={rezervor}
+          sites={sites}
+          pretMotorina={pretMotorina}
           onClose={() => setModal(null)}
           onSaved={handleSaved}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal achiziție vrac */}
+      {showAchizitie && rezervor && (
+        <AchizitieVracModal 
+          rezervor={rezervor}
+          onClose={() => setShowAchizitie(false)}
+          onSaved={() => { setShowAchizitie(false); loadAll() }}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal setări preț motorină */}
+      {showSetariPret && (
+        <SetariMotorinaModal 
+          pret={pretMotorina}
+          dataActualizat={pretMotorinaActualizat}
+          onClose={() => setShowSetariPret(false)}
+          onSaved={() => { setShowSetariPret(false); loadAll() }}
           showToast={showToast}
         />
       )}
