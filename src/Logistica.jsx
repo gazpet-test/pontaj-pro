@@ -541,6 +541,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     tip_carburant: a?.tip_carburant || '',
     norma_consum: a?.norma_consum || '',
     unitate_norma: a?.unitate_norma || 'l/h',
+    prag_alerta_consum: a?.prag_alerta_consum || '10',
     link_fisa_nas: a?.link_fisa_nas || '',
     observatii: a?.observatii || '',
     serie_sasiu: a?.serie_sasiu || '',
@@ -620,6 +621,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       tip_carburant: form.tip_carburant || null,
       norma_consum: form.norma_consum ? Number(form.norma_consum) : null,
       unitate_norma: form.unitate_norma || null,
+      prag_alerta_consum: form.prag_alerta_consum ? Number(form.prag_alerta_consum) : 10,
       link_fisa_nas: form.link_fisa_nas.trim() || null,
       observatii: form.observatii.trim() || null,
       serie_sasiu: form.serie_sasiu.trim() || null,
@@ -772,9 +774,9 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldSelect label="Tip carburant" value={form.tip_carburant} onChange={v => setField('tip_carburant', v)} options={TIPURI_CARBURANT} placeholder="— niciunul —" readonly={isReadOnly} />
             <FieldText label="Normă consum" value={form.norma_consum} onChange={v => setField('norma_consum', v)} type="number" placeholder="ex: 12.5" readonly={isReadOnly} />
             <FieldSelect label="Unitate" value={form.unitate_norma} onChange={v => setField('unitate_norma', v)} options={UNITATI_NORMA} readonly={isReadOnly} />
+            <FieldText label="Prag alertă consum (%)" value={form.prag_alerta_consum} onChange={v => setField('prag_alerta_consum', v)} type="number" placeholder="10" readonly={isReadOnly} />
             <FieldText label="Serie șasiu (VIN)" value={form.serie_sasiu} onChange={v => setField('serie_sasiu', v)} placeholder="ex: WDB9061..." readonly={isReadOnly} />
             <FieldSelect label="Firmă proprietară" value={form.firma_proprietara} onChange={v => setField('firma_proprietara', v)} options={FIRME} readonly={isReadOnly} />
-            <div></div>
           </div>
         </div>
         
@@ -843,6 +845,98 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             </div>
           </div>
         )}
+        
+        {/* Widget analiză consum (rolling 5 alimentări) */}
+        {mode === 'view' && alimentari.length >= 2 && activ?.norma_consum && (() => {
+          const window = alimentari.slice(0, 5)  // ultimele 5 (deja sortate desc)
+          const totalLitri = window.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
+          const oreEfectiveSum = window.reduce((s, a) => s + Number(a.ore_lucrate_efectiv || 0), 0)
+          
+          // Fallback: ore din bord (oldest - newest)
+          const oreBordOldest = window[window.length-1]?.ore_la_alimentare
+          const oreBordNewest = window[0]?.ore_la_alimentare
+          const oreBordDif = (oreBordOldest && oreBordNewest && oreBordNewest > oreBordOldest) ? oreBordNewest - oreBordOldest : null
+          
+          const oreReale = oreEfectiveSum > 0 ? oreEfectiveSum : oreBordDif
+          const sursaOre = oreEfectiveSum > 0 ? 'raport șantier' : 'citire bord'
+          
+          if (!oreReale) return (
+            <div style={{padding: 12, background: G.surface, border: `1px dashed ${G.border2}`, borderRadius: 10, marginBottom: 14, fontSize: 12, color: G.muted}}>
+              📊 <strong>Analiză consum indisponibilă</strong> — completează "Ore lucrate efectiv" sau "Ore bord" la alimentări pentru a putea calcula
+            </div>
+          )
+          
+          const norma = Number(activ.norma_consum)
+          const consumTeoretic = oreReale * norma  // L
+          const diferenta = totalLitri - consumTeoretic
+          const procentDif = consumTeoretic > 0 ? (diferenta / consumTeoretic) * 100 : 0
+          const prag = Number(activ.prag_alerta_consum) || 10
+          const isSuspect = Math.abs(procentDif) > prag
+          const isCritic = Math.abs(procentDif) > prag * 2
+          
+          // Direction: pozitivă = consumat MAI MULT decât teoretic (suspect furt), negativă = mai puțin (eficient)
+          const isOverConsum = diferenta > 0
+          
+          let bg, color, emoji, status
+          if (!isSuspect) {
+            bg = G.greenDim; color = G.green; emoji = '✅'
+            status = 'Consum în limite normale'
+          } else if (isCritic) {
+            bg = G.redDim; color = G.red; emoji = '🚨'
+            status = isOverConsum ? 'CONSUM CRITIC — verifică urgent (posibil furt sau scurgere)' : 'Diferență critică — verifică citirile'
+          } else {
+            bg = G.yellowDim; color = G.orange; emoji = '⚠️'
+            status = isOverConsum ? 'Consum peste prag — atenție' : 'Sub prag — verificare recomandată'
+          }
+          
+          return (
+            <div style={{
+              ...S.card, padding: 14, marginBottom: 14,
+              background: bg + 'aa',
+              borderLeft: `4px solid ${color}`,
+            }}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
+                <div style={{fontSize: 12, color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+                  📊 Analiză consum — ultimele {window.length} alimentări
+                </div>
+                <div style={{fontSize: 10, color: G.muted}}>
+                  prag alertă: {prag}% · sursă ore: {sursaOre}
+                </div>
+              </div>
+              
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 10}}>
+                <div>
+                  <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>Total alimentat</div>
+                  <div style={{fontSize: 18, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+                    {totalLitri.toFixed(1)} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>L</span>
+                  </div>
+                </div>
+                <div>
+                  <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>Ore reale lucrate</div>
+                  <div style={{fontSize: 18, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+                    {oreReale.toFixed(1)} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>h</span>
+                  </div>
+                </div>
+                <div>
+                  <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>Consum teoretic ({norma} {activ.unitate_norma || 'l/h'})</div>
+                  <div style={{fontSize: 18, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+                    {consumTeoretic.toFixed(1)} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>L</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div style={{padding: '10px 12px', background: G.bg + 'cc', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12}}>
+                <div style={{fontSize: 22}}>{emoji}</div>
+                <div style={{flex: 1}}>
+                  <div style={{fontSize: 13, color, fontWeight: 700}}>
+                    Diferență: {diferenta > 0 ? '+' : ''}{diferenta.toFixed(1)} L ({procentDif > 0 ? '+' : ''}{procentDif.toFixed(1)}%)
+                  </div>
+                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>{status}</div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
         
         {/* Istoric alimentări (doar în view) */}
         {mode === 'view' && alimentari.length > 0 && (
@@ -1072,6 +1166,174 @@ export default function LogisticaPage() {
     showToast(`✓ Exportat ${filtered.length} active`, 'success')
   }
   
+  // ─── Template Excel pentru Alimentări ──────────────────────────────────────
+  const downloadTemplateAlimentari = () => {
+    const aoa = [
+      ['📋 Template Alimentări Combustibil — Gazpet Logistică'],
+      ['Completați coloanele de mai jos. Coloana A trebuie să fie codul intern (TST...) sau plăcuța din ERP.'],
+      ['Datele se importă apoi prin butonul "📤 Import Excel" din modul Logistică.'],
+      [],
+      ['Cod intern SAU Plăcuță', 'Data alimentării (DD-MM-YYYY)', 'Cantitate (litri)', 'Ore bord la alim.', 'Km la alim.', 'Ore lucrate efectiv', 'Stație', 'Card combustibil', 'Cost total (RON)', 'Număr factură', 'Observații'],
+      ['TST094', '01-05-2026', 50.5, 1250, '', 8, 'Petrom', '7059-XXXX-1234', 380.50, 'F-2026-0123', 'Alim. în drum spre Transgaz Orsova'],
+      ['PH 99 GAZ', '03-05-2026', 40, '', 145000, 6, 'OMV', '7059-XXXX-5678', 305.00, '', ''],
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    
+    const titleStyle = { font: { bold: true, sz: 14, color: { rgb: 'E3B341' } } }
+    const noteStyle = { font: { italic: true, sz: 10, color: { rgb: '8B949E' } } }
+    const headerStyle = {
+      fill: { fgColor: { rgb: '2D2A1A' } },
+      font: { bold: true, color: { rgb: 'E3B341' }, sz: 10 },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+      border: { top: { style: 'thin', color: { rgb: '30363D' } }, bottom: { style: 'thin', color: { rgb: '30363D' } }, left: { style: 'thin', color: { rgb: '30363D' } }, right: { style: 'thin', color: { rgb: '30363D' } } }
+    }
+    const exampleStyle = { fill: { fgColor: { rgb: 'FFFCE0' } }, font: { italic: true, sz: 10, color: { rgb: '6E7681' } } }
+    
+    if (ws['A1']) ws['A1'].s = titleStyle
+    if (ws['A2']) ws['A2'].s = noteStyle
+    if (ws['A3']) ws['A3'].s = noteStyle
+    
+    const headerCells = ['A5','B5','C5','D5','E5','F5','G5','H5','I5','J5','K5']
+    headerCells.forEach(a => { if (ws[a]) ws[a].s = headerStyle })
+    
+    // Stiluri exemplu (rândurile 6 și 7)
+    for (let r = 5; r <= 6; r++) {
+      for (let c = 0; c < 11; c++) {
+        const a = XLSX.utils.encode_cell({ r, c })
+        if (ws[a]) ws[a].s = exampleStyle
+      }
+    }
+    
+    ws['!cols'] = [
+      { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 13 }, { wch: 14 }, { wch: 30 }
+    ]
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 10 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 10 } },
+    ]
+    
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Alimentări')
+    XLSX.writeFile(wb, 'Template_Alimentari_Logistica.xlsx')
+    showToast('✓ Template descărcat — completați și importați înapoi', 'success')
+  }
+  
+  // ─── Import alimentări din Excel ───────────────────────────────────────────
+  const [importPreview, setImportPreview] = useState(null)  // { rows: [...], errors: [...] }
+  const fileInputRef = useState({ current: null })
+  
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    try {
+      const buffer = await file.arrayBuffer()
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, raw: false })
+      
+      // Caut rândul cu header (cel cu "Cod intern" sau "Cantitate")
+      let headerRow = -1
+      for (let i = 0; i < Math.min(aoa.length, 10); i++) {
+        const row = (aoa[i] || []).map(x => String(x || '').toLowerCase())
+        if (row.some(c => c.includes('cantitate')) && row.some(c => c.includes('cod') || c.includes('plăcuță') || c.includes('placuta'))) {
+          headerRow = i; break
+        }
+      }
+      if (headerRow === -1) { showToast('Nu am găsit antetul în fișier. Folosește template-ul oficial!', 'error'); e.target.value = ''; return }
+      
+      const dataRows = aoa.slice(headerRow + 1).filter(r => r && r.length > 0 && (r[0] || r[1] || r[2]))
+      
+      const rows = []
+      const errors = []
+      
+      dataRows.forEach((r, idx) => {
+        const codOrPlate = String(r[0] || '').trim()
+        const data = r[1]
+        const cantitate = r[2]
+        
+        if (!codOrPlate) return  // skip exemple goale
+        
+        // Match activ
+        const matched = active.find(a => 
+          a.cod_intern?.toLowerCase() === codOrPlate.toLowerCase() ||
+          a.nr_inmatriculare?.toLowerCase() === codOrPlate.toLowerCase() ||
+          a.nr_inventar?.toLowerCase() === codOrPlate.toLowerCase()
+        )
+        
+        if (!matched) {
+          errors.push(`Rând ${idx + headerRow + 2}: Activ negăsit pentru "${codOrPlate}"`)
+          return
+        }
+        if (!cantitate || isNaN(Number(cantitate)) || Number(cantitate) <= 0) {
+          errors.push(`Rând ${idx + headerRow + 2}: Cantitate invalidă pentru "${codOrPlate}"`)
+          return
+        }
+        
+        // Parsare data
+        let dataAlim
+        if (data instanceof Date) {
+          dataAlim = data.toISOString().split('T')[0]
+        } else if (typeof data === 'string') {
+          // încercăm DD-MM-YYYY sau DD/MM/YYYY sau YYYY-MM-DD
+          const m = data.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/)
+          if (m) {
+            dataAlim = `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+          } else if (/^\d{4}-\d{2}-\d{2}/.test(data)) {
+            dataAlim = data.substring(0, 10)
+          } else {
+            errors.push(`Rând ${idx + headerRow + 2}: Data invalidă "${data}"`)
+            return
+          }
+        } else {
+          errors.push(`Rând ${idx + headerRow + 2}: Data lipsă`)
+          return
+        }
+        
+        rows.push({
+          active_id: matched.id,
+          activ_label: `${matched.cod_intern || matched.nr_inmatriculare} · ${matched.marca || ''} ${matched.model || ''}`.trim(),
+          data_alimentare: dataAlim,
+          cantitate_litri: Number(cantitate),
+          ore_la_alimentare: r[3] ? Number(r[3]) : null,
+          km_la_alimentare: r[4] ? Number(r[4]) : null,
+          ore_lucrate_efectiv: r[5] ? Number(r[5]) : null,
+          statie_combustibil: r[6] ? String(r[6]).trim() : null,
+          card_combustibil: r[7] ? String(r[7]).trim() : null,
+          pret_total: r[8] ? Number(r[8]) : null,
+          numar_factura: r[9] ? String(r[9]).trim() : null,
+          observatii: r[10] ? String(r[10]).trim() : null,
+        })
+      })
+      
+      setImportPreview({ rows, errors, fileName: file.name })
+      e.target.value = ''
+    } catch (err) {
+      console.error(err)
+      showToast(`Eroare la citire: ${err.message}`, 'error')
+      e.target.value = ''
+    }
+  }
+  
+  const handleImportConfirm = async () => {
+    if (!importPreview?.rows?.length) return
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    const payload = importPreview.rows.map(r => {
+      const { activ_label, ...rest } = r
+      return { ...rest, pret_per_litru: r.pret_total && r.cantitate_litri ? Number((r.pret_total / r.cantitate_litri).toFixed(4)) : null, created_by: user?.id }
+    })
+    
+    const { error } = await supabase.from('logistica_alimentari').insert(payload)
+    if (error) { showToast(`Eroare import: ${error.message}`, 'error'); return }
+    
+    showToast(`✓ Import reușit: ${payload.length} alimentări`, 'success')
+    setImportPreview(null)
+    loadAll()
+  }
+  
   const tipuri = useMemo(() => ['Toate', ...Array.from(new Set(categorii.map(c => c.tip))).sort()], [categorii])
   const subcategoriiPentruTip = useMemo(() => {
     if (tipF === 'Toate') return []
@@ -1248,6 +1510,15 @@ export default function LogisticaPage() {
             </button>
           )}
           <div style={{flex: 1}}/>
+          <button onClick={downloadTemplateAlimentari} style={{...S.btnS, fontSize: 12, color: G.muted, borderColor: G.border}} title="Template Excel pentru șefii de echipă">
+            📋 Template
+          </button>
+          {canEdit && (
+            <label style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55', cursor: 'pointer', display: 'inline-flex', alignItems: 'center'}}>
+              📤 Import alimentări
+              <input type="file" accept=".xlsx,.xls" onChange={handleImportFile} style={{display: 'none'}} />
+            </label>
+          )}
           <button onClick={exportExcel} disabled={filtered.length === 0} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55', opacity: filtered.length === 0 ? .4 : 1}}>
             📥 Excel
           </button>
@@ -1340,6 +1611,78 @@ export default function LogisticaPage() {
           onSaved={handleSaved}
           showToast={showToast}
         />
+      )}
+      
+      {/* Modal Import Preview */}
+      {importPreview && (
+        <div onClick={() => setImportPreview(null)} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'30px 16px', overflowY:'auto'}}>
+          <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 20, width: '100%', maxWidth: 880, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.orange}`}} className="fi">
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 14, paddingBottom: 12, borderBottom: `1px solid ${G.border}`}}>
+              <div>
+                <div style={{fontSize: 17, fontWeight: 800, color: G.text, marginBottom: 4}}>
+                  📤 Import alimentări — preview
+                </div>
+                <div style={{fontSize: 12, color: G.muted}}>
+                  Fișier: <strong style={{color: G.text}}>{importPreview.fileName}</strong> · 
+                  <span style={{color: G.green, marginLeft: 6}}>{importPreview.rows.length} ok</span>
+                  {importPreview.errors.length > 0 && <span style={{color: G.red, marginLeft: 6}}>· {importPreview.errors.length} cu probleme</span>}
+                </div>
+              </div>
+              <button onClick={() => setImportPreview(null)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+            </div>
+            
+            {importPreview.errors.length > 0 && (
+              <div style={{...S.card, padding: 10, marginBottom: 12, background: G.redDim + '88', borderColor: G.red + '55'}}>
+                <div style={{fontSize: 12, fontWeight: 700, color: G.red, marginBottom: 6}}>⚠️ Probleme detectate (rândurile vor fi sărite):</div>
+                <ul style={{margin: 0, paddingLeft: 20, fontSize: 11, color: G.muted}}>
+                  {importPreview.errors.slice(0, 10).map((e, i) => <li key={i}>{e}</li>)}
+                  {importPreview.errors.length > 10 && <li>... și încă {importPreview.errors.length - 10} probleme</li>}
+                </ul>
+              </div>
+            )}
+            
+            {importPreview.rows.length > 0 ? (
+              <div style={{...S.card, overflow: 'hidden', marginBottom: 14, maxHeight: 400, overflowY: 'auto'}}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{width: 90}}>Data</th>
+                      <th>Activ</th>
+                      <th style={{width: 70}}>Cantit.</th>
+                      <th style={{width: 90}}>Stație</th>
+                      <th style={{width: 80}}>Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.rows.slice(0, 50).map((r, i) => (
+                      <tr key={i}>
+                        <td style={{fontFamily: 'monospace', fontSize: 12}}>{fmtDate(r.data_alimentare)}</td>
+                        <td style={{fontSize: 12, color: G.text}}>{r.activ_label}</td>
+                        <td style={{fontSize: 12, color: G.orange, fontWeight: 700}}>{r.cantitate_litri} L</td>
+                        <td style={{fontSize: 11, color: G.muted}}>{r.statie_combustibil || '—'}</td>
+                        <td style={{fontSize: 12, color: G.green, fontWeight: 600}}>{r.pret_total ? `${Number(r.pret_total).toFixed(2)} RON` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {importPreview.rows.length > 50 && (
+                  <div style={{padding: 10, textAlign: 'center', fontSize: 11, color: G.muted, background: G.bg, borderTop: `1px solid ${G.border}`}}>
+                    ... și încă {importPreview.rows.length - 50} înregistrări (toate vor fi importate)
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{padding: 30, textAlign: 'center', color: G.muted}}>Nicio înregistrare validă de importat</div>
+            )}
+            
+            <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 12, borderTop: `1px solid ${G.border}`}}>
+              <button onClick={() => setImportPreview(null)} style={{...S.btnS, fontSize: 13, color: G.muted}}>Anulează</button>
+              <button onClick={handleImportConfirm} disabled={importPreview.rows.length === 0} style={{...S.btnP, background: G.orange, opacity: importPreview.rows.length === 0 ? .4 : 1}}>
+                ✓ Importă {importPreview.rows.length} alimentări
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )
