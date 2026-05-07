@@ -151,6 +151,149 @@ function FieldTextarea({ label, value, onChange, rows=2, readonly, mono }) {
   )
 }
 
+// ─── Modal Mentenanță Făcută ─────────────────────────────────────────────────
+function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
+  const [form, setForm] = useState({
+    data_revizie: new Date().toISOString().split('T')[0],
+    ore_la_revizie: plan?.urmatoarea_ore || '',
+    km_la_revizie: plan?.urmatoarea_km || '',
+    tip_revizie: 'revizie',
+    cost: '',
+    service_furnizor: '',
+    observatii: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  
+  const handleSave = async () => {
+    if (!form.data_revizie) { showToast('Selectează data', 'error'); return }
+    
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    // 1. INSERT în istoric
+    const istoricPayload = {
+      active_id: activ.id,
+      data_revizie: form.data_revizie,
+      ore_la_revizie: form.ore_la_revizie ? Number(form.ore_la_revizie) : null,
+      km_la_revizie: form.km_la_revizie ? Number(form.km_la_revizie) : null,
+      tip_revizie: form.tip_revizie,
+      cost: form.cost ? Number(form.cost) : null,
+      service_furnizor: form.service_furnizor.trim() || null,
+      observatii: form.observatii.trim() || null,
+      created_by: user?.id,
+    }
+    
+    const { error: insErr } = await supabase
+      .from('logistica_mentenanta_istoric')
+      .insert(istoricPayload)
+    
+    if (insErr) {
+      setSaving(false)
+      showToast(`Eroare: ${insErr.message}`, 'error')
+      return
+    }
+    
+    // 2. UPDATE plan (calculez urmatoarea automat)
+    const updateFields = {
+      ultima_revizie_data: form.data_revizie,
+      ultima_revizie_ore: form.ore_la_revizie ? Number(form.ore_la_revizie) : null,
+      ultima_revizie_km: form.km_la_revizie ? Number(form.km_la_revizie) : null,
+      updated_by: user?.id,
+    }
+    
+    // Calculez următoarea
+    const intervalOre = plan?.interval_ore || null
+    const intervalKm = plan?.interval_km || null
+    
+    if (intervalOre && form.ore_la_revizie) {
+      updateFields.urmatoarea_ore = Number(form.ore_la_revizie) + intervalOre
+    }
+    if (intervalKm && form.km_la_revizie) {
+      updateFields.urmatoarea_km = Number(form.km_la_revizie) + intervalKm
+    }
+    
+    // Data următoare: default + 365 zile (sau folosește interval_ore proporțional dacă e disponibil)
+    const newDate = new Date(form.data_revizie)
+    if (intervalOre && form.ore_la_revizie) {
+      // Estimare: 8h/zi de utilizare → days = interval_ore / 8
+      const daysEstimate = Math.round(intervalOre / 8)
+      newDate.setDate(newDate.getDate() + Math.min(daysEstimate, 365))
+    } else {
+      newDate.setDate(newDate.getDate() + 365)  // default 1 an
+    }
+    updateFields.urmatoarea_data = newDate.toISOString().split('T')[0]
+    
+    let upErr
+    if (plan?.id) {
+      const r = await supabase.from('logistica_mentenanta_plan').update(updateFields).eq('id', plan.id)
+      upErr = r.error
+    } else {
+      const r = await supabase.from('logistica_mentenanta_plan').insert({ active_id: activ.id, ...updateFields })
+      upErr = r.error
+    }
+    
+    setSaving(false)
+    if (upErr) {
+      showToast(`Mentenanță înregistrată, dar eroare la actualizare plan: ${upErr.message}`, 'warn')
+    } else {
+      showToast('✓ Mentenanță înregistrată cu succes!', 'success')
+    }
+    onSaved()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 600, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.green}`}} className="fi">
+        
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: G.text, marginBottom: 4}}>
+              ✅ Mentenanță efectuată
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              {activ.marca} {activ.model} {activ.cod_intern && `· ${activ.cod_intern}`}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+        </div>
+        
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 14}}>
+          <FieldText label="Data efectuării" value={form.data_revizie} onChange={v => setField('data_revizie', v)} type="date" required />
+          <FieldSelect label="Tip" value={form.tip_revizie} onChange={v => setField('tip_revizie', v)} options={['revizie', 'reparatie', 'ITP', 'RCA', 'CASCO', 'altele']} required />
+          <FieldText label="Ore funcționare la revizie" value={form.ore_la_revizie} onChange={v => setField('ore_la_revizie', v)} type="number" placeholder="ex: 1250" />
+          <FieldText label="Kilometri la revizie" value={form.km_la_revizie} onChange={v => setField('km_la_revizie', v)} type="number" placeholder="ex: 145000" />
+          <FieldText label="Cost (RON)" value={form.cost} onChange={v => setField('cost', v)} type="number" placeholder="ex: 1250.50" />
+          <FieldText label="Service / Furnizor" value={form.service_furnizor} onChange={v => setField('service_furnizor', v)} placeholder="ex: Service Auto Ploiești" />
+        </div>
+        
+        <div style={{marginBottom: 14}}>
+          <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} />
+        </div>
+        
+        {/* Preview urmatoarea revizie */}
+        {(plan?.interval_ore || plan?.interval_km) && (form.ore_la_revizie || form.km_la_revizie) && (
+          <div style={{padding: 10, background: G.greenDim, border: `1px solid ${G.green}33`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
+            <strong style={{color: G.green}}>📅 Următoarea revizie va fi calculată:</strong>
+            <div style={{marginTop: 4, color: G.muted}}>
+              {plan?.interval_ore && form.ore_la_revizie && <>· la {Number(form.ore_la_revizie) + plan.interval_ore} ore funcționare<br/></>}
+              {plan?.interval_km && form.km_la_revizie && <>· la {(Number(form.km_la_revizie) + plan.interval_km).toLocaleString('ro-RO')} km<br/></>}
+              · sau aproximativ în 1 an de la data introdusă
+            </div>
+          </div>
+        )}
+        
+        <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: G.green, opacity: saving ? .6 : 1, cursor: saving ? 'wait' : 'pointer'}}>
+            {saving ? '⏳ Se salvează...' : '✓ Înregistrează mentenanța'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Modal Form (View / Edit / Create) ───────────────────────────────────────
 function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast }) {
   const [mode, setMode] = useState(initialMode)
@@ -177,6 +320,19 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   
   const [form, setForm] = useState(fromActiv(activ))
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  const [showMent, setShowMent] = useState(false)
+  const [istoric, setIstoric] = useState([])
+  
+  // Fetch istoric când se deschide în view
+  useEffect(() => {
+    if (mode === 'view' && activ?.id) {
+      supabase.from('logistica_mentenanta_istoric')
+        .select('*')
+        .eq('active_id', activ.id)
+        .order('data_revizie', { ascending: false })
+        .then(({ data }) => setIstoric(data || []))
+    }
+  }, [mode, activ?.id])
   
   const tipuri = useMemo(() => ['', ...Array.from(new Set(categorii.map(c => c.tip))).sort()], [categorii])
   const subcategoriiDisponibile = useMemo(() => {
@@ -315,9 +471,12 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
               </div>
             )}
           </div>
-          <div style={{display:'flex', gap: 6}}>
+          <div style={{display:'flex', gap: 6, flexWrap: 'wrap'}}>
             {mode === 'view' && canEdit && (
               <>
+                <button onClick={() => setShowMent(true)} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55'}}>
+                  ✅ Mentenanță făcută
+                </button>
                 <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
                   ✏️ Editează
                 </button>
@@ -389,6 +548,53 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           </div>
         </div>
         
+        {/* Istoric mentenanță (doar în view) */}
+        {mode === 'view' && istoric.length > 0 && (
+          <div style={{marginBottom: 14}}>
+            <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>
+              📜 Istoric mentenanță ({istoric.length})
+            </div>
+            <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
+              {istoric.map((i, idx) => {
+                const tipColors = {
+                  'revizie': G.green, 'reparatie': G.orange, 'ITP': G.blue,
+                  'RCA': G.purple, 'CASCO': G.purple, 'altele': G.muted
+                }
+                const tipColor = tipColors[i.tip_revizie] || G.muted
+                return (
+                  <div key={i.id} style={{
+                    padding: '10px 14px',
+                    borderBottom: idx < istoric.length - 1 ? `1px solid ${G.border}` : 'none',
+                    display: 'grid',
+                    gridTemplateColumns: '90px 90px 1fr auto',
+                    gap: 12,
+                    alignItems: 'center',
+                    fontSize: 12
+                  }}>
+                    <div style={{fontFamily: 'monospace', color: G.text, fontWeight: 600}}>
+                      {fmtDate(i.data_revizie)}
+                    </div>
+                    <span style={{
+                      background: tipColor + '22', color: tipColor,
+                      padding: '2px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700,
+                      letterSpacing: '.3px', textTransform: 'uppercase', textAlign: 'center'
+                    }}>{i.tip_revizie}</span>
+                    <div style={{color: G.muted, fontSize: 11}}>
+                      {i.service_furnizor && <span style={{color: G.text}}>{i.service_furnizor}</span>}
+                      {i.ore_la_revizie && <> · {i.ore_la_revizie.toLocaleString('ro-RO')} ore</>}
+                      {i.km_la_revizie && <> · {i.km_la_revizie.toLocaleString('ro-RO')} km</>}
+                      {i.observatii && <div style={{marginTop: 2, fontStyle: 'italic'}}>{i.observatii}</div>}
+                    </div>
+                    <div style={{color: G.green, fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontSize: 13}}>
+                      {i.cost ? `${Number(i.cost).toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} RON` : '—'}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+        
         <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
           {mode !== 'view' && (
             <>
@@ -401,6 +607,26 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           {mode === 'view' && <button onClick={onClose} style={{...S.btnS, fontSize: 13}}>Închide</button>}
         </div>
       </div>
+      
+      {/* Modal mentenanță făcută (peste view) */}
+      {showMent && (
+        <MentenantaFacutaModal 
+          activ={activ}
+          plan={mentenanta}
+          onClose={() => setShowMent(false)}
+          onSaved={() => {
+            setShowMent(false)
+            // Reîncarc istoricul + plan
+            supabase.from('logistica_mentenanta_istoric')
+              .select('*').eq('active_id', activ.id)
+              .order('data_revizie', { ascending: false })
+              .then(({ data }) => setIstoric(data || []))
+            // Trigger refresh în pagina principală pentru a actualiza KPI și mentenanța
+            onSaved()
+          }}
+          showToast={showToast}
+        />
+      )}
     </div>
   )
 }
