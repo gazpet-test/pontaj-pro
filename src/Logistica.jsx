@@ -428,6 +428,113 @@ function AchizitieVracModal({ rezervor, onClose, onSaved, showToast }) {
   )
 }
 
+// ─── Modal Editare Stoc Rezervor (corecții manuale) ──────────────────────────
+function EditStocModal({ rezervor, onClose, onSaved, showToast }) {
+  const stocCurent = rezervor?.stoc_curent_litri ? Number(rezervor.stoc_curent_litri) : 0
+  const cap = rezervor?.capacitate_litri ? Number(rezervor.capacitate_litri) : 0
+  const [val, setVal] = useState(String(stocCurent))
+  const [motiv, setMotiv] = useState('')
+  const [saving, setSaving] = useState(false)
+  
+  const newStoc = Number(val) || 0
+  const diferenta = newStoc - stocCurent
+  
+  const handleSave = async () => {
+    if (val === '' || isNaN(Number(val))) { showToast('Valoare invalidă', 'error'); return }
+    if (newStoc < 0) {
+      const ok = window.confirm(`⚠️ Stoc NEGATIV: ${newStoc} L. Continui oricum?`)
+      if (!ok) return
+    }
+    if (cap > 0 && newStoc > cap) {
+      const ok = window.confirm(`⚠️ Stocul (${newStoc} L) depășește capacitatea rezervorului (${cap} L). Continui oricum?`)
+      if (!ok) return
+    }
+    
+    setSaving(true)
+    const { error } = await supabase.from('logistica_rezervoare')
+      .update({ 
+        stoc_curent_litri: newStoc,
+        observatii: motiv.trim() ? `[${new Date().toISOString().split('T')[0]}] Ajustare manuală: ${stocCurent} → ${newStoc} L. Motiv: ${motiv.trim()}\n${rezervor.observatii || ''}`.trim() : rezervor.observatii
+      })
+      .eq('id', rezervor.id)
+    setSaving(false)
+    
+    if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
+    
+    showToast(`✓ Stoc ajustat: ${stocCurent.toFixed(1)} → ${newStoc.toFixed(1)} L (${diferenta > 0 ? '+' : ''}${diferenta.toFixed(1)})`, 'success')
+    onSaved()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:'40px 16px'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 500, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.yellow}`}} className="fi">
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: G.text, marginBottom: 4}}>
+              ✏️ Ajustare stoc rezervor
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              {rezervor.nume} · capacitate: {cap.toFixed(0)} L
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+        </div>
+        
+        <div style={{marginBottom: 12, padding: 12, background: G.bg, borderRadius: 8}}>
+          <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 4}}>
+            Stoc curent înregistrat
+          </div>
+          <div style={{fontSize: 22, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+            {stocCurent.toFixed(2)} <span style={{fontSize: 12, color: G.muted}}>L</span>
+          </div>
+        </div>
+        
+        <FieldText label="Stoc nou (L)" value={val} onChange={v => setVal(v)} type="number" placeholder="ex: 0 sau 8500.5" />
+        
+        <div style={{display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap'}}>
+          <button onClick={() => setVal('0')} style={{...S.btnS, fontSize: 11, padding: '5px 10px', color: G.red, borderColor: G.red + '55'}}>
+            ⟲ Reset la 0
+          </button>
+          {cap > 0 && (
+            <button onClick={() => setVal(String(cap))} style={{...S.btnS, fontSize: 11, padding: '5px 10px', color: G.green, borderColor: G.green + '55'}}>
+              ⤴ Plin ({cap} L)
+            </button>
+          )}
+          <button onClick={() => setVal(String(stocCurent))} style={{...S.btnS, fontSize: 11, padding: '5px 10px', color: G.muted}}>
+            ↺ Înapoi la curent
+          </button>
+        </div>
+        
+        {val !== '' && !isNaN(Number(val)) && diferenta !== 0 && (
+          <div style={{marginTop: 12, padding: 10, background: diferenta > 0 ? G.greenDim : G.redDim, border: `1px solid ${diferenta > 0 ? G.green : G.red}33`, borderRadius: 8, fontSize: 12, color: G.text}}>
+            <strong style={{color: diferenta > 0 ? G.green : G.red}}>
+              Modificare: {diferenta > 0 ? '+' : ''}{diferenta.toFixed(2)} L
+            </strong>
+            <div style={{marginTop: 4, color: G.muted, fontSize: 11}}>
+              {stocCurent.toFixed(1)} L → <strong style={{color: G.text}}>{newStoc.toFixed(1)} L</strong>
+            </div>
+          </div>
+        )}
+        
+        <div style={{marginTop: 14}}>
+          <FieldTextarea label="Motiv ajustare (opțional, pentru audit)" value={motiv} onChange={setMotiv} rows={2} />
+        </div>
+        
+        <div style={{padding: 8, background: G.yellowDim + '88', border: `1px solid ${G.yellow}33`, borderRadius: 8, marginTop: 12, fontSize: 11, color: G.muted, lineHeight: 1.5}}>
+          ⚠️ Această ajustare modifică direct stocul, fără să fie înregistrată ca achiziție sau alimentare. Folosește doar pentru corecții (inventar, erori). Motivul se salvează în observații pentru audit.
+        </div>
+        
+        <div style={{display:'flex', justifyContent:'flex-end', gap: 8, marginTop: 18, paddingTop: 12, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
+          <button onClick={handleSave} disabled={saving || diferenta === 0} style={{...S.btnP, background: G.yellow, color: '#000', opacity: (saving || diferenta === 0) ? .5 : 1}}>
+            {saving ? '⏳' : '✓ Salvează ajustarea'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Modal setări preț motorină ──────────────────────────────────────────────
 function SetariMotorinaModal({ pret, dataActualizat, onClose, onSaved, showToast }) {
   const [val, setVal] = useState(pret || '7.50')
@@ -1243,6 +1350,7 @@ export default function LogisticaPage() {
   const [pretMotorina, setPretMotorina] = useState(null) // preț curent
   const [pretMotorinaActualizat, setPretMotorinaActualizat] = useState(null)
   const [showAchizitie, setShowAchizitie] = useState(false)
+  const [showEditStoc, setShowEditStoc] = useState(false)
   const [showSetariPret, setShowSetariPret] = useState(false)
   const [toast, showToast] = useToast()
   
@@ -1671,9 +1779,14 @@ export default function LogisticaPage() {
                   </div>
                 </div>
                 {canEdit && (
-                  <button onClick={() => setShowAchizitie(true)} style={{...S.btnS, fontSize: 11, color: G.purple, borderColor: G.purple + '55', padding: '5px 10px'}}>
-                    + Achiziție vrac
-                  </button>
+                  <div style={{display: 'flex', gap: 6}}>
+                    <button onClick={() => setShowEditStoc(true)} style={{...S.btnS, fontSize: 11, color: G.yellow, borderColor: G.yellow + '55', padding: '5px 10px'}} title="Ajustare manuală stoc (corecții)">
+                      ✏️ Edit
+                    </button>
+                    <button onClick={() => setShowAchizitie(true)} style={{...S.btnS, fontSize: 11, color: G.purple, borderColor: G.purple + '55', padding: '5px 10px'}}>
+                      + Achiziție vrac
+                    </button>
+                  </div>
                 )}
               </div>
               <div style={{height: 8, background: G.bg, borderRadius: 4, overflow: 'hidden', marginBottom: 6}}>
@@ -1888,6 +2001,16 @@ export default function LogisticaPage() {
           rezervor={rezervor}
           onClose={() => setShowAchizitie(false)}
           onSaved={() => { setShowAchizitie(false); loadAll() }}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal edit stoc rezervor (corecții manuale) */}
+      {showEditStoc && rezervor && (
+        <EditStocModal 
+          rezervor={rezervor}
+          onClose={() => setShowEditStoc(false)}
+          onSaved={() => { setShowEditStoc(false); loadAll() }}
           showToast={showToast}
         />
       )}
