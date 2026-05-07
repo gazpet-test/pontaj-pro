@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
+import LogisticaPage from './Logistica.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -128,6 +129,7 @@ function Layout({ children }) {
     {p:'/panou',i:'📊',l:'Panou'},
     {p:'/pontaj',i:'👥',l:'Pontaj'},
     {p:'/rapoarte',i:'📈',l:'Rapoarte'},
+    {p:'/logistica',i:'🚛',l:'Logistică'},
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
     ...(isAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
   ]
@@ -176,7 +178,7 @@ function HomeDashboard() {
   const modules = [
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true },
     { path:null,        icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi · Cash flow · Bugete',     active:false },
-    { path:null,        icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:false },
+    { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true },
     { path:null,        icon:'📦', label:'Comercial',   color:'#A371F7', desc:'Oferte · Contracte · CRM',         active:false },
     { path:null,        icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing',active:false },
     { path:null,        icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Recrutare · Evaluări · Training',  active:false },
@@ -2735,6 +2737,7 @@ export default function App() {
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
         <Route path="/panou" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/>
         <Route path="/pontaj" element={<ProtectedRoute><PontajPage/></ProtectedRoute>}/>
+        <Route path="/logistica" element={<ProtectedRoute><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
