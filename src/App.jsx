@@ -23,6 +23,10 @@ function AuthProvider({ children }) {
         // Load all sites for this manager
         const { data: ps } = await supabase.from('profile_sites').select('site_id').eq('profile_id', userId)
         data.site_ids = (ps || []).map(x => x.site_id)
+        // Load module access (Logistică, Pontaj, etc.)
+        const { data: ma } = await supabase.from('user_module_access').select('module, access_level').eq('profile_id', userId)
+        data.module_access = (ma || []).map(x => x.module)
+        data.module_access_levels = Object.fromEntries((ma || []).map(x => [x.module, x.access_level]))
         setProfile(data)
       } else {
         setTimeout(async () => {
@@ -30,6 +34,9 @@ function AuthProvider({ children }) {
           if (d2) {
             const { data: ps } = await supabase.from('profile_sites').select('site_id').eq('profile_id', userId)
             d2.site_ids = (ps || []).map(x => x.site_id)
+            const { data: ma2 } = await supabase.from('user_module_access').select('module, access_level').eq('profile_id', userId)
+            d2.module_access = (ma2 || []).map(x => x.module)
+            d2.module_access_levels = Object.fromEntries((ma2 || []).map(x => [x.module, x.access_level]))
             setProfile(d2)
           }
         }, 1000)
@@ -41,12 +48,22 @@ function AuthProvider({ children }) {
   return <AuthContext.Provider value={{ session, profile, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
 }
 
-function ProtectedRoute({ children, adminOnly = false, salaryAccess = false }) {
+// ─── Module access helper ───────────────────────────────────────────────────
+function hasModuleAccess(profile, moduleName) {
+  if (!profile) return false
+  // Admin & superadmin = acces la TOATE modulele
+  if (['admin', 'superadmin'].includes(profile.role)) return true
+  // Restul = doar ce e explicit în user_module_access
+  return profile.module_access?.includes(moduleName) || false
+}
+
+function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, requireModule = null }) {
   const { session, profile } = useAuth()
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
   if (adminOnly && !['admin','superadmin'].includes(profile?.role)) return <Navigate to="/" replace />
   if (salaryAccess && !['superadmin','contabil'].includes(profile?.role)) return <Navigate to="/" replace />
+  if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
 }
 
@@ -126,10 +143,12 @@ function Layout({ children }) {
   const hasSalaryAccess = isSuperAdmin || isContabil
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
-    {p:'/panou',i:'📊',l:'Panou'},
-    {p:'/pontaj',i:'👥',l:'Pontaj'},
-    {p:'/rapoarte',i:'📈',l:'Rapoarte'},
-    {p:'/logistica',i:'🚛',l:'Logistică'},
+    ...(hasModuleAccess(profile, 'Pontaj') ? [
+      {p:'/panou',i:'📊',l:'Panou'},
+      {p:'/pontaj',i:'👥',l:'Pontaj'},
+      {p:'/rapoarte',i:'📈',l:'Rapoarte'},
+    ] : []),
+    ...(hasModuleAccess(profile, 'Logistică') ? [{p:'/logistica',i:'🚛',l:'Logistică'}] : []),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
     ...(isAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
   ]
@@ -175,15 +194,17 @@ function HomeDashboard() {
   const isContabil = profile?.role==='contabil'
   const hasSalaryAccess = isSuperAdmin || isContabil
 
-  const modules = [
-    { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true },
+  const allModules = [
+    { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'Pontaj' },
     { path:null,        icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi · Cash flow · Bugete',     active:false },
-    { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true },
+    { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'Logistică' },
     { path:null,        icon:'📦', label:'Comercial',   color:'#A371F7', desc:'Oferte · Contracte · CRM',         active:false },
     { path:null,        icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing',active:false },
     { path:null,        icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Recrutare · Evaluări · Training',  active:false },
     { path:'/panou',    icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
   ]
+  // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
+  const modules = allModules.filter(m => !m.active || !m.requireModule || hasModuleAccess(profile, m.requireModule))
 
   return (
     <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column'}}>
@@ -2735,10 +2756,10 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
-        <Route path="/panou" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/>
-        <Route path="/pontaj" element={<ProtectedRoute><PontajPage/></ProtectedRoute>}/>
-        <Route path="/logistica" element={<ProtectedRoute><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
-        <Route path="/rapoarte" element={<ProtectedRoute><ReportsPage/></ProtectedRoute>}/>
+        <Route path="/panou" element={<ProtectedRoute requireModule="Pontaj"><DashboardPage/></ProtectedRoute>}/>
+        <Route path="/pontaj" element={<ProtectedRoute requireModule="Pontaj"><PontajPage/></ProtectedRoute>}/>
+        <Route path="/logistica" element={<ProtectedRoute requireModule="Logistică"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
+        <Route path="/rapoarte" element={<ProtectedRoute requireModule="Pontaj"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
