@@ -776,6 +776,9 @@ function ReportsPage() {
   const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [sites,setSites]=useState([]); const [data,setData]=useState([]); const [detailed,setDetailed]=useState([])
   const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false); const [expS,setExpS]=useState(false); const [expBT,setExpBT]=useState(false)
+  const [rSearch,setRSearch]=useState('')
+  const [impPontajPrev,setImpPontajPrev]=useState(null); const [importingPontaj,setImportingPontaj]=useState(false)
+  const importPontajRef=useRef(null)
   const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15)
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
   const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
@@ -911,6 +914,101 @@ function ReportsPage() {
     setData(stats)
     setDetailed((recs||[]).map(r=>{const e=emps.find(x=>x.id===r.employee_id);return {...r,empName:e?.name||'?',empDept:e?.department||'',empPos:e?.position||'',empSite:e?.sites?.name||''}}).sort((a,b)=>a.date.localeCompare(b.date)||a.empName.localeCompare(b.empName)))
     setLoad(false)
+  }
+
+  // ── Import Pontaj ──────────────────────────────────────────────────────────
+  const dlImportTemplate=()=>{
+    const {y,m,days}=getRange()
+    const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
+    const dayAbbr=['D','L','Ma','Mi','J','V','S']
+    const wb=XLSX.utils.book_new()
+    const dayNums=Array.from({length:days},(_,i)=>i+1)
+    const hdr=['ANGAJAT',...dayNums]
+    const dayRow=['',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()])]
+    const rows=[hdr,dayRow]
+    // Add current employees as empty rows
+    data.forEach(emp=>rows.push([emp.name,...Array(days).fill('')]))
+    rows.push([])
+    rows.push(['INSTRUCȚIUNI: Completați fiecare zi cu: ore (08:00-16:00), sau cod normă (CO, CM, BO, O, N, CFP...). Lăsați gol dacă nu lucrează.'])
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols']=[{wch:28},...dayNums.map(()=>({wch:8}))]
+    // Style header
+    const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+    hdr.forEach((_,c)=>{ const a=XLSX.utils.encode_cell({r:0,c}); if(!ws[a])ws[a]={v:'',t:'s'}; ws[a].s={fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center'}} })
+    dayRow.forEach((v,c)=>{
+      if(c===0) return
+      const a=XLSX.utils.encode_cell({r:1,c})
+      if(!ws[a])ws[a]={v:v,t:'s'}
+      const d=c; const dt=new Date(y,m-1,d); const isWE=dt.getDay()===0||dt.getDay()===6
+      ws[a].s={fill:{fgColor:{rgb:isWE?'BFBFBF':'4472C4'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:{horizontal:'center'}}
+    })
+    XLSX.utils.book_append_sheet(wb,ws,`Pontaj ${mName}`)
+    XLSX.writeFile(wb,`Template_Pontaj_${mName.replace(' ','_')}.xlsx`)
+    showToast('✓ Template descărcat!')
+  }
+
+  const handleImportPontaj=async(e)=>{
+    const file=e.target.files?.[0]; if(!file) return
+    importPontajRef.current.value=''
+    const reader=new FileReader()
+    reader.onload=async(ev)=>{
+      try{
+        const wb=XLSX.read(ev.target.result,{type:'array'})
+        const ws=wb.Sheets[wb.SheetNames[0]]
+        const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''})
+        // Find header row (has 'ANGAJAT')
+        const hdrIdx=rows.findIndex(r=>String(r[0]).toUpperCase().includes('ANGAJAT'))
+        if(hdrIdx<0){showToast('Nu găsesc coloana ANGAJAT!','error');return}
+        const hdr=rows[hdrIdx]
+        const {y,m,days}=getRange()
+        const records=[]
+        for(let ri=hdrIdx+2;ri<rows.length;ri++){
+          const row=rows[ri]
+          const name=String(row[0]||'').trim(); if(!name||name.toUpperCase().includes('INSTRUC')) continue
+          const emp=data.find(e=>e.name.toLowerCase()===name.toLowerCase())
+          if(!emp) continue
+          for(let ci=1;ci<hdr.length;ci++){
+            const dayNum=Number(hdr[ci]); if(!dayNum||dayNum<1||dayNum>days) continue
+            const val=String(row[ci]||'').trim(); if(!val) continue
+            const dateStr=`${y}-${String(m).padStart(2,'0')}-${String(dayNum).padStart(2,'0')}`
+            const normaCodes=['CO','CM','BO','BP','AM','CFP','M','O','N','PRM','PRB','LL']
+            if(normaCodes.includes(val.toUpperCase())){
+              records.push({employee_id:emp.id,date:dateStr,norma:val.toUpperCase(),check_in:null,check_out:null,lunch_break:false,diurna:false})
+            } else {
+              // Parse time: "08:00-16:00" or "08:00" or "8-16" 
+              const timeMatch=val.match(/(\d{1,2})[:\.]?(\d{2})?\s*[-–]\s*(\d{1,2})[:\.]?(\d{2})?/)
+              if(timeMatch){
+                const ciT=`${String(timeMatch[1]).padStart(2,'0')}:${timeMatch[2]||'00'}`
+                const coT=`${String(timeMatch[3]).padStart(2,'0')}:${timeMatch[4]||'00'}`
+                records.push({employee_id:emp.id,date:dateStr,check_in:`${dateStr}T${ciT}:00+00:00`,check_out:`${dateStr}T${coT}:00+00:00`,norma:null,lunch_break:true,diurna:false})
+              } else if(val==='1'||val.toUpperCase()==='P'||val.toUpperCase()==='X'){
+                records.push({employee_id:emp.id,date:dateStr,check_in:`${dateStr}T08:00:00+00:00`,check_out:`${dateStr}T17:00:00+00:00`,norma:null,lunch_break:true,diurna:false})
+              }
+            }
+          }
+        }
+        if(!records.length){showToast('Nicio înregistrare validă găsită','warn');return}
+        setImpPontajPrev(records)
+      }catch(err){showToast('Eroare la citire fișier: '+err.message,'error')}
+    }
+    reader.readAsArrayBuffer(file)
+  }
+
+  const confirmImportPontaj=async()=>{
+    if(!impPontajPrev?.length) return
+    setImportingPontaj(true)
+    try{
+      const uid=(await supabase.auth.getUser()).data.user?.id
+      const withMeta=impPontajPrev.map(r=>({...r,created_by:uid,updated_by:uid,updated_at:new Date().toISOString()}))
+      // Insert in chunks of 200
+      for(let i=0;i<withMeta.length;i+=200){
+        await supabase.from('pontaj_records').upsert(withMeta.slice(i,i+200),{onConflict:'employee_id,date',ignoreDuplicates:false})
+      }
+      showToast(`✓ ${impPontajPrev.length} înregistrări importate!`)
+      setImpPontajPrev(null)
+      loadReport()
+    }catch(err){showToast('Eroare import: '+err.message,'error')}
+    finally{setImportingPontaj(false)}
   }
 
   const exportITM=async()=>{
@@ -1476,7 +1574,14 @@ function ReportsPage() {
           <div style={{display:'flex',background:G.surface,border:`1px solid ${G.border}`,borderRadius:8,overflow:'hidden'}}>
             {[['summary','📊'],['detailed','📋']].map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?'#21262D':'none',color:view===v?G.text:G.muted,border:'none',padding:'6px 11px',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:700}}>{l}</button>)}
           </div>
+          <div style={{position:'relative'}}>
+            <span style={{position:'absolute',left:9,top:'50%',transform:'translateY(-50%)',fontSize:13,pointerEvents:'none'}}>🔍</span>
+            <input value={rSearch} onChange={e=>setRSearch(e.target.value)} placeholder="Caută angajat..." style={{...S.input,paddingLeft:30,margin:0,fontSize:11,height:32,width:170}}/>
+          </div>
           <button onClick={exportITM} disabled={expITM||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expITM?<><div className="sp"/>...</>:'📄 Export ITM'}</button>
+          <button onClick={dlImportTemplate} disabled={load||!data.length} style={{...S.btnS,fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Descarcă template Excel pentru import">⬇ Template Import</button>
+          <input ref={importPontajRef} type="file" accept=".xlsx,.xls" style={{display:'none'}} onChange={handleImportPontaj}/>
+          <button onClick={()=>importPontajRef.current?.click()} disabled={load} style={{...S.btnP,background:'#3A1A6B',fontSize:12,display:'flex',alignItems:'center',gap:5}}>📥 Import Pontaj</button>
         </div>
       </div>
 
@@ -1581,6 +1686,37 @@ function ReportsPage() {
         </div>
       </div>
 
+      {/* Import preview modal */}
+      {impPontajPrev&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{...S.card,width:700,maxHeight:'80vh',display:'flex',flexDirection:'column'}}>
+            <div style={{padding:'16px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontSize:14,fontWeight:800}}>📥 Preview Import — {impPontajPrev.length} înregistrări</div>
+              <button onClick={()=>setImpPontajPrev(null)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
+            </div>
+            <div style={{overflowY:'auto',flex:1,padding:16}}>
+              <table><thead><tr style={{background:G.bg}}><th>#</th><th>Angajat</th><th>Data</th><th>Intrare</th><th>Ieșire</th><th>Normă</th></tr></thead>
+              <tbody>{impPontajPrev.slice(0,50).map((r,i)=>{
+                const emp=data.find(e=>e.id===r.employee_id)
+                return <tr key={i}>
+                  <td style={{fontSize:10,color:G.dim}}>{i+1}</td>
+                  <td style={{fontWeight:600,fontSize:12}}>{emp?.name||r.employee_id}</td>
+                  <td style={{fontSize:11,color:G.blue}}>{new Date(r.date+'T12:00').toLocaleDateString('ro-RO',{day:'2-digit',month:'2-digit'})}</td>
+                  <td style={{fontSize:11,color:G.green}}>{r.check_in?new Date(r.check_in).toTimeString().slice(0,5):'—'}</td>
+                  <td style={{fontSize:11,color:G.red}}>{r.check_out?new Date(r.check_out).toTimeString().slice(0,5):'—'}</td>
+                  <td>{r.norma?<span style={{background:G.yellowDim,color:G.yellow,padding:'1px 6px',borderRadius:10,fontSize:11}}>{r.norma}</span>:'—'}</td>
+                </tr>
+              })}</tbody></table>
+              {impPontajPrev.length>50&&<div style={{textAlign:'center',fontSize:11,color:G.muted,marginTop:8}}>...și încă {impPontajPrev.length-50} înregistrări</div>}
+            </div>
+            <div style={{padding:'12px 20px',borderTop:`1px solid ${G.border}`,display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={()=>setImpPontajPrev(null)} style={{...S.btnS}}>Anulează</button>
+              <button onClick={confirmImportPontaj} disabled={importingPontaj} style={{...S.btnP,background:'#3A1A6B',display:'flex',alignItems:'center',gap:6}}>{importingPontaj?<><div className="sp"/>Se importă...</>:`✓ Confirmă import (${impPontajPrev.length} rec.)`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :view==='summary'?(
         <div style={{...S.card,overflow:'hidden'}}>
@@ -1588,7 +1724,7 @@ function ReportsPage() {
             <thead><tr style={{background:G.bg}}><th>Angajat</th><th>Dept.</th><th>Șantier</th><th>Zile Lucrate</th><th>Ore Brute</th><th>☕</th><th>Ore Nete</th><th>💰 Diurne</th><th>Norme</th><th>Status</th></tr></thead>
             <tbody>
               {!data.length?<tr><td colSpan={10} style={{textAlign:'center',color:G.muted,padding:40}}>Nicio dată</td></tr>
-              :data.map(emp=>{
+              :data.filter(emp=>!rSearch||emp.name.toLowerCase().includes(rSearch.toLowerCase())).map(emp=>{
                 const over=emp.avgMins>510
                 return <tr key={emp.id}>
                   <td><div style={{display:'flex',alignItems:'center',gap:8}}><Avatar name={emp.name} id={emp.id} size={26}/><span style={{fontWeight:600,fontSize:12}}>{emp.name}</span></div></td>
@@ -1612,7 +1748,7 @@ function ReportsPage() {
             <thead><tr style={{background:G.bg}}><th>Data</th><th>Angajat</th><th>Dept.</th><th>Intrare</th><th>Ieșire</th><th>Pauză</th><th>Net</th><th>Normă</th><th>💰</th></tr></thead>
             <tbody>
               {!detailed.length?<tr><td colSpan={9} style={{textAlign:'center',color:G.muted,padding:40}}>Nicio înregistrare</td></tr>
-              :detailed.map(r=>{
+              :detailed.filter(r=>!rSearch||r.empName.toLowerCase().includes(rSearch.toLowerCase())).map(r=>{
                 const net=netMins(r.check_in,r.check_out,r.lunch_break!==false)
                 const lo=r.lunch_break!==false&&spansLunch(r.check_in,r.check_out)
                 return <tr key={r.id}>
