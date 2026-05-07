@@ -917,34 +917,61 @@ function ReportsPage() {
   }
 
   // ── Import Pontaj ──────────────────────────────────────────────────────────
-  const dlImportTemplate=()=>{
+  const dlImportTemplate=async()=>{
     const {y,m,days}=getRange()
     const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
     const dayAbbr=['D','L','Ma','Mi','J','V','S']
     const wb=XLSX.utils.book_new()
     const dayNums=Array.from({length:days},(_,i)=>i+1)
-    const hdr=['ANGAJAT',...dayNums]
-    const dayRow=['',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()])]
-    const rows=[hdr,dayRow]
-    // Add current employees as empty rows
-    data.forEach(emp=>rows.push([emp.name,...Array(days).fill('')]))
-    rows.push([])
-    rows.push(['INSTRUCȚIUNI: Completați fiecare zi cu: ore (08:00-16:00), sau cod normă (CO, CM, BO, O, N, CFP...). Lăsați gol dacă nu lucrează.'])
-    const ws=XLSX.utils.aoa_to_sheet(rows)
-    ws['!cols']=[{wch:28},...dayNums.map(()=>({wch:8}))]
-    // Style header
+    // Load holidays for this month
+    const {data:calData}=await supabase.from('calendar_days').select('date').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
+    const legalSet=new Set((calData||[]).map(c=>c.date))
+    const isOff=(d)=>{ const dt=new Date(y,m-1,d); return dt.getDay()===0||dt.getDay()===6||legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`)}
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
-    hdr.forEach((_,c)=>{ const a=XLSX.utils.encode_cell({r:0,c}); if(!ws[a])ws[a]={v:'',t:'s'}; ws[a].s={fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center'}} })
-    dayRow.forEach((v,c)=>{
-      if(c===0) return
-      const a=XLSX.utils.encode_cell({r:1,c})
-      if(!ws[a])ws[a]={v:v,t:'s'}
-      const d=c; const dt=new Date(y,m-1,d); const isWE=dt.getDay()===0||dt.getDay()===6
-      ws[a].s={fill:{fgColor:{rgb:isWE?'BFBFBF':'4472C4'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:{horizontal:'center'}}
+    const sc=(ws,r,c,v,s)=>{ const a=XLSX.utils.encode_cell({r,c}); ws[a]={v,t:typeof v==='number'?'n':'s',s} }
+    const R=[]
+    // Antet identic cu ITM
+    R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
+    R.push(['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'])
+    R.push([])
+    R.push([`FOAIE COLECTIVĂ DE PREZENȚĂ — ${mName.toUpperCase()}`])
+    R.push([])
+    // Header row (row 5)
+    const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE']
+    R.push(HDR)
+    // Day abbr row (row 6)
+    const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','']
+    R.push(DNR)
+    // Employee rows — pre-completate cu 08:00/17:00 pe zile lucratoare
+    data.forEach(emp=>{
+      let tz=0, toMins=0
+      const rCI=[emp.name, emp.position||'', 'Ora Intrare']
+      const rCO=['','','Ora Ieșire']
+      const rPM=['','','Pauza de Masă (ore)']
+      const rOL=['','','Ore Lucrate']
+      for(let d=1;d<=days;d++){
+        if(isOff(d)){ rCI.push(''); rCO.push(''); rPM.push(''); rOL.push('') }
+        else { rCI.push('08:00'); rCO.push('17:00'); rPM.push(1); rOL.push(8); tz++; toMins+=8*60 }
+      }
+      rCI.push(tz, +(toMins/60).toFixed(1))
+      rCO.push('',''); rPM.push('',''); rOL.push('','')
+      R.push(rCI,rCO,rPM,rOL,[])
+    })
+    const ws=XLSX.utils.aoa_to_sheet(R)
+    ws['!cols']=[{wch:28},{wch:18},{wch:22},...dayNums.map(()=>({wch:6})),{wch:11},{wch:11}]
+    // Style header row 5
+    HDR.forEach((_,c)=>sc(ws,5,c,'',{fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:c<3?'left':'center'}}))
+    // Style day abbr row 6
+    DNR.forEach((v,c)=>{
+      if(c<3) return
+      const d=c-2; const dt=new Date(y,m-1,d)
+      const isWE=dt.getDay()===0||dt.getDay()===6
+      const isLeg=legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`)
+      sc(ws,6,c,v,{fill:{fgColor:{rgb:isWE?'BFBFBF':isLeg?'FF8888':'4472C4'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:{horizontal:'center'}})
     })
     XLSX.utils.book_append_sheet(wb,ws,`Pontaj ${mName}`)
     XLSX.writeFile(wb,`Template_Pontaj_${mName.replace(' ','_')}.xlsx`)
-    showToast('✓ Template descărcat!')
+    showToast('✓ Template ITM descărcat — pre-completat 08:00-17:00!')
   }
 
   const handleImportPontaj=async(e)=>{
