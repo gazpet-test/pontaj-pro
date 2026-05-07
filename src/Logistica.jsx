@@ -158,6 +158,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   
   const fromActiv = (a) => ({
     cod_intern: a?.cod_intern || '',
+    nr_inventar: a?.nr_inventar || '',
     nr_inmatriculare: a?.nr_inmatriculare || '',
     tip: a?.logistica_categorii?.tip || '',
     subcategorie: a?.logistica_categorii?.subcategorie || '',
@@ -217,6 +218,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     
     const payload = {
       cod_intern: form.cod_intern.trim() || null,
+      nr_inventar: form.nr_inventar.trim() || null,
       nr_inmatriculare: form.nr_inmatriculare.trim() || null,
       categorie_id: cat.id,
       marca: form.marca.trim() || null,
@@ -356,6 +358,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🆔 Identificare</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12}}>
             <FieldText label="Cod intern (TST...)" value={form.cod_intern} onChange={v => setField('cod_intern', v)} placeholder="ex: TST094" readonly={isReadOnly} />
+            <FieldText label="Nr inventar" value={form.nr_inventar} onChange={v => setField('nr_inventar', v)} placeholder="ex: MF-00123" readonly={isReadOnly} />
             <FieldText label="Plăcuță înmatriculare" value={form.nr_inmatriculare} onChange={v => setField('nr_inmatriculare', v)} placeholder="ex: PH 99 GAZ" readonly={isReadOnly} />
             <FieldSelect label="Tip" value={form.tip} onChange={v => setField('tip', v)} options={tipuri} required={!isReadOnly} placeholder="— alege tipul —" readonly={isReadOnly} />
             <FieldSelect label="Subcategorie" value={form.subcategorie} onChange={v => setField('subcategorie', v)} options={subcategoriiDisponibile} placeholder={subcategoriiDisponibile.length > 1 ? '— alege subcategorie —' : '— niciuna —'} readonly={isReadOnly} />
@@ -455,13 +458,14 @@ export default function LogisticaPage() {
   
   // ─── Export Excel ──────────────────────────────────────────────────────────
   const exportExcel = () => {
-    const header = ['Cod intern', 'Plăcuță', 'Marcă', 'Model', 'Tip', 'Subcategorie', 'An', 'Stare', 'Carburant', 'Normă consum', 'Unitate', 'Firmă', 'Mentenanță următoare', 'Zile până la scadență', 'Observații']
+    const header = ['Cod intern', 'Nr inventar', 'Plăcuță', 'Marcă', 'Model', 'Tip', 'Subcategorie', 'An', 'Stare', 'Carburant', 'Normă consum', 'Unitate', 'Firmă', 'Mentenanță următoare', 'Zile până la scadență', 'Observații']
     const rows = filtered.map(a => {
       const cat = a.logistica_categorii
       const ment = a.logistica_mentenanta_plan?.[0]
       const days = ment?.urmatoarea_data ? daysUntil(ment.urmatoarea_data) : null
       return [
         a.cod_intern || '',
+        a.nr_inventar || '',
         a.nr_inmatriculare || '',
         a.marca || '',
         a.model || '',
@@ -508,15 +512,15 @@ export default function LogisticaPage() {
     
     // Lățimi coloane
     ws['!cols'] = [
-      { wch: 10 }, { wch: 13 }, { wch: 16 }, { wch: 22 }, { wch: 15 }, { wch: 18 },
+      { wch: 10 }, { wch: 12 }, { wch: 13 }, { wch: 16 }, { wch: 22 }, { wch: 15 }, { wch: 18 },
       { wch: 6 }, { wch: 14 }, { wch: 11 }, { wch: 9 }, { wch: 8 }, { wch: 16 },
       { wch: 14 }, { wch: 9 }, { wch: 30 }
     ]
     
     // Merge cells pentru titlu
     ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 14 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 14 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } },
     ]
     
     const wb = XLSX.utils.book_new()
@@ -540,7 +544,7 @@ export default function LogisticaPage() {
       const cat = a.logistica_categorii
       if (search) {
         const s = search.toLowerCase()
-        const haystack = [a.cod_intern, a.nr_inmatriculare, a.marca, a.model, a.observatii, cat?.tip, cat?.subcategorie].filter(Boolean).join(' ').toLowerCase()
+        const haystack = [a.cod_intern, a.nr_inventar, a.nr_inmatriculare, a.marca, a.model, a.observatii, cat?.tip, cat?.subcategorie].filter(Boolean).join(' ').toLowerCase()
         if (!haystack.includes(s)) return false
       }
       if (tipF !== 'Toate' && cat?.tip !== tipF) return false
@@ -556,6 +560,7 @@ export default function LogisticaPage() {
       const ment = a.logistica_mentenanta_plan?.[0]
       switch(sortBy.col) {
         case 'cod_intern': return a.cod_intern || 'zzz'
+        case 'nr_inventar': return a.nr_inventar || 'zzz'
         case 'nr_inmatriculare': return a.nr_inmatriculare || 'zzz'
         case 'marca': return [(a.marca || 'zzz').toLowerCase(), (a.model || '').toLowerCase()].join(' ')
         case 'tip': return [(cat?.tip || 'zzz').toLowerCase(), (cat?.subcategorie || '').toLowerCase()].join(' ')
@@ -727,14 +732,15 @@ export default function LogisticaPage() {
             <table>
               <thead>
                 <tr>
-                  <SortableTh col="cod_intern" sortBy={sortBy} setSortBy={setSortBy} width={80}>Cod</SortableTh>
-                  <SortableTh col="nr_inmatriculare" sortBy={sortBy} setSortBy={setSortBy} width={100}>Plăcuță</SortableTh>
+                  <SortableTh col="cod_intern" sortBy={sortBy} setSortBy={setSortBy} width={75}>Cod intern</SortableTh>
+                  <SortableTh col="nr_inventar" sortBy={sortBy} setSortBy={setSortBy} width={90}>Nr inventar</SortableTh>
+                  <SortableTh col="nr_inmatriculare" sortBy={sortBy} setSortBy={setSortBy} width={95}>Plăcuță</SortableTh>
                   <SortableTh col="marca" sortBy={sortBy} setSortBy={setSortBy}>Marcă · Model</SortableTh>
-                  <SortableTh col="tip" sortBy={sortBy} setSortBy={setSortBy} width={180}>Categorie</SortableTh>
-                  <SortableTh col="an" sortBy={sortBy} setSortBy={setSortBy} width={70}>An</SortableTh>
-                  <SortableTh col="stare" sortBy={sortBy} setSortBy={setSortBy} width={130}>Stare</SortableTh>
-                  <SortableTh col="mentenanta" sortBy={sortBy} setSortBy={setSortBy} width={160}>Mentenanță</SortableTh>
-                  <th style={{width: 60}}></th>
+                  <SortableTh col="tip" sortBy={sortBy} setSortBy={setSortBy} width={170}>Categorie</SortableTh>
+                  <SortableTh col="an" sortBy={sortBy} setSortBy={setSortBy} width={60}>An</SortableTh>
+                  <SortableTh col="stare" sortBy={sortBy} setSortBy={setSortBy} width={120}>Stare</SortableTh>
+                  <SortableTh col="mentenanta" sortBy={sortBy} setSortBy={setSortBy} width={150}>Mentenanță</SortableTh>
+                  <th style={{width: 50}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -745,6 +751,9 @@ export default function LogisticaPage() {
                     <tr key={a.id} onClick={() => setModal({ mode: 'view', activ: a })} style={{cursor: 'pointer'}}>
                       <td style={{fontFamily: 'monospace', fontSize: 12, color: G.blue, fontWeight: 600}}>
                         {a.cod_intern || <span style={{color: G.dim}}>—</span>}
+                      </td>
+                      <td style={{fontFamily: 'monospace', fontSize: 11, color: G.muted}}>
+                        {a.nr_inventar || <span style={{color: G.dim}}>—</span>}
                       </td>
                       <td style={{fontSize: 12, fontWeight: 600, color: G.purple}}>
                         {a.nr_inmatriculare || <span style={{color: G.dim, fontWeight: 400}}>—</span>}
