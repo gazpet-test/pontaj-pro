@@ -2294,7 +2294,7 @@ function AdminPage() {
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
-                <td><span className={`badge ${['admin','superadmin'].includes(m.role)?'ba':m.role==='contabil'?'bs':'bm'}`}>{m.role==='superadmin'?'⭐ Super Admin':m.role==='admin'?'⚙ Admin':m.role==='contabil'?'💵 Contabil':'👤 Manager'}</span></td>
+                <td><span className={`badge ${['admin','superadmin'].includes(m.role)?'ba':m.role==='contabil'?'bs':m.role==='sef_santier'?'bd':'bm'}`}>{m.role==='superadmin'?'⭐ Super Admin':m.role==='admin'?'⚙ Admin':m.role==='contabil'?'💵 Contabil':m.role==='sef_santier'?'🏗️ Șef Șantier':'👤 Manager'}</span></td>
                 <td style={{fontSize:11,color:G.purple}}>{(m.site_ids||[]).length>0?m.site_ids.map(id=>sites.find(s=>s.id===id)?.name).filter(Boolean).join(', '):'—'}</td>
                 <td><button onClick={()=>setEditMgr({...m})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>

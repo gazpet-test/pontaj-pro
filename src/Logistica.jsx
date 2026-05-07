@@ -89,6 +89,28 @@ function KPICard({ icon, label, value, color = G.blue, sub }) {
   )
 }
 
+// ─── Sortable header cell ────────────────────────────────────────────────────
+function SortableTh({ col, sortBy, setSortBy, width, children }) {
+  const isActive = sortBy.col === col
+  const handleClick = () => {
+    if (isActive) setSortBy({ col, dir: sortBy.dir === 'asc' ? 'desc' : 'asc' })
+    else setSortBy({ col, dir: 'asc' })
+  }
+  return (
+    <th onClick={handleClick} style={{
+      width, cursor: 'pointer', userSelect: 'none',
+      color: isActive ? G.logistica : undefined
+    }}>
+      <span style={{display:'inline-flex', alignItems:'center', gap:4}}>
+        {children}
+        <span style={{fontSize: 9, opacity: isActive ? 1 : .35}}>
+          {isActive ? (sortBy.dir === 'asc' ? '▲' : '▼') : '▲▼'}
+        </span>
+      </span>
+    </th>
+  )
+}
+
 // ─── Form Field components ───────────────────────────────────────────────────
 const FieldLabel = ({ label, required }) => (
   <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 5}}>
@@ -393,6 +415,7 @@ export default function LogisticaPage() {
   const [tipF, setTipF] = useState('Toate')
   const [subF, setSubF] = useState('Toate')
   const [stareF, setStareF] = useState('Toate')
+  const [sortBy, setSortBy] = useState({ col: 'marca', dir: 'asc' })  // sortare tabel
   const [modal, setModal] = useState(null)
   const [toast, showToast] = useToast()
   
@@ -512,18 +535,60 @@ export default function LogisticaPage() {
     return ['Toate', ...subs.sort()]
   }, [tipF, categorii])
   
-  const filtered = useMemo(() => active.filter(a => {
-    const cat = a.logistica_categorii
-    if (search) {
-      const s = search.toLowerCase()
-      const haystack = [a.cod_intern, a.nr_inmatriculare, a.marca, a.model, a.observatii, cat?.tip, cat?.subcategorie].filter(Boolean).join(' ').toLowerCase()
-      if (!haystack.includes(s)) return false
+  const filtered = useMemo(() => {
+    const result = active.filter(a => {
+      const cat = a.logistica_categorii
+      if (search) {
+        const s = search.toLowerCase()
+        const haystack = [a.cod_intern, a.nr_inmatriculare, a.marca, a.model, a.observatii, cat?.tip, cat?.subcategorie].filter(Boolean).join(' ').toLowerCase()
+        if (!haystack.includes(s)) return false
+      }
+      if (tipF !== 'Toate' && cat?.tip !== tipF) return false
+      if (subF !== 'Toate' && cat?.subcategorie !== subF) return false
+      if (stareF !== 'Toate' && a.stare !== stareF) return false
+      return true
+    })
+    
+    // Sortare
+    const dir = sortBy.dir === 'asc' ? 1 : -1
+    const getValue = (a) => {
+      const cat = a.logistica_categorii
+      const ment = a.logistica_mentenanta_plan?.[0]
+      switch(sortBy.col) {
+        case 'cod_intern': return a.cod_intern || 'zzz'
+        case 'nr_inmatriculare': return a.nr_inmatriculare || 'zzz'
+        case 'marca': return [(a.marca || 'zzz').toLowerCase(), (a.model || '').toLowerCase()].join(' ')
+        case 'tip': return [(cat?.tip || 'zzz').toLowerCase(), (cat?.subcategorie || '').toLowerCase()].join(' ')
+        case 'an': return a.an_fabricatie || 0
+        case 'stare': return a.stare || 'zzz'
+        case 'mentenanta': return ment?.urmatoarea_data ? new Date(ment.urmatoarea_data).getTime() : 9999999999999
+        default: return ''
+      }
     }
-    if (tipF !== 'Toate' && cat?.tip !== tipF) return false
-    if (subF !== 'Toate' && cat?.subcategorie !== subF) return false
-    if (stareF !== 'Toate' && a.stare !== stareF) return false
-    return true
-  }), [active, search, tipF, subF, stareF])
+    result.sort((a, b) => {
+      const va = getValue(a), vb = getValue(b)
+      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir
+      return String(va).localeCompare(String(vb), 'ro') * dir
+    })
+    return result
+  }, [active, search, tipF, subF, stareF, sortBy])
+  
+  // Calculez alerte mentenanță (pentru widget)
+  const alerteMentenanta = useMemo(() => {
+    const intarziate = []
+    const urgente = []  // <= 7 zile
+    const apropiate = []  // 8-30 zile
+    active.forEach(a => {
+      const ment = a.logistica_mentenanta_plan?.[0]
+      if (!ment?.urmatoarea_data) return
+      const days = daysUntil(ment.urmatoarea_data)
+      if (days === null) return
+      if (days < 0) intarziate.push(a)
+      else if (days <= 7) urgente.push(a)
+      else if (days <= 30) apropiate.push(a)
+    })
+    return { intarziate, urgente, apropiate }
+  }, [active])
   
   if (accessLevel === undefined) return <div style={{...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center'}}><div className="sp" style={{width: 28, height: 28}}/></div>
   
@@ -568,6 +633,50 @@ export default function LogisticaPage() {
           <KPICard icon="🔧" label="În service" value={kpi.nr_in_service} color={G.yellow} />
           <KPICard icon="📅" label="Scadențe 30z" value={kpi.nr_scadente_30_zile} color={G.orange} />
           <KPICard icon="📄" label="Doc. expirate" value={kpi.nr_documente_expirate} color={G.red} />
+        </div>
+      )}
+      
+      {/* Widget alerte mentenanță */}
+      {(alerteMentenanta.intarziate.length > 0 || alerteMentenanta.urgente.length > 0) && (
+        <div style={{
+          ...S.card,
+          padding: '12px 16px',
+          marginBottom: 14,
+          borderLeft: `4px solid ${alerteMentenanta.intarziate.length > 0 ? G.red : G.orange}`,
+          background: alerteMentenanta.intarziate.length > 0 ? G.redDim + '88' : G.yellowDim + '88',
+        }}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap'}}>
+            <div style={{fontSize: 22}}>
+              {alerteMentenanta.intarziate.length > 0 ? '⚠️' : '🔔'}
+            </div>
+            <div style={{flex: 1}}>
+              <div style={{fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 2}}>
+                Atenție — mentenanță urgentă
+              </div>
+              <div style={{fontSize: 12, color: G.muted, display: 'flex', gap: 14, flexWrap: 'wrap'}}>
+                {alerteMentenanta.intarziate.length > 0 && (
+                  <span style={{color: G.red, fontWeight: 600}}>
+                    🔴 {alerteMentenanta.intarziate.length} întârziate
+                  </span>
+                )}
+                {alerteMentenanta.urgente.length > 0 && (
+                  <span style={{color: G.orange, fontWeight: 600}}>
+                    🟠 {alerteMentenanta.urgente.length} în următoarele 7 zile
+                  </span>
+                )}
+                {alerteMentenanta.apropiate.length > 0 && (
+                  <span style={{color: G.yellow, fontWeight: 600}}>
+                    🟡 {alerteMentenanta.apropiate.length} în 8-30 zile
+                  </span>
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={() => setSortBy({ col: 'mentenanta', dir: 'asc' })}
+              style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
+              📅 Sortează după scadență
+            </button>
+          </div>
         </div>
       )}
       
@@ -618,13 +727,13 @@ export default function LogisticaPage() {
             <table>
               <thead>
                 <tr>
-                  <th style={{width: 80}}>Cod</th>
-                  <th style={{width: 100}}>Plăcuță</th>
-                  <th>Marcă · Model</th>
-                  <th style={{width: 180}}>Categorie</th>
-                  <th style={{width: 70}}>An</th>
-                  <th style={{width: 130}}>Stare</th>
-                  <th style={{width: 160}}>Mentenanță</th>
+                  <SortableTh col="cod_intern" sortBy={sortBy} setSortBy={setSortBy} width={80}>Cod</SortableTh>
+                  <SortableTh col="nr_inmatriculare" sortBy={sortBy} setSortBy={setSortBy} width={100}>Plăcuță</SortableTh>
+                  <SortableTh col="marca" sortBy={sortBy} setSortBy={setSortBy}>Marcă · Model</SortableTh>
+                  <SortableTh col="tip" sortBy={sortBy} setSortBy={setSortBy} width={180}>Categorie</SortableTh>
+                  <SortableTh col="an" sortBy={sortBy} setSortBy={setSortBy} width={70}>An</SortableTh>
+                  <SortableTh col="stare" sortBy={sortBy} setSortBy={setSortBy} width={130}>Stare</SortableTh>
+                  <SortableTh col="mentenanta" sortBy={sortBy} setSortBy={setSortBy} width={160}>Mentenanță</SortableTh>
                   <th style={{width: 60}}></th>
                 </tr>
               </thead>
