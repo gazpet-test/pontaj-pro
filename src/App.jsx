@@ -544,7 +544,7 @@ function DashboardPage() {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt }) {
+function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture }) {
   const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
   const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
   const [norma,setNorma]=useState(rec?.norma||'')
@@ -566,12 +566,30 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
     else if (mode==='ore'&&ci) onSave(emp,{check_in:dateToISO(selectedDate,ci),check_out:co?dateToISO(selectedDate,co):null,norma:null,lunch_break:true,diurna,meal_supplement:supl})
     else onSave(emp,{...(rec||{}),diurna,meal_supplement:supl,norma:rec?.norma||null,check_in:rec?.check_in||null,check_out:rec?.check_out||null})
   }
+  if(isTerminated) return (
+    <div style={{...S.card,padding:'10px 14px',opacity:0.55,border:`1px solid #FF000022`,background:'#1A0A0A',pointerEvents:'none'}}>
+      <div style={{display:'flex',alignItems:'center',gap:11}}>
+        <Avatar name={emp.name} id={emp.id} size={34}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',color:G.muted}}>{emp.name}</div>
+          <div style={{fontSize:10,color:G.muted,display:'flex',gap:5,alignItems:'center'}}>
+            {emp.department&&<span className="badge bd" style={{fontSize:9,padding:'1px 5px'}}>{emp.department}</span>}
+            {emp.position&&<span>{emp.position}</span>}
+          </div>
+        </div>
+        <span style={{fontSize:11,color:G.red,fontWeight:700,background:G.redDim,padding:'3px 10px',borderRadius:20,border:`1px solid ${G.red}44`}}>🔴 Contract încetat {new Date(emp.termination_date).toLocaleDateString('ro-RO')}</span>
+      </div>
+    </div>
+  )
   return (
     <div style={{...S.card,padding:'10px 14px',transition:'border-color .2s'}}>
       <div style={{display:'flex',alignItems:'center',gap:11,flexWrap:'nowrap'}}>
         <Avatar name={emp.name} id={emp.id} size={34}/>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{emp.name}</div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{emp.name}</div>
+            {emp.hire_date&&emp.hire_date===selectedDate&&<span style={{fontSize:10,color:G.green,fontWeight:700,background:G.greenDim,padding:'2px 7px',borderRadius:20,border:`1px solid ${G.green}44`}}>🆕 Prima zi</span>}
+          </div>
           <div style={{fontSize:10,color:G.muted,display:'flex',gap:5,alignItems:'center'}}>
             {emp.department&&<span className="badge bd" style={{fontSize:9,padding:'1px 5px'}}>{emp.department}</span>}
             {emp.position&&<span>{emp.position}</span>}
@@ -671,12 +689,13 @@ function PontajPage() {
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
   const isAdmin=['admin','superadmin'].includes(profile?.role)
   useEffect(()=>{ loadSites(); loadSettings() },[])
-  useEffect(()=>{ loadEmps() },[profile,sites])
+  useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
-    let q=supabase.from('employees').select('*,sites(name)').eq('active',true).order('name')
+    const monthStart=date.slice(0,7)+'-01'
+    let q=supabase.from('employees').select('*,sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
     if(!isAdmin){
       const siteIds=profile?.site_ids||[]
       if(siteIds.length===0){setEmps([]);setLoad(false);return}
@@ -700,6 +719,9 @@ function PontajPage() {
     showToast(siteId?`✓ Alocat: ${sites.find(s=>s.id===siteId)?.name}`:'Dezalocat','warn')
   }
   const filtered=emps.filter(e=>{
+    if(e.hire_date&&e.hire_date>date) return false
+    const monthStart=date.slice(0,7)+'-01'
+    if(!e.active&&e.termination_date&&e.termination_date<monthStart) return false
     const ms=e.name.toLowerCase().includes(search.toLowerCase())
     const md=deptF==='Toate'||e.department===deptF
     const ms2=siteF==='Toate'||String(e.site_id)===String(siteF)
@@ -739,7 +761,7 @@ function PontajPage() {
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
     </Layout>
@@ -1628,7 +1650,7 @@ function AdminPage() {
   const [deletingSite,setDeletingSite]=useState(null) // site being confirmed for delete
   const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
-  const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [addingE,setAddingE]=useState(false)
+  const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [eHireDate,setEHireDate]=useState(''); const [addingE,setAddingE]=useState(false)
   const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
   const [empSearch,setEmpSearch]=useState('')
   const [empDeptFilter,setEmpDeptFilter]=useState('all')
@@ -1695,11 +1717,11 @@ function AdminPage() {
     setCreating(false)
   }
 
-  const addEmployee=async()=>{ if(!eName.trim()){showToast('Introduceți numele','warn');return}; setAddingE(true); const {error}=await supabase.from('employees').insert({name:eName.trim(),department:eDept,position:ePos||null,site_id:eSite?Number(eSite):null,active:true}); if(!error){showToast(`✓ ${eName}`);setEName('');setEPos('');loadAll()} else showToast('Eroare','error'); setAddingE(false) }
-  const toggleEmp=async(emp)=>{ await supabase.from('employees').update({active:!emp.active}).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,active:!e.active}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
+  const addEmployee=async()=>{ if(!eName.trim()){showToast('Introduceți numele','warn');return}; setAddingE(true); const {error}=await supabase.from('employees').insert({name:eName.trim(),department:eDept,position:ePos||null,site_id:eSite?Number(eSite):null,active:true,hire_date:eHireDate||null}); if(!error){showToast(`✓ ${eName}`);setEName('');setEPos('');setEHireDate('');loadAll()} else showToast('Eroare','error'); setAddingE(false) }
+  const toggleEmp=async(emp)=>{ const updates={active:!emp.active}; if(emp.active&&!emp.termination_date) updates.termination_date=new Date().toISOString().split('T')[0]; await supabase.from('employees').update(updates).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,...updates}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
   const saveEditEmp=async()=>{
     if(!editEmp) return
-    const {error}=await supabase.from('employees').update({name:editEmp.name,position:editEmp.position||null,department:editEmp.department,site_id:editEmp.site_id||null,iban:editEmp.iban||null}).eq('id',editEmp.id)
+    const {error}=await supabase.from('employees').update({name:editEmp.name,position:editEmp.position||null,department:editEmp.department,site_id:editEmp.site_id||null,iban:editEmp.iban||null,hire_date:editEmp.hire_date||null,termination_date:editEmp.termination_date||null}).eq('id',editEmp.id)
     if(!error){showToast(`✓ Salvat: ${editEmp.name}`);setEditEmp(null);loadAll()} else showToast('Eroare','error')
   }
   const deleteEmp=async()=>{
@@ -1848,12 +1870,17 @@ function AdminPage() {
                 {DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
               </select>
             </div>
-            <div style={{marginBottom:18}}><Lbl>Șantier</Lbl>
+            <div style={{marginBottom:12}}><Lbl>Șantier</Lbl>
               <select value={editEmp.site_id||''} onChange={e=>setEditEmp({...editEmp,site_id:e.target.value?Number(e.target.value):null})} style={{width:'100%'}}>
                 <option value="">— fără șantier —</option>
                 {sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
+            <div style={{display:'flex',gap:10,marginBottom:12}}>
+              <div style={{flex:1}}><Lbl>📅 Data angajării</Lbl><input type="date" style={S.input} value={editEmp.hire_date||''} onChange={e=>setEditEmp({...editEmp,hire_date:e.target.value||null})}/></div>
+              <div style={{flex:1}}><Lbl>🔴 Data încetării ctr.</Lbl><input type="date" style={S.input} value={editEmp.termination_date||''} onChange={e=>setEditEmp({...editEmp,termination_date:e.target.value||null})}/></div>
+            </div>
+            {editEmp.termination_date&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:8,padding:'8px 12px',marginBottom:14,fontSize:11,color:G.red}}>⚠️ Contract încetat pe {new Date(editEmp.termination_date).toLocaleDateString('ro-RO')} — angajatul va fi vizibil în pontaj până la finalul lunii respective.</div>}
             <div style={{display:'flex',gap:10}}>
               <button onClick={()=>setEditEmp(null)} style={{...S.btnS,flex:1}}>Anulează</button>
               <button onClick={saveEditEmp} style={{...S.btnP,flex:1}}>✓ Salvează</button>
@@ -2017,7 +2044,7 @@ function AdminPage() {
             </div>
             <div style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
               {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Status</th><th>Acțiuni</th></tr></thead>
+                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Angajat</th><th>Încetat</th><th>Status</th><th>Acțiuni</th></tr></thead>
                 <tbody>{employees.filter(e=>{
                   const s=empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active
                   const q=empSearch.trim().toLowerCase()
@@ -2031,6 +2058,8 @@ function AdminPage() {
                     <td><span className="badge bd">{emp.department}</span></td>
                     <td style={{color:G.muted,fontSize:11}}>{emp.position||'—'}</td>
                     <td style={{fontSize:11,color:G.purple}}>{emp.sites?.name||<span style={{color:G.red}}>⚠ Nealocate</span>}</td>
+                    <td style={{fontSize:11,color:G.green}}>{emp.hire_date?new Date(emp.hire_date).toLocaleDateString('ro-RO'):<span style={{color:G.dim}}>—</span>}</td>
+                    <td style={{fontSize:11,color:emp.termination_date?G.red:G.dim}}>{emp.termination_date?new Date(emp.termination_date).toLocaleDateString('ro-RO'):'—'}</td>
                     <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
                     <td><div style={{display:'flex',gap:5}}>
                       <button onClick={()=>setEditEmp({...emp})} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
@@ -2074,7 +2103,8 @@ function AdminPage() {
               <div style={{marginBottom:9}}><Lbl>Nume *</Lbl><input style={S.input} placeholder="Ana Ionescu" value={eName} onChange={e=>setEName(e.target.value)}/></div>
               <div style={{marginBottom:9}}><Lbl>Funcție</Lbl><input style={S.input} placeholder="Inginer" value={ePos} onChange={e=>setEPos(e.target.value)}/></div>
               <div style={{marginBottom:9}}><Lbl>Departament</Lbl><select value={eDept} onChange={e=>setEDept(e.target.value)} style={{width:'100%'}}>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select></div>
-              <div style={{marginBottom:14}}><Lbl>Șantier</Lbl><select value={eSite} onChange={e=>setESite(e.target.value)} style={{width:'100%'}}><option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+              <div style={{marginBottom:9}}><Lbl>Șantier</Lbl><select value={eSite} onChange={e=>setESite(e.target.value)} style={{width:'100%'}}><option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+              <div style={{marginBottom:14}}><Lbl>📅 Data angajării</Lbl><input type="date" style={S.input} value={eHireDate} onChange={e=>setEHireDate(e.target.value)}/></div>
               <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addEmployee} disabled={addingE}>{addingE?<><div className="sp"/>...</>:'+ Adaugă'}</button>
             </div>
           </div>
