@@ -151,6 +151,143 @@ function FieldTextarea({ label, value, onChange, rows=2, readonly, mono }) {
   )
 }
 
+// ─── Modal Alimentare Combustibil ────────────────────────────────────────────
+const STATII = ['', 'Petrom', 'OMV', 'MOL', 'Rompetrol', 'Lukoil', 'Gazprom', 'Socar', 'Tinmar', 'Altele']
+
+function AlimentareModal({ activ, onClose, onSaved, showToast }) {
+  const [form, setForm] = useState({
+    data_alimentare: new Date().toISOString().split('T')[0],
+    cantitate_litri: '',
+    ore_la_alimentare: '',
+    km_la_alimentare: '',
+    ore_lucrate_efectiv: '',
+    statie_combustibil: '',
+    card_combustibil: '',
+    pret_total: '',
+    pret_per_litru: '',
+    numar_factura: '',
+    observatii: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  
+  // Auto-calc preț per litru când se schimbă pret_total sau cantitate
+  useEffect(() => {
+    if (form.pret_total && form.cantitate_litri && Number(form.cantitate_litri) > 0) {
+      const ppl = (Number(form.pret_total) / Number(form.cantitate_litri)).toFixed(4)
+      if (form.pret_per_litru !== ppl) setField('pret_per_litru', ppl)
+    }
+  }, [form.pret_total, form.cantitate_litri])
+  
+  const handleSave = async () => {
+    if (!form.data_alimentare) { showToast('Selectează data', 'error'); return }
+    if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) { showToast('Cantitatea trebuie > 0', 'error'); return }
+    
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    const payload = {
+      active_id: activ.id,
+      data_alimentare: form.data_alimentare,
+      cantitate_litri: Number(form.cantitate_litri),
+      ore_la_alimentare: form.ore_la_alimentare ? Number(form.ore_la_alimentare) : null,
+      km_la_alimentare: form.km_la_alimentare ? Number(form.km_la_alimentare) : null,
+      ore_lucrate_efectiv: form.ore_lucrate_efectiv ? Number(form.ore_lucrate_efectiv) : null,
+      statie_combustibil: form.statie_combustibil || null,
+      card_combustibil: form.card_combustibil.trim() || null,
+      pret_total: form.pret_total ? Number(form.pret_total) : null,
+      pret_per_litru: form.pret_per_litru ? Number(form.pret_per_litru) : null,
+      numar_factura: form.numar_factura.trim() || null,
+      observatii: form.observatii.trim() || null,
+      created_by: user?.id,
+    }
+    
+    const { error } = await supabase.from('logistica_alimentari').insert(payload)
+    setSaving(false)
+    
+    if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
+    
+    showToast(`✓ Alimentare înregistrată: ${form.cantitate_litri} L`, 'success')
+    onSaved()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 620, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.orange}`}} className="fi">
+        
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: G.text, marginBottom: 4}}>
+              ⛽ Alimentare combustibil
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              {activ.marca} {activ.model} {activ.cod_intern && `· ${activ.cod_intern}`}
+              {activ.tip_carburant && ` · ${activ.tip_carburant}`}
+              {activ.norma_consum && ` · normă ${activ.norma_consum} ${activ.unitate_norma || 'l/h'}`}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+        </div>
+        
+        {/* Cantitate & data */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+          <FieldText label="Data alimentării" value={form.data_alimentare} onChange={v => setField('data_alimentare', v)} type="date" required />
+          <FieldText label="Cantitate (litri)" value={form.cantitate_litri} onChange={v => setField('cantitate_litri', v)} type="number" placeholder="ex: 50.5" required />
+        </div>
+        
+        {/* Citiri bord & ore lucrate */}
+        <div style={{marginBottom: 4}}>
+          <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
+            📊 Citiri pentru analiză consum
+          </div>
+        </div>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 12, marginBottom: 14}}>
+          <FieldText label="Ore bord la alim." value={form.ore_la_alimentare} onChange={v => setField('ore_la_alimentare', v)} type="number" placeholder="ex: 1250" />
+          <FieldText label="Km la alimentare" value={form.km_la_alimentare} onChange={v => setField('km_la_alimentare', v)} type="number" placeholder="ex: 145000" />
+          <FieldText label="Ore lucrate efectiv" value={form.ore_lucrate_efectiv} onChange={v => setField('ore_lucrate_efectiv', v)} type="number" placeholder="ex: 8" />
+        </div>
+        
+        {/* Stație & financiar */}
+        <div style={{marginBottom: 4}}>
+          <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
+            💳 Date stație & cost
+          </div>
+        </div>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 14}}>
+          <FieldSelect label="Stație combustibil" value={form.statie_combustibil} onChange={v => setField('statie_combustibil', v)} options={STATII} placeholder="— alege stația —" />
+          <FieldText label="Card combustibil" value={form.card_combustibil} onChange={v => setField('card_combustibil', v)} placeholder="ex: 7059-XXXX-1234" />
+          <FieldText label="Cost total (RON)" value={form.pret_total} onChange={v => setField('pret_total', v)} type="number" placeholder="ex: 380.50" />
+          <FieldText label="Preț/litru (auto)" value={form.pret_per_litru} onChange={v => setField('pret_per_litru', v)} type="number" placeholder="auto-calculat" />
+          <FieldText label="Număr factură" value={form.numar_factura} onChange={v => setField('numar_factura', v)} placeholder="ex: F-2026-1234" />
+          <div></div>
+        </div>
+        
+        <div style={{marginBottom: 14}}>
+          <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} />
+        </div>
+        
+        {/* Info: analiza vine în window */}
+        {form.cantitate_litri && (
+          <div style={{padding: 10, background: G.yellowDim + '88', border: `1px solid ${G.yellow}33`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
+            <strong style={{color: G.yellow}}>💡 Analiza consum</strong>
+            <div style={{marginTop: 4, color: G.muted, fontSize: 11, lineHeight: 1.5}}>
+              Diferența între consum teoretic și efectiv NU se calculează la o singură alimentare (rezervorul reține motorină).
+              <br/>Analiza apare automat după minimum 5 alimentări înregistrate, în secțiunea "📊 Analiză consum" din detaliul activului.
+            </div>
+          </div>
+        )}
+        
+        <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: G.orange, opacity: saving ? .6 : 1, cursor: saving ? 'wait' : 'pointer'}}>
+            {saving ? '⏳ Se salvează...' : '✓ Înregistrează alimentarea'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Modal Mentenanță Făcută ─────────────────────────────────────────────────
 function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
   const [form, setForm] = useState({
@@ -412,9 +549,11 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   const [form, setForm] = useState(fromActiv(activ))
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
   const [showMent, setShowMent] = useState(false)
+  const [showAlim, setShowAlim] = useState(false)
   const [istoric, setIstoric] = useState([])
+  const [alimentari, setAlimentari] = useState([])
   
-  // Fetch istoric când se deschide în view
+  // Fetch istoric + alimentări când se deschide în view
   useEffect(() => {
     if (mode === 'view' && activ?.id) {
       supabase.from('logistica_mentenanta_istoric')
@@ -422,6 +561,11 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         .eq('active_id', activ.id)
         .order('data_revizie', { ascending: false })
         .then(({ data }) => setIstoric(data || []))
+      supabase.from('logistica_alimentari')
+        .select('*')
+        .eq('active_id', activ.id)
+        .order('data_alimentare', { ascending: false })
+        .then(({ data }) => setAlimentari(data || []))
     }
   }, [mode, activ?.id])
   
@@ -565,8 +709,11 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           <div style={{display:'flex', gap: 6, flexWrap: 'wrap'}}>
             {mode === 'view' && canEdit && (
               <>
+                <button onClick={() => setShowAlim(true)} style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55'}}>
+                  ⛽ Alimentare
+                </button>
                 <button onClick={() => setShowMent(true)} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55'}}>
-                  ✅ Mentenanță făcută
+                  ✅ Mentenanță
                 </button>
                 <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
                   ✏️ Editează
@@ -697,6 +844,56 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           </div>
         )}
         
+        {/* Istoric alimentări (doar în view) */}
+        {mode === 'view' && alimentari.length > 0 && (
+          <div style={{marginBottom: 14}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8}}>
+              <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px'}}>
+                ⛽ Alimentări combustibil ({alimentari.length})
+              </div>
+              <div style={{fontSize: 11, color: G.muted}}>
+                Total: <strong style={{color: G.text}}>{alimentari.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0).toFixed(2)} L</strong>
+                {alimentari.some(a => a.pret_total) && <> · <strong style={{color: G.green}}>{alimentari.reduce((s, a) => s + Number(a.pret_total || 0), 0).toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} RON</strong></>}
+              </div>
+            </div>
+            <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
+              {alimentari.slice(0, 10).map((a, idx) => (
+                <div key={a.id} style={{
+                  padding: '8px 14px',
+                  borderBottom: idx < Math.min(alimentari.length, 10) - 1 ? `1px solid ${G.border}` : 'none',
+                  display: 'grid',
+                  gridTemplateColumns: '90px 70px 1fr auto',
+                  gap: 12,
+                  alignItems: 'center',
+                  fontSize: 12
+                }}>
+                  <div style={{fontFamily: 'monospace', color: G.text, fontWeight: 600}}>
+                    {fmtDate(a.data_alimentare)}
+                  </div>
+                  <div style={{color: G.orange, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
+                    {Number(a.cantitate_litri).toFixed(1)} L
+                  </div>
+                  <div style={{color: G.muted, fontSize: 11}}>
+                    {a.statie_combustibil && <span style={{color: G.text}}>{a.statie_combustibil}</span>}
+                    {a.ore_la_alimentare && <> · {a.ore_la_alimentare.toLocaleString('ro-RO')} ore bord</>}
+                    {a.km_la_alimentare && <> · {a.km_la_alimentare.toLocaleString('ro-RO')} km</>}
+                    {a.ore_lucrate_efectiv && <> · {a.ore_lucrate_efectiv}h lucrate</>}
+                    {a.observatii && <div style={{marginTop: 2, fontStyle: 'italic'}}>{a.observatii}</div>}
+                  </div>
+                  <div style={{color: G.green, fontWeight: 700, fontVariantNumeric: 'tabular-nums', fontSize: 13}}>
+                    {a.pret_total ? `${Number(a.pret_total).toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} RON` : '—'}
+                  </div>
+                </div>
+              ))}
+              {alimentari.length > 10 && (
+                <div style={{padding: '8px 14px', textAlign: 'center', fontSize: 11, color: G.muted, background: G.bg, borderTop: `1px solid ${G.border}`}}>
+                  ... și încă {alimentari.length - 10} alimentări mai vechi
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
         <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
           {mode !== 'view' && (
             <>
@@ -718,12 +915,27 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           onClose={() => setShowMent(false)}
           onSaved={() => {
             setShowMent(false)
-            // Reîncarc istoricul + plan
             supabase.from('logistica_mentenanta_istoric')
               .select('*').eq('active_id', activ.id)
               .order('data_revizie', { ascending: false })
               .then(({ data }) => setIstoric(data || []))
-            // Trigger refresh în pagina principală pentru a actualiza KPI și mentenanța
+            onSaved()
+          }}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal alimentare combustibil */}
+      {showAlim && (
+        <AlimentareModal 
+          activ={activ}
+          onClose={() => setShowAlim(false)}
+          onSaved={() => {
+            setShowAlim(false)
+            supabase.from('logistica_alimentari')
+              .select('*').eq('active_id', activ.id)
+              .order('data_alimentare', { ascending: false })
+              .then(({ data }) => setAlimentari(data || []))
             onSaved()
           }}
           showToast={showToast}
