@@ -598,9 +598,9 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
 
         {/* Santier */}
         <div style={{minWidth:130}}>
-          {emp.site_id?<span className="badge bs" style={{fontSize:10,display:'block',marginBottom:3}}>{emp.sites?.name||'Șantier'}</span>
+          {(rec?.site_id||emp.site_id)?<span className="badge bs" style={{fontSize:10,display:'block',marginBottom:3}}>{sites.find(s=>s.id===(rec?.site_id||emp.site_id))?.name||emp.sites?.name||'Șantier'}</span>
           :<span style={{fontSize:10,color:G.red,fontWeight:700,display:'block',marginBottom:3}}>⚠ Nealocate</span>}
-          {isAdmin&&<select value={emp.site_id||''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
+          {isAdmin&&<select value={rec?.site_id??emp.site_id??''} onChange={e=>onAllocate(emp,e.target.value?Number(e.target.value):null)} style={{padding:'2px 5px',fontSize:10,width:'100%'}}>
             <option value="">— fără —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
           </select>}
         </div>
@@ -707,16 +707,27 @@ function PontajPage() {
 
   const saveRecord = async (emp, fields) => {
     setSaving(emp.id)
-    if (!fields.norma && !emp.site_id) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
+    // site_id: use per-day record site if exists, else employee default
+    const recSiteId = recs[emp.id]?.site_id ?? emp.site_id ?? null
+    if (!fields.norma && !recSiteId) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
     const uid=(await supabase.auth.getUser()).data.user?.id
-    const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:emp.site_id,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
+    const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:recSiteId,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
     if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`)} else showToast('Eroare la salvare','error')
     setSaving(null)
   }
   const allocate = async (emp, siteId) => {
-    await supabase.from('employees').update({site_id:siteId||null}).eq('id',emp.id)
-    setEmps(prev=>prev.map(e=>e.id===emp.id?{...e,site_id:siteId||null,sites:sites.find(s=>s.id===siteId)||null}:e))
-    showToast(siteId?`✓ Alocat: ${sites.find(s=>s.id===siteId)?.name}`:'Dezalocat','warn')
+    // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
+    const uid=(await supabase.auth.getUser()).data.user?.id
+    const {data:rec}=await supabase.from('pontaj_records')
+      .upsert({employee_id:emp.id,date,site_id:siteId||null,updated_by:uid,updated_at:new Date().toISOString()},{onConflict:'employee_id,date'})
+      .select().single()
+    if(rec) setRecs(prev=>({...prev,[emp.id]:rec}))
+    // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
+    if(!emp.site_id&&siteId){
+      await supabase.from('employees').update({site_id:siteId}).eq('id',emp.id)
+      setEmps(prev=>prev.map(e=>e.id===emp.id?{...e,site_id:siteId,sites:sites.find(s=>s.id===siteId)||null}:e))
+    }
+    showToast(siteId?`✓ ${emp.name} → ${sites.find(s=>s.id===siteId)?.name} (doar ${date})`:'Dezalocat zi','warn')
   }
   const filtered=emps.filter(e=>{
     if(e.hire_date&&e.hire_date>date) return false
