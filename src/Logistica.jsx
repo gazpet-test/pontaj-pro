@@ -5,6 +5,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import * as XLSX from 'xlsx-js-style'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -238,6 +239,32 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     onSaved(result.data)
   }
   
+  const handleDelete = async () => {
+    const label = `${activ.marca || ''} ${activ.model || ''}`.trim() || activ.cod_intern || activ.nr_inmatriculare || `ID ${activ.id}`
+    const confirmed = window.confirm(
+      `⚠️ ATENȚIE — Ștergere ireversibilă\n\n` +
+      `Sigur vrei să ștergi:\n"${label}"?\n\n` +
+      `Vor fi șterse și:\n` +
+      `· planul de mentenanță asociat\n` +
+      `· toate alocările istorice\n` +
+      `· documentele atașate\n\n` +
+      `Această acțiune NU poate fi anulată.`
+    )
+    if (!confirmed) return
+    
+    setSaving(true)
+    const { error } = await supabase.from('logistica_active').delete().eq('id', activ.id)
+    setSaving(false)
+    
+    if (error) {
+      showToast(`Eroare la ștergere: ${error.message}`, 'error')
+      return
+    }
+    
+    showToast(`✓ Șters: ${label}`, 'success')
+    onSaved()
+  }
+  
   const titleMain = mode === 'create' 
     ? '+ Activ nou'
     : `${activ?.marca || '—'} ${activ?.model || ''}`.trim()
@@ -266,9 +293,19 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           </div>
           <div style={{display:'flex', gap: 6}}>
             {mode === 'view' && canEdit && (
-              <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
-                ✏️ Editează
-              </button>
+              <>
+                <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
+                  ✏️ Editează
+                </button>
+                {accessLevel === 'admin' && (
+                  <button onClick={handleDelete} disabled={saving} style={{
+                    ...S.btnS, fontSize: 12, color: G.red, borderColor: G.red + '55',
+                    opacity: saving ? .5 : 1
+                  }}>
+                    🗑️ Șterge
+                  </button>
+                )}
+              </>
             )}
             <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4, lineHeight: 1}}>×</button>
           </div>
@@ -393,6 +430,81 @@ export default function LogisticaPage() {
   
   const handleSaved = () => { loadAll(); setModal(null) }
   
+  // ─── Export Excel ──────────────────────────────────────────────────────────
+  const exportExcel = () => {
+    const header = ['Cod intern', 'Plăcuță', 'Marcă', 'Model', 'Tip', 'Subcategorie', 'An', 'Stare', 'Carburant', 'Normă consum', 'Unitate', 'Firmă', 'Mentenanță următoare', 'Zile până la scadență', 'Observații']
+    const rows = filtered.map(a => {
+      const cat = a.logistica_categorii
+      const ment = a.logistica_mentenanta_plan?.[0]
+      const days = ment?.urmatoarea_data ? daysUntil(ment.urmatoarea_data) : null
+      return [
+        a.cod_intern || '',
+        a.nr_inmatriculare || '',
+        a.marca || '',
+        a.model || '',
+        cat?.tip || '',
+        cat?.subcategorie || '',
+        a.an_fabricatie || '',
+        a.stare === 'Functional' ? 'Funcțional' : a.stare === 'Nefunctional' ? 'Nefuncțional' : a.stare === 'In_service' || a.stare === 'Service' ? 'În service' : (a.stare || ''),
+        a.tip_carburant || '',
+        a.norma_consum || '',
+        a.unitate_norma || '',
+        a.firma_proprietara || '',
+        ment?.urmatoarea_data ? new Date(ment.urmatoarea_data).toLocaleDateString('ro-RO') : '',
+        days !== null ? days : '',
+        a.observatii || '',
+      ]
+    })
+    
+    const aoa = [
+      [`Listă Active Logistică — ${new Date().toLocaleDateString('ro-RO')}`],
+      [`${filtered.length} active${filtered.length !== active.length ? ` (filtrat din ${active.length})` : ''}`],
+      [],
+      header,
+      ...rows
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    
+    // Stiluri
+    const titleStyle = { font: { bold: true, sz: 14, color: { rgb: 'E3B341' } } }
+    const subtitleStyle = { font: { italic: true, sz: 10, color: { rgb: '8B949E' } } }
+    const headerStyle = {
+      fill: { fgColor: { rgb: '1F2937' } },
+      font: { bold: true, color: { rgb: 'E3B341' }, sz: 10 },
+      alignment: { horizontal: 'center', vertical: 'center' },
+      border: { top: { style: 'thin', color: { rgb: '30363D' } }, bottom: { style: 'thin', color: { rgb: '30363D' } }, left: { style: 'thin', color: { rgb: '30363D' } }, right: { style: 'thin', color: { rgb: '30363D' } } }
+    }
+    
+    // Aplic stiluri
+    if (ws['A1']) ws['A1'].s = titleStyle
+    if (ws['A2']) ws['A2'].s = subtitleStyle
+    header.forEach((_, c) => {
+      const a = XLSX.utils.encode_cell({ r: 3, c })
+      if (ws[a]) ws[a].s = headerStyle
+    })
+    
+    // Lățimi coloane
+    ws['!cols'] = [
+      { wch: 10 }, { wch: 13 }, { wch: 16 }, { wch: 22 }, { wch: 15 }, { wch: 18 },
+      { wch: 6 }, { wch: 14 }, { wch: 11 }, { wch: 9 }, { wch: 8 }, { wch: 16 },
+      { wch: 14 }, { wch: 9 }, { wch: 30 }
+    ]
+    
+    // Merge cells pentru titlu
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 14 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 14 } },
+    ]
+    
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Active Logistică')
+    
+    const today = new Date().toISOString().split('T')[0]
+    XLSX.writeFile(wb, `Logistica_Active_${today}.xlsx`)
+    
+    showToast(`✓ Exportat ${filtered.length} active`, 'success')
+  }
+  
   const tipuri = useMemo(() => ['Toate', ...Array.from(new Set(categorii.map(c => c.tip))).sort()], [categorii])
   const subcategoriiPentruTip = useMemo(() => {
     if (tipF === 'Toate') return []
@@ -482,6 +594,9 @@ export default function LogisticaPage() {
             </button>
           )}
           <div style={{flex: 1}}/>
+          <button onClick={exportExcel} disabled={filtered.length === 0} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55', opacity: filtered.length === 0 ? .4 : 1}}>
+            📥 Excel
+          </button>
           {canEdit && (
             <button onClick={() => setModal({ mode: 'create', activ: null })} style={{...S.btnP, background: G.logistica, color: '#000'}}>
               + Activ nou
