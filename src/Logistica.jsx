@@ -1439,6 +1439,263 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
 }
 
 // ─── Pagina principală ───────────────────────────────────────────────────────
+// ─── Bara de tab-uri pentru pagina Logistică ─────────────────────────────────
+function TabsBar({ tab, setTab }) {
+  const tabs = [
+    { key: 'lista',     icon: '📋', label: 'Active' },
+    { key: 'alimentari',icon: '⛽', label: 'Alimentări' },
+    { key: 'documente', icon: '📎', label: 'Documente' },
+    { key: 'service',   icon: '🔧', label: 'Service' },
+    { key: 'tichete',   icon: '🎫', label: 'Tichete' },
+  ]
+  return (
+    <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
+      {tabs.map(t => {
+        const active = tab === t.key
+        return (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            padding: '8px 14px',
+            borderRadius: 7,
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: active ? 700 : 500,
+            background: active ? G.logistica + '22' : 'transparent',
+            color: active ? G.logistica : G.muted,
+            transition: 'all .15s',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <span style={{fontSize: 14}}>{t.icon}</span>
+            {t.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Placeholder pentru tab-uri în curs de dezvoltare ────────────────────────
+function PlaceholderTab({ label, desc, emoji }) {
+  return (
+    <div style={{...S.card, padding: 60, textAlign: 'center'}}>
+      <div style={{fontSize: 64, marginBottom: 14, opacity: .4}}>{emoji}</div>
+      <div style={{fontSize: 22, fontWeight: 800, color: G.text, marginBottom: 6}}>{label}</div>
+      <div style={{fontSize: 13, color: G.muted, marginBottom: 18}}>{desc}</div>
+      <div style={{display: 'inline-block', padding: '6px 14px', background: G.yellow + '22', color: G.yellow, fontSize: 11, fontWeight: 700, borderRadius: 14, letterSpacing: '.5px'}}>
+        🚧 ÎN DEZVOLTARE
+      </div>
+    </div>
+  )
+}
+
+// ─── Pagina Alimentări — input bulk per zi ──────────────────────────────────
+function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved }) {
+  const [filterText, setFilterText] = useState('')
+  const [filterSite, setFilterSite] = useState('')
+  const [forms, setForms] = useState({})  // map active_id → form data
+  const [savingId, setSavingId] = useState(null)
+  const [saved, setSaved] = useState({})  // map active_id → true (succes salvare)
+  const [pretMediuGazpet, setPretMediuGazpet] = useState(null)
+  
+  // Calculez preț mediu Gazpet
+  useEffect(() => {
+    if (!rezervorGazpet?.id) return
+    supabase.from('logistica_achizitii_vrac')
+      .select('cantitate_litri, pret_per_litru')
+      .eq('rezervor_id', rezervorGazpet.id)
+      .not('pret_per_litru', 'is', null)
+      .then(({ data }) => {
+        if (!data?.length) return
+        const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
+        const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
+        if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
+      })
+  }, [rezervorGazpet?.id])
+  
+  // Filtru: doar active cu combustibil
+  const activeFiltrate = useMemo(() => {
+    let res = active.filter(a => a.tip_carburant && a.tip_carburant.trim() !== '')
+    if (filterText.trim()) {
+      const q = filterText.toLowerCase()
+      res = res.filter(a => 
+        (a.cod_intern || '').toLowerCase().includes(q) ||
+        (a.nr_inmatriculare || '').toLowerCase().includes(q) ||
+        (a.marca || '').toLowerCase().includes(q) ||
+        (a.model || '').toLowerCase().includes(q)
+      )
+    }
+    return res
+  }, [active, filterText])
+  
+  const setFormField = (activId, field, value) => {
+    setForms(prev => ({ ...prev, [activId]: { ...prev[activId], [field]: value } }))
+  }
+  
+  const getForm = (activId) => forms[activId] || {}
+  
+  const navigateDate = (delta) => {
+    const d = new Date(dataAlim)
+    d.setDate(d.getDate() + delta)
+    setDataAlim(d.toISOString().split('T')[0])
+  }
+  
+  const handleSave = async (activ) => {
+    const f = getForm(activ.id)
+    if (!f.cantitate_litri || Number(f.cantitate_litri) <= 0) { showToast(`Cantitatea trebuie > 0 pentru ${activ.cod_intern || activ.nr_inmatriculare}`, 'error'); return }
+    
+    const isGazpet = f.statie_combustibil === STATIE_GAZPET
+    const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
+    const pretL = f.pret_per_litru ? Number(f.pret_per_litru) : (pretBaza ? Number(pretBaza) : null)
+    const pretTotal = pretL ? Number((Number(f.cantitate_litri) * pretL).toFixed(2)) : null
+    
+    // Warning preț atipic
+    if (pretL && (pretL < 1 || pretL > 20)) {
+      const ok = window.confirm(`⚠️ Preț/litru atipic: ${pretL} RON/L pentru ${activ.cod_intern || activ.nr_inmatriculare}\n\nContinui oricum?`)
+      if (!ok) return
+    }
+    
+    setSavingId(activ.id)
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    // Calc ore lucrate efectiv = ore_la_alimentare - ore_precedente (dacă e disponibil)
+    const orePrec = ultimeAlim[activ.id]?.ultime_ore
+    const oreLaAlim = f.ore_la_alimentare ? Number(f.ore_la_alimentare) : null
+    const oreLucrate = (orePrec && oreLaAlim && oreLaAlim > Number(orePrec)) ? oreLaAlim - Number(orePrec) : null
+    
+    const payload = {
+      active_id: activ.id,
+      data_alimentare: dataAlim,
+      cantitate_litri: Number(f.cantitate_litri),
+      ore_la_alimentare: oreLaAlim,
+      km_la_alimentare: f.km_la_alimentare ? Number(f.km_la_alimentare) : null,
+      ore_lucrate_efectiv: oreLucrate,
+      statie_combustibil: f.statie_combustibil || null,
+      pret_total: pretTotal,
+      pret_per_litru: pretL,
+      rezervor_id: isGazpet && rezervorGazpet ? rezervorGazpet.id : null,
+      site_id: f.site_id ? Number(f.site_id) : null,
+      created_by: user?.id,
+    }
+    
+    const { error } = await supabase.from('logistica_alimentari').insert(payload)
+    setSavingId(null)
+    
+    if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
+    
+    showToast(`✓ ${activ.cod_intern || activ.nr_inmatriculare}: ${f.cantitate_litri} L`, 'success')
+    setSaved(prev => ({ ...prev, [activ.id]: true }))
+    setForms(prev => ({ ...prev, [activ.id]: {} }))  // resetez form
+    onSaved()
+  }
+  
+  return (
+    <div>
+      {/* Header navigare dată */}
+      <div style={{...S.card, padding: '14px 18px', marginBottom: 14, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+          <button onClick={() => navigateDate(-1)} style={{...S.btnS, padding: '6px 10px', fontSize: 16}} title="Ziua precedentă">◀</button>
+          <input type="date" value={dataAlim} onChange={e => setDataAlim(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 14, fontWeight: 700, color: G.text, minWidth: 150}} />
+          <button onClick={() => navigateDate(1)} style={{...S.btnS, padding: '6px 10px', fontSize: 16}} title="Ziua următoare">▶</button>
+          <button onClick={() => setDataAlim(new Date().toISOString().split('T')[0])} style={{...S.btnS, padding: '6px 12px', fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>Azi</button>
+          <button onClick={() => { const d = new Date(); d.setDate(d.getDate() - 1); setDataAlim(d.toISOString().split('T')[0]) }} style={{...S.btnS, padding: '6px 12px', fontSize: 12, color: G.muted}}>Ieri</button>
+        </div>
+        <div style={{flex: 1}}/>
+        <input type="text" placeholder="🔍 Filtrează după marcă, cod, plăcuță..." value={filterText} onChange={e => setFilterText(e.target.value)} style={{...S.input, padding: '6px 12px', fontSize: 13, minWidth: 220}} />
+      </div>
+      
+      {/* Info banner */}
+      <div style={{padding: 10, marginBottom: 14, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 12, color: G.muted}}>
+        💡 Sunt {activeFiltrate.length} utilaje cu combustibil. Completează doar rândurile relevante și apasă <strong style={{color: G.green}}>✓ Salvează</strong> pe fiecare. Datele se salvează cu data <strong style={{color: G.text}}>{fmtDate(dataAlim)}</strong>.
+      </div>
+      
+      {/* Listă active cu form inline */}
+      <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+        {activeFiltrate.length === 0 ? (
+          <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted}}>
+            Niciun activ corespunzător filtrelor.
+          </div>
+        ) : activeFiltrate.map(activ => {
+          const f = getForm(activ.id)
+          const ultima = ultimeAlim[activ.id]
+          const isGazpet = f.statie_combustibil === STATIE_GAZPET
+          const isSaved = saved[activ.id]
+          
+          return (
+            <div key={activ.id} style={{
+              ...S.card,
+              padding: '10px 14px',
+              borderLeft: `3px solid ${isSaved ? G.green : (f.cantitate_litri ? G.orange : G.border)}`,
+              opacity: isSaved ? .7 : 1,
+            }}>
+              {/* Rând 1: Identificare + status */}
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8}}>
+                <div style={{flex: 1, minWidth: 200}}>
+                  <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
+                    {activ.marca} {activ.model}
+                  </div>
+                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                    {activ.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{activ.cod_intern}</span>}
+                    {activ.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: activ.cod_intern ? 8 : 0}}>{activ.nr_inmatriculare}</span>}
+                    {activ.tip_carburant && <span style={{marginLeft: 8}}>· {activ.tip_carburant}</span>}
+                    {activ.norma_consum && <span style={{marginLeft: 4}}>· {activ.norma_consum} {activ.unitate_norma || 'l/h'}</span>}
+                  </div>
+                  {ultima && (
+                    <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                      Ultima alim: {fmtDate(ultima.ultima_data)}
+                      {ultima.ultime_litri && ` · ${Number(ultima.ultime_litri).toFixed(1)}L`}
+                      {ultima.ultime_ore && ` · ${ultima.ultime_ore} ore bord`}
+                      {ultima.ultimi_km && ` · ${Number(ultima.ultimi_km).toLocaleString('ro-RO')} km`}
+                    </div>
+                  )}
+                </div>
+                {isSaved && (
+                  <span style={{fontSize: 11, padding: '3px 8px', background: G.green + '22', color: G.green, borderRadius: 4, fontWeight: 700}}>
+                    ✓ SALVAT
+                  </span>
+                )}
+              </div>
+              
+              {/* Rând 2: Form inline */}
+              {!isSaved && (
+                <div style={{display: 'grid', gridTemplateColumns: '90px 130px 130px 80px 80px 80px', gap: 6, alignItems: 'end'}}>
+                  <FieldText label="Cant. (L)" value={f.cantitate_litri || ''} onChange={v => setFormField(activ.id, 'cantitate_litri', v)} type="number" placeholder="50" />
+                  <FieldSelect label="Sursa" value={f.statie_combustibil || ''} onChange={v => setFormField(activ.id, 'statie_combustibil', v)} options={STATII} placeholder="—" />
+                  <FieldSelect label="Șantier" value={f.site_id || ''} onChange={v => setFormField(activ.id, 'site_id', v)} options={[{label:'—', value:''}, ...(sites||[]).map(s => ({label: s.name, value: String(s.id)}))]} placeholder="—" />
+                  <FieldText label={ultima?.ultime_ore ? `Ore (de la ${ultima.ultime_ore})` : "Ore bord"} value={f.ore_la_alimentare || ''} onChange={v => setFormField(activ.id, 'ore_la_alimentare', v)} type="number" placeholder={ultima?.ultime_ore ? String(Number(ultima.ultime_ore) + 8) : "ex: 1248"} />
+                  <FieldText label="Km" value={f.km_la_alimentare || ''} onChange={v => setFormField(activ.id, 'km_la_alimentare', v)} type="number" placeholder={ultima?.ultimi_km ? String(ultima.ultimi_km) : ""} />
+                  <button 
+                    onClick={() => handleSave(activ)} 
+                    disabled={savingId === activ.id || !canEdit || !f.cantitate_litri}
+                    style={{...S.btnP, background: G.green, padding: '7px 12px', fontSize: 12, opacity: (savingId === activ.id || !canEdit || !f.cantitate_litri) ? .4 : 1, cursor: (savingId === activ.id || !canEdit || !f.cantitate_litri) ? 'not-allowed' : 'pointer'}}>
+                    {savingId === activ.id ? '⏳' : '✓ Save'}
+                  </button>
+                </div>
+              )}
+              
+              {/* Banner Gazpet în mini-form */}
+              {!isSaved && isGazpet && rezervorGazpet && f.cantitate_litri && (
+                <div style={{marginTop: 6, padding: '5px 10px', background: G.purple + '15', border: `1px solid ${G.purple}33`, borderRadius: 6, fontSize: 10, color: G.muted}}>
+                  📦 Stoc Gazpet: {Number(rezervorGazpet.stoc_curent_litri).toFixed(0)}L → {(Number(rezervorGazpet.stoc_curent_litri) - Number(f.cantitate_litri)).toFixed(0)}L
+                  {pretMediuGazpet && <> · preț mediu vrac: <strong style={{color: G.text}}>{pretMediuGazpet} RON/L</strong></>}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      
+      {Object.keys(saved).length > 0 && (
+        <div style={{marginTop: 14, padding: 10, background: G.greenDim + '88', border: `1px solid ${G.green}55`, borderRadius: 8, fontSize: 12, color: G.text, textAlign: 'center'}}>
+          ✓ <strong style={{color: G.green}}>{Object.keys(saved).length} alimentări înregistrate</strong> pentru {fmtDate(dataAlim)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 export default function LogisticaPage() {
   const nav = useNavigate()
   const [profile, setProfile] = useState(null)
@@ -1461,6 +1718,9 @@ export default function LogisticaPage() {
   const [showAchizitie, setShowAchizitie] = useState(false)
   const [showEditStoc, setShowEditStoc] = useState(false)
   const [showSetariPret, setShowSetariPret] = useState(false)
+  const [tab, setTab] = useState('lista')                    // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete'
+  const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
+  const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
   const [toast, showToast] = useToast()
   
   useEffect(() => {
@@ -1482,7 +1742,7 @@ export default function LogisticaPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes] = await Promise.all([
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
@@ -1492,6 +1752,7 @@ export default function LogisticaPage() {
       supabase.from('sites').select('id, name').order('name'),
       supabase.from('logistica_setari').select('key, value').in('key', ['pret_motorina_ron', 'pret_motorina_actualizat']),
       supabase.from('v_alimentari_kpi').select('*').single(),
+      supabase.from('v_alimentari_ultima').select('*'),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
@@ -1502,6 +1763,10 @@ export default function LogisticaPage() {
     setPretMotorina(setariMap.pret_motorina_ron || null)
     setPretMotorinaActualizat(setariMap.pret_motorina_actualizat || null)
     setKpiAlim(kpiAlimRes.data || null)
+    // Map ultima alimentare per activ
+    const map = {}
+    ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
+    setUltimeAlim(map)
     setLoad(false)
   }
   
@@ -1849,6 +2114,37 @@ export default function LogisticaPage() {
         </div>
       </div>
       
+      {/* Bara de tab-uri */}
+      <TabsBar tab={tab} setTab={setTab} />
+      
+      {/* TAB: Alimentări (input bulk per zi) */}
+      {tab === 'alimentari' && (
+        <AlimentariBulkPage 
+          active={active}
+          ultimeAlim={ultimeAlim}
+          sites={sites}
+          rezervorGazpet={rezervor}
+          pretMotorina={pretMotorina}
+          dataAlim={dataAlim}
+          setDataAlim={setDataAlim}
+          canEdit={canEdit}
+          showToast={showToast}
+          onSaved={loadAll}
+        />
+      )}
+      
+      {/* TAB: Documente (placeholder) */}
+      {tab === 'documente' && <PlaceholderTab label="Documente" desc="ITP · RCA · CASCO · Autorizații · Asigurări" emoji="📎" />}
+      
+      {/* TAB: Service (placeholder) */}
+      {tab === 'service' && <PlaceholderTab label="Service" desc="Programări · Intervenții · Costuri reparații" emoji="🔧" />}
+      
+      {/* TAB: Tichete (placeholder) */}
+      {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
+      
+      {/* TAB: Active (default — conținutul existent) */}
+      {tab === 'lista' && (<>
+      
       {kpi && (
         <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
           <KPICard icon="🚛" label="Total active" value={kpi.nr_total_active} color={G.blue} />
@@ -2099,6 +2395,8 @@ export default function LogisticaPage() {
           </div>
         </div>
       )}
+      
+      </>)}
       
       {modal && (
         <ActivFormModal 
