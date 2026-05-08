@@ -1562,7 +1562,21 @@ function EditAlimentareModal({ alim, sites, rezervorGazpet, pretMotorina, onClos
   }
   
   const handleDelete = async () => {
-    if (!window.confirm(`Ștergi alimentarea de ${alim.cantitate_litri} L de pe ${fmtDate(alim.data_alimentare)}?\n\nStocul rezervorului va fi ajustat automat.`)) return
+    const msg = 
+`⚠️ ATENȚIE — Ștergi această alimentare?
+
+📅 Data: ${fmtDate(alim.data_alimentare)}
+⛽ Cantitate: ${alim.cantitate_litri} L
+🕐 Ore bord: ${alim.ore_la_alimentare || '—'}
+🚗 Km: ${alim.km_la_alimentare || '—'}
+
+⚠️ Această ștergere INFLUENȚEAZĂ:
+  • Calculul orelor lucrate între alimentări
+  • Stocul rezervorului${alim.rezervor_id ? ' Gazpet (vor fi REPUȘI ' + alim.cantitate_litri + ' L)' : ''}
+  • Analiza consum (window 5 alimentări)
+
+Continui ștergerea?`
+    if (!window.confirm(msg)) return
     setDeleting(true)
     const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id)
     setDeleting(false)
@@ -1638,6 +1652,223 @@ function EditAlimentareModal({ alim, sites, rezervorGazpet, pretMotorina, onClos
   )
 }
 
+// ─── Mini-modal istoric alimentări per utilaj ───────────────────────────────
+function IstoricAlimUtilaj({ activ, sites, rezervorGazpet, pretMotorina, canEdit, onClose, onChanged, showToast }) {
+  const [perioada, setPerioada] = useState('luna')  // 'azi' | 'ieri' | 'saptamana' | 'luna' | 'tot' | 'custom'
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
+  const [list, setList] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [editAlim, setEditAlim] = useState(null)
+  
+  const fetchList = async () => {
+    setLoading(true)
+    let q = supabase.from('logistica_alimentari')
+      .select(`*, sites(name), profiles!created_by(name)`)
+      .eq('active_id', activ.id)
+      .order('data_alimentare', { ascending: false })
+      .order('id', { ascending: false })
+    
+    const today = new Date().toISOString().split('T')[0]
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
+    const week = new Date(Date.now() - 7*86400000).toISOString().split('T')[0]
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+    
+    if (perioada === 'azi') q = q.eq('data_alimentare', today)
+    else if (perioada === 'ieri') q = q.eq('data_alimentare', yesterday)
+    else if (perioada === 'saptamana') q = q.gte('data_alimentare', week).lte('data_alimentare', today)
+    else if (perioada === 'luna') q = q.gte('data_alimentare', monthStart)
+    else if (perioada === 'custom' && customStart && customEnd) q = q.gte('data_alimentare', customStart).lte('data_alimentare', customEnd)
+    
+    const { data } = await q
+    setList(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { fetchList() }, [perioada, customStart, customEnd])
+  
+  // Ștergere CU notificare specială despre influența ore/km/stoc
+  const handleDelete = async (a) => {
+    const msg = 
+`⚠️ ATENȚIE — Ștergi această alimentare?
+
+📅 Data: ${fmtDate(a.data_alimentare)}
+⛽ Cantitate: ${a.cantitate_litri} L
+🕐 Ore bord: ${a.ore_la_alimentare || '—'}
+🚗 Km: ${a.km_la_alimentare || '—'}
+🏪 Sursă: ${a.statie_combustibil || '—'}
+
+⚠️ Această ștergere INFLUENȚEAZĂ:
+  • Calculul orelor lucrate între alimentări
+  • Stocul rezervorului${a.rezervor_id ? ' Gazpet (vor fi REPUȘI ' + a.cantitate_litri + ' L)' : ''}
+  • Analiza consum (window 5 alimentări)
+  • Costul total raportat
+
+❗ Verifică ATENT alimentările vecine după ștergere — valorile ore/km pot rămâne neconcordante.
+
+Continui ștergerea?`
+    
+    if (!window.confirm(msg)) return
+    
+    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', a.id)
+    if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
+    showToast(`✓ Alimentarea ștearsă · ${a.rezervor_id ? `+${a.cantitate_litri}L în rezervor` : ''}`, 'success')
+    fetchList()
+    onChanged && onChanged()
+  }
+  
+  const totalLitri = list.reduce((s,a) => s + Number(a.cantitate_litri || 0), 0)
+  const totalCost = list.reduce((s,a) => s + Number(a.pret_total || 0), 0)
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'30px 16px', overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 20, width: '100%', maxWidth: 1100, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.logistica}`}} className="fi">
+        
+        {/* Header */}
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 14, paddingBottom: 12, borderBottom: `1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize: 17, fontWeight: 800, color: G.text, marginBottom: 4}}>
+              📋 Istoric alimentări — {activ.marca} {activ.model}
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              {activ.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{activ.cod_intern}</span>}
+              {activ.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: 8}}>{activ.nr_inmatriculare}</span>}
+              {activ.tip_carburant && <> · {activ.tip_carburant}</>}
+              {activ.norma_consum && <> · normă {activ.norma_consum} {activ.unitate_norma || 'l/h'}</>}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+        </div>
+        
+        {/* Filtru perioadă */}
+        <div style={{display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap'}}>
+          <span style={{fontSize: 11, color: G.muted, fontWeight: 600, marginRight: 4}}>PERIOADĂ:</span>
+          {[
+            {key: 'azi', label: 'Azi'},
+            {key: 'ieri', label: 'Ieri'},
+            {key: 'saptamana', label: '7 zile'},
+            {key: 'luna', label: 'Luna'},
+            {key: 'tot', label: 'Tot'},
+            {key: 'custom', label: 'Custom'},
+          ].map(p => (
+            <button key={p.key} onClick={() => setPerioada(p.key)} style={{
+              ...S.btnS, padding: '6px 12px', fontSize: 12, fontWeight: 600,
+              background: perioada === p.key ? G.logistica + '22' : 'transparent',
+              color: perioada === p.key ? G.logistica : G.muted,
+              borderColor: perioada === p.key ? G.logistica + '55' : G.border,
+            }}>{p.label}</button>
+          ))}
+          {perioada === 'custom' && (
+            <>
+              <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 12}} />
+              <span style={{color: G.muted, fontSize: 12}}>→</span>
+              <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 12}} />
+            </>
+          )}
+          <div style={{flex: 1}}/>
+          {list.length > 0 && (
+            <div style={{fontSize: 12, color: G.muted}}>
+              <strong style={{color: G.orange}}>{totalLitri.toFixed(1)} L</strong>
+              {totalCost > 0 && <> · <strong style={{color: G.green}}>{totalCost.toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} RON</strong></>}
+              <span style={{marginLeft: 6}}>· {list.length} alim.</span>
+            </div>
+          )}
+        </div>
+        
+        {/* Tabel */}
+        {loading ? (
+          <div style={{padding: 30, textAlign: 'center', color: G.muted}}>⏳ Se încarcă...</div>
+        ) : list.length === 0 ? (
+          <div style={{padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>
+            Nicio alimentare înregistrată în această perioadă.
+          </div>
+        ) : (
+          <div style={{...S.card, padding: 0, overflow: 'hidden', maxHeight: 500, overflowY: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
+              <thead style={{position: 'sticky', top: 0, background: G.surface, zIndex: 1}}>
+                <tr style={{borderBottom: `2px solid ${G.border}`}}>
+                  <th style={{padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase', width: 40}}>#</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Data</th>
+                  <th style={{padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Cant.</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Sursa</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Șantier</th>
+                  <th style={{padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Ore bord</th>
+                  <th style={{padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Km</th>
+                  <th style={{padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Cost</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase'}}>Cine</th>
+                  {canEdit && <th style={{padding: '10px 8px', textAlign: 'center', width: 100}}></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {list.map((a, idx) => {
+                  const pretL = Number(a.pret_per_litru || 0)
+                  const isPretSusp = a.pret_per_litru && (pretL < 1 || pretL > 20)
+                  return (
+                    <tr key={a.id} style={{borderBottom: `1px solid ${G.border}`}}>
+                      <td style={{padding: '7px 8px', textAlign: 'center', color: G.muted, fontFamily: 'monospace', fontWeight: 600}}>{idx + 1}</td>
+                      <td style={{padding: '7px 8px', fontFamily: 'monospace', color: G.text, fontWeight: 600}}>{fmtDate(a.data_alimentare)}</td>
+                      <td style={{padding: '7px 8px', textAlign: 'right', color: G.orange, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
+                        {Number(a.cantitate_litri).toFixed(1)} L
+                      </td>
+                      <td style={{padding: '7px 8px', fontSize: 11, color: a.statie_combustibil === STATIE_GAZPET ? G.purple : G.text}}>
+                        {a.statie_combustibil ? (a.statie_combustibil === STATIE_GAZPET ? 'Gazpet' : a.statie_combustibil) : <span style={{color: G.muted}}>—</span>}
+                      </td>
+                      <td style={{padding: '7px 8px', fontSize: 11, color: G.text}}>
+                        {a.sites?.name || <span style={{color: G.muted}}>—</span>}
+                      </td>
+                      <td style={{padding: '7px 8px', textAlign: 'right', fontFamily: 'monospace', color: G.muted}}>
+                        {a.ore_la_alimentare || '—'}
+                      </td>
+                      <td style={{padding: '7px 8px', textAlign: 'right', fontFamily: 'monospace', color: G.muted}}>
+                        {a.km_la_alimentare ? Number(a.km_la_alimentare).toLocaleString('ro-RO') : '—'}
+                      </td>
+                      <td style={{padding: '7px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums'}}>
+                        {a.pret_total ? (
+                          <div>
+                            <div style={{color: isPretSusp ? G.red : G.green, fontWeight: 700}}>
+                              {Number(a.pret_total).toFixed(2)}
+                            </div>
+                            {isPretSusp && <div style={{fontSize: 9, color: G.red, fontWeight: 600}}>⚠️ {pretL.toFixed(2)}/L</div>}
+                          </div>
+                        ) : <span style={{color: G.muted}}>—</span>}
+                      </td>
+                      <td style={{padding: '7px 8px', fontSize: 10, color: G.muted}}>
+                        {a.profiles?.name?.split(' ')[0] || '—'}
+                      </td>
+                      {canEdit && (
+                        <td style={{padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap'}}>
+                          <button onClick={() => setEditAlim(a)} style={{...S.btnS, padding: '3px 7px', fontSize: 10, color: G.logistica, borderColor: G.logistica + '55', marginRight: 3}} title="Editează">✏️</button>
+                          <button onClick={() => handleDelete(a)} style={{...S.btnS, padding: '3px 7px', fontSize: 10, color: G.red, borderColor: G.red + '55'}} title="Șterge cu atenționare">🗑️</button>
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        
+        <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, marginTop: 12, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} style={S.btnS}>Închide</button>
+        </div>
+        
+        {/* Modal edit alimentare */}
+        {editAlim && (
+          <EditAlimentareModal 
+            alim={editAlim}
+            sites={sites}
+            rezervorGazpet={rezervorGazpet}
+            pretMotorina={pretMotorina}
+            onClose={() => setEditAlim(null)}
+            onSaved={() => { setEditAlim(null); fetchList(); onChanged && onChanged() }}
+            showToast={showToast}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
@@ -1654,6 +1885,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
   const [alimList, setAlimList] = useState([])
   const [loadingAlim, setLoadingAlim] = useState(false)
   const [editAlim, setEditAlim] = useState(null)
+  const [istoricActiv, setIstoricActiv] = useState(null)  // activ pentru care vedem istoric
   
   // Calculez preț mediu Gazpet
   useEffect(() => {
@@ -1841,7 +2073,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
           <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted}}>
             Niciun activ corespunzător filtrelor.
           </div>
-        ) : activeFiltrate.map(activ => {
+        ) : activeFiltrate.map((activ, idx) => {
           const f = getForm(activ.id)
           const ultima = ultimeAlim[activ.id]
           const isGazpet = f.statie_combustibil === STATIE_GAZPET
@@ -1856,30 +2088,44 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
             }}>
               {/* Rând 1: Identificare + status */}
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8}}>
-                <div style={{flex: 1, minWidth: 200}}>
-                  <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
-                    {activ.marca} {activ.model}
-                  </div>
-                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
-                    {activ.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{activ.cod_intern}</span>}
-                    {activ.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: activ.cod_intern ? 8 : 0}}>{activ.nr_inmatriculare}</span>}
-                    {activ.tip_carburant && <span style={{marginLeft: 8}}>· {activ.tip_carburant}</span>}
-                    {activ.norma_consum && <span style={{marginLeft: 4}}>· {activ.norma_consum} {activ.unitate_norma || 'l/h'}</span>}
-                  </div>
-                  {ultima && (
-                    <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
-                      Ultima alim: {fmtDate(ultima.ultima_data)}
-                      {ultima.ultime_litri && ` · ${Number(ultima.ultime_litri).toFixed(1)}L`}
-                      {ultima.ultime_ore && ` · ${ultima.ultime_ore} ore bord`}
-                      {ultima.ultimi_km && ` · ${Number(ultima.ultimi_km).toLocaleString('ro-RO')} km`}
+                <div style={{flex: 1, minWidth: 200, display: 'flex', alignItems: 'flex-start', gap: 10}}>
+                  <div style={{
+                    minWidth: 28, height: 28, borderRadius: 6,
+                    background: G.bg, border: `1px solid ${G.border}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 11, fontWeight: 700, color: G.muted, fontFamily: 'monospace',
+                    flexShrink: 0,
+                  }}>{idx + 1}</div>
+                  <div style={{flex: 1}}>
+                    <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
+                      {activ.marca} {activ.model}
                     </div>
-                  )}
+                    <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                      {activ.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{activ.cod_intern}</span>}
+                      {activ.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: activ.cod_intern ? 8 : 0}}>{activ.nr_inmatriculare}</span>}
+                      {activ.tip_carburant && <span style={{marginLeft: 8}}>· {activ.tip_carburant}</span>}
+                      {activ.norma_consum && <span style={{marginLeft: 4}}>· {activ.norma_consum} {activ.unitate_norma || 'l/h'}</span>}
+                    </div>
+                    {ultima && (
+                      <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                        Ultima alim: {fmtDate(ultima.ultima_data)}
+                        {ultima.ultime_litri && ` · ${Number(ultima.ultime_litri).toFixed(1)}L`}
+                        {ultima.ultime_ore && ` · ${ultima.ultime_ore} ore bord`}
+                        {ultima.ultimi_km && ` · ${Number(ultima.ultimi_km).toLocaleString('ro-RO')} km`}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {isSaved && (
-                  <span style={{fontSize: 11, padding: '3px 8px', background: G.green + '22', color: G.green, borderRadius: 4, fontWeight: 700}}>
-                    ✓ SALVAT
-                  </span>
-                )}
+                <div style={{display: 'flex', gap: 6, alignItems: 'center'}}>
+                  {isSaved && (
+                    <span style={{fontSize: 11, padding: '3px 8px', background: G.green + '22', color: G.green, borderRadius: 4, fontWeight: 700}}>
+                      ✓ SALVAT
+                    </span>
+                  )}
+                  <button onClick={() => setIstoricActiv(activ)} style={{...S.btnS, padding: '5px 10px', fontSize: 11, color: G.logistica, borderColor: G.logistica + '55'}} title="Vezi istoric alimentări pentru acest utilaj">
+                    👁 View
+                  </button>
+                </div>
               </div>
               
               {/* Rând 2: Form inline */}
@@ -1974,6 +2220,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
               <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
                 <thead>
                   <tr style={{background: G.surface, borderBottom: `2px solid ${G.border}`}}>
+                    <th style={{padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', width: 40}}>#</th>
                     <th style={{padding: '10px 12px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data</th>
                     <th style={{padding: '10px 12px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Utilaj</th>
                     <th style={{padding: '10px 12px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Cantitate</th>
@@ -1986,12 +2233,13 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
                   </tr>
                 </thead>
                 <tbody>
-                  {alimList.map(a => {
+                  {alimList.map((a, idx) => {
                     const av = a.logistica_active || {}
                     const pretL = Number(a.pret_per_litru || 0)
                     const isPretSusp = a.pret_per_litru && (pretL < 1 || pretL > 20)
                     return (
                       <tr key={a.id} style={{borderBottom: `1px solid ${G.border}`}}>
+                        <td style={{padding: '8px 8px', textAlign: 'center', color: G.muted, fontFamily: 'monospace', fontWeight: 600, fontSize: 11}}>{idx + 1}</td>
                         <td style={{padding: '8px 12px', fontFamily: 'monospace', color: G.text, fontWeight: 600}}>{fmtDate(a.data_alimentare)}</td>
                         <td style={{padding: '8px 12px'}}>
                           <div style={{fontWeight: 600, color: G.text}}>{av.marca} {av.model?.substring(0, 30)}{av.model?.length > 30 ? '...' : ''}</div>
@@ -2051,6 +2299,20 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
           pretMotorina={pretMotorina}
           onClose={() => setEditAlim(null)}
           onSaved={() => { setEditAlim(null); fetchAlimentari(); onSaved() }}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal istoric alimentări per utilaj */}
+      {istoricActiv && (
+        <IstoricAlimUtilaj 
+          activ={istoricActiv}
+          sites={sites}
+          rezervorGazpet={rezervorGazpet}
+          pretMotorina={pretMotorina}
+          canEdit={canEdit}
+          onClose={() => setIstoricActiv(null)}
+          onChanged={() => { fetchAlimentari(); onSaved() }}
           showToast={showToast}
         />
       )}
