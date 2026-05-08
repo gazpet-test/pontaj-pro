@@ -210,33 +210,88 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
     site_id: '',
   })
   const [saving, setSaving] = useState(false)
+  const [lastEdited, setLastEdited] = useState(null)  // 'total' | 'pret' | null
+  const [pretMediuGazpet, setPretMediuGazpet] = useState(null)
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
   
   const isGazpet = form.statie_combustibil === STATIE_GAZPET
   const stocCurent = rezervorGazpet?.stoc_curent_litri ? Number(rezervorGazpet.stoc_curent_litri) : 0
   const stocAfter = isGazpet && form.cantitate_litri ? stocCurent - Number(form.cantitate_litri) : null
   
-  // Auto-calc preț per litru
+  // Fetch preț mediu ponderat Gazpet (din achiziții vrac)
   useEffect(() => {
-    if (form.pret_total && form.cantitate_litri && Number(form.cantitate_litri) > 0) {
-      const ppl = (Number(form.pret_total) / Number(form.cantitate_litri)).toFixed(4)
-      if (form.pret_per_litru !== ppl) setField('pret_per_litru', ppl)
-    }
-  }, [form.pret_total, form.cantitate_litri])
+    if (!rezervorGazpet?.id) return
+    supabase.from('logistica_achizitii_vrac')
+      .select('cantitate_litri, pret_per_litru')
+      .eq('rezervor_id', rezervorGazpet.id)
+      .not('pret_per_litru', 'is', null)
+      .then(({ data }) => {
+        if (!data?.length) return
+        const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
+        const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
+        if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
+      })
+  }, [rezervorGazpet?.id])
   
-  // Auto-fill cost când se introduce cantitatea (dacă nu există preț total introdus manual)
+  // Pretul de bază folosit la auto-fill (Gazpet → mediu ponderat, altă stație → preț pompă)
+  const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
+  
+  // Sincronizare bidirecțională cost ↔ preț/litru când se schimbă cantitatea
   useEffect(() => {
-    if (form.cantitate_litri && pretMotorina && !form.pret_total) {
-      const costEstimat = (Number(form.cantitate_litri) * Number(pretMotorina)).toFixed(2)
-      setField('pret_total', costEstimat)
+    if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) return
+    
+    if (lastEdited === 'total' && form.pret_total) {
+      // User a editat costul total → recalculez preț/litru
+      const ppl = (Number(form.pret_total) / Number(form.cantitate_litri)).toFixed(4)
+      setField('pret_per_litru', ppl)
+    } else if (lastEdited === 'pret' && form.pret_per_litru) {
+      // User a editat preț/litru → recalculez cost total
+      const total = (Number(form.pret_per_litru) * Number(form.cantitate_litri)).toFixed(2)
+      setField('pret_total', total)
+    } else if (!lastEdited && pretBaza) {
+      // Prima dată, prefill din preț de bază
+      setField('pret_per_litru', Number(pretBaza).toFixed(2))
+      setField('pret_total', (Number(form.cantitate_litri) * Number(pretBaza)).toFixed(2))
     }
   }, [form.cantitate_litri])
+  
+  // Handler pentru cost total (user editează)
+  const handleTotalChange = (v) => {
+    setField('pret_total', v)
+    setLastEdited('total')
+    if (v && form.cantitate_litri && Number(form.cantitate_litri) > 0) {
+      const ppl = (Number(v) / Number(form.cantitate_litri)).toFixed(4)
+      setField('pret_per_litru', ppl)
+    } else if (!v) {
+      setField('pret_per_litru', '')
+    }
+  }
+  
+  // Handler pentru preț/litru (user editează)
+  const handlePretLChange = (v) => {
+    setField('pret_per_litru', v)
+    setLastEdited('pret')
+    if (v && form.cantitate_litri && Number(form.cantitate_litri) > 0) {
+      const total = (Number(v) * Number(form.cantitate_litri)).toFixed(2)
+      setField('pret_total', total)
+    } else if (!v) {
+      setField('pret_total', '')
+    }
+  }
+  
+  // Validare preț/litru — warning pentru valori absurde
+  const pretLNum = Number(form.pret_per_litru) || 0
+  const isPretSuspect = form.pret_per_litru && (pretLNum < 1 || pretLNum > 20)
   
   const handleSave = async () => {
     if (!form.data_alimentare) { showToast('Selectează data', 'error'); return }
     if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) { showToast('Cantitatea trebuie > 0', 'error'); return }
     if (isGazpet && stocAfter !== null && stocAfter < 0) {
       const ok = window.confirm(`⚠️ ATENȚIE: Stocul rezervorului Gazpet va deveni NEGATIV (${stocAfter.toFixed(1)} L).\n\nVerifică dacă ai înregistrat toate achizițiile vrac.\n\nContinui oricum?`)
+      if (!ok) return
+    }
+    if (isPretSuspect) {
+      const ok = window.confirm(`⚠️ Preț/litru atipic: ${form.pret_per_litru} RON/L\n\nPentru motorină, prețul ar trebui între 6-9 RON/L.\nVerifică valorile introduse!\n\nContinui oricum?`)
       if (!ok) return
     }
     
@@ -303,7 +358,6 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
           <FieldSelect label={isGazpet ? "Șantier (obligatoriu pt. Gazpet)" : "Șantier (opțional)"} value={form.site_id} onChange={v => setField('site_id', v)} options={[{label:'— niciun șantier —', value:''}, ...(sites||[]).map(s => ({label: s.name, value: String(s.id)}))]} placeholder="— niciun șantier —" />
         </div>
         
-        {/* Banner Gazpet */}
         {isGazpet && rezervorGazpet && (
           <div style={{padding: 10, marginBottom: 12, background: G.purple + '15', border: `1px solid ${G.purple}55`, borderRadius: 8, fontSize: 12, color: G.text}}>
             <strong style={{color: G.purple}}>📦 Rezervor Gazpet — Oscar</strong>
@@ -314,6 +368,7 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
                   După alimentare: {stocAfter.toFixed(1)} L
                 </strong></>
               )}
+              {pretMediuGazpet && <><br/>Preț mediu ponderat din achiziții vrac: <strong style={{color: G.text}}>{pretMediuGazpet} RON/L</strong></>}
             </div>
           </div>
         )}
@@ -331,13 +386,31 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
         
         <div style={{marginBottom: 4}}>
           <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
-            💳 Cost {pretMotorina && !isGazpet && <span style={{fontSize: 10, color: G.muted, fontWeight: 500, textTransform: 'none', letterSpacing: 0}}>(auto-fill din preț setat: {pretMotorina} RON/L)</span>}
+            💳 Cost <span style={{fontSize: 10, color: G.muted, fontWeight: 500, textTransform: 'none', letterSpacing: 0}}>
+              (auto-fill din {isGazpet && pretMediuGazpet ? `preț mediu Gazpet ${pretMediuGazpet} RON/L` : pretMotorina ? `preț pompă setat ${pretMotorina} RON/L` : 'cantitate × preț'} — editează oricare câmp pentru a recalcula celălalt)
+            </span>
           </div>
         </div>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 8}}>
+          <FieldText label="Preț per litru (RON/L)" value={form.pret_per_litru} onChange={handlePretLChange} type="number" placeholder="ex: 7.50" />
+          <FieldText label="Cost total alimentare (RON)" value={form.pret_total} onChange={handleTotalChange} type="number" placeholder="ex: 380.50" />
+        </div>
+        
+        {/* Warning preț atipic */}
+        {isPretSuspect && (
+          <div style={{padding: 10, background: G.redDim + '88', border: `1px solid ${G.red}55`, borderRadius: 8, marginBottom: 14, fontSize: 12, color: G.text}}>
+            <strong style={{color: G.red}}>⚠️ Preț/litru atipic: {form.pret_per_litru} RON/L</strong>
+            <div style={{marginTop: 4, color: G.muted, fontSize: 11, lineHeight: 1.5}}>
+              Pentru motorină normală, prețul ar trebui între <strong>6-9 RON/L</strong>. Verifică:
+              <br/>· Cantitatea introdusă e corectă? ({form.cantitate_litri} L)
+              <br/>· Costul TOTAL e cel din factură, nu prețul per litru?
+              <br/>· Calcul corect: <strong>cantitate × preț/L = cost total</strong>
+            </div>
+          </div>
+        )}
+        
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 14}}>
           <FieldText label="Card combustibil" value={form.card_combustibil} onChange={v => setField('card_combustibil', v)} placeholder="ex: 7059-XXXX-1234" />
-          <FieldText label="Cost total (RON)" value={form.pret_total} onChange={v => setField('pret_total', v)} type="number" placeholder="ex: 380.50" />
-          <FieldText label="Preț/litru (auto)" value={form.pret_per_litru} onChange={v => setField('pret_per_litru', v)} type="number" placeholder="auto-calculat" />
           <FieldText label="Număr factură" value={form.numar_factura} onChange={v => setField('numar_factura', v)} placeholder="ex: F-2026-1234" />
         </div>
         
