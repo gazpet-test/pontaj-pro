@@ -1902,9 +1902,16 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
       })
   }, [rezervorGazpet?.id])
   
-  // Filtru: doar active cu combustibil + tip + subcategorie + text
+  // Filtru: vehicule care POT fi alimentate (cu motor) + tip + subcategorie + text
+  // Includem: Autoturism, Autoutilitară, Camion, Cap tractor, Utilaj — chiar dacă tip_carburant nu e setat încă
+  // Excludem: Container, Rulotă, Remorcă, Semiremorcă, Trailer (nu au motor propriu)
+  const TIPURI_CU_MOTOR = ['Autoturism', 'Autoutilitară', 'Camion', 'Cap tractor', 'Utilaj']
   const activeFiltrate = useMemo(() => {
-    let res = active.filter(a => a.tip_carburant && a.tip_carburant.trim() !== '')
+    let res = active.filter(a => {
+      const tip = a.logistica_categorii?.tip
+      // Include dacă: are tip_carburant setat SAU e o categorie cu motor
+      return (a.tip_carburant && a.tip_carburant.trim() !== '') || (tip && TIPURI_CU_MOTOR.includes(tip))
+    })
     if (filterTip !== 'Toate') res = res.filter(a => a.logistica_categorii?.tip === filterTip)
     if (filterSub !== 'Toate') res = res.filter(a => a.logistica_categorii?.subcategorie === filterSub)
     if (filterText.trim()) {
@@ -1919,17 +1926,23 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
     return res
   }, [active, filterText, filterTip, filterSub])
   
-  // Tipuri și subcategorii unice (din active filtrate cu combustibil)
+  // Tipuri unice — afișez toate tipurile cu motor (chiar dacă unele utilaje nu au carburant setat)
   const tipuri = useMemo(() => {
     const set = new Set()
-    active.filter(a => a.tip_carburant).forEach(a => { if (a.logistica_categorii?.tip) set.add(a.logistica_categorii.tip) })
+    active.forEach(a => { 
+      const tip = a.logistica_categorii?.tip
+      if (tip && (TIPURI_CU_MOTOR.includes(tip) || (a.tip_carburant && a.tip_carburant.trim() !== ''))) set.add(tip) 
+    })
     return Array.from(set).sort()
   }, [active])
   
   const subcategorii = useMemo(() => {
     const set = new Set()
-    active.filter(a => a.tip_carburant && (filterTip === 'Toate' || a.logistica_categorii?.tip === filterTip))
-      .forEach(a => { if (a.logistica_categorii?.subcategorie) set.add(a.logistica_categorii.subcategorie) })
+    active.filter(a => {
+      const tip = a.logistica_categorii?.tip
+      if (filterTip !== 'Toate' && tip !== filterTip) return false
+      return (a.tip_carburant && a.tip_carburant.trim() !== '') || (tip && TIPURI_CU_MOTOR.includes(tip))
+    }).forEach(a => { if (a.logistica_categorii?.subcategorie) set.add(a.logistica_categorii.subcategorie) })
     return Array.from(set).sort()
   }, [active, filterTip])
   
