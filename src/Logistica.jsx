@@ -89,6 +89,41 @@ function KPICard({ icon, label, value, color = G.blue, sub }) {
   )
 }
 
+// ─── Card statistici per perioadă (azi/săptămână/lună alimentări) ────────────
+function PerioadaCard({ label, data, suffix, color }) {
+  const litri = Number(data[`litri_${suffix}`] || 0)
+  const utilaje = Number(data[`utilaje_${suffix}`] || 0)
+  const alim = Number(data[`alim_${suffix}`] || 0)
+  const cost = Number(data[`cost_${suffix}`] || 0)
+  return (
+    <div style={{...S.card, padding: '12px 16px', flex: 1, minWidth: 220, borderTop: `3px solid ${color}`}}>
+      <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 8}}>
+        {label}
+      </div>
+      <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
+        <div>
+          <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.3px'}}>Motorină</div>
+          <div style={{fontSize: 19, fontWeight: 800, color, fontVariantNumeric: 'tabular-nums'}}>
+            {litri.toLocaleString('ro-RO', {minimumFractionDigits: 0, maximumFractionDigits: 1})} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>L</span>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.3px'}}>Utilaje / Alim.</div>
+          <div style={{fontSize: 19, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+            {utilaje} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>/ {alim}</span>
+          </div>
+        </div>
+      </div>
+      {cost > 0 && (
+        <div style={{marginTop: 6, paddingTop: 6, borderTop: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', fontSize: 11}}>
+          <span style={{color: G.muted}}>💰 Cost</span>
+          <strong style={{color: G.green, fontVariantNumeric: 'tabular-nums'}}>{cost.toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} RON</strong>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Sortable header cell ────────────────────────────────────────────────────
 function SortableTh({ col, sortBy, setSortBy, width, children }) {
   const isActive = sortBy.col === col
@@ -1338,6 +1373,7 @@ export default function LogisticaPage() {
   const [active, setActive] = useState([])
   const [categorii, setCategorii] = useState([])
   const [kpi, setKpi] = useState(null)
+  const [kpiAlim, setKpiAlim] = useState(null)
   const [load, setLoad] = useState(true)
   const [search, setSearch] = useState('')
   const [tipF, setTipF] = useState('Toate')
@@ -1373,7 +1409,7 @@ export default function LogisticaPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes] = await Promise.all([
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
@@ -1382,6 +1418,7 @@ export default function LogisticaPage() {
       supabase.from('logistica_rezervoare').select('*').eq('nume', 'Gazpet - Oscar').maybeSingle(),
       supabase.from('sites').select('id, name').order('name'),
       supabase.from('logistica_setari').select('key, value').in('key', ['pret_motorina_ron', 'pret_motorina_actualizat']),
+      supabase.from('v_alimentari_kpi').select('*').single(),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
@@ -1391,6 +1428,7 @@ export default function LogisticaPage() {
     const setariMap = Object.fromEntries((setariRes.data || []).map(s => [s.key, s.value]))
     setPretMotorina(setariMap.pret_motorina_ron || null)
     setPretMotorinaActualizat(setariMap.pret_motorina_actualizat || null)
+    setKpiAlim(kpiAlimRes.data || null)
     setLoad(false)
   }
   
@@ -1823,6 +1861,15 @@ export default function LogisticaPage() {
           </div>
         </div>
       </div>
+      
+      {/* Widget statistici alimentări — IERI / ULTIMELE 7 ZILE / LUNA */}
+      {kpiAlim && (
+        <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
+          <PerioadaCard label="📅 Ieri" data={kpiAlim} suffix="ieri" color={G.blue} />
+          <PerioadaCard label="📊 Ultimele 7 zile" data={kpiAlim} suffix="saptamana" color={G.purple} />
+          <PerioadaCard label="📆 Luna curentă" data={kpiAlim} suffix="luna" color={G.orange} />
+        </div>
+      )}
       {(alerteMentenanta.intarziate.length > 0 || alerteMentenanta.urgente.length > 0) && (
         <div style={{
           ...S.card,
