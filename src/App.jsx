@@ -1034,7 +1034,7 @@ function ReportsPage() {
     showToast('✓ Export gata!')
   }
 
-  const getRange=()=>{ const [y,m]=month.split('-').map(Number); return {y,m,from:new Date(y,m-1,1).toISOString().split('T')[0],to:new Date(y,m,0).toISOString().split('T')[0],days:new Date(y,m,0).getDate()} }
+  const getRange=()=>{ const [y,m]=month.split('-').map(Number); const days=new Date(y,m,0).getDate(); const mm=String(m).padStart(2,'0'); const dd=String(days).padStart(2,'0'); return {y,m,from:`${y}-${mm}-01`,to:`${y}-${mm}-${dd}`,days} }
 
   const loadReport=async()=>{
     setLoad(true)
