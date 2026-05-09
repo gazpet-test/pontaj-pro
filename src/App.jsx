@@ -451,6 +451,101 @@ function LoginPage() {
   )
 }
 
+// ─── Mesaj de la companie (afișat pe toate paginile) ─────────────────────────
+function MesajCompanieBox() {
+  const [mesaj, setMesaj] = useState(null)
+  const [dismissed, setDismissed] = useState(false)
+  
+  useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      const { data } = await supabase.from('settings').select('key, value')
+        .in('key', ['mesaj_companie_text', 'mesaj_companie_activ', 'mesaj_companie_tip', 'mesaj_companie_data'])
+      if (!mounted || !data) return
+      const map = Object.fromEntries(data.map(s => [s.key, s.value]))
+      if (map.mesaj_companie_activ === 'true' && map.mesaj_companie_text?.trim()) {
+        setMesaj({
+          text: map.mesaj_companie_text,
+          tip: map.mesaj_companie_tip || 'info',
+          data: map.mesaj_companie_data
+        })
+      } else {
+        setMesaj(null)
+      }
+    }
+    load()
+    // Reload la 60 sec dacă tab-ul e vizibil (mesaje noi)
+    const iv = setInterval(load, 60000)
+    return () => { mounted = false; clearInterval(iv) }
+  }, [])
+  
+  // Verifică dismiss state din sessionStorage
+  useEffect(() => {
+    if (mesaj && mesaj.data) {
+      const dismissedAt = sessionStorage.getItem('mesaj_companie_dismissed')
+      if (dismissedAt === mesaj.data) setDismissed(true)
+      else setDismissed(false)
+    }
+  }, [mesaj?.data])
+  
+  if (!mesaj || dismissed) return null
+  
+  const styles = {
+    info:     { bg: 'linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%)', border: '#3B82F6', icon: '📢' },
+    warning:  { bg: 'linear-gradient(135deg, #78350F 0%, #C2410C 100%)', border: '#F59E0B', icon: '⚠️' },
+    critical: { bg: 'linear-gradient(135deg, #7F1D1D 0%, #DC2626 100%)', border: '#EF4444', icon: '🚨' },
+  }[mesaj.tip] || styles?.info
+  
+  const handleDismiss = () => {
+    sessionStorage.setItem('mesaj_companie_dismissed', mesaj.data || '')
+    setDismissed(true)
+  }
+  
+  return (
+    <div style={{
+      background: styles.bg,
+      border: `2px solid ${styles.border}`,
+      borderRadius: 12,
+      padding: '14px 18px',
+      marginBottom: 14,
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 14,
+      position: 'relative'
+    }}>
+      <div style={{fontSize: 28, lineHeight: 1, flexShrink: 0}}>{styles.icon}</div>
+      <div style={{flex: 1, minWidth: 0}}>
+        <div style={{fontSize: 11, fontWeight: 800, color: '#FFF', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6, opacity: 0.9}}>
+          📨 Mesaj din partea companiei
+        </div>
+        <div style={{fontSize: 14, color: '#FFF', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordWrap: 'break-word'}}>
+          {mesaj.text}
+        </div>
+        {mesaj.data && (
+          <div style={{fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 6}}>
+            {new Date(mesaj.data).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={handleDismiss}
+        style={{
+          padding: '4px 10px',
+          background: 'rgba(255,255,255,0.15)',
+          color: '#FFF',
+          border: '1px solid rgba(255,255,255,0.3)',
+          borderRadius: 6,
+          fontSize: 12,
+          cursor: 'pointer',
+          fontWeight: 600,
+          flexShrink: 0
+        }}
+        title="Marchează ca citit (până la următorul mesaj)"
+      >✕</button>
+    </div>
+  )
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 function DashboardPage() {
   const { profile } = useAuth()
@@ -473,6 +568,7 @@ function DashboardPage() {
     setLoad(true)
     const today=todayStr()
     let eq=supabase.from('employees').select('*,sites(name)').eq('active',true)
+      .or(`termination_date.is.null,termination_date.gte.${today}`)
     if (!isAdmin){
       const siteIds=profile?.site_ids||[]
       if(siteIds.length===0){setLoad(false);return}
@@ -581,6 +677,9 @@ function DashboardPage() {
   return (
     <Layout>
       <div style={{fontSize:19,fontWeight:800,marginBottom:18}}>Bun venit{profile?.name?`, ${profile.name.split(' ')[0]}`:''}! 👋</div>
+
+      {/* Mesaj global de la companie (administrat din Admin → Setări) */}
+      <MesajCompanieBox />
 
       {/* Alerta contracte care expira */}
       {expiringContracts.length>0&&<div style={{background:'#1A1A3A',border:`1px solid ${G.purple}44`,borderRadius:10,padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10}}>
@@ -1015,6 +1114,7 @@ function PontajPage() {
   return (
     <Layout>
       <Toast toast={toast}/>
+      <MesajCompanieBox />
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <div><div style={{fontSize:19,fontWeight:800}}>Pontaj</div><div style={{fontSize:11,color:G.muted,marginTop:2}}>{filtered.length} angajați · {Object.values(recs).filter(r=>r.check_in||r.norma).length} înreg.</div></div>
         <div style={{display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
@@ -1896,6 +1996,7 @@ function ReportsPage() {
   return (
     <Layout>
       <Toast toast={toast}/>
+      <MesajCompanieBox />
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
         <div style={{fontSize:19,fontWeight:800}}>Rapoarte</div>
         <div style={{display:'flex',gap:7,flexWrap:'wrap',alignItems:'center'}}>
@@ -2655,6 +2756,95 @@ function AdminPage() {
 
       {tab==='settings'&&(
         <div style={{maxWidth:680}}>
+          {/* === MESAJ PENTRU UTILIZATORI — afișat ca banner în top-ul tuturor paginilor === */}
+          <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.purple}`}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text}}>📨 Mesaj pentru utilizatori</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:18,lineHeight:1.5}}>
+              Mesajul va apărea ca <strong>banner în top-ul tuturor paginilor</strong> (Acasă, Pontaj, Rapoarte, etc). 
+              Useri pot închide bannerul cu ✕, dar va reapărea dacă editezi mesajul.
+            </div>
+            
+            <div style={{marginBottom:14}}>
+              <Lbl>Activează / Dezactivează</Lbl>
+              <div style={{display:'flex',gap:8}}>
+                <button 
+                  onClick={()=>saveSetting('mesaj_companie_activ','true')}
+                  style={{...S.btnP, background: settings.mesaj_companie_activ==='true'?G.green:G.surface, border: `1px solid ${settings.mesaj_companie_activ==='true'?G.green:G.border}`, color: settings.mesaj_companie_activ==='true'?'#fff':G.muted, flex:1}}
+                >✓ Activ</button>
+                <button 
+                  onClick={()=>saveSetting('mesaj_companie_activ','false')}
+                  style={{...S.btnP, background: settings.mesaj_companie_activ!=='true'?G.red:G.surface, border: `1px solid ${settings.mesaj_companie_activ!=='true'?G.red:G.border}`, color: settings.mesaj_companie_activ!=='true'?'#fff':G.muted, flex:1}}
+                >✗ Dezactivat</button>
+              </div>
+            </div>
+            
+            <div style={{marginBottom:14}}>
+              <Lbl>Tip mesaj</Lbl>
+              <div style={{display:'flex',gap:8}}>
+                {[
+                  ['info','📢 Info',G.blue],
+                  ['warning','⚠️ Avertisment',G.orange],
+                  ['critical','🚨 Critical',G.red],
+                ].map(([val, label, color]) => (
+                  <button key={val}
+                    onClick={()=>saveSetting('mesaj_companie_tip',val)}
+                    style={{
+                      flex:1, padding:'8px 10px', borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:600,
+                      background: settings.mesaj_companie_tip===val?color:G.surface,
+                      color: settings.mesaj_companie_tip===val?'#fff':G.muted,
+                      border: `1px solid ${settings.mesaj_companie_tip===val?color:G.border}`
+                    }}
+                  >{label}</button>
+                ))}
+              </div>
+            </div>
+            
+            <div style={{marginBottom:14}}>
+              <Lbl>Conținut mesaj</Lbl>
+              <textarea
+                value={settings.mesaj_companie_text || ''}
+                onChange={e=>setSettings(prev=>({...prev,mesaj_companie_text:e.target.value}))}
+                placeholder="Ex: Vineri 15 mai vom efectua mentenanță sistem între 18:00-20:00. Vă rugăm salvați munca înainte!"
+                style={{...S.input, minHeight: 100, resize: 'vertical', fontFamily: 'inherit'}}
+                maxLength={500}
+              />
+              <div style={{fontSize:10,color:G.muted,marginTop:4,textAlign:'right'}}>
+                {(settings.mesaj_companie_text || '').length}/500 caractere
+              </div>
+            </div>
+            
+            <div style={{display:'flex',gap:8}}>
+              <button 
+                onClick={async()=>{
+                  await saveSetting('mesaj_companie_text', settings.mesaj_companie_text || '')
+                  await saveSetting('mesaj_companie_data', new Date().toISOString())
+                  showToast('✓ Mesaj actualizat — apare la toți utilizatorii imediat')
+                }}
+                style={{...S.btnP,background:G.purple,flex:1}}
+              >💾 Salvează & Publică</button>
+              <button
+                onClick={async()=>{
+                  if(confirm('Ștergi mesajul curent?')) {
+                    await saveSetting('mesaj_companie_text', '')
+                    await saveSetting('mesaj_companie_activ', 'false')
+                    setSettings(prev=>({...prev,mesaj_companie_text:'',mesaj_companie_activ:'false'}))
+                    showToast('✓ Mesaj șters')
+                  }
+                }}
+                style={S.btnS}
+              >🗑️ Șterge</button>
+            </div>
+            
+            {settings.mesaj_companie_text && settings.mesaj_companie_activ === 'true' && (
+              <div style={{marginTop:14, padding:12, background: G.bg, border:`1px dashed ${G.border}`, borderRadius:8}}>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6}}>👁 PREVIEW (cum vede user-ul):</div>
+                <div style={{padding:10, background: settings.mesaj_companie_tip==='critical'?'#7F1D1D33':settings.mesaj_companie_tip==='warning'?'#78350F33':'#1E3A8A33', border:`1px solid ${settings.mesaj_companie_tip==='critical'?G.red:settings.mesaj_companie_tip==='warning'?G.orange:G.blue}`, borderRadius:6, fontSize:13, color:G.text, whiteSpace:'pre-wrap'}}>
+                  {settings.mesaj_companie_tip==='critical'?'🚨':settings.mesaj_companie_tip==='warning'?'⚠️':'📢'} {settings.mesaj_companie_text}
+                </div>
+              </div>
+            )}
+          </div>
+          
           {/* === DATE IDENTIFICARE FIRMĂ — folosite pentru aviz, contracte HR, contracte Comercial === */}
           <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.blue}`}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text}}>🏢 Date Identificare Firmă</div>

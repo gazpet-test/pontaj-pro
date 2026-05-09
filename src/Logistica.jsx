@@ -5018,8 +5018,91 @@ function ArhivaAvizePage({ profile, showToast }) {
   const [search, setSearch] = useState('')
   const [perioadaFilter, setPerioadaFilter] = useState('toate')  // toate | luna | sapt | azi
   const [downloadingId, setDownloadingId] = useState(null)
+  const [showDeleteLuna, setShowDeleteLuna] = useState(false)  // modal bulk delete pe lună
   
   const isAdmin = ['admin', 'superadmin'].includes(profile?.role)
+  
+  // Delete individual aviz (admin only)
+  const handleDelete = async (arhAviz) => {
+    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    if (!confirm(`Sigur vrei să ștergi ${arhAviz.numar_aviz}?\n\n• PDF din Storage\n• Înregistrarea din arhivă\n\nAceastă acțiune e ireversibilă!`)) return
+    
+    setDownloadingId(arhAviz.id)
+    try {
+      // 1. Delete PDF din Storage
+      const { error: stErr } = await supabase.storage.from('avize').remove([arhAviz.pdf_path])
+      if (stErr) console.warn('Storage delete warning:', stErr.message)
+      
+      // 2. Delete row din DB
+      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().eq('id', arhAviz.id)
+      if (dbErr) throw dbErr
+      
+      showToast(`✓ ${arhAviz.numar_aviz} șters`)
+      loadArhiva()
+    } catch (e) {
+      showToast('Eroare ștergere: ' + (e.message || e), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+  
+  // Delete bulk pe lună (admin only — pentru curățenie după 12 luni)
+  const handleDeleteLuna = async (yearMonth) => {
+    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    
+    // Verifică câte avize sunt în luna respectivă
+    const startDate = `${yearMonth}-01`
+    const endDate = (() => {
+      const [y, m] = yearMonth.split('-').map(Number)
+      const next = new Date(y, m, 1)  // luna următoare
+      return next.toISOString().split('T')[0]
+    })()
+    
+    const { data: avizeLuna, error: qErr } = await supabase
+      .from('logistica_avize_arhiva')
+      .select('id, numar_aviz, pdf_path')
+      .gte('data_transport', startDate)
+      .lt('data_transport', endDate)
+    
+    if (qErr) { showToast('Eroare query: ' + qErr.message, 'error'); return }
+    if (!avizeLuna || avizeLuna.length === 0) { showToast('Nicio aviz în această lună', 'warn'); return }
+    
+    if (!confirm(`Vei șterge ${avizeLuna.length} avize din luna ${yearMonth}!\n\n• Toate PDF-urile din Storage\n• Toate înregistrările din arhivă\n\nAceastă acțiune e IREVERSIBILĂ. Continui?`)) return
+    
+    try {
+      // Delete PDF-uri din Storage (batch)
+      const paths = avizeLuna.map(a => a.pdf_path).filter(Boolean)
+      if (paths.length > 0) {
+        const { error: stErr } = await supabase.storage.from('avize').remove(paths)
+        if (stErr) console.warn('Storage delete warning:', stErr.message)
+      }
+      
+      // Delete rows din DB
+      const ids = avizeLuna.map(a => a.id)
+      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().in('id', ids)
+      if (dbErr) throw dbErr
+      
+      showToast(`✓ ${avizeLuna.length} avize șterse pentru ${yearMonth}`)
+      setShowDeleteLuna(false)
+      loadArhiva()
+    } catch (e) {
+      showToast('Eroare ștergere: ' + (e.message || e), 'error')
+    }
+  }
+  
+  // Calculează lunile cu avize pentru bulk delete
+  const luniCuAvize = useMemo(() => {
+    const map = new Map()
+    arhiva.forEach(a => {
+      if (!a.data_transport) return
+      const ym = a.data_transport.substring(0, 7)
+      const cur = map.get(ym) || { count: 0, size: 0 }
+      cur.count += 1
+      cur.size += (a.pdf_size_bytes || 0)
+      map.set(ym, cur)
+    })
+    return Array.from(map.entries()).map(([ym, data]) => ({ ym, ...data })).sort((a, b) => a.ym.localeCompare(b.ym))
+  }, [arhiva])
   
   useEffect(() => { loadArhiva() }, [perioadaFilter])
   
@@ -5122,6 +5205,11 @@ function ArhivaAvizePage({ profile, showToast }) {
           ))}
         </div>
         <button onClick={loadArhiva} style={S.btnS}>🔄 Reîncarcă</button>
+        {isAdmin && luniCuAvize.length > 0 && (
+          <button onClick={() => setShowDeleteLuna(true)} style={{...S.btnS, color: G.red, borderColor: G.red+'88'}}>
+            🗑️ Șterge lună
+          </button>
+        )}
       </div>
       
       {/* Tabel arhivă */}
@@ -5198,6 +5286,16 @@ function ArhivaAvizePage({ profile, showToast }) {
                         >
                           {downloadingId === a.id ? '...' : '⬇️ Descarcă'}
                         </button>
+                        {isAdmin && (
+                          <button 
+                            onClick={() => handleDelete(a)} 
+                            disabled={downloadingId === a.id}
+                            style={{padding:'5px 10px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}
+                            title="Șterge aviz (PDF + arhivă)"
+                          >
+                            🗑️
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -5211,6 +5309,78 @@ function ArhivaAvizePage({ profile, showToast }) {
       <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
         💡 Avizele generate cu butonul "💾 Arhivează PDF" din modalul aviz apar aici · Stocate în Supabase Storage (bucket "avize")
       </div>
+      
+      {/* Modal Bulk Delete pe Lună */}
+      {showDeleteLuna && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+          <div style={{...S.card, width:'100%', maxWidth:560, padding:24, maxHeight:'85vh', overflowY:'auto'}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+              <div>
+                <div style={{fontSize:17, fontWeight:700, color:G.text}}>🗑️ Șterge avize pe lună</div>
+                <div style={{fontSize:11, color:G.muted, marginTop:3}}>Pentru retenție de date — șterge toate avizele dintr-o lună întreagă</div>
+              </div>
+              <button onClick={() => setShowDeleteLuna(false)} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+            </div>
+            
+            <div style={{marginBottom:14, padding:10, background:G.red+'11', border:`1px solid ${G.red}44`, borderRadius:8}}>
+              <div style={{fontSize:11, color:G.red, fontWeight:700, marginBottom:4}}>⚠️ ATENȚIE</div>
+              <div style={{fontSize:11, color:G.muted, lineHeight:1.5}}>
+                Recomandare: păstrează avizele cel puțin <strong>12 luni</strong> pentru audit fiscal. 
+                Ștergerea e <strong>ireversibilă</strong> (PDF + Storage).
+              </div>
+            </div>
+            
+            <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:8}}>Luni cu avize în arhivă</div>
+            <div style={{display:'flex', flexDirection:'column', gap:6}}>
+              {luniCuAvize.length === 0 && <div style={{fontSize:12, color:G.muted, fontStyle:'italic', padding:12, textAlign:'center'}}>Nicio lună cu avize</div>}
+              {luniCuAvize.map(luna => {
+                const monthsAgo = (() => {
+                  const [y, m] = luna.ym.split('-').map(Number)
+                  const target = new Date(y, m-1, 1)
+                  const now = new Date()
+                  return (now.getFullYear() - target.getFullYear()) * 12 + (now.getMonth() - target.getMonth())
+                })()
+                const sizeKB = (luna.size / 1024).toFixed(0)
+                const sizeMB = (luna.size / 1024 / 1024).toFixed(1)
+                const sizeStr = luna.size > 1024*1024 ? `${sizeMB} MB` : `${sizeKB} KB`
+                const isOldEnough = monthsAgo >= 12
+                
+                return (
+                  <div key={luna.ym} style={{display:'flex', alignItems:'center', gap:10, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13, fontWeight:600, color:G.text}}>
+                        {luna.ym} 
+                        {isOldEnough && <span style={{marginLeft:8, fontSize:10, padding:'2px 6px', background:G.green+'33', color:G.green, borderRadius:4}}>OK pentru ștergere</span>}
+                        {!isOldEnough && <span style={{marginLeft:8, fontSize:10, padding:'2px 6px', background:G.orange+'33', color:G.orange, borderRadius:4}}>{monthsAgo}/12 luni</span>}
+                      </div>
+                      <div style={{fontSize:10, color:G.muted, marginTop:2}}>
+                        {luna.count} {luna.count === 1 ? 'aviz' : 'avize'} · {sizeStr}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteLuna(luna.ym)}
+                      style={{
+                        padding:'6px 12px',
+                        background: isOldEnough ? G.red+'22' : G.surface,
+                        color: isOldEnough ? G.red : G.muted,
+                        border: `1px solid ${isOldEnough ? G.red+'88' : G.border}`,
+                        borderRadius: 6,
+                        fontSize: 11,
+                        cursor: 'pointer',
+                        fontWeight: 700
+                      }}
+                    >🗑️ Șterge</button>
+                  </div>
+                )
+              })}
+            </div>
+            
+            <div style={{display:'flex', justifyContent:'flex-end', marginTop:14, paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+              <button onClick={() => setShowDeleteLuna(false)} style={S.btnS}>Închide</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
