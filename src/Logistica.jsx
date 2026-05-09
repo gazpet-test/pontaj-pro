@@ -88,16 +88,21 @@ function KPICard({ icon, label, value, color = G.blue, sub, onClick }) {
         padding: '14px 18px', flex: 1, minWidth: 160, 
         borderLeft: `3px solid ${color}`, 
         cursor: onClick ? 'pointer' : 'default',
-        transition: 'all .15s',
-        ...(onClick && { ':hover': { transform: 'translateY(-1px)' } })
+        transition: 'all .2s'
       }}
       onMouseEnter={onClick ? (e) => {
         e.currentTarget.style.background = G.bg
-        e.currentTarget.style.borderLeftWidth = '5px'
+        e.currentTarget.style.borderLeftWidth = '8px'
+        e.currentTarget.style.paddingLeft = '13px'  // compensez pt borderLeft 3→8
+        e.currentTarget.style.boxShadow = `0 4px 16px ${color}33`
+        e.currentTarget.style.transform = 'translateY(-1px)'
       } : undefined}
       onMouseLeave={onClick ? (e) => {
         e.currentTarget.style.background = ''
         e.currentTarget.style.borderLeftWidth = '3px'
+        e.currentTarget.style.paddingLeft = '18px'
+        e.currentTarget.style.boxShadow = ''
+        e.currentTarget.style.transform = ''
       } : undefined}
     >
       <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>{icon} {label}{onClick && <span style={{marginLeft: 4, fontSize: 9, color: color}}>→</span>}</div>
@@ -4506,24 +4511,24 @@ export default function LogisticaPage() {
           else { barColor = G.blue; statusText = '✓ Normal'; statusColor = G.blue }
           
           return (
-            <div style={{...S.card, padding: '8px 12px', minWidth: 240, flex: 1, maxWidth: 320, borderLeft: `3px solid ${barColor}`}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4, gap: 6}}>
+            <div style={{...S.card, padding: '10px 14px', minWidth: 260, flex: 1, maxWidth: 340, borderLeft: `3px solid ${barColor}`}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6, gap: 6}}>
                 <div style={{flex: 1, minWidth: 0}}>
-                  <div style={{fontSize: 9, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+                  <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
                     📦 {rezervor.nume}
                   </div>
-                  <div style={{fontSize: 16, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 1, lineHeight: 1.2}}>
-                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 0, maximumFractionDigits: 0})}<span style={{fontSize: 10, color: G.muted, fontWeight: 600}}> / {cap.toFixed(0)} L</span>
+                  <div style={{fontSize: 19, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 2, lineHeight: 1.2}}>
+                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 0, maximumFractionDigits: 0})}<span style={{fontSize: 12, color: G.muted, fontWeight: 600}}> / {cap.toFixed(0)} L</span>
                   </div>
                 </div>
                 {canEdit && (
-                  <div style={{display: 'flex', gap: 4}}>
-                    <button onClick={() => setShowEditStoc(true)} style={{background:'transparent', border:'none', color:G.yellow, fontSize: 11, cursor:'pointer', padding: 2, lineHeight: 1}} title="Edit stoc">✏️</button>
-                    <button onClick={() => setShowAchizitie(true)} style={{background:'transparent', border:'none', color:G.purple, fontSize: 11, cursor:'pointer', padding: 2, lineHeight: 1}} title="Achiziție vrac">+</button>
+                  <div style={{display: 'flex', gap: 6}}>
+                    <button onClick={() => setShowEditStoc(true)} style={{background:'transparent', border:`1px solid ${G.yellow}55`, color:G.yellow, fontSize: 11, cursor:'pointer', padding: '3px 7px', lineHeight: 1, borderRadius: 5, fontWeight: 600}} title="Edit stoc">✏️ Edit</button>
+                    <button onClick={() => setShowAchizitie(true)} style={{background:'transparent', border:`1px solid ${G.purple}55`, color:G.purple, fontSize: 11, cursor:'pointer', padding: '3px 7px', lineHeight: 1, borderRadius: 5, fontWeight: 600}} title="Achiziție vrac">+ Achiziție</button>
                   </div>
                 )}
               </div>
-              <div style={{height: 5, background: G.bg, borderRadius: 3, overflow: 'hidden', marginBottom: 3}}>
+              <div style={{height: 6, background: G.bg, borderRadius: 3, overflow: 'hidden', marginBottom: 4}}>
                 <div style={{
                   width: `${Math.min(procentUmplere, 100)}%`,
                   height: '100%',
@@ -4531,9 +4536,9 @@ export default function LogisticaPage() {
                   transition: 'width .3s'
                 }}/>
               </div>
-              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 9}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11}}>
                 <span style={{color: statusColor, fontWeight: 700}}>{statusText}</span>
-                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}%</span>
+                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}% · prag: {pragProc}%</span>
               </div>
             </div>
           )
@@ -4544,7 +4549,7 @@ export default function LogisticaPage() {
           <div 
             onClick={() => setTab('transporturi')}
             style={{
-              ...S.card, padding: '10px 14px', minWidth: 200, flex: 1, maxWidth: 280,
+              ...S.card, padding: '10px 14px', minWidth: 220, flex: 1, maxWidth: 280,
               borderLeft: `4px solid ${G.red}`,
               background: G.redDim + '88',
               animation: 'pulse-red-alert 2s infinite',
@@ -4556,15 +4561,15 @@ export default function LogisticaPage() {
             onMouseLeave={e => { e.currentTarget.style.transform = '' }}
             title="Click pentru a deschide tabul Transporturi"
           >
-            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4}}>
               <span style={{fontSize: 18}}>⏳</span>
-              <div style={{fontSize: 10, color: G.red, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .5}}>
-                Cerere transport
+              <div style={{fontSize: 11, color: G.red, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .5}}>
+                Cereri transport
               </div>
-              <span style={{padding: '2px 6px', background: G.red, color: '#fff', borderRadius: 4, fontSize: 8, fontWeight: 700}}>URGENT</span>
+              <span style={{padding: '2px 6px', background: G.red, color: '#fff', borderRadius: 4, fontSize: 9, fontWeight: 700}}>URGENT</span>
             </div>
             <div style={{fontSize: 22, fontWeight: 800, color: G.red, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1}}>
-              {nrTransportCerute} <span style={{fontSize: 10, color: G.text, fontWeight: 600}}>de aprobat →</span>
+              {nrTransportCerute} <span style={{fontSize: 12, color: G.text, fontWeight: 600}}>de aprobat →</span>
             </div>
           </div>
         )}
@@ -4578,19 +4583,19 @@ export default function LogisticaPage() {
         `}</style>
         
         {/* Card preț motorină — compact */}
-        <div style={{...S.card, padding: '10px 14px', minWidth: 140, borderLeft: `3px solid ${G.green}`}}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 2, gap: 6}}>
-            <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+        <div style={{...S.card, padding: '10px 14px', minWidth: 160, borderLeft: `3px solid ${G.green}`}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4, gap: 6}}>
+            <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
               💰 Preț motorină
             </div>
             {canEdit && (
-              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 12, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
+              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 13, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
             )}
           </div>
-          <div style={{fontSize: 18, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2}}>
-            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'} <span style={{fontSize: 10, color: G.muted, fontWeight: 600}}>RON/L</span>
+          <div style={{fontSize: 20, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2}}>
+            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>RON/L</span>
           </div>
-          <div style={{fontSize: 9, color: G.muted, marginTop: 2}}>
+          <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
             {pretMotorinaActualizat || '—'}
           </div>
         </div>
