@@ -3014,6 +3014,333 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   )
 }
 
+// ----- Identificare aprobatori (pentru workflow) -----
+const APROBATORI_TRANSPORT_EMAILS = ['alexandru.mitrache@gazpet.ro', 'cristiana.puscasu@gazpet.ro']
+const isAprobatorTransport = (profile) => {
+  if (!profile?.email) return false
+  // Aprobatori desemnați
+  if (APROBATORI_TRANSPORT_EMAILS.includes(profile.email)) return true
+  // Backup: admin / superadmin (pentru testing și absențe)
+  if (['admin', 'superadmin'].includes(profile.role)) return true
+  return false
+}
+
+// ----- Modal Detalii Transport (vizualizare + workflow aprobare) -----
+function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEdit, showToast, sites }) {
+  const [showRespingere, setShowRespingere] = useState(false)
+  const [motivRespingere, setMotivRespingere] = useState('')
+  const [showAlegeSofer, setShowAlegeSofer] = useState(false)
+  const [employees, setEmployees] = useState([])
+  const [soferEmployeeId, setSoferEmployeeId] = useState('')
+  const [soferSearch, setSoferSearch] = useState('')
+  const [filterFunctie, setFilterFunctie] = useState('atestati')
+  const [actionLoading, setActionLoading] = useState(false)
+  
+  const isAprobator = isAprobatorTransport(profile)
+  const isSolicitant = profile?.id === T.solicitant_id
+  const status = T.status
+  
+  // Load employees (pentru când Logistică alege șofer la aprobare)
+  useEffect(() => {
+    if (showAlegeSofer) {
+      supabase.from('employees').select('id, name, position, department, functii_extra')
+        .eq('active', true).order('name').then(({ data }) => setEmployees(data || []))
+    }
+  }, [showAlegeSofer])
+  
+  const soferiDisponibili = useMemo(() => {
+    let list = employees.filter(e => matchesFunctie(e, filterFunctie))
+    if (soferSearch.trim()) {
+      const q = soferSearch.toLowerCase()
+      list = list.filter(e => 
+        (e.name || '').toLowerCase().includes(q) ||
+        (e.position || '').toLowerCase().includes(q)
+      )
+    }
+    return list.slice(0, 30)
+  }, [employees, filterFunctie, soferSearch])
+  
+  // Format locație
+  const formatLoc = (tip, site, text) => formatLocatie(tip, site, text)
+  
+  // ---- Acțiuni ----
+  const handleAproba = async () => {
+    // Dacă sofer_aloca_logistica și fără șofer → cere alegerea ÎNTÂI
+    if (T.sofer_aloca_logistica && !T.sofer_employee_id && !showAlegeSofer) {
+      setShowAlegeSofer(true)
+      return
+    }
+    if (showAlegeSofer && !soferEmployeeId) {
+      showToast('Selectează șoferul înainte de aprobare', 'warn')
+      return
+    }
+    
+    setActionLoading(true)
+    const updateData = {
+      status: 'aprobat',
+      aprobator_id: profile.id,
+      data_aprobare: new Date().toISOString(),
+    }
+    if (showAlegeSofer && soferEmployeeId) {
+      updateData.sofer_employee_id = Number(soferEmployeeId)
+      updateData.sofer_gazpet = true
+      updateData.sofer_aloca_logistica = false  // s-a alocat
+    }
+    
+    const { error } = await supabase.from('logistica_transporturi').update(updateData).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare aprobare: ' + error.message, 'error'); return }
+    showToast('✓ Transport aprobat! Următorul pas: programare.')
+    onChanged?.()
+    onClose()
+  }
+  
+  const handleRespinge = async () => {
+    if (!motivRespingere.trim()) {
+      showToast('Motivul respingerii e obligatoriu', 'warn')
+      return
+    }
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({
+      status: 'respins',
+      aprobator_id: profile.id,
+      data_aprobare: new Date().toISOString(),
+      motiv_respingere: motivRespingere.trim()
+    }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✓ Transport respins')
+    onChanged?.()
+    onClose()
+  }
+  
+  const handleAnuleaza = async () => {
+    if (!confirm('Sigur vrei să anulezi această cerere de transport? Acțiunea nu poate fi reversată.')) return
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({ status: 'anulat' }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('Cererea a fost anulată')
+    onChanged?.()
+    onClose()
+  }
+  
+  const handleSchimbaStatus = async (nou) => {
+    const labels = { programat: 'Programat', in_tranzit: 'În tranzit', livrat: 'Livrat' }
+    if (!confirm(`Schimbi status la "${labels[nou]}"?`)) return
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({ status: nou }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast(`✓ Status schimbat: ${labels[nou]}`)
+    onChanged?.()
+    onClose()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:780, maxHeight:'92vh', overflow:'auto', padding:24}}>
+        {/* Header */}
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
+              <span style={{fontSize:24}}>{T.tip === 'utilaj' ? '🚛' : '📄'}</span>
+              <span style={{fontSize:18, fontWeight:700, color:G.text, fontFamily:'monospace'}}>{T.numar_transport}</span>
+              <StatusBadge status={status} />
+            </div>
+            <div style={{fontSize:11, color:G.muted}}>
+              Solicitat: {new Date(T.data_solicitarii).toLocaleString('ro-RO')} de <strong style={{color:G.text}}>{T.solicitant?.name || '—'}</strong>
+              {T.aprobator && <span> · Aprobat de <strong style={{color:G.text}}>{T.aprobator.name}</strong></span>}
+            </div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Detalii activ/conținut */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>
+            {T.tip === 'utilaj' ? '🚛 Activ transportat' : '📄 Conținut'}
+          </div>
+          {T.tip === 'utilaj' && T.activ_transportat ? (
+            <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
+              <div style={{color:G.text, fontWeight:600}}>{T.activ_transportat.cod_intern || formatActiv(T.activ_transportat)} · {T.activ_transportat.marca} {T.activ_transportat.model}</div>
+              {T.activ_transportat.regim_transport_special && <div style={{fontSize:11, color:G.red, fontWeight:600, marginTop:4}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
+            </div>
+          ) : (
+            <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, color:G.text}}>
+              {T.continut_descriere || '—'}
+            </div>
+          )}
+          {(T.masina || T.remorca) && (
+            <div style={{marginTop:6, fontSize:12, color:G.logistica}}>
+              🚛 Mijloc: {T.masina ? formatActiv(T.masina) : 'fără mijloc'}
+              {T.remorca && <span> + {formatActiv(T.remorca)} ({T.remorca.logistica_categorii?.tip})</span>}
+            </div>
+          )}
+        </div>
+        
+        {/* Traseu */}
+        <div style={{marginBottom:12, display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10}}>
+          <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>De la</div>
+            <div style={{fontSize:13, color:G.text}}>{formatLoc(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}</div>
+          </div>
+          <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>La</div>
+            <div style={{fontSize:13, color:G.text}}>{formatLoc(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}</div>
+          </div>
+          <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>📅 Data · Ora</div>
+            <div style={{fontSize:13, color:G.text}}>{T.data_transport}{T.ora_plecare ? ` · ${T.ora_plecare.substring(0,5)}` : ''}</div>
+          </div>
+        </div>
+        
+        {/* Șofer */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>👤 Șofer</div>
+          {T.sofer_aloca_logistica && !T.sofer_employee_id ? (
+            <div style={{padding:10, background:G.purple+'22', border:`1px solid ${G.purple}55`, borderRadius:8, fontSize:13, color:G.text}}>
+              🏢 <strong>Logistică alocă șoferul</strong> — va fi selectat la aprobare
+            </div>
+          ) : T.sofer_gazpet ? (
+            T.sofer_employee ? (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
+                <div style={{color:G.text, fontWeight:600}}>{T.sofer_employee.name}</div>
+                <div style={{fontSize:11, color:G.muted}}>{T.sofer_employee.position}</div>
+              </div>
+            ) : T.sofer ? (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, color:G.text}}>{T.sofer.name} <span style={{fontSize:10, color:G.muted}}>(user sistem)</span></div>
+            ) : (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, color:G.muted}}>—</div>
+            )
+          ) : (
+            <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
+              <div style={{color:G.text}}>{T.sofer_extern_nume}</div>
+              {T.sofer_extern_telefon && <div style={{fontSize:11, color:G.muted}}>📞 {T.sofer_extern_telefon}</div>}
+              <div style={{fontSize:10, color:G.orange, marginTop:2}}>Șofer extern</div>
+            </div>
+          )}
+        </div>
+        
+        {/* Cost + Observații */}
+        {(T.cost_estimat || T.observatii) && (
+          <div style={{marginBottom:12, display:'grid', gridTemplateColumns: T.cost_estimat && T.observatii ? '1fr 2fr' : '1fr', gap:10}}>
+            {T.cost_estimat && (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>💰 Cost estimat</div>
+                <div style={{fontSize:14, color:G.text, fontWeight:700}}>{T.cost_estimat} RON</div>
+              </div>
+            )}
+            {T.observatii && (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>📝 Observații</div>
+                <div style={{fontSize:12, color:G.text}}>{T.observatii}</div>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Motiv respingere (dacă e cazul) */}
+        {status === 'respins' && T.motiv_respingere && (
+          <div style={{marginBottom:12, padding:10, background:G.redDim, border:`1px solid ${G.red}55`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.red, fontWeight:700, marginBottom:4}}>✗ MOTIV RESPINGERE:</div>
+            <div style={{fontSize:13, color:G.text}}>{T.motiv_respingere}</div>
+          </div>
+        )}
+        
+        {/* === ALEGE ȘOFER înainte de aprobare (când Logistică alocă) === */}
+        {showAlegeSofer && (
+          <div style={{marginBottom:12, padding:12, background:G.purple+'11', border:`2px solid ${G.purple}`, borderRadius:8}}>
+            <div style={{fontSize:13, fontWeight:700, color:G.purple, marginBottom:10}}>🏢 Alege șoferul pentru a aproba</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 2fr', gap:8, marginBottom:8}}>
+              <select value={filterFunctie} onChange={e => { setFilterFunctie(e.target.value); setSoferEmployeeId(''); }} style={{...S.input, fontSize:12}}>
+                {FUNCTII_TRANSPORT.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+              <input type="text" value={soferSearch} onChange={e => setSoferSearch(e.target.value)} placeholder={`🔍 Caută... (${soferiDisponibili.length})`} style={S.input} />
+            </div>
+            <div style={{maxHeight:160, overflowY:'auto', border:`1px solid ${G.border}`, borderRadius:6, background:G.bg}}>
+              {soferiDisponibili.map(emp => (
+                <label key={emp.id} style={{display:'flex', alignItems:'center', gap:8, padding:'6px 10px', cursor:'pointer', borderBottom:`1px solid ${G.border}`, background: String(soferEmployeeId) === String(emp.id) ? G.purple+'22' : 'transparent'}}>
+                  <input type="radio" checked={String(soferEmployeeId) === String(emp.id)} onChange={() => setSoferEmployeeId(emp.id)} style={{accentColor:G.purple}} />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12, color:G.text, fontWeight:600}}>{emp.name}</div>
+                    <div style={{fontSize:10, color:G.muted}}>{emp.position}{emp.functii_extra?.length > 0 && <span style={{color:G.logistica}}> · extra: {emp.functii_extra.join(', ')}</span>}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* === MODAL RESPINGERE === */}
+        {showRespingere && (
+          <div style={{marginBottom:12, padding:12, background:G.redDim, border:`2px solid ${G.red}`, borderRadius:8}}>
+            <div style={{fontSize:13, fontWeight:700, color:G.red, marginBottom:8}}>✗ Motiv respingere (obligatoriu)</div>
+            <textarea value={motivRespingere} onChange={e => setMotivRespingere(e.target.value)} rows={3} placeholder="Ex: Utilajul e defect, traseu nepotrivit, ARR expirat..." style={{...S.input, resize:'vertical'}} />
+          </div>
+        )}
+        
+        {/* === ACȚIUNI === */}
+        <div style={{display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          {/* Buton Edit (pentru cereri 'cerut') */}
+          {status === 'cerut' && (isSolicitant || isAprobator) && !showRespingere && !showAlegeSofer && (
+            <button onClick={() => { onClose(); onEdit?.(T) }} style={{...S.btnS, color:G.logistica, borderColor:G.logistica+'88'}}>✏️ Editează</button>
+          )}
+          
+          {/* Anulează cerere (solicitant cu cerere 'cerut') */}
+          {status === 'cerut' && isSolicitant && !showRespingere && !showAlegeSofer && (
+            <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>🗑️ Anulează cererea</button>
+          )}
+          
+          {/* === STATUS = CERUT — APROBĂ / RESPINGE (doar aprobatori) === */}
+          {status === 'cerut' && isAprobator && !showRespingere && (
+            <>
+              <button onClick={() => setShowRespingere(true)} disabled={actionLoading} style={{...S.btnS, color:G.red, borderColor:G.red+'88'}}>✗ Respinge</button>
+              <button onClick={handleAproba} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
+                {showAlegeSofer ? '✓ Aprobă cu acest șofer' : (T.sofer_aloca_logistica && !T.sofer_employee_id ? '✓ Aprobă (alege șofer)' : '✓ Aprobă')}
+              </button>
+            </>
+          )}
+          
+          {/* Confirm respingere */}
+          {status === 'cerut' && isAprobator && showRespingere && (
+            <>
+              <button onClick={() => { setShowRespingere(false); setMotivRespingere('') }} style={S.btnS}>← Înapoi</button>
+              <button onClick={handleRespinge} disabled={actionLoading} style={{...S.btnP, background:G.red}}>✗ Confirm respingere</button>
+            </>
+          )}
+          
+          {/* === STATUS = APROBAT — Programat / Anulat === */}
+          {status === 'aprobat' && (
+            <>
+              <button onClick={() => handleSchimbaStatus('programat')} disabled={actionLoading} style={{...S.btnP, background:G.blue}}>📅 Marchează "Programat"</button>
+              {(isAprobator || isSolicitant) && <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>⏸ Anulează</button>}
+            </>
+          )}
+          
+          {/* === STATUS = PROGRAMAT — Începe transport === */}
+          {status === 'programat' && (
+            <>
+              <button onClick={() => handleSchimbaStatus('in_tranzit')} disabled={actionLoading} style={{...S.btnP, background:G.yellow, color:'#000'}}>🚚 Începe transport (în tranzit)</button>
+              {(isAprobator || isSolicitant) && <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>⏸ Anulează</button>}
+            </>
+          )}
+          
+          {/* === STATUS = IN TRANZIT — Marchează livrat === */}
+          {status === 'in_tranzit' && (
+            <button onClick={() => handleSchimbaStatus('livrat')} disabled={actionLoading} style={{...S.btnP, background:G.green}}>✅ Marchează livrat</button>
+          )}
+          
+          {/* Fără acțiuni dacă livrat / anulat / respins */}
+          {['livrat', 'anulat', 'respins'].includes(status) && (
+            <div style={{fontSize:12, color:G.muted, fontStyle:'italic', alignSelf:'center'}}>Transport finalizat — fără acțiuni disponibile</div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ----- Pagina Transporturi -----
 function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
   const [list, setList] = useState([])
@@ -3021,7 +3348,8 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
   const [statusFilter, setStatusFilter] = useState('Toate')
   const [perioadaFilter, setPerioadaFilter] = useState('luna')
   const [showComanda, setShowComanda] = useState(false)
-  const [editTransport, setEditTransport] = useState(null)  // transportul în edit mode
+  const [editTransport, setEditTransport] = useState(null)
+  const [detaliiTransport, setDetaliiTransport] = useState(null)  // pentru DetaliiTransportModal
   
   const fetchList = async () => {
     setLoading(true)
@@ -3153,7 +3481,11 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
               </thead>
               <tbody>
                 {list.map((t, idx) => (
-                  <tr key={t.id} style={{borderBottom:`1px solid ${G.border}`, transition:'background .15s'}} onMouseEnter={e => e.currentTarget.style.background = G.bg} onMouseLeave={e => e.currentTarget.style.background = ''}>
+                  <tr key={t.id} 
+                      onClick={() => setDetaliiTransport(t)}
+                      style={{borderBottom:`1px solid ${G.border}`, transition:'background .15s', cursor:'pointer'}} 
+                      onMouseEnter={e => e.currentTarget.style.background = G.bg} 
+                      onMouseLeave={e => e.currentTarget.style.background = ''}>
                     <td style={tdStyle}>
                       <span style={{display:'inline-block', minWidth:24, padding:'2px 6px', background:G.surface, border:`1px solid ${G.border}`, borderRadius:6, fontSize:11, color:G.muted, textAlign:'center'}}>{idx+1}</span>
                     </td>
@@ -3227,7 +3559,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                       {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
                       {t.status === 'cerut' ? (
                         <button 
-                          onClick={() => setEditTransport(t)}
+                          onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
                           style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
                           title="Editează cererea (doar înainte de aprobare)"
                         >
@@ -3266,6 +3598,19 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
           initialTransport={editTransport}
           onClose={() => setEditTransport(null)}
           onSaved={fetchList}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal Detalii Transport (workflow aprobare) */}
+      {detaliiTransport && (
+        <DetaliiTransportModal
+          transport={detaliiTransport}
+          profile={profile}
+          sites={sites}
+          onClose={() => setDetaliiTransport(null)}
+          onChanged={fetchList}
+          onEdit={(t) => setEditTransport(t)}
           showToast={showToast}
         />
       )}
