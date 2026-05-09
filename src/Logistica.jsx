@@ -3812,7 +3812,7 @@ function SemnaturaCanvasModal({ rol, numeImplicit, onClose, onSave, showToast })
         
         {/* Nume semnatar */}
         <div style={{marginBottom:14}}>
-          <Lbl>Nume celui care semnează</Lbl>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>Nume celui care semnează</div>
           <input 
             type="text" 
             value={nume} 
@@ -3824,7 +3824,7 @@ function SemnaturaCanvasModal({ rol, numeImplicit, onClose, onSave, showToast })
         
         {/* Canvas */}
         <div style={{marginBottom:14}}>
-          <Lbl>Desenează semnătura mai jos (mouse pe desktop / deget pe mobil)</Lbl>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>Desenează semnătura mai jos (mouse pe desktop / deget pe mobil)</div>
           <div style={{position:'relative', border:`2px solid ${G.border}`, borderRadius:8, background:'#fff', overflow:'hidden'}}>
             <canvas 
               ref={canvasRef}
