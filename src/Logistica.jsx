@@ -2463,30 +2463,43 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
   const [dataTransport, setDataTransport] = useState(new Date().toISOString().split('T')[0])
   const [oraPlecare, setOraPlecare] = useState('08:00')
   const [masinaId, setMasinaId] = useState('')
+  const [remorcaId, setRemorcaId] = useState('')              // NEW: combo remorca/trailer/semiremorca
+  const [necesitaSoferAtestat, setNecesitaSoferAtestat] = useState(true)  // NEW: pt utilaj default ON
   const [soferGazpet, setSoferGazpet] = useState(true)
-  const [soferId, setSoferId] = useState('')
+  const [soferEmployeeId, setSoferEmployeeId] = useState('')   // NEW: int → employees
+  const [soferSearch, setSoferSearch] = useState('')           // NEW: search nume
   const [soferExternNume, setSoferExternNume] = useState('')
   const [soferExternTel, setSoferExternTel] = useState('')
   const [costEstimat, setCostEstimat] = useState('')
   const [observatii, setObservatii] = useState('')
-  const [profiles, setProfiles] = useState([])
+  const [employees, setEmployees] = useState([])               // NEW: din employees
   const [saving, setSaving] = useState(false)
   
-  // Load profiles pentru dropdown șofer
+  // Load employees (toți angajații activi cu poziție)
   useEffect(() => {
-    supabase.from('profiles').select('id, name').order('name').then(({ data }) => setProfiles(data || []))
+    supabase.from('employees').select('id, name, position, department')
+      .eq('active', true)
+      .order('name')
+      .then(({ data }) => setEmployees(data || []))
   }, [])
   
-  // Active transportabile (utilaje, camioane, autoutilitare, cap tractor) — pentru tip utilaj
+  // Auto-set necesita_atestat când se schimbă tipul (utilaj→true, tesa→false)
+  useEffect(() => {
+    setNecesitaSoferAtestat(tip === 'utilaj')
+    setSoferEmployeeId('')  // reset la schimbare tip
+    setSoferSearch('')
+  }, [tip])
+  
+  // Active transportabile
   const activeTransportabile = useMemo(() => {
     return active.filter(a => {
       const t = a.logistica_categorii?.tip
-      return ['Utilaj', 'Camion', 'Autoutilitară', 'Cap tractor', 'Container', 'Remorcă', 'Trailer'].includes(t)
+      return ['Utilaj', 'Camion', 'Autoutilitară', 'Cap tractor', 'Container'].includes(t)
     })
   }, [active])
   
-  // Mașini de transport (camioane + cap tractor pentru utilaje, autoturisme + autoutilitare pentru tesa)
-  const masiniTransport = useMemo(() => {
+  // Mijloc principal (cap tractor / camion / autoutilitară pt utilaj; autoturism pt tesa)
+  const masiniPrincipale = useMemo(() => {
     return active.filter(a => {
       const t = a.logistica_categorii?.tip
       if (tip === 'utilaj') return ['Camion', 'Cap tractor', 'Autoutilitară'].includes(t)
@@ -2494,11 +2507,48 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
     })
   }, [active, tip])
   
+  // Remorci/Trailere/Semiremorci (doar pentru tip='utilaj')
+  const remorciDisponibile = useMemo(() => {
+    if (tip !== 'utilaj') return []
+    return active.filter(a => {
+      const t = a.logistica_categorii?.tip
+      return ['Remorcă', 'Trailer', 'Semiremorcă'].includes(t)
+    })
+  }, [active, tip])
+  
+  // POZIȚII șoferi profesioniști (cu atestat / categorii speciale)
+  // SOFER (4) + MASINIST LA MASINI PENTRU TERASAMENTE (23) + MACARAGIU (1) + MECANIC AUTO (3) + MECANIC UTILAJE (3) + TEHNICIAN MASINI SI UTILAJE (1) = ~35 atestați
+  const POZITII_ATESTAT = ['SOFER', 'MASINIST', 'MACARAGIU', 'MECANIC AUTO', 'MECANIC UTILAJE', 'TEHNICIAN MASINI']
+  
+  // Lista șoferi filtrată
+  const soferiDisponibili = useMemo(() => {
+    let list = employees
+    if (necesitaSoferAtestat) {
+      list = list.filter(e => {
+        const pos = (e.position || '').toUpperCase()
+        return POZITII_ATESTAT.some(kw => pos.includes(kw))
+      })
+    }
+    if (soferSearch.trim()) {
+      const q = soferSearch.toLowerCase()
+      list = list.filter(e => 
+        (e.name || '').toLowerCase().includes(q) ||
+        (e.position || '').toLowerCase().includes(q)
+      )
+    }
+    return list.slice(0, 50)  // limit pt performanță
+  }, [employees, necesitaSoferAtestat, soferSearch])
+  
   // Activul transportat (pentru afișaj dimensiuni)
   const activSelectat = useMemo(() => 
     active.find(a => String(a.id) === String(activTransportatId)), 
     [active, activTransportatId]
   )
+  
+  // Mijlocul ales (pentru afișaj)
+  const masinaAleasa = useMemo(() => active.find(a => String(a.id) === String(masinaId)), [active, masinaId])
+  const remorcaAleasa = useMemo(() => active.find(a => String(a.id) === String(remorcaId)), [active, remorcaId])
+  const soferAles = useMemo(() => employees.find(e => String(e.id) === String(soferEmployeeId)), [employees, soferEmployeeId])
   
   // Verificare ARR la data transport
   const arrExpirat = useMemo(() => {
@@ -2537,8 +2587,8 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
       showToast('Selectează data transportului', 'warn')
       return
     }
-    if (soferGazpet && !soferId) {
-      showToast('Selectează șoferul Gazpet', 'warn')
+    if (soferGazpet && !soferEmployeeId) {
+      showToast('Selectează șoferul din lista de angajați', 'warn')
       return
     }
     if (!soferGazpet && !soferExternNume.trim()) {
@@ -2563,8 +2613,11 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
       data_transport: dataTransport,
       ora_plecare: oraPlecare || null,
       masina_id: masinaId ? Number(masinaId) : null,
+      remorca_id: remorcaId ? Number(remorcaId) : null,
+      necesita_sofer_atestat: necesitaSoferAtestat,
       sofer_gazpet: soferGazpet,
-      sofer_id: soferGazpet ? soferId : null,
+      sofer_employee_id: soferGazpet && soferEmployeeId ? Number(soferEmployeeId) : null,
+      sofer_id: null,  // legacy, nu mai folosim
       sofer_extern_nume: !soferGazpet ? soferExternNume.trim() : null,
       sofer_extern_telefon: !soferGazpet ? soferExternTel.trim() || null : null,
       necesita_regim_special: !!(activSelectat?.regim_transport_special),
@@ -2712,40 +2765,118 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
           </div>
         </div>
         
-        {/* DATA + ORA + MIJLOC */}
+        {/* DATA + ORA */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>📅 Programare</div>
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:10}}>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, maxWidth:400}}>
             <FieldText label="Data transport" type="date" value={dataTransport} onChange={setDataTransport} />
             <FieldText label="Ora plecare" type="time" value={oraPlecare} onChange={setOraPlecare} />
-            <FieldSelect 
-              label={tip === 'utilaj' ? 'Mijloc transport (camion/cap tractor)' : 'Mașina (opțional)'}
-              value={masinaId} 
-              onChange={setMasinaId}
-              options={[{label:'— niciuna —', value:''}, ...masiniTransport.map(a => ({
-                label: `${a.cod_intern || ''} · ${a.marca || ''} ${a.model || ''} ${a.nr_inmatriculare ? '(' + a.nr_inmatriculare + ')' : ''}`,
-                value: String(a.id)
-              }))]}
-            />
           </div>
         </div>
         
-        {/* ȘOFER */}
+        {/* MIJLOC TRANSPORT (combo cap tractor + remorcă pentru utilaje) */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🚛 Mijloc transport</div>
+          <div style={{display:'grid', gridTemplateColumns: tip === 'utilaj' ? '1fr 1fr' : '1fr', gap:10}}>
+            <FieldSelect 
+              label={tip === 'utilaj' ? 'Mijloc principal (camion / cap tractor)' : 'Mașina (autoturism, opțional)'}
+              value={masinaId} 
+              onChange={setMasinaId}
+              options={[{label:'— niciunul —', value:''}, ...masiniPrincipale.map(a => ({
+                label: `${a.cod_intern || ''} · ${a.marca || ''} ${a.model || ''}${a.nr_inmatriculare ? ' (' + a.nr_inmatriculare + ')' : ''}`,
+                value: String(a.id)
+              }))]}
+            />
+            {tip === 'utilaj' && (
+              <FieldSelect 
+                label="Remorcă / Trailer / Semiremorcă (opțional)"
+                value={remorcaId} 
+                onChange={setRemorcaId}
+                options={[{label:'— fără remorcă —', value:''}, ...remorciDisponibile.map(a => ({
+                  label: `${a.cod_intern || ''} · ${a.logistica_categorii?.tip || ''} ${a.marca || ''} ${a.model || ''}${a.nr_inmatriculare ? ' (' + a.nr_inmatriculare + ')' : ''}`,
+                  value: String(a.id)
+                }))]}
+              />
+            )}
+          </div>
+          {/* Preview combo */}
+          {(masinaAleasa || remorcaAleasa) && (
+            <div style={{marginTop:8, padding:8, background:G.bg, border:`1px solid ${G.border}`, borderRadius:6, fontSize:12, color:G.muted}}>
+              <strong style={{color:G.text}}>🔗 Combo: </strong>
+              {masinaAleasa && <span style={{color:G.text}}>{masinaAleasa.cod_intern} {masinaAleasa.marca}</span>}
+              {masinaAleasa && remorcaAleasa && <span style={{margin:'0 6px'}}>+</span>}
+              {remorcaAleasa && <span style={{color:G.logistica}}>{remorcaAleasa.cod_intern} ({remorcaAleasa.logistica_categorii?.tip})</span>}
+            </div>
+          )}
+        </div>
+        
+        {/* ȘOFER — bifă atestat + listă filtrată cu search din employees */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>👤 Șofer</div>
+          
+          {/* Bifă necesită atestat */}
+          <div style={{marginBottom:10, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none'}}>
+              <input type="checkbox" checked={necesitaSoferAtestat} onChange={e => { setNecesitaSoferAtestat(e.target.checked); setSoferEmployeeId(''); }} style={{width:16, height:16, accentColor:G.orange}} />
+              <span style={{fontSize:13, color:G.text, fontWeight:600}}>⚠️ Necesită șofer cu atestat / categorie specială</span>
+            </label>
+            <div style={{fontSize:11, color:G.muted, marginTop:4, marginLeft:24}}>
+              {necesitaSoferAtestat 
+                ? '→ Listă filtrată: doar șoferi profesioniști (SOFER, MASINIST, MACARAGIU, MECANIC AUTO/UTILAJE, OPERATOR)' 
+                : '→ Listă completă: orice angajat poate fi ales (cu search după nume)'}
+            </div>
+          </div>
+          
+          {/* Toggle Gazpet / extern */}
           <div style={{marginBottom:8}}>
             <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none'}}>
               <input type="checkbox" checked={soferGazpet} onChange={e => setSoferGazpet(e.target.checked)} style={{width:14, height:14, accentColor:G.green}} />
-              <span style={{fontSize:13, color:G.text, fontWeight:600}}>Șofer Gazpet (din echipă)</span>
+              <span style={{fontSize:13, color:G.text, fontWeight:600}}>Șofer Gazpet (din angajați)</span>
             </label>
           </div>
+          
           {soferGazpet ? (
-            <FieldSelect 
-              label="Selectează șoferul"
-              value={soferId} 
-              onChange={setSoferId}
-              options={[{label:'— alege —', value:''}, ...profiles.map(p => ({label: p.name, value: p.id}))]}
-            />
+            <div>
+              {/* Search */}
+              <div style={{marginBottom:8}}>
+                <input 
+                  type="text" 
+                  value={soferSearch} 
+                  onChange={e => setSoferSearch(e.target.value)} 
+                  placeholder={`🔍 Caută după nume sau funcție... (${soferiDisponibili.length}${necesitaSoferAtestat ? ' atestați' : ' disponibili'})`}
+                  style={S.input}
+                />
+              </div>
+              
+              {/* Lista cu radio buttons */}
+              <div style={{maxHeight: 200, overflowY:'auto', border:`1px solid ${G.border}`, borderRadius:8, background:G.bg}}>
+                {soferiDisponibili.length === 0 ? (
+                  <div style={{padding:14, textAlign:'center', color:G.muted, fontSize:12}}>
+                    {soferSearch ? `Niciun rezultat pentru "${soferSearch}"` : (necesitaSoferAtestat ? 'Niciun șofer atestat găsit' : 'Niciun angajat')}
+                  </div>
+                ) : (
+                  soferiDisponibili.map(emp => (
+                    <label key={emp.id} style={{
+                      display:'flex', alignItems:'center', gap:10, padding:'8px 12px', cursor:'pointer',
+                      borderBottom:`1px solid ${G.border}`,
+                      background: String(soferEmployeeId) === String(emp.id) ? G.logistica + '22' : 'transparent'
+                    }}>
+                      <input type="radio" name="sofer" checked={String(soferEmployeeId) === String(emp.id)} onChange={() => setSoferEmployeeId(emp.id)} style={{accentColor:G.logistica}} />
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:13, color:G.text, fontWeight:600}}>{emp.name}</div>
+                        <div style={{fontSize:10, color:G.muted}}>{emp.position || '—'}{emp.department ? ` · ${emp.department}` : ''}</div>
+                      </div>
+                    </label>
+                  ))
+                )}
+              </div>
+              
+              {soferAles && (
+                <div style={{marginTop:8, padding:8, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:6, fontSize:12, color:G.text}}>
+                  ✓ Șofer ales: <strong>{soferAles.name}</strong> · <span style={{color:G.muted}}>{soferAles.position}</span>
+                </div>
+              )}
+            </div>
           ) : (
             <div style={{display:'grid', gridTemplateColumns:'2fr 1fr', gap:10}}>
               <FieldText label="Nume șofer extern" value={soferExternNume} onChange={setSoferExternNume} placeholder="ex: Ion Popescu (Transport SRL)" />
@@ -2792,11 +2923,13 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
       .select(`*,
         activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, marca, model, nr_inmatriculare, regim_transport_special),
         masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
+        remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
         plecare_site:sites!plecare_site_id(name),
         destinatie_site:sites!destinatie_site_id(name),
         solicitant:profiles!solicitant_id(name),
         aprobator:profiles!aprobator_id(name),
-        sofer:profiles!sofer_id(name)
+        sofer:profiles!sofer_id(name),
+        sofer_employee:employees!sofer_employee_id(id, name, position)
       `)
       .order('data_transport', { ascending: false })
       .order('id', { ascending: false })
@@ -2932,9 +3065,19 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                         <div>
                           <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.activ_transportat.cod_intern} · {t.activ_transportat.marca}</div>
                           <div style={{fontSize:10, color:G.muted}}>{t.activ_transportat.model}{t.activ_transportat.regim_transport_special && <span style={{color:G.red, marginLeft:4}}>⚠️ Regim special</span>}</div>
+                          {/* Mijloc transport (combo cap tractor + remorca) */}
+                          {(t.masina || t.remorca) && (
+                            <div style={{marginTop:4, fontSize:10, color:G.logistica}}>
+                              🚛 {t.masina ? `${t.masina.cod_intern}` : '—'}
+                              {t.remorca && <span> + {t.remorca.cod_intern} <span style={{color:G.muted}}>({t.remorca.logistica_categorii?.tip})</span></span>}
+                            </div>
+                          )}
                         </div>
                       ) : (
-                        <div style={{fontSize:12, color:G.text, maxWidth:200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={t.continut_descriere}>{t.continut_descriere}</div>
+                        <div>
+                          <div style={{fontSize:12, color:G.text, maxWidth:200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={t.continut_descriere}>{t.continut_descriere}</div>
+                          {t.masina && <div style={{marginTop:4, fontSize:10, color:G.logistica}}>🚗 {t.masina.cod_intern} {t.masina.marca}</div>}
+                        </div>
                       )}
                     </td>
                     <td style={tdStyle}>
@@ -2943,8 +3086,25 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                       <div style={{fontSize:11, color:G.text}}>{formatLocatie(t.destinatie_tip, t.destinatie_site, t.destinatie_locatie_text)}</div>
                     </td>
                     <td style={tdStyle}>
-                      <div style={{fontSize:12, color:G.text}}>{t.sofer_gazpet ? (t.sofer?.name || '—') : (t.sofer_extern_nume || '—')}</div>
-                      {!t.sofer_gazpet && t.sofer_extern_telefon && <div style={{fontSize:10, color:G.muted}}>{t.sofer_extern_telefon}</div>}
+                      {/* Prioritate: employee → profile → extern */}
+                      {t.sofer_gazpet ? (
+                        t.sofer_employee ? (
+                          <>
+                            <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.sofer_employee.name}</div>
+                            <div style={{fontSize:10, color:G.muted}}>{t.sofer_employee.position}</div>
+                          </>
+                        ) : t.sofer ? (
+                          <div style={{fontSize:12, color:G.text}}>{t.sofer.name} <span style={{fontSize:9, color:G.muted}}>(user)</span></div>
+                        ) : (
+                          <div style={{fontSize:12, color:G.muted}}>—</div>
+                        )
+                      ) : (
+                        <>
+                          <div style={{fontSize:12, color:G.text}}>{t.sofer_extern_nume || '—'}</div>
+                          {t.sofer_extern_telefon && <div style={{fontSize:10, color:G.muted}}>{t.sofer_extern_telefon}</div>}
+                          <div style={{fontSize:9, color:G.orange}}>(extern)</div>
+                        </>
+                      )}
                     </td>
                     <td style={tdStyle}>
                       <div style={{fontSize:11, color:G.muted}}>{t.solicitant?.name || '—'}</div>
