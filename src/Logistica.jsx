@@ -3914,6 +3914,9 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     else if (rol === 'destinatar') { setSemnDestData(data); setSemnDestNume(nume); setSemnDestLa(now) }
     setShowSemnatura(null)
     
+    // Propagă refresh la parent (DetaliiTransportModal → reîncarcă transport cu semnături noi)
+    onTrimisEmail?.()
+    
     // === AUTO-ARHIVARE când avem toate 3 semnături ===
     // Verificăm noile valori după update (rol-ul curent + cele 2 anterioare)
     const nowExp = rol === 'expeditor' ? true : !!semnExpData
@@ -3939,7 +3942,25 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       setSetariFirma(map)
       setDestinatari((map.aviz_email_destinatari || '').split(',').map(s => s.trim()).filter(Boolean))
     })
-  }, [])
+    
+    // FRESH fetch semnături din DB (în caz că modalul a fost redeschis după modificări)
+    supabase.from('logistica_transporturi')
+      .select('semnatura_expeditor_data, semnatura_expeditor_nume, semnatura_expeditor_la, semnatura_sofer_data, semnatura_sofer_nume, semnatura_sofer_la, semnatura_destinatar_data, semnatura_destinatar_nume, semnatura_destinatar_la, aviz_generat, aviz_data')
+      .eq('id', T.id)
+      .single()
+      .then(({ data }) => {
+        if (!data) return
+        setSemnExpData(data.semnatura_expeditor_data || null)
+        setSemnExpNume(data.semnatura_expeditor_nume || '')
+        setSemnExpLa(data.semnatura_expeditor_la || null)
+        setSemnSofData(data.semnatura_sofer_data || null)
+        setSemnSofNume(data.semnatura_sofer_nume || '')
+        setSemnSofLa(data.semnatura_sofer_la || null)
+        setSemnDestData(data.semnatura_destinatar_data || null)
+        setSemnDestNume(data.semnatura_destinatar_nume || '')
+        setSemnDestLa(data.semnatura_destinatar_la || null)
+      })
+  }, [T.id])
   
   // Print A4
   const handlePrint = () => {
@@ -4906,7 +4927,29 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
           profile={profile}
           sites={sites}
           onClose={() => setDetaliiTransport(null)}
-          onChanged={fetchAll}
+          onChanged={async () => {
+            await fetchAll()
+            // Refresh și transportul deschis în detalii (pentru că state-ul lui pierdea schimbările)
+            const { data: fresh } = await supabase
+              .from('logistica_transporturi')
+              .select(`*,
+                activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, marca, model, nr_inmatriculare, regim_transport_special),
+                masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
+                remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
+                plecare_site:sites!plecare_site_id(name),
+                destinatie_site:sites!destinatie_site_id(name),
+                solicitant:profiles!solicitant_id(name),
+                aprobator:profiles!aprobator_id(name),
+                sofer:profiles!sofer_id(name),
+                sofer_employee:employees!sofer_employee_id(id, name, position),
+                manager_plecare:profiles!manager_plecare_id(id, name, role),
+                manager_destinatie:profiles!manager_destinatie_id(id, name, role),
+                confirmat_de:profiles!confirmat_primire_de(name)
+              `)
+              .eq('id', detaliiTransport.id)
+              .single()
+            if (fresh) setDetaliiTransport(fresh)
+          }}
           onEdit={(t) => setEditTransport(t)}
           showToast={showToast}
         />
