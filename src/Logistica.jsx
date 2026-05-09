@@ -2506,8 +2506,16 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   const [soferExternTel, setSoferExternTel] = useState(T?.sofer_extern_telefon || '')
   const [costEstimat, setCostEstimat] = useState(T?.cost_estimat || '')
   const [observatii, setObservatii] = useState(T?.observatii || '')
+  const [managerPlecareId, setManagerPlecareId] = useState(T?.manager_plecare_id || '')
+  const [managerDestinatieId, setManagerDestinatieId] = useState(T?.manager_destinatie_id || '')
+  const [profilesList, setProfilesList] = useState([])
   const [employees, setEmployees] = useState([])
   const [saving, setSaving] = useState(false)
+  
+  // Load profiles (pentru dropdown manageri — doar useri sistem)
+  useEffect(() => {
+    supabase.from('profiles').select('id, name, role, email').order('name').then(({ data }) => setProfilesList(data || []))
+  }, [])
   
   // Load employees
   const loadEmployees = async () => {
@@ -2662,6 +2670,8 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
       necesita_regim_special: !!(activSelectat?.regim_transport_special),
       cost_estimat: costEstimat ? Number(costEstimat) : null,
       observatii: observatii.trim() || null,
+      manager_plecare_id: managerPlecareId || null,
+      manager_destinatie_id: managerDestinatieId || null,
     }
     
     let error
@@ -2772,9 +2782,9 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🛣️ Traseu</div>
           
           {/* Plecare */}
-          <div style={{marginBottom:10}}>
+          <div style={{marginBottom:12}}>
             <div style={{fontSize:11, color:G.muted, marginBottom:4, fontWeight:600}}>DE LA (plecare)</div>
-            <div style={{display:'flex', gap:8}}>
+            <div style={{display:'flex', gap:8, marginBottom:6}}>
               <select value={plecareTip} onChange={e => setPlecareTip(e.target.value)} style={{...S.input, width:200}}>
                 <option value="sediu">🏢 Sediu Gazpet</option>
                 <option value="site">📍 Șantier</option>
@@ -2790,12 +2800,17 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                 <input type="text" value={plecareLocText} onChange={e => setPlecareLocText(e.target.value)} placeholder="ex: Depozit furnizor SC X SRL, București" style={{...S.input, flex:1}} />
               )}
             </div>
+            {/* Manager plecare */}
+            <select value={managerPlecareId} onChange={e => setManagerPlecareId(e.target.value)} style={{...S.input, fontSize:12}}>
+              <option value="">👤 Manager plecare (opțional, cel care eliberează utilajul)</option>
+              {profilesList.map(p => <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>)}
+            </select>
           </div>
           
           {/* Destinație */}
           <div>
             <div style={{fontSize:11, color:G.muted, marginBottom:4, fontWeight:600}}>LA (destinație)</div>
-            <div style={{display:'flex', gap:8}}>
+            <div style={{display:'flex', gap:8, marginBottom:6}}>
               <select value={destinatieTip} onChange={e => setDestinatieTip(e.target.value)} style={{...S.input, width:200}}>
                 <option value="sediu">🏢 Sediu Gazpet</option>
                 <option value="site">📍 Șantier</option>
@@ -2811,6 +2826,16 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                 <input type="text" value={destinatieLocText} onChange={e => setDestinatieLocText(e.target.value)} placeholder="ex: ANRE Sediu central, Str. Constantin Nacu 3, București" style={{...S.input, flex:1}} />
               )}
             </div>
+            {/* Manager destinație — IMPORTANT pentru confirmare primire */}
+            <select value={managerDestinatieId} onChange={e => setManagerDestinatieId(e.target.value)} style={{...S.input, fontSize:12, borderColor: managerDestinatieId ? G.green + '88' : G.border2}}>
+              <option value="">⚠️ Manager destinație (cel care va confirma primirea)</option>
+              {profilesList.map(p => <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>)}
+            </select>
+            {managerDestinatieId && (
+              <div style={{fontSize:10, color:G.green, marginTop:4}}>
+                ✓ La livrare, această persoană va confirma primirea utilajului
+              </div>
+            )}
           </div>
         </div>
         
@@ -3030,6 +3055,8 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [showRespingere, setShowRespingere] = useState(false)
   const [motivRespingere, setMotivRespingere] = useState('')
   const [showAlegeSofer, setShowAlegeSofer] = useState(false)
+  const [showConfirmPrimire, setShowConfirmPrimire] = useState(false)
+  const [confirmareObs, setConfirmareObs] = useState('')
   const [employees, setEmployees] = useState([])
   const [soferEmployeeId, setSoferEmployeeId] = useState('')
   const [soferSearch, setSoferSearch] = useState('')
@@ -3038,6 +3065,8 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   
   const isAprobator = isAprobatorTransport(profile)
   const isSolicitant = profile?.id === T.solicitant_id
+  const isManagerDestinatie = profile?.id === T.manager_destinatie_id
+  const isManagerPlecare = profile?.id === T.manager_plecare_id
   const status = T.status
   
   // Load employees (pentru când Logistică alege șofer la aprobare)
@@ -3137,6 +3166,22 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
     onClose()
   }
   
+  // Confirmare primire — acțiune specială când transportul ajunge la destinație
+  const handleConfirmPrimire = async () => {
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({
+      status: 'livrat',
+      confirmat_primire_la: new Date().toISOString(),
+      confirmat_primire_de: profile.id,
+      confirmare_observatii: confirmareObs.trim() || null
+    }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✅ Primire confirmată — transport finalizat!')
+    onChanged?.()
+    onClose()
+  }
+  
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
       <div style={{...S.card, width:'100%', maxWidth:780, maxHeight:'92vh', overflow:'auto', padding:24}}>
@@ -3184,10 +3229,25 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
           <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
             <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>De la</div>
             <div style={{fontSize:13, color:G.text}}>{formatLoc(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}</div>
+            {T.manager_plecare && (
+              <div style={{fontSize:10, color:G.muted, marginTop:6, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                👤 Manager plecare: <strong style={{color:G.text}}>{T.manager_plecare.name}</strong>
+              </div>
+            )}
           </div>
           <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
             <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>La</div>
             <div style={{fontSize:13, color:G.text}}>{formatLoc(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}</div>
+            {T.manager_destinatie ? (
+              <div style={{fontSize:10, color:isManagerDestinatie ? G.green : G.muted, marginTop:6, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                👤 Manager destinație: <strong style={{color:isManagerDestinatie ? G.green : G.text}}>{T.manager_destinatie.name}</strong>
+                {isManagerDestinatie && <span style={{marginLeft:4, fontWeight:700}}>(TU!)</span>}
+              </div>
+            ) : (
+              <div style={{fontSize:10, color:G.orange, marginTop:6, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                ⚠️ Fără manager destinație
+              </div>
+            )}
           </div>
           <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
             <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>📅 Data · Ora</div>
@@ -3245,6 +3305,38 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
           <div style={{marginBottom:12, padding:10, background:G.redDim, border:`1px solid ${G.red}55`, borderRadius:8}}>
             <div style={{fontSize:11, color:G.red, fontWeight:700, marginBottom:4}}>✗ MOTIV RESPINGERE:</div>
             <div style={{fontSize:13, color:G.text}}>{T.motiv_respingere}</div>
+          </div>
+        )}
+        
+        {/* Confirmare primire (când e livrat) */}
+        {status === 'livrat' && T.confirmat_primire_la && (
+          <div style={{marginBottom:12, padding:10, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.green, fontWeight:700, marginBottom:4}}>✅ PRIMIRE CONFIRMATĂ:</div>
+            <div style={{fontSize:13, color:G.text}}>
+              de <strong>{T.confirmat_de?.name || '—'}</strong> la {new Date(T.confirmat_primire_la).toLocaleString('ro-RO')}
+            </div>
+            {T.confirmare_observatii && (
+              <div style={{marginTop:6, fontSize:12, color:G.muted, paddingTop:6, borderTop:`1px solid ${G.green}33`}}>
+                📝 {T.confirmare_observatii}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Form confirmare primire (pentru status='in_tranzit') */}
+        {showConfirmPrimire && (
+          <div style={{marginBottom:12, padding:12, background:G.green+'11', border:`2px solid ${G.green}`, borderRadius:8}}>
+            <div style={{fontSize:13, fontWeight:700, color:G.green, marginBottom:8}}>✅ Confirmă primirea utilajului</div>
+            <div style={{fontSize:11, color:G.muted, marginBottom:8}}>
+              Confirmi că ai primit utilajul în stare bună la destinație. Această acțiune nu poate fi reversată.
+            </div>
+            <textarea 
+              value={confirmareObs} 
+              onChange={e => setConfirmareObs(e.target.value)} 
+              rows={3} 
+              placeholder="Observații (opțional): ex: 'Primit OK', sau 'Primit cu o zgârietură pe șasiu', sau 'Lipsește furtunul X'..." 
+              style={{...S.input, resize:'vertical'}} 
+            />
           </div>
         )}
         
@@ -3326,9 +3418,32 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
             </>
           )}
           
-          {/* === STATUS = IN TRANZIT — Marchează livrat === */}
-          {status === 'in_tranzit' && (
-            <button onClick={() => handleSchimbaStatus('livrat')} disabled={actionLoading} style={{...S.btnP, background:G.green}}>✅ Marchează livrat</button>
+          {/* === STATUS = IN TRANZIT — Confirmare primire / Marchează livrat === */}
+          {status === 'in_tranzit' && !showConfirmPrimire && (
+            <>
+              {/* Manager destinație → confirmare oficială cu observații */}
+              {(isManagerDestinatie || isAprobator) && (
+                <button onClick={() => setShowConfirmPrimire(true)} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
+                  {isManagerDestinatie ? '✅ Confirm primirea (livrat)' : '✅ Confirmă primire (override)'}
+                </button>
+              )}
+              {/* Marchează livrat fără confirmare oficială (fallback) */}
+              {!isManagerDestinatie && !isAprobator && (
+                <div style={{fontSize:12, color:G.orange, alignSelf:'center'}}>
+                  Așteaptă confirmarea de la {T.manager_destinatie?.name || 'managerul destinație'}
+                </div>
+              )}
+            </>
+          )}
+          
+          {/* Confirmare primire în curs */}
+          {status === 'in_tranzit' && showConfirmPrimire && (
+            <>
+              <button onClick={() => { setShowConfirmPrimire(false); setConfirmareObs('') }} style={S.btnS}>← Înapoi</button>
+              <button onClick={handleConfirmPrimire} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
+                ✅ Confirm primire
+              </button>
+            </>
           )}
           
           {/* Fără acțiuni dacă livrat / anulat / respins */}
@@ -3347,6 +3462,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
   const [loading, setLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState('Toate')
   const [perioadaFilter, setPerioadaFilter] = useState('luna')
+  const [meleFilter, setMeleFilter] = useState(false)  // doar transporturile mele (solicitant SAU manager destinație)
   const [showComanda, setShowComanda] = useState(false)
   const [editTransport, setEditTransport] = useState(null)
   const [detaliiTransport, setDetaliiTransport] = useState(null)  // pentru DetaliiTransportModal
@@ -3363,7 +3479,10 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
         solicitant:profiles!solicitant_id(name),
         aprobator:profiles!aprobator_id(name),
         sofer:profiles!sofer_id(name),
-        sofer_employee:employees!sofer_employee_id(id, name, position)
+        sofer_employee:employees!sofer_employee_id(id, name, position),
+        manager_plecare:profiles!manager_plecare_id(id, name, role),
+        manager_destinatie:profiles!manager_destinatie_id(id, name, role),
+        confirmat_de:profiles!confirmat_primire_de(name)
       `)
       .order('data_transport', { ascending: false })
       .order('id', { ascending: false })
@@ -3384,13 +3503,18 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
     // Filtru status
     if (statusFilter !== 'Toate') q = q.eq('status', statusFilter)
     
+    // Filtru "Doar ale mele" — sunt solicitant SAU manager destinație SAU manager plecare
+    if (meleFilter && profile?.id) {
+      q = q.or(`solicitant_id.eq.${profile.id},manager_destinatie_id.eq.${profile.id},manager_plecare_id.eq.${profile.id}`)
+    }
+    
     const { data, error } = await q
     if (error) console.error('Eroare fetch transporturi:', error)
     setList(data || [])
     setLoading(false)
   }
   
-  useEffect(() => { fetchList() }, [statusFilter, perioadaFilter])
+  useEffect(() => { fetchList() }, [statusFilter, perioadaFilter, meleFilter])
   
   // KPI
   const kpi = useMemo(() => {
@@ -3446,6 +3570,21 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
         </div>
         
         <div style={{flex:1}} />
+        
+        {/* Toggle "Doar ale mele" */}
+        <button 
+          onClick={() => setMeleFilter(!meleFilter)} 
+          style={{
+            padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
+            border:`1px solid ${meleFilter ? G.purple : G.border}`,
+            background: meleFilter ? G.purple + '22' : 'transparent',
+            color: meleFilter ? G.purple : G.muted,
+            cursor:'pointer'
+          }}
+          title="Vezi doar transporturile unde ești solicitant SAU manager (plecare/destinație)"
+        >
+          {meleFilter ? '👤 Doar ale mele' : '👥 Toate'}
+        </button>
         
         <button onClick={() => setShowComanda(true)} style={{...S.btnP, background:G.green, fontSize:13, display:'flex', alignItems:'center', gap:6}}>
           <span>+</span><span>Comandă transport</span>
