@@ -3951,7 +3951,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
           sites={sites}
           profile={profile}
           onClose={() => setShowComanda(false)}
-          onSaved={fetchList}
+          onSaved={fetchAll}
           showToast={showToast}
         />
       )}
@@ -3964,7 +3964,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
           profile={profile}
           initialTransport={editTransport}
           onClose={() => setEditTransport(null)}
-          onSaved={fetchList}
+          onSaved={fetchAll}
           showToast={showToast}
         />
       )}
@@ -3976,7 +3976,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
           profile={profile}
           sites={sites}
           onClose={() => setDetaliiTransport(null)}
-          onChanged={fetchList}
+          onChanged={fetchAll}
           onEdit={(t) => setEditTransport(t)}
           showToast={showToast}
         />
