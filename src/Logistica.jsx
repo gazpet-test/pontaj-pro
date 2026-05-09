@@ -2,11 +2,13 @@
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -1551,6 +1553,7 @@ function TabsBar({ tab, setTab }) {
     { key: 'service',   icon: '🔧', label: 'Service' },
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
+    { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -2553,15 +2556,15 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     })
   }, [])
   
-  // Identifică Mitrache din profilesList (default pentru sediu)
+  // Identifică Mitrache din profilesList (default pentru sediu) — acceptă ambele forme
   const mitrachId = useMemo(() => {
-    const m = profilesList.find(p => p.email === 'alexandru.mitrache@gazpet.ro')
+    const m = profilesList.find(p => p.email === 'alexandru.mitrache@gazpet.ro' || p.email === 'm.alexandru@gazpet.ro')
     return m?.id || ''
   }, [profilesList])
   
   // Identifică toți userii din departamentul Logistică (Mitrache + Cristiana + viitor)
   const profilesLogistica = useMemo(() => {
-    const emails = ['alexandru.mitrache@gazpet.ro', 'cristiana.puscasu@gazpet.ro']
+    const emails = ['alexandru.mitrache@gazpet.ro', 'm.alexandru@gazpet.ro', 'cristiana.puscasu@gazpet.ro']
     return profilesList.filter(p => emails.includes(p.email))
   }, [profilesList])
   
@@ -3130,7 +3133,13 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
 }
 
 // ----- Identificare aprobatori (pentru workflow) -----
-const APROBATORI_TRANSPORT_EMAILS = ['alexandru.mitrache@gazpet.ro', 'cristiana.puscasu@gazpet.ro']
+// Acceptăm ambele forme de email pentru Mitrache (alexandru.mitrache sau m.alexandru)
+// pentru flexibilitate dacă se schimbă în profiles/auth
+const APROBATORI_TRANSPORT_EMAILS = [
+  'alexandru.mitrache@gazpet.ro', 
+  'm.alexandru@gazpet.ro',
+  'cristiana.puscasu@gazpet.ro'
+]
 const isAprobatorTransport = (profile) => {
   if (!profile?.email) return false
   // Aprobatori desemnați
@@ -3715,6 +3724,146 @@ function SetariEmailDestinatariModal({ valoare, onClose, onSaved, showToast }) {
   )
 }
 
+// --- Modal Canvas pentru Semnătură Electronică ---
+function SemnaturaCanvasModal({ rol, numeImplicit, onClose, onSave, showToast }) {
+  const [drawing, setDrawing] = useState(false)
+  const [hasDrawn, setHasDrawn] = useState(false)
+  const [nume, setNume] = useState(numeImplicit || '')
+  const canvasRef = useRef(null)
+  const lastPoint = useRef({ x: 0, y: 0 })
+  
+  // Setup canvas la mount
+  useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return
+    const ctx = c.getContext('2d')
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, c.width, c.height)
+    ctx.strokeStyle = '#0F172A'
+    ctx.lineWidth = 2.2
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+  }, [])
+  
+  // Coords helper (mouse + touch)
+  const getCoords = (e) => {
+    const c = canvasRef.current
+    const rect = c.getBoundingClientRect()
+    const scaleX = c.width / rect.width
+    const scaleY = c.height / rect.height
+    if (e.touches?.[0]) {
+      return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY }
+    }
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY }
+  }
+  
+  const startDraw = (e) => {
+    e.preventDefault()
+    setDrawing(true)
+    const p = getCoords(e)
+    lastPoint.current = p
+  }
+  
+  const draw = (e) => {
+    if (!drawing) return
+    e.preventDefault()
+    const ctx = canvasRef.current.getContext('2d')
+    const p = getCoords(e)
+    ctx.beginPath()
+    ctx.moveTo(lastPoint.current.x, lastPoint.current.y)
+    ctx.lineTo(p.x, p.y)
+    ctx.stroke()
+    lastPoint.current = p
+    setHasDrawn(true)
+  }
+  
+  const endDraw = (e) => {
+    e?.preventDefault()
+    setDrawing(false)
+  }
+  
+  const clearCanvas = () => {
+    const c = canvasRef.current
+    const ctx = c.getContext('2d')
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, c.width, c.height)
+    setHasDrawn(false)
+  }
+  
+  const handleSave = () => {
+    if (!hasDrawn) { showToast('Desenează semnătura înainte de salvare', 'warn'); return }
+    if (!nume.trim()) { showToast('Completează numele celui care semnează', 'warn'); return }
+    const dataUrl = canvasRef.current.toDataURL('image/png')
+    onSave({ data: dataUrl, nume: nume.trim() })
+  }
+  
+  const rolLabel = { expeditor: '📤 EXPEDITOR / Manager plecare', sofer: '🚚 ȘOFER', destinatar: '📥 DESTINATAR / Manager destinație' }[rol] || rol
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:620, padding:22}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize:16, fontWeight:700, color:G.text}}>🖋️ Semnătură electronică</div>
+            <div style={{fontSize:12, color:G.muted, marginTop:3}}>{rolLabel}</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Nume semnatar */}
+        <div style={{marginBottom:14}}>
+          <Lbl>Nume celui care semnează</Lbl>
+          <input 
+            type="text" 
+            value={nume} 
+            onChange={e => setNume(e.target.value)} 
+            placeholder="Nume Prenume"
+            style={S.input}
+          />
+        </div>
+        
+        {/* Canvas */}
+        <div style={{marginBottom:14}}>
+          <Lbl>Desenează semnătura mai jos (mouse pe desktop / deget pe mobil)</Lbl>
+          <div style={{position:'relative', border:`2px solid ${G.border}`, borderRadius:8, background:'#fff', overflow:'hidden'}}>
+            <canvas 
+              ref={canvasRef}
+              width={560}
+              height={200}
+              style={{display:'block', width:'100%', height:200, touchAction:'none', cursor:'crosshair'}}
+              onMouseDown={startDraw}
+              onMouseMove={draw}
+              onMouseUp={endDraw}
+              onMouseLeave={endDraw}
+              onTouchStart={startDraw}
+              onTouchMove={draw}
+              onTouchEnd={endDraw}
+            />
+            {!hasDrawn && (
+              <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none', color:'#9CA3AF', fontSize:14, fontStyle:'italic'}}>
+                ✍️ Semnează aici...
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* Actions */}
+        <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          <button onClick={clearCanvas} style={{...S.btnS, color:G.orange, borderColor:G.orange+'88'}}>
+            🗑️ Șterge
+          </button>
+          <div style={{display:'flex', gap:8}}>
+            <button onClick={onClose} style={S.btnS}>Anulează</button>
+            <button onClick={handleSave} disabled={!hasDrawn} style={{...S.btnP, background:G.green}}>
+              ✓ Salvează semnătura
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --- Modal AVIZ ÎNSOȚIRE MARFĂ (HTML printabil A4) ---
 function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onTrimisEmail }) {
   const [setariFirma, setSetariFirma] = useState({})
@@ -3722,7 +3871,47 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
   const [showSetariEmail, setShowSetariEmail] = useState(false)
   const [trimisLoading, setTrimisLoading] = useState(false)
   
+  // Pas 4: Semnături electronice
+  const [showSemnatura, setShowSemnatura] = useState(null)  // 'expeditor' | 'sofer' | 'destinatar' | null
+  const [semnExpData, setSemnExpData] = useState(T.semnatura_expeditor_data || null)
+  const [semnExpNume, setSemnExpNume] = useState(T.semnatura_expeditor_nume || '')
+  const [semnExpLa, setSemnExpLa] = useState(T.semnatura_expeditor_la || null)
+  const [semnSofData, setSemnSofData] = useState(T.semnatura_sofer_data || null)
+  const [semnSofNume, setSemnSofNume] = useState(T.semnatura_sofer_nume || '')
+  const [semnSofLa, setSemnSofLa] = useState(T.semnatura_sofer_la || null)
+  const [semnDestData, setSemnDestData] = useState(T.semnatura_destinatar_data || null)
+  const [semnDestNume, setSemnDestNume] = useState(T.semnatura_destinatar_nume || '')
+  const [semnDestLa, setSemnDestLa] = useState(T.semnatura_destinatar_la || null)
+  
   const isAdmin = ['admin', 'superadmin'].includes(profile?.role)
+  
+  // Save semnătură în DB
+  const saveSemnatura = async (rol, { data, nume }) => {
+    const updates = {}
+    const now = new Date().toISOString()
+    if (rol === 'expeditor') {
+      updates.semnatura_expeditor_data = data
+      updates.semnatura_expeditor_nume = nume
+      updates.semnatura_expeditor_la = now
+      updates.semnatura_expeditor_de = profile?.id
+    } else if (rol === 'sofer') {
+      updates.semnatura_sofer_data = data
+      updates.semnatura_sofer_nume = nume
+      updates.semnatura_sofer_la = now
+    } else if (rol === 'destinatar') {
+      updates.semnatura_destinatar_data = data
+      updates.semnatura_destinatar_nume = nume
+      updates.semnatura_destinatar_la = now
+      updates.semnatura_destinatar_de = profile?.id
+    }
+    const { error } = await supabase.from('logistica_transporturi').update(updates).eq('id', T.id)
+    if (error) { showToast('Eroare salvare semnătură: ' + error.message, 'error'); return }
+    showToast(`✓ Semnătură ${rol} salvată`)
+    if (rol === 'expeditor') { setSemnExpData(data); setSemnExpNume(nume); setSemnExpLa(now) }
+    else if (rol === 'sofer') { setSemnSofData(data); setSemnSofNume(nume); setSemnSofLa(now) }
+    else if (rol === 'destinatar') { setSemnDestData(data); setSemnDestNume(nume); setSemnDestLa(now) }
+    setShowSemnatura(null)
+  }
   
   // Load setări firmă + destinatari
   useEffect(() => {
@@ -3738,6 +3927,96 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
   // Print A4
   const handlePrint = () => {
     window.print()
+  }
+  
+  // Arhivare PDF (PAS 5)
+  const [arhivareLoading, setArhivareLoading] = useState(false)
+  const [avizContentRef] = useState({ current: null })
+  
+  const handleArhivare = async () => {
+    setArhivareLoading(true)
+    try {
+      // 1. Selectează zona aviz
+      const aviz = document.querySelector('.aviz-content')
+      if (!aviz) { showToast('Nu pot localiza conținutul avizului', 'error'); setArhivareLoading(false); return }
+      
+      // 2. Render to canvas
+      const canvas = await html2canvas(aviz, { scale: 2, backgroundColor: '#FFFFFF', useCORS: true, logging: false })
+      
+      // 3. Convert to PDF (A4)
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const pageW = 210, pageH = 297
+      const imgW = pageW
+      const imgH = (canvas.height * imgW) / canvas.width
+      const imgData = canvas.toDataURL('image/png')
+      
+      if (imgH <= pageH) {
+        pdf.addImage(imgData, 'PNG', 0, 0, imgW, imgH)
+      } else {
+        // Multi-page (rare pentru aviz)
+        let position = 0
+        let heightLeft = imgH
+        pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH)
+        heightLeft -= pageH
+        while (heightLeft > 0) {
+          position = -(imgH - heightLeft)
+          pdf.addPage()
+          pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH)
+          heightLeft -= pageH
+        }
+      }
+      
+      // 4. Convert PDF to Blob
+      const pdfBlob = pdf.output('blob')
+      const pdfSize = pdfBlob.size
+      
+      // 5. Upload în Supabase Storage
+      const numarAviz = `AVZ-${T.numar_transport.replace('TRP-', '')}`
+      const fileName = `${T.data_transport?.substring(0,7) || '2026-01'}/${numarAviz}_${Date.now()}.pdf`
+      const { error: upErr } = await supabase.storage.from('avize').upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false })
+      if (upErr) throw upErr
+      
+      // 6. Insert în arhivă
+      const { error: insErr } = await supabase.from('logistica_avize_arhiva').insert({
+        transport_id: T.id,
+        numar_aviz: numarAviz,
+        numar_transport: T.numar_transport,
+        pdf_path: fileName,
+        pdf_size_bytes: pdfSize,
+        generat_de: profile?.id,
+        generat_de_nume: profile?.name,
+        data_transport: T.data_transport,
+        tip: T.tip,
+        plecare_text: formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text),
+        destinatie_text: formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text),
+        manager_plecare_nume: T.manager_plecare?.name,
+        manager_destinatie_nume: T.manager_destinatie?.name,
+        sofer_nume: T.sofer_employee?.name || T.sofer_extern_nume,
+        semnat_expeditor: !!semnExpData,
+        semnat_sofer: !!semnSofData,
+        semnat_destinatar: !!semnDestData
+      })
+      if (insErr) throw insErr
+      
+      // 7. Update aviz_generat în transport
+      await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
+      
+      // 8. Download local
+      const blobUrl = URL.createObjectURL(pdfBlob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = `${numarAviz}.pdf`
+      a.click()
+      URL.revokeObjectURL(blobUrl)
+      
+      showToast(`📂 Aviz arhivat (${(pdfSize/1024).toFixed(0)} KB) + descărcat`)
+      onTrimisEmail?.()
+    } catch (e) {
+      showToast('Eroare arhivare: ' + (e.message || e), 'error')
+      console.error(e)
+    } finally {
+      setArhivareLoading(false)
+    }
   }
   
   // Trimite email cu mailto (deschide client email cu destinatarii pre-completați)
@@ -3813,6 +4092,9 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
               </button>
               <button onClick={handlePrint} style={{padding:'7px 14px', background:'#16A34A', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
                 🖨️ Print
+              </button>
+              <button onClick={handleArhivare} disabled={arhivareLoading} style={{padding:'7px 14px', background:'#7C3AED', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                {arhivareLoading ? '...' : '💾 Arhivează PDF'}
               </button>
               <button onClick={onClose} style={{padding:'7px 12px', background:'#DC2626', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
                 ✕ Închide
@@ -3973,22 +4255,90 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
               </div>
             )}
             
-            {/* Spații semnătură */}
+            {/* Spații semnătură (PAS 4 - cu canvas drawing) */}
             <div style={{marginTop:30, display:'flex', gap:14, justifyContent:'space-between'}}>
-              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6}}>
-                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:24}}>EXPEDITOR / Manager plecare</div>
-                <div style={{fontSize:10, color:'#6B7280'}}>{T.manager_plecare?.name || '—'}</div>
-                <div style={{fontSize:9, color:'#9CA3AF', marginTop:4}}>Semnătură & Ștampilă</div>
+              {/* Semnătură EXPEDITOR */}
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6, position:'relative'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:6}}>EXPEDITOR / Manager plecare</div>
+                <div style={{minHeight:60, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  {semnExpData ? (
+                    <img src={semnExpData} alt="semnătură expeditor" style={{maxHeight:60, maxWidth:'95%'}} />
+                  ) : (
+                    <button 
+                      className="no-print"
+                      onClick={() => setShowSemnatura('expeditor')}
+                      style={{padding:'8px 14px', background:'#EFF6FF', color:'#2563EB', border:'1px dashed #2563EB', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600}}
+                    >
+                      ✍️ Semnează aici
+                    </button>
+                  )}
+                </div>
+                <div style={{fontSize:10, color:'#374151', fontWeight:600, marginTop:3}}>{semnExpNume || T.manager_plecare?.name || '—'}</div>
+                {semnExpLa && <div style={{fontSize:8, color:'#16A34A', marginTop:2}}>✓ {new Date(semnExpLa).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>}
+                {semnExpData && (
+                  <button 
+                    className="no-print"
+                    onClick={() => setShowSemnatura('expeditor')}
+                    style={{position:'absolute', top:0, right:0, padding:'2px 6px', background:'transparent', color:'#9CA3AF', border:'none', fontSize:10, cursor:'pointer'}}
+                    title="Re-semnează"
+                  >🔄</button>
+                )}
               </div>
-              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6}}>
-                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:24}}>ȘOFER</div>
-                <div style={{fontSize:10, color:'#6B7280'}}>{T.sofer_employee?.name || T.sofer_extern_nume || '—'}</div>
-                <div style={{fontSize:9, color:'#9CA3AF', marginTop:4}}>Semnătură</div>
+              
+              {/* Semnătură ȘOFER */}
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6, position:'relative'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:6}}>ȘOFER</div>
+                <div style={{minHeight:60, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  {semnSofData ? (
+                    <img src={semnSofData} alt="semnătură șofer" style={{maxHeight:60, maxWidth:'95%'}} />
+                  ) : (
+                    <button 
+                      className="no-print"
+                      onClick={() => setShowSemnatura('sofer')}
+                      style={{padding:'8px 14px', background:'#EFF6FF', color:'#2563EB', border:'1px dashed #2563EB', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600}}
+                    >
+                      ✍️ Semnează aici
+                    </button>
+                  )}
+                </div>
+                <div style={{fontSize:10, color:'#374151', fontWeight:600, marginTop:3}}>{semnSofNume || T.sofer_employee?.name || T.sofer_extern_nume || '—'}</div>
+                {semnSofLa && <div style={{fontSize:8, color:'#16A34A', marginTop:2}}>✓ {new Date(semnSofLa).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>}
+                {semnSofData && (
+                  <button 
+                    className="no-print"
+                    onClick={() => setShowSemnatura('sofer')}
+                    style={{position:'absolute', top:0, right:0, padding:'2px 6px', background:'transparent', color:'#9CA3AF', border:'none', fontSize:10, cursor:'pointer'}}
+                    title="Re-semnează"
+                  >🔄</button>
+                )}
               </div>
-              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6}}>
-                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:24}}>DESTINATAR / Manager destinație</div>
-                <div style={{fontSize:10, color:'#6B7280'}}>{T.manager_destinatie?.name || '—'}</div>
-                <div style={{fontSize:9, color:'#9CA3AF', marginTop:4}}>Semnătură & Ștampilă</div>
+              
+              {/* Semnătură DESTINATAR */}
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6, position:'relative'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:6}}>DESTINATAR / Manager destinație</div>
+                <div style={{minHeight:60, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  {semnDestData ? (
+                    <img src={semnDestData} alt="semnătură destinatar" style={{maxHeight:60, maxWidth:'95%'}} />
+                  ) : (
+                    <button 
+                      className="no-print"
+                      onClick={() => setShowSemnatura('destinatar')}
+                      style={{padding:'8px 14px', background:'#EFF6FF', color:'#2563EB', border:'1px dashed #2563EB', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600}}
+                    >
+                      ✍️ Semnează aici
+                    </button>
+                  )}
+                </div>
+                <div style={{fontSize:10, color:'#374151', fontWeight:600, marginTop:3}}>{semnDestNume || T.manager_destinatie?.name || '—'}</div>
+                {semnDestLa && <div style={{fontSize:8, color:'#16A34A', marginTop:2}}>✓ {new Date(semnDestLa).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>}
+                {semnDestData && (
+                  <button 
+                    className="no-print"
+                    onClick={() => setShowSemnatura('destinatar')}
+                    style={{position:'absolute', top:0, right:0, padding:'2px 6px', background:'transparent', color:'#9CA3AF', border:'none', fontSize:10, cursor:'pointer'}}
+                    title="Re-semnează"
+                  >🔄</button>
+                )}
               </div>
             </div>
             
@@ -4033,6 +4383,21 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
           valoare={destinatari.join(',')}
           onClose={() => setShowSetariEmail(false)}
           onSaved={(newVal) => setDestinatari(newVal.split(',').map(s => s.trim()).filter(Boolean))}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal Canvas Semnătură (PAS 4) */}
+      {showSemnatura && (
+        <SemnaturaCanvasModal 
+          rol={showSemnatura}
+          numeImplicit={
+            showSemnatura === 'expeditor' ? (T.manager_plecare?.name || profile?.name || '') :
+            showSemnatura === 'sofer' ? (T.sofer_employee?.name || T.sofer_extern_nume || '') :
+            showSemnatura === 'destinatar' ? (T.manager_destinatie?.name || profile?.name || '') : ''
+          }
+          onClose={() => setShowSemnatura(null)}
+          onSave={(data) => saveSemnatura(showSemnatura, data)}
           showToast={showToast}
         />
       )}
@@ -4464,6 +4829,211 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
 const thStyle = { padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:.5 }
 const tdStyle = { padding:'10px 12px', verticalAlign:'top' }
 
+// ===========================================================================
+// PAS 5 — Arhivă Avize (listare + descărcare PDF din Supabase Storage)
+// ===========================================================================
+function ArhivaAvizePage({ profile, showToast }) {
+  const [arhiva, setArhiva] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
+  const [perioadaFilter, setPerioadaFilter] = useState('toate')  // toate | luna | sapt | azi
+  const [downloadingId, setDownloadingId] = useState(null)
+  
+  const isAdmin = ['admin', 'superadmin'].includes(profile?.role)
+  
+  useEffect(() => { loadArhiva() }, [perioadaFilter])
+  
+  const loadArhiva = async () => {
+    setLoading(true)
+    let q = supabase.from('logistica_avize_arhiva').select('*').order('generat_la', { ascending: false }).limit(500)
+    
+    const today = new Date().toISOString().split('T')[0]
+    if (perioadaFilter === 'azi') q = q.eq('data_transport', today)
+    else if (perioadaFilter === 'sapt') {
+      const d = new Date(); d.setDate(d.getDate() - 7)
+      q = q.gte('data_transport', d.toISOString().split('T')[0])
+    } else if (perioadaFilter === 'luna') {
+      const y = new Date().getFullYear(), m = String(new Date().getMonth() + 1).padStart(2, '0')
+      q = q.gte('data_transport', `${y}-${m}-01`)
+    }
+    
+    const { data, error } = await q
+    if (error) { showToast('Eroare încărcare arhivă: ' + error.message, 'error'); setLoading(false); return }
+    setArhiva(data || [])
+    setLoading(false)
+  }
+  
+  const filtered = useMemo(() => {
+    if (!search.trim()) return arhiva
+    const s = search.toLowerCase()
+    return arhiva.filter(a => 
+      a.numar_aviz?.toLowerCase().includes(s) ||
+      a.numar_transport?.toLowerCase().includes(s) ||
+      a.plecare_text?.toLowerCase().includes(s) ||
+      a.destinatie_text?.toLowerCase().includes(s) ||
+      a.sofer_nume?.toLowerCase().includes(s) ||
+      a.manager_destinatie_nume?.toLowerCase().includes(s)
+    )
+  }, [arhiva, search])
+  
+  const handleDownload = async (arhAviz) => {
+    setDownloadingId(arhAviz.id)
+    try {
+      const { data, error } = await supabase.storage.from('avize').download(arhAviz.pdf_path)
+      if (error) throw error
+      const url = URL.createObjectURL(data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${arhAviz.numar_aviz}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast('✓ PDF descărcat')
+    } catch (e) {
+      showToast('Eroare descărcare: ' + (e.message || e), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+  
+  const handlePreview = async (arhAviz) => {
+    setDownloadingId(arhAviz.id)
+    try {
+      const { data, error } = await supabase.storage.from('avize').createSignedUrl(arhAviz.pdf_path, 60)  // 60 sec
+      if (error) throw error
+      window.open(data.signedUrl, '_blank')
+    } catch (e) {
+      showToast('Eroare preview: ' + (e.message || e), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+  
+  const totalSize = useMemo(() => {
+    const s = arhiva.reduce((acc, a) => acc + (a.pdf_size_bytes || 0), 0)
+    return s > 1024*1024 ? `${(s / 1024 / 1024).toFixed(1)} MB` : `${(s / 1024).toFixed(0)} KB`
+  }, [arhiva])
+  
+  return (
+    <div>
+      {/* Header + KPI */}
+      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
+        <KPICard icon="📂" label="Total avize arhivate" value={arhiva.length} color={G.purple} />
+        <KPICard icon="✍️" label="Cu toate semnăturile" value={arhiva.filter(a => a.semnat_expeditor && a.semnat_sofer && a.semnat_destinatar).length} color={G.green} />
+        <KPICard icon="💾" label="Spațiu ocupat" value={totalSize} color={G.blue} />
+      </div>
+      
+      {/* Filtre */}
+      <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
+        <input 
+          type="text" 
+          value={search} 
+          onChange={e => setSearch(e.target.value)} 
+          placeholder="🔍 Caută după nr aviz, transport, locație, șofer..."
+          style={{...S.input, flex:1, minWidth:280}}
+        />
+        <div style={{display:'flex', gap:4, padding:4, background:G.surface, borderRadius:8, border:`1px solid ${G.border}`}}>
+          {[['azi','Azi'],['sapt','7 zile'],['luna','Luna'],['toate','Toate']].map(([k, label]) => (
+            <button key={k} onClick={() => setPerioadaFilter(k)} style={{
+              padding:'6px 12px', borderRadius:6, border:'none', cursor:'pointer', fontSize:12,
+              background: perioadaFilter === k ? G.purple+'33' : 'transparent',
+              color: perioadaFilter === k ? G.purple : G.muted,
+              fontWeight: perioadaFilter === k ? 700 : 500
+            }}>{label}</button>
+          ))}
+        </div>
+        <button onClick={loadArhiva} style={S.btnS}>🔄 Reîncarcă</button>
+      </div>
+      
+      {/* Tabel arhivă */}
+      <div style={{...S.card, padding:0, overflow:'hidden'}}>
+        {loading ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă arhiva...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>
+            {arhiva.length === 0 ? '📭 Nicio arhivă încă — generează un aviz și apasă "💾 Arhivează PDF"' : 'Nimic găsit pentru căutare'}
+          </div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+              <thead style={{background:G.bg}}>
+                <tr>
+                  <th style={thStyle}>Nr. Aviz</th>
+                  <th style={thStyle}>Transport</th>
+                  <th style={thStyle}>Data</th>
+                  <th style={thStyle}>Plecare → Destinație</th>
+                  <th style={thStyle}>Șofer</th>
+                  <th style={thStyle}>Semnături</th>
+                  <th style={thStyle}>Generat</th>
+                  <th style={thStyle}>Mărime</th>
+                  <th style={{...thStyle, textAlign:'right'}}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(a => (
+                  <tr key={a.id} style={{borderTop:`1px solid ${G.border}`}}>
+                    <td style={{...tdStyle, fontFamily:'monospace', fontWeight:700, color:G.purple}}>{a.numar_aviz}</td>
+                    <td style={{...tdStyle, fontFamily:'monospace', fontSize:11}}>{a.numar_transport}</td>
+                    <td style={tdStyle}>{a.data_transport ? new Date(a.data_transport).toLocaleDateString('ro-RO') : '—'}</td>
+                    <td style={{...tdStyle, fontSize:11, color:G.muted}}>
+                      <div>{a.plecare_text || '—'}</div>
+                      <div style={{color:G.dim, fontSize:10}}>↓</div>
+                      <div>{a.destinatie_text || '—'}</div>
+                    </td>
+                    <td style={{...tdStyle, fontSize:12}}>{a.sofer_nume || '—'}</td>
+                    <td style={tdStyle}>
+                      <div style={{display:'flex', gap:3}}>
+                        <span title="Expeditor" style={{fontSize:11, padding:'2px 6px', borderRadius:4, background: a.semnat_expeditor ? G.green+'33' : G.border, color: a.semnat_expeditor ? G.green : G.dim}}>
+                          {a.semnat_expeditor ? '✓' : '—'} E
+                        </span>
+                        <span title="Șofer" style={{fontSize:11, padding:'2px 6px', borderRadius:4, background: a.semnat_sofer ? G.green+'33' : G.border, color: a.semnat_sofer ? G.green : G.dim}}>
+                          {a.semnat_sofer ? '✓' : '—'} Ș
+                        </span>
+                        <span title="Destinatar" style={{fontSize:11, padding:'2px 6px', borderRadius:4, background: a.semnat_destinatar ? G.green+'33' : G.border, color: a.semnat_destinatar ? G.green : G.dim}}>
+                          {a.semnat_destinatar ? '✓' : '—'} D
+                        </span>
+                      </div>
+                    </td>
+                    <td style={{...tdStyle, fontSize:11, color:G.muted}}>
+                      <div>{a.generat_de_nume || '—'}</div>
+                      <div style={{fontSize:10, color:G.dim}}>{new Date(a.generat_la).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>
+                    </td>
+                    <td style={{...tdStyle, fontSize:11, color:G.muted}}>
+                      {a.pdf_size_bytes ? `${(a.pdf_size_bytes / 1024).toFixed(0)} KB` : '—'}
+                    </td>
+                    <td style={{...tdStyle, textAlign:'right'}}>
+                      <div style={{display:'flex', gap:6, justifyContent:'flex-end'}}>
+                        <button 
+                          onClick={() => handlePreview(a)} 
+                          disabled={downloadingId === a.id}
+                          style={{padding:'5px 10px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}
+                          title="Deschide într-un tab nou"
+                        >
+                          👁 Preview
+                        </button>
+                        <button 
+                          onClick={() => handleDownload(a)} 
+                          disabled={downloadingId === a.id}
+                          style={{padding:'5px 10px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}
+                          title="Descarcă PDF"
+                        >
+                          {downloadingId === a.id ? '...' : '⬇️ Descarcă'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
+        💡 Avizele generate cu butonul "💾 Arhivează PDF" din modalul aviz apar aici · Stocate în Supabase Storage (bucket "avize")
+      </div>
+    </div>
+  )
+}
 
 export default function LogisticaPage() {
   const nav = useNavigate()
@@ -4924,6 +5494,11 @@ export default function LogisticaPage() {
           accessLevel={accessLevel} 
           showToast={showToast} 
         />
+      )}
+      
+      {/* TAB: Arhivă Avize (PAS 5) */}
+      {tab === 'arhiva' && (
+        <ArhivaAvizePage profile={profile} showToast={showToast} />
       )}
       
       {/* TAB: Active (default — conținutul existent) */}
