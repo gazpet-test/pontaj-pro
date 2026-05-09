@@ -3923,13 +3923,23 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     const nowSof = rol === 'sofer' ? true : !!semnSofData
     const nowDest = rol === 'destinatar' ? true : !!semnDestData
     
-    if (nowExp && nowSof && nowDest && !T.aviz_generat) {
-      // Toate 3 semnături prezente + nu e deja arhivat → trigger automat
-      showToast('🎉 Toate 3 semnături complete! Se arhivează automat...', 'info')
-      // Delay scurt ca canvas să se actualizeze cu semnătura nouă înainte de captură
-      setTimeout(() => {
-        handleArhivare(true)  // true = auto (skip download local pentru a nu deranja destinatar)
-      }, 800)
+    if (nowExp && nowSof && nowDest) {
+      // Verifică direct în arhivă (NU pe aviz_generat care e stricat de mailto)
+      const { count } = await supabase
+        .from('logistica_avize_arhiva')
+        .select('id', { count: 'exact', head: true })
+        .eq('transport_id', T.id)
+      
+      if ((count || 0) === 0) {
+        // Toate 3 semnături prezente + NU e arhivat → trigger automat
+        showToast('🎉 Toate 3 semnături complete! Se arhivează automat...', 'info')
+        // Delay scurt ca canvas să se actualizeze cu semnătura nouă înainte de captură
+        setTimeout(() => {
+          handleArhivare(true)  // true = auto (skip download local pentru a nu deranja destinatar)
+        }, 800)
+      } else {
+        showToast('✓ Aviz deja arhivat — nu re-arhivează', 'info')
+      }
     }
   }
   
@@ -3948,7 +3958,7 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       .select('semnatura_expeditor_data, semnatura_expeditor_nume, semnatura_expeditor_la, semnatura_sofer_data, semnatura_sofer_nume, semnatura_sofer_la, semnatura_destinatar_data, semnatura_destinatar_nume, semnatura_destinatar_la, aviz_generat, aviz_data')
       .eq('id', T.id)
       .single()
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         if (!data) return
         setSemnExpData(data.semnatura_expeditor_data || null)
         setSemnExpNume(data.semnatura_expeditor_nume || '')
@@ -3959,6 +3969,18 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         setSemnDestData(data.semnatura_destinatar_data || null)
         setSemnDestNume(data.semnatura_destinatar_nume || '')
         setSemnDestLa(data.semnatura_destinatar_la || null)
+        
+        // RECOVERY: dacă avem 3/3 semnături dar NU există în arhivă → trigger arhivare
+        if (data.semnatura_expeditor_data && data.semnatura_sofer_data && data.semnatura_destinatar_data) {
+          const { count } = await supabase
+            .from('logistica_avize_arhiva')
+            .select('id', { count: 'exact', head: true })
+            .eq('transport_id', T.id)
+          if ((count || 0) === 0) {
+            showToast('🔄 Aviz cu 3/3 semnături găsit fără arhivă — se arhivează acum...', 'info')
+            setTimeout(() => handleArhivare(true), 1200)  // delay mai mare pt randare canvas
+          }
+        }
       })
   }, [T.id])
   
@@ -4106,10 +4128,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     const mailtoUrl = `mailto:${destinatari.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
     window.location.href = mailtoUrl
     
-    // Update DB: marchează aviz trimis
+    // Update DB: marchează aviz email trimis (NU aviz_generat — acela e doar pentru arhivă)
     const { error } = await supabase.from('logistica_transporturi').update({
-      aviz_generat: true,
-      aviz_data: new Date().toISOString(),
       aviz_emails_trimis: destinatari
     }).eq('id', T.id)
     
