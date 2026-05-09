@@ -71,6 +71,24 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
 const DEPARTMENTS = ['Execuție', 'Logistică', 'TESA']
 const NORME = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
 const NORME_LABELS = { BO:'Boală Obișnuită', BP:'Boală Profesională', AM:'Accident de Muncă', CO:'Concediu Odihnă', CFP:'Concediu Fără Plată', CM:'Concediu Medical', M:'Maternitate', O:'Obligații Cetățenești', N:'Absențe Nemotivate', PRM:'Prog.Redus Maternitate', PRB:'Prog.Redus Boală', LL:'Liber Legal' }
+
+// === Helper paginare pentru bypass PostgREST max-rows (1000) ===
+// Folosit la query-uri mari (raport lunar, export ITM, etc.) cand pot exista >1000 records.
+// Returnează TOATE records-urile fără limită.
+async function fetchAllRecords(queryBuilder, pageSize = 1000) {
+  const all = []
+  let offset = 0
+  while (true) {
+    const { data, error } = await queryBuilder.range(offset, offset + pageSize - 1)
+    if (error) { console.error('fetchAllRecords error:', error); break }
+    if (!data || data.length === 0) break
+    all.push(...data)
+    if (data.length < pageSize) break
+    offset += pageSize
+    if (offset > 200000) break  // safety
+  }
+  return all
+}
 const LUNCH_START = 12; const LUNCH_END = 13; const LUNCH_MINS = 60
 const todayStr = () => new Date().toISOString().split('T')[0]
 const fmt24 = (ts) => ts ? new Date(ts).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
@@ -1012,7 +1030,9 @@ function ReportsPage() {
     let eq=supabase.from('employees').select('*').eq('active',true)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
-    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
+    // Paginare manuală
+    let recs = []
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
 
     const empStats=(emps||[]).map(emp=>{
       const er=(recs||[]).filter(r=>r.employee_id===emp.id)
@@ -1079,7 +1099,18 @@ function ReportsPage() {
     if (deptF!=='Toate'&&isAdmin) eq=eq.eq('department',deptF)
     if (siteF!=='Toate'&&isAdmin) eq=eq.eq('site_id',siteF)
     const {data:emps}=await eq; if(!emps){setLoad(false);return}
-    const {data:recs}=await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).in('employee_id',emps.map(e=>e.id)).limit(50000)
+    // Paginare manuală pentru bypass PostgREST max-rows (1000)
+    const empIds = emps.map(e=>e.id)
+    let recs = []
+    let off = 0
+    while (true) {
+      const { data: page } = await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).in('employee_id',empIds).range(off, off+999)
+      if (!page || page.length === 0) break
+      recs.push(...page)
+      if (page.length < 1000) break
+      off += 1000
+      if (off > 200000) break
+    }
     const stats=emps.map(emp=>{
       const er=(recs||[]).filter(r=>r.employee_id===emp.id)
       const workDays=er.filter(r=>r.check_in&&!r.norma).length
@@ -1401,14 +1432,18 @@ function ReportsPage() {
     while(pd<=periodEnd){const pds=pd.toISOString().split('T')[0];if(pd.getDay()!==0&&pd.getDay()!==6&&!legalSet.has(pds))workDaysInPeriod++;pd.setDate(pd.getDate()+1)}
 
     // Get all pontaj records from start of month to end of period (for norme cumulate)
-    const {data:allRecs}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
+    // Paginare manuală
+    let allRecs = []
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; allRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
 
     // Transe anterioare din aceeași lună — pentru calculul surplusului deja plătit
     // Luăm toate plățile cu period_from în aceeași lună ȘI period_to < df (perioadele deja finalizate)
     const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
 
     // Get diurna records for the export period only
-    const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
+    // Paginare manuală
+    let diurnaRecs = []
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; diurnaRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
 
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
@@ -1658,7 +1693,9 @@ function ReportsPage() {
       let eq=supabase.from('employees').select('*').eq('active',true)
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
       const {data:emps}=await eq
-      const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
+      // Paginare manuală
+      let recs = []
+      { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
       const {data:st}=await supabase.from('settings').select('*')
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
       const diurnaAmt=Number(getSetting('diurna_amount',50))
@@ -1722,7 +1759,9 @@ function ReportsPage() {
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
-    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id))
+    // Paginare manuală
+    let recs = []
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
     const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*suplAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
     if(!empStats.length){showToast('Nu există suplimente în perioadă','warn');setExpS(false);return}
     const from=new Date(sf).toLocaleDateString('ro-RO'),to=new Date(st2).toLocaleDateString('ro-RO')
