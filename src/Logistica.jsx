@@ -1554,6 +1554,7 @@ function TabsBar({ tab, setTab }) {
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
+    { key: 'gestiune',  icon: '📦', label: 'Gestiune Utilaje' },
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -2480,7 +2481,9 @@ const StatusBadge = ({ status }) => {
 // Helper: formatare activ pentru afișaj (priorizează cod_intern, fallback la nr_inmatriculare/marca)
 const formatActiv = (a) => {
   if (!a) return null
-  return a.cod_intern || a.nr_inmatriculare || [a.marca, a.model].filter(Boolean).join(' ') || '?'
+  const id = a.cod_intern || a.nr_inmatriculare || [a.marca, a.model].filter(Boolean).join(' ') || '?'
+  // Prefix cu nr_inventar dacă există (format: [MF-123] TST085)
+  return a.nr_inventar ? `[${a.nr_inventar}] ${id}` : id
 }
 
 // Liste funcții pentru filtrare
@@ -2790,10 +2793,11 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
         </div>
         
         {/* Toggle TIP */}
-        <div style={{display:'flex', gap:8, marginBottom:16, padding:4, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+        <div style={{display:'flex', gap:6, marginBottom:16, padding:4, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
           {[
-            { v: 'utilaj', label: '🚛 Transport utilaj/material', desc: 'Pentru excavatoare, generatoare, materiale grele' },
-            { v: 'mic_tesa', label: '📄 Transport mic (TESA)', desc: 'Documente, manometru, dosare' },
+            { v: 'utilaj', label: '🚛 Utilaj', desc: 'Excavatoare, generatoare, basculante' },
+            { v: 'materiale', label: '📦 Materiale', desc: 'Din stoc magazie / șantier' },
+            { v: 'mic_tesa', label: '📄 Mic (TESA)', desc: 'Documente, dosare' },
           ].map(opt => (
             <button key={opt.v} onClick={() => setTip(opt.v)} style={{
               flex:1, padding:'10px 12px', borderRadius:8, border:'none', cursor:'pointer',
@@ -2806,6 +2810,25 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
             </button>
           ))}
         </div>
+        
+        {/* TIP MATERIALE - Placeholder pentru viitor modul Magazie */}
+        {tip === 'materiale' && (
+          <div style={{marginBottom:14}}>
+            <div style={{padding:18, background:G.purple+'11', border:`2px dashed ${G.purple}77`, borderRadius:12, textAlign:'center'}}>
+              <div style={{fontSize:32, marginBottom:8}}>📦</div>
+              <div style={{fontSize:15, fontWeight:700, color:G.purple, marginBottom:6}}>Transport Materiale — În curs de dezvoltare</div>
+              <div style={{fontSize:12, color:G.muted, lineHeight:1.6, maxWidth:480, margin:'0 auto'}}>
+                Această funcționalitate va fi disponibilă odată cu <strong>Modulul Magazie</strong>. 
+                Vei putea selecta materiale din stoc (magazie centrală sau alt șantier) și genera transfer cu aviz automat.
+                <br/><br/>
+                <strong>Pentru moment</strong>, descrie materialele transportate în câmpul "Conținut transport" de mai jos.
+              </div>
+              <div style={{marginTop:12, padding:'8px 14px', background:G.purple+'22', color:G.purple, borderRadius:6, display:'inline-block', fontSize:11, fontWeight:700, letterSpacing:.5}}>
+                🚧 ÎN CURÂND
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* TIP UTILAJ */}
         {tip === 'utilaj' && (
@@ -4295,7 +4318,7 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
                   </tr>
                   <tr>
                     <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Tip transport:</td>
-                    <td style={{padding:'4px 8px'}}>{T.tip === 'utilaj' ? '🚛 Transport utilaj' : '📄 Transport mic / TESA'}</td>
+                    <td style={{padding:'4px 8px'}}>{T.tip === 'utilaj' ? '🚛 Transport utilaj' : T.tip === 'materiale' ? '📦 Transport materiale' : '📄 Transport mic / TESA'}</td>
                     <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Status:</td>
                     <td style={{padding:'4px 8px'}}>
                       {(() => {
@@ -4366,8 +4389,10 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
                     <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
                       {T.tip === 'utilaj' && T.activ_transportat ? (
                         <>
-                          {T.activ_transportat.cod_intern && <div>Cod: <strong>{T.activ_transportat.cod_intern}</strong></div>}
-                          {T.activ_transportat.nr_inmatriculare && <div>Nr.: {T.activ_transportat.nr_inmatriculare}</div>}
+                          {T.activ_transportat.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{T.activ_transportat.nr_inventar}</strong></div>}
+                          {T.activ_transportat.cod_intern && <div>Cod intern: <strong>{T.activ_transportat.cod_intern}</strong></div>}
+                          {T.activ_transportat.nr_inmatriculare && <div>Nr. înmatriculare: {T.activ_transportat.nr_inmatriculare}</div>}
+                          {T.activ_transportat.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {T.activ_transportat.serie_sasiu}</div>}
                         </>
                       ) : '—'}
                     </td>
@@ -4579,7 +4604,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
     setLoading(true)
     let q = supabase.from('logistica_transporturi')
       .select(`*,
-        activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, marca, model, nr_inmatriculare, regim_transport_special),
+        activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
         masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
         remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
         plecare_site:sites!plecare_site_id(name),
@@ -4981,7 +5006,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
             const { data: fresh } = await supabase
               .from('logistica_transporturi')
               .select(`*,
-                activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, marca, model, nr_inmatriculare, regim_transport_special),
+                activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
                 masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
                 remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
                 plecare_site:sites!plecare_site_id(name),
@@ -5008,6 +5033,258 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
 
 const thStyle = { padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:.5 }
 const tdStyle = { padding:'10px 12px', verticalAlign:'top' }
+
+// ===========================================================================
+// GESTIUNE UTILAJE PE ȘANTIER — locația curentă fiecare activ
+// ===========================================================================
+function GestiuneUtilajePage({ profile, sites, active, showToast, onActivClick }) {
+  const [siteF, setSiteF] = useState('toate')  // ID șantier sau 'toate' / 'sediu' / 'fara'
+  const [tipF, setTipF] = useState('Toate')
+  const [search, setSearch] = useState('')
+  const [locatii, setLocatii] = useState({})  // {activ_id: {tip, site_id, site_name, transport_id, data}}
+  const [loading, setLoading] = useState(false)
+  
+  const isAdmin = ['admin', 'superadmin'].includes(profile?.role)
+  
+  useEffect(() => {
+    loadLocatii()
+  }, [])
+  
+  // Pentru fiecare activ, găsește ULTIMUL transport LIVRAT (destinație curentă)
+  const loadLocatii = async () => {
+    setLoading(true)
+    // Query: pentru fiecare activ_transportat_id luăm ultimul transport cu status='livrat'
+    const { data, error } = await supabase
+      .from('logistica_transporturi')
+      .select('id, activ_transportat_id, destinatie_tip, destinatie_site_id, destinatie_locatie_text, data_transport, confirmat_primire_la, destinatie_site:sites!destinatie_site_id(id, name)')
+      .eq('status', 'livrat')
+      .not('activ_transportat_id', 'is', null)
+      .order('data_transport', { ascending: false })
+      .limit(2000)
+    
+    if (error) { showToast('Eroare load locații: ' + error.message, 'error'); setLoading(false); return }
+    
+    // Map activ_id → ultimul transport (primul care apare = cel mai recent datorită order)
+    const map = {}
+    ;(data || []).forEach(t => {
+      if (!map[t.activ_transportat_id]) {
+        map[t.activ_transportat_id] = {
+          tip: t.destinatie_tip,
+          site_id: t.destinatie_site_id,
+          site_name: t.destinatie_site?.name || t.destinatie_locatie_text,
+          transport_id: t.id,
+          data: t.data_transport,
+          confirmat_la: t.confirmat_primire_la
+        }
+      }
+    })
+    setLocatii(map)
+    setLoading(false)
+  }
+  
+  // Filtrare
+  const filtered = useMemo(() => {
+    return active.filter(a => {
+      const loc = locatii[a.id]
+      
+      // Filtru șantier
+      if (siteF === 'toate') {} 
+      else if (siteF === 'sediu') {
+        // Doar la sediu (sau fără location track)
+        if (loc && loc.tip !== 'sediu') return false
+      } else if (siteF === 'fara') {
+        // Doar fără locație înregistrată (utilaje noi, niciodată transportate)
+        if (loc) return false
+      } else {
+        // Pe un șantier specific (siteF e ID)
+        if (!loc || loc.tip !== 'site' || String(loc.site_id) !== String(siteF)) return false
+      }
+      
+      // Filtru tip
+      if (tipF !== 'Toate' && a.logistica_categorii?.tip !== tipF) return false
+      
+      // Search
+      if (search.trim()) {
+        const s = search.toLowerCase()
+        if (!(
+          a.cod_intern?.toLowerCase().includes(s) ||
+          a.nr_inventar?.toLowerCase().includes(s) ||
+          a.nr_inmatriculare?.toLowerCase().includes(s) ||
+          a.marca?.toLowerCase().includes(s) ||
+          a.model?.toLowerCase().includes(s)
+        )) return false
+      }
+      
+      return true
+    })
+  }, [active, locatii, siteF, tipF, search])
+  
+  // Tipuri unice (pentru filter)
+  const tipuri = useMemo(() => {
+    const s = new Set(active.map(a => a.logistica_categorii?.tip).filter(Boolean))
+    return ['Toate', ...Array.from(s).sort()]
+  }, [active])
+  
+  // Stats per șantier
+  const statsPerSantier = useMemo(() => {
+    const map = { sediu: 0, fara: 0 }
+    sites.forEach(s => { map[s.id] = 0 })
+    active.forEach(a => {
+      const loc = locatii[a.id]
+      if (!loc) map.fara += 1
+      else if (loc.tip === 'sediu') map.sediu += 1
+      else if (loc.tip === 'site' && loc.site_id) map[loc.site_id] = (map[loc.site_id] || 0) + 1
+    })
+    return map
+  }, [active, locatii, sites])
+  
+  // Export Excel
+  const exportExcel = () => {
+    const rows = filtered.map(a => {
+      const loc = locatii[a.id]
+      const locStr = !loc ? '— Niciodată transportat' :
+                     loc.tip === 'sediu' ? '🏢 Sediu Gazpet' :
+                     loc.tip === 'site' ? `📍 ${loc.site_name}` :
+                     loc.site_name || 'Locație externă'
+      return {
+        'Nr. Inventar': a.nr_inventar || '',
+        'Cod Intern': a.cod_intern || '',
+        'Nr. Înmatriculare': a.nr_inmatriculare || '',
+        'Tip': a.logistica_categorii?.tip || '',
+        'Marca': a.marca || '',
+        'Model': a.model || '',
+        'An': a.an_fabricatie || '',
+        'Stare': a.stare || '',
+        'Firma': a.firma_proprietara || '',
+        'Locație curentă': locStr,
+        'Data ultim transport': loc?.data || '',
+        'Observații': a.observatii || ''
+      }
+    })
+    
+    const ws = XLSX.utils.json_to_sheet(rows)
+    ws['!cols'] = [
+      {wch:18},{wch:14},{wch:18},{wch:18},{wch:18},{wch:24},{wch:7},{wch:14},{wch:16},{wch:30},{wch:15},{wch:30}
+    ]
+    
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventar Utilaje')
+    
+    const siteName = siteF === 'toate' ? 'TOATE' : siteF === 'sediu' ? 'SEDIU' : siteF === 'fara' ? 'FARA-LOC' : (sites.find(s => String(s.id) === String(siteF))?.name || 'SANTIER').replace(/[^a-zA-Z0-9]/g,'_')
+    XLSX.writeFile(wb, `Inventar_${siteName}_${new Date().toISOString().split('T')[0]}.xlsx`)
+    showToast(`✓ Inventar exportat (${rows.length} utilaje)`)
+  }
+  
+  return (
+    <div>
+      {/* KPI per locație */}
+      <div style={{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap', overflowX:'auto', paddingBottom:4}}>
+        <button onClick={() => setSiteF('toate')} style={{padding:'10px 14px', background: siteF==='toate'?G.logistica+'33':G.surface, border:`1px solid ${siteF==='toate'?G.logistica:G.border}`, borderRadius:8, cursor:'pointer', minWidth:120, color: siteF==='toate'?G.logistica:G.text}}>
+          <div style={{fontSize:10, color:G.muted, fontWeight:600}}>📦 Total active</div>
+          <div style={{fontSize:18, fontWeight:800, marginTop:2}}>{active.length}</div>
+        </button>
+        <button onClick={() => setSiteF('sediu')} style={{padding:'10px 14px', background: siteF==='sediu'?G.blue+'33':G.surface, border:`1px solid ${siteF==='sediu'?G.blue:G.border}`, borderRadius:8, cursor:'pointer', minWidth:120, color: siteF==='sediu'?G.blue:G.text}}>
+          <div style={{fontSize:10, color:G.muted, fontWeight:600}}>🏢 La Sediu</div>
+          <div style={{fontSize:18, fontWeight:800, marginTop:2}}>{statsPerSantier.sediu}</div>
+        </button>
+        {sites.map(s => (
+          <button key={s.id} onClick={() => setSiteF(String(s.id))} style={{padding:'10px 14px', background: String(siteF)===String(s.id)?G.green+'33':G.surface, border:`1px solid ${String(siteF)===String(s.id)?G.green:G.border}`, borderRadius:8, cursor:'pointer', minWidth:140, color: String(siteF)===String(s.id)?G.green:G.text}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:120}}>📍 {s.name}</div>
+            <div style={{fontSize:18, fontWeight:800, marginTop:2}}>{statsPerSantier[s.id] || 0}</div>
+          </button>
+        ))}
+        <button onClick={() => setSiteF('fara')} style={{padding:'10px 14px', background: siteF==='fara'?G.dim+'33':G.surface, border:`1px solid ${siteF==='fara'?G.muted:G.border}`, borderRadius:8, cursor:'pointer', minWidth:140, color: siteF==='fara'?G.muted:G.text}}>
+          <div style={{fontSize:10, color:G.muted, fontWeight:600}}>❓ Fără locație</div>
+          <div style={{fontSize:18, fontWeight:800, marginTop:2}}>{statsPerSantier.fara}</div>
+        </button>
+      </div>
+      
+      {/* Filtre */}
+      <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
+        <input 
+          type="text" value={search} onChange={e => setSearch(e.target.value)} 
+          placeholder="🔍 Caută după nr. inventar, cod intern, marcă, model..."
+          style={{...S.input, flex:1, minWidth:280}}
+        />
+        <select value={tipF} onChange={e => setTipF(e.target.value)} style={{...S.input, width:'auto', minWidth:160}}>
+          {tipuri.map(t => <option key={t} value={t}>{t === 'Toate' ? '🔧 Toate tipurile' : t}</option>)}
+        </select>
+        <button onClick={loadLocatii} style={S.btnS} disabled={loading}>{loading ? '...' : '🔄 Reîncarcă'}</button>
+        <button onClick={exportExcel} style={{...S.btnP, background: G.green}}>⬇️ Export Excel</button>
+      </div>
+      
+      {/* Tabel */}
+      <div style={{...S.card, padding:0, overflow:'hidden'}}>
+        {loading ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă locațiile...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>
+            {active.length === 0 ? '📭 Niciun activ în baza de date' : 'Nimic găsit pentru filtrele selectate'}
+          </div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+              <thead style={{background:G.bg}}>
+                <tr>
+                  <th style={thStyle}>Nr. Inventar</th>
+                  <th style={thStyle}>Cod intern</th>
+                  <th style={thStyle}>Tip / Subcategorie</th>
+                  <th style={thStyle}>Marcă / Model</th>
+                  <th style={thStyle}>Plăcuță</th>
+                  <th style={thStyle}>Locație curentă</th>
+                  <th style={thStyle}>Stare</th>
+                  <th style={{...thStyle, textAlign:'right'}}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(a => {
+                  const loc = locatii[a.id]
+                  const locDisplay = !loc ? <span style={{color:G.muted, fontStyle:'italic'}}>— Niciodată transportat</span> :
+                                     loc.tip === 'sediu' ? <span style={{color:G.blue}}>🏢 Sediu Gazpet</span> :
+                                     loc.tip === 'site' ? <span style={{color:G.green}}>📍 {loc.site_name}</span> :
+                                     <span style={{color:G.orange}}>🌐 {loc.site_name || 'Locație externă'}</span>
+                  return (
+                    <tr key={a.id} style={{borderTop:`1px solid ${G.border}`, cursor:'pointer'}} onClick={() => onActivClick?.(a)}>
+                      <td style={{...tdStyle, fontFamily:'monospace', fontWeight:700, color:G.purple}}>{a.nr_inventar || <span style={{color:G.dim, fontStyle:'italic'}}>—</span>}</td>
+                      <td style={{...tdStyle, fontFamily:'monospace', fontSize:11}}>{a.cod_intern || <span style={{color:G.dim}}>—</span>}</td>
+                      <td style={{...tdStyle, fontSize:11}}>
+                        <div style={{fontWeight:600}}>{a.logistica_categorii?.tip || '—'}</div>
+                        {a.logistica_categorii?.subcategorie && <div style={{color:G.muted, fontSize:10}}>{a.logistica_categorii.subcategorie}</div>}
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{fontWeight:600}}>{a.marca || '—'}</div>
+                        <div style={{color:G.muted, fontSize:11}}>{a.model || '—'}</div>
+                      </td>
+                      <td style={{...tdStyle, fontFamily:'monospace', fontSize:11}}>{a.nr_inmatriculare || <span style={{color:G.dim}}>—</span>}</td>
+                      <td style={{...tdStyle, fontSize:12}}>
+                        {locDisplay}
+                        {loc?.data && <div style={{fontSize:10, color:G.dim, marginTop:2}}>din {new Date(loc.data).toLocaleDateString('ro-RO')}</div>}
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{padding:'3px 8px', fontSize:11, borderRadius:4, background: a.stare === 'Functional' ? G.green+'33' : a.stare === 'Defect' ? G.red+'33' : G.muted+'33', color: a.stare === 'Functional' ? G.green : a.stare === 'Defect' ? G.red : G.muted}}>
+                          {a.stare || 'Necunoscut'}
+                        </span>
+                      </td>
+                      <td style={{...tdStyle, textAlign:'right'}}>
+                        <button onClick={(e) => { e.stopPropagation(); onActivClick?.(a) }} style={{padding:'5px 10px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}>
+                          ✏️ Edit
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
+        💡 Locația curentă = ultimul transport cu status "livrat" pentru fiecare utilaj · Click pe rând pentru editare
+      </div>
+    </div>
+  )
+}
 
 // ===========================================================================
 // PAS 5 — Arhivă Avize (listare + descărcare PDF din Supabase Storage)
@@ -5849,6 +6126,11 @@ export default function LogisticaPage() {
       {/* TAB: Arhivă Avize (PAS 5) */}
       {tab === 'arhiva' && (
         <ArhivaAvizePage profile={profile} showToast={showToast} />
+      )}
+      
+      {/* TAB: Gestiune Utilaje pe Șantier */}
+      {tab === 'gestiune' && (
+        <GestiuneUtilajePage profile={profile} sites={sites} active={active} showToast={showToast} onActivClick={(a) => setModal({ mode: 'edit', activ: a })} />
       )}
       
       {/* TAB: Active (default — conținutul existent) */}

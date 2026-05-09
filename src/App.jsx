@@ -803,9 +803,9 @@ function DashboardPage() {
               <span style={{fontSize:12,color:G.muted}}>💰 Cu diurnă</span>
               <span style={{fontSize:13,fontWeight:800,color:G.orange}}>{stats.diurna}</span>
             </div>
-            <div style={{display:'flex',justifyContent:'space-between',padding:'9px 12px',background:G.redDim,borderRadius:8,border:`1px solid ${G.red}33`}}>
-              <span style={{fontSize:14,fontWeight:700,color:G.red}}>‼️ Fără pontaj</span>
-              <span style={{fontSize:16,fontWeight:900,color:G.red}}>{stats.total-stats.present-Object.values(stats.normeStats||{}).reduce((s,v)=>s+v,0)}</span>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',background:G.redDim,borderRadius:10,border:`2px solid ${G.red}66`,marginTop:4}}>
+              <span style={{fontSize:17,fontWeight:800,color:G.red,letterSpacing:0.3}}>‼️ Fără pontaj</span>
+              <span style={{fontSize:24,fontWeight:900,color:G.red,letterSpacing:0.5}}>{stats.total-stats.present-Object.values(stats.normeStats||{}).reduce((s,v)=>s+v,0)}</span>
             </div>
           </div>
         </div>
