@@ -941,6 +941,17 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     link_fisa_nas: a?.link_fisa_nas || '',
     observatii: a?.observatii || '',
     serie_sasiu: a?.serie_sasiu || '',
+    // Dimensiuni transport
+    lungime_m: a?.lungime_m || '',
+    latime_m: a?.latime_m || '',
+    inaltime_m: a?.inaltime_m || '',
+    greutate_kg: a?.greutate_kg || '',
+    regim_transport_special: a?.regim_transport_special || false,
+    nr_autorizatie_arr: a?.nr_autorizatie_arr || '',
+    valabilitate_autorizatie: a?.valabilitate_autorizatie || '',
+    necesita_pilot: a?.necesita_pilot || false,
+    restrictii_ore: a?.restrictii_ore || '',
+    note_transport_special: a?.note_transport_special || '',
   })
   
   const [form, setForm] = useState(fromActiv(activ))
@@ -1021,6 +1032,17 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       link_fisa_nas: form.link_fisa_nas.trim() || null,
       observatii: form.observatii.trim() || null,
       serie_sasiu: form.serie_sasiu.trim() || null,
+      // Dimensiuni & transport
+      lungime_m: form.lungime_m ? Number(form.lungime_m) : null,
+      latime_m: form.latime_m ? Number(form.latime_m) : null,
+      inaltime_m: form.inaltime_m ? Number(form.inaltime_m) : null,
+      greutate_kg: form.greutate_kg ? Number(form.greutate_kg) : null,
+      regim_transport_special: !!form.regim_transport_special,
+      nr_autorizatie_arr: form.nr_autorizatie_arr.trim() || null,
+      valabilitate_autorizatie: form.valabilitate_autorizatie || null,
+      necesita_pilot: !!form.necesita_pilot,
+      restrictii_ore: form.restrictii_ore.trim() || null,
+      note_transport_special: form.note_transport_special.trim() || null,
     }
     
     let result
@@ -1174,6 +1196,63 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="Serie șasiu (VIN)" value={form.serie_sasiu} onChange={v => setField('serie_sasiu', v)} placeholder="ex: WDB9061..." readonly={isReadOnly} />
             <FieldSelect label="Firmă proprietară" value={form.firma_proprietara} onChange={v => setField('firma_proprietara', v)} options={FIRME} readonly={isReadOnly} />
           </div>
+        </div>
+        
+        {/* DIMENSIUNI & TRANSPORT */}
+        <div style={{marginBottom: 14}}>
+          <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🚚 Dimensiuni & Transport</div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap: 12, marginBottom: 12}}>
+            <FieldText label="Lungime (m)" value={form.lungime_m} onChange={v => setField('lungime_m', v)} type="number" placeholder="ex: 12.50" readonly={isReadOnly} />
+            <FieldText label="Lățime (m)" value={form.latime_m} onChange={v => setField('latime_m', v)} type="number" placeholder="ex: 2.40" readonly={isReadOnly} />
+            <FieldText label="Înălțime (m)" value={form.inaltime_m} onChange={v => setField('inaltime_m', v)} type="number" placeholder="ex: 3.20" readonly={isReadOnly} />
+            <FieldText label="Greutate (kg)" value={form.greutate_kg} onChange={v => setField('greutate_kg', v)} type="number" placeholder="ex: 24000" readonly={isReadOnly} />
+          </div>
+          
+          {/* Auto-detect dimensiuni mari */}
+          {(() => {
+            const L = Number(form.lungime_m) || 0
+            const W = Number(form.latime_m) || 0
+            const H = Number(form.inaltime_m) || 0
+            const G_ = Number(form.greutate_kg) || 0
+            const depasiri = []
+            if (L > 18.75) depasiri.push(`Lungime ${L}m > 18.75m`)
+            if (W > 2.55) depasiri.push(`Lățime ${W}m > 2.55m`)
+            if (H > 4.00) depasiri.push(`Înălțime ${H}m > 4.00m`)
+            if (G_ > 40000) depasiri.push(`Greutate ${G_}kg > 40000kg`)
+            if (depasiri.length === 0) return null
+            return (
+              <div style={{padding: 8, background: G.redDim + '88', border: `1px solid ${G.red}55`, borderRadius: 6, marginBottom: 10, fontSize: 11, color: G.text}}>
+                <strong style={{color: G.red}}>⚠️ Dimensiunile sugerează regim transport special obligatoriu:</strong>
+                <div style={{marginTop: 4, color: G.muted}}>{depasiri.join(' · ')}</div>
+              </div>
+            )
+          })()}
+          
+          {/* Bifă regim special */}
+          <div style={{marginBottom: 10}}>
+            <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer', userSelect: 'none'}}>
+              <input type="checkbox" checked={!!form.regim_transport_special} onChange={e => setField('regim_transport_special', e.target.checked)} disabled={isReadOnly} style={{width: 16, height: 16, accentColor: G.red, cursor: isReadOnly ? 'default' : 'pointer'}} />
+              <span style={{fontSize: 13, color: G.text, fontWeight: 600}}>Necesită regim transport special (gabarit/tonaj depășit)</span>
+            </label>
+          </div>
+          
+          {/* Sub-form pentru regim special */}
+          {form.regim_transport_special && (
+            <div style={{padding: 12, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, borderLeft: `3px solid ${G.red}`}}>
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 10}}>
+                <FieldText label="Nr autorizație ARR" value={form.nr_autorizatie_arr} onChange={v => setField('nr_autorizatie_arr', v)} placeholder="ex: AUT-2026-1234" readonly={isReadOnly} />
+                <FieldText label="Valabil până la" value={form.valabilitate_autorizatie} onChange={v => setField('valabilitate_autorizatie', v)} type="date" readonly={isReadOnly} />
+                <FieldText label="Restricții ore" value={form.restrictii_ore} onChange={v => setField('restrictii_ore', v)} placeholder="ex: 22:00 - 06:00" readonly={isReadOnly} />
+              </div>
+              <div style={{marginBottom: 10}}>
+                <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer', userSelect: 'none'}}>
+                  <input type="checkbox" checked={!!form.necesita_pilot} onChange={e => setField('necesita_pilot', e.target.checked)} disabled={isReadOnly} style={{width: 14, height: 14, accentColor: G.orange, cursor: isReadOnly ? 'default' : 'pointer'}} />
+                  <span style={{fontSize: 12, color: G.text}}>Necesită însoțitor / pilot</span>
+                </label>
+              </div>
+              <FieldTextarea label="Note transport (traseu, restricții, contact ARR)" value={form.note_transport_special} onChange={v => setField('note_transport_special', v)} rows={2} readonly={isReadOnly} />
+            </div>
+          )}
         </div>
         
         <div style={{marginBottom: 14}}>
@@ -1447,6 +1526,7 @@ function TabsBar({ tab, setTab }) {
     { key: 'documente', icon: '📎', label: 'Documente' },
     { key: 'service',   icon: '🔧', label: 'Service' },
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
+    { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -2334,6 +2414,571 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
 }
 
 
+// ============================================================
+// MODUL TRANSPORTURI
+// ============================================================
+
+const STATUS_TRANSPORT = {
+  cerut:      { label: 'Cerut',       color: G.orange, icon: '⏳' },
+  aprobat:    { label: 'Aprobat',     color: G.green,  icon: '✓' },
+  respins:    { label: 'Respins',     color: G.red,    icon: '✗' },
+  programat:  { label: 'Programat',   color: G.blue,   icon: '📅' },
+  in_tranzit: { label: 'În tranzit',  color: G.yellow, icon: '🚛' },
+  livrat:     { label: 'Livrat',      color: G.green,  icon: '✅' },
+  anulat:     { label: 'Anulat',      color: G.muted,  icon: '❌' },
+}
+
+const formatLocatie = (tip, site, text) => {
+  if (tip === 'sediu') return '🏢 Sediu Gazpet (Ploiești)'
+  if (tip === 'site' && site) return `📍 ${site.name || site}`
+  if (tip === 'alta' && text) return `📍 ${text}`
+  return '—'
+}
+
+const StatusBadge = ({ status }) => {
+  const s = STATUS_TRANSPORT[status] || STATUS_TRANSPORT.cerut
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '3px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+      background: s.color + '22', color: s.color, border: `1px solid ${s.color}55`
+    }}>
+      <span>{s.icon}</span>
+      <span>{s.label}</span>
+    </span>
+  )
+}
+
+// ----- Modal Comandă Transport -----
+function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showToast }) {
+  const [tip, setTip] = useState('utilaj')  // 'utilaj' | 'mic_tesa'
+  const [activTransportatId, setActivTransportatId] = useState('')
+  const [continutDescriere, setContinutDescriere] = useState('')
+  const [plecareTip, setPlecareTip] = useState('sediu')
+  const [plecareSiteId, setPlecareSiteId] = useState('')
+  const [plecareLocText, setPlecareLocText] = useState('')
+  const [destinatieTip, setDestinatieTip] = useState('site')
+  const [destinatieSiteId, setDestinatieSiteId] = useState('')
+  const [destinatieLocText, setDestinatieLocText] = useState('')
+  const [dataTransport, setDataTransport] = useState(new Date().toISOString().split('T')[0])
+  const [oraPlecare, setOraPlecare] = useState('08:00')
+  const [masinaId, setMasinaId] = useState('')
+  const [soferGazpet, setSoferGazpet] = useState(true)
+  const [soferId, setSoferId] = useState('')
+  const [soferExternNume, setSoferExternNume] = useState('')
+  const [soferExternTel, setSoferExternTel] = useState('')
+  const [costEstimat, setCostEstimat] = useState('')
+  const [observatii, setObservatii] = useState('')
+  const [profiles, setProfiles] = useState([])
+  const [saving, setSaving] = useState(false)
+  
+  // Load profiles pentru dropdown șofer
+  useEffect(() => {
+    supabase.from('profiles').select('id, name').order('name').then(({ data }) => setProfiles(data || []))
+  }, [])
+  
+  // Active transportabile (utilaje, camioane, autoutilitare, cap tractor) — pentru tip utilaj
+  const activeTransportabile = useMemo(() => {
+    return active.filter(a => {
+      const t = a.logistica_categorii?.tip
+      return ['Utilaj', 'Camion', 'Autoutilitară', 'Cap tractor', 'Container', 'Remorcă', 'Trailer'].includes(t)
+    })
+  }, [active])
+  
+  // Mașini de transport (camioane + cap tractor pentru utilaje, autoturisme + autoutilitare pentru tesa)
+  const masiniTransport = useMemo(() => {
+    return active.filter(a => {
+      const t = a.logistica_categorii?.tip
+      if (tip === 'utilaj') return ['Camion', 'Cap tractor', 'Autoutilitară'].includes(t)
+      return ['Autoturism', 'Autoutilitară'].includes(t)
+    })
+  }, [active, tip])
+  
+  // Activul transportat (pentru afișaj dimensiuni)
+  const activSelectat = useMemo(() => 
+    active.find(a => String(a.id) === String(activTransportatId)), 
+    [active, activTransportatId]
+  )
+  
+  // Verificare ARR la data transport
+  const arrExpirat = useMemo(() => {
+    if (!activSelectat?.regim_transport_special) return false
+    if (!activSelectat.valabilitate_autorizatie) return false
+    return new Date(activSelectat.valabilitate_autorizatie) < new Date(dataTransport)
+  }, [activSelectat, dataTransport])
+  
+  const handleSave = async () => {
+    // Validări
+    if (tip === 'utilaj' && !activTransportatId) {
+      showToast('Selectează utilajul de transportat', 'warn')
+      return
+    }
+    if (tip === 'mic_tesa' && !continutDescriere.trim()) {
+      showToast('Descrie ce se transportă', 'warn')
+      return
+    }
+    if (plecareTip === 'site' && !plecareSiteId) {
+      showToast('Selectează șantierul de plecare', 'warn')
+      return
+    }
+    if (plecareTip === 'alta' && !plecareLocText.trim()) {
+      showToast('Completează locația de plecare', 'warn')
+      return
+    }
+    if (destinatieTip === 'site' && !destinatieSiteId) {
+      showToast('Selectează șantierul destinație', 'warn')
+      return
+    }
+    if (destinatieTip === 'alta' && !destinatieLocText.trim()) {
+      showToast('Completează destinația', 'warn')
+      return
+    }
+    if (!dataTransport) {
+      showToast('Selectează data transportului', 'warn')
+      return
+    }
+    if (soferGazpet && !soferId) {
+      showToast('Selectează șoferul Gazpet', 'warn')
+      return
+    }
+    if (!soferGazpet && !soferExternNume.trim()) {
+      showToast('Completează numele șoferului extern', 'warn')
+      return
+    }
+    if (arrExpirat) {
+      if (!confirm(`⚠️ ATENȚIE: Autorizația ARR a expirat pe ${activSelectat.valabilitate_autorizatie}!\n\nContinui totuși cu cererea?`)) return
+    }
+    
+    setSaving(true)
+    const payload = {
+      tip,
+      activ_transportat_id: tip === 'utilaj' ? Number(activTransportatId) : null,
+      continut_descriere: tip === 'mic_tesa' ? continutDescriere.trim() : null,
+      plecare_tip: plecareTip,
+      plecare_site_id: plecareTip === 'site' ? Number(plecareSiteId) : null,
+      plecare_locatie_text: plecareTip === 'alta' ? plecareLocText.trim() : null,
+      destinatie_tip: destinatieTip,
+      destinatie_site_id: destinatieTip === 'site' ? Number(destinatieSiteId) : null,
+      destinatie_locatie_text: destinatieTip === 'alta' ? destinatieLocText.trim() : null,
+      data_transport: dataTransport,
+      ora_plecare: oraPlecare || null,
+      masina_id: masinaId ? Number(masinaId) : null,
+      sofer_gazpet: soferGazpet,
+      sofer_id: soferGazpet ? soferId : null,
+      sofer_extern_nume: !soferGazpet ? soferExternNume.trim() : null,
+      sofer_extern_telefon: !soferGazpet ? soferExternTel.trim() || null : null,
+      necesita_regim_special: !!(activSelectat?.regim_transport_special),
+      cost_estimat: costEstimat ? Number(costEstimat) : null,
+      observatii: observatii.trim() || null,
+      status: 'cerut',
+      solicitant_id: profile?.id,
+      data_solicitarii: new Date().toISOString(),
+    }
+    
+    const { error } = await supabase.from('logistica_transporturi').insert(payload)
+    setSaving(false)
+    
+    if (error) {
+      showToast('Eroare la salvare: ' + error.message, 'error')
+      return
+    }
+    showToast('✓ Cererea de transport a fost trimisă!')
+    onSaved?.()
+    onClose()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:780, maxHeight:'92vh', overflow:'auto', padding:24}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:18}}>
+          <div>
+            <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:4}}>🚚 Comandă transport nou</div>
+            <div style={{fontSize:12, color:G.muted}}>Cererea va fi trimisă spre aprobare către Mitrache + Cristiana</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Toggle TIP */}
+        <div style={{display:'flex', gap:8, marginBottom:16, padding:4, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+          {[
+            { v: 'utilaj', label: '🚛 Transport utilaj/material', desc: 'Pentru excavatoare, generatoare, materiale grele' },
+            { v: 'mic_tesa', label: '📄 Transport mic (TESA)', desc: 'Documente, manometru, dosare' },
+          ].map(opt => (
+            <button key={opt.v} onClick={() => setTip(opt.v)} style={{
+              flex:1, padding:'10px 12px', borderRadius:8, border:'none', cursor:'pointer',
+              background: tip === opt.v ? G.logistica + '33' : 'transparent',
+              color: tip === opt.v ? G.logistica : G.muted,
+              fontWeight:700, fontSize:13, textAlign:'left'
+            }}>
+              <div>{opt.label}</div>
+              <div style={{fontSize:10, fontWeight:400, marginTop:2, color:G.muted}}>{opt.desc}</div>
+            </button>
+          ))}
+        </div>
+        
+        {/* TIP UTILAJ */}
+        {tip === 'utilaj' && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🚛 Activ de transportat</div>
+            <FieldSelect 
+              label="Selectează activul" 
+              value={activTransportatId} 
+              onChange={setActivTransportatId}
+              options={[{label:'— alege —', value:''}, ...activeTransportabile.map(a => ({
+                label: `${a.cod_intern || ''} · ${a.marca || ''} ${a.model || ''} ${a.nr_inmatriculare ? '(' + a.nr_inmatriculare + ')' : ''}`,
+                value: String(a.id)
+              }))]}
+            />
+            
+            {activSelectat && (
+              <div style={{marginTop:10, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:12}}>
+                <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8, color:G.muted}}>
+                  <div>📏 L: <strong style={{color:G.text}}>{activSelectat.lungime_m || '—'} m</strong></div>
+                  <div>↔️ W: <strong style={{color:G.text}}>{activSelectat.latime_m || '—'} m</strong></div>
+                  <div>↕️ H: <strong style={{color:G.text}}>{activSelectat.inaltime_m || '—'} m</strong></div>
+                  <div>⚖️ G: <strong style={{color:G.text}}>{activSelectat.greutate_kg || '—'} kg</strong></div>
+                </div>
+                {activSelectat.regim_transport_special && (
+                  <div style={{marginTop:8, padding:8, background:G.redDim + '88', border:`1px solid ${G.red}55`, borderRadius:6, color:G.red, fontWeight:700, fontSize:12}}>
+                    ⚠️ REGIM TRANSPORT SPECIAL
+                    {activSelectat.nr_autorizatie_arr && <span style={{fontWeight:400, color:G.text}}> · ARR: {activSelectat.nr_autorizatie_arr}</span>}
+                    {activSelectat.valabilitate_autorizatie && <span style={{fontWeight:400, color:arrExpirat ? G.red : G.text}}> · Valabilă: {activSelectat.valabilitate_autorizatie}{arrExpirat ? ' (EXPIRATĂ!)' : ''}</span>}
+                    {activSelectat.necesita_pilot && <span style={{fontWeight:400, color:G.text}}> · 🚓 Pilot necesar</span>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* TIP MIC TESA */}
+        {tip === 'mic_tesa' && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>📄 Conținut transport</div>
+            <FieldTextarea 
+              label="Ce se transportă (descriere detaliată)"
+              value={continutDescriere}
+              onChange={setContinutDescriere}
+              rows={3}
+              placeholder="ex: 3 dosare licitație ANRE + manometru calibrat + 2 cărți tehnice instalație gaz"
+            />
+          </div>
+        )}
+        
+        {/* TRASEU */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🛣️ Traseu</div>
+          
+          {/* Plecare */}
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:11, color:G.muted, marginBottom:4, fontWeight:600}}>DE LA (plecare)</div>
+            <div style={{display:'flex', gap:8}}>
+              <select value={plecareTip} onChange={e => setPlecareTip(e.target.value)} style={{...S.input, width:200}}>
+                <option value="sediu">🏢 Sediu Gazpet</option>
+                <option value="site">📍 Șantier</option>
+                <option value="alta">✏️ Altă locație</option>
+              </select>
+              {plecareTip === 'site' && (
+                <select value={plecareSiteId} onChange={e => setPlecareSiteId(e.target.value)} style={{...S.input, flex:1}}>
+                  <option value="">— alege șantier —</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              )}
+              {plecareTip === 'alta' && (
+                <input type="text" value={plecareLocText} onChange={e => setPlecareLocText(e.target.value)} placeholder="ex: Depozit furnizor SC X SRL, București" style={{...S.input, flex:1}} />
+              )}
+            </div>
+          </div>
+          
+          {/* Destinație */}
+          <div>
+            <div style={{fontSize:11, color:G.muted, marginBottom:4, fontWeight:600}}>LA (destinație)</div>
+            <div style={{display:'flex', gap:8}}>
+              <select value={destinatieTip} onChange={e => setDestinatieTip(e.target.value)} style={{...S.input, width:200}}>
+                <option value="sediu">🏢 Sediu Gazpet</option>
+                <option value="site">📍 Șantier</option>
+                <option value="alta">✏️ Altă locație</option>
+              </select>
+              {destinatieTip === 'site' && (
+                <select value={destinatieSiteId} onChange={e => setDestinatieSiteId(e.target.value)} style={{...S.input, flex:1}}>
+                  <option value="">— alege șantier —</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              )}
+              {destinatieTip === 'alta' && (
+                <input type="text" value={destinatieLocText} onChange={e => setDestinatieLocText(e.target.value)} placeholder="ex: ANRE Sediu central, Str. Constantin Nacu 3, București" style={{...S.input, flex:1}} />
+              )}
+            </div>
+          </div>
+        </div>
+        
+        {/* DATA + ORA + MIJLOC */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>📅 Programare</div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:10}}>
+            <FieldText label="Data transport" type="date" value={dataTransport} onChange={setDataTransport} />
+            <FieldText label="Ora plecare" type="time" value={oraPlecare} onChange={setOraPlecare} />
+            <FieldSelect 
+              label={tip === 'utilaj' ? 'Mijloc transport (camion/cap tractor)' : 'Mașina (opțional)'}
+              value={masinaId} 
+              onChange={setMasinaId}
+              options={[{label:'— niciuna —', value:''}, ...masiniTransport.map(a => ({
+                label: `${a.cod_intern || ''} · ${a.marca || ''} ${a.model || ''} ${a.nr_inmatriculare ? '(' + a.nr_inmatriculare + ')' : ''}`,
+                value: String(a.id)
+              }))]}
+            />
+          </div>
+        </div>
+        
+        {/* ȘOFER */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>👤 Șofer</div>
+          <div style={{marginBottom:8}}>
+            <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none'}}>
+              <input type="checkbox" checked={soferGazpet} onChange={e => setSoferGazpet(e.target.checked)} style={{width:14, height:14, accentColor:G.green}} />
+              <span style={{fontSize:13, color:G.text, fontWeight:600}}>Șofer Gazpet (din echipă)</span>
+            </label>
+          </div>
+          {soferGazpet ? (
+            <FieldSelect 
+              label="Selectează șoferul"
+              value={soferId} 
+              onChange={setSoferId}
+              options={[{label:'— alege —', value:''}, ...profiles.map(p => ({label: p.name, value: p.id}))]}
+            />
+          ) : (
+            <div style={{display:'grid', gridTemplateColumns:'2fr 1fr', gap:10}}>
+              <FieldText label="Nume șofer extern" value={soferExternNume} onChange={setSoferExternNume} placeholder="ex: Ion Popescu (Transport SRL)" />
+              <FieldText label="Telefon" value={soferExternTel} onChange={setSoferExternTel} placeholder="ex: 0722 123 456" />
+            </div>
+          )}
+        </div>
+        
+        {/* COST + OBSERVAȚII */}
+        <div style={{marginBottom:14, display:'grid', gridTemplateColumns:'1fr 2fr', gap:10}}>
+          <FieldText label="Cost estimat (RON)" type="number" value={costEstimat} onChange={setCostEstimat} placeholder="opțional" />
+          <FieldTextarea label="Observații" value={observatii} onChange={setObservatii} rows={2} placeholder="orice altceva relevant..." />
+        </div>
+        
+        {/* INFO solicitant */}
+        <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, marginBottom:14, fontSize:12, color:G.muted}}>
+          📝 Solicitant: <strong style={{color:G.text}}>{profile?.name || 'tu'}</strong>
+          <span style={{marginLeft:8}}>· Status inițial: <StatusBadge status="cerut" /></span>
+        </div>
+        
+        {/* BUTOANE */}
+        <div style={{display:'flex', gap:10, justifyContent:'flex-end'}}>
+          <button onClick={onClose} style={S.btnS} disabled={saving}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background:G.green}}>
+            {saving ? 'Salvez...' : '✓ Trimite cererea'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ----- Pagina Transporturi -----
+function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
+  const [list, setList] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [statusFilter, setStatusFilter] = useState('Toate')
+  const [perioadaFilter, setPerioadaFilter] = useState('luna')
+  const [showComanda, setShowComanda] = useState(false)
+  
+  const fetchList = async () => {
+    setLoading(true)
+    let q = supabase.from('logistica_transporturi')
+      .select(`*,
+        activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, marca, model, nr_inmatriculare, regim_transport_special),
+        masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
+        plecare_site:sites!plecare_site_id(name),
+        destinatie_site:sites!destinatie_site_id(name),
+        solicitant:profiles!solicitant_id(name),
+        aprobator:profiles!aprobator_id(name),
+        sofer:profiles!sofer_id(name)
+      `)
+      .order('data_transport', { ascending: false })
+      .order('id', { ascending: false })
+    
+    // Filtru perioadă
+    const today = new Date().toISOString().split('T')[0]
+    if (perioadaFilter === 'luna') {
+      const y = new Date().getFullYear()
+      const m = String(new Date().getMonth() + 1).padStart(2, '0')
+      q = q.gte('data_transport', `${y}-${m}-01`)
+    } else if (perioadaFilter === 'sapt') {
+      const d = new Date(); d.setDate(d.getDate() - 7)
+      q = q.gte('data_transport', d.toISOString().split('T')[0])
+    } else if (perioadaFilter === 'azi') {
+      q = q.eq('data_transport', today)
+    }
+    
+    // Filtru status
+    if (statusFilter !== 'Toate') q = q.eq('status', statusFilter)
+    
+    const { data, error } = await q
+    if (error) console.error('Eroare fetch transporturi:', error)
+    setList(data || [])
+    setLoading(false)
+  }
+  
+  useEffect(() => { fetchList() }, [statusFilter, perioadaFilter])
+  
+  // KPI
+  const kpi = useMemo(() => {
+    const cerute = list.filter(t => t.status === 'cerut').length
+    const aprobate = list.filter(t => t.status === 'aprobat' || t.status === 'programat').length
+    const inTranzit = list.filter(t => t.status === 'in_tranzit').length
+    const livrate = list.filter(t => t.status === 'livrat').length
+    return { cerute, aprobate, inTranzit, livrate }
+  }, [list])
+  
+  return (
+    <div>
+      {/* KPI */}
+      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
+        <KPICard icon="⏳" label="Cerute (de aprobat)" value={kpi.cerute} color={G.orange} />
+        <KPICard icon="✓" label="Aprobate / Programate" value={kpi.aprobate} color={G.green} />
+        <KPICard icon="🚛" label="În tranzit" value={kpi.inTranzit} color={G.yellow} />
+        <KPICard icon="✅" label="Livrate" value={kpi.livrate} color={G.green} />
+      </div>
+      
+      {/* Toolbar filtre + buton */}
+      <div style={{...S.card, padding:12, marginBottom:14, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
+        <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6}}>Filtre:</div>
+        
+        {/* Status */}
+        <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
+          {['Toate', 'cerut', 'aprobat', 'programat', 'in_tranzit', 'livrat', 'respins', 'anulat'].map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)} style={{
+              padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
+              border:`1px solid ${statusFilter === s ? G.logistica : G.border}`,
+              background: statusFilter === s ? G.logistica + '22' : 'transparent',
+              color: statusFilter === s ? G.logistica : G.muted,
+              cursor:'pointer'
+            }}>
+              {s === 'Toate' ? 'Toate' : (STATUS_TRANSPORT[s]?.label || s)}
+            </button>
+          ))}
+        </div>
+        
+        <div style={{width:1, height:20, background:G.border}} />
+        
+        {/* Perioadă */}
+        <div style={{display:'flex', gap:4}}>
+          {[{k:'azi', l:'Azi'}, {k:'sapt', l:'7 zile'}, {k:'luna', l:'Luna'}, {k:'tot', l:'Toate'}].map(p => (
+            <button key={p.k} onClick={() => setPerioadaFilter(p.k)} style={{
+              padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
+              border:`1px solid ${perioadaFilter === p.k ? G.logistica : G.border}`,
+              background: perioadaFilter === p.k ? G.logistica + '22' : 'transparent',
+              color: perioadaFilter === p.k ? G.logistica : G.muted,
+              cursor:'pointer'
+            }}>{p.l}</button>
+          ))}
+        </div>
+        
+        <div style={{flex:1}} />
+        
+        <button onClick={() => setShowComanda(true)} style={{...S.btnP, background:G.green, fontSize:13, display:'flex', alignItems:'center', gap:6}}>
+          <span>+</span><span>Comandă transport</span>
+        </button>
+      </div>
+      
+      {/* Lista transporturi */}
+      <div style={{...S.card, padding:0, overflow:'hidden'}}>
+        {loading ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă...</div>
+        ) : list.length === 0 ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>
+            <div style={{fontSize:32, marginBottom:8}}>🚚</div>
+            <div style={{fontSize:14, fontWeight:700, color:G.text, marginBottom:4}}>Nicio cerere de transport în această perioadă</div>
+            <div style={{fontSize:12}}>Apasă <strong style={{color:G.green}}>+ Comandă transport</strong> pentru a crea prima cerere</div>
+          </div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+              <thead>
+                <tr style={{background:G.bg, borderBottom:`1px solid ${G.border}`}}>
+                  <th style={thStyle}>#</th>
+                  <th style={thStyle}>Nr</th>
+                  <th style={thStyle}>Data · Ora</th>
+                  <th style={thStyle}>Tip</th>
+                  <th style={thStyle}>Activ / Conținut</th>
+                  <th style={thStyle}>Plecare → Destinație</th>
+                  <th style={thStyle}>Șofer</th>
+                  <th style={thStyle}>Solicitant</th>
+                  <th style={thStyle}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.map((t, idx) => (
+                  <tr key={t.id} style={{borderBottom:`1px solid ${G.border}`, transition:'background .15s'}} onMouseEnter={e => e.currentTarget.style.background = G.bg} onMouseLeave={e => e.currentTarget.style.background = ''}>
+                    <td style={tdStyle}>
+                      <span style={{display:'inline-block', minWidth:24, padding:'2px 6px', background:G.surface, border:`1px solid ${G.border}`, borderRadius:6, fontSize:11, color:G.muted, textAlign:'center'}}>{idx+1}</span>
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{fontFamily:'monospace', fontSize:11, color:G.logistica, fontWeight:700}}>{t.numar_transport}</span>
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize:12, color:G.text}}>{t.data_transport}</div>
+                      {t.ora_plecare && <div style={{fontSize:10, color:G.muted}}>{t.ora_plecare.substring(0,5)}</div>}
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{fontSize:18}}>{t.tip === 'utilaj' ? '🚛' : '📄'}</span>
+                    </td>
+                    <td style={tdStyle}>
+                      {t.tip === 'utilaj' && t.activ_transportat ? (
+                        <div>
+                          <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.activ_transportat.cod_intern} · {t.activ_transportat.marca}</div>
+                          <div style={{fontSize:10, color:G.muted}}>{t.activ_transportat.model}{t.activ_transportat.regim_transport_special && <span style={{color:G.red, marginLeft:4}}>⚠️ Regim special</span>}</div>
+                        </div>
+                      ) : (
+                        <div style={{fontSize:12, color:G.text, maxWidth:200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={t.continut_descriere}>{t.continut_descriere}</div>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize:11, color:G.text}}>{formatLocatie(t.plecare_tip, t.plecare_site, t.plecare_locatie_text)}</div>
+                      <div style={{fontSize:10, color:G.muted, marginTop:2}}>↓</div>
+                      <div style={{fontSize:11, color:G.text}}>{formatLocatie(t.destinatie_tip, t.destinatie_site, t.destinatie_locatie_text)}</div>
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize:12, color:G.text}}>{t.sofer_gazpet ? (t.sofer?.name || '—') : (t.sofer_extern_nume || '—')}</div>
+                      {!t.sofer_gazpet && t.sofer_extern_telefon && <div style={{fontSize:10, color:G.muted}}>{t.sofer_extern_telefon}</div>}
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize:11, color:G.muted}}>{t.solicitant?.name || '—'}</div>
+                    </td>
+                    <td style={tdStyle}>
+                      <StatusBadge status={t.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      {/* Modal Comandă */}
+      {showComanda && (
+        <ComandaTransportModal
+          active={active}
+          sites={sites}
+          profile={profile}
+          onClose={() => setShowComanda(false)}
+          onSaved={fetchList}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  )
+}
+
+const thStyle = { padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:.5 }
+const tdStyle = { padding:'10px 12px', verticalAlign:'top' }
+
+
 export default function LogisticaPage() {
   const nav = useNavigate()
   const [profile, setProfile] = useState(null)
@@ -2780,6 +3425,17 @@ export default function LogisticaPage() {
       
       {/* TAB: Tichete (placeholder) */}
       {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
+      
+      {/* TAB: Transporturi */}
+      {tab === 'transporturi' && (
+        <TransporturiPage 
+          active={active} 
+          sites={sites} 
+          profile={profile} 
+          accessLevel={accessLevel} 
+          showToast={showToast} 
+        />
+      )}
       
       {/* TAB: Active (default — conținutul existent) */}
       {tab === 'lista' && (<>
