@@ -466,6 +466,7 @@ function DashboardPage() {
   const [expiringContracts,setExpiringContracts]=useState([])
   const [nrTransportCerute, setNrTransportCerute] = useState(0)
   const [transportSamples, setTransportSamples] = useState([])  // primele 3 transporturi pentru preview
+  const [avizeNesemnate, setAvizeNesemnate] = useState([])  // avize cu 2/3 semnături > 3 zile (pentru manageri destinație)
   const navigate = useNavigate()
   useEffect(()=>{ if(profile!==null) loadData() },[profile])
   const loadData = async () => {
@@ -544,6 +545,30 @@ function DashboardPage() {
       setNrTransportCerute(count || 0)
       setTransportSamples(samples || [])
     }
+    
+    // Avize cu 2/3 semnături > 3 zile fără confirmare destinatar
+    // Vizibile pentru: managerul destinatie + aprobatori + admin
+    {
+      const treshold = new Date(); treshold.setDate(treshold.getDate() - 3)
+      const tresholdStr = treshold.toISOString()
+      let q = supabase
+        .from('logistica_transporturi')
+        .select('id, numar_transport, data_transport, aviz_data, manager_destinatie:profiles!manager_destinatie_id(id, name, email), destinatie_site:sites!destinatie_site_id(name), destinatie_locatie_text, destinatie_tip')
+        .not('semnatura_expeditor_data', 'is', null)
+        .not('semnatura_sofer_data', 'is', null)
+        .is('semnatura_destinatar_data', null)
+        .lt('aviz_data', tresholdStr)
+        .order('aviz_data', { ascending: true })
+        .limit(20)
+      
+      // Restrict pentru manager destinatie: doar avizele LUI
+      if (!isAdmin && !isAprobatorTransport) {
+        q = q.eq('manager_destinatie_id', profile?.id)
+      }
+      
+      const { data: avizeNesem } = await q
+      setAvizeNesemnate(avizeNesem || [])
+    }
 
     // Check expiring contracts (next 30 days) - only for admin/superadmin
     if(['admin','superadmin'].includes(profile?.role)){
@@ -598,6 +623,45 @@ function DashboardPage() {
           </div>
           <div style={{fontSize: 14, color: '#FFF', fontWeight: 700, padding: '8px 14px', background: 'rgba(255,255,255,0.15)', borderRadius: 8, whiteSpace: 'nowrap'}}>
             Vezi toate →
+          </div>
+        </div>
+      )}
+      
+      {/* === ALERTĂ AVIZE NESEMNATE DE DESTINATAR > 3 ZILE === */}
+      {avizeNesemnate.length > 0 && (
+        <div 
+          onClick={() => navigate('/logistica?tab=transporturi')}
+          style={{
+            background: 'linear-gradient(135deg, #78350F 0%, #92400E 100%)',
+            border: `2px solid #F59E0B`,
+            borderRadius: 12,
+            padding: '12px 18px',
+            marginBottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            cursor: 'pointer',
+            transition: 'transform 0.15s'
+          }}
+          onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
+          onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
+        >
+          <div style={{fontSize: 28, lineHeight: 1}}>⏰</div>
+          <div style={{flex: 1}}>
+            <div style={{fontSize: 14, fontWeight: 800, color: '#FFF', marginBottom: 4}}>
+              {avizeNesemnate.length} {avizeNesemnate.length === 1 ? 'aviz așteaptă' : 'avize așteaptă'} confirmare destinatar &gt; 3 zile!
+            </div>
+            <div style={{fontSize: 11, color: '#FCD34D', lineHeight: 1.5}}>
+              {avizeNesemnate.slice(0, 3).map(a => {
+                const dest = a.destinatie_tip === 'site' ? (a.destinatie_site?.name || '?') : (a.destinatie_locatie_text || '?')
+                const days = Math.floor((Date.now() - new Date(a.aviz_data).getTime()) / 86400000)
+                return `${a.numar_transport} → ${dest} (${days}z, ${a.manager_destinatie?.name || 'fără mgr'})`
+              }).join(' · ')}
+              {avizeNesemnate.length > 3 && ` · +${avizeNesemnate.length - 3} alte`}
+            </div>
+          </div>
+          <div style={{fontSize: 13, color: '#FFF', fontWeight: 700, padding: '6px 12px', background: 'rgba(255,255,255,0.15)', borderRadius: 8, whiteSpace: 'nowrap'}}>
+            Verifică →
           </div>
         </div>
       )}

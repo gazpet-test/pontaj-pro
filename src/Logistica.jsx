@@ -3907,10 +3907,27 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     const { error } = await supabase.from('logistica_transporturi').update(updates).eq('id', T.id)
     if (error) { showToast('Eroare salvare semnătură: ' + error.message, 'error'); return }
     showToast(`✓ Semnătură ${rol} salvată`)
+    
+    // Update state local
     if (rol === 'expeditor') { setSemnExpData(data); setSemnExpNume(nume); setSemnExpLa(now) }
     else if (rol === 'sofer') { setSemnSofData(data); setSemnSofNume(nume); setSemnSofLa(now) }
     else if (rol === 'destinatar') { setSemnDestData(data); setSemnDestNume(nume); setSemnDestLa(now) }
     setShowSemnatura(null)
+    
+    // === AUTO-ARHIVARE când avem toate 3 semnături ===
+    // Verificăm noile valori după update (rol-ul curent + cele 2 anterioare)
+    const nowExp = rol === 'expeditor' ? true : !!semnExpData
+    const nowSof = rol === 'sofer' ? true : !!semnSofData
+    const nowDest = rol === 'destinatar' ? true : !!semnDestData
+    
+    if (nowExp && nowSof && nowDest && !T.aviz_generat) {
+      // Toate 3 semnături prezente + nu e deja arhivat → trigger automat
+      showToast('🎉 Toate 3 semnături complete! Se arhivează automat...', 'info')
+      // Delay scurt ca canvas să se actualizeze cu semnătura nouă înainte de captură
+      setTimeout(() => {
+        handleArhivare(true)  // true = auto (skip download local pentru a nu deranja destinatar)
+      }, 800)
+    }
   }
   
   // Load setări firmă + destinatari
@@ -3933,35 +3950,46 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
   const [arhivareLoading, setArhivareLoading] = useState(false)
   const [avizContentRef] = useState({ current: null })
   
-  const handleArhivare = async () => {
+  const handleArhivare = async (auto = false) => {
     setArhivareLoading(true)
     try {
       // 1. Selectează zona aviz
       const aviz = document.querySelector('.aviz-content')
       if (!aviz) { showToast('Nu pot localiza conținutul avizului', 'error'); setArhivareLoading(false); return }
       
-      // 2. Render to canvas
-      const canvas = await html2canvas(aviz, { scale: 2, backgroundColor: '#FFFFFF', useCORS: true, logging: false })
+      // 2. Render to canvas — scale 1.5 e suficient pentru claritate la print A4
+      const canvas = await html2canvas(aviz, { 
+        scale: 1.5, 
+        backgroundColor: '#FFFFFF', 
+        useCORS: true, 
+        logging: false,
+        imageTimeout: 5000
+      })
       
-      // 3. Convert to PDF (A4)
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      // 3. Convert to PDF (A4) — JPEG quality 0.85 + FAST compression (10x mai mic decât PNG)
+      const pdf = new jsPDF({ 
+        orientation: 'portrait', 
+        unit: 'mm', 
+        format: 'a4',
+        compress: true
+      })
       const pageW = 210, pageH = 297
       const imgW = pageW
       const imgH = (canvas.height * imgW) / canvas.width
-      const imgData = canvas.toDataURL('image/png')
+      const imgData = canvas.toDataURL('image/jpeg', 0.85)  // JPEG 85% quality
       
       if (imgH <= pageH) {
-        pdf.addImage(imgData, 'PNG', 0, 0, imgW, imgH)
+        pdf.addImage(imgData, 'JPEG', 0, 0, imgW, imgH, undefined, 'FAST')
       } else {
         // Multi-page (rare pentru aviz)
         let position = 0
         let heightLeft = imgH
-        pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH)
+        pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH, undefined, 'FAST')
         heightLeft -= pageH
         while (heightLeft > 0) {
           position = -(imgH - heightLeft)
           pdf.addPage()
-          pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH)
+          pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH, undefined, 'FAST')
           heightLeft -= pageH
         }
       }
@@ -3992,24 +4020,28 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         manager_plecare_nume: T.manager_plecare?.name,
         manager_destinatie_nume: T.manager_destinatie?.name,
         sofer_nume: T.sofer_employee?.name || T.sofer_extern_nume,
-        semnat_expeditor: !!semnExpData,
-        semnat_sofer: !!semnSofData,
-        semnat_destinatar: !!semnDestData
+        semnat_expeditor: !!semnExpData || (auto && !!T.semnatura_expeditor_data),
+        semnat_sofer: !!semnSofData || (auto && !!T.semnatura_sofer_data),
+        semnat_destinatar: !!semnDestData || (auto && !!T.semnatura_destinatar_data)
       })
       if (insErr) throw insErr
       
-      // 7. Update aviz_generat în transport
+      // 7. Update aviz_generat în transport (locked după arhivare)
       await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
       
-      // 8. Download local
-      const blobUrl = URL.createObjectURL(pdfBlob)
-      const a = document.createElement('a')
-      a.href = blobUrl
-      a.download = `${numarAviz}.pdf`
-      a.click()
-      URL.revokeObjectURL(blobUrl)
+      // 8. Download local DOAR dacă NU e auto (pentru flow manual la sediu)
+      if (!auto) {
+        const blobUrl = URL.createObjectURL(pdfBlob)
+        const a = document.createElement('a')
+        a.href = blobUrl
+        a.download = `${numarAviz}.pdf`
+        a.click()
+        URL.revokeObjectURL(blobUrl)
+        showToast(`📂 Aviz arhivat (${(pdfSize/1024).toFixed(0)} KB) + descărcat`)
+      } else {
+        showToast(`✅ Aviz arhivat AUTOMAT după 3 semnături (${(pdfSize/1024).toFixed(0)} KB)`)
+      }
       
-      showToast(`📂 Aviz arhivat (${(pdfSize/1024).toFixed(0)} KB) + descărcat`)
       onTrimisEmail?.()
     } catch (e) {
       showToast('Eroare arhivare: ' + (e.message || e), 'error')
@@ -4093,9 +4125,30 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
               <button onClick={handlePrint} style={{padding:'7px 14px', background:'#16A34A', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
                 🖨️ Print
               </button>
-              <button onClick={handleArhivare} disabled={arhivareLoading} style={{padding:'7px 14px', background:'#7C3AED', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
-                {arhivareLoading ? '...' : '💾 Arhivează PDF'}
-              </button>
+              {/* Progress semnături — arhivarea se face AUTOMAT la a 3-a semnătură */}
+              {(() => {
+                const nrSemn = (semnExpData ? 1 : 0) + (semnSofData ? 1 : 0) + (semnDestData ? 1 : 0)
+                const colorBg = nrSemn === 3 ? '#16A34A' : nrSemn === 2 ? '#F59E0B' : nrSemn === 1 ? '#EAB308' : '#6B7280'
+                const isArhivat = T.aviz_generat && nrSemn === 3
+                return (
+                  <div style={{
+                    padding:'7px 12px', 
+                    background: isArhivat ? '#16A34A' : colorBg+'33',
+                    color: isArhivat ? '#fff' : colorBg,
+                    border: isArhivat ? `1px solid #16A34A` : `1px solid ${colorBg}88`,
+                    borderRadius:6, fontSize:12, fontWeight:700,
+                    display:'flex', alignItems:'center', gap:6
+                  }}>
+                    {arhivareLoading ? (
+                      <>⏳ Se arhivează...</>
+                    ) : isArhivat ? (
+                      <>📂 Arhivat</>
+                    ) : (
+                      <>✍️ Semnături: <strong>{nrSemn}/3</strong></>
+                    )}
+                  </div>
+                )
+              })()}
               <button onClick={onClose} style={{padding:'7px 12px', background:'#DC2626', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
                 ✕ Închide
               </button>
@@ -4123,6 +4176,42 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
                 <div style={{fontSize:10, color:'#6B7280'}}>din {new Date().toLocaleDateString('ro-RO')}</div>
               </div>
             </div>
+            
+            {/* Banner status semnături — vizibil pe ecran, ascuns la print */}
+            {(() => {
+              const nrSemn = (semnExpData ? 1 : 0) + (semnSofData ? 1 : 0) + (semnDestData ? 1 : 0)
+              if (nrSemn === 3) return null  // toate complete, nu mai e nevoie de banner
+              const lipsaList = []
+              if (!semnExpData) lipsaList.push('Expeditor')
+              if (!semnSofData) lipsaList.push('Șofer')
+              if (!semnDestData) lipsaList.push('Destinatar')
+              const colorBg = nrSemn === 2 ? '#FEF3C7' : nrSemn === 1 ? '#FEF9C3' : '#FEE2E2'
+              const colorText = nrSemn === 2 ? '#D97706' : nrSemn === 1 ? '#CA8A04' : '#DC2626'
+              return (
+                <div className="no-print" style={{
+                  marginBottom: 18, 
+                  padding: '10px 14px', 
+                  background: colorBg, 
+                  border: `1px dashed ${colorText}88`,
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10
+                }}>
+                  <span style={{fontSize: 20}}>{nrSemn === 2 ? '⏳' : '✍️'}</span>
+                  <div style={{flex: 1}}>
+                    <div style={{fontSize: 12, fontWeight: 700, color: colorText}}>
+                      Aviz în așteptare — <strong>{nrSemn}/3 semnături</strong>
+                      {nrSemn === 2 && ' · gata pentru print + traseu'}
+                    </div>
+                    <div style={{fontSize: 11, color: colorText+'CC', marginTop: 2}}>
+                      Lipsește: <strong>{lipsaList.join(', ')}</strong>
+                      {nrSemn === 2 && ` · arhivare automată după a 3-a semnătură`}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
             
             {/* Date transport */}
             <div style={{marginBottom:18}}>
