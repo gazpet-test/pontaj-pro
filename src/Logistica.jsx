@@ -79,10 +79,28 @@ function MentenantaScadenta({ data, ore }) {
   )
 }
 
-function KPICard({ icon, label, value, color = G.blue, sub }) {
+function KPICard({ icon, label, value, color = G.blue, sub, onClick }) {
   return (
-    <div style={{...S.card, padding: '14px 18px', flex: 1, minWidth: 160, borderLeft: `3px solid ${color}`}}>
-      <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>{icon} {label}</div>
+    <div 
+      onClick={onClick}
+      style={{
+        ...S.card, 
+        padding: '14px 18px', flex: 1, minWidth: 160, 
+        borderLeft: `3px solid ${color}`, 
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'all .15s',
+        ...(onClick && { ':hover': { transform: 'translateY(-1px)' } })
+      }}
+      onMouseEnter={onClick ? (e) => {
+        e.currentTarget.style.background = G.bg
+        e.currentTarget.style.borderLeftWidth = '5px'
+      } : undefined}
+      onMouseLeave={onClick ? (e) => {
+        e.currentTarget.style.background = ''
+        e.currentTarget.style.borderLeftWidth = '3px'
+      } : undefined}
+    >
+      <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>{icon} {label}{onClick && <span style={{marginLeft: 4, fontSize: 9, color: color}}>→</span>}</div>
       <div style={{fontSize: 24, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>{value}</div>
       {sub && <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>{sub}</div>}
     </div>
@@ -4011,9 +4029,10 @@ export default function LogisticaPage() {
   const [showAchizitie, setShowAchizitie] = useState(false)
   const [showEditStoc, setShowEditStoc] = useState(false)
   const [showSetariPret, setShowSetariPret] = useState(false)
-  const [tab, setTab] = useState('lista')                    // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete'
+  const [tab, setTab] = useState('lista')                    // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete' | 'transporturi'
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
   const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
+  const [nrTransportCerute, setNrTransportCerute] = useState(0)  // transporturi pendinte aprobare (alert pe pagina principală)
   const [toast, showToast] = useToast()
   
   useEffect(() => {
@@ -4035,7 +4054,7 @@ export default function LogisticaPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes] = await Promise.all([
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes, transpCeruteRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
@@ -4046,6 +4065,7 @@ export default function LogisticaPage() {
       supabase.from('logistica_setari').select('key, value').in('key', ['pret_motorina_ron', 'pret_motorina_actualizat']),
       supabase.from('v_alimentari_kpi').select('*').single(),
       supabase.from('v_alimentari_ultima').select('*'),
+      supabase.from('logistica_transporturi').select('id', { count: 'exact', head: true }).eq('status', 'cerut'),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
@@ -4056,6 +4076,7 @@ export default function LogisticaPage() {
     setPretMotorina(setariMap.pret_motorina_ron || null)
     setPretMotorinaActualizat(setariMap.pret_motorina_actualizat || null)
     setKpiAlim(kpiAlimRes.data || null)
+    setNrTransportCerute(transpCeruteRes.count || 0)
     // Map ultima alimentare per activ
     const map = {}
     ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
@@ -4452,17 +4473,23 @@ export default function LogisticaPage() {
       
       {kpi && (
         <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
-          <KPICard icon="🚛" label="Total active" value={kpi.nr_total_active} color={G.blue} />
-          <KPICard icon="✓" label="Funcționale" value={kpi.nr_functionale} color={G.green} sub={`${kpi.procent_functionale}%`} />
-          <KPICard icon="✗" label="Nefuncționale" value={kpi.nr_nefunctionale} color={G.red} />
-          <KPICard icon="🔧" label="În service" value={kpi.nr_in_service} color={G.yellow} />
-          <KPICard icon="📅" label="Scadențe 30z" value={kpi.nr_scadente_30_zile} color={G.orange} />
-          <KPICard icon="📄" label="Doc. expirate" value={kpi.nr_documente_expirate} color={G.red} />
+          <KPICard icon="🚛" label="Total active" value={kpi.nr_total_active} color={G.blue} 
+            onClick={() => { setStareF('Toate'); setTipF('Toate'); setSubF('Toate'); setSearch(''); setTab('lista') }} />
+          <KPICard icon="✓" label="Funcționale" value={kpi.nr_functionale} color={G.green} sub={`${kpi.procent_functionale}%`} 
+            onClick={() => { setStareF('Functional'); setTipF('Toate'); setSubF('Toate'); setSearch(''); setTab('lista') }} />
+          <KPICard icon="✗" label="Nefuncționale" value={kpi.nr_nefunctionale} color={G.red} 
+            onClick={() => { setStareF('Nefunctional'); setTipF('Toate'); setSubF('Toate'); setSearch(''); setTab('lista') }} />
+          <KPICard icon="🔧" label="În service" value={kpi.nr_in_service} color={G.yellow} 
+            onClick={() => { setStareF('In_service'); setTipF('Toate'); setSubF('Toate'); setSearch(''); setTab('lista') }} />
+          <KPICard icon="📅" label="Scadențe 30z" value={kpi.nr_scadente_30_zile} color={G.orange} 
+            onClick={() => { setTab('service'); setSearch('') }} />
+          <KPICard icon="📄" label="Doc. expirate" value={kpi.nr_documente_expirate} color={G.red} 
+            onClick={() => { setTab('documente'); setSearch('') }} />
         </div>
       )}
       
-      {/* Widget Rezervor Gazpet + Preț motorină */}
-      <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
+      {/* Widget Rezervor Gazpet (compact) + Card alertă Transporturi cerute + Preț motorină */}
+      <div style={{display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap'}}>
         {rezervor && (() => {
           const stoc = Number(rezervor.stoc_curent_litri || 0)
           const cap = Number(rezervor.capacitate_litri || 0)
@@ -4473,35 +4500,30 @@ export default function LogisticaPage() {
           const isCritic = stoc <= pragLitri / 2
           
           let barColor, statusText, statusColor
-          if (isCritic) { barColor = G.red; statusText = '🚨 STOC CRITIC — comandă urgent!'; statusColor = G.red }
-          else if (isLow) { barColor = G.orange; statusText = '⚠️ Sub pragul de alertă'; statusColor = G.orange }
-          else if (procentUmplere > 90) { barColor = G.green; statusText = '✓ Rezervor plin'; statusColor = G.green }
-          else { barColor = G.blue; statusText = '✓ Stoc normal'; statusColor = G.blue }
+          if (isCritic) { barColor = G.red; statusText = '🚨 CRITIC'; statusColor = G.red }
+          else if (isLow) { barColor = G.orange; statusText = '⚠️ Sub prag'; statusColor = G.orange }
+          else if (procentUmplere > 90) { barColor = G.green; statusText = '✓ Plin'; statusColor = G.green }
+          else { barColor = G.blue; statusText = '✓ Normal'; statusColor = G.blue }
           
           return (
-            <div style={{...S.card, padding: '12px 16px', flex: 2, minWidth: 360, borderLeft: `3px solid ${barColor}`}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8}}>
-                <div>
-                  <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+            <div style={{...S.card, padding: '8px 12px', minWidth: 240, flex: 1, maxWidth: 320, borderLeft: `3px solid ${barColor}`}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4, gap: 6}}>
+                <div style={{flex: 1, minWidth: 0}}>
+                  <div style={{fontSize: 9, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
                     📦 {rezervor.nume}
                   </div>
-                  <div style={{fontSize: 22, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 2}}>
-                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 1, maximumFractionDigits: 1})} <span style={{fontSize: 12, color: G.muted, fontWeight: 600}}>L</span>
-                    <span style={{fontSize: 12, color: G.muted, fontWeight: 600, marginLeft: 8}}>/ {cap.toFixed(0)} L</span>
+                  <div style={{fontSize: 16, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 1, lineHeight: 1.2}}>
+                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 0, maximumFractionDigits: 0})}<span style={{fontSize: 10, color: G.muted, fontWeight: 600}}> / {cap.toFixed(0)} L</span>
                   </div>
                 </div>
                 {canEdit && (
-                  <div style={{display: 'flex', gap: 6}}>
-                    <button onClick={() => setShowEditStoc(true)} style={{...S.btnS, fontSize: 11, color: G.yellow, borderColor: G.yellow + '55', padding: '5px 10px'}} title="Ajustare manuală stoc (corecții)">
-                      ✏️ Edit
-                    </button>
-                    <button onClick={() => setShowAchizitie(true)} style={{...S.btnS, fontSize: 11, color: G.purple, borderColor: G.purple + '55', padding: '5px 10px'}}>
-                      + Achiziție vrac
-                    </button>
+                  <div style={{display: 'flex', gap: 4}}>
+                    <button onClick={() => setShowEditStoc(true)} style={{background:'transparent', border:'none', color:G.yellow, fontSize: 11, cursor:'pointer', padding: 2, lineHeight: 1}} title="Edit stoc">✏️</button>
+                    <button onClick={() => setShowAchizitie(true)} style={{background:'transparent', border:'none', color:G.purple, fontSize: 11, cursor:'pointer', padding: 2, lineHeight: 1}} title="Achiziție vrac">+</button>
                   </div>
                 )}
               </div>
-              <div style={{height: 8, background: G.bg, borderRadius: 4, overflow: 'hidden', marginBottom: 6}}>
+              <div style={{height: 5, background: G.bg, borderRadius: 3, overflow: 'hidden', marginBottom: 3}}>
                 <div style={{
                   width: `${Math.min(procentUmplere, 100)}%`,
                   height: '100%',
@@ -4509,13 +4531,51 @@ export default function LogisticaPage() {
                   transition: 'width .3s'
                 }}/>
               </div>
-              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11}}>
-                <span style={{color: statusColor, fontWeight: 600}}>{statusText}</span>
-                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}% · prag alertă: {pragProc}%</span>
+              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 9}}>
+                <span style={{color: statusColor, fontWeight: 700}}>{statusText}</span>
+                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}%</span>
               </div>
             </div>
           )
         })()}
+        
+        {/* Card ALERTĂ Transporturi cerute (de aprobat) — vizibil DOAR când > 0 */}
+        {nrTransportCerute > 0 && (
+          <div 
+            onClick={() => setTab('transporturi')}
+            style={{
+              ...S.card, padding: '10px 14px', minWidth: 200, flex: 1, maxWidth: 280,
+              borderLeft: `4px solid ${G.red}`,
+              background: G.redDim + '88',
+              animation: 'pulse-red-alert 2s infinite',
+              boxShadow: `0 0 16px ${G.red}33`,
+              cursor: 'pointer',
+              transition: 'all .15s'
+            }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)' }}
+            onMouseLeave={e => { e.currentTarget.style.transform = '' }}
+            title="Click pentru a deschide tabul Transporturi"
+          >
+            <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2}}>
+              <span style={{fontSize: 18}}>⏳</span>
+              <div style={{fontSize: 10, color: G.red, fontWeight: 700, textTransform: 'uppercase', letterSpacing: .5}}>
+                Cerere transport
+              </div>
+              <span style={{padding: '2px 6px', background: G.red, color: '#fff', borderRadius: 4, fontSize: 8, fontWeight: 700}}>URGENT</span>
+            </div>
+            <div style={{fontSize: 22, fontWeight: 800, color: G.red, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1}}>
+              {nrTransportCerute} <span style={{fontSize: 10, color: G.text, fontWeight: 600}}>de aprobat →</span>
+            </div>
+          </div>
+        )}
+        
+        {/* Animație pulse-red-alert */}
+        <style>{`
+          @keyframes pulse-red-alert {
+            0%, 100% { box-shadow: 0 0 12px ${G.red}33; }
+            50% { box-shadow: 0 0 20px ${G.red}66; }
+          }
+        `}</style>
         
         {/* Card preț motorină — compact */}
         <div style={{...S.card, padding: '10px 14px', minWidth: 140, borderLeft: `3px solid ${G.green}`}}>
