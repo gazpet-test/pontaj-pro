@@ -679,18 +679,40 @@ function DashboardPage() {
   )
 }
 
+// Helper: ore default funcție de norma angajatului (din employee_salaries.work_hours_per_day)
+// Logic: ≥8h → 08:00-17:00 (cu pauza); 3-7h → start = 17:00 - n, end = 17:00 (afternoon ending);
+//        ≤2h → start = 17:00, end = 17:00 + n (after-hours)
+function defaultOreFromNorma(h) {
+  const n = Number(h) || 8
+  if (n >= 8) return { intrare: '08:00', iesire: '17:00' }  // 8h efective + 1h pauză scăzută auto
+  if (n >= 3) {
+    const startH = 17 - Math.floor(n)
+    const startM = (n % 1) * 60  // dacă norma e 3.5, ajustez minutele
+    return { intrare: `${String(startH).padStart(2,'0')}:${String(60 - startM).padStart(2,'0').replace('60','00')}`, iesire: '17:00' }
+  }
+  // n <= 2
+  const endH = 17 + Math.floor(n)
+  const endM = (n % 1) * 60
+  return { intrare: '17:00', iesire: `${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}` }
+}
+
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
 function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture }) {
-  const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
-  const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
+  // Norma angajatului (pentru auto-fill ore)
+  const normaH = emp.employee_salaries?.[0]?.work_hours_per_day || emp.employee_salaries?.work_hours_per_day || 8
+  const oreDefault = defaultOreFromNorma(normaH)
+  
+  // State init: dacă rec are check_in folosesc valorile lui; altfel auto-fill cu defaults bazat pe normă
+  const [ci,setCi]=useState(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
+  const [co,setCo]=useState(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
   const [norma,setNorma]=useState(rec?.norma||'')
   const [diurna,setDiurna]=useState(rec?.diurna||false)
   const [supl,setSupl]=useState(rec?.meal_supplement||false)
   const [mode,setMode]=useState(rec?.norma?'norma':'ore')
   const [exp,setExp]=useState(false)
   useEffect(()=>{
-    setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):'')
-    setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):'')
+    setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
+    setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
     setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setSupl(rec?.meal_supplement||false); setMode(rec?.norma?'norma':'ore')
   },[rec])
   const previewNet = () => { if(!ci) return null; const a=dateToISO(selectedDate,ci),b=co?dateToISO(selectedDate,co):null; return b?netMins(a,b,true):null }
@@ -778,7 +800,12 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
             <Lbl>Tip</Lbl>
             <div style={{display:'flex',gap:12}}>
               <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
-                <input type="radio" name={`m${emp.id}`} checked={mode==='ore'} onChange={()=>{setMode('ore');setNorma('')}} style={{accentColor:G.blue}}/> Ore lucrate
+                <input type="radio" name={`m${emp.id}`} checked={mode==='ore'} onChange={()=>{
+                  setMode('ore')
+                  setNorma('')
+                  // Auto-fill ore default bazat pe norma angajatului (dacă nu sunt deja completate)
+                  if (!ci && !co) { setCi(oreDefault.intrare); setCo(oreDefault.iesire) }
+                }} style={{accentColor:G.blue}}/> Ore lucrate
               </label>
               <label style={{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer'}}>
                 <input type="radio" name={`m${emp.id}`} checked={mode==='norma'} onChange={()=>{setMode('norma');setCi('');setCo('')}} style={{accentColor:G.yellow}}/> Normă specială
@@ -790,6 +817,11 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
               <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:110}}/></div>
               <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:110}}/></div>
               {pNet!==null&&<div style={{paddingTop:18,fontSize:12,color:G.yellow,fontWeight:700}}>{minsToHM(pNet)} net</div>}
+              {emp.employee_salaries && (emp.employee_salaries[0]?.work_hours_per_day || emp.employee_salaries.work_hours_per_day) && (
+                <div style={{paddingTop:18,fontSize:11,color:G.muted}}>
+                  📋 Normă: <strong style={{color:G.text}}>{normaH}h/zi</strong>
+                </div>
+              )}
             </>
           ):(
             <div><Lbl>Normă</Lbl>
@@ -831,7 +863,7 @@ function PontajPage() {
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
     const monthStart=date.slice(0,7)+'-01'
-    let q=supabase.from('employees').select('*,sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
+    let q=supabase.from('employees').select('*,sites(name),employee_salaries(work_hours_per_day)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
     if(!isAdmin){
       const siteIds=profile?.site_ids||[]
       if(siteIds.length===0){setEmps([]);setLoad(false);return}
