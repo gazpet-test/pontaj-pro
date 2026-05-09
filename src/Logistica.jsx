@@ -3996,6 +3996,17 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
   const handleArhivare = async (auto = false) => {
     setArhivareLoading(true)
     try {
+      // 0. FRESH FETCH din DB pentru a fi sigur că avem cele mai recente semnături
+      // (state-urile pot fi stale din cauza React batch-ing dacă vine din auto-recovery)
+      const { data: fresh } = await supabase
+        .from('logistica_transporturi')
+        .select('semnatura_expeditor_data, semnatura_sofer_data, semnatura_destinatar_data, aviz_generat')
+        .eq('id', T.id)
+        .single()
+      const finalSemnExp = !!fresh?.semnatura_expeditor_data
+      const finalSemnSof = !!fresh?.semnatura_sofer_data
+      const finalSemnDest = !!fresh?.semnatura_destinatar_data
+      
       // 1. Selectează zona aviz
       const aviz = document.querySelector('.aviz-content')
       if (!aviz) { showToast('Nu pot localiza conținutul avizului', 'error'); setArhivareLoading(false); return }
@@ -4063,9 +4074,9 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         manager_plecare_nume: T.manager_plecare?.name,
         manager_destinatie_nume: T.manager_destinatie?.name,
         sofer_nume: T.sofer_employee?.name || T.sofer_extern_nume,
-        semnat_expeditor: !!semnExpData || (auto && !!T.semnatura_expeditor_data),
-        semnat_sofer: !!semnSofData || (auto && !!T.semnatura_sofer_data),
-        semnat_destinatar: !!semnDestData || (auto && !!T.semnatura_destinatar_data)
+        semnat_expeditor: finalSemnExp,
+        semnat_sofer: finalSemnSof,
+        semnat_destinatar: finalSemnDest
       })
       if (insErr) throw insErr
       
@@ -4102,31 +4113,27 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     }
     setTrimisLoading(true)
     
-    // Construct subject + body
+    // Subject + body SCURT (mailto are limită ~2000 caractere)
     const subject = `Aviz însoțire marfă - ${T.numar_transport}`
     const body = [
       `Bună ziua,`,
       ``,
-      `Vă transmitem avizul de însoțire marfă pentru transportul ${T.numar_transport}.`,
-      ``,
-      `📦 DETALII TRANSPORT:`,
-      `• Activ transportat: ${T.tip === 'utilaj' && T.activ_transportat ? `${T.activ_transportat.cod_intern || ''} ${T.activ_transportat.marca || ''} ${T.activ_transportat.model || ''}`.trim() : (T.continut_descriere || '—')}`,
-      `• Plecare: ${formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}`,
-      `• Destinație: ${formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}`,
-      `• Data transport: ${T.data_transport}${T.ora_plecare ? ' · ' + T.ora_plecare.substring(0,5) : ''}`,
+      `Vă transmitem avizul de însoțire marfă ${T.numar_transport}:`,
+      `• Activ: ${T.tip === 'utilaj' && T.activ_transportat ? `${T.activ_transportat.cod_intern || ''} ${T.activ_transportat.marca || ''} ${T.activ_transportat.model || ''}`.trim() : (T.continut_descriere || '—')}`,
+      `• Plecare → Destinație: ${formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)} → ${formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}`,
+      `• Data: ${T.data_transport}${T.ora_plecare ? ' · ' + T.ora_plecare.substring(0,5) : ''}`,
       `• Șofer: ${T.sofer_employee?.name || T.sofer_extern_nume || '—'}`,
-      `• Mijloc transport: ${T.masina ? formatActiv(T.masina) : '—'}${T.remorca ? ' + ' + formatActiv(T.remorca) : ''}`,
-      `• Manager destinație: ${T.manager_destinatie?.name || '—'}`,
-      ``,
-      `Documentul printabil este atașat (vă rugăm să printați avizul HTML din aplicație și să-l trimiteți semnat).`,
       ``,
       `Cu stimă,`,
-      profile?.name || 'Echipa Gazpet Instal',
-      `${setariFirma.firma_nume || 'GAZPET INSTAL SRL'}`
+      profile?.name || 'Echipa Gazpet'
     ].join('\n')
     
     const mailtoUrl = `mailto:${destinatari.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
-    window.location.href = mailtoUrl
+    
+    // Verificare lungime URL — limită ~2000 caractere pe Chrome/Edge
+    if (mailtoUrl.length > 1900) {
+      showToast('⚠️ Conținut prea lung pentru mailto. Copiază manual datele.', 'warn')
+    }
     
     // Update DB: marchează aviz email trimis (NU aviz_generat — acela e doar pentru arhivă)
     const { error } = await supabase.from('logistica_transporturi').update({
@@ -4135,7 +4142,28 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     
     setTrimisLoading(false)
     if (error) { showToast('Eroare actualizare DB: ' + error.message, 'error'); return }
-    showToast(`📧 Mail deschis în client (${destinatari.length} destinatari)`)
+    
+    // Deschidem mailto cu mai multe metode (window.open are mai multe șanse decât location.href)
+    let opened = false
+    try {
+      const newWindow = window.open(mailtoUrl, '_self')
+      if (newWindow) opened = true
+    } catch (e) { /* ignored */ }
+    
+    if (!opened) {
+      // Fallback: location.href
+      try { window.location.href = mailtoUrl; opened = true } catch (e) { /* ignored */ }
+    }
+    
+    // Copiez în clipboard subject + body + emails ca fallback
+    try {
+      const fullText = `Către: ${destinatari.join(', ')}\nSubject: ${subject}\n\n${body}`
+      await navigator.clipboard.writeText(fullText)
+      showToast(`📧 Mail deschis + ${fullText.length} caractere copiate în clipboard (paste în orice client mail)`, 'info')
+    } catch (e) {
+      showToast(`📧 Mail deschis în client (${destinatari.length} destinatari)`, 'info')
+    }
+    
     onTrimisEmail?.()
   }
   

@@ -589,43 +589,9 @@ function DashboardPage() {
         <div style={{fontSize:11,color:G.purple+'99'}}>{expiringContracts.slice(0,3).map(e=>`${e.employees?.name} (${new Date(e.contract_expiry).toLocaleDateString('ro-RO')})`).join(', ')}{expiringContracts.length>3?` +${expiringContracts.length-3}`:''}</div></div>
       </div>}
       
-      {/* === ALERTĂ TRANSPORTURI PENDINTE (Mitrache / Cristiana / Admin) === */}
-      {nrTransportCerute > 0 && (
-        <div 
-          onClick={() => navigate('/logistica?tab=transporturi&status=cerut')}
-          style={{
-            background: 'linear-gradient(135deg, #7F1D1D 0%, #991B1B 100%)',
-            border: `2px solid #EF4444`,
-            borderRadius: 12,
-            padding: '14px 18px',
-            marginBottom: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 14,
-            cursor: 'pointer',
-            transition: 'transform 0.15s, box-shadow 0.15s',
-            boxShadow: '0 0 0 0 rgba(239,68,68,0.5)',
-            animation: 'pulse-red 2s ease-in-out infinite'
-          }}
-          onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
-          onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
-        >
-          <style>{`@keyframes pulse-red { 0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); } 50% { box-shadow: 0 0 0 12px rgba(239,68,68,0); } }`}</style>
-          <div style={{fontSize: 32, lineHeight: 1}}>🚛</div>
-          <div style={{flex: 1}}>
-            <div style={{fontSize: 16, fontWeight: 800, color: '#FFF', marginBottom: 4}}>
-              {nrTransportCerute} {nrTransportCerute === 1 ? 'cerere de transport' : 'cereri de transport'} așteaptă aprobare!
-            </div>
-            <div style={{fontSize: 12, color: '#FCA5A5', lineHeight: 1.5}}>
-              {transportSamples.slice(0, 3).map(t => `${t.numar_transport} (${t.solicitant?.name || '?'})`).join(' · ')}
-              {nrTransportCerute > 3 && ` · +${nrTransportCerute - 3} alte`}
-            </div>
-          </div>
-          <div style={{fontSize: 14, color: '#FFF', fontWeight: 700, padding: '8px 14px', background: 'rgba(255,255,255,0.15)', borderRadius: 8, whiteSpace: 'nowrap'}}>
-            Vezi toate →
-          </div>
-        </div>
-      )}
+      {/* === ALERTĂ TRANSPORTURI PENDINTE — ELIMINATĂ TEMPORAR === */}
+      {/* Va fi reintegrată în Modulul Execuție (per manager proiect) — nu pe Dashboard global */}
+      {/* {nrTransportCerute > 0 && ( ... )} */}
       
       {/* === ALERTĂ AVIZE NESEMNATE DE DESTINATAR > 3 ZILE === */}
       {avizeNesemnate.length > 0 && (
