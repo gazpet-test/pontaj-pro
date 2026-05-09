@@ -482,8 +482,8 @@ function DashboardPage() {
     const monthStartStr = now.toISOString().split('T')[0].slice(0,7)+'-01'
     const empIds = emps.map(e=>e.id)
     const [{data:weekRecs},{data:monthRecs}] = await Promise.all([
-      supabase.from('pontaj_records').select('*').gte('date',weekStartStr).lte('date',todayStr()).in('employee_id',empIds),
-      supabase.from('pontaj_records').select('*').gte('date',monthStartStr).lte('date',todayStr()).in('employee_id',empIds)
+      supabase.from('pontaj_records').select('*').gte('date',weekStartStr).lte('date',todayStr()).in('employee_id',empIds).limit(50000),
+      supabase.from('pontaj_records').select('*').gte('date',monthStartStr).lte('date',todayStr()).in('employee_id',empIds).limit(50000)
     ])
     const calcStats = (r) => {
       const present=(r||[]).filter(x=>x.check_in&&!x.norma).length
@@ -500,7 +500,7 @@ function DashboardPage() {
     const last3 = []
     for(let i=1;i<=3;i++){const d=new Date(now);d.setDate(d.getDate()-i);const ds=d.toISOString().split('T')[0];const dow=d.getDay();if(dow!==0&&dow!==6)last3.push(ds)}
     if(last3.length>=3){
-      const {data:last3Recs}=await supabase.from('pontaj_records').select('employee_id,date,check_in,norma').in('date',last3).in('employee_id',empIds)
+      const {data:last3Recs}=await supabase.from('pontaj_records').select('employee_id,date,check_in,norma').in('date',last3).in('employee_id',empIds).limit(50000)
       const absentEmps=emps.filter(e=>{
         return last3.every(day=>{
           const r=(last3Recs||[]).find(x=>x.employee_id===e.id&&x.date===day)
@@ -1012,7 +1012,7 @@ function ReportsPage() {
     let eq=supabase.from('employees').select('*').eq('active',true)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
-    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+    const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
 
     const empStats=(emps||[]).map(emp=>{
       const er=(recs||[]).filter(r=>r.employee_id===emp.id)
@@ -1079,7 +1079,7 @@ function ReportsPage() {
     if (deptF!=='Toate'&&isAdmin) eq=eq.eq('department',deptF)
     if (siteF!=='Toate'&&isAdmin) eq=eq.eq('site_id',siteF)
     const {data:emps}=await eq; if(!emps){setLoad(false);return}
-    const {data:recs}=await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).in('employee_id',emps.map(e=>e.id))
+    const {data:recs}=await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).in('employee_id',emps.map(e=>e.id)).limit(50000)
     const stats=emps.map(emp=>{
       const er=(recs||[]).filter(r=>r.employee_id===emp.id)
       const workDays=er.filter(r=>r.check_in&&!r.norma).length
@@ -1401,14 +1401,14 @@ function ReportsPage() {
     while(pd<=periodEnd){const pds=pd.toISOString().split('T')[0];if(pd.getDay()!==0&&pd.getDay()!==6&&!legalSet.has(pds))workDaysInPeriod++;pd.setDate(pd.getDate()+1)}
 
     // Get all pontaj records from start of month to end of period (for norme cumulate)
-    const {data:allRecs}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id))
+    const {data:allRecs}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
 
     // Transe anterioare din aceeași lună — pentru calculul surplusului deja plătit
     // Luăm toate plățile cu period_from în aceeași lună ȘI period_to < df (perioadele deja finalizate)
     const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
 
     // Get diurna records for the export period only
-    const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+    const {data:diurnaRecs}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
 
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
@@ -1658,7 +1658,7 @@ function ReportsPage() {
       let eq=supabase.from('employees').select('*').eq('active',true)
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
       const {data:emps}=await eq
-      const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id))
+      const {data:recs}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).limit(50000)
       const {data:st}=await supabase.from('settings').select('*')
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
       const diurnaAmt=Number(getSetting('diurna_amount',50))
