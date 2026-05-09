@@ -2509,6 +2509,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   const [managerPlecareId, setManagerPlecareId] = useState(T?.manager_plecare_id || '')
   const [managerDestinatieId, setManagerDestinatieId] = useState(T?.manager_destinatie_id || '')
   const [profilesList, setProfilesList] = useState([])
+  const [siteManagers, setSiteManagers] = useState({})  // map site_id → profile_id
   const [employees, setEmployees] = useState([])
   const [saving, setSaving] = useState(false)
   
@@ -2516,6 +2517,57 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   useEffect(() => {
     supabase.from('profiles').select('id, name, role, email').order('name').then(({ data }) => setProfilesList(data || []))
   }, [])
+  
+  // Load alocări site → manager (din profile_sites)
+  useEffect(() => {
+    supabase.from('profile_sites').select('site_id, profile_id').then(({ data }) => {
+      const map = {}
+      ;(data || []).forEach(({ site_id, profile_id }) => {
+        if (!map[site_id]) map[site_id] = profile_id  // primul găsit (dacă mai mulți, prioritate primul)
+      })
+      setSiteManagers(map)
+    })
+  }, [])
+  
+  // Identifică Mitrache din profilesList (default pentru sediu)
+  const mitrachId = useMemo(() => {
+    const m = profilesList.find(p => p.email === 'alexandru.mitrache@gazpet.ro')
+    return m?.id || ''
+  }, [profilesList])
+  
+  // Identifică toți userii din departamentul Logistică (Mitrache + Cristiana + viitor)
+  const profilesLogistica = useMemo(() => {
+    const emails = ['alexandru.mitrache@gazpet.ro', 'cristiana.puscasu@gazpet.ro']
+    return profilesList.filter(p => emails.includes(p.email))
+  }, [profilesList])
+  
+  // Auto-fill manager plecare la schimbarea sursei
+  useEffect(() => {
+    // Doar la creare nouă (nu la edit cu manager deja salvat)
+    if (isEdit) return
+    if (plecareTip === 'site' && plecareSiteId) {
+      const mgr = siteManagers[plecareSiteId]
+      if (mgr) setManagerPlecareId(mgr)
+    } else if (plecareTip === 'sediu') {
+      // Pentru sediu, default = Mitrache (Logistică)
+      if (mitrachId) setManagerPlecareId(mitrachId)
+    } else if (plecareTip === 'alta') {
+      setManagerPlecareId('')
+    }
+  }, [plecareTip, plecareSiteId, siteManagers, mitrachId, isEdit])
+  
+  // Auto-fill manager destinație la schimbarea destinației
+  useEffect(() => {
+    if (isEdit) return
+    if (destinatieTip === 'site' && destinatieSiteId) {
+      const mgr = siteManagers[destinatieSiteId]
+      if (mgr) setManagerDestinatieId(mgr)
+    } else if (destinatieTip === 'sediu') {
+      if (mitrachId) setManagerDestinatieId(mitrachId)
+    } else if (destinatieTip === 'alta') {
+      setManagerDestinatieId('')
+    }
+  }, [destinatieTip, destinatieSiteId, siteManagers, mitrachId, isEdit])
   
   // Load employees
   const loadEmployees = async () => {
@@ -2800,11 +2852,20 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                 <input type="text" value={plecareLocText} onChange={e => setPlecareLocText(e.target.value)} placeholder="ex: Depozit furnizor SC X SRL, București" style={{...S.input, flex:1}} />
               )}
             </div>
-            {/* Manager plecare */}
-            <select value={managerPlecareId} onChange={e => setManagerPlecareId(e.target.value)} style={{...S.input, fontSize:12}}>
-              <option value="">👤 Manager plecare (opțional, cel care eliberează utilajul)</option>
-              {profilesList.map(p => <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>)}
+            {/* Manager plecare — smart: pentru sediu doar Logistică, pentru site auto-completat */}
+            <select 
+              value={managerPlecareId} 
+              onChange={e => setManagerPlecareId(e.target.value)} 
+              style={{...S.input, fontSize:12, borderColor: managerPlecareId ? G.green + '88' : G.border2}}
+            >
+              <option value="">👤 Manager plecare {plecareTip === 'sediu' ? '(filtrat: Logistică)' : '(opțional)'}</option>
+              {(plecareTip === 'sediu' ? profilesLogistica : profilesList).map(p => 
+                <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>
+              )}
             </select>
+            {managerPlecareId && plecareTip === 'site' && siteManagers[plecareSiteId] === managerPlecareId && (
+              <div style={{fontSize:10, color:G.green, marginTop:2}}>✓ Auto-completat din alocările șantierului</div>
+            )}
           </div>
           
           {/* Destinație */}
@@ -2829,8 +2890,13 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
             {/* Manager destinație — IMPORTANT pentru confirmare primire */}
             <select value={managerDestinatieId} onChange={e => setManagerDestinatieId(e.target.value)} style={{...S.input, fontSize:12, borderColor: managerDestinatieId ? G.green + '88' : G.border2}}>
               <option value="">⚠️ Manager destinație (cel care va confirma primirea)</option>
-              {profilesList.map(p => <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>)}
+              {(destinatieTip === 'sediu' ? profilesLogistica : profilesList).map(p => 
+                <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>
+              )}
             </select>
+            {managerDestinatieId && destinatieTip === 'site' && siteManagers[destinatieSiteId] === managerDestinatieId && (
+              <div style={{fontSize:10, color:G.green, marginTop:2}}>✓ Auto-completat din alocările șantierului</div>
+            )}
             {managerDestinatieId && (
               <div style={{fontSize:10, color:G.green, marginTop:4}}>
                 ✓ La livrare, această persoană va confirma primirea utilajului
@@ -3060,8 +3126,9 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [employees, setEmployees] = useState([])
   const [soferEmployeeId, setSoferEmployeeId] = useState('')
   const [soferSearch, setSoferSearch] = useState('')
-  const [filterFunctie, setFilterFunctie] = useState('atestati')
+  const [filterFunctie, setFilterFunctie] = useState('soferi')  // default doar șoferi atestați
   const [actionLoading, setActionLoading] = useState(false)
+  const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
   
   const isAprobator = isAprobatorTransport(profile)
   const isSolicitant = profile?.id === T.solicitant_id
@@ -3109,6 +3176,10 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
       status: 'aprobat',
       aprobator_id: profile.id,
       data_aprobare: new Date().toISOString(),
+    }
+    // Dacă data a fost modificată față de original, actualizează și data_transport
+    if (dataTransportEdit && dataTransportEdit !== T.data_transport) {
+      updateData.data_transport = dataTransportEdit
     }
     if (showAlegeSofer && soferEmployeeId) {
       updateData.sofer_employee_id = Number(soferEmployeeId)
@@ -3340,6 +3411,31 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
           </div>
         )}
         
+        {/* === DATĂ TRANSPORT EDITABILĂ la aprobare (doar aprobatori la status='cerut') === */}
+        {status === 'cerut' && isAprobator && (
+          <div style={{marginBottom:12, padding:10, background:G.blue+'11', border:`1px dashed ${G.blue}`, borderRadius:8}}>
+            <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+              <div style={{fontSize:11, color:G.blue, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>
+                📅 Data transportului (editabilă la aprobare)
+              </div>
+              <input 
+                type="date" 
+                value={dataTransportEdit} 
+                onChange={e => setDataTransportEdit(e.target.value)} 
+                style={{...S.input, width:'auto', fontSize:13, fontWeight:700}}
+              />
+              {dataTransportEdit && dataTransportEdit !== T.data_transport && (
+                <span style={{fontSize:10, color:G.orange, fontWeight:700}}>
+                  ⚠️ Schimbat (originală: {T.data_transport})
+                </span>
+              )}
+            </div>
+            <div style={{fontSize:10, color:G.muted, marginTop:4}}>
+              Dacă data inițială nu e bună, schimb-o aici. Va fi salvată cu aprobarea.
+            </div>
+          </div>
+        )}
+        
         {/* === ALEGE ȘOFER înainte de aprobare (când Logistică alocă) === */}
         {showAlegeSofer && (
           <div style={{marginBottom:12, padding:12, background:G.purple+'11', border:`2px solid ${G.purple}`, borderRadius:8}}>
@@ -3402,18 +3498,30 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
             </>
           )}
           
-          {/* === STATUS = APROBAT — Programat / Anulat === */}
+          {/* === STATUS = APROBAT — Începe transport / Anulat === */}
           {status === 'aprobat' && (
             <>
-              <button onClick={() => handleSchimbaStatus('programat')} disabled={actionLoading} style={{...S.btnP, background:G.blue}}>📅 Marchează "Programat"</button>
+              {/* Început transport: aprobator SAU manager plecare */}
+              {(isAprobator || isManagerPlecare) && (
+                <button onClick={() => handleSchimbaStatus('in_tranzit')} disabled={actionLoading} style={{...S.btnP, background:G.yellow, color:'#000'}}>
+                  🚚 Începe transport (în tranzit)
+                </button>
+              )}
+              {!isAprobator && !isManagerPlecare && (
+                <div style={{fontSize:12, color:G.orange, alignSelf:'center'}}>
+                  Așteaptă confirmarea de la {T.manager_plecare?.name || 'manager plecare'} sau Logistică
+                </div>
+              )}
               {(isAprobator || isSolicitant) && <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>⏸ Anulează</button>}
             </>
           )}
           
-          {/* === STATUS = PROGRAMAT — Începe transport === */}
+          {/* === STATUS = PROGRAMAT (backward compat — nu mai apare la cereri noi) === */}
           {status === 'programat' && (
             <>
-              <button onClick={() => handleSchimbaStatus('in_tranzit')} disabled={actionLoading} style={{...S.btnP, background:G.yellow, color:'#000'}}>🚚 Începe transport (în tranzit)</button>
+              {(isAprobator || isManagerPlecare) && (
+                <button onClick={() => handleSchimbaStatus('in_tranzit')} disabled={actionLoading} style={{...S.btnP, background:G.yellow, color:'#000'}}>🚚 Începe transport (în tranzit)</button>
+              )}
               {(isAprobator || isSolicitant) && <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>⏸ Anulează</button>}
             </>
           )}
@@ -3458,16 +3566,17 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
 
 // ----- Pagina Transporturi -----
 function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
-  const [list, setList] = useState([])
+  const [allInPeriod, setAllInPeriod] = useState([])  // TOATE din perioadă (pentru KPI corect)
   const [loading, setLoading] = useState(false)
   const [statusFilter, setStatusFilter] = useState('Toate')
   const [perioadaFilter, setPerioadaFilter] = useState('luna')
-  const [meleFilter, setMeleFilter] = useState(false)  // doar transporturile mele (solicitant SAU manager destinație)
+  const [meleFilter, setMeleFilter] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
   const [showComanda, setShowComanda] = useState(false)
   const [editTransport, setEditTransport] = useState(null)
-  const [detaliiTransport, setDetaliiTransport] = useState(null)  // pentru DetaliiTransportModal
+  const [detaliiTransport, setDetaliiTransport] = useState(null)
   
-  const fetchList = async () => {
+  const fetchAll = async () => {
     setLoading(true)
     let q = supabase.from('logistica_transporturi')
       .select(`*,
@@ -3484,10 +3593,8 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
         manager_destinatie:profiles!manager_destinatie_id(id, name, role),
         confirmat_de:profiles!confirmat_primire_de(name)
       `)
-      .order('data_transport', { ascending: false })
-      .order('id', { ascending: false })
     
-    // Filtru perioadă
+    // Filtru perioadă (aplicat la nivel DB)
     const today = new Date().toISOString().split('T')[0]
     if (perioadaFilter === 'luna') {
       const y = new Date().getFullYear()
@@ -3500,48 +3607,140 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
       q = q.eq('data_transport', today)
     }
     
-    // Filtru status
-    if (statusFilter !== 'Toate') q = q.eq('status', statusFilter)
-    
-    // Filtru "Doar ale mele" — sunt solicitant SAU manager destinație SAU manager plecare
+    // Filtru "Doar ale mele" se aplică tot la DB
     if (meleFilter && profile?.id) {
       q = q.or(`solicitant_id.eq.${profile.id},manager_destinatie_id.eq.${profile.id},manager_plecare_id.eq.${profile.id}`)
     }
     
     const { data, error } = await q
     if (error) console.error('Eroare fetch transporturi:', error)
-    setList(data || [])
+    setAllInPeriod(data || [])
     setLoading(false)
   }
   
-  useEffect(() => { fetchList() }, [statusFilter, perioadaFilter, meleFilter])
+  useEffect(() => { fetchAll() }, [perioadaFilter, meleFilter])
   
-  // KPI
+  // Lista filtrată după status (în memorie)
+  const list = useMemo(() => {
+    let result = [...allInPeriod]
+    if (statusFilter !== 'Toate') result = result.filter(t => t.status === statusFilter)
+    
+    // Sortare specială pentru aprobate (după data_transport ASC — cele mai apropiate sus)
+    if (statusFilter === 'aprobat' || statusFilter === 'programat') {
+      result.sort((a, b) => (a.data_transport || '').localeCompare(b.data_transport || ''))
+    } else {
+      // Default: descrescător pe data_transport (cele recente sus)
+      result.sort((a, b) => (b.data_transport || '').localeCompare(a.data_transport || '') || (b.id - a.id))
+    }
+    return result
+  }, [allInPeriod, statusFilter])
+  
+  // KPI calculate din TOATE transporturile din perioadă (NU se schimbă cu filtrul status)
   const kpi = useMemo(() => {
-    const cerute = list.filter(t => t.status === 'cerut').length
-    const aprobate = list.filter(t => t.status === 'aprobat' || t.status === 'programat').length
-    const inTranzit = list.filter(t => t.status === 'in_tranzit').length
-    const livrate = list.filter(t => t.status === 'livrat').length
+    const cerute = allInPeriod.filter(t => t.status === 'cerut').length
+    const aprobate = allInPeriod.filter(t => t.status === 'aprobat' || t.status === 'programat').length
+    const inTranzit = allInPeriod.filter(t => t.status === 'in_tranzit').length
+    const livrate = allInPeriod.filter(t => t.status === 'livrat').length
     return { cerute, aprobate, inTranzit, livrate }
-  }, [list])
+  }, [allInPeriod])
+  
+  // Helper: zile de la solicitare (pentru highlight urgent)
+  const zileLaSolicitare = (t) => {
+    if (!t.data_solicitarii) return 0
+    const ms = Date.now() - new Date(t.data_solicitarii).getTime()
+    return Math.floor(ms / (1000 * 60 * 60 * 24))
+  }
+  
+  // Export Excel
+  const handleExportExcel = async () => {
+    setExportingExcel(true)
+    try {
+      const XLSX = await import('xlsx-js-style')
+      const rows = list.map((t, idx) => ({
+        '#': idx + 1,
+        'Nr Transport': t.numar_transport || '',
+        'Data': t.data_transport || '',
+        'Ora': t.ora_plecare ? t.ora_plecare.substring(0, 5) : '',
+        'Tip': t.tip === 'utilaj' ? 'Utilaj' : 'Mic TESA',
+        'Activ / Conținut': t.tip === 'utilaj' && t.activ_transportat
+          ? `${t.activ_transportat.cod_intern || ''} ${t.activ_transportat.marca || ''} ${t.activ_transportat.model || ''}`.trim()
+          : (t.continut_descriere || ''),
+        'Mijloc principal': t.masina ? formatActiv(t.masina) : '',
+        'Remorcă': t.remorca ? formatActiv(t.remorca) : '',
+        'Plecare': t.plecare_tip === 'sediu' ? 'Sediu Gazpet' : (t.plecare_site?.name || t.plecare_locatie_text || ''),
+        'Manager plecare': t.manager_plecare?.name || '',
+        'Destinație': t.destinatie_tip === 'sediu' ? 'Sediu Gazpet' : (t.destinatie_site?.name || t.destinatie_locatie_text || ''),
+        'Manager destinație': t.manager_destinatie?.name || '',
+        'Șofer': t.sofer_employee?.name || t.sofer?.name || t.sofer_extern_nume || (t.sofer_aloca_logistica ? 'Logistică alocă' : ''),
+        'Funcție': t.sofer_employee?.position || '',
+        'Solicitant': t.solicitant?.name || '',
+        'Aprobator': t.aprobator?.name || '',
+        'Status': STATUS_TRANSPORT[t.status]?.label || t.status,
+        'Cost estimat (RON)': t.cost_estimat || '',
+        'Confirmat primire la': t.confirmat_primire_la ? new Date(t.confirmat_primire_la).toLocaleString('ro-RO') : '',
+        'Confirmat de': t.confirmat_de?.name || '',
+        'Observații confirmare': t.confirmare_observatii || '',
+        'Observații': t.observatii || '',
+      }))
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Transporturi')
+      // Auto-width
+      const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }))
+      ws['!cols'] = colWidths
+      const today = new Date().toISOString().split('T')[0]
+      XLSX.writeFile(wb, `Transporturi_${today}.xlsx`)
+      showToast(`✓ Export ${rows.length} transporturi → Excel`)
+    } catch (e) {
+      showToast('Eroare export: ' + e.message, 'error')
+    } finally {
+      setExportingExcel(false)
+    }
+  }
   
   return (
     <div>
-      {/* KPI */}
+      {/* KPI — Cerute (de aprobat) e ROȘU PULSING dacă > 0 */}
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
-        <KPICard icon="⏳" label="Cerute (de aprobat)" value={kpi.cerute} color={G.orange} />
-        <KPICard icon="✓" label="Aprobate / Programate" value={kpi.aprobate} color={G.green} />
+        <div style={{
+          ...S.card, padding:'14px 18px', flex:1, minWidth:200,
+          borderLeft: `5px solid ${kpi.cerute > 0 ? G.red : G.border}`,
+          background: kpi.cerute > 0 ? G.redDim + '88' : G.surface,
+          animation: kpi.cerute > 0 ? 'pulse-red 2s infinite' : 'none',
+          boxShadow: kpi.cerute > 0 ? `0 0 16px ${G.red}33` : 'none',
+          transition: 'all .3s'
+        }}>
+          <div style={{fontSize:11, color: kpi.cerute > 0 ? G.red : G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>
+            ⏳ Cerute (de aprobat) {kpi.cerute > 0 && <span style={{marginLeft:6, padding:'2px 6px', background:G.red, color:'#fff', borderRadius:4, fontSize:9}}>URGENT</span>}
+          </div>
+          <div style={{fontSize:32, fontWeight:800, color: kpi.cerute > 0 ? G.red : G.text, fontVariantNumeric:'tabular-nums'}}>
+            {kpi.cerute}
+          </div>
+        </div>
+        <KPICard icon="✓" label="Aprobate" value={kpi.aprobate} color={G.green} />
         <KPICard icon="🚛" label="În tranzit" value={kpi.inTranzit} color={G.yellow} />
         <KPICard icon="✅" label="Livrate" value={kpi.livrate} color={G.green} />
       </div>
+      
+      {/* CSS animation pulse-red — inline */}
+      <style>{`
+        @keyframes pulse-red {
+          0%, 100% { box-shadow: 0 0 16px ${G.red}33; }
+          50% { box-shadow: 0 0 24px ${G.red}88; }
+        }
+        @keyframes pulse-row {
+          0%, 100% { background: ${G.redDim}33; }
+          50% { background: ${G.redDim}66; }
+        }
+      `}</style>
       
       {/* Toolbar filtre + buton */}
       <div style={{...S.card, padding:12, marginBottom:14, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
         <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6}}>Filtre:</div>
         
-        {/* Status */}
+        {/* Status — fără 'programat' (eliminat din flow nou; rămâne accesibil dacă există date vechi cu acel status) */}
         <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
-          {['Toate', 'cerut', 'aprobat', 'programat', 'in_tranzit', 'livrat', 'respins', 'anulat'].map(s => (
+          {['Toate', 'cerut', 'aprobat', 'in_tranzit', 'livrat', 'respins', 'anulat'].map(s => (
             <button key={s} onClick={() => setStatusFilter(s)} style={{
               padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
               border:`1px solid ${statusFilter === s ? G.logistica : G.border}`,
@@ -3571,22 +3770,37 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
         
         <div style={{flex:1}} />
         
-        {/* Toggle "Doar ale mele" */}
+        {/* Toggle "Doar ale mele" — MAI MARE și mai vizibil */}
         <button 
           onClick={() => setMeleFilter(!meleFilter)} 
           style={{
-            padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
-            border:`1px solid ${meleFilter ? G.purple : G.border}`,
-            background: meleFilter ? G.purple + '22' : 'transparent',
-            color: meleFilter ? G.purple : G.muted,
-            cursor:'pointer'
+            padding:'8px 16px', fontSize:13, borderRadius:8, fontWeight:700,
+            border:`2px solid ${meleFilter ? G.purple : G.border2}`,
+            background: meleFilter ? G.purple + '33' : G.surface,
+            color: meleFilter ? G.purple : G.text,
+            cursor:'pointer',
+            display:'flex', alignItems:'center', gap:6,
+            boxShadow: meleFilter ? `0 0 12px ${G.purple}44` : 'none',
+            transition:'all .2s'
           }}
           title="Vezi doar transporturile unde ești solicitant SAU manager (plecare/destinație)"
         >
-          {meleFilter ? '👤 Doar ale mele' : '👥 Toate'}
+          <span style={{fontSize:16}}>{meleFilter ? '👤' : '👥'}</span>
+          <span>{meleFilter ? 'Doar ale mele' : 'Toate'}</span>
         </button>
         
-        <button onClick={() => setShowComanda(true)} style={{...S.btnP, background:G.green, fontSize:13, display:'flex', alignItems:'center', gap:6}}>
+        {/* Buton Export Excel */}
+        <button onClick={handleExportExcel} disabled={exportingExcel || list.length === 0} style={{
+          ...S.btnS, padding:'8px 14px', fontSize:13, fontWeight:700,
+          color: G.green, borderColor: G.green + '88',
+          opacity: list.length === 0 ? 0.4 : 1,
+          display:'flex', alignItems:'center', gap:6
+        }} title="Export listă curentă în Excel">
+          <span style={{fontSize:14}}>📥</span>
+          <span>{exportingExcel ? 'Export...' : 'Excel'}</span>
+        </button>
+        
+        <button onClick={() => setShowComanda(true)} style={{...S.btnP, background:G.green, fontSize:13, display:'flex', alignItems:'center', gap:6, padding:'10px 16px'}}>
           <span>+</span><span>Comandă transport</span>
         </button>
       </div>
@@ -3619,20 +3833,33 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                 </tr>
               </thead>
               <tbody>
-                {list.map((t, idx) => (
+                {list.map((t, idx) => {
+                  const zile = zileLaSolicitare(t)
+                  const urgent = t.status === 'cerut' && zile > 7
+                  const isApr = t.status === 'aprobat' || t.status === 'programat'
+                  return (
                   <tr key={t.id} 
                       onClick={() => setDetaliiTransport(t)}
-                      style={{borderBottom:`1px solid ${G.border}`, transition:'background .15s', cursor:'pointer'}} 
-                      onMouseEnter={e => e.currentTarget.style.background = G.bg} 
-                      onMouseLeave={e => e.currentTarget.style.background = ''}>
+                      style={{
+                        borderBottom: urgent ? `2px solid ${G.red}` : `1px solid ${G.border}`, 
+                        transition:'background .15s', 
+                        cursor:'pointer',
+                        background: urgent ? `${G.redDim}33` : undefined,
+                        animation: urgent ? 'pulse-row 2s infinite' : 'none'
+                      }} 
+                      onMouseEnter={e => { if (!urgent) e.currentTarget.style.background = G.bg }} 
+                      onMouseLeave={e => { if (!urgent) e.currentTarget.style.background = '' }}>
                     <td style={tdStyle}>
-                      <span style={{display:'inline-block', minWidth:24, padding:'2px 6px', background:G.surface, border:`1px solid ${G.border}`, borderRadius:6, fontSize:11, color:G.muted, textAlign:'center'}}>{idx+1}</span>
+                      <span style={{display:'inline-block', minWidth:24, padding:'2px 6px', background:urgent ? G.red : G.surface, border:`1px solid ${urgent ? G.red : G.border}`, borderRadius:6, fontSize:11, color:urgent ? '#fff' : G.muted, textAlign:'center', fontWeight: urgent ? 700 : 400}}>
+                        {urgent ? '🔥' : idx+1}
+                      </span>
                     </td>
                     <td style={tdStyle}>
                       <span style={{fontFamily:'monospace', fontSize:11, color:G.logistica, fontWeight:700}}>{t.numar_transport}</span>
+                      {urgent && <div style={{fontSize:9, color:G.red, fontWeight:700, marginTop:2}}>⚠️ {zile} zile fără răspuns</div>}
                     </td>
                     <td style={tdStyle}>
-                      <div style={{fontSize:12, color:G.text}}>{t.data_transport}</div>
+                      <div style={{fontSize: isApr ? 14 : 12, color:G.text, fontWeight: isApr ? 700 : 400}}>{t.data_transport}</div>
                       {t.ora_plecare && <div style={{fontSize:10, color:G.muted}}>{t.ora_plecare.substring(0,5)}</div>}
                     </td>
                     <td style={tdStyle}>
@@ -3709,7 +3936,8 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                       )}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -4289,21 +4517,21 @@ export default function LogisticaPage() {
           )
         })()}
         
-        {/* Card preț motorină */}
-        <div style={{...S.card, padding: '12px 16px', flex: 1, minWidth: 200, borderLeft: `3px solid ${G.green}`}}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4}}>
-            <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+        {/* Card preț motorină — compact */}
+        <div style={{...S.card, padding: '10px 14px', minWidth: 140, borderLeft: `3px solid ${G.green}`}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 2, gap: 6}}>
+            <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
               💰 Preț motorină
             </div>
             {canEdit && (
-              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 14, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
+              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 12, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
             )}
           </div>
-          <div style={{fontSize: 22, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums'}}>
-            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'} <span style={{fontSize: 12, color: G.muted, fontWeight: 600}}>RON/L</span>
+          <div style={{fontSize: 18, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2}}>
+            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'} <span style={{fontSize: 10, color: G.muted, fontWeight: 600}}>RON/L</span>
           </div>
-          <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
-            actualizat: {pretMotorinaActualizat || '—'}
+          <div style={{fontSize: 9, color: G.muted, marginTop: 2}}>
+            {pretMotorinaActualizat || '—'}
           </div>
         </div>
       </div>
