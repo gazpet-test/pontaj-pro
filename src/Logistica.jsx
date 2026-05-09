@@ -2450,45 +2450,72 @@ const StatusBadge = ({ status }) => {
 }
 
 // ----- Modal Comandă Transport -----
-function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showToast }) {
-  const [tip, setTip] = useState('utilaj')  // 'utilaj' | 'mic_tesa'
-  const [activTransportatId, setActivTransportatId] = useState('')
-  const [continutDescriere, setContinutDescriere] = useState('')
-  const [plecareTip, setPlecareTip] = useState('sediu')
-  const [plecareSiteId, setPlecareSiteId] = useState('')
-  const [plecareLocText, setPlecareLocText] = useState('')
-  const [destinatieTip, setDestinatieTip] = useState('site')
-  const [destinatieSiteId, setDestinatieSiteId] = useState('')
-  const [destinatieLocText, setDestinatieLocText] = useState('')
-  const [dataTransport, setDataTransport] = useState(new Date().toISOString().split('T')[0])
-  const [oraPlecare, setOraPlecare] = useState('08:00')
-  const [masinaId, setMasinaId] = useState('')
-  const [remorcaId, setRemorcaId] = useState('')              // NEW: combo remorca/trailer/semiremorca
-  const [necesitaSoferAtestat, setNecesitaSoferAtestat] = useState(true)  // NEW: pt utilaj default ON
-  const [soferGazpet, setSoferGazpet] = useState(true)
-  const [soferEmployeeId, setSoferEmployeeId] = useState('')   // NEW: int → employees
-  const [soferSearch, setSoferSearch] = useState('')           // NEW: search nume
-  const [soferExternNume, setSoferExternNume] = useState('')
-  const [soferExternTel, setSoferExternTel] = useState('')
-  const [costEstimat, setCostEstimat] = useState('')
-  const [observatii, setObservatii] = useState('')
-  const [employees, setEmployees] = useState([])               // NEW: din employees
+// Liste funcții pentru filtrare
+const FUNCTII_TRANSPORT = [
+  { key: 'toate',     label: '👥 Toți angajații',    keywords: null },
+  { key: 'atestati',  label: '⭐ Toți atestații',     keywords: ['SOFER', 'MASINIST', 'MACARAGIU', 'MECANIC AUTO', 'MECANIC UTILAJE', 'TEHNICIAN MASINI'] },
+  { key: 'soferi',    label: '🚗 Doar Șoferi',        keywords: ['SOFER'] },
+  { key: 'masinisti', label: '🏗️ Doar Masiniști',    keywords: ['MASINIST'] },
+  { key: 'macaragii', label: '🏗️ Doar Macaragii',    keywords: ['MACARAGIU'] },
+  { key: 'mecanici',  label: '🔧 Doar Mecanici',      keywords: ['MECANIC AUTO', 'MECANIC UTILAJE'] },
+]
+
+// Helper: verifică dacă un employee are funcția dorită (din position SAU functii_extra)
+const matchesFunctie = (emp, functieKey) => {
+  const f = FUNCTII_TRANSPORT.find(x => x.key === functieKey)
+  if (!f || !f.keywords) return true
+  const pos = (emp.position || '').toUpperCase()
+  const extra = (emp.functii_extra || []).map(x => (x || '').toUpperCase())
+  return f.keywords.some(kw => pos.includes(kw) || extra.some(ex => ex.includes(kw) || kw.includes(ex)))
+}
+
+// Liste atestate pentru editare per angajat
+const ATESTATE_DISPONIBILE = ['SOFER', 'MASINIST', 'MACARAGIU', 'MECANIC AUTO', 'MECANIC UTILAJE', 'TEHNICIAN MASINI', 'OPERATOR PEHD']
+
+function ComandaTransportModal({ active, sites, profile, initialTransport, onClose, onSaved, showToast }) {
+  const isEdit = !!initialTransport
+  const T = initialTransport  // shortcut
+  
+  const [tip, setTip] = useState(T?.tip || 'utilaj')
+  const [activTransportatId, setActivTransportatId] = useState(T?.activ_transportat_id ? String(T.activ_transportat_id) : '')
+  const [continutDescriere, setContinutDescriere] = useState(T?.continut_descriere || '')
+  const [plecareTip, setPlecareTip] = useState(T?.plecare_tip || 'sediu')
+  const [plecareSiteId, setPlecareSiteId] = useState(T?.plecare_site_id ? String(T.plecare_site_id) : '')
+  const [plecareLocText, setPlecareLocText] = useState(T?.plecare_locatie_text || '')
+  const [destinatieTip, setDestinatieTip] = useState(T?.destinatie_tip || 'site')
+  const [destinatieSiteId, setDestinatieSiteId] = useState(T?.destinatie_site_id ? String(T.destinatie_site_id) : '')
+  const [destinatieLocText, setDestinatieLocText] = useState(T?.destinatie_locatie_text || '')
+  const [dataTransport, setDataTransport] = useState(T?.data_transport || new Date().toISOString().split('T')[0])
+  const [oraPlecare, setOraPlecare] = useState(T?.ora_plecare ? T.ora_plecare.substring(0,5) : '08:00')
+  const [masinaId, setMasinaId] = useState(T?.masina_id ? String(T.masina_id) : '')
+  const [remorcaId, setRemorcaId] = useState(T?.remorca_id ? String(T.remorca_id) : '')
+  const [filterFunctie, setFilterFunctie] = useState(T ? (T.necesita_sofer_atestat ? 'atestati' : 'toate') : (T?.tip === 'utilaj' || (!T && 'utilaj' === 'utilaj') ? 'atestati' : 'toate'))
+  const [soferGazpet, setSoferGazpet] = useState(T?.sofer_gazpet ?? true)
+  const [soferEmployeeId, setSoferEmployeeId] = useState(T?.sofer_employee_id ? String(T.sofer_employee_id) : '')
+  const [soferSearch, setSoferSearch] = useState('')
+  const [soferExternNume, setSoferExternNume] = useState(T?.sofer_extern_nume || '')
+  const [soferExternTel, setSoferExternTel] = useState(T?.sofer_extern_telefon || '')
+  const [costEstimat, setCostEstimat] = useState(T?.cost_estimat || '')
+  const [observatii, setObservatii] = useState(T?.observatii || '')
+  const [employees, setEmployees] = useState([])
   const [saving, setSaving] = useState(false)
   
-  // Load employees (toți angajații activi cu poziție)
-  useEffect(() => {
-    supabase.from('employees').select('id, name, position, department')
-      .eq('active', true)
-      .order('name')
-      .then(({ data }) => setEmployees(data || []))
-  }, [])
+  // Load employees
+  const loadEmployees = async () => {
+    const { data } = await supabase.from('employees').select('id, name, position, department, functii_extra')
+      .eq('active', true).order('name')
+    setEmployees(data || [])
+  }
+  useEffect(() => { loadEmployees() }, [])
   
-  // Auto-set necesita_atestat când se schimbă tipul (utilaj→true, tesa→false)
+  // Auto-set filter când se schimbă tipul (doar la creare nouă, nu la edit)
   useEffect(() => {
-    setNecesitaSoferAtestat(tip === 'utilaj')
-    setSoferEmployeeId('')  // reset la schimbare tip
-    setSoferSearch('')
-  }, [tip])
+    if (!isEdit) {
+      setFilterFunctie(tip === 'utilaj' ? 'atestati' : 'toate')
+      setSoferEmployeeId('')
+      setSoferSearch('')
+    }
+  }, [tip, isEdit])
   
   // Active transportabile
   const activeTransportabile = useMemo(() => {
@@ -2498,7 +2525,7 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
     })
   }, [active])
   
-  // Mijloc principal (cap tractor / camion / autoutilitară pt utilaj; autoturism pt tesa)
+  // Mijloc principal
   const masiniPrincipale = useMemo(() => {
     return active.filter(a => {
       const t = a.logistica_categorii?.tip
@@ -2507,7 +2534,7 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
     })
   }, [active, tip])
   
-  // Remorci/Trailere/Semiremorci (doar pentru tip='utilaj')
+  // Remorci/Trailere/Semiremorci
   const remorciDisponibile = useMemo(() => {
     if (tip !== 'utilaj') return []
     return active.filter(a => {
@@ -2516,19 +2543,9 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
     })
   }, [active, tip])
   
-  // POZIȚII șoferi profesioniști (cu atestat / categorii speciale)
-  // SOFER (4) + MASINIST LA MASINI PENTRU TERASAMENTE (23) + MACARAGIU (1) + MECANIC AUTO (3) + MECANIC UTILAJE (3) + TEHNICIAN MASINI SI UTILAJE (1) = ~35 atestați
-  const POZITII_ATESTAT = ['SOFER', 'MASINIST', 'MACARAGIU', 'MECANIC AUTO', 'MECANIC UTILAJE', 'TEHNICIAN MASINI']
-  
   // Lista șoferi filtrată
   const soferiDisponibili = useMemo(() => {
-    let list = employees
-    if (necesitaSoferAtestat) {
-      list = list.filter(e => {
-        const pos = (e.position || '').toUpperCase()
-        return POZITII_ATESTAT.some(kw => pos.includes(kw))
-      })
-    }
+    let list = employees.filter(e => matchesFunctie(e, filterFunctie))
     if (soferSearch.trim()) {
       const q = soferSearch.toLowerCase()
       list = list.filter(e => 
@@ -2536,26 +2553,38 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
         (e.position || '').toLowerCase().includes(q)
       )
     }
-    return list.slice(0, 50)  // limit pt performanță
-  }, [employees, necesitaSoferAtestat, soferSearch])
+    return list.slice(0, 50)
+  }, [employees, filterFunctie, soferSearch])
   
-  // Activul transportat (pentru afișaj dimensiuni)
+  // Activul transportat
   const activSelectat = useMemo(() => 
     active.find(a => String(a.id) === String(activTransportatId)), 
     [active, activTransportatId]
   )
-  
-  // Mijlocul ales (pentru afișaj)
   const masinaAleasa = useMemo(() => active.find(a => String(a.id) === String(masinaId)), [active, masinaId])
   const remorcaAleasa = useMemo(() => active.find(a => String(a.id) === String(remorcaId)), [active, remorcaId])
   const soferAles = useMemo(() => employees.find(e => String(e.id) === String(soferEmployeeId)), [employees, soferEmployeeId])
   
-  // Verificare ARR la data transport
+  // Verificare ARR
   const arrExpirat = useMemo(() => {
     if (!activSelectat?.regim_transport_special) return false
     if (!activSelectat.valabilitate_autorizatie) return false
     return new Date(activSelectat.valabilitate_autorizatie) < new Date(dataTransport)
   }, [activSelectat, dataTransport])
+  
+  // Toggle funcție extra pentru șoferul ales (instant save în DB)
+  const toggleFunctieExtra = async (atestat) => {
+    if (!soferAles) return
+    const curent = soferAles.functii_extra || []
+    const nou = curent.includes(atestat) ? curent.filter(x => x !== atestat) : [...curent, atestat]
+    
+    const { error } = await supabase.from('employees').update({ functii_extra: nou }).eq('id', soferAles.id)
+    if (error) { showToast('Eroare update: ' + error.message, 'error'); return }
+    showToast(`✓ Funcții extra actualizate pentru ${soferAles.name}`)
+    
+    // Reload employees ca să reflecte schimbarea
+    await loadEmployees()
+  }
   
   const handleSave = async () => {
     // Validări
@@ -2614,28 +2643,38 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
       ora_plecare: oraPlecare || null,
       masina_id: masinaId ? Number(masinaId) : null,
       remorca_id: remorcaId ? Number(remorcaId) : null,
-      necesita_sofer_atestat: necesitaSoferAtestat,
+      necesita_sofer_atestat: filterFunctie !== 'toate',  // bazat pe filtrul ales
       sofer_gazpet: soferGazpet,
       sofer_employee_id: soferGazpet && soferEmployeeId ? Number(soferEmployeeId) : null,
-      sofer_id: null,  // legacy, nu mai folosim
+      sofer_id: null,  // legacy
       sofer_extern_nume: !soferGazpet ? soferExternNume.trim() : null,
       sofer_extern_telefon: !soferGazpet ? soferExternTel.trim() || null : null,
       necesita_regim_special: !!(activSelectat?.regim_transport_special),
       cost_estimat: costEstimat ? Number(costEstimat) : null,
       observatii: observatii.trim() || null,
-      status: 'cerut',
-      solicitant_id: profile?.id,
-      data_solicitarii: new Date().toISOString(),
     }
     
-    const { error } = await supabase.from('logistica_transporturi').insert(payload)
+    let error
+    if (isEdit) {
+      // Update — păstrăm status și solicitant_id originale
+      const result = await supabase.from('logistica_transporturi').update(payload).eq('id', T.id)
+      error = result.error
+    } else {
+      // Insert nou — adăugăm status='cerut' și solicitant_id
+      payload.status = 'cerut'
+      payload.solicitant_id = profile?.id
+      payload.data_solicitarii = new Date().toISOString()
+      const result = await supabase.from('logistica_transporturi').insert(payload)
+      error = result.error
+    }
+    
     setSaving(false)
     
     if (error) {
       showToast('Eroare la salvare: ' + error.message, 'error')
       return
     }
-    showToast('✓ Cererea de transport a fost trimisă!')
+    showToast(isEdit ? '✓ Cererea a fost actualizată!' : '✓ Cererea de transport a fost trimisă!')
     onSaved?.()
     onClose()
   }
@@ -2645,8 +2684,8 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
       <div style={{...S.card, width:'100%', maxWidth:780, maxHeight:'92vh', overflow:'auto', padding:24}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:18}}>
           <div>
-            <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:4}}>🚚 Comandă transport nou</div>
-            <div style={{fontSize:12, color:G.muted}}>Cererea va fi trimisă spre aprobare către Mitrache + Cristiana</div>
+            <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:4}}>{isEdit ? `✏️ Editează transport ${T.numar_transport || ''}` : '🚚 Comandă transport nou'}</div>
+            <div style={{fontSize:12, color:G.muted}}>{isEdit ? 'Modifici cererea — datele vor fi actualizate' : 'Cererea va fi trimisă spre aprobare către Mitrache + Cristiana'}</div>
           </div>
           <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
         </div>
@@ -2810,25 +2849,12 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
           )}
         </div>
         
-        {/* ȘOFER — bifă atestat + listă filtrată cu search din employees */}
+        {/* ȘOFER — filtru funcție + listă cu search din employees */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>👤 Șofer</div>
           
-          {/* Bifă necesită atestat */}
-          <div style={{marginBottom:10, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
-            <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none'}}>
-              <input type="checkbox" checked={necesitaSoferAtestat} onChange={e => { setNecesitaSoferAtestat(e.target.checked); setSoferEmployeeId(''); }} style={{width:16, height:16, accentColor:G.orange}} />
-              <span style={{fontSize:13, color:G.text, fontWeight:600}}>⚠️ Necesită șofer cu atestat / categorie specială</span>
-            </label>
-            <div style={{fontSize:11, color:G.muted, marginTop:4, marginLeft:24}}>
-              {necesitaSoferAtestat 
-                ? '→ Listă filtrată: doar șoferi profesioniști (SOFER, MASINIST, MACARAGIU, MECANIC AUTO/UTILAJE, OPERATOR)' 
-                : '→ Listă completă: orice angajat poate fi ales (cu search după nume)'}
-            </div>
-          </div>
-          
           {/* Toggle Gazpet / extern */}
-          <div style={{marginBottom:8}}>
+          <div style={{marginBottom:10}}>
             <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none'}}>
               <input type="checkbox" checked={soferGazpet} onChange={e => setSoferGazpet(e.target.checked)} style={{width:14, height:14, accentColor:G.green}} />
               <span style={{fontSize:13, color:G.text, fontWeight:600}}>Șofer Gazpet (din angajați)</span>
@@ -2837,13 +2863,16 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
           
           {soferGazpet ? (
             <div>
-              {/* Search */}
-              <div style={{marginBottom:8}}>
+              {/* Filtru funcție + Search */}
+              <div style={{display:'grid', gridTemplateColumns:'1fr 2fr', gap:8, marginBottom:8}}>
+                <select value={filterFunctie} onChange={e => { setFilterFunctie(e.target.value); setSoferEmployeeId(''); }} style={{...S.input, fontSize:13}}>
+                  {FUNCTII_TRANSPORT.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
                 <input 
                   type="text" 
                   value={soferSearch} 
                   onChange={e => setSoferSearch(e.target.value)} 
-                  placeholder={`🔍 Caută după nume sau funcție... (${soferiDisponibili.length}${necesitaSoferAtestat ? ' atestați' : ' disponibili'})`}
+                  placeholder={`🔍 Caută după nume sau funcție... (${soferiDisponibili.length} găsiți)`}
                   style={S.input}
                 />
               </div>
@@ -2852,7 +2881,7 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
               <div style={{maxHeight: 200, overflowY:'auto', border:`1px solid ${G.border}`, borderRadius:8, background:G.bg}}>
                 {soferiDisponibili.length === 0 ? (
                   <div style={{padding:14, textAlign:'center', color:G.muted, fontSize:12}}>
-                    {soferSearch ? `Niciun rezultat pentru "${soferSearch}"` : (necesitaSoferAtestat ? 'Niciun șofer atestat găsit' : 'Niciun angajat')}
+                    {soferSearch ? `Niciun rezultat pentru "${soferSearch}"` : 'Niciun angajat în această categorie'}
                   </div>
                 ) : (
                   soferiDisponibili.map(emp => (
@@ -2864,16 +2893,59 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
                       <input type="radio" name="sofer" checked={String(soferEmployeeId) === String(emp.id)} onChange={() => setSoferEmployeeId(emp.id)} style={{accentColor:G.logistica}} />
                       <div style={{flex:1}}>
                         <div style={{fontSize:13, color:G.text, fontWeight:600}}>{emp.name}</div>
-                        <div style={{fontSize:10, color:G.muted}}>{emp.position || '—'}{emp.department ? ` · ${emp.department}` : ''}</div>
+                        <div style={{fontSize:10, color:G.muted}}>
+                          {emp.position || '—'}{emp.department ? ` · ${emp.department}` : ''}
+                          {emp.functii_extra && emp.functii_extra.length > 0 && (
+                            <span style={{color:G.logistica, marginLeft:6}}>· extra: {emp.functii_extra.join(', ')}</span>
+                          )}
+                        </div>
                       </div>
                     </label>
                   ))
                 )}
               </div>
               
+              {/* Confirmare șofer ales + widget funcții extra */}
               {soferAles && (
-                <div style={{marginTop:8, padding:8, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:6, fontSize:12, color:G.text}}>
-                  ✓ Șofer ales: <strong>{soferAles.name}</strong> · <span style={{color:G.muted}}>{soferAles.position}</span>
+                <div style={{marginTop:8, padding:10, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:6}}>
+                  <div style={{fontSize:12, color:G.text, marginBottom:6}}>
+                    ✓ Șofer ales: <strong>{soferAles.name}</strong> · <span style={{color:G.muted}}>{soferAles.position}</span>
+                  </div>
+                  
+                  {/* Mini-widget editare funcții extra */}
+                  <div style={{paddingTop:8, borderTop:`1px solid ${G.green}33`, marginTop:6}}>
+                    <div style={{fontSize:10, color:G.muted, marginBottom:6, fontWeight:600}}>
+                      ✨ FUNCȚII EXTRA ALE ACESTUI ANGAJAT (atestate / categorii suplimentare):
+                    </div>
+                    <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+                      {ATESTATE_DISPONIBILE.map(at => {
+                        const active = (soferAles.functii_extra || []).includes(at)
+                        const inPos = (soferAles.position || '').toUpperCase().includes(at)
+                        return (
+                          <label key={at} style={{
+                            display:'flex', alignItems:'center', gap:4, padding:'4px 8px', borderRadius:6,
+                            cursor: inPos ? 'default' : 'pointer',
+                            background: active ? G.logistica + '33' : (inPos ? G.surface : G.bg),
+                            border:`1px solid ${active ? G.logistica : G.border}`,
+                            opacity: inPos ? 0.6 : 1
+                          }} title={inPos ? 'Deja inclus în poziția principală' : 'Click pentru a comuta'}>
+                            <input 
+                              type="checkbox" 
+                              checked={active || inPos} 
+                              disabled={inPos}
+                              onChange={() => !inPos && toggleFunctieExtra(at)} 
+                              style={{width:12, height:12, accentColor:G.logistica}} 
+                            />
+                            <span style={{fontSize:10, color:G.text, fontWeight:600}}>{at}</span>
+                            {inPos && <span style={{fontSize:9, color:G.muted}}>(principal)</span>}
+                          </label>
+                        )
+                      })}
+                    </div>
+                    <div style={{fontSize:9, color:G.muted, marginTop:4}}>
+                      💡 Bifează atestatele suplimentare ale angajatului. Salvarea e instant. Ex: TOMA RAZVAN inginer + șofer profesionist.
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -2894,14 +2966,15 @@ function ComandaTransportModal({ active, sites, profile, onClose, onSaved, showT
         {/* INFO solicitant */}
         <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, marginBottom:14, fontSize:12, color:G.muted}}>
           📝 Solicitant: <strong style={{color:G.text}}>{profile?.name || 'tu'}</strong>
-          <span style={{marginLeft:8}}>· Status inițial: <StatusBadge status="cerut" /></span>
+          <span style={{marginLeft:8}}>· Status {isEdit ? 'actual' : 'inițial'}: <StatusBadge status={isEdit ? T.status : 'cerut'} /></span>
+          {isEdit && T.numar_transport && <span style={{marginLeft:8, fontFamily:'monospace', color:G.logistica, fontWeight:700}}>· {T.numar_transport}</span>}
         </div>
         
         {/* BUTOANE */}
         <div style={{display:'flex', gap:10, justifyContent:'flex-end'}}>
           <button onClick={onClose} style={S.btnS} disabled={saving}>Anulează</button>
           <button onClick={handleSave} disabled={saving} style={{...S.btnP, background:G.green}}>
-            {saving ? 'Salvez...' : '✓ Trimite cererea'}
+            {saving ? 'Salvez...' : (isEdit ? '💾 Salvează modificările' : '✓ Trimite cererea')}
           </button>
         </div>
       </div>
@@ -2916,6 +2989,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
   const [statusFilter, setStatusFilter] = useState('Toate')
   const [perioadaFilter, setPerioadaFilter] = useState('luna')
   const [showComanda, setShowComanda] = useState(false)
+  const [editTransport, setEditTransport] = useState(null)  // transportul în edit mode
   
   const fetchList = async () => {
     setLoading(true)
@@ -3042,6 +3116,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                   <th style={thStyle}>Șofer</th>
                   <th style={thStyle}>Solicitant</th>
                   <th style={thStyle}>Status</th>
+                  <th style={thStyle}>Acțiuni</th>
                 </tr>
               </thead>
               <tbody>
@@ -3066,10 +3141,10 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                           <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.activ_transportat.cod_intern} · {t.activ_transportat.marca}</div>
                           <div style={{fontSize:10, color:G.muted}}>{t.activ_transportat.model}{t.activ_transportat.regim_transport_special && <span style={{color:G.red, marginLeft:4}}>⚠️ Regim special</span>}</div>
                           {/* Mijloc transport (combo cap tractor + remorca) */}
-                          {(t.masina || t.remorca) && (
+                          {(t.masina?.cod_intern || t.remorca?.cod_intern) && (
                             <div style={{marginTop:4, fontSize:10, color:G.logistica}}>
-                              🚛 {t.masina ? `${t.masina.cod_intern}` : '—'}
-                              {t.remorca && <span> + {t.remorca.cod_intern} <span style={{color:G.muted}}>({t.remorca.logistica_categorii?.tip})</span></span>}
+                              🚛 {t.masina?.cod_intern ? `${t.masina.cod_intern}` : <span style={{color:G.muted}}>fără mijloc</span>}
+                              {t.remorca?.cod_intern && <span> + {t.remorca.cod_intern} <span style={{color:G.muted}}>({t.remorca.logistica_categorii?.tip})</span></span>}
                             </div>
                           )}
                         </div>
@@ -3112,6 +3187,20 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                     <td style={tdStyle}>
                       <StatusBadge status={t.status} />
                     </td>
+                    <td style={tdStyle}>
+                      {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
+                      {t.status === 'cerut' ? (
+                        <button 
+                          onClick={() => setEditTransport(t)}
+                          style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
+                          title="Editează cererea (doar înainte de aprobare)"
+                        >
+                          ✏️ Edit
+                        </button>
+                      ) : (
+                        <span style={{fontSize:10, color:G.muted}}>—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -3120,13 +3209,26 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
         )}
       </div>
       
-      {/* Modal Comandă */}
+      {/* Modal Comandă (creare nouă) */}
       {showComanda && (
         <ComandaTransportModal
           active={active}
           sites={sites}
           profile={profile}
           onClose={() => setShowComanda(false)}
+          onSaved={fetchList}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal Edit transport */}
+      {editTransport && (
+        <ComandaTransportModal
+          active={active}
+          sites={sites}
+          profile={profile}
+          initialTransport={editTransport}
+          onClose={() => setEditTransport(null)}
           onSaved={fetchList}
           showToast={showToast}
         />
