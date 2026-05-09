@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
+import LOGO_B64 from './logo.js'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -3152,6 +3153,7 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [filterFunctie, setFilterFunctie] = useState('soferi')  // default doar șoferi atestați
   const [actionLoading, setActionLoading] = useState(false)
   const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
+  const [showAviz, setShowAviz] = useState(false)  // PAS 5F: deschide modal aviz
   
   const isAprobator = isAprobatorTransport(profile)
   const isSolicitant = profile?.id === T.solicitant_id
@@ -3417,6 +3419,19 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
           </div>
         )}
         
+        {/* Indicator aviz generat/trimis */}
+        {T.aviz_generat && T.aviz_data && (
+          <div style={{marginBottom:12, padding:10, background:G.purple+'11', border:`1px solid ${G.purple}55`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.purple, fontWeight:700, marginBottom:4}}>📄 AVIZ GENERAT:</div>
+            <div style={{fontSize:12, color:G.text}}>
+              la {new Date(T.aviz_data).toLocaleString('ro-RO')}
+              {T.aviz_emails_trimis && T.aviz_emails_trimis.length > 0 && (
+                <span style={{marginLeft:8, color:G.muted}}>· trimis la: {T.aviz_emails_trimis.join(', ')}</span>
+              )}
+            </div>
+          </div>
+        )}
+        
         {/* Form confirmare primire (pentru status='in_tranzit') */}
         {showConfirmPrimire && (
           <div style={{marginBottom:12, padding:12, background:G.green+'11', border:`2px solid ${G.green}`, borderRadius:8}}>
@@ -3577,13 +3592,451 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
             </>
           )}
           
+          {/* === BUTON AVIZ ÎNSOȚIRE MARFĂ === */}
+          {/* Vizibil pentru status: aprobat, in_tranzit, livrat (nu pentru cerut/respins/anulat) */}
+          {['aprobat', 'programat', 'in_tranzit', 'livrat'].includes(status) && !showRespingere && !showAlegeSofer && !showConfirmPrimire && (
+            <button onClick={() => setShowAviz(true)} style={{...S.btnS, color:G.purple, borderColor:G.purple+'88', fontWeight:700}} title="Generează aviz însoțire marfă (printabil + email)">
+              📄 Aviz {T.aviz_generat && <span style={{marginLeft:4, color:G.green}}>✓</span>}
+            </button>
+          )}
+          
           {/* Fără acțiuni dacă livrat / anulat / respins */}
-          {['livrat', 'anulat', 'respins'].includes(status) && (
-            <div style={{fontSize:12, color:G.muted, fontStyle:'italic', alignSelf:'center'}}>Transport finalizat — fără acțiuni disponibile</div>
+          {['livrat', 'anulat', 'respins'].includes(status) && !showConfirmPrimire && (
+            <div style={{fontSize:12, color:G.muted, fontStyle:'italic', alignSelf:'center'}}>
+              {status === 'livrat' ? 'Transport livrat' : status === 'respins' ? 'Cerere respinsă' : 'Cerere anulată'}
+            </div>
           )}
         </div>
       </div>
+      
+      {/* Modal Aviz Însoțire Marfă (PAS 5F) */}
+      {showAviz && (
+        <AvizInsotireMarfaModal 
+          transport={T} 
+          profile={profile} 
+          onClose={() => setShowAviz(false)} 
+          showToast={showToast}
+          onTrimisEmail={() => { onChanged?.() }}
+        />
+      )}
     </div>
+  )
+}
+
+// ===========================================================================
+// PAS 5F — AVIZ ÎNSOȚIRE MARFĂ (HTML printabil A4) + EMAIL MAILTO + SETĂRI
+// ===========================================================================
+
+// --- Modal Setări Destinatari Email (admin) ---
+function SetariEmailDestinatariModal({ valoare, onClose, onSaved, showToast }) {
+  const initial = (valoare || '').split(',').map(s => s.trim()).filter(Boolean)
+  const [emails, setEmails] = useState(initial)
+  const [newEmail, setNewEmail] = useState('')
+  const [saving, setSaving] = useState(false)
+  
+  const isValidEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)
+  
+  const handleAdd = () => {
+    const trimmed = newEmail.trim().toLowerCase()
+    if (!trimmed) return
+    if (!isValidEmail(trimmed)) { showToast('Email invalid', 'warn'); return }
+    if (emails.includes(trimmed)) { showToast('Email deja în listă', 'warn'); return }
+    setEmails([...emails, trimmed])
+    setNewEmail('')
+  }
+  
+  const handleRemove = (e) => setEmails(emails.filter(x => x !== e))
+  
+  const handleSave = async () => {
+    if (emails.length === 0) { showToast('Adaugă cel puțin un destinatar', 'warn'); return }
+    setSaving(true)
+    const { error } = await supabase.from('logistica_setari').upsert({
+      key: 'aviz_email_destinatari',
+      value: emails.join(','),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'key' })
+    setSaving(false)
+    if (error) { showToast('Eroare salvare: ' + error.message, 'error'); return }
+    showToast('✓ Destinatari email salvați')
+    onSaved?.(emails.join(','))
+    onClose()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:540, padding:24}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize:17, fontWeight:700, color:G.text}}>⚙️ Destinatari email aviz</div>
+            <div style={{fontSize:11, color:G.muted, marginTop:2}}>Vor primi în CC mailul când se trimite aviz</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Lista chips */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6}}>Destinatari curenți ({emails.length})</div>
+          <div style={{display:'flex', flexWrap:'wrap', gap:6, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, minHeight:50}}>
+            {emails.length === 0 && <div style={{fontSize:12, color:G.muted, fontStyle:'italic'}}>Niciun destinatar adăugat</div>}
+            {emails.map(e => (
+              <span key={e} style={{display:'inline-flex', alignItems:'center', gap:6, padding:'4px 6px 4px 10px', background:G.logistica + '22', border:`1px solid ${G.logistica}55`, borderRadius:16, fontSize:12, color:G.text}}>
+                <span style={{maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>📧 {e}</span>
+                <button onClick={() => handleRemove(e)} style={{background:'none', border:'none', color:G.red, cursor:'pointer', fontSize:14, padding:0, lineHeight:1, display:'flex', alignItems:'center', justifyContent:'center', width:18, height:18, borderRadius:'50%'}} title="Șterge">×</button>
+              </span>
+            ))}
+          </div>
+        </div>
+        
+        {/* Add new */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6}}>Adaugă email nou</div>
+          <div style={{display:'flex', gap:8}}>
+            <input 
+              type="email" 
+              value={newEmail} 
+              onChange={e => setNewEmail(e.target.value)} 
+              onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
+              placeholder="ex: nume.prenume@gazpet.ro" 
+              style={{...S.input, flex:1}} 
+            />
+            <button onClick={handleAdd} style={{...S.btnP, background:G.green, padding:'8px 14px'}}>+ Adaugă</button>
+          </div>
+        </div>
+        
+        {/* Actions */}
+        <div style={{display:'flex', gap:8, justifyContent:'flex-end', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          <button onClick={onClose} style={S.btnS}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background:G.green}}>
+            {saving ? 'Se salvează...' : '💾 Salvează'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Modal AVIZ ÎNSOȚIRE MARFĂ (HTML printabil A4) ---
+function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onTrimisEmail }) {
+  const [setariFirma, setSetariFirma] = useState({})
+  const [destinatari, setDestinatari] = useState([])
+  const [showSetariEmail, setShowSetariEmail] = useState(false)
+  const [trimisLoading, setTrimisLoading] = useState(false)
+  
+  const isAdmin = ['admin', 'superadmin'].includes(profile?.role)
+  
+  // Load setări firmă + destinatari
+  useEffect(() => {
+    supabase.from('logistica_setari').select('key, value').or(
+      `key.eq.firma_nume,key.eq.firma_cui,key.eq.firma_reg_com,key.eq.firma_adresa,key.eq.firma_telefon,key.eq.firma_email,key.eq.aviz_email_destinatari`
+    ).then(({ data }) => {
+      const map = Object.fromEntries((data || []).map(s => [s.key, s.value]))
+      setSetariFirma(map)
+      setDestinatari((map.aviz_email_destinatari || '').split(',').map(s => s.trim()).filter(Boolean))
+    })
+  }, [])
+  
+  // Print A4
+  const handlePrint = () => {
+    window.print()
+  }
+  
+  // Trimite email cu mailto (deschide client email cu destinatarii pre-completați)
+  const handleSendEmail = async () => {
+    if (destinatari.length === 0) {
+      showToast('Niciun destinatar configurat. Apasă ⚙️ Setări destinatari.', 'warn')
+      return
+    }
+    setTrimisLoading(true)
+    
+    // Construct subject + body
+    const subject = `Aviz însoțire marfă - ${T.numar_transport}`
+    const body = [
+      `Bună ziua,`,
+      ``,
+      `Vă transmitem avizul de însoțire marfă pentru transportul ${T.numar_transport}.`,
+      ``,
+      `📦 DETALII TRANSPORT:`,
+      `• Activ transportat: ${T.tip === 'utilaj' && T.activ_transportat ? `${T.activ_transportat.cod_intern || ''} ${T.activ_transportat.marca || ''} ${T.activ_transportat.model || ''}`.trim() : (T.continut_descriere || '—')}`,
+      `• Plecare: ${formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}`,
+      `• Destinație: ${formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}`,
+      `• Data transport: ${T.data_transport}${T.ora_plecare ? ' · ' + T.ora_plecare.substring(0,5) : ''}`,
+      `• Șofer: ${T.sofer_employee?.name || T.sofer_extern_nume || '—'}`,
+      `• Mijloc transport: ${T.masina ? formatActiv(T.masina) : '—'}${T.remorca ? ' + ' + formatActiv(T.remorca) : ''}`,
+      `• Manager destinație: ${T.manager_destinatie?.name || '—'}`,
+      ``,
+      `Documentul printabil este atașat (vă rugăm să printați avizul HTML din aplicație și să-l trimiteți semnat).`,
+      ``,
+      `Cu stimă,`,
+      profile?.name || 'Echipa Gazpet Instal',
+      `${setariFirma.firma_nume || 'GAZPET INSTAL SRL'}`
+    ].join('\n')
+    
+    const mailtoUrl = `mailto:${destinatari.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    window.location.href = mailtoUrl
+    
+    // Update DB: marchează aviz trimis
+    const { error } = await supabase.from('logistica_transporturi').update({
+      aviz_generat: true,
+      aviz_data: new Date().toISOString(),
+      aviz_emails_trimis: destinatari
+    }).eq('id', T.id)
+    
+    setTrimisLoading(false)
+    if (error) { showToast('Eroare actualizare DB: ' + error.message, 'error'); return }
+    showToast(`📧 Mail deschis în client (${destinatari.length} destinatari)`)
+    onTrimisEmail?.()
+  }
+  
+  // Date afișate
+  const dataTransport = T.data_transport ? new Date(T.data_transport).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+  const oraPlecare = T.ora_plecare ? T.ora_plecare.substring(0,5) : '—'
+  const numarAviz = `AVZ-${T.numar_transport.replace('TRP-', '')}`
+  
+  return (
+    <>
+      <div className="aviz-modal-overlay" style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1050, display:'flex', alignItems:'center', justifyContent:'center', padding:20, overflowY:'auto'}}>
+        <div style={{width:'100%', maxWidth:850, background:'#fff', borderRadius:8, position:'relative'}}>
+          
+          {/* Toolbar (HIDE pe print) */}
+          <div className="aviz-toolbar no-print" style={{position:'sticky', top:0, padding:'12px 20px', background:'#1F2937', color:'#fff', borderRadius:'8px 8px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, zIndex:10, flexWrap:'wrap'}}>
+            <div style={{fontSize:14, fontWeight:700}}>
+              📄 Aviz Însoțire Marfă · {numarAviz}
+            </div>
+            <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+              {isAdmin && (
+                <button onClick={() => setShowSetariEmail(true)} style={{padding:'7px 12px', background:'#374151', color:'#fff', border:'1px solid #4B5563', borderRadius:6, fontSize:12, cursor:'pointer', fontWeight:600}}>
+                  ⚙️ Setări destinatari
+                </button>
+              )}
+              <button onClick={handleSendEmail} disabled={trimisLoading} style={{padding:'7px 14px', background:'#2563EB', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                {trimisLoading ? '...' : `📧 Trimite (${destinatari.length})`}
+              </button>
+              <button onClick={handlePrint} style={{padding:'7px 14px', background:'#16A34A', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                🖨️ Print
+              </button>
+              <button onClick={onClose} style={{padding:'7px 12px', background:'#DC2626', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                ✕ Închide
+              </button>
+            </div>
+          </div>
+          
+          {/* === CONȚINUT AVIZ A4 === */}
+          <div className="aviz-content" style={{padding:'30px 40px', color:'#111', fontFamily:'"Times New Roman", serif', fontSize:12, lineHeight:1.4}}>
+            
+            {/* Antet cu logo */}
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', borderBottom:'3px solid #1E40AF', paddingBottom:15, marginBottom:20}}>
+              <div style={{display:'flex', alignItems:'center', gap:14}}>
+                <img src={LOGO_B64} alt="Gazpet Instal" style={{height:65, width:'auto', objectFit:'contain'}} />
+                <div>
+                  <div style={{fontSize:18, fontWeight:'bold', color:'#1E40AF', letterSpacing:.5}}>{setariFirma.firma_nume || 'GAZPET INSTAL SRL'}</div>
+                  <div style={{fontSize:10, color:'#374151', marginTop:3}}>CUI: {setariFirma.firma_cui || '—'} · {setariFirma.firma_reg_com || '—'}</div>
+                  <div style={{fontSize:10, color:'#374151'}}>{setariFirma.firma_adresa || '—'}</div>
+                  <div style={{fontSize:10, color:'#374151'}}>Tel: {setariFirma.firma_telefon || '—'} · Email: {setariFirma.firma_email || '—'}</div>
+                </div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:22, fontWeight:'bold', color:'#1E40AF', letterSpacing:1}}>AVIZ</div>
+                <div style={{fontSize:14, fontWeight:'bold', color:'#374151'}}>ÎNSOȚIRE MARFĂ</div>
+                <div style={{fontSize:11, color:'#6B7280', marginTop:6, fontWeight:'bold'}}>Nr. {numarAviz}</div>
+                <div style={{fontSize:10, color:'#6B7280'}}>din {new Date().toLocaleDateString('ro-RO')}</div>
+              </div>
+            </div>
+            
+            {/* Date transport */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:8, letterSpacing:.5}}>📋 Date transport</div>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+                <tbody>
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', width:'25%', color:'#374151', verticalAlign:'top'}}>Nr. Transport:</td>
+                    <td style={{padding:'4px 8px', fontFamily:'monospace', fontSize:13, fontWeight:'bold', color:'#1E40AF'}}>{T.numar_transport}</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', width:'20%', color:'#374151', verticalAlign:'top'}}>Data:</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold'}}>{dataTransport} {oraPlecare !== '—' && `· ${oraPlecare}`}</td>
+                  </tr>
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Tip transport:</td>
+                    <td style={{padding:'4px 8px'}}>{T.tip === 'utilaj' ? '🚛 Transport utilaj' : '📄 Transport mic / TESA'}</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Status:</td>
+                    <td style={{padding:'4px 8px'}}>
+                      {(() => {
+                        const statusInfo = {
+                          aprobat: { text: '✓ Aprobat - În pregătire', color: '#16A34A', bg: '#DCFCE7' },
+                          programat: { text: '📅 Programat - În pregătire', color: '#2563EB', bg: '#DBEAFE' },
+                          in_tranzit: { text: '🚚 În curs de livrare', color: '#D97706', bg: '#FEF3C7' },
+                          livrat: { text: '✅ Livrat', color: '#16A34A', bg: '#DCFCE7' },
+                          cerut: { text: '⏳ Cerut', color: '#D97706', bg: '#FEF3C7' },
+                          respins: { text: '✗ Respins', color: '#DC2626', bg: '#FEE2E2' },
+                          anulat: { text: '⊘ Anulat', color: '#6B7280', bg: '#F3F4F6' },
+                        }[T.status] || { text: T.status, color: '#6B7280', bg: '#F3F4F6' }
+                        return (
+                          <span style={{display:'inline-block', padding:'3px 10px', background:statusInfo.bg, color:statusInfo.color, borderRadius:4, fontWeight:'bold', fontSize:11, border:`1px solid ${statusInfo.color}33`}}>
+                            {statusInfo.text}
+                          </span>
+                        )
+                      })()}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Date emitent / destinatar */}
+            <div style={{display:'flex', gap:14, marginBottom:18}}>
+              <div style={{flex:1, padding:10, border:'2px solid #93C5FD', borderRadius:6, background:'#EFF6FF'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>📤 EXPEDITOR</div>
+                <div style={{fontSize:12, fontWeight:'bold', color:'#111'}}>{setariFirma.firma_nume || 'GAZPET INSTAL SRL'}</div>
+                <div style={{fontSize:10, color:'#374151', marginTop:3}}>CUI: {setariFirma.firma_cui || '—'}</div>
+                <div style={{fontSize:10, color:'#374151'}}>De la: {formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}</div>
+                {T.manager_plecare && <div style={{fontSize:10, color:'#374151', marginTop:3}}>Manager plecare: <strong>{T.manager_plecare.name}</strong></div>}
+              </div>
+              <div style={{flex:1, padding:10, border:'2px solid #FCA5A5', borderRadius:6, background:'#FEF2F2'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#DC2626', textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>📥 DESTINATAR</div>
+                <div style={{fontSize:12, fontWeight:'bold', color:'#111'}}>{T.destinatie_tip === 'site' && T.destinatie_site ? T.destinatie_site.name : (T.destinatie_tip === 'sediu' ? (setariFirma.firma_nume || 'GAZPET INSTAL SRL') : 'Destinație externă')}</div>
+                <div style={{fontSize:10, color:'#374151', marginTop:3}}>La: {formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}</div>
+                {T.manager_destinatie && <div style={{fontSize:10, color:'#374151', marginTop:3}}>Manager destinație: <strong>{T.manager_destinatie.name}</strong></div>}
+              </div>
+            </div>
+            
+            {/* Detalii activ transportat */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:8, letterSpacing:.5}}>📦 Conținut transport</div>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11, border:'1px solid #D1D5DB'}}>
+                <thead>
+                  <tr style={{background:'#F3F4F6'}}>
+                    <th style={{padding:'6px 8px', textAlign:'left', fontWeight:'bold', borderBottom:'2px solid #6B7280', width:30}}>Nr.</th>
+                    <th style={{padding:'6px 8px', textAlign:'left', fontWeight:'bold', borderBottom:'2px solid #6B7280'}}>Denumire</th>
+                    <th style={{padding:'6px 8px', textAlign:'left', fontWeight:'bold', borderBottom:'2px solid #6B7280'}}>Cod / Serii</th>
+                    <th style={{padding:'6px 8px', textAlign:'center', fontWeight:'bold', borderBottom:'2px solid #6B7280', width:60}}>UM</th>
+                    <th style={{padding:'6px 8px', textAlign:'center', fontWeight:'bold', borderBottom:'2px solid #6B7280', width:60}}>Cant.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>1</td>
+                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
+                      {T.tip === 'utilaj' && T.activ_transportat ? (
+                        <>
+                          <div style={{fontWeight:'bold'}}>{T.activ_transportat.marca} {T.activ_transportat.model}</div>
+                          {T.activ_transportat.regim_transport_special && <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
+                        </>
+                      ) : (
+                        <div style={{whiteSpace:'pre-wrap'}}>{T.continut_descriere || '—'}</div>
+                      )}
+                    </td>
+                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
+                      {T.tip === 'utilaj' && T.activ_transportat ? (
+                        <>
+                          {T.activ_transportat.cod_intern && <div>Cod: <strong>{T.activ_transportat.cod_intern}</strong></div>}
+                          {T.activ_transportat.nr_inmatriculare && <div>Nr.: {T.activ_transportat.nr_inmatriculare}</div>}
+                        </>
+                      ) : '—'}
+                    </td>
+                    <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{T.tip === 'utilaj' ? 'buc' : '—'}</td>
+                    <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>{T.tip === 'utilaj' ? '1' : '—'}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Mijloc transport + șofer */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:8, letterSpacing:.5}}>🚚 Mijloc transport & Șofer</div>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+                <tbody>
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', width:'25%', color:'#374151', verticalAlign:'top'}}>Mijloc principal:</td>
+                    <td style={{padding:'4px 8px'}}>{T.masina ? formatActiv(T.masina) : '—'}</td>
+                  </tr>
+                  {T.remorca && (
+                    <tr>
+                      <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Remorcă/Trailer:</td>
+                      <td style={{padding:'4px 8px'}}>{formatActiv(T.remorca)} {T.remorca.logistica_categorii?.tip && `(${T.remorca.logistica_categorii.tip})`}</td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Șofer:</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold'}}>
+                      {T.sofer_employee?.name || T.sofer_extern_nume || '—'}
+                      {T.sofer_employee?.position && <span style={{fontWeight:'normal', color:'#6B7280', marginLeft:6}}>({T.sofer_employee.position})</span>}
+                      {T.sofer_extern_telefon && <span style={{fontWeight:'normal', color:'#6B7280', marginLeft:6}}>· Tel: {T.sofer_extern_telefon}</span>}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Observații */}
+            {T.observatii && (
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:6, letterSpacing:.5}}>📝 Observații</div>
+                <div style={{padding:8, background:'#F9FAFB', border:'1px solid #E5E7EB', borderRadius:4, fontSize:11, whiteSpace:'pre-wrap'}}>{T.observatii}</div>
+              </div>
+            )}
+            
+            {/* Spații semnătură */}
+            <div style={{marginTop:30, display:'flex', gap:14, justifyContent:'space-between'}}>
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:24}}>EXPEDITOR / Manager plecare</div>
+                <div style={{fontSize:10, color:'#6B7280'}}>{T.manager_plecare?.name || '—'}</div>
+                <div style={{fontSize:9, color:'#9CA3AF', marginTop:4}}>Semnătură & Ștampilă</div>
+              </div>
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:24}}>ȘOFER</div>
+                <div style={{fontSize:10, color:'#6B7280'}}>{T.sofer_employee?.name || T.sofer_extern_nume || '—'}</div>
+                <div style={{fontSize:9, color:'#9CA3AF', marginTop:4}}>Semnătură</div>
+              </div>
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:24}}>DESTINATAR / Manager destinație</div>
+                <div style={{fontSize:10, color:'#6B7280'}}>{T.manager_destinatie?.name || '—'}</div>
+                <div style={{fontSize:9, color:'#9CA3AF', marginTop:4}}>Semnătură & Ștampilă</div>
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div style={{marginTop:30, paddingTop:8, borderTop:'1px dashed #D1D5DB', textAlign:'center', fontSize:9, color:'#9CA3AF'}}>
+              Document generat automat din ERP Gazpet Instal · {new Date().toLocaleString('ro-RO')} · Operator: {profile?.name || '—'}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* CSS print */}
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          .aviz-modal-overlay, .aviz-modal-overlay * { visibility: visible; }
+          .aviz-modal-overlay { 
+            position: absolute !important; 
+            inset: 0 !important; 
+            background: white !important;
+            padding: 0 !important;
+            display: block !important;
+          }
+          .aviz-modal-overlay > div { 
+            max-width: none !important; 
+            width: 100% !important; 
+            border-radius: 0 !important;
+            box-shadow: none !important;
+          }
+          .no-print, .aviz-toolbar { display: none !important; }
+          .aviz-content { 
+            padding: 15mm !important; 
+            font-size: 11pt !important;
+          }
+          @page { size: A4; margin: 10mm; }
+        }
+      `}</style>
+      
+      {/* Modal Setări destinatari email */}
+      {showSetariEmail && (
+        <SetariEmailDestinatariModal 
+          valoare={destinatari.join(',')}
+          onClose={() => setShowSetariEmail(false)}
+          onSaved={(newVal) => setDestinatari(newVal.split(',').map(s => s.trim()).filter(Boolean))}
+          showToast={showToast}
+        />
+      )}
+    </>
   )
 }
 

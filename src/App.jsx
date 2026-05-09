@@ -814,8 +814,8 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
           </div>
           {mode==='ore'?(
             <>
-              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:110}}/></div>
-              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:110}}/></div>
+              <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:140}}/></div>
+              <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:140}}/></div>
               {pNet!==null&&<div style={{paddingTop:18,fontSize:12,color:G.yellow,fontWeight:700}}>{minsToHM(pNet)} net</div>}
               {emp.employee_salaries && (emp.employee_salaries[0]?.work_hours_per_day || emp.employee_salaries.work_hours_per_day) && (
                 <div style={{paddingTop:18,fontSize:11,color:G.muted}}>
@@ -2002,16 +2002,19 @@ function AdminPage() {
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
 
   const [calYear,setCalYear]=useState(new Date().getFullYear())
+  // Date Identificare Firmă (din logistica_setari) — folosite pentru aviz, contracte HR, contracte comercial
+  const [firmaSettings, setFirmaSettings] = useState({})
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st,ps]=await Promise.all([
+    const [s,p,e,c,st,ps,fs]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
       supabase.from('calendar_days').select('*').order('date').limit(60),
       supabase.from('settings').select('*'),
       supabase.from('profile_sites').select('*'),
+      supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
     ])
     setSites(s.data||[])
     // Attach site_ids to each manager
@@ -2019,7 +2022,16 @@ function AdminPage() {
     setManagers(mgrs)
     setEmployees(e.data||[]); setCalDays(c.data||[])
     const sm={}; (st.data||[]).forEach(x=>{sm[x.key]=x.value}); setSettings(sm)
+    const fm={}; (fs.data||[]).forEach(x=>{fm[x.key]=x.value}); setFirmaSettings(fm)
     setLoad(false)
+  }
+  
+  // Save date firmă (în logistica_setari)
+  const saveFirmaSetting = async (k, v) => {
+    const { error } = await supabase.from('logistica_setari').upsert({ key: k, value: v, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+    if (error) { showToast('Eroare salvare: ' + error.message, 'error'); return }
+    setFirmaSettings(prev => ({ ...prev, [k]: v }))
+    showToast('✓ Salvat')
   }
 
   const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
@@ -2517,7 +2529,37 @@ function AdminPage() {
       )}
 
       {tab==='settings'&&(
-        <div style={{maxWidth:500}}>
+        <div style={{maxWidth:680}}>
+          {/* === DATE IDENTIFICARE FIRMĂ — folosite pentru aviz, contracte HR, contracte Comercial === */}
+          <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.blue}`}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text}}>🏢 Date Identificare Firmă</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:18,lineHeight:1.5}}>
+              Aceste date vor apărea pe <strong>avizele de însoțire marfă</strong>, <strong>contractele cu terți</strong> (modul Comercial) și <strong>contractele de muncă</strong> (modul HR).
+            </div>
+            {[
+              ['🏢 Denumire Societate', 'firma_nume', 'GAZPET INSTAL SRL'],
+              ['🏷️ CUI / CIF', 'firma_cui', 'RO 12345678'],
+              ['📋 Nr. Reg. Comerțului', 'firma_reg_com', 'J29/...'],
+              ['📍 Sediu Social', 'firma_adresa', 'Str. ..., Localitate, Județ'],
+              ['📞 Telefon', 'firma_telefon', '0244...'],
+              ['📧 Email companie', 'firma_email', 'office@...'],
+            ].map(([label, key, placeholder]) => (
+              <div key={key} style={{marginBottom:14}}>
+                <Lbl>{label}</Lbl>
+                <div style={{display:'flex',gap:9}}>
+                  <input 
+                    style={S.input} 
+                    type="text" 
+                    placeholder={placeholder}
+                    value={firmaSettings[key]||''} 
+                    onChange={e=>setFirmaSettings(prev=>({...prev,[key]:e.target.value}))} 
+                  />
+                  <button onClick={()=>saveFirmaSetting(key,firmaSettings[key]||'')} style={{...S.btnP,whiteSpace:'nowrap',background:G.blue}}>Salvează</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          
           <div style={{...S.card,padding:22,marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:18}}>⚙️ Setări Generale</div>
             {[['Valoare Diurnă (RON/zi)','diurna_amount','50'],['Ore normale/zi','work_hours_per_day','8'],['Valoare Supliment Hrană (RON/zi)','meal_supplement_amount','15']].map(([l,k,ph])=>(
