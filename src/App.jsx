@@ -2216,7 +2216,7 @@ function AdminPage() {
   const [siteName,setSiteName]=useState(''); const [addingSite,setAddingSite]=useState(false)
   const [editSiteItem,setEditSiteItem]=useState(null); const [editSiteName,setEditSiteName]=useState('')
   const [deletingSite,setDeletingSite]=useState(null) // site being confirmed for delete
-  const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [creating,setCreating]=useState(false)
+  const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [nDept,setNDept]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [eHireDate,setEHireDate]=useState(''); const [addingE,setAddingE]=useState(false)
   const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
@@ -2272,15 +2272,29 @@ function AdminPage() {
   }
   const saveEditMgr=async()=>{
     if(!editMgr) return
-    const {error}=await supabase.from('profiles').update({name:editMgr.name,role:editMgr.role}).eq('id',editMgr.id)
+    const updates = {
+      name: editMgr.name,
+      role: editMgr.role,
+      department: editMgr.department || null
+    }
+    // Adaug email update doar dacă e diferit (evităm trigger-uri inutile)
+    if (editMgr.email && editMgr.email !== editMgr.original_email) {
+      updates.email = editMgr.email
+    }
+    const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
       // Update sites in profile_sites table
       await supabase.from('profile_sites').delete().eq('profile_id',editMgr.id)
-      if(editMgr.role!=='admin'&&editMgr.site_ids?.length>0){
+      if(editMgr.role!=='admin'&&editMgr.role!=='superadmin'&&editMgr.site_ids?.length>0){
         await supabase.from('profile_sites').insert(editMgr.site_ids.map(sid=>({profile_id:editMgr.id,site_id:sid})))
       }
+      // Update email și în auth.users (dacă schimbat) — via RPC
+      if (updates.email) {
+        const {error: aErr} = await supabase.rpc('update_user_email_by_admin', { user_id: editMgr.id, new_email: updates.email })
+        if (aErr) showToast(`Profil ok dar auth email nu s-a actualizat: ${aErr.message}`, 'warn')
+      }
       showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll()
-    } else showToast('Eroare','error')
+    } else showToast('Eroare: '+error.message,'error')
   }
   const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
 
@@ -2290,8 +2304,8 @@ function AdminPage() {
     const {data:au,error:ae}=await supabase.auth.signUp({email:nEmail,password:nPwd})
     if(ae){showToast(ae.message,'error');setCreating(false);return}
     if(au.user){
-      await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole})
-      if(nRole==='manager'&&nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
+      await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,department:nDept||null})
+      if((nRole==='manager'||nRole==='sef_santier')&&nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
       showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()
     }
     setCreating(false)
@@ -2489,18 +2503,36 @@ function AdminPage() {
       )}
       {editMgr&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:440}}>
+          <div style={{...S.card,padding:28,width:440,maxHeight:'90vh',overflowY:'auto'}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Manager</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet</Lbl><input style={S.input} value={editMgr.name||''} onChange={e=>setEditMgr({...editMgr,name:e.target.value})}/></div>
+            <div style={{marginBottom:12}}><Lbl>Email</Lbl>
+              <input style={S.input} type="email" value={editMgr.email||''} onChange={e=>setEditMgr({...editMgr,email:e.target.value})}/>
+              <div style={{fontSize:10,color:G.muted,marginTop:3}}>⚠ Schimbarea email-ului afectează autentificarea</div>
+            </div>
             <div style={{marginBottom:12}}><Lbl>Rol</Lbl>
               <select value={editMgr.role} onChange={e=>setEditMgr({...editMgr,role:e.target.value})} style={{width:'100%'}}>
                 <option value="manager">👤 Manager Proiect</option>
+                <option value="sef_santier">🏗️ Șef Șantier</option>
                 <option value="admin">⚙ Admin</option>
                 <option value="superadmin">⭐ Super Admin</option>
                 <option value="contabil">💵 Contabil</option>
               </select>
             </div>
-            {editMgr.role==='manager'&&(
+            <div style={{marginBottom:12}}><Lbl>🏢 Departament</Lbl>
+              <select value={editMgr.department || ''} onChange={e=>setEditMgr({...editMgr,department:e.target.value || null})} style={{width:'100%'}}>
+                <option value="">— niciunul —</option>
+                <option value="Execuție">⚙️ Execuție</option>
+                <option value="Logistică">🚛 Logistică</option>
+                <option value="TESA">📋 TESA</option>
+                <option value="HR">👥 HR</option>
+                <option value="Administrativ">🏢 Administrativ</option>
+                <option value="Contabilitate">💵 Contabilitate</option>
+                <option value="IT">💻 IT</option>
+              </select>
+              <div style={{fontSize:10,color:G.muted,marginTop:3}}>Pe viitor: drepturile pot fi legate de departament</div>
+            </div>
+            {(editMgr.role==='manager' || editMgr.role==='sef_santier')&&(
               <div style={{marginBottom:18}}>
                 <Lbl>Șantiere Alocate (poate selecta mai multe)</Lbl>
                 <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:200,overflowY:'auto',padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border2}`}}>
@@ -2526,10 +2558,31 @@ function AdminPage() {
                 </div>
               </div>
             )}
-            <div style={{display:'flex',gap:10}}>
+            <div style={{display:'flex',gap:10,marginBottom:10}}>
               <button onClick={()=>setEditMgr(null)} style={{...S.btnS,flex:1}}>Anulează</button>
               <button onClick={saveEditMgr} style={{...S.btnP,flex:1}}>✓ Salvează</button>
             </div>
+            
+            {/* Delete user (admin only, nu te poți șterge pe tine) */}
+            {editMgr.id !== profile?.id && (
+              <div style={{marginTop:18,paddingTop:14,borderTop:`1px dashed ${G.border}`}}>
+                <button onClick={async () => {
+                  if (!confirm(`⚠️ ATENȚIE: ștergi PERMANENT user-ul "${editMgr.name}" (${editMgr.email})?\n\n• Profil + autentificare șterse\n• Pontajele și transporturile rămân (referințe la nume)\n• Acțiune IREVERSIBILĂ`)) return
+                  // Delete profile_sites mapping
+                  await supabase.from('profile_sites').delete().eq('profile_id', editMgr.id)
+                  // Delete profile
+                  const {error: pErr} = await supabase.from('profiles').delete().eq('id', editMgr.id)
+                  if (pErr) { showToast('Eroare ștergere profil: '+pErr.message,'error'); return }
+                  // Delete auth user via RPC (server-side)
+                  const {error: aErr} = await supabase.rpc('delete_user_by_admin', { user_id: editMgr.id })
+                  if (aErr) { showToast(`Profil șters dar auth user a rămas: ${aErr.message}`,'warn') }
+                  else { showToast(`✓ User "${editMgr.name}" șters complet`) }
+                  setEditMgr(null); loadAll()
+                }} style={{...S.btnS,width:'100%',color:G.red,borderColor:G.red+'88'}}>
+                  🗑️ Șterge user permanent
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2562,13 +2615,17 @@ function AdminPage() {
         <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
           <div style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier</th><th></th></tr></thead>
+              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th></th></tr></thead>
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
                 <td><span className={`badge ${['admin','superadmin'].includes(m.role)?'ba':m.role==='contabil'?'bs':m.role==='sef_santier'?'bd':'bm'}`}>{m.role==='superadmin'?'⭐ Super Admin':m.role==='admin'?'⚙ Admin':m.role==='contabil'?'💵 Contabil':m.role==='sef_santier'?'🏗️ Șef Șantier':'👤 Manager'}</span></td>
-                <td style={{fontSize:11,color:G.purple}}>{(m.site_ids||[]).length>0?m.site_ids.map(id=>sites.find(s=>s.id===id)?.name).filter(Boolean).join(', '):'—'}</td>
-                <td><button onClick={()=>setEditMgr({...m})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
+                <td style={{fontSize:11}}>
+                  <div style={{color:G.purple}}>{(m.site_ids||[]).length>0?m.site_ids.map(id=>sites.find(s=>s.id===id)?.name).filter(Boolean).join(', '):''}</div>
+                  {m.department && <div style={{color:G.blue,marginTop:2,fontSize:10,fontWeight:600}}>🏢 {m.department}</div>}
+                  {!m.department && (m.site_ids||[]).length===0 && <span style={{color:G.dim}}>—</span>}
+                </td>
+                <td><button onClick={()=>setEditMgr({...m, original_email: m.email})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
           </div>
@@ -2579,11 +2636,22 @@ function AdminPage() {
             ))}
             <div style={{marginBottom:10}}><Lbl>Rol</Lbl><select value={nRole} onChange={e=>setNRole(e.target.value)} style={{width:'100%'}}>
               <option value="manager">👤 Manager Proiect</option>
+              <option value="sef_santier">🏗️ Șef Șantier</option>
               <option value="admin">⚙ Admin</option>
               <option value="superadmin">⭐ Super Admin</option>
               <option value="contabil">💵 Contabil</option>
             </select></div>
-            {nRole==='manager'&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
+            <div style={{marginBottom:10}}><Lbl>🏢 Departament (opțional)</Lbl><select value={nDept} onChange={e=>setNDept(e.target.value)} style={{width:'100%'}}>
+              <option value="">— niciunul —</option>
+              <option value="Execuție">⚙️ Execuție</option>
+              <option value="Logistică">🚛 Logistică</option>
+              <option value="TESA">📋 TESA</option>
+              <option value="HR">👥 HR</option>
+              <option value="Administrativ">🏢 Administrativ</option>
+              <option value="Contabilitate">💵 Contabilitate</option>
+              <option value="IT">💻 IT</option>
+            </select></div>
+            {(nRole==='manager'||nRole==='sef_santier')&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={createManager} disabled={creating}>{creating?<><div className="sp"/>...</>:'+ Adaugă Manager'}</button>
           </div>
         </div>
