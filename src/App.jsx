@@ -4,6 +4,8 @@ import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
+import HRPage from './HR.jsx'
+import AdministrativPage from './Administrativ.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -330,9 +332,9 @@ function HomeDashboard() {
     { path:null,        icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:false },
     { path:null,        icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:false },
     { path:null,        icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:false },
-    { path:null,        icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing',active:false },
-    { path:null,        icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Recrutare · Evaluări · Training',  active:false },
-    { path:'/panou',    icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
+    { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing', active:true, requireModule:'Administrativ' },
+    { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'HR' },
+    { path:null,        icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
   const modules = allModules.filter(m => !m.active || !m.requireModule || hasModuleAccess(profile, m.requireModule))
@@ -3329,6 +3331,8 @@ export default function App() {
         <Route path="/panou" element={<ProtectedRoute requireModule="Pontaj"><DashboardPage/></ProtectedRoute>}/>
         <Route path="/pontaj" element={<ProtectedRoute requireModule="Pontaj"><PontajPage/></ProtectedRoute>}/>
         <Route path="/logistica" element={<ProtectedRoute requireModule="Logistică"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
+        <Route path="/hr" element={<ProtectedRoute requireModule="HR"><Layout><HRPage/></Layout></ProtectedRoute>}/>
+        <Route path="/administrativ" element={<ProtectedRoute requireModule="Administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="Pontaj"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
