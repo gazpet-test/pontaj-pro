@@ -51,20 +51,21 @@ function AuthProvider({ children }) {
 }
 
 // ─── Module access helper ───────────────────────────────────────────────────
+// Acces dacă: superadmin (bypass total), SAU user_module_access conține fix cheia,
+// SAU conține orice sub-modul de tipul "<cheia>.xxx" (ex: 'pontajpro.pontaj' => are acces la 'pontajpro')
 function hasModuleAccess(profile, moduleName) {
   if (!profile) return false
-  // Admin & superadmin = acces la TOATE modulele
-  if (['admin', 'superadmin'].includes(profile.role)) return true
-  // Restul = doar ce e explicit în user_module_access
-  return profile.module_access?.includes(moduleName) || false
+  if (profile.role === 'superadmin') return true
+  const ma = profile.module_access || []
+  return ma.some(m => m === moduleName || m.startsWith(moduleName + '.'))
 }
 
 function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, requireModule = null }) {
   const { session, profile } = useAuth()
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
-  if (adminOnly && !['admin','superadmin'].includes(profile?.role)) return <Navigate to="/" replace />
-  if (salaryAccess && !['superadmin','contabil'].includes(profile?.role)) return <Navigate to="/" replace />
+  if (adminOnly && profile?.role !== 'superadmin') return <Navigate to="/" replace />
+  if (salaryAccess && !['superadmin','contabilitate'].includes(profile?.role)) return <Navigate to="/" replace />
   if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
 }
@@ -130,6 +131,25 @@ tr:hover td{background:#1C2128}
 .sp{width:16px;height:16px;border:2px solid #30363D;border-top-color:#1F6FEB;border-radius:50%;animation:sp .7s linear infinite}
 .toast{position:fixed;bottom:18px;right:18px;padding:10px 16px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.5);animation:fi .3s ease}
 `
+
+// ─── Role definitions ─────────────────────────────────────────────────────────
+// Cele 6 roluri valide (aliniate cu CHECK constraint profiles_role_chk din BD)
+const ROLES_WITH_SITES = ['manager_santier', 'sef_echipa']
+const ROLE_BADGES = {
+  superadmin:      { label:'⭐ Super Admin',     bg:'#2D1F4A', color:'#BC8CFF' },
+  admin_logistica: { label:'🚛 Admin Logistică', bg:'#3A2A0A', color:'#E3B341' },
+  manager_santier: { label:'👤 Manager Șantier', bg:'#1F3A2D', color:'#56D364' },
+  sef_echipa:      { label:'🏗️ Șef Echipă',     bg:'#1F3A5A', color:'#79C0FF' },
+  contabilitate:   { label:'💵 Contabilitate',   bg:'#2D1F4A', color:'#BC8CFF' },
+  hr:              { label:'👥 HR',              bg:'#3A1F2D', color:'#F778BA' },
+}
+function RoleBadge({ role, size='normal' }) {
+  const r = ROLE_BADGES[role]
+  if (!r) return <span className="badge" style={{background:G.border,color:G.muted}}>— {role||'fără rol'} —</span>
+  const px = size==='small' ? '2px 7px' : '2px 8px'
+  const fs = size==='small' ? 10 : 11
+  return <span className="badge" style={{background:r.bg, color:r.color, padding:px, fontSize:fs}}>{r.label}</span>
+}
 
 function Avatar({ name, id=1, size=34 }) {
   const hue = ((name?.charCodeAt(0)||0)*37+id*13)%360
@@ -265,21 +285,22 @@ function Layout({ children }) {
   const nav = useNavigate(); const loc = useLocation()
   const [now, setNow] = useState(new Date())
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
-  const isAdmin = ['admin','superadmin'].includes(profile?.role)
   const isSuperAdmin = profile?.role==='superadmin'
-  const isContabil = profile?.role==='contabil'
-  const hasSalaryAccess = isSuperAdmin || isContabil
+  const isContabilitate = profile?.role==='contabilitate'
+  const hasSalaryAccess = isSuperAdmin || isContabilitate
   const [showPwd, setShowPwd] = useState(false)
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
-    ...(hasModuleAccess(profile, 'Pontaj') ? [
+    ...(hasModuleAccess(profile, 'pontajpro') ? [
       {p:'/panou',i:'📊',l:'Panou'},
       {p:'/pontaj',i:'👥',l:'Pontaj'},
       {p:'/rapoarte',i:'📈',l:'Rapoarte'},
     ] : []),
-    ...(hasModuleAccess(profile, 'Logistică') ? [{p:'/logistica',i:'🚛',l:'Logistică'}] : []),
+    ...(hasModuleAccess(profile, 'logistica') ? [{p:'/logistica',i:'🚛',l:'Logistică'}] : []),
+    ...(hasModuleAccess(profile, 'hr') ? [{p:'/hr',i:'👥',l:'HR'}] : []),
+    ...(hasModuleAccess(profile, 'administrativ') ? [{p:'/administrativ',i:'🏢',l:'Administrativ'}] : []),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
-    ...(isAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
+    ...(isSuperAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
   ]
   return (
     <div style={S.page}><style>{css}</style>
@@ -298,7 +319,7 @@ function Layout({ children }) {
           <Avatar name={profile?.name} id={1} size={28}/>
           <div>
             <div style={{fontSize:12,fontWeight:600,lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
-            <span className={`badge ${isAdmin?'ba':profile?.role==='contabil'?'bs':profile?.role==='sef_santier'?'bd':'bm'}`}>{profile?.role==='superadmin'?'⭐ Super Admin':isAdmin?'⚙ Admin':profile?.role==='contabil'?'💵 Contabil':profile?.role==='sef_santier'?'🏗️ Șef Șantier':'👤 Manager'}</span>
+            <RoleBadge role={profile?.role} size="small"/>
           </div>
           <button className="nl" onClick={()=>setShowPwd(true)} title="Schimbă parola" style={{padding:'5px 8px',color:G.muted}}>🔑</button>
           <button className="nl" onClick={signOut} title="Ieșire" style={{color:G.red,padding:'5px 8px'}}>⎋</button>
@@ -321,19 +342,18 @@ function HomeDashboard() {
   const [now, setNow] = useState(new Date())
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
   const isSuperAdmin = profile?.role==='superadmin'
-  const isAdmin = ['admin','superadmin'].includes(profile?.role)
-  const isContabil = profile?.role==='contabil'
-  const hasSalaryAccess = isSuperAdmin || isContabil
+  const isContabilitate = profile?.role==='contabilitate'
+  const hasSalaryAccess = isSuperAdmin || isContabilitate
 
   const allModules = [
-    { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'Pontaj' },
+    { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
     { path:null,        icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi · Cash flow · Bugete',     active:false },
-    { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'Logistică' },
+    { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
     { path:null,        icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:false },
     { path:null,        icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:false },
     { path:null,        icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:false },
-    { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing', active:true, requireModule:'Administrativ' },
-    { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'HR' },
+    { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing', active:true, requireModule:'administrativ' },
+    { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'hr' },
     { path:null,        icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
@@ -357,7 +377,7 @@ function HomeDashboard() {
           <Avatar name={profile?.name} id={1} size={32}/>
           <div>
             <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
-            <span className={`badge ${isAdmin?'ba':profile?.role==='contabil'?'bs':'bm'}`}>{profile?.role==='superadmin'?'⭐ Super Admin':isAdmin?'⚙ Admin':profile?.role==='contabil'?'💵 Contabil':'👤 Manager'}</span>
+            <RoleBadge role={profile?.role} size="small"/>
           </div>
           <button onClick={signOut} style={{background:'transparent',border:'1px solid #30363D',color:'#8B949E',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12,marginLeft:8}}>Ieșire</button>
         </div>
@@ -559,7 +579,7 @@ function DashboardPage() {
   const [weekStats,setWeekStats]=useState(null)
   const [monthStats,setMonthStats]=useState(null)
   const [absent3,setAbsent3]=useState([])
-  const isAdmin=(['admin','superadmin'].includes(profile?.role))
+  const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
   const [expiringContracts,setExpiringContracts]=useState([])
   const [nrTransportCerute, setNrTransportCerute] = useState(0)
   const [transportSamples, setTransportSamples] = useState([])  // primele 3 transporturi pentru preview
@@ -630,9 +650,8 @@ function DashboardPage() {
       setAbsent3(absentEmps)
     }
     
-    // Transporturi pendinte aprobare (vizibile pentru aprobatori + admin)
-    const aprobatoriTransport = ['alexandru.mitrache@gazpet.ro', 'm.alexandru@gazpet.ro', 'cristiana.puscasu@gazpet.ro']
-    const isAprobatorTransport = isAdmin || aprobatoriTransport.includes(profile?.email)
+    // Transporturi pendinte aprobare (vizibile pentru superadmin + admin_logistica)
+    const isAprobatorTransport = ['superadmin', 'admin_logistica'].includes(profile?.role)
     if (isAprobatorTransport) {
       const { count, data: samples } = await supabase
         .from('logistica_transporturi')
@@ -668,8 +687,8 @@ function DashboardPage() {
       setAvizeNesemnate(avizeNesem || [])
     }
 
-    // Check expiring contracts (next 30 days) - only for admin/superadmin
-    if(['admin','superadmin'].includes(profile?.role)){
+    // Check expiring contracts (next 30 days) - superadmin + contabilitate + hr
+    if(['superadmin','contabilitate','hr'].includes(profile?.role)){
       const in30=new Date(); in30.setDate(in30.getDate()+30)
       const {data:expiring}=await supabase.from('employee_salaries').select('*,employees(name)').not('contract_expiry','is',null).lte('contract_expiry',in30.toISOString().split('T')[0]).gte('contract_expiry',todayStr())
       setExpiringContracts(expiring||[])
@@ -1060,7 +1079,7 @@ function PontajPage() {
   const [onlyDiurna,setOnlyDiurna]=useState(false)
   const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
-  const isAdmin=['admin','superadmin'].includes(profile?.role)
+  const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
@@ -1173,7 +1192,7 @@ function ReportsPage() {
   const [paymentDetails,setPaymentDetails]=useState([])
   const [showIstoric,setShowIstoric]=useState(false)
   const [toast,showToast]=useToast()
-  const isAdmin=['admin','superadmin'].includes(profile?.role)
+  const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
   useEffect(()=>{ if(showIstoric) loadPayments() },[showIstoric])
@@ -2208,8 +2227,8 @@ function ReportsPage() {
 // ─── Admin Page ───────────────────────────────────────────────────────────────
 function AdminPage() {
   const { profile } = useAuth()
-  const isAdmin=['admin','superadmin'].includes(profile?.role)
   const isSuperAdmin=profile?.role==='superadmin'
+  const isAdmin = isSuperAdmin
   const [tab,setTab]=useState('sites')
   const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
   const [calDays,setCalDays]=useState([]); const [settings,setSettings]=useState({diurna_amount:'50',work_hours_per_day:'8'})
@@ -2218,7 +2237,7 @@ function AdminPage() {
   const [siteName,setSiteName]=useState(''); const [addingSite,setAddingSite]=useState(false)
   const [editSiteItem,setEditSiteItem]=useState(null); const [editSiteName,setEditSiteName]=useState('')
   const [deletingSite,setDeletingSite]=useState(null) // site being confirmed for delete
-  const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager'); const [nPwd,setNPwd]=useState(''); const [nDept,setNDept]=useState(''); const [creating,setCreating]=useState(false)
+  const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager_santier'); const [nPwd,setNPwd]=useState(''); const [nDept,setNDept]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [eHireDate,setEHireDate]=useState(''); const [addingE,setAddingE]=useState(false)
   const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
@@ -2285,9 +2304,9 @@ function AdminPage() {
     }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
-      // Update sites in profile_sites table
+      // Update sites in profile_sites table — doar pentru rolurile care au șantiere alocate
       await supabase.from('profile_sites').delete().eq('profile_id',editMgr.id)
-      if(editMgr.role!=='admin'&&editMgr.role!=='superadmin'&&editMgr.site_ids?.length>0){
+      if(ROLES_WITH_SITES.includes(editMgr.role) && editMgr.site_ids?.length>0){
         await supabase.from('profile_sites').insert(editMgr.site_ids.map(sid=>({profile_id:editMgr.id,site_id:sid})))
       }
       // Update email și în auth.users (dacă schimbat) — via RPC
@@ -2307,7 +2326,7 @@ function AdminPage() {
     if(ae){showToast(ae.message,'error');setCreating(false);return}
     if(au.user){
       await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,department:nDept||null})
-      if((nRole==='manager'||nRole==='sef_santier')&&nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
+      if(ROLES_WITH_SITES.includes(nRole) && nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
       showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()
     }
     setCreating(false)
@@ -2514,11 +2533,12 @@ function AdminPage() {
             </div>
             <div style={{marginBottom:12}}><Lbl>Rol</Lbl>
               <select value={editMgr.role} onChange={e=>setEditMgr({...editMgr,role:e.target.value})} style={{width:'100%'}}>
-                <option value="manager">👤 Manager Proiect</option>
-                <option value="sef_santier">🏗️ Șef Șantier</option>
-                <option value="admin">⚙ Admin</option>
                 <option value="superadmin">⭐ Super Admin</option>
-                <option value="contabil">💵 Contabil</option>
+                <option value="admin_logistica">🚛 Admin Logistică</option>
+                <option value="manager_santier">👤 Manager Șantier</option>
+                <option value="sef_echipa">🏗️ Șef Echipă</option>
+                <option value="contabilitate">💵 Contabilitate</option>
+                <option value="hr">👥 HR</option>
               </select>
             </div>
             <div style={{marginBottom:12}}><Lbl>🏢 Departament</Lbl>
@@ -2534,7 +2554,7 @@ function AdminPage() {
               </select>
               <div style={{fontSize:10,color:G.muted,marginTop:3}}>Pe viitor: drepturile pot fi legate de departament</div>
             </div>
-            {(editMgr.role==='manager' || editMgr.role==='sef_santier')&&(
+            {ROLES_WITH_SITES.includes(editMgr.role)&&(
               <div style={{marginBottom:18}}>
                 <Lbl>Șantiere Alocate (poate selecta mai multe)</Lbl>
                 <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:200,overflowY:'auto',padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border2}`}}>
@@ -2621,7 +2641,7 @@ function AdminPage() {
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
-                <td><span className={`badge ${['admin','superadmin'].includes(m.role)?'ba':m.role==='contabil'?'bs':m.role==='sef_santier'?'bd':'bm'}`}>{m.role==='superadmin'?'⭐ Super Admin':m.role==='admin'?'⚙ Admin':m.role==='contabil'?'💵 Contabil':m.role==='sef_santier'?'🏗️ Șef Șantier':'👤 Manager'}</span></td>
+                <td><RoleBadge role={m.role}/></td>
                 <td style={{fontSize:11}}>
                   <div style={{color:G.purple}}>{(m.site_ids||[]).length>0?m.site_ids.map(id=>sites.find(s=>s.id===id)?.name).filter(Boolean).join(', '):''}</div>
                   {m.department && <div style={{color:G.blue,marginTop:2,fontSize:10,fontWeight:600}}>🏢 {m.department}</div>}
@@ -2637,11 +2657,12 @@ function AdminPage() {
               <div key={l} style={{marginBottom:10}}><Lbl>{l}</Lbl><input style={S.input} type={t} placeholder={ph} value={v} onChange={e=>s(e.target.value)}/></div>
             ))}
             <div style={{marginBottom:10}}><Lbl>Rol</Lbl><select value={nRole} onChange={e=>setNRole(e.target.value)} style={{width:'100%'}}>
-              <option value="manager">👤 Manager Proiect</option>
-              <option value="sef_santier">🏗️ Șef Șantier</option>
-              <option value="admin">⚙ Admin</option>
               <option value="superadmin">⭐ Super Admin</option>
-              <option value="contabil">💵 Contabil</option>
+              <option value="admin_logistica">🚛 Admin Logistică</option>
+              <option value="manager_santier">👤 Manager Șantier</option>
+              <option value="sef_echipa">🏗️ Șef Echipă</option>
+              <option value="contabilitate">💵 Contabilitate</option>
+              <option value="hr">👥 HR</option>
             </select></div>
             <div style={{marginBottom:10}}><Lbl>🏢 Departament (opțional)</Lbl><select value={nDept} onChange={e=>setNDept(e.target.value)} style={{width:'100%'}}>
               <option value="">— niciunul —</option>
@@ -2653,7 +2674,7 @@ function AdminPage() {
               <option value="Contabilitate">💵 Contabilitate</option>
               <option value="IT">💻 IT</option>
             </select></div>
-            {(nRole==='manager'||nRole==='sef_santier')&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
+            {ROLES_WITH_SITES.includes(nRole)&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat (poți adăuga mai multe după salvare, din butonul Edit)</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={createManager} disabled={creating}>{creating?<><div className="sp"/>...</>:'+ Adaugă Manager'}</button>
           </div>
         </div>
@@ -3329,12 +3350,12 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
-        <Route path="/panou" element={<ProtectedRoute requireModule="Pontaj"><DashboardPage/></ProtectedRoute>}/>
-        <Route path="/pontaj" element={<ProtectedRoute requireModule="Pontaj"><PontajPage/></ProtectedRoute>}/>
-        <Route path="/logistica" element={<ProtectedRoute requireModule="Logistică"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
-        <Route path="/hr" element={<ProtectedRoute requireModule="HR"><Layout><HRPage/></Layout></ProtectedRoute>}/>
-        <Route path="/administrativ" element={<ProtectedRoute requireModule="Administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
-        <Route path="/rapoarte" element={<ProtectedRoute requireModule="Pontaj"><ReportsPage/></ProtectedRoute>}/>
+        <Route path="/panou" element={<ProtectedRoute requireModule="pontajpro"><DashboardPage/></ProtectedRoute>}/>
+        <Route path="/pontaj" element={<ProtectedRoute requireModule="pontajpro"><PontajPage/></ProtectedRoute>}/>
+        <Route path="/logistica" element={<ProtectedRoute requireModule="logistica"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
+        <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
+        <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
+        <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
