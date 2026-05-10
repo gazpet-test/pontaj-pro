@@ -3104,8 +3104,10 @@ export function SalariiPage({ noExport = false } = {}) {
   )
 
   return (
-    <Layout>
-      <Toast toast={toast}/>
+    noExport ? (<><Toast toast={toast}/><SalariiInner/></>) : (<Layout><Toast toast={toast}/><SalariiInner/></Layout>)
+  )
+  
+  function SalariiInner() { return (<>
       {/* Edit modal */}
       {editSal&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',overflow:'auto',padding:20}}>
@@ -3280,7 +3282,7 @@ export function SalariiPage({ noExport = false } = {}) {
           <select value={deptF} onChange={e=>setDeptF(e.target.value)}>
             <option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
           </select>
-          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',display:'flex',alignItems:'center',gap:6, display: noExport ? 'none' : 'flex'}}>🏦 Export Bancă Salarii</button>
+          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',alignItems:'center',gap:6, display: noExport ? 'none' : 'flex'}}>🏦 Export Bancă Salarii</button>
         </div>
       </div>
 
@@ -3318,8 +3320,7 @@ export function SalariiPage({ noExport = false } = {}) {
           </tbody>
         </table>
       </div>}
-    </Layout>
-  )
+    </>) }
 }
 
 export default function App() {
