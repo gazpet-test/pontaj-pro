@@ -6,6 +6,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
+import ServiceTab from './ServiceTab.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -3293,8 +3294,8 @@ export default function LogisticaPage() {
         />
       )}
       
-      {/* TAB: Service (placeholder) */}
-      {tab === 'service' && <PlaceholderTab label="Service" desc="Programări · Intervenții · Costuri reparații" emoji="🔧" />}
+      {/* TAB: Service (Fișe service detaliate) */}
+      {tab === 'service' && <ServiceTab active={active} canEdit={canEdit} showToast={showToast} />}
       
       {/* TAB: Tichete (placeholder) */}
       {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
