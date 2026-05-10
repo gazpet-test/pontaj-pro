@@ -6,11 +6,18 @@
 // Status flow: programat → in_lucru → finalizat (finalizat doar prin buton confirm).
 // Filtru categorie (10 categorii), căutare după cod TST, plăcuță, marcă, model.
 // Buton "Acoperire flotă" cu lista activelor fără fișă.
+// Coloană "Următor service" cu badge colorat + KPI scadențe.
+//
+// Pachet C (10.05.2026): KM/Ore live din view v_active_km_ore (km_actuali și
+// ore_functionare_actuale sunt 100% goale pe toate activele momentan).
+// Helper-ele calcUrmService / urmServiceLevel / urmServiceColor au fost mutate
+// în src/lib/service.js pentru reutilizare (Acasă, etc.).
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
+import { calcUrmService, urmServiceLevel, urmServiceColor, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -37,7 +44,6 @@ const STATUSURI = [
   { value:'in_lucru',  label:'🔧 În lucru',   color:G.yellow },
   { value:'finalizat', label:'✓ Finalizat',   color:G.green  },
 ]
-// Cele 10 categorii din Active (sincron cu logistica_categorii.tip)
 const CATEGORII = ['Autoturism','Autoutilitară','Camion','Cap tractor','Container','Remorcă','Rulotă','Semiremorcă','Trailer','Utilaj']
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' }) : '—'
@@ -45,7 +51,6 @@ const fmtRON = (n) => n != null && n !== '' ? Number(n).toLocaleString('ro-RO', 
 const todayISO = () => new Date().toISOString().split('T')[0]
 const norm = (s) => (s || '').toString().toLowerCase().replace(/[ăâ]/g,'a').replace(/[î]/g,'i').replace(/[șş]/g,'s').replace(/[țţ]/g,'t').trim()
 
-// Verifică dacă un item preset e aplicabil pt un activ (categorie + subcategorie)
 function isApplicable(aplicabilPt, categorie, subcategorie) {
   if (!aplicabilPt || aplicabilPt === 'Toate') return true
   const cat = categorie || ''
@@ -59,7 +64,7 @@ function isApplicable(aplicabilPt, categorie, subcategorie) {
   if (ap === 'Excavator')                 return cat === 'Utilaj' && sub.includes('excavator')
   if (ap === 'Buldozer')                  return cat === 'Utilaj' && sub.includes('buldozer')
   if (ap.startsWith('Specific:'))         return cat === ap.replace('Specific:', '').trim()
-  return true // fallback: arată dacă nu se potrivește vreo regulă
+  return true
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -121,6 +126,21 @@ function TipBadge({ tip }) {
   return <span style={{display:'inline-block', padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:700, letterSpacing:'.3px', background: c.color + '22', color: c.color, whiteSpace:'nowrap'}}>{c.label}</span>
 }
 
+function UrmServiceBadge({ u }) {
+  if (!u) return <span style={{color:G.dim, fontSize:11}}>—</span>
+  const c = urmServiceColor(u)
+  const icon = u.tip === 'data' ? '📅' : u.tip === 'km' ? '🛣️' : '⏱️'
+  return (
+    <span style={{
+      display:'inline-block', padding:'3px 9px', borderRadius:8,
+      background: c + '22', color: c, fontWeight:700, fontSize:11,
+      whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums'
+    }}>
+      {icon} {u.label}
+    </span>
+  )
+}
+
 function KPICard({ icon, label, value, color = G.blue, sub }) {
   return (
     <div style={{...S.card, padding:'14px 18px', flex:1, minWidth:160, borderLeft:`3px solid ${color}`}}>
@@ -152,7 +172,6 @@ function SortableTh({ col, sortBy, setSortBy, width, children, align='left' }) {
   )
 }
 
-// ─── Combobox autocomplete pentru selecție activ ─────────────────────────────
 function ComboboxActiv({ value, onChange, active, required, readonly, placeholder='Caută cod TST, plăcuță, marcă, model…' }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -188,7 +207,7 @@ function ComboboxActiv({ value, onChange, active, required, readonly, placeholde
         onBlur={() => setTimeout(() => setOpen(false), 180)}
         placeholder={placeholder}
         readOnly={readonly}
-        style={{...S.input, background: readonly ? G.surface : G.bg, color: readonly ? G.muted : G.text, fontFamily: selected ? 'inherit' : 'inherit'}}
+        style={{...S.input, background: readonly ? G.surface : G.bg, color: readonly ? G.muted : G.text}}
       />
       {open && !readonly && (
         <div style={{
@@ -224,7 +243,6 @@ function ComboboxActiv({ value, onChange, active, required, readonly, placeholde
   )
 }
 
-// ─── Accordion grup bifabile ────────────────────────────────────────────────
 function GrupAccordion({ grupa, items, expanded, onToggle, bife, onBifa, onBifaDetail, smartFillMap }) {
   const checkedCount = items.filter(it => bife[it.id]).length
   return (
@@ -328,15 +346,14 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
   const [urmKm, setUrmKm] = useState('')
   const [urmOre, setUrmOre] = useState('')
   const [urmData, setUrmData] = useState('')
-  const [bife, setBife] = useState({}) // {presetId: {cantitate, cod_piesa, denumire}}
-  const [extra, setExtra] = useState([]) // intrări custom (ne-preset): [{denumire, cod_piesa, cantitate}]
-  const [expanded, setExpanded] = useState({}) // {grupa: bool}
+  const [bife, setBife] = useState({})
+  const [extra, setExtra] = useState([])
+  const [expanded, setExpanded] = useState({})
   const [saving, setSaving] = useState(false)
-  const [smartFillMap, setSmartFillMap] = useState({}) // {denumire_norm: cod_piesa_top}
+  const [smartFillMap, setSmartFillMap] = useState({})
 
   const activSelected = active.find(a => String(a.id) === String(activId))
 
-  // La schimbarea activului → fetch istoric pentru smart-fill cod_piesa
   useEffect(() => {
     if (!activId) { setSmartFillMap({}); return }
     let cancelled = false
@@ -352,14 +369,13 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
       const map = {}
       for (const r of data) {
         const k = norm(r.denumire)
-        if (k && r.cod_piesa && !map[k]) map[k] = r.cod_piesa // primul = cel mai recent (sortat desc)
+        if (k && r.cod_piesa && !map[k]) map[k] = r.cod_piesa
       }
       setSmartFillMap(map)
     })()
     return () => { cancelled = true }
   }, [activId])
 
-  // Bifabile filtrate pe categoria activului selectat
   const itemiAplicabili = useMemo(() => {
     if (!activSelected) return presetItems
     return presetItems.filter(it => isApplicable(it.aplicabil_pt, activSelected.categorie?.tip, activSelected.categorie?.subcategorie))
@@ -410,8 +426,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
     setSaving(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-
-      // Construiesc titlul automat dacă nu e setat manual
       const titluFinal = titlu.trim() || `Service ${tip} · ${new Date(dataFisei).toLocaleDateString('ro-RO')}${numarFactura ? ' · F.' + numarFactura : ''}`
 
       const payloadFisa = {
@@ -445,7 +459,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
 
       if (fErr) throw fErr
 
-      // Construiesc intrări (piese)
       const intrari = []
       for (const id in bife) {
         const b = bife[id]
@@ -479,7 +492,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
         if (iErr) throw iErr
       }
 
-      // Marchează ca acoperit notificările "Lipsă fișă"
       await supabase
         .from('notifications')
         .update({ action_taken: true, read_at: new Date().toISOString() })
@@ -507,7 +519,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
         </div>
 
-        {/* IDENTIFICARE */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px', marginBottom:8}}>Identificare</div>
           <div style={{marginBottom:10}}>
@@ -521,7 +532,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           </div>
         </div>
 
-        {/* FACTURĂ + LOCAȚIE */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px', marginBottom:8}}>Factură & locație</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:10}}>
@@ -535,7 +545,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           </div>
         </div>
 
-        {/* KM/ORE */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px', marginBottom:8}}>Kilometraj / Ore funcționare</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:10}}>
@@ -546,12 +555,10 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           </div>
         </div>
 
-        {/* DIAGNOSTIC */}
         <div style={{marginBottom:14}}>
           <FieldTextarea label="Diagnostic & lucrări efectuate" value={diagnostic} onChange={setDiagnostic} rows={3} placeholder="ex: Diagnostic — pierdere putere. Lucrări: schimb pompă combustibil + filtru motorină." />
         </div>
 
-        {/* BIFABILE */}
         <div style={{marginBottom:14}}>
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8}}>
             <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px'}}>
@@ -586,7 +593,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           )}
         </div>
 
-        {/* EXTRA / CUSTOM */}
         <div style={{marginBottom:14}}>
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8}}>
             <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px'}}>+ Itemi custom (ne-preset)</div>
@@ -604,7 +610,6 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           ))}
         </div>
 
-        {/* URMĂTORUL SERVICE */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px', marginBottom:8}}>📅 Următorul service (opțional — oricare)</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10}}>
@@ -614,12 +619,10 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
           </div>
         </div>
 
-        {/* OBSERVAȚII */}
         <div style={{marginBottom:18}}>
           <FieldTextarea label="Observații" value={observatii} onChange={setObservatii} rows={2} />
         </div>
 
-        {/* Footer */}
         <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:14, borderTop:`1px solid ${G.border}`}}>
           <div style={{fontSize:12, color:G.muted}}>
             {totalIntrari > 0 && <>📋 <strong style={{color:G.text}}>{totalIntrari}</strong> intrări vor fi create</>}
@@ -637,12 +640,13 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// MODAL: DETALIU FIȘĂ (vizualizare + editare + finalizare)
+// MODAL: DETALIU FIȘĂ
 // ════════════════════════════════════════════════════════════════════════════
 
 function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
   const [fisa, setFisa] = useState(null)
   const [intrari, setIntrari] = useState([])
+  const [kmOre, setKmOre] = useState(null) // ← Pachet C: km/ore live din v_active_km_ore
   const [load, setLoad] = useState(true)
   const [editMode, setEditMode] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -653,13 +657,26 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
     setLoad(true)
     const { data: f } = await supabase
       .from('logistica_service_fise')
-      .select('*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, categorie_id, logistica_categorii:categorie_id(tip, subcategorie))')
+      .select('*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie))')
       .eq('id', fisaId).single()
     const { data: ints } = await supabase
       .from('logistica_service_intrari')
       .select('*').eq('fisa_id', fisaId).order('id')
+
+    // Pachet C: km/ore live din view
+    let kmOreData = null
+    if (f?.activ_id) {
+      const { data: ko } = await supabase
+        .from('v_active_km_ore')
+        .select('km_live, ore_live')
+        .eq('activ_id', f.activ_id)
+        .maybeSingle()
+      kmOreData = ko || null
+    }
+
     setFisa(f)
     setIntrari(ints || [])
+    setKmOre(kmOreData)
     setForm({
       tip: f?.tip || 'mentenanta',
       data_fisei: f?.data_fisei || todayISO(),
@@ -798,18 +815,23 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
   const a = fisa.logistica_active || {}
   const tipColor = fisa.tip === 'reparatie' ? G.orange : G.green
   const isReadonly = !editMode || !canEdit
+  // Pachet C: folosim km/ore live din v_active_km_ore (a.km_actuali e 100% null)
+  const urmService = calcUrmService(fisa, kmOre?.km_live, kmOre?.ore_live)
+  // Valori afișate în header — preferăm live, fallback la coloana din active
+  const kmAfisat = kmOre?.km_live ?? a.km_actuali
+  const oreAfisat = kmOre?.ore_live ?? a.ore_functionare_actuale
 
   return (
     <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'30px 16px', overflowY:'auto'}}>
       <div onClick={e => e.stopPropagation()} style={{...S.card, padding:22, width:'100%', maxWidth:920, boxShadow:'0 20px 80px rgba(0,0,0,.6)', borderTop:`3px solid ${tipColor}`}}>
 
-        {/* HEADER */}
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${G.border}`}}>
           <div style={{flex:1, minWidth:0}}>
-            <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6}}>
+            <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6, flexWrap:'wrap'}}>
               <div style={{fontSize:18, fontWeight:800, color:G.text}}>{fisa.titlu || `Fișă #${fisa.id}`}</div>
               <TipBadge tip={fisa.tip} />
               <StatusBadge status={fisa.status} />
+              {urmService && <UrmServiceBadge u={urmService} />}
             </div>
             <div style={{fontSize:13, color:G.muted}}>
               <strong style={{color:G.text}}>{a.marca} {a.model}</strong>
@@ -819,6 +841,8 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
             </div>
             <div style={{fontSize:11, color:G.dim, marginTop:3}}>
               ID #{fisa.id} · {fmtDate(fisa.data_fisei)} · {intrari.length} intrări
+              {kmAfisat != null && <span> · KM curent: <strong style={{color:G.muted}}>{Number(kmAfisat).toLocaleString('ro-RO')}</strong></span>}
+              {oreAfisat != null && <span> · Ore curente: <strong style={{color:G.muted}}>{oreAfisat}</strong></span>}
               {fisa.finalizat_at && ` · finalizat ${fmtDate(fisa.finalizat_at)}`}
             </div>
           </div>
@@ -830,7 +854,6 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
           </div>
         </div>
 
-        {/* BANNER STATUS + ACȚIUNI */}
         {canEdit && fisa.status !== 'finalizat' && !editMode && (
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, marginBottom:14}}>
             <div style={{fontSize:12, color:G.muted}}>
@@ -853,7 +876,6 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
           </div>
         )}
 
-        {/* DETALII */}
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px', marginBottom:8}}>Detalii</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:10}}>
@@ -889,7 +911,6 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
           </div>
         </div>
 
-        {/* INTRĂRI / PIESE */}
         <div style={{marginBottom:14}}>
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8}}>
             <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:'.6px'}}>📋 Piese & operații ({intrari.length})</div>
@@ -955,7 +976,6 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
           )}
         </div>
 
-        {/* FOOTER */}
         <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:14, borderTop:`1px solid ${G.border}`}}>
           <div>
             {canEdit && editMode && (
@@ -1078,11 +1098,11 @@ function AcoperireFlotaModal({ active, fiseCountByActiv, canEdit, onClose, onCre
 
 export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [fise, setFise] = useState([])
-  const [activeFull, setActiveFull] = useState([]) // cu categorie joined
+  const [activeFull, setActiveFull] = useState([])
   const [presetItems, setPresetItems] = useState([])
+  const [kmOreMap, setKmOreMap] = useState({}) // ← Pachet C: km/ore live per activ
   const [load, setLoad] = useState(true)
 
-  // Filtre
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('Toate')
   const [tipF, setTipF] = useState('Toate')
@@ -1091,53 +1111,72 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
 
-  // Sortare
   const [sortBy, setSortBy] = useState({ col:'data_fisei', dir:'desc' })
 
-  // Modale
-  const [newModal, setNewModal] = useState(null)        // { activPreset?: id }
-  const [detailModal, setDetailModal] = useState(null)  // fișa.id
+  const [newModal, setNewModal] = useState(null)
+  const [detailModal, setDetailModal] = useState(null)
   const [acoperireModal, setAcoperireModal] = useState(false)
 
   const loadAll = useCallback(async () => {
     setLoad(true)
-    const [fisRes, actRes, presetRes] = await Promise.all([
+    const [fisRes, actRes, presetRes, kmOreRes] = await Promise.all([
       supabase
         .from('logistica_service_fise')
-        .select('*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)), logistica_service_intrari(id)')
+        .select('*, logistica_active(id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)), logistica_service_intrari(id)')
         .order('data_fisei', { ascending:false, nullsFirst:false })
         .order('id', { ascending:false }),
       supabase
         .from('logistica_active')
-        .select('id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)')
+        .select('id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)')
         .order('cod_intern', { nullsFirst:false }),
       supabase
         .from('logistica_service_itemi_preset')
         .select('*').eq('activ', true).order('grupa').order('ordine'),
+      // Pachet C: km/ore live per activ (din toate sursele agregate)
+      supabase
+        .from('v_active_km_ore')
+        .select('activ_id, km_live, ore_live'),
     ])
     if (fisRes.error) showToast(`Eroare la încărcare fișe: ${fisRes.error.message}`, 'error')
     if (actRes.error) showToast(`Eroare la încărcare active: ${actRes.error.message}`, 'error')
     if (presetRes.error) showToast(`Eroare la preset itemi: ${presetRes.error.message}`, 'error')
+    if (kmOreRes.error) showToast(`Eroare la km/ore live: ${kmOreRes.error.message}`, 'error')
     setFise(fisRes.data || [])
-    // Normalizez activul: categorie pe direct
     setActiveFull((actRes.data || []).map(a => ({
       ...a,
       categorie: a.logistica_categorii ? { tip: a.logistica_categorii.tip, subcategorie: a.logistica_categorii.subcategorie } : null,
     })))
     setPresetItems(presetRes.data || [])
+    // Populez kmOreMap: { [activ_id]: { km_live, ore_live } }
+    const map = {}
+    for (const r of (kmOreRes.data || [])) map[r.activ_id] = r
+    setKmOreMap(map)
     setLoad(false)
   }, [showToast])
 
   useEffect(() => { loadAll() }, [loadAll])
 
-  // Map: cate fișe are fiecare activ (pentru "Acoperire flotă")
   const fiseCountByActiv = useMemo(() => {
     const m = {}
     for (const f of fise) m[f.activ_id] = (m[f.activ_id] || 0) + 1
     return m
   }, [fise])
 
-  // KPI
+  const ultimaFisaPerActiv = useMemo(() => {
+    const m = {}
+    for (const f of fise) {
+      const cur = m[f.activ_id]
+      if (!cur || (f.data_fisei || '') > (cur.data_fisei || '')) m[f.activ_id] = f
+    }
+    return m
+  }, [fise])
+
+  const activMap = useMemo(() => {
+    const m = {}
+    for (const a of activeFull) m[a.id] = a
+    return m
+  }, [activeFull])
+
   const kpi = useMemo(() => {
     const total = fise.length
     const programat = fise.filter(f => f.status === 'programat').length
@@ -1146,10 +1185,19 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
     const sumaTotala = fise.reduce((s, f) => s + Number(f.suma_factura || 0), 0)
     const fara = activeFull.filter(a => !fiseCountByActiv[a.id]).length
     const acoperire = activeFull.length > 0 ? Math.round((1 - fara / activeFull.length) * 100) : 0
-    return { total, programat, in_lucru, finalizat, sumaTotala, fara, acoperire }
-  }, [fise, activeFull, fiseCountByActiv])
 
-  // Filtre + sortare
+    let scadDepasite = 0, scadAproape = 0
+    for (const f of Object.values(ultimaFisaPerActiv)) {
+      // Pachet C: folosim km/ore live din view
+      const km = kmOreMap[f.activ_id]
+      const u = calcUrmService(f, km?.km_live, km?.ore_live)
+      const lvl = urmServiceLevel(u)
+      if (lvl === 'depasit') scadDepasite++
+      else if (lvl === 'aproape') scadAproape++
+    }
+    return { total, programat, in_lucru, finalizat, sumaTotala, fara, acoperire, scadDepasite, scadAproape }
+  }, [fise, activeFull, fiseCountByActiv, ultimaFisaPerActiv, kmOreMap])
+
   const filtered = useMemo(() => {
     let dStart = null, dEnd = null
     const now = new Date()
@@ -1186,6 +1234,12 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         case 'status':        return f.status || ''
         case 'suma_factura':  return Number(f.suma_factura || 0)
         case 'numar_factura': return (f.numar_factura || '').toLowerCase()
+        case 'urmator': {
+          // Pachet C: folosim km/ore live din view
+          const km = kmOreMap[f.activ_id]
+          const u = calcUrmService(f, km?.km_live, km?.ore_live)
+          return u ? u.ramas : Number.MAX_SAFE_INTEGER
+        }
         default:              return f.id
       }
     }
@@ -1196,14 +1250,17 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       return 0
     })
     return r
-  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy])
+  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy, kmOreMap])
 
   const sumaFiltrata = useMemo(() => filtered.reduce((s, f) => s + Number(f.suma_factura || 0), 0), [filtered])
 
   const exportExcel = () => {
-    const header = ['#', 'Data', 'Cod TST', 'Plăcuță', 'Marcă', 'Model', 'Categorie', 'Tip', 'Status', 'Titlu', 'Locație', 'Nr. factură', 'Sumă (RON)', 'Manoperă (RON)', 'KM in', 'KM out', 'Ore in', 'Ore out', 'Diagnostic', 'Următor KM', 'Următor Ore', 'Următor data', 'Observații']
+    const header = ['#', 'Data', 'Cod TST', 'Plăcuță', 'Marcă', 'Model', 'Categorie', 'Tip', 'Status', 'Titlu', 'Locație', 'Nr. factură', 'Sumă (RON)', 'Manoperă (RON)', 'KM in', 'KM out', 'Ore in', 'Ore out', 'Diagnostic', 'Următor KM', 'Următor Ore', 'Următor data', 'Scadență', 'Observații']
     const rows = filtered.map((f, i) => {
       const a = f.logistica_active || {}
+      // Pachet C: folosim km/ore live din view
+      const km = kmOreMap[f.activ_id]
+      const u = calcUrmService(f, km?.km_live, km?.ore_live)
       return [
         i + 1, f.data_fisei ? new Date(f.data_fisei).toLocaleDateString('ro-RO') : '',
         a.cod_intern || '', a.nr_inmatriculare || '', a.marca || '', a.model || '',
@@ -1212,6 +1269,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         f.km_intrare ?? '', f.km_iesire ?? '', f.ore_intrare ?? '', f.ore_iesire ?? '',
         f.diagnostic_lucrari || '', f.urmatoarea_km ?? '', f.urmatoarea_ore ?? '',
         f.urmatoarea_data ? new Date(f.urmatoarea_data).toLocaleDateString('ro-RO') : '',
+        u ? u.label : '',
         f.observatii || '',
       ]
     })
@@ -1246,9 +1304,17 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   }
   const haveFiltre = search || catFilter !== 'Toate' || tipF !== 'Toate' || statusF !== 'Toate' || perioadaF !== 'toate'
 
+  const scadIcon = kpi.scadDepasite > 0 ? '🚨' : kpi.scadAproape > 0 ? '⚠️' : '✅'
+  const scadColor = kpi.scadDepasite > 0 ? G.red : kpi.scadAproape > 0 ? G.yellow : G.green
+  const scadValue = kpi.scadDepasite + kpi.scadAproape
+  const scadSub = kpi.scadDepasite > 0
+    ? `${kpi.scadDepasite} depășite${kpi.scadAproape > 0 ? ` · ${kpi.scadAproape} aproape` : ''}`
+    : kpi.scadAproape > 0
+      ? `${kpi.scadAproape} aproape (≤${PRAG_ZILE}z / ${PRAG_KM}km / ${PRAG_ORE}h)`
+      : 'Toate la zi'
+
   return (
     <>
-      {/* KPI BAR */}
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
         <KPICard icon="📋" label="Total fișe" value={kpi.total} color={G.logistica}
           sub={`${kpi.programat} programate · ${kpi.in_lucru} în lucru · ${kpi.finalizat} finalizate`} />
@@ -1256,9 +1322,9 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         <KPICard icon="📊" label="Acoperire flotă" value={`${kpi.acoperire}%`}
           color={kpi.acoperire >= 80 ? G.green : kpi.acoperire >= 50 ? G.yellow : G.red}
           sub={kpi.fara > 0 ? `${kpi.fara} active fără fișă` : 'Toate active acoperite'} />
+        <KPICard icon={scadIcon} label="Scadențe service" value={scadValue} color={scadColor} sub={scadSub} />
       </div>
 
-      {/* CATEGORIE TABS */}
       <div style={{...S.card, padding:'10px 14px', marginBottom:14}}>
         <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
           <span style={{fontSize:11, color:G.muted, fontWeight:600, marginRight:4}}>CATEGORIE:</span>
@@ -1277,7 +1343,6 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         </div>
       </div>
 
-      {/* FILTRE */}
       <div style={{...S.card, padding:14, marginBottom:14}}>
         <div style={{display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:10}}>
           <input placeholder="🔍 Caută cod TST, plăcuță, titlu, diagnostic, factură..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, width:340}} />
@@ -1320,7 +1385,6 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         </div>
       </div>
 
-      {/* TOOLBAR (sumă + butoane) */}
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:10}}>
         <div style={{fontSize:13, color:G.muted}}>
           <strong style={{color:G.text}}>{filtered.length}</strong>
@@ -1338,7 +1402,6 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         </div>
       </div>
 
-      {/* TABEL */}
       {load ? (
         <div style={{display:'flex', justifyContent:'center', padding:80}}>
           <div style={{width:32, height:32, border:`3px solid ${G.border}`, borderTopColor:G.logistica, borderRadius:'50%', animation:'sp 0.8s linear infinite'}} />
@@ -1364,8 +1427,9 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                   <SortableTh col="titlu"         sortBy={sortBy} setSortBy={setSortBy}>Titlu</SortableTh>
                   <SortableTh col="numar_factura" sortBy={sortBy} setSortBy={setSortBy} width={110}>Factură</SortableTh>
                   <SortableTh col="suma_factura"  sortBy={sortBy} setSortBy={setSortBy} width={120} align="right">Sumă</SortableTh>
+                  <SortableTh col="urmator"       sortBy={sortBy} setSortBy={setSortBy} width={150}>Următor</SortableTh>
                   <SortableTh col="status"        sortBy={sortBy} setSortBy={setSortBy} width={120}>Status</SortableTh>
-                  <th style={{width:80, padding:'10px 8px', borderBottom:`1px solid ${G.border}`, background:G.surface}}></th>
+                  <th style={{width:100, padding:'10px 8px', borderBottom:`1px solid ${G.border}`, background:G.surface}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1373,6 +1437,9 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                   const a = f.logistica_active || {}
                   const cat = a.logistica_categorii || {}
                   const nrIntrari = (f.logistica_service_intrari || []).length
+                  // Pachet C: folosim km/ore live din view
+                  const km = kmOreMap[f.activ_id]
+                  const u = calcUrmService(f, km?.km_live, km?.ore_live)
                   return (
                     <tr key={f.id} style={{borderBottom:`1px solid ${G.border}`}}
                         onMouseEnter={e => e.currentTarget.style.background = G.bg}
@@ -1399,10 +1466,11 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                       <td style={{padding:'10px 8px', fontSize:13, fontWeight:700, color: f.suma_factura ? G.green : G.dim, fontVariantNumeric:'tabular-nums', textAlign:'right'}}>
                         {f.suma_factura ? fmtRON(f.suma_factura) : '—'}
                       </td>
+                      <td style={{padding:'10px 8px'}}><UrmServiceBadge u={u} /></td>
                       <td style={{padding:'10px 8px'}}><StatusBadge status={f.status} /></td>
                       <td style={{padding:'10px 8px', textAlign:'right', whiteSpace:'nowrap'}}>
-                        <button onClick={() => setDetailModal(f.id)} title="Vezi detaliu" style={{...S.btnS, padding:'5px 8px', fontSize:14, color:G.muted, marginRight:4}}>👁</button>
-                        {canEdit && <button onClick={() => setDetailModal(f.id)} title="Editează" style={{...S.btnS, padding:'5px 8px', fontSize:14, color:G.logistica}}>✎</button>}
+                        <button onClick={() => setDetailModal(f.id)} title="Vezi detaliu" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.muted, marginRight:4}}>👁</button>
+                        {canEdit && <button onClick={() => setDetailModal(f.id)} title="Editează" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.logistica}}>✎</button>}
                       </td>
                     </tr>
                   )
@@ -1413,7 +1481,6 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         </div>
       )}
 
-      {/* MODALE */}
       {newModal && (
         <NewFisaModal
           activPreset={newModal.activPreset}
