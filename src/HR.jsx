@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { SalariiPage as SalariiOriginal } from './App.jsx'
 
 // Theme
 const G = {
@@ -68,6 +69,7 @@ export default function HRPage() {
   const [toast, setToast] = useState(null)
   const [editEmp, setEditEmp] = useState(null)
   const [showAddAut, setShowAddAut] = useState(null)  // employee_id
+  const [editAut, setEditAut] = useState(null)  // autorizatie object
   
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type })
@@ -148,17 +150,17 @@ export default function HRPage() {
       </div>
       
       {/* Tab navigation */}
-      <div style={{display:'flex', gap:6, marginBottom:18, padding:6, background:G.surface, borderRadius:12, border:`1px solid ${G.border}`, flexWrap:'wrap'}}>
+      <div style={{display:'flex', gap:8, marginBottom:18, padding:8, background:G.surface, borderRadius:14, border:`1px solid ${G.border}`, flexWrap:'wrap'}}>
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
-            padding:'10px 16px', borderRadius:8, border:'none', cursor:'pointer',
+            padding:'12px 20px', borderRadius:10, border:'none', cursor:'pointer',
             background: tab === t.key ? G.hr + '33' : 'transparent',
             color: tab === t.key ? G.hr : G.muted,
-            fontWeight:700, fontSize:13, display:'flex', alignItems:'center', gap:8,
-            transition:'all 0.15s'
+            fontWeight:700, fontSize:15, display:'flex', alignItems:'center', gap:10,
+            transition:'all 0.15s', letterSpacing:0.3
           }}>
-            <span>{t.icon}</span> {t.label}
-            {t.badge > 0 && <span style={{padding:'2px 7px', background:G.red, color:'#fff', borderRadius:10, fontSize:10, fontWeight:800}}>{t.badge}</span>}
+            <span style={{fontSize:18}}>{t.icon}</span> {t.label}
+            {t.badge > 0 && <span style={{padding:'3px 9px', background:G.red, color:'#fff', borderRadius:12, fontSize:13, fontWeight:800}}>{t.badge}</span>}
           </button>
         ))}
       </div>
@@ -166,7 +168,7 @@ export default function HRPage() {
       {load && <div style={{padding:60, textAlign:'center', color:G.muted}}><div className="sp" style={{margin:'0 auto'}}/></div>}
       
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
-      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} />}
+      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} />}
       {!load && tab === 'documente' && <TabDocumente employees={employees} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
@@ -179,6 +181,7 @@ export default function HRPage() {
           isAdmin={isAdmin}
           onClose={() => setEditEmp(null)}
           onReload={loadAll}
+          onEditAut={setEditAut}
           showToast={showToast}
         />
       )}
@@ -189,6 +192,16 @@ export default function HRPage() {
           tipuri={tipuri}
           onClose={() => setShowAddAut(null)}
           onSaved={() => { loadAll(); setShowAddAut(null) }}
+          showToast={showToast}
+        />
+      )}
+      
+      {editAut && (
+        <ModalEditAutorizatie 
+          autorizatie={editAut}
+          tipuri={tipuri}
+          onClose={() => setEditAut(null)}
+          onSaved={() => { loadAll(); setEditAut(null) }}
           showToast={showToast}
         />
       )}
@@ -298,15 +311,16 @@ function TabPersonal({ employees, autorizatii, onClickEmp, showToast }) {
 // ===========================================================================
 // TAB AUTORIZAȚII — tabel cu toate
 // ===========================================================================
-function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, showToast }) {
+function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, showToast, onEditAut }) {
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('Toate')
   const [statusFilter, setStatusFilter] = useState('toate')
+  const [sortBy, setSortBy] = useState('nume')  // nume | tip | expirare | status
   
   const categorii = useMemo(() => ['Toate', ...new Set(tipuri.map(t => t.categorie).filter(Boolean))], [tipuri])
   
   const filtered = useMemo(() => {
-    return autorizatii.filter(a => {
+    let result = autorizatii.filter(a => {
       if (catFilter !== 'Toate' && a.tip_categorie !== catFilter) return false
       if (statusFilter !== 'toate' && a.status !== statusFilter) return false
       if (search.trim()) {
@@ -319,7 +333,16 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
       }
       return true
     })
-  }, [autorizatii, catFilter, statusFilter, search])
+    // Sortare
+    if (sortBy === 'nume') result.sort((a,b) => (a.employee_name || '').localeCompare(b.employee_name || ''))
+    else if (sortBy === 'tip') result.sort((a,b) => (a.tip_denumire || '').localeCompare(b.tip_denumire || ''))
+    else if (sortBy === 'expirare') result.sort((a,b) => (a.data_expirare || '9999').localeCompare(b.data_expirare || '9999'))
+    else if (sortBy === 'status') {
+      const order = { expirat: 0, expira_7z: 1, expira_30z: 2, expira_60z: 3, valid: 4, fara_exp: 5, fara_data: 6 }
+      result.sort((a,b) => (order[a.status] ?? 99) - (order[b.status] ?? 99))
+    }
+    return result
+  }, [autorizatii, catFilter, statusFilter, search, sortBy])
   
   const handleDelete = async (a) => {
     if (!confirm(`Ștergi autorizația ${a.tip_denumire} pentru ${a.employee_name}?`)) return
@@ -333,6 +356,12 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
       <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
         <input type="text" value={search} onChange={e => setSearch(e.target.value)} 
           placeholder="🔍 Caută după nume angajat, tip, număr, procedeu..." style={{...S.input, flex:1, minWidth:280}}/>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{...S.input, width:'auto', minWidth:160}}>
+          <option value="nume">🔤 Sortare: Nume A-Z</option>
+          <option value="tip">📋 Sortare: Tip A-Z</option>
+          <option value="expirare">📅 Sortare: Data expirare</option>
+          <option value="status">🚦 Sortare: Status (expirate sus)</option>
+        </select>
         <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{...S.input, width:'auto', minWidth:140}}>
           {categorii.map(c => <option key={c} value={c}>{c === 'Toate' ? '📋 Toate categoriile' : c}</option>)}
         </select>
@@ -380,7 +409,10 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
                   <td style={tdStyle}>{statusBadge(a.status, a.zile_pana_expirare)}</td>
                   {isAdmin && (
                     <td style={{...tdStyle, textAlign:'right'}}>
-                      <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}>🗑️</button>
+                      <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
+                        <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
+                        <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Șterge">🗑️</button>
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -392,7 +424,7 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
       </div>
       
       <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
-        💡 {filtered.length} / {autorizatii.length} autorizații afișate · Click pe angajat în tab "Angajați" pentru detalii și editare
+        💡 {filtered.length} / {autorizatii.length} autorizații afișate
       </div>
     </div>
   )
@@ -498,18 +530,12 @@ function TabDocumente({ employees, showToast }) {
 }
 
 // ===========================================================================
-// TAB SALARII — copiat din Pontaj fără Export Banca (super admin only)
+// TAB SALARII — Oglindire SalariiPage din Pontaj fără Export Banca (super admin only)
 // ===========================================================================
 function TabSalarii({ showToast }) {
   return (
-    <div style={{...S.card, padding:50, textAlign:'center'}}>
-      <div style={{fontSize:48, marginBottom:14}}>💰</div>
-      <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:8}}>Salarii — Vezi în Modulul Pontaj</div>
-      <div style={{fontSize:13, color:G.muted, maxWidth:500, margin:'0 auto 16px', lineHeight:1.6}}>
-        Pentru moment, foloseşte modulul Pontaj → Salarii (acces direct).<br/>
-        În <strong>Faza 2</strong> vom integra aici versiunea fără Export Banca (doar super admin).
-      </div>
-      <a href="/salarii" style={{...S.btnP, textDecoration:'none', display:'inline-block'}}>💰 Deschide Salarii (Pontaj)</a>
+    <div style={{...S.card, padding:0, overflow:'hidden'}}>
+      <SalariiOriginal noExport={true} />
     </div>
   )
 }
@@ -517,16 +543,29 @@ function TabSalarii({ showToast }) {
 // ===========================================================================
 // MODAL PROFIL ANGAJAT — Date + Tab Autorizații
 // ===========================================================================
-function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, onReload, showToast }) {
+function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, onReload, onEditAut, showToast }) {
   const [tabM, setTabM] = useState('date')  // date | autorizatii
   const [showAddAut, setShowAddAut] = useState(false)
-  const [editAut, setEditAut] = useState(null)
+  const [editingAreAut, setEditingAreAut] = useState(false)
+  const [areAut, setAreAut] = useState(employee.are_autorizatii || false)
+  
+  // Auto-calculate (real count) for display
+  const realAutCount = autorizatii.length
   
   const handleDelete = async (a) => {
     if (!confirm(`Ștergi autorizația ${a.tip_denumire}?`)) return
     const { error } = await supabase.from('hr_autorizatii').delete().eq('id', a.id)
     if (error) showToast('Eroare: ' + error.message, 'error')
     else { showToast('✓ Șters'); onReload() }
+  }
+  
+  const saveAreAut = async (val) => {
+    const { error } = await supabase.from('employees').update({ are_autorizatii: val }).eq('id', employee.id)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    setAreAut(val)
+    setEditingAreAut(false)
+    showToast('✓ Actualizat')
+    onReload()
   }
   
   return (
@@ -547,7 +586,7 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
         <div style={{display:'flex', gap:6, padding:'10px 24px', borderBottom:`1px solid ${G.border}`}}>
           {[
             { key: 'date', icon:'📋', label: 'Date personale' },
-            { key: 'autorizatii', icon: '📑', label: `Autorizații (${autorizatii.length})` },
+            { key: 'autorizatii', icon: '📑', label: `Autorizații (${realAutCount})` },
           ].map(t => (
             <button key={t.key} onClick={() => setTabM(t.key)} style={{
               padding:'8px 14px', borderRadius:8, border:'none', cursor:'pointer',
@@ -567,7 +606,29 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
               <Field label="Telefon" value={employee.telefon} />
               <Field label="Activ" value={employee.active ? 'Da' : 'Nu'} />
               <Field label="Data angajare" value={employee.hire_date} />
-              <Field label="Are autorizații" value={employee.are_autorizatii ? 'Da' : 'Nu'} />
+              {/* Are autorizatii editabil */}
+              <div>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>
+                  Are autorizații {realAutCount > 0 && <span style={{color:G.green, fontWeight:600, textTransform:'none', letterSpacing:0}}>· auto: {realAutCount} înregistrate</span>}
+                </div>
+                {editingAreAut && isAdmin ? (
+                  <div style={{display:'flex', gap:6}}>
+                    <button onClick={() => saveAreAut(true)} style={{flex:1, padding:'8px', background:G.green, color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:600}}>✓ DA</button>
+                    <button onClick={() => saveAreAut(false)} style={{flex:1, padding:'8px', background:G.red, color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:600}}>✗ NU</button>
+                    <button onClick={() => setEditingAreAut(false)} style={{...S.btnS, padding:'8px 10px'}}>×</button>
+                  </div>
+                ) : (
+                  <div onClick={() => isAdmin && setEditingAreAut(true)} style={{
+                    fontSize:13, color: areAut ? G.green : G.muted, padding:'8px 10px', background:G.bg, 
+                    border:`1px solid ${areAut ? G.green+'55' : G.border}`, borderRadius:6, minHeight:32,
+                    cursor: isAdmin ? 'pointer' : 'default', fontWeight:600,
+                    display:'flex', justifyContent:'space-between', alignItems:'center'
+                  }}>
+                    <span>{areAut ? '✓ Da' : '✗ Nu'}</span>
+                    {isAdmin && <span style={{fontSize:10, color:G.muted, fontWeight:400}}>✏️ click pentru editare</span>}
+                  </div>
+                )}
+              </div>
               <Field label="Șantier alocat" value={employee.sites?.name} />
               {employee.observatii_hr && (
                 <div style={{gridColumn:'1/-1'}}>
@@ -607,7 +668,10 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                         <div style={{display:'flex', flexDirection:'column', gap:6, alignItems:'flex-end'}}>
                           {statusBadge(a.status, a.zile_pana_expirare)}
                           {isAdmin && (
-                            <button onClick={() => handleDelete(a)} style={{padding:'3px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}>🗑️</button>
+                            <div style={{display:'flex', gap:4}}>
+                              <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
+                              <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Șterge">🗑️</button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -798,4 +862,151 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
 
 function Lbl({ children }) {
   return <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>{children}</div>
+}
+
+// ===========================================================================
+// MODAL EDIT AUTORIZAȚIE — pre-fill cu datele existente
+// ===========================================================================
+function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast }) {
+  const [tipId, setTipId] = useState(autorizatie.tip_id || '')
+  const [numar, setNumar] = useState(autorizatie.numar_autorizatie || '')
+  const [emitent, setEmitent] = useState(autorizatie.emitent || '')
+  const [dataEmitere, setDataEmitere] = useState(autorizatie.data_emitere || '')
+  const [dataExpirare, setDataExpirare] = useState(autorizatie.data_expirare || '')
+  const [faraExpirare, setFaraExpirare] = useState(autorizatie.fara_expirare || false)
+  const [procedeu, setProcedeu] = useState(autorizatie.procedeu_sudura || '')
+  const [diametru, setDiametru] = useState(autorizatie.diametru_teava_mm || '')
+  const [calitateMat, setCalitateMat] = useState(autorizatie.calitate_material || '')
+  const [domenii, setDomenii] = useState(autorizatie.domenii || [])
+  const [observatii, setObservatii] = useState(autorizatie.observatii || '')
+  const [saving, setSaving] = useState(false)
+  
+  const tipSelectat = tipuri.find(t => t.id === Number(tipId))
+  
+  const save = async () => {
+    if (!tipId) { showToast('Alege tipul autorizației', 'warn'); return }
+    setSaving(true)
+    
+    const payload = {
+      tip_id: Number(tipId),
+      numar_autorizatie: numar.trim() || null,
+      emitent: emitent.trim() || null,
+      data_emitere: dataEmitere || null,
+      data_expirare: faraExpirare ? null : (dataExpirare || null),
+      fara_expirare: faraExpirare,
+      procedeu_sudura: procedeu.trim() || null,
+      diametru_teava_mm: diametru ? Number(diametru) : null,
+      calitate_material: calitateMat.trim() || null,
+      domenii: domenii.length > 0 ? domenii : null,
+      observatii: observatii.trim() || null,
+      modificat_la: new Date().toISOString(),
+    }
+    
+    const { error } = await supabase.from('hr_autorizatii').update(payload).eq('id', autorizatie.id)
+    setSaving(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✓ Autorizație actualizată')
+    onSaved()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:560, maxHeight:'92vh', overflow:'auto', padding:24}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize:17, fontWeight:700, color:G.text}}>✏️ Editează Autorizație</div>
+            <div style={{fontSize:11, color:G.muted, marginTop:2}}>{autorizatie.employee_name}</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        <Lbl>Tip Autorizație *</Lbl>
+        <select value={tipId} onChange={e => setTipId(e.target.value)} style={{...S.input, marginBottom:12}}>
+          <option value="">— alege —</option>
+          {Object.entries(tipuri.reduce((acc, t) => { (acc[t.categorie] = acc[t.categorie] || []).push(t); return acc }, {})).map(([cat, lista]) => (
+            <optgroup key={cat} label={cat.toUpperCase()}>
+              {lista.map(t => <option key={t.id} value={t.id}>{t.denumire}</option>)}
+            </optgroup>
+          ))}
+        </select>
+        
+        {tipSelectat?.necesita_procedura && (
+          <div style={{marginBottom:12, padding:12, background:G.orange+'11', border:`1px solid ${G.orange}33`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.orange, fontWeight:700, marginBottom:8}}>🔥 SUDOR — date specifice</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8}}>
+              <div>
+                <Lbl>Procedeu</Lbl>
+                <select value={procedeu} onChange={e => setProcedeu(e.target.value)} style={S.input}>
+                  <option value="">— alege —</option>
+                  {PROCEDEE_SUDURA.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
+                <Lbl>Diametru (mm)</Lbl>
+                <input type="number" step="0.1" value={diametru} onChange={e => setDiametru(e.target.value)} placeholder="48.3" style={S.input}/>
+              </div>
+              <div>
+                <Lbl>Calitate material</Lbl>
+                <select value={calitateMat} onChange={e => setCalitateMat(e.target.value)} style={S.input}>
+                  <option value="">— alege —</option>
+                  {CALITATI_MATERIAL.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {tipSelectat?.necesita_domenii && (
+          <div style={{marginBottom:12, padding:12, background:G.blue+'11', border:`1px solid ${G.blue}33`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.blue, fontWeight:700, marginBottom:8}}>🏷 Domenii (selectează multiple)</div>
+            <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+              {DOMENII_RTE.map(d => (
+                <label key={d} style={{display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background: domenii.includes(d) ? G.blue+'33' : G.bg, border:`1px solid ${domenii.includes(d) ? G.blue : G.border}`, borderRadius:6, cursor:'pointer', fontSize:12}}>
+                  <input type="checkbox" checked={domenii.includes(d)} onChange={e => {
+                    setDomenii(e.target.checked ? [...domenii, d] : domenii.filter(x => x !== d))
+                  }} style={{accentColor:G.blue}}/>
+                  {d}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10}}>
+          <div>
+            <Lbl>Număr autorizație</Lbl>
+            <input value={numar} onChange={e => setNumar(e.target.value)} style={S.input}/>
+          </div>
+          <div>
+            <Lbl>Emitent</Lbl>
+            <input value={emitent} onChange={e => setEmitent(e.target.value)} style={S.input}/>
+          </div>
+        </div>
+        
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10}}>
+          <div>
+            <Lbl>Data emitere</Lbl>
+            <input type="date" value={dataEmitere || ''} onChange={e => setDataEmitere(e.target.value)} style={S.input}/>
+          </div>
+          <div>
+            <Lbl>Data expirare</Lbl>
+            <input type="date" value={dataExpirare || ''} onChange={e => setDataExpirare(e.target.value)} disabled={faraExpirare} style={{...S.input, opacity: faraExpirare ? 0.5 : 1}}/>
+          </div>
+        </div>
+        
+        <label style={{display:'flex', alignItems:'center', gap:8, marginBottom:14, cursor:'pointer', fontSize:13, color:G.text}}>
+          <input type="checkbox" checked={faraExpirare} onChange={e => setFaraExpirare(e.target.checked)} style={{accentColor:G.green}}/>
+          ∞ Fără expirare (curs permanent — "NU E CAZUL")
+        </label>
+        
+        <Lbl>Observații</Lbl>
+        <textarea value={observatii} onChange={e => setObservatii(e.target.value)} style={{...S.input, minHeight:60, resize:'vertical', marginBottom:14, fontFamily:'inherit'}}/>
+        
+        <div style={{display:'flex', gap:10, justifyContent:'flex-end', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          <button onClick={onClose} style={S.btnS}>Anulează</button>
+          <button onClick={save} disabled={saving || !tipId} style={{...S.btnP, opacity: (saving || !tipId) ? 0.5 : 1}}>{saving ? '...' : '✓ Salvează modificările'}</button>
+        </div>
+      </div>
+    </div>
+  )
 }

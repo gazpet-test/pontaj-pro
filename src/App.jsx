@@ -2998,7 +2998,7 @@ function AdminPage() {
 }
 
 // ─── Salarii Page ─────────────────────────────────────────────────────────────
-function SalariiPage() {
+export function SalariiPage({ noExport = false } = {}) {
   const { profile } = useAuth()
   const [employees,setEmployees]=useState([])
   const [salaries,setSalaries]=useState({})
@@ -3280,7 +3280,7 @@ function SalariiPage() {
           <select value={deptF} onChange={e=>setDeptF(e.target.value)}>
             <option>Toate</option>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
           </select>
-          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',display:'flex',alignItems:'center',gap:6}}>🏦 Export Bancă Salarii</button>
+          <button onClick={exportBanca} style={{...S.btnP,background:'#1A4A1A',display:'flex',alignItems:'center',gap:6, display: noExport ? 'none' : 'flex'}}>🏦 Export Bancă Salarii</button>
         </div>
       </div>
 
