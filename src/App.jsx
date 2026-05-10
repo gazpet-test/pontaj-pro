@@ -311,6 +311,30 @@ function Layout({ children }) {
         </div>
         {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
+          {/* Buton global Cere Transport — vizibil pentru oricine cu acces la modulul comanda_transport */}
+          {hasModuleAccess(profile, 'comanda_transport') && (
+            <button
+              onClick={() => nav('/logistica?tab=transporturi&action=new')}
+              title="Solicită un transport (acces rapid din orice modul)"
+              style={{
+                display:'flex', alignItems:'center', gap:6,
+                padding:'7px 14px',
+                background: '#E3B341' + '22',
+                color: '#E3B341',
+                border: `1px solid #E3B341` + '55',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer',
+                transition: 'all .15s',
+                fontFamily: 'inherit',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#E3B341' + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#E3B341' + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
+            >
+              🚚 Cere transport
+            </button>
+          )}
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
             <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
@@ -709,9 +733,43 @@ function DashboardPage() {
         <div style={{fontSize:11,color:G.purple+'99'}}>{expiringContracts.slice(0,3).map(e=>`${e.employees?.name} (${new Date(e.contract_expiry).toLocaleDateString('ro-RO')})`).join(', ')}{expiringContracts.length>3?` +${expiringContracts.length-3}`:''}</div></div>
       </div>}
       
-      {/* === ALERTĂ TRANSPORTURI PENDINTE — ELIMINATĂ TEMPORAR === */}
-      {/* Va fi reintegrată în Modulul Execuție (per manager proiect) — nu pe Dashboard global */}
-      {/* {nrTransportCerute > 0 && ( ... )} */}
+      {/* === ALERTĂ TRANSPORTURI PENDINTE (pentru superadmin + admin_logistica) === */}
+      {nrTransportCerute > 0 && (
+        <div 
+          onClick={() => navigate('/logistica?tab=transporturi')}
+          style={{
+            background: 'linear-gradient(135deg, #7C2D12 0%, #9A3412 100%)',
+            border: `2px solid #FB923C`,
+            borderRadius: 12,
+            padding: '12px 18px',
+            marginBottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            cursor: 'pointer',
+            transition: 'transform 0.15s'
+          }}
+          onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
+          onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
+        >
+          <div style={{fontSize: 28, lineHeight: 1}}>🚚</div>
+          <div style={{flex: 1}}>
+            <div style={{fontSize: 14, fontWeight: 800, color: '#FFF', marginBottom: 4}}>
+              {nrTransportCerute} {nrTransportCerute === 1 ? 'cerere transport așteaptă' : 'cereri transport așteaptă'} aprobare!
+            </div>
+            <div style={{fontSize: 11, color: '#FED7AA', lineHeight: 1.5}}>
+              {transportSamples.map(t => {
+                const dataS = t.data_solicitarii ? new Date(t.data_solicitarii).toLocaleDateString('ro-RO', {day:'2-digit', month:'2-digit'}) : '?'
+                return `${t.numar_transport || '#'+t.id} (${t.tip || '?'}) · ${t.solicitant?.name || '?'} · ${dataS}`
+              }).join(' · ')}
+              {nrTransportCerute > 3 && ` · +${nrTransportCerute - 3} alte`}
+            </div>
+          </div>
+          <div style={{fontSize: 13, color: '#FFF', fontWeight: 700, padding: '6px 12px', background: 'rgba(255,255,255,0.15)', borderRadius: 8, whiteSpace: 'nowrap'}}>
+            Aprobă →
+          </div>
+        </div>
+      )}
       
       {/* === ALERTĂ AVIZE NESEMNATE DE DESTINATAR > 3 ZILE === */}
       {avizeNesemnate.length > 0 && (

@@ -3,10 +3,9 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
-import ServiceTab from './ServiceTab.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -1448,6 +1447,8 @@ function TabsBar({ tab, setTab }) {
     { key: 'documente', icon: '📎', label: 'Documente' },
     { key: 'service',   icon: '🔧', label: 'Service' },
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
+    { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
+    { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -1474,792 +1475,6 @@ function TabsBar({ tab, setTab }) {
         )
       })}
     </div>
-  )
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// TAB DOCUMENTE — Hub cu 4 sub-tab-uri
-// ════════════════════════════════════════════════════════════════════════════
-
-function DocStatusBadge({ zile }) {
-  if (zile === null || zile === undefined) {
-    return <span style={{fontSize:11, padding:'2px 8px', borderRadius:4, background:G.dim+'22', color:G.dim, fontWeight:600}}>—</span>
-  }
-  if (zile < 0) {
-    return <span style={{fontSize:11, padding:'2px 8px', borderRadius:4, background:G.red+'22', color:G.red, fontWeight:700}}>EXPIRAT ({Math.abs(zile)}z)</span>
-  }
-  if (zile <= 30) {
-    return <span style={{fontSize:11, padding:'2px 8px', borderRadius:4, background:G.orange+'22', color:G.orange, fontWeight:700}}>{zile}z</span>
-  }
-  if (zile <= 90) {
-    return <span style={{fontSize:11, padding:'2px 8px', borderRadius:4, background:G.yellow+'22', color:G.yellow, fontWeight:600}}>{zile}z</span>
-  }
-  return <span style={{fontSize:11, padding:'2px 8px', borderRadius:4, background:G.green+'22', color:G.green, fontWeight:600}}>{zile}z</span>
-}
-
-function DocumenteSubTabs({ subtab, setSubtab, kpiAlerte }) {
-  const tabs = [
-    { key: 'flota',    icon: '🚛', label: 'Flotă' },
-    { key: 'personal', icon: '👤', label: 'Personal' },
-    { key: 'amc',      icon: '🔬', label: 'Echipamente AMC' },
-    { key: 'alerte',   icon: '🔔', label: 'Alerte', badge: kpiAlerte },
-  ]
-  return (
-    <div style={{display:'flex', gap:6, marginBottom:14, padding:4, background:G.bg, borderRadius:9, border:`1px solid ${G.border}`, width:'fit-content', flexWrap:'wrap'}}>
-      {tabs.map(t => {
-        const a = subtab === t.key
-        return (
-          <button key={t.key} onClick={()=>setSubtab(t.key)} style={{
-            padding:'8px 14px', borderRadius:6, border:'none',
-            cursor:'pointer', fontSize:13,
-            fontWeight: a?700:500,
-            background: a ? G.logistica + '33' : 'transparent',
-            color: a ? G.logistica : G.muted,
-            display:'flex', alignItems:'center', gap:6,
-            transition:'all .15s',
-          }}>
-            <span style={{fontSize:14}}>{t.icon}</span>
-            {t.label}
-            {t.badge > 0 && (
-              <span style={{
-                fontSize:10, padding:'1px 6px', borderRadius:8,
-                background: a ? G.red : G.red+'33',
-                color: a ? 'white' : G.red, fontWeight:700, marginLeft:2
-              }}>{t.badge}</span>
-            )}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// ─── DocumenteTab (parent) ──────────────────────────────────────────────────
-function DocumenteTab({ active, accessLevel, profile, showToast }) {
-  const [subtab, setSubtab] = useState('flota')
-  const [kpiAlerte, setKpiAlerte] = useState(0)
-  
-  // Fetch count alerte (expirate + 30z) pentru badge
-  useEffect(() => {
-    const fetchAlerteCount = async () => {
-      const in30 = new Date(Date.now() + 30*86400000).toISOString().split('T')[0]
-      const [{ count: flotaCnt }, { count: hrCnt }] = await Promise.all([
-        supabase.from('logistica_documente').select('id', { count: 'exact', head: true })
-          .eq('entitate_tip', 'activ')
-          .lte('data_expirare', in30),
-        supabase.from('v_hr_autorizatii_status').select('id', { count: 'exact', head: true })
-          .eq('fara_expirare', false)
-          .lte('data_expirare', in30),
-      ])
-      setKpiAlerte((flotaCnt || 0) + (hrCnt || 0))
-    }
-    fetchAlerteCount().catch(()=>{})
-  }, [subtab])
-  
-  return (
-    <>
-      <DocumenteSubTabs subtab={subtab} setSubtab={setSubtab} kpiAlerte={kpiAlerte} />
-      {subtab === 'flota'    && <DocumenteFlotaPage    active={active} accessLevel={accessLevel} showToast={showToast} />}
-      {subtab === 'personal' && <DocumentePersonalPage showToast={showToast} />}
-      {subtab === 'amc'      && <DocumenteAMCPage />}
-      {subtab === 'alerte'   && <DocumenteAlertePage   active={active} />}
-    </>
-  )
-}
-
-// ─── Sub-tab Flotă: Documente vehicule/utilaje ─────────────────────────────
-function DocumenteFlotaPage({ active, accessLevel, showToast }) {
-  const [docs, setDocs] = useState([])
-  const [tipuri, setTipuri] = useState([])
-  const [load, setLoad] = useState(true)
-  const [search, setSearch] = useState('')
-  const [statusF, setStatusF] = useState('Toate')
-  const [tipF, setTipF] = useState('Toate')
-  const [modal, setModal] = useState(null)  // {mode:'create'|'edit', doc?}
-  
-  const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
-  
-  useEffect(() => {
-    fetchAll()
-  }, [])
-  
-  const fetchAll = async () => {
-    setLoad(true)
-    const [docsRes, tipuriRes] = await Promise.all([
-      supabase.from('logistica_documente')
-        .select('*, logistica_tipuri_documente(nume)')
-        .eq('entitate_tip', 'activ')
-        .order('data_expirare', { ascending: true }),
-      supabase.from('logistica_tipuri_documente')
-        .select('*').eq('activ', true).order('nume')
-    ])
-    setDocs(docsRes.data || [])
-    setTipuri(tipuriRes.data || [])
-    setLoad(false)
-  }
-  
-  // Map activ_id → label
-  const activMap = useMemo(() => {
-    const m = {}
-    active.forEach(a => {
-      const id = a.cod_intern || a.nr_inmatriculare || `#${a.id}`
-      const desc = [a.marca, a.model].filter(Boolean).join(' ')
-      m[a.id] = { id_label: id, desc, cod: a.cod_intern, plac: a.nr_inmatriculare }
-    })
-    return m
-  }, [active])
-  
-  // Enrichment + filtrare
-  const enriched = useMemo(() => {
-    const today = new Date()
-    return docs.map(d => {
-      const a = activMap[d.entitate_id] || {}
-      const expDate = d.data_expirare ? new Date(d.data_expirare) : null
-      const zile = expDate ? Math.ceil((expDate - today) / 86400000) : null
-      const status = zile === null ? 'fara_data' : 
-                     zile < 0 ? 'expirat' : 
-                     zile <= 30 ? 'expira_30z' : 
-                     zile <= 90 ? 'expira_90z' : 'ok'
-      return { ...d, activ: a, zile, status }
-    })
-  }, [docs, activMap])
-  
-  const filtered = useMemo(() => {
-    return enriched.filter(d => {
-      if (search) {
-        const s = search.toLowerCase()
-        const hay = [d.activ?.id_label, d.activ?.desc, d.logistica_tipuri_documente?.nume, d.numar_document].filter(Boolean).join(' ').toLowerCase()
-        if (!hay.includes(s)) return false
-      }
-      if (tipF !== 'Toate' && d.logistica_tipuri_documente?.nume !== tipF) return false
-      if (statusF === 'Expirate' && d.status !== 'expirat') return false
-      if (statusF === 'Expiră 30z' && d.status !== 'expira_30z') return false
-      if (statusF === 'Expiră 90z' && d.status !== 'expira_90z') return false
-      if (statusF === 'OK' && d.status !== 'ok') return false
-      return true
-    })
-  }, [enriched, search, statusF, tipF])
-  
-  // KPI
-  const kpi = useMemo(() => ({
-    total: enriched.length,
-    expirate: enriched.filter(d => d.status === 'expirat').length,
-    expira_30: enriched.filter(d => d.status === 'expira_30z').length,
-    expira_90: enriched.filter(d => d.status === 'expira_90z').length,
-    ok: enriched.filter(d => d.status === 'ok').length,
-  }), [enriched])
-  
-  const handleDelete = async (id) => {
-    if (!confirm('Sigur ștergi acest document?')) return
-    const { error } = await supabase.from('logistica_documente').delete().eq('id', id)
-    if (error) { showToast('Eroare la ștergere: '+error.message, 'error'); return }
-    showToast('✓ Document șters', 'success')
-    fetchAll()
-  }
-  
-  if (load) return <div style={{...S.card, padding:30, textAlign:'center', color:G.muted}}>⏳ Se încarcă documente...</div>
-  
-  return (
-    <>
-      {/* KPI cards */}
-      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
-        <KPICard icon="📄" label="Total docs flotă" value={kpi.total} color={G.blue} />
-        <KPICard icon="⚠" label="Expirate" value={kpi.expirate} color={G.red} />
-        <KPICard icon="⏰" label="Expiră 30z" value={kpi.expira_30} color={G.orange} />
-        <KPICard icon="📅" label="Expiră 90z" value={kpi.expira_90} color={G.yellow} />
-        <KPICard icon="✓" label="Valabile" value={kpi.ok} color={G.green} />
-      </div>
-      
-      {/* Filtre */}
-      <div style={{...S.card, padding:12, marginBottom:14, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center'}}>
-        <input
-          type="text"
-          placeholder="🔍 Caută vehicul, tip, număr..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{...S.input, flex:'1 1 240px', minWidth:240}}
-        />
-        <select value={tipF} onChange={e => setTipF(e.target.value)} style={{...S.input, width:'auto'}}>
-          <option>Toate</option>
-          {tipuri.map(t => <option key={t.id}>{t.nume}</option>)}
-        </select>
-        <div style={{display:'flex', gap:4}}>
-          {['Toate','Expirate','Expiră 30z','Expiră 90z','OK'].map(s => (
-            <button key={s} onClick={() => setStatusF(s)} style={{
-              ...S.btnS, padding:'6px 12px', fontSize:12,
-              background: statusF===s ? G.logistica+'22' : 'transparent',
-              color: statusF===s ? G.logistica : G.muted,
-              borderColor: statusF===s ? G.logistica+'55' : G.border,
-            }}>{s}</button>
-          ))}
-        </div>
-        {canEdit && (
-          <button onClick={() => setModal({mode:'create'})} style={{...S.btnP, marginLeft:'auto'}}>
-            + Adaugă document
-          </button>
-        )}
-      </div>
-      
-      {/* Tabel */}
-      {filtered.length === 0 ? (
-        <div style={{...S.card, padding:40, textAlign:'center', color:G.muted}}>
-          {docs.length === 0 ? 'Niciun document înregistrat încă.' : `Nu există documente care să respecte filtrele aplicate (${enriched.length} total).`}
-        </div>
-      ) : (
-        <div style={{...S.card, overflow:'hidden'}}>
-          <div style={{maxHeight:600, overflow:'auto'}}>
-            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
-              <thead style={{position:'sticky', top:0, background:G.surface, zIndex:1}}>
-                <tr style={{borderBottom:`2px solid ${G.border2}`}}>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Vehicul/Utilaj</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Tip doc</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Număr</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Emis</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Expiră</th>
-                  <th style={{padding:'10px 12px', textAlign:'center', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Status</th>
-                  {canEdit && <th style={{padding:'10px 12px', textAlign:'right', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Acțiuni</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((d, i) => (
-                  <tr key={d.id} style={{borderBottom:`1px solid ${G.border}`, background: i%2===0 ? 'transparent' : G.bg+'77'}}>
-                    <td style={{padding:'9px 12px'}}>
-                      <div style={{fontFamily:'monospace', fontSize:12, color: d.activ.cod ? G.blue : G.purple, fontWeight:700}}>
-                        {d.activ.id_label || `#${d.entitate_id}`}
-                      </div>
-                      <div style={{fontSize:11, color:G.muted}}>{d.activ.desc || '—'}</div>
-                    </td>
-                    <td style={{padding:'9px 12px', fontWeight:600}}>{d.logistica_tipuri_documente?.nume || '—'}</td>
-                    <td style={{padding:'9px 12px', fontFamily:'monospace', fontSize:12, color:G.muted}}>{d.numar_document || '—'}</td>
-                    <td style={{padding:'9px 12px', color:G.muted}}>{fmtDate(d.data_emitere)}</td>
-                    <td style={{padding:'9px 12px', fontWeight:600}}>{fmtDate(d.data_expirare)}</td>
-                    <td style={{padding:'9px 12px', textAlign:'center'}}><DocStatusBadge zile={d.zile} /></td>
-                    {canEdit && (
-                      <td style={{padding:'9px 12px', textAlign:'right', whiteSpace:'nowrap'}}>
-                        <button onClick={() => setModal({mode:'edit', doc:d})} style={{...S.btnS, padding:'4px 10px', fontSize:11, marginRight:6}}>✏️</button>
-                        <button onClick={() => handleDelete(d.id)} style={{...S.btnS, padding:'4px 10px', fontSize:11, color:G.red, borderColor:G.red+'55'}}>🗑</button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{padding:'8px 14px', borderTop:`1px solid ${G.border}`, fontSize:11, color:G.muted, background:G.bg}}>
-            {filtered.length} din {enriched.length} documente afișate
-          </div>
-        </div>
-      )}
-      
-      {modal && (
-        <DocumentFlotaModal
-          mode={modal.mode}
-          doc={modal.doc}
-          active={active}
-          tipuri={tipuri}
-          onClose={() => setModal(null)}
-          onSaved={() => { setModal(null); fetchAll() }}
-          showToast={showToast}
-        />
-      )}
-    </>
-  )
-}
-
-// ─── Modal Add/Edit document flotă ───────────────────────────────────────────
-function DocumentFlotaModal({ mode, doc, active, tipuri, onClose, onSaved, showToast }) {
-  const [form, setForm] = useState({
-    entitate_id: doc?.entitate_id || '',
-    tip_id: doc?.tip_id || '',
-    numar_document: doc?.numar_document || '',
-    data_emitere: doc?.data_emitere || '',
-    data_expirare: doc?.data_expirare || '',
-    emitent: doc?.emitent || '',
-    cost: doc?.cost || '',
-    observatii: doc?.observatii || '',
-  })
-  const [saving, setSaving] = useState(false)
-  const [pdfFile, setPdfFile] = useState(null)
-  const [searchActiv, setSearchActiv] = useState('')
-  
-  const setField = (k, v) => setForm(f => ({ ...f, [k]: v }))
-  
-  // Auto-calculate data_expirare când se selectează tip_id și se setează data_emitere
-  useEffect(() => {
-    if (form.tip_id && form.data_emitere && !doc) {
-      const tip = tipuri.find(t => t.id === Number(form.tip_id))
-      if (tip?.perioada_default_zile) {
-        const d = new Date(form.data_emitere)
-        d.setDate(d.getDate() + tip.perioada_default_zile)
-        setField('data_expirare', d.toISOString().split('T')[0])
-      }
-    }
-  }, [form.tip_id, form.data_emitere])
-  
-  const activeFiltered = useMemo(() => {
-    if (!searchActiv) return active.slice(0, 50)
-    const s = searchActiv.toLowerCase()
-    return active.filter(a => {
-      const lbl = [a.cod_intern, a.nr_inmatriculare, a.marca, a.model].filter(Boolean).join(' ').toLowerCase()
-      return lbl.includes(s)
-    }).slice(0, 50)
-  }, [searchActiv, active])
-  
-  const selectedActiv = active.find(a => a.id === Number(form.entitate_id))
-  
-  const handleSave = async () => {
-    if (!form.entitate_id) { showToast('Selectează vehicul/utilaj', 'error'); return }
-    if (!form.tip_id) { showToast('Selectează tip document', 'error'); return }
-    if (!form.data_expirare) { showToast('Data expirării obligatorie', 'error'); return }
-    
-    setSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    
-    let pdfUrl = doc?.pdf_url || null
-    if (pdfFile) {
-      const ext = pdfFile.name.split('.').pop()
-      const path = `${form.entitate_id}/${Date.now()}.${ext}`
-      const { error: upErr } = await supabase.storage.from('documente-flota').upload(path, pdfFile)
-      if (upErr) { setSaving(false); showToast('Eroare upload PDF: '+upErr.message, 'error'); return }
-      pdfUrl = path
-    }
-    
-    const payload = {
-      entitate_tip: 'activ',
-      entitate_id: Number(form.entitate_id),
-      active_id: Number(form.entitate_id),  // backwards compat
-      tip_id: Number(form.tip_id),
-      numar_document: form.numar_document.trim() || null,
-      data_emitere: form.data_emitere || null,
-      data_expirare: form.data_expirare,
-      emitent: form.emitent.trim() || null,
-      cost: form.cost ? Number(form.cost) : null,
-      observatii: form.observatii.trim() || null,
-      pdf_url: pdfUrl,
-      created_by: user?.id,
-    }
-    
-    let result
-    if (mode === 'create') {
-      result = await supabase.from('logistica_documente').insert(payload).select().single()
-    } else {
-      result = await supabase.from('logistica_documente').update(payload).eq('id', doc.id).select().single()
-    }
-    
-    setSaving(false)
-    if (result.error) { showToast('Eroare: '+result.error.message, 'error'); return }
-    showToast(mode==='create' ? '✓ Document adăugat' : '✓ Document actualizat', 'success')
-    onSaved()
-  }
-  
-  return (
-    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{
-        background:G.surface, border:`1px solid ${G.border2}`, borderRadius:14,
-        padding:24, width:'100%', maxWidth:560, maxHeight:'90vh', overflow:'auto'
-      }}>
-        <div style={{fontSize:18, fontWeight:800, color:G.text, marginBottom:18}}>
-          {mode==='create' ? '📄 Adaugă document' : '✏️ Editare document'}
-        </div>
-        
-        {/* Activ */}
-        <div style={{marginBottom:14}}>
-          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.5, marginBottom:6}}>
-            Vehicul / Utilaj *
-          </div>
-          {selectedActiv ? (
-            <div style={{padding:'8px 12px', background:G.bg, border:`1px solid ${G.border2}`, borderRadius:7, display:'flex', alignItems:'center', justifyContent:'space-between'}}>
-              <div>
-                <span style={{fontFamily:'monospace', fontWeight:700, color:G.blue}}>{selectedActiv.cod_intern || selectedActiv.nr_inmatriculare}</span>
-                <span style={{color:G.muted, marginLeft:8}}>{[selectedActiv.marca, selectedActiv.model].filter(Boolean).join(' ')}</span>
-              </div>
-              {mode==='create' && (
-                <button onClick={() => setField('entitate_id', '')} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>Schimbă</button>
-              )}
-            </div>
-          ) : (
-            <>
-              <input type="text" placeholder="🔍 Caută cod TST, plăcuță, marcă..." value={searchActiv} onChange={e=>setSearchActiv(e.target.value)} style={{...S.input, marginBottom:6}} />
-              <div style={{maxHeight:200, overflow:'auto', border:`1px solid ${G.border}`, borderRadius:7}}>
-                {activeFiltered.map(a => (
-                  <div key={a.id} onClick={() => setField('entitate_id', a.id)} style={{
-                    padding:'7px 12px', borderBottom:`1px solid ${G.border}`, cursor:'pointer',
-                    fontSize:13,
-                  }} onMouseEnter={e => e.currentTarget.style.background = G.bg} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <span style={{fontFamily:'monospace', fontWeight:700, color: a.cod_intern ? G.blue : G.purple}}>
-                      {a.cod_intern || a.nr_inmatriculare || `#${a.id}`}
-                    </span>
-                    <span style={{color:G.muted, marginLeft:8, fontSize:12}}>{[a.marca, a.model].filter(Boolean).join(' ')}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-        
-        {/* Tip document */}
-        <FieldSelect label="Tip document *" value={form.tip_id} onChange={v=>setField('tip_id',v)}
-          options={[{value:'', label:'— alege —'}, ...tipuri.map(t => ({value:t.id, label:t.nume}))]}
-        />
-        
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12}}>
-          <div>
-            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.5, marginBottom:6}}>Data emitere</div>
-            <input type="date" value={form.data_emitere} onChange={e=>setField('data_emitere', e.target.value)} style={S.input} />
-          </div>
-          <div>
-            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.5, marginBottom:6}}>Data expirare *</div>
-            <input type="date" value={form.data_expirare} onChange={e=>setField('data_expirare', e.target.value)} style={S.input} />
-          </div>
-        </div>
-        
-        <div style={{marginTop:12}}>
-          <FieldText label="Număr document" value={form.numar_document} onChange={v=>setField('numar_document',v)} placeholder="ex: RCA12345" />
-        </div>
-        <div style={{marginTop:12}}>
-          <FieldText label="Emitent" value={form.emitent} onChange={v=>setField('emitent',v)} placeholder="ex: Allianz, Service ITP Ploiești..." />
-        </div>
-        <div style={{marginTop:12}}>
-          <FieldText label="Cost (RON)" type="number" value={form.cost} onChange={v=>setField('cost',v)} />
-        </div>
-        
-        {/* PDF upload */}
-        <div style={{marginTop:12}}>
-          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.5, marginBottom:6}}>PDF document</div>
-          <input type="file" accept="application/pdf,image/*" onChange={e=>setPdfFile(e.target.files[0])} style={{...S.input, padding:6, fontSize:12}} />
-          {doc?.pdf_url && !pdfFile && (
-            <div style={{fontSize:11, color:G.green, marginTop:4}}>✓ PDF existent: {doc.pdf_url.split('/').pop()}</div>
-          )}
-        </div>
-        
-        <div style={{marginTop:12}}>
-          <FieldTextarea label="Observații" value={form.observatii} onChange={v=>setField('observatii',v)} rows={2} />
-        </div>
-        
-        <div style={{display:'flex', gap:10, justifyContent:'flex-end', marginTop:18, paddingTop:14, borderTop:`1px solid ${G.border}`}}>
-          <button onClick={onClose} disabled={saving} style={{...S.btnS, fontSize:13}}>Anulează</button>
-          <button onClick={handleSave} disabled={saving} style={{...S.btnP, opacity: saving ? .6 : 1, cursor: saving?'wait':'pointer'}}>
-            {saving ? '⏳ Se salvează...' : (mode==='create' ? '✓ Adaugă' : '✓ Salvează')}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Sub-tab Personal: Pull READ-ONLY din hr_autorizatii ────────────────────
-function DocumentePersonalPage({ showToast }) {
-  const [auts, setAuts] = useState([])
-  const [load, setLoad] = useState(true)
-  const [search, setSearch] = useState('')
-  const [statusF, setStatusF] = useState('Toate')
-  
-  useEffect(() => {
-    fetchAuts()
-  }, [])
-  
-  const fetchAuts = async () => {
-    setLoad(true)
-    // Folosim view-ul gata calculat din modulul HR
-    const { data, error } = await supabase
-      .from('v_hr_autorizatii_status')
-      .select('*')
-      .order('data_expirare', { ascending: true, nullsFirst: false })
-    if (error) { showToast('Eroare: '+error.message, 'error') }
-    setAuts(data || [])
-    setLoad(false)
-  }
-  
-  const enriched = useMemo(() => {
-    return auts.map(a => ({
-      ...a,
-      angajat: a.employee_name || '—',
-      dept: a.departament_hr,
-      tip_label: a.tip_denumire || a.tip_cod || '—',
-      numar: a.numar_autorizatie,
-      zile: a.zile_pana_expirare,
-      status: a.fara_expirare ? 'fara_data' : a.status,
-    }))
-  }, [auts])
-  
-  const filtered = useMemo(() => {
-    return enriched.filter(a => {
-      if (search) {
-        const s = search.toLowerCase()
-        const hay = [a.angajat, a.tip_label, a.numar, a.dept].filter(Boolean).join(' ').toLowerCase()
-        if (!hay.includes(s)) return false
-      }
-      if (statusF === 'Expirate' && a.status !== 'expirat') return false
-      if (statusF === 'Expiră 30z' && a.status !== 'expira_30z') return false
-      if (statusF === 'Expiră 90z' && a.status !== 'expira_90z') return false
-      if (statusF === 'OK' && a.status !== 'ok') return false
-      if (statusF === 'Fără expirare' && a.status !== 'fara_data') return false
-      return true
-    })
-  }, [enriched, search, statusF])
-  
-  const kpi = useMemo(() => ({
-    total: enriched.length,
-    expirate: enriched.filter(a => a.status === 'expirat').length,
-    expira_30: enriched.filter(a => a.status === 'expira_30z').length,
-    fara_data: enriched.filter(a => a.status === 'fara_data').length,
-  }), [enriched])
-  
-  if (load) return <div style={{...S.card, padding:30, textAlign:'center', color:G.muted}}>⏳ Se încarcă autorizații...</div>
-  
-  return (
-    <>
-      <div style={{...S.card, padding:'10px 14px', marginBottom:14, background:G.blue+'11', border:`1px solid ${G.blue}33`, fontSize:12, color:G.text}}>
-        ℹ️ <strong>Citire READ-ONLY</strong> din modulul HR. Pentru CRUD autorizații folosește <strong>HR → Autorizații</strong>.
-      </div>
-      
-      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
-        <KPICard icon="📋" label="Total autorizații" value={kpi.total} color={G.blue} />
-        <KPICard icon="⚠" label="Expirate" value={kpi.expirate} color={G.red} />
-        <KPICard icon="⏰" label="Expiră 30z" value={kpi.expira_30} color={G.orange} />
-        <KPICard icon="∞" label="Fără expirare" value={kpi.fara_data} color={G.muted} />
-      </div>
-      
-      <div style={{...S.card, padding:12, marginBottom:14, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center'}}>
-        <input type="text" placeholder="🔍 Caută angajat, tip, număr, dept..." value={search} onChange={e=>setSearch(e.target.value)} style={{...S.input, flex:'1 1 240px', minWidth:240}} />
-        <div style={{display:'flex', gap:4}}>
-          {['Toate','Expirate','Expiră 30z','Expiră 90z','OK','Fără expirare'].map(s => (
-            <button key={s} onClick={() => setStatusF(s)} style={{
-              ...S.btnS, padding:'6px 12px', fontSize:12,
-              background: statusF===s ? G.logistica+'22' : 'transparent',
-              color: statusF===s ? G.logistica : G.muted,
-              borderColor: statusF===s ? G.logistica+'55' : G.border,
-            }}>{s}</button>
-          ))}
-        </div>
-      </div>
-      
-      {filtered.length === 0 ? (
-        <div style={{...S.card, padding:40, textAlign:'center', color:G.muted}}>Nicio autorizație care să respecte filtrele.</div>
-      ) : (
-        <div style={{...S.card, overflow:'hidden'}}>
-          <div style={{maxHeight:600, overflow:'auto'}}>
-            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
-              <thead style={{position:'sticky', top:0, background:G.surface, zIndex:1}}>
-                <tr style={{borderBottom:`2px solid ${G.border2}`}}>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Angajat</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Departament</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Tip autorizație</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Număr</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Expiră</th>
-                  <th style={{padding:'10px 12px', textAlign:'center', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((a, i) => (
-                  <tr key={a.id} style={{borderBottom:`1px solid ${G.border}`, background: i%2===0 ? 'transparent' : G.bg+'77'}}>
-                    <td style={{padding:'9px 12px', fontWeight:600}}>{a.angajat}</td>
-                    <td style={{padding:'9px 12px', color:G.muted, fontSize:12}}>{a.dept || '—'}</td>
-                    <td style={{padding:'9px 12px'}}>{a.tip_label}</td>
-                    <td style={{padding:'9px 12px', fontFamily:'monospace', fontSize:12, color:G.muted}}>{a.numar || '—'}</td>
-                    <td style={{padding:'9px 12px'}}>{a.fara_expirare ? <span style={{color:G.muted, fontStyle:'italic'}}>fără expirare</span> : fmtDate(a.data_expirare)}</td>
-                    <td style={{padding:'9px 12px', textAlign:'center'}}><DocStatusBadge zile={a.fara_expirare ? null : a.zile} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{padding:'8px 14px', borderTop:`1px solid ${G.border}`, fontSize:11, color:G.muted, background:G.bg}}>
-            {filtered.length} din {enriched.length} autorizații
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-// ─── Sub-tab AMC (placeholder) ──────────────────────────────────────────────
-function DocumenteAMCPage() {
-  return (
-    <div style={{...S.card, padding:60, textAlign:'center'}}>
-      <div style={{fontSize:64, marginBottom:14, opacity:.4}}>🔬</div>
-      <div style={{fontSize:22, fontWeight:800, color:G.text, marginBottom:6}}>Echipamente AMC</div>
-      <div style={{fontSize:13, color:G.muted, marginBottom:18, maxWidth:480, margin:'0 auto 18px'}}>
-        Aparate de Măsură și Control: manometre, izotest, EIP, buletine etalonare, PRAM (verificare instalații electrice).
-      </div>
-      <div style={{display:'inline-block', padding:'6px 14px', background:G.yellow+'22', color:G.yellow, fontSize:11, fontWeight:700, borderRadius:14, letterSpacing:.5}}>
-        🚧 FAZA 2
-      </div>
-    </div>
-  )
-}
-
-// ─── Sub-tab Alerte (combinate flotă + HR) ──────────────────────────────────
-function DocumenteAlertePage({ active }) {
-  const [flotaDocs, setFlotaDocs] = useState([])
-  const [hrAuts, setHrAuts] = useState([])
-  const [load, setLoad] = useState(true)
-  const [sursa, setSursa] = useState('Toate')  // Toate | Flotă | HR
-  const [statusF, setStatusF] = useState('Toate')  // Toate | Expirate | 30z | 90z
-  
-  useEffect(() => {
-    const fetchAll = async () => {
-      setLoad(true)
-      const in90 = new Date(Date.now() + 90*86400000).toISOString().split('T')[0]
-      const [flota, hr] = await Promise.all([
-        supabase.from('logistica_documente')
-          .select('*, logistica_tipuri_documente(nume)')
-          .eq('entitate_tip', 'activ')
-          .lte('data_expirare', in90)
-          .order('data_expirare', { ascending: true }),
-        supabase.from('v_hr_autorizatii_status')
-          .select('*')
-          .eq('fara_expirare', false)
-          .lte('data_expirare', in90)
-          .order('data_expirare', { ascending: true })
-      ])
-      setFlotaDocs(flota.data || [])
-      setHrAuts(hr.data || [])
-      setLoad(false)
-    }
-    fetchAll().catch(()=>setLoad(false))
-  }, [])
-  
-  const activMap = useMemo(() => {
-    const m = {}
-    active.forEach(a => {
-      m[a.id] = {
-        label: a.cod_intern || a.nr_inmatriculare || `#${a.id}`,
-        desc: [a.marca, a.model].filter(Boolean).join(' ')
-      }
-    })
-    return m
-  }, [active])
-  
-  const merged = useMemo(() => {
-    const today = new Date()
-    const flotaItems = flotaDocs.map(d => {
-      const a = activMap[d.entitate_id] || {}
-      const zile = Math.ceil((new Date(d.data_expirare) - today) / 86400000)
-      return {
-        id: 'f' + d.id, sursa: 'Flotă',
-        target: a.label || `#${d.entitate_id}`,
-        target_desc: a.desc || '',
-        tip: d.logistica_tipuri_documente?.nume || '?',
-        numar: d.numar_document,
-        data_expirare: d.data_expirare,
-        zile,
-        status: zile < 0 ? 'expirat' : zile <= 30 ? 'expira_30z' : 'expira_90z'
-      }
-    })
-    const hrItems = hrAuts.map(a => {
-      const zile = Math.ceil((new Date(a.data_expirare) - today) / 86400000)
-      return {
-        id: 'h' + a.id, sursa: 'HR',
-        target: a.employee_name || '—',
-        target_desc: a.departament_hr || '',
-        tip: a.tip_denumire || a.tip_cod || '?',
-        numar: a.numar_autorizatie,
-        data_expirare: a.data_expirare,
-        zile,
-        status: zile < 0 ? 'expirat' : zile <= 30 ? 'expira_30z' : 'expira_90z'
-      }
-    })
-    return [...flotaItems, ...hrItems].sort((a,b) => a.zile - b.zile)
-  }, [flotaDocs, hrAuts, activMap])
-  
-  const filtered = useMemo(() => {
-    return merged.filter(m => {
-      if (sursa !== 'Toate' && m.sursa !== sursa) return false
-      if (statusF === 'Expirate' && m.status !== 'expirat') return false
-      if (statusF === 'Expiră 30z' && m.status !== 'expira_30z') return false
-      if (statusF === 'Expiră 90z' && m.status !== 'expira_90z') return false
-      return true
-    })
-  }, [merged, sursa, statusF])
-  
-  const kpi = useMemo(() => ({
-    total: merged.length,
-    flota: merged.filter(m => m.sursa === 'Flotă').length,
-    hr: merged.filter(m => m.sursa === 'HR').length,
-    expirate: merged.filter(m => m.status === 'expirat').length,
-    expira_30: merged.filter(m => m.status === 'expira_30z').length,
-  }), [merged])
-  
-  if (load) return <div style={{...S.card, padding:30, textAlign:'center', color:G.muted}}>⏳ Se încarcă alerte...</div>
-  
-  return (
-    <>
-      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
-        <KPICard icon="🔔" label="Total alerte" value={kpi.total} color={G.blue} />
-        <KPICard icon="🚛" label="Flotă" value={kpi.flota} color={G.logistica} />
-        <KPICard icon="👤" label="HR" value={kpi.hr} color={G.purple} />
-        <KPICard icon="⚠" label="Expirate" value={kpi.expirate} color={G.red} />
-        <KPICard icon="⏰" label="Expiră 30z" value={kpi.expira_30} color={G.orange} />
-      </div>
-      
-      <div style={{...S.card, padding:12, marginBottom:14, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center'}}>
-        <span style={{fontSize:11, color:G.muted, fontWeight:600}}>SURSĂ:</span>
-        {['Toate','Flotă','HR'].map(s => (
-          <button key={s} onClick={() => setSursa(s)} style={{
-            ...S.btnS, padding:'6px 12px', fontSize:12,
-            background: sursa===s ? G.purple+'22' : 'transparent',
-            color: sursa===s ? G.purple : G.muted,
-            borderColor: sursa===s ? G.purple+'55' : G.border,
-          }}>{s}</button>
-        ))}
-        <span style={{fontSize:11, color:G.muted, fontWeight:600, marginLeft:14}}>STATUS:</span>
-        {['Toate','Expirate','Expiră 30z','Expiră 90z'].map(s => (
-          <button key={s} onClick={() => setStatusF(s)} style={{
-            ...S.btnS, padding:'6px 12px', fontSize:12,
-            background: statusF===s ? G.logistica+'22' : 'transparent',
-            color: statusF===s ? G.logistica : G.muted,
-            borderColor: statusF===s ? G.logistica+'55' : G.border,
-          }}>{s}</button>
-        ))}
-      </div>
-      
-      {filtered.length === 0 ? (
-        <div style={{...S.card, padding:40, textAlign:'center', color:G.muted}}>
-          {merged.length === 0 ? '🎉 Nicio alertă activă în următoarele 90 zile!' : 'Nicio alertă cu filtrele aplicate.'}
-        </div>
-      ) : (
-        <div style={{...S.card, overflow:'hidden'}}>
-          <div style={{maxHeight:600, overflow:'auto'}}>
-            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
-              <thead style={{position:'sticky', top:0, background:G.surface, zIndex:1}}>
-                <tr style={{borderBottom:`2px solid ${G.border2}`}}>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase'}}>Sursă</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase'}}>Țintă</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase'}}>Tip document</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase'}}>Număr</th>
-                  <th style={{padding:'10px 12px', textAlign:'left', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase'}}>Expiră</th>
-                  <th style={{padding:'10px 12px', textAlign:'center', fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase'}}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((m, i) => (
-                  <tr key={m.id} style={{borderBottom:`1px solid ${G.border}`, background: i%2===0 ? 'transparent' : G.bg+'77'}}>
-                    <td style={{padding:'9px 12px'}}>
-                      <span style={{fontSize:11, padding:'2px 8px', borderRadius:4, fontWeight:700,
-                        background: m.sursa==='Flotă' ? G.logistica+'22' : G.purple+'22',
-                        color: m.sursa==='Flotă' ? G.logistica : G.purple,
-                      }}>{m.sursa==='Flotă' ? '🚛 Flotă' : '👤 HR'}</span>
-                    </td>
-                    <td style={{padding:'9px 12px'}}>
-                      <div style={{fontFamily: m.sursa==='Flotă' ? 'monospace' : 'inherit', fontWeight:700, color: m.sursa==='Flotă' ? G.blue : G.text}}>{m.target}</div>
-                      {m.target_desc && <div style={{fontSize:11, color:G.muted}}>{m.target_desc}</div>}
-                    </td>
-                    <td style={{padding:'9px 12px', fontWeight:600}}>{m.tip}</td>
-                    <td style={{padding:'9px 12px', fontFamily:'monospace', fontSize:12, color:G.muted}}>{m.numar || '—'}</td>
-                    <td style={{padding:'9px 12px', fontWeight:600}}>{fmtDate(m.data_expirare)}</td>
-                    <td style={{padding:'9px 12px', textAlign:'center'}}><DocStatusBadge zile={m.zile} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{padding:'8px 14px', borderTop:`1px solid ${G.border}`, fontSize:11, color:G.muted, background:G.bg}}>
-            {filtered.length} din {merged.length} alerte (90 zile)
-          </div>
-        </div>
-      )}
-    </>
   )
 }
 
@@ -2846,8 +2061,2989 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
 }
 
 
+
+// ============================================================
+// SECȚIUNE TRANSPORT — restaurată din legacy (commit 74e7c22, 10 mai 2026)
+// Adaptată pentru rolurile noi: superadmin, admin_logistica,
+// manager_santier, sef_echipa, contabilitate, hr
+// ============================================================
+
+// ============================================================
+
+const STATUS_TRANSPORT = {
+  cerut:      { label: 'Cerut',       color: G.orange, icon: '⏳' },
+  aprobat:    { label: 'Aprobat',     color: G.green,  icon: '✓' },
+  respins:    { label: 'Respins',     color: G.red,    icon: '✗' },
+  programat:  { label: 'Programat',   color: G.blue,   icon: '📅' },
+  in_tranzit: { label: 'În tranzit',  color: G.yellow, icon: '🚛' },
+  livrat:     { label: 'Livrat',      color: G.green,  icon: '✅' },
+  anulat:     { label: 'Anulat',      color: G.muted,  icon: '❌' },
+}
+
+const formatLocatie = (tip, site, text) => {
+  if (tip === 'sediu') return '🏢 Sediu Gazpet (Ploiești)'
+  if (tip === 'site' && site) return `📍 ${site.name || site}`
+  if (tip === 'alta' && text) return `📍 ${text}`
+  return '—'
+}
+
+const StatusBadge = ({ status }) => {
+  const s = STATUS_TRANSPORT[status] || STATUS_TRANSPORT.cerut
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '3px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+      background: s.color + '22', color: s.color, border: `1px solid ${s.color}55`
+    }}>
+      <span>{s.icon}</span>
+      <span>{s.label}</span>
+    </span>
+  )
+}
+
+// ----- Modal Comandă Transport -----
+// Helper: formatare activ pentru afișaj (priorizează cod_intern, fallback la nr_inmatriculare/marca)
+const formatActiv = (a) => {
+  if (!a) return null
+  const id = a.cod_intern || a.nr_inmatriculare || [a.marca, a.model].filter(Boolean).join(' ') || '?'
+  // Prefix cu nr_inventar dacă există (format: [MF-123] TST085)
+  return a.nr_inventar ? `[${a.nr_inventar}] ${id}` : id
+}
+
+// Liste funcții pentru filtrare
+const FUNCTII_TRANSPORT = [
+  { key: 'toate',     label: '👥 Toți angajații',    keywords: null },
+  { key: 'atestati',  label: '⭐ Toți atestații',     keywords: ['SOFER', 'MASINIST', 'MACARAGIU', 'MECANIC AUTO', 'MECANIC UTILAJE', 'TEHNICIAN MASINI'] },
+  { key: 'soferi',    label: '🚗 Doar Șoferi',        keywords: ['SOFER'] },
+  { key: 'masinisti', label: '🏗️ Doar Masiniști',    keywords: ['MASINIST'] },
+  { key: 'macaragii', label: '🏗️ Doar Macaragii',    keywords: ['MACARAGIU'] },
+  { key: 'mecanici',  label: '🔧 Doar Mecanici',      keywords: ['MECANIC AUTO', 'MECANIC UTILAJE'] },
+]
+
+// Helper: verifică dacă un employee are funcția dorită (din position SAU functii_extra)
+const matchesFunctie = (emp, functieKey) => {
+  const f = FUNCTII_TRANSPORT.find(x => x.key === functieKey)
+  if (!f || !f.keywords) return true
+  const pos = (emp.position || '').toUpperCase()
+  const extra = (emp.functii_extra || []).map(x => (x || '').toUpperCase())
+  return f.keywords.some(kw => pos.includes(kw) || extra.some(ex => ex.includes(kw) || kw.includes(ex)))
+}
+
+// Liste atestate pentru editare per angajat
+const ATESTATE_DISPONIBILE = ['SOFER', 'MASINIST', 'MACARAGIU', 'MECANIC AUTO', 'MECANIC UTILAJE', 'TEHNICIAN MASINI', 'OPERATOR PEHD']
+
+function ComandaTransportModal({ active, sites, profile, initialTransport, onClose, onSaved, showToast }) {
+  const isEdit = !!initialTransport
+  const T = initialTransport  // shortcut
+  
+  const [tip, setTip] = useState(T?.tip || 'utilaj')
+  const [activTransportatId, setActivTransportatId] = useState(T?.activ_transportat_id ? String(T.activ_transportat_id) : '')
+  const [continutDescriere, setContinutDescriere] = useState(T?.continut_descriere || '')
+  const [plecareTip, setPlecareTip] = useState(T?.plecare_tip || 'sediu')
+  const [plecareSiteId, setPlecareSiteId] = useState(T?.plecare_site_id ? String(T.plecare_site_id) : '')
+  const [plecareLocText, setPlecareLocText] = useState(T?.plecare_locatie_text || '')
+  const [destinatieTip, setDestinatieTip] = useState(T?.destinatie_tip || 'site')
+  const [destinatieSiteId, setDestinatieSiteId] = useState(T?.destinatie_site_id ? String(T.destinatie_site_id) : '')
+  const [destinatieLocText, setDestinatieLocText] = useState(T?.destinatie_locatie_text || '')
+  const [dataTransport, setDataTransport] = useState(T?.data_transport || new Date().toISOString().split('T')[0])
+  const [oraPlecare, setOraPlecare] = useState(T?.ora_plecare ? T.ora_plecare.substring(0,5) : '08:00')
+  const [masinaId, setMasinaId] = useState(T?.masina_id ? String(T.masina_id) : '')
+  const [remorcaId, setRemorcaId] = useState(T?.remorca_id ? String(T.remorca_id) : '')
+  const [filterFunctie, setFilterFunctie] = useState(T ? (T.necesita_sofer_atestat ? 'atestati' : 'toate') : (T?.tip === 'utilaj' || (!T && 'utilaj' === 'utilaj') ? 'atestati' : 'toate'))
+  const [soferMode, setSoferMode] = useState(
+    T ? (T.sofer_aloca_logistica ? 'logistica' : (T.sofer_gazpet ? 'manual' : 'extern')) 
+      : 'logistica'  // default pentru cereri noi: Logistică alege
+  )
+  const [soferEmployeeId, setSoferEmployeeId] = useState(T?.sofer_employee_id ? String(T.sofer_employee_id) : '')
+  const [soferSearch, setSoferSearch] = useState('')
+  const [soferExternNume, setSoferExternNume] = useState(T?.sofer_extern_nume || '')
+  const [soferExternTel, setSoferExternTel] = useState(T?.sofer_extern_telefon || '')
+  const [costEstimat, setCostEstimat] = useState(T?.cost_estimat || '')
+  const [observatii, setObservatii] = useState(T?.observatii || '')
+  const [managerPlecareId, setManagerPlecareId] = useState(T?.manager_plecare_id || '')
+  const [managerDestinatieId, setManagerDestinatieId] = useState(T?.manager_destinatie_id || '')
+  const [profilesList, setProfilesList] = useState([])
+  const [siteManagers, setSiteManagers] = useState({})  // map site_id → profile_id
+  const [employees, setEmployees] = useState([])
+  const [saving, setSaving] = useState(false)
+  
+  // Load profiles (pentru dropdown manageri — doar useri sistem)
+  useEffect(() => {
+    supabase.from('profiles').select('id, name, role, email').order('name').then(({ data }) => setProfilesList(data || []))
+  }, [])
+  
+  // Load alocări site → manager (din profile_sites)
+  useEffect(() => {
+    supabase.from('profile_sites').select('site_id, profile_id').then(({ data }) => {
+      const map = {}
+      ;(data || []).forEach(({ site_id, profile_id }) => {
+        if (!map[site_id]) map[site_id] = profile_id  // primul găsit (dacă mai mulți, prioritate primul)
+      })
+      setSiteManagers(map)
+    })
+  }, [])
+  
+  // Identifică Mitrache din profilesList (default pentru sediu) — acceptă ambele forme
+  const mitrachId = useMemo(() => {
+    const m = profilesList.find(p => p.email === 'alexandru.mitrache@gazpet.ro' || p.email === 'm.alexandru@gazpet.ro')
+    return m?.id || ''
+  }, [profilesList])
+  
+  // Identifică toți userii din departamentul Logistică (admin_logistica + superadmin pentru backup)
+  // Filtrul e dinamic pe rol — auto-update când se schimbă echipa în BD
+  const profilesLogistica = useMemo(() => {
+    return profilesList.filter(p => ['admin_logistica', 'superadmin'].includes(p.role))
+  }, [profilesList])
+  
+  // Auto-fill manager plecare la schimbarea sursei
+  useEffect(() => {
+    // Doar la creare nouă (nu la edit cu manager deja salvat)
+    if (isEdit) return
+    if (plecareTip === 'site' && plecareSiteId) {
+      const mgr = siteManagers[plecareSiteId]
+      if (mgr) setManagerPlecareId(mgr)
+    } else if (plecareTip === 'sediu') {
+      // Pentru sediu, default = Mitrache (Logistică)
+      if (mitrachId) setManagerPlecareId(mitrachId)
+    } else if (plecareTip === 'alta') {
+      setManagerPlecareId('')
+    }
+  }, [plecareTip, plecareSiteId, siteManagers, mitrachId, isEdit])
+  
+  // Auto-fill manager destinație la schimbarea destinației
+  useEffect(() => {
+    if (isEdit) return
+    if (destinatieTip === 'site' && destinatieSiteId) {
+      const mgr = siteManagers[destinatieSiteId]
+      if (mgr) setManagerDestinatieId(mgr)
+    } else if (destinatieTip === 'sediu') {
+      if (mitrachId) setManagerDestinatieId(mitrachId)
+    } else if (destinatieTip === 'alta') {
+      setManagerDestinatieId('')
+    }
+  }, [destinatieTip, destinatieSiteId, siteManagers, mitrachId, isEdit])
+  
+  // Load employees
+  const loadEmployees = async () => {
+    const { data } = await supabase.from('employees').select('id, name, position, department, functii_extra')
+      .eq('active', true).order('name')
+    setEmployees(data || [])
+  }
+  useEffect(() => { loadEmployees() }, [])
+  
+  // Auto-set filter când se schimbă tipul (doar la creare nouă, nu la edit)
+  useEffect(() => {
+    if (!isEdit) {
+      setFilterFunctie(tip === 'utilaj' ? 'atestati' : 'toate')
+      setSoferEmployeeId('')
+      setSoferSearch('')
+    }
+  }, [tip, isEdit])
+  
+  // Active transportabile
+  const activeTransportabile = useMemo(() => {
+    return active.filter(a => {
+      const t = a.logistica_categorii?.tip
+      return ['Utilaj', 'Camion', 'Autoutilitară', 'Cap tractor', 'Container'].includes(t)
+    })
+  }, [active])
+  
+  // Mijloc principal
+  const masiniPrincipale = useMemo(() => {
+    return active.filter(a => {
+      const t = a.logistica_categorii?.tip
+      if (tip === 'utilaj') return ['Camion', 'Cap tractor', 'Autoutilitară'].includes(t)
+      return ['Autoturism', 'Autoutilitară'].includes(t)
+    })
+  }, [active, tip])
+  
+  // Remorci/Trailere/Semiremorci
+  const remorciDisponibile = useMemo(() => {
+    if (tip !== 'utilaj') return []
+    return active.filter(a => {
+      const t = a.logistica_categorii?.tip
+      return ['Remorcă', 'Trailer', 'Semiremorcă'].includes(t)
+    })
+  }, [active, tip])
+  
+  // Lista șoferi filtrată
+  const soferiDisponibili = useMemo(() => {
+    let list = employees.filter(e => matchesFunctie(e, filterFunctie))
+    if (soferSearch.trim()) {
+      const q = soferSearch.toLowerCase()
+      list = list.filter(e => 
+        (e.name || '').toLowerCase().includes(q) ||
+        (e.position || '').toLowerCase().includes(q)
+      )
+    }
+    return list.slice(0, 50)
+  }, [employees, filterFunctie, soferSearch])
+  
+  // Activul transportat
+  const activSelectat = useMemo(() => 
+    active.find(a => String(a.id) === String(activTransportatId)), 
+    [active, activTransportatId]
+  )
+  const masinaAleasa = useMemo(() => active.find(a => String(a.id) === String(masinaId)), [active, masinaId])
+  const remorcaAleasa = useMemo(() => active.find(a => String(a.id) === String(remorcaId)), [active, remorcaId])
+  const soferAles = useMemo(() => employees.find(e => String(e.id) === String(soferEmployeeId)), [employees, soferEmployeeId])
+  
+  // Verificare ARR
+  const arrExpirat = useMemo(() => {
+    if (!activSelectat?.regim_transport_special) return false
+    if (!activSelectat.valabilitate_autorizatie) return false
+    return new Date(activSelectat.valabilitate_autorizatie) < new Date(dataTransport)
+  }, [activSelectat, dataTransport])
+  
+  // Toggle funcție extra pentru șoferul ales (instant save în DB)
+  const toggleFunctieExtra = async (atestat) => {
+    if (!soferAles) return
+    const curent = soferAles.functii_extra || []
+    const nou = curent.includes(atestat) ? curent.filter(x => x !== atestat) : [...curent, atestat]
+    
+    const { error } = await supabase.from('employees').update({ functii_extra: nou }).eq('id', soferAles.id)
+    if (error) { showToast('Eroare update: ' + error.message, 'error'); return }
+    showToast(`✓ Funcții extra actualizate pentru ${soferAles.name}`)
+    
+    // Reload employees ca să reflecte schimbarea
+    await loadEmployees()
+  }
+  
+  const handleSave = async () => {
+    // Validări
+    if (tip === 'utilaj' && !activTransportatId) {
+      showToast('Selectează utilajul de transportat', 'warn')
+      return
+    }
+    if (tip === 'mic_tesa' && !continutDescriere.trim()) {
+      showToast('Descrie ce se transportă', 'warn')
+      return
+    }
+    if (plecareTip === 'site' && !plecareSiteId) {
+      showToast('Selectează șantierul de plecare', 'warn')
+      return
+    }
+    if (plecareTip === 'alta' && !plecareLocText.trim()) {
+      showToast('Completează locația de plecare', 'warn')
+      return
+    }
+    if (destinatieTip === 'site' && !destinatieSiteId) {
+      showToast('Selectează șantierul destinație', 'warn')
+      return
+    }
+    if (destinatieTip === 'alta' && !destinatieLocText.trim()) {
+      showToast('Completează destinația', 'warn')
+      return
+    }
+    if (!dataTransport) {
+      showToast('Selectează data transportului', 'warn')
+      return
+    }
+    if (soferMode === 'manual' && !soferEmployeeId) {
+      showToast('Selectează șoferul din lista de angajați', 'warn')
+      return
+    }
+    if (soferMode === 'extern' && !soferExternNume.trim()) {
+      showToast('Completează numele șoferului extern', 'warn')
+      return
+    }
+    if (arrExpirat) {
+      if (!confirm(`⚠️ ATENȚIE: Autorizația ARR a expirat pe ${activSelectat.valabilitate_autorizatie}!\n\nContinui totuși cu cererea?`)) return
+    }
+    
+    setSaving(true)
+    const payload = {
+      tip,
+      activ_transportat_id: tip === 'utilaj' ? Number(activTransportatId) : null,
+      continut_descriere: tip === 'mic_tesa' ? continutDescriere.trim() : null,
+      plecare_tip: plecareTip,
+      plecare_site_id: plecareTip === 'site' ? Number(plecareSiteId) : null,
+      plecare_locatie_text: plecareTip === 'alta' ? plecareLocText.trim() : null,
+      destinatie_tip: destinatieTip,
+      destinatie_site_id: destinatieTip === 'site' ? Number(destinatieSiteId) : null,
+      destinatie_locatie_text: destinatieTip === 'alta' ? destinatieLocText.trim() : null,
+      data_transport: dataTransport,
+      ora_plecare: oraPlecare || null,
+      masina_id: masinaId ? Number(masinaId) : null,
+      remorca_id: remorcaId ? Number(remorcaId) : null,
+      necesita_sofer_atestat: filterFunctie !== 'toate',  // bazat pe filtrul ales
+      sofer_aloca_logistica: soferMode === 'logistica',
+      sofer_gazpet: soferMode !== 'extern',  // logistica + manual = gazpet, doar extern = false
+      sofer_employee_id: soferMode === 'manual' && soferEmployeeId ? Number(soferEmployeeId) : null,
+      sofer_id: null,  // legacy
+      sofer_extern_nume: soferMode === 'extern' ? soferExternNume.trim() : null,
+      sofer_extern_telefon: soferMode === 'extern' ? (soferExternTel.trim() || null) : null,
+      necesita_regim_special: !!(activSelectat?.regim_transport_special),
+      cost_estimat: costEstimat ? Number(costEstimat) : null,
+      observatii: observatii.trim() || null,
+      manager_plecare_id: managerPlecareId || null,
+      manager_destinatie_id: managerDestinatieId || null,
+    }
+    
+    let error
+    if (isEdit) {
+      // Update — păstrăm status și solicitant_id originale
+      const result = await supabase.from('logistica_transporturi').update(payload).eq('id', T.id)
+      error = result.error
+    } else {
+      // Insert nou — adăugăm status='cerut' și solicitant_id
+      payload.status = 'cerut'
+      payload.solicitant_id = profile?.id
+      payload.data_solicitarii = new Date().toISOString()
+      const result = await supabase.from('logistica_transporturi').insert(payload)
+      error = result.error
+    }
+    
+    setSaving(false)
+    
+    if (error) {
+      showToast('Eroare la salvare: ' + error.message, 'error')
+      return
+    }
+    showToast(isEdit ? '✓ Cererea a fost actualizată!' : '✓ Cererea de transport a fost trimisă!')
+    onSaved?.()
+    onClose()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:780, maxHeight:'92vh', overflow:'auto', padding:24}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:18}}>
+          <div>
+            <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:4}}>{isEdit ? `✏️ Editează transport ${T.numar_transport || ''}` : '🚚 Comandă transport nou'}</div>
+            <div style={{fontSize:12, color:G.muted}}>{isEdit ? 'Modifici cererea — datele vor fi actualizate' : 'Cererea va fi trimisă spre aprobare către Mitrache + Cristiana'}</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Toggle TIP */}
+        <div style={{display:'flex', gap:6, marginBottom:16, padding:4, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+          {[
+            { v: 'utilaj', label: '🚛 Utilaj', desc: 'Excavatoare, generatoare, basculante' },
+            { v: 'materiale', label: '📦 Materiale', desc: 'Din stoc magazie / șantier' },
+            { v: 'mic_tesa', label: '📄 Mic (TESA)', desc: 'Documente, dosare' },
+          ].map(opt => (
+            <button key={opt.v} onClick={() => setTip(opt.v)} style={{
+              flex:1, padding:'10px 12px', borderRadius:8, border:'none', cursor:'pointer',
+              background: tip === opt.v ? G.logistica + '33' : 'transparent',
+              color: tip === opt.v ? G.logistica : G.muted,
+              fontWeight:700, fontSize:13, textAlign:'left'
+            }}>
+              <div>{opt.label}</div>
+              <div style={{fontSize:10, fontWeight:400, marginTop:2, color:G.muted}}>{opt.desc}</div>
+            </button>
+          ))}
+        </div>
+        
+        {/* TIP MATERIALE - Placeholder pentru viitor modul Magazie */}
+        {tip === 'materiale' && (
+          <div style={{marginBottom:14}}>
+            <div style={{padding:18, background:G.purple+'11', border:`2px dashed ${G.purple}77`, borderRadius:12, textAlign:'center'}}>
+              <div style={{fontSize:32, marginBottom:8}}>📦</div>
+              <div style={{fontSize:15, fontWeight:700, color:G.purple, marginBottom:6}}>Transport Materiale — În curs de dezvoltare</div>
+              <div style={{fontSize:12, color:G.muted, lineHeight:1.6, maxWidth:480, margin:'0 auto'}}>
+                Această funcționalitate va fi disponibilă odată cu <strong>Modulul Magazie</strong>. 
+                Vei putea selecta materiale din stoc (magazie centrală sau alt șantier) și genera transfer cu aviz automat.
+                <br/><br/>
+                <strong>Pentru moment</strong>, descrie materialele transportate în câmpul "Conținut transport" de mai jos.
+              </div>
+              <div style={{marginTop:12, padding:'8px 14px', background:G.purple+'22', color:G.purple, borderRadius:6, display:'inline-block', fontSize:11, fontWeight:700, letterSpacing:.5}}>
+                🚧 ÎN CURÂND
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* TIP UTILAJ */}
+        {tip === 'utilaj' && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🚛 Activ de transportat</div>
+            <FieldSelect 
+              label="Selectează activul" 
+              value={activTransportatId} 
+              onChange={setActivTransportatId}
+              options={[{label:'— alege —', value:''}, ...activeTransportabile.map(a => ({
+                label: `${a.cod_intern || ''} · ${a.marca || ''} ${a.model || ''} ${a.nr_inmatriculare ? '(' + a.nr_inmatriculare + ')' : ''}`,
+                value: String(a.id)
+              }))]}
+            />
+            
+            {activSelectat && (
+              <div style={{marginTop:10, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:12}}>
+                <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:8, color:G.muted}}>
+                  <div>📏 L: <strong style={{color:G.text}}>{activSelectat.lungime_m || '—'} m</strong></div>
+                  <div>↔️ W: <strong style={{color:G.text}}>{activSelectat.latime_m || '—'} m</strong></div>
+                  <div>↕️ H: <strong style={{color:G.text}}>{activSelectat.inaltime_m || '—'} m</strong></div>
+                  <div>⚖️ G: <strong style={{color:G.text}}>{activSelectat.greutate_kg || '—'} kg</strong></div>
+                </div>
+                {activSelectat.regim_transport_special && (
+                  <div style={{marginTop:8, padding:8, background:G.redDim + '88', border:`1px solid ${G.red}55`, borderRadius:6, color:G.red, fontWeight:700, fontSize:12}}>
+                    ⚠️ REGIM TRANSPORT SPECIAL
+                    {activSelectat.nr_autorizatie_arr && <span style={{fontWeight:400, color:G.text}}> · ARR: {activSelectat.nr_autorizatie_arr}</span>}
+                    {activSelectat.valabilitate_autorizatie && <span style={{fontWeight:400, color:arrExpirat ? G.red : G.text}}> · Valabilă: {activSelectat.valabilitate_autorizatie}{arrExpirat ? ' (EXPIRATĂ!)' : ''}</span>}
+                    {activSelectat.necesita_pilot && <span style={{fontWeight:400, color:G.text}}> · 🚓 Pilot necesar</span>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* TIP MIC TESA */}
+        {tip === 'mic_tesa' && (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>📄 Conținut transport</div>
+            <FieldTextarea 
+              label="Ce se transportă (descriere detaliată)"
+              value={continutDescriere}
+              onChange={setContinutDescriere}
+              rows={3}
+              placeholder="ex: 3 dosare licitație ANRE + manometru calibrat + 2 cărți tehnice instalație gaz"
+            />
+          </div>
+        )}
+        
+        {/* TRASEU */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🛣️ Traseu</div>
+          
+          {/* Plecare */}
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11, color:G.muted, marginBottom:4, fontWeight:600}}>DE LA (plecare)</div>
+            <div style={{display:'flex', gap:8, marginBottom:6}}>
+              <select value={plecareTip} onChange={e => setPlecareTip(e.target.value)} style={{...S.input, width:200}}>
+                <option value="sediu">🏢 Sediu Gazpet</option>
+                <option value="site">📍 Șantier</option>
+                <option value="alta">✏️ Altă locație</option>
+              </select>
+              {plecareTip === 'site' && (
+                <select value={plecareSiteId} onChange={e => setPlecareSiteId(e.target.value)} style={{...S.input, flex:1}}>
+                  <option value="">— alege șantier —</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              )}
+              {plecareTip === 'alta' && (
+                <input type="text" value={plecareLocText} onChange={e => setPlecareLocText(e.target.value)} placeholder="ex: Depozit furnizor SC X SRL, București" style={{...S.input, flex:1}} />
+              )}
+            </div>
+            {/* Manager plecare — smart: pentru sediu doar Logistică, pentru site auto-completat */}
+            <select 
+              value={managerPlecareId} 
+              onChange={e => setManagerPlecareId(e.target.value)} 
+              style={{...S.input, fontSize:12, borderColor: managerPlecareId ? G.green + '88' : G.border2}}
+            >
+              <option value="">👤 Manager plecare {plecareTip === 'sediu' ? '(filtrat: Logistică)' : '(opțional)'}</option>
+              {(plecareTip === 'sediu' ? profilesLogistica : profilesList).map(p => 
+                <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>
+              )}
+            </select>
+            {managerPlecareId && plecareTip === 'site' && siteManagers[plecareSiteId] === managerPlecareId && (
+              <div style={{fontSize:10, color:G.green, marginTop:2}}>✓ Auto-completat din alocările șantierului</div>
+            )}
+          </div>
+          
+          {/* Destinație */}
+          <div>
+            <div style={{fontSize:11, color:G.muted, marginBottom:4, fontWeight:600}}>LA (destinație)</div>
+            <div style={{display:'flex', gap:8, marginBottom:6}}>
+              <select value={destinatieTip} onChange={e => setDestinatieTip(e.target.value)} style={{...S.input, width:200}}>
+                <option value="sediu">🏢 Sediu Gazpet</option>
+                <option value="site">📍 Șantier</option>
+                <option value="alta">✏️ Altă locație</option>
+              </select>
+              {destinatieTip === 'site' && (
+                <select value={destinatieSiteId} onChange={e => setDestinatieSiteId(e.target.value)} style={{...S.input, flex:1}}>
+                  <option value="">— alege șantier —</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              )}
+              {destinatieTip === 'alta' && (
+                <input type="text" value={destinatieLocText} onChange={e => setDestinatieLocText(e.target.value)} placeholder="ex: ANRE Sediu central, Str. Constantin Nacu 3, București" style={{...S.input, flex:1}} />
+              )}
+            </div>
+            {/* Manager destinație — IMPORTANT pentru confirmare primire */}
+            <select value={managerDestinatieId} onChange={e => setManagerDestinatieId(e.target.value)} style={{...S.input, fontSize:12, borderColor: managerDestinatieId ? G.green + '88' : G.border2}}>
+              <option value="">⚠️ Manager destinație (cel care va confirma primirea)</option>
+              {(destinatieTip === 'sediu' ? profilesLogistica : profilesList).map(p => 
+                <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>
+              )}
+            </select>
+            {managerDestinatieId && destinatieTip === 'site' && siteManagers[destinatieSiteId] === managerDestinatieId && (
+              <div style={{fontSize:10, color:G.green, marginTop:2}}>✓ Auto-completat din alocările șantierului</div>
+            )}
+            {managerDestinatieId && (
+              <div style={{fontSize:10, color:G.green, marginTop:4}}>
+                ✓ La livrare, această persoană va confirma primirea utilajului
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* DATA + ORA */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>📅 Programare</div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, maxWidth:400}}>
+            <FieldText label="Data transport" type="date" value={dataTransport} onChange={setDataTransport} />
+            <FieldText label="Ora plecare" type="time" value={oraPlecare} onChange={setOraPlecare} />
+          </div>
+        </div>
+        
+        {/* MIJLOC TRANSPORT (combo cap tractor + remorcă pentru utilaje) */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🚛 Mijloc transport</div>
+          <div style={{display:'grid', gridTemplateColumns: tip === 'utilaj' ? '1fr 1fr' : '1fr', gap:10}}>
+            <FieldSelect 
+              label={tip === 'utilaj' ? 'Mijloc principal (camion / cap tractor)' : 'Mașina (autoturism, opțional)'}
+              value={masinaId} 
+              onChange={setMasinaId}
+              options={[{label:'— niciunul —', value:''}, ...masiniPrincipale.map(a => ({
+                label: `${formatActiv(a)} · ${a.marca || ''} ${a.model || ''}${a.nr_inmatriculare && a.cod_intern ? ' (' + a.nr_inmatriculare + ')' : ''}`,
+                value: String(a.id)
+              }))]}
+            />
+            {tip === 'utilaj' && (
+              <FieldSelect 
+                label="Remorcă / Trailer / Semiremorcă (opțional)"
+                value={remorcaId} 
+                onChange={setRemorcaId}
+                options={[{label:'— fără remorcă —', value:''}, ...remorciDisponibile.map(a => ({
+                  label: `${formatActiv(a)} · ${a.logistica_categorii?.tip || ''} ${a.marca || ''} ${a.model || ''}${a.nr_inmatriculare && a.cod_intern ? ' (' + a.nr_inmatriculare + ')' : ''}`,
+                  value: String(a.id)
+                }))]}
+              />
+            )}
+          </div>
+          {/* Preview combo */}
+          {(masinaAleasa || remorcaAleasa) && (
+            <div style={{marginTop:8, padding:8, background:G.bg, border:`1px solid ${G.border}`, borderRadius:6, fontSize:12, color:G.muted}}>
+              <strong style={{color:G.text}}>🔗 Combo: </strong>
+              {masinaAleasa && <span style={{color:G.text}}>{formatActiv(masinaAleasa)} {masinaAleasa.marca}</span>}
+              {masinaAleasa && remorcaAleasa && <span style={{margin:'0 6px'}}>+</span>}
+              {remorcaAleasa && <span style={{color:G.logistica}}>{formatActiv(remorcaAleasa)} ({remorcaAleasa.logistica_categorii?.tip})</span>}
+            </div>
+          )}
+        </div>
+        
+        {/* ȘOFER — 3 moduri: Logistică alege / Aleg eu / Extern */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>👤 Șofer</div>
+          
+          {/* Selector mod alegere șofer — radio buttons mari */}
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:12}}>
+            {[
+              { v: 'logistica', icon: '🏢', label: 'Logistică alege', desc: 'Dept Logistică alocă șoferul la aprobare' },
+              { v: 'manual',    icon: '👤', label: 'Aleg eu acum',    desc: 'Selectez din angajații Gazpet' },
+              { v: 'extern',    icon: '🚚', label: 'Șofer extern',    desc: 'Curier / transportator extern' },
+            ].map(opt => (
+              <button key={opt.v} onClick={() => setSoferMode(opt.v)} style={{
+                padding:'10px 12px', borderRadius:8, cursor:'pointer', textAlign:'left',
+                background: soferMode === opt.v ? G.logistica + '22' : G.bg,
+                border: `1px solid ${soferMode === opt.v ? G.logistica : G.border}`,
+                color: soferMode === opt.v ? G.logistica : G.text
+              }}>
+                <div style={{fontSize:13, fontWeight:700, marginBottom:2}}>{opt.icon} {opt.label}</div>
+                <div style={{fontSize:10, color: soferMode === opt.v ? G.logistica : G.muted, fontWeight:400}}>{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+          
+          {/* MODE: LOGISTICA ALEGE — info doar */}
+          {soferMode === 'logistica' && (
+            <div style={{padding:12, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:8, fontSize:12, color:G.text}}>
+              ✓ <strong>Departamentul Logistică va aloca șoferul potrivit la aprobare.</strong>
+              <div style={{fontSize:11, color:G.muted, marginTop:4}}>
+                Cererea ta apare în tabel cu badge "🏢 Logistică alocă". Mitrache sau Cristiana vor selecta șoferul disponibil cu atestatul potrivit înainte să aprobe.
+              </div>
+            </div>
+          )}
+          
+          {/* MODE: MANUAL — listă șoferi cu filtru funcție */}
+          {soferMode === 'manual' && (
+            <div>
+              {/* Filtru funcție + Search */}
+              <div style={{display:'grid', gridTemplateColumns:'1fr 2fr', gap:8, marginBottom:8}}>
+                <select value={filterFunctie} onChange={e => { setFilterFunctie(e.target.value); setSoferEmployeeId(''); }} style={{...S.input, fontSize:13}}>
+                  {FUNCTII_TRANSPORT.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
+                <input 
+                  type="text" 
+                  value={soferSearch} 
+                  onChange={e => setSoferSearch(e.target.value)} 
+                  placeholder={`🔍 Caută după nume sau funcție... (${soferiDisponibili.length} găsiți)`}
+                  style={S.input}
+                />
+              </div>
+              
+              {/* Lista cu radio buttons */}
+              <div style={{maxHeight: 200, overflowY:'auto', border:`1px solid ${G.border}`, borderRadius:8, background:G.bg}}>
+                {soferiDisponibili.length === 0 ? (
+                  <div style={{padding:14, textAlign:'center', color:G.muted, fontSize:12}}>
+                    {soferSearch ? `Niciun rezultat pentru "${soferSearch}"` : 'Niciun angajat în această categorie'}
+                  </div>
+                ) : (
+                  soferiDisponibili.map(emp => (
+                    <label key={emp.id} style={{
+                      display:'flex', alignItems:'center', gap:10, padding:'8px 12px', cursor:'pointer',
+                      borderBottom:`1px solid ${G.border}`,
+                      background: String(soferEmployeeId) === String(emp.id) ? G.logistica + '22' : 'transparent'
+                    }}>
+                      <input type="radio" name="sofer" checked={String(soferEmployeeId) === String(emp.id)} onChange={() => setSoferEmployeeId(emp.id)} style={{accentColor:G.logistica}} />
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:13, color:G.text, fontWeight:600}}>{emp.name}</div>
+                        <div style={{fontSize:10, color:G.muted}}>
+                          {emp.position || '—'}{emp.department ? ` · ${emp.department}` : ''}
+                          {emp.functii_extra && emp.functii_extra.length > 0 && (
+                            <span style={{color:G.logistica, marginLeft:6}}>· extra: {emp.functii_extra.join(', ')}</span>
+                          )}
+                        </div>
+                      </div>
+                    </label>
+                  ))
+                )}
+              </div>
+              
+              {/* Confirmare șofer ales + widget funcții extra */}
+              {soferAles && (
+                <div style={{marginTop:8, padding:10, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:6}}>
+                  <div style={{fontSize:12, color:G.text, marginBottom:6}}>
+                    ✓ Șofer ales: <strong>{soferAles.name}</strong> · <span style={{color:G.muted}}>{soferAles.position}</span>
+                  </div>
+                  
+                  {/* Mini-widget editare funcții extra */}
+                  <div style={{paddingTop:8, borderTop:`1px solid ${G.green}33`, marginTop:6}}>
+                    <div style={{fontSize:10, color:G.muted, marginBottom:6, fontWeight:600}}>
+                      ✨ FUNCȚII EXTRA ALE ACESTUI ANGAJAT (atestate / categorii suplimentare):
+                    </div>
+                    <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+                      {ATESTATE_DISPONIBILE.map(at => {
+                        const active = (soferAles.functii_extra || []).includes(at)
+                        const inPos = (soferAles.position || '').toUpperCase().includes(at)
+                        return (
+                          <label key={at} style={{
+                            display:'flex', alignItems:'center', gap:4, padding:'4px 8px', borderRadius:6,
+                            cursor: inPos ? 'default' : 'pointer',
+                            background: active ? G.logistica + '33' : (inPos ? G.surface : G.bg),
+                            border:`1px solid ${active ? G.logistica : G.border}`,
+                            opacity: inPos ? 0.6 : 1
+                          }} title={inPos ? 'Deja inclus în poziția principală' : 'Click pentru a comuta'}>
+                            <input 
+                              type="checkbox" 
+                              checked={active || inPos} 
+                              disabled={inPos}
+                              onChange={() => !inPos && toggleFunctieExtra(at)} 
+                              style={{width:12, height:12, accentColor:G.logistica}} 
+                            />
+                            <span style={{fontSize:10, color:G.text, fontWeight:600}}>{at}</span>
+                            {inPos && <span style={{fontSize:9, color:G.muted}}>(principal)</span>}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* MODE: EXTERN */}
+          {soferMode === 'extern' && (
+            <div style={{display:'grid', gridTemplateColumns:'2fr 1fr', gap:10}}>
+              <FieldText label="Nume șofer extern" value={soferExternNume} onChange={setSoferExternNume} placeholder="ex: Ion Popescu (Transport SRL)" />
+              <FieldText label="Telefon" value={soferExternTel} onChange={setSoferExternTel} placeholder="ex: 0722 123 456" />
+            </div>
+          )}
+        </div>
+        
+        {/* COST + OBSERVAȚII */}
+        <div style={{marginBottom:14, display:'grid', gridTemplateColumns:'1fr 2fr', gap:10}}>
+          <FieldText label="Cost estimat (RON)" type="number" value={costEstimat} onChange={setCostEstimat} placeholder="opțional" />
+          <FieldTextarea label="Observații" value={observatii} onChange={setObservatii} rows={2} placeholder="orice altceva relevant..." />
+        </div>
+        
+        {/* INFO solicitant */}
+        <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, marginBottom:14, fontSize:12, color:G.muted}}>
+          📝 Solicitant: <strong style={{color:G.text}}>{profile?.name || 'tu'}</strong>
+          <span style={{marginLeft:8}}>· Status {isEdit ? 'actual' : 'inițial'}: <StatusBadge status={isEdit ? T.status : 'cerut'} /></span>
+          {isEdit && T.numar_transport && <span style={{marginLeft:8, fontFamily:'monospace', color:G.logistica, fontWeight:700}}>· {T.numar_transport}</span>}
+        </div>
+        
+        {/* BUTOANE */}
+        <div style={{display:'flex', gap:10, justifyContent:'flex-end'}}>
+          <button onClick={onClose} style={S.btnS} disabled={saving}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background:G.green}}>
+            {saving ? 'Salvez...' : (isEdit ? '💾 Salvează modificările' : '✓ Trimite cererea')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ----- Identificare aprobatori (pentru workflow) -----
+// Aprobatori: superadmin + admin_logistica (rolurile noi)
+const isAprobatorTransport = (profile) => {
+  return ['superadmin', 'admin_logistica'].includes(profile?.role)
+}
+
+function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEdit, showToast, sites }) {
+  const [showRespingere, setShowRespingere] = useState(false)
+  const [motivRespingere, setMotivRespingere] = useState('')
+  const [showAlegeSofer, setShowAlegeSofer] = useState(false)
+  const [showConfirmPrimire, setShowConfirmPrimire] = useState(false)
+  const [confirmareObs, setConfirmareObs] = useState('')
+  const [employees, setEmployees] = useState([])
+  const [soferEmployeeId, setSoferEmployeeId] = useState('')
+  const [soferSearch, setSoferSearch] = useState('')
+  const [filterFunctie, setFilterFunctie] = useState('soferi')  // default doar șoferi atestați
+  const [actionLoading, setActionLoading] = useState(false)
+  const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
+  const [showAviz, setShowAviz] = useState(false)  // PAS 5F: deschide modal aviz
+  
+  const isAprobator = isAprobatorTransport(profile)
+  const isSolicitant = profile?.id === T.solicitant_id
+  const isManagerDestinatie = profile?.id === T.manager_destinatie_id
+  const isManagerPlecare = profile?.id === T.manager_plecare_id
+  const status = T.status
+  
+  // Load employees (pentru când Logistică alege șofer la aprobare)
+  useEffect(() => {
+    if (showAlegeSofer) {
+      supabase.from('employees').select('id, name, position, department, functii_extra')
+        .eq('active', true).order('name').then(({ data }) => setEmployees(data || []))
+    }
+  }, [showAlegeSofer])
+  
+  const soferiDisponibili = useMemo(() => {
+    let list = employees.filter(e => matchesFunctie(e, filterFunctie))
+    if (soferSearch.trim()) {
+      const q = soferSearch.toLowerCase()
+      list = list.filter(e => 
+        (e.name || '').toLowerCase().includes(q) ||
+        (e.position || '').toLowerCase().includes(q)
+      )
+    }
+    return list.slice(0, 30)
+  }, [employees, filterFunctie, soferSearch])
+  
+  // Format locație
+  const formatLoc = (tip, site, text) => formatLocatie(tip, site, text)
+  
+  // ---- Acțiuni ----
+  const handleAproba = async () => {
+    // Dacă sofer_aloca_logistica și fără șofer → cere alegerea ÎNTÂI
+    if (T.sofer_aloca_logistica && !T.sofer_employee_id && !showAlegeSofer) {
+      setShowAlegeSofer(true)
+      return
+    }
+    if (showAlegeSofer && !soferEmployeeId) {
+      showToast('Selectează șoferul înainte de aprobare', 'warn')
+      return
+    }
+    
+    setActionLoading(true)
+    const updateData = {
+      status: 'aprobat',
+      aprobator_id: profile.id,
+      data_aprobare: new Date().toISOString(),
+    }
+    // Dacă data a fost modificată față de original, actualizează și data_transport
+    if (dataTransportEdit && dataTransportEdit !== T.data_transport) {
+      updateData.data_transport = dataTransportEdit
+    }
+    if (showAlegeSofer && soferEmployeeId) {
+      updateData.sofer_employee_id = Number(soferEmployeeId)
+      updateData.sofer_gazpet = true
+      updateData.sofer_aloca_logistica = false  // s-a alocat
+    }
+    
+    const { error } = await supabase.from('logistica_transporturi').update(updateData).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare aprobare: ' + error.message, 'error'); return }
+    showToast('✓ Transport aprobat! Următorul pas: programare.')
+    onChanged?.()
+    onClose()
+  }
+  
+  const handleRespinge = async () => {
+    if (!motivRespingere.trim()) {
+      showToast('Motivul respingerii e obligatoriu', 'warn')
+      return
+    }
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({
+      status: 'respins',
+      aprobator_id: profile.id,
+      data_aprobare: new Date().toISOString(),
+      motiv_respingere: motivRespingere.trim()
+    }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✓ Transport respins')
+    onChanged?.()
+    onClose()
+  }
+  
+  const handleAnuleaza = async () => {
+    if (!confirm('Sigur vrei să anulezi această cerere de transport? Acțiunea nu poate fi reversată.')) return
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({ status: 'anulat' }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('Cererea a fost anulată')
+    onChanged?.()
+    onClose()
+  }
+  
+  const handleSchimbaStatus = async (nou) => {
+    const labels = { programat: 'Programat', in_tranzit: 'În tranzit', livrat: 'Livrat' }
+    if (!confirm(`Schimbi status la "${labels[nou]}"?`)) return
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({ status: nou }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast(`✓ Status schimbat: ${labels[nou]}`)
+    onChanged?.()
+    onClose()
+  }
+  
+  // Confirmare primire — acțiune specială când transportul ajunge la destinație
+  const handleConfirmPrimire = async () => {
+    setActionLoading(true)
+    const { error } = await supabase.from('logistica_transporturi').update({
+      status: 'livrat',
+      confirmat_primire_la: new Date().toISOString(),
+      confirmat_primire_de: profile.id,
+      confirmare_observatii: confirmareObs.trim() || null
+    }).eq('id', T.id)
+    setActionLoading(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✅ Primire confirmată — transport finalizat!')
+    onChanged?.()
+    onClose()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:780, maxHeight:'92vh', overflow:'auto', padding:24}}>
+        {/* Header */}
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:4}}>
+              <span style={{fontSize:24}}>{T.tip === 'utilaj' ? '🚛' : '📄'}</span>
+              <span style={{fontSize:18, fontWeight:700, color:G.text, fontFamily:'monospace'}}>{T.numar_transport}</span>
+              <StatusBadge status={status} />
+            </div>
+            <div style={{fontSize:11, color:G.muted}}>
+              Solicitat: {new Date(T.data_solicitarii).toLocaleString('ro-RO')} de <strong style={{color:G.text}}>{T.solicitant?.name || '—'}</strong>
+              {T.aprobator && <span> · Aprobat de <strong style={{color:G.text}}>{T.aprobator.name}</strong></span>}
+            </div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Detalii activ/conținut */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>
+            {T.tip === 'utilaj' ? '🚛 Activ transportat' : '📄 Conținut'}
+          </div>
+          {T.tip === 'utilaj' && T.activ_transportat ? (
+            <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
+              <div style={{color:G.text, fontWeight:600}}>{T.activ_transportat.cod_intern || formatActiv(T.activ_transportat)} · {T.activ_transportat.marca} {T.activ_transportat.model}</div>
+              {T.activ_transportat.regim_transport_special && <div style={{fontSize:11, color:G.red, fontWeight:600, marginTop:4}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
+            </div>
+          ) : (
+            <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, color:G.text}}>
+              {T.continut_descriere || '—'}
+            </div>
+          )}
+          {(T.masina || T.remorca) && (
+            <div style={{marginTop:6, fontSize:12, color:G.logistica}}>
+              🚛 Mijloc: {T.masina ? formatActiv(T.masina) : 'fără mijloc'}
+              {T.remorca && <span> + {formatActiv(T.remorca)} ({T.remorca.logistica_categorii?.tip})</span>}
+            </div>
+          )}
+        </div>
+        
+        {/* Traseu */}
+        <div style={{marginBottom:12, display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10}}>
+          <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>De la</div>
+            <div style={{fontSize:13, color:G.text}}>{formatLoc(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}</div>
+            {T.manager_plecare && (
+              <div style={{fontSize:10, color:G.muted, marginTop:6, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                👤 Manager plecare: <strong style={{color:G.text}}>{T.manager_plecare.name}</strong>
+              </div>
+            )}
+          </div>
+          <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>La</div>
+            <div style={{fontSize:13, color:G.text}}>{formatLoc(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}</div>
+            {T.manager_destinatie ? (
+              <div style={{fontSize:10, color:isManagerDestinatie ? G.green : G.muted, marginTop:6, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                👤 Manager destinație: <strong style={{color:isManagerDestinatie ? G.green : G.text}}>{T.manager_destinatie.name}</strong>
+                {isManagerDestinatie && <span style={{marginLeft:4, fontWeight:700}}>(TU!)</span>}
+              </div>
+            ) : (
+              <div style={{fontSize:10, color:G.orange, marginTop:6, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                ⚠️ Fără manager destinație
+              </div>
+            )}
+          </div>
+          <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+            <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>📅 Data · Ora</div>
+            <div style={{fontSize:13, color:G.text}}>{T.data_transport}{T.ora_plecare ? ` · ${T.ora_plecare.substring(0,5)}` : ''}</div>
+          </div>
+        </div>
+        
+        {/* Șofer */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>👤 Șofer</div>
+          {T.sofer_aloca_logistica && !T.sofer_employee_id ? (
+            <div style={{padding:10, background:G.purple+'22', border:`1px solid ${G.purple}55`, borderRadius:8, fontSize:13, color:G.text}}>
+              🏢 <strong>Logistică alocă șoferul</strong> — va fi selectat la aprobare
+            </div>
+          ) : T.sofer_gazpet ? (
+            T.sofer_employee ? (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
+                <div style={{color:G.text, fontWeight:600}}>{T.sofer_employee.name}</div>
+                <div style={{fontSize:11, color:G.muted}}>{T.sofer_employee.position}</div>
+              </div>
+            ) : T.sofer ? (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, color:G.text}}>{T.sofer.name} <span style={{fontSize:10, color:G.muted}}>(user sistem)</span></div>
+            ) : (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, color:G.muted}}>—</div>
+            )
+          ) : (
+            <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
+              <div style={{color:G.text}}>{T.sofer_extern_nume}</div>
+              {T.sofer_extern_telefon && <div style={{fontSize:11, color:G.muted}}>📞 {T.sofer_extern_telefon}</div>}
+              <div style={{fontSize:10, color:G.orange, marginTop:2}}>Șofer extern</div>
+            </div>
+          )}
+        </div>
+        
+        {/* Cost + Observații */}
+        {(T.cost_estimat || T.observatii) && (
+          <div style={{marginBottom:12, display:'grid', gridTemplateColumns: T.cost_estimat && T.observatii ? '1fr 2fr' : '1fr', gap:10}}>
+            {T.cost_estimat && (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>💰 Cost estimat</div>
+                <div style={{fontSize:14, color:G.text, fontWeight:700}}>{T.cost_estimat} RON</div>
+              </div>
+            )}
+            {T.observatii && (
+              <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:4}}>📝 Observații</div>
+                <div style={{fontSize:12, color:G.text}}>{T.observatii}</div>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Motiv respingere (dacă e cazul) */}
+        {status === 'respins' && T.motiv_respingere && (
+          <div style={{marginBottom:12, padding:10, background:G.redDim, border:`1px solid ${G.red}55`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.red, fontWeight:700, marginBottom:4}}>✗ MOTIV RESPINGERE:</div>
+            <div style={{fontSize:13, color:G.text}}>{T.motiv_respingere}</div>
+          </div>
+        )}
+        
+        {/* Confirmare primire (când e livrat) */}
+        {status === 'livrat' && T.confirmat_primire_la && (
+          <div style={{marginBottom:12, padding:10, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.green, fontWeight:700, marginBottom:4}}>✅ PRIMIRE CONFIRMATĂ:</div>
+            <div style={{fontSize:13, color:G.text}}>
+              de <strong>{T.confirmat_de?.name || '—'}</strong> la {new Date(T.confirmat_primire_la).toLocaleString('ro-RO')}
+            </div>
+            {T.confirmare_observatii && (
+              <div style={{marginTop:6, fontSize:12, color:G.muted, paddingTop:6, borderTop:`1px solid ${G.green}33`}}>
+                📝 {T.confirmare_observatii}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Indicator aviz generat/trimis */}
+        {T.aviz_generat && T.aviz_data && (
+          <div style={{marginBottom:12, padding:10, background:G.purple+'11', border:`1px solid ${G.purple}55`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.purple, fontWeight:700, marginBottom:4}}>📄 AVIZ GENERAT:</div>
+            <div style={{fontSize:12, color:G.text}}>
+              la {new Date(T.aviz_data).toLocaleString('ro-RO')}
+              {T.aviz_emails_trimis && T.aviz_emails_trimis.length > 0 && (
+                <span style={{marginLeft:8, color:G.muted}}>· trimis la: {T.aviz_emails_trimis.join(', ')}</span>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {/* Form confirmare primire (pentru status='in_tranzit') */}
+        {showConfirmPrimire && (
+          <div style={{marginBottom:12, padding:12, background:G.green+'11', border:`2px solid ${G.green}`, borderRadius:8}}>
+            <div style={{fontSize:13, fontWeight:700, color:G.green, marginBottom:8}}>✅ Confirmă primirea utilajului</div>
+            <div style={{fontSize:11, color:G.muted, marginBottom:8}}>
+              Confirmi că ai primit utilajul în stare bună la destinație. Această acțiune nu poate fi reversată.
+            </div>
+            <textarea 
+              value={confirmareObs} 
+              onChange={e => setConfirmareObs(e.target.value)} 
+              rows={3} 
+              placeholder="Observații (opțional): ex: 'Primit OK', sau 'Primit cu o zgârietură pe șasiu', sau 'Lipsește furtunul X'..." 
+              style={{...S.input, resize:'vertical'}} 
+            />
+          </div>
+        )}
+        
+        {/* === DATĂ TRANSPORT EDITABILĂ la aprobare (doar aprobatori la status='cerut') === */}
+        {status === 'cerut' && isAprobator && (
+          <div style={{marginBottom:12, padding:10, background:G.blue+'11', border:`1px dashed ${G.blue}`, borderRadius:8}}>
+            <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+              <div style={{fontSize:11, color:G.blue, fontWeight:700, textTransform:'uppercase', letterSpacing:.5}}>
+                📅 Data transportului (editabilă la aprobare)
+              </div>
+              <input 
+                type="date" 
+                value={dataTransportEdit} 
+                onChange={e => setDataTransportEdit(e.target.value)} 
+                style={{...S.input, width:'auto', fontSize:13, fontWeight:700}}
+              />
+              {dataTransportEdit && dataTransportEdit !== T.data_transport && (
+                <span style={{fontSize:10, color:G.orange, fontWeight:700}}>
+                  ⚠️ Schimbat (originală: {T.data_transport})
+                </span>
+              )}
+            </div>
+            <div style={{fontSize:10, color:G.muted, marginTop:4}}>
+              Dacă data inițială nu e bună, schimb-o aici. Va fi salvată cu aprobarea.
+            </div>
+          </div>
+        )}
+        
+        {/* === ALEGE ȘOFER înainte de aprobare (când Logistică alocă) === */}
+        {showAlegeSofer && (
+          <div style={{marginBottom:12, padding:12, background:G.purple+'11', border:`2px solid ${G.purple}`, borderRadius:8}}>
+            <div style={{fontSize:13, fontWeight:700, color:G.purple, marginBottom:10}}>🏢 Alege șoferul pentru a aproba</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 2fr', gap:8, marginBottom:8}}>
+              <select value={filterFunctie} onChange={e => { setFilterFunctie(e.target.value); setSoferEmployeeId(''); }} style={{...S.input, fontSize:12}}>
+                {FUNCTII_TRANSPORT.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+              <input type="text" value={soferSearch} onChange={e => setSoferSearch(e.target.value)} placeholder={`🔍 Caută... (${soferiDisponibili.length})`} style={S.input} />
+            </div>
+            <div style={{maxHeight:160, overflowY:'auto', border:`1px solid ${G.border}`, borderRadius:6, background:G.bg}}>
+              {soferiDisponibili.map(emp => (
+                <label key={emp.id} style={{display:'flex', alignItems:'center', gap:8, padding:'6px 10px', cursor:'pointer', borderBottom:`1px solid ${G.border}`, background: String(soferEmployeeId) === String(emp.id) ? G.purple+'22' : 'transparent'}}>
+                  <input type="radio" checked={String(soferEmployeeId) === String(emp.id)} onChange={() => setSoferEmployeeId(emp.id)} style={{accentColor:G.purple}} />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12, color:G.text, fontWeight:600}}>{emp.name}</div>
+                    <div style={{fontSize:10, color:G.muted}}>{emp.position}{emp.functii_extra?.length > 0 && <span style={{color:G.logistica}}> · extra: {emp.functii_extra.join(', ')}</span>}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* === MODAL RESPINGERE === */}
+        {showRespingere && (
+          <div style={{marginBottom:12, padding:12, background:G.redDim, border:`2px solid ${G.red}`, borderRadius:8}}>
+            <div style={{fontSize:13, fontWeight:700, color:G.red, marginBottom:8}}>✗ Motiv respingere (obligatoriu)</div>
+            <textarea value={motivRespingere} onChange={e => setMotivRespingere(e.target.value)} rows={3} placeholder="Ex: Utilajul e defect, traseu nepotrivit, ARR expirat..." style={{...S.input, resize:'vertical'}} />
+          </div>
+        )}
+        
+        {/* === ACȚIUNI === */}
+        <div style={{display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          {/* Buton Edit (pentru cereri 'cerut') */}
+          {status === 'cerut' && (isSolicitant || isAprobator) && !showRespingere && !showAlegeSofer && (
+            <button onClick={() => { onClose(); onEdit?.(T) }} style={{...S.btnS, color:G.logistica, borderColor:G.logistica+'88'}}>✏️ Editează</button>
+          )}
+          
+          {/* Anulează cerere (solicitant cu cerere 'cerut') */}
+          {status === 'cerut' && isSolicitant && !showRespingere && !showAlegeSofer && (
+            <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>🗑️ Anulează cererea</button>
+          )}
+          
+          {/* === STATUS = CERUT — APROBĂ / RESPINGE (doar aprobatori) === */}
+          {status === 'cerut' && isAprobator && !showRespingere && (
+            <>
+              <button onClick={() => setShowRespingere(true)} disabled={actionLoading} style={{...S.btnS, color:G.red, borderColor:G.red+'88'}}>✗ Respinge</button>
+              <button onClick={handleAproba} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
+                {showAlegeSofer ? '✓ Aprobă cu acest șofer' : (T.sofer_aloca_logistica && !T.sofer_employee_id ? '✓ Aprobă (alege șofer)' : '✓ Aprobă')}
+              </button>
+            </>
+          )}
+          
+          {/* Confirm respingere */}
+          {status === 'cerut' && isAprobator && showRespingere && (
+            <>
+              <button onClick={() => { setShowRespingere(false); setMotivRespingere('') }} style={S.btnS}>← Înapoi</button>
+              <button onClick={handleRespinge} disabled={actionLoading} style={{...S.btnP, background:G.red}}>✗ Confirm respingere</button>
+            </>
+          )}
+          
+          {/* === STATUS = APROBAT — Începe transport / Anulat === */}
+          {status === 'aprobat' && (
+            <>
+              {/* Început transport: aprobator SAU manager plecare */}
+              {(isAprobator || isManagerPlecare) && (
+                <button onClick={() => handleSchimbaStatus('in_tranzit')} disabled={actionLoading} style={{...S.btnP, background:G.yellow, color:'#000'}}>
+                  🚚 Începe transport (în tranzit)
+                </button>
+              )}
+              {!isAprobator && !isManagerPlecare && (
+                <div style={{fontSize:12, color:G.orange, alignSelf:'center'}}>
+                  Așteaptă confirmarea de la {T.manager_plecare?.name || 'manager plecare'} sau Logistică
+                </div>
+              )}
+              {(isAprobator || isSolicitant) && <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>⏸ Anulează</button>}
+            </>
+          )}
+          
+          {/* === STATUS = PROGRAMAT (backward compat — nu mai apare la cereri noi) === */}
+          {status === 'programat' && (
+            <>
+              {(isAprobator || isManagerPlecare) && (
+                <button onClick={() => handleSchimbaStatus('in_tranzit')} disabled={actionLoading} style={{...S.btnP, background:G.yellow, color:'#000'}}>🚚 Începe transport (în tranzit)</button>
+              )}
+              {(isAprobator || isSolicitant) && <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>⏸ Anulează</button>}
+            </>
+          )}
+          
+          {/* === STATUS = IN TRANZIT — Confirmare primire / Marchează livrat === */}
+          {status === 'in_tranzit' && !showConfirmPrimire && (
+            <>
+              {/* Manager destinație → confirmare oficială cu observații */}
+              {(isManagerDestinatie || isAprobator) && (
+                <button onClick={() => setShowConfirmPrimire(true)} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
+                  {isManagerDestinatie ? '✅ Confirm primirea (livrat)' : '✅ Confirmă primire (override)'}
+                </button>
+              )}
+              {/* Marchează livrat fără confirmare oficială (fallback) */}
+              {!isManagerDestinatie && !isAprobator && (
+                <div style={{fontSize:12, color:G.orange, alignSelf:'center'}}>
+                  Așteaptă confirmarea de la {T.manager_destinatie?.name || 'managerul destinație'}
+                </div>
+              )}
+            </>
+          )}
+          
+          {/* Confirmare primire în curs */}
+          {status === 'in_tranzit' && showConfirmPrimire && (
+            <>
+              <button onClick={() => { setShowConfirmPrimire(false); setConfirmareObs('') }} style={S.btnS}>← Înapoi</button>
+              <button onClick={handleConfirmPrimire} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
+                ✅ Confirm primire
+              </button>
+            </>
+          )}
+          
+          {/* === BUTON AVIZ ÎNSOȚIRE MARFĂ === */}
+          {/* Vizibil pentru status: aprobat, in_tranzit, livrat (nu pentru cerut/respins/anulat) */}
+          {['aprobat', 'programat', 'in_tranzit', 'livrat'].includes(status) && !showRespingere && !showAlegeSofer && !showConfirmPrimire && (
+            <button onClick={() => setShowAviz(true)} style={{...S.btnS, color:G.purple, borderColor:G.purple+'88', fontWeight:700}} title="Generează aviz însoțire marfă (printabil + email)">
+              📄 Aviz {T.aviz_generat && <span style={{marginLeft:4, color:G.green}}>✓</span>}
+            </button>
+          )}
+          
+          {/* Fără acțiuni dacă livrat / anulat / respins */}
+          {['livrat', 'anulat', 'respins'].includes(status) && !showConfirmPrimire && (
+            <div style={{fontSize:12, color:G.muted, fontStyle:'italic', alignSelf:'center'}}>
+              {status === 'livrat' ? 'Transport livrat' : status === 'respins' ? 'Cerere respinsă' : 'Cerere anulată'}
+            </div>
+          )}
+        </div>
+      </div>
+      
+      {/* Modal Aviz Însoțire Marfă (PAS 5F) */}
+      {showAviz && (
+        <AvizInsotireMarfaModal 
+          transport={T} 
+          profile={profile} 
+          onClose={() => setShowAviz(false)} 
+          showToast={showToast}
+          onTrimisEmail={() => { onChanged?.() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ===========================================================================
+// PAS 5F — AVIZ ÎNSOȚIRE MARFĂ (HTML printabil A4) + EMAIL MAILTO + SETĂRI
+// ===========================================================================
+
+// --- Modal Setări Destinatari Email (admin) ---
+function SetariEmailDestinatariModal({ valoare, onClose, onSaved, showToast }) {
+  const initial = (valoare || '').split(',').map(s => s.trim()).filter(Boolean)
+  const [emails, setEmails] = useState(initial)
+  const [newEmail, setNewEmail] = useState('')
+  const [saving, setSaving] = useState(false)
+  
+  const isValidEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)
+  
+  const handleAdd = () => {
+    const trimmed = newEmail.trim().toLowerCase()
+    if (!trimmed) return
+    if (!isValidEmail(trimmed)) { showToast('Email invalid', 'warn'); return }
+    if (emails.includes(trimmed)) { showToast('Email deja în listă', 'warn'); return }
+    setEmails([...emails, trimmed])
+    setNewEmail('')
+  }
+  
+  const handleRemove = (e) => setEmails(emails.filter(x => x !== e))
+  
+  const handleSave = async () => {
+    if (emails.length === 0) { showToast('Adaugă cel puțin un destinatar', 'warn'); return }
+    setSaving(true)
+    const { error } = await supabase.from('logistica_setari').upsert({
+      key: 'aviz_email_destinatari',
+      value: emails.join(','),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'key' })
+    setSaving(false)
+    if (error) { showToast('Eroare salvare: ' + error.message, 'error'); return }
+    showToast('✓ Destinatari email salvați')
+    onSaved?.(emails.join(','))
+    onClose()
+  }
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:540, padding:24}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize:17, fontWeight:700, color:G.text}}>⚙️ Destinatari email aviz</div>
+            <div style={{fontSize:11, color:G.muted, marginTop:2}}>Vor primi în CC mailul când se trimite aviz</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Lista chips */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6}}>Destinatari curenți ({emails.length})</div>
+          <div style={{display:'flex', flexWrap:'wrap', gap:6, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, minHeight:50}}>
+            {emails.length === 0 && <div style={{fontSize:12, color:G.muted, fontStyle:'italic'}}>Niciun destinatar adăugat</div>}
+            {emails.map(e => (
+              <span key={e} style={{display:'inline-flex', alignItems:'center', gap:6, padding:'4px 6px 4px 10px', background:G.logistica + '22', border:`1px solid ${G.logistica}55`, borderRadius:16, fontSize:12, color:G.text}}>
+                <span style={{maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>📧 {e}</span>
+                <button onClick={() => handleRemove(e)} style={{background:'none', border:'none', color:G.red, cursor:'pointer', fontSize:14, padding:0, lineHeight:1, display:'flex', alignItems:'center', justifyContent:'center', width:18, height:18, borderRadius:'50%'}} title="Șterge">×</button>
+              </span>
+            ))}
+          </div>
+        </div>
+        
+        {/* Add new */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6}}>Adaugă email nou</div>
+          <div style={{display:'flex', gap:8}}>
+            <input 
+              type="email" 
+              value={newEmail} 
+              onChange={e => setNewEmail(e.target.value)} 
+              onKeyDown={e => { if (e.key === 'Enter') handleAdd() }}
+              placeholder="ex: nume.prenume@gazpet.ro" 
+              style={{...S.input, flex:1}} 
+            />
+            <button onClick={handleAdd} style={{...S.btnP, background:G.green, padding:'8px 14px'}}>+ Adaugă</button>
+          </div>
+        </div>
+        
+        {/* Actions */}
+        <div style={{display:'flex', gap:8, justifyContent:'flex-end', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          <button onClick={onClose} style={S.btnS}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background:G.green}}>
+            {saving ? 'Se salvează...' : '💾 Salvează'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Modal Canvas pentru Semnătură Electronică ---
+function SemnaturaCanvasModal({ rol, numeImplicit, onClose, onSave, showToast }) {
+  const [drawing, setDrawing] = useState(false)
+  const [hasDrawn, setHasDrawn] = useState(false)
+  const [nume, setNume] = useState(numeImplicit || '')
+  const canvasRef = useRef(null)
+  const lastPoint = useRef({ x: 0, y: 0 })
+  
+  // Setup canvas la mount
+  useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return
+    const ctx = c.getContext('2d')
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, c.width, c.height)
+    ctx.strokeStyle = '#0F172A'
+    ctx.lineWidth = 2.2
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+  }, [])
+  
+  // Coords helper (mouse + touch)
+  const getCoords = (e) => {
+    const c = canvasRef.current
+    const rect = c.getBoundingClientRect()
+    const scaleX = c.width / rect.width
+    const scaleY = c.height / rect.height
+    if (e.touches?.[0]) {
+      return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY }
+    }
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY }
+  }
+  
+  const startDraw = (e) => {
+    e.preventDefault()
+    setDrawing(true)
+    const p = getCoords(e)
+    lastPoint.current = p
+  }
+  
+  const draw = (e) => {
+    if (!drawing) return
+    e.preventDefault()
+    const ctx = canvasRef.current.getContext('2d')
+    const p = getCoords(e)
+    ctx.beginPath()
+    ctx.moveTo(lastPoint.current.x, lastPoint.current.y)
+    ctx.lineTo(p.x, p.y)
+    ctx.stroke()
+    lastPoint.current = p
+    setHasDrawn(true)
+  }
+  
+  const endDraw = (e) => {
+    e?.preventDefault()
+    setDrawing(false)
+  }
+  
+  const clearCanvas = () => {
+    const c = canvasRef.current
+    const ctx = c.getContext('2d')
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, c.width, c.height)
+    setHasDrawn(false)
+  }
+  
+  const handleSave = () => {
+    if (!hasDrawn) { showToast('Desenează semnătura înainte de salvare', 'warn'); return }
+    if (!nume.trim()) { showToast('Completează numele celui care semnează', 'warn'); return }
+    const dataUrl = canvasRef.current.toDataURL('image/png')
+    onSave({ data: dataUrl, nume: nume.trim() })
+  }
+  
+  const rolLabel = { expeditor: '📤 EXPEDITOR / Manager plecare', sofer: '🚚 ȘOFER', destinatar: '📥 DESTINATAR / Manager destinație' }[rol] || rol
+  
+  return (
+    <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div style={{...S.card, width:'100%', maxWidth:620, padding:22}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize:16, fontWeight:700, color:G.text}}>🖋️ Semnătură electronică</div>
+            <div style={{fontSize:12, color:G.muted, marginTop:3}}>{rolLabel}</div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+        </div>
+        
+        {/* Nume semnatar */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>Nume celui care semnează</div>
+          <input 
+            type="text" 
+            value={nume} 
+            onChange={e => setNume(e.target.value)} 
+            placeholder="Nume Prenume"
+            style={S.input}
+          />
+        </div>
+        
+        {/* Canvas */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>Desenează semnătura mai jos (mouse pe desktop / deget pe mobil)</div>
+          <div style={{position:'relative', border:`2px solid ${G.border}`, borderRadius:8, background:'#fff', overflow:'hidden'}}>
+            <canvas 
+              ref={canvasRef}
+              width={560}
+              height={200}
+              style={{display:'block', width:'100%', height:200, touchAction:'none', cursor:'crosshair'}}
+              onMouseDown={startDraw}
+              onMouseMove={draw}
+              onMouseUp={endDraw}
+              onMouseLeave={endDraw}
+              onTouchStart={startDraw}
+              onTouchMove={draw}
+              onTouchEnd={endDraw}
+            />
+            {!hasDrawn && (
+              <div style={{position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none', color:'#9CA3AF', fontSize:14, fontStyle:'italic'}}>
+                ✍️ Semnează aici...
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* Actions */}
+        <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+          <button onClick={clearCanvas} style={{...S.btnS, color:G.orange, borderColor:G.orange+'88'}}>
+            🗑️ Șterge
+          </button>
+          <div style={{display:'flex', gap:8}}>
+            <button onClick={onClose} style={S.btnS}>Anulează</button>
+            <button onClick={handleSave} disabled={!hasDrawn} style={{...S.btnP, background:G.green}}>
+              ✓ Salvează semnătura
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Modal AVIZ ÎNSOȚIRE MARFĂ (HTML printabil A4) ---
+function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onTrimisEmail }) {
+  const [setariFirma, setSetariFirma] = useState({})
+  const [destinatari, setDestinatari] = useState([])
+  const [showSetariEmail, setShowSetariEmail] = useState(false)
+  const [trimisLoading, setTrimisLoading] = useState(false)
+  
+  // Pas 4: Semnături electronice
+  const [showSemnatura, setShowSemnatura] = useState(null)  // 'expeditor' | 'sofer' | 'destinatar' | null
+  const [semnExpData, setSemnExpData] = useState(T.semnatura_expeditor_data || null)
+  const [semnExpNume, setSemnExpNume] = useState(T.semnatura_expeditor_nume || '')
+  const [semnExpLa, setSemnExpLa] = useState(T.semnatura_expeditor_la || null)
+  const [semnSofData, setSemnSofData] = useState(T.semnatura_sofer_data || null)
+  const [semnSofNume, setSemnSofNume] = useState(T.semnatura_sofer_nume || '')
+  const [semnSofLa, setSemnSofLa] = useState(T.semnatura_sofer_la || null)
+  const [semnDestData, setSemnDestData] = useState(T.semnatura_destinatar_data || null)
+  const [semnDestNume, setSemnDestNume] = useState(T.semnatura_destinatar_nume || '')
+  const [semnDestLa, setSemnDestLa] = useState(T.semnatura_destinatar_la || null)
+  
+  const isAdmin = ['superadmin', 'admin_logistica'].includes(profile?.role)
+  
+  // Save semnătură în DB
+  const saveSemnatura = async (rol, { data, nume }) => {
+    const updates = {}
+    const now = new Date().toISOString()
+    if (rol === 'expeditor') {
+      updates.semnatura_expeditor_data = data
+      updates.semnatura_expeditor_nume = nume
+      updates.semnatura_expeditor_la = now
+      updates.semnatura_expeditor_de = profile?.id
+    } else if (rol === 'sofer') {
+      updates.semnatura_sofer_data = data
+      updates.semnatura_sofer_nume = nume
+      updates.semnatura_sofer_la = now
+    } else if (rol === 'destinatar') {
+      updates.semnatura_destinatar_data = data
+      updates.semnatura_destinatar_nume = nume
+      updates.semnatura_destinatar_la = now
+      updates.semnatura_destinatar_de = profile?.id
+    }
+    const { error } = await supabase.from('logistica_transporturi').update(updates).eq('id', T.id)
+    if (error) { showToast('Eroare salvare semnătură: ' + error.message, 'error'); return }
+    showToast(`✓ Semnătură ${rol} salvată`)
+    
+    // Update state local
+    if (rol === 'expeditor') { setSemnExpData(data); setSemnExpNume(nume); setSemnExpLa(now) }
+    else if (rol === 'sofer') { setSemnSofData(data); setSemnSofNume(nume); setSemnSofLa(now) }
+    else if (rol === 'destinatar') { setSemnDestData(data); setSemnDestNume(nume); setSemnDestLa(now) }
+    setShowSemnatura(null)
+    
+    // Propagă refresh la parent (DetaliiTransportModal → reîncarcă transport cu semnături noi)
+    onTrimisEmail?.()
+    
+    // === AUTO-ARHIVARE când avem toate 3 semnături ===
+    // Verificăm noile valori după update (rol-ul curent + cele 2 anterioare)
+    const nowExp = rol === 'expeditor' ? true : !!semnExpData
+    const nowSof = rol === 'sofer' ? true : !!semnSofData
+    const nowDest = rol === 'destinatar' ? true : !!semnDestData
+    
+    if (nowExp && nowSof && nowDest) {
+      // Verifică direct în arhivă (NU pe aviz_generat care e stricat de mailto)
+      const { count } = await supabase
+        .from('logistica_avize_arhiva')
+        .select('id', { count: 'exact', head: true })
+        .eq('transport_id', T.id)
+      
+      if ((count || 0) === 0) {
+        // Toate 3 semnături prezente + NU e arhivat → trigger automat
+        showToast('🎉 Toate 3 semnături complete! Se arhivează automat...', 'info')
+        // Delay scurt ca canvas să se actualizeze cu semnătura nouă înainte de captură
+        setTimeout(() => {
+          handleArhivare(true)  // true = auto (skip download local pentru a nu deranja destinatar)
+        }, 800)
+      } else {
+        showToast('✓ Aviz deja arhivat — nu re-arhivează', 'info')
+      }
+    }
+  }
+  
+  // Load setări firmă + destinatari
+  useEffect(() => {
+    supabase.from('logistica_setari').select('key, value').or(
+      `key.eq.firma_nume,key.eq.firma_cui,key.eq.firma_reg_com,key.eq.firma_adresa,key.eq.firma_telefon,key.eq.firma_email,key.eq.aviz_email_destinatari`
+    ).then(({ data }) => {
+      const map = Object.fromEntries((data || []).map(s => [s.key, s.value]))
+      setSetariFirma(map)
+      setDestinatari((map.aviz_email_destinatari || '').split(',').map(s => s.trim()).filter(Boolean))
+    })
+    
+    // FRESH fetch semnături din DB (în caz că modalul a fost redeschis după modificări)
+    supabase.from('logistica_transporturi')
+      .select('semnatura_expeditor_data, semnatura_expeditor_nume, semnatura_expeditor_la, semnatura_sofer_data, semnatura_sofer_nume, semnatura_sofer_la, semnatura_destinatar_data, semnatura_destinatar_nume, semnatura_destinatar_la, aviz_generat, aviz_data')
+      .eq('id', T.id)
+      .single()
+      .then(async ({ data }) => {
+        if (!data) return
+        setSemnExpData(data.semnatura_expeditor_data || null)
+        setSemnExpNume(data.semnatura_expeditor_nume || '')
+        setSemnExpLa(data.semnatura_expeditor_la || null)
+        setSemnSofData(data.semnatura_sofer_data || null)
+        setSemnSofNume(data.semnatura_sofer_nume || '')
+        setSemnSofLa(data.semnatura_sofer_la || null)
+        setSemnDestData(data.semnatura_destinatar_data || null)
+        setSemnDestNume(data.semnatura_destinatar_nume || '')
+        setSemnDestLa(data.semnatura_destinatar_la || null)
+        
+        // RECOVERY: dacă avem 3/3 semnături dar NU există în arhivă → trigger arhivare
+        if (data.semnatura_expeditor_data && data.semnatura_sofer_data && data.semnatura_destinatar_data) {
+          const { count } = await supabase
+            .from('logistica_avize_arhiva')
+            .select('id', { count: 'exact', head: true })
+            .eq('transport_id', T.id)
+          if ((count || 0) === 0) {
+            showToast('🔄 Aviz cu 3/3 semnături găsit fără arhivă — se arhivează acum...', 'info')
+            setTimeout(() => handleArhivare(true), 1200)  // delay mai mare pt randare canvas
+          }
+        }
+      })
+  }, [T.id])
+  
+  // Print A4
+  const handlePrint = () => {
+    window.print()
+  }
+  
+  // Arhivare PDF (PAS 5)
+  const [arhivareLoading, setArhivareLoading] = useState(false)
+  const [avizContentRef] = useState({ current: null })
+  
+  const handleArhivare = async (auto = false) => {
+    setArhivareLoading(true)
+    try {
+      // 0. FRESH FETCH din DB pentru a fi sigur că avem cele mai recente semnături
+      // (state-urile pot fi stale din cauza React batch-ing dacă vine din auto-recovery)
+      const { data: fresh } = await supabase
+        .from('logistica_transporturi')
+        .select('semnatura_expeditor_data, semnatura_sofer_data, semnatura_destinatar_data, aviz_generat')
+        .eq('id', T.id)
+        .single()
+      const finalSemnExp = !!fresh?.semnatura_expeditor_data
+      const finalSemnSof = !!fresh?.semnatura_sofer_data
+      const finalSemnDest = !!fresh?.semnatura_destinatar_data
+      
+      // 1. Selectează zona aviz
+      const aviz = document.querySelector('.aviz-content')
+      if (!aviz) { showToast('Nu pot localiza conținutul avizului', 'error'); setArhivareLoading(false); return }
+      
+      // 2. Render to canvas — scale 1.5 e suficient pentru claritate la print A4
+      const canvas = await html2canvas(aviz, { 
+        scale: 1.5, 
+        backgroundColor: '#FFFFFF', 
+        useCORS: true, 
+        logging: false,
+        imageTimeout: 5000
+      })
+      
+      // 3. Convert to PDF (A4) — JPEG quality 0.85 + FAST compression (10x mai mic decât PNG)
+      const pdf = new jsPDF({ 
+        orientation: 'portrait', 
+        unit: 'mm', 
+        format: 'a4',
+        compress: true
+      })
+      const pageW = 210, pageH = 297
+      const imgW = pageW
+      const imgH = (canvas.height * imgW) / canvas.width
+      const imgData = canvas.toDataURL('image/jpeg', 0.85)  // JPEG 85% quality
+      
+      if (imgH <= pageH) {
+        pdf.addImage(imgData, 'JPEG', 0, 0, imgW, imgH, undefined, 'FAST')
+      } else {
+        // Multi-page (rare pentru aviz)
+        let position = 0
+        let heightLeft = imgH
+        pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH, undefined, 'FAST')
+        heightLeft -= pageH
+        while (heightLeft > 0) {
+          position = -(imgH - heightLeft)
+          pdf.addPage()
+          pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH, undefined, 'FAST')
+          heightLeft -= pageH
+        }
+      }
+      
+      // 4. Convert PDF to Blob
+      const pdfBlob = pdf.output('blob')
+      const pdfSize = pdfBlob.size
+      
+      // 5. Upload în Supabase Storage
+      const numarAviz = `AVZ-${T.numar_transport.replace('TRP-', '')}`
+      const fileName = `${T.data_transport?.substring(0,7) || '2026-01'}/${numarAviz}_${Date.now()}.pdf`
+      const { error: upErr } = await supabase.storage.from('avize').upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false })
+      if (upErr) throw upErr
+      
+      // 6. Insert în arhivă
+      const { error: insErr } = await supabase.from('logistica_avize_arhiva').insert({
+        transport_id: T.id,
+        numar_aviz: numarAviz,
+        numar_transport: T.numar_transport,
+        pdf_path: fileName,
+        pdf_size_bytes: pdfSize,
+        generat_de: profile?.id,
+        generat_de_nume: profile?.name,
+        data_transport: T.data_transport,
+        tip: T.tip,
+        plecare_text: formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text),
+        destinatie_text: formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text),
+        manager_plecare_nume: T.manager_plecare?.name,
+        manager_destinatie_nume: T.manager_destinatie?.name,
+        sofer_nume: T.sofer_employee?.name || T.sofer_extern_nume,
+        semnat_expeditor: finalSemnExp,
+        semnat_sofer: finalSemnSof,
+        semnat_destinatar: finalSemnDest
+      })
+      if (insErr) throw insErr
+      
+      // 7. Update aviz_generat în transport (locked după arhivare)
+      await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
+      
+      // 8. Download local DOAR dacă NU e auto (pentru flow manual la sediu)
+      if (!auto) {
+        const blobUrl = URL.createObjectURL(pdfBlob)
+        const a = document.createElement('a')
+        a.href = blobUrl
+        a.download = `${numarAviz}.pdf`
+        a.click()
+        URL.revokeObjectURL(blobUrl)
+        showToast(`📂 Aviz arhivat (${(pdfSize/1024).toFixed(0)} KB) + descărcat`)
+      } else {
+        showToast(`✅ Aviz arhivat AUTOMAT după 3 semnături (${(pdfSize/1024).toFixed(0)} KB)`)
+      }
+      
+      onTrimisEmail?.()
+    } catch (e) {
+      showToast('Eroare arhivare: ' + (e.message || e), 'error')
+      console.error(e)
+    } finally {
+      setArhivareLoading(false)
+    }
+  }
+  
+  // Trimite email cu mailto (deschide client email cu destinatarii pre-completați)
+  const handleSendEmail = async () => {
+    if (destinatari.length === 0) {
+      showToast('Niciun destinatar configurat. Apasă ⚙️ Setări destinatari.', 'warn')
+      return
+    }
+    setTrimisLoading(true)
+    
+    // Subject + body SCURT (mailto are limită ~2000 caractere)
+    const subject = `Aviz însoțire marfă - ${T.numar_transport}`
+    const body = [
+      `Bună ziua,`,
+      ``,
+      `Vă transmitem avizul de însoțire marfă ${T.numar_transport}:`,
+      `• Activ: ${T.tip === 'utilaj' && T.activ_transportat ? `${T.activ_transportat.cod_intern || ''} ${T.activ_transportat.marca || ''} ${T.activ_transportat.model || ''}`.trim() : (T.continut_descriere || '—')}`,
+      `• Plecare → Destinație: ${formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)} → ${formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}`,
+      `• Data: ${T.data_transport}${T.ora_plecare ? ' · ' + T.ora_plecare.substring(0,5) : ''}`,
+      `• Șofer: ${T.sofer_employee?.name || T.sofer_extern_nume || '—'}`,
+      ``,
+      `Cu stimă,`,
+      profile?.name || 'Echipa Gazpet'
+    ].join('\n')
+    
+    const mailtoUrl = `mailto:${destinatari.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    
+    // Verificare lungime URL — limită ~2000 caractere pe Chrome/Edge
+    if (mailtoUrl.length > 1900) {
+      showToast('⚠️ Conținut prea lung pentru mailto. Copiază manual datele.', 'warn')
+    }
+    
+    // Update DB: marchează aviz email trimis (NU aviz_generat — acela e doar pentru arhivă)
+    const { error } = await supabase.from('logistica_transporturi').update({
+      aviz_emails_trimis: destinatari
+    }).eq('id', T.id)
+    
+    setTrimisLoading(false)
+    if (error) { showToast('Eroare actualizare DB: ' + error.message, 'error'); return }
+    
+    // Deschidem mailto cu mai multe metode (window.open are mai multe șanse decât location.href)
+    let opened = false
+    try {
+      const newWindow = window.open(mailtoUrl, '_self')
+      if (newWindow) opened = true
+    } catch (e) { /* ignored */ }
+    
+    if (!opened) {
+      // Fallback: location.href
+      try { window.location.href = mailtoUrl; opened = true } catch (e) { /* ignored */ }
+    }
+    
+    // Copiez în clipboard subject + body + emails ca fallback
+    try {
+      const fullText = `Către: ${destinatari.join(', ')}\nSubject: ${subject}\n\n${body}`
+      await navigator.clipboard.writeText(fullText)
+      showToast(`📧 Mail deschis + ${fullText.length} caractere copiate în clipboard (paste în orice client mail)`, 'info')
+    } catch (e) {
+      showToast(`📧 Mail deschis în client (${destinatari.length} destinatari)`, 'info')
+    }
+    
+    onTrimisEmail?.()
+  }
+  
+  // Date afișate
+  const dataTransport = T.data_transport ? new Date(T.data_transport).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+  const oraPlecare = T.ora_plecare ? T.ora_plecare.substring(0,5) : '—'
+  const numarAviz = `AVZ-${T.numar_transport.replace('TRP-', '')}`
+  
+  return (
+    <>
+      <div className="aviz-modal-overlay" style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1050, display:'flex', alignItems:'center', justifyContent:'center', padding:20, overflowY:'auto'}}>
+        <div style={{width:'100%', maxWidth:850, background:'#fff', borderRadius:8, position:'relative'}}>
+          
+          {/* Toolbar (HIDE pe print) */}
+          <div className="aviz-toolbar no-print" style={{position:'sticky', top:0, padding:'12px 20px', background:'#1F2937', color:'#fff', borderRadius:'8px 8px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, zIndex:10, flexWrap:'wrap'}}>
+            <div style={{fontSize:14, fontWeight:700}}>
+              📄 Aviz Însoțire Marfă · {numarAviz}
+            </div>
+            <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+              {isAdmin && (
+                <button onClick={() => setShowSetariEmail(true)} style={{padding:'7px 12px', background:'#374151', color:'#fff', border:'1px solid #4B5563', borderRadius:6, fontSize:12, cursor:'pointer', fontWeight:600}}>
+                  ⚙️ Setări destinatari
+                </button>
+              )}
+              <button onClick={handleSendEmail} disabled={trimisLoading} style={{padding:'7px 14px', background:'#2563EB', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                {trimisLoading ? '...' : `📧 Trimite (${destinatari.length})`}
+              </button>
+              <button onClick={handlePrint} style={{padding:'7px 14px', background:'#16A34A', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                🖨️ Print
+              </button>
+              {/* Progress semnături — arhivarea se face AUTOMAT la a 3-a semnătură */}
+              {(() => {
+                const nrSemn = (semnExpData ? 1 : 0) + (semnSofData ? 1 : 0) + (semnDestData ? 1 : 0)
+                const colorBg = nrSemn === 3 ? '#16A34A' : nrSemn === 2 ? '#F59E0B' : nrSemn === 1 ? '#EAB308' : '#6B7280'
+                const isArhivat = T.aviz_generat && nrSemn === 3
+                return (
+                  <div style={{
+                    padding:'7px 12px', 
+                    background: isArhivat ? '#16A34A' : colorBg+'33',
+                    color: isArhivat ? '#fff' : colorBg,
+                    border: isArhivat ? `1px solid #16A34A` : `1px solid ${colorBg}88`,
+                    borderRadius:6, fontSize:12, fontWeight:700,
+                    display:'flex', alignItems:'center', gap:6
+                  }}>
+                    {arhivareLoading ? (
+                      <>⏳ Se arhivează...</>
+                    ) : isArhivat ? (
+                      <>📂 Arhivat</>
+                    ) : (
+                      <>✍️ Semnături: <strong>{nrSemn}/3</strong></>
+                    )}
+                  </div>
+                )
+              })()}
+              <button onClick={onClose} style={{padding:'7px 12px', background:'#DC2626', color:'#fff', border:'none', borderRadius:6, fontSize:13, cursor:'pointer', fontWeight:700}}>
+                ✕ Închide
+              </button>
+            </div>
+          </div>
+          
+          {/* === CONȚINUT AVIZ A4 === */}
+          <div className="aviz-content" style={{padding:'30px 40px', color:'#111', fontFamily:'"Times New Roman", serif', fontSize:12, lineHeight:1.4}}>
+            
+            {/* Antet cu logo */}
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', borderBottom:'3px solid #1E40AF', paddingBottom:15, marginBottom:20}}>
+              <div style={{display:'flex', alignItems:'center', gap:14}}>
+                <img src={LOGO_B64} alt="Gazpet Instal" style={{height:65, width:'auto', objectFit:'contain'}} />
+                <div>
+                  <div style={{fontSize:18, fontWeight:'bold', color:'#1E40AF', letterSpacing:.5}}>{setariFirma.firma_nume || 'GAZPET INSTAL SRL'}</div>
+                  <div style={{fontSize:10, color:'#374151', marginTop:3}}>CUI: {setariFirma.firma_cui || '—'} · {setariFirma.firma_reg_com || '—'}</div>
+                  <div style={{fontSize:10, color:'#374151'}}>{setariFirma.firma_adresa || '—'}</div>
+                  <div style={{fontSize:10, color:'#374151'}}>Tel: {setariFirma.firma_telefon || '—'} · Email: {setariFirma.firma_email || '—'}</div>
+                </div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:22, fontWeight:'bold', color:'#1E40AF', letterSpacing:1}}>AVIZ</div>
+                <div style={{fontSize:14, fontWeight:'bold', color:'#374151'}}>ÎNSOȚIRE MARFĂ</div>
+                <div style={{fontSize:11, color:'#6B7280', marginTop:6, fontWeight:'bold'}}>Nr. {numarAviz}</div>
+                <div style={{fontSize:10, color:'#6B7280'}}>din {new Date().toLocaleDateString('ro-RO')}</div>
+              </div>
+            </div>
+            
+            {/* Banner status semnături — vizibil pe ecran, ascuns la print */}
+            {(() => {
+              const nrSemn = (semnExpData ? 1 : 0) + (semnSofData ? 1 : 0) + (semnDestData ? 1 : 0)
+              if (nrSemn === 3) return null  // toate complete, nu mai e nevoie de banner
+              const lipsaList = []
+              if (!semnExpData) lipsaList.push('Expeditor')
+              if (!semnSofData) lipsaList.push('Șofer')
+              if (!semnDestData) lipsaList.push('Destinatar')
+              const colorBg = nrSemn === 2 ? '#FEF3C7' : nrSemn === 1 ? '#FEF9C3' : '#FEE2E2'
+              const colorText = nrSemn === 2 ? '#D97706' : nrSemn === 1 ? '#CA8A04' : '#DC2626'
+              return (
+                <div className="no-print" style={{
+                  marginBottom: 18, 
+                  padding: '10px 14px', 
+                  background: colorBg, 
+                  border: `1px dashed ${colorText}88`,
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10
+                }}>
+                  <span style={{fontSize: 20}}>{nrSemn === 2 ? '⏳' : '✍️'}</span>
+                  <div style={{flex: 1}}>
+                    <div style={{fontSize: 12, fontWeight: 700, color: colorText}}>
+                      Aviz în așteptare — <strong>{nrSemn}/3 semnături</strong>
+                      {nrSemn === 2 && ' · gata pentru print + traseu'}
+                    </div>
+                    <div style={{fontSize: 11, color: colorText+'CC', marginTop: 2}}>
+                      Lipsește: <strong>{lipsaList.join(', ')}</strong>
+                      {nrSemn === 2 && ` · arhivare automată după a 3-a semnătură`}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+            
+            {/* Date transport */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:8, letterSpacing:.5}}>📋 Date transport</div>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+                <tbody>
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', width:'25%', color:'#374151', verticalAlign:'top'}}>Nr. Transport:</td>
+                    <td style={{padding:'4px 8px', fontFamily:'monospace', fontSize:13, fontWeight:'bold', color:'#1E40AF'}}>{T.numar_transport}</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', width:'20%', color:'#374151', verticalAlign:'top'}}>Data:</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold'}}>{dataTransport} {oraPlecare !== '—' && `· ${oraPlecare}`}</td>
+                  </tr>
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Tip transport:</td>
+                    <td style={{padding:'4px 8px'}}>{T.tip === 'utilaj' ? '🚛 Transport utilaj' : T.tip === 'materiale' ? '📦 Transport materiale' : '📄 Transport mic / TESA'}</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Status:</td>
+                    <td style={{padding:'4px 8px'}}>
+                      {(() => {
+                        const statusInfo = {
+                          aprobat: { text: '✓ Aprobat - În pregătire', color: '#16A34A', bg: '#DCFCE7' },
+                          programat: { text: '📅 Programat - În pregătire', color: '#2563EB', bg: '#DBEAFE' },
+                          in_tranzit: { text: '🚚 În curs de livrare', color: '#D97706', bg: '#FEF3C7' },
+                          livrat: { text: '✅ Livrat', color: '#16A34A', bg: '#DCFCE7' },
+                          cerut: { text: '⏳ Cerut', color: '#D97706', bg: '#FEF3C7' },
+                          respins: { text: '✗ Respins', color: '#DC2626', bg: '#FEE2E2' },
+                          anulat: { text: '⊘ Anulat', color: '#6B7280', bg: '#F3F4F6' },
+                        }[T.status] || { text: T.status, color: '#6B7280', bg: '#F3F4F6' }
+                        return (
+                          <span style={{display:'inline-block', padding:'3px 10px', background:statusInfo.bg, color:statusInfo.color, borderRadius:4, fontWeight:'bold', fontSize:11, border:`1px solid ${statusInfo.color}33`}}>
+                            {statusInfo.text}
+                          </span>
+                        )
+                      })()}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Date emitent / destinatar */}
+            <div style={{display:'flex', gap:14, marginBottom:18}}>
+              <div style={{flex:1, padding:10, border:'2px solid #93C5FD', borderRadius:6, background:'#EFF6FF'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>📤 EXPEDITOR</div>
+                <div style={{fontSize:12, fontWeight:'bold', color:'#111'}}>{setariFirma.firma_nume || 'GAZPET INSTAL SRL'}</div>
+                <div style={{fontSize:10, color:'#374151', marginTop:3}}>CUI: {setariFirma.firma_cui || '—'}</div>
+                <div style={{fontSize:10, color:'#374151'}}>De la: {formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)}</div>
+                {T.manager_plecare && <div style={{fontSize:10, color:'#374151', marginTop:3}}>Manager plecare: <strong>{T.manager_plecare.name}</strong></div>}
+              </div>
+              <div style={{flex:1, padding:10, border:'2px solid #FCA5A5', borderRadius:6, background:'#FEF2F2'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#DC2626', textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>📥 DESTINATAR</div>
+                <div style={{fontSize:12, fontWeight:'bold', color:'#111'}}>{T.destinatie_tip === 'site' && T.destinatie_site ? T.destinatie_site.name : (T.destinatie_tip === 'sediu' ? (setariFirma.firma_nume || 'GAZPET INSTAL SRL') : 'Destinație externă')}</div>
+                <div style={{fontSize:10, color:'#374151', marginTop:3}}>La: {formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}</div>
+                {T.manager_destinatie && <div style={{fontSize:10, color:'#374151', marginTop:3}}>Manager destinație: <strong>{T.manager_destinatie.name}</strong></div>}
+              </div>
+            </div>
+            
+            {/* Detalii activ transportat */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:8, letterSpacing:.5}}>📦 Conținut transport</div>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11, border:'1px solid #D1D5DB'}}>
+                <thead>
+                  <tr style={{background:'#F3F4F6'}}>
+                    <th style={{padding:'6px 8px', textAlign:'left', fontWeight:'bold', borderBottom:'2px solid #6B7280', width:30}}>Nr.</th>
+                    <th style={{padding:'6px 8px', textAlign:'left', fontWeight:'bold', borderBottom:'2px solid #6B7280'}}>Denumire</th>
+                    <th style={{padding:'6px 8px', textAlign:'left', fontWeight:'bold', borderBottom:'2px solid #6B7280'}}>Cod / Serii</th>
+                    <th style={{padding:'6px 8px', textAlign:'center', fontWeight:'bold', borderBottom:'2px solid #6B7280', width:60}}>UM</th>
+                    <th style={{padding:'6px 8px', textAlign:'center', fontWeight:'bold', borderBottom:'2px solid #6B7280', width:60}}>Cant.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>1</td>
+                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
+                      {T.tip === 'utilaj' && T.activ_transportat ? (
+                        <>
+                          <div style={{fontWeight:'bold'}}>{T.activ_transportat.marca} {T.activ_transportat.model}</div>
+                          {T.activ_transportat.regim_transport_special && <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
+                        </>
+                      ) : (
+                        <div style={{whiteSpace:'pre-wrap'}}>{T.continut_descriere || '—'}</div>
+                      )}
+                    </td>
+                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
+                      {T.tip === 'utilaj' && T.activ_transportat ? (
+                        <>
+                          {T.activ_transportat.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{T.activ_transportat.nr_inventar}</strong></div>}
+                          {T.activ_transportat.cod_intern && <div>Cod intern: <strong>{T.activ_transportat.cod_intern}</strong></div>}
+                          {T.activ_transportat.nr_inmatriculare && <div>Nr. înmatriculare: {T.activ_transportat.nr_inmatriculare}</div>}
+                          {T.activ_transportat.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {T.activ_transportat.serie_sasiu}</div>}
+                        </>
+                      ) : '—'}
+                    </td>
+                    <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{T.tip === 'utilaj' ? 'buc' : '—'}</td>
+                    <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>{T.tip === 'utilaj' ? '1' : '—'}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Mijloc transport + șofer */}
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:8, letterSpacing:.5}}>🚚 Mijloc transport & Șofer</div>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+                <tbody>
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', width:'25%', color:'#374151', verticalAlign:'top'}}>Mijloc principal:</td>
+                    <td style={{padding:'4px 8px'}}>{T.masina ? formatActiv(T.masina) : '—'}</td>
+                  </tr>
+                  {T.remorca && (
+                    <tr>
+                      <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Remorcă/Trailer:</td>
+                      <td style={{padding:'4px 8px'}}>{formatActiv(T.remorca)} {T.remorca.logistica_categorii?.tip && `(${T.remorca.logistica_categorii.tip})`}</td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td style={{padding:'4px 8px', fontWeight:'bold', color:'#374151', verticalAlign:'top'}}>Șofer:</td>
+                    <td style={{padding:'4px 8px', fontWeight:'bold'}}>
+                      {T.sofer_employee?.name || T.sofer_extern_nume || '—'}
+                      {T.sofer_employee?.position && <span style={{fontWeight:'normal', color:'#6B7280', marginLeft:6}}>({T.sofer_employee.position})</span>}
+                      {T.sofer_extern_telefon && <span style={{fontWeight:'normal', color:'#6B7280', marginLeft:6}}>· Tel: {T.sofer_extern_telefon}</span>}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Observații */}
+            {T.observatii && (
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:11, fontWeight:'bold', color:'#1E40AF', textTransform:'uppercase', borderBottom:'1px solid #93C5FD', paddingBottom:3, marginBottom:6, letterSpacing:.5}}>📝 Observații</div>
+                <div style={{padding:8, background:'#F9FAFB', border:'1px solid #E5E7EB', borderRadius:4, fontSize:11, whiteSpace:'pre-wrap'}}>{T.observatii}</div>
+              </div>
+            )}
+            
+            {/* Spații semnătură (PAS 4 - cu canvas drawing) */}
+            <div style={{marginTop:30, display:'flex', gap:14, justifyContent:'space-between'}}>
+              {/* Semnătură EXPEDITOR */}
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6, position:'relative'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:6}}>EXPEDITOR / Manager plecare</div>
+                <div style={{minHeight:60, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  {semnExpData ? (
+                    <img src={semnExpData} alt="semnătură expeditor" style={{maxHeight:60, maxWidth:'95%'}} />
+                  ) : (
+                    <button 
+                      className="no-print"
+                      onClick={() => setShowSemnatura('expeditor')}
+                      style={{padding:'8px 14px', background:'#EFF6FF', color:'#2563EB', border:'1px dashed #2563EB', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600}}
+                    >
+                      ✍️ Semnează aici
+                    </button>
+                  )}
+                </div>
+                <div style={{fontSize:10, color:'#374151', fontWeight:600, marginTop:3}}>{semnExpNume || T.manager_plecare?.name || '—'}</div>
+                {semnExpLa && <div style={{fontSize:8, color:'#16A34A', marginTop:2}}>✓ {new Date(semnExpLa).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>}
+                {semnExpData && (
+                  <button 
+                    className="no-print"
+                    onClick={() => setShowSemnatura('expeditor')}
+                    style={{position:'absolute', top:0, right:0, padding:'2px 6px', background:'transparent', color:'#9CA3AF', border:'none', fontSize:10, cursor:'pointer'}}
+                    title="Re-semnează"
+                  >🔄</button>
+                )}
+              </div>
+              
+              {/* Semnătură ȘOFER */}
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6, position:'relative'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:6}}>ȘOFER</div>
+                <div style={{minHeight:60, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  {semnSofData ? (
+                    <img src={semnSofData} alt="semnătură șofer" style={{maxHeight:60, maxWidth:'95%'}} />
+                  ) : (
+                    <button 
+                      className="no-print"
+                      onClick={() => setShowSemnatura('sofer')}
+                      style={{padding:'8px 14px', background:'#EFF6FF', color:'#2563EB', border:'1px dashed #2563EB', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600}}
+                    >
+                      ✍️ Semnează aici
+                    </button>
+                  )}
+                </div>
+                <div style={{fontSize:10, color:'#374151', fontWeight:600, marginTop:3}}>{semnSofNume || T.sofer_employee?.name || T.sofer_extern_nume || '—'}</div>
+                {semnSofLa && <div style={{fontSize:8, color:'#16A34A', marginTop:2}}>✓ {new Date(semnSofLa).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>}
+                {semnSofData && (
+                  <button 
+                    className="no-print"
+                    onClick={() => setShowSemnatura('sofer')}
+                    style={{position:'absolute', top:0, right:0, padding:'2px 6px', background:'transparent', color:'#9CA3AF', border:'none', fontSize:10, cursor:'pointer'}}
+                    title="Re-semnează"
+                  >🔄</button>
+                )}
+              </div>
+              
+              {/* Semnătură DESTINATAR */}
+              <div style={{flex:1, textAlign:'center', borderTop:'1px solid #6B7280', paddingTop:6, position:'relative'}}>
+                <div style={{fontSize:10, fontWeight:'bold', color:'#374151', marginBottom:6}}>DESTINATAR / Manager destinație</div>
+                <div style={{minHeight:60, display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  {semnDestData ? (
+                    <img src={semnDestData} alt="semnătură destinatar" style={{maxHeight:60, maxWidth:'95%'}} />
+                  ) : (
+                    <button 
+                      className="no-print"
+                      onClick={() => setShowSemnatura('destinatar')}
+                      style={{padding:'8px 14px', background:'#EFF6FF', color:'#2563EB', border:'1px dashed #2563EB', borderRadius:6, fontSize:11, cursor:'pointer', fontWeight:600}}
+                    >
+                      ✍️ Semnează aici
+                    </button>
+                  )}
+                </div>
+                <div style={{fontSize:10, color:'#374151', fontWeight:600, marginTop:3}}>{semnDestNume || T.manager_destinatie?.name || '—'}</div>
+                {semnDestLa && <div style={{fontSize:8, color:'#16A34A', marginTop:2}}>✓ {new Date(semnDestLa).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>}
+                {semnDestData && (
+                  <button 
+                    className="no-print"
+                    onClick={() => setShowSemnatura('destinatar')}
+                    style={{position:'absolute', top:0, right:0, padding:'2px 6px', background:'transparent', color:'#9CA3AF', border:'none', fontSize:10, cursor:'pointer'}}
+                    title="Re-semnează"
+                  >🔄</button>
+                )}
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div style={{marginTop:30, paddingTop:8, borderTop:'1px dashed #D1D5DB', textAlign:'center', fontSize:9, color:'#9CA3AF'}}>
+              Document generat automat din ERP Gazpet Instal · {new Date().toLocaleString('ro-RO')} · Operator: {profile?.name || '—'}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* CSS print */}
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          .aviz-modal-overlay, .aviz-modal-overlay * { visibility: visible; }
+          .aviz-modal-overlay { 
+            position: absolute !important; 
+            inset: 0 !important; 
+            background: white !important;
+            padding: 0 !important;
+            display: block !important;
+          }
+          .aviz-modal-overlay > div { 
+            max-width: none !important; 
+            width: 100% !important; 
+            border-radius: 0 !important;
+            box-shadow: none !important;
+          }
+          .no-print, .aviz-toolbar { display: none !important; }
+          .aviz-content { 
+            padding: 15mm !important; 
+            font-size: 11pt !important;
+          }
+          @page { size: A4; margin: 10mm; }
+        }
+      `}</style>
+      
+      {/* Modal Setări destinatari email */}
+      {showSetariEmail && (
+        <SetariEmailDestinatariModal 
+          valoare={destinatari.join(',')}
+          onClose={() => setShowSetariEmail(false)}
+          onSaved={(newVal) => setDestinatari(newVal.split(',').map(s => s.trim()).filter(Boolean))}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal Canvas Semnătură (PAS 4) */}
+      {showSemnatura && (
+        <SemnaturaCanvasModal 
+          rol={showSemnatura}
+          numeImplicit={
+            showSemnatura === 'expeditor' ? (T.manager_plecare?.name || profile?.name || '') :
+            showSemnatura === 'sofer' ? (T.sofer_employee?.name || T.sofer_extern_nume || '') :
+            showSemnatura === 'destinatar' ? (T.manager_destinatie?.name || profile?.name || '') : ''
+          }
+          onClose={() => setShowSemnatura(null)}
+          onSave={(data) => saveSemnatura(showSemnatura, data)}
+          showToast={showToast}
+        />
+      )}
+    </>
+  )
+}
+
+// ----- Pagina Transporturi -----
+function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
+  const loc = useLocation()
+  const nav = useNavigate()
+  const [allInPeriod, setAllInPeriod] = useState([])  // TOATE din perioadă (pentru KPI corect)
+  const [loading, setLoading] = useState(false)
+  const [statusFilter, setStatusFilter] = useState('Toate')
+  const [perioadaFilter, setPerioadaFilter] = useState('luna')
+  const [meleFilter, setMeleFilter] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
+  const [showComanda, setShowComanda] = useState(false)
+  const [editTransport, setEditTransport] = useState(null)
+  const [detaliiTransport, setDetaliiTransport] = useState(null)
+  
+  // Auto-deschide modal dacă vine din butonul global "Cere transport" (?action=new)
+  useEffect(() => {
+    const params = new URLSearchParams(loc.search)
+    if (params.get('action') === 'new') {
+      setShowComanda(true)
+      params.delete('action')
+      const newSearch = params.toString()
+      nav(loc.pathname + (newSearch ? '?' + newSearch : ''), { replace: true })
+    }
+  }, [loc.search])
+  
+  const fetchAll = async () => {
+    setLoading(true)
+    let q = supabase.from('logistica_transporturi')
+      .select(`*,
+        activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
+        masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
+        remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
+        plecare_site:sites!plecare_site_id(name),
+        destinatie_site:sites!destinatie_site_id(name),
+        solicitant:profiles!solicitant_id(name),
+        aprobator:profiles!aprobator_id(name),
+        sofer:profiles!sofer_id(name),
+        sofer_employee:employees!sofer_employee_id(id, name, position),
+        manager_plecare:profiles!manager_plecare_id(id, name, role),
+        manager_destinatie:profiles!manager_destinatie_id(id, name, role),
+        confirmat_de:profiles!confirmat_primire_de(name)
+      `)
+    
+    // Filtru perioadă (aplicat la nivel DB)
+    const today = new Date().toISOString().split('T')[0]
+    if (perioadaFilter === 'luna') {
+      const y = new Date().getFullYear()
+      const m = String(new Date().getMonth() + 1).padStart(2, '0')
+      q = q.gte('data_transport', `${y}-${m}-01`)
+    } else if (perioadaFilter === 'sapt') {
+      const d = new Date(); d.setDate(d.getDate() - 7)
+      q = q.gte('data_transport', d.toISOString().split('T')[0])
+    } else if (perioadaFilter === 'azi') {
+      q = q.eq('data_transport', today)
+    }
+    
+    // Filtru "Doar ale mele" se aplică tot la DB
+    if (meleFilter && profile?.id) {
+      q = q.or(`solicitant_id.eq.${profile.id},manager_destinatie_id.eq.${profile.id},manager_plecare_id.eq.${profile.id}`)
+    }
+    
+    const { data, error } = await q
+    if (error) console.error('Eroare fetch transporturi:', error)
+    setAllInPeriod(data || [])
+    setLoading(false)
+  }
+  
+  useEffect(() => { fetchAll() }, [perioadaFilter, meleFilter])
+  
+  // Lista filtrată după status (în memorie)
+  const list = useMemo(() => {
+    let result = [...allInPeriod]
+    if (statusFilter !== 'Toate') result = result.filter(t => t.status === statusFilter)
+    
+    // Sortare specială pentru aprobate (după data_transport ASC — cele mai apropiate sus)
+    if (statusFilter === 'aprobat' || statusFilter === 'programat') {
+      result.sort((a, b) => (a.data_transport || '').localeCompare(b.data_transport || ''))
+    } else {
+      // Default: descrescător pe data_transport (cele recente sus)
+      result.sort((a, b) => (b.data_transport || '').localeCompare(a.data_transport || '') || (b.id - a.id))
+    }
+    return result
+  }, [allInPeriod, statusFilter])
+  
+  // KPI calculate din TOATE transporturile din perioadă (NU se schimbă cu filtrul status)
+  const kpi = useMemo(() => {
+    const cerute = allInPeriod.filter(t => t.status === 'cerut').length
+    const aprobate = allInPeriod.filter(t => t.status === 'aprobat' || t.status === 'programat').length
+    const inTranzit = allInPeriod.filter(t => t.status === 'in_tranzit').length
+    const livrate = allInPeriod.filter(t => t.status === 'livrat').length
+    return { cerute, aprobate, inTranzit, livrate }
+  }, [allInPeriod])
+  
+  // Helper: zile de la solicitare (pentru highlight urgent)
+  const zileLaSolicitare = (t) => {
+    if (!t.data_solicitarii) return 0
+    const ms = Date.now() - new Date(t.data_solicitarii).getTime()
+    return Math.floor(ms / (1000 * 60 * 60 * 24))
+  }
+  
+  // Export Excel
+  const handleExportExcel = async () => {
+    setExportingExcel(true)
+    try {
+      const XLSX = await import('xlsx-js-style')
+      const rows = list.map((t, idx) => ({
+        '#': idx + 1,
+        'Nr Transport': t.numar_transport || '',
+        'Data': t.data_transport || '',
+        'Ora': t.ora_plecare ? t.ora_plecare.substring(0, 5) : '',
+        'Tip': t.tip === 'utilaj' ? 'Utilaj' : 'Mic TESA',
+        'Activ / Conținut': t.tip === 'utilaj' && t.activ_transportat
+          ? `${t.activ_transportat.cod_intern || ''} ${t.activ_transportat.marca || ''} ${t.activ_transportat.model || ''}`.trim()
+          : (t.continut_descriere || ''),
+        'Mijloc principal': t.masina ? formatActiv(t.masina) : '',
+        'Remorcă': t.remorca ? formatActiv(t.remorca) : '',
+        'Plecare': t.plecare_tip === 'sediu' ? 'Sediu Gazpet' : (t.plecare_site?.name || t.plecare_locatie_text || ''),
+        'Manager plecare': t.manager_plecare?.name || '',
+        'Destinație': t.destinatie_tip === 'sediu' ? 'Sediu Gazpet' : (t.destinatie_site?.name || t.destinatie_locatie_text || ''),
+        'Manager destinație': t.manager_destinatie?.name || '',
+        'Șofer': t.sofer_employee?.name || t.sofer?.name || t.sofer_extern_nume || (t.sofer_aloca_logistica ? 'Logistică alocă' : ''),
+        'Funcție': t.sofer_employee?.position || '',
+        'Solicitant': t.solicitant?.name || '',
+        'Aprobator': t.aprobator?.name || '',
+        'Status': STATUS_TRANSPORT[t.status]?.label || t.status,
+        'Cost estimat (RON)': t.cost_estimat || '',
+        'Confirmat primire la': t.confirmat_primire_la ? new Date(t.confirmat_primire_la).toLocaleString('ro-RO') : '',
+        'Confirmat de': t.confirmat_de?.name || '',
+        'Observații confirmare': t.confirmare_observatii || '',
+        'Observații': t.observatii || '',
+      }))
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Transporturi')
+      // Auto-width
+      const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }))
+      ws['!cols'] = colWidths
+      const today = new Date().toISOString().split('T')[0]
+      XLSX.writeFile(wb, `Transporturi_${today}.xlsx`)
+      showToast(`✓ Export ${rows.length} transporturi → Excel`)
+    } catch (e) {
+      showToast('Eroare export: ' + e.message, 'error')
+    } finally {
+      setExportingExcel(false)
+    }
+  }
+  
+  return (
+    <div>
+      {/* KPI — Cerute (de aprobat) e ROȘU PULSING dacă > 0 */}
+      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
+        <div style={{
+          ...S.card, padding:'14px 18px', flex:1, minWidth:200,
+          borderLeft: `5px solid ${kpi.cerute > 0 ? G.red : G.border}`,
+          background: kpi.cerute > 0 ? G.redDim + '88' : G.surface,
+          animation: kpi.cerute > 0 ? 'pulse-red 2s infinite' : 'none',
+          boxShadow: kpi.cerute > 0 ? `0 0 16px ${G.red}33` : 'none',
+          transition: 'all .3s'
+        }}>
+          <div style={{fontSize:11, color: kpi.cerute > 0 ? G.red : G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>
+            ⏳ Cerute (de aprobat) {kpi.cerute > 0 && <span style={{marginLeft:6, padding:'2px 6px', background:G.red, color:'#fff', borderRadius:4, fontSize:9}}>URGENT</span>}
+          </div>
+          <div style={{fontSize:32, fontWeight:800, color: kpi.cerute > 0 ? G.red : G.text, fontVariantNumeric:'tabular-nums'}}>
+            {kpi.cerute}
+          </div>
+        </div>
+        <KPICard icon="✓" label="Aprobate" value={kpi.aprobate} color={G.green} />
+        <KPICard icon="🚛" label="În tranzit" value={kpi.inTranzit} color={G.yellow} />
+        <KPICard icon="✅" label="Livrate" value={kpi.livrate} color={G.green} />
+      </div>
+      
+      {/* CSS animation pulse-red — inline */}
+      <style>{`
+        @keyframes pulse-red {
+          0%, 100% { box-shadow: 0 0 16px ${G.red}33; }
+          50% { box-shadow: 0 0 24px ${G.red}88; }
+        }
+        @keyframes pulse-row {
+          0%, 100% { background: ${G.redDim}33; }
+          50% { background: ${G.redDim}66; }
+        }
+      `}</style>
+      
+      {/* Toolbar filtre + buton */}
+      <div style={{...S.card, padding:12, marginBottom:14, display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
+        <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6}}>Filtre:</div>
+        
+        {/* Status — fără 'programat' (eliminat din flow nou; rămâne accesibil dacă există date vechi cu acel status) */}
+        <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
+          {['Toate', 'cerut', 'aprobat', 'in_tranzit', 'livrat', 'respins', 'anulat'].map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)} style={{
+              padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
+              border:`1px solid ${statusFilter === s ? G.logistica : G.border}`,
+              background: statusFilter === s ? G.logistica + '22' : 'transparent',
+              color: statusFilter === s ? G.logistica : G.muted,
+              cursor:'pointer'
+            }}>
+              {s === 'Toate' ? 'Toate' : (STATUS_TRANSPORT[s]?.label || s)}
+            </button>
+          ))}
+        </div>
+        
+        <div style={{width:1, height:20, background:G.border}} />
+        
+        {/* Perioadă */}
+        <div style={{display:'flex', gap:4}}>
+          {[{k:'azi', l:'Azi'}, {k:'sapt', l:'7 zile'}, {k:'luna', l:'Luna'}, {k:'tot', l:'Toate'}].map(p => (
+            <button key={p.k} onClick={() => setPerioadaFilter(p.k)} style={{
+              padding:'5px 11px', fontSize:11, borderRadius:8, fontWeight:700,
+              border:`1px solid ${perioadaFilter === p.k ? G.logistica : G.border}`,
+              background: perioadaFilter === p.k ? G.logistica + '22' : 'transparent',
+              color: perioadaFilter === p.k ? G.logistica : G.muted,
+              cursor:'pointer'
+            }}>{p.l}</button>
+          ))}
+        </div>
+        
+        <div style={{flex:1}} />
+        
+        {/* Toggle "Doar ale mele" — MAI MARE și mai vizibil */}
+        <button 
+          onClick={() => setMeleFilter(!meleFilter)} 
+          style={{
+            padding:'8px 16px', fontSize:13, borderRadius:8, fontWeight:700,
+            border:`2px solid ${meleFilter ? G.purple : G.border2}`,
+            background: meleFilter ? G.purple + '33' : G.surface,
+            color: meleFilter ? G.purple : G.text,
+            cursor:'pointer',
+            display:'flex', alignItems:'center', gap:6,
+            boxShadow: meleFilter ? `0 0 12px ${G.purple}44` : 'none',
+            transition:'all .2s'
+          }}
+          title="Vezi doar transporturile unde ești solicitant SAU manager (plecare/destinație)"
+        >
+          <span style={{fontSize:16}}>{meleFilter ? '👤' : '👥'}</span>
+          <span>{meleFilter ? 'Doar ale mele' : 'Toate'}</span>
+        </button>
+        
+        {/* Buton Export Excel */}
+        <button onClick={handleExportExcel} disabled={exportingExcel || list.length === 0} style={{
+          ...S.btnS, padding:'8px 14px', fontSize:13, fontWeight:700,
+          color: G.green, borderColor: G.green + '88',
+          opacity: list.length === 0 ? 0.4 : 1,
+          display:'flex', alignItems:'center', gap:6
+        }} title="Export listă curentă în Excel">
+          <span style={{fontSize:14}}>📥</span>
+          <span>{exportingExcel ? 'Export...' : 'Excel'}</span>
+        </button>
+        
+        <button onClick={() => setShowComanda(true)} style={{...S.btnP, background:G.green, fontSize:13, display:'flex', alignItems:'center', gap:6, padding:'10px 16px'}}>
+          <span>+</span><span>Comandă transport</span>
+        </button>
+      </div>
+      
+      {/* Lista transporturi */}
+      <div style={{...S.card, padding:0, overflow:'hidden'}}>
+        {loading ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă...</div>
+        ) : list.length === 0 ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>
+            <div style={{fontSize:32, marginBottom:8}}>🚚</div>
+            <div style={{fontSize:14, fontWeight:700, color:G.text, marginBottom:4}}>Nicio cerere de transport în această perioadă</div>
+            <div style={{fontSize:12}}>Apasă <strong style={{color:G.green}}>+ Comandă transport</strong> pentru a crea prima cerere</div>
+          </div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+              <thead>
+                <tr style={{background:G.bg, borderBottom:`1px solid ${G.border}`}}>
+                  <th style={thStyle}>#</th>
+                  <th style={thStyle}>Nr</th>
+                  <th style={thStyle}>Data · Ora</th>
+                  <th style={thStyle}>Tip</th>
+                  <th style={thStyle}>Activ / Conținut</th>
+                  <th style={thStyle}>Plecare → Destinație</th>
+                  <th style={thStyle}>Șofer</th>
+                  <th style={thStyle}>Solicitant</th>
+                  <th style={thStyle}>Status</th>
+                  <th style={thStyle}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.map((t, idx) => {
+                  const zile = zileLaSolicitare(t)
+                  const urgent = t.status === 'cerut' && zile > 7
+                  const isApr = t.status === 'aprobat' || t.status === 'programat'
+                  return (
+                  <tr key={t.id} 
+                      onClick={() => setDetaliiTransport(t)}
+                      style={{
+                        borderBottom: urgent ? `2px solid ${G.red}` : `1px solid ${G.border}`, 
+                        transition:'background .15s', 
+                        cursor:'pointer',
+                        background: urgent ? `${G.redDim}33` : undefined,
+                        animation: urgent ? 'pulse-row 2s infinite' : 'none'
+                      }} 
+                      onMouseEnter={e => { if (!urgent) e.currentTarget.style.background = G.bg }} 
+                      onMouseLeave={e => { if (!urgent) e.currentTarget.style.background = '' }}>
+                    <td style={tdStyle}>
+                      <span style={{display:'inline-block', minWidth:24, padding:'2px 6px', background:urgent ? G.red : G.surface, border:`1px solid ${urgent ? G.red : G.border}`, borderRadius:6, fontSize:11, color:urgent ? '#fff' : G.muted, textAlign:'center', fontWeight: urgent ? 700 : 400}}>
+                        {urgent ? '🔥' : idx+1}
+                      </span>
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{fontFamily:'monospace', fontSize:11, color:G.logistica, fontWeight:700}}>{t.numar_transport}</span>
+                      {urgent && <div style={{fontSize:9, color:G.red, fontWeight:700, marginTop:2}}>⚠️ {zile} zile fără răspuns</div>}
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize: isApr ? 14 : 12, color:G.text, fontWeight: isApr ? 700 : 400}}>{t.data_transport}</div>
+                      {t.ora_plecare && <div style={{fontSize:10, color:G.muted}}>{t.ora_plecare.substring(0,5)}</div>}
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{fontSize:18}}>{t.tip === 'utilaj' ? '🚛' : '📄'}</span>
+                    </td>
+                    <td style={tdStyle}>
+                      {t.tip === 'utilaj' && t.activ_transportat ? (
+                        <div>
+                          <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.activ_transportat.cod_intern} · {t.activ_transportat.marca}</div>
+                          <div style={{fontSize:10, color:G.muted}}>{t.activ_transportat.model}{t.activ_transportat.regim_transport_special && <span style={{color:G.red, marginLeft:4}}>⚠️ Regim special</span>}</div>
+                          {/* Mijloc transport (combo cap tractor + remorca) */}
+                          {(t.masina || t.remorca) && (
+                            <div style={{marginTop:4, fontSize:10, color:G.logistica}}>
+                              🚛 {t.masina ? formatActiv(t.masina) : <span style={{color:G.muted}}>fără mijloc</span>}
+                              {t.remorca && <span> + {formatActiv(t.remorca)} <span style={{color:G.muted}}>({t.remorca.logistica_categorii?.tip})</span></span>}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{fontSize:12, color:G.text, maxWidth:200, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={t.continut_descriere}>{t.continut_descriere}</div>
+                          {t.masina && <div style={{marginTop:4, fontSize:10, color:G.logistica}}>🚗 {formatActiv(t.masina)}</div>}
+                        </div>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize:11, color:G.text}}>{formatLocatie(t.plecare_tip, t.plecare_site, t.plecare_locatie_text)}</div>
+                      <div style={{fontSize:10, color:G.muted, marginTop:2}}>↓</div>
+                      <div style={{fontSize:11, color:G.text}}>{formatLocatie(t.destinatie_tip, t.destinatie_site, t.destinatie_locatie_text)}</div>
+                    </td>
+                    <td style={tdStyle}>
+                      {/* Prioritate: logistica alocă → employee → profile → extern */}
+                      {t.sofer_aloca_logistica && !t.sofer_employee_id ? (
+                        <div style={{display:'inline-flex', alignItems:'center', gap:4, padding:'3px 8px', borderRadius:999, fontSize:10, fontWeight:700, background:G.purple + '22', color:G.purple, border:`1px solid ${G.purple}55`}}>
+                          🏢 Logistică alocă
+                        </div>
+                      ) : t.sofer_gazpet ? (
+                        t.sofer_employee ? (
+                          <>
+                            <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.sofer_employee.name}</div>
+                            <div style={{fontSize:10, color:G.muted}}>{t.sofer_employee.position}</div>
+                          </>
+                        ) : t.sofer ? (
+                          <div style={{fontSize:12, color:G.text}}>{t.sofer.name} <span style={{fontSize:9, color:G.muted}}>(user)</span></div>
+                        ) : (
+                          <div style={{fontSize:12, color:G.muted}}>—</div>
+                        )
+                      ) : (
+                        <>
+                          <div style={{fontSize:12, color:G.text}}>{t.sofer_extern_nume || '—'}</div>
+                          {t.sofer_extern_telefon && <div style={{fontSize:10, color:G.muted}}>{t.sofer_extern_telefon}</div>}
+                          <div style={{fontSize:9, color:G.orange}}>(extern)</div>
+                        </>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      <div style={{fontSize:11, color:G.muted}}>{t.solicitant?.name || '—'}</div>
+                    </td>
+                    <td style={tdStyle}>
+                      <StatusBadge status={t.status} />
+                    </td>
+                    <td style={tdStyle}>
+                      {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
+                      {t.status === 'cerut' ? (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
+                          style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
+                          title="Editează cererea (doar înainte de aprobare)"
+                        >
+                          ✏️ Edit
+                        </button>
+                      ) : (
+                        <span style={{fontSize:10, color:G.muted}}>—</span>
+                      )}
+                    </td>
+                  </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      {/* Modal Comandă (creare nouă) */}
+      {showComanda && (
+        <ComandaTransportModal
+          active={active}
+          sites={sites}
+          profile={profile}
+          onClose={() => setShowComanda(false)}
+          onSaved={fetchAll}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal Edit transport */}
+      {editTransport && (
+        <ComandaTransportModal
+          active={active}
+          sites={sites}
+          profile={profile}
+          initialTransport={editTransport}
+          onClose={() => setEditTransport(null)}
+          onSaved={fetchAll}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal Detalii Transport (workflow aprobare) */}
+      {detaliiTransport && (
+        <DetaliiTransportModal
+          transport={detaliiTransport}
+          profile={profile}
+          sites={sites}
+          onClose={() => setDetaliiTransport(null)}
+          onChanged={async () => {
+            await fetchAll()
+            // Refresh și transportul deschis în detalii (pentru că state-ul lui pierdea schimbările)
+            const { data: fresh } = await supabase
+              .from('logistica_transporturi')
+              .select(`*,
+                activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
+                masina:logistica_active!masina_id(id, cod_intern, marca, model, nr_inmatriculare),
+                remorca:logistica_active!remorca_id(id, cod_intern, marca, model, nr_inmatriculare, logistica_categorii(tip)),
+                plecare_site:sites!plecare_site_id(name),
+                destinatie_site:sites!destinatie_site_id(name),
+                solicitant:profiles!solicitant_id(name),
+                aprobator:profiles!aprobator_id(name),
+                sofer:profiles!sofer_id(name),
+                sofer_employee:employees!sofer_employee_id(id, name, position),
+                manager_plecare:profiles!manager_plecare_id(id, name, role),
+                manager_destinatie:profiles!manager_destinatie_id(id, name, role),
+                confirmat_de:profiles!confirmat_primire_de(name)
+              `)
+              .eq('id', detaliiTransport.id)
+              .single()
+            if (fresh) setDetaliiTransport(fresh)
+          }}
+          onEdit={(t) => setEditTransport(t)}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  )
+}
+
+const thStyle = { padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:.5 }
+const tdStyle = { padding:'10px 12px', verticalAlign:'top' }
+
+// ===========================================================================
+// GESTIUNE UTILAJE PE ȘANTIER — locația curentă fiecare activ
+// ===========================================================================
+function ArhivaAvizePage({ profile, showToast }) {
+  const [arhiva, setArhiva] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
+  const [perioadaFilter, setPerioadaFilter] = useState('toate')  // toate | luna | sapt | azi
+  const [downloadingId, setDownloadingId] = useState(null)
+  const [showDeleteLuna, setShowDeleteLuna] = useState(false)  // modal bulk delete pe lună
+  
+  const isAdmin = ['superadmin', 'admin_logistica'].includes(profile?.role)
+  
+  // Delete individual aviz (admin only)
+  const handleDelete = async (arhAviz) => {
+    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    if (!confirm(`Sigur vrei să ștergi ${arhAviz.numar_aviz}?\n\n• PDF din Storage\n• Înregistrarea din arhivă\n\nAceastă acțiune e ireversibilă!`)) return
+    
+    setDownloadingId(arhAviz.id)
+    try {
+      // 1. Delete PDF din Storage
+      const { error: stErr } = await supabase.storage.from('avize').remove([arhAviz.pdf_path])
+      if (stErr) console.warn('Storage delete warning:', stErr.message)
+      
+      // 2. Delete row din DB
+      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().eq('id', arhAviz.id)
+      if (dbErr) throw dbErr
+      
+      showToast(`✓ ${arhAviz.numar_aviz} șters`)
+      loadArhiva()
+    } catch (e) {
+      showToast('Eroare ștergere: ' + (e.message || e), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+  
+  // Delete bulk pe lună (admin only — pentru curățenie după 12 luni)
+  const handleDeleteLuna = async (yearMonth) => {
+    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    
+    // Verifică câte avize sunt în luna respectivă
+    const startDate = `${yearMonth}-01`
+    const endDate = (() => {
+      const [y, m] = yearMonth.split('-').map(Number)
+      const next = new Date(y, m, 1)  // luna următoare
+      return next.toISOString().split('T')[0]
+    })()
+    
+    const { data: avizeLuna, error: qErr } = await supabase
+      .from('logistica_avize_arhiva')
+      .select('id, numar_aviz, pdf_path')
+      .gte('data_transport', startDate)
+      .lt('data_transport', endDate)
+    
+    if (qErr) { showToast('Eroare query: ' + qErr.message, 'error'); return }
+    if (!avizeLuna || avizeLuna.length === 0) { showToast('Nicio aviz în această lună', 'warn'); return }
+    
+    if (!confirm(`Vei șterge ${avizeLuna.length} avize din luna ${yearMonth}!\n\n• Toate PDF-urile din Storage\n• Toate înregistrările din arhivă\n\nAceastă acțiune e IREVERSIBILĂ. Continui?`)) return
+    
+    try {
+      // Delete PDF-uri din Storage (batch)
+      const paths = avizeLuna.map(a => a.pdf_path).filter(Boolean)
+      if (paths.length > 0) {
+        const { error: stErr } = await supabase.storage.from('avize').remove(paths)
+        if (stErr) console.warn('Storage delete warning:', stErr.message)
+      }
+      
+      // Delete rows din DB
+      const ids = avizeLuna.map(a => a.id)
+      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().in('id', ids)
+      if (dbErr) throw dbErr
+      
+      showToast(`✓ ${avizeLuna.length} avize șterse pentru ${yearMonth}`)
+      setShowDeleteLuna(false)
+      loadArhiva()
+    } catch (e) {
+      showToast('Eroare ștergere: ' + (e.message || e), 'error')
+    }
+  }
+  
+  // Calculează lunile cu avize pentru bulk delete
+  const luniCuAvize = useMemo(() => {
+    const map = new Map()
+    arhiva.forEach(a => {
+      if (!a.data_transport) return
+      const ym = a.data_transport.substring(0, 7)
+      const cur = map.get(ym) || { count: 0, size: 0 }
+      cur.count += 1
+      cur.size += (a.pdf_size_bytes || 0)
+      map.set(ym, cur)
+    })
+    return Array.from(map.entries()).map(([ym, data]) => ({ ym, ...data })).sort((a, b) => a.ym.localeCompare(b.ym))
+  }, [arhiva])
+  
+  useEffect(() => { loadArhiva() }, [perioadaFilter])
+  
+  const loadArhiva = async () => {
+    setLoading(true)
+    let q = supabase.from('logistica_avize_arhiva').select('*').order('generat_la', { ascending: false }).limit(500)
+    
+    const today = new Date().toISOString().split('T')[0]
+    if (perioadaFilter === 'azi') q = q.eq('data_transport', today)
+    else if (perioadaFilter === 'sapt') {
+      const d = new Date(); d.setDate(d.getDate() - 7)
+      q = q.gte('data_transport', d.toISOString().split('T')[0])
+    } else if (perioadaFilter === 'luna') {
+      const y = new Date().getFullYear(), m = String(new Date().getMonth() + 1).padStart(2, '0')
+      q = q.gte('data_transport', `${y}-${m}-01`)
+    }
+    
+    const { data, error } = await q
+    if (error) { showToast('Eroare încărcare arhivă: ' + error.message, 'error'); setLoading(false); return }
+    setArhiva(data || [])
+    setLoading(false)
+  }
+  
+  const filtered = useMemo(() => {
+    if (!search.trim()) return arhiva
+    const s = search.toLowerCase()
+    return arhiva.filter(a => 
+      a.numar_aviz?.toLowerCase().includes(s) ||
+      a.numar_transport?.toLowerCase().includes(s) ||
+      a.plecare_text?.toLowerCase().includes(s) ||
+      a.destinatie_text?.toLowerCase().includes(s) ||
+      a.sofer_nume?.toLowerCase().includes(s) ||
+      a.manager_destinatie_nume?.toLowerCase().includes(s)
+    )
+  }, [arhiva, search])
+  
+  const handleDownload = async (arhAviz) => {
+    setDownloadingId(arhAviz.id)
+    try {
+      const { data, error } = await supabase.storage.from('avize').download(arhAviz.pdf_path)
+      if (error) throw error
+      const url = URL.createObjectURL(data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${arhAviz.numar_aviz}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast('✓ PDF descărcat')
+    } catch (e) {
+      showToast('Eroare descărcare: ' + (e.message || e), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+  
+  const handlePreview = async (arhAviz) => {
+    setDownloadingId(arhAviz.id)
+    try {
+      const { data, error } = await supabase.storage.from('avize').createSignedUrl(arhAviz.pdf_path, 60)  // 60 sec
+      if (error) throw error
+      window.open(data.signedUrl, '_blank')
+    } catch (e) {
+      showToast('Eroare preview: ' + (e.message || e), 'error')
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+  
+  const totalSize = useMemo(() => {
+    const s = arhiva.reduce((acc, a) => acc + (a.pdf_size_bytes || 0), 0)
+    return s > 1024*1024 ? `${(s / 1024 / 1024).toFixed(1)} MB` : `${(s / 1024).toFixed(0)} KB`
+  }, [arhiva])
+  
+  return (
+    <div>
+      {/* Header + KPI */}
+      <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
+        <KPICard icon="📂" label="Total avize arhivate" value={arhiva.length} color={G.purple} />
+        <KPICard icon="✍️" label="Cu toate semnăturile" value={arhiva.filter(a => a.semnat_expeditor && a.semnat_sofer && a.semnat_destinatar).length} color={G.green} />
+        <KPICard icon="💾" label="Spațiu ocupat" value={totalSize} color={G.blue} />
+      </div>
+      
+      {/* Filtre */}
+      <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
+        <input 
+          type="text" 
+          value={search} 
+          onChange={e => setSearch(e.target.value)} 
+          placeholder="🔍 Caută după nr aviz, transport, locație, șofer..."
+          style={{...S.input, flex:1, minWidth:280}}
+        />
+        <div style={{display:'flex', gap:4, padding:4, background:G.surface, borderRadius:8, border:`1px solid ${G.border}`}}>
+          {[['azi','Azi'],['sapt','7 zile'],['luna','Luna'],['toate','Toate']].map(([k, label]) => (
+            <button key={k} onClick={() => setPerioadaFilter(k)} style={{
+              padding:'6px 12px', borderRadius:6, border:'none', cursor:'pointer', fontSize:12,
+              background: perioadaFilter === k ? G.purple+'33' : 'transparent',
+              color: perioadaFilter === k ? G.purple : G.muted,
+              fontWeight: perioadaFilter === k ? 700 : 500
+            }}>{label}</button>
+          ))}
+        </div>
+        <button onClick={loadArhiva} style={S.btnS}>🔄 Reîncarcă</button>
+        {isAdmin && luniCuAvize.length > 0 && (
+          <button onClick={() => setShowDeleteLuna(true)} style={{...S.btnS, color: G.red, borderColor: G.red+'88'}}>
+            🗑️ Șterge lună
+          </button>
+        )}
+      </div>
+      
+      {/* Tabel arhivă */}
+      <div style={{...S.card, padding:0, overflow:'hidden'}}>
+        {loading ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>Se încarcă arhiva...</div>
+        ) : filtered.length === 0 ? (
+          <div style={{padding:40, textAlign:'center', color:G.muted}}>
+            {arhiva.length === 0 ? '📭 Nicio arhivă încă — generează un aviz și apasă "💾 Arhivează PDF"' : 'Nimic găsit pentru căutare'}
+          </div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+              <thead style={{background:G.bg}}>
+                <tr>
+                  <th style={thStyle}>Nr. Aviz</th>
+                  <th style={thStyle}>Transport</th>
+                  <th style={thStyle}>Data</th>
+                  <th style={thStyle}>Plecare → Destinație</th>
+                  <th style={thStyle}>Șofer</th>
+                  <th style={thStyle}>Semnături</th>
+                  <th style={thStyle}>Generat</th>
+                  <th style={thStyle}>Mărime</th>
+                  <th style={{...thStyle, textAlign:'right'}}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(a => (
+                  <tr key={a.id} style={{borderTop:`1px solid ${G.border}`}}>
+                    <td style={{...tdStyle, fontFamily:'monospace', fontWeight:700, color:G.purple}}>{a.numar_aviz}</td>
+                    <td style={{...tdStyle, fontFamily:'monospace', fontSize:11}}>{a.numar_transport}</td>
+                    <td style={tdStyle}>{a.data_transport ? new Date(a.data_transport).toLocaleDateString('ro-RO') : '—'}</td>
+                    <td style={{...tdStyle, fontSize:11, color:G.muted}}>
+                      <div>{a.plecare_text || '—'}</div>
+                      <div style={{color:G.dim, fontSize:10}}>↓</div>
+                      <div>{a.destinatie_text || '—'}</div>
+                    </td>
+                    <td style={{...tdStyle, fontSize:12}}>{a.sofer_nume || '—'}</td>
+                    <td style={tdStyle}>
+                      <div style={{display:'flex', gap:3}}>
+                        <span title="Expeditor" style={{fontSize:11, padding:'2px 6px', borderRadius:4, background: a.semnat_expeditor ? G.green+'33' : G.border, color: a.semnat_expeditor ? G.green : G.dim}}>
+                          {a.semnat_expeditor ? '✓' : '—'} E
+                        </span>
+                        <span title="Șofer" style={{fontSize:11, padding:'2px 6px', borderRadius:4, background: a.semnat_sofer ? G.green+'33' : G.border, color: a.semnat_sofer ? G.green : G.dim}}>
+                          {a.semnat_sofer ? '✓' : '—'} Ș
+                        </span>
+                        <span title="Destinatar" style={{fontSize:11, padding:'2px 6px', borderRadius:4, background: a.semnat_destinatar ? G.green+'33' : G.border, color: a.semnat_destinatar ? G.green : G.dim}}>
+                          {a.semnat_destinatar ? '✓' : '—'} D
+                        </span>
+                      </div>
+                    </td>
+                    <td style={{...tdStyle, fontSize:11, color:G.muted}}>
+                      <div>{a.generat_de_nume || '—'}</div>
+                      <div style={{fontSize:10, color:G.dim}}>{new Date(a.generat_la).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'})}</div>
+                    </td>
+                    <td style={{...tdStyle, fontSize:11, color:G.muted}}>
+                      {a.pdf_size_bytes ? `${(a.pdf_size_bytes / 1024).toFixed(0)} KB` : '—'}
+                    </td>
+                    <td style={{...tdStyle, textAlign:'right'}}>
+                      <div style={{display:'flex', gap:6, justifyContent:'flex-end'}}>
+                        <button 
+                          onClick={() => handlePreview(a)} 
+                          disabled={downloadingId === a.id}
+                          style={{padding:'5px 10px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}
+                          title="Deschide într-un tab nou"
+                        >
+                          👁 Preview
+                        </button>
+                        <button 
+                          onClick={() => handleDownload(a)} 
+                          disabled={downloadingId === a.id}
+                          style={{padding:'5px 10px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}
+                          title="Descarcă PDF"
+                        >
+                          {downloadingId === a.id ? '...' : '⬇️ Descarcă'}
+                        </button>
+                        {isAdmin && (
+                          <button 
+                            onClick={() => handleDelete(a)} 
+                            disabled={downloadingId === a.id}
+                            style={{padding:'5px 10px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:5, fontSize:11, cursor:'pointer', fontWeight:600}}
+                            title="Șterge aviz (PDF + arhivă)"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
+        💡 Avizele generate cu butonul "💾 Arhivează PDF" din modalul aviz apar aici · Stocate în Supabase Storage (bucket "avize")
+      </div>
+      
+      {/* Modal Bulk Delete pe Lună */}
+      {showDeleteLuna && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+          <div style={{...S.card, width:'100%', maxWidth:560, padding:24, maxHeight:'85vh', overflowY:'auto'}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
+              <div>
+                <div style={{fontSize:17, fontWeight:700, color:G.text}}>🗑️ Șterge avize pe lună</div>
+                <div style={{fontSize:11, color:G.muted, marginTop:3}}>Pentru retenție de date — șterge toate avizele dintr-o lună întreagă</div>
+              </div>
+              <button onClick={() => setShowDeleteLuna(false)} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
+            </div>
+            
+            <div style={{marginBottom:14, padding:10, background:G.red+'11', border:`1px solid ${G.red}44`, borderRadius:8}}>
+              <div style={{fontSize:11, color:G.red, fontWeight:700, marginBottom:4}}>⚠️ ATENȚIE</div>
+              <div style={{fontSize:11, color:G.muted, lineHeight:1.5}}>
+                Recomandare: păstrează avizele cel puțin <strong>12 luni</strong> pentru audit fiscal. 
+                Ștergerea e <strong>ireversibilă</strong> (PDF + Storage).
+              </div>
+            </div>
+            
+            <div style={{fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', marginBottom:8}}>Luni cu avize în arhivă</div>
+            <div style={{display:'flex', flexDirection:'column', gap:6}}>
+              {luniCuAvize.length === 0 && <div style={{fontSize:12, color:G.muted, fontStyle:'italic', padding:12, textAlign:'center'}}>Nicio lună cu avize</div>}
+              {luniCuAvize.map(luna => {
+                const monthsAgo = (() => {
+                  const [y, m] = luna.ym.split('-').map(Number)
+                  const target = new Date(y, m-1, 1)
+                  const now = new Date()
+                  return (now.getFullYear() - target.getFullYear()) * 12 + (now.getMonth() - target.getMonth())
+                })()
+                const sizeKB = (luna.size / 1024).toFixed(0)
+                const sizeMB = (luna.size / 1024 / 1024).toFixed(1)
+                const sizeStr = luna.size > 1024*1024 ? `${sizeMB} MB` : `${sizeKB} KB`
+                const isOldEnough = monthsAgo >= 12
+                
+                return (
+                  <div key={luna.ym} style={{display:'flex', alignItems:'center', gap:10, padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13, fontWeight:600, color:G.text}}>
+                        {luna.ym} 
+                        {isOldEnough && <span style={{marginLeft:8, fontSize:10, padding:'2px 6px', background:G.green+'33', color:G.green, borderRadius:4}}>OK pentru ștergere</span>}
+                        {!isOldEnough && <span style={{marginLeft:8, fontSize:10, padding:'2px 6px', background:G.orange+'33', color:G.orange, borderRadius:4}}>{monthsAgo}/12 luni</span>}
+                      </div>
+                      <div style={{fontSize:10, color:G.muted, marginTop:2}}>
+                        {luna.count} {luna.count === 1 ? 'aviz' : 'avize'} · {sizeStr}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteLuna(luna.ym)}
+                      style={{
+                        padding:'6px 12px',
+                        background: isOldEnough ? G.red+'22' : G.surface,
+                        color: isOldEnough ? G.red : G.muted,
+                        border: `1px solid ${isOldEnough ? G.red+'88' : G.border}`,
+                        borderRadius: 6,
+                        fontSize: 11,
+                        cursor: 'pointer',
+                        fontWeight: 700
+                      }}
+                    >🗑️ Șterge</button>
+                  </div>
+                )
+              })}
+            </div>
+            
+            <div style={{display:'flex', justifyContent:'flex-end', marginTop:14, paddingTop:12, borderTop:`1px solid ${G.border}`}}>
+              <button onClick={() => setShowDeleteLuna(false)} style={S.btnS}>Închide</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+// ============================================================
+// SFÂRȘIT SECȚIUNE TRANSPORT
+// ============================================================
+
 export default function LogisticaPage() {
   const nav = useNavigate()
+  const loc = useLocation()
   const [profile, setProfile] = useState(null)
   const [accessLevel, setAccessLevel] = useState(undefined)
   const [active, setActive] = useState([])
@@ -2868,7 +5064,12 @@ export default function LogisticaPage() {
   const [showAchizitie, setShowAchizitie] = useState(false)
   const [showEditStoc, setShowEditStoc] = useState(false)
   const [showSetariPret, setShowSetariPret] = useState(false)
-  const [tab, setTab] = useState('lista')                    // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete'
+  const [tab, setTab] = useState(() => {
+    const params = new URLSearchParams(loc.search)
+    const t = params.get('tab')
+    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva']
+    return valid.includes(t) ? t : 'lista'
+  })  // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete' | 'transporturi' | 'arhiva'
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
   const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
   const [toast, showToast] = useToast()
@@ -2879,7 +5080,7 @@ export default function LogisticaPage() {
       if (!user) { setAccessLevel(null); return }
       const [{ data: prof }, { data: access }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
-        supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'logistica').maybeSingle()
+        supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'Logistică').maybeSingle()
       ])
       setProfile(prof)
       if (prof?.role === 'superadmin') setAccessLevel('admin')
@@ -2889,6 +5090,14 @@ export default function LogisticaPage() {
   }, [])
   
   useEffect(() => { if (accessLevel) loadAll() }, [accessLevel])
+  
+  // Sincronizez tab cu URL când se schimbă search-ul (ex: navigare din butonul global)
+  useEffect(() => {
+    const params = new URLSearchParams(loc.search)
+    const t = params.get('tab')
+    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva']
+    if (t && valid.includes(t) && t !== tab) setTab(t)
+  }, [loc.search])
   
   const loadAll = async () => {
     setLoad(true)
@@ -3284,21 +5493,30 @@ export default function LogisticaPage() {
         />
       )}
       
-      {/* TAB: Documente — 4 sub-taburi (Flotă · Personal · AMC · Alerte) */}
-      {tab === 'documente' && (
-        <DocumenteTab 
-          active={active} 
-          accessLevel={accessLevel} 
+      {/* TAB: Documente (placeholder) */}
+      {tab === 'documente' && <PlaceholderTab label="Documente" desc="ITP · RCA · CASCO · Autorizații · Asigurări" emoji="📎" />}
+      
+      {/* TAB: Service (placeholder) */}
+      {tab === 'service' && <PlaceholderTab label="Service" desc="Programări · Intervenții · Costuri reparații" emoji="🔧" />}
+      
+      {/* TAB: Tichete (placeholder) */}
+      {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
+      
+      {/* TAB: Transporturi */}
+      {tab === 'transporturi' && (
+        <TransporturiPage
+          active={active}
+          sites={sites}
           profile={profile}
+          accessLevel={accessLevel}
           showToast={showToast}
         />
       )}
       
-      {/* TAB: Service (Fișe service detaliate) */}
-      {tab === 'service' && <ServiceTab active={active} canEdit={canEdit} showToast={showToast} />}
-      
-      {/* TAB: Tichete (placeholder) */}
-      {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
+      {/* TAB: Arhivă Avize */}
+      {tab === 'arhiva' && (
+        <ArhivaAvizePage profile={profile} showToast={showToast} />
+      )}
       
       {/* TAB: Active (default — conținutul existent) */}
       {tab === 'lista' && (<>
