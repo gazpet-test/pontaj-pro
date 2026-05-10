@@ -2879,7 +2879,7 @@ export default function LogisticaPage() {
       if (!user) { setAccessLevel(null); return }
       const [{ data: prof }, { data: access }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
-        supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'Logistică').maybeSingle()
+        supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'logistica').maybeSingle()
       ])
       setProfile(prof)
       if (prof?.role === 'superadmin') setAccessLevel('admin')
