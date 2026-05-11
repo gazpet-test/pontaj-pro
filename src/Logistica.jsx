@@ -1532,6 +1532,7 @@ function TabsBar({ tab, setTab }) {
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
+    { key: 'arhiva_alimentari', icon: '📊', label: 'Arhivă Alimentări' },
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -1882,130 +1883,10 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
   
   return (
     <div>
-      {/* Header navigare dată + filtre */}
-      <div style={{...S.card, padding: '14px 18px', marginBottom: 14}}>
-        <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10}}>
-          📥 Înregistrare alimentări
-        </div>
-        <div style={{display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10}}>
-          <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-            <button onClick={() => navigateDate(-1)} style={{...S.btnS, padding: '6px 10px', fontSize: 16}} title="Ziua precedentă">◀</button>
-            <input type="date" value={dataAlim} onChange={e => setDataAlim(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 14, fontWeight: 700, color: G.text, minWidth: 150}} />
-            <button onClick={() => navigateDate(1)} style={{...S.btnS, padding: '6px 10px', fontSize: 16}} title="Ziua următoare">▶</button>
-            <button onClick={() => setDataAlim(new Date().toISOString().split('T')[0])} style={{...S.btnS, padding: '6px 12px', fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>Azi</button>
-            <button onClick={() => { const d = new Date(); d.setDate(d.getDate() - 1); setDataAlim(d.toISOString().split('T')[0]) }} style={{...S.btnS, padding: '6px 12px', fontSize: 12, color: G.muted}}>Ieri</button>
-          </div>
-        </div>
-        
-        {/* Filtre Tip + Subcategorie + Text */}
-        <div style={{display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center'}}>
-          <div style={{fontSize: 11, color: G.muted, fontWeight: 600}}>FILTRU:</div>
-          <select value={filterTip} onChange={e => { setFilterTip(e.target.value); setFilterSub('Toate') }} style={{...S.input, padding: '6px 10px', fontSize: 12, minWidth: 140}}>
-            <option value="Toate">Toate tipurile</option>
-            {tipuri.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <select value={filterSub} onChange={e => setFilterSub(e.target.value)} disabled={filterTip === 'Toate'} style={{...S.input, padding: '6px 10px', fontSize: 12, minWidth: 160, opacity: filterTip === 'Toate' ? .5 : 1}}>
-            <option value="Toate">Toate subcategoriile</option>
-            {subcategorii.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <input type="text" placeholder="🔍 marcă, cod, plăcuță..." value={filterText} onChange={e => setFilterText(e.target.value)} style={{...S.input, padding: '6px 12px', fontSize: 12, minWidth: 200, flex: 1}} />
-          {(filterTip !== 'Toate' || filterSub !== 'Toate' || filterText) && (
-            <button onClick={() => { setFilterTip('Toate'); setFilterSub('Toate'); setFilterText('') }} style={{...S.btnS, padding: '6px 10px', fontSize: 11, color: G.muted}}>×  Resetează</button>
-          )}
-        </div>
-      </div>
-      
-      {/* Info banner */}
-      <div style={{padding: 10, marginBottom: 14, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 12, color: G.muted}}>
-        💡 <strong style={{color: G.text}}>{activeFiltrate.length}</strong> utilaje afișate. Completezi doar rândurile relevante și apasă <strong style={{color: G.green}}>✓ Save</strong> pe fiecare. Datele se salvează cu data <strong style={{color: G.text}}>{fmtDate(dataAlim)}</strong>.
-      </div>
-      
-      {/* Listă active cu form inline */}
-      <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-        {activeFiltrate.length === 0 ? (
-          <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted}}>
-            Niciun activ corespunzător filtrelor.
-          </div>
-        ) : activeFiltrate.map(activ => {
-          const f = getForm(activ.id)
-          const ultima = ultimeAlim[activ.id]
-          const isGazpet = f.statie_combustibil === STATIE_GAZPET
-          const isSaved = saved[activ.id]
-          
-          return (
-            <div key={activ.id} style={{
-              ...S.card,
-              padding: '10px 14px',
-              borderLeft: `3px solid ${isSaved ? G.green : (f.cantitate_litri ? G.orange : G.border)}`,
-              opacity: isSaved ? .7 : 1,
-            }}>
-              {/* Rând 1: Identificare + status */}
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8}}>
-                <div style={{flex: 1, minWidth: 200}}>
-                  <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
-                    {activ.marca} {activ.model}
-                  </div>
-                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
-                    {activ.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{activ.cod_intern}</span>}
-                    {activ.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: activ.cod_intern ? 8 : 0}}>{activ.nr_inmatriculare}</span>}
-                    {activ.tip_carburant && <span style={{marginLeft: 8}}>· {activ.tip_carburant}</span>}
-                    {activ.norma_consum && <span style={{marginLeft: 4}}>· {activ.norma_consum} {activ.unitate_norma || 'l/h'}</span>}
-                  </div>
-                  {ultima && (
-                    <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
-                      Ultima alim: {fmtDate(ultima.ultima_data)}
-                      {ultima.ultime_litri && ` · ${Number(ultima.ultime_litri).toFixed(1)}L`}
-                      {ultima.ultime_ore && ` · ${ultima.ultime_ore} ore bord`}
-                      {ultima.ultimi_km && ` · ${Number(ultima.ultimi_km).toLocaleString('ro-RO')} km`}
-                    </div>
-                  )}
-                </div>
-                {isSaved && (
-                  <span style={{fontSize: 11, padding: '3px 8px', background: G.green + '22', color: G.green, borderRadius: 4, fontWeight: 700}}>
-                    ✓ SALVAT
-                  </span>
-                )}
-              </div>
-              
-              {/* Rând 2: Form inline */}
-              {!isSaved && (
-                <div style={{display: 'grid', gridTemplateColumns: '90px 130px 130px 80px 80px 80px', gap: 6, alignItems: 'end'}}>
-                  <FieldText label="Cant. (L)" value={f.cantitate_litri || ''} onChange={v => setFormField(activ.id, 'cantitate_litri', v)} type="number" placeholder="50" />
-                  <FieldSelect label="Sursa" value={f.statie_combustibil || ''} onChange={v => setFormField(activ.id, 'statie_combustibil', v)} options={STATII} placeholder="—" />
-                  <FieldSelect label="Șantier" value={f.site_id || ''} onChange={v => setFormField(activ.id, 'site_id', v)} options={[{label:'—', value:''}, ...(sites||[]).map(s => ({label: s.name, value: String(s.id)}))]} placeholder="—" />
-                  <FieldText label={ultima?.ultime_ore ? `Ore (de la ${ultima.ultime_ore})` : "Ore bord"} value={f.ore_la_alimentare || ''} onChange={v => setFormField(activ.id, 'ore_la_alimentare', v)} type="number" placeholder={ultima?.ultime_ore ? String(Number(ultima.ultime_ore) + 8) : "ex: 1248"} />
-                  <FieldText label="Km" value={f.km_la_alimentare || ''} onChange={v => setFormField(activ.id, 'km_la_alimentare', v)} type="number" placeholder={ultima?.ultimi_km ? String(ultima.ultimi_km) : ""} />
-                  <button 
-                    onClick={() => handleSave(activ)} 
-                    disabled={savingId === activ.id || !canEdit || !f.cantitate_litri}
-                    style={{...S.btnP, background: G.green, padding: '7px 12px', fontSize: 12, opacity: (savingId === activ.id || !canEdit || !f.cantitate_litri) ? .4 : 1, cursor: (savingId === activ.id || !canEdit || !f.cantitate_litri) ? 'not-allowed' : 'pointer'}}>
-                    {savingId === activ.id ? '⏳' : '✓ Save'}
-                  </button>
-                </div>
-              )}
-              
-              {/* Banner Gazpet în mini-form */}
-              {!isSaved && isGazpet && rezervorGazpet && f.cantitate_litri && (
-                <div style={{marginTop: 6, padding: '5px 10px', background: G.purple + '15', border: `1px solid ${G.purple}33`, borderRadius: 6, fontSize: 10, color: G.muted}}>
-                  📦 Stoc Gazpet: {Number(rezervorGazpet.stoc_curent_litri).toFixed(0)}L → {(Number(rezervorGazpet.stoc_curent_litri) - Number(f.cantitate_litri)).toFixed(0)}L
-                  {pretMediuGazpet && <> · preț mediu vrac: <strong style={{color: G.text}}>{pretMediuGazpet} RON/L</strong></>}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-      
-      {Object.keys(saved).length > 0 && (
-        <div style={{marginTop: 14, padding: 10, background: G.greenDim + '88', border: `1px solid ${G.green}55`, borderRadius: 8, fontSize: 12, color: G.text, textAlign: 'center'}}>
-          ✓ <strong style={{color: G.green}}>{Object.keys(saved).length} alimentări înregistrate</strong> pentru {fmtDate(dataAlim)}
-        </div>
-      )}
-      
-      {/* ──────────────────────────────────────────────────────────────────── */}
+            {/* ──────────────────────────────────────────────────────────────────── */}
       {/* SECȚIUNEA 2: Alimentări înregistrate (vizualizare + edit + ștergere) */}
       {/* ──────────────────────────────────────────────────────────────────── */}
-      <div style={{marginTop: 24}}>
+      <div style={{marginBottom: 24}}>
         <div style={{...S.card, padding: '14px 18px', marginBottom: 12}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8}}>
             <div style={{fontSize: 11, color: G.purple, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px'}}>
@@ -2126,6 +2007,127 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
           </div>
         )}
       </div>
+      
+      {/* Header navigare dată + filtre */}
+      <div style={{...S.card, padding: '14px 18px', marginBottom: 14}}>
+        <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10}}>
+          📥 Înregistrare alimentări
+        </div>
+        <div style={{display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+            <button onClick={() => navigateDate(-1)} style={{...S.btnS, padding: '6px 10px', fontSize: 16}} title="Ziua precedentă">◀</button>
+            <input type="date" value={dataAlim} onChange={e => setDataAlim(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 14, fontWeight: 700, color: G.text, minWidth: 150}} />
+            <button onClick={() => navigateDate(1)} style={{...S.btnS, padding: '6px 10px', fontSize: 16}} title="Ziua următoare">▶</button>
+            <button onClick={() => setDataAlim(new Date().toISOString().split('T')[0])} style={{...S.btnS, padding: '6px 12px', fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>Azi</button>
+            <button onClick={() => { const d = new Date(); d.setDate(d.getDate() - 1); setDataAlim(d.toISOString().split('T')[0]) }} style={{...S.btnS, padding: '6px 12px', fontSize: 12, color: G.muted}}>Ieri</button>
+          </div>
+        </div>
+        
+        {/* Filtre Tip + Subcategorie + Text */}
+        <div style={{display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center'}}>
+          <div style={{fontSize: 11, color: G.muted, fontWeight: 600}}>FILTRU:</div>
+          <select value={filterTip} onChange={e => { setFilterTip(e.target.value); setFilterSub('Toate') }} style={{...S.input, padding: '6px 10px', fontSize: 12, minWidth: 140}}>
+            <option value="Toate">Toate tipurile</option>
+            {tipuri.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={filterSub} onChange={e => setFilterSub(e.target.value)} disabled={filterTip === 'Toate'} style={{...S.input, padding: '6px 10px', fontSize: 12, minWidth: 160, opacity: filterTip === 'Toate' ? .5 : 1}}>
+            <option value="Toate">Toate subcategoriile</option>
+            {subcategorii.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <input type="text" placeholder="🔍 marcă, cod, plăcuță..." value={filterText} onChange={e => setFilterText(e.target.value)} style={{...S.input, padding: '6px 12px', fontSize: 12, minWidth: 200, flex: 1}} />
+          {(filterTip !== 'Toate' || filterSub !== 'Toate' || filterText) && (
+            <button onClick={() => { setFilterTip('Toate'); setFilterSub('Toate'); setFilterText('') }} style={{...S.btnS, padding: '6px 10px', fontSize: 11, color: G.muted}}>×  Resetează</button>
+          )}
+        </div>
+      </div>
+      
+      {/* Info banner */}
+      <div style={{padding: 10, marginBottom: 14, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 12, color: G.muted}}>
+        💡 <strong style={{color: G.text}}>{activeFiltrate.length}</strong> utilaje afișate. Completezi doar rândurile relevante și apasă <strong style={{color: G.green}}>✓ Save</strong> pe fiecare. Datele se salvează cu data <strong style={{color: G.text}}>{fmtDate(dataAlim)}</strong>.
+      </div>
+      
+      {/* Listă active cu form inline */}
+      <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+        {activeFiltrate.length === 0 ? (
+          <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted}}>
+            Niciun activ corespunzător filtrelor.
+          </div>
+        ) : activeFiltrate.map(activ => {
+          const f = getForm(activ.id)
+          const ultima = ultimeAlim[activ.id]
+          const isGazpet = f.statie_combustibil === STATIE_GAZPET
+          const isSaved = saved[activ.id]
+          
+          return (
+            <div key={activ.id} style={{
+              ...S.card,
+              padding: '10px 14px',
+              borderLeft: `3px solid ${isSaved ? G.green : (f.cantitate_litri ? G.orange : G.border)}`,
+              opacity: isSaved ? .7 : 1,
+            }}>
+              {/* Rând 1: Identificare + status */}
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8}}>
+                <div style={{flex: 1, minWidth: 200}}>
+                  <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
+                    {activ.marca} {activ.model}
+                  </div>
+                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                    {activ.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{activ.cod_intern}</span>}
+                    {activ.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: activ.cod_intern ? 8 : 0}}>{activ.nr_inmatriculare}</span>}
+                    {activ.tip_carburant && <span style={{marginLeft: 8}}>· {activ.tip_carburant}</span>}
+                    {activ.norma_consum && <span style={{marginLeft: 4}}>· {activ.norma_consum} {activ.unitate_norma || 'l/h'}</span>}
+                  </div>
+                  {ultima && (
+                    <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                      Ultima alim: {fmtDate(ultima.ultima_data)}
+                      {ultima.ultime_litri && ` · ${Number(ultima.ultime_litri).toFixed(1)}L`}
+                      {ultima.ultime_ore && ` · ${ultima.ultime_ore} ore bord`}
+                      {ultima.ultimi_km && ` · ${Number(ultima.ultimi_km).toLocaleString('ro-RO')} km`}
+                    </div>
+                  )}
+                </div>
+                {isSaved && (
+                  <span style={{fontSize: 11, padding: '3px 8px', background: G.green + '22', color: G.green, borderRadius: 4, fontWeight: 700}}>
+                    ✓ SALVAT
+                  </span>
+                )}
+              </div>
+              
+              {/* Rând 2: Form inline */}
+              {!isSaved && (
+                <div style={{display: 'grid', gridTemplateColumns: '90px 130px 130px 80px 80px 80px', gap: 6, alignItems: 'end'}}>
+                  <FieldText label="Cant. (L)" value={f.cantitate_litri || ''} onChange={v => setFormField(activ.id, 'cantitate_litri', v)} type="number" placeholder="50" />
+                  <FieldSelect label="Sursa" value={f.statie_combustibil || ''} onChange={v => setFormField(activ.id, 'statie_combustibil', v)} options={STATII} placeholder="—" />
+                  <FieldSelect label="Șantier" value={f.site_id || ''} onChange={v => setFormField(activ.id, 'site_id', v)} options={[{label:'—', value:''}, ...(sites||[]).map(s => ({label: s.name, value: String(s.id)}))]} placeholder="—" />
+                  <FieldText label={ultima?.ultime_ore ? `Ore (de la ${ultima.ultime_ore})` : "Ore bord"} value={f.ore_la_alimentare || ''} onChange={v => setFormField(activ.id, 'ore_la_alimentare', v)} type="number" placeholder={ultima?.ultime_ore ? String(Number(ultima.ultime_ore) + 8) : "ex: 1248"} />
+                  <FieldText label="Km" value={f.km_la_alimentare || ''} onChange={v => setFormField(activ.id, 'km_la_alimentare', v)} type="number" placeholder={ultima?.ultimi_km ? String(ultima.ultimi_km) : ""} />
+                  <button 
+                    onClick={() => handleSave(activ)} 
+                    disabled={savingId === activ.id || !canEdit || !f.cantitate_litri}
+                    style={{...S.btnP, background: G.green, padding: '7px 12px', fontSize: 12, opacity: (savingId === activ.id || !canEdit || !f.cantitate_litri) ? .4 : 1, cursor: (savingId === activ.id || !canEdit || !f.cantitate_litri) ? 'not-allowed' : 'pointer'}}>
+                    {savingId === activ.id ? '⏳' : '✓ Save'}
+                  </button>
+                </div>
+              )}
+              
+              {/* Banner Gazpet în mini-form */}
+              {!isSaved && isGazpet && rezervorGazpet && f.cantitate_litri && (
+                <div style={{marginTop: 6, padding: '5px 10px', background: G.purple + '15', border: `1px solid ${G.purple}33`, borderRadius: 6, fontSize: 10, color: G.muted}}>
+                  📦 Stoc Gazpet: {Number(rezervorGazpet.stoc_curent_litri).toFixed(0)}L → {(Number(rezervorGazpet.stoc_curent_litri) - Number(f.cantitate_litri)).toFixed(0)}L
+                  {pretMediuGazpet && <> · preț mediu vrac: <strong style={{color: G.text}}>{pretMediuGazpet} RON/L</strong></>}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      
+      {Object.keys(saved).length > 0 && (
+        <div style={{marginTop: 14, padding: 10, background: G.greenDim + '88', border: `1px solid ${G.green}55`, borderRadius: 8, fontSize: 12, color: G.text, textAlign: 'center'}}>
+          ✓ <strong style={{color: G.green}}>{Object.keys(saved).length} alimentări înregistrate</strong> pentru {fmtDate(dataAlim)}
+        </div>
+      )}
+      
       
       {/* Modal edit alimentare */}
       {editAlim && (
@@ -5124,6 +5126,350 @@ function ArhivaAvizePage({ profile, showToast }) {
 // SFÂRȘIT SECȚIUNE TRANSPORT
 // ============================================================
 
+// ============================================================
+// ARHIVĂ ALIMENTĂRI — consultare istoric extins
+// ============================================================
+function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, showToast }) {
+  const [arhiva, setArhiva] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
+  const [perioadaFilter, setPerioadaFilter] = useState('luna')  // azi|ieri|sapt|luna|3luni|an|toate|custom
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
+  const [tipFilter, setTipFilter] = useState('Toate')
+  const [sursaFilter, setSursaFilter] = useState('Toate')
+  const [siteFilter, setSiteFilter] = useState('Toate')
+  const [editAlim, setEditAlim] = useState(null)
+  const [exportingExcel, setExportingExcel] = useState(false)
+  
+  const isAdmin = ['superadmin', 'admin_logistica'].includes(profile?.role)
+  
+  // Load alimentări din DB conform filtru perioadă
+  const loadArhiva = async () => {
+    setLoading(true)
+    const today = new Date()
+    let startDate = null, endDate = null
+    
+    if (perioadaFilter === 'azi') {
+      startDate = today.toISOString().split('T')[0]
+      endDate = today.toISOString().split('T')[0]
+    } else if (perioadaFilter === 'ieri') {
+      const ieri = new Date(today); ieri.setDate(ieri.getDate() - 1)
+      startDate = ieri.toISOString().split('T')[0]
+      endDate = ieri.toISOString().split('T')[0]
+    } else if (perioadaFilter === 'sapt') {
+      const start = new Date(today); start.setDate(start.getDate() - 7)
+      startDate = start.toISOString().split('T')[0]
+      endDate = today.toISOString().split('T')[0]
+    } else if (perioadaFilter === 'luna') {
+      const start = new Date(today.getFullYear(), today.getMonth(), 1)
+      startDate = start.toISOString().split('T')[0]
+      endDate = today.toISOString().split('T')[0]
+    } else if (perioadaFilter === '3luni') {
+      const start = new Date(today); start.setMonth(start.getMonth() - 3)
+      startDate = start.toISOString().split('T')[0]
+      endDate = today.toISOString().split('T')[0]
+    } else if (perioadaFilter === 'an') {
+      const start = new Date(today.getFullYear(), 0, 1)
+      startDate = start.toISOString().split('T')[0]
+      endDate = today.toISOString().split('T')[0]
+    } else if (perioadaFilter === 'custom' && customStart && customEnd) {
+      startDate = customStart
+      endDate = customEnd
+    }
+    
+    let q = supabase.from('logistica_alimentari')
+      .select(`*, 
+        logistica_active(id, cod_intern, nr_inmatriculare, marca, model, logistica_categorii(tip, subcategorie)),
+        sites:site_id(id, name),
+        profile_creator:created_by(id, name)
+      `)
+      .order('data_alimentare', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(2000)
+    
+    if (startDate) q = q.gte('data_alimentare', startDate)
+    if (endDate) q = q.lte('data_alimentare', endDate)
+    
+    const { data, error } = await q
+    setLoading(false)
+    if (error) { showToast('Eroare încărcare arhivă: ' + error.message, 'error'); return }
+    setArhiva(data || [])
+  }
+  
+  useEffect(() => {
+    if (perioadaFilter !== 'custom' || (customStart && customEnd)) loadArhiva()
+  }, [perioadaFilter, customStart, customEnd])
+  
+  // Liste pentru filtre (calculate din date)
+  const tipuriDisponibile = useMemo(() => {
+    const s = new Set()
+    arhiva.forEach(a => { if (a.logistica_active?.logistica_categorii?.tip) s.add(a.logistica_active.logistica_categorii.tip) })
+    return Array.from(s).sort()
+  }, [arhiva])
+  
+  const surseDisponibile = useMemo(() => {
+    const s = new Set()
+    arhiva.forEach(a => { if (a.statie_combustibil) s.add(a.statie_combustibil) })
+    return Array.from(s).sort()
+  }, [arhiva])
+  
+  const siteuriDisponibile = useMemo(() => {
+    const s = new Set()
+    arhiva.forEach(a => { if (a.sites?.name) s.add(a.sites.name) })
+    return Array.from(s).sort()
+  }, [arhiva])
+  
+  // Filtrare finală (search + 3 filtre)
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    return arhiva.filter(a => {
+      const av = a.logistica_active
+      if (tipFilter !== 'Toate' && av?.logistica_categorii?.tip !== tipFilter) return false
+      if (sursaFilter !== 'Toate' && a.statie_combustibil !== sursaFilter) return false
+      if (siteFilter !== 'Toate' && a.sites?.name !== siteFilter) return false
+      if (q) {
+        const hay = `${av?.marca || ''} ${av?.model || ''} ${av?.cod_intern || ''} ${av?.nr_inmatriculare || ''} ${a.sites?.name || ''} ${a.statie_combustibil || ''} ${a.profile_creator?.name || ''}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [arhiva, search, tipFilter, sursaFilter, siteFilter])
+  
+  // KPI
+  const kpi = useMemo(() => ({
+    total: filtered.length,
+    totalLitri: filtered.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0),
+    totalCost: filtered.reduce((s, a) => s + Number(a.pret_total || 0), 0),
+    medieLitri: filtered.length > 0 ? filtered.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0) / filtered.length : 0,
+  }), [filtered])
+  
+  // Delete individual (admin only)
+  const handleDelete = async (alim) => {
+    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    const av = alim.logistica_active
+    const desc = `${av?.marca || ''} ${av?.model || ''} · ${alim.cantitate_litri}L · ${fmtDate(alim.data_alimentare)}`
+    if (!confirm(`Sigur vrei să ștergi alimentarea:\n${desc}?\n\nAceastă acțiune e ireversibilă!`)) return
+    
+    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast(`✓ Alimentare ștearsă`)
+    loadArhiva()
+  }
+  
+  // Export Excel
+  const handleExportExcel = () => {
+    setExportingExcel(true)
+    try {
+      const rows = filtered.map(a => {
+        const av = a.logistica_active || {}
+        return {
+          'Data': a.data_alimentare,
+          'Cod intern': av.cod_intern || '',
+          'Plăcuță': av.nr_inmatriculare || '',
+          'Marcă': av.marca || '',
+          'Model': av.model || '',
+          'Tip': av.logistica_categorii?.tip || '',
+          'Cantitate (L)': Number(a.cantitate_litri || 0),
+          'Sursă': a.statie_combustibil || '',
+          'Șantier': a.sites?.name || '',
+          'Ore bord': a.ore_la_alimentare || '',
+          'Ore lucrate efectiv': a.ore_lucrate_efectiv || '',
+          'Km bord': a.km_la_alimentare || '',
+          'Preț/L (RON)': Number(a.pret_per_litru || 0),
+          'Total (RON)': Number(a.pret_total || 0),
+          'Înregistrat de': a.profile_creator?.name || '',
+        }
+      })
+      
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Alimentări')
+      
+      // Auto-width coloane
+      const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }))
+      ws['!cols'] = colWidths
+      
+      const filename = `Arhiva_Alimentari_${new Date().toISOString().split('T')[0]}.xlsx`
+      XLSX.writeFile(wb, filename)
+      showToast(`✓ Export reușit: ${filtered.length} rânduri`)
+    } catch (e) {
+      showToast('Eroare export: ' + (e.message || e), 'error')
+    } finally {
+      setExportingExcel(false)
+    }
+  }
+  
+  return (
+    <div>
+      {/* KPI sus */}
+      <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 14}}>
+        <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.purple}`}}>
+          <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>📊 Alimentări</div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>{kpi.total}</div>
+        </div>
+        <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.orange}`}}>
+          <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>⛽ Total litri</div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.orange, fontVariantNumeric: 'tabular-nums'}}>{kpi.totalLitri.toFixed(1)} <span style={{fontSize: 14, color: G.muted}}>L</span></div>
+        </div>
+        <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.green}`}}>
+          <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>💰 Total cost</div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums'}}>{kpi.totalCost.toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} <span style={{fontSize: 14, color: G.muted}}>RON</span></div>
+        </div>
+        <div style={{...S.card, padding: '14px 16px', borderLeft: `3px solid ${G.blue}`}}>
+          <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>📈 Medie / alimentare</div>
+          <div style={{fontSize: 24, fontWeight: 800, color: G.blue, fontVariantNumeric: 'tabular-nums'}}>{kpi.medieLitri.toFixed(1)} <span style={{fontSize: 14, color: G.muted}}>L</span></div>
+        </div>
+      </div>
+      
+      {/* Filtre + Search + Export */}
+      <div style={{...S.card, padding: '14px 18px', marginBottom: 14}}>
+        {/* Perioadă */}
+        <div style={{display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12}}>
+          <span style={{fontSize: 11, color: G.muted, fontWeight: 600, marginRight: 4}}>PERIOADĂ:</span>
+          {[
+            {key: 'azi', label: 'Azi'},
+            {key: 'ieri', label: 'Ieri'},
+            {key: 'sapt', label: '7 zile'},
+            {key: 'luna', label: 'Luna curentă'},
+            {key: '3luni', label: '3 luni'},
+            {key: 'an', label: 'An'},
+            {key: 'toate', label: 'Toate'},
+            {key: 'custom', label: 'Custom'},
+          ].map(p => (
+            <button key={p.key} onClick={() => setPerioadaFilter(p.key)} style={{
+              ...S.btnS, padding: '6px 12px', fontSize: 12, fontWeight: 600,
+              background: perioadaFilter === p.key ? G.purple + '22' : 'transparent',
+              color: perioadaFilter === p.key ? G.purple : G.muted,
+              borderColor: perioadaFilter === p.key ? G.purple + '55' : G.border,
+            }}>{p.label}</button>
+          ))}
+          {perioadaFilter === 'custom' && (
+            <>
+              <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 12, minWidth: 140}} />
+              <span style={{color: G.muted, fontSize: 12}}>→</span>
+              <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={{...S.input, padding: '6px 10px', fontSize: 12, minWidth: 140}} />
+            </>
+          )}
+        </div>
+        
+        {/* Filtre tip + sursă + șantier + search */}
+        <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr)) auto', gap: 8, alignItems: 'center'}}>
+          <select value={tipFilter} onChange={e => setTipFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
+            <option value="Toate">Toate tipurile</option>
+            {tipuriDisponibile.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={sursaFilter} onChange={e => setSursaFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
+            <option value="Toate">Toate sursele</option>
+            {surseDisponibile.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={siteFilter} onChange={e => setSiteFilter(e.target.value)} style={{...S.input, padding: '7px 10px', fontSize: 12}}>
+            <option value="Toate">Toate șantierele</option>
+            {siteuriDisponibile.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <input type="text" placeholder="🔍 marcă, cod, plăcuță, șantier..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, padding: '7px 12px', fontSize: 12, gridColumn: 'span 1'}} />
+          <button 
+            onClick={handleExportExcel} 
+            disabled={exportingExcel || filtered.length === 0} 
+            style={{...S.btnP, padding: '7px 16px', fontSize: 12, background: G.green, opacity: (exportingExcel || filtered.length === 0) ? .5 : 1, cursor: (exportingExcel || filtered.length === 0) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap'}}
+          >
+            {exportingExcel ? '⏳ Export...' : `📊 Excel (${filtered.length})`}
+          </button>
+        </div>
+      </div>
+      
+      {/* Tabel */}
+      {loading ? (
+        <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>⏳ Se încarcă...</div>
+      ) : filtered.length === 0 ? (
+        <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>
+          Nicio alimentare găsită cu filtrele curente.
+        </div>
+      ) : (
+        <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
+              <thead>
+                <tr style={{background: G.surface, borderBottom: `2px solid ${G.border}`}}>
+                  <th style={thStyleAlim}>Data</th>
+                  <th style={thStyleAlim}>Utilaj</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Cantitate</th>
+                  <th style={thStyleAlim}>Sursa</th>
+                  <th style={thStyleAlim}>Șantier</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Ore bord</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Cost</th>
+                  <th style={thStyleAlim}>Cine</th>
+                  <th style={{...thStyleAlim, textAlign: 'center', width: 100}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(a => {
+                  const av = a.logistica_active || {}
+                  return (
+                    <tr key={a.id} style={{borderBottom: `1px solid ${G.border}`}}>
+                      <td style={{padding: '8px 12px', fontFamily: 'monospace', color: G.text, fontWeight: 600}}>{fmtDate(a.data_alimentare)}</td>
+                      <td style={{padding: '8px 12px'}}>
+                        <div style={{fontWeight: 600, color: G.text}}>{av.marca} {av.model?.substring(0, 30)}{av.model?.length > 30 ? '...' : ''}</div>
+                        <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                          {av.cod_intern && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{av.cod_intern}</span>}
+                          {av.nr_inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: 6}}>{av.nr_inmatriculare}</span>}
+                        </div>
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: G.orange, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
+                        {Number(a.cantitate_litri).toFixed(1)} L
+                      </td>
+                      <td style={{padding: '8px 12px', color: a.statie_combustibil === STATIE_GAZPET ? G.logistica : G.text, fontWeight: a.statie_combustibil === STATIE_GAZPET ? 600 : 400}}>
+                        {a.statie_combustibil || '—'}
+                      </td>
+                      <td style={{padding: '8px 12px', color: G.text}}>{a.sites?.name || '—'}</td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', fontFamily: 'monospace', color: G.muted, fontVariantNumeric: 'tabular-nums'}}>
+                        {a.ore_la_alimentare ?? '—'}
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: a.pret_total ? G.green : G.muted, fontWeight: 600, fontVariantNumeric: 'tabular-nums'}}>
+                        {a.pret_total ? `${Number(a.pret_total).toFixed(2)} RON` : '—'}
+                      </td>
+                      <td style={{padding: '8px 12px', color: G.muted, fontSize: 11}}>{a.profile_creator?.name?.split(' ')[0] || '—'}</td>
+                      <td style={{padding: '8px 12px', textAlign: 'center', display: 'flex', gap: 4, justifyContent: 'center'}}>
+                        {isAdmin && (
+                          <>
+                            <button onClick={() => setEditAlim(a)} style={{...S.btnS, padding: '4px 8px', fontSize: 11, color: G.logistica, borderColor: G.logistica + '55'}} title="Editează">
+                              ✏️
+                            </button>
+                            <button onClick={() => handleDelete(a)} style={{...S.btnS, padding: '4px 8px', fontSize: 11, color: G.red, borderColor: G.red + '55'}} title="Șterge">
+                              🗑️
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      
+      {/* Modal edit (reutilizat din AlimentariBulkPage) */}
+      {editAlim && (
+        <EditAlimentareModal 
+          alim={editAlim}
+          sites={sites}
+          rezervorGazpet={rezervorGazpet}
+          pretMotorina={pretMotorina}
+          onClose={() => setEditAlim(null)}
+          onSaved={() => { setEditAlim(null); loadArhiva() }}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  )
+}
+
+const thStyleAlim = { padding: '10px 12px', textAlign: 'left', color: '#8B949E', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px' }
+
+
+
 export default function LogisticaPage() {
   const nav = useNavigate()
   const loc = useLocation()
@@ -5150,7 +5496,7 @@ export default function LogisticaPage() {
   const [tab, setTab] = useState(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
-    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva']
+    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari']
     return valid.includes(t) ? t : 'lista'
   })  // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete' | 'transporturi' | 'arhiva'
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
@@ -5178,7 +5524,7 @@ export default function LogisticaPage() {
   useEffect(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
-    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva']
+    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari']
     if (t && valid.includes(t) && t !== tab) setTab(t)
   }, [loc.search])
   
@@ -5599,6 +5945,17 @@ export default function LogisticaPage() {
       {/* TAB: Arhivă Avize */}
       {tab === 'arhiva' && (
         <ArhivaAvizePage profile={profile} showToast={showToast} />
+      )}
+      
+      {/* TAB: Arhivă Alimentări */}
+      {tab === 'arhiva_alimentari' && (
+        <ArhivaAlimentariPage 
+          profile={profile} 
+          sites={sites} 
+          rezervorGazpet={rezervorGazpet}
+          pretMotorina={pretMotorina}
+          showToast={showToast} 
+        />
       )}
       
       {/* TAB: Active (default — conținutul existent) */}
