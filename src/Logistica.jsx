@@ -10,6 +10,7 @@ import LOGO_B64 from './logo.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import ServiceTab from './ServiceTab.jsx'
+import DocumenteFlotaPage from './DocumenteFlotaPage.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -6284,8 +6285,15 @@ export default function LogisticaPage() {
         />
       )}
       
-      {/* TAB: Documente (placeholder) */}
-      {tab === 'documente' && <PlaceholderTab label="Documente" desc="ITP · RCA · CASCO · Autorizații · Asigurări" emoji="📎" />}
+      {/* TAB: Documente — Etapa 1 read-only (KPI + filtre + listă + view PDF) */}
+      {tab === 'documente' && (
+        <DocumenteFlotaPage
+          active={active}
+          accessLevel={accessLevel}
+          profile={profile}
+          showToast={showToast}
+        />
+      )}
       
       {/* TAB: Service (placeholder) */}
       {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
