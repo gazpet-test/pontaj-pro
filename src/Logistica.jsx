@@ -1835,6 +1835,12 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
     const f = getForm(activ.id)
     if (!f.cantitate_litri || Number(f.cantitate_litri) <= 0) { showToast(`Cantitatea trebuie > 0 pentru ${activ.cod_intern || activ.nr_inmatriculare}`, 'error'); return }
     
+    // Warning soft: utilajul are normă consum dar userul n-a completat orele
+    if (activ.norma_consum && Number(activ.norma_consum) > 0 && !f.ore_la_alimentare) {
+      const ok = window.confirm(`⚠️ ${activ.cod_intern || activ.nr_inmatriculare} are normă de consum setată (${activ.norma_consum} ${activ.unitate_norma || 'l/h'}), dar n-ai completat câmpul "Ore bord".\n\nFără ore, NU se poate calcula consumul real și NU se poate detecta dacă utilajul consumă peste normă.\n\nSalvezi oricum?`)
+      if (!ok) return
+    }
+    
     const isGazpet = f.statie_combustibil === STATIE_GAZPET
     const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
     const pretL = f.pret_per_litru ? Number(f.pret_per_litru) : (pretBaza ? Number(pretBaza) : null)
@@ -2117,6 +2123,31 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
                   {pretMediuGazpet && <> · preț mediu vrac: <strong style={{color: G.text}}>{pretMediuGazpet} RON/L</strong></>}
                 </div>
               )}
+              
+              {/* Banner FEEDBACK CONSUM REAL — calculat instant când userul tastează ore */}
+              {!isSaved && f.cantitate_litri && f.ore_la_alimentare && ultima?.ultime_ore && Number(f.ore_la_alimentare) > Number(ultima.ultime_ore) && (() => {
+                const oreLucrate = Number(f.ore_la_alimentare) - Number(ultima.ultime_ore)
+                const consumReal = Number(f.cantitate_litri) / oreLucrate
+                const norma = activ.norma_consum ? Number(activ.norma_consum) : null
+                const prag = activ.prag_alerta_consum ? Number(activ.prag_alerta_consum) : 10
+                const unitate = activ.unitate_norma || 'l/h'
+                
+                let abateMsg = null, color = G.muted, bgColor = G.bg, icon = '📊'
+                if (norma) {
+                  const abaterePct = ((consumReal - norma) / norma) * 100
+                  if (abaterePct > prag * 2) { color = G.red; bgColor = G.redDim + '88'; icon = '🚨'; abateMsg = `CRITIC: ${abaterePct > 0 ? '+' : ''}${abaterePct.toFixed(1)}% peste normă` }
+                  else if (abaterePct > prag) { color = G.orange; bgColor = G.yellowDim + '88'; icon = '⚠️'; abateMsg = `WARNING: ${abaterePct > 0 ? '+' : ''}${abaterePct.toFixed(1)}% peste normă` }
+                  else { color = G.green; bgColor = G.greenDim + '88'; icon = '✓'; abateMsg = `OK: ${abaterePct > 0 ? '+' : ''}${abaterePct.toFixed(1)}% față de normă` }
+                }
+                
+                return (
+                  <div style={{marginTop: 6, padding: '6px 10px', background: bgColor, border: `1px solid ${color}55`, borderRadius: 6, fontSize: 11, color: G.text, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center'}}>
+                    <span>{icon} <strong>{oreLucrate.toFixed(1)} ore lucrate</strong> · consum: <strong style={{color}}>{consumReal.toFixed(2)} {unitate}</strong></span>
+                    {norma && <span style={{color: G.muted}}>· normă: {norma} {unitate}</span>}
+                    {abateMsg && <span style={{color, fontWeight: 700, marginLeft: 'auto'}}>{abateMsg}</span>}
+                  </div>
+                )
+              })()}
             </div>
           )
         })}
@@ -5141,6 +5172,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
   const [siteFilter, setSiteFilter] = useState('Toate')
   const [editAlim, setEditAlim] = useState(null)
   const [exportingExcel, setExportingExcel] = useState(false)
+  const [viewMode, setViewMode] = useState('toate')  // 'toate' | 'santier' | 'utilaj'
   
   const isAdmin = ['superadmin', 'admin_logistica'].includes(profile?.role)
   
@@ -5180,7 +5212,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
     
     let q = supabase.from('logistica_alimentari')
       .select(`*, 
-        logistica_active(id, cod_intern, nr_inmatriculare, marca, model, logistica_categorii(tip, subcategorie)),
+        logistica_active(id, cod_intern, nr_inmatriculare, marca, model, norma_consum, unitate_norma, prag_alerta_consum, logistica_categorii(tip, subcategorie)),
         sites:site_id(id, name),
         profile_creator:created_by(id, name)
       `)
@@ -5242,7 +5274,105 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
     totalLitri: filtered.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0),
     totalCost: filtered.reduce((s, a) => s + Number(a.pret_total || 0), 0),
     medieLitri: filtered.length > 0 ? filtered.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0) / filtered.length : 0,
+    nrSantiere: new Set(filtered.filter(a => a.sites?.name).map(a => a.sites.name)).size,
+    nrUtilaje: new Set(filtered.filter(a => a.logistica_active?.id).map(a => a.logistica_active.id)).size,
   }), [filtered])
+  
+  // Agregare pe ȘANTIER
+  const aggSantier = useMemo(() => {
+    const map = new Map()
+    filtered.forEach(a => {
+      const siteName = a.sites?.name || '(Fără șantier)'
+      if (!map.has(siteName)) {
+        map.set(siteName, { 
+          siteName, 
+          siteId: a.sites?.id || null,
+          nrAlim: 0, totalLitri: 0, totalCost: 0,
+          utilajeSet: new Set(),
+          rows: []
+        })
+      }
+      const x = map.get(siteName)
+      x.nrAlim += 1
+      x.totalLitri += Number(a.cantitate_litri || 0)
+      x.totalCost += Number(a.pret_total || 0)
+      if (a.logistica_active?.id) x.utilajeSet.add(a.logistica_active.id)
+      x.rows.push(a)
+    })
+    const total = filtered.reduce((s,a) => s + Number(a.cantitate_litri || 0), 0)
+    return Array.from(map.values()).map(x => ({
+      ...x,
+      nrUtilaje: x.utilajeSet.size,
+      procent: total > 0 ? (x.totalLitri / total * 100) : 0
+    })).sort((a, b) => b.totalLitri - a.totalLitri)
+  }, [filtered])
+  
+  // Agregare pe UTILAJ + Consum real pe ultimele 7 zile
+  const aggUtilaj = useMemo(() => {
+    const map = new Map()
+    // Pentru consumul real, filtrez DIN NOU pe ultimele 7 zile (independent de perioadaFilter)
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+    const sevenDaysStr = sevenDaysAgo.toISOString().split('T')[0]
+    
+    filtered.forEach(a => {
+      const av = a.logistica_active
+      if (!av?.id) return
+      const key = av.id
+      if (!map.has(key)) {
+        map.set(key, {
+          activId: av.id,
+          cod: av.cod_intern || '',
+          inmatriculare: av.nr_inmatriculare || '',
+          marca: av.marca || '',
+          model: av.model || '',
+          tip: av.logistica_categorii?.tip || '',
+          norma: av.norma_consum ? Number(av.norma_consum) : null,
+          unitateNorma: av.unitate_norma || 'l/h',
+          pragAlerta: av.prag_alerta_consum ? Number(av.prag_alerta_consum) : 10,
+          nrAlim: 0, totalLitri: 0, totalCost: 0,
+          // Pe ultimele 7 zile pentru consum real
+          litri7z: 0, oreLucrate7z: 0, nrAlim7z: 0,
+          rows: []
+        })
+      }
+      const x = map.get(key)
+      x.nrAlim += 1
+      x.totalLitri += Number(a.cantitate_litri || 0)
+      x.totalCost += Number(a.pret_total || 0)
+      x.rows.push(a)
+      
+      // Pentru ultimele 7 zile
+      if (a.data_alimentare >= sevenDaysStr) {
+        x.nrAlim7z += 1
+        x.litri7z += Number(a.cantitate_litri || 0)
+        if (a.ore_lucrate_efectiv && Number(a.ore_lucrate_efectiv) > 0) {
+          x.oreLucrate7z += Number(a.ore_lucrate_efectiv)
+        }
+      }
+    })
+    
+    return Array.from(map.values()).map(x => {
+      // Consum real = litri / ore_lucrate (doar dacă avem date)
+      const consumReal = x.oreLucrate7z > 0 ? x.litri7z / x.oreLucrate7z : null
+      let stareConsum = null  // null | 'ok' | 'warning' | 'critic'
+      let abaterePct = null
+      if (consumReal !== null && x.norma) {
+        abaterePct = ((consumReal - x.norma) / x.norma) * 100
+        if (abaterePct > x.pragAlerta * 2) stareConsum = 'critic'
+        else if (abaterePct > x.pragAlerta) stareConsum = 'warning'
+        else stareConsum = 'ok'
+      }
+      return { ...x, consumReal, abaterePct, stareConsum }
+    }).sort((a, b) => {
+      // Sortare: critic > warning > ok > fără date, apoi descrescător după consum
+      const order = { critic: 0, warning: 1, ok: 2, null: 3 }
+      const oa = order[a.stareConsum] ?? 3
+      const ob = order[b.stareConsum] ?? 3
+      if (oa !== ob) return oa - ob
+      return b.totalLitri - a.totalLitri
+    })
+  }, [filtered])
   
   // Delete individual (admin only)
   const handleDelete = async (alim) => {
@@ -5255,6 +5385,108 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
     showToast(`✓ Alimentare ștearsă`)
     loadArhiva()
+  }
+  
+  // Helper: construiește row Excel din alimentare
+  const _alimToRow = (a) => {
+    const av = a.logistica_active || {}
+    return {
+      'Data': a.data_alimentare,
+      'Cod intern': av.cod_intern || '',
+      'Plăcuță': av.nr_inmatriculare || '',
+      'Marcă': av.marca || '',
+      'Model': av.model || '',
+      'Tip': av.logistica_categorii?.tip || '',
+      'Cantitate (L)': Number(a.cantitate_litri || 0),
+      'Sursă': a.statie_combustibil || '',
+      'Șantier': a.sites?.name || '',
+      'Ore bord': a.ore_la_alimentare || '',
+      'Ore lucrate efectiv': a.ore_lucrate_efectiv || '',
+      'Km bord': a.km_la_alimentare || '',
+      'Preț/L (RON)': Number(a.pret_per_litru || 0),
+      'Total (RON)': Number(a.pret_total || 0),
+      'Înregistrat de': a.profile_creator?.name || '',
+    }
+  }
+  
+  // Sanitize sheet name pentru Excel (max 31 chars, fără [ ] : * ? / \)
+  const _sanitizeSheetName = (s) => (s || 'Sheet').replace(/[\[\]:*?\/\\]/g, '_').substring(0, 31)
+  
+  // Export pe toate șantierele (1 fișier cu sheet per șantier)
+  const handleExportPerSantier = () => {
+    setExportingExcel(true)
+    try {
+      const wb = XLSX.utils.book_new()
+      aggSantier.forEach(s => {
+        if (s.rows.length === 0) return
+        const rows = s.rows.map(_alimToRow)
+        const ws = XLSX.utils.json_to_sheet(rows)
+        const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }))
+        ws['!cols'] = colWidths
+        XLSX.utils.book_append_sheet(wb, ws, _sanitizeSheetName(s.siteName))
+      })
+      const filename = `Aliment_Per_Santier_${new Date().toISOString().split('T')[0]}.xlsx`
+      XLSX.writeFile(wb, filename)
+      showToast(`✓ Export pe ${aggSantier.length} șantiere`)
+    } catch (e) {
+      showToast('Eroare export: ' + (e.message || e), 'error')
+    } finally {
+      setExportingExcel(false)
+    }
+  }
+  
+  // Export pentru un singur șantier
+  const handleExportSantier = (siteName) => {
+    const s = aggSantier.find(x => x.siteName === siteName)
+    if (!s || s.rows.length === 0) { showToast('Nimic de exportat', 'warn'); return }
+    try {
+      const rows = s.rows.map(_alimToRow)
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 12) }))
+      ws['!cols'] = colWidths
+      XLSX.utils.book_append_sheet(wb, ws, _sanitizeSheetName(siteName))
+      const filename = `Aliment_${_sanitizeSheetName(siteName)}_${new Date().toISOString().split('T')[0]}.xlsx`
+      XLSX.writeFile(wb, filename)
+      showToast(`✓ Export: ${s.rows.length} alimentări`)
+    } catch (e) {
+      showToast('Eroare export: ' + (e.message || e), 'error')
+    }
+  }
+  
+  // Export pe utilaje (sumar + alertă consum)
+  const handleExportUtilaje = () => {
+    setExportingExcel(true)
+    try {
+      const rows = aggUtilaj.map(u => ({
+        'Cod intern': u.cod,
+        'Plăcuță': u.inmatriculare,
+        'Marcă': u.marca,
+        'Model': u.model,
+        'Tip': u.tip,
+        'Nr alimentări (perioadă)': u.nrAlim,
+        'Total litri (perioadă)': u.totalLitri.toFixed(2),
+        'Total cost RON (perioadă)': u.totalCost.toFixed(2),
+        'Litri ult. 7 zile': u.litri7z.toFixed(2),
+        'Ore lucrate ult. 7 zile': u.oreLucrate7z.toFixed(2),
+        'Consum real (l/h)': u.consumReal !== null ? u.consumReal.toFixed(2) : '—',
+        'Normă (l/h)': u.norma !== null ? u.norma : '—',
+        'Abatere %': u.abaterePct !== null ? u.abaterePct.toFixed(1) + '%' : '—',
+        'Stare': u.stareConsum === 'critic' ? '🚨 CRITIC' : u.stareConsum === 'warning' ? '⚠️ WARNING' : u.stareConsum === 'ok' ? '✓ OK' : '— (date insuficiente)',
+      }))
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      const colWidths = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 14) }))
+      ws['!cols'] = colWidths
+      XLSX.utils.book_append_sheet(wb, ws, 'Utilaje')
+      const filename = `Aliment_Per_Utilaj_${new Date().toISOString().split('T')[0]}.xlsx`
+      XLSX.writeFile(wb, filename)
+      showToast(`✓ Export: ${aggUtilaj.length} utilaje`)
+    } catch (e) {
+      showToast('Eroare export: ' + (e.message || e), 'error')
+    } finally {
+      setExportingExcel(false)
+    }
   }
   
   // Export Excel
@@ -5322,6 +5554,23 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
         </div>
       </div>
       
+      {/* View mode pills */}
+      <div style={{display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center'}}>
+        <span style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginRight: 4}}>VEDERE:</span>
+        {[
+          {key: 'toate', icon: '📋', label: 'Toate alimentările'},
+          {key: 'santier', icon: '🏗️', label: 'Pe șantier'},
+          {key: 'utilaj', icon: '🚜', label: 'Pe utilaj (consum real)'},
+        ].map(v => (
+          <button key={v.key} onClick={() => setViewMode(v.key)} style={{
+            ...S.btnS, padding: '8px 14px', fontSize: 12, fontWeight: 700,
+            background: viewMode === v.key ? G.purple + '22' : 'transparent',
+            color: viewMode === v.key ? G.purple : G.text,
+            borderColor: viewMode === v.key ? G.purple + '88' : G.border,
+          }}>{v.icon} {v.label}</button>
+        ))}
+      </div>
+      
       {/* Filtre + Search + Export */}
       <div style={{...S.card, padding: '14px 18px', marginBottom: 14}}>
         {/* Perioadă */}
@@ -5378,12 +5627,125 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
         </div>
       </div>
       
-      {/* Tabel */}
+      {/* Tabel — render condițional bazat pe viewMode */}
       {loading ? (
         <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>⏳ Se încarcă...</div>
       ) : filtered.length === 0 ? (
         <div style={{...S.card, padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>
           Nicio alimentare găsită cu filtrele curente.
+        </div>
+      ) : viewMode === 'santier' ? (
+        <div>
+          {/* Buton export global per șantier */}
+          <div style={{marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+            <div style={{fontSize: 13, color: G.muted}}>
+              <strong style={{color: G.text}}>{aggSantier.length}</strong> șantiere · sortate descrescător după consum total
+            </div>
+            <button onClick={handleExportPerSantier} disabled={exportingExcel || aggSantier.length === 0} style={{...S.btnP, background: G.green, padding: '7px 16px', fontSize: 12, opacity: (exportingExcel || aggSantier.length === 0) ? .5 : 1}}>
+              {exportingExcel ? '⏳ Export...' : `📊 Export Excel (sheet/șantier)`}
+            </button>
+          </div>
+          <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
+            <div style={{overflowX: 'auto'}}>
+              <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13}}>
+                <thead>
+                  <tr style={{background: G.surface, borderBottom: `2px solid ${G.border}`}}>
+                    <th style={thStyleAlim}>Șantier</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Nr alim.</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Utilaje</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Total litri</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Total cost</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>% din total</th>
+                    <th style={{...thStyleAlim, textAlign: 'center', width: 100}}>Export</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aggSantier.map(s => (
+                    <tr key={s.siteName} style={{borderBottom: `1px solid ${G.border}`}}>
+                      <td style={{padding: '10px 12px', fontWeight: 700, color: G.text}}>{s.siteName}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.text}}>{s.nrAlim}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>{s.nrUtilaje}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.orange, fontWeight: 700}}>{s.totalLitri.toFixed(1)} L</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.green, fontWeight: 600}}>{s.totalCost.toLocaleString('ro-RO', {minimumFractionDigits: 2, maximumFractionDigits: 2})} RON</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.purple, fontWeight: 600}}>{s.procent.toFixed(1)}%</td>
+                      <td style={{padding: '10px 12px', textAlign: 'center'}}>
+                        <button onClick={() => handleExportSantier(s.siteName)} style={{...S.btnS, padding: '4px 10px', fontSize: 11, color: G.green, borderColor: G.green + '55'}} title={`Export Excel pentru ${s.siteName}`}>
+                          📊
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : viewMode === 'utilaj' ? (
+        <div>
+          {/* Buton export utilaje + notă consum */}
+          <div style={{marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+            <div style={{fontSize: 12, color: G.muted}}>
+              <strong style={{color: G.text}}>{aggUtilaj.length}</strong> utilaje · consumul real e calculat pe <strong style={{color: G.text}}>ultimele 7 zile</strong> din perioada selectată. Sortat: critic → warning → ok → date insuficiente.
+            </div>
+            <button onClick={handleExportUtilaje} disabled={exportingExcel || aggUtilaj.length === 0} style={{...S.btnP, background: G.green, padding: '7px 16px', fontSize: 12, opacity: (exportingExcel || aggUtilaj.length === 0) ? .5 : 1}}>
+              {exportingExcel ? '⏳ Export...' : `📊 Export Excel`}
+            </button>
+          </div>
+          <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
+            <div style={{overflowX: 'auto'}}>
+              <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
+                <thead>
+                  <tr style={{background: G.surface, borderBottom: `2px solid ${G.border}`}}>
+                    <th style={thStyleAlim}>Utilaj</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Nr alim.</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Total litri</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Total cost</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Litri 7z</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Ore lucrate 7z</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Consum real</th>
+                    <th style={{...thStyleAlim, textAlign: 'right'}}>Normă</th>
+                    <th style={{...thStyleAlim, textAlign: 'center'}}>Stare</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aggUtilaj.map(u => {
+                    const stareColor = u.stareConsum === 'critic' ? G.red : u.stareConsum === 'warning' ? G.orange : u.stareConsum === 'ok' ? G.green : G.muted
+                    const stareLabel = u.stareConsum === 'critic' ? '🚨 Critic' : u.stareConsum === 'warning' ? '⚠️ Warning' : u.stareConsum === 'ok' ? '✓ OK' : '— Date insuf.'
+                    return (
+                      <tr key={u.activId} style={{borderBottom: `1px solid ${G.border}`, background: u.stareConsum === 'critic' ? G.red + '0D' : u.stareConsum === 'warning' ? G.orange + '0D' : 'transparent'}}>
+                        <td style={{padding: '8px 12px'}}>
+                          <div style={{fontWeight: 600, color: G.text}}>{u.marca} {u.model?.substring(0, 25)}{u.model?.length > 25 ? '...' : ''}</div>
+                          <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                            {u.cod && <span style={{color: G.logistica, fontFamily: 'monospace'}}>{u.cod}</span>}
+                            {u.inmatriculare && <span style={{color: G.blue, fontFamily: 'monospace', marginLeft: 6}}>{u.inmatriculare}</span>}
+                          </div>
+                        </td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.text}}>{u.nrAlim}</td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.orange, fontWeight: 700}}>{u.totalLitri.toFixed(1)} L</td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.green}}>{u.totalCost.toFixed(0)} RON</td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>{u.litri7z.toFixed(1)}</td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>{u.oreLucrate7z > 0 ? u.oreLucrate7z.toFixed(1) : '—'}</td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: stareColor, fontWeight: 700}}>
+                          {u.consumReal !== null ? `${u.consumReal.toFixed(2)} ${u.unitateNorma}` : '—'}
+                        </td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>{u.norma !== null ? `${u.norma} ${u.unitateNorma}` : '—'}</td>
+                        <td style={{padding: '8px 12px', textAlign: 'center'}}>
+                          <span style={{display: 'inline-block', padding: '3px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: stareColor + '22', color: stareColor, border: `1px solid ${stareColor}55`, whiteSpace: 'nowrap'}}>
+                            {stareLabel}
+                          </span>
+                          {u.abaterePct !== null && u.stareConsum !== 'ok' && (
+                            <div style={{fontSize: 10, color: stareColor, marginTop: 3, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
+                              {u.abaterePct > 0 ? '+' : ''}{u.abaterePct.toFixed(1)}%
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       ) : (
         <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
