@@ -10,7 +10,7 @@ import LOGO_B64 from './logo.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import ServiceTab from './ServiceTab.jsx'
-import DocumenteFlotaPage from './DocumenteFlotaPage.jsx'
+import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -1262,6 +1262,21 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         
         <div style={{marginBottom: 14}}>
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>📎 Documente</div>
+          {activ?.id ? (
+            <DocumenteUtilajList
+              activId={activ.id}
+              canEdit={accessLevel === 'admin' || accessLevel === 'editor'}
+              showToast={showToast}
+            />
+          ) : (
+            <div style={{padding: 14, background: G.bg, border: `1px dashed ${G.border2}`, borderRadius: 8, color: G.dim, fontSize: 12, textAlign: 'center'}}>
+              Salvează mai întâi utilajul, apoi poți adăuga documente.
+            </div>
+          )}
+        </div>
+
+        <div style={{marginBottom: 14}}>
+          <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>📝 Note interne</div>
           <div style={{display:'flex', flexDirection: 'column', gap: 12}}>
             <FieldTextarea label="Link fișă service NAS" value={form.link_fisa_nas} onChange={v => setField('link_fisa_nas', v)} rows={2} mono readonly={isReadOnly} />
             <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} readonly={isReadOnly} />
