@@ -13,6 +13,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import AmcSection from './AmcSection.jsx'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -947,10 +948,9 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
       )}
 
       {subTab === 'amc' && (
-        <PlaceholderSubTab
-          emoji="🔬"
-          titlu="Documente AMC"
-          descriere="Evidență echipamente AMC și verificări metrologice. Construcție în Etapa 4b — necesită BD nouă."
+        <AmcSection
+          accessLevel={accessLevel}
+          showToast={showToast}
         />
       )}
 
