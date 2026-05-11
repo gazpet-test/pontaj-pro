@@ -9,6 +9,7 @@ import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
+import ServiceTab from './ServiceTab.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -5500,7 +5501,7 @@ export default function LogisticaPage() {
       {tab === 'documente' && <PlaceholderTab label="Documente" desc="ITP · RCA · CASCO · Autorizații · Asigurări" emoji="📎" />}
       
       {/* TAB: Service (placeholder) */}
-      {tab === 'service' && <PlaceholderTab label="Service" desc="Programări · Intervenții · Costuri reparații" emoji="🔧" />}
+      {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
       
       {/* TAB: Tichete (placeholder) */}
       {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
