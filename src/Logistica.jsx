@@ -945,6 +945,17 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     link_fisa_nas: a?.link_fisa_nas || '',
     observatii: a?.observatii || '',
     serie_sasiu: a?.serie_sasiu || '',
+    // Dimensiuni transport
+    lungime_m: a?.lungime_m || '',
+    latime_m: a?.latime_m || '',
+    inaltime_m: a?.inaltime_m || '',
+    greutate_kg: a?.greutate_kg || '',
+    regim_transport_special: a?.regim_transport_special || false,
+    nr_autorizatie_arr: a?.nr_autorizatie_arr || '',
+    valabilitate_autorizatie: a?.valabilitate_autorizatie || '',
+    necesita_pilot: a?.necesita_pilot || false,
+    restrictii_ore: a?.restrictii_ore || '',
+    note_transport_special: a?.note_transport_special || '',
   })
   
   const [form, setForm] = useState(fromActiv(activ))
@@ -1025,6 +1036,17 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       link_fisa_nas: form.link_fisa_nas.trim() || null,
       observatii: form.observatii.trim() || null,
       serie_sasiu: form.serie_sasiu.trim() || null,
+      // Dimensiuni & transport
+      lungime_m: form.lungime_m ? Number(form.lungime_m) : null,
+      latime_m: form.latime_m ? Number(form.latime_m) : null,
+      inaltime_m: form.inaltime_m ? Number(form.inaltime_m) : null,
+      greutate_kg: form.greutate_kg ? Number(form.greutate_kg) : null,
+      regim_transport_special: !!form.regim_transport_special,
+      nr_autorizatie_arr: form.nr_autorizatie_arr.trim() || null,
+      valabilitate_autorizatie: form.valabilitate_autorizatie || null,
+      necesita_pilot: !!form.necesita_pilot,
+      restrictii_ore: form.restrictii_ore.trim() || null,
+      note_transport_special: form.note_transport_special.trim() || null,
     }
     
     let result
@@ -1178,6 +1200,63 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="Serie șasiu (VIN)" value={form.serie_sasiu} onChange={v => setField('serie_sasiu', v)} placeholder="ex: WDB9061..." readonly={isReadOnly} />
             <FieldSelect label="Firmă proprietară" value={form.firma_proprietara} onChange={v => setField('firma_proprietara', v)} options={FIRME} readonly={isReadOnly} />
           </div>
+        </div>
+        
+        {/* DIMENSIUNI & TRANSPORT */}
+        <div style={{marginBottom: 14}}>
+          <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🚚 Dimensiuni & Transport</div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap: 12, marginBottom: 12}}>
+            <FieldText label="Lungime (m)" value={form.lungime_m} onChange={v => setField('lungime_m', v)} type="number" placeholder="ex: 12.50" readonly={isReadOnly} />
+            <FieldText label="Lățime (m)" value={form.latime_m} onChange={v => setField('latime_m', v)} type="number" placeholder="ex: 2.40" readonly={isReadOnly} />
+            <FieldText label="Înălțime (m)" value={form.inaltime_m} onChange={v => setField('inaltime_m', v)} type="number" placeholder="ex: 3.20" readonly={isReadOnly} />
+            <FieldText label="Greutate (kg)" value={form.greutate_kg} onChange={v => setField('greutate_kg', v)} type="number" placeholder="ex: 24000" readonly={isReadOnly} />
+          </div>
+          
+          {/* Auto-detect dimensiuni mari */}
+          {(() => {
+            const L = Number(form.lungime_m) || 0
+            const W = Number(form.latime_m) || 0
+            const H = Number(form.inaltime_m) || 0
+            const G_ = Number(form.greutate_kg) || 0
+            const depasiri = []
+            if (L > 18.75) depasiri.push(`Lungime ${L}m > 18.75m`)
+            if (W > 2.55) depasiri.push(`Lățime ${W}m > 2.55m`)
+            if (H > 4.00) depasiri.push(`Înălțime ${H}m > 4.00m`)
+            if (G_ > 40000) depasiri.push(`Greutate ${G_}kg > 40000kg`)
+            if (depasiri.length === 0) return null
+            return (
+              <div style={{padding: 8, background: G.redDim + '88', border: `1px solid ${G.red}55`, borderRadius: 6, marginBottom: 10, fontSize: 11, color: G.text}}>
+                <strong style={{color: G.red}}>⚠️ Dimensiunile sugerează regim transport special obligatoriu:</strong>
+                <div style={{marginTop: 4, color: G.muted}}>{depasiri.join(' · ')}</div>
+              </div>
+            )
+          })()}
+          
+          {/* Bifă regim special */}
+          <div style={{marginBottom: 10}}>
+            <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer', userSelect: 'none'}}>
+              <input type="checkbox" checked={!!form.regim_transport_special} onChange={e => setField('regim_transport_special', e.target.checked)} disabled={isReadOnly} style={{width: 16, height: 16, accentColor: G.red, cursor: isReadOnly ? 'default' : 'pointer'}} />
+              <span style={{fontSize: 13, color: G.text, fontWeight: 600}}>Necesită regim transport special (gabarit/tonaj depășit)</span>
+            </label>
+          </div>
+          
+          {/* Sub-form pentru regim special */}
+          {form.regim_transport_special && (
+            <div style={{padding: 12, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, borderLeft: `3px solid ${G.red}`}}>
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 10}}>
+                <FieldText label="Nr autorizație ARR" value={form.nr_autorizatie_arr} onChange={v => setField('nr_autorizatie_arr', v)} placeholder="ex: AUT-2026-1234" readonly={isReadOnly} />
+                <FieldText label="Valabil până la" value={form.valabilitate_autorizatie} onChange={v => setField('valabilitate_autorizatie', v)} type="date" readonly={isReadOnly} />
+                <FieldText label="Restricții ore" value={form.restrictii_ore} onChange={v => setField('restrictii_ore', v)} placeholder="ex: 22:00 - 06:00" readonly={isReadOnly} />
+              </div>
+              <div style={{marginBottom: 10}}>
+                <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer', userSelect: 'none'}}>
+                  <input type="checkbox" checked={!!form.necesita_pilot} onChange={e => setField('necesita_pilot', e.target.checked)} disabled={isReadOnly} style={{width: 14, height: 14, accentColor: G.orange, cursor: isReadOnly ? 'default' : 'pointer'}} />
+                  <span style={{fontSize: 12, color: G.text}}>Necesită însoțitor / pilot</span>
+                </label>
+              </div>
+              <FieldTextarea label="Note transport (traseu, restricții, contact ARR)" value={form.note_transport_special} onChange={v => setField('note_transport_special', v)} rows={2} readonly={isReadOnly} />
+            </div>
+          )}
         </div>
         
         <div style={{marginBottom: 14}}>
