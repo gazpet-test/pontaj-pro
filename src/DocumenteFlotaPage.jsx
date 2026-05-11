@@ -11,6 +11,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
@@ -110,6 +111,165 @@ async function openPdfFromBucket(pdfPath, showToast, setLoadingId, docId) {
   } finally {
     if (setLoadingId) setLoadingId(null)
   }
+}
+
+// ─── Sub-tabs bar pentru pagina Documente Flotă ─────────────────────────────
+function DocumenteSubTabsBar({ subTab, setSubTab, badgeAlerte }) {
+  const subTabs = [
+    { key:'flota',    icon:'🚛', label:'Flotă'    },
+    { key:'alerte',   icon:'🚨', label:'Alerte',   badge: badgeAlerte },
+    { key:'personal', icon:'📋', label:'Personal' },
+    { key:'amc',      icon:'🔬', label:'AMC'      },
+  ]
+  return (
+    <div style={{display:'flex', gap:3, marginBottom:14, padding:3, background:G.bg, borderRadius:8, border:`1px solid ${G.border}`, flexWrap:'wrap'}}>
+      {subTabs.map(t => {
+        const active = subTab === t.key
+        return (
+          <button key={t.key} onClick={() => setSubTab(t.key)} style={{
+            padding:'6px 12px', borderRadius:6, border:'none',
+            cursor:'pointer', fontSize:12,
+            fontWeight: active ? 700 : 500,
+            background: active ? G.logistica + '22' : 'transparent',
+            color: active ? G.logistica : G.muted,
+            display:'flex', alignItems:'center', gap:6,
+            transition:'all .12s',
+          }}>
+            <span>{t.icon}</span>
+            <span>{t.label}</span>
+            {t.badge > 0 && (
+              <span style={{
+                background: active ? G.red : G.red + '33',
+                color: active ? '#fff' : G.red,
+                borderRadius:10, padding:'1px 7px',
+                fontSize:10, fontWeight:800,
+                fontVariantNumeric:'tabular-nums',
+                minWidth:18, textAlign:'center',
+              }}>{t.badge}</span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Secțiunea Alerte (3 grupuri colorate, click pe rând = edit) ────────────
+function AlerteSection({ enriched, canEdit, onEditDoc, openingPdfId, setOpeningPdfId, showToast }) {
+  const sectiuni = [
+    { key:'expirat',    label:'Expirate',          icon:'🚨', color:G.red,    bg:G.redDim    },
+    { key:'expira_30z', label:'Expiră în 30 zile', icon:'⏰', color:G.orange, bg:'#3A2010'   },
+    { key:'expira_90z', label:'Expiră în 90 zile', icon:'🕒', color:G.yellow, bg:G.yellowDim },
+  ]
+  const sortMarca = (a, b) => {
+    const ma = (a._utilaj?.marca || '').toLowerCase()
+    const mb = (b._utilaj?.marca || '').toLowerCase()
+    if (ma !== mb) return ma.localeCompare(mb, 'ro')
+    const moa = (a._utilaj?.model || '').toLowerCase()
+    const mob = (b._utilaj?.model || '').toLowerCase()
+    return moa.localeCompare(mob, 'ro')
+  }
+  const grupuri = sectiuni.map(sec => ({
+    ...sec,
+    items: enriched.filter(d => d._status === sec.key).sort(sortMarca),
+  })).filter(g => g.items.length > 0)
+
+  if (grupuri.length === 0) {
+    return (
+      <div style={{...S.card, padding:60, textAlign:'center'}}>
+        <div style={{fontSize:48, marginBottom:14, opacity:.5}}>✅</div>
+        <div style={{fontSize:18, fontWeight:800, color:G.green}}>Niciun document expirat sau pe punctul de a expira</div>
+        <div style={{fontSize:13, color:G.muted, marginTop:8}}>Toată flota e la zi cu actele.</div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {grupuri.map(g => (
+        <div key={g.key} style={{...S.card, marginBottom:14, overflow:'hidden'}}>
+          <div style={{padding:'10px 16px', background:g.bg, borderBottom:`1px solid ${G.border2}`, display:'flex', alignItems:'center', gap:10}}>
+            <span style={{fontSize:16}}>{g.icon}</span>
+            <span style={{fontSize:14, fontWeight:800, color:g.color, flex:1}}>{g.label}</span>
+            <span style={{fontSize:11, fontWeight:700, color:g.color, background:G.bg+'66', padding:'2px 9px', borderRadius:10, fontVariantNumeric:'tabular-nums'}}>{g.items.length}</span>
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(0, 1.1fr) 100px 70px 50px', gap:10, padding:'10px 16px', background:G.bg, borderBottom:`1px solid ${G.border}`, fontSize:10, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:'.5px'}}>
+            <div>Utilaj</div>
+            <div>Tip doc</div>
+            <div>Expirare</div>
+            <div>Zile</div>
+            <div></div>
+          </div>
+          {g.items.map(d => {
+            const u = d._utilaj
+            const hasPdf = !!d.pdf_url
+            return (
+              <div key={d.id}
+                onClick={() => canEdit && onEditDoc(d)}
+                title={canEdit ? 'Click pentru reînnoire / editare' : ''}
+                style={{display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(0, 1.1fr) 100px 70px 50px', gap:10, padding:'11px 16px', alignItems:'center', borderBottom:`1px solid ${G.border}`, fontSize:13, cursor: canEdit ? 'pointer' : 'default', transition:'background .12s'}}
+                onMouseEnter={e => { if (canEdit) e.currentTarget.style.background = G.bg + '88' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+              >
+                <div style={{minWidth:0}}>
+                  {u ? (
+                    <>
+                      <div style={{fontWeight:600, color:G.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+                        {u.marca} {u.model}
+                      </div>
+                      <div style={{display:'flex', gap:8, fontSize:11, marginTop:2, alignItems:'center'}}>
+                        {u.nr_inmatriculare && <span style={{color:G.blue, fontFamily:'monospace'}}>{u.nr_inmatriculare}</span>}
+                        {u.cod_intern && <span style={{color:G.logistica, fontFamily:'monospace', fontWeight:700}}>{u.cod_intern}</span>}
+                      </div>
+                    </>
+                  ) : (
+                    <span style={{color:G.dim, fontStyle:'italic'}}>utilaj #{d.entitate_id ?? d.active_id} (lipsă)</span>
+                  )}
+                </div>
+                <div style={{color:G.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{d._tipNume}</div>
+                <div style={{color:G.muted, fontVariantNumeric:'tabular-nums', fontSize:12}}>{fmtDate(d.data_expirare)}</div>
+                <div style={{color:g.color, fontWeight:700, fontVariantNumeric:'tabular-nums'}}>{fmtZile(d._zile)}</div>
+                <div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (hasPdf) openPdfFromBucket(d.pdf_url, showToast, setOpeningPdfId, d.id) }}
+                    disabled={!hasPdf || openingPdfId === d.id}
+                    title={hasPdf ? 'Deschide PDF' : 'Fără PDF'}
+                    style={{
+                      width:32, height:32, borderRadius:6,
+                      background: hasPdf ? G.bg : 'transparent',
+                      border:`1px solid ${hasPdf ? G.border2 : G.border}`,
+                      color: hasPdf ? G.blue : G.dim,
+                      cursor: hasPdf ? 'pointer' : 'not-allowed',
+                      opacity: hasPdf ? 1 : .35, fontSize:14,
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                    }}
+                  >
+                    {openingPdfId === d.id ? '⏳' : (hasPdf ? '👁' : '∅')}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ))}
+      {canEdit && (
+        <div style={{fontSize:12, color:G.muted, marginTop:8, textAlign:'center'}}>
+          💡 Click pe rând pentru a reînnoi documentul (deschide editorul cu data nouă)
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Sub-tab placeholder (pentru Personal + AMC) ────────────────────────────
+function PlaceholderSubTab({ emoji, titlu, descriere }) {
+  return (
+    <div style={{...S.card, padding:60, textAlign:'center'}}>
+      <div style={{fontSize:48, marginBottom:14, opacity:.4}}>{emoji}</div>
+      <div style={{fontSize:20, fontWeight:800, color:G.text}}>{titlu}</div>
+      <div style={{fontSize:13, color:G.muted, marginTop:10, maxWidth:440, margin:'10px auto 0', lineHeight:1.55}}>{descriere}</div>
+    </div>
+  )
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -532,11 +692,19 @@ export function DocumenteUtilajList({ activId, canEdit, showToast }) {
 // ════════════════════════════════════════════════════════════════════════════
 
 export default function DocumenteFlotaPage({ active, accessLevel, profile, showToast }) {
+  const loc = useLocation()
   const [docs, setDocs]       = useState([])
   const [tipuri, setTipuri]   = useState([])
   const [load, setLoad]       = useState(true)
   const [openingPdfId, setOpeningPdfId] = useState(null)
   const [editModal, setEditModal] = useState(null)
+
+  const [subTab, setSubTab] = useState(() => {
+    const params = new URLSearchParams(loc.search)
+    const s = params.get('sub')
+    const valid = ['flota','alerte','personal','amc']
+    return valid.includes(s) ? s : 'flota'
+  })
 
   const [search, setSearch]   = useState('')
   const [tipF, setTipF]       = useState('Toate')
@@ -544,6 +712,14 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
   const [page, setPage]       = useState(1)
 
   const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
+
+  // Sincronizez subTab cu URL la schimbare externă (ex: navigare directă)
+  useEffect(() => {
+    const params = new URLSearchParams(loc.search)
+    const s = params.get('sub')
+    const valid = ['flota','alerte','personal','amc']
+    if (s && valid.includes(s) && s !== subTab) setSubTab(s)
+  }, [loc.search])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const activMap = useMemo(() => {
     const m = {}
@@ -623,6 +799,13 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
 
   return (
     <div>
+      <DocumenteSubTabsBar
+        subTab={subTab}
+        setSubTab={setSubTab}
+        badgeAlerte={(kpi.expirat || 0) + (kpi.expira_30z || 0)}
+      />
+
+      {subTab === 'flota' && (<>
       <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:16}}>
         <KPICard icon="📎" label="Total documente" value={kpi.total} />
         <KPICard icon="🚨" label="Expirate"        value={kpi.expirat}    color={G.red}    bg={G.redDim+'66'} />
@@ -742,6 +925,34 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
           </div>
         )}
       </div>
+      </>)}
+
+      {subTab === 'alerte' && (
+        <AlerteSection
+          enriched={enriched}
+          canEdit={canEdit}
+          onEditDoc={d => setEditModal({ doc:d })}
+          openingPdfId={openingPdfId}
+          setOpeningPdfId={setOpeningPdfId}
+          showToast={showToast}
+        />
+      )}
+
+      {subTab === 'personal' && (
+        <PlaceholderSubTab
+          emoji="📋"
+          titlu="Documente Personal"
+          descriere="Listarea documentelor de personal (autorizații ANRE, ISCIR, ISU, medicale etc.). Construcție în Etapa 4a — read-only din modulul HR."
+        />
+      )}
+
+      {subTab === 'amc' && (
+        <PlaceholderSubTab
+          emoji="🔬"
+          titlu="Documente AMC"
+          descriere="Evidență echipamente AMC și verificări metrologice. Construcție în Etapa 4b — necesită BD nouă."
+        />
+      )}
 
       {editModal && (
         <DocumentFormModal
