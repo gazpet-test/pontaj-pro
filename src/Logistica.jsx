@@ -2,11 +2,13 @@
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
