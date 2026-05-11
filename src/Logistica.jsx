@@ -5952,7 +5952,7 @@ export default function LogisticaPage() {
         <ArhivaAlimentariPage 
           profile={profile} 
           sites={sites} 
-          rezervorGazpet={rezervorGazpet}
+          rezervorGazpet={rezervor}
           pretMotorina={pretMotorina}
           showToast={showToast} 
         />
