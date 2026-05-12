@@ -979,7 +979,7 @@ function defaultOreFromNorma(h) {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture }) {
+function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
   // Norma angajatului (pentru auto-fill ore)
   const normaH = emp.employee_salaries?.[0]?.work_hours_per_day || emp.employee_salaries?.work_hours_per_day || 8
   const oreDefault = defaultOreFromNorma(normaH)
@@ -992,6 +992,16 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
   const [supl,setSupl]=useState(rec?.meal_supplement||false)
   const [mode,setMode]=useState(rec?.norma?'norma':'ore')
   const [exp,setExp]=useState(false)
+
+  // Enforce regulă: supliment hrană DOAR dacă e bifată diurna
+  const handleSuplToggle = (val) => {
+    if (val && !diurna) { showToast?.('Bifează întâi diurna înainte de supliment','warn'); return }
+    setSupl(val)
+  }
+  const handleDiurnaToggle = (val) => {
+    if (!val && supl) { setSupl(false); showToast?.('Suplimentul a fost debifat automat (necesită diurnă)','info') }
+    setDiurna(val)
+  }
   useEffect(()=>{
     setCi(rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare))
     setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
@@ -1059,13 +1069,13 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
 
         {/* Diurna */}
         <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',minWidth:55}}>
-          <input type="checkbox" checked={diurna} onChange={e=>setDiurna(e.target.checked)} style={{width:15,height:15,accentColor:G.orange}}/>
+          <input type="checkbox" checked={diurna} onChange={e=>handleDiurnaToggle(e.target.checked)} style={{width:15,height:15,accentColor:G.orange}}/>
           <span style={{fontSize:9,color:diurna?G.orange:G.dim,fontWeight:600}}>{diurna?`💰${diurnaAmt}RON`:'💰 Diurnă'}</span>
         </label>
 
         {/* Supliment Hrana */}
-        <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',minWidth:55}}>
-          <input type="checkbox" checked={supl} onChange={e=>setSupl(e.target.checked)} style={{width:15,height:15,accentColor:'#56D364'}}/>
+        <label style={{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:diurna?'pointer':'not-allowed',minWidth:55,opacity:diurna?1:.45}} title={diurna?'':'Bifează întâi diurna'}>
+          <input type="checkbox" checked={supl} onChange={e=>handleSuplToggle(e.target.checked)} style={{width:15,height:15,accentColor:'#56D364'}}/>
           <span style={{fontSize:9,color:supl?'#56D364':G.dim,fontWeight:600}}>{supl?`🍔${suplAmt}RON`:'🍔 Hrană'}</span>
         </label>
 
@@ -1115,12 +1125,12 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
           )}
           <div style={{paddingTop:18}}>
             <label style={{display:'flex',alignItems:'center',gap:7,fontSize:12,cursor:'pointer'}}>
-              <input type="checkbox" checked={diurna} onChange={e=>setDiurna(e.target.checked)} style={{accentColor:G.orange}}/> 💰 Diurnă ({diurnaAmt} RON)
+              <input type="checkbox" checked={diurna} onChange={e=>handleDiurnaToggle(e.target.checked)} style={{accentColor:G.orange}}/> 💰 Diurnă ({diurnaAmt} RON)
             </label>
           </div>
           <div style={{paddingTop:18}}>
-            <label style={{display:'flex',alignItems:'center',gap:7,fontSize:12,cursor:'pointer'}}>
-              <input type="checkbox" checked={supl} onChange={e=>setSupl(e.target.checked)} style={{accentColor:'#56D364'}}/> 🍔 Supliment Hrană ({suplAmt} RON)
+            <label style={{display:'flex',alignItems:'center',gap:7,fontSize:12,cursor:diurna?'pointer':'not-allowed',opacity:diurna?1:.45}} title={diurna?'':'Bifează întâi diurna'}>
+              <input type="checkbox" checked={supl} onChange={e=>handleSuplToggle(e.target.checked)} style={{accentColor:'#56D364'}}/> 🍔 Supliment Hrană ({suplAmt} RON)
             </label>
           </div>
         </div>
@@ -1223,7 +1233,7 @@ function PontajPage() {
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
     </Layout>
