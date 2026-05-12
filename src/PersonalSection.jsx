@@ -32,10 +32,11 @@ const PAGE_SIZE = 50
 const BUCKET = 'autorizatii'
 
 // Stările reale ale view-ului v_hr_autorizatii_status
-// (valid / expira_30z / expirat / fara_data / fara_exp)
+// (valid / expira_60z / expira_30z / expirat / fara_data / fara_exp)
 const STARI = [
   { key:'expirat',    label:'Expirat',         color:G.red,    bg:G.redDim    },
   { key:'expira_30z', label:'Expiră 30z',      color:G.orange, bg:'#3A2010'   },
+  { key:'expira_60z', label:'Expiră 60z',      color:G.yellow, bg:'#3A3010'   },
   { key:'valid',      label:'Valid',           color:G.green,  bg:G.greenDim  },
   { key:'fara_data',  label:'Fără dată',       color:G.dim,    bg:G.bg        },
   { key:'fara_exp',   label:'Fără expirare',   color:G.blue,   bg:'#0E2540'   },
@@ -243,6 +244,7 @@ export default function PersonalSection({ docs, loading, showToast }) {
         ) : paginated.map(d => {
           const zileColor = d.status === 'expirat' ? G.red
                           : d.status === 'expira_30z' ? G.orange
+                          : d.status === 'expira_60z' ? G.yellow
                           : d.status === 'fara_data' ? G.dim
                           : G.muted
           const hasPdf = !!d.fisier_path

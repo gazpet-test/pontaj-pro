@@ -434,9 +434,38 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
 // TAB ALERTE — Doar autorizațiile cu probleme (expirate + curand)
 // ===========================================================================
 function TabAlerte({ autorizatii, stats, onClickAut }) {
-  const expirate = autorizatii.filter(a => a.status === 'expirat')
-  const expira7 = autorizatii.filter(a => a.status === 'expira_7z')
-  const expira30 = autorizatii.filter(a => a.status === 'expira_30z')
+  const [tipFilter, setTipFilter] = useState(null)  // null = toate, string = nume categorie
+
+  const expirateAll = autorizatii.filter(a => a.status === 'expirat')
+  const expira7All = autorizatii.filter(a => a.status === 'expira_7z')
+  const expira30All = autorizatii.filter(a => a.status === 'expira_30z')
+  const toateAlerteAll = [...expirateAll, ...expira7All, ...expira30All]
+
+  // Meta pe categorie (emoji + label friendly)
+  const CAT_META = {
+    medical:     { emoji: '⚕',  label: 'Medical' },
+    iscir:       { emoji: '🏗',  label: 'ISCIR' },
+    transport:   { emoji: '🚗',  label: 'Transport' },
+    profesional: { emoji: '👷', label: 'Profesional' },
+    sudura:      { emoji: '🔥',  label: 'Sudură' },
+    anre:        { emoji: '⚡',  label: 'ANRE' },
+    mediu:       { emoji: '🌿',  label: 'Mediu/SSM' },
+    cursuri:     { emoji: '📚',  label: 'Cursuri' },
+    isu:         { emoji: '🚨',  label: 'ISU' },
+  }
+
+  // Count per categorie (doar din alertele active)
+  const tipCounts = toateAlerteAll.reduce((acc, a) => {
+    const cat = a.tip_categorie || 'altele'
+    acc[cat] = (acc[cat] || 0) + 1
+    return acc
+  }, {})
+  const tipuriArr = Object.entries(tipCounts).sort((a,b) => b[1] - a[1])
+
+  // Aplic filtru pe cele 3 secțiuni
+  const expirate = tipFilter ? expirateAll.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expirateAll
+  const expira7  = tipFilter ? expira7All.filter(a => (a.tip_categorie || 'altele') === tipFilter)  : expira7All
+  const expira30 = tipFilter ? expira30All.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expira30All
   
   return (
     <div>
@@ -463,6 +492,39 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
           <div style={{fontSize:24, fontWeight:800, color:G.red, marginTop:4}}>{stats.expirat}</div>
         </div>
       </div>
+
+      {/* === FILTRE pe TIP DOCUMENT (chip-uri clickabile) === */}
+      {tipuriArr.length > 0 && (
+        <div style={{marginBottom:18, padding:12, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+          <div style={{fontSize:10, color:G.muted, fontWeight:700, marginBottom:8, letterSpacing:.5}}>🏷 FILTREAZĂ PE TIP DOCUMENT</div>
+          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+            <button onClick={() => setTipFilter(null)} style={{
+              padding:'5px 12px', fontSize:12, fontWeight:700, borderRadius:16, cursor:'pointer',
+              border:`1px solid ${tipFilter === null ? G.purple : G.border2}`,
+              background:tipFilter === null ? G.purple + '22' : G.surface,
+              color:tipFilter === null ? G.purple : G.text,
+              transition:'all 0.15s'
+            }}>
+              Toate ({toateAlerteAll.length})
+            </button>
+            {tipuriArr.map(([cat, count]) => {
+              const meta = CAT_META[cat] || { emoji:'📄', label:cat }
+              const active = tipFilter === cat
+              return (
+                <button key={cat} onClick={() => setTipFilter(active ? null : cat)} style={{
+                  padding:'5px 12px', fontSize:12, fontWeight:700, borderRadius:16, cursor:'pointer',
+                  border:`1px solid ${active ? G.purple : G.border2}`,
+                  background:active ? G.purple + '22' : G.surface,
+                  color:active ? G.purple : G.text,
+                  transition:'all 0.15s'
+                }}>
+                  {meta.emoji} {meta.label} ({count})
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
       
       <SectiuneAlerte titlu="🚨 EXPIRATE — necesită reînnoire URGENT" lista={expirate} color={G.red} onClick={onClickAut} />
       <SectiuneAlerte titlu="⚠⚠ Expiră în mai puțin de 7 zile" lista={expira7} color={G.orange} onClick={onClickAut} />
