@@ -3285,7 +3285,88 @@ export function SalariiPage({ noExport = false } = {}) {
   const [saving,setSaving]=useState(false)
   const [toast,showToast]=useToast()
 
-  useEffect(()=>{ loadData() },[])
+  // === RE-AUTENTIFICARE: lockscreen cu parolă + inactivity timer ===
+  const SALARII_TIMEOUT_MIN = 20  // minute valabilitate unlock (reset la activitate)
+  const [unlocked, setUnlocked] = useState(() => {
+    const until = Number(sessionStorage.getItem('salariiUnlockedUntil') || 0)
+    return until > Date.now()
+  })
+  const [unlockUntil, setUnlockUntil] = useState(() => Number(sessionStorage.getItem('salariiUnlockedUntil') || 0))
+  const [pwdInput, setPwdInput] = useState('')
+  const [pwdErr, setPwdErr] = useState('')
+  const [verifying, setVerifying] = useState(false)
+
+  // Inactivity tracking: reset timer la fiecare interactiune (mouse, keyboard, scroll, touch)
+  useEffect(() => {
+    if (!unlocked) return
+    const resetTimer = () => {
+      const until = Date.now() + SALARII_TIMEOUT_MIN * 60 * 1000
+      sessionStorage.setItem('salariiUnlockedUntil', String(until))
+      setUnlockUntil(until)
+    }
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart']
+    events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }))
+    const tid = setInterval(() => {
+      const until = Number(sessionStorage.getItem('salariiUnlockedUntil') || 0)
+      if (until <= Date.now()) {
+        setUnlocked(false)
+        sessionStorage.removeItem('salariiUnlockedUntil')
+      }
+    }, 10000) // verifica la fiecare 10s
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetTimer))
+      clearInterval(tid)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlocked])
+
+  const handleUnlock = async () => {
+    if (!profile?.email) { setPwdErr('Lipsește email-ul contului tău'); return }
+    if (!pwdInput) { setPwdErr('Introdu parola'); return }
+    setVerifying(true)
+    setPwdErr('')
+    const { error } = await supabase.auth.signInWithPassword({ email: profile.email, password: pwdInput })
+    if (error) {
+      setPwdErr('Parolă greșită')
+      // Audit access_denied (best-effort, ignoram erorile)
+      try {
+        await supabase.from('hr_salarii_audit').insert({
+          user_id: profile.id,
+          user_email: profile.email,
+          action: 'access_denied',
+          target_table: 'employee_salaries',
+          user_agent: navigator.userAgent || null
+        })
+      } catch (e) { /* ignore */ }
+      setVerifying(false)
+      return
+    }
+    // Success
+    const until = Date.now() + SALARII_TIMEOUT_MIN * 60 * 1000
+    sessionStorage.setItem('salariiUnlockedUntil', String(until))
+    setUnlockUntil(until)
+    setUnlocked(true)
+    setPwdInput('')
+    setVerifying(false)
+    // Audit unlock
+    try {
+      await supabase.from('hr_salarii_audit').insert({
+        user_id: profile.id,
+        user_email: profile.email,
+        action: 'unlock',
+        target_table: 'employee_salaries',
+        user_agent: navigator.userAgent || null
+      })
+    } catch (e) { /* ignore */ }
+  }
+
+  const handleLock = () => {
+    sessionStorage.removeItem('salariiUnlockedUntil')
+    setUnlocked(false)
+    setUnlockUntil(0)
+  }
+
+  useEffect(()=>{ if(unlocked) loadData() },[unlocked])
 
   const loadData=async()=>{
     setLoad(true)
@@ -3378,11 +3459,54 @@ export function SalariiPage({ noExport = false } = {}) {
     </div>
   )
 
+  // === LOCKSCREEN: dacă nu e deblocat, afișez modal cu parolă ===
+  if (!unlocked) {
+    const LockScreen = (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.92)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+        <div style={{...S.card,padding:32,maxWidth:460,width:'100%',border:`2px solid ${G.red}66`,boxShadow:`0 8px 40px ${G.red}33`}}>
+          <div style={{fontSize:42,textAlign:'center',marginBottom:14}}>🔐</div>
+          <div style={{fontSize:18,fontWeight:800,textAlign:'center',marginBottom:8,color:G.red}}>Acces Restricționat</div>
+          <div style={{fontSize:12,color:G.muted,textAlign:'center',marginBottom:22,lineHeight:1.7}}>
+            Tab-ul <strong style={{color:G.text}}>Salarii</strong> conține date GDPR-sensibile.<br/>
+            Re-introdu parola contului tău pentru <strong style={{color:G.yellow}}>{SALARII_TIMEOUT_MIN} minute</strong>.<br/>
+            <span style={{fontSize:10,color:G.dim}}>Toate accesele sunt înregistrate în audit log.</span>
+          </div>
+          <div style={{marginBottom:12}}>
+            <Lbl>Email contului tău</Lbl>
+            <div style={{fontSize:12,color:G.text,padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border}`,fontFamily:'monospace'}}>{profile?.email || '—'}</div>
+          </div>
+          <div style={{marginBottom:16}}>
+            <Lbl>Parolă</Lbl>
+            <input type="password" style={{...S.input,borderColor:pwdErr?G.red:G.border2}}
+              value={pwdInput} onChange={e=>setPwdInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter') handleUnlock()}}
+              autoFocus disabled={verifying} placeholder="••••••••"/>
+            {pwdErr && <div style={{fontSize:11,color:G.red,marginTop:5,fontWeight:600}}>⚠ {pwdErr}</div>}
+          </div>
+          <button onClick={handleUnlock} disabled={verifying} style={{...S.btnP,width:'100%',padding:'11px',background:verifying?G.dim:G.red,fontSize:13,fontWeight:700}}>
+            {verifying ? '⏳ Verificare...' : '🔓 Deblochează acces'}
+          </button>
+          <div style={{textAlign:'center',marginTop:14}}>
+            <button onClick={()=>window.history.back()} style={{...S.btnS,fontSize:11,padding:'6px 14px'}}>← Înapoi</button>
+          </div>
+        </div>
+      </div>
+    )
+    return noExport ? LockScreen : (<Layout>{LockScreen}</Layout>)
+  }
+
   return (
     noExport ? (<><Toast toast={toast}/><SalariiInner/></>) : (<Layout><Toast toast={toast}/><SalariiInner/></Layout>)
   )
-  
+
   function SalariiInner() { return (<>
+      {/* Bara unlock cu countdown + lock manual */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 14px',background:G.greenDim,borderLeft:`3px solid ${G.green}`,borderRadius:6,marginBottom:14,gap:10,flexWrap:'wrap'}}>
+        <div style={{fontSize:11,color:G.green,fontWeight:600}}>
+          🔓 Acces deblocat · valabil până la {new Date(unlockUntil).toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit'})} (se resetează la activitate)
+        </div>
+        <button onClick={handleLock} style={{...S.btnS,padding:'4px 10px',fontSize:11,borderColor:G.red+'66',color:G.red}}>🔒 Lock acum</button>
+      </div>
       {/* Edit modal */}
       {editSal&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',overflow:'auto',padding:20}}>
