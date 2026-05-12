@@ -2427,8 +2427,44 @@ function AdminPage() {
   const toggleEmp=async(emp)=>{ const updates={active:!emp.active}; if(emp.active&&!emp.termination_date) updates.termination_date=new Date().toISOString().split('T')[0]; await supabase.from('employees').update(updates).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,...updates}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
   const saveEditEmp=async()=>{
     if(!editEmp) return
-    const {error}=await supabase.from('employees').update({name:editEmp.name,position:editEmp.position||null,department:editEmp.department,site_id:editEmp.site_id||null,iban:editEmp.iban||null,hire_date:editEmp.hire_date||null,termination_date:editEmp.termination_date||null}).eq('id',editEmp.id)
-    if(!error){showToast(`✓ Salvat: ${editEmp.name}`);setEditEmp(null);loadAll()} else showToast('Eroare','error')
+    // Validare CNP (daca a fost completat)
+    if(editEmp.cnp && !/^[0-9]{13}$/.test(editEmp.cnp)){ showToast('CNP invalid: trebuie 13 cifre','warn'); return }
+    // Update employees - campurile de baza + 4 noi (date contract)
+    const empUpdates = {
+      name:editEmp.name,
+      position:editEmp.position||null,
+      department:editEmp.department,
+      site_id:editEmp.site_id||null,
+      iban:editEmp.iban||null,
+      hire_date:editEmp.hire_date||null,
+      termination_date:editEmp.termination_date||null,
+      cetatenie:editEmp.cetatenie||null,
+      tip_contract:editEmp.tip_contract||null,
+      procent_ocupare:editEmp.procent_ocupare?Number(editEmp.procent_ocupare):null,
+      co_maxim_zile:editEmp.co_maxim_zile?Number(editEmp.co_maxim_zile):null
+    }
+    const {error}=await supabase.from('employees').update(empUpdates).eq('id',editEmp.id)
+    if(error){ showToast('Eroare: '+error.message,'error'); return }
+    // Upsert date personale GDPR in hr_employees_private (doar superadmin + hr pot, RLS oricum protejeaza)
+    if(isSuperAdmin || profile?.role==='hr'){
+      const hasPrivate = editEmp.cnp||editEmp.data_nastere||editEmp.adresa_strada||editEmp.adresa_oras||editEmp.adresa_judet||editEmp.adresa_cod_postal
+      if(hasPrivate){
+        const {error:pErr}=await supabase.from('hr_employees_private').upsert({
+          employee_id:editEmp.id,
+          cnp:editEmp.cnp||null,
+          data_nastere:editEmp.data_nastere||null,
+          adresa_strada:editEmp.adresa_strada||null,
+          adresa_oras:editEmp.adresa_oras||null,
+          adresa_judet:editEmp.adresa_judet||null,
+          adresa_cod_postal:editEmp.adresa_cod_postal||null,
+          adresa_tara:editEmp.adresa_tara||'România'
+        },{onConflict:'employee_id'})
+        if(pErr){ showToast('Eroare date personale: '+pErr.message,'warn') /* nu blocam, employees a salvat */ }
+      }
+    }
+    showToast(`✓ Salvat: ${editEmp.name}`)
+    setEditEmp(null)
+    loadAll()
   }
   const deleteEmp=async()=>{
     if(!deleteEmpItem) return
@@ -2566,7 +2602,7 @@ function AdminPage() {
       {/* Edit employee modal */}
       {editEmp&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:420}}>
+          <div style={{...S.card,padding:28,width:520,maxHeight:'90vh',overflowY:'auto'}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
@@ -2587,7 +2623,78 @@ function AdminPage() {
               <div style={{flex:1}}><Lbl>🔴 Data încetării ctr.</Lbl><input type="date" style={S.input} value={editEmp.termination_date||''} onChange={e=>setEditEmp({...editEmp,termination_date:e.target.value||null})}/></div>
             </div>
             {editEmp.termination_date&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:8,padding:'8px 12px',marginBottom:14,fontSize:11,color:G.red}}>⚠️ Contract încetat pe {new Date(editEmp.termination_date).toLocaleDateString('ro-RO')} — angajatul va fi vizibil în pontaj până la finalul lunii respective.</div>}
-            <div style={{display:'flex',gap:10}}>
+
+            {/* === SECTIUNE: Date Contract === */}
+            <div style={{marginTop:18,marginBottom:14,padding:'8px 12px',background:G.bg,borderRadius:8,borderLeft:`3px solid ${G.blue}`}}>
+              <div style={{fontSize:11,fontWeight:700,color:G.blue,letterSpacing:.3}}>📋 DATE CONTRACT</div>
+              <div style={{fontSize:10,color:G.muted,marginTop:2}}>Cetățenie + tip contract + normă + CO maxim</div>
+            </div>
+            <div style={{display:'flex',gap:10,marginBottom:12}}>
+              <div style={{flex:1}}><Lbl>🌍 Cetățenie</Lbl>
+                <select value={editEmp.cetatenie||''} onChange={e=>setEditEmp({...editEmp,cetatenie:e.target.value||null})} style={{width:'100%'}}>
+                  <option value="">— neselectat —</option>
+                  <option value="roman">🇷🇴 Român</option>
+                  <option value="ue">🇪🇺 UE</option>
+                  <option value="non_ue">🌐 Non-UE</option>
+                </select>
+              </div>
+              <div style={{flex:1}}><Lbl>📑 Tip Contract</Lbl>
+                <select value={editEmp.tip_contract||''} onChange={e=>setEditEmp({...editEmp,tip_contract:e.target.value||null})} style={{width:'100%'}}>
+                  <option value="">— neselectat —</option>
+                  <option value="cim_nedeterminat">CIM Nedeterminat</option>
+                  <option value="cim_determinat">CIM Determinat</option>
+                  <option value="part_time">Part-time</option>
+                </select>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:10,marginBottom:12}}>
+              <div style={{flex:1}}><Lbl>⏱ Procent Ocupare</Lbl>
+                <select value={editEmp.procent_ocupare||''} onChange={e=>setEditEmp({...editEmp,procent_ocupare:e.target.value||null})} style={{width:'100%'}}>
+                  <option value="">— neselectat —</option>
+                  <option value="100">100% (8H/zi)</option>
+                  <option value="50">50% (4H/zi)</option>
+                  <option value="25">25% (2H/zi)</option>
+                </select>
+              </div>
+              <div style={{flex:1}}><Lbl>🏖 CO Maxim (zile/an)</Lbl>
+                <input style={S.input} type="number" min={1} max={50} placeholder="21" value={editEmp.co_maxim_zile||''} onChange={e=>setEditEmp({...editEmp,co_maxim_zile:e.target.value||null})}/>
+              </div>
+            </div>
+
+            {/* === SECTIUNE: Date Personale GDPR (RLS filtreaza automat) === */}
+            {(isSuperAdmin || profile?.role==='hr') && (
+              <>
+                <div style={{marginTop:18,marginBottom:14,padding:'8px 12px',background:'#2A1A1A',borderRadius:8,borderLeft:`3px solid ${G.red}`}}>
+                  <div style={{fontSize:11,fontWeight:700,color:G.red,letterSpacing:.3}}>🔒 DATE PERSONALE (GDPR)</div>
+                  <div style={{fontSize:10,color:G.muted,marginTop:2}}>CNP + data naștere + adresă · Acces strict HR/SuperAdmin · Salvate în <code style={{fontSize:9,color:G.yellow}}>hr_employees_private</code></div>
+                </div>
+                <div style={{display:'flex',gap:10,marginBottom:12}}>
+                  <div style={{flex:1.5}}><Lbl>🆔 CNP (13 cifre)</Lbl>
+                    <input style={{...S.input,borderColor:editEmp.cnp&&!/^[0-9]{13}$/.test(editEmp.cnp)?G.red:G.border2,fontFamily:'monospace',letterSpacing:1}} placeholder="1234567890123" value={editEmp.cnp||''} onChange={e=>setEditEmp({...editEmp,cnp:e.target.value.replace(/\D/g,'').slice(0,13)})} maxLength={13}/>
+                    {editEmp.cnp&&!/^[0-9]{13}$/.test(editEmp.cnp)&&<div style={{fontSize:10,color:G.red,marginTop:3}}>⚠ Trebuie 13 cifre</div>}
+                  </div>
+                  <div style={{flex:1}}><Lbl>🎂 Data Nașterii</Lbl>
+                    <input style={S.input} type="date" value={editEmp.data_nastere||''} onChange={e=>setEditEmp({...editEmp,data_nastere:e.target.value||null})}/>
+                  </div>
+                </div>
+                <div style={{marginBottom:12}}><Lbl>🏠 Stradă, Număr, Bloc, Apartament</Lbl>
+                  <input style={S.input} placeholder="Str. Memorandumului nr. 12, bl. A, ap. 5" value={editEmp.adresa_strada||''} onChange={e=>setEditEmp({...editEmp,adresa_strada:e.target.value})}/>
+                </div>
+                <div style={{display:'flex',gap:10,marginBottom:12}}>
+                  <div style={{flex:1.5}}><Lbl>🏙 Oraș</Lbl>
+                    <input style={S.input} placeholder="Brașov" value={editEmp.adresa_oras||''} onChange={e=>setEditEmp({...editEmp,adresa_oras:e.target.value})}/>
+                  </div>
+                  <div style={{flex:1.5}}><Lbl>📍 Județ</Lbl>
+                    <input style={S.input} placeholder="Brașov" value={editEmp.adresa_judet||''} onChange={e=>setEditEmp({...editEmp,adresa_judet:e.target.value})}/>
+                  </div>
+                  <div style={{flex:1}}><Lbl>📮 Cod Poștal</Lbl>
+                    <input style={S.input} placeholder="500001" value={editEmp.adresa_cod_postal||''} onChange={e=>setEditEmp({...editEmp,adresa_cod_postal:e.target.value.replace(/\D/g,'').slice(0,6)})} maxLength={6}/>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div style={{display:'flex',gap:10,marginTop:18}}>
               <button onClick={()=>setEditEmp(null)} style={{...S.btnS,flex:1}}>Anulează</button>
               <button onClick={saveEditEmp} style={{...S.btnP,flex:1}}>✓ Salvează</button>
             </div>
@@ -2843,7 +2950,21 @@ function AdminPage() {
                     <td style={{fontSize:11,color:emp.termination_date?G.red:G.dim}}>{emp.termination_date?new Date(emp.termination_date).toLocaleDateString('ro-RO'):'—'}</td>
                     <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
                     <td><div style={{display:'flex',gap:5}}>
-                      <button onClick={()=>setEditEmp({...emp})} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
+                      <button onClick={async()=>{
+                        const editObj={...emp}
+                        // Pre-fetch date personale GDPR din hr_employees_private (RLS filtreaza automat)
+                        const {data:pData}=await supabase.from('hr_employees_private').select('*').eq('employee_id',emp.id).maybeSingle()
+                        if(pData){
+                          editObj.cnp=pData.cnp||''
+                          editObj.data_nastere=pData.data_nastere||''
+                          editObj.adresa_strada=pData.adresa_strada||''
+                          editObj.adresa_oras=pData.adresa_oras||''
+                          editObj.adresa_judet=pData.adresa_judet||''
+                          editObj.adresa_cod_postal=pData.adresa_cod_postal||''
+                          editObj.adresa_tara=pData.adresa_tara||'România'
+                        }
+                        setEditEmp(editObj)
+                      }} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
                       <button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button>
                       {!emp.active&&<button onClick={()=>setDeleteEmpItem(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10,color:G.red,borderColor:G.red+'44'}}>🗑️</button>}
                     </div></td>
