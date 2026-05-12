@@ -65,7 +65,7 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
   if (adminOnly && profile?.role !== 'superadmin') return <Navigate to="/" replace />
-  if (salaryAccess && !['superadmin','contabilitate'].includes(profile?.role)) return <Navigate to="/" replace />
+  if (salaryAccess && !profile?.can_access_salarii && !profile?.is_owner) return <Navigate to="/" replace />
   if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
 }
@@ -287,7 +287,7 @@ function Layout({ children }) {
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
   const isSuperAdmin = profile?.role==='superadmin'
   const isContabilitate = profile?.role==='contabilitate'
-  const hasSalaryAccess = isSuperAdmin || isContabilitate
+  const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
@@ -367,7 +367,7 @@ function HomeDashboard() {
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
   const isSuperAdmin = profile?.role==='superadmin'
   const isContabilitate = profile?.role==='contabilitate'
-  const hasSalaryAccess = isSuperAdmin || isContabilitate
+  const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
 
   const allModules = [
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
@@ -2389,6 +2389,10 @@ function AdminPage() {
     if (editMgr.email && editMgr.email !== editMgr.original_email) {
       updates.email = editMgr.email
     }
+    // Acces Salarii: doar OWNER poate modifica acest flag (BD-ul are si un trigger care verifica)
+    if (profile?.is_owner === true && editMgr.can_access_salarii !== undefined) {
+      updates.can_access_salarii = !!editMgr.can_access_salarii
+    }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
       // Update sites in profile_sites table — doar pentru rolurile care au șantiere alocate
@@ -2641,6 +2645,25 @@ function AdminPage() {
               </select>
               <div style={{fontSize:10,color:G.muted,marginTop:3}}>Pe viitor: drepturile pot fi legate de departament</div>
             </div>
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_access_salarii?'#2A1A2A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_access_salarii?G.red:G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_access_salarii}
+                    onChange={e=>setEditMgr({...editMgr,can_access_salarii:e.target.checked})}
+                    style={{accentColor:G.red,width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_access_salarii?G.red:G.text}}>
+                      🔐 Acces la Salarii (GDPR)
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite vizualizare salarii brute/nete, contracte, taxe, declarația 112. Toate accesele sunt înregistrate în audit log.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
             {ROLES_WITH_SITES.includes(editMgr.role)&&(
               <div style={{marginBottom:18}}>
                 <Lbl>Șantiere Alocate (poate selecta mai multe)</Lbl>
