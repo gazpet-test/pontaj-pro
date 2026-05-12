@@ -1784,7 +1784,11 @@ function ReportsPage() {
       const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
       const p=emp.name.split(' ')
       return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata}
-    }).filter(Boolean).sort((a,b)=>(a.nume+a.prenume).localeCompare(b.nume+b.prenume))
+    }).filter(Boolean).sort((a,b)=>{
+      const n=(a.nume||'').localeCompare((b.nume||''),'ro')
+      if(n!==0) return n
+      return (a.prenume||'').localeCompare((b.prenume||''),'ro')
+    })
 
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setExpD(false);return}
 
@@ -1792,7 +1796,7 @@ function ReportsPage() {
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
     const HFILL='1F497D'; const TFILL='D9E1F2'; const GFILL='1F497D'; const WFILL='FFF2CC'
     const wb=XLSX.utils.book_new()
-    const hdrCols=['Nr.','Prenume','Nume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită']
+    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită']
 
     const wsData=[]
     wsData.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -1813,8 +1817,8 @@ function ReportsPage() {
         // Only show diurnaMax and pesteLimita on first row per employee
         wsData.push([
           si===0?nr:'',
-          si===0?emp.prenume:'',
           si===0?emp.nume:'',
+          si===0?emp.prenume:'',
           site.name,
           site.zile,
           diurnaAmt,
@@ -1826,7 +1830,7 @@ function ReportsPage() {
         rowIdx++
       })
       // Total per angajat
-      wsData.push(['','',`Total ${emp.prenume} ${emp.nume}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0])
+      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0])
       totalRowIdxs.push({row:rowIdx,hasPeste:emp.pesteLimita>0})
       empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
       rowIdx++; nr++
@@ -1877,6 +1881,9 @@ function ReportsPage() {
 
     // Merge cells
     ws['!merges']=ws['!merges']||[]
+    // Antet firmă: A1:B1 (nume firmă) și A2:B2 (CUI/Reg.Com.) — îmbinate pe 2 coloane
+    ws['!merges'].push({s:{r:0,c:0},e:{r:0,c:1}})
+    ws['!merges'].push({s:{r:1,c:0},e:{r:1,c:1}})
     empRanges.forEach(({start,end,rows})=>{
       if(rows>1){
         [0,1,2,7,8].forEach(c=>{
@@ -1917,13 +1924,13 @@ function ReportsPage() {
       nr2++
 
       // Header
-      const nh=['Nr.','Prenume','Nume','Buget lunar (RON)','Platit anterior (RON)','Rest buget (RON)','Suma acest export (RON)','PESTE BUGET (RON)','→ DE ADAUGAT IN SALARIU (RON)']
+      const nh=['Nr.','Nume','Prenume','Buget lunar (RON)','Platit anterior (RON)','Rest buget (RON)','Suma acest export (RON)','PESTE BUGET (RON)','→ DE ADAUGAT IN SALARIU (RON)']
       nh.forEach((h,c)=>{const a=XLSX.utils.encode_cell({r:nr2,c});ws[a]={v:h,t:'s'};ws[a].s={fill:{fgColor:{rgb:'843C0C'}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center',wrapText:true}}})
       nr2++
 
       // Randuri angajati
       angajatiPeste.forEach((emp,i)=>{
-        const row=[i+1,emp.prenume,emp.nume,emp.bugetLunar,emp.platitAnteriorSuma,emp.restBuget,emp.sumaAcestExport,emp.pesteCumulat,emp.restDePlata]
+        const row=[i+1,emp.nume,emp.prenume,emp.bugetLunar,emp.platitAnteriorSuma,emp.restBuget,emp.sumaAcestExport,emp.pesteCumulat,emp.restDePlata]
         row.forEach((v,c)=>{
           const a=XLSX.utils.encode_cell({r:nr2,c})
           ws[a]={v,t:typeof v==='number'?'n':'s'}
