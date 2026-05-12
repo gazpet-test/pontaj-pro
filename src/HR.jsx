@@ -26,6 +26,19 @@ const S = {
 const thStyle = { padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:.5 }
 const tdStyle = { padding:'10px 12px', verticalAlign:'top' }
 
+// Meta pe categorie (emoji + label friendly) — folosit în TabAlerte + TabAutorizatii
+const CAT_META = {
+  medical:     { emoji: '⚕',  label: 'Medical' },
+  iscir:       { emoji: '🏗',  label: 'ISCIR' },
+  transport:   { emoji: '🚗',  label: 'Transport' },
+  profesional: { emoji: '👷', label: 'Profesional' },
+  sudura:      { emoji: '🔥',  label: 'Sudură' },
+  anre:        { emoji: '⚡',  label: 'ANRE' },
+  mediu:       { emoji: '🌿',  label: 'Mediu/SSM' },
+  cursuri:     { emoji: '📚',  label: 'Cursuri' },
+  isu:         { emoji: '🚨',  label: 'ISU' },
+}
+
 // Toast helper
 function Toast({ toast }) {
   if (!toast) return null
@@ -317,8 +330,6 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
   const [statusFilter, setStatusFilter] = useState('toate')
   const [sortBy, setSortBy] = useState('nume')  // nume | tip | expirare | status
   
-  const categorii = useMemo(() => ['Toate', ...new Set(tipuri.map(t => t.categorie).filter(Boolean))], [tipuri])
-  
   const filtered = useMemo(() => {
     let result = autorizatii.filter(a => {
       if (catFilter !== 'Toate' && a.tip_categorie !== catFilter) return false
@@ -353,6 +364,61 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
   
   return (
     <div>
+      {/* === CHIP-URI FILTRU pe TIP DOCUMENT === */}
+      {(() => {
+        const tipCountsAll = autorizatii.reduce((acc, a) => {
+          const cat = a.tip_categorie || 'altele'
+          acc[cat] = (acc[cat] || 0) + 1
+          return acc
+        }, {})
+        const tipuriArrAll = Object.entries(tipCountsAll).sort((a,b) => b[1] - a[1])
+        if (tipuriArrAll.length === 0) return null
+        return (
+          <div style={{marginBottom:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+            <div style={{fontSize:11, color:G.muted, fontWeight:700, marginBottom:12, letterSpacing:.5}}>🏷 FILTREAZĂ PE TIP DOCUMENT</div>
+            <div style={{display:'flex', flexWrap:'wrap', gap:10}}>
+              <button onClick={() => setCatFilter('Toate')} style={{
+                padding:'10px 20px', fontSize:14, fontWeight:800, borderRadius:24, cursor:'pointer',
+                border:`2px solid ${catFilter === 'Toate' ? G.hr : G.border2}`,
+                background:catFilter === 'Toate' ? G.hr + '22' : G.surface,
+                color:catFilter === 'Toate' ? G.hr : G.text,
+                transition:'all 0.15s', display:'inline-flex', alignItems:'center', gap:8
+              }}>
+                <span>Toate</span>
+                <span style={{
+                  padding:'2px 9px', borderRadius:14, fontSize:13, fontWeight:800,
+                  background:catFilter === 'Toate' ? G.hr : G.bg,
+                  color:catFilter === 'Toate' ? '#fff' : G.muted,
+                  minWidth:24, textAlign:'center'
+                }}>{autorizatii.length}</span>
+              </button>
+              {tipuriArrAll.map(([cat, count]) => {
+                const meta = CAT_META[cat] || { emoji:'📄', label:cat }
+                const active = catFilter === cat
+                return (
+                  <button key={cat} onClick={() => setCatFilter(active ? 'Toate' : cat)} style={{
+                    padding:'10px 20px', fontSize:14, fontWeight:800, borderRadius:24, cursor:'pointer',
+                    border:`2px solid ${active ? G.hr : G.border2}`,
+                    background:active ? G.hr + '22' : G.surface,
+                    color:active ? G.hr : G.text,
+                    transition:'all 0.15s', display:'inline-flex', alignItems:'center', gap:8
+                  }}>
+                    <span style={{fontSize:18}}>{meta.emoji}</span>
+                    <span>{meta.label}</span>
+                    <span style={{
+                      padding:'2px 9px', borderRadius:14, fontSize:13, fontWeight:800,
+                      background:active ? G.hr : G.bg,
+                      color:active ? '#fff' : G.muted,
+                      minWidth:24, textAlign:'center'
+                    }}>{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
+
       <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
         <input type="text" value={search} onChange={e => setSearch(e.target.value)} 
           placeholder="🔍 Caută după nume angajat, tip, număr, procedeu..." style={{...S.input, flex:1, minWidth:280}}/>
@@ -361,9 +427,6 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
           <option value="tip">📋 Sortare: Tip A-Z</option>
           <option value="expirare">📅 Sortare: Data expirare</option>
           <option value="status">🚦 Sortare: Status (expirate sus)</option>
-        </select>
-        <select value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{...S.input, width:'auto', minWidth:140}}>
-          {categorii.map(c => <option key={c} value={c}>{c === 'Toate' ? '📋 Toate categoriile' : c}</option>)}
         </select>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{...S.input, width:'auto', minWidth:140}}>
           <option value="toate">Toate statusurile</option>
@@ -440,19 +503,6 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
   const expira7All = autorizatii.filter(a => a.status === 'expira_7z')
   const expira30All = autorizatii.filter(a => a.status === 'expira_30z')
   const toateAlerteAll = [...expirateAll, ...expira7All, ...expira30All]
-
-  // Meta pe categorie (emoji + label friendly)
-  const CAT_META = {
-    medical:     { emoji: '⚕',  label: 'Medical' },
-    iscir:       { emoji: '🏗',  label: 'ISCIR' },
-    transport:   { emoji: '🚗',  label: 'Transport' },
-    profesional: { emoji: '👷', label: 'Profesional' },
-    sudura:      { emoji: '🔥',  label: 'Sudură' },
-    anre:        { emoji: '⚡',  label: 'ANRE' },
-    mediu:       { emoji: '🌿',  label: 'Mediu/SSM' },
-    cursuri:     { emoji: '📚',  label: 'Cursuri' },
-    isu:         { emoji: '🚨',  label: 'ISU' },
-  }
 
   // Count per categorie (doar din alertele active)
   const tipCounts = toateAlerteAll.reduce((acc, a) => {
