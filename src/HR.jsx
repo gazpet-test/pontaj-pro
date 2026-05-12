@@ -495,30 +495,43 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
 
       {/* === FILTRE pe TIP DOCUMENT (chip-uri clickabile) === */}
       {tipuriArr.length > 0 && (
-        <div style={{marginBottom:18, padding:12, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
-          <div style={{fontSize:10, color:G.muted, fontWeight:700, marginBottom:8, letterSpacing:.5}}>🏷 FILTREAZĂ PE TIP DOCUMENT</div>
-          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+        <div style={{marginBottom:18, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:700, marginBottom:12, letterSpacing:.5}}>🏷 FILTREAZĂ PE TIP DOCUMENT</div>
+          <div style={{display:'flex', flexWrap:'wrap', gap:10}}>
             <button onClick={() => setTipFilter(null)} style={{
-              padding:'5px 12px', fontSize:12, fontWeight:700, borderRadius:16, cursor:'pointer',
-              border:`1px solid ${tipFilter === null ? G.purple : G.border2}`,
+              padding:'10px 20px', fontSize:14, fontWeight:800, borderRadius:24, cursor:'pointer',
+              border:`2px solid ${tipFilter === null ? G.purple : G.border2}`,
               background:tipFilter === null ? G.purple + '22' : G.surface,
               color:tipFilter === null ? G.purple : G.text,
-              transition:'all 0.15s'
+              transition:'all 0.15s', display:'inline-flex', alignItems:'center', gap:8
             }}>
-              Toate ({toateAlerteAll.length})
+              <span>Toate</span>
+              <span style={{
+                padding:'2px 9px', borderRadius:14, fontSize:13, fontWeight:800,
+                background:tipFilter === null ? G.purple : G.bg,
+                color:tipFilter === null ? '#fff' : G.muted,
+                minWidth:24, textAlign:'center'
+              }}>{toateAlerteAll.length}</span>
             </button>
             {tipuriArr.map(([cat, count]) => {
               const meta = CAT_META[cat] || { emoji:'📄', label:cat }
               const active = tipFilter === cat
               return (
                 <button key={cat} onClick={() => setTipFilter(active ? null : cat)} style={{
-                  padding:'5px 12px', fontSize:12, fontWeight:700, borderRadius:16, cursor:'pointer',
-                  border:`1px solid ${active ? G.purple : G.border2}`,
+                  padding:'10px 20px', fontSize:14, fontWeight:800, borderRadius:24, cursor:'pointer',
+                  border:`2px solid ${active ? G.purple : G.border2}`,
                   background:active ? G.purple + '22' : G.surface,
                   color:active ? G.purple : G.text,
-                  transition:'all 0.15s'
+                  transition:'all 0.15s', display:'inline-flex', alignItems:'center', gap:8
                 }}>
-                  {meta.emoji} {meta.label} ({count})
+                  <span style={{fontSize:18}}>{meta.emoji}</span>
+                  <span>{meta.label}</span>
+                  <span style={{
+                    padding:'2px 9px', borderRadius:14, fontSize:13, fontWeight:800,
+                    background:active ? G.purple : G.bg,
+                    color:active ? '#fff' : G.muted,
+                    minWidth:24, textAlign:'center'
+                  }}>{count}</span>
                 </button>
               )
             })}
