@@ -65,7 +65,7 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
   if (adminOnly && profile?.role !== 'superadmin') return <Navigate to="/" replace />
-  if (salaryAccess && !['superadmin','contabilitate'].includes(profile?.role)) return <Navigate to="/" replace />
+  if (salaryAccess && !profile?.can_access_salarii && !profile?.is_owner) return <Navigate to="/" replace />
   if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
 }
@@ -287,7 +287,7 @@ function Layout({ children }) {
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
   const isSuperAdmin = profile?.role==='superadmin'
   const isContabilitate = profile?.role==='contabilitate'
-  const hasSalaryAccess = isSuperAdmin || isContabilitate
+  const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
@@ -367,7 +367,7 @@ function HomeDashboard() {
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
   const isSuperAdmin = profile?.role==='superadmin'
   const isContabilitate = profile?.role==='contabilitate'
-  const hasSalaryAccess = isSuperAdmin || isContabilitate
+  const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
 
   const allModules = [
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
