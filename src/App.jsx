@@ -2393,6 +2393,10 @@ function AdminPage() {
     if (profile?.is_owner === true && editMgr.can_access_salarii !== undefined) {
       updates.can_access_salarii = !!editMgr.can_access_salarii
     }
+    // Acces Date Personale (GDPR): doar OWNER (trigger BD verifica la fel)
+    if (profile?.is_owner === true && editMgr.can_access_personal_data !== undefined) {
+      updates.can_access_personal_data = !!editMgr.can_access_personal_data
+    }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
       // Update sites in profile_sites table — doar pentru rolurile care au șantiere alocate
@@ -2445,8 +2449,8 @@ function AdminPage() {
     }
     const {error}=await supabase.from('employees').update(empUpdates).eq('id',editEmp.id)
     if(error){ showToast('Eroare: '+error.message,'error'); return }
-    // Upsert date personale GDPR in hr_employees_private (doar superadmin + hr pot, RLS oricum protejeaza)
-    if(isSuperAdmin || profile?.role==='hr'){
+    // Upsert date personale GDPR in hr_employees_private (gated pe can_access_personal_data || is_owner)
+    if(profile?.can_access_personal_data===true || profile?.is_owner===true){
       const hasPrivate = editEmp.cnp||editEmp.data_nastere||editEmp.adresa_strada||editEmp.adresa_oras||editEmp.adresa_judet||editEmp.adresa_cod_postal
       if(hasPrivate){
         const {error:pErr}=await supabase.from('hr_employees_private').upsert({
@@ -2662,7 +2666,7 @@ function AdminPage() {
             </div>
 
             {/* === SECTIUNE: Date Personale GDPR (RLS filtreaza automat) === */}
-            {(isSuperAdmin || profile?.role==='hr') && (
+            {(profile?.can_access_personal_data===true || profile?.is_owner===true) && (
               <>
                 <div style={{marginTop:18,marginBottom:14,padding:'8px 12px',background:'#2A1A1A',borderRadius:8,borderLeft:`3px solid ${G.red}`}}>
                   <div style={{fontSize:11,fontWeight:700,color:G.red,letterSpacing:.3}}>🔒 DATE PERSONALE (GDPR)</div>
@@ -2766,6 +2770,25 @@ function AdminPage() {
                     </div>
                     <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
                       Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite vizualizare salarii brute/nete, contracte, taxe, declarația 112. Toate accesele sunt înregistrate în audit log.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_access_personal_data?'#2A1A2A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_access_personal_data?G.purple:G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_access_personal_data}
+                    onChange={e=>setEditMgr({...editMgr,can_access_personal_data:e.target.checked})}
+                    style={{accentColor:G.purple,width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_access_personal_data?G.purple:G.text}}>
+                      🆔 Acces Date Personale (GDPR)
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite vizualizare/edit CNP, data nașterii, adresă completă. Necesar pentru HR/contracte.
                     </div>
                   </div>
                 </label>
