@@ -961,7 +961,8 @@ function DashboardPage() {
   )
 }
 
-// Helper: ore default funcție de norma angajatului (din employee_salaries.work_hours_per_day)
+// Helper: ore default funcție de norma angajatului (din v_employee_work_hours)
+// Sursa: view v_employee_work_hours (fara RLS), merged in loadEmps ca emp.work_hours_per_day
 // Logic: ≥8h → 08:00-17:00 (cu pauza); 3-7h → start = 17:00 - n, end = 17:00 (afternoon ending);
 //        ≤2h → start = 17:00, end = 17:00 + n (after-hours)
 function defaultOreFromNorma(h) {
@@ -980,8 +981,8 @@ function defaultOreFromNorma(h) {
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
 function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
-  // Norma angajatului (pentru auto-fill ore)
-  const normaH = emp.employee_salaries?.[0]?.work_hours_per_day || emp.employee_salaries?.work_hours_per_day || 8
+  // Norma angajatului (pentru auto-fill ore) — vine din v_employee_work_hours
+  const normaH = emp.work_hours_per_day || 8
   const oreDefault = defaultOreFromNorma(normaH)
   
   // State init: dacă rec are check_in folosesc valorile lui; altfel auto-fill cu defaults bazat pe normă
@@ -1109,7 +1110,7 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
               <div><Lbl>Intrare</Lbl><input type="time" value={ci} onChange={e=>setCi(e.target.value)} style={{...S.input,width:140}}/></div>
               <div><Lbl>Ieșire</Lbl><input type="time" value={co} onChange={e=>setCo(e.target.value)} style={{...S.input,width:140}}/></div>
               {pNet!==null&&<div style={{paddingTop:18,fontSize:12,color:G.yellow,fontWeight:700}}>{minsToHM(pNet)} net</div>}
-              {emp.employee_salaries && (emp.employee_salaries[0]?.work_hours_per_day || emp.employee_salaries.work_hours_per_day) && (
+              {emp.work_hours_per_day && (
                 <div style={{paddingTop:18,fontSize:11,color:G.muted}}>
                   📋 Normă: <strong style={{color:G.text}}>{normaH}h/zi</strong>
                 </div>
@@ -1155,13 +1156,20 @@ function PontajPage() {
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
     const monthStart=date.slice(0,7)+'-01'
-    let q=supabase.from('employees').select('*,sites(name),employee_salaries(work_hours_per_day)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
+    let q=supabase.from('employees').select('*,sites(name)').or(`active.eq.true,and(active.eq.false,termination_date.gte.${monthStart})`).order('name')
     if(!isAdmin){
       const siteIds=profile?.site_ids||[]
       if(siteIds.length===0){setEmps([]);setLoad(false);return}
       q=q.in('site_id',siteIds)
     }
-    const {data}=await q; setEmps(data||[])
+    // Fetch employees + work_hours separat (employee_salaries are RLS strict pe can_access_salarii, view v_employee_work_hours e public)
+    const [empsRes, whRes] = await Promise.all([
+      q,
+      supabase.from('v_employee_work_hours').select('*')
+    ])
+    const whMap = new Map((whRes.data||[]).map(w => [w.employee_id, w.work_hours_per_day]))
+    const enriched = (empsRes.data||[]).map(e => ({...e, work_hours_per_day: whMap.get(e.id) || null}))
+    setEmps(enriched)
   }
   const loadRecs=async()=>{ setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); const m={}; (data||[]).forEach(r=>{m[r.employee_id]=r}); setRecs(m); setLoad(false) }
 
