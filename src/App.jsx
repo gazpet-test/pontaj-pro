@@ -1341,7 +1341,7 @@ function ReportsPage() {
     const from=new Date(payment.period_from).toLocaleDateString('ro-RO')
     const to=new Date(payment.period_to).toLocaleDateString('ro-RO')
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
-    const hdr=['Nr.','Prenume','Nume','Zile','Diurnă/zi (RON)','TOTAL RON']
+    const hdr=['Nr.','Nume','Prenume','Zile','Diurnă/zi (RON)','TOTAL RON']
     const rows=[
       ['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'],
       ['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'],
@@ -1354,7 +1354,11 @@ function ReportsPage() {
       ['','','TOTAL',details.reduce((s,d)=>s+d.days,0),diurnaAmt,details.reduce((s,d)=>s+d.amount,0)]
     ]
     const ws=XLSX.utils.aoa_to_sheet(rows)
-    ws['!cols']=[{wch:5},{wch:16},{wch:18},{wch:10},{wch:14},{wch:14}]
+    ws['!cols']=[{wch:5},{wch:30,wpx:225},{wch:24,wpx:180},{wch:10},{wch:14},{wch:14}]
+    // Merge celule antet firmă: A1:B1 (nume firmă) și A2:B2 (CUI/Reg.Com.)
+    ws['!merges']=ws['!merges']||[]
+    ws['!merges'].push({s:{r:0,c:0},e:{r:0,c:1}})
+    ws['!merges'].push({s:{r:1,c:0},e:{r:1,c:1}})
     hdr.forEach((_,c)=>{const a=XLSX.utils.encode_cell({r:5,c});if(!ws[a])ws[a]={v:hdr[c],t:'s'};ws[a].s={fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}})
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}_${to.replace(/\//g,'-')}.xlsx`)
@@ -1783,7 +1787,7 @@ function ReportsPage() {
       er.forEach(r=>{const s=r.sites?.name||'Nealocate'; siteMap[s]=(siteMap[s]||0)+1})
       const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
       const p=emp.name.split(' ')
-      return {prenume:p[0],nume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata}
+      return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata}
     }).filter(Boolean).sort((a,b)=>{
       const n=(a.nume||'').localeCompare((b.nume||''),'ro')
       if(n!==0) return n
@@ -1844,7 +1848,7 @@ function ReportsPage() {
     const totalGenRow=rowIdx+1
 
     const ws=XLSX.utils.aoa_to_sheet(wsData)
-    ws['!cols']=[{wch:5},{wch:16},{wch:18},{wch:28},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18}]
+    ws['!cols']=[{wch:5},{wch:30,wpx:225},{wch:24,wpx:180},{wch:30,wpx:225},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18}]
 
     const sc=(r,c,s)=>{ const a=XLSX.utils.encode_cell({r,c}); if(!ws[a]) ws[a]={v:'',t:'s'}; ws[a].s=s }
 
