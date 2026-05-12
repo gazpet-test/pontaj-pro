@@ -14,6 +14,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import AmcSection from './AmcSection.jsx'
+import PersonalSection from './PersonalSection.jsx'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -115,11 +116,11 @@ async function openPdfFromBucket(pdfPath, showToast, setLoadingId, docId) {
 }
 
 // ─── Sub-tabs bar pentru pagina Documente Flotă ─────────────────────────────
-function DocumenteSubTabsBar({ subTab, setSubTab, badgeAlerte }) {
+function DocumenteSubTabsBar({ subTab, setSubTab, badgeAlerte, badgePersonal }) {
   const subTabs = [
     { key:'flota',    icon:'🚛', label:'Flotă'    },
     { key:'alerte',   icon:'🚨', label:'Alerte',   badge: badgeAlerte },
-    { key:'personal', icon:'📋', label:'Personal' },
+    { key:'personal', icon:'📋', label:'Personal', badge: badgePersonal },
     { key:'amc',      icon:'🔬', label:'AMC'      },
   ]
   return (
@@ -696,7 +697,9 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
   const loc = useLocation()
   const [docs, setDocs]       = useState([])
   const [tipuri, setTipuri]   = useState([])
+  const [personalDocs, setPersonalDocs] = useState([])
   const [load, setLoad]       = useState(true)
+  const [loadPersonal, setLoadPersonal] = useState(true)
   const [openingPdfId, setOpeningPdfId] = useState(null)
   const [editModal, setEditModal] = useState(null)
 
@@ -730,7 +733,8 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
 
   const loadAll = useCallback(async () => {
     setLoad(true)
-    const [docsRes, tipuriRes] = await Promise.all([
+    setLoadPersonal(true)
+    const [docsRes, tipuriRes, persIscirTransport, persProfesional] = await Promise.all([
       supabase.from('logistica_documente')
         .select('id, entitate_id, active_id, tip_id, numar_document, data_emitere, data_expirare, emitent, cost, pdf_url, pdf_locatie, observatii, created_at')
         .order('data_expirare', { ascending:true, nullsFirst:false }),
@@ -738,12 +742,35 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
         .select('id, nume, descriere, perioada_default_zile, activ')
         .eq('activ', true)
         .order('nume'),
+      // Personal — scope logistică: ISCIR + Transport (toate tipurile)
+      supabase.from('v_hr_autorizatii_status')
+        .select('id, employee_name, functie, departament_hr, tip_categorie, tip_cod, tip_denumire, numar_autorizatie, emitent, data_expirare, fara_expirare, zile_pana_expirare, status, fisier_path, fisier_nume')
+        .in('tip_categorie', ['iscir', 'transport'])
+        .order('data_expirare', { ascending:true, nullsFirst:false }),
+      // Personal — scope logistică: Profesional restrâns (doar OPERATOR_UTILAJ + MECANIC_AUTO)
+      supabase.from('v_hr_autorizatii_status')
+        .select('id, employee_name, functie, departament_hr, tip_categorie, tip_cod, tip_denumire, numar_autorizatie, emitent, data_expirare, fara_expirare, zile_pana_expirare, status, fisier_path, fisier_nume')
+        .eq('tip_categorie', 'profesional')
+        .in('tip_cod', ['OPERATOR_UTILAJ', 'MECANIC_AUTO'])
+        .order('data_expirare', { ascending:true, nullsFirst:false }),
     ])
     if (docsRes.error)   showToast(`Eroare la încărcare documente: ${docsRes.error.message}`, 'error')
     if (tipuriRes.error) showToast(`Eroare la încărcare tipuri: ${tipuriRes.error.message}`, 'error')
+    if (persIscirTransport.error) showToast(`Eroare autorizații personal: ${persIscirTransport.error.message}`, 'error')
+    if (persProfesional.error)    showToast(`Eroare autorizații personal: ${persProfesional.error.message}`, 'error')
     setDocs(docsRes.data || [])
     setTipuri(tipuriRes.data || [])
+    // Merge cele 2 fetch-uri + re-sort pe data_expirare ASC (NULL last)
+    const mergedPersonal = [...(persIscirTransport.data || []), ...(persProfesional.data || [])]
+      .sort((a, b) => {
+        if (!a.data_expirare && !b.data_expirare) return 0
+        if (!a.data_expirare) return 1
+        if (!b.data_expirare) return -1
+        return a.data_expirare.localeCompare(b.data_expirare)
+      })
+    setPersonalDocs(mergedPersonal)
     setLoad(false)
+    setLoadPersonal(false)
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadAll() }, [loadAll])
@@ -765,6 +792,15 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
     for (const d of enriched) k[d._status]++
     return k
   }, [enriched])
+
+  // Badge Personal = autorizații expirate + expiră ≤30z în scope-ul logisticii
+  const badgePersonal = useMemo(() => {
+    let n = 0
+    for (const d of personalDocs) {
+      if (d.status === 'expirat' || d.status === 'expira_30z') n++
+    }
+    return n
+  }, [personalDocs])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -804,6 +840,7 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
         subTab={subTab}
         setSubTab={setSubTab}
         badgeAlerte={(kpi.expirat || 0) + (kpi.expira_30z || 0)}
+        badgePersonal={badgePersonal}
       />
 
       {subTab === 'flota' && (<>
@@ -940,10 +977,10 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
       )}
 
       {subTab === 'personal' && (
-        <PlaceholderSubTab
-          emoji="📋"
-          titlu="Documente Personal"
-          descriere="Listarea documentelor de personal (autorizații ANRE, ISCIR, ISU, medicale etc.). Construcție în Etapa 4a — read-only din modulul HR."
+        <PersonalSection
+          docs={personalDocs}
+          loading={loadPersonal}
+          showToast={showToast}
         />
       )}
 
