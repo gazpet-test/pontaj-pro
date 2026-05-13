@@ -168,9 +168,35 @@ function genStoragePath(employeeId, tipCod, fileName) {
 
 export default function DocumenteBulkImportModal({ employees, tipuri, onClose, onImported, showToast }) {
   const fileInputRef = useRef(null)
-  const [rows, setRows] = useState([])  // { id, file, employeeId, tipId, dataEmitere, dataExpirare, faraExpirare, action, confidenceEmp, confidenceTip }
+  const [rows, setRows] = useState([])  // { id, file, employeeId, tipId, dataEmitere, dataExpirare, faraExpirare, action, confidenceEmp, confidenceTip, isDuplicate }
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0, errors: [] })
+  const [existingDocs, setExistingDocs] = useState(new Set())  // key: `${employee_id}::${fisier_nume}`
+  const [loadingExisting, setLoadingExisting] = useState(true)
+  
+  // Fetch documente existente la mount pentru anti-dublură check
+  useEffect(() => {
+    ;(async () => {
+      setLoadingExisting(true)
+      const { data, error } = await supabase
+        .from('hr_documente_personale')
+        .select('employee_id, fisier_nume')
+      if (!error && data) {
+        const set = new Set()
+        for (const d of data) {
+          set.add(`${d.employee_id}::${d.fisier_nume}`)
+        }
+        setExistingDocs(set)
+      }
+      setLoadingExisting(false)
+    })()
+  }, [])
+  
+  // Helper: verifică dacă un rând e duplicat
+  const checkDuplicate = (employeeId, fileName) => {
+    if (!employeeId || !fileName) return false
+    return existingDocs.has(`${employeeId}::${fileName}`)
+  }
   
   // Auto-process la upload
   const processFiles = (files) => {
@@ -178,14 +204,22 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
       const { tip, confidence: tipConf } = detectDocumentType(file.name, tipuri)
       const { employee: emp, confidence: empConf } = fuzzyMatchEmployee(file.name, employees)
       const dataEmitere = detectDate(file.name)
+      const isDuplicate = emp ? checkDuplicate(emp.id, file.name) : false
       
       // Determinare action
       let action = 'ready'
-      if (!tip || !emp) action = 'review'  // unul lipsește
-      else if (tipConf < 70 || empConf < 50) action = 'review'  // confidence scăzut
+      let errorMsg = null
+      if (isDuplicate) {
+        action = 'skip'
+        errorMsg = '🔁 Duplicat — există deja în BD'
+      } else if (!tip || !emp) {
+        action = 'review'
+      } else if (tipConf < 70 || empConf < 50) {
+        action = 'review'
+      }
       
       // Verificare mărime
-      if (file.size > 10485760) action = 'skip'  // peste 10 MB
+      if (file.size > 10485760) { action = 'skip'; errorMsg = '⏭ Peste 10 MB' }
       
       return {
         id: `${Date.now()}-${idx}-${Math.random()}`,
@@ -199,8 +233,9 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
         action,
         confidenceEmp: empConf,
         confidenceTip: tipConf,
-        statusFinal: null,  // 'success' | 'error' | null
-        errorMsg: null,
+        statusFinal: null,
+        errorMsg,
+        isDuplicate,
       }
     })
     setRows(prev => [...prev, ...newRows])
@@ -221,9 +256,20 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
     setRows(prev => prev.map(r => {
       if (r.id !== id) return r
       const updated = { ...r, ...patch }
+      // Re-check duplicate dacă s-a schimbat employeeId
+      if (patch.employeeId !== undefined) {
+        updated.isDuplicate = checkDuplicate(updated.employeeId, updated.file.name)
+        if (updated.isDuplicate) {
+          updated.errorMsg = '🔁 Duplicat — există deja în BD'
+        } else if (updated.errorMsg === '🔁 Duplicat — există deja în BD') {
+          updated.errorMsg = null
+        }
+      }
       // Recalculează action după update
-      if (updated.action !== 'skip') {
-        if (updated.employeeId && updated.tipId) {
+      if (updated.action !== 'skip' || patch.employeeId !== undefined || patch.tipId !== undefined) {
+        if (updated.isDuplicate) {
+          updated.action = 'skip'
+        } else if (updated.employeeId && updated.tipId) {
           updated.action = 'ready'
         } else {
           updated.action = 'review'
@@ -254,6 +300,7 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
     ready: rows.filter(r => r.action === 'ready').length,
     review: rows.filter(r => r.action === 'review').length,
     skip: rows.filter(r => r.action === 'skip').length,
+    duplicates: rows.filter(r => r.isDuplicate).length,
     success: rows.filter(r => r.statusFinal === 'success').length,
     error: rows.filter(r => r.statusFinal === 'error').length,
   }), [rows])
@@ -320,6 +367,12 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
         setRows(prev => prev.map(r => r.id === row.id ? { ...r, statusFinal: 'error', errorMsg: 'DB: ' + insErr.message } : r))
       } else {
         setRows(prev => prev.map(r => r.id === row.id ? { ...r, statusFinal: 'success' } : r))
+        // Adaug la set-ul existent pentru a bloca dublarea în aceeași sesiune
+        setExistingDocs(prev => {
+          const next = new Set(prev)
+          next.add(`${row.employeeId}::${row.file.name}`)
+          return next
+        })
       }
       
       done++
@@ -338,9 +391,11 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
   }
   
   const confidenceColor = (c) => c >= 90 ? G.green : c >= 60 ? G.yellow : c >= 30 ? G.orange : G.red
-  const actionBadge = (action, statusFinal) => {
+  const actionBadge = (row) => {
+    const { action, statusFinal, isDuplicate } = row
     if (statusFinal === 'success') return { bg: G.greenDim, fg: G.green, label: '✅ Importat' }
     if (statusFinal === 'error') return { bg: G.redDim, fg: G.red, label: '❌ Eroare' }
+    if (isDuplicate) return { bg: G.orange + '22', fg: G.orange, label: '🔁 Duplicat' }
     if (action === 'ready') return { bg: G.greenDim, fg: G.green, label: '✓ Ready' }
     if (action === 'review') return { bg: G.yellowDim, fg: G.yellow, label: '⚠ Verifică' }
     return { bg: G.redDim, fg: G.red, label: '⏭ Skip' }
@@ -380,6 +435,11 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
             </div>
             <div style={{fontSize:11, color:G.muted}}>
               PDF, JPG, PNG, WEBP · max 10 MB per fișier · {rows.length} fișiere selectate
+              {loadingExisting ? (
+                <span style={{marginLeft:8, color:G.yellow}}>⏳ încarc lista anti-dublură...</span>
+              ) : (
+                <span style={{marginLeft:8, color:G.green}}>🛡 anti-dublură activă ({existingDocs.size} docs în BD)</span>
+              )}
             </div>
             <input ref={fileInputRef} type="file" multiple
               accept="application/pdf,image/jpeg,image/png,image/webp"
@@ -401,9 +461,14 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
                   ⚠ De verificat: {stats.review}
                 </div>
               )}
-              {stats.skip > 0 && (
+              {stats.duplicates > 0 && (
+                <div style={{padding:'6px 14px', background:G.orange + '22', color:G.orange, border:`1px solid ${G.orange}44`, borderRadius:6, fontWeight:600}}>
+                  🔁 Duplicate: {stats.duplicates}
+                </div>
+              )}
+              {(stats.skip - stats.duplicates) > 0 && (
                 <div style={{padding:'6px 14px', background:G.redDim, color:G.red, border:`1px solid ${G.red}44`, borderRadius:6, fontWeight:600}}>
-                  ⏭ Skip: {stats.skip}
+                  ⏭ Skip: {stats.skip - stats.duplicates}
                 </div>
               )}
               {progress.total > 0 && (
@@ -434,7 +499,7 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
                   <tbody>
                     {rows.map(r => {
                       const tipSelectat = tipuri.find(t => t.id === Number(r.tipId))
-                      const badge = actionBadge(r.action, r.statusFinal)
+                      const badge = actionBadge(r)
                       return (
                         <tr key={r.id} style={{
                           borderTop:`1px solid ${G.border}`,
