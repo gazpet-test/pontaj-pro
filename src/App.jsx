@@ -1267,6 +1267,13 @@ function ReportsPage() {
   const [selectedPayment,setSelectedPayment]=useState(null)
   const [paymentDetails,setPaymentDetails]=useState([])
   const [showIstoric,setShowIstoric]=useState(false)
+  // Generator Ordin Deplasare
+  const [showOrdGen, setShowOrdGen] = useState(false)
+  const [ordGenLoading, setOrdGenLoading] = useState(false)
+  const [ordGenPayment, setOrdGenPayment] = useState(null)
+  const [ordGenEmps, setOrdGenEmps] = useState([])  // [{employee_id, name, days_real, diurna_max, diurna_records, santiere_list, selected}]
+  const [ordGenerating, setOrdGenerating] = useState(false)
+  const [ordGenProgress, setOrdGenProgress] = useState({ done: 0, total: 0 })
   const [toast,showToast]=useToast()
   const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
@@ -1371,6 +1378,310 @@ function ReportsPage() {
     const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}_${to.replace(/\//g,'-')}.xlsx`)
     showToast('✓ Export gata!')
+  }
+
+  // ─── ORDIN DEPLASARE — Generator ────────────────────────────────────────────
+  // Pregătește datele pentru modal: recalculează diurna_max per angajat (pattern cascade din exportDiurne)
+  // + colectează pontaj_records cronologice pentru distribuția pe zile
+  const openOrdGen = async (payment) => {
+    setOrdGenPayment(payment)
+    setOrdGenLoading(true)
+    setShowOrdGen(true)
+    setOrdGenEmps([])
+    try {
+      // Detalii payment (employee_ids)
+      const { data: details } = await supabase.from('diurna_payment_details')
+        .select('*').eq('payment_id', payment.id).order('employee_name')
+      if (!details?.length) { showToast('Plata nu are detalii angajați', 'warn'); setShowOrdGen(false); return }
+
+      const empIds = details.map(d => d.employee_id)
+      const periodFrom = payment.period_from
+      const periodTo = payment.period_to
+
+      // Month boundaries (pentru cascade)
+      const d0 = new Date(periodFrom)
+      const monthStart = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}-01`
+      const mE = new Date(monthStart); mE.setMonth(mE.getMonth()+1); mE.setDate(0)
+      const monthEnd = mE.toISOString().split('T')[0]
+
+      // Calendar legal days
+      const { data: calData } = await supabase.from('calendar_days')
+        .select('date,type').gte('date', monthStart).lte('date', monthEnd)
+      const legalSet = new Set((calData || []).filter(x => x.type === 'legal').map(x => x.date))
+
+      // Calc work-day sets + counters
+      const workDaySet = new Set()
+      let calWorkDays = 0       // monthStart → periodTo (pentru diurnaMax cascade)
+      let workDaysInPeriod = 0  // periodFrom → periodTo (pentru periodCapacity)
+      const periodStartD = new Date(periodFrom)
+      const periodEndD = new Date(periodTo)
+      const wdIter = new Date(monthStart)
+      while (wdIter <= mE) {
+        const ds = wdIter.toISOString().split('T')[0]
+        const dow = wdIter.getDay()
+        const isWork = dow !== 0 && dow !== 6 && !legalSet.has(ds)
+        if (isWork) {
+          workDaySet.add(ds)
+          if (wdIter <= periodEndD) calWorkDays++
+          if (wdIter >= periodStartD && wdIter <= periodEndD) workDaysInPeriod++
+        }
+        wdIter.setDate(wdIter.getDate() + 1)
+      }
+
+      // Fetch pontaj records cu sites join (paginat) + employees details în paralel
+      const [empsDetailsRes] = await Promise.all([
+        supabase.from('employees').select('id, functie, departament_hr').in('id', empIds),
+      ])
+      const empDetailsMap = new Map((empsDetailsRes.data || []).map(e => [e.id, e]))
+
+      let allRecs = []
+      let off = 0
+      while (true) {
+        const { data: page } = await supabase.from('pontaj_records')
+          .select('*, sites(name)')
+          .gte('date', monthStart).lte('date', monthEnd)
+          .in('employee_id', empIds)
+          .range(off, off + 999)
+        if (!page || page.length === 0) break
+        allRecs.push(...page)
+        if (page.length < 1000) break
+        off += 1000
+        if (off > 200000) break
+      }
+
+      // Per employee: recalc diurnaMax + colectează diurnaRecords cronologice
+      const empData = details.map(d => {
+        const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
+        const normeCumulate = empRecs.filter(r => r.norma && NORME.includes(r.norma) && workDaySet.has(r.date)).length
+        const zilePlatiteAnterior = empRecs.filter(r => r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)).length
+        const monthlyRemaining = Math.max(0, calWorkDays - normeCumulate - zilePlatiteAnterior)
+        const normeInPeriod = empRecs.filter(r => r.norma && NORME.includes(r.norma) && r.date >= periodFrom && r.date <= periodTo).length
+        const periodCapacity = Math.max(0, workDaysInPeriod - normeInPeriod)
+        const diurnaMax = Math.min(monthlyRemaining, periodCapacity)
+
+        // Records cu diurna în perioadă (cronologic asc)
+        const diurnaInPeriod = empRecs
+          .filter(r => r.diurna === true && r.date >= periodFrom && r.date <= periodTo)
+          .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+
+        // Lista șantiere distincte (în ordinea apariției cronologice — primele diurnaMax)
+        const distribution = diurnaInPeriod.slice(0, diurnaMax)
+        const seen = new Set()
+        const santiereList = []
+        distribution.forEach(r => {
+          const s = r.sites?.name || 'Nealocate'
+          if (!seen.has(s)) { seen.add(s); santiereList.push(s) }
+        })
+
+        const empDet = empDetailsMap.get(d.employee_id) || {}
+        const functieRaw = empDet.functie
+        const hasFunctie = !!(functieRaw && String(functieRaw).trim())
+
+        return {
+          employee_id: d.employee_id,
+          name: d.employee_name,
+          functie: hasFunctie ? functieRaw : null,
+          departament_hr: empDet.departament_hr || null,
+          has_functie: hasFunctie,
+          days_real: d.days,
+          diurna_max: diurnaMax,
+          diurna_records: diurnaInPeriod,
+          santiere_list: santiereList,
+          selected: diurnaMax > 0,  // bifați automat doar cei cu zile > 0
+        }
+      })
+
+      setOrdGenEmps(empData)
+    } catch (e) {
+      console.error('openOrdGen err:', e)
+      showToast('Eroare la pregătire: ' + (e?.message || e), 'error')
+      setShowOrdGen(false)
+    } finally {
+      setOrdGenLoading(false)
+    }
+  }
+
+  // Generează ZIP cu xlsx per angajat (template din Storage)
+  const generateOrdine = async () => {
+    const selected = ordGenEmps.filter(e => e.selected && e.diurna_max > 0)
+    if (!selected.length) {
+      showToast('Selectează cel puțin un angajat cu zile admise > 0', 'warn')
+      return
+    }
+    if (!ordGenPayment) { showToast('Eroare: plată necunoscută', 'error'); return }
+
+    setOrdGenerating(true)
+    setOrdGenProgress({ done: 0, total: selected.length })
+
+    try {
+      // 1. Fetch dependencies în paralel (functie e deja în ordGenEmps din openOrdGen)
+      const [setariRes, signedUrlRes, firmaSetRes] = await Promise.all([
+        supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
+        supabase.storage.from('templates').createSignedUrl('model_ordin_deplasare.xlsx', 300),
+        supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
+      ])
+
+      if (signedUrlRes.error || !signedUrlRes.data?.signedUrl) {
+        showToast('⚠ Template nu există în Storage. Upload "model_ordin_deplasare.xlsx" în bucket "templates" prin Supabase Dashboard.', 'error')
+        setOrdGenerating(false); return
+      }
+
+      const setari = setariRes.data || {
+        director_aproba: 'Trusu Razvan',
+        control_preventiv: 'Tudorache Marilena',
+        verificat_decont: 'Mirela Popescu',
+        sef_compartiment: 'Udrea Natalia',
+      }
+      const fm = {}; (firmaSetRes.data || []).forEach(x => fm[x.key] = x.value)
+      const denumireSocietate = fm['firma_nume'] || 'S.C. GAZPET INSTAL S.R.L.'
+      const nrRegCom = fm['firma_reg_com'] || 'J29/1650/2007'
+      const cui = fm['firma_cui'] || 'RO 22029920'
+
+      // 2. Fetch template binary
+      const tplResp = await fetch(signedUrlRes.data.signedUrl)
+      if (!tplResp.ok) throw new Error('Fetch template eșuat: ' + tplResp.status)
+      const tplArrayBuf = await tplResp.arrayBuffer()
+
+      // 3. Dynamic import JSZip
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+
+      // Helper format date dd.mm.yyyy
+      const fmtRO = (s) => {
+        if (!s) return ''
+        const d = new Date(s + (s.length === 10 ? 'T12:00' : ''))
+        return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`
+      }
+      const periodStartFmt = fmtRO(ordGenPayment.period_from)
+      const periodEndFmt = fmtRO(ordGenPayment.period_to)
+
+      // 4. Per employee: clone template + populate + add to zip
+      for (let idx = 0; idx < selected.length; idx++) {
+        const emp = selected[idx]
+        // Re-read template each iteration — clone natural via separate parse
+        const wb = XLSX.read(tplArrayBuf, { type: 'array', cellStyles: true })
+        const sheetName = wb.SheetNames.find(s => s !== 'LEGENDA_ERP')
+        if (!sheetName) throw new Error('Template invalid: nu am găsit sheet principal')
+        const ws = wb.Sheets[sheetName]
+
+        // Distribuția cronologică: primele diurna_max records
+        const distribution = emp.diurna_records.slice(0, emp.diurna_max)
+        // Lista șantiere (dedup în ordinea cronologică)
+        const seen = new Set(); const santiereList = []
+        distribution.forEach(r => {
+          const s = r.sites?.name || 'Nealocate'
+          if (!seen.has(s)) { seen.add(s); santiereList.push(s) }
+        })
+        const listaSantiere = santiereList.join(' / ')
+        const functie = emp.functie || '—'
+
+        // Replacements map
+        const repl = {
+          '{{perioada_start}}': periodStartFmt,
+          '{{perioada_sfarsit}}': periodEndFmt,
+          '{{denumire_societate}}': denumireSocietate,
+          '{{nr_reg_com}}': nrRegCom,
+          '{{cui}}': cui,
+          '{{nume_angajat}}': emp.name,
+          '{{functie}}': functie,
+          '{{lista_santiere}}': listaSantiere,
+          '{{diurna_max_admisa}}': emp.diurna_max,
+          '{{diurna_lei_zi}}': diurnaAmt,
+        }
+        // Tabel zile 1..31
+        for (let n = 1; n <= 31; n++) {
+          const r = distribution[n - 1]
+          if (r) {
+            repl[`{{ziua_${n}_data}}`] = fmtRO(r.date)
+            repl[`{{ziua_${n}_santier}}`] = r.sites?.name || 'Nealocate'
+          } else {
+            repl[`{{ziua_${n}_data}}`] = ''
+            repl[`{{ziua_${n}_santier}}`] = ''
+          }
+          repl[`{{ziua_${n}_obs}}`] = ''  // completare manuală pe hârtie
+        }
+        // nr_chitanta / data_chitanta: plata prin bancă → rămân goale
+        repl['{{nr_chitanta}}'] = ''
+        repl['{{data_chitanta}}'] = ''
+
+        // Replace în toate celulele
+        for (const addr in ws) {
+          if (addr[0] === '!') continue  // skip metadata
+          const cell = ws[addr]
+          if (cell == null) continue
+
+          // 1. Replace placeholders în string values
+          if (typeof cell.v === 'string' && cell.v.includes('{{')) {
+            let nv = cell.v
+            for (const [k, val] of Object.entries(repl)) {
+              if (nv.includes(k)) nv = nv.split(k).join(val == null ? '' : String(val))
+            }
+            // Curăță orice placeholder neînlocuit
+            nv = nv.replace(/\{\{[^}]*\}\}/g, '')
+            cell.v = nv
+          }
+
+          // 2. Replace semnatari hardcoded (DOAR string exact match cu defaults)
+          if (typeof cell.v === 'string') {
+            if (cell.v === 'Trusu Razvan' && setari.director_aproba !== 'Trusu Razvan') cell.v = setari.director_aproba
+            else if (cell.v === 'Tudorache Marilena' && setari.control_preventiv !== 'Tudorache Marilena') cell.v = setari.control_preventiv
+            else if (cell.v === 'Mirela Popescu' && setari.verificat_decont !== 'Mirela Popescu') cell.v = setari.verificat_decont
+            else if (cell.v === 'Udrea Natalia' && setari.sef_compartiment !== 'Udrea Natalia') cell.v = setari.sef_compartiment
+          }
+        }
+
+        // Convert numeric cells pentru formula F37=D37*E37
+        const numericCells = ['D37', 'E37']
+        numericCells.forEach(addr => {
+          if (ws[addr] && ws[addr].v !== '' && !isNaN(Number(ws[addr].v))) {
+            ws[addr].v = Number(ws[addr].v)
+            ws[addr].t = 'n'
+          }
+        })
+
+        // Rename sheet to employee name (safe chars only, max 31 chars per Excel limit)
+        const cleanName = emp.name.replace(/[\\/?*\[\]:]/g, '').slice(0, 31).trim()
+        if (cleanName && cleanName !== sheetName) {
+          const oldIdx = wb.SheetNames.indexOf(sheetName)
+          wb.SheetNames[oldIdx] = cleanName
+          wb.Sheets[cleanName] = ws
+          delete wb.Sheets[sheetName]
+        }
+
+        // Write to array buffer
+        const wbArr = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
+
+        // Add to zip
+        const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
+        const filename = `Ordin_Deplasare_${safeName}_${ordGenPayment.period_from}_${ordGenPayment.period_to}.xlsx`
+        zip.file(filename, wbArr)
+
+        setOrdGenProgress({ done: idx + 1, total: selected.length })
+      }
+
+      // 5. Generate ZIP blob + download
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Ordine_Deplasare_${ordGenPayment.period_from}_${ordGenPayment.period_to}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      playBeep(920, 0.12); setTimeout(() => playBeep(1100, 0.12), 130)
+      showToast(`✅ ${selected.length} ordine generate în ZIP`)
+      setShowOrdGen(false)
+      setOrdGenEmps([])
+      setOrdGenPayment(null)
+    } catch (e) {
+      console.error('generateOrdine err:', e)
+      showToast('Eroare la generare: ' + (e?.message || e), 'error')
+    } finally {
+      setOrdGenerating(false)
+      setOrdGenProgress({ done: 0, total: 0 })
+    }
   }
 
   const getRange=()=>{ const [y,m]=month.split('-').map(Number); const days=new Date(y,m,0).getDate(); const mm=String(m).padStart(2,'0'); const dd=String(days).padStart(2,'0'); return {y,m,from:`${y}-${mm}-01`,to:`${y}-${mm}-${dd}`,days} }
@@ -2169,11 +2480,14 @@ function ReportsPage() {
               <div style={{overflowY:'auto',padding:16}}>
                 {!selectedPayment?<div style={{textAlign:'center',color:G.muted,padding:40,fontSize:12}}>← Selectează o plată</div>
                 :<>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,gap:8,flexWrap:'wrap'}}>
                     <div style={{fontSize:13,fontWeight:700}}>
                       {new Date(selectedPayment.period_from).toLocaleDateString('ro-RO')} — {new Date(selectedPayment.period_to).toLocaleDateString('ro-RO')}
                     </div>
-                    <button onClick={()=>reexportPayment(selectedPayment)} style={{...S.btnP,background:'#1A6B1A',fontSize:11,padding:'5px 12px'}}>⬇ Reexportă Excel</button>
+                    <div style={{display:'flex',gap:6}}>
+                      <button onClick={()=>reexportPayment(selectedPayment)} style={{...S.btnP,background:'#1A6B1A',fontSize:11,padding:'5px 12px'}}>⬇ Reexportă Excel</button>
+                      <button onClick={()=>openOrdGen(selectedPayment)} style={{...S.btnP,background:G.orange,fontSize:11,padding:'5px 12px'}} title="Generează ordine de deplasare xlsx (1 per angajat) într-un ZIP">📄 Ordine Deplasare</button>
+                    </div>
                   </div>
                   <table style={{width:'100%',fontSize:12}}>
                     <thead><tr style={{background:G.bg}}><th>Prenume</th><th>Nume</th><th style={{textAlign:'center'}}>Zile</th><th style={{textAlign:'right'}}>Sumă</th></tr></thead>
@@ -2199,6 +2513,147 @@ function ReportsPage() {
                 </>}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Generator Ordin Deplasare */}
+      {showOrdGen && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{...S.card,width:880,maxHeight:'90vh',display:'flex',flexDirection:'column',borderTop:`3px solid ${G.orange}`}}>
+            <div style={{padding:'16px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:800,display:'flex',alignItems:'center',gap:8}}>📄 Generator Ordine Deplasare</div>
+                {ordGenPayment && (
+                  <div style={{fontSize:11,color:G.muted,marginTop:3}}>
+                    Plata: {new Date(ordGenPayment.period_from).toLocaleDateString('ro-RO')} — {new Date(ordGenPayment.period_to).toLocaleDateString('ro-RO')}
+                  </div>
+                )}
+              </div>
+              <button 
+                onClick={()=>{if(!ordGenerating){setShowOrdGen(false);setOrdGenEmps([]);setOrdGenPayment(null)}}} 
+                style={{background:'none',border:'none',color:G.muted,cursor:ordGenerating?'not-allowed':'pointer',fontSize:20,opacity:ordGenerating?.4:1}}
+              >✕</button>
+            </div>
+            
+            {ordGenLoading ? (
+              <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                <div className="sp" style={{display:'inline-block',marginBottom:12}}/>
+                <div>Calculez Diurna Max. Admisă pentru fiecare angajat...</div>
+              </div>
+            ) : ordGenEmps.length === 0 ? (
+              <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>Niciun angajat în această plată.</div>
+            ) : (
+              <>
+                <div style={{padding:'10px 20px',background:G.bg,borderBottom:`1px solid ${G.border}`,display:'flex',gap:14,fontSize:11,color:G.muted,flexWrap:'wrap'}}>
+                  <span>📊 {ordGenEmps.length} angajați</span>
+                  <span>✓ {ordGenEmps.filter(e=>e.selected).length} selectați</span>
+                  <span style={{color:G.orange}}>⚠ {ordGenEmps.filter(e=>e.diurna_max===0).length} cu 0 zile admise (excluși auto)</span>
+                  <span style={{marginLeft:'auto',color:G.green}}>Total zile în ZIP: <strong>{ordGenEmps.filter(e=>e.selected).reduce((s,e)=>s+e.diurna_max,0)}</strong></span>
+                </div>
+                
+                {/* Banner warning: angajați selectați fără funcție */}
+                {ordGenEmps.filter(e=>e.selected && !e.has_functie).length > 0 && (
+                  <div style={{padding:'10px 20px',background:'#3A1A00',borderBottom:`1px solid ${G.orange}66`,fontSize:11,color:G.orange,display:'flex',gap:8,alignItems:'flex-start',lineHeight:1.5}}>
+                    <span style={{fontSize:14}}>⚠️</span>
+                    <div>
+                      <strong>{ordGenEmps.filter(e=>e.selected && !e.has_functie).length} angajat(i) selectat(i) fără funcție în BD</strong> — pe ordin va apărea „—" în loc de funcție.
+                      &nbsp;Recomandare: completează funcția în <strong>HR → Personal</strong> înainte de generare.
+                      <div style={{marginTop:4,opacity:.85}}>
+                        Lipsesc: {ordGenEmps.filter(e=>e.selected && !e.has_functie).map(e=>e.name).join(', ')}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                <div style={{padding:'8px 20px',background:G.bg,borderBottom:`1px solid ${G.border}`,display:'flex',gap:8}}>
+                  <button 
+                    onClick={()=>setOrdGenEmps(prev=>prev.map(e=>({...e,selected:e.diurna_max>0})))}
+                    disabled={ordGenerating}
+                    style={{...S.btnS,fontSize:10,padding:'4px 10px'}}
+                  >✓ Selectează toți (cu zile&gt;0)</button>
+                  <button 
+                    onClick={()=>setOrdGenEmps(prev=>prev.map(e=>({...e,selected:false})))}
+                    disabled={ordGenerating}
+                    style={{...S.btnS,fontSize:10,padding:'4px 10px'}}
+                  >✗ Deselectează tot</button>
+                </div>
+                
+                <div style={{overflowY:'auto',flex:1,padding:'0 20px'}}>
+                  <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                    <thead style={{position:'sticky',top:0,background:G.surface,zIndex:1}}>
+                      <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                        <th style={{padding:'10px 6px',textAlign:'left',width:30}}></th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Angajat</th>
+                        <th style={{padding:'10px 6px',textAlign:'left',color:G.muted,fontWeight:600}}>Funcție</th>
+                        <th style={{padding:'10px 6px',textAlign:'center',color:G.muted,fontWeight:600}}>Zile reale</th>
+                        <th style={{padding:'10px 6px',textAlign:'center',color:G.orange,fontWeight:700}}>Zile admise</th>
+                        <th style={{padding:'10px 6px',textAlign:'left',color:G.muted,fontWeight:600}}>Șantiere</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ordGenEmps.map((emp,i) => {
+                        const noZile = emp.diurna_max === 0
+                        return (
+                          <tr key={emp.employee_id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`,opacity:noZile?.5:1}}>
+                            <td style={{padding:'8px 6px'}}>
+                              <input 
+                                type="checkbox" 
+                                checked={emp.selected} 
+                                disabled={noZile||ordGenerating}
+                                onChange={e=>setOrdGenEmps(prev=>prev.map(x=>x.employee_id===emp.employee_id?{...x,selected:e.target.checked}:x))}
+                                style={{accentColor:G.orange,cursor:noZile?'not-allowed':'pointer'}}
+                              />
+                            </td>
+                            <td style={{padding:'8px 6px',fontWeight:600}}>{emp.name}</td>
+                            <td style={{padding:'8px 6px',fontSize:11}}>
+                              {emp.has_functie ? (
+                                <span style={{color:G.text}}>{emp.functie}</span>
+                              ) : (
+                                <span style={{color:G.orange,fontWeight:600}} title="Funcția lipsește în BD — pe ordin va apărea '—'">⚠️ lipsă</span>
+                              )}
+                            </td>
+                            <td style={{padding:'8px 6px',textAlign:'center',color:G.blue}}>{emp.days_real}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center',fontWeight:700,color:noZile?G.red:G.orange}}>
+                              {emp.diurna_max}
+                              {noZile && <span style={{marginLeft:4,fontSize:9,color:G.red}}>(buget consumat)</span>}
+                            </td>
+                            <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>
+                              {emp.santiere_list.length === 0 ? '—' : emp.santiere_list.join(' / ')}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                
+                <div style={{padding:'12px 20px',borderTop:`1px solid ${G.border}`,display:'flex',gap:10,alignItems:'center',justifyContent:'space-between',background:G.bg}}>
+                  <div style={{fontSize:11,color:G.muted,flex:1}}>
+                    {ordGenerating ? (
+                      <div>
+                        <div style={{marginBottom:4}}>⏳ Generez {ordGenProgress.done}/{ordGenProgress.total}...</div>
+                        <div style={{height:4,background:G.surface,borderRadius:2,overflow:'hidden'}}>
+                          <div style={{height:'100%',width:`${ordGenProgress.total?(ordGenProgress.done/ordGenProgress.total)*100:0}%`,background:G.orange,transition:'width .2s'}}/>
+                        </div>
+                      </div>
+                    ) : (
+                      <span>💡 Distribuție cronologică pe zile · Template din Storage privat · Semnatari din Admin → Setări</span>
+                    )}
+                  </div>
+                  <button 
+                    onClick={()=>{if(!ordGenerating){setShowOrdGen(false);setOrdGenEmps([]);setOrdGenPayment(null)}}} 
+                    disabled={ordGenerating}
+                    style={{...S.btnS,fontSize:12}}
+                  >Anulează</button>
+                  <button 
+                    onClick={generateOrdine} 
+                    disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0}
+                    style={{...S.btnP,background:G.orange,fontSize:12,opacity:(ordGenerating||ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0)?.5:1}}
+                  >{ordGenerating ? '⏳ Generez...' : `📦 Generează ZIP (${ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length})`}</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2338,10 +2793,17 @@ function AdminPage() {
   const [calYear,setCalYear]=useState(new Date().getFullYear())
   // Date Identificare Firmă (din logistica_setari) — folosite pentru aviz, contracte HR, contracte comercial
   const [firmaSettings, setFirmaSettings] = useState({})
+  // Setări Ordin Deplasare (singleton row, semnatari)
+  const [ordSetari, setOrdSetari] = useState({
+    director_aproba: 'Trusu Razvan',
+    control_preventiv: 'Tudorache Marilena',
+    verificat_decont: 'Mirela Popescu',
+    sef_compartiment: 'Udrea Natalia',
+  })
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st,ps,fs]=await Promise.all([
+    const [s,p,e,c,st,ps,fs,os]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
@@ -2349,6 +2811,7 @@ function AdminPage() {
       supabase.from('settings').select('*'),
       supabase.from('profile_sites').select('*'),
       supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
+      supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
     ])
     setSites(s.data||[])
     // Attach site_ids to each manager
@@ -2357,6 +2820,7 @@ function AdminPage() {
     setEmployees(e.data||[]); setCalDays(c.data||[])
     const sm={}; (st.data||[]).forEach(x=>{sm[x.key]=x.value}); setSettings(sm)
     const fm={}; (fs.data||[]).forEach(x=>{fm[x.key]=x.value}); setFirmaSettings(fm)
+    if (os.data) setOrdSetari(os.data)
     setLoad(false)
   }
   
@@ -2366,6 +2830,18 @@ function AdminPage() {
     if (error) { showToast('Eroare salvare: ' + error.message, 'error'); return }
     setFirmaSettings(prev => ({ ...prev, [k]: v }))
     showToast('✓ Salvat')
+  }
+  
+  // Save setări Ordin Deplasare (singleton update)
+  const saveOrdSetari = async () => {
+    const { error } = await supabase.from('setari_ordin_deplasare').update({
+      director_aproba: ordSetari.director_aproba || 'Trusu Razvan',
+      control_preventiv: ordSetari.control_preventiv || 'Tudorache Marilena',
+      verificat_decont: ordSetari.verificat_decont || 'Mirela Popescu',
+      sef_compartiment: ordSetari.sef_compartiment || 'Udrea Natalia',
+    }).eq('id', 1)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✓ Semnatari salvați — folosiți la generarea ordinelor de deplasare')
   }
 
   const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
@@ -3264,6 +3740,42 @@ function AdminPage() {
             ))}
             <div style={{padding:12,background:'#1A2A1A',borderRadius:8,border:`1px solid ${G.green}33`,fontSize:11,color:'#8FD490',marginTop:8}}>
               ✓ Valori curente 2025-2026 conform OUG 156/2024 (scutire impozit eliminată)
+            </div>
+          </div>
+          
+          {/* === ORDIN DEPLASARE — SEMNATARI === */}
+          <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.orange}`}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text}}>📄 Ordin Deplasare — Semnatari</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:18,lineHeight:1.5}}>
+              Numele care apar pe <strong>ordinele de deplasare</strong> generate din Istoric Plăți Diurne (modul Rapoarte). 
+              Modifică doar dacă se schimbă persoanele responsabile cu aprobarea/decontarea.
+            </div>
+            
+            {[
+              ['director_aproba', '✓ Se aprobă (conducătorul unității)', 'Trusu Razvan'],
+              ['control_preventiv', '🔍 Control financiar preventiv', 'Tudorache Marilena'],
+              ['verificat_decont', '📋 Verificat decont', 'Mirela Popescu'],
+              ['sef_compartiment', '👤 Șef compartiment', 'Udrea Natalia'],
+            ].map(([key, label, placeholder]) => (
+              <div key={key} style={{marginBottom:12}}>
+                <Lbl>{label}</Lbl>
+                <input 
+                  style={S.input} 
+                  type="text" 
+                  value={ordSetari[key] || ''} 
+                  onChange={e => setOrdSetari(prev => ({...prev, [key]: e.target.value}))} 
+                  placeholder={placeholder}
+                />
+              </div>
+            ))}
+            
+            <button 
+              onClick={saveOrdSetari} 
+              style={{...S.btnP, background: G.orange, width:'100%', marginTop:8}}
+            >💾 Salvează semnatari</button>
+            
+            <div style={{padding:10,background:G.orange+'15',borderRadius:8,border:`1px solid ${G.orange}33`,fontSize:11,color:G.orange,marginTop:12,lineHeight:1.5}}>
+              💡 <strong>Cum se folosesc:</strong> În <strong>Rapoarte → Istoric Plăți Diurne</strong>, butonul „📄 Generează Ordine Deplasare" creează câte un xlsx per angajat cu aceste 4 nume preumplute.
             </div>
           </div>
         </div>
