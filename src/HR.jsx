@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
+import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 
 // Theme
 const G = {
@@ -108,6 +109,7 @@ export default function HRPage() {
   
   const isAdmin = ['admin', 'superadmin'].includes(profile?.role) || profile?.department === 'HR'
   const isSuperAdmin = profile?.role === 'superadmin'
+  const canAccessPersonal = profile?.is_owner === true || profile?.can_access_personal_data === true
   
   const loadAll = async () => {
     setLoad(true)
@@ -183,7 +185,7 @@ export default function HRPage() {
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
       {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} />}
-      {!load && tab === 'documente' && <TabDocumente employees={employees} showToast={showToast} />}
+      {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
       
       {editEmp && (
@@ -638,21 +640,9 @@ function SectiuneAlerte({ titlu, lista, color, onClick }) {
 // ===========================================================================
 // TAB DOCUMENTE PERSONALE — placeholder (buletin, permis ședere, etc.)
 // ===========================================================================
-function TabDocumente({ employees, showToast }) {
-  return (
-    <div style={{...S.card, padding:50, textAlign:'center'}}>
-      <div style={{fontSize:48, marginBottom:14}}>📁</div>
-      <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:8}}>Documente Personale</div>
-      <div style={{fontSize:13, color:G.muted, maxWidth:500, margin:'0 auto 16px', lineHeight:1.6}}>
-        Aici vor putea fi încărcate documentele personale ale angajaților:<br/>
-        <strong>Buletin · Permis de ședere străini · Permis de muncă · Diplome studii · Cazier · Contract muncă</strong>
-      </div>
-      <div style={{padding:'8px 16px', background:G.purple+'22', color:G.purple, borderRadius:6, display:'inline-block', fontSize:11, fontWeight:700, letterSpacing:.5}}>
-        🚧 ÎN CURÂND — Faza 2
-      </div>
-    </div>
-  )
-}
+// ===========================================================================
+// TAB DOCUMENTE PERSONALE — mutat în TabDocumentePersonale.jsx (Etapa 6.A)
+// ===========================================================================
 
 // ===========================================================================
 // TAB SALARII — Oglindire SalariiPage din Pontaj fără Export Banca (super admin only)
