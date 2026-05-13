@@ -6,6 +6,7 @@
 // ===========================================================================
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabase.js'
+import DocumenteBulkImportModal from './DocumenteBulkImportModal.jsx'
 
 // Theme (consistent cu HR.jsx)
 const G = {
@@ -600,6 +601,9 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
   const [showAdd, setShowAdd] = useState(false)
   const [editDoc, setEditDoc] = useState(null)
   const [showGestTipuri, setShowGestTipuri] = useState(false)
+  const [showBulkImport, setShowBulkImport] = useState(false)
+  const [viewMode, setViewMode] = useState('flat')  // 'flat' | 'grouped'
+  const [expandedEmp, setExpandedEmp] = useState(new Set())
   
   const loadAll = async () => {
     setLoading(true)
@@ -715,6 +719,73 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
     else { showToast('✓ Document șters'); loadAll() }
   }
   
+  // ─── Grupare per persoană (pentru viewMode='grouped') ─────
+  
+  const groupedByEmployee = useMemo(() => {
+    if (viewMode !== 'grouped') return []
+    
+    const map = new Map()
+    
+    // Init pentru TOȚI angajații activi (chiar fără documente — ca să vedem lipsa)
+    for (const emp of (employees || []).filter(e => e.active !== false)) {
+      map.set(emp.id, {
+        employee_id: emp.id,
+        employee_name: emp.name,
+        functie: emp.functie || null,
+        departament_hr: emp.departament_hr || null,
+        cetatenie: emp.cetatenie || 'roman',
+        docs: [],
+        counts: { total: 0, valide: 0, expira: 0, expirate: 0, fara_data: 0 },
+        tipuri_present: new Set(),
+      })
+    }
+    
+    // Adaug documentele filtrate
+    for (const doc of filtered) {
+      const grp = map.get(doc.employee_id)
+      if (!grp) continue
+      grp.docs.push(doc)
+      grp.counts.total += 1
+      if (doc.status === 'valid' || doc.status === 'fara_exp') grp.counts.valide += 1
+      else if (doc.status === 'expira_30z' || doc.status === 'expira_60z') grp.counts.expira += 1
+      else if (doc.status === 'expirat') grp.counts.expirate += 1
+      else if (doc.status === 'fara_data') grp.counts.fara_data += 1
+      grp.tipuri_present.add(doc.tip_id)
+    }
+    
+    // Calcul missing obligatorii per persoană (depinde de cetățenie)
+    const obligTipuri = tipuri.filter(t => t.activ && !t.permite_multiple)
+    for (const grp of map.values()) {
+      const isNonUe = grp.cetatenie === 'non_ue'
+      grp.missing = obligTipuri.filter(t => 
+        ((isNonUe && t.obligatoriu_non_ue) || (!isNonUe && t.obligatoriu_ro)) &&
+        !grp.tipuri_present.has(t.id)
+      )
+      grp.missing_count = grp.missing.length
+    }
+    
+    // Filtru: dacă există search/cat/status activ, arătăm DOAR persoanele care au documente în filtru
+    const hasActiveFilter = search.trim() !== '' || catFilter !== 'Toate' || statusFilter !== 'toate'
+    
+    return Array.from(map.values())
+      .filter(g => !hasActiveFilter || g.docs.length > 0)
+      .sort((a, b) => {
+        // Cei cu missing mai multe primii, apoi cei cu expirate, apoi alfabetic
+        if (b.missing_count !== a.missing_count) return b.missing_count - a.missing_count
+        if (b.counts.expirate !== a.counts.expirate) return b.counts.expirate - a.counts.expirate
+        return (a.employee_name || '').localeCompare(b.employee_name || '')
+      })
+  }, [viewMode, filtered, employees, tipuri, search, catFilter, statusFilter])
+  
+  const toggleExpanded = (empId) => {
+    setExpandedEmp(prev => {
+      const next = new Set(prev)
+      if (next.has(empId)) next.delete(empId)
+      else next.add(empId)
+      return next
+    })
+  }
+  
   // ─── Gating ─────
   
   if (!canAccessPersonal) {
@@ -751,18 +822,35 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
       
       {/* Action Bar */}
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, gap:10, flexWrap:'wrap'}}>
-        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+        <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
           <button onClick={() => setShowAdd(true)} style={{...S.btnP, fontSize:14, padding:'10px 18px'}}>
             ➕ Adaugă Document
+          </button>
+          <button onClick={() => setShowBulkImport(true)} 
+            style={{...S.btnS, background:G.purple+'22', color:G.purple, border:`1px solid ${G.purple}55`, fontWeight:600}}>
+            📥 Bulk Import
           </button>
           <button onClick={() => setShowGestTipuri(true)} style={S.btnS}>
             ⚙️ Tipuri ({tipuri.filter(t => t.activ).length})
           </button>
         </div>
-        <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:G.muted, cursor:'pointer'}}>
-          <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} style={{accentColor:G.purple}}/>
-          Arată și inactive ({stats.inactive})
-        </label>
+        <div style={{display:'flex', gap:14, alignItems:'center', flexWrap:'wrap'}}>
+          {/* View mode toggle */}
+          <div style={{display:'inline-flex', background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, overflow:'hidden'}}>
+            <button onClick={() => setViewMode('flat')} 
+              style={{padding:'7px 12px', background: viewMode === 'flat' ? G.hr+'22' : 'transparent', color: viewMode === 'flat' ? G.hr : G.muted, border:'none', cursor:'pointer', fontSize:12, fontWeight:600, borderRight:`1px solid ${G.border}`}}>
+              📋 Listă
+            </button>
+            <button onClick={() => setViewMode('grouped')} 
+              style={{padding:'7px 12px', background: viewMode === 'grouped' ? G.hr+'22' : 'transparent', color: viewMode === 'grouped' ? G.hr : G.muted, border:'none', cursor:'pointer', fontSize:12, fontWeight:600}}>
+              🗂 Pe persoană
+            </button>
+          </div>
+          <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:G.muted, cursor:'pointer'}}>
+            <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} style={{accentColor:G.purple}}/>
+            Arată și inactive ({stats.inactive})
+          </label>
+        </div>
       </div>
       
       {/* Chip-uri filtru pe categorie */}
@@ -841,7 +929,175 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
         </select>
       </div>
       
-      {/* Tabel listing */}
+      {/* ─── GROUPED VIEW (per persoană) ─── */}
+      {viewMode === 'grouped' && (
+        <div style={{display:'flex', flexDirection:'column', gap:10}}>
+          {groupedByEmployee.map(grp => {
+            const isExpanded = expandedEmp.has(grp.employee_id)
+            const hasIssues = grp.missing_count > 0 || grp.counts.expirate > 0 || grp.counts.expira > 0
+            return (
+              <div key={grp.employee_id} style={{
+                ...S.card,
+                borderColor: grp.missing_count > 0 ? G.red+'55' : (grp.counts.expirate > 0 ? G.red+'33' : (grp.counts.expira > 0 ? G.yellow+'33' : G.border)),
+                overflow:'hidden'
+              }}>
+                {/* Header */}
+                <div onClick={() => toggleExpanded(grp.employee_id)} style={{
+                  padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:14, flexWrap:'wrap',
+                  background: isExpanded ? G.bg : 'transparent',
+                  borderBottom: isExpanded ? `1px solid ${G.border}` : 'none',
+                }}>
+                  {/* Expand icon */}
+                  <span style={{fontSize:14, color:G.muted, width:14, display:'inline-block'}}>
+                    {isExpanded ? '▼' : '▶'}
+                  </span>
+                  
+                  {/* Identitate */}
+                  <div style={{flex:'1 1 220px', minWidth:0}}>
+                    <div style={{fontSize:14, fontWeight:700, color:G.text}}>
+                      {grp.employee_name}
+                      {grp.cetatenie && grp.cetatenie !== 'roman' && (
+                        <span style={{marginLeft:8, fontSize:10, padding:'2px 7px', background:G.blue+'22', color:G.blue, borderRadius:3, fontWeight:600, textTransform:'uppercase'}}>
+                          {grp.cetatenie}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{fontSize:11, color:G.muted, marginTop:2}}>
+                      {grp.functie || '—'}{grp.departament_hr ? ` · ${grp.departament_hr}` : ''}
+                    </div>
+                  </div>
+                  
+                  {/* Stats badges */}
+                  <div style={{display:'flex', gap:6, flexWrap:'wrap', alignItems:'center'}}>
+                    <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.surface, border:`1px solid ${G.border}`, borderRadius:4, color:G.text}} title="Total documente">
+                      📁 {grp.counts.total}
+                    </span>
+                    {grp.counts.valide > 0 && (
+                      <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.greenDim, border:`1px solid ${G.green}55`, borderRadius:4, color:G.green}} title="Valide">
+                        ✓ {grp.counts.valide}
+                      </span>
+                    )}
+                    {grp.counts.expira > 0 && (
+                      <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.yellowDim, border:`1px solid ${G.yellow}55`, borderRadius:4, color:G.yellow}} title="Expiră în curând">
+                        ⚠ {grp.counts.expira}
+                      </span>
+                    )}
+                    {grp.counts.expirate > 0 && (
+                      <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.redDim, border:`1px solid ${G.red}55`, borderRadius:4, color:G.red}} title="Expirate">
+                        🚨 {grp.counts.expirate}
+                      </span>
+                    )}
+                    {grp.missing_count > 0 ? (
+                      <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.red, color:'#fff', borderRadius:4}} title={`Documente obligatorii lipsă: ${grp.missing.map(t => t.denumire).join(', ')}`}>
+                        ⚠ {grp.missing_count} lipsă obligatorii
+                      </span>
+                    ) : grp.counts.total > 0 ? (
+                      <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.green+'33', color:G.green, borderRadius:4}}>
+                        ✅ Dosar complet
+                      </span>
+                    ) : (
+                      <span style={{padding:'4px 10px', fontSize:11, fontWeight:700, background:G.dim+'33', color:G.dim, borderRadius:4}}>
+                        — fără documente —
+                      </span>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Body (când expanded) */}
+                {isExpanded && (
+                  <div style={{padding:'12px 18px 16px'}}>
+                    {/* Documente lipsă obligatorii */}
+                    {grp.missing.length > 0 && (
+                      <div style={{marginBottom:14, padding:'10px 14px', background:G.redDim+'66', border:`1px solid ${G.red}55`, borderRadius:8}}>
+                        <div style={{fontSize:11, fontWeight:700, color:G.red, marginBottom:8, textTransform:'uppercase', letterSpacing:.4}}>
+                          ⚠ Documente obligatorii lipsă ({grp.missing.length})
+                        </div>
+                        <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+                          {grp.missing.map(t => {
+                            const meta = CAT_META_DOCUMENTE[t.categorie] || { emoji:'📄' }
+                            return (
+                              <span key={t.id} style={{padding:'5px 10px', fontSize:11, background:G.surface, border:`1px solid ${G.red}33`, borderRadius:4, color:G.text, display:'inline-flex', alignItems:'center', gap:5}}>
+                                <span>{meta.emoji}</span>
+                                <span>{t.denumire}</span>
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Mini-tabel documente */}
+                    {grp.docs.length > 0 ? (
+                      <div style={{overflowX:'auto'}}>
+                        <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
+                          <thead style={{background:G.bg}}>
+                            <tr>
+                              <th style={{...thStyle, padding:'6px 10px'}}>Tip</th>
+                              <th style={{...thStyle, padding:'6px 10px'}}>Număr</th>
+                              <th style={{...thStyle, padding:'6px 10px'}}>Emis</th>
+                              <th style={{...thStyle, padding:'6px 10px'}}>Expiră</th>
+                              <th style={{...thStyle, padding:'6px 10px'}}>Status</th>
+                              <th style={{...thStyle, padding:'6px 10px', textAlign:'right'}}>Acțiuni</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {grp.docs.map(d => {
+                              const meta = CAT_META_DOCUMENTE[d.categorie] || { emoji:'📄' }
+                              return (
+                                <tr key={d.id} style={{
+                                  borderTop:`1px solid ${G.border2}`,
+                                  opacity: d.activ === false ? 0.55 : 1,
+                                }}>
+                                  <td style={{padding:'7px 10px'}}>
+                                    <span style={{marginRight:5}}>{meta.emoji}</span>
+                                    <span style={{fontWeight:600}}>{d.tip_denumire}</span>
+                                  </td>
+                                  <td style={{padding:'7px 10px', fontFamily:'monospace', fontSize:11, color:G.muted}}>
+                                    {d.numar_document || '—'}
+                                  </td>
+                                  <td style={{padding:'7px 10px', fontSize:11}}>
+                                    {d.data_emitere ? new Date(d.data_emitere).toLocaleDateString('ro-RO') : '—'}
+                                  </td>
+                                  <td style={{padding:'7px 10px', fontSize:11}}>
+                                    {d.fara_expirare || !d.tip_are_expirare ? '∞' : (d.data_expirare ? new Date(d.data_expirare).toLocaleDateString('ro-RO') : '—')}
+                                  </td>
+                                  <td style={{padding:'7px 10px'}}>{statusBadge(d.status, d.zile_pana_expirare)}</td>
+                                  <td style={{padding:'7px 10px', textAlign:'right'}}>
+                                    <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
+                                      <button onClick={(e) => { e.stopPropagation(); openDocPreview(d.fisier_path, showToast) }} 
+                                        style={{padding:'3px 7px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Vizualizează">👁</button>
+                                      <button onClick={(e) => { e.stopPropagation(); setEditDoc(d) }} 
+                                        style={{padding:'3px 7px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
+                                      <button onClick={(e) => { e.stopPropagation(); handleDelete(d) }} 
+                                        style={{padding:'3px 7px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Șterge">🗑️</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div style={{padding:18, textAlign:'center', color:G.muted, fontSize:12, background:G.bg, borderRadius:6}}>
+                        Nu există documente uploadate pentru această persoană.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {groupedByEmployee.length === 0 && (
+            <div style={{...S.card, padding:40, textAlign:'center', color:G.muted}}>
+              Nicio persoană găsită cu filtrele curente.
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* ─── FLAT VIEW (tabel listing) ─── */}
+      {viewMode === 'flat' && (
       <div style={{...S.card, overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
@@ -912,14 +1168,17 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
         {filtered.length === 0 && (
           <div style={{padding:40, textAlign:'center', color:G.muted}}>
             {documente.length === 0 
-              ? '📂 Nu există documente. Apasă „➕ Adaugă Document" să începi.' 
+              ? '📂 Nu există documente. Apasă „➕ Adaugă Document" sau „📥 Bulk Import" să începi.' 
               : 'Niciun document găsit cu filtrele curente.'}
           </div>
         )}
       </div>
+      )}
       
       <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
-        💡 {filtered.length} / {documente.length} documente afișate · Click pe 👁 pentru preview PDF
+        {viewMode === 'flat' 
+          ? `💡 ${filtered.length} / ${documente.length} documente afișate · Click pe 👁 pentru preview PDF`
+          : `🗂 ${groupedByEmployee.length} persoane · Click pe rând pentru a vedea documentele · Cele cu „lipsă obligatorii" sunt sus`}
       </div>
       
       {/* Modale */}
@@ -948,6 +1207,15 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
           tipuri={tipuri} 
           onClose={() => setShowGestTipuri(false)} 
           onReload={loadAll} 
+          showToast={showToast}
+        />
+      )}
+      {showBulkImport && (
+        <DocumenteBulkImportModal 
+          employees={employees}
+          tipuri={tipuri}
+          onClose={() => setShowBulkImport(false)}
+          onImported={() => loadAll()}
           showToast={showToast}
         />
       )}
