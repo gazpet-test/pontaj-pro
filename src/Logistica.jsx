@@ -196,10 +196,30 @@ function FieldTextarea({ label, value, onChange, rows=2, readonly, mono }) {
 }
 
 // ─── Modal Alimentare Combustibil ────────────────────────────────────────────
-const STATII = ['', 'Gazpet - Oscar (vrac propriu)', 'Petrom', 'OMV', 'MOL', 'Rompetrol', 'Lukoil', 'Gazprom', 'Socar', 'Tinmar', 'Altele']
-const STATIE_GAZPET = 'Gazpet - Oscar (vrac propriu)'  // identifier pentru detectare
+const STATIE_GAZPET_OSCAR_1 = 'Gazpet - Oscar 1 (vrac propriu)'
+const STATIE_GAZPET_OSCAR_2 = 'Gazpet - Oscar 2 (vrac propriu)'
+const STATII = ['', STATIE_GAZPET_OSCAR_1, STATIE_GAZPET_OSCAR_2, 'Petrom', 'OMV', 'MOL', 'Rompetrol', 'Lukoil', 'Gazprom', 'Socar', 'Tinmar', 'Altele']
+// Detectează dacă o stație e rezervor Gazpet (Oscar 1, Oscar 2 sau legacy fără număr)
+const isStatieGazpet = (statie) => /^Gazpet\s*-\s*Oscar/i.test(statie || '')
+// Match: 'Gazpet - Oscar 1 (vrac propriu)' → rezervor 'Gazpet - Oscar 1'
+//        'Gazpet - Oscar 2 (vrac propriu)' → rezervor 'Gazpet - Oscar 2'
+//        legacy fără număr → fallback la Oscar 1 (primul găsit)
+const getRezervorPentruStatie = (statie, rezervoare) => {
+  if (!isStatieGazpet(statie) || !Array.isArray(rezervoare) || !rezervoare.length) return null
+  const m = String(statie).match(/Oscar\s*(\d+)/i)
+  if (m) {
+    const targetNum = Number(m[1])
+    const found = rezervoare.find(r => {
+      const rm = String(r.nume || '').match(/Oscar\s*(\d+)/i)
+      return rm && Number(rm[1]) === targetNum
+    })
+    if (found) return found
+  }
+  // Fallback: Oscar 1 sau primul
+  return rezervoare.find(r => /Oscar\s*1\b/i.test(r.nume || '')) || rezervoare[0] || null
+}
 
-function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, sites, pretMotorina }) {
+function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites, pretMotorina }) {
   const [form, setForm] = useState({
     data_alimentare: new Date().toISOString().split('T')[0],
     cantitate_litri: '',
@@ -219,24 +239,28 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
   const [pretMediuGazpet, setPretMediuGazpet] = useState(null)
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
   
-  const isGazpet = form.statie_combustibil === STATIE_GAZPET
-  const stocCurent = rezervorGazpet?.stoc_curent_litri ? Number(rezervorGazpet.stoc_curent_litri) : 0
+  const isGazpet = isStatieGazpet(form.statie_combustibil)
+  const rezervorActiv = useMemo(
+    () => getRezervorPentruStatie(form.statie_combustibil, rezervoare),
+    [form.statie_combustibil, rezervoare]
+  )
+  const stocCurent = rezervorActiv?.stoc_curent_litri ? Number(rezervorActiv.stoc_curent_litri) : 0
   const stocAfter = isGazpet && form.cantitate_litri ? stocCurent - Number(form.cantitate_litri) : null
   
-  // Fetch preț mediu ponderat Gazpet (din achiziții vrac)
+  // Fetch preț mediu ponderat Gazpet (din achiziții vrac) — pentru rezervorul activ
   useEffect(() => {
-    if (!rezervorGazpet?.id) return
+    if (!rezervorActiv?.id) { setPretMediuGazpet(null); return }
     supabase.from('logistica_achizitii_vrac')
       .select('cantitate_litri, pret_per_litru')
-      .eq('rezervor_id', rezervorGazpet.id)
+      .eq('rezervor_id', rezervorActiv.id)
       .not('pret_per_litru', 'is', null)
       .then(({ data }) => {
-        if (!data?.length) return
+        if (!data?.length) { setPretMediuGazpet(null); return }
         const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
         const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
         if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
       })
-  }, [rezervorGazpet?.id])
+  }, [rezervorActiv?.id])
   
   // Pretul de bază folosit la auto-fill (Gazpet → mediu ponderat, altă stație → preț pompă)
   const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
@@ -316,7 +340,7 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
       pret_per_litru: form.pret_per_litru ? Number(form.pret_per_litru) : null,
       numar_factura: form.numar_factura.trim() || null,
       observatii: form.observatii.trim() || null,
-      rezervor_id: isGazpet && rezervorGazpet ? rezervorGazpet.id : null,
+      rezervor_id: isGazpet && rezervorActiv ? rezervorActiv.id : null,
       site_id: form.site_id ? Number(form.site_id) : null,
       created_by: user?.id,
     }
@@ -363,13 +387,13 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervorGazpet, s
           <FieldSelect label={isGazpet ? "Șantier (obligatoriu pt. Gazpet)" : "Șantier (opțional)"} value={form.site_id} onChange={v => setField('site_id', v)} options={[{label:'— niciun șantier —', value:''}, ...(sites||[]).map(s => ({label: s.name, value: String(s.id)}))]} placeholder="— niciun șantier —" />
         </div>
         
-        {isGazpet && rezervorGazpet && (
+        {isGazpet && rezervorActiv && (
           <div style={{padding: 10, marginBottom: 12, background: G.purple + '15', border: `1px solid ${G.purple}55`, borderRadius: 8, fontSize: 12, color: G.text}}>
-            <strong style={{color: G.purple}}>📦 Rezervor Gazpet — Oscar</strong>
+            <strong style={{color: G.purple}}>📦 {rezervorActiv.nume}</strong>
             <div style={{marginTop: 4, color: G.muted, fontSize: 11, lineHeight: 1.6}}>
-              Stoc curent: <strong style={{color: G.text}}>{stocCurent.toFixed(1)} L</strong> din {Number(rezervorGazpet.capacitate_litri).toFixed(0)} L total
+              Stoc curent: <strong style={{color: G.text}}>{stocCurent.toFixed(1)} L</strong> din {Number(rezervorActiv.capacitate_litri).toFixed(0)} L total
               {form.cantitate_litri && stocAfter !== null && (
-                <> · <strong style={{color: stocAfter < 0 ? G.red : stocAfter < (Number(rezervorGazpet.capacitate_litri) * Number(rezervorGazpet.prag_alerta_procent) / 100) ? G.orange : G.green}}>
+                <> · <strong style={{color: stocAfter < 0 ? G.red : stocAfter < (Number(rezervorActiv.capacitate_litri) * Number(rezervorActiv.prag_alerta_procent) / 100) ? G.orange : G.green}}>
                   După alimentare: {stocAfter.toFixed(1)} L
                 </strong></>
               )}
@@ -924,7 +948,7 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
 }
 
 // ─── Modal Form (View / Edit / Create) ───────────────────────────────────────
-function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervorGazpet, sites, pretMotorina }) {
+function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervoare, sites, pretMotorina }) {
   const [mode, setMode] = useState(initialMode)
   const [saving, setSaving] = useState(false)
   
@@ -1518,7 +1542,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       {showAlim && (
         <AlimentareModal 
           activ={activ}
-          rezervorGazpet={rezervorGazpet}
+          rezervoare={rezervoare}
           sites={sites}
           pretMotorina={pretMotorina}
           onClose={() => setShowAlim(false)}
@@ -1594,7 +1618,7 @@ function PlaceholderTab({ label, desc, emoji }) {
 
 // ─── Pagina Alimentări — input bulk per zi ──────────────────────────────────
 // ─── Modal Editare Alimentare existentă ─────────────────────────────────────
-function EditAlimentareModal({ alim, sites, rezervorGazpet, pretMotorina, onClose, onSaved, showToast }) {
+function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, onSaved, showToast }) {
   const [form, setForm] = useState({
     data_alimentare: alim.data_alimentare,
     cantitate_litri: alim.cantitate_litri || '',
@@ -1612,7 +1636,11 @@ function EditAlimentareModal({ alim, sites, rezervorGazpet, pretMotorina, onClos
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
-  const isGazpet = form.statie_combustibil === STATIE_GAZPET
+  const isGazpet = isStatieGazpet(form.statie_combustibil)
+  const rezervorActiv = useMemo(
+    () => getRezervorPentruStatie(form.statie_combustibil, rezervoare),
+    [form.statie_combustibil, rezervoare]
+  )
   
   const handleTotalChange = (v) => {
     setField('pret_total', v)
@@ -1653,7 +1681,7 @@ function EditAlimentareModal({ alim, sites, rezervorGazpet, pretMotorina, onClos
       card_combustibil: form.card_combustibil.trim() || null,
       numar_factura: form.numar_factura.trim() || null,
       observatii: form.observatii.trim() || null,
-      rezervor_id: isGazpet && rezervorGazpet ? rezervorGazpet.id : null,
+      rezervor_id: isGazpet && rezervorActiv ? rezervorActiv.id : null,
     }
     
     const { error } = await supabase.from('logistica_alimentari').update(payload).eq('id', alim.id)
@@ -1740,14 +1768,15 @@ function EditAlimentareModal({ alim, sites, rezervorGazpet, pretMotorina, onClos
   )
 }
 
-function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved }) {
+function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
   const [filterSub, setFilterSub] = useState('Toate')
   const [forms, setForms] = useState({})
   const [savingId, setSavingId] = useState(null)
   const [saved, setSaved] = useState({})
-  const [pretMediuGazpet, setPretMediuGazpet] = useState(null)
+  // Map rezervor_id → preț mediu ponderat (pentru auto-fill rapid pe Gazpet)
+  const [pretMediuPerRezervor, setPretMediuPerRezervor] = useState({})
   
   // State pentru listă alimentări înregistrate (cu filtru perioadă + edit)
   const [perioadaF, setPerioadaF] = useState('azi')  // 'azi' | 'ieri' | 'saptamana' | 'luna' | 'custom'
@@ -1757,20 +1786,27 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
   const [loadingAlim, setLoadingAlim] = useState(false)
   const [editAlim, setEditAlim] = useState(null)
   
-  // Calculez preț mediu Gazpet
+  // Calculez preț mediu Gazpet per fiecare rezervor activ
   useEffect(() => {
-    if (!rezervorGazpet?.id) return
+    const ids = (rezervoare || []).map(r => r.id).filter(Boolean)
+    if (!ids.length) { setPretMediuPerRezervor({}); return }
     supabase.from('logistica_achizitii_vrac')
-      .select('cantitate_litri, pret_per_litru')
-      .eq('rezervor_id', rezervorGazpet.id)
+      .select('rezervor_id, cantitate_litri, pret_per_litru')
+      .in('rezervor_id', ids)
       .not('pret_per_litru', 'is', null)
       .then(({ data }) => {
-        if (!data?.length) return
-        const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
-        const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
-        if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
+        const map = {}
+        if (data?.length) {
+          ids.forEach(rid => {
+            const rows = data.filter(d => d.rezervor_id === rid)
+            const tot = rows.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
+            const cost = rows.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
+            if (tot > 0) map[rid] = (cost / tot).toFixed(4)
+          })
+        }
+        setPretMediuPerRezervor(map)
       })
-  }, [rezervorGazpet?.id])
+  }, [rezervoare])
   
   // Filtru: doar active cu combustibil + tip + subcategorie + text
   const activeFiltrate = useMemo(() => {
@@ -1857,8 +1893,10 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
       if (!ok) return
     }
     
-    const isGazpet = f.statie_combustibil === STATIE_GAZPET
-    const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
+    const isGazpet = isStatieGazpet(f.statie_combustibil)
+    const rezervorActiv = getRezervorPentruStatie(f.statie_combustibil, rezervoare)
+    const pretMediuRez = rezervorActiv ? pretMediuPerRezervor[rezervorActiv.id] : null
+    const pretBaza = isGazpet ? (pretMediuRez || pretMotorina) : pretMotorina
     const pretL = f.pret_per_litru ? Number(f.pret_per_litru) : (pretBaza ? Number(pretBaza) : null)
     const pretTotal = pretL ? Number((Number(f.cantitate_litri) * pretL).toFixed(2)) : null
     
@@ -1886,7 +1924,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
       statie_combustibil: f.statie_combustibil || null,
       pret_total: pretTotal,
       pret_per_litru: pretL,
-      rezervor_id: isGazpet && rezervorGazpet ? rezervorGazpet.id : null,
+      rezervor_id: isGazpet && rezervorActiv ? rezervorActiv.id : null,
       site_id: f.site_id ? Number(f.site_id) : null,
       created_by: user?.id,
     }
@@ -1991,7 +2029,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
                         <td style={{padding: '8px 12px', textAlign: 'right', color: G.orange, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
                           {Number(a.cantitate_litri).toFixed(1)} L
                         </td>
-                        <td style={{padding: '8px 12px', fontSize: 11, color: a.statie_combustibil === STATIE_GAZPET ? G.purple : G.text}}>
+                        <td style={{padding: '8px 12px', fontSize: 11, color: isStatieGazpet(a.statie_combustibil) ? G.purple : G.text}}>
                           {a.statie_combustibil || '—'}
                         </td>
                         <td style={{padding: '8px 12px', fontSize: 11, color: G.text}}>
@@ -2077,7 +2115,9 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
         ) : activeFiltrate.map(activ => {
           const f = getForm(activ.id)
           const ultima = ultimeAlim[activ.id]
-          const isGazpet = f.statie_combustibil === STATIE_GAZPET
+          const isGazpet = isStatieGazpet(f.statie_combustibil)
+          const rezervorActiv = getRezervorPentruStatie(f.statie_combustibil, rezervoare)
+          const pretMediuRez = rezervorActiv ? pretMediuPerRezervor[rezervorActiv.id] : null
           const isSaved = saved[activ.id]
           
           return (
@@ -2133,10 +2173,10 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
               )}
               
               {/* Banner Gazpet în mini-form */}
-              {!isSaved && isGazpet && rezervorGazpet && f.cantitate_litri && (
+              {!isSaved && isGazpet && rezervorActiv && f.cantitate_litri && (
                 <div style={{marginTop: 6, padding: '5px 10px', background: G.purple + '15', border: `1px solid ${G.purple}33`, borderRadius: 6, fontSize: 10, color: G.muted}}>
-                  📦 Stoc Gazpet: {Number(rezervorGazpet.stoc_curent_litri).toFixed(0)}L → {(Number(rezervorGazpet.stoc_curent_litri) - Number(f.cantitate_litri)).toFixed(0)}L
-                  {pretMediuGazpet && <> · preț mediu vrac: <strong style={{color: G.text}}>{pretMediuGazpet} RON/L</strong></>}
+                  📦 Stoc {rezervorActiv.nume}: {Number(rezervorActiv.stoc_curent_litri).toFixed(0)}L → {(Number(rezervorActiv.stoc_curent_litri) - Number(f.cantitate_litri)).toFixed(0)}L
+                  {pretMediuRez && <> · preț mediu vrac: <strong style={{color: G.text}}>{pretMediuRez} RON/L</strong></>}
                 </div>
               )}
               
@@ -2181,7 +2221,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervorGazpet, pretMot
         <EditAlimentareModal 
           alim={editAlim}
           sites={sites}
-          rezervorGazpet={rezervorGazpet}
+          rezervoare={rezervoare}
           pretMotorina={pretMotorina}
           onClose={() => setEditAlim(null)}
           onSaved={() => { setEditAlim(null); fetchAlimentari(); onSaved() }}
@@ -4704,42 +4744,18 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                       <StatusBadge status={t.status} />
                     </td>
                     <td style={tdStyle}>
-                      <div style={{display:'flex',gap:6,justifyContent:'flex-start',alignItems:'center'}}>
-                        {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
-                        {t.status === 'cerut' ? (
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
-                            style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
-                            title="Editează cererea (doar înainte de aprobare)"
-                          >
-                            ✏️ Edit
-                          </button>
-                        ) : null}
-                        {/* Buton Delete: DOAR pentru OWNER (cazuri de înregistrare greșită) */}
-                        {profile?.is_owner === true && (
-                          <button
-                            onClick={async (e) => {
-                              e.stopPropagation()
-                              const hasAvize = t.aviz_emis === true || t.aviz_numar
-                              const warn = hasAvize 
-                                ? `\n\n⚠ ATENȚIE: acest transport are aviz emis (${t.aviz_numar||'?'}). Ștergerea va elimina ȘI avizul din arhivă (CASCADE)!`
-                                : ''
-                              if (!window.confirm(`Ștergi transportul ${t.numar_transport || '#'+t.id}?\n\nStatus: ${t.status}${warn}\n\nAcțiunea NU poate fi anulată.`)) return
-                              const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id)
-                              if (error) { showToast('Eroare ștergere: ' + error.message, 'error'); return }
-                              showToast(`✓ Transport ${t.numar_transport || '#'+t.id} șters`)
-                              fetchAll()
-                            }}
-                            style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.red, borderColor:G.red + '66'}}
-                            title="Șterge transport (doar OWNER, în caz de înregistrare greșită)"
-                          >
-                            🗑️
-                          </button>
-                        )}
-                        {t.status !== 'cerut' && profile?.is_owner !== true && (
-                          <span style={{fontSize:10, color:G.muted}}>—</span>
-                        )}
-                      </div>
+                      {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
+                      {t.status === 'cerut' ? (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
+                          style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
+                          title="Editează cererea (doar înainte de aprobare)"
+                        >
+                          ✏️ Edit
+                        </button>
+                      ) : (
+                        <span style={{fontSize:10, color:G.muted}}>—</span>
+                      )}
                     </td>
                   </tr>
                   )
@@ -5200,7 +5216,7 @@ function ArhivaAvizePage({ profile, showToast }) {
 // ============================================================
 // ARHIVĂ ALIMENTĂRI — consultare istoric extins
 // ============================================================
-function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, showToast }) {
+function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showToast }) {
   const [arhiva, setArhiva] = useState([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
@@ -5820,7 +5836,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
                       <td style={{padding: '8px 12px', textAlign: 'right', color: G.orange, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
                         {Number(a.cantitate_litri).toFixed(1)} L
                       </td>
-                      <td style={{padding: '8px 12px', color: a.statie_combustibil === STATIE_GAZPET ? G.logistica : G.text, fontWeight: a.statie_combustibil === STATIE_GAZPET ? 600 : 400}}>
+                      <td style={{padding: '8px 12px', color: isStatieGazpet(a.statie_combustibil) ? G.logistica : G.text, fontWeight: isStatieGazpet(a.statie_combustibil) ? 600 : 400}}>
                         {a.statie_combustibil || '—'}
                       </td>
                       <td style={{padding: '8px 12px', color: G.text}}>{a.sites?.name || '—'}</td>
@@ -5857,7 +5873,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervorGazpet, pretMotorina, sh
         <EditAlimentareModal 
           alim={editAlim}
           sites={sites}
-          rezervorGazpet={rezervorGazpet}
+          rezervoare={rezervoare}
           pretMotorina={pretMotorina}
           onClose={() => setEditAlim(null)}
           onSaved={() => { setEditAlim(null); loadArhiva() }}
@@ -5888,13 +5904,14 @@ export default function LogisticaPage() {
   const [stareF, setStareF] = useState('Toate')
   const [sortBy, setSortBy] = useState({ col: 'marca', dir: 'asc' })  // sortare tabel
   const [modal, setModal] = useState(null)
-  const [rezervor, setRezervor] = useState(null)         // rezervorul Gazpet Oscar
+  const [rezervoare, setRezervoare] = useState([])         // [Gazpet - Oscar 1, Gazpet - Oscar 2]
   const [sites, setSites] = useState([])                  // pentru alocare alimentare pe șantier
   const [pretMotorina, setPretMotorina] = useState(null) // preț curent
   const [pretMotorinaActualizat, setPretMotorinaActualizat] = useState(null)
-  const [showAchizitie, setShowAchizitie] = useState(false)
-  const [showEditStoc, setShowEditStoc] = useState(false)
+  const [showAchizitie, setShowAchizitie] = useState(null) // null | obiect rezervor (Oscar 1/2)
+  const [showEditStoc, setShowEditStoc] = useState(null)   // null | obiect rezervor
   const [showSetariPret, setShowSetariPret] = useState(false)
+  const [alerteTransp, setAlerteTransp] = useState([])     // transporturi cu status='cerut'
   const [tab, setTab] = useState(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
@@ -5932,27 +5949,37 @@ export default function LogisticaPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes] = await Promise.all([
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes, transpRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
       supabase.from('logistica_categorii').select('*').order('tip').order('subcategorie'),
       supabase.from('v_kpi_logistica').select('*').single(),
-      supabase.from('logistica_rezervoare').select('*').eq('nume', 'Gazpet - Oscar').maybeSingle(),
+      supabase.from('logistica_rezervoare').select('*').like('nume', 'Gazpet - Oscar%').order('nume'),
       supabase.from('sites').select('id, name').order('name'),
       supabase.from('logistica_setari').select('key, value').in('key', ['pret_motorina_ron', 'pret_motorina_actualizat']),
       supabase.from('v_alimentari_kpi').select('*').single(),
       supabase.from('v_alimentari_ultima').select('*'),
+      supabase.from('logistica_transporturi')
+        .select(`id, tip, data_transport, continut_descriere, status, created_at,
+          activ_transportat:logistica_active!activ_transportat_id(cod_intern, marca, model),
+          plecare_site:sites!plecare_site_id(name),
+          destinatie_site:sites!destinatie_site_id(name),
+          solicitant:profiles!solicitant_id(name)`)
+        .eq('status', 'cerut')
+        .order('created_at', { ascending: false })
+        .limit(10),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
     setKpi(kpiRes.data || null)
-    setRezervor(rezRes.data || null)
+    setRezervoare(rezRes.data || [])
     setSites(sitesRes.data || [])
     const setariMap = Object.fromEntries((setariRes.data || []).map(s => [s.key, s.value]))
     setPretMotorina(setariMap.pret_motorina_ron || null)
     setPretMotorinaActualizat(setariMap.pret_motorina_actualizat || null)
     setKpiAlim(kpiAlimRes.data || null)
+    setAlerteTransp(transpRes.data || [])
     // Map ultima alimentare per activ
     const map = {}
     ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
@@ -6314,7 +6341,7 @@ export default function LogisticaPage() {
           active={active}
           ultimeAlim={ultimeAlim}
           sites={sites}
-          rezervorGazpet={rezervor}
+          rezervoare={rezervoare}
           pretMotorina={pretMotorina}
           dataAlim={dataAlim}
           setDataAlim={setDataAlim}
@@ -6361,7 +6388,7 @@ export default function LogisticaPage() {
         <ArhivaAlimentariPage 
           profile={profile} 
           sites={sites} 
-          rezervorGazpet={rezervor}
+          rezervoare={rezervoare}
           pretMotorina={pretMotorina}
           showToast={showToast} 
         />
@@ -6381,47 +6408,48 @@ export default function LogisticaPage() {
         </div>
       )}
       
-      {/* Widget Rezervor Gazpet + Preț motorină */}
-      <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
-        {rezervor && (() => {
-          const stoc = Number(rezervor.stoc_curent_litri || 0)
-          const cap = Number(rezervor.capacitate_litri || 0)
-          const pragProc = Number(rezervor.prag_alerta_procent || 10)
+      {/* Widget Rezervoare Gazpet (Oscar 1 + Oscar 2) + Preț motorină (compact) */}
+      <div style={{display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap'}}>
+        {(rezervoare || []).map((rez) => {
+          const stoc = Number(rez.stoc_curent_litri || 0)
+          const cap = Number(rez.capacitate_litri || 0)
+          const pragProc = Number(rez.prag_alerta_procent || 10)
           const pragLitri = cap * pragProc / 100
           const procentUmplere = cap > 0 ? (stoc / cap) * 100 : 0
           const isLow = stoc <= pragLitri
           const isCritic = stoc <= pragLitri / 2
+          const isEmpty = stoc < 1
           
           let barColor, statusText, statusColor
-          if (isCritic) { barColor = G.red; statusText = '🚨 STOC CRITIC — comandă urgent!'; statusColor = G.red }
-          else if (isLow) { barColor = G.orange; statusText = '⚠️ Sub pragul de alertă'; statusColor = G.orange }
-          else if (procentUmplere > 90) { barColor = G.green; statusText = '✓ Rezervor plin'; statusColor = G.green }
-          else { barColor = G.blue; statusText = '✓ Stoc normal'; statusColor = G.blue }
+          if (isEmpty) { barColor = G.dim; statusText = '○ Gol'; statusColor = G.muted }
+          else if (isCritic) { barColor = G.red; statusText = '🚨 CRITIC'; statusColor = G.red }
+          else if (isLow) { barColor = G.orange; statusText = '⚠️ Sub prag'; statusColor = G.orange }
+          else if (procentUmplere > 90) { barColor = G.green; statusText = '✓ Plin'; statusColor = G.green }
+          else { barColor = G.blue; statusText = '✓ Normal'; statusColor = G.blue }
+          
+          // Scurt nume: 'Gazpet - Oscar 1' → '📦 Oscar 1'
+          const shortName = (rez.nume || '').replace(/^Gazpet\s*-\s*/i, '')
           
           return (
-            <div style={{...S.card, padding: '12px 16px', flex: 2, minWidth: 360, borderLeft: `3px solid ${barColor}`}}>
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8}}>
-                <div>
-                  <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
-                    📦 {rezervor.nume}
+            <div key={rez.id} style={{...S.card, padding: '10px 14px', flex: 1, minWidth: 240, borderLeft: `3px solid ${barColor}`}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6}}>
+                <div style={{flex: 1, minWidth: 0}}>
+                  <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+                    📦 {shortName}
                   </div>
-                  <div style={{fontSize: 22, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 2}}>
-                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 1, maximumFractionDigits: 1})} <span style={{fontSize: 12, color: G.muted, fontWeight: 600}}>L</span>
-                    <span style={{fontSize: 12, color: G.muted, fontWeight: 600, marginLeft: 8}}>/ {cap.toFixed(0)} L</span>
+                  <div style={{fontSize: 18, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums', marginTop: 1, lineHeight: 1.2}}>
+                    {stoc.toLocaleString('ro-RO', {minimumFractionDigits: 0, maximumFractionDigits: 0})}<span style={{fontSize: 11, color: G.muted, fontWeight: 600}}> L</span>
+                    <span style={{fontSize: 10, color: G.muted, fontWeight: 600, marginLeft: 5}}>/ {cap.toFixed(0)}</span>
                   </div>
                 </div>
                 {canEdit && (
-                  <div style={{display: 'flex', gap: 6}}>
-                    <button onClick={() => setShowEditStoc(true)} style={{...S.btnS, fontSize: 11, color: G.yellow, borderColor: G.yellow + '55', padding: '5px 10px'}} title="Ajustare manuală stoc (corecții)">
-                      ✏️ Edit
-                    </button>
-                    <button onClick={() => setShowAchizitie(true)} style={{...S.btnS, fontSize: 11, color: G.purple, borderColor: G.purple + '55', padding: '5px 10px'}}>
-                      + Achiziție vrac
-                    </button>
+                  <div style={{display: 'flex', gap: 4}}>
+                    <button onClick={() => setShowEditStoc(rez)} style={{background:'transparent', border:'none', color:G.yellow, fontSize: 11, cursor:'pointer', padding: '2px 4px', lineHeight: 1}} title="Ajustare manuală stoc">✏️</button>
+                    <button onClick={() => setShowAchizitie(rez)} style={{background:'transparent', border:`1px solid ${G.purple}55`, color:G.purple, fontSize: 10, cursor:'pointer', padding: '3px 6px', borderRadius: 4, fontWeight: 600}} title="Achiziție vrac">+ Vrac</button>
                   </div>
                 )}
               </div>
-              <div style={{height: 8, background: G.bg, borderRadius: 4, overflow: 'hidden', marginBottom: 6}}>
+              <div style={{height: 6, background: G.bg, borderRadius: 3, overflow: 'hidden', marginBottom: 4}}>
                 <div style={{
                   width: `${Math.min(procentUmplere, 100)}%`,
                   height: '100%',
@@ -6429,32 +6457,107 @@ export default function LogisticaPage() {
                   transition: 'width .3s'
                 }}/>
               </div>
-              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 10}}>
                 <span style={{color: statusColor, fontWeight: 600}}>{statusText}</span>
-                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}% · prag alertă: {pragProc}%</span>
+                <span style={{color: G.muted}}>{procentUmplere.toFixed(0)}% · prag {pragProc}%</span>
               </div>
             </div>
           )
-        })()}
+        })}
         
-        {/* Card preț motorină */}
-        <div style={{...S.card, padding: '12px 16px', flex: 1, minWidth: 200, borderLeft: `3px solid ${G.green}`}}>
-          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4}}>
-            <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
-              💰 Preț motorină
+        {/* Card preț motorină — compact */}
+        <div style={{...S.card, padding: '10px 14px', minWidth: 140, borderLeft: `3px solid ${G.green}`}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 2}}>
+            <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px'}}>
+              💰 Motorină
             </div>
             {canEdit && (
-              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 14, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
+              <button onClick={() => setShowSetariPret(true)} style={{background:'transparent', border:'none', color:G.muted, fontSize: 12, cursor:'pointer', padding: 0, lineHeight: 1}} title="Editează preț">⚙️</button>
             )}
           </div>
-          <div style={{fontSize: 22, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums'}}>
-            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'} <span style={{fontSize: 12, color: G.muted, fontWeight: 600}}>RON/L</span>
+          <div style={{fontSize: 18, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2}}>
+            {pretMotorina ? Number(pretMotorina).toFixed(2) : '—'}<span style={{fontSize: 10, color: G.muted, fontWeight: 600, marginLeft: 3}}>RON/L</span>
           </div>
-          <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
-            actualizat: {pretMotorinaActualizat || '—'}
+          <div style={{fontSize: 9, color: G.muted, marginTop: 2}}>
+            {pretMotorinaActualizat || '—'}
           </div>
         </div>
       </div>
+      
+      {/* Widget Alerte Transporturi cerute — pending aprobare */}
+      {alerteTransp && alerteTransp.length > 0 && (
+        <div style={{
+          ...S.card,
+          padding: '10px 14px',
+          marginBottom: 12,
+          borderLeft: `4px solid ${G.orange}`,
+          background: G.yellowDim + '66',
+        }}>
+          <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap'}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+              <span style={{fontSize: 20}}>🚛</span>
+              <div>
+                <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
+                  Transporturi cerute — așteaptă aprobare
+                </div>
+                <div style={{fontSize: 11, color: G.muted, marginTop: 1}}>
+                  <span style={{color: G.orange, fontWeight: 700}}>⏳ {alerteTransp.length}</span> {alerteTransp.length === 1 ? 'cerere pending' : 'cereri pending'} · click pentru detalii
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={() => setTab('transporturi')}
+              style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '88', fontWeight: 700}}>
+              → Vezi în Transporturi
+            </button>
+          </div>
+          <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+            {alerteTransp.slice(0, 5).map(t => {
+              const continut = t.tip === 'utilaj' && t.activ_transportat
+                ? `🚛 ${t.activ_transportat.cod_intern || ''} ${t.activ_transportat.marca || ''} ${t.activ_transportat.model || ''}`.trim()
+                : `📄 ${t.continut_descriere || '—'}`
+              const traseu = `${t.plecare_site?.name || '?'} → ${t.destinatie_site?.name || '?'}`
+              return (
+                <div 
+                  key={t.id}
+                  onClick={() => setTab('transporturi')}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '5px 10px', background: G.bg, borderRadius: 4, cursor: 'pointer',
+                    fontSize: 11, gap: 10
+                  }}
+                  title="Click pentru a deschide tabul Transporturi"
+                >
+                  <div style={{display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, overflow: 'hidden'}}>
+                    <span style={{color: G.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 280}}>
+                      {continut}
+                    </span>
+                    <span style={{color: G.muted, fontSize: 10}}>·</span>
+                    <span style={{color: G.muted, fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                      {traseu}
+                    </span>
+                  </div>
+                  <div style={{display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0}}>
+                    <span style={{color: G.blue, fontSize: 10, fontFamily: 'monospace'}}>
+                      📅 {t.data_transport}
+                    </span>
+                    {t.solicitant?.name && (
+                      <span style={{color: G.muted, fontSize: 10}}>
+                        {t.solicitant.name.split(' ')[0]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            {alerteTransp.length > 5 && (
+              <div style={{fontSize: 10, color: G.muted, textAlign: 'center', paddingTop: 4, fontStyle: 'italic'}}>
+                ... și încă {alerteTransp.length - 5} cereri
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       
       {/* Widget statistici alimentări — IERI / ULTIMELE 7 ZILE / LUNA */}
       {kpiAlim && (
@@ -6633,7 +6736,7 @@ export default function LogisticaPage() {
           initialMode={modal.mode}
           categorii={categorii}
           accessLevel={accessLevel}
-          rezervorGazpet={rezervor}
+          rezervoare={rezervoare}
           sites={sites}
           pretMotorina={pretMotorina}
           onClose={() => setModal(null)}
@@ -6642,22 +6745,22 @@ export default function LogisticaPage() {
         />
       )}
       
-      {/* Modal achiziție vrac */}
-      {showAchizitie && rezervor && (
+      {/* Modal achiziție vrac — pe rezervorul selectat (Oscar 1 sau Oscar 2) */}
+      {showAchizitie && (
         <AchizitieVracModal 
-          rezervor={rezervor}
-          onClose={() => setShowAchizitie(false)}
-          onSaved={() => { setShowAchizitie(false); loadAll() }}
+          rezervor={showAchizitie}
+          onClose={() => setShowAchizitie(null)}
+          onSaved={() => { setShowAchizitie(null); loadAll() }}
           showToast={showToast}
         />
       )}
       
-      {/* Modal edit stoc rezervor (corecții manuale) */}
-      {showEditStoc && rezervor && (
+      {/* Modal edit stoc rezervor — pe rezervorul selectat (corecții manuale) */}
+      {showEditStoc && (
         <EditStocModal 
-          rezervor={rezervor}
-          onClose={() => setShowEditStoc(false)}
-          onSaved={() => { setShowEditStoc(false); loadAll() }}
+          rezervor={showEditStoc}
+          onClose={() => setShowEditStoc(null)}
+          onSaved={() => { setShowEditStoc(null); loadAll() }}
           showToast={showToast}
         />
       )}
