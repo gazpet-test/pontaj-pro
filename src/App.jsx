@@ -2054,6 +2054,436 @@ function ReportsPage() {
     }
   }
 
+  // ─── HELPERI Faza 7.5 — Generare PDF cu semnături ────────────────────────
+  
+  // Fuzzy match nume → employee (pentru lookup setări semnatari)
+  // Normalizează (lowercase + strip diacritice + non-alfanumeric → space)
+  // Match dacă ≥2 tokens din needle se găsesc în empName (sau 1 token dacă needle are doar 1)
+  const findEmployeeFuzzy = (needle, employees) => {
+    if (!needle) return null
+    const normalize = (s) => (s || '').toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9 ]/g, ' ')
+      .split(/\s+/).filter(Boolean)
+    const needleTokens = normalize(needle)
+    if (needleTokens.length === 0) return null
+    for (const emp of employees) {
+      const empTokens = normalize(emp.name)
+      const matches = needleTokens.filter(t => empTokens.includes(t)).length
+      if (matches >= 2 || (needleTokens.length === 1 && matches === 1)) return emp
+    }
+    return null
+  }
+  
+  // Fetch o imagine (signed URL Supabase) și o transformă în dataURL base64
+  // Necesar pentru html2canvas — evită probleme CORS și async loading
+  const fetchAsDataURL = async (url) => {
+    try {
+      const response = await fetch(url)
+      const blob = await response.blob()
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result)
+        reader.onerror = reject
+        reader.readAsDataURL(blob)
+      })
+    } catch (e) {
+      console.warn('fetchAsDataURL fail:', e)
+      return null
+    }
+  }
+  
+  // Escape pentru HTML safety (folosit în template-uri PDF)
+  const esc = (s) => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  
+  // ───────────────────────────────────────────────────────────────────────
+  // GENERATOR PDF — Construiește HTML offscreen identic vizual cu xlsx,
+  // captureaza cu html2canvas, wrappează în jsPDF cu 2 pagini A4.
+  // Include 4 semnături reale inserate ca <img> (dataURL base64).
+  // ───────────────────────────────────────────────────────────────────────
+  
+  // Builds 2-pagini HTML pentru ordin (returnează string)
+  // semnaturiData = { aproba: 'data:...'|null, control: ..., verificat: ..., titular: ... }
+  const buildOrdinHTML = ({ emp, ordGenPayment, allDays, setari, denumireSocietate, nrRegCom, cui, periodStartFmt, periodEndFmt, fmtRO, semnaturiData, genTimestamp }) => {
+    // Lățime canvas: 794px = 210mm @ 96 DPI
+    // Coloane proporțional cu xlsx (4/11/18/17/8/9/12/4 = 83 units):
+    //   A=38px B=105px C=172px D=163px E=76px F=86px G=115px H=38px (total 793px)
+    
+    const numeAng = esc(emp.name)
+    const functieAng = esc(emp.functie || '—')
+    const ziluLcrate = allDays.filter(d => d.shantier_name && !d.is_weekend && !d.is_legal).length
+    const zileTotal = ordGenPayment?.diurna_zile || allDays.filter(d => d.shantier_name && !d.is_weekend && !d.is_legal).length
+    const diurnaMax = emp.diurna_max || 0
+    const totalChelt = (zileTotal * diurnaMax).toFixed(2)
+    
+    const A4_W = 794   // 210mm @ 96 DPI
+    const A4_H = 1123  // 297mm @ 96 DPI
+    
+    // ─── Stiluri inline ────────────────────────────────────────────
+    const pageStyle = `width:${A4_W}px;min-height:${A4_H}px;background:#fff;padding:38px 28px;font-family:Calibri,Arial,sans-serif;color:#000;box-sizing:border-box;font-size:11px;line-height:1.35;`
+    const tblStyle = 'width:100%;border-collapse:collapse;table-layout:fixed;'
+    const blueDark = '#1F497D'
+    const blueLight = '#D9E1F2'
+    const grayBg = '#F5F5F5'
+    
+    const colgroup = `<colgroup>
+      <col style="width:4.82%"><col style="width:13.25%"><col style="width:21.69%"><col style="width:20.48%">
+      <col style="width:9.64%"><col style="width:10.84%"><col style="width:14.46%"><col style="width:4.82%">
+    </colgroup>`
+    
+    // Semnătură image cell (cu fallback gol dacă lipsește)
+    const sigCell = (dataUrl) => dataUrl
+      ? `<img src="${dataUrl}" style="max-width:160px;max-height:50px;object-fit:contain;display:block;margin:0 auto;" alt="semnatura"/>`
+      : `<div style="height:50px;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:9px;font-style:italic;">semnătură lipsă</div>`
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PAGINA 1 — ORDIN DEPLASARE
+    // ═══════════════════════════════════════════════════════════════
+    const page1 = `
+      <div class="pdf-page-1" style="${pageStyle}">
+        <!-- Titlu -->
+        <div style="text-align:center;color:${blueDark};font-size:22px;font-weight:800;letter-spacing:2px;margin-bottom:4px;">ORDIN DE DEPLASARE</div>
+        <div style="text-align:center;color:#666;font-size:10px;margin-bottom:14px;">(delegație)</div>
+        
+        <!-- Nr / Data -->
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:10px;">
+          <span><strong>Nr.:</strong> _____________________</span>
+          <span><strong>Data emiterii:</strong> _____________________</span>
+        </div>
+        
+        <!-- Date angajat -->
+        <table style="${tblStyle}margin-bottom:10px;">${colgroup}
+          <tr>
+            <td colspan="2" style="font-weight:600;padding:4px 6px;border:1px solid #ccc;background:${grayBg};font-size:10px;">Numele și prenumele:</td>
+            <td colspan="6" style="padding:4px 6px;border:1px solid #ccc;font-weight:700;font-size:12px;">${numeAng}</td>
+          </tr>
+          <tr>
+            <td colspan="2" style="font-weight:600;padding:4px 6px;border:1px solid #ccc;background:${grayBg};font-size:10px;">Funcția:</td>
+            <td colspan="6" style="padding:4px 6px;border:1px solid #ccc;font-size:11px;">${functieAng}</td>
+          </tr>
+        </table>
+        
+        <!-- DURATA -->
+        <div style="background:${blueDark};color:#fff;padding:5px 10px;font-weight:700;font-size:11px;letter-spacing:.5px;">
+          DURATA DEPLASĂRII: ${periodStartFmt} — ${periodEndFmt}  •  ${zileTotal} zile lucrate
+        </div>
+        
+        <!-- CONFIRMĂRI -->
+        <div style="background:${blueLight};color:${blueDark};padding:4px 10px;font-weight:700;font-size:10px;border:1px solid #ccc;margin-top:8px;">CONFIRMĂRI:</div>
+        <table style="${tblStyle}font-size:10px;border:1px solid #ccc;border-top:0;">
+          <tr><td style="padding:4px 10px;font-weight:700;width:90px;">UNITATEA 1:</td>
+              <td style="padding:4px 6px;">Sosit la ___________________ Data __________ Sem. __________</td></tr>
+          <tr><td style="padding:4px 10px;"></td>
+              <td style="padding:4px 6px;">Plecat din _________________ Data __________ Sem. __________</td></tr>
+          <tr><td style="padding:4px 10px;font-weight:700;">UNITATEA 2:</td>
+              <td style="padding:4px 6px;">Sosit la ___________________ Data __________ Sem. __________</td></tr>
+          <tr><td style="padding:4px 10px;"></td>
+              <td style="padding:4px 6px;">Plecat din _________________ Data __________ Sem. __________</td></tr>
+        </table>
+        
+        <!-- DECONT -->
+        <div style="background:${blueLight};color:${blueDark};padding:4px 10px;font-weight:700;font-size:10px;border:1px solid #ccc;margin-top:8px;">DECONT:</div>
+        <table style="${tblStyle}font-size:10px;border:1px solid #ccc;border-top:0;">
+          <tr><td style="padding:4px 10px;width:170px;">Avans primit la plecare:</td>
+              <td style="padding:4px 6px;">_______________ lei</td></tr>
+          <tr><td style="padding:4px 10px;">Avans rest neutilizat:</td>
+              <td style="padding:4px 6px;">_______________ lei</td></tr>
+        </table>
+        
+        <!-- CHELTUIELI -->
+        <div style="background:${blueLight};color:${blueDark};padding:4px 10px;font-weight:700;font-size:10px;border:1px solid #ccc;margin-top:8px;">CHELTUIELI:</div>
+        <table style="${tblStyle}font-size:10px;border:1px solid #ccc;border-top:0;text-align:center;">${colgroup}
+          <tr style="background:${grayBg};font-weight:700;">
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;">Nr.</td>
+            <td colspan="3" style="padding:4px;border-right:1px solid #ccc;text-align:left;">Documente justificative</td>
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;">Val./buc</td>
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;">Cant.</td>
+            <td colspan="2" style="padding:4px;">Total</td>
+          </tr>
+          <tr>
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">1.</td>
+            <td colspan="3" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;text-align:left;">Diurnă internă</td>
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">${diurnaMax.toFixed(2)} lei</td>
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">${zileTotal} zile</td>
+            <td colspan="2" style="padding:4px;border-top:1px solid #ccc;font-weight:700;">${totalChelt} lei</td>
+          </tr>
+          <tr style="background:${blueLight};color:${blueDark};font-weight:700;">
+            <td colspan="6" style="padding:5px;text-align:right;border-top:1px solid #ccc;">TOTAL CHELTUIELI:</td>
+            <td colspan="2" style="padding:5px;border-top:1px solid #ccc;">${totalChelt} lei</td>
+          </tr>
+          <tr style="font-weight:700;">
+            <td colspan="6" style="padding:5px;text-align:right;border-top:1px solid #ccc;">DIFERENȚA DE PRIMIT:</td>
+            <td colspan="2" style="padding:5px;border-top:1px solid #ccc;">${totalChelt} lei</td>
+          </tr>
+        </table>
+        
+        <!-- SEMNĂTURI — banda principală cu IMAGINI -->
+        <div style="background:${blueDark};color:#fff;padding:5px 10px;font-weight:700;font-size:11px;letter-spacing:.5px;margin-top:14px;">SEMNĂTURI:</div>
+        <table style="${tblStyle}border:1px solid #ccc;border-top:0;text-align:center;">${colgroup}
+          <!-- Header coloane -->
+          <tr style="background:${blueLight};color:${blueDark};font-weight:700;font-size:9px;">
+            <td colspan="2" style="padding:5px 4px;border-right:1px solid #ccc;">SE APROBĂ</td>
+            <td colspan="2" style="padding:5px 4px;border-right:1px solid #ccc;">CONTROL FIN. PREVENTIV</td>
+            <td colspan="2" style="padding:5px 4px;border-right:1px solid #ccc;">VERIFICAT DECONT</td>
+            <td colspan="2" style="padding:5px 4px;">TITULAR ORDIN</td>
+          </tr>
+          <!-- Spațiu imagini semnături (înălțime 60px) -->
+          <tr style="height:60px;background:#fff;">
+            <td colspan="2" style="padding:4px;border-right:1px solid #eee;vertical-align:middle;">${sigCell(semnaturiData.aproba)}</td>
+            <td colspan="2" style="padding:4px;border-right:1px solid #eee;vertical-align:middle;">${sigCell(semnaturiData.control)}</td>
+            <td colspan="2" style="padding:4px;border-right:1px solid #eee;vertical-align:middle;">${sigCell(semnaturiData.verificat)}</td>
+            <td colspan="2" style="padding:4px;vertical-align:middle;">${sigCell(semnaturiData.titular)}</td>
+          </tr>
+          <!-- Numele sub semnături -->
+          <tr style="background:${grayBg};color:${blueDark};font-weight:700;font-size:9px;border-top:1px solid #ccc;">
+            <td colspan="2" style="padding:5px 4px;border-right:1px solid #ccc;">${esc((setari.director_aproba || 'Trusu Razvan').toUpperCase())}</td>
+            <td colspan="2" style="padding:5px 4px;border-right:1px solid #ccc;">${esc((setari.control_preventiv || 'Tudorache Marilena').toUpperCase())}</td>
+            <td colspan="2" style="padding:5px 4px;border-right:1px solid #ccc;">${esc((setari.verificat_decont || 'Mirela Popescu').toUpperCase())}</td>
+            <td colspan="2" style="padding:5px 4px;">${esc(numeAng)}</td>
+          </tr>
+        </table>
+        
+        <!-- Footer companie -->
+        <div style="background:${blueDark};color:#fff;padding:5px 10px;font-weight:700;font-size:9px;text-align:center;letter-spacing:1px;margin-top:14px;">
+          ${esc(denumireSocietate)}  •  ${esc(nrRegCom)}  •  CUI: ${esc(cui)}
+        </div>
+        
+        <!-- Log audit generare (mic, gri, pentru trasabilitate) -->
+        <div style="color:#999;font-size:7px;text-align:right;margin-top:6px;font-style:italic;letter-spacing:.3px;">
+          📋 Document generat electronic în PontajPRO la ${esc(genTimestamp)} • Semnături inserate automat din baza de date
+        </div>
+      </div>
+    `
+    
+    // ═══════════════════════════════════════════════════════════════
+    // PAGINA 2 — SITUAȚIE PREZENȚĂ ZILNICĂ
+    // ═══════════════════════════════════════════════════════════════
+    const rows = allDays.map((d, i) => {
+      const isWE = d.is_weekend || (d.date && [0, 6].includes(new Date(d.date + 'T12:00').getDay()))
+      const isLegal = d.is_legal || !!d.legal_name
+      const skip = isWE || isLegal
+      const dataFmt = d.date ? fmtRO(d.date) : ''
+      const shantier = skip ? '—' : esc(d.shantier_name || '')
+      const obs = isLegal
+        ? `Sărbătoare legală${d.legal_name ? ' (' + esc(d.legal_name) + ')' : ''}`
+        : (isWE ? 'Weekend' : '')
+      const styleRow = skip ? 'background:#FAFAFA;color:#888;font-style:italic;' : ''
+      return `<tr style="${styleRow}">
+        <td style="padding:3px 6px;border:1px solid #ddd;text-align:center;font-size:10px;">${i + 1}.</td>
+        <td style="padding:3px 6px;border:1px solid #ddd;text-align:center;font-size:10px;">${dataFmt}</td>
+        <td style="padding:3px 6px;border:1px solid #ddd;font-size:10px;">${shantier}</td>
+        <td style="padding:3px 6px;border:1px solid #ddd;font-size:10px;">${esc(obs)}</td>
+      </tr>`
+    }).join('')
+    
+    const page2 = `
+      <div class="pdf-page-2" style="${pageStyle}">
+        <div style="color:${blueDark};font-size:18px;font-weight:800;letter-spacing:1px;margin-bottom:4px;">SITUAȚIE PREZENȚĂ ZILNICĂ</div>
+        <div style="font-size:10px;font-style:italic;color:#666;margin-bottom:10px;">
+          Angajat: <strong style="color:#000;">${numeAng}</strong>  •
+          Funcția: <strong style="color:#000;">${functieAng}</strong>  •
+          Perioada: <strong style="color:#000;">${periodStartFmt} – ${periodEndFmt}</strong>
+        </div>
+        <table style="${tblStyle}">
+          <colgroup><col style="width:7%"><col style="width:13%"><col><col style="width:28%"></colgroup>
+          <thead>
+            <tr style="background:${blueLight};color:${blueDark};font-weight:700;font-size:10px;">
+              <td style="padding:6px;border:1px solid #ccc;text-align:center;">Nr. zi</td>
+              <td style="padding:6px;border:1px solid #ccc;text-align:center;">Data</td>
+              <td style="padding:6px;border:1px solid #ccc;">Șantier</td>
+              <td style="padding:6px;border:1px solid #ccc;">Observații</td>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr style="background:${blueLight};color:${blueDark};font-weight:700;font-size:10px;">
+              <td colspan="2" style="padding:6px;border:1px solid #ccc;text-align:right;">TOTAL ZILE LUCRATE:</td>
+              <td colspan="2" style="padding:6px;border:1px solid #ccc;">${ziluLcrate} zile</td>
+            </tr>
+          </tfoot>
+        </table>
+        <div style="background:${blueDark};color:#fff;padding:5px 10px;font-weight:700;font-size:9px;text-align:center;letter-spacing:1px;margin-top:14px;">
+          ${esc(denumireSocietate)}  •  ${esc(nrRegCom)}  •  CUI: ${esc(cui)}
+        </div>
+        <div style="color:#999;font-size:7px;text-align:right;margin-top:6px;font-style:italic;letter-spacing:.3px;">
+          📋 Document generat electronic în PontajPRO la ${esc(genTimestamp)} • Pagina 2/2
+        </div>
+      </div>
+    `
+    
+    return { page1, page2 }
+  }
+  
+  // Generează ZIP cu PDF-uri per angajat (cu semnături inserate)
+  const generateOrdinePDF = async () => {
+    const selected = ordGenEmps.filter(e => e.selected && e.diurna_max > 0)
+    if (!selected.length) {
+      showToast('Selectează cel puțin un angajat cu zile admise > 0', 'warn')
+      return
+    }
+    if (!ordGenPayment) { showToast('Eroare: plată necunoscută', 'error'); return }
+    
+    setOrdGenerating(true)
+    setOrdGenProgress({ done: 0, total: selected.length })
+    
+    try {
+      // 1. Fetch setari + firma + toate semnăturile active + lista employees în paralel
+      const [setariRes, firmaSetRes, sigsRes, empsRes] = await Promise.all([
+        supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
+        supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
+        supabase.from('hr_semnaturi_electronice').select('employee_id, fisier_path').eq('activ', true),
+        supabase.from('employees').select('id, name').eq('active', true),
+      ])
+      
+      const setari = setariRes.data || {
+        director_aproba: 'Trusu Razvan',
+        control_preventiv: 'Tudorache Marilena',
+        verificat_decont: 'Mirela Popescu',
+      }
+      const fm = {}; (firmaSetRes.data || []).forEach(x => fm[x.key] = x.value)
+      const denumireSocietate = fm['firma_nume'] || 'GAZPET INSTAL SRL'
+      const nrRegCom = fm['firma_reg_com'] || 'J29/0001650/2007'
+      const cui = fm['firma_cui'] || 'RO 22029920'
+      
+      // 2. Map employee_id → fisier_path semnătură activă
+      const sigPathByEmpId = {}
+      ;(sigsRes.data || []).forEach(s => { sigPathByEmpId[s.employee_id] = s.fisier_path })
+      const allEmployees = empsRes.data || []
+      
+      // 3. Lookup fuzzy 3 semnatari fix → employee_id → signed URL → dataURL (cache global)
+      const dataURLCache = new Map()  // employee_id → dataURL
+      const getSigDataURLByEmpId = async (empId) => {
+        if (!empId) return null
+        if (dataURLCache.has(empId)) return dataURLCache.get(empId)
+        const path = sigPathByEmpId[empId]
+        if (!path) { dataURLCache.set(empId, null); return null }
+        const { data: signed } = await supabase.storage.from('hr-semnaturi').createSignedUrl(path, 600)
+        if (!signed?.signedUrl) { dataURLCache.set(empId, null); return null }
+        const dataUrl = await fetchAsDataURL(signed.signedUrl)
+        dataURLCache.set(empId, dataUrl)
+        return dataUrl
+      }
+      
+      const empAproba = findEmployeeFuzzy(setari.director_aproba, allEmployees)
+      const empControl = findEmployeeFuzzy(setari.control_preventiv, allEmployees)
+      const empVerificat = findEmployeeFuzzy(setari.verificat_decont, allEmployees)
+      
+      // Pre-load cele 3 semnături fixe (paralel)
+      const [sigAproba, sigControl, sigVerificat] = await Promise.all([
+        getSigDataURLByEmpId(empAproba?.id),
+        getSigDataURLByEmpId(empControl?.id),
+        getSigDataURLByEmpId(empVerificat?.id),
+      ])
+      
+      // Warn dacă lipsesc semnături obligatorii
+      const missing = []
+      if (!sigAproba) missing.push(`SE APROBĂ (${setari.director_aproba || 'Trusu Razvan'})`)
+      if (!sigControl) missing.push(`CONTROL FIN. (${setari.control_preventiv || 'Tudorache Marilena'})`)
+      if (!sigVerificat) missing.push(`VERIFICAT DECONT (${setari.verificat_decont || 'Mirela Popescu'})`)
+      if (missing.length) {
+        const ok = window.confirm(
+          `⚠ Semnături lipsă pentru:\n\n  • ${missing.join('\n  • ')}\n\n` +
+          `Aceste rubrici vor apărea GOALE în PDF. Continui? Apasă OK pentru a continua, sau Cancel pentru a opri și a uploada întâi semnăturile lipsă (HR → Semnături).`
+        )
+        if (!ok) { setOrdGenerating(false); return }
+      }
+      
+      // Helper format date dd.mm.yyyy
+      const fmtRO = (s) => {
+        if (!s) return ''
+        const d = new Date(s + (s.length === 10 ? 'T12:00' : ''))
+        return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`
+      }
+      const periodStartFmt = fmtRO(ordGenPayment.period_from)
+      const periodEndFmt = fmtRO(ordGenPayment.period_to)
+      
+      // Timestamp generare pentru log audit (apare jos pe fiecare pagină)
+      const now = new Date()
+      const genTimestamp = `${String(now.getDate()).padStart(2,'0')}.${String(now.getMonth()+1).padStart(2,'0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
+      
+      // 4. Dynamic imports (jsPDF + html2canvas + JSZip)
+      const [{ default: jsPDF }, { default: html2canvas }, { default: JSZip }] = await Promise.all([
+        import('jspdf'),
+        import('html2canvas'),
+        import('jszip'),
+      ])
+      const zip = new JSZip()
+      
+      // 5. Container offscreen unic (reutilizat pentru fiecare angajat)
+      const wrapper = document.createElement('div')
+      wrapper.style.cssText = 'position:absolute;left:-99999px;top:0;width:794px;background:#fff;'
+      document.body.appendChild(wrapper)
+      
+      try {
+        for (let idx = 0; idx < selected.length; idx++) {
+          const emp = selected[idx]
+          // Titular semnătură (lookup direct pe id)
+          const sigTitular = await getSigDataURLByEmpId(emp.id)
+          
+          const allDays = emp.allDays || []
+          
+          // Build HTML 2 pagini cu semnături inserate
+          const { page1, page2 } = buildOrdinHTML({
+            emp, ordGenPayment, allDays, setari,
+            denumireSocietate, nrRegCom, cui, periodStartFmt, periodEndFmt, fmtRO,
+            semnaturiData: { aproba: sigAproba, control: sigControl, verificat: sigVerificat, titular: sigTitular },
+            genTimestamp,
+          })
+          
+          wrapper.innerHTML = page1 + page2
+          
+          // Wait pentru imagini să se încarce (data URLs sunt sync dar lasă să se așeze layout-ul)
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+          
+          const page1Elem = wrapper.querySelector('.pdf-page-1')
+          const page2Elem = wrapper.querySelector('.pdf-page-2')
+          
+          const canvasOpts = { scale: 2, useCORS: true, logging: false, background: '#fff' }
+          const canvas1 = await html2canvas(page1Elem, canvasOpts)
+          const canvas2 = await html2canvas(page2Elem, canvasOpts)
+          
+          // jsPDF A4: 210 × 297mm
+          const pdf = new jsPDF('p', 'mm', 'a4')
+          pdf.addImage(canvas1.toDataURL('image/png'), 'PNG', 0, 0, 210, 297, undefined, 'FAST')
+          pdf.addPage()
+          pdf.addImage(canvas2.toDataURL('image/png'), 'PNG', 0, 0, 210, 297, undefined, 'FAST')
+          
+          const pdfBlob = pdf.output('blob')
+          const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
+          const filename = `Ordin_Deplasare_${safeName}_${ordGenPayment.period_from}_${ordGenPayment.period_to}.pdf`
+          zip.file(filename, pdfBlob)
+          
+          setOrdGenProgress({ done: idx + 1, total: selected.length })
+        }
+      } finally {
+        document.body.removeChild(wrapper)
+      }
+      
+      // 6. Generate ZIP + download
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Ordine_Deplasare_PDF_${ordGenPayment.period_from}_${ordGenPayment.period_to}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      
+      playBeep(920, 0.12); setTimeout(() => playBeep(1100, 0.12), 130)
+      showToast(`✅ ${selected.length} PDF-uri generate în ZIP`)
+      setShowOrdGen(false)
+      setOrdGenEmps([])
+      setOrdGenPayment(null)
+    } catch (e) {
+      console.error('generateOrdinePDF err:', e)
+      showToast('Eroare la generare PDF: ' + (e?.message || e), 'error')
+    } finally {
+      setOrdGenerating(false)
+      setOrdGenProgress({ done: 0, total: 0 })
+    }
+  }
+  
   // Generează ZIP cu xlsx per angajat (build from-scratch, fără template Storage)
   // Layout: pagina 1 = ordin deplasare (CONFIRMĂRI, DECONT, SEMNĂTURI) + pagina 2 = Situație Prezență Zilnică
   const generateOrdine = async () => {
@@ -4160,8 +4590,15 @@ function ReportsPage() {
                   <button 
                     onClick={generateOrdine} 
                     disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0}
+                    style={{...S.btnS,fontSize:12,background:G.orange+'22',color:G.orange,border:`1px solid ${G.orange}66`,opacity:(ordGenerating||ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0)?.5:1}}
+                    title="Generează xlsx editabile (fără semnături)"
+                  >{ordGenerating ? '⏳' : `📦 ZIP xlsx (${ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length})`}</button>
+                  <button 
+                    onClick={generateOrdinePDF} 
+                    disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0}
                     style={{...S.btnP,background:G.orange,fontSize:12,opacity:(ordGenerating||ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0)?.5:1}}
-                  >{ordGenerating ? '⏳ Generez...' : `📦 Generează ZIP (${ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length})`}</button>
+                    title="Generează PDF-uri cu semnături inserate (gata de printat/semnat)"
+                  >{ordGenerating ? '⏳ Generez...' : `📄 PDF cu semnături (${ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length})`}</button>
                 </div>
               </>
             )}
