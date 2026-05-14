@@ -2110,8 +2110,9 @@ function ReportsPage() {
       const nrRegCom = fm['firma_reg_com'] || 'J29/1650/2007'
       const cui = fm['firma_cui'] || 'RO 22029920'
 
-      // 2. Fetch template binary
-      const tplResp = await fetch(templateUrl)
+      // 2. Fetch template binary (cu cache-busting pentru a evita CDN cache vechi după re-upload)
+      const cacheBustUrl = templateUrl + (templateUrl.includes('?') ? '&' : '?') + '_cb=' + Date.now()
+      const tplResp = await fetch(cacheBustUrl, { cache: 'no-store' })
       if (!tplResp.ok) throw new Error('Fetch template eșuat: ' + tplResp.status)
       const tplArrayBuf = await tplResp.arrayBuffer()
 
