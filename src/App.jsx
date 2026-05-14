@@ -2217,15 +2217,25 @@ function ReportsPage() {
         // Bug cunoscut: la XLSX.write se pierd font color hex, page scale, bold flag etc.
         // Margins, formule și row heights se păstrează OK; restul trebuie setat manual.
 
-        // 1. Page setup: portrait A4, scale 80%, fit la o pagină pe lățime (oricât pe înălțime)
+        // 1. Page setup: portrait A4 + fitToPage (1 pagină pe lățime ȘI pe înălțime)
+        //    Scale NU se setează — Excel calculează automat scale-ul optim când fitToPage=true
         ws['!pageSetup'] = {
           orientation: 'portrait',
           paperSize: 9,         // 9 = A4
-          scale: 80,
           fitToWidth: 1,
-          fitToHeight: 0,
+          fitToHeight: 1,
         }
-        ws['!margins'] = { left: 0.35, right: 0.35, top: 0.4, bottom: 0.4, header: 0.3, footer: 0.3 }
+        // Activare fitToPage prin sheetPr (atribut <pageSetUpPr fitToPage="1"/> în XML)
+        ws['!sheetPr'] = ws['!sheetPr'] || {}
+        ws['!sheetPr'].pageSetUpPr = { fitToPage: true }
+        ws['!margins'] = { left: 0.25, right: 0.25, top: 0.3, bottom: 0.3, header: 0.15, footer: 0.15 }
+        // Print area strict (A1:I89) — evită coloanele goale K/L din template
+        ws['!printArea'] = 'A1:I89'
+
+        // 1b. Elimin lățimile pe coloane > I (K, L au width 33.3 dar nu au date — măresc artificial pagina)
+        if (ws['!cols']) {
+          ws['!cols'] = ws['!cols'].slice(0, 9)  // păstrez doar A-I (idx 0-8)
+        }
 
         // 2. Titlu D7 — bold mare albastru
         if (ws['D7']) {
@@ -2275,6 +2285,15 @@ function ReportsPage() {
         ws['!rows'][44] = { hpx: 21 }   // R45 etichete
         ws['!rows'][45] = { hpx: 19 }   // R46 sub-etichete
         ws['!rows'][46] = { hpx: 29 }   // R47 semnături
+
+        // ─── CRITIC: șterg sheet-ul LEGENDA_ERP din workbook ─────────────────
+        // Acest sheet conține documentația placeholders + exemple și NU trebuie să apară
+        // în ordinul final. Dacă rămâne, la tipărire generează 4 pagini extra (2-5).
+        const legendaIdx = wb.SheetNames.indexOf('LEGENDA_ERP')
+        if (legendaIdx >= 0) {
+          wb.SheetNames.splice(legendaIdx, 1)
+          delete wb.Sheets['LEGENDA_ERP']
+        }
 
         // Rename sheet to employee name (safe chars only, max 31 chars per Excel limit)
         const cleanName = emp.name.replace(/[\\/?*\[\]:]/g, '').slice(0, 31).trim()
