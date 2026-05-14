@@ -1269,7 +1269,7 @@ function ReportsPage() {
   const [month,setMonth]=useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`)
   const [deptF,setDeptF]=useState('Toate'); const [siteF,setSiteF]=useState('Toate')
   const [sites,setSites]=useState([]); const [data,setData]=useState([]); const [detailed,setDetailed]=useState([])
-  const [load,setLoad]=useState(true); const [expITM,setExpITM]=useState(false); const [expD,setExpD]=useState(false); const [expS,setExpS]=useState(false); const [expBT,setExpBT]=useState(false)
+  const [load,setLoad]=useState(true); const [expD,setExpD]=useState(false); const [expS,setExpS]=useState(false); const [expBT,setExpBT]=useState(false)
   const [rSearch,setRSearch]=useState('')
   const [impPontajPrev,setImpPontajPrev]=useState(null); const [importingPontaj,setImportingPontaj]=useState(false)
   const importPontajRef=useRef(null)
@@ -1288,8 +1288,90 @@ function ReportsPage() {
   const [ordGenEmps, setOrdGenEmps] = useState([])  // [{employee_id, name, days_real, diurna_max, diurna_records, santiere_list, selected}]
   const [ordGenerating, setOrdGenerating] = useState(false)
   const [ordGenProgress, setOrdGenProgress] = useState({ done: 0, total: 0 })
+  
+  // Pontaj Brut (fost Export ITM) + Istoric — acces gate-uit
+  const [expPontajBrut, setExpPontajBrut] = useState(false)
+  const [showHistoricPB, setShowHistoricPB] = useState(false)
+  const [historicPB, setHistoricPB] = useState([])
+  const [historicPBLoad, setHistoricPBLoad] = useState(false)
+  // Lock-screen pentru Istoric (re-auth ca la Salarii, 20 min timeout)
+  const PB_TIMEOUT_MIN = 20
+  const [pbUnlocked, setPbUnlocked] = useState(() => {
+    const until = Number(sessionStorage.getItem('pontajBrutUnlockedUntil') || 0)
+    return until > Date.now()
+  })
+  const [pbUnlockUntil, setPbUnlockUntil] = useState(() => Number(sessionStorage.getItem('pontajBrutUnlockedUntil') || 0))
+  const [pbPwdInput, setPbPwdInput] = useState('')
+  const [pbPwdErr, setPbPwdErr] = useState('')
+  const [pbVerifying, setPbVerifying] = useState(false)
   const [toast,showToast]=useToast()
   const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
+  // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
+  const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
+  
+  // Lock-screen Istoric: reset timer la fiecare interactiune (mouse, keyboard, scroll, touch)
+  useEffect(() => {
+    if (!pbUnlocked || !showHistoricPB) return
+    const resetTimer = () => {
+      const until = Date.now() + PB_TIMEOUT_MIN * 60 * 1000
+      sessionStorage.setItem('pontajBrutUnlockedUntil', String(until))
+      setPbUnlockUntil(until)
+    }
+    const events = ['mousedown', 'keydown', 'scroll', 'touchstart']
+    events.forEach(e => window.addEventListener(e, resetTimer, { passive: true }))
+    const tid = setInterval(() => {
+      const until = Number(sessionStorage.getItem('pontajBrutUnlockedUntil') || 0)
+      if (until <= Date.now()) {
+        setPbUnlocked(false)
+        sessionStorage.removeItem('pontajBrutUnlockedUntil')
+      }
+    }, 10000)
+    return () => {
+      events.forEach(e => window.removeEventListener(e, resetTimer))
+      clearInterval(tid)
+    }
+  }, [pbUnlocked, showHistoricPB])
+  
+  const handlePbUnlock = async () => {
+    if (!profile?.email) { setPbPwdErr('Lipsește email-ul contului'); return }
+    if (!pbPwdInput) { setPbPwdErr('Introdu parola'); return }
+    setPbVerifying(true); setPbPwdErr('')
+    const { error } = await supabase.auth.signInWithPassword({ email: profile.email, password: pbPwdInput })
+    if (error) { setPbPwdErr('Parolă greșită'); setPbVerifying(false); return }
+    const until = Date.now() + PB_TIMEOUT_MIN * 60 * 1000
+    sessionStorage.setItem('pontajBrutUnlockedUntil', String(until))
+    setPbUnlockUntil(until); setPbUnlocked(true); setPbPwdInput(''); setPbVerifying(false)
+    loadHistoricPB()
+  }
+  const handlePbLock = () => {
+    sessionStorage.removeItem('pontajBrutUnlockedUntil')
+    setPbUnlocked(false); setPbUnlockUntil(0)
+  }
+  const loadHistoricPB = async () => {
+    setHistoricPBLoad(true)
+    const { data } = await supabase.from('pontaj_brut_istoric').select('*').order('exported_at', { ascending: false }).limit(100)
+    setHistoricPB(data || [])
+    setHistoricPBLoad(false)
+  }
+  // Redownload xlsx dintr-o intrare istoric
+  const redownloadHistoricPB = async (entry) => {
+    if (!entry?.storage_path) { showToast('Fără storage_path — fișier inexistent', 'warn'); return }
+    const { data, error } = await supabase.storage.from('pontaj-brut-istoric').createSignedUrl(entry.storage_path, 120)
+    if (error || !data?.signedUrl) { showToast('Eroare descărcare: ' + (error?.message || 'fără URL'), 'error'); return }
+    const a = document.createElement('a'); a.href = data.signedUrl; a.download = entry.filename || 'pontaj_brut.xlsx'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+  // Ștergere intrare istoric (doar OWNER per RLS)
+  const deleteHistoricPB = async (entry) => {
+    if (!window.confirm(`Ștergi exportul "${entry.filename}" (${new Date(entry.exported_at).toLocaleDateString('ro-RO')})?\nFișierul Excel + metadata sunt șterse permanent.`)) return
+    // Șterg Storage object (RLS permite owner)
+    if (entry.storage_path) {
+      await supabase.storage.from('pontaj-brut-istoric').remove([entry.storage_path])
+    }
+    await supabase.from('pontaj_brut_istoric').delete().eq('id', entry.id)
+    showToast('✓ Intrare ștearsă')
+    loadHistoricPB()
+  }
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
   useEffect(()=>{ if(showIstoric) loadPayments() },[showIstoric])
@@ -1895,9 +1977,13 @@ function ReportsPage() {
     finally{setImportingPontaj(false)}
   }
 
-  const exportITM=async()=>{
+  // ─── EXPORT PONTAJ BRUT (fost Export ITM) — cu coloană Ore Suplimentare + Istoric ─────
+  // Acces gate-uit: doar Owner sau utilizatori cu can_access_pontaj_brut
+  // După export: salvează xlsx în Storage (pontaj-brut-istoric) + INSERT în pontaj_brut_istoric
+  const exportPontajBrut=async()=>{
     if (!data.length){showToast('Fără date','warn');return}
-    setExpITM(true)
+    if (!hasPontajBrutAccess) { showToast('Acces refuzat — necesită bifa „Pontaj Brut" pe profil','error'); return }
+    setExpPontajBrut(true)
     try {
       const {y,m,days}=getRange()
       const mName=new Date(y,m-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
@@ -1906,32 +1992,59 @@ function ReportsPage() {
       const dayAbbr=['D','L','Ma','Mi','J','V','S']
       const FIXED=3 // Col A=Nume, B=Functia, C=Program de Lucru
 
-      // Load holidays
-      const {data:calData}=await supabase.from('calendar_days').select('date').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
-      const legalSet=new Set((calData||[]).map(c=>c.date))
+      // Load holidays (cu type ca să distingem legal vs holiday firmă)
+      const {data:calData}=await supabase.from('calendar_days').select('date,type').gte('date',`${y}-${String(m).padStart(2,'0')}-01`).lte('date',`${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
+      const legalSet=new Set((calData||[]).filter(c=>c.type==='legal').map(c=>c.date))
+
+      // Zile lucrătoare lună = Mon-Fri minus sărbători legale (consistent cu AdminPage)
+      let workDaysInMonth=0
+      for(let d=1;d<=days;d++){
+        const dt=new Date(y,m-1,d)
+        const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+        if(dt.getDay()!==0 && dt.getDay()!==6 && !legalSet.has(ds)) workDaysInMonth++
+      }
 
       const isOff=(d)=>{ const dt=new Date(y,m-1,d); return {we:dt.getDay()===0||dt.getDay()===6, leg:legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`)} }
 
-      // ── Build rows ──
-      const R=[] // array of arrays
+      // Coloane dinamice (lățimea depinde de numărul de zile ale lunii)
+      const TOTAL_ZILE_C = FIXED + days        // ex Apr(30): col 33=AH; Mai(31): col 34=AI
+      const TOTAL_ORE_C  = FIXED + days + 1    // ex Apr: col 34=AI; Mai: col 35=AJ
+      const ORE_SUPL_C   = FIXED + days + 2    // ex Apr: col 35=AJ; Mai: col 36=AK
+      const WD_LABEL_C   = FIXED + days + 3    // etichetă „Zile lucr. lună:"
+      const WD_VALUE_C   = FIXED + days + 4    // valoarea numerică (folosită în formulă)
+      const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
+      const wdValueColLetter  = XLSX.utils.encode_col(WD_VALUE_C)
 
-      // Antet
+      // ── Build rows ──
+      const R=[]
+      // Antet firmă
       R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
       R.push(['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'])
       R.push([])
-      R.push([`FOAIE COLECTIVĂ DE PREZENȚĂ — ${mName.toUpperCase()}`])
+      // Rândul 4 (idx 3): titlu + zile lucr. lună la dreapta (etichetă + valoare)
+      const titleRow = [`FOAIE COLECTIVĂ DE PREZENȚĂ — ${mName.toUpperCase()}`]
+      while (titleRow.length < WD_LABEL_C) titleRow.push('')
+      titleRow.push('Zile lucr. lună:')   // WD_LABEL_C — etichetă
+      titleRow.push(workDaysInMonth)       // WD_VALUE_C — valoarea (numeric pentru formulă)
+      R.push(titleRow)
       R.push([])
-
-      // Header row (row idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE']
+      // Header row (idx 5)
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE']
       R.push(HDR)
-
-      // Day names row (row idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','']
+      // Day names row (idx 6)
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','']
       R.push(DNR)
 
-      // Employee rows
-      data.forEach(emp=>{
+      // Tracking metadata pentru istoric BD
+      let totalOreLunarSum = 0
+      let totalOreSuplSum  = 0
+
+      // Employee rows (5 rânduri per angajat: 4 date + 1 separator)
+      data.forEach((emp, empIdx)=>{
+        // Excel row number (1-indexed) pentru primul rând al acestui angajat (Ora Intrare)
+        // Rândurile 1-7 sunt antet, deci primul angajat începe la rând 8
+        const excelRow = 8 + empIdx * 5
+
         const rCI=[emp.name, emp.position||'', 'Ora Intrare']
         const rCO=['','','Ora Ieșire']
         const rPM=['','','Pauza de Masă (ore)']
@@ -1943,60 +2056,83 @@ function ReportsPage() {
           const {we,leg}=isOff(d)
           const rec=emp.records?.find(r=>r.date===ds)
           if(rec?.norma){
-            // Norma - always shown regardless of day type
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
-            // Has pontaj - show it even on weekends/holidays
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
             const mins=netMins(rec.check_in,rec.check_out,rec.lunch_break!==false)
             rCI.push(fmt24(rec.check_in)); rCO.push(rec.check_out?fmt24(rec.check_out):'')
             rPM.push(hp?1:''); rOL.push(+(mins/60).toFixed(1))
             tz++; to+=mins
           } else if(we||leg){
-            // No pontaj, it's a day off
             rCI.push(''); rCO.push(''); rPM.push(''); rOL.push(leg?'SL':'')
           } else {
             rCI.push(''); rCO.push(''); rPM.push(''); rOL.push('')
           }
         }
-        rCI.push(tz,+(to/60).toFixed(1))
-        rCO.push('',''); rPM.push('',''); rOL.push('','')
-        R.push(rCI,rCO,rPM,rOL,[]) // 4 data rows + 1 empty separator
+        const empOreLunar = +(to/60).toFixed(1)
+        const empOreSupl  = Math.max(0, empOreLunar - workDaysInMonth*8)
+        totalOreLunarSum += empOreLunar
+        totalOreSuplSum  += empOreSupl
+
+        rCI.push(tz, empOreLunar)
+        // ORE SUPLIMENTARE — formula Excel pe primul rând (Ora Intrare)
+        // = MAX(0, TotalOre{row} - WdValue$4 * 8) — referință absolută pe rând 4 pentru zile lucr.
+        rCI.push({ f: `MAX(0, ${totalOreColLetter}${excelRow} - ${wdValueColLetter}$4*8)`, t: 'n' })
+
+        rCO.push('','',''); rPM.push('','',''); rOL.push('','','')
+        R.push(rCI,rCO,rPM,rOL,[])
       })
 
       const ws=XLSX.utils.aoa_to_sheet(R)
-      ws['!cols']=[{wch:26},{wch:16},{wch:22},...dayNums.map(()=>({wch:5.5})),{wch:11},{wch:11}]
+      // Lățimi: A,B,C + zile + TOTAL ZILE + TOTAL ORE + ORE SUPL (216px = ~30 char) + label + value
+      ws['!cols']=[
+        {wch:26},{wch:16},{wch:22},
+        ...dayNums.map(()=>({wch:5.5})),
+        {wch:11},                  // TOTAL ZILE
+        {wch:11},                  // TOTAL ORE
+        {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
+        {wch:18},                  // 'Zile lucr. lună:' label
+        {wch:11}                   // valoare zile lucr.
+      ]
 
-      // ── Style cells ──
+      // ── Stilizare ──
       const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
       const sc=(r,c,s)=>{ const a=XLSX.utils.encode_cell({r,c}); if(!ws[a]) ws[a]={v:'',t:'s'}; ws[a].s=s }
       const alC={horizontal:'center',vertical:'center'}
       const alL={horizontal:'left',vertical:'center'}
 
-      // Header row (5)
+      // Title row (idx 3) — etichetă „Zile lucr. lună:" + valoare la dreapta
+      sc(3, WD_LABEL_C, {fill:{fgColor:{rgb:'1F497D'}}, font:{bold:true,color:{rgb:'FFFFFF'},sz:10}, border:bd, alignment:{horizontal:'right',vertical:'center'}})
+      sc(3, WD_VALUE_C, {fill:{fgColor:{rgb:'FFE699'}}, font:{bold:true,sz:11,color:{rgb:'7F6000'}}, border:bd, alignment:alC})
+
+      // Header row (5) — 'TOTAL ZILE', 'TOTAL ORE', 'ORE SUPLIMENTARE'
       HDR.forEach((v,c)=> sc(5,c,{fill:{fgColor:{rgb:'1F497D'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:10},border:bd,alignment:c<3?alL:alC}))
 
-      // Day names row (6)
+      // Day names row (6) — inclusiv sub-header pentru ORE SUPL (#4472C4 ca specs)
       DNR.forEach((v,c)=>{
-        const isWE=c>=3&&c<3+days&&(()=>{const d=c-2;const dt=new Date(y,m-1,d);return dt.getDay()===0||dt.getDay()===6})()
-        const isLeg=c>=3&&c<3+days&&legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(c-2).padStart(2,'0')}`)
-        sc(6,c,{fill:{fgColor:{rgb:isWE?'BFBFBF':isLeg?'FF8888':'4472C4'}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:alC})
+        const isDayCol = c >= 3 && c < 3+days
+        const isWE = isDayCol && (()=>{const d=c-2;const dt=new Date(y,m-1,d);return dt.getDay()===0||dt.getDay()===6})()
+        const isLeg = isDayCol && legalSet.has(`${y}-${String(m).padStart(2,'0')}-${String(c-2).padStart(2,'0')}`)
+        let rgb = '4472C4'
+        if (isWE) rgb = 'BFBFBF'
+        else if (isLeg) rgb = 'FF8888'
+        sc(6,c,{fill:{fgColor:{rgb}},font:{bold:true,color:{rgb:'FFFFFF'},sz:9},border:bd,alignment:alC})
       })
 
-      // Employee rows starting at 7
+      // Employee rows starting at idx 7 (Excel rândul 8)
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C=FIXED+days+2
+          const TOTAL_C = FIXED + days + 3  // include ORE SUPL
           for(let c=0;c<TOTAL_C;c++){
             let s={}
-            if(c===0){ // Nume
+            if(c===0){
               s=ro===0?{fill:{fgColor:{rgb:'E2EFDA'}},font:{bold:true,sz:10},border:bd,alignment:alL}:{fill:{fgColor:{rgb:'F5F5F5'}},border:bd,alignment:alL}
-            } else if(c===1){ // Functia
+            } else if(c===1){
               s=ro===0?{fill:{fgColor:{rgb:'E2EFDA'}},border:bd,alignment:alL}:{fill:{fgColor:{rgb:'F5F5F5'}},border:bd}
-            } else if(c===2){ // Program de Lucru label
+            } else if(c===2){
               s={fill:{fgColor:{rgb:'D6E4F0'}},font:{bold:true,sz:8},border:bd,alignment:alL}
-            } else if(c>=3&&c<3+days){ // Day columns
+            } else if(c>=3 && c<3+days){
               const d=c-2
               const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
               const {we,leg}=isOff(d)
@@ -2004,12 +2140,19 @@ function ReportsPage() {
               const hasWork=rec?.check_in&&!rec?.norma
               const hasNorma=rec?.norma
               let rgb=null
-              if(hasWork&&(we||leg)) rgb='FFC000'      // lucrat in zi libera = portocaliu
-              else if(hasNorma) rgb='FFFF00'            // norma = galben
-              else if(we) rgb='C0C0C0'                  // weekend fara pontaj = gri
-              else if(leg) rgb='FFAAAA'                 // sarbatoare fara pontaj = rosu deschis
+              if(hasWork&&(we||leg)) rgb='FFC000'
+              else if(hasNorma) rgb='FFFF00'
+              else if(we) rgb='C0C0C0'
+              else if(leg) rgb='FFAAAA'
               s={...(rgb?{fill:{fgColor:{rgb}}}:{}),border:bd,alignment:alC,font:{sz:9}}
-            } else { // Totals
+            } else if(c === ORE_SUPL_C) {
+              // ORE SUPLIMENTARE — stil per specs Razvan
+              // ro=0 (Ora Intrare = rândul principal): bold #D9E1F2 centrat font 11
+              // ro=1-3 (sub-rânduri): #F5F5F5 font 9 centrat
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else {
               s={fill:{fgColor:{rgb:ro===0?'D9E1F2':'F5F5F5'}},font:ro===0?{bold:true}:{sz:9},border:bd,alignment:alC}
             }
             sc(ri+ro,c,s)
@@ -2018,11 +2161,51 @@ function ReportsPage() {
         ri+=5
       })
 
-      XLSX.utils.book_append_sheet(wb,ws,'Pontaj ITM')
-      XLSX.writeFile(wb,`Pontaj_ITM_${mName.replace(' ','_')}.xlsx`)
-      playBeep(660,0.15); showToast('✓ Export ITM gata!')
+      XLSX.utils.book_append_sheet(wb,ws,'Pontaj Brut')
+
+      // ── Write + Download + Upload Storage + INSERT istoric ──
+      const wbArr = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
+      const blob = new Blob([wbArr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const filename = `Pontaj_Brut_${mName.replace(' ','_').replace(/\s/g,'_')}.xlsx`
+
+      // Download local
+      const localUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = localUrl; a.download = filename
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(localUrl)
+
+      // Upload Storage + INSERT istoric (non-blocking pentru download)
+      const storagePath = `${y}/${String(m).padStart(2,'0')}/${Date.now()}_${filename}`
+      try {
+        const { error: upErr } = await supabase.storage.from('pontaj-brut-istoric').upload(storagePath, blob, {
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          upsert: false
+        })
+        if (upErr) {
+          showToast('⚠ Excel descărcat, dar istoric nu a fost salvat în Storage: ' + upErr.message, 'warn')
+        } else {
+          const { error: insErr } = await supabase.from('pontaj_brut_istoric').insert({
+            period_year: y,
+            period_month: m,
+            work_days_in_month: workDaysInMonth,
+            total_employees: data.length,
+            total_ore_lunar: +totalOreLunarSum.toFixed(2),
+            total_ore_supl: +totalOreSuplSum.toFixed(2),
+            exported_by: profile?.id,
+            exported_by_name: profile?.name || profile?.email,
+            filename, storage_path: storagePath
+          })
+          if (insErr) showToast('⚠ Fișier salvat dar metadata istoric a eșuat: ' + insErr.message, 'warn')
+        }
+      } catch (e) {
+        showToast('⚠ Eroare salvare istoric (fișierul s-a descărcat OK): ' + (e?.message||e), 'warn')
+      }
+
+      playBeep(660,0.15)
+      showToast(`✓ Pontaj Brut — ${data.length} ang. · ${workDaysInMonth} zile lucr. · ${totalOreSuplSum.toFixed(1)}h supl.`)
     } catch(e){ showToast('Eroare: '+e.message,'error'); console.error(e) }
-    finally{ setExpITM(false) }
+    finally{ setExpPontajBrut(false) }
   }
 
   const exportDiurne=async()=>{
@@ -2478,7 +2661,12 @@ function ReportsPage() {
             <span style={{position:'absolute',left:9,top:'50%',transform:'translateY(-50%)',fontSize:13,pointerEvents:'none'}}>🔍</span>
             <input value={rSearch} onChange={e=>setRSearch(e.target.value)} placeholder="Caută angajat..." style={{...S.input,paddingLeft:30,margin:0,fontSize:11,height:32,width:170}}/>
           </div>
-          <button onClick={exportITM} disabled={expITM||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expITM?<><div className="sp"/>...</>:'📄 Export ITM'}</button>
+          {hasPontajBrutAccess && (
+            <>
+              <button onClick={exportPontajBrut} disabled={expPontajBrut||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Foaie Colectivă de Prezență cu Ore Suplimentare — acces restricționat">{expPontajBrut?<><div className="sp"/>...</>:'📄 Export Pontaj Brut'}</button>
+              <button onClick={()=>setShowHistoricPB(true)} disabled={load} style={{...S.btnS,fontSize:12,background:'#2A1A4A',color:'#BC8CFF',borderColor:G.purple+'66'}} title="Istoric exporturi Pontaj Brut (parolat)">📋 Istoric Pontaj Brut</button>
+            </>
+          )}
           <button onClick={dlImportTemplate} disabled={load||!data.length} style={{...S.btnS,fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Descarcă template Excel pentru import">⬇ Template Import</button>
           <input ref={importPontajRef} type="file" accept=".xlsx,.xls" style={{display:'none'}} onChange={handleImportPontaj}/>
           <button onClick={()=>importPontajRef.current?.click()} disabled={load} style={{...S.btnP,background:'#3A1A6B',fontSize:12,display:'flex',alignItems:'center',gap:5}}>📥 Import Pontaj</button>
@@ -2563,6 +2751,106 @@ function ReportsPage() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Modal Istoric Pontaj Brut — cu lock-screen (re-auth + 20 min) */}
+      {showHistoricPB && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          {!pbUnlocked ? (
+            // Lock screen
+            <div style={{...S.card,padding:32,maxWidth:460,width:'100%',border:`2px solid ${G.purple}66`,boxShadow:`0 8px 40px ${G.purple}33`}}>
+              <div style={{fontSize:42,textAlign:'center',marginBottom:14}}>🔐</div>
+              <div style={{fontSize:18,fontWeight:800,textAlign:'center',marginBottom:8,color:G.purple}}>Istoric Pontaj Brut</div>
+              <div style={{fontSize:12,color:G.muted,textAlign:'center',marginBottom:22,lineHeight:1.7}}>
+                Conține date GDPR-sensibile cu ore reale lucrate.<br/>
+                Re-introdu parola contului tău pentru <strong style={{color:G.yellow}}>{PB_TIMEOUT_MIN} minute</strong>.
+              </div>
+              <div style={{marginBottom:12}}>
+                <Lbl>Email contului tău</Lbl>
+                <div style={{fontSize:12,color:G.text,padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border}`,fontFamily:'monospace'}}>{profile?.email || '—'}</div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <Lbl>Parolă</Lbl>
+                <input type="password" style={{...S.input,borderColor:pbPwdErr?G.red:G.border2}}
+                  value={pbPwdInput} onChange={e=>setPbPwdInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter') handlePbUnlock()}}
+                  autoFocus disabled={pbVerifying} placeholder="••••••••"/>
+                {pbPwdErr && <div style={{fontSize:11,color:G.red,marginTop:5,fontWeight:600}}>⚠ {pbPwdErr}</div>}
+              </div>
+              <button onClick={handlePbUnlock} disabled={pbVerifying} style={{...S.btnP,width:'100%',padding:'11px',background:pbVerifying?G.dim:G.purple,fontSize:13,fontWeight:700}}>
+                {pbVerifying ? '⏳ Verificare...' : '🔓 Deblochează acces'}
+              </button>
+              <div style={{textAlign:'center',marginTop:14}}>
+                <button onClick={()=>{setShowHistoricPB(false);setPbPwdInput('');setPbPwdErr('')}} style={{...S.btnS,fontSize:11,padding:'6px 14px'}}>← Anulează</button>
+              </div>
+            </div>
+          ) : (
+            // Conținut istoric
+            <div style={{...S.card,width:900,maxHeight:'88vh',display:'flex',flexDirection:'column',borderTop:`3px solid ${G.purple}`}}>
+              <div style={{padding:'14px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:800,display:'flex',alignItems:'center',gap:8}}>📋 Istoric Pontaj Brut</div>
+                  <div style={{fontSize:11,color:G.muted,marginTop:3}}>
+                    🔓 Deblocat până la {new Date(pbUnlockUntil).toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit'})} · {historicPB.length} exporturi
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={handlePbLock} style={{...S.btnS,padding:'4px 10px',fontSize:11,borderColor:G.red+'66',color:G.red}}>🔒 Lock</button>
+                  <button onClick={()=>setShowHistoricPB(false)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>×</button>
+                </div>
+              </div>
+              <div style={{overflowY:'auto',flex:1,padding:'0 20px'}}>
+                {historicPBLoad ? (
+                  <div style={{textAlign:'center',padding:60}}><div className="sp" style={{display:'inline-block'}}/></div>
+                ) : !historicPB.length ? (
+                  <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                    Niciun export salvat încă. Folosește „📄 Export Pontaj Brut" pentru a începe istoricul.
+                  </div>
+                ) : (
+                  <table style={{width:'100%',fontSize:12}}>
+                    <thead style={{position:'sticky',top:0,background:G.surface,zIndex:1}}>
+                      <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Perioadă</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Zile lucr.</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Angajați</th>
+                        <th style={{padding:'10px 6px',textAlign:'right'}}>Total ore</th>
+                        <th style={{padding:'10px 6px',textAlign:'right'}}>Total ore supl.</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Exportat de</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Data</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Acțiuni</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicPB.map((e,i)=>{
+                        const mLabel = new Date(e.period_year, e.period_month-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
+                        return (
+                          <tr key={e.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                            <td style={{padding:'8px 6px',fontWeight:600,color:G.blue,textTransform:'capitalize'}}>{mLabel}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center',color:G.yellow,fontWeight:700}}>{e.work_days_in_month}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center'}}>{e.total_employees}</td>
+                            <td style={{padding:'8px 6px',textAlign:'right',color:G.text}}>{Number(e.total_ore_lunar).toLocaleString('ro-RO',{maximumFractionDigits:1})} h</td>
+                            <td style={{padding:'8px 6px',textAlign:'right',color:Number(e.total_ore_supl)>0?G.orange:G.dim,fontWeight:Number(e.total_ore_supl)>0?700:400}}>{Number(e.total_ore_supl).toLocaleString('ro-RO',{maximumFractionDigits:1})} h</td>
+                            <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{e.exported_by_name || '—'}</td>
+                            <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{new Date(e.exported_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center'}}>
+                              <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                                {e.storage_path && <button onClick={()=>redownloadHistoricPB(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.green,borderColor:G.green+'44'}} title="Descarcă Excel">⬇</button>}
+                                {profile?.is_owner === true && <button onClick={()=>deleteHistoricPB(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.red,borderColor:G.red+'44'}} title="Șterge (doar OWNER)">🗑️</button>}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div style={{padding:'10px 20px',borderTop:`1px solid ${G.border}`,fontSize:11,color:G.muted,background:G.bg}}>
+                💡 Fișierele Excel sunt salvate în Storage privat. Doar OWNER poate șterge intrările.
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -2921,6 +3209,10 @@ function AdminPage() {
     // Acces Date Personale (GDPR): doar OWNER (trigger BD verifica la fel)
     if (profile?.is_owner === true && editMgr.can_access_personal_data !== undefined) {
       updates.can_access_personal_data = !!editMgr.can_access_personal_data
+    }
+    // Acces Pontaj Brut (FCP cu Ore Suplimentare + Istoric): doar OWNER (trigger BD verifică la fel)
+    if (profile?.is_owner === true && editMgr.can_access_pontaj_brut !== undefined) {
+      updates.can_access_pontaj_brut = !!editMgr.can_access_pontaj_brut
     }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
@@ -3314,6 +3606,25 @@ function AdminPage() {
                     </div>
                     <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
                       Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite vizualizare/edit CNP, data nașterii, adresă completă. Necesar pentru HR/contracte.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_access_pontaj_brut?'#1A2A1F':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_access_pontaj_brut?G.green:G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_access_pontaj_brut}
+                    onChange={e=>setEditMgr({...editMgr,can_access_pontaj_brut:e.target.checked})}
+                    style={{accentColor:G.green,width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_access_pontaj_brut?G.green:G.text}}>
+                      📊 Acces Pontaj Brut
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite Export Pontaj Brut (FCP cu Ore Suplimentare) + Istoric exporturi (parolat). Bifează doar pentru utilizatorii responsabili cu salariile.
                     </div>
                   </div>
                 </label>
