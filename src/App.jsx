@@ -1521,13 +1521,34 @@ function ReportsPage() {
 
     try {
       // 1. Fetch dependencies în paralel (functie e deja în ordGenEmps din openOrdGen)
-      const [setariRes, signedUrlRes, firmaSetRes] = await Promise.all([
+      // Template: încercăm mai întâi nume cu underscore (recomandat), fallback la spații (legacy)
+      const [setariRes, signedUrlUnderscore, firmaSetRes] = await Promise.all([
         supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
         supabase.storage.from('templates').createSignedUrl('model_ordin_deplasare.xlsx', 300),
         supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
       ])
+      
+      // Determinăm signed URL final: încercăm să fetch-uim primul, dacă fail încercăm fallback
+      let templateUrl = null
+      if (signedUrlUnderscore.data?.signedUrl) {
+        // Verifică dacă fișierul există efectiv (fetch HEAD)
+        try {
+          const headResp = await fetch(signedUrlUnderscore.data.signedUrl, { method: 'HEAD' })
+          if (headResp.ok) templateUrl = signedUrlUnderscore.data.signedUrl
+        } catch (_) { /* fallback */ }
+      }
+      // Fallback: nume cu spații (legacy upload manual)
+      if (!templateUrl) {
+        const { data: fallback } = await supabase.storage.from('templates').createSignedUrl('model ordin deplasare.xlsx', 300)
+        if (fallback?.signedUrl) {
+          try {
+            const headResp2 = await fetch(fallback.signedUrl, { method: 'HEAD' })
+            if (headResp2.ok) templateUrl = fallback.signedUrl
+          } catch (_) { /* nothing */ }
+        }
+      }
 
-      if (signedUrlRes.error || !signedUrlRes.data?.signedUrl) {
+      if (!templateUrl) {
         showToast('⚠ Template nu există în Storage. Upload "model_ordin_deplasare.xlsx" în bucket "templates" prin Supabase Dashboard.', 'error')
         setOrdGenerating(false); return
       }
@@ -1544,7 +1565,7 @@ function ReportsPage() {
       const cui = fm['firma_cui'] || 'RO 22029920'
 
       // 2. Fetch template binary
-      const tplResp = await fetch(signedUrlRes.data.signedUrl)
+      const tplResp = await fetch(templateUrl)
       if (!tplResp.ok) throw new Error('Fetch template eșuat: ' + tplResp.status)
       const tplArrayBuf = await tplResp.arrayBuffer()
 
