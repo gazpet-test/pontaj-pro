@@ -2053,7 +2053,8 @@ function ReportsPage() {
     }
   }
 
-  // Generează ZIP cu xlsx per angajat (template din Storage)
+  // Generează ZIP cu xlsx per angajat (build from-scratch, fără template Storage)
+  // Layout: pagina 1 = ordin deplasare (CONFIRMĂRI, DECONT, SEMNĂTURI) + pagina 2 = Situație Prezență Zilnică
   const generateOrdine = async () => {
     const selected = ordGenEmps.filter(e => e.selected && e.diurna_max > 0)
     if (!selected.length) {
@@ -2066,39 +2067,11 @@ function ReportsPage() {
     setOrdGenProgress({ done: 0, total: selected.length })
 
     try {
-      // 1. Fetch dependencies în paralel (functie e deja în ordGenEmps din openOrdGen)
-      // Template: încercăm mai întâi nume cu underscore (recomandat), fallback la spații (legacy)
-      const [setariRes, signedUrlUnderscore, firmaSetRes] = await Promise.all([
+      // 1. Fetch semnatari + date firmă în paralel
+      const [setariRes, firmaSetRes] = await Promise.all([
         supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
-        supabase.storage.from('templates').createSignedUrl('model_ordin_deplasare.xlsx', 300),
         supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
       ])
-      
-      // Determinăm signed URL final: încercăm să fetch-uim primul, dacă fail încercăm fallback
-      let templateUrl = null
-      if (signedUrlUnderscore.data?.signedUrl) {
-        // Verifică dacă fișierul există efectiv (fetch HEAD)
-        try {
-          const headResp = await fetch(signedUrlUnderscore.data.signedUrl, { method: 'HEAD' })
-          if (headResp.ok) templateUrl = signedUrlUnderscore.data.signedUrl
-        } catch (_) { /* fallback */ }
-      }
-      // Fallback: nume cu spații (legacy upload manual)
-      if (!templateUrl) {
-        const { data: fallback } = await supabase.storage.from('templates').createSignedUrl('model ordin deplasare.xlsx', 300)
-        if (fallback?.signedUrl) {
-          try {
-            const headResp2 = await fetch(fallback.signedUrl, { method: 'HEAD' })
-            if (headResp2.ok) templateUrl = fallback.signedUrl
-          } catch (_) { /* nothing */ }
-        }
-      }
-
-      if (!templateUrl) {
-        showToast('⚠ Template nu există în Storage. Upload "model_ordin_deplasare.xlsx" în bucket "templates" prin Supabase Dashboard.', 'error')
-        setOrdGenerating(false); return
-      }
-
       const setari = setariRes.data || {
         director_aproba: 'Trusu Razvan',
         control_preventiv: 'Tudorache Marilena',
@@ -2106,19 +2079,9 @@ function ReportsPage() {
         sef_compartiment: 'Udrea Natalia',
       }
       const fm = {}; (firmaSetRes.data || []).forEach(x => fm[x.key] = x.value)
-      const denumireSocietate = fm['firma_nume'] || 'S.C. GAZPET INSTAL S.R.L.'
-      const nrRegCom = fm['firma_reg_com'] || 'J29/1650/2007'
+      const denumireSocietate = fm['firma_nume'] || 'GAZPET INSTAL SRL'
+      const nrRegCom = fm['firma_reg_com'] || 'J29/0001650/2007'
       const cui = fm['firma_cui'] || 'RO 22029920'
-
-      // 2. Fetch template binary (cu cache-busting pentru a evita CDN cache vechi după re-upload)
-      const cacheBustUrl = templateUrl + (templateUrl.includes('?') ? '&' : '?') + '_cb=' + Date.now()
-      const tplResp = await fetch(cacheBustUrl, { cache: 'no-store' })
-      if (!tplResp.ok) throw new Error('Fetch template eșuat: ' + tplResp.status)
-      const tplArrayBuf = await tplResp.arrayBuffer()
-
-      // 3. Dynamic import JSZip
-      const JSZip = (await import('jszip')).default
-      const zip = new JSZip()
 
       // Helper format date dd.mm.yyyy
       const fmtRO = (s) => {
@@ -2129,185 +2092,482 @@ function ReportsPage() {
       const periodStartFmt = fmtRO(ordGenPayment.period_from)
       const periodEndFmt = fmtRO(ordGenPayment.period_to)
 
-      // 4. Per employee: clone template + populate + add to zip
+      // 2. Dynamic import JSZip
+      const JSZip = (await import('jszip')).default
+      const zip = new JSZip()
+
+      // ─── Paleta culori ─────────────────────────────────────────────
+      const BLUE_DARK = '1F497D', BLUE_LIGHT = 'D9E1F2', GRAY_BG = 'F5F5F5'
+      const WHITE = 'FFFFFF', TEXT_MUTED = '7F7F7F', BORDER_GRAY = 'BFBFBF'
+
+      // Border thin
+      const tb = {
+        top: { style: 'thin', color: { rgb: BORDER_GRAY } },
+        bottom: { style: 'thin', color: { rgb: BORDER_GRAY } },
+        left: { style: 'thin', color: { rgb: BORDER_GRAY } },
+        right: { style: 'thin', color: { rgb: BORDER_GRAY } },
+      }
+
+      // ─── Helper: setCell ──────────────────────────────────────────
+      const setCell = (ws, addr, opts) => { ws[addr] = opts }
+      const merge = (ws, fromAddr, toAddr) => {
+        ws['!merges'] = ws['!merges'] || []
+        ws['!merges'].push({ s: XLSX.utils.decode_cell(fromAddr), e: XLSX.utils.decode_cell(toAddr) })
+      }
+
+      // ─── Stiluri pre-construite ───────────────────────────────────
+      const styleTitlu = {
+        fill: { fgColor: { rgb: WHITE } },
+        font: { name: 'Calibri', sz: 16, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      }
+      const styleBanner = {
+        fill: { fgColor: { rgb: BLUE_DARK } },
+        font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: WHITE } },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border: tb,
+      }
+      const styleBannerCenter = {
+        fill: { fgColor: { rgb: BLUE_DARK } },
+        font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: WHITE } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: tb,
+      }
+      const styleSubHeader = {
+        fill: { fgColor: { rgb: BLUE_DARK } },
+        font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: WHITE } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: tb,
+      }
+      const styleFieldLabel = {
+        fill: { fgColor: { rgb: GRAY_BG } },
+        font: { name: 'Calibri', sz: 9 },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border: tb,
+      }
+      const styleFieldValue = {
+        fill: { fgColor: { rgb: WHITE } },
+        font: { name: 'Calibri', sz: 10 },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border: tb,
+      }
+      const styleAmount = (bold = false) => ({
+        fill: { fgColor: { rgb: WHITE } },
+        font: { name: 'Calibri', sz: 10, bold },
+        alignment: { horizontal: 'right', vertical: 'center', indent: 1 },
+        border: tb,
+        numFmt: '#,##0.00',
+      })
+      const styleAmountTotal = {
+        fill: { fgColor: { rgb: WHITE } },
+        font: { name: 'Calibri', sz: 10, bold: true },
+        alignment: { horizontal: 'right', vertical: 'center', indent: 1 },
+        border: tb,
+        numFmt: '#,##0.00 "RON"',
+      }
+      const styleAmountTotalHighlight = {
+        fill: { fgColor: { rgb: BLUE_LIGHT } },
+        font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'right', vertical: 'center', indent: 1 },
+        border: tb,
+        numFmt: '#,##0.00 "RON"',
+      }
+      const styleItalicNote = {
+        font: { name: 'Calibri', sz: 9, italic: true, color: { rgb: TEXT_MUTED } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      }
+      const styleSignature = {
+        font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: { top: { style: 'thin', color: { rgb: TEXT_MUTED } } },
+      }
+      const styleDateDuratahdr = {
+        font: { name: 'Calibri', sz: 10, bold: true },
+        alignment: { horizontal: 'right', vertical: 'center' },
+      }
+      const styleDateDurataVal = {
+        font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      }
+      const styleSuffixLei = {
+        fill: { fgColor: { rgb: WHITE } },
+        font: { name: 'Calibri', sz: 9, italic: true, color: { rgb: TEXT_MUTED } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+        border: tb,
+      }
+      const styleCheltuieliBanner = {
+        fill: { fgColor: { rgb: BLUE_LIGHT } },
+        font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border: tb,
+      }
+      const styleTotalLabelHighlight = {
+        fill: { fgColor: { rgb: BLUE_LIGHT } },
+        font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border: tb,
+      }
+      const styleSubHeaderRole = {
+        font: { name: 'Calibri', sz: 9, italic: true, color: { rgb: TEXT_MUTED } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      }
+      const styleCompanyBanner = {
+        fill: { fgColor: { rgb: BLUE_DARK } },
+        font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: WHITE } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: tb,
+      }
+      const styleSitTitle = {
+        font: { name: 'Calibri', sz: 14, bold: true, color: { rgb: BLUE_DARK } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      }
+      const styleDayCell = (isOff) => isOff ? {
+        font: { name: 'Calibri', sz: 9, italic: true, color: { rgb: TEXT_MUTED } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: tb,
+        fill: { fgColor: { rgb: GRAY_BG } },
+      } : {
+        font: { name: 'Calibri', sz: 10 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: tb,
+      }
+      const styleDaySite = (isOff) => isOff ? {
+        font: { name: 'Calibri', sz: 9, italic: true, color: { rgb: TEXT_MUTED } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: tb,
+        fill: { fgColor: { rgb: GRAY_BG } },
+      } : {
+        font: { name: 'Calibri', sz: 10 },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border: tb,
+      }
+      const styleDayObs = (isOff) => ({
+        fill: { fgColor: { rgb: isOff ? GRAY_BG : WHITE } },
+        border: tb,
+      })
+
+      // ─── Construire ordin per angajat ─────────────────────────────
       for (let idx = 0; idx < selected.length; idx++) {
         const emp = selected[idx]
-        // Re-read template each iteration — clone natural via separate parse
-        const wb = XLSX.read(tplArrayBuf, { type: 'array', cellStyles: true })
-        const sheetName = wb.SheetNames.find(s => s !== 'LEGENDA_ERP')
-        if (!sheetName) throw new Error('Template invalid: nu am găsit sheet principal')
-        const ws = wb.Sheets[sheetName]
 
-        // Distribuția cronologică: primele diurna_max records
-        const distribution = emp.diurna_records.slice(0, emp.diurna_max)
-        // Lista șantiere (dedup în ordinea cronologică)
-        const seen = new Set(); const santiereList = []
-        distribution.forEach(r => {
-          const s = r.sites?.name || 'Nealocate'
-          if (!seen.has(s)) { seen.add(s); santiereList.push(s) }
-        })
-        const listaSantiere = santiereList.join(' / ')
-        const functie = emp.functie || '—'
-
-        // Replacements map
-        const repl = {
-          '{{perioada_start}}': periodStartFmt,
-          '{{perioada_sfarsit}}': periodEndFmt,
-          '{{denumire_societate}}': denumireSocietate,
-          '{{nr_reg_com}}': nrRegCom,
-          '{{cui}}': cui,
-          '{{nume_angajat}}': emp.name,
-          '{{functie}}': functie,
-          '{{lista_santiere}}': listaSantiere,
-          '{{diurna_max_admisa}}': emp.diurna_max,
-          '{{diurna_lei_zi}}': diurnaAmt,
-        }
-        // Tabel zile 1..31
-        for (let n = 1; n <= 31; n++) {
-          const r = distribution[n - 1]
-          if (r) {
-            repl[`{{ziua_${n}_data}}`] = fmtRO(r.date)
-            repl[`{{ziua_${n}_santier}}`] = r.sites?.name || 'Nealocate'
-          } else {
-            repl[`{{ziua_${n}_data}}`] = ''
-            repl[`{{ziua_${n}_santier}}`] = ''
-          }
-          repl[`{{ziua_${n}_obs}}`] = ''  // completare manuală pe hârtie
-        }
-        // nr_chitanta / data_chitanta: plata prin bancă → rămân goale
-        repl['{{nr_chitanta}}'] = ''
-        repl['{{data_chitanta}}'] = ''
-
-        // Replace în toate celulele
-        for (const addr in ws) {
-          if (addr[0] === '!') continue  // skip metadata
-          const cell = ws[addr]
-          if (cell == null) continue
-
-          // 1. Replace placeholders în string values
-          if (typeof cell.v === 'string' && cell.v.includes('{{')) {
-            let nv = cell.v
-            for (const [k, val] of Object.entries(repl)) {
-              if (nv.includes(k)) nv = nv.split(k).join(val == null ? '' : String(val))
-            }
-            // Curăță orice placeholder neînlocuit
-            nv = nv.replace(/\{\{[^}]*\}\}/g, '')
-            cell.v = nv
-          }
-
-          // 2. Replace semnatari hardcoded (DOAR string exact match cu defaults)
-          if (typeof cell.v === 'string') {
-            if (cell.v === 'Trusu Razvan' && setari.director_aproba !== 'Trusu Razvan') cell.v = setari.director_aproba
-            else if (cell.v === 'Tudorache Marilena' && setari.control_preventiv !== 'Tudorache Marilena') cell.v = setari.control_preventiv
-            else if (cell.v === 'Mirela Popescu' && setari.verificat_decont !== 'Mirela Popescu') cell.v = setari.verificat_decont
-            else if (cell.v === 'Udrea Natalia' && setari.sef_compartiment !== 'Udrea Natalia') cell.v = setari.sef_compartiment
-          }
+        // Lista zile completă pentru perioada de export (cu/fără șantier)
+        const allDays = []
+        const periodStartD = new Date(ordGenPayment.period_from)
+        const periodEndD = new Date(ordGenPayment.period_to)
+        const distMap = new Map(emp.diurna_records.slice(0, emp.diurna_max).map(r => [r.date, r]))
+        const dIter = new Date(periodStartD)
+        while (dIter <= periodEndD) {
+          const ds = dIter.toISOString().split('T')[0]
+          const rec = distMap.get(ds)
+          allDays.push({
+            nr: allDays.length + 1,
+            data: fmtRO(ds),
+            santier: rec ? (rec.sites?.name || 'Nealocate') : null,
+          })
+          dIter.setDate(dIter.getDate() + 1)
         }
 
-        // Convert numeric cells pentru formula F37=D37*E37
-        const numericCells = ['D37', 'E37']
-        numericCells.forEach(addr => {
-          if (ws[addr] && ws[addr].v !== '' && !isNaN(Number(ws[addr].v))) {
-            ws[addr].v = Number(ws[addr].v)
-            ws[addr].t = 'n'
-          }
+        // Build worksheet
+        const ws = {}
+
+        // ───────── COLOANE A-H ─────────
+        ws['!cols'] = [
+          { wch: 5 },   // A: Nr. zi
+          { wch: 13 },  // B: Data
+          { wch: 20 },  // C: Conținut/Șantier
+          { wch: 20 },  // D
+          { wch: 15 },  // E
+          { wch: 15 },  // F
+          { wch: 13 },  // G: Suma RON
+          { wch: 5 },   // H: suffix lei
+        ]
+        ws['!rows'] = []
+
+        // ───────── R1: TITLU ─────────
+        setCell(ws, 'A1', { v: 'ORDIN DE DEPLASARE', t: 's', s: styleTitlu })
+        merge(ws, 'A1', 'H1')
+        ws['!rows'][0] = { hpx: 28 }
+
+        // ───────── R2: Durata deplasării ─────────
+        setCell(ws, 'A2', { v: 'Durata deplasării:', t: 's', s: styleDateDuratahdr })
+        merge(ws, 'A2', 'B2')
+        setCell(ws, 'C2', { v: 'de la  ' + periodStartFmt, t: 's', s: styleDateDurataVal })
+        merge(ws, 'C2', 'D2')
+        setCell(ws, 'E2', { v: 'până la', t: 's', s: { font: { name: 'Calibri', sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } } })
+        setCell(ws, 'F2', { v: periodEndFmt, t: 's', s: styleDateDurataVal })
+        merge(ws, 'F2', 'H2')
+        ws['!rows'][1] = { hpx: 20 }
+
+        // ───────── R3: gol ─────────
+        ws['!rows'][2] = { hpx: 6 }
+
+        // ───────── R4: banda CONFIRMĂRI ─────────
+        setCell(ws, 'A4', { v: '  CONFIRMĂRI SOSIT / PLECAT', t: 's', s: styleBanner })
+        merge(ws, 'A4', 'H4')
+        ws['!rows'][3] = { hpx: 22 }
+
+        // ───────── R5: UNITATEA 1 | UNITATEA 2 ─────────
+        setCell(ws, 'A5', { v: 'UNITATEA 1', t: 's', s: styleSubHeader })
+        merge(ws, 'A5', 'D5')
+        setCell(ws, 'E5', { v: 'UNITATEA 2', t: 's', s: styleSubHeader })
+        merge(ws, 'E5', 'H5')
+        ws['!rows'][4] = { hpx: 18 }
+
+        // ───────── R6-R8: Sosit/Plecat/Cazare ─────────
+        const fields = ['Sosit', 'Plecat', 'Cu / fără cazare']
+        fields.forEach((label, i) => {
+          const r = 6 + i
+          setCell(ws, `A${r}`, { v: label, t: 's', s: styleFieldLabel })
+          merge(ws, `A${r}`, `B${r}`)
+          setCell(ws, `C${r}`, { v: '', t: 's', s: styleFieldValue })
+          merge(ws, `C${r}`, `D${r}`)
+          setCell(ws, `E${r}`, { v: label, t: 's', s: styleFieldLabel })
+          merge(ws, `E${r}`, `F${r}`)
+          setCell(ws, `G${r}`, { v: '', t: 's', s: styleFieldValue })
+          merge(ws, `G${r}`, `H${r}`)
+          ws['!rows'][r - 1] = { hpx: 16 }
         })
 
-        // ─── FIX: aplicăm EXPLICIT stilurile pe care xlsx-js-style le pierde la roundtrip ───
-        // Bug cunoscut: la XLSX.write se pierd font color hex, page scale, bold flag etc.
-        // Margins, formule și row heights se păstrează OK; restul trebuie setat manual.
+        // ───────── R9-R10: ștampila ─────────
+        setCell(ws, 'A9', { v: 'Ștampila unității și semnătura', t: 's', s: styleItalicNote })
+        merge(ws, 'A9', 'D10')
+        setCell(ws, 'E9', { v: 'Ștampila unității și semnătura', t: 's', s: styleItalicNote })
+        merge(ws, 'E9', 'H10')
+        ws['!rows'][8] = { hpx: 14 }
+        ws['!rows'][9] = { hpx: 14 }
 
-        // 1. Page setup: portrait A4 + fitToPage (1 pagină pe lățime ȘI pe înălțime)
-        //    Scale NU se setează — Excel calculează automat scale-ul optim când fitToPage=true
+        // ───────── R11: gol ─────────
+        ws['!rows'][10] = { hpx: 6 }
+
+        // ───────── R12: banda DECONT DEPLASARE ─────────
+        setCell(ws, 'A12', { v: '  DECONT DEPLASARE', t: 's', s: styleBanner })
+        merge(ws, 'A12', 'H12')
+        ws['!rows'][11] = { hpx: 22 }
+
+        // ───────── R13-R16: rândurile decont ─────────
+        const decontRows = [
+          ['Ziua și ora plecării', 'Avans de decontare', ''],
+          ['Ziua și ora sosirii', 'Primit la plecare', 'lei'],
+          ['Data depunerii decontului', 'Primit în timpul deplasării', 'lei'],
+          ['Penalități calculate', 'Total avans', 'lei'],
+        ]
+        decontRows.forEach((row, i) => {
+          const r = 13 + i
+          const [l1, l2, suf] = row
+          setCell(ws, `A${r}`, { v: l1, t: 's', s: styleFieldLabel })
+          merge(ws, `A${r}`, `B${r}`)
+          setCell(ws, `C${r}`, { v: '', t: 's', s: styleFieldValue })
+          merge(ws, `C${r}`, `D${r}`)
+          setCell(ws, `E${r}`, { v: l2, t: 's', s: styleFieldLabel })
+          merge(ws, `E${r}`, `F${r}`)
+          setCell(ws, `G${r}`, { v: '', t: 's', s: styleFieldValue })
+          setCell(ws, `H${r}`, { v: suf, t: 's', s: styleSuffixLei })
+          ws['!rows'][r - 1] = { hpx: 17 }
+        })
+
+        // ───────── R17: gol ─────────
+        ws['!rows'][16] = { hpx: 6 }
+
+        // ───────── R18: banda Cheltuieli ─────────
+        setCell(ws, 'A18', { v: '  Cheltuieli efectuate conform documente anexate', t: 's', s: styleCheltuieliBanner })
+        merge(ws, 'A18', 'H18')
+        ws['!rows'][17] = { hpx: 20 }
+
+        // ───────── R19: Header tabel cheltuieli ─────────
+        setCell(ws, 'A19', { v: 'Felul actului', t: 's', s: styleSubHeader })
+        merge(ws, 'A19', 'D19')
+        setCell(ws, 'E19', { v: 'Nr. zile', t: 's', s: styleSubHeader })
+        setCell(ws, 'F19', { v: 'Lei / zi', t: 's', s: styleSubHeader })
+        setCell(ws, 'G19', { v: 'Suma (RON)', t: 's', s: styleSubHeader })
+        merge(ws, 'G19', 'H19')
+        ws['!rows'][18] = { hpx: 18 }
+
+        // ───────── R20: Diurnă cu FORMULĂ G20=E20*F20 ─────────
+        setCell(ws, 'A20', { v: 'Diurnă', t: 's', s: styleFieldValue })
+        merge(ws, 'A20', 'D20')
+        setCell(ws, 'E20', { v: emp.diurna_max, t: 'n', s: { ...styleAmount(false), numFmt: '0' } })
+        setCell(ws, 'F20', { v: diurnaAmt, t: 'n', s: styleAmount(false) })
+        setCell(ws, 'G20', { f: 'E20*F20', t: 'n', s: styleAmountTotal })
+        merge(ws, 'G20', 'H20')
+        ws['!rows'][19] = { hpx: 18 }
+
+        // ───────── R21-R22: rânduri goale pentru cheltuieli adăugate manual ─────────
+        for (const r of [21, 22]) {
+          setCell(ws, `A${r}`, { v: '', t: 's', s: styleFieldValue })
+          merge(ws, `A${r}`, `D${r}`)
+          setCell(ws, `E${r}`, { v: '', t: 's', s: styleAmount(false) })
+          setCell(ws, `F${r}`, { v: '', t: 's', s: styleAmount(false) })
+          setCell(ws, `G${r}`, { v: '', t: 's', s: styleAmount(false) })
+          merge(ws, `G${r}`, `H${r}`)
+          ws['!rows'][r - 1] = { hpx: 18 }
+        }
+
+        // ───────── R23: TOTAL CHELTUIELI cu FORMULĂ ─────────
+        setCell(ws, 'A23', { v: 'TOTAL CHELTUIELI', t: 's', s: styleTotalLabelHighlight })
+        merge(ws, 'A23', 'F23')
+        setCell(ws, 'G23', { f: 'SUM(G20:G22)', t: 'n', s: styleAmountTotalHighlight })
+        merge(ws, 'G23', 'H23')
+        ws['!rows'][22] = { hpx: 22 }
+
+        // ───────── R24: gol ─────────
+        ws['!rows'][23] = { hpx: 6 }
+
+        // ───────── R25: Diferența de primit/restituit cu FORMULĂ ─────────
+        setCell(ws, 'A25', { v: 'Diferența de primit / restituit:', t: 's', s: { font: { name: 'Calibri', sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } } })
+        merge(ws, 'A25', 'E25')
+        setCell(ws, 'F25', { f: 'G23-G16', t: 'n', s: { font: { name: 'Calibri', sz: 11, bold: true }, alignment: { horizontal: 'right', vertical: 'center' }, numFmt: '#,##0.00 "RON"' } })
+        merge(ws, 'F25', 'G25')
+        setCell(ws, 'H25', { v: 'lei', t: 's', s: { font: { name: 'Calibri', sz: 9, italic: true, color: { rgb: TEXT_MUTED } }, alignment: { horizontal: 'left', vertical: 'center' } } })
+        ws['!rows'][24] = { hpx: 20 }
+
+        // ───────── R26: subtitle chitanță ─────────
+        setCell(ws, 'A26', { v: 'Diferența de restituit s-a depus cu chitanța nr.______ din______', t: 's', s: styleItalicNote })
+        merge(ws, 'A26', 'H26')
+        ws['!rows'][25] = { hpx: 14 }
+
+        // ───────── R27: note bancă ─────────
+        setCell(ws, 'A27', { v: '* sume virate prin bancă, în contul de salarii', t: 's', s: { font: { name: 'Calibri', sz: 8, italic: true, color: { rgb: TEXT_MUTED } }, alignment: { horizontal: 'left', vertical: 'center' } } })
+        merge(ws, 'A27', 'H27')
+        ws['!rows'][26] = { hpx: 12 }
+
+        // ───────── R28: gol ─────────
+        ws['!rows'][27] = { hpx: 6 }
+
+        // ───────── R29: banda SEMNĂTURI ─────────
+        setCell(ws, 'A29', { v: '  SEMNĂTURI ȘI APROBĂRI', t: 's', s: styleBanner })
+        merge(ws, 'A29', 'H29')
+        ws['!rows'][28] = { hpx: 22 }
+
+        // ───────── R30: sub-headere 4 coloane ─────────
+        setCell(ws, 'A30', { v: 'SE APROBĂ', t: 's', s: styleSubHeader })
+        merge(ws, 'A30', 'B30')
+        setCell(ws, 'C30', { v: 'CONTROL FIN.', t: 's', s: styleSubHeader })
+        merge(ws, 'C30', 'D30')
+        setCell(ws, 'E30', { v: 'VERIFICAT', t: 's', s: styleSubHeader })
+        merge(ws, 'E30', 'F30')
+        setCell(ws, 'G30', { v: 'TITULAR', t: 's', s: styleSubHeader })
+        merge(ws, 'G30', 'H30')
+        ws['!rows'][29] = { hpx: 18 }
+
+        // ───────── R31: sub-roluri ─────────
+        const roles = [['A', 'B', 'Conducător unitate'], ['C', 'D', 'Preventiv'], ['E', 'F', 'Decont'], ['G', 'H', 'Avans']]
+        for (const [c1, c2, role] of roles) {
+          setCell(ws, `${c1}31`, { v: role, t: 's', s: styleSubHeaderRole })
+          merge(ws, `${c1}31`, `${c2}31`)
+        }
+        ws['!rows'][30] = { hpx: 14 }
+
+        // ───────── R32: spațiu semnătură ─────────
+        ws['!rows'][31] = { hpx: 18 }
+
+        // ───────── R33: NUMELE semnatari ─────────
+        const numeAng = emp.name
+        const semnatari = [
+          ['A', 'B', setari.director_aproba || 'Trusu Razvan'],
+          ['C', 'D', setari.control_preventiv || 'Tudorache Marilena'],
+          ['E', 'F', setari.verificat_decont || 'Mirela Popescu'],
+          ['G', 'H', numeAng],
+        ]
+        for (const [c1, c2, nm] of semnatari) {
+          setCell(ws, `${c1}33`, { v: nm, t: 's', s: styleSignature })
+          merge(ws, `${c1}33`, `${c2}33`)
+        }
+        ws['!rows'][32] = { hpx: 20 }
+
+        // ───────── R34: gol ─────────
+        ws['!rows'][33] = { hpx: 6 }
+
+        // ───────── R35: banda companie ─────────
+        setCell(ws, 'A35', { v: `   ${denumireSocietate}   •   ${nrRegCom}   •   CUI: ${cui}`, t: 's', s: styleCompanyBanner })
+        merge(ws, 'A35', 'H35')
+        ws['!rows'][34] = { hpx: 20 }
+
+        // ═══════════════════════════════════════════════════
+        // PARTEA 2 — SITUAȚIE PREZENȚĂ ZILNICĂ (PAGINA 2)
+        // ═══════════════════════════════════════════════════
+
+        // ───────── R36: gol ─────────
+        ws['!rows'][35] = { hpx: 12 }
+
+        // ───────── R37: titlu mare ─────────
+        setCell(ws, 'A37', { v: 'SITUAȚIE PREZENȚĂ ZILNICĂ', t: 's', s: styleSitTitle })
+        merge(ws, 'A37', 'H37')
+        ws['!rows'][36] = { hpx: 24 }
+
+        // ───────── R38: sub-titlu cu detalii angajat ─────────
+        const functieAng = emp.functie || '—'
+        setCell(ws, 'A38', { v: `Angajat: ${numeAng}   •   Funcția: ${functieAng}   •   Perioada: ${periodStartFmt} – ${periodEndFmt}`, t: 's', s: styleItalicNote })
+        merge(ws, 'A38', 'H38')
+        ws['!rows'][37] = { hpx: 16 }
+
+        // ───────── R39: gol ─────────
+        ws['!rows'][38] = { hpx: 6 }
+
+        // ───────── R40: HEADER tabel zile ─────────
+        setCell(ws, 'A40', { v: 'Nr. zi', t: 's', s: styleSubHeader })
+        setCell(ws, 'B40', { v: 'Data', t: 's', s: styleSubHeader })
+        setCell(ws, 'C40', { v: 'Șantier', t: 's', s: styleSubHeader })
+        merge(ws, 'C40', 'F40')
+        setCell(ws, 'G40', { v: 'Observații', t: 's', s: styleSubHeader })
+        merge(ws, 'G40', 'H40')
+        ws['!rows'][39] = { hpx: 18 }
+
+        // ───────── R41+: rânduri zile ─────────
+        const startRow = 41
+        allDays.forEach((day, i) => {
+          const r = startRow + i
+          const isOff = day.santier === null
+          setCell(ws, `A${r}`, { v: day.nr, t: 'n', s: styleDayCell(isOff) })
+          setCell(ws, `B${r}`, { v: day.data, t: 's', s: styleDayCell(isOff) })
+          setCell(ws, `C${r}`, { v: isOff ? '—' : day.santier, t: 's', s: styleDaySite(isOff) })
+          merge(ws, `C${r}`, `F${r}`)
+          setCell(ws, `G${r}`, { v: '', t: 's', s: styleDayObs(isOff) })
+          merge(ws, `G${r}`, `H${r}`)
+          ws['!rows'][r - 1] = { hpx: 16 }
+        })
+
+        // ───────── Total zile cu FORMULĂ ─────────
+        const totalRow = startRow + allDays.length
+        const endZileRow = startRow + allDays.length - 1
+        setCell(ws, `A${totalRow}`, { v: 'TOTAL ZILE LUCRATE:', t: 's', s: { ...styleTotalLabelHighlight, alignment: { horizontal: 'right', vertical: 'center', indent: 1 } } })
+        merge(ws, `A${totalRow}`, `F${totalRow}`)
+        // Formula: numără șantierele reale (exclude "—")
+        setCell(ws, `G${totalRow}`, {
+          f: `COUNTA(C${startRow}:C${endZileRow})-COUNTIF(C${startRow}:C${endZileRow},"—")`,
+          t: 'n',
+          s: {
+            fill: { fgColor: { rgb: BLUE_LIGHT } },
+            font: { name: 'Calibri', sz: 12, bold: true, color: { rgb: BLUE_DARK } },
+            alignment: { horizontal: 'center', vertical: 'center' },
+            border: tb,
+          }
+        })
+        merge(ws, `G${totalRow}`, `H${totalRow}`)
+        ws['!rows'][totalRow - 1] = { hpx: 22 }
+
+        // ───────── Set !ref ca SheetJS să cunoască range-ul ─────────
+        ws['!ref'] = `A1:H${totalRow}`
+
+        // ───────── Page break ÎNAINTE de R36 (după R35) ─────────
+        ws['!rowBreaks'] = [{ id: 35, manual: 1 }]
+
+        // ───────── Page setup ─────────
         ws['!pageSetup'] = {
           orientation: 'portrait',
-          paperSize: 9,         // 9 = A4
+          paperSize: 9,    // A4
           fitToWidth: 1,
-          fitToHeight: 1,
+          fitToHeight: 0,  // NU forța — lăsăm page break să decidă
         }
-        // Activare fitToPage prin sheetPr (atribut <pageSetUpPr fitToPage="1"/> în XML)
-        ws['!sheetPr'] = ws['!sheetPr'] || {}
-        ws['!sheetPr'].pageSetUpPr = { fitToPage: true }
-        ws['!margins'] = { left: 0.25, right: 0.25, top: 0.3, bottom: 0.3, header: 0.15, footer: 0.15 }
-        // Print area strict (A1:I89) — evită coloanele goale K/L din template
-        ws['!printArea'] = 'A1:I89'
+        ws['!sheetPr'] = { pageSetUpPr: { fitToPage: true } }
+        ws['!margins'] = { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.15 }
+        ws['!printOptions'] = { horizontalCentered: true }
 
-        // 1b. Elimin lățimile pe coloane > I (K, L au width 33.3 dar nu au date — măresc artificial pagina)
-        if (ws['!cols']) {
-          ws['!cols'] = ws['!cols'].slice(0, 9)  // păstrez doar A-I (idx 0-8)
-        }
+        // ───────── Build workbook + add to ZIP ─────────
+        const wb = XLSX.utils.book_new()
+        const cleanName = emp.name.replace(/[\\/?*\[\]:]/g, '').slice(0, 31).trim() || 'Ordin'
+        XLSX.utils.book_append_sheet(wb, ws, cleanName)
 
-        // 2. Titlu D7 — bold mare albastru
-        if (ws['D7']) {
-          ws['D7'].s = {
-            ...(ws['D7'].s || {}),
-            font: { sz: 16, bold: true, color: { rgb: '1A4A8C' }, name: 'Calibri' },
-            alignment: { horizontal: 'center', vertical: 'center' }
-          }
-        }
-
-        // 3. Semnături R47 (B/D/F/G/I) — sz=12 bold albastru centrat
-        ;['B47', 'D47', 'F47', 'G47', 'I47'].forEach(addr => {
-          if (ws[addr]) {
-            ws[addr].s = {
-              ...(ws[addr].s || {}),
-              font: { sz: 12, bold: true, color: { rgb: '1A4A8C' }, name: 'Calibri' },
-              alignment: { horizontal: 'center', vertical: 'center' }
-            }
-          }
-        })
-
-        // 4. Etichete R45 (titluri secțiune semnături) — sz=10 normal centrat
-        ;['B45', 'D45', 'F45', 'G45', 'I45'].forEach(addr => {
-          if (ws[addr]) {
-            ws[addr].s = {
-              ...(ws[addr].s || {}),
-              font: { sz: 10, bold: false, name: 'Calibri' },
-              alignment: { horizontal: 'center', vertical: 'center', wrapText: true }
-            }
-          }
-        })
-
-        // 5. Etichete R46 (sub-titluri) — sz=9.5 centrat
-        ;['B46', 'D46', 'F46', 'G46', 'I46'].forEach(addr => {
-          if (ws[addr]) {
-            ws[addr].s = {
-              ...(ws[addr].s || {}),
-              font: { sz: 9.5, bold: false, name: 'Calibri' },
-              alignment: { horizontal: 'center', vertical: 'center', wrapText: true }
-            }
-          }
-        })
-
-        // 6. Row heights (asigurare suplimentară)
-        ws['!rows'] = ws['!rows'] || []
-        ws['!rows'][6]  = { hpx: 32 }   // R7 titlu
-        ws['!rows'][44] = { hpx: 21 }   // R45 etichete
-        ws['!rows'][45] = { hpx: 19 }   // R46 sub-etichete
-        ws['!rows'][46] = { hpx: 29 }   // R47 semnături
-
-        // ─── CRITIC: șterg sheet-ul LEGENDA_ERP din workbook ─────────────────
-        // Acest sheet conține documentația placeholders + exemple și NU trebuie să apară
-        // în ordinul final. Dacă rămâne, la tipărire generează 4 pagini extra (2-5).
-        const legendaIdx = wb.SheetNames.indexOf('LEGENDA_ERP')
-        if (legendaIdx >= 0) {
-          wb.SheetNames.splice(legendaIdx, 1)
-          delete wb.Sheets['LEGENDA_ERP']
-        }
-
-        // Rename sheet to employee name (safe chars only, max 31 chars per Excel limit)
-        const cleanName = emp.name.replace(/[\\/?*\[\]:]/g, '').slice(0, 31).trim()
-        if (cleanName && cleanName !== sheetName) {
-          const oldIdx = wb.SheetNames.indexOf(sheetName)
-          wb.SheetNames[oldIdx] = cleanName
-          wb.Sheets[cleanName] = ws
-          delete wb.Sheets[sheetName]
-        }
-
-        // Write to array buffer
         const wbArr = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
-
-        // Add to zip
         const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
         const filename = `Ordin_Deplasare_${safeName}_${ordGenPayment.period_from}_${ordGenPayment.period_to}.xlsx`
         zip.file(filename, wbArr)
@@ -2315,7 +2575,7 @@ function ReportsPage() {
         setOrdGenProgress({ done: idx + 1, total: selected.length })
       }
 
-      // 5. Generate ZIP blob + download
+      // ───────── Generate ZIP blob + download ─────────
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       const url = URL.createObjectURL(zipBlob)
       const a = document.createElement('a')
@@ -2340,7 +2600,7 @@ function ReportsPage() {
     }
   }
 
-  const getRange=()=>{ const [y,m]=month.split('-').map(Number); const days=new Date(y,m,0).getDate(); const mm=String(m).padStart(2,'0'); const dd=String(days).padStart(2,'0'); return {y,m,from:`${y}-${mm}-01`,to:`${y}-${mm}-${dd}`,days} }
+    const getRange=()=>{ const [y,m]=month.split('-').map(Number); const days=new Date(y,m,0).getDate(); const mm=String(m).padStart(2,'0'); const dd=String(days).padStart(2,'0'); return {y,m,from:`${y}-${mm}-01`,to:`${y}-${mm}-${dd}`,days} }
 
   const loadReport=async()=>{
     setLoad(true)
