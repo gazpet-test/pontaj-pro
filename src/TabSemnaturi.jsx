@@ -6,7 +6,7 @@
 // One active signature per employee (UNIQUE WHERE activ=true)
 // Reutilizabilă: import în HR.jsx (tab Semnături) + Admin → Setări (tab dedicat)
 // ===========================================================================
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 
 // Theme (consistent cu HR.jsx și TabDocumentePersonale.jsx)
@@ -122,9 +122,151 @@ function SemnaturaThumbnail({ path, height = 50, onClick }) {
   )
 }
 
+// ─── SIGNATURE PAD (canvas pentru desen direct pe ecran) ────────────────────
+
+function SignaturePad({ onCapture, height = 180 }) {
+  const canvasRef = useRef(null)
+  const ctxRef = useRef(null)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [hasContent, setHasContent] = useState(false)
+  
+  // Init canvas la mount
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    
+    // High-DPI support pentru desen clar (Retina etc.)
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = height * dpr
+    
+    const ctx = canvas.getContext('2d')
+    ctx.scale(dpr, dpr)
+    ctx.strokeStyle = '#000'
+    ctx.lineWidth = 2.5
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    
+    // Fundal alb (pentru export PNG fără transparency neagră în UI dark)
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, rect.width, height)
+    
+    ctxRef.current = ctx
+  }, [height])
+  
+  // Convertește coordonate pointer la coordonate canvas
+  const getPos = (e) => {
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    const isTouch = e.touches && e.touches[0]
+    const clientX = isTouch ? e.touches[0].clientX : e.clientX
+    const clientY = isTouch ? e.touches[0].clientY : e.clientY
+    return {
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    }
+  }
+  
+  const startDraw = (e) => {
+    e.preventDefault()
+    setIsDrawing(true)
+    setHasContent(true)
+    const { x, y } = getPos(e)
+    ctxRef.current.beginPath()
+    ctxRef.current.moveTo(x, y)
+  }
+  
+  const draw = (e) => {
+    if (!isDrawing) return
+    e.preventDefault()
+    const { x, y } = getPos(e)
+    ctxRef.current.lineTo(x, y)
+    ctxRef.current.stroke()
+  }
+  
+  const endDraw = () => setIsDrawing(false)
+  
+  const clearCanvas = () => {
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    const ctx = ctxRef.current
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, rect.width, height)
+    setHasContent(false)
+  }
+  
+  const captureAsFile = () => {
+    if (!hasContent) return
+    canvasRef.current.toBlob((blob) => {
+      if (!blob) return
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      const file = new File([blob], `semnatura_desenata_${ts}.png`, { type: 'image/png' })
+      onCapture(file)
+    }, 'image/png', 0.95)
+  }
+  
+  return (
+    <div>
+      <div style={{
+        position:'relative',
+        background:'#fff',
+        border:`2px dashed ${G.border}`,
+        borderRadius:10,
+        marginBottom:10,
+        overflow:'hidden',
+      }}>
+        <canvas
+          ref={canvasRef}
+          onMouseDown={startDraw}
+          onMouseMove={draw}
+          onMouseUp={endDraw}
+          onMouseLeave={endDraw}
+          onTouchStart={startDraw}
+          onTouchMove={draw}
+          onTouchEnd={endDraw}
+          style={{
+            display:'block',
+            width:'100%',
+            height,
+            cursor:'crosshair',
+            touchAction:'none',  // previne scroll pe touch
+          }}
+        />
+        {!hasContent && (
+          <div style={{
+            position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center',
+            color:'#aaa', fontSize:13, fontStyle:'italic', pointerEvents:'none',
+          }}>
+            ✍️ Desenează cu mouse-ul sau cu degetul (pe touch)
+          </div>
+        )}
+      </div>
+      
+      <div style={{display:'flex', gap:10, marginBottom:14}}>
+        <button
+          onClick={clearCanvas}
+          disabled={!hasContent}
+          style={{...S.btnS, flex:1, opacity:hasContent?1:.5, color:G.red, borderColor:hasContent?G.red+'55':G.border}}
+        >
+          🗑️ Șterge & reia
+        </button>
+        <button
+          onClick={captureAsFile}
+          disabled={!hasContent}
+          style={{...S.btnP, flex:2, opacity:hasContent?1:.5, background:hasContent?G.green:G.surface, color:hasContent?'#fff':G.muted}}
+        >
+          ✓ Folosește această semnătură
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── MODAL UPLOAD SEMNĂTURĂ ─────────────────────────────────────────────────
 
 function ModalUploadSemnatura({ employee, existing, onClose, onSaved, showToast }) {
+  const [mode, setMode] = useState('upload')  // 'upload' | 'draw'
   const [file, setFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
   const [dimensions, setDimensions] = useState(null)
@@ -227,13 +369,55 @@ function ModalUploadSemnatura({ employee, existing, onClose, onSaved, showToast 
         </div>
         
         <div style={{padding:20}}>
+          {/* Tab switcher: Upload imagine / Desenează */}
+          <div style={{display:'flex', gap:6, marginBottom:14, padding:4, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
+            <button
+              onClick={()=>setMode('upload')}
+              disabled={saving}
+              style={{
+                flex:1, padding:'10px 14px', borderRadius:7, border:'none', cursor:'pointer',
+                background: mode==='upload' ? G.hr+'33' : 'transparent',
+                color: mode==='upload' ? G.hr : G.muted,
+                fontWeight:700, fontSize:13, transition:'all .15s',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:7,
+              }}
+            >
+              <span style={{fontSize:16}}>📤</span> Upload imagine
+            </button>
+            <button
+              onClick={()=>setMode('draw')}
+              disabled={saving}
+              style={{
+                flex:1, padding:'10px 14px', borderRadius:7, border:'none', cursor:'pointer',
+                background: mode==='draw' ? G.hr+'33' : 'transparent',
+                color: mode==='draw' ? G.hr : G.muted,
+                fontWeight:700, fontSize:13, transition:'all .15s',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:7,
+              }}
+            >
+              <span style={{fontSize:16}}>✍️</span> Desenează direct
+            </button>
+          </div>
+          
           {/* Specs */}
           <div style={{padding:12, background:G.blueDim, borderLeft:`3px solid ${G.blue}`, borderRadius:6, marginBottom:14, fontSize:11, lineHeight:1.6, color:'#9CC9FF'}}>
-            <div><strong>📋 Specificații recomandate:</strong></div>
-            <div>• Format: PNG transparent (recomandat), JPG, WEBP</div>
-            <div>• Dimensiuni: <strong style={{color:G.text}}>{RECOMMENDED_WIDTH}×{RECOMMENDED_HEIGHT}px</strong> (proporție 3:1)</div>
-            <div>• Mărime max: <strong style={{color:G.text}}>{(MAX_SIZE_BYTES/1024).toFixed(0)} KB</strong></div>
-            <div>• Fundal transparent sau alb (semnătura clară, negru sau albastru închis)</div>
+            {mode === 'upload' ? (
+              <>
+                <div><strong>📋 Specificații recomandate:</strong></div>
+                <div>• Format: PNG transparent (recomandat), JPG, WEBP</div>
+                <div>• Dimensiuni: <strong style={{color:G.text}}>{RECOMMENDED_WIDTH}×{RECOMMENDED_HEIGHT}px</strong> (proporție 3:1)</div>
+                <div>• Mărime max: <strong style={{color:G.text}}>{(MAX_SIZE_BYTES/1024).toFixed(0)} KB</strong></div>
+                <div>• Fundal transparent sau alb (semnătura clară, negru sau albastru închis)</div>
+              </>
+            ) : (
+              <>
+                <div><strong>✍️ Sfaturi pentru semnătura desenată:</strong></div>
+                <div>• Pe <strong style={{color:G.text}}>telefon/tablet</strong>: folosește degetul direct pe ecran</div>
+                <div>• Pe <strong style={{color:G.text}}>laptop</strong>: ține apăsat click stâng și mișcă mouse-ul</div>
+                <div>• Desenează clar, ca pe hârtie — poți reface oricând cu „🗑️ Șterge & reia"</div>
+                <div>• Salvare automată ca PNG la rezoluție optimă (~580×180px)</div>
+              </>
+            )}
           </div>
           
           {/* Existing warning */}
@@ -243,50 +427,78 @@ function ModalUploadSemnatura({ employee, existing, onClose, onSaved, showToast 
             </div>
           )}
           
-          {/* Drop zone / file picker */}
-          <Lbl>Fișier semnătură</Lbl>
-          <label
-            onDragOver={e=>{e.preventDefault(); setDragOver(true)}}
-            onDragLeave={()=>setDragOver(false)}
-            onDrop={onDrop}
-            style={{
-              display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-              padding:'24px 16px', background:dragOver?G.blueDim:G.bg,
-              border:`2px dashed ${dragOver?G.blue:G.border}`, borderRadius:10,
-              cursor:'pointer', transition:'all .15s', marginBottom:14,
-              minHeight:140,
-            }}
-          >
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={e=>handleFile(e.target.files?.[0])}
-              style={{display:'none'}}
-              disabled={saving}
-            />
-            {!file ? (
-              <>
-                <div style={{fontSize:36, marginBottom:6}}>📁</div>
-                <div style={{fontSize:13, color:G.text, fontWeight:600}}>Click sau drag & drop</div>
-                <div style={{fontSize:11, color:G.muted, marginTop:4}}>PNG / JPG / WEBP · max {(MAX_SIZE_BYTES/1024).toFixed(0)} KB</div>
-              </>
-            ) : (
-              <>
-                <img src={previewUrl} alt="preview" style={{maxHeight:120, maxWidth:'100%', background:'#fff', padding:6, borderRadius:6, marginBottom:10}}/>
-                <div style={{fontSize:12, color:G.green, fontWeight:600}}>✓ {file.name}</div>
-                <div style={{fontSize:10, color:G.muted, marginTop:3, display:'flex', gap:10}}>
-                  <span>{(file.size/1024).toFixed(1)} KB</span>
-                  {dimensions?.width && (
-                    <span>
-                      {dimensions.width}×{dimensions.height}px
-                      {(dimensions.width < 100 || dimensions.height < 30) && <span style={{color:G.yellow}}> ⚠ prea mică</span>}
-                      {(dimensions.width > 1200 || dimensions.height > 400) && <span style={{color:G.yellow}}> ⚠ prea mare</span>}
-                    </span>
-                  )}
+          {/* MODE: UPLOAD — Drop zone / file picker */}
+          {mode === 'upload' && (
+            <>
+              <Lbl>Fișier semnătură</Lbl>
+              <label
+                onDragOver={e=>{e.preventDefault(); setDragOver(true)}}
+                onDragLeave={()=>setDragOver(false)}
+                onDrop={onDrop}
+                style={{
+                  display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+                  padding:'24px 16px', background:dragOver?G.blueDim:G.bg,
+                  border:`2px dashed ${dragOver?G.blue:G.border}`, borderRadius:10,
+                  cursor:'pointer', transition:'all .15s', marginBottom:14,
+                  minHeight:140,
+                }}
+              >
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={e=>handleFile(e.target.files?.[0])}
+                  style={{display:'none'}}
+                  disabled={saving}
+                />
+                {!file ? (
+                  <>
+                    <div style={{fontSize:36, marginBottom:6}}>📁</div>
+                    <div style={{fontSize:13, color:G.text, fontWeight:600}}>Click sau drag & drop</div>
+                    <div style={{fontSize:11, color:G.muted, marginTop:4}}>PNG / JPG / WEBP · max {(MAX_SIZE_BYTES/1024).toFixed(0)} KB</div>
+                  </>
+                ) : (
+                  <>
+                    <img src={previewUrl} alt="preview" style={{maxHeight:120, maxWidth:'100%', background:'#fff', padding:6, borderRadius:6, marginBottom:10}}/>
+                    <div style={{fontSize:12, color:G.green, fontWeight:600}}>✓ {file.name}</div>
+                    <div style={{fontSize:10, color:G.muted, marginTop:3, display:'flex', gap:10}}>
+                      <span>{(file.size/1024).toFixed(1)} KB</span>
+                      {dimensions?.width && (
+                        <span>
+                          {dimensions.width}×{dimensions.height}px
+                          {(dimensions.width < 100 || dimensions.height < 30) && <span style={{color:G.yellow}}> ⚠ prea mică</span>}
+                          {(dimensions.width > 1200 || dimensions.height > 400) && <span style={{color:G.yellow}}> ⚠ prea mare</span>}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </label>
+            </>
+          )}
+          
+          {/* MODE: DRAW — Canvas signature pad */}
+          {mode === 'draw' && (
+            <>
+              <Lbl>{file ? '✓ Semnătură capturată — poți redesenă dacă vrei' : 'Desenează semnătura'}</Lbl>
+              {file && previewUrl ? (
+                <div style={{marginBottom:12, padding:10, background:'#fff', borderRadius:8, border:`2px solid ${G.green}`, display:'flex', flexDirection:'column', alignItems:'center'}}>
+                  <img src={previewUrl} alt="preview" style={{maxHeight:120, maxWidth:'100%'}}/>
+                  <div style={{fontSize:11, color:G.green, fontWeight:700, marginTop:8}}>
+                    ✓ {file.name} · {(file.size/1024).toFixed(1)} KB
+                  </div>
+                  <button
+                    onClick={()=>{ setFile(null); if(previewUrl) URL.revokeObjectURL(previewUrl); setPreviewUrl(null); setDimensions(null) }}
+                    disabled={saving}
+                    style={{...S.btnS, marginTop:10, color:G.yellow, borderColor:G.yellow+'55'}}
+                  >
+                    ✍️ Redesenă semnătura
+                  </button>
                 </div>
-              </>
-            )}
-          </label>
+              ) : (
+                <SignaturePad onCapture={handleFile} />
+              )}
+            </>
+          )}
           
           {/* Observații */}
           <Lbl>Observații (opțional)</Lbl>
