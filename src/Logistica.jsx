@@ -5912,6 +5912,7 @@ export default function LogisticaPage() {
   const [showEditStoc, setShowEditStoc] = useState(null)   // null | obiect rezervor
   const [showSetariPret, setShowSetariPret] = useState(false)
   const [alerteTransp, setAlerteTransp] = useState([])     // transporturi cu status='cerut'
+  const [kpiTransp, setKpiTransp] = useState({ cerute: 0, aprobate: 0, inTranzit: 0, livrate: 0 })  // KPI transporturi luna curentă
   const [tab, setTab] = useState(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
@@ -5949,7 +5950,12 @@ export default function LogisticaPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes, transpRes] = await Promise.all([
+    // Calcul start luna curentă pentru KPI transporturi
+    const ymStart = new Date()
+    ymStart.setDate(1); ymStart.setHours(0, 0, 0, 0)
+    const ymStartISO = ymStart.toISOString().split('T')[0]
+    
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes, transpRes, transpKpiRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
@@ -5969,6 +5975,9 @@ export default function LogisticaPage() {
         .eq('status', 'cerut')
         .order('created_at', { ascending: false })
         .limit(10),
+      supabase.from('logistica_transporturi')
+        .select('status')
+        .gte('data_transport', ymStartISO),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
@@ -5980,6 +5989,14 @@ export default function LogisticaPage() {
     setPretMotorinaActualizat(setariMap.pret_motorina_actualizat || null)
     setKpiAlim(kpiAlimRes.data || null)
     setAlerteTransp(transpRes.data || [])
+    // Calculez KPI transporturi luna curentă pe client
+    const transpArr = transpKpiRes.data || []
+    setKpiTransp({
+      cerute: transpArr.filter(t => t.status === 'cerut').length,
+      aprobate: transpArr.filter(t => t.status === 'aprobat' || t.status === 'programat').length,
+      inTranzit: transpArr.filter(t => t.status === 'in_tranzit').length,
+      livrate: transpArr.filter(t => t.status === 'livrat').length,
+    })
     // Map ultima alimentare per activ
     const map = {}
     ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
@@ -6609,6 +6626,70 @@ export default function LogisticaPage() {
           </div>
         </div>
       )}
+      
+      {/* Widget KPI Transporturi — Luna curentă (Cerute / Aprobate / În tranzit / Livrate) */}
+      <div style={{display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap'}}>
+        <div 
+          onClick={() => setTab('transporturi')}
+          style={{
+            ...S.card, padding: '10px 14px', flex: 1, minWidth: 160, cursor: 'pointer',
+            borderLeft: `4px solid ${kpiTransp.cerute > 0 ? G.red : G.border}`,
+            background: kpiTransp.cerute > 0 ? G.redDim + '66' : G.surface,
+            animation: kpiTransp.cerute > 0 ? 'pulse-red 2s infinite' : 'none',
+            boxShadow: kpiTransp.cerute > 0 ? `0 0 12px ${G.red}33` : 'none',
+            transition: 'all .3s'
+          }}
+          title="Click pentru a deschide tabul Transporturi"
+        >
+          <div style={{fontSize: 10, color: kpiTransp.cerute > 0 ? G.red : G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 2}}>
+            ⏳ Cerute (de aprobat) {kpiTransp.cerute > 0 && <span style={{marginLeft: 4, padding: '1px 5px', background: G.red, color: '#fff', borderRadius: 3, fontSize: 9, fontWeight: 700}}>URGENT</span>}
+          </div>
+          <div style={{fontSize: 22, fontWeight: 800, color: kpiTransp.cerute > 0 ? G.red : G.text, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1}}>
+            {kpiTransp.cerute}
+          </div>
+        </div>
+        <div onClick={() => setTab('transporturi')} style={{
+          ...S.card, padding: '10px 14px', flex: 1, minWidth: 130, cursor: 'pointer',
+          borderLeft: `4px solid ${G.green}`,
+        }} title="Click pentru a deschide tabul Transporturi">
+          <div style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 2}}>
+            ✓ Aprobate
+          </div>
+          <div style={{fontSize: 22, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1}}>
+            {kpiTransp.aprobate}
+          </div>
+        </div>
+        <div onClick={() => setTab('transporturi')} style={{
+          ...S.card, padding: '10px 14px', flex: 1, minWidth: 130, cursor: 'pointer',
+          borderLeft: `4px solid ${G.yellow}`,
+        }} title="Click pentru a deschide tabul Transporturi">
+          <div style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 2}}>
+            🚛 În tranzit
+          </div>
+          <div style={{fontSize: 22, fontWeight: 800, color: G.yellow, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1}}>
+            {kpiTransp.inTranzit}
+          </div>
+        </div>
+        <div onClick={() => setTab('transporturi')} style={{
+          ...S.card, padding: '10px 14px', flex: 1, minWidth: 130, cursor: 'pointer',
+          borderLeft: `4px solid ${G.green}`,
+        }} title="Click pentru a deschide tabul Transporturi">
+          <div style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 2}}>
+            ✅ Livrate
+          </div>
+          <div style={{fontSize: 22, fontWeight: 800, color: G.green, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1}}>
+            {kpiTransp.livrate}
+          </div>
+        </div>
+      </div>
+      
+      {/* CSS animation pulse-red pentru KPI Cerute */}
+      <style>{`
+        @keyframes pulse-red {
+          0%, 100% { box-shadow: 0 0 12px ${G.red}33; }
+          50% { box-shadow: 0 0 18px ${G.red}66; }
+        }
+      `}</style>
       
       <div style={{...S.card, padding: 14, marginBottom: 14}}>
         <div style={{display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center'}}>
