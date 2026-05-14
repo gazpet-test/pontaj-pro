@@ -1898,26 +1898,59 @@ function ReportsPage() {
         if (off > 200000) break
       }
 
-      // Per employee: recalc diurnaMax + colectează diurnaRecords cronologice
+      // Per employee: aplic algoritmul Pontaj NET ca să determin zilele de pe ordin
+      // Logica: ordinul reflectă zilele LUCR pe care angajatul a fost detașat după redistribuire
+      // (WE/sărbătoare lucrate sunt mutate în locul LL-urilor de pe zile lucrătoare)
+      const NORME_LIST = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
+      const sortedWorkDays = [...workDaySet].sort()
       const empData = details.map(d => {
         const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
-        // Zile diurnă plătite în plăți anterioare aceleași luni (în workDaySet)
-        const zilePlatiteAnterior = empRecs.filter(r => r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)).length
-
-        // Records cu diurna în perioadă (cronologic asc)
-        const diurnaInPeriod = empRecs
-          .filter(r => r.diurna === true && r.date >= periodFrom && r.date <= periodTo)
+        const recsInPeriod = empRecs
+          .filter(r => r.date >= periodFrom && r.date <= periodTo)
           .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
 
-        // diurnaMax = consistent cu savePayment: buget lunar = (zile lucr. ALE LUNII) × diurnaAmt
-        // împărțit la diurnaAmt = workDaySet.size zile (TOATĂ luna, NU doar perioada).
-        // MINUS zilele deja plătite în plăți anterioare.
-        // NU se scad LL-urile (ele sunt pe salariu separat, NU reduc bugetul de diurnă).
-        const bugetLunarRamasZile = Math.max(0, workDaySet.size - zilePlatiteAnterior)
-        const diurnaMax = Math.min(bugetLunarRamasZile, diurnaInPeriod.length)
+        // SURSE = WE/LEG cu check_in, fără cod NORME (lucrat efectiv în weekend/sărbătoare)
+        const surse = recsInPeriod.filter(r =>
+          !workDaySet.has(r.date) &&  // NU e zi lucrătoare → WE sau LEG
+          r.check_in &&
+          !(r.norma && NORME_LIST.includes(r.norma))
+        )
+        // DESTINAȚII = zi LUCR cu norma=LL (învoire în zi lucrătoare)
+        const dest = recsInPeriod.filter(r =>
+          workDaySet.has(r.date) && r.norma === 'LL'
+        )
+        // Mutare cronologică: src[i] → dest[i]
+        const moveMap = new Map()  // destDate -> srcRec
+        const nMoves = Math.min(surse.length, dest.length)
+        for (let i = 0; i < nMoves; i++) {
+          moveMap.set(dest[i].date, surse[i])
+        }
 
-        // Lista șantiere distincte (în ordinea apariției cronologice — primele diurnaMax)
-        const distribution = diurnaInPeriod.slice(0, diurnaMax)
+        // Lista zile NET cu diurnă (= zile LUCR pe ordin) — iterare cronologică prin zile lucr ale lunii
+        const netDays = []
+        for (const ds of sortedWorkDays) {
+          if (ds < periodFrom || ds > periodTo) continue
+          const rec = empRecs.find(r => r.date === ds)
+          if (rec?.check_in && rec?.diurna === true && !rec.norma) {
+            // Zi LUCR cu diurnă reală (păstrat în NET)
+            netDays.push({ date: ds, sites: rec.sites || { name: 'Nealocate' } })
+          } else if (moveMap.has(ds)) {
+            // Zi LUCR fost LL care a primit mutare → preia șantierul din sursa weekend/sărbătoare
+            const srcRec = moveMap.get(ds)
+            netDays.push({ date: ds, sites: srcRec.sites || { name: 'Nealocate' } })
+          }
+          // Altfel: zi LUCR fără ore în NET (LL rămas, gol, normă) → NU intră pe ordin
+        }
+
+        // diurnaMax = plafonată la buget lunar (consistent cu savePayment) și la zilele NET
+        const zilePlatiteAnterior = empRecs.filter(r =>
+          r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)
+        ).length
+        const bugetLunarRamasZile = Math.max(0, workDaySet.size - zilePlatiteAnterior)
+        const diurnaMax = Math.min(bugetLunarRamasZile, netDays.length)
+
+        // Distribuția = primele diurnaMax din netDays (cronologic)
+        const distribution = netDays.slice(0, diurnaMax)
         const seen = new Set()
         const santiereList = []
         distribution.forEach(r => {
@@ -1943,7 +1976,7 @@ function ReportsPage() {
           has_functie: hasFunctie,
           days_real: d.days,
           diurna_max: diurnaMax,
-          diurna_records: diurnaInPeriod,
+          diurna_records: netDays,
           santiere_list: santiereList,
           selected: diurnaMax > 0,  // bifați automat doar cei cu zile > 0
         }
