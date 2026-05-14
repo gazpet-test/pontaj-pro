@@ -95,6 +95,20 @@ async function fetchAllRecords(queryBuilder, pageSize = 1000) {
 const LUNCH_START = 12; const LUNCH_END = 13; const LUNCH_MINS = 60
 const todayStr = () => new Date().toISOString().split('T')[0]
 const fmt24 = (ts) => ts ? new Date(ts).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
+
+// Audio feedback pentru acțiuni reușite (Web Audio API, fail-safe)
+const playBeep = (freq = 880, dur = 0.1) => {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.frequency.value = freq
+    osc.connect(gain); gain.connect(ctx.destination)
+    gain.gain.setValueAtTime(0.1, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur)
+    osc.start(); osc.stop(ctx.currentTime + dur)
+  } catch (_) { /* silent fail dacă AudioContext indisponibil */ }
+}
 const diffMins = (a, b) => a && b ? Math.max(0, Math.floor((new Date(b) - new Date(a)) / 60000)) : 0
 const minsToHM = (m) => { const mm = Math.abs(m); return `${Math.floor(mm/60)}h${mm%60>0?' '+mm%60+'m':''}` }
 const spansLunch = (ci, co) => { if (!ci||!co) return false; const a=new Date(ci),b=new Date(co),d=a.toDateString(); return a<=new Date(`${d} 12:00:00`)&&b>=new Date(`${d} 13:00:00`) }
@@ -1452,17 +1466,25 @@ function ReportsPage() {
       // Per employee: recalc diurnaMax + colectează diurnaRecords cronologice
       const empData = details.map(d => {
         const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
+        // Norme cumulate: DOAR pe zile lucrătoare (workDaySet), identic cu exportDiurne
         const normeCumulate = empRecs.filter(r => r.norma && NORME.includes(r.norma) && workDaySet.has(r.date)).length
         const zilePlatiteAnterior = empRecs.filter(r => r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)).length
         const monthlyRemaining = Math.max(0, calWorkDays - normeCumulate - zilePlatiteAnterior)
-        const normeInPeriod = empRecs.filter(r => r.norma && NORME.includes(r.norma) && r.date >= periodFrom && r.date <= periodTo).length
+        // FIX BUG: normeInPeriod TREBUIE filtrat pe workDaySet (consistent cu exportDiurne)
+        // — altfel LL pe weekend scade incorect din periodCapacity
+        const normeInPeriod = empRecs.filter(r => r.norma && NORME.includes(r.norma) && workDaySet.has(r.date) && r.date >= periodFrom && r.date <= periodTo).length
         const periodCapacity = Math.max(0, workDaysInPeriod - normeInPeriod)
-        const diurnaMax = Math.min(monthlyRemaining, periodCapacity)
 
-        // Records cu diurna în perioadă (cronologic asc)
+        // Records cu diurna în perioadă (cronologic asc) — calculat ÎNAINTE de diurnaMax
+        // ca să putem plafona diurnaMax la zilele real bifate
         const diurnaInPeriod = empRecs
           .filter(r => r.diurna === true && r.date >= periodFrom && r.date <= periodTo)
           .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+
+        // diurnaMax = min(cascade lunară, capacitate perioadă, zile real bifate)
+        // Pentru ordin: nu putem acorda diurnă pe mai multe zile decât au fost bifate
+        const diurnaMaxCascade = Math.min(monthlyRemaining, periodCapacity)
+        const diurnaMax = Math.min(diurnaMaxCascade, diurnaInPeriod.length)
 
         // Lista șantiere distincte (în ordinea apariției cronologice — primele diurnaMax)
         const distribution = diurnaInPeriod.slice(0, diurnaMax)
