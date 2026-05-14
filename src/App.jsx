@@ -1901,25 +1901,20 @@ function ReportsPage() {
       // Per employee: recalc diurnaMax + colectează diurnaRecords cronologice
       const empData = details.map(d => {
         const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
-        // Norme cumulate: DOAR pe zile lucrătoare (workDaySet), identic cu exportDiurne
-        const normeCumulate = empRecs.filter(r => r.norma && NORME.includes(r.norma) && workDaySet.has(r.date)).length
+        // Zile diurnă plătite în plăți anterioare aceleași luni (în workDaySet)
         const zilePlatiteAnterior = empRecs.filter(r => r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)).length
-        const monthlyRemaining = Math.max(0, calWorkDays - normeCumulate - zilePlatiteAnterior)
-        // FIX BUG: normeInPeriod TREBUIE filtrat pe workDaySet (consistent cu exportDiurne)
-        // — altfel LL pe weekend scade incorect din periodCapacity
-        const normeInPeriod = empRecs.filter(r => r.norma && NORME.includes(r.norma) && workDaySet.has(r.date) && r.date >= periodFrom && r.date <= periodTo).length
-        const periodCapacity = Math.max(0, workDaysInPeriod - normeInPeriod)
 
-        // Records cu diurna în perioadă (cronologic asc) — calculat ÎNAINTE de diurnaMax
-        // ca să putem plafona diurnaMax la zilele real bifate
+        // Records cu diurna în perioadă (cronologic asc)
         const diurnaInPeriod = empRecs
           .filter(r => r.diurna === true && r.date >= periodFrom && r.date <= periodTo)
           .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
 
-        // diurnaMax = min(cascade lunară, capacitate perioadă, zile real bifate)
-        // Pentru ordin: nu putem acorda diurnă pe mai multe zile decât au fost bifate
-        const diurnaMaxCascade = Math.min(monthlyRemaining, periodCapacity)
-        const diurnaMax = Math.min(diurnaMaxCascade, diurnaInPeriod.length)
+        // diurnaMax = consistent cu savePayment: buget lunar = (zile lucr. ALE LUNII) × diurnaAmt
+        // împărțit la diurnaAmt = workDaySet.size zile (TOATĂ luna, NU doar perioada).
+        // MINUS zilele deja plătite în plăți anterioare.
+        // NU se scad LL-urile (ele sunt pe salariu separat, NU reduc bugetul de diurnă).
+        const bugetLunarRamasZile = Math.max(0, workDaySet.size - zilePlatiteAnterior)
+        const diurnaMax = Math.min(bugetLunarRamasZile, diurnaInPeriod.length)
 
         // Lista șantiere distincte (în ordinea apariției cronologice — primele diurnaMax)
         const distribution = diurnaInPeriod.slice(0, diurnaMax)
