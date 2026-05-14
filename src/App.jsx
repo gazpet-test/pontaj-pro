@@ -2271,15 +2271,15 @@ function ReportsPage() {
         const ws = {}
 
         // ───────── COLOANE A-H (lățimi optime pentru A4 portrait) ─────────
-        // Total: 95 units = ~499 pt < 535 pt A4 useful → încape garantat pe lățime
+        // Total: 83 units = ~436 pt < 535 pt A4 useful → încape cu marjă confort (~2 cm liber stânga+dreapta)
         ws['!cols'] = [
-          { wch: 5 },   // A: Nr. zi
-          { wch: 12 },  // B: Data
-          { wch: 22 },  // C: Conținut/Șantier
-          { wch: 20 },  // D
-          { wch: 9 },   // E: Nr. zile
-          { wch: 10 },  // F: Lei/zi
-          { wch: 13 },  // G: Suma RON
+          { wch: 4 },   // A: Nr. zi
+          { wch: 11 },  // B: Data
+          { wch: 18 },  // C: Conținut/Șantier
+          { wch: 17 },  // D
+          { wch: 8 },   // E: Nr. zile
+          { wch: 9 },   // F: Lei/zi
+          { wch: 12 },  // G: Suma RON
           { wch: 4 },   // H: lei suffix
         ]
         ws['!rows'] = []
