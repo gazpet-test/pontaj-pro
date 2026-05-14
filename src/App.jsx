@@ -1304,6 +1304,16 @@ function ReportsPage() {
   const [pbPwdInput, setPbPwdInput] = useState('')
   const [pbPwdErr, setPbPwdErr] = useState('')
   const [pbVerifying, setPbVerifying] = useState(false)
+  
+  // Pontaj Net — buton „Generează Pontaj Net" + Istoric Net (același gating ca brutul)
+  const [showSelectBrutForNet, setShowSelectBrutForNet] = useState(false)  // modal selectare brut
+  const [genNetLoading, setGenNetLoading] = useState(false)  // în curs de procesare
+  const [genNetProgress, setGenNetProgress] = useState('')  // mesaj de status
+  const [showHistoricPN, setShowHistoricPN] = useState(false)
+  const [historicPN, setHistoricPN] = useState([])
+  const [historicPNLoad, setHistoricPNLoad] = useState(false)
+  // Lock-screen partajat: dacă brutul e deblocat, și netul e deblocat (același flag de acces)
+  // Folosim ACELAȘI session key pb pentru ambele — UX mai simplu (re-auth 1 dată)
   const [toast,showToast]=useToast()
   const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
@@ -1372,9 +1382,352 @@ function ReportsPage() {
     showToast('✓ Intrare ștearsă')
     loadHistoricPB()
   }
+
+  // ─── PONTAJ NET ─────────────────────────────────────────────────
+  const loadHistoricPN = async () => {
+    setHistoricPNLoad(true)
+    const { data } = await supabase.from('pontaj_net_istoric').select('*').order('exported_at', { ascending: false }).limit(100)
+    setHistoricPN(data || [])
+    setHistoricPNLoad(false)
+  }
+  const redownloadHistoricPN = async (entry) => {
+    if (!entry?.storage_path) { showToast('Fără storage_path — fișier inexistent', 'warn'); return }
+    const { data, error } = await supabase.storage.from('pontaj-net-istoric').createSignedUrl(entry.storage_path, 120)
+    if (error || !data?.signedUrl) { showToast('Eroare descărcare: ' + (error?.message || 'fără URL'), 'error'); return }
+    const a = document.createElement('a'); a.href = data.signedUrl; a.download = entry.filename || 'pontaj_net.xlsx'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+  const deleteHistoricPN = async (entry) => {
+    if (!window.confirm(`Ștergi exportul Net "${entry.filename}"?`)) return
+    if (entry.storage_path) await supabase.storage.from('pontaj-net-istoric').remove([entry.storage_path])
+    await supabase.from('pontaj_net_istoric').delete().eq('id', entry.id)
+    showToast('✓ Intrare Net ștearsă')
+    loadHistoricPN()
+  }
+
+  // Generează Pontaj Net dintr-un export brut selectat
+  // Algoritm: surse (WE/LEG cu ore reale, NU coduri NORME) → destinații (LUCR cu LL)
+  // Mutare cronologică; orfani sursă → LL galben; orfani destinație → rămân
+  const generatePontajNet = async (brutEntry) => {
+    if (!brutEntry?.storage_path) { showToast('Brut fără fișier în Storage', 'error'); return }
+    if (!hasPontajBrutAccess) { showToast('Acces refuzat', 'error'); return }
+    setGenNetLoading(true)
+    setGenNetProgress('Descărcare brut din Storage...')
+    try {
+      // 1. Fetch xlsx brut din Storage
+      const { data: signedData, error: sigErr } = await supabase.storage.from('pontaj-brut-istoric').createSignedUrl(brutEntry.storage_path, 120)
+      if (sigErr || !signedData?.signedUrl) throw new Error('Signed URL eșuat: ' + (sigErr?.message || 'fără URL'))
+      const resp = await fetch(signedData.signedUrl)
+      if (!resp.ok) throw new Error('Fetch xlsx brut eșuat: ' + resp.status)
+      const arrBuf = await resp.arrayBuffer()
+
+      // 2. Parse xlsx
+      setGenNetProgress('Parse fișier Excel...')
+      const wbIn = XLSX.read(arrBuf, { type: 'array', cellStyles: true })
+      const wsIn = wbIn.Sheets[wbIn.SheetNames[0]]
+      const decodeRange = XLSX.utils.decode_range(wsIn['!ref'] || 'A1:AK646')
+      const getCell = (r0, c0) => wsIn[XLSX.utils.encode_cell({ r: r0, c: c0 })]
+      const cellVal = (r0, c0) => { const c = getCell(r0, c0); return c ? c.v : undefined }
+
+      // 3. Fetch calendar legal pentru perioada brut-ului
+      const y = brutEntry.period_year, m = brutEntry.period_month
+      const days = new Date(y, m, 0).getDate()  // ultima zi a lunii
+      const { data: calData } = await supabase.from('calendar_days').select('date,type')
+        .gte('date', `${y}-${String(m).padStart(2,'0')}-01`)
+        .lte('date', `${y}-${String(m).padStart(2,'0')}-${String(days).padStart(2,'0')}`)
+      const legalSet = new Set((calData||[]).filter(c => c.type === 'legal').map(c => c.date))
+      const dayType = (d) => {
+        const dt = new Date(y, m-1, d)
+        const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+        if (legalSet.has(ds)) return 'LEG'
+        if (dt.getDay() === 0 || dt.getDay() === 6) return 'WE'
+        return 'LUCR'
+      }
+
+      // 4. Aplicăm algoritmul de procesare per salariat
+      // Format identic cu brut: rândurile 1-7 antet, salariați de la r=8 cu pas 5 (r, r+1, r+2, r+3, r+4=separator)
+      // Coloane: A=Nume, B=Functia, C=Program; D..(D+days-1) = zile; +TotalZile, +TotalOre
+      // Identifică ultimul rând cu salariat
+      const NORME_SET = new Set(['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL'])
+      const FIXED = 3
+      const DATA_COL_START = FIXED  // 0-indexed: D = col 3
+      const DATA_COL_END   = FIXED + days - 1  // ultima zi
+      
+      setGenNetProgress('Aplicare reguli mutare...')
+      
+      // Construim noua matrice de date (clonată din brut)
+      // Pentru fiecare salariat: aplicăm mutările
+      const employees = []  // [{name, position, rowData: [r, r+1, r+2, r+3] cu valori și flag pentru fundal}]
+      let totalMoves = 0, totalOrphansSrc = 0, totalOrphansDst = 0, totalOreLunarSum = 0
+      
+      for (let row0 = 7; row0 <= decodeRange.e.r; row0 += 5) {  // r=8 Excel → row0=7 (0-indexed)
+        const name = cellVal(row0, 0)
+        if (!name) continue
+        const position = cellVal(row0, 1) || ''
+        
+        // Citește valorile din cele 4 rânduri (Intrare, Ieșire, Pauză, Ore) pentru toate zilele
+        // Plus metadata WE/LEG/LUCR per coloană
+        const rowData = [[], [], [], []]  // 4 sub-rânduri
+        const dayInfo = []  // [{col, day, type, isSrc, isDst, vals: [intrare, ieșire, pauza, ore]}]
+        
+        for (let c0 = DATA_COL_START; c0 <= DATA_COL_END; c0++) {
+          const day = c0 - DATA_COL_START + 1
+          const dt = dayType(day)
+          const vals = [
+            cellVal(row0, c0),       // intrare
+            cellVal(row0+1, c0),     // ieșire
+            cellVal(row0+2, c0),     // pauză
+            cellVal(row0+3, c0),     // ore
+          ]
+          const intrare = vals[0]
+          // SURSĂ: WE sau LEG, are valoare reală (nu null, nu LL, nu cod NORMĂ)
+          const isSrc = (dt === 'WE' || dt === 'LEG') 
+                     && intrare !== null && intrare !== undefined && intrare !== ''
+                     && !NORME_SET.has(String(intrare).trim())
+          // DESTINAȚIE: LUCR cu valoarea LL
+          const isDst = (dt === 'LUCR') && String(intrare).trim() === 'LL'
+          dayInfo.push({ c0, day, type: dt, isSrc, isDst, vals: [...vals] })
+        }
+        
+        // Aplică algoritmul: mut surse → destinații în ordine cronologică
+        const surse = dayInfo.filter(d => d.isSrc)
+        const dest = dayInfo.filter(d => d.isDst)
+        const nMoves = Math.min(surse.length, dest.length)
+        
+        for (let i = 0; i < nMoves; i++) {
+          const src = surse[i]
+          const dst = dest[i]
+          // Mut valorile sursă → destinație
+          const dstInfo = dayInfo.find(d => d.c0 === dst.c0)
+          dstInfo.vals = [...src.vals]
+          dstInfo.bgRole = 'MOVED_DST'  // fundal alb FFFFFF
+          // Sursa devine LL galben
+          const srcInfo = dayInfo.find(d => d.c0 === src.c0)
+          srcInfo.vals = ['LL', '', '', '']
+          srcInfo.bgRole = 'LL_YELLOW'
+        }
+        // Surse orfane → LL galben + ore șterse
+        for (let i = nMoves; i < surse.length; i++) {
+          const srcInfo = dayInfo.find(d => d.c0 === surse[i].c0)
+          srcInfo.vals = ['LL', '', '', '']
+          srcInfo.bgRole = 'LL_YELLOW'
+        }
+        // Destinații orfane rămân ca atare (LL galben, neschimbat)
+        
+        totalMoves += nMoves
+        totalOrphansSrc += Math.max(0, surse.length - nMoves)
+        totalOrphansDst += Math.max(0, dest.length - nMoves)
+        
+        // Calcul total ore lunar pentru metadata BD
+        let oreSum = 0
+        for (const di of dayInfo) {
+          const oreV = di.vals[3]
+          if (typeof oreV === 'number') oreSum += oreV
+          else if (oreV && !isNaN(Number(oreV))) oreSum += Number(oreV)
+        }
+        totalOreLunarSum += oreSum
+        
+        employees.push({ name, position, dayInfo, oreSum })
+      }
+      
+      setGenNetProgress(`Generare Excel: ${employees.length} salariați, ${totalMoves} mutări...`)
+
+      // 5. Build noul workbook
+      const wbOut = XLSX.utils.book_new()
+      const dayNums = Array.from({ length: days }, (_, i) => i+1)
+      const dayAbbr = ['D','L','Ma','Mi','J','V','S']
+      const mName = new Date(y, m-1).toLocaleString('ro-RO', { month: 'long', year: 'numeric' })
+      
+      // Coloane finale: A=Nume, B=Funcție, C=Program, D..AG/AH/AI(zile), Total Zile, Total Ore (FĂRĂ ORE SUPL)
+      // Plus etichetă AK4/AL4 (Razvan a zis să le păstrăm ca info informativă)
+      const TOTAL_ZILE_C = FIXED + days       // col index al „Total Zile"
+      const TOTAL_ORE_C  = FIXED + days + 1   // col index al „Total Ore"
+      const WD_LABEL_C   = FIXED + days + 2   // col index al etichetei „Zile lucr. lună:"
+      const WD_VALUE_C   = FIXED + days + 3   // col index al valorii
+      
+      const R = []
+      R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
+      R.push(['RO 22029920; J2007001650296','','','Tel./Fax 0244/435005  office@gazpet.ro'])
+      R.push([])
+      // Rând 4 (idx 3): titlu + zile lucr lună la dreapta
+      const titleRow = [`FOAIE COLECTIVĂ DE PREZENȚĂ (NET) — ${mName.toUpperCase()}`]
+      while (titleRow.length < WD_LABEL_C) titleRow.push('')
+      titleRow.push('Zile lucr. lună:')
+      titleRow.push(brutEntry.work_days_in_month)
+      R.push(titleRow)
+      R.push([])
+      // Header rând 6
+      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE']
+      R.push(HDR)
+      // Day abbr rând 7
+      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '']
+      R.push(DNR)
+      
+      // Salariați
+      employees.forEach((emp, empIdx) => {
+        const excelRow = 8 + empIdx * 5  // 1-indexed Excel
+        const rCI = [emp.name, emp.position, 'Ora Intrare']
+        const rCO = ['', '', 'Ora Ieșire']
+        const rPM = ['', '', 'Pauza de Masă (ore)']
+        const rOL = ['', '', 'Ore Lucrate']
+        for (const di of emp.dayInfo) {
+          rCI.push(di.vals[0] ?? '')
+          rCO.push(di.vals[1] ?? '')
+          rPM.push(di.vals[2] ?? '')
+          rOL.push(di.vals[3] ?? '')
+        }
+        // Total Zile + Total Ore = FORMULE (nu valori), pe rândul Ora Intrare (r)
+        // COUNTIF / SUM pe rândul Ore Lucrate (r+3)
+        rCI.push({ f: `COUNTIF(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3},">0")`, t: 'n' })
+        rCI.push({ f: `SUM(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3})`, t: 'n' })
+        rCO.push('', '')
+        rPM.push('', '')
+        rOL.push('', '')
+        R.push(rCI, rCO, rPM, rOL, [])
+      })
+      
+      const wsOut = XLSX.utils.aoa_to_sheet(R)
+      wsOut['!cols'] = [
+        {wch:26},{wch:16},{wch:22},
+        ...dayNums.map(()=>({wch:5.5})),
+        {wch:11}, {wch:11},
+        {wch:18}, {wch:11}
+      ]
+      
+      // ── Stilizare conform paletei Razvan ──
+      const bd = {top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
+      const sc = (r0, c0, s) => { const a = XLSX.utils.encode_cell({r:r0, c:c0}); if (!wsOut[a]) wsOut[a] = {v:'', t:'s'}; wsOut[a].s = s }
+      const alC = {horizontal:'center', vertical:'center'}
+      const alL = {horizontal:'left', vertical:'center'}
+      
+      // Title row (idx 3) — etichetă + valoare
+      sc(3, WD_LABEL_C, {fill:{fgColor:{rgb:'1F497D'}}, font:{bold:true,color:{rgb:'FFFFFF'},sz:10}, border:bd, alignment:{horizontal:'right',vertical:'center'}})
+      sc(3, WD_VALUE_C, {fill:{fgColor:{rgb:'FFE699'}}, font:{bold:true,sz:11,color:{rgb:'7F6000'}}, border:bd, alignment:alC})
+      
+      // Header rândul 5
+      HDR.forEach((v,c) => sc(5, c, {fill:{fgColor:{rgb:'1F497D'}}, font:{bold:true,color:{rgb:'FFFFFF'},sz:10}, border:bd, alignment:c<3?alL:alC}))
+      
+      // Day names rândul 6 cu culori per tip zi
+      DNR.forEach((v,c) => {
+        const isDayCol = c >= 3 && c < 3+days
+        if (!isDayCol) {
+          sc(6, c, {fill:{fgColor:{rgb:'4472C4'}}, font:{bold:true,color:{rgb:'FFFFFF'},sz:9}, border:bd, alignment:alC})
+          return
+        }
+        const day = c - 2
+        const dt = dayType(day)
+        let rgb = '4472C4'  // lucr
+        if (dt === 'WE') rgb = 'BFBFBF'
+        else if (dt === 'LEG') rgb = 'FF8888'
+        sc(6, c, {fill:{fgColor:{rgb}}, font:{bold:true,color:{rgb:'FFFFFF'},sz:9}, border:bd, alignment:alC})
+      })
+      
+      // Salariați: stilizare cu paleta Razvan
+      let ri = 7  // 0-indexed (Excel rând 8)
+      employees.forEach(emp => {
+        for (let ro = 0; ro < 4; ro++) {
+          const TOTAL_C = FIXED + days + 2  // FĂRĂ ORE SUPL
+          for (let c = 0; c < TOTAL_C; c++) {
+            let s = {}
+            if (c === 0) {
+              s = ro===0 ? {fill:{fgColor:{rgb:'E2EFDA'}}, font:{bold:true,sz:10}, border:bd, alignment:alL}
+                         : {fill:{fgColor:{rgb:'F5F5F5'}}, border:bd, alignment:alL}
+            } else if (c === 1) {
+              s = ro===0 ? {fill:{fgColor:{rgb:'E2EFDA'}}, border:bd, alignment:alL}
+                         : {fill:{fgColor:{rgb:'F5F5F5'}}, border:bd}
+            } else if (c === 2) {
+              s = {fill:{fgColor:{rgb:'D6E4F0'}}, font:{bold:true,sz:8}, border:bd, alignment:alL}
+            } else if (c >= 3 && c < 3+days) {
+              const di = emp.dayInfo[c-3]
+              const dt = di.type
+              const intrare = di.vals[0]
+              let rgb = null
+              // Determină culoarea finală conform paletei Razvan
+              if (di.bgRole === 'MOVED_DST') {
+                rgb = 'FFFFFF'  // destinație care a primit mutare → alb
+              } else if (di.bgRole === 'LL_YELLOW') {
+                rgb = 'FFFF00'  // sursă convertită la LL → galben
+              } else if (intrare === 'LL') {
+                rgb = 'FFFF00'  // LL natural (în zi lucr fără sursă, sau orig pe WE/LEG)
+              } else if (intrare && intrare !== '' && !NORME_SET.has(String(intrare).trim()) && (dt === 'WE' || dt === 'LEG')) {
+                // Caz teoretic: sursă care nu a fost mișcată (nu ar trebui să apară după algoritm)
+                rgb = 'FFC000'
+              } else if (intrare && intrare !== '' && dt === 'LUCR') {
+                rgb = null  // alb default (zi lucrătoare normală)
+              } else if (dt === 'WE') {
+                rgb = 'C0C0C0'  // weekend gol
+              } else if (dt === 'LEG') {
+                rgb = 'FFAAAA'  // legal gol
+              }
+              s = {...(rgb?{fill:{fgColor:{rgb}}}:{}), border:bd, alignment:alC, font:{sz: ro===3 ? 9 : 9}}
+            } else {
+              s = {fill:{fgColor:{rgb: ro===0 ? 'D9E1F2' : 'F5F5F5'}}, font: ro===0?{bold:true}:{sz:9}, border:bd, alignment:alC}
+            }
+            sc(ri+ro, c, s)
+          }
+        }
+        ri += 5
+      })
+      
+      XLSX.utils.book_append_sheet(wbOut, wsOut, 'Pontaj Net')
+      
+      // 6. Write + Download + Upload Storage + INSERT istoric net
+      setGenNetProgress('Salvare în Storage...')
+      const wbArr = XLSX.write(wbOut, { bookType: 'xlsx', type: 'array', cellStyles: true })
+      const blob = new Blob([wbArr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const filename = `Pontaj_Net_${mName.replace(/\s/g,'_')}.xlsx`
+      
+      // Download local
+      const localUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = localUrl; a.download = filename
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(localUrl)
+      
+      // Upload Storage + INSERT istoric
+      const storagePath = `${y}/${String(m).padStart(2,'0')}/${Date.now()}_${filename}`
+      try {
+        const { error: upErr } = await supabase.storage.from('pontaj-net-istoric').upload(storagePath, blob, {
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          upsert: false
+        })
+        if (upErr) {
+          showToast('⚠ Excel descărcat, Storage net a eșuat: ' + upErr.message, 'warn')
+        } else {
+          await supabase.from('pontaj_net_istoric').insert({
+            source_brut_id: brutEntry.id,
+            period_year: y, period_month: m,
+            work_days_in_month: brutEntry.work_days_in_month,
+            total_employees: employees.length,
+            moves_count: totalMoves,
+            orphans_src_count: totalOrphansSrc,
+            orphans_dst_count: totalOrphansDst,
+            total_ore_lunar: +totalOreLunarSum.toFixed(2),
+            exported_by: profile?.id,
+            exported_by_name: profile?.name || profile?.email,
+            filename, storage_path: storagePath
+          })
+        }
+      } catch (e) {
+        showToast('⚠ Eroare salvare istoric Net: ' + (e?.message||e), 'warn')
+      }
+      
+      playBeep(880, 0.15); setTimeout(()=>playBeep(1100, 0.12), 130)
+      showToast(`✓ Pontaj Net — ${employees.length} ang. · ${totalMoves} mutări · ${totalOrphansSrc} surse orfane → LL`)
+      setShowSelectBrutForNet(false)  // închide modal selectare
+    } catch (e) {
+      console.error('generatePontajNet err:', e)
+      showToast('Eroare procesare Net: ' + (e?.message || e), 'error')
+    } finally {
+      setGenNetLoading(false)
+      setGenNetProgress('')
+    }
+  }
+
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
   useEffect(()=>{ if(showIstoric) loadPayments() },[showIstoric])
+  useEffect(()=>{ if(showHistoricPN && pbUnlocked) loadHistoricPN() }, [showHistoricPN, pbUnlocked])
 
   const loadPayments=async()=>{
     const {data}=await supabase.from('diurna_payments').select('*').order('payment_date',{ascending:false}).limit(50)
@@ -2665,6 +3018,8 @@ function ReportsPage() {
             <>
               <button onClick={exportPontajBrut} disabled={expPontajBrut||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Foaie Colectivă de Prezență cu Ore Suplimentare — acces restricționat">{expPontajBrut?<><div className="sp"/>...</>:'📄 Export Pontaj Brut'}</button>
               <button onClick={()=>setShowHistoricPB(true)} disabled={load} style={{...S.btnS,fontSize:12,background:'#2A1A4A',color:'#BC8CFF',borderColor:G.purple+'66'}} title="Istoric exporturi Pontaj Brut (parolat)">📋 Istoric Pontaj Brut</button>
+              <button onClick={()=>{setShowSelectBrutForNet(true); loadHistoricPB()}} disabled={load} style={{...S.btnP,background:'#1A4A6B',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Procesează un export Brut prin reguli de salarizare → Pontaj Net">🔄 Generează Pontaj Net</button>
+              <button onClick={()=>setShowHistoricPN(true)} disabled={load} style={{...S.btnS,fontSize:12,background:'#1A2A4A',color:'#7FB3FF',borderColor:G.blue+'66'}} title="Istoric exporturi Pontaj Net (parolat)">📑 Istoric Pontaj Net</button>
             </>
           )}
           <button onClick={dlImportTemplate} disabled={load||!data.length} style={{...S.btnS,fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Descarcă template Excel pentru import">⬇ Template Import</button>
@@ -2836,6 +3191,7 @@ function ReportsPage() {
                             <td style={{padding:'8px 6px',textAlign:'center'}}>
                               <div style={{display:'flex',gap:4,justifyContent:'center'}}>
                                 {e.storage_path && <button onClick={()=>redownloadHistoricPB(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.green,borderColor:G.green+'44'}} title="Descarcă Excel">⬇</button>}
+                                {e.storage_path && <button onClick={()=>{setShowHistoricPB(false); generatePontajNet(e)}} disabled={genNetLoading} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.blue,borderColor:G.blue+'66'}} title="Generează Pontaj Net din acest brut">➡</button>}
                                 {profile?.is_owner === true && <button onClick={()=>deleteHistoricPB(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.red,borderColor:G.red+'44'}} title="Șterge (doar OWNER)">🗑️</button>}
                               </div>
                             </td>
@@ -2848,6 +3204,199 @@ function ReportsPage() {
               </div>
               <div style={{padding:'10px 20px',borderTop:`1px solid ${G.border}`,fontSize:11,color:G.muted,background:G.bg}}>
                 💡 Fișierele Excel sunt salvate în Storage privat. Doar OWNER poate șterge intrările.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal Selectare Brut pentru Generare Net */}
+      {showSelectBrutForNet && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          {!pbUnlocked ? (
+            <div style={{...S.card,padding:32,maxWidth:460,width:'100%',border:`2px solid ${G.blue}66`,boxShadow:`0 8px 40px ${G.blue}33`}}>
+              <div style={{fontSize:42,textAlign:'center',marginBottom:14}}>🔐</div>
+              <div style={{fontSize:18,fontWeight:800,textAlign:'center',marginBottom:8,color:G.blue}}>Generează Pontaj Net</div>
+              <div style={{fontSize:12,color:G.muted,textAlign:'center',marginBottom:22,lineHeight:1.7}}>
+                Procesează un brut existent prin reguli de salarizare.<br/>Necesită parola contului tău pentru <strong style={{color:G.yellow}}>{PB_TIMEOUT_MIN} min</strong>.
+              </div>
+              <div style={{marginBottom:12}}>
+                <Lbl>Email contului tău</Lbl>
+                <div style={{fontSize:12,color:G.text,padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border}`,fontFamily:'monospace'}}>{profile?.email || '—'}</div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <Lbl>Parolă</Lbl>
+                <input type="password" style={{...S.input,borderColor:pbPwdErr?G.red:G.border2}}
+                  value={pbPwdInput} onChange={e=>setPbPwdInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter') handlePbUnlock()}}
+                  autoFocus disabled={pbVerifying} placeholder="••••••••"/>
+                {pbPwdErr && <div style={{fontSize:11,color:G.red,marginTop:5,fontWeight:600}}>⚠ {pbPwdErr}</div>}
+              </div>
+              <button onClick={handlePbUnlock} disabled={pbVerifying} style={{...S.btnP,width:'100%',padding:'11px',background:pbVerifying?G.dim:G.blue,fontSize:13,fontWeight:700}}>
+                {pbVerifying ? '⏳ Verificare...' : '🔓 Deblochează acces'}
+              </button>
+              <div style={{textAlign:'center',marginTop:14}}>
+                <button onClick={()=>{setShowSelectBrutForNet(false);setPbPwdInput('');setPbPwdErr('')}} style={{...S.btnS,fontSize:11,padding:'6px 14px'}}>← Anulează</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{...S.card,width:840,maxHeight:'88vh',display:'flex',flexDirection:'column',borderTop:`3px solid ${G.blue}`}}>
+              <div style={{padding:'14px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:800,display:'flex',alignItems:'center',gap:8}}>🔄 Generează Pontaj Net</div>
+                  <div style={{fontSize:11,color:G.muted,marginTop:3}}>Selectează un export Brut din care să generez Pontajul Net (după aplicarea regulilor de salarizare)</div>
+                </div>
+                <button onClick={()=>setShowSelectBrutForNet(false)} disabled={genNetLoading} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>×</button>
+              </div>
+              {genNetLoading && (
+                <div style={{padding:'14px 20px',background:'#1A2A4A',borderBottom:`1px solid ${G.blue}66`,fontSize:12,color:G.text,display:'flex',alignItems:'center',gap:10}}>
+                  <div className="sp"/>
+                  <span>⚙️ {genNetProgress || 'Procesare...'}</span>
+                </div>
+              )}
+              <div style={{overflowY:'auto',flex:1,padding:'0 20px'}}>
+                {historicPBLoad ? (
+                  <div style={{textAlign:'center',padding:60}}><div className="sp" style={{display:'inline-block'}}/></div>
+                ) : !historicPB.length ? (
+                  <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                    Nu există încă exporturi Brut. Generează un Pontaj Brut întâi.
+                  </div>
+                ) : (
+                  <table style={{width:'100%',fontSize:12}}>
+                    <thead style={{position:'sticky',top:0,background:G.surface,zIndex:1}}>
+                      <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Perioadă</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Zile lucr.</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Angajați</th>
+                        <th style={{padding:'10px 6px',textAlign:'right'}}>Ore Brut</th>
+                        <th style={{padding:'10px 6px',textAlign:'right'}}>Ore Supl</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Exportat</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Acțiune</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicPB.map((e,i)=>{
+                        const mLabel = new Date(e.period_year, e.period_month-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
+                        return (
+                          <tr key={e.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                            <td style={{padding:'8px 6px',fontWeight:600,color:G.blue,textTransform:'capitalize'}}>{mLabel}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center',color:G.yellow,fontWeight:700}}>{e.work_days_in_month}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center'}}>{e.total_employees}</td>
+                            <td style={{padding:'8px 6px',textAlign:'right',color:G.text}}>{Number(e.total_ore_lunar).toLocaleString('ro-RO',{maximumFractionDigits:1})}h</td>
+                            <td style={{padding:'8px 6px',textAlign:'right',color:Number(e.total_ore_supl)>0?G.orange:G.dim}}>{Number(e.total_ore_supl).toLocaleString('ro-RO',{maximumFractionDigits:1})}h</td>
+                            <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{new Date(e.exported_at).toLocaleDateString('ro-RO')}<br/><span style={{fontSize:10}}>{e.exported_by_name}</span></td>
+                            <td style={{padding:'8px 6px',textAlign:'center'}}>
+                              <button onClick={()=>generatePontajNet(e)} disabled={genNetLoading || !e.storage_path} style={{...S.btnP,padding:'6px 12px',fontSize:11,background:G.blue,minWidth:90}}>
+                                {genNetLoading?'⏳':'➡ Procesează'}
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div style={{padding:'10px 20px',borderTop:`1px solid ${G.border}`,fontSize:11,color:G.muted,background:G.bg}}>
+                💡 Algoritm: mută orele lucrate în WE/sărbătoare → zile lucrătoare cu LL. Surse orfane → LL galben.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal Istoric Pontaj Net — cu lock-screen (același mecanism) */}
+      {showHistoricPN && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          {!pbUnlocked ? (
+            <div style={{...S.card,padding:32,maxWidth:460,width:'100%',border:`2px solid ${G.blue}66`,boxShadow:`0 8px 40px ${G.blue}33`}}>
+              <div style={{fontSize:42,textAlign:'center',marginBottom:14}}>🔐</div>
+              <div style={{fontSize:18,fontWeight:800,textAlign:'center',marginBottom:8,color:G.blue}}>Istoric Pontaj Net</div>
+              <div style={{fontSize:12,color:G.muted,textAlign:'center',marginBottom:22,lineHeight:1.7}}>
+                Re-introdu parola contului tău pentru <strong style={{color:G.yellow}}>{PB_TIMEOUT_MIN} min</strong>.
+              </div>
+              <div style={{marginBottom:12}}>
+                <Lbl>Email contului tău</Lbl>
+                <div style={{fontSize:12,color:G.text,padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border}`,fontFamily:'monospace'}}>{profile?.email || '—'}</div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <Lbl>Parolă</Lbl>
+                <input type="password" style={{...S.input,borderColor:pbPwdErr?G.red:G.border2}}
+                  value={pbPwdInput} onChange={e=>setPbPwdInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter') handlePbUnlock()}}
+                  autoFocus disabled={pbVerifying} placeholder="••••••••"/>
+                {pbPwdErr && <div style={{fontSize:11,color:G.red,marginTop:5,fontWeight:600}}>⚠ {pbPwdErr}</div>}
+              </div>
+              <button onClick={()=>{handlePbUnlock().then(()=>loadHistoricPN())}} disabled={pbVerifying} style={{...S.btnP,width:'100%',padding:'11px',background:pbVerifying?G.dim:G.blue,fontSize:13,fontWeight:700}}>
+                {pbVerifying ? '⏳ Verificare...' : '🔓 Deblochează'}
+              </button>
+              <div style={{textAlign:'center',marginTop:14}}>
+                <button onClick={()=>{setShowHistoricPN(false);setPbPwdInput('');setPbPwdErr('')}} style={{...S.btnS,fontSize:11,padding:'6px 14px'}}>← Anulează</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{...S.card,width:1000,maxHeight:'88vh',display:'flex',flexDirection:'column',borderTop:`3px solid ${G.blue}`}}>
+              <div style={{padding:'14px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:800,display:'flex',alignItems:'center',gap:8}}>📑 Istoric Pontaj Net</div>
+                  <div style={{fontSize:11,color:G.muted,marginTop:3}}>
+                    🔓 Deblocat până la {new Date(pbUnlockUntil).toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit'})} · {historicPN.length} exporturi
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>{loadHistoricPN()}} style={{...S.btnS,padding:'4px 10px',fontSize:11}}>🔄 Reîncarcă</button>
+                  <button onClick={handlePbLock} style={{...S.btnS,padding:'4px 10px',fontSize:11,borderColor:G.red+'66',color:G.red}}>🔒 Lock</button>
+                  <button onClick={()=>setShowHistoricPN(false)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>×</button>
+                </div>
+              </div>
+              <div style={{overflowY:'auto',flex:1,padding:'0 20px'}}>
+                {historicPNLoad ? (
+                  <div style={{textAlign:'center',padding:60}}><div className="sp" style={{display:'inline-block'}}/></div>
+                ) : !historicPN.length ? (
+                  <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                    Niciun export Net încă. Folosește „🔄 Generează Pontaj Net" sau butonul ➡ din Istoric Brut.
+                  </div>
+                ) : (
+                  <table style={{width:'100%',fontSize:12}}>
+                    <thead style={{position:'sticky',top:0,background:G.surface,zIndex:1}}>
+                      <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Perioadă</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Angajați</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Mutări</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Orfani→LL</th>
+                        <th style={{padding:'10px 6px',textAlign:'right'}}>Total ore</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Exportat de</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Data</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Acțiuni</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicPN.map((e,i)=>{
+                        const mLabel = new Date(e.period_year, e.period_month-1).toLocaleString('ro-RO',{month:'long',year:'numeric'})
+                        return (
+                          <tr key={e.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                            <td style={{padding:'8px 6px',fontWeight:600,color:G.blue,textTransform:'capitalize'}}>{mLabel}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center'}}>{e.total_employees}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center',color:G.green,fontWeight:700}}>{e.moves_count}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center',color:G.orange,fontWeight:700}}>{e.orphans_src_count}</td>
+                            <td style={{padding:'8px 6px',textAlign:'right',color:G.text}}>{Number(e.total_ore_lunar).toLocaleString('ro-RO',{maximumFractionDigits:1})}h</td>
+                            <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{e.exported_by_name || '—'}</td>
+                            <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{new Date(e.exported_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                            <td style={{padding:'8px 6px',textAlign:'center'}}>
+                              <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                                {e.storage_path && <button onClick={()=>redownloadHistoricPN(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.green,borderColor:G.green+'44'}} title="Descarcă Excel">⬇</button>}
+                                {profile?.is_owner === true && <button onClick={()=>deleteHistoricPN(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.red,borderColor:G.red+'44'}} title="Șterge (doar OWNER)">🗑️</button>}
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div style={{padding:'10px 20px',borderTop:`1px solid ${G.border}`,fontSize:11,color:G.muted,background:G.bg}}>
+                💡 Net = brut procesat (WE/sărbătoare lucrată mutate în zile cu LL). Coloana Ore Suplimentare eliminată.
               </div>
             </div>
           )}
