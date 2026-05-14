@@ -30,7 +30,14 @@ const S = {
 }
 
 const STARI = ['Functional', 'Nefunctional', 'In_service']
-const TIPURI_CARBURANT = ['', 'motorina', 'benzina', 'electric', 'gpl', 'mixt']
+const TIPURI_CARBURANT = [
+  { value: '', label: '— niciunul —' },
+  { value: 'motorina', label: '⛽ Motorină' },
+  { value: 'benzina', label: '⛽ Benzină' },
+  { value: 'electric', label: '⚡ Electric' },
+  { value: 'gpl', label: '🔥 GPL' },
+  { value: 'mixt', label: '🔋 Mixt (hibrid)' },
+]
 const FIRME = ['Gazpet Instal', 'Gazpet Invest', 'Alt proprietar']
 const UNITATI_NORMA = ['l/h', 'l/100km']
 
@@ -5912,6 +5919,7 @@ export default function LogisticaPage() {
   const [showEditStoc, setShowEditStoc] = useState(null)   // null | obiect rezervor
   const [showSetariPret, setShowSetariPret] = useState(false)
   const [alerteTransp, setAlerteTransp] = useState([])     // transporturi cu status='cerut'
+  const [transpBlocate, setTranspBlocate] = useState([])   // aprobate sau in_tranzit cu data depășită
   const [kpiTransp, setKpiTransp] = useState({ cerute: 0, aprobate: 0, inTranzit: 0, livrate: 0 })  // KPI transporturi luna curentă
   const [tab, setTab] = useState(() => {
     const params = new URLSearchParams(loc.search)
@@ -5954,8 +5962,15 @@ export default function LogisticaPage() {
     const ymStart = new Date()
     ymStart.setDate(1); ymStart.setHours(0, 0, 0, 0)
     const ymStartISO = ymStart.toISOString().split('T')[0]
+    // Calcul azi + ieri pentru detectare transporturi blocate
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const todayISO = today.toISOString().split('T')[0]
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yesterdayISO = yesterday.toISOString().split('T')[0]
     
-    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes, transpRes, transpKpiRes] = await Promise.all([
+    const [activeRes, catRes, kpiRes, rezRes, sitesRes, setariRes, kpiAlimRes, ultimeRes, transpRes, transpKpiRes, transpBlocRes] = await Promise.all([
       supabase.from('logistica_active')
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .order('marca', { ascending: true }).order('model', { ascending: true }),
@@ -5978,6 +5993,19 @@ export default function LogisticaPage() {
       supabase.from('logistica_transporturi')
         .select('status')
         .gte('data_transport', ymStartISO),
+      // Transporturi blocate: aprobate/programate cu data <= azi-1 SAU in_tranzit cu data <= azi-2
+      // (în fetch luăm mai larg, filtrăm exact pe client)
+      supabase.from('logistica_transporturi')
+        .select(`id, tip, data_transport, continut_descriere, status,
+          activ_transportat:logistica_active!activ_transportat_id(cod_intern, marca, model),
+          plecare_site:sites!plecare_site_id(name),
+          destinatie_site:sites!destinatie_site_id(name),
+          solicitant:profiles!solicitant_id(name),
+          sofer:profiles!sofer_id(name)`)
+        .in('status', ['aprobat', 'programat', 'in_tranzit'])
+        .lt('data_transport', todayISO)
+        .order('data_transport', { ascending: true })
+        .limit(30),
     ])
     setActive(activeRes.data || [])
     setCategorii(catRes.data || [])
@@ -5997,6 +6025,16 @@ export default function LogisticaPage() {
       inTranzit: transpArr.filter(t => t.status === 'in_tranzit').length,
       livrate: transpArr.filter(t => t.status === 'livrat').length,
     })
+    // Filtrez blocate strict pe client:
+    // - aprobat/programat blocat: data_transport < azi (data plănuită a trecut, nu a plecat)
+    // - in_tranzit blocat: data_transport < ieri (depășit cu 1+ zi termenul fără confirmare)
+    const allBloc = transpBlocRes.data || []
+    const blocate = allBloc.filter(t => {
+      if (t.status === 'aprobat' || t.status === 'programat') return t.data_transport < todayISO
+      if (t.status === 'in_tranzit') return t.data_transport < yesterdayISO
+      return false
+    })
+    setTranspBlocate(blocate)
     // Map ultima alimentare per activ
     const map = {}
     ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
@@ -6575,6 +6613,117 @@ export default function LogisticaPage() {
           </div>
         </div>
       )}
+      
+      {/* Widget Transporturi BLOCATE — aprobate care nu au plecat SAU în tranzit care nu au confirmat livrare */}
+      {transpBlocate && transpBlocate.length > 0 && (() => {
+        const hasTranzit = transpBlocate.some(t => t.status === 'in_tranzit')
+        const borderColor = hasTranzit ? G.red : G.orange
+        const bgColor = hasTranzit ? G.redDim + '66' : G.yellowDim + '66'
+        // Helper zile întârziere
+        const daysOverdue = (dataTransport) => {
+          if (!dataTransport) return 0
+          const d = new Date(dataTransport); d.setHours(0,0,0,0)
+          const t = new Date(); t.setHours(0,0,0,0)
+          return Math.floor((t.getTime() - d.getTime()) / (1000 * 60 * 60 * 24))
+        }
+        return (
+          <div style={{
+            ...S.card,
+            padding: '10px 14px',
+            marginBottom: 12,
+            borderLeft: `4px solid ${borderColor}`,
+            background: bgColor,
+          }}>
+            <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8, flexWrap: 'wrap'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+                <span style={{fontSize: 20}}>{hasTranzit ? '🚨' : '⚠️'}</span>
+                <div>
+                  <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>
+                    Transporturi blocate — acțiune necesară
+                  </div>
+                  <div style={{fontSize: 11, color: G.muted, marginTop: 1, display: 'flex', gap: 12, flexWrap: 'wrap'}}>
+                    {transpBlocate.filter(t => t.status === 'aprobat' || t.status === 'programat').length > 0 && (
+                      <span style={{color: G.orange, fontWeight: 700}}>
+                        ⚠️ {transpBlocate.filter(t => t.status === 'aprobat' || t.status === 'programat').length} aprobate, n-au plecat
+                      </span>
+                    )}
+                    {transpBlocate.filter(t => t.status === 'in_tranzit').length > 0 && (
+                      <span style={{color: G.red, fontWeight: 700}}>
+                        🚨 {transpBlocate.filter(t => t.status === 'in_tranzit').length} în tranzit, livrare neconfirmată
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => setTab('transporturi')}
+                style={{...S.btnS, fontSize: 12, color: borderColor, borderColor: borderColor + '88', fontWeight: 700}}>
+                → Vezi în Transporturi
+              </button>
+            </div>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+              {transpBlocate.slice(0, 5).map(t => {
+                const isTranzit = t.status === 'in_tranzit'
+                const continut = t.tip === 'utilaj' && t.activ_transportat
+                  ? `🚛 ${t.activ_transportat.cod_intern || ''} ${t.activ_transportat.marca || ''} ${t.activ_transportat.model || ''}`.trim()
+                  : `📄 ${t.continut_descriere || '—'}`
+                const traseu = `${t.plecare_site?.name || '?'} → ${t.destinatie_site?.name || '?'}`
+                const zileInt = daysOverdue(t.data_transport)
+                const persoana = isTranzit ? (t.sofer?.name || t.solicitant?.name) : t.solicitant?.name
+                return (
+                  <div 
+                    key={t.id}
+                    onClick={() => setTab('transporturi')}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '5px 10px', background: G.bg, borderRadius: 4, cursor: 'pointer',
+                      fontSize: 11, gap: 10,
+                      borderLeft: `2px solid ${isTranzit ? G.red : G.orange}`,
+                    }}
+                    title={isTranzit ? `În tranzit — livrare neconfirmată de ${zileInt} ${zileInt === 1 ? 'zi' : 'zile'}` : `Aprobat — trebuia să plece acum ${zileInt} ${zileInt === 1 ? 'zi' : 'zile'}`}
+                  >
+                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, overflow: 'hidden'}}>
+                      <span style={{
+                        padding: '1px 6px', borderRadius: 3, fontSize: 9, fontWeight: 700,
+                        background: isTranzit ? G.red + '33' : G.orange + '33',
+                        color: isTranzit ? G.red : G.orange,
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {isTranzit ? '🚨 TRANZIT' : '⚠️ APROBAT'}
+                      </span>
+                      <span style={{color: G.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 240}}>
+                        {continut}
+                      </span>
+                      <span style={{color: G.muted, fontSize: 10}}>·</span>
+                      <span style={{color: G.muted, fontSize: 10, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                        {traseu}
+                      </span>
+                    </div>
+                    <div style={{display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0}}>
+                      <span style={{color: isTranzit ? G.red : G.orange, fontSize: 10, fontWeight: 700}}>
+                        ⏱ {zileInt} {zileInt === 1 ? 'zi' : 'zile'}
+                      </span>
+                      <span style={{color: G.blue, fontSize: 10, fontFamily: 'monospace'}}>
+                        📅 {t.data_transport}
+                      </span>
+                      {persoana && (
+                        <span style={{color: G.muted, fontSize: 10}}>
+                          {persoana.split(' ')[0]}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+              {transpBlocate.length > 5 && (
+                <div style={{fontSize: 10, color: G.muted, textAlign: 'center', paddingTop: 4, fontStyle: 'italic'}}>
+                  ... și încă {transpBlocate.length - 5} blocate
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })()}
       
       {/* Widget statistici alimentări — IERI / ULTIMELE 7 ZILE / LUNA */}
       {kpiAlim && (
