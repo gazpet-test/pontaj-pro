@@ -4704,18 +4704,42 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                       <StatusBadge status={t.status} />
                     </td>
                     <td style={tdStyle}>
-                      {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
-                      {t.status === 'cerut' ? (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
-                          style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
-                          title="Editează cererea (doar înainte de aprobare)"
-                        >
-                          ✏️ Edit
-                        </button>
-                      ) : (
-                        <span style={{fontSize:10, color:G.muted}}>—</span>
-                      )}
+                      <div style={{display:'flex',gap:6,justifyContent:'flex-start',alignItems:'center'}}>
+                        {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
+                        {t.status === 'cerut' ? (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
+                            style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
+                            title="Editează cererea (doar înainte de aprobare)"
+                          >
+                            ✏️ Edit
+                          </button>
+                        ) : null}
+                        {/* Buton Delete: DOAR pentru OWNER (cazuri de înregistrare greșită) */}
+                        {profile?.is_owner === true && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              const hasAvize = t.aviz_emis === true || t.aviz_numar
+                              const warn = hasAvize 
+                                ? `\n\n⚠ ATENȚIE: acest transport are aviz emis (${t.aviz_numar||'?'}). Ștergerea va elimina ȘI avizul din arhivă (CASCADE)!`
+                                : ''
+                              if (!window.confirm(`Ștergi transportul ${t.numar_transport || '#'+t.id}?\n\nStatus: ${t.status}${warn}\n\nAcțiunea NU poate fi anulată.`)) return
+                              const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id)
+                              if (error) { showToast('Eroare ștergere: ' + error.message, 'error'); return }
+                              showToast(`✓ Transport ${t.numar_transport || '#'+t.id} șters`)
+                              fetchAll()
+                            }}
+                            style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.red, borderColor:G.red + '66'}}
+                            title="Șterge transport (doar OWNER, în caz de înregistrare greșită)"
+                          >
+                            🗑️
+                          </button>
+                        )}
+                        {t.status !== 'cerut' && profile?.is_owner !== true && (
+                          <span style={{fontSize:10, color:G.muted}}>—</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                   )

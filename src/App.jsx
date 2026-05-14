@@ -1314,6 +1314,16 @@ function ReportsPage() {
   const [historicPNLoad, setHistoricPNLoad] = useState(false)
   // Lock-screen partajat: dacă brutul e deblocat, și netul e deblocat (același flag de acces)
   // Folosim ACELAȘI session key pb pentru ambele — UX mai simplu (re-auth 1 dată)
+  
+  // Re-auth pentru butoanele de Export (Brut + Diurne + Hrană) — folosește același pbUnlocked
+  // Când userul apasă un buton Export și !pbUnlocked, se setează pendingExportAction
+  // și se afișează modal-ul de unlock. După unlock cu succes, acțiunea pendentă rulează automat.
+  const [pendingExportAction, setPendingExportAction] = useState(null)  // 'brut' | 'diurne' | 'hrana' | 'hrana-istoric' | null
+  
+  // Istoric Suplimente Hrană (același pattern ca PB + PN)
+  const [showHistoricHrana, setShowHistoricHrana] = useState(false)
+  const [historicHrana, setHistoricHrana] = useState([])
+  const [historicHranaLoad, setHistoricHranaLoad] = useState(false)
   const [toast,showToast]=useToast()
   const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
@@ -1404,6 +1414,57 @@ function ReportsPage() {
     showToast('✓ Intrare Net ștearsă')
     loadHistoricPN()
   }
+
+  // ─── ISTORIC SUPLIMENTE HRANĂ (același pattern ca PB + PN) ───────────────
+  const loadHistoricHrana = async () => {
+    setHistoricHranaLoad(true)
+    const { data } = await supabase.from('supliment_hrana_istoric').select('*').order('exported_at', { ascending: false }).limit(100)
+    setHistoricHrana(data || [])
+    setHistoricHranaLoad(false)
+  }
+  const redownloadHistoricHrana = async (entry) => {
+    if (!entry?.storage_path) { showToast('Fără storage_path', 'warn'); return }
+    const { data, error } = await supabase.storage.from('supliment-hrana-istoric').createSignedUrl(entry.storage_path, 120)
+    if (error || !data?.signedUrl) { showToast('Eroare descărcare: ' + (error?.message || 'fără URL'), 'error'); return }
+    const a = document.createElement('a'); a.href = data.signedUrl; a.download = entry.filename || 'supliment_hrana.xlsx'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  }
+  const deleteHistoricHrana = async (entry) => {
+    if (!window.confirm(`Ștergi exportul "${entry.filename}"?`)) return
+    if (entry.storage_path) await supabase.storage.from('supliment-hrana-istoric').remove([entry.storage_path])
+    await supabase.from('supliment_hrana_istoric').delete().eq('id', entry.id)
+    showToast('✓ Intrare ștearsă')
+    loadHistoricHrana()
+  }
+
+  // ─── Re-auth pentru butoane Export (Brut + Diurne + Hrană) ────────────────
+  // Dacă pbUnlocked=false, setează pendingExportAction (afișează modal de unlock).
+  // După unlock cu succes, acțiunea rulează automat (via useEffect mai jos).
+  const requireUnlockThen = (action) => {
+    if (pbUnlocked) {
+      runPendingAction(action)
+    } else {
+      setPendingExportAction(action)
+    }
+  }
+  const runPendingAction = (action) => {
+    if (action === 'brut') exportPontajBrut()
+    else if (action === 'diurne') exportDiurne()
+    else if (action === 'hrana') exportSupl()
+    else if (action === 'hrana-istoric') { setShowHistoricHrana(true); loadHistoricHrana() }
+    else if (action === 'brut-istoric') { setShowHistoricPB(true); loadHistoricPB() }
+    else if (action === 'diurne-istoric') setShowIstoric(true)
+    setPendingExportAction(null)
+  }
+  // După unlock cu succes (pbUnlocked devine true), execută acțiunea pendentă
+  useEffect(() => {
+    if (pbUnlocked && pendingExportAction) {
+      const a = pendingExportAction
+      setPendingExportAction(null)
+      // delay mic ca să se închidă modal-ul de unlock vizual
+      setTimeout(() => runPendingAction(a), 100)
+    }
+  }, [pbUnlocked, pendingExportAction])
 
   // Generează Pontaj Net dintr-un export brut selectat
   // Algoritm: surse (WE/LEG cu ore reale, NU coduri NORME) → destinații (LUCR cu LL)
@@ -2991,6 +3052,7 @@ function ReportsPage() {
 
   const exportSupl=async()=>{
     if(!sf||!st2){showToast('Selectează perioada','warn');return}
+    if (!hasPontajBrutAccess) { showToast('Acces refuzat — necesită bifa „Pontaj Brut" pe profil','error'); return }
     setExpS(true)
     try{
     let eq=supabase.from('employees').select('*').eq('active',true).order('name')
@@ -3037,8 +3099,48 @@ function ReportsPage() {
       ws[a].s={fill:{fgColor:{rgb:'D9F2D9'}},font:{bold:true,sz:10},border:bd,alignment:{horizontal:'center',vertical:'center'}}
     }
     XLSX.utils.book_append_sheet(wb,ws,'Supliment Hrana')
-    XLSX.writeFile(wb,`Supliment_Hrana_${from.replace(/\//g,'-')}.xlsx`)
-    playBeep(); showToast(`✓ ${empStats.length} angajați exportați`)
+
+    // Build blob + download local + upload Storage + INSERT istoric (consistent cu Pontaj Brut)
+    const wbArr = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
+    const blob = new Blob([wbArr], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const filename = `Supliment_Hrana_${from.replace(/\//g,'-')}_${to.replace(/\//g,'-')}.xlsx`
+    
+    // Download local
+    const localUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = localUrl; a.download = filename
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(localUrl)
+    
+    // Upload Storage + INSERT istoric (non-blocking pentru download)
+    const totalDays = empStats.reduce((s,e)=>s+e.zile, 0)
+    const totalAmount = empStats.reduce((s,e)=>s+e.val, 0)
+    const storagePath = `${sf.substring(0,7)}/${Date.now()}_${filename}`
+    try {
+      const { error: upErr } = await supabase.storage.from('supliment-hrana-istoric').upload(storagePath, blob, {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        upsert: false
+      })
+      if (upErr) {
+        showToast('⚠ Excel descărcat, Storage istoric a eșuat: ' + upErr.message, 'warn')
+      } else {
+        const { error: insErr } = await supabase.from('supliment_hrana_istoric').insert({
+          period_from: sf, period_to: st2,
+          total_employees: empStats.length,
+          total_days: totalDays,
+          total_amount: +totalAmount.toFixed(2),
+          amount_per_day: suplAmt,
+          exported_by: profile?.id,
+          exported_by_name: profile?.name || profile?.email,
+          filename, storage_path: storagePath
+        })
+        if (insErr) showToast('⚠ Fișier salvat dar metadata istoric a eșuat: ' + insErr.message, 'warn')
+      }
+    } catch (e) {
+      showToast('⚠ Eroare salvare istoric (fișierul s-a descărcat OK)', 'warn')
+    }
+    
+    playBeep(); showToast(`✓ ${empStats.length} angajați · ${totalDays} zile · ${totalAmount.toLocaleString('ro-RO')} RON`)
     }catch(e){showToast('Eroare la export supliment','error')}finally{setExpS(false)}
   }
 
@@ -3063,8 +3165,8 @@ function ReportsPage() {
           </div>
           {hasPontajBrutAccess && (
             <>
-              <button onClick={exportPontajBrut} disabled={expPontajBrut||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Foaie Colectivă de Prezență cu Ore Suplimentare — acces restricționat">{expPontajBrut?<><div className="sp"/>...</>:'📄 Export Pontaj Brut'}</button>
-              <button onClick={()=>setShowHistoricPB(true)} disabled={load} style={{...S.btnS,fontSize:12,background:'#2A1A4A',color:'#BC8CFF',borderColor:G.purple+'66'}} title="Istoric exporturi Pontaj Brut (parolat)">📋 Istoric Pontaj Brut</button>
+              <button onClick={()=>requireUnlockThen('brut')} disabled={expPontajBrut||load||!data.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Foaie Colectivă de Prezență cu Ore Suplimentare — necesită parolă">{expPontajBrut?<><div className="sp"/>...</>:'📄 Export Pontaj Brut'}</button>
+              <button onClick={()=>requireUnlockThen('brut-istoric')} disabled={load} style={{...S.btnS,fontSize:12,background:'#2A1A4A',color:'#BC8CFF',borderColor:G.purple+'66'}} title="Istoric exporturi Pontaj Brut (parolat)">📋 Istoric Pontaj Brut</button>
               <button onClick={()=>{setShowSelectBrutForNet(true); loadHistoricPB()}} disabled={load} style={{...S.btnP,background:'#1A4A6B',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Procesează un export Brut prin reguli de salarizare → Pontaj Net">🔄 Generează Pontaj Net</button>
               <button onClick={()=>setShowHistoricPN(true)} disabled={load} style={{...S.btnS,fontSize:12,background:'#1A2A4A',color:'#7FB3FF',borderColor:G.blue+'66'}} title="Istoric exporturi Pontaj Net (parolat)">📑 Istoric Pontaj Net</button>
             </>
@@ -3450,6 +3552,135 @@ function ReportsPage() {
         </div>
       )}
 
+      {/* Modal de unlock pentru butoanele de Export (Brut / Diurne / Hrană / Istoric) */}
+      {pendingExportAction && !pbUnlocked && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:310,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{...S.card,padding:32,maxWidth:460,width:'100%',border:`2px solid ${G.yellow}66`,boxShadow:`0 8px 40px ${G.yellow}33`}}>
+            <div style={{fontSize:42,textAlign:'center',marginBottom:14}}>🔐</div>
+            <div style={{fontSize:18,fontWeight:800,textAlign:'center',marginBottom:8,color:G.yellow}}>
+              {pendingExportAction === 'brut' ? 'Export Pontaj Brut' :
+               pendingExportAction === 'diurne' ? 'Export Diurne' :
+               pendingExportAction === 'hrana' ? 'Export Supliment Hrană' :
+               pendingExportAction === 'brut-istoric' ? 'Istoric Pontaj Brut' :
+               pendingExportAction === 'hrana-istoric' ? 'Istoric Supliment Hrană' :
+               'Acțiune protejată'}
+            </div>
+            <div style={{fontSize:12,color:G.muted,textAlign:'center',marginBottom:22,lineHeight:1.7}}>
+              Acțiune sensibilă cu date salariale.<br/>
+              Re-introdu parola pentru <strong style={{color:G.yellow}}>{PB_TIMEOUT_MIN} min</strong>.
+            </div>
+            <div style={{marginBottom:12}}>
+              <Lbl>Email contului tău</Lbl>
+              <div style={{fontSize:12,color:G.text,padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border}`,fontFamily:'monospace'}}>{profile?.email || '—'}</div>
+            </div>
+            <div style={{marginBottom:16}}>
+              <Lbl>Parolă</Lbl>
+              <input type="password" style={{...S.input,borderColor:pbPwdErr?G.red:G.border2}}
+                value={pbPwdInput} onChange={e=>setPbPwdInput(e.target.value)}
+                onKeyDown={e=>{if(e.key==='Enter') handlePbUnlock()}}
+                autoFocus disabled={pbVerifying} placeholder="••••••••"/>
+              {pbPwdErr && <div style={{fontSize:11,color:G.red,marginTop:5,fontWeight:600}}>⚠ {pbPwdErr}</div>}
+            </div>
+            <button onClick={handlePbUnlock} disabled={pbVerifying} style={{...S.btnP,width:'100%',padding:'11px',background:pbVerifying?G.dim:G.yellow,color:'#000',fontSize:13,fontWeight:700}}>
+              {pbVerifying ? '⏳ Verificare...' : '🔓 Deblochează & execută'}
+            </button>
+            <div style={{textAlign:'center',marginTop:14}}>
+              <button onClick={()=>{setPendingExportAction(null);setPbPwdInput('');setPbPwdErr('')}} style={{...S.btnS,fontSize:11,padding:'6px 14px'}}>← Anulează</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Istoric Supliment Hrană — cu lock-screen identic */}
+      {showHistoricHrana && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          {!pbUnlocked ? (
+            <div style={{...S.card,padding:32,maxWidth:460,width:'100%',border:`2px solid ${G.green}66`}}>
+              <div style={{fontSize:42,textAlign:'center',marginBottom:14}}>🔐</div>
+              <div style={{fontSize:18,fontWeight:800,textAlign:'center',marginBottom:8,color:G.green}}>Istoric Supliment Hrană</div>
+              <div style={{fontSize:12,color:G.muted,textAlign:'center',marginBottom:22,lineHeight:1.7}}>
+                Re-introdu parola pentru <strong style={{color:G.yellow}}>{PB_TIMEOUT_MIN} min</strong>.
+              </div>
+              <div style={{marginBottom:12}}>
+                <Lbl>Email contului tău</Lbl>
+                <div style={{fontSize:12,color:G.text,padding:'10px 12px',background:G.bg,borderRadius:8,border:`1px solid ${G.border}`,fontFamily:'monospace'}}>{profile?.email || '—'}</div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <Lbl>Parolă</Lbl>
+                <input type="password" style={{...S.input,borderColor:pbPwdErr?G.red:G.border2}}
+                  value={pbPwdInput} onChange={e=>setPbPwdInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter') handlePbUnlock()}}
+                  autoFocus disabled={pbVerifying} placeholder="••••••••"/>
+                {pbPwdErr && <div style={{fontSize:11,color:G.red,marginTop:5,fontWeight:600}}>⚠ {pbPwdErr}</div>}
+              </div>
+              <button onClick={()=>handlePbUnlock().then(()=>loadHistoricHrana())} disabled={pbVerifying} style={{...S.btnP,width:'100%',padding:'11px',background:pbVerifying?G.dim:G.green,fontSize:13,fontWeight:700}}>
+                {pbVerifying ? '⏳ Verificare...' : '🔓 Deblochează'}
+              </button>
+              <div style={{textAlign:'center',marginTop:14}}>
+                <button onClick={()=>{setShowHistoricHrana(false);setPbPwdInput('');setPbPwdErr('')}} style={{...S.btnS,fontSize:11,padding:'6px 14px'}}>← Anulează</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{...S.card,width:1000,maxHeight:'88vh',display:'flex',flexDirection:'column',borderTop:`3px solid ${G.green}`}}>
+              <div style={{padding:'14px 20px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:15,fontWeight:800,display:'flex',alignItems:'center',gap:8}}>📋 Istoric Supliment Hrană</div>
+                  <div style={{fontSize:11,color:G.muted,marginTop:3}}>
+                    🔓 Deblocat până la {new Date(pbUnlockUntil).toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit'})} · {historicHrana.length} exporturi
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <button onClick={()=>loadHistoricHrana()} style={{...S.btnS,padding:'4px 10px',fontSize:11}}>🔄 Reîncarcă</button>
+                  <button onClick={handlePbLock} style={{...S.btnS,padding:'4px 10px',fontSize:11,borderColor:G.red+'66',color:G.red}}>🔒 Lock</button>
+                  <button onClick={()=>setShowHistoricHrana(false)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>×</button>
+                </div>
+              </div>
+              <div style={{overflowY:'auto',flex:1,padding:'0 20px'}}>
+                {historicHranaLoad ? (
+                  <div style={{textAlign:'center',padding:60}}><div className="sp" style={{display:'inline-block'}}/></div>
+                ) : !historicHrana.length ? (
+                  <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                    Niciun export salvat încă.
+                  </div>
+                ) : (
+                  <table style={{width:'100%',fontSize:12}}>
+                    <thead style={{position:'sticky',top:0,background:G.surface,zIndex:1}}>
+                      <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Perioadă</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Angajați</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Zile</th>
+                        <th style={{padding:'10px 6px',textAlign:'right'}}>Total RON</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Exportat de</th>
+                        <th style={{padding:'10px 6px',textAlign:'left'}}>Data</th>
+                        <th style={{padding:'10px 6px',textAlign:'center'}}>Acțiuni</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicHrana.map((e,i)=>(
+                        <tr key={e.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                          <td style={{padding:'8px 6px',fontWeight:600,color:G.green}}>{new Date(e.period_from).toLocaleDateString('ro-RO')} → {new Date(e.period_to).toLocaleDateString('ro-RO')}</td>
+                          <td style={{padding:'8px 6px',textAlign:'center'}}>{e.total_employees}</td>
+                          <td style={{padding:'8px 6px',textAlign:'center',color:G.yellow,fontWeight:700}}>{e.total_days}</td>
+                          <td style={{padding:'8px 6px',textAlign:'right',color:G.green,fontWeight:700}}>{Number(e.total_amount).toLocaleString('ro-RO')} RON</td>
+                          <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{e.exported_by_name || '—'}</td>
+                          <td style={{padding:'8px 6px',fontSize:11,color:G.muted}}>{new Date(e.exported_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                          <td style={{padding:'8px 6px',textAlign:'center'}}>
+                            <div style={{display:'flex',gap:4,justifyContent:'center'}}>
+                              {e.storage_path && <button onClick={()=>redownloadHistoricHrana(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.green,borderColor:G.green+'44'}} title="Descarcă Excel">⬇</button>}
+                              {profile?.is_owner === true && <button onClick={()=>deleteHistoricHrana(e)} style={{...S.btnS,padding:'3px 8px',fontSize:10,color:G.red,borderColor:G.red+'44'}} title="Șterge (doar OWNER)">🗑️</button>}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Modal Generator Ordin Deplasare */}
       {showOrdGen && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
@@ -3599,7 +3830,7 @@ function ReportsPage() {
           <input type="date" value={df} onChange={e=>setDf(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
           <span style={{fontSize:11,color:G.muted}}>Până la:</span>
           <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
-          <button onClick={exportDiurne} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+          <button onClick={()=>requireUnlockThen('diurne')} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Export Diurne (necesită parolă)">{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
           <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
           <button onClick={exportBancaDiurne} disabled={expBT} style={{...S.btnP,background:'#0A3A6A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expBT?<><div className="sp"/>...</>:'🏦 Export Bancă'}</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>
@@ -3610,7 +3841,12 @@ function ReportsPage() {
           <input type="date" value={sf} onChange={e=>setSf(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
           <span style={{fontSize:11,color:G.muted}}>Până la:</span>
           <input type="date" value={st2} onChange={e=>setSt2(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
-          <button onClick={exportSupl} disabled={expS} style={{...S.btnP,background:'#1A3A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expS?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+          {hasPontajBrutAccess && (
+            <>
+              <button onClick={()=>requireUnlockThen('hrana')} disabled={expS} style={{...S.btnP,background:'#1A3A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Export Supliment Hrană (necesită parolă)">{expS?<><div className="sp"/>...</>:'⬇ Excel'}</button>
+              <button onClick={()=>requireUnlockThen('hrana-istoric')} style={{...S.btnS,fontSize:12,background:'#1A3A1A',color:'#56D364',borderColor:'#56D36466'}} title="Istoric exporturi Supliment Hrană (parolat)">📋 Istoric</button>
+            </>
+          )}
         </div>
       </div>
 
