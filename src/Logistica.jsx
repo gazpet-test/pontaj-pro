@@ -39,7 +39,7 @@ const TIPURI_CARBURANT = [
   { value: 'mixt', label: '🔋 Mixt (hibrid)' },
 ]
 const FIRME = ['Gazpet Instal', 'Gazpet Invest', 'Alt proprietar']
-const UNITATI_NORMA = ['l/h', 'l/100km']
+const UNITATI_NORMA = ['l/h', 'l/100km', 'kWh/h', 'kWh/100km']
 
 const daysUntil = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
@@ -1225,7 +1225,20 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         <div style={{marginBottom: 14}}>
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>⚙️ Tehnice</div>
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 12}}>
-            <FieldSelect label="Tip carburant" value={form.tip_carburant} onChange={v => setField('tip_carburant', v)} options={TIPURI_CARBURANT} placeholder="— niciunul —" readonly={isReadOnly} />
+            <FieldSelect label="Tip carburant" value={form.tip_carburant} onChange={v => {
+              // Auto-suggest unitate_norma în funcție de tip carburant
+              // Doar dacă unitatea curentă e default ('l/h' sau 'kWh/h' sau goală), n-o suprascriu pe custom
+              const currentU = form.unitate_norma
+              const isDefaultU = !currentU || currentU === 'l/h' || currentU === 'kWh/h'
+              if (v === 'electric' && isDefaultU) {
+                setForm(p => ({ ...p, tip_carburant: v, unitate_norma: 'kWh/h' }))
+              } else if (v && v !== 'electric' && currentU === 'kWh/h') {
+                // Trecere de la electric → carburant lichid: sugerez înapoi l/h
+                setForm(p => ({ ...p, tip_carburant: v, unitate_norma: 'l/h' }))
+              } else {
+                setField('tip_carburant', v)
+              }
+            }} options={TIPURI_CARBURANT} placeholder="— niciunul —" readonly={isReadOnly} />
             <FieldText label="Normă consum" value={form.norma_consum} onChange={v => setField('norma_consum', v)} type="number" placeholder="ex: 12.5" readonly={isReadOnly} />
             <FieldSelect label="Unitate" value={form.unitate_norma} onChange={v => setField('unitate_norma', v)} options={UNITATI_NORMA} readonly={isReadOnly} />
             <FieldText label="Prag alertă consum (%)" value={form.prag_alerta_consum} onChange={v => setField('prag_alerta_consum', v)} type="number" placeholder="10" readonly={isReadOnly} />
