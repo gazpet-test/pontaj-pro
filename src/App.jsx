@@ -6,6 +6,7 @@ import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
+import TabSemnaturi from './TabSemnaturi.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -4561,7 +4562,7 @@ function AdminPage() {
     XLSX.writeFile(wb,'template_calendar_2027.xlsx')
   }
 
-  const tabs=[['sites','🏗️ Șantiere'],['managers','👤 Manageri'],['employees','👥 Angajați'],['calendar','📅 Calendar'],['settings','⚙️ Setări']]
+  const tabs=[['sites','🏗️ Șantiere'],['managers','👤 Manageri'],['employees','👥 Angajați'],['calendar','📅 Calendar'],['semnaturi','🖋️ Semnături'],['settings','⚙️ Setări']]
 
   return (
     <Layout>
@@ -5110,6 +5111,21 @@ function AdminPage() {
               ✓ Zile legale 2026 preîncărcate
             </div>
           </div>
+        </div>
+      )}
+
+      {tab==='semnaturi'&&(
+        <div style={{maxWidth:1300}}>
+          <div style={{...S.card,padding:18,marginBottom:14,borderLeft:`4px solid ${G.purple}`}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text,display:'flex',alignItems:'center',gap:8}}>
+              🖋️ Semnături Electronice Angajați
+            </div>
+            <div style={{fontSize:11,color:G.muted,lineHeight:1.5}}>
+              Stochează semnături PNG/JPG pentru fiecare angajat activ. Folosite la generare automată <strong>ordin deplasare PDF</strong> (Faza 2),
+              contracte HR, formulare interne. Acces strict: utilizatori cu bifa <strong>„Acces Date Personale"</strong>.
+            </div>
+          </div>
+          <TabSemnaturi profile={profile} showToast={showToast} />
         </div>
       )}
 

@@ -1,11 +1,12 @@
 // ===========================================================================
-// MODUL HR — Personal · Autorizații · Documente · Alerte expirări
+// MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături
 // ===========================================================================
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
 import TabDocumentePersonale from './TabDocumentePersonale.jsx'
+import TabSemnaturi from './TabSemnaturi.jsx'
 
 // Theme
 const G = {
@@ -75,7 +76,7 @@ function statusBadge(status, zile) {
 export default function HRPage() {
   const nav = useNavigate()
   const [profile, setProfile] = useState(null)
-  const [tab, setTab] = useState('personal')  // personal | autorizatii | alerte | documente | salarii
+  const [tab, setTab] = useState('personal')  // personal | autorizatii | alerte | documente | semnaturi | salarii
   const [employees, setEmployees] = useState([])
   const [autorizatii, setAutorizatii] = useState([])
   const [tipuri, setTipuri] = useState([])
@@ -144,6 +145,7 @@ export default function HRPage() {
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
+    { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'salarii',     icon: '💰', label: 'Salarii', superOnly: true },
   ].filter(t => !t.superOnly || isSuperAdmin)
   
@@ -186,6 +188,7 @@ export default function HRPage() {
       {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
+      {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
       
       {editEmp && (
@@ -637,9 +640,6 @@ function SectiuneAlerte({ titlu, lista, color, onClick }) {
   )
 }
 
-// ===========================================================================
-// TAB DOCUMENTE PERSONALE — placeholder (buletin, permis ședere, etc.)
-// ===========================================================================
 // ===========================================================================
 // TAB DOCUMENTE PERSONALE — mutat în TabDocumentePersonale.jsx (Etapa 6.A)
 // ===========================================================================
