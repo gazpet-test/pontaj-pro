@@ -1430,7 +1430,7 @@ function ReportsPage() {
 
       // Fetch pontaj records cu sites join (paginat) + employees details în paralel
       const [empsDetailsRes] = await Promise.all([
-        supabase.from('employees').select('id, functie, departament_hr').in('id', empIds),
+        supabase.from('employees').select('id, functie, position, departament_hr, department').in('id', empIds),
       ])
       const empDetailsMap = new Map((empsDetailsRes.data || []).map(e => [e.id, e]))
 
@@ -1474,14 +1474,20 @@ function ReportsPage() {
         })
 
         const empDet = empDetailsMap.get(d.employee_id) || {}
-        const functieRaw = empDet.functie
-        const hasFunctie = !!(functieRaw && String(functieRaw).trim())
+        // Fallback: prioritate functie (COR oficial), apoi position (descriptiv) — pentru angajări recente
+        // unde doar position e completat în BD
+        const functieRaw = empDet.functie && String(empDet.functie).trim()
+          ? String(empDet.functie).trim()
+          : (empDet.position && String(empDet.position).trim() ? String(empDet.position).trim() : null)
+        const hasFunctie = !!functieRaw
+        // Departament: același pattern (departament_hr nou, department vechi)
+        const deptRaw = empDet.departament_hr || empDet.department || null
 
         return {
           employee_id: d.employee_id,
           name: d.employee_name,
-          functie: hasFunctie ? functieRaw : null,
-          departament_hr: empDet.departament_hr || null,
+          functie: functieRaw,
+          departament_hr: deptRaw,
           has_functie: hasFunctie,
           days_real: d.days,
           diurna_max: diurnaMax,
