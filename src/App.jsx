@@ -2270,16 +2270,17 @@ function ReportsPage() {
         // Build worksheet
         const ws = {}
 
-        // ───────── COLOANE A-H ─────────
+        // ───────── COLOANE A-H (lățimi optime pentru A4 portrait) ─────────
+        // Total: 95 units = ~499 pt < 535 pt A4 useful → încape garantat pe lățime
         ws['!cols'] = [
           { wch: 5 },   // A: Nr. zi
-          { wch: 13 },  // B: Data
-          { wch: 20 },  // C: Conținut/Șantier
+          { wch: 12 },  // B: Data
+          { wch: 22 },  // C: Conținut/Șantier
           { wch: 20 },  // D
-          { wch: 15 },  // E
-          { wch: 15 },  // F
+          { wch: 9 },   // E: Nr. zile
+          { wch: 10 },  // F: Lei/zi
           { wch: 13 },  // G: Suma RON
-          { wch: 5 },   // H: suffix lei
+          { wch: 4 },   // H: lei suffix
         ]
         ws['!rows'] = []
 
@@ -2552,14 +2553,16 @@ function ReportsPage() {
         ws['!rowBreaks'] = [{ id: 35, manual: 1 }]
 
         // ───────── Page setup ─────────
+        // IMPORTANT: scale FIX 80% (nu fitToPage — Excel real îl ignoră deseori).
+        // Scale + lățimi optime garantează 2 pagini A4 portrait la orice client.
         ws['!pageSetup'] = {
           orientation: 'portrait',
           paperSize: 9,    // A4
-          fitToWidth: 1,
-          fitToHeight: 0,  // NU forța — lăsăm page break să decidă
+          scale: 80,
+          fitToWidth: 0,
+          fitToHeight: 0,
         }
-        ws['!sheetPr'] = { pageSetUpPr: { fitToPage: true } }
-        ws['!margins'] = { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.15 }
+        ws['!margins'] = { left: 0.3, right: 0.3, top: 0.3, bottom: 0.3, header: 0.1, footer: 0.1 }
         ws['!printOptions'] = { horizontalCentered: true }
 
         // ───────── Build workbook + add to ZIP ─────────
