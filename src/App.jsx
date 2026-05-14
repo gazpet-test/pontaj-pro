@@ -2213,6 +2213,69 @@ function ReportsPage() {
           }
         })
 
+        // ─── FIX: aplicăm EXPLICIT stilurile pe care xlsx-js-style le pierde la roundtrip ───
+        // Bug cunoscut: la XLSX.write se pierd font color hex, page scale, bold flag etc.
+        // Margins, formule și row heights se păstrează OK; restul trebuie setat manual.
+
+        // 1. Page setup: portrait A4, scale 80%, fit la o pagină pe lățime (oricât pe înălțime)
+        ws['!pageSetup'] = {
+          orientation: 'portrait',
+          paperSize: 9,         // 9 = A4
+          scale: 80,
+          fitToWidth: 1,
+          fitToHeight: 0,
+        }
+        ws['!margins'] = { left: 0.35, right: 0.35, top: 0.4, bottom: 0.4, header: 0.3, footer: 0.3 }
+
+        // 2. Titlu D7 — bold mare albastru
+        if (ws['D7']) {
+          ws['D7'].s = {
+            ...(ws['D7'].s || {}),
+            font: { sz: 16, bold: true, color: { rgb: '1A4A8C' }, name: 'Calibri' },
+            alignment: { horizontal: 'center', vertical: 'center' }
+          }
+        }
+
+        // 3. Semnături R47 (B/D/F/G/I) — sz=12 bold albastru centrat
+        ;['B47', 'D47', 'F47', 'G47', 'I47'].forEach(addr => {
+          if (ws[addr]) {
+            ws[addr].s = {
+              ...(ws[addr].s || {}),
+              font: { sz: 12, bold: true, color: { rgb: '1A4A8C' }, name: 'Calibri' },
+              alignment: { horizontal: 'center', vertical: 'center' }
+            }
+          }
+        })
+
+        // 4. Etichete R45 (titluri secțiune semnături) — sz=10 normal centrat
+        ;['B45', 'D45', 'F45', 'G45', 'I45'].forEach(addr => {
+          if (ws[addr]) {
+            ws[addr].s = {
+              ...(ws[addr].s || {}),
+              font: { sz: 10, bold: false, name: 'Calibri' },
+              alignment: { horizontal: 'center', vertical: 'center', wrapText: true }
+            }
+          }
+        })
+
+        // 5. Etichete R46 (sub-titluri) — sz=9.5 centrat
+        ;['B46', 'D46', 'F46', 'G46', 'I46'].forEach(addr => {
+          if (ws[addr]) {
+            ws[addr].s = {
+              ...(ws[addr].s || {}),
+              font: { sz: 9.5, bold: false, name: 'Calibri' },
+              alignment: { horizontal: 'center', vertical: 'center', wrapText: true }
+            }
+          }
+        })
+
+        // 6. Row heights (asigurare suplimentară)
+        ws['!rows'] = ws['!rows'] || []
+        ws['!rows'][6]  = { hpx: 32 }   // R7 titlu
+        ws['!rows'][44] = { hpx: 21 }   // R45 etichete
+        ws['!rows'][45] = { hpx: 19 }   // R46 sub-etichete
+        ws['!rows'][46] = { hpx: 29 }   // R47 semnături
+
         // Rename sheet to employee name (safe chars only, max 31 chars per Excel limit)
         const cleanName = emp.name.replace(/[\\/?*\[\]:]/g, '').slice(0, 31).trim()
         if (cleanName && cleanName !== sheetName) {
