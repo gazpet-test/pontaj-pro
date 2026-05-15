@@ -1282,6 +1282,13 @@ function ReportsPage() {
   const [selectedPayment,setSelectedPayment]=useState(null)
   const [paymentDetails,setPaymentDetails]=useState([])
   const [showIstoric,setShowIstoric]=useState(false)
+  // Istoric Ordine Deplasare (PDF-uri arhivate)
+  const [showIstoricOrd, setShowIstoricOrd] = useState(false)
+  const [istoricOrd, setIstoricOrd] = useState([])
+  const [istoricOrdLoading, setIstoricOrdLoading] = useState(false)
+  const [istoricOrdSearch, setIstoricOrdSearch] = useState('')
+  const [istoricOrdMonth, setIstoricOrdMonth] = useState('')
+  const [istoricOrdSel, setIstoricOrdSel] = useState(null) // record selectat pentru preview
   // Generator Ordin Deplasare
   const [showOrdGen, setShowOrdGen] = useState(false)
   const [ordGenLoading, setOrdGenLoading] = useState(false)
@@ -1789,11 +1796,62 @@ function ReportsPage() {
   useEffect(()=>{ supabase.from('sites').select('*').eq('active',true).then(({data:s})=>setSites(s||[])); supabase.from('settings').select('*').then(({data:st})=>{const d=st?.find(x=>x.key==='diurna_amount');if(d)setDiurnaAmt(Number(d.value));const s=st?.find(x=>x.key==='meal_supplement_amount');if(s)setSuplAmt(Number(s.value))}) },[])
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
   useEffect(()=>{ if(showIstoric) loadPayments() },[showIstoric])
+  useEffect(()=>{ if(showIstoricOrd) loadIstoricOrd() },[showIstoricOrd])
   useEffect(()=>{ if(showHistoricPN && pbUnlocked) loadHistoricPN() }, [showHistoricPN, pbUnlocked])
 
   const loadPayments=async()=>{
     const {data}=await supabase.from('diurna_payments').select('*').order('payment_date',{ascending:false}).limit(50)
     setPayments(data||[])
+  }
+
+  const loadIstoricOrd = async () => {
+    setIstoricOrdLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('ordine_deplasare_arhiva')
+        .select('id, employee_id, period_from, period_to, pdf_path, pdf_nume, pdf_size_bytes, semnaturi_snapshot, observatii, created_at, employees!inner(name, functie)')
+        .order('created_at', { ascending: false })
+        .limit(1000)
+      if (error) throw error
+      setIstoricOrd(data || [])
+    } catch (e) {
+      console.error('loadIstoricOrd err:', e)
+      showToast('Eroare încărcare istoric ordine: ' + (e?.message || e), 'error')
+    } finally {
+      setIstoricOrdLoading(false)
+    }
+  }
+
+  const openIstoricOrdPDF = async (rec) => {
+    try {
+      const { data, error } = await supabase.storage
+        .from('ordine-deplasare-pdf')
+        .createSignedUrl(rec.pdf_path, 600)
+      if (error) throw error
+      if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+    } catch (e) {
+      console.error('openIstoricOrdPDF err:', e)
+      showToast('Eroare deschidere PDF: ' + (e?.message || e), 'error')
+    }
+  }
+
+  const deleteIstoricOrd = async (rec) => {
+    if (!profile?.is_owner) { showToast('Doar owner-ii pot șterge din arhivă', 'warn'); return }
+    if (!window.confirm(`Șterg ordin pentru ${rec.employees?.name || 'angajat'} (${rec.period_from} → ${rec.period_to})?\n\nAcțiunea șterge PDF-ul din Storage și înregistrarea din BD definitiv.`)) return
+    try {
+      // 1. Delete din Storage (chiar dacă fail, continui cu BD)
+      const { error: stErr } = await supabase.storage.from('ordine-deplasare-pdf').remove([rec.pdf_path])
+      if (stErr) console.warn('Storage delete warning:', stErr)
+      // 2. Delete din BD
+      const { error: dbErr } = await supabase.from('ordine_deplasare_arhiva').delete().eq('id', rec.id)
+      if (dbErr) throw dbErr
+      setIstoricOrd(prev => prev.filter(x => x.id !== rec.id))
+      if (istoricOrdSel?.id === rec.id) setIstoricOrdSel(null)
+      showToast('✓ Ordin șters din arhivă')
+    } catch (e) {
+      console.error('deleteIstoricOrd err:', e)
+      showToast('Eroare ștergere: ' + (e?.message || e), 'error')
+    }
   }
 
   const loadPaymentDetails=async(paymentId)=>{
@@ -2408,6 +2466,7 @@ function ReportsPage() {
         import('jszip'),
       ])
       const zip = new JSZip()
+      const archiveQueue = []  // { emp, pdfBlob, filename }
       
       // 5. Container offscreen unic (reutilizat pentru fiecare angajat)
       const wrapper = document.createElement('div')
@@ -2452,6 +2511,7 @@ function ReportsPage() {
           const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
           const filename = `Ordin_Deplasare_${safeName}_${ordGenPayment.period_from}_${ordGenPayment.period_to}.pdf`
           zip.file(filename, pdfBlob)
+          archiveQueue.push({ emp, pdfBlob, filename, sigTitularPath: sigPathByEmpId[emp.id] || null })
           
           setOrdGenProgress({ done: idx + 1, total: selected.length })
         }
@@ -2459,7 +2519,7 @@ function ReportsPage() {
         document.body.removeChild(wrapper)
       }
       
-      // 6. Generate ZIP + download
+      // 6. Generate ZIP + download (rapid, pentru ca Razvan să vadă rezultatul)
       const zipBlob = await zip.generateAsync({ type: 'blob' })
       const url = URL.createObjectURL(zipBlob)
       const a = document.createElement('a')
@@ -2470,8 +2530,57 @@ function ReportsPage() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       
+      // 7. ARHIVARE (background - upload Storage + INSERT BD)
+      showToast(`📦 Arhivare ${archiveQueue.length} PDF-uri în BD...`)
+      const uid = (await supabase.auth.getUser()).data.user?.id || null
+      const snapshotBase = {
+        director_aproba: empAproba ? { nume: setari.director_aproba, employee_id: empAproba.id, semnatura_path: sigPathByEmpId[empAproba.id] || null } : { nume: setari.director_aproba, employee_id: null, semnatura_path: null },
+        control_preventiv: empControl ? { nume: setari.control_preventiv, employee_id: empControl.id, semnatura_path: sigPathByEmpId[empControl.id] || null } : { nume: setari.control_preventiv, employee_id: null, semnatura_path: null },
+        verificat_decont: empVerificat ? { nume: setari.verificat_decont, employee_id: empVerificat.id, semnatura_path: sigPathByEmpId[empVerificat.id] || null } : { nume: setari.verificat_decont, employee_id: null, semnatura_path: null },
+        generat_la: genTimestamp,
+      }
+      const folderPath = `${ordGenPayment.period_from.substring(0,7)}/${ordGenPayment.period_from}_${ordGenPayment.period_to}`
+      const arhivareResults = await Promise.allSettled(
+        archiveQueue.map(async ({ emp, pdfBlob, filename, sigTitularPath }) => {
+          const uuid8 = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36)).replace(/-/g,'').substring(0, 8)
+          const storagePath = `${folderPath}/${emp.id}_${uuid8}.pdf`
+          const { error: upErr } = await supabase.storage
+            .from('ordine-deplasare-pdf')
+            .upload(storagePath, pdfBlob, { contentType: 'application/pdf', upsert: false })
+          if (upErr) throw new Error(`Upload ${emp.name}: ${upErr.message}`)
+          const semnaturi = {
+            ...snapshotBase,
+            titular: { nume: emp.name, employee_id: emp.id, semnatura_path: sigTitularPath },
+          }
+          const { error: insErr } = await supabase.from('ordine_deplasare_arhiva').insert({
+            employee_id: emp.id,
+            period_from: ordGenPayment.period_from,
+            period_to: ordGenPayment.period_to,
+            pdf_path: storagePath,
+            pdf_nume: filename,
+            pdf_size_bytes: pdfBlob.size,
+            semnaturi_snapshot: semnaturi,
+            created_by: uid,
+          })
+          if (insErr) {
+            // Rollback Storage dacă INSERT eșuează
+            await supabase.storage.from('ordine-deplasare-pdf').remove([storagePath]).catch(()=>{})
+            throw new Error(`Insert ${emp.name}: ${insErr.message}`)
+          }
+          return emp.name
+        })
+      )
+      const okCount = arhivareResults.filter(r => r.status === 'fulfilled').length
+      const errCount = arhivareResults.length - okCount
+      const errMsgs = arhivareResults.filter(r => r.status === 'rejected').map(r => r.reason?.message || r.reason).slice(0, 3)
+      if (errCount > 0) console.error('Arhivare erori:', arhivareResults.filter(r => r.status === 'rejected'))
+      
       playBeep(920, 0.12); setTimeout(() => playBeep(1100, 0.12), 130)
-      showToast(`✅ ${selected.length} PDF-uri generate în ZIP`)
+      if (errCount === 0) {
+        showToast(`✅ ${okCount} PDF-uri generate, descărcate și arhivate`)
+      } else {
+        showToast(`⚠ ${okCount}/${archiveQueue.length} arhivate (${errCount} erori). ZIP-ul a fost descărcat OK. ${errMsgs.length ? 'Primele erori: ' + errMsgs.join('; ') : ''}`, 'warn')
+      }
       setShowOrdGen(false)
       setOrdGenEmps([])
       setOrdGenPayment(null)
@@ -4035,6 +4144,91 @@ function ReportsPage() {
         </div>
       )}
 
+      {/* Istoric Ordine Deplasare modal */}
+      {showIstoricOrd && (() => {
+        const filtered = istoricOrd.filter(r => {
+          if (istoricOrdSearch) {
+            const q = istoricOrdSearch.toLowerCase()
+            if (!(r.employees?.name || '').toLowerCase().includes(q) && !(r.pdf_nume || '').toLowerCase().includes(q)) return false
+          }
+          if (istoricOrdMonth) {
+            const m = r.period_from?.substring(0,7)
+            if (m !== istoricOrdMonth) return false
+          }
+          return true
+        })
+        const grouped = {}
+        filtered.forEach(r => {
+          const key = `${r.period_from}__${r.period_to}`
+          if (!grouped[key]) grouped[key] = { period_from: r.period_from, period_to: r.period_to, items: [] }
+          grouped[key].items.push(r)
+        })
+        const groups = Object.values(grouped).sort((a,b) => b.period_from.localeCompare(a.period_from))
+        return (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{...S.card,width:1100,maxHeight:'88vh',display:'flex',flexDirection:'column'}}>
+            <div style={{padding:'14px 18px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <div style={{fontSize:15,fontWeight:800,color:G.orange}}>📚 Istoric Ordine Deplasare</div>
+              <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <input type="text" placeholder="🔍 Caută angajat..." value={istoricOrdSearch} onChange={e=>setIstoricOrdSearch(e.target.value)} style={{...S.input,width:200,padding:'6px 10px',fontSize:12}}/>
+                <input type="month" value={istoricOrdMonth} onChange={e=>setIstoricOrdMonth(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px',fontSize:12}} title="Filtru luna period_from"/>
+                {(istoricOrdSearch||istoricOrdMonth)&&<button onClick={()=>{setIstoricOrdSearch('');setIstoricOrdMonth('')}} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>✕ Reset</button>}
+                <button onClick={()=>{setShowIstoricOrd(false);setIstoricOrdSel(null)}} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
+              </div>
+            </div>
+            <div style={{padding:'8px 18px',background:G.bg,borderBottom:`1px solid ${G.border}`,fontSize:11,color:G.muted,display:'flex',gap:14}}>
+              <span>📊 {istoricOrd.length} total</span>
+              <span>🔎 {filtered.length} afișate</span>
+              <span>📅 {groups.length} perioade</span>
+              {istoricOrdLoading && <span style={{color:G.blue}}>⏳ Se încarcă...</span>}
+            </div>
+            <div style={{flex:1,overflowY:'auto',padding:'8px 18px 18px'}}>
+              {!istoricOrdLoading && groups.length===0 && (
+                <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                  {istoricOrd.length===0 ? '🗂️ Nu există ordine arhivate încă' : '🔍 Niciun rezultat pentru filtrele curente'}
+                </div>
+              )}
+              {groups.map(g => (
+                <div key={`${g.period_from}__${g.period_to}`} style={{marginTop:12}}>
+                  <div style={{padding:'8px 12px',background:'#1C2128',borderRadius:6,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div style={{fontSize:13,fontWeight:700,color:G.blue}}>
+                      📅 {new Date(g.period_from).toLocaleDateString('ro-RO')} — {new Date(g.period_to).toLocaleDateString('ro-RO')}
+                    </div>
+                    <div style={{fontSize:11,color:G.muted}}>{g.items.length} ordine</div>
+                  </div>
+                  <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                    <thead><tr style={{background:G.bg,color:G.muted}}>
+                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Angajat</th>
+                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Funcție</th>
+                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Generat la</th>
+                      <th style={{padding:'6px 8px',textAlign:'right',fontWeight:600}}>Mărime</th>
+                      <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:120}}>Acțiuni</th>
+                    </tr></thead>
+                    <tbody>
+                      {g.items.map((r,i) => (
+                        <tr key={r.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                          <td style={{padding:'7px 8px',fontWeight:600}}>{r.employees?.name || `#${r.employee_id}`}</td>
+                          <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{r.employees?.functie || '—'}</td>
+                          <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{new Date(r.created_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+                          <td style={{padding:'7px 8px',textAlign:'right',color:G.muted,fontSize:11}}>{r.pdf_size_bytes ? (r.pdf_size_bytes/1024).toFixed(0)+' KB' : '—'}</td>
+                          <td style={{padding:'7px 8px',textAlign:'center'}}>
+                            <button onClick={()=>openIstoricOrdPDF(r)} style={{background:'none',border:`1px solid ${G.blue}66`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.blue,fontSize:11,marginRight:4}} title="Deschide PDF">📄 Vezi</button>
+                            {profile?.is_owner && (
+                              <button onClick={()=>deleteIstoricOrd(r)} style={{background:'none',border:`1px solid ${G.red}44`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.red,fontSize:11}} title="Șterge din arhivă (doar owner)">🗑️</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        )
+      })()}
+
       {/* Modal Istoric Pontaj Brut — cu lock-screen (re-auth + 20 min) */}
       {showHistoricPB && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
@@ -4618,6 +4812,7 @@ function ReportsPage() {
           <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
           <button onClick={exportBancaDiurne} disabled={expBT} style={{...S.btnP,background:'#0A3A6A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expBT?<><div className="sp"/>...</>:'🏦 Export Bancă'}</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>
+          <button onClick={()=>setShowIstoricOrd(true)} style={{...S.btnS,fontSize:12,background:G.orange+'22',color:G.orange,border:`1px solid ${G.orange}66`}} title="Arhivă PDF-uri ordine deplasare generate">📚 Istoric Ordine</button>
         </div>
         <div style={{...S.card,padding:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <span style={{fontSize:12,fontWeight:700,color:'#56D364'}}>🍔 Export Supliment Hrană</span>
