@@ -618,7 +618,7 @@ function DashboardPage() {
   const [weekStats,setWeekStats]=useState(null)
   const [monthStats,setMonthStats]=useState(null)
   const [absent3,setAbsent3]=useState([])
-  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate'
+  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   const [expiringContracts,setExpiringContracts]=useState([])
   const [nrTransportCerute, setNrTransportCerute] = useState(0)
   const [transportSamples, setTransportSamples] = useState([])  // primele 3 transporturi pentru preview
@@ -1163,7 +1163,7 @@ function PontajPage() {
   const [onlyDiurna,setOnlyDiurna]=useState(false)
   const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
-  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate'
+  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
@@ -1326,7 +1326,7 @@ function ReportsPage() {
   const [historicHrana, setHistoricHrana] = useState([])
   const [historicHranaLoad, setHistoricHranaLoad] = useState(false)
   const [toast,showToast]=useToast()
-  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate'
+  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
   const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
   
