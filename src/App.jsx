@@ -4830,6 +4830,10 @@ function AdminPage() {
     if (profile?.is_owner === true && editMgr.can_access_pontaj_brut !== undefined) {
       updates.can_access_pontaj_brut = !!editMgr.can_access_pontaj_brut
     }
+    // Modifică Angajați (HR write): doar OWNER (trigger BD verifică la fel). Separat de can_access_personal_data care e DOAR vizualizare GDPR.
+    if (profile?.is_owner === true && editMgr.can_modify_employees !== undefined) {
+      updates.can_modify_employees = !!editMgr.can_modify_employees
+    }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
       // Update sites in profile_sites table — doar pentru rolurile care au șantiere alocate
@@ -5241,6 +5245,25 @@ function AdminPage() {
                     </div>
                     <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
                       Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite Export Pontaj Brut (FCP cu Ore Suplimentare) + Istoric exporturi (parolat). Bifează doar pentru utilizatorii responsabili cu salariile.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_modify_employees?'#2A1F0F':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_modify_employees?G.orange:G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_modify_employees}
+                    onChange={e=>setEditMgr({...editMgr,can_modify_employees:e.target.checked})}
+                    style={{accentColor:G.orange,width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_modify_employees?G.orange:G.text}}>
+                      ✏️ Modifică Angajați (WRITE)
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite <strong>adăugare/editare/ștergere</strong> angajați în modulul HR. Necesar pentru personalul de resurse umane. <strong style={{color:G.purple}}>Separat de „Acces Date Personale"</strong> care permite DOAR vizualizare CNP/adresă (fără modificare).
                     </div>
                   </div>
                 </label>
