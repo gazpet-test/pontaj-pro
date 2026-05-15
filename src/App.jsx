@@ -1289,6 +1289,12 @@ function ReportsPage() {
   const [istoricOrdSearch, setIstoricOrdSearch] = useState('')
   const [istoricOrdMonth, setIstoricOrdMonth] = useState('')
   const [istoricOrdSel, setIstoricOrdSel] = useState(null) // record selectat pentru preview
+  // Registru Ordine (jurnal contabil)
+  const [showRegistruOrd, setShowRegistruOrd] = useState(false)
+  const [registruOrdMonth, setRegistruOrdMonth] = useState('')
+  const [registruOrdSearch, setRegistruOrdSearch] = useState('')
+  const [registruOrdSortAsc, setRegistruOrdSortAsc] = useState(false) // false = cele mai recente sus
+  const [exportingRegistru, setExportingRegistru] = useState(false)
   // Generator Ordin Deplasare
   const [showOrdGen, setShowOrdGen] = useState(false)
   const [ordGenLoading, setOrdGenLoading] = useState(false)
@@ -1809,7 +1815,7 @@ function ReportsPage() {
     try {
       const { data, error } = await supabase
         .from('ordine_deplasare_arhiva')
-        .select('id, employee_id, period_from, period_to, pdf_path, pdf_nume, pdf_size_bytes, semnaturi_snapshot, observatii, created_at, employees!inner(name, functie)')
+        .select('id, employee_id, period_from, period_to, pdf_path, pdf_nume, pdf_size_bytes, semnaturi_snapshot, observatii, created_at, numar_ordin, data_emiterii, zile_lucrate, suma_totala, employees!inner(name, functie)')
         .order('created_at', { ascending: false })
         .limit(1000)
       if (error) throw error
@@ -1819,6 +1825,128 @@ function ReportsPage() {
       showToast('Eroare încărcare istoric ordine: ' + (e?.message || e), 'error')
     } finally {
       setIstoricOrdLoading(false)
+    }
+  }
+
+  // Export Registru Ordine Excel (Etapa 7.5 Faza 3.1)
+  const exportRegistruOrdineExcel = async () => {
+    if (!istoricOrd.length) { showToast('Niciun ordin în registru pentru export', 'warn'); return }
+    setExportingRegistru(true)
+    try {
+      const XLSX = await import('xlsx-js-style')
+      // Filtrez + sortez la fel ca UI
+      const filtered = istoricOrd.filter(r => {
+        if (registruOrdSearch) {
+          const q = registruOrdSearch.toLowerCase()
+          if (!(r.employees?.name || '').toLowerCase().includes(q) && !((r.numar_ordin || '').toLowerCase().includes(q))) return false
+        }
+        if (registruOrdMonth) {
+          const m = (r.data_emiterii || r.period_from)?.substring(0,7)
+          if (m !== registruOrdMonth) return false
+        }
+        return true
+      })
+      filtered.sort((a, b) => {
+        const da = (a.data_emiterii || a.period_from || '') + (a.numar_ordin || '')
+        const db = (b.data_emiterii || b.period_from || '') + (b.numar_ordin || '')
+        return registruOrdSortAsc ? da.localeCompare(db) : db.localeCompare(da)
+      })
+      
+      const headerStyle = {
+        fill: { fgColor: { rgb: '1F497D' } },
+        font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        border: { top: {style:'thin'}, bottom:{style:'thin'}, left:{style:'thin'}, right:{style:'thin'} },
+      }
+      const cellBase = {
+        font: { name: 'Calibri', sz: 10 },
+        alignment: { vertical: 'center', wrapText: false },
+        border: { top: {style:'thin'}, bottom:{style:'thin'}, left:{style:'thin'}, right:{style:'thin'} },
+      }
+      
+      const aoa = [
+        [`REGISTRU ORDINE DE DEPLASARE`],
+        [`Generat: ${new Date().toLocaleString('ro-RO')}  •  Total: ${filtered.length} ordine`],
+        [],
+        ['Nr crt', 'Nr Ordin', 'Data emiterii', 'Angajat', 'Funcția', 'Perioada', 'Zile', 'Suma (RON)', 'Generat la', 'Generat de'],
+      ]
+      filtered.forEach((r, i) => {
+        aoa.push([
+          i + 1,
+          r.numar_ordin || '—',
+          r.data_emiterii ? new Date(r.data_emiterii).toLocaleDateString('ro-RO') : '—',
+          r.employees?.name || `#${r.employee_id}`,
+          r.employees?.functie || '—',
+          `${new Date(r.period_from).toLocaleDateString('ro-RO')} – ${new Date(r.period_to).toLocaleDateString('ro-RO')}`,
+          r.zile_lucrate || 0,
+          Number(r.suma_totala || 0),
+          new Date(r.created_at).toLocaleString('ro-RO', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}),
+          r.semnaturi_snapshot?.director_aproba?.nume || '—',
+        ])
+      })
+      // TOTAL
+      const totalZile = filtered.reduce((s, r) => s + (Number(r.zile_lucrate) || 0), 0)
+      const totalSuma = filtered.reduce((s, r) => s + (Number(r.suma_totala) || 0), 0)
+      aoa.push([])
+      aoa.push(['', '', '', '', '', 'TOTAL:', totalZile, totalSuma, '', ''])
+      
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      // Merge titlu
+      ws['!merges'] = [
+        { s:{r:0,c:0}, e:{r:0,c:9} },
+        { s:{r:1,c:0}, e:{r:1,c:9} },
+      ]
+      // Title style
+      ws['A1'] = { v: aoa[0][0], t: 's', s: { font:{sz:14,bold:true,color:{rgb:'1F497D'}}, alignment:{horizontal:'center',vertical:'center'} } }
+      ws['A2'] = { v: aoa[1][0], t: 's', s: { font:{sz:9,italic:true,color:{rgb:'666666'}}, alignment:{horizontal:'center'} } }
+      // Header row (4 = row index 3)
+      for (let c = 0; c < 10; c++) {
+        const cell = XLSX.utils.encode_cell({ r: 3, c })
+        if (ws[cell]) ws[cell].s = headerStyle
+      }
+      // Body cells
+      for (let r = 4; r < aoa.length; r++) {
+        for (let c = 0; c < 10; c++) {
+          const cellRef = XLSX.utils.encode_cell({ r, c })
+          if (ws[cellRef]) {
+            ws[cellRef].s = { ...cellBase }
+            if (c === 0 || c === 6) ws[cellRef].s.alignment = { ...cellBase.alignment, horizontal: 'center' }
+            if (c === 7) {
+              ws[cellRef].s.alignment = { ...cellBase.alignment, horizontal: 'right' }
+              ws[cellRef].s.numFmt = '#,##0.00'
+            }
+          }
+        }
+      }
+      // TOTAL row highlight (last data row)
+      const totalRowIdx = aoa.length - 1
+      for (let c = 5; c < 10; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r: totalRowIdx, c })
+        if (ws[cellRef]) {
+          ws[cellRef].s = { 
+            ...cellBase, 
+            font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '1F497D' } },
+            fill: { fgColor: { rgb: 'D9E1F2' } },
+            alignment: { ...cellBase.alignment, horizontal: c === 5 ? 'right' : (c === 6 ? 'center' : (c === 7 ? 'right' : 'left')) },
+          }
+          if (c === 7) ws[cellRef].s.numFmt = '#,##0.00'
+        }
+      }
+      // Column widths
+      ws['!cols'] = [
+        {wch:6}, {wch:14}, {wch:14}, {wch:32}, {wch:24}, {wch:24}, {wch:7}, {wch:13}, {wch:18}, {wch:22}
+      ]
+      
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Registru Ordine')
+      const filename = `Registru_Ordine_Deplasare_${new Date().toISOString().split('T')[0]}.xlsx`
+      XLSX.writeFile(wb, filename)
+      showToast(`✓ ${filename} descărcat`)
+    } catch (e) {
+      console.error('exportRegistru err:', e)
+      showToast('Eroare export registru: ' + (e?.message || e), 'error')
+    } finally {
+      setExportingRegistru(false)
     }
   }
 
@@ -2187,7 +2315,7 @@ function ReportsPage() {
   
   // Builds 2-pagini HTML pentru ordin (returnează string)
   // semnaturiData = { aproba: 'data:...'|null, control: ..., verificat: ..., titular: ... }
-  const buildOrdinHTML = ({ emp, ordGenPayment, allDays, setari, denumireSocietate, nrRegCom, cui, periodStartFmt, periodEndFmt, fmtRO, semnaturiData, genTimestamp }) => {
+  const buildOrdinHTML = ({ emp, ordGenPayment, allDays, setari, denumireSocietate, nrRegCom, cui, periodStartFmt, periodEndFmt, fmtRO, semnaturiData, genTimestamp, numarOrd, dataEmit }) => {
     // Lățime canvas: 794px = 210mm @ 96 DPI
     // Coloane proporțional cu xlsx (4/11/18/17/8/9/12/4 = 83 units):
     //   A=38px B=105px C=172px D=163px E=76px F=86px G=115px H=38px (total 793px)
@@ -2234,8 +2362,8 @@ function ReportsPage() {
         
         <!-- Nr / Data -->
         <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:10px;">
-          <span><strong>Nr.:</strong> _____________________</span>
-          <span><strong>Data emiterii:</strong> _____________________</span>
+          <span><strong>Nr.:</strong> ${esc(numarOrd || '_____________________')}</span>
+          <span><strong>Data emiterii:</strong> ${esc(dataEmit || '_____________________')}</span>
         </div>
         
         <!-- Date angajat -->
@@ -2402,6 +2530,39 @@ function ReportsPage() {
   }
   
   // Generează ZIP cu PDF-uri per angajat (cu semnături inserate)
+  // ─── Helpers Numerotare + Validare Fereastră (Etapa 7.5 Faza 3.1) ───
+  // Format Nr.: OD {INITIALE_PRIMELE_2_CUVINTE} {LUNA_NR}. Ex: OD AD 4 pentru ABSER DIDARUL Aprilie
+  const getInitialsOrdin = (name) => {
+    if (!name) return 'XX'
+    const words = String(name).trim().toUpperCase().split(/\s+/).filter(Boolean)
+    if (words.length === 0) return 'XX'
+    if (words.length === 1) return words[0].substring(0, 2)
+    return (words[0][0] || '') + (words[1][0] || '')
+  }
+  const getDataEmiteriiOrdin = (periodFromStr) => {
+    if (!periodFromStr) return null
+    const d = new Date(periodFromStr + 'T12:00')
+    return new Date(d.getFullYear(), d.getMonth() + 1, 0)  // ultima zi a lunii
+  }
+  const getNumarOrdin = (name, periodFromStr) => {
+    const d = new Date(periodFromStr + 'T12:00')
+    const luna = d.getMonth() + 1
+    return `OD ${getInitialsOrdin(name)} ${luna}`
+  }
+  const isInGenerationWindow = (periodFromStr) => {
+    const pf = new Date(periodFromStr + 'T12:00')
+    const Y = pf.getFullYear(); const M = pf.getMonth()
+    const lastDay = new Date(Y, M + 1, 0).getDate()
+    const today = new Date()
+    const Ty = today.getFullYear(); const Tm = today.getMonth(); const Td = today.getDate()
+    // Ultima zi a lunii M
+    if (Ty === Y && Tm === M && Td === lastDay) return true
+    // Primele 7 zile ale lunii M+1
+    const nextMonth = M === 11 ? { y: Y + 1, m: 0 } : { y: Y, m: M + 1 }
+    if (Ty === nextMonth.y && Tm === nextMonth.m && Td >= 1 && Td <= 7) return true
+    return false
+  }
+
   const generateOrdinePDF = async () => {
     const selected = ordGenEmps.filter(e => e.selected && e.diurna_max > 0)
     if (!selected.length) {
@@ -2409,6 +2570,30 @@ function ReportsPage() {
       return
     }
     if (!ordGenPayment) { showToast('Eroare: plată necunoscută', 'error'); return }
+    
+    // ─── Validare fereastră generare (Etapa 7.5 Faza 3.1) ───
+    const inWindow = isInGenerationWindow(ordGenPayment.period_from)
+    if (!inWindow) {
+      const lastDay = getDataEmiteriiOrdin(ordGenPayment.period_from)
+      const lastDayFmt = lastDay.toLocaleDateString('ro-RO')
+      const todayFmt = new Date().toLocaleDateString('ro-RO')
+      if (profile?.is_owner) {
+        const ok = window.confirm(
+          `⚠ FEREASTRA RECOMANDATĂ pentru generarea ordinelor:\n\n` +
+          `  • Ultima zi a lunii: ${lastDayFmt}\n` +
+          `  • SAU primele 7 zile ale lunii următoare\n\n` +
+          `Azi: ${todayFmt} (în afara ferestrei)\n\n` +
+          `Doar tu (owner) poți face override. Continui?`
+        )
+        if (!ok) return
+      } else {
+        showToast(
+          `⛔ Ordinele de deplasare pot fi generate doar în ultima zi a lunii (${lastDayFmt}) sau în primele 7 zile ale lunii următoare. Pentru excepții contactează owner-ul.`,
+          'warn'
+        )
+        return
+      }
+    }
     
     setOrdGenerating(true)
     setOrdGenProgress({ done: 0, total: selected.length })
@@ -2511,12 +2696,23 @@ function ReportsPage() {
           
           const allDays = emp.allDays || []
           
+          // Calculez numar_ordin + data_emiterii per angajat (Etapa 7.5 Faza 3.1)
+          const numarOrdEmp = getNumarOrdin(emp.name, ordGenPayment.period_from)
+          const dataEmitEmp = getDataEmiteriiOrdin(ordGenPayment.period_from)
+          const dataEmitFmt = `${String(dataEmitEmp.getDate()).padStart(2,'0')}.${String(dataEmitEmp.getMonth()+1).padStart(2,'0')}.${dataEmitEmp.getFullYear()}`
+          const dataEmitISO = dataEmitEmp.toISOString().split('T')[0]
+          // Zile lucrate + sumă (pentru INSERT + registru)
+          const zileLucrateEmp = allDays.filter(d => d.shantier_name && !d.is_weekend && !d.is_legal).length || (emp.diurna_max || 0)
+          const sumaTotalaEmp = zileLucrateEmp * (Number(diurnaAmt) || 0)
+          
           // Build HTML 2 pagini cu semnături inserate
           const { page1, page2 } = buildOrdinHTML({
             emp, ordGenPayment, allDays, setari,
             denumireSocietate, nrRegCom, cui, periodStartFmt, periodEndFmt, fmtRO,
             semnaturiData: { aproba: sigAproba, control: sigControl, verificat: sigVerificat, titular: sigTitular },
             genTimestamp,
+            numarOrd: numarOrdEmp,
+            dataEmit: dataEmitFmt,
           })
           
           wrapper.innerHTML = page1 + page2
@@ -2541,7 +2737,14 @@ function ReportsPage() {
           const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
           const filename = `Ordin_Deplasare_${safeName}_${ordGenPayment.period_from}_${ordGenPayment.period_to}.pdf`
           zip.file(filename, pdfBlob)
-          archiveQueue.push({ emp, pdfBlob, filename, sigTitularPath: sigPathByEmpId[emp.employee_id] || null })
+          archiveQueue.push({ 
+            emp, pdfBlob, filename, 
+            sigTitularPath: sigPathByEmpId[emp.employee_id] || null,
+            numarOrd: numarOrdEmp,
+            dataEmitISO,
+            zileLucrate: zileLucrateEmp,
+            sumaTotala: sumaTotalaEmp,
+          })
           
           setOrdGenProgress({ done: idx + 1, total: selected.length })
         }
@@ -2571,7 +2774,7 @@ function ReportsPage() {
       }
       const folderPath = `${ordGenPayment.period_from.substring(0,7)}/${ordGenPayment.period_from}_${ordGenPayment.period_to}`
       const arhivareResults = await Promise.allSettled(
-        archiveQueue.map(async ({ emp, pdfBlob, filename, sigTitularPath }) => {
+        archiveQueue.map(async ({ emp, pdfBlob, filename, sigTitularPath, numarOrd, dataEmitISO, zileLucrate, sumaTotala }) => {
           const uuid8 = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36)).replace(/-/g,'').substring(0, 8)
           const storagePath = `${folderPath}/${emp.employee_id}_${uuid8}.pdf`
           const { error: upErr } = await supabase.storage
@@ -2590,6 +2793,10 @@ function ReportsPage() {
             pdf_nume: filename,
             pdf_size_bytes: pdfBlob.size,
             semnaturi_snapshot: semnaturi,
+            numar_ordin: numarOrd,
+            data_emiterii: dataEmitISO,
+            zile_lucrate: zileLucrate,
+            suma_totala: sumaTotala,
             created_by: uid,
           })
           if (insErr) {
@@ -4179,7 +4386,9 @@ function ReportsPage() {
         const filtered = istoricOrd.filter(r => {
           if (istoricOrdSearch) {
             const q = istoricOrdSearch.toLowerCase()
-            if (!(r.employees?.name || '').toLowerCase().includes(q) && !(r.pdf_nume || '').toLowerCase().includes(q)) return false
+            if (!(r.employees?.name || '').toLowerCase().includes(q) 
+                && !(r.pdf_nume || '').toLowerCase().includes(q)
+                && !((r.numar_ordin || '').toLowerCase().includes(q))) return false
           }
           if (istoricOrdMonth) {
             const m = r.period_from?.substring(0,7)
@@ -4200,9 +4409,10 @@ function ReportsPage() {
             <div style={{padding:'14px 18px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
               <div style={{fontSize:15,fontWeight:800,color:G.orange}}>📚 Istoric Ordine Deplasare</div>
               <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                <input type="text" placeholder="🔍 Caută angajat..." value={istoricOrdSearch} onChange={e=>setIstoricOrdSearch(e.target.value)} style={{...S.input,width:200,padding:'6px 10px',fontSize:12}}/>
+                <input type="text" placeholder="🔍 Caută angajat/nr ordin..." value={istoricOrdSearch} onChange={e=>setIstoricOrdSearch(e.target.value)} style={{...S.input,width:220,padding:'6px 10px',fontSize:12}}/>
                 <input type="month" value={istoricOrdMonth} onChange={e=>setIstoricOrdMonth(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px',fontSize:12}} title="Filtru luna period_from"/>
                 {(istoricOrdSearch||istoricOrdMonth)&&<button onClick={()=>{setIstoricOrdSearch('');setIstoricOrdMonth('')}} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>✕ Reset</button>}
+                <button onClick={()=>setShowRegistruOrd(true)} style={{...S.btnP,background:G.blue,fontSize:12,padding:'6px 12px'}} title="Vezi registru contabil cu export Excel">📋 Registru</button>
                 <button onClick={()=>{setShowIstoricOrd(false);setIstoricOrdSel(null)}} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
               </div>
             </div>
@@ -4228,19 +4438,23 @@ function ReportsPage() {
                   </div>
                   <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
                     <thead><tr style={{background:G.bg,color:G.muted}}>
+                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600,width:90}}>Nr Ordin</th>
                       <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Angajat</th>
                       <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Funcție</th>
+                      <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:55}}>Zile</th>
+                      <th style={{padding:'6px 8px',textAlign:'right',fontWeight:600,width:90}}>Suma</th>
                       <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Generat la</th>
-                      <th style={{padding:'6px 8px',textAlign:'right',fontWeight:600}}>Mărime</th>
                       <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:120}}>Acțiuni</th>
                     </tr></thead>
                     <tbody>
                       {g.items.map((r,i) => (
                         <tr key={r.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                          <td style={{padding:'7px 8px',fontWeight:700,color:G.orange,fontSize:11,fontFamily:'monospace'}}>{r.numar_ordin || '—'}</td>
                           <td style={{padding:'7px 8px',fontWeight:600}}>{r.employees?.name || `#${r.employee_id}`}</td>
                           <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{r.employees?.functie || '—'}</td>
+                          <td style={{padding:'7px 8px',textAlign:'center',color:G.blue}}>{r.zile_lucrate || 0}</td>
+                          <td style={{padding:'7px 8px',textAlign:'right',color:G.green,fontWeight:700}}>{Number(r.suma_totala || 0).toLocaleString('ro-RO',{minimumFractionDigits:2})} RON</td>
                           <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{new Date(r.created_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right',color:G.muted,fontSize:11}}>{r.pdf_size_bytes ? (r.pdf_size_bytes/1024).toFixed(0)+' KB' : '—'}</td>
                           <td style={{padding:'7px 8px',textAlign:'center'}}>
                             <button onClick={()=>openIstoricOrdPDF(r)} style={{background:'none',border:`1px solid ${G.blue}66`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.blue,fontSize:11,marginRight:4}} title="Deschide PDF">📄 Vezi</button>
                             {profile?.is_owner && (
@@ -4253,6 +4467,101 @@ function ReportsPage() {
                   </table>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+        )
+      })()}
+
+      {/* Registru Ordine Deplasare modal (jurnal contabil cu export Excel) */}
+      {showRegistruOrd && (() => {
+        const filtered = istoricOrd.filter(r => {
+          if (registruOrdSearch) {
+            const q = registruOrdSearch.toLowerCase()
+            if (!(r.employees?.name || '').toLowerCase().includes(q) 
+                && !((r.numar_ordin || '').toLowerCase().includes(q))) return false
+          }
+          if (registruOrdMonth) {
+            const m = (r.data_emiterii || r.period_from)?.substring(0,7)
+            if (m !== registruOrdMonth) return false
+          }
+          return true
+        })
+        const sorted = [...filtered].sort((a, b) => {
+          const da = (a.data_emiterii || a.period_from || '') + (a.numar_ordin || '')
+          const db = (b.data_emiterii || b.period_from || '') + (b.numar_ordin || '')
+          return registruOrdSortAsc ? da.localeCompare(db) : db.localeCompare(da)
+        })
+        const totalZile = filtered.reduce((s, r) => s + (Number(r.zile_lucrate) || 0), 0)
+        const totalSuma = filtered.reduce((s, r) => s + (Number(r.suma_totala) || 0), 0)
+        return (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:210,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{...S.card,width:1200,maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
+            <div style={{padding:'14px 18px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:G.blue}}>📋 Registru Ordine Deplasare</div>
+                <div style={{fontSize:11,color:G.muted,marginTop:2}}>Jurnal cronologic cu toate ordinele generate · {filtered.length} ordine afișate din {istoricOrd.length} totale</div>
+              </div>
+              <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <input type="text" placeholder="🔍 Angajat / Nr ordin..." value={registruOrdSearch} onChange={e=>setRegistruOrdSearch(e.target.value)} style={{...S.input,width:200,padding:'6px 10px',fontSize:12}}/>
+                <input type="month" value={registruOrdMonth} onChange={e=>setRegistruOrdMonth(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px',fontSize:12}} title="Filtru lună data emiterii"/>
+                <button onClick={()=>setRegistruOrdSortAsc(!registruOrdSortAsc)} style={{...S.btnS,fontSize:11,padding:'5px 10px'}} title="Toggle sortare">
+                  {registruOrdSortAsc ? '⬆ Vechi → Nou' : '⬇ Nou → Vechi'}
+                </button>
+                {(registruOrdSearch||registruOrdMonth)&&<button onClick={()=>{setRegistruOrdSearch('');setRegistruOrdMonth('')}} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>✕ Reset</button>}
+                <button onClick={exportRegistruOrdineExcel} disabled={exportingRegistru||!filtered.length} style={{...S.btnP,background:'#1A6B1A',fontSize:12,padding:'6px 12px',opacity:exportingRegistru||!filtered.length?.5:1}} title="Export Excel registru">
+                  {exportingRegistru ? '⏳' : '⬇ Excel'}
+                </button>
+                <button onClick={()=>setShowRegistruOrd(false)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
+              </div>
+            </div>
+            <div style={{flex:1,overflowY:'auto',padding:'12px 18px'}}>
+              {sorted.length===0 ? (
+                <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
+                  {istoricOrd.length===0 ? '🗂️ Registru gol — nu există ordine arhivate încă' : '🔍 Niciun rezultat pentru filtrele curente'}
+                </div>
+              ) : (
+                <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                  <thead style={{position:'sticky',top:0,background:'#0D1117',zIndex:1}}>
+                    <tr style={{background:G.blue+'22',borderBottom:`2px solid ${G.blue}`}}>
+                      <th style={{padding:'8px 6px',textAlign:'center',fontWeight:700,fontSize:11,color:G.blue,width:50}}>Nr crt</th>
+                      <th style={{padding:'8px 6px',textAlign:'left',fontWeight:700,fontSize:11,color:G.blue,width:100}}>Nr Ordin</th>
+                      <th style={{padding:'8px 6px',textAlign:'left',fontWeight:700,fontSize:11,color:G.blue,width:100}}>Data emit.</th>
+                      <th style={{padding:'8px 6px',textAlign:'left',fontWeight:700,fontSize:11,color:G.blue}}>Angajat</th>
+                      <th style={{padding:'8px 6px',textAlign:'left',fontWeight:700,fontSize:11,color:G.blue,width:140}}>Funcția</th>
+                      <th style={{padding:'8px 6px',textAlign:'left',fontWeight:700,fontSize:11,color:G.blue,width:170}}>Perioada</th>
+                      <th style={{padding:'8px 6px',textAlign:'center',fontWeight:700,fontSize:11,color:G.blue,width:55}}>Zile</th>
+                      <th style={{padding:'8px 6px',textAlign:'right',fontWeight:700,fontSize:11,color:G.blue,width:100}}>Suma</th>
+                      <th style={{padding:'8px 6px',textAlign:'center',fontWeight:700,fontSize:11,color:G.blue,width:80}}>PDF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((r,i) => (
+                      <tr key={r.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
+                        <td style={{padding:'7px 6px',textAlign:'center',color:G.muted,fontSize:11}}>{i + 1}</td>
+                        <td style={{padding:'7px 6px',fontWeight:700,color:G.orange,fontSize:11,fontFamily:'monospace'}}>{r.numar_ordin || '—'}</td>
+                        <td style={{padding:'7px 6px',fontSize:11}}>{r.data_emiterii ? new Date(r.data_emiterii).toLocaleDateString('ro-RO') : '—'}</td>
+                        <td style={{padding:'7px 6px',fontWeight:600}}>{r.employees?.name || `#${r.employee_id}`}</td>
+                        <td style={{padding:'7px 6px',color:G.muted,fontSize:11}}>{r.employees?.functie || '—'}</td>
+                        <td style={{padding:'7px 6px',fontSize:11}}>{new Date(r.period_from).toLocaleDateString('ro-RO')} – {new Date(r.period_to).toLocaleDateString('ro-RO')}</td>
+                        <td style={{padding:'7px 6px',textAlign:'center',color:G.blue,fontWeight:600}}>{r.zile_lucrate || 0}</td>
+                        <td style={{padding:'7px 6px',textAlign:'right',color:G.green,fontWeight:700}}>{Number(r.suma_totala || 0).toLocaleString('ro-RO',{minimumFractionDigits:2})}</td>
+                        <td style={{padding:'7px 6px',textAlign:'center'}}>
+                          <button onClick={()=>openIstoricOrdPDF(r)} style={{background:'none',border:`1px solid ${G.blue}66`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.blue,fontSize:11}} title="Deschide PDF">📄</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot style={{position:'sticky',bottom:0,background:'#0D1117'}}>
+                    <tr style={{background:G.blue+'33',borderTop:`2px solid ${G.blue}`,fontWeight:700}}>
+                      <td colSpan={6} style={{padding:'10px 6px',textAlign:'right',color:G.blue}}>TOTAL REGISTRU:</td>
+                      <td style={{padding:'10px 6px',textAlign:'center',color:G.blue}}>{totalZile}</td>
+                      <td style={{padding:'10px 6px',textAlign:'right',color:G.green}}>{totalSuma.toLocaleString('ro-RO',{minimumFractionDigits:2})} RON</td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
             </div>
           </div>
         </div>
