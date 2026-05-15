@@ -52,11 +52,11 @@ function AuthProvider({ children }) {
 }
 
 // ─── Module access helper ───────────────────────────────────────────────────
-// Acces dacă: superadmin (bypass total), SAU user_module_access conține fix cheia,
+// Acces dacă: is_owner (bypass total - Razvan + Marilena), SAU user_module_access conține fix cheia,
 // SAU conține orice sub-modul de tipul "<cheia>.xxx" (ex: 'pontajpro.pontaj' => are acces la 'pontajpro')
 function hasModuleAccess(profile, moduleName) {
   if (!profile) return false
-  if (profile.role === 'superadmin') return true
+  if (profile.is_owner === true) return true
   const ma = profile.module_access || []
   return ma.some(m => m === moduleName || m.startsWith(moduleName + '.'))
 }
@@ -65,7 +65,7 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
   const { session, profile } = useAuth()
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
-  if (adminOnly && profile?.role !== 'superadmin') return <Navigate to="/" replace />
+  if (adminOnly && !profile?.is_owner) return <Navigate to="/" replace />
   if (salaryAccess && !profile?.can_access_salarii && !profile?.is_owner) return <Navigate to="/" replace />
   if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
@@ -300,7 +300,7 @@ function Layout({ children }) {
   const nav = useNavigate(); const loc = useLocation()
   const [now, setNow] = useState(new Date())
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
-  const isSuperAdmin = profile?.role==='superadmin'
+  const isSuperAdmin = profile?.is_owner === true
   const isContabilitate = profile?.role==='contabilitate'
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
@@ -380,7 +380,7 @@ function HomeDashboard() {
   const nav = useNavigate()
   const [now, setNow] = useState(new Date())
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
-  const isSuperAdmin = profile?.role==='superadmin'
+  const isSuperAdmin = profile?.is_owner === true
   const isContabilitate = profile?.role==='contabilitate'
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
 
@@ -618,7 +618,7 @@ function DashboardPage() {
   const [weekStats,setWeekStats]=useState(null)
   const [monthStats,setMonthStats]=useState(null)
   const [absent3,setAbsent3]=useState([])
-  const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
+  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate'
   const [expiringContracts,setExpiringContracts]=useState([])
   const [nrTransportCerute, setNrTransportCerute] = useState(0)
   const [transportSamples, setTransportSamples] = useState([])  // primele 3 transporturi pentru preview
@@ -690,7 +690,7 @@ function DashboardPage() {
     }
     
     // Transporturi pendinte aprobare (vizibile pentru superadmin + admin_logistica)
-    const isAprobatorTransport = ['superadmin', 'admin_logistica'].includes(profile?.role)
+    const isAprobatorTransport = profile?.is_owner === true || profile?.role === 'admin_logistica'
     if (isAprobatorTransport) {
       const { count, data: samples } = await supabase
         .from('logistica_transporturi')
@@ -727,7 +727,7 @@ function DashboardPage() {
     }
 
     // Check expiring contracts (next 30 days) - superadmin + contabilitate + hr
-    if(['superadmin','contabilitate','hr'].includes(profile?.role)){
+    if(profile?.is_owner === true || ['contabilitate','hr'].includes(profile?.role)){
       const in30=new Date(); in30.setDate(in30.getDate()+30)
       const {data:expiring}=await supabase.from('employee_salaries').select('*,employees(name)').not('contract_expiry','is',null).lte('contract_expiry',in30.toISOString().split('T')[0]).gte('contract_expiry',todayStr())
       setExpiringContracts(expiring||[])
@@ -1163,7 +1163,7 @@ function PontajPage() {
   const [onlyDiurna,setOnlyDiurna]=useState(false)
   const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
-  const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
+  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate'
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
@@ -1326,7 +1326,7 @@ function ReportsPage() {
   const [historicHrana, setHistoricHrana] = useState([])
   const [historicHranaLoad, setHistoricHranaLoad] = useState(false)
   const [toast,showToast]=useToast()
-  const isAdmin=['superadmin','contabilitate'].includes(profile?.role)
+  const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate'
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
   const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
   
@@ -4722,7 +4722,7 @@ function ReportsPage() {
 // ─── Admin Page ───────────────────────────────────────────────────────────────
 function AdminPage() {
   const { profile } = useAuth()
-  const isSuperAdmin=profile?.role==='superadmin'
+  const isSuperAdmin = profile?.is_owner === true
   const isAdmin = isSuperAdmin
   const [tab,setTab]=useState('sites')
   const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
