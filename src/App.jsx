@@ -1289,12 +1289,20 @@ function ReportsPage() {
   const [istoricOrdSearch, setIstoricOrdSearch] = useState('')
   const [istoricOrdMonth, setIstoricOrdMonth] = useState('')
   const [istoricOrdSel, setIstoricOrdSel] = useState(null) // record selectat pentru preview
+  // Accordion + multi-select (Etapa 7.5 Faza 3.4)
+  const [istoricOrdExpanded, setIstoricOrdExpanded] = useState(new Set()) // chei luni expanded (YYYY-MM)
+  const [istoricOrdSelected, setIstoricOrdSelected] = useState(new Set()) // id-uri ordine selectate
+  const [bulkDeletingOrd, setBulkDeletingOrd] = useState(false)
   // Registru Ordine (jurnal contabil)
   const [showRegistruOrd, setShowRegistruOrd] = useState(false)
   const [registruOrdMonth, setRegistruOrdMonth] = useState('')
   const [registruOrdSearch, setRegistruOrdSearch] = useState('')
   const [registruOrdSortAsc, setRegistruOrdSortAsc] = useState(false) // false = cele mai recente sus
   const [exportingRegistru, setExportingRegistru] = useState(false)
+  // Notificare Ordine Lipsă/Overdue (Etapa 7.5 Faza 3.2)
+  const [ordineLipsa, setOrdineLipsa] = useState([])
+  const [ordineLipsaExpanded, setOrdineLipsaExpanded] = useState(false)
+  const [ordineLipsaDismissed, setOrdineLipsaDismissed] = useState(false)
   // Generator Ordin Deplasare
   const [showOrdGen, setShowOrdGen] = useState(false)
   const [ordGenLoading, setOrdGenLoading] = useState(false)
@@ -1803,7 +1811,24 @@ function ReportsPage() {
   useEffect(()=>{ loadReport() },[month,deptF,siteF,profile])
   useEffect(()=>{ if(showIstoric) loadPayments() },[showIstoric])
   useEffect(()=>{ if(showIstoricOrd) loadIstoricOrd() },[showIstoricOrd])
+  useEffect(()=>{ loadOrdineLipsa() },[profile])
   useEffect(()=>{ if(showHistoricPN && pbUnlocked) loadHistoricPN() }, [showHistoricPN, pbUnlocked])
+
+  const loadOrdineLipsa = async () => {
+    // Doar pentru cei care pot genera ordine (owners + can_access_personal_data)
+    if (!profile?.is_owner && !profile?.can_access_personal_data) { setOrdineLipsa([]); return }
+    try {
+      const { data, error } = await supabase
+        .from('v_ordine_lipsa')
+        .select('*')
+        .order('period_from', { ascending: false })
+      if (error) throw error
+      setOrdineLipsa(data || [])
+    } catch (e) {
+      console.error('loadOrdineLipsa err:', e)
+      // Silent fail - banner-ul e nice-to-have
+    }
+  }
 
   const loadPayments=async()=>{
     const {data}=await supabase.from('diurna_payments').select('*').order('payment_date',{ascending:false}).limit(50)
@@ -1820,11 +1845,93 @@ function ReportsPage() {
         .limit(1000)
       if (error) throw error
       setIstoricOrd(data || [])
+      // Auto-expand luna cea mai recentă (Etapa 7.5 Faza 3.4)
+      if (data && data.length > 0) {
+        const monthKeys = [...new Set(data.map(r => r.period_from?.substring(0, 7)).filter(Boolean))]
+        monthKeys.sort((a,b) => b.localeCompare(a))
+        if (monthKeys[0]) setIstoricOrdExpanded(new Set([monthKeys[0]]))
+      }
+      setIstoricOrdSelected(new Set()) // reset selecție la reload
     } catch (e) {
       console.error('loadIstoricOrd err:', e)
       showToast('Eroare încărcare istoric ordine: ' + (e?.message || e), 'error')
     } finally {
       setIstoricOrdLoading(false)
+    }
+  }
+
+  // Toggle expand/collapse lună
+  const toggleMonthExpanded = (monthKey) => {
+    setIstoricOrdExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(monthKey)) next.delete(monthKey)
+      else next.add(monthKey)
+      return next
+    })
+  }
+
+  // Toggle selecție individuală sau bulk
+  const toggleSelectOrd = (id) => {
+    setIstoricOrdSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const selectAllInList = (records) => {
+    setIstoricOrdSelected(prev => {
+      const next = new Set(prev)
+      records.forEach(r => next.add(r.id))
+      return next
+    })
+  }
+  const deselectAllInList = (records) => {
+    setIstoricOrdSelected(prev => {
+      const next = new Set(prev)
+      records.forEach(r => next.delete(r.id))
+      return next
+    })
+  }
+
+  // Bulk delete: șterge multiple ordine selectate (Storage + DB)
+  const bulkDeleteOrd = async () => {
+    if (!profile?.is_owner) { showToast('Doar owner-ii pot șterge bulk', 'warn'); return }
+    if (istoricOrdSelected.size === 0) { showToast('Niciun ordin selectat', 'warn'); return }
+    const idsToDelete = Array.from(istoricOrdSelected)
+    const recordsToDelete = istoricOrd.filter(r => idsToDelete.includes(r.id))
+    if (!window.confirm(
+      `🗑️ Ștergi ${recordsToDelete.length} ordin${recordsToDelete.length === 1 ? '' : 'e'} de deplasare?\n\n` +
+      `Acțiunea șterge PDF-urile din Storage ȘI înregistrările din BD definitiv.\n` +
+      `După ștergere, banner-ul de notificare „Ordine lipsă" va apărea automat dacă rămân plăți lunare fără ordine.\n\n` +
+      `Continui?`
+    )) return
+    setBulkDeletingOrd(true)
+    try {
+      // 1. Storage bulk delete (în batch, tolerant la erori)
+      const paths = recordsToDelete.map(r => r.pdf_path).filter(Boolean)
+      if (paths.length > 0) {
+        // Supabase Storage permite max 100 paths per call, splittăm
+        const chunkSize = 100
+        for (let i = 0; i < paths.length; i += chunkSize) {
+          const chunk = paths.slice(i, i + chunkSize)
+          const { error: stErr } = await supabase.storage.from('ordine-deplasare-pdf').remove(chunk)
+          if (stErr) console.warn(`Storage delete chunk ${i}:`, stErr)
+        }
+      }
+      // 2. DB bulk delete
+      const { error: dbErr } = await supabase.from('ordine_deplasare_arhiva').delete().in('id', idsToDelete)
+      if (dbErr) throw dbErr
+      showToast(`✓ ${recordsToDelete.length} ordin${recordsToDelete.length === 1 ? '' : 'e'} ștearse din arhivă`)
+      // Reload (resetează și selecția)
+      await loadIstoricOrd()
+      // Reload banner notificare
+      loadOrdineLipsa()
+    } catch (e) {
+      console.error('bulkDeleteOrd err:', e)
+      showToast('Eroare bulk delete: ' + (e?.message || e), 'error')
+    } finally {
+      setBulkDeletingOrd(false)
     }
   }
 
@@ -1993,9 +2100,41 @@ function ReportsPage() {
     try{
     // Check for overlap
     const {data:existing}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
+    
+    // Detect dacă perioada e o LUNĂ ÎNTREAGĂ (ziua 1 → ultima zi a aceleiași luni)
+    // Plățile lunare au scop diferit: generarea ordinelor de deplasare pentru toată luna.
+    // Trebuie să poată coexista cu plățile săptămânale (cash flow).
+    const isFullMonthPeriod = (() => {
+      const f = new Date(df + 'T12:00'); const t = new Date(dt + 'T12:00')
+      if (f.getDate() !== 1) return false
+      const lastDay = new Date(f.getFullYear(), f.getMonth() + 1, 0).getDate()
+      if (t.getDate() !== lastDay) return false
+      if (f.getMonth() !== t.getMonth() || f.getFullYear() !== t.getFullYear()) return false
+      return true
+    })()
+    
     if(existing?.length>0){
-      showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
-      setSavingPayment(false); return
+      if (isFullMonthPeriod) {
+        // Bypass cu confirmation pentru plata lunară
+        const lunaName = new Date(df + 'T12:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })
+        const listaSupra = existing.slice(0, 5).map(p => 
+          `  • ${new Date(p.period_from).toLocaleDateString('ro-RO')} – ${new Date(p.period_to).toLocaleDateString('ro-RO')} (${p.total_employees} ang.)`
+        ).join('\n')
+        const ok = window.confirm(
+          `📅 Perioada selectată acoperă luna ÎNTREAGĂ: ${lunaName}\n\n` +
+          `Există deja ${existing.length} ${existing.length===1?'plată săptămânală':'plăți săptămânale'} în această lună:\n` +
+          `${listaSupra}\n` +
+          (existing.length > 5 ? `  • ... și încă ${existing.length - 5}\n` : '') +
+          `\nGENEREZI DIURNELE PENTRU ORDINELE DE DEPLASARE?\n\n` +
+          `(Plata lunară se salvează în PARALEL cu cele săptămânale, fără să le afecteze. ` +
+          `Vei putea apoi genera ordinele de deplasare pentru întreaga lună.)`
+        )
+        if (!ok) { setSavingPayment(false); return }
+        // Continuă - skip overlap check
+      } else {
+        showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
+        setSavingPayment(false); return
+      }
     }
 
     // Calculeaza bugetul lunar din Admin→Calendar (type='work')
@@ -2821,6 +2960,8 @@ function ReportsPage() {
       setShowOrdGen(false)
       setOrdGenEmps([])
       setOrdGenPayment(null)
+      // Reload notificarea ordine lipsă (Etapa 7.5 Faza 3.2)
+      loadOrdineLipsa()
     } catch (e) {
       console.error('generateOrdinePDF err:', e)
       showToast('Eroare la generare PDF: ' + (e?.message || e), 'error')
@@ -4381,7 +4522,7 @@ function ReportsPage() {
         </div>
       )}
 
-      {/* Istoric Ordine Deplasare modal */}
+      {/* Istoric Ordine Deplasare modal - cu accordion pe luni + multi-select */}
       {showIstoricOrd && (() => {
         const filtered = istoricOrd.filter(r => {
           if (istoricOrdSearch) {
@@ -4396,16 +4537,38 @@ function ReportsPage() {
           }
           return true
         })
+        // Grupare pe LUNĂ → în interior pe PERIOADĂ (Etapa 7.5 Faza 3.4)
+        const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : ''
         const grouped = {}
         filtered.forEach(r => {
-          const key = `${r.period_from}__${r.period_to}`
-          if (!grouped[key]) grouped[key] = { period_from: r.period_from, period_to: r.period_to, items: [] }
-          grouped[key].items.push(r)
+          const monthKey = r.period_from?.substring(0, 7) || 'unknown'
+          if (!grouped[monthKey]) grouped[monthKey] = {
+            monthKey,
+            monthLabel: cap(new Date(monthKey + '-01T12:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })),
+            periodeGroups: {},
+            totalOrders: 0,
+            totalSum: 0,
+            totalZile: 0,
+            allIds: [],
+          }
+          const periodKey = `${r.period_from}__${r.period_to}`
+          if (!grouped[monthKey].periodeGroups[periodKey]) {
+            grouped[monthKey].periodeGroups[periodKey] = { period_from: r.period_from, period_to: r.period_to, items: [] }
+          }
+          grouped[monthKey].periodeGroups[periodKey].items.push(r)
+          grouped[monthKey].totalOrders++
+          grouped[monthKey].totalSum += Number(r.suma_totala || 0)
+          grouped[monthKey].totalZile += Number(r.zile_lucrate || 0)
+          grouped[monthKey].allIds.push(r.id)
         })
-        const groups = Object.values(grouped).sort((a,b) => b.period_from.localeCompare(a.period_from))
+        const months = Object.values(grouped).sort((a, b) => b.monthKey.localeCompare(a.monthKey))
+        const totalSelected = istoricOrdSelected.size
+        const filteredIds = filtered.map(r => r.id)
+        const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => istoricOrdSelected.has(id))
+        
         return (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
-          <div style={{...S.card,width:1100,maxHeight:'88vh',display:'flex',flexDirection:'column'}}>
+          <div style={{...S.card,width:1150,maxHeight:'90vh',display:'flex',flexDirection:'column',position:'relative'}}>
             <div style={{padding:'14px 18px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
               <div style={{fontSize:15,fontWeight:800,color:G.orange}}>📚 Istoric Ordine Deplasare</div>
               <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
@@ -4413,61 +4576,140 @@ function ReportsPage() {
                 <input type="month" value={istoricOrdMonth} onChange={e=>setIstoricOrdMonth(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px',fontSize:12}} title="Filtru luna period_from"/>
                 {(istoricOrdSearch||istoricOrdMonth)&&<button onClick={()=>{setIstoricOrdSearch('');setIstoricOrdMonth('')}} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>✕ Reset</button>}
                 <button onClick={()=>setShowRegistruOrd(true)} style={{...S.btnP,background:G.blue,fontSize:12,padding:'6px 12px'}} title="Vezi registru contabil cu export Excel">📋 Registru</button>
-                <button onClick={()=>{setShowIstoricOrd(false);setIstoricOrdSel(null)}} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
+                <button onClick={()=>{setShowIstoricOrd(false);setIstoricOrdSel(null);setIstoricOrdSelected(new Set())}} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
               </div>
             </div>
-            <div style={{padding:'8px 18px',background:G.bg,borderBottom:`1px solid ${G.border}`,fontSize:11,color:G.muted,display:'flex',gap:14}}>
+            <div style={{padding:'8px 18px',background:G.bg,borderBottom:`1px solid ${G.border}`,fontSize:11,color:G.muted,display:'flex',gap:14,alignItems:'center',flexWrap:'wrap'}}>
               <span>📊 {istoricOrd.length} total</span>
               <span>🔎 {filtered.length} afișate</span>
-              <span>📅 {groups.length} perioade</span>
+              <span>📅 {months.length} {months.length===1?'lună':'luni'}</span>
               {istoricOrdLoading && <span style={{color:G.blue}}>⏳ Se încarcă...</span>}
+              {profile?.is_owner && filtered.length > 0 && (
+                <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6}}>
+                  <label style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer',color:allFilteredSelected?G.orange:G.muted,fontWeight:allFilteredSelected?700:400}}>
+                    <input type="checkbox" checked={allFilteredSelected} onChange={e=>{
+                      if (e.target.checked) selectAllInList(filtered)
+                      else deselectAllInList(filtered)
+                    }} style={{accentColor:G.orange}}/>
+                    {allFilteredSelected ? `✓ Toate ${filtered.length} selectate` : `Selectează toate ${filtered.length}`}
+                  </label>
+                </span>
+              )}
             </div>
-            <div style={{flex:1,overflowY:'auto',padding:'8px 18px 18px'}}>
-              {!istoricOrdLoading && groups.length===0 && (
+            <div style={{flex:1,overflowY:'auto',padding:'8px 18px ' + (totalSelected > 0 ? '70px' : '18px')}}>
+              {!istoricOrdLoading && months.length===0 && (
                 <div style={{padding:60,textAlign:'center',color:G.muted,fontSize:13}}>
                   {istoricOrd.length===0 ? '🗂️ Nu există ordine arhivate încă' : '🔍 Niciun rezultat pentru filtrele curente'}
                 </div>
               )}
-              {groups.map(g => (
-                <div key={`${g.period_from}__${g.period_to}`} style={{marginTop:12}}>
-                  <div style={{padding:'8px 12px',background:'#1C2128',borderRadius:6,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                    <div style={{fontSize:13,fontWeight:700,color:G.blue}}>
-                      📅 {new Date(g.period_from).toLocaleDateString('ro-RO')} — {new Date(g.period_to).toLocaleDateString('ro-RO')}
+              {months.map(m => {
+                const isExpanded = istoricOrdExpanded.has(m.monthKey)
+                const monthSelected = m.allIds.every(id => istoricOrdSelected.has(id))
+                const monthPartialSelected = !monthSelected && m.allIds.some(id => istoricOrdSelected.has(id))
+                const periodeArr = Object.values(m.periodeGroups).sort((a,b) => b.period_from.localeCompare(a.period_from))
+                return (
+                <div key={m.monthKey} style={{marginTop:10,border:`1px solid ${isExpanded?G.orange+'66':G.border}`,borderRadius:8,overflow:'hidden',transition:'border-color .15s'}}>
+                  <div style={{padding:'12px 14px',display:'flex',justifyContent:'space-between',alignItems:'center',background:isExpanded?G.orange+'11':'#1C2128',gap:10,flexWrap:'wrap'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',flex:1}} onClick={()=>toggleMonthExpanded(m.monthKey)}>
+                      <span style={{fontSize:14,color:isExpanded?G.orange:G.muted,transition:'transform .15s',transform:isExpanded?'rotate(0deg)':'rotate(-90deg)',display:'inline-block'}}>▼</span>
+                      <span style={{fontSize:14,fontWeight:700,color:G.blue}}>📅 {m.monthLabel}</span>
+                      <span style={{fontSize:11,color:G.muted}}>{m.totalOrders} ordine · {periodeArr.length} {periodeArr.length===1?'perioadă':'perioade'}</span>
                     </div>
-                    <div style={{fontSize:11,color:G.muted}}>{g.items.length} ordine</div>
+                    <div style={{display:'flex',gap:14,alignItems:'center'}}>
+                      <span style={{fontSize:11,color:G.muted}}>📅 {m.totalZile} zile</span>
+                      <span style={{fontSize:13,fontWeight:700,color:G.green}}>{m.totalSum.toLocaleString('ro-RO',{minimumFractionDigits:2})} RON</span>
+                      {profile?.is_owner && (
+                        <label onClick={e=>e.stopPropagation()} style={{display:'flex',alignItems:'center',gap:5,cursor:'pointer',padding:'4px 8px',borderRadius:5,background:monthSelected?G.orange+'22':'transparent',fontSize:11,fontWeight:monthSelected?700:400,color:monthSelected?G.orange:G.muted}}>
+                          <input type="checkbox" checked={monthSelected} ref={el => { if(el) el.indeterminate = monthPartialSelected }} onChange={e=>{
+                            if (e.target.checked) selectAllInList(m.allIds.map(id=>({id})))
+                            else deselectAllInList(m.allIds.map(id=>({id})))
+                          }} style={{accentColor:G.orange}}/>
+                          {monthSelected ? '✓' : 'Sel.'} luna
+                        </label>
+                      )}
+                    </div>
                   </div>
-                  <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
-                    <thead><tr style={{background:G.bg,color:G.muted}}>
-                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600,width:90}}>Nr Ordin</th>
-                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Angajat</th>
-                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Funcție</th>
-                      <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:55}}>Zile</th>
-                      <th style={{padding:'6px 8px',textAlign:'right',fontWeight:600,width:90}}>Suma</th>
-                      <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Generat la</th>
-                      <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:120}}>Acțiuni</th>
-                    </tr></thead>
-                    <tbody>
-                      {g.items.map((r,i) => (
-                        <tr key={r.id} style={{background:i%2===0?'transparent':'#1C2128',borderBottom:`1px solid ${G.border}33`}}>
-                          <td style={{padding:'7px 8px',fontWeight:700,color:G.orange,fontSize:11,fontFamily:'monospace'}}>{r.numar_ordin || '—'}</td>
-                          <td style={{padding:'7px 8px',fontWeight:600}}>{r.employees?.name || `#${r.employee_id}`}</td>
-                          <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{r.employees?.functie || '—'}</td>
-                          <td style={{padding:'7px 8px',textAlign:'center',color:G.blue}}>{r.zile_lucrate || 0}</td>
-                          <td style={{padding:'7px 8px',textAlign:'right',color:G.green,fontWeight:700}}>{Number(r.suma_totala || 0).toLocaleString('ro-RO',{minimumFractionDigits:2})} RON</td>
-                          <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{new Date(r.created_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
-                          <td style={{padding:'7px 8px',textAlign:'center'}}>
-                            <button onClick={()=>openIstoricOrdPDF(r)} style={{background:'none',border:`1px solid ${G.blue}66`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.blue,fontSize:11,marginRight:4}} title="Deschide PDF">📄 Vezi</button>
-                            {profile?.is_owner && (
-                              <button onClick={()=>deleteIstoricOrd(r)} style={{background:'none',border:`1px solid ${G.red}44`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.red,fontSize:11}} title="Șterge din arhivă (doar owner)">🗑️</button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {isExpanded && (
+                    <div style={{padding:'10px 14px',background:'#0D1117'}}>
+                      {periodeArr.map(g => {
+                        const groupIds = g.items.map(it => it.id)
+                        const groupSelected = groupIds.every(id => istoricOrdSelected.has(id))
+                        const groupPartial = !groupSelected && groupIds.some(id => istoricOrdSelected.has(id))
+                        return (
+                        <div key={`${g.period_from}__${g.period_to}`} style={{marginBottom:14}}>
+                          <div style={{padding:'7px 12px',background:'#1C2128',borderRadius:6,marginBottom:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                            <div style={{display:'flex',alignItems:'center',gap:10}}>
+                              {profile?.is_owner && (
+                                <input type="checkbox" checked={groupSelected} ref={el => { if(el) el.indeterminate = groupPartial }} onChange={e=>{
+                                  if (e.target.checked) selectAllInList(g.items)
+                                  else deselectAllInList(g.items)
+                                }} style={{accentColor:G.orange}} title="Selectează toate din această perioadă"/>
+                              )}
+                              <div style={{fontSize:12,fontWeight:700,color:G.blue}}>
+                                {new Date(g.period_from).toLocaleDateString('ro-RO')} — {new Date(g.period_to).toLocaleDateString('ro-RO')}
+                              </div>
+                            </div>
+                            <div style={{fontSize:11,color:G.muted}}>{g.items.length} ordine</div>
+                          </div>
+                          <table style={{width:'100%',fontSize:12,borderCollapse:'collapse'}}>
+                            <thead><tr style={{background:G.bg,color:G.muted}}>
+                              {profile?.is_owner && <th style={{padding:'6px 4px',width:30}}></th>}
+                              <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600,width:90}}>Nr Ordin</th>
+                              <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Angajat</th>
+                              <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Funcție</th>
+                              <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:55}}>Zile</th>
+                              <th style={{padding:'6px 8px',textAlign:'right',fontWeight:600,width:90}}>Suma</th>
+                              <th style={{padding:'6px 8px',textAlign:'left',fontWeight:600}}>Generat la</th>
+                              <th style={{padding:'6px 8px',textAlign:'center',fontWeight:600,width:120}}>Acțiuni</th>
+                            </tr></thead>
+                            <tbody>
+                              {g.items.map((r,i) => {
+                                const isSel = istoricOrdSelected.has(r.id)
+                                return (
+                                <tr key={r.id} style={{background:isSel?G.orange+'18':(i%2===0?'transparent':'#1C2128'),borderBottom:`1px solid ${G.border}33`}}>
+                                  {profile?.is_owner && (
+                                    <td style={{padding:'7px 4px',textAlign:'center'}}>
+                                      <input type="checkbox" checked={isSel} onChange={()=>toggleSelectOrd(r.id)} style={{accentColor:G.orange}}/>
+                                    </td>
+                                  )}
+                                  <td style={{padding:'7px 8px',fontWeight:700,color:G.orange,fontSize:11,fontFamily:'monospace'}}>{r.numar_ordin || '—'}</td>
+                                  <td style={{padding:'7px 8px',fontWeight:600}}>{r.employees?.name || `#${r.employee_id}`}</td>
+                                  <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{r.employees?.functie || '—'}</td>
+                                  <td style={{padding:'7px 8px',textAlign:'center',color:G.blue}}>{r.zile_lucrate || 0}</td>
+                                  <td style={{padding:'7px 8px',textAlign:'right',color:G.green,fontWeight:700}}>{Number(r.suma_totala || 0).toLocaleString('ro-RO',{minimumFractionDigits:2})} RON</td>
+                                  <td style={{padding:'7px 8px',color:G.muted,fontSize:11}}>{new Date(r.created_at).toLocaleString('ro-RO',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+                                  <td style={{padding:'7px 8px',textAlign:'center'}}>
+                                    <button onClick={()=>openIstoricOrdPDF(r)} style={{background:'none',border:`1px solid ${G.blue}66`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.blue,fontSize:11,marginRight:4}} title="Deschide PDF">📄 Vezi</button>
+                                    {profile?.is_owner && (
+                                      <button onClick={()=>deleteIstoricOrd(r)} style={{background:'none',border:`1px solid ${G.red}44`,borderRadius:5,padding:'3px 9px',cursor:'pointer',color:G.red,fontSize:11}} title="Șterge din arhivă (doar owner)">🗑️</button>
+                                    )}
+                                  </td>
+                                </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
+            {/* Floating bulk action bar (Etapa 7.5 Faza 3.4) */}
+            {profile?.is_owner && totalSelected > 0 && (
+              <div style={{position:'absolute',bottom:0,left:0,right:0,padding:'12px 18px',background:'#1C2128',borderTop:`2px solid ${G.orange}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,borderRadius:'0 0 8px 8px'}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <span style={{fontSize:13,fontWeight:700,color:G.orange}}>✓ {totalSelected} ordin{totalSelected===1?'':'e'} selectat{totalSelected===1?'':'e'}</span>
+                  <button onClick={()=>setIstoricOrdSelected(new Set())} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>✕ Deselectează tot</button>
+                </div>
+                <button onClick={bulkDeleteOrd} disabled={bulkDeletingOrd} style={{...S.btnP,background:G.red,fontSize:12,padding:'8px 16px',opacity:bulkDeletingOrd?.5:1}}>
+                  {bulkDeletingOrd ? '⏳ Se șterge...' : `🗑️ Șterge ${totalSelected} selectat${totalSelected===1?'':'e'}`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
         )
@@ -5138,6 +5380,98 @@ function ReportsPage() {
           </div>
         </div>
       )}
+
+      {/* Notificare Ordine Lipsă/Overdue (Etapa 7.5 Faza 3.2) */}
+      {!ordineLipsaDismissed && ordineLipsa.length > 0 && (() => {
+        const overdueList = ordineLipsa.filter(x => x.status === 'overdue')
+        const pendingList = ordineLipsa.filter(x => x.status === 'pending')
+        const hasOverdue = overdueList.length > 0
+        const accent = hasOverdue ? G.red : G.orange
+        const bg = hasOverdue ? '#3D1A1A' : '#3D2A0A'
+        const fmtDate = (s) => new Date(s).toLocaleDateString('ro-RO')
+        const monthName = (s) => new Date(s + 'T12:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })
+        const openGenForPayment = async (payment_id) => {
+          const { data: payment, error } = await supabase.from('diurna_payments').select('*').eq('id', payment_id).maybeSingle()
+          if (error || !payment) { showToast('Eroare deschidere plată: ' + (error?.message || 'inexistentă'), 'error'); return }
+          openOrdGen(payment)
+        }
+        return (
+          <div style={{
+            background: bg,
+            border: `2px solid ${accent}`,
+            borderRadius: 10,
+            marginBottom: 16,
+            padding: '12px 16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <span style={{fontSize:22}}>{hasOverdue ? '🚨' : '⚠️'}</span>
+                <div>
+                  <div style={{fontSize:14,fontWeight:800,color:accent}}>
+                    {hasOverdue 
+                      ? `Ordine de deplasare DEPĂȘITE termen (${overdueList.length} ${overdueList.length===1?'plată':'plăți'})`
+                      : `Ordine de deplasare de generat (${pendingList.length} ${pendingList.length===1?'plată':'plăți'})`}
+                  </div>
+                  <div style={{fontSize:11,color:G.muted,marginTop:2}}>
+                    {hasOverdue && `${overdueList.length} ${overdueList.length===1?'plată depășită':'plăți depășite'} termen.`}
+                    {hasOverdue && pendingList.length > 0 && ' '}
+                    {pendingList.length > 0 && `${pendingList.length} în fereastră (1-7 ${monthName(pendingList[0].period_from).split(' ')[0]} viitor).`}
+                  </div>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <button onClick={()=>setOrdineLipsaExpanded(!ordineLipsaExpanded)} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>
+                  {ordineLipsaExpanded ? '▲ Ascunde' : '▼ Detalii'}
+                </button>
+                <button onClick={()=>setOrdineLipsaDismissed(true)} title="Ascunde până la următorul refresh" style={{background:'none',border:`1px solid ${G.muted}44`,borderRadius:6,padding:'5px 8px',cursor:'pointer',color:G.muted,fontSize:11}}>✕</button>
+              </div>
+            </div>
+            {ordineLipsaExpanded && (
+              <div style={{marginTop:4,borderTop:`1px solid ${accent}44`,paddingTop:10}}>
+                <table style={{width:'100%',fontSize:11,borderCollapse:'collapse'}}>
+                  <thead>
+                    <tr style={{color:G.muted}}>
+                      <th style={{padding:'4px 6px',textAlign:'left',fontWeight:600}}>Status</th>
+                      <th style={{padding:'4px 6px',textAlign:'left',fontWeight:600}}>Perioada</th>
+                      <th style={{padding:'4px 6px',textAlign:'center',fontWeight:600}}>Angajați</th>
+                      <th style={{padding:'4px 6px',textAlign:'center',fontWeight:600}}>Arhivate</th>
+                      <th style={{padding:'4px 6px',textAlign:'center',fontWeight:600}}>Lipsă</th>
+                      <th style={{padding:'4px 6px',textAlign:'left',fontWeight:600}}>Deadline</th>
+                      <th style={{padding:'4px 6px',textAlign:'center',fontWeight:600,width:170}}>Acțiune</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ordineLipsa.map(r => {
+                      const isOver = r.status === 'overdue'
+                      const cAccent = isOver ? G.red : G.orange
+                      return (
+                        <tr key={r.payment_id} style={{borderTop:`1px solid ${G.border}33`}}>
+                          <td style={{padding:'6px 6px'}}>
+                            <span style={{padding:'2px 8px',borderRadius:10,background:cAccent+'33',color:cAccent,fontSize:10,fontWeight:700}}>
+                              {isOver ? `🔴 OVERDUE +${r.zile_depasire}z` : '🟠 PENDING'}
+                            </span>
+                          </td>
+                          <td style={{padding:'6px 6px',fontWeight:600}}>{fmtDate(r.period_from)} – {fmtDate(r.period_to)}</td>
+                          <td style={{padding:'6px 6px',textAlign:'center'}}>{r.angajati_cu_zile}</td>
+                          <td style={{padding:'6px 6px',textAlign:'center',color:G.green}}>{r.ordine_arhivate}</td>
+                          <td style={{padding:'6px 6px',textAlign:'center',color:cAccent,fontWeight:700}}>{r.ordine_lipsa}</td>
+                          <td style={{padding:'6px 6px',color:G.muted}}>{fmtDate(r.deadline_generare)}</td>
+                          <td style={{padding:'6px 6px',textAlign:'center'}}>
+                            <button onClick={()=>openGenForPayment(r.payment_id)} style={{...S.btnP,background:cAccent,fontSize:10,padding:'4px 10px'}} title="Deschide Generator Ordin pentru această plată">📄 Generează acum</button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Export Diurne + Supliment Hrana */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
