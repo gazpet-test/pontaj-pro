@@ -2476,8 +2476,9 @@ function ReportsPage() {
       try {
         for (let idx = 0; idx < selected.length; idx++) {
           const emp = selected[idx]
-          // Titular semnătură (lookup direct pe id)
-          const sigTitular = await getSigDataURLByEmpId(emp.id)
+          // Titular semnătură (lookup direct pe employee_id)
+          // FIX 15.05.2026: era emp.id (undefined) - structura ordGenEmps folosește employee_id
+          const sigTitular = await getSigDataURLByEmpId(emp.employee_id)
           
           const allDays = emp.allDays || []
           
@@ -2511,7 +2512,7 @@ function ReportsPage() {
           const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
           const filename = `Ordin_Deplasare_${safeName}_${ordGenPayment.period_from}_${ordGenPayment.period_to}.pdf`
           zip.file(filename, pdfBlob)
-          archiveQueue.push({ emp, pdfBlob, filename, sigTitularPath: sigPathByEmpId[emp.id] || null })
+          archiveQueue.push({ emp, pdfBlob, filename, sigTitularPath: sigPathByEmpId[emp.employee_id] || null })
           
           setOrdGenProgress({ done: idx + 1, total: selected.length })
         }
@@ -2543,17 +2544,17 @@ function ReportsPage() {
       const arhivareResults = await Promise.allSettled(
         archiveQueue.map(async ({ emp, pdfBlob, filename, sigTitularPath }) => {
           const uuid8 = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36)).replace(/-/g,'').substring(0, 8)
-          const storagePath = `${folderPath}/${emp.id}_${uuid8}.pdf`
+          const storagePath = `${folderPath}/${emp.employee_id}_${uuid8}.pdf`
           const { error: upErr } = await supabase.storage
             .from('ordine-deplasare-pdf')
             .upload(storagePath, pdfBlob, { contentType: 'application/pdf', upsert: false })
           if (upErr) throw new Error(`Upload ${emp.name}: ${upErr.message}`)
           const semnaturi = {
             ...snapshotBase,
-            titular: { nume: emp.name, employee_id: emp.id, semnatura_path: sigTitularPath },
+            titular: { nume: emp.name, employee_id: emp.employee_id, semnatura_path: sigTitularPath },
           }
           const { error: insErr } = await supabase.from('ordine_deplasare_arhiva').insert({
-            employee_id: emp.id,
+            employee_id: emp.employee_id,
             period_from: ordGenPayment.period_from,
             period_to: ordGenPayment.period_to,
             pdf_path: storagePath,
