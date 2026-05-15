@@ -1975,8 +1975,9 @@ function ReportsPage() {
 
       // Calendar legal days
       const { data: calData } = await supabase.from('calendar_days')
-        .select('date,type').gte('date', monthStart).lte('date', monthEnd)
+        .select('date,type,description').gte('date', monthStart).lte('date', monthEnd)
       const legalSet = new Set((calData || []).filter(x => x.type === 'legal').map(x => x.date))
+      const legalNameMap = new Map((calData || []).filter(x => x.type === 'legal').map(x => [x.date, x.description || '']))
 
       // Calc work-day sets + counters
       const workDaySet = new Set()
@@ -2088,6 +2089,29 @@ function ReportsPage() {
         // Departament: același pattern (departament_hr nou, department vechi)
         const deptRaw = empDet.departament_hr || empDet.department || null
 
+        // FIX 15.05.2026: construire allDays per angajat (schema așteptată de buildOrdinHTML)
+        // Pattern identic cu generateOrdine (xlsx) dar cu câmpuri suplimentare pentru PDF
+        const allDaysForEmp = []
+        const distMapPdf = new Map(netDays.slice(0, diurnaMax).map(r => [r.date, r]))
+        const pDStart = new Date(periodFrom)
+        const pDEnd = new Date(periodTo)
+        const dItPdf = new Date(pDStart)
+        while (dItPdf <= pDEnd) {
+          const ds = dItPdf.toISOString().split('T')[0]
+          const dow = dItPdf.getDay()
+          const isWeekend = dow === 0 || dow === 6
+          const isLegal = legalSet.has(ds)
+          const recPdf = distMapPdf.get(ds)
+          allDaysForEmp.push({
+            date: ds,
+            is_weekend: isWeekend,
+            is_legal: isLegal,
+            legal_name: isLegal ? (legalNameMap.get(ds) || '') : '',
+            shantier_name: recPdf ? (recPdf.sites?.name || 'Nealocate') : '',
+          })
+          dItPdf.setDate(dItPdf.getDate() + 1)
+        }
+
         return {
           employee_id: d.employee_id,
           name: d.employee_name,
@@ -2097,6 +2121,7 @@ function ReportsPage() {
           days_real: d.days,
           diurna_max: diurnaMax,
           diurna_records: netDays,
+          allDays: allDaysForEmp,
           santiere_list: santiereList,
           selected: diurnaMax > 0,  // bifați automat doar cei cu zile > 0
         }
@@ -2169,10 +2194,14 @@ function ReportsPage() {
     
     const numeAng = esc(emp.name)
     const functieAng = esc(emp.functie || '—')
-    const ziluLcrate = allDays.filter(d => d.shantier_name && !d.is_weekend && !d.is_legal).length
-    const zileTotal = ordGenPayment?.diurna_zile || allDays.filter(d => d.shantier_name && !d.is_weekend && !d.is_legal).length
-    const diurnaMax = emp.diurna_max || 0
-    const totalChelt = (zileTotal * diurnaMax).toFixed(2)
+    // FIX 15.05.2026: confuzie semantică între ZILE și SUMA PE ZI
+    // ziluLcrate = numărul de zile cu șantier alocat (excl. WE/sărbători)
+    // Fallback la emp.diurna_max (= numărul de zile cascade) dacă allDays e gol din motive vechi
+    const zileDinAllDays = allDays.filter(d => d.shantier_name && !d.is_weekend && !d.is_legal).length
+    const ziluLcrate = zileDinAllDays || (emp.diurna_max || 0)
+    const zileTotal = ziluLcrate
+    const diurnaPerZi = Number(diurnaAmt) || 0  // SUMA pe zi din settings (din scope ReportsPage prin closure)
+    const totalChelt = (zileTotal * diurnaPerZi).toFixed(2)
     
     const A4_W = 794   // 210mm @ 96 DPI
     const A4_H = 1123  // 297mm @ 96 DPI
@@ -2261,7 +2290,7 @@ function ReportsPage() {
           <tr>
             <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">1.</td>
             <td colspan="3" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;text-align:left;">Diurnă internă</td>
-            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">${diurnaMax.toFixed(2)} lei</td>
+            <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">${diurnaPerZi.toFixed(2)} lei</td>
             <td colspan="1" style="padding:4px;border-right:1px solid #ccc;border-top:1px solid #ccc;">${zileTotal} zile</td>
             <td colspan="2" style="padding:4px;border-top:1px solid #ccc;font-weight:700;">${totalChelt} lei</td>
           </tr>
