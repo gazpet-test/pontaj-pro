@@ -7,6 +7,7 @@ import LogisticaPage from './Logistica.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
+import ChatbotWidget from './ChatbotWidget.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -1293,10 +1294,6 @@ function ReportsPage() {
   const [istoricOrdExpanded, setIstoricOrdExpanded] = useState(new Set()) // chei luni expanded (YYYY-MM)
   const [istoricOrdSelected, setIstoricOrdSelected] = useState(new Set()) // id-uri ordine selectate
   const [bulkDeletingOrd, setBulkDeletingOrd] = useState(false)
-  // Curățenie automată (Etapa 7.5 Faza 3.5)
-  const [showCuratenieOrd, setShowCuratenieOrd] = useState(false)
-  const [curatenieLuni, setCuratenieLuni] = useState(24)
-  const [curateniLoading, setCuratenieLoading] = useState(false)
   // Registru Ordine (jurnal contabil)
   const [showRegistruOrd, setShowRegistruOrd] = useState(false)
   const [registruOrdMonth, setRegistruOrdMonth] = useState('')
@@ -1936,58 +1933,6 @@ function ReportsPage() {
       showToast('Eroare bulk delete: ' + (e?.message || e), 'error')
     } finally {
       setBulkDeletingOrd(false)
-    }
-  }
-
-  // Curățenie automată ordine vechi (Etapa 7.5 Faza 3.5)
-  const getCuratenieCandidati = () => {
-    const cutoff = new Date()
-    cutoff.setMonth(cutoff.getMonth() - curatenieLuni)
-    const cutoffISO = cutoff.toISOString().split('T')[0]
-    return istoricOrd.filter(r => (r.data_emiterii || r.period_from) < cutoffISO)
-  }
-
-  const executaCuratenie = async () => {
-    if (!profile?.is_owner) { showToast('Doar owner-ii pot face curățenie', 'warn'); return }
-    const candidati = getCuratenieCandidati()
-    if (candidati.length === 0) { showToast('Niciun ordin de șters cu setarea curentă', 'warn'); return }
-    const totalMB = (candidati.reduce((s, r) => s + (Number(r.pdf_size_bytes) || 0), 0) / 1024 / 1024).toFixed(1)
-    const cutoff = new Date()
-    cutoff.setMonth(cutoff.getMonth() - curatenieLuni)
-    const cutoffFmt = cutoff.toLocaleDateString('ro-RO')
-    if (!window.confirm(
-      `🧹 CURĂȚENIE ORDINE DEPLASARE > ${curatenieLuni} LUNI\n\n` +
-      `Vor fi șterse ${candidati.length} ordine emise înainte de ${cutoffFmt}.\n` +
-      `Spațiu eliberat: ~${totalMB} MB\n\n` +
-      `⚠ ACȚIUNEA E IREVERSIBILĂ:\n` +
-      `  • PDF-urile dispar din Storage\n` +
-      `  • Înregistrările dispar din BD\n` +
-      `  • NU pot fi recuperate\n\n` +
-      `Continui?`
-    )) return
-    setCuratenieLoading(true)
-    try {
-      const idsToDelete = candidati.map(c => c.id)
-      const paths = candidati.map(c => c.pdf_path).filter(Boolean)
-      // Storage delete în chunks de 100
-      const chunkSize = 100
-      for (let i = 0; i < paths.length; i += chunkSize) {
-        const chunk = paths.slice(i, i + chunkSize)
-        const { error: stErr } = await supabase.storage.from('ordine-deplasare-pdf').remove(chunk)
-        if (stErr) console.warn(`Storage curățenie chunk ${i}:`, stErr)
-      }
-      // DB delete bulk
-      const { error: dbErr } = await supabase.from('ordine_deplasare_arhiva').delete().in('id', idsToDelete)
-      if (dbErr) throw dbErr
-      showToast(`✓ Curățenie completă: ${candidati.length} ordine ștearse, ~${totalMB} MB eliberați`)
-      setShowCuratenieOrd(false)
-      await loadIstoricOrd()
-      loadOrdineLipsa()
-    } catch (e) {
-      console.error('executaCuratenie err:', e)
-      showToast('Eroare curățenie: ' + (e?.message || e), 'error')
-    } finally {
-      setCuratenieLoading(false)
     }
   }
 
@@ -2918,18 +2863,15 @@ function ReportsPage() {
           const page1Elem = wrapper.querySelector('.pdf-page-1')
           const page2Elem = wrapper.querySelector('.pdf-page-2')
           
-          // Compresie PDF (Etapa 7.5 Faza 3.5 - 16.05.2026):
-          // scale 1.5 (de la 2) + JPEG 0.85 (de la PNG lossless) + jsPDF compress = ~50-60% size reduction
-          // Calitatea vizuală rămâne foarte bună la printare A4 (300+ DPI efectiv)
-          const canvasOpts = { scale: 1.5, useCORS: true, logging: false, background: '#fff' }
+          const canvasOpts = { scale: 2, useCORS: true, logging: false, background: '#fff' }
           const canvas1 = await html2canvas(page1Elem, canvasOpts)
           const canvas2 = await html2canvas(page2Elem, canvasOpts)
           
-          // jsPDF A4: 210 × 297mm cu compresie internă activată
-          const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true })
-          pdf.addImage(canvas1.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 210, 297, undefined, 'FAST')
+          // jsPDF A4: 210 × 297mm
+          const pdf = new jsPDF('p', 'mm', 'a4')
+          pdf.addImage(canvas1.toDataURL('image/png'), 'PNG', 0, 0, 210, 297, undefined, 'FAST')
           pdf.addPage()
-          pdf.addImage(canvas2.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 210, 297, undefined, 'FAST')
+          pdf.addImage(canvas2.toDataURL('image/png'), 'PNG', 0, 0, 210, 297, undefined, 'FAST')
           
           const pdfBlob = pdf.output('blob')
           const safeName = emp.name.replace(/[^a-zA-Z0-9_\-]/g, '_')
@@ -4635,9 +4577,6 @@ function ReportsPage() {
                 <input type="month" value={istoricOrdMonth} onChange={e=>setIstoricOrdMonth(e.target.value)} style={{...S.input,width:'auto',padding:'6px 10px',fontSize:12}} title="Filtru luna period_from"/>
                 {(istoricOrdSearch||istoricOrdMonth)&&<button onClick={()=>{setIstoricOrdSearch('');setIstoricOrdMonth('')}} style={{...S.btnS,fontSize:11,padding:'5px 10px'}}>✕ Reset</button>}
                 <button onClick={()=>setShowRegistruOrd(true)} style={{...S.btnP,background:G.blue,fontSize:12,padding:'6px 12px'}} title="Vezi registru contabil cu export Excel">📋 Registru</button>
-                {profile?.is_owner && (
-                  <button onClick={()=>setShowCuratenieOrd(true)} style={{...S.btnP,background:'#7B3D00',fontSize:12,padding:'6px 12px'}} title="Curățenie automată ordine vechi (doar owner)">🧹 Curățenie</button>
-                )}
                 <button onClick={()=>{setShowIstoricOrd(false);setIstoricOrdSel(null);setIstoricOrdSelected(new Set())}} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
               </div>
             </div>
@@ -4869,90 +4808,6 @@ function ReportsPage() {
             </div>
           </div>
         </div>
-        )
-      })()}
-
-      {/* Curățenie automată ordine vechi (Etapa 7.5 Faza 3.5) */}
-      {showCuratenieOrd && profile?.is_owner && (() => {
-        const candidati = getCuratenieCandidati()
-        const totalMB = (candidati.reduce((s, r) => s + (Number(r.pdf_size_bytes) || 0), 0) / 1024 / 1024).toFixed(1)
-        const totalSum = candidati.reduce((s, r) => s + (Number(r.suma_totala) || 0), 0)
-        const cutoff = new Date()
-        cutoff.setMonth(cutoff.getMonth() - curatenieLuni)
-        const cutoffFmt = cutoff.toLocaleDateString('ro-RO')
-        return (
-          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:220,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
-            <div style={{...S.card,width:560,maxHeight:'85vh',display:'flex',flexDirection:'column'}}>
-              <div style={{padding:'14px 18px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                <div style={{fontSize:15,fontWeight:800,color:'#FF9F40'}}>🧹 Curățenie Arhivă Ordine</div>
-                <button onClick={()=>setShowCuratenieOrd(false)} style={{background:'none',border:'none',color:G.muted,cursor:'pointer',fontSize:20}}>✕</button>
-              </div>
-              <div style={{padding:'18px',flex:1,overflowY:'auto'}}>
-                <div style={{fontSize:13,color:G.muted,marginBottom:14,lineHeight:1.5}}>
-                  Șterge ordinele vechi din arhivă pentru a elibera spațiu Storage. Recomandat <strong style={{color:G.text}}>24 luni</strong> (retenție legală standard pentru documente diurne).
-                </div>
-                <div style={{marginBottom:18}}>
-                  <div style={{fontSize:12,fontWeight:700,color:G.muted,marginBottom:8}}>Șterge ordine mai vechi de:</div>
-                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                    {[12, 18, 24, 36, 60].map(luni => (
-                      <button key={luni} onClick={()=>setCuratenieLuni(luni)} style={{
-                        padding:'8px 14px',
-                        borderRadius:8,
-                        border: `2px solid ${curatenieLuni===luni ? '#FF9F40' : G.border}`,
-                        background: curatenieLuni===luni ? '#FF9F4022' : 'transparent',
-                        color: curatenieLuni===luni ? '#FF9F40' : G.muted,
-                        cursor:'pointer',
-                        fontSize:12,
-                        fontWeight:700,
-                        fontFamily:'inherit',
-                      }}>
-                        {luni} luni{luni===24?' ⭐':''}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div style={{background:'#1C2128',padding:14,borderRadius:8,marginBottom:14}}>
-                  <div style={{fontSize:11,color:G.muted,marginBottom:8}}>📋 PREVIEW CURĂȚENIE:</div>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,fontSize:13}}>
-                    <div>
-                      <div style={{color:G.muted,fontSize:11}}>Vor fi șterse</div>
-                      <div style={{fontSize:22,fontWeight:800,color:candidati.length>0?'#FF9F40':G.green,marginTop:2}}>{candidati.length}</div>
-                      <div style={{color:G.muted,fontSize:11}}>ordine</div>
-                    </div>
-                    <div>
-                      <div style={{color:G.muted,fontSize:11}}>Spațiu eliberat</div>
-                      <div style={{fontSize:22,fontWeight:800,color:G.green,marginTop:2}}>{totalMB}</div>
-                      <div style={{color:G.muted,fontSize:11}}>MB Storage</div>
-                    </div>
-                  </div>
-                  <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${G.border}33`,fontSize:11,color:G.muted}}>
-                    <div>📅 Înainte de: <strong style={{color:G.text}}>{cutoffFmt}</strong></div>
-                    {candidati.length > 0 && (
-                      <div style={{marginTop:4}}>💰 Total ordine (referință): <strong style={{color:G.green}}>{totalSum.toLocaleString('ro-RO',{minimumFractionDigits:2})} RON</strong></div>
-                    )}
-                  </div>
-                </div>
-                {candidati.length > 0 ? (
-                  <div style={{background:'#3D1A1A',border:`1px solid ${G.red}66`,padding:12,borderRadius:6,fontSize:11,color:G.red,lineHeight:1.5}}>
-                    ⚠ <strong>ATENȚIE:</strong> Acțiunea e IREVERSIBILĂ. PDF-urile dispar din Storage și din BD. Asigură-te că ai backup dacă ai nevoie de istoricul fizic.
-                  </div>
-                ) : (
-                  <div style={{background:G.green+'22',border:`1px solid ${G.green}66`,padding:12,borderRadius:6,fontSize:11,color:G.green,lineHeight:1.5}}>
-                    ✓ Nu există ordine mai vechi de {curatenieLuni} luni. Arhiva e curată.
-                  </div>
-                )}
-              </div>
-              <div style={{padding:'14px 18px',borderTop:`1px solid ${G.border}`,display:'flex',justifyContent:'flex-end',gap:8}}>
-                <button onClick={()=>setShowCuratenieOrd(false)} style={{...S.btnS,fontSize:12,padding:'8px 16px'}}>Anulează</button>
-                <button 
-                  onClick={executaCuratenie} 
-                  disabled={candidati.length===0 || curateniLoading}
-                  style={{...S.btnP,background:candidati.length===0?G.muted:G.red,fontSize:12,padding:'8px 16px',opacity:(candidati.length===0||curateniLoading)?.5:1}}>
-                  {curateniLoading ? '⏳ Se șterge...' : `🗑️ Curăță ${candidati.length} definitiv`}
-                </button>
-              </div>
-            </div>
-          </div>
         )
       })()}
 
@@ -7262,6 +7117,16 @@ export function SalariiPage({ noExport = false } = {}) {
     </>) }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CHATBOT GATE - afișează ChatbotWidget DOAR pentru useri logați (cu profile)
+// ════════════════════════════════════════════════════════════════════════════
+function ChatbotWidgetGate() {
+  const { session, profile } = useAuth()
+  // NU afișa dacă: nu există sesiune SAU profilul nu s-a încărcat încă SAU pe pagina login
+  if (!session || !profile) return null
+  return <ChatbotWidget profile={profile} />
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -7278,6 +7143,7 @@ export default function App() {
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
+      <ChatbotWidgetGate />
     </AuthProvider>
   )
 }
