@@ -1,9 +1,9 @@
 // ════════════════════════════════════════════════════════════════════════════
 // CHATBOT GAZPET ERP v2 - WIDGET HELP IN-APP (Etapa 9, 16.05.2026)
 // ════════════════════════════════════════════════════════════════════════════
-// v2 schimbări:
+// v3 schimbări:
 //   - Mascotă custom „Inginerul" (SVG inline: cască galbenă + carte + zâmbet)
-//   - Font ~2x mai mare peste tot (13 → 18-20px)
+//   - Font 2.5x mai mare peste tot (13 → 19-20px) - Razvan still small in v2
 //   - Rate limit progresiv 20/10/5 cu badge vizibil + warning
 //   - Mesaje 429 (rate limit atins) afișate special
 // ════════════════════════════════════════════════════════════════════════════
@@ -24,7 +24,7 @@ const G = {
 
 // ════════ MASCOTA INGINERUL — SVG inline ════════════════════════════════════
 function InginerAvatar({ size = 'md', happy = true }) {
-  const px = size === 'sm' ? 28 : size === 'lg' ? 56 : 40
+  const px = size === 'sm' ? 32 : size === 'lg' ? 60 : 44
   return (
     <svg width={px} height={px} viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
       <defs>
@@ -287,8 +287,8 @@ export default function ChatbotWidget({ profile }) {
           position: 'fixed',
           bottom: 104,
           right: 24,
-          width: 'min(480px, calc(100vw - 32px))',
-          height: 'min(720px, calc(100vh - 140px))',
+          width: 'min(520px, calc(100vw - 32px))',
+          height: 'min(760px, calc(100vh - 140px))',
           background: G.surface,
           border: `1px solid ${G.border2}`,
           borderRadius: 16,
@@ -309,8 +309,8 @@ export default function ChatbotWidget({ profile }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <InginerAvatar size="md" />
               <div>
-                <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>Inginerul Gazpet</div>
-                <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: G.text }}>Inginerul Gazpet</div>
+                <div style={{ fontSize: 14, color: G.muted, marginTop: 2 }}>
                   Asistent AI · răspunde despre app
                 </div>
               </div>
@@ -325,8 +325,8 @@ export default function ChatbotWidget({ profile }) {
                   border: `1px solid ${G.border}`,
                   color: G.muted,
                   borderRadius: 6,
-                  padding: '5px 9px',
-                  fontSize: 14,
+                  padding: '6px 11px',
+                  fontSize: 17,
                   cursor: 'pointer',
                 }}>
                 🔄
@@ -338,11 +338,11 @@ export default function ChatbotWidget({ profile }) {
                   background: 'transparent',
                   border: 'none',
                   color: G.muted,
-                  fontSize: 26,
+                  fontSize: 30,
                   cursor: 'pointer',
                   lineHeight: 1,
                   padding: 0,
-                  width: 32,
+                  width: 36,
                 }}>
                 ×
               </button>
@@ -368,14 +368,14 @@ export default function ChatbotWidget({ profile }) {
               }}>
                 {m.role === 'user' ? (
                   <div style={{
-                    width: 36,
-                    height: 36,
+                    width: 40,
+                    height: 40,
                     borderRadius: '50%',
                     background: G.primary,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    fontSize: 16,
+                    fontSize: 18,
                     fontWeight: 800,
                     color: '#fff',
                     flexShrink: 0,
@@ -384,8 +384,8 @@ export default function ChatbotWidget({ profile }) {
                   </div>
                 ) : (
                   <div style={{
-                    width: 36,
-                    height: 36,
+                    width: 40,
+                    height: 40,
                     borderRadius: '50%',
                     background: m.isError ? G.red : (m.isRateLimit ? G.yellow + '33' : 'transparent'),
                     display: 'flex',
@@ -413,7 +413,7 @@ export default function ChatbotWidget({ profile }) {
                     m.role === 'user' ? G.primary + '44' : 
                     (m.isError ? G.red + '44' : (m.isRateLimit ? G.yellow + '55' : G.border))
                   }`,
-                  fontSize: 17,
+                  fontSize: 20,
                   lineHeight: 1.55,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
@@ -425,7 +425,7 @@ export default function ChatbotWidget({ profile }) {
             
             {loading && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0, overflow: 'hidden' }}>
+                <div style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0, overflow: 'hidden' }}>
                   <InginerAvatar size="sm" />
                 </div>
                 <div style={{
@@ -436,9 +436,9 @@ export default function ChatbotWidget({ profile }) {
                   display: 'flex',
                   gap: 7,
                 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out infinite both' }} />
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.2s infinite both' }} />
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.4s infinite both' }} />
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out infinite both' }} />
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.2s infinite both' }} />
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.4s infinite both' }} />
                 </div>
                 <style>{`@keyframes cb-pulse { 0%, 80%, 100% { opacity: 0.3 } 40% { opacity: 1 } }`}</style>
               </div>
@@ -446,7 +446,7 @@ export default function ChatbotWidget({ profile }) {
 
             {messages.length === 1 && !loading && (
               <div style={{ marginTop: 14 }}>
-                <div style={{ fontSize: 13, color: G.muted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.6px', fontWeight: 700 }}>
+                <div style={{ fontSize: 14, color: G.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.6px', fontWeight: 700 }}>
                   💡 Sugestii rapide:
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -459,9 +459,9 @@ export default function ChatbotWidget({ profile }) {
                         border: `1px solid ${G.border}`,
                         color: G.text,
                         textAlign: 'left',
-                        padding: '11px 14px',
+                        padding: '13px 16px',
                         borderRadius: 10,
-                        fontSize: 15,
+                        fontSize: 17,
                         cursor: 'pointer',
                         transition: 'all .15s',
                         fontWeight: 500,
@@ -497,11 +497,11 @@ export default function ChatbotWidget({ profile }) {
                   border: `1px solid ${G.border2}`,
                   color: G.text,
                   borderRadius: 10,
-                  padding: '11px 14px',
-                  fontSize: 16,
+                  padding: '13px 16px',
+                  fontSize: 19,
                   fontFamily: 'inherit',
                   resize: 'none',
-                  minHeight: 44,
+                  minHeight: 52,
                   maxHeight: 120,
                   outline: 'none',
                   opacity: loading ? 0.6 : 1,
@@ -518,18 +518,18 @@ export default function ChatbotWidget({ profile }) {
                   color: '#fff',
                   border: 'none',
                   borderRadius: 10,
-                  padding: '11px 18px',
-                  fontSize: 17,
+                  padding: '13px 20px',
+                  fontSize: 20,
                   fontWeight: 800,
                   cursor: (loading || !input.trim()) ? 'default' : 'pointer',
                   whiteSpace: 'nowrap',
                   transition: 'all .15s',
-                  minHeight: 44,
+                  minHeight: 52,
                 }}>
                 {loading ? '⏳' : '➤'}
               </button>
             </div>
-            <div style={{ fontSize: 11, color: G.dim, marginTop: 7, textAlign: 'center' }}>
+            <div style={{ fontSize: 13, color: G.dim, marginTop: 8, textAlign: 'center' }}>
               Enter = trimite · Shift+Enter = linie nouă · AI poate face greșeli
             </div>
           </div>
