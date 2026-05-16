@@ -384,7 +384,7 @@ export default function InternalChat({ profile }) {
           position: 'fixed',
           top: 64,
           right: 12,
-          width: 'min(720px, calc(100vw - 24px))',
+          width: 'min(820px, calc(100vw - 24px))',
           height: 'calc(100vh - 84px)',
           background: G.surface,
           border: `1px solid ${G.border2}`,
@@ -396,7 +396,7 @@ export default function InternalChat({ profile }) {
         }}>
           {/* SIDEBAR CHATS */}
           <div style={{
-            width: 240,
+            width: 270,
             background: G.bg,
             borderRight: `1px solid ${G.border}`,
             display: 'flex',
@@ -410,7 +410,7 @@ export default function InternalChat({ profile }) {
               alignItems: 'center',
               justifyContent: 'space-between',
             }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: G.text }}>Chat-uri</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>Chat-uri</div>
               <div style={{ display: 'flex', gap: 5 }}>
                 <button
                   onClick={() => setShowNewChatModal(true)}
@@ -461,36 +461,36 @@ export default function InternalChat({ profile }) {
                     borderLeft: activeChatId === c.id ? `3px solid ${G.primary}` : '3px solid transparent',
                     color: G.text,
                     textAlign: 'left',
-                    padding: '11px 13px',
+                    padding: '13px 14px',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 10,
+                    gap: 11,
                     transition: 'background .15s',
                   }}
                   onMouseEnter={e => { if (activeChatId !== c.id) e.currentTarget.style.background = G.border }}
                   onMouseLeave={e => { if (activeChatId !== c.id) e.currentTarget.style.background = 'transparent' }}
                 >
                   <div style={{
-                    width: 36, height: 36, borderRadius: '50%',
+                    width: 42, height: 42, borderRadius: '50%',
                     background: c.is_general ? G.primary : G.purple + '44',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 18, flexShrink: 0,
+                    fontSize: 22, flexShrink: 0,
                   }}>{c.avatar_emoji || '💬'}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
-                      fontSize: 13, fontWeight: 700, color: G.text,
+                      fontSize: 16, fontWeight: 700, color: G.text,
                       display: 'flex', alignItems: 'center', gap: 6,
                     }}>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {c.name}
                       </span>
                       {c.my_role === 'admin' && (
-                        <span style={{ fontSize: 9, color: G.yellow, fontWeight: 700 }}>👑</span>
+                        <span style={{ fontSize: 11, color: G.yellow, fontWeight: 700 }}>👑</span>
                       )}
                     </div>
                     <div style={{
-                      fontSize: 11, color: G.muted, marginTop: 1,
+                      fontSize: 13, color: G.muted, marginTop: 2,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
                       {c.last_message ? c.last_message : 'Niciun mesaj încă'}
@@ -502,9 +502,9 @@ export default function InternalChat({ profile }) {
                       color: '#fff',
                       borderRadius: 10,
                       padding: '2px 7px',
-                      fontSize: 10,
+                      fontSize: 12,
                       fontWeight: 800,
-                      minWidth: 18,
+                      minWidth: 22,
                       textAlign: 'center',
                     }}>{c.unread_count > 99 ? '99+' : c.unread_count}</span>
                   )}
@@ -516,7 +516,7 @@ export default function InternalChat({ profile }) {
             <div style={{
               padding: 10,
               borderTop: `1px solid ${G.border}`,
-              fontSize: 10,
+              fontSize: 12,
               color: G.dim,
               textAlign: 'center',
             }}>
@@ -538,14 +538,14 @@ export default function InternalChat({ profile }) {
                   background: `linear-gradient(135deg, ${G.primary}10, ${G.purple}10)`,
                 }}>
                   <div style={{
-                    width: 40, height: 40, borderRadius: '50%',
+                    width: 46, height: 46, borderRadius: '50%',
                     background: activeChat.is_general ? G.primary : G.purple + '44',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 20, flexShrink: 0,
+                    fontSize: 24, flexShrink: 0,
                   }}>{activeChat.avatar_emoji || '💬'}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>{activeChat.name}</div>
-                    <div style={{ fontSize: 11, color: G.muted, marginTop: 1 }}>
+                    <div style={{ fontSize: 19, fontWeight: 800, color: G.text }}>{activeChat.name}</div>
+                    <div style={{ fontSize: 13, color: G.muted, marginTop: 2 }}>
                       {activeChat.total_members} membri · {members.filter(m => m.member_role === 'admin').length} admini
                       {activeChat.my_role === 'admin' && <span style={{ color: G.yellow, marginLeft: 6 }}>· Tu ești ADMIN 👑</span>}
                     </div>
@@ -593,7 +593,7 @@ export default function InternalChat({ profile }) {
                     gap: 8,
                   }}>
                   {messages.length === 0 ? (
-                    <div style={{ textAlign: 'center', color: G.muted, fontSize: 14, marginTop: 40 }}>
+                    <div style={{ textAlign: 'center', color: G.muted, fontSize: 17, marginTop: 50 }}>
                       Niciun mesaj încă. Începe conversația! 👋
                     </div>
                   ) : messages.map((m, idx) => {
@@ -612,12 +612,12 @@ export default function InternalChat({ profile }) {
                         marginTop: showSender ? 4 : 0,
                       }}>
                         {/* Avatar - doar la primul mesaj din streak */}
-                        <div style={{ width: 32, flexShrink: 0 }}>
-                          {showSender && <Avatar name={senderName} userId={m.sender_id} size={32} />}
+                        <div style={{ width: 38, flexShrink: 0 }}>
+                          {showSender && <Avatar name={senderName} userId={m.sender_id} size={38} />}
                         </div>
                         <div style={{ maxWidth: '70%', display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
                           {showSender && !isOwn && (
-                            <div style={{ fontSize: 11, color: G.muted, marginBottom: 3, marginLeft: 4 }}>
+                            <div style={{ fontSize: 13, color: G.muted, marginBottom: 4, marginLeft: 4, fontWeight: 600 }}>
                               {senderName}
                             </div>
                           )}
@@ -627,14 +627,14 @@ export default function InternalChat({ profile }) {
                             background: isOwn ? G.primary : G.bg,
                             color: isOwn ? '#fff' : G.text,
                             border: isOwn ? 'none' : `1px solid ${G.border}`,
-                            fontSize: 15,
-                            lineHeight: 1.4,
+                            fontSize: 18,
+                            lineHeight: 1.45,
                             whiteSpace: 'pre-wrap',
                             wordBreak: 'break-word',
                           }}>
                             {m.content}
                           </div>
-                          <div style={{ fontSize: 9, color: G.dim, marginTop: 2, padding: '0 4px' }}>
+                          <div style={{ fontSize: 11, color: G.dim, marginTop: 3, padding: '0 4px' }}>
                             {formatTime(m.created_at)}
                             {m.edited_at && <span style={{ marginLeft: 4 }}>· editat</span>}
                           </div>
@@ -665,11 +665,11 @@ export default function InternalChat({ profile }) {
                         border: `1px solid ${G.border2}`,
                         color: G.text,
                         borderRadius: 8,
-                        padding: '10px 14px',
-                        fontSize: 15,
+                        padding: '12px 16px',
+                        fontSize: 18,
                         fontFamily: 'inherit',
                         resize: 'none',
-                        minHeight: 42,
+                        minHeight: 48,
                         maxHeight: 120,
                         outline: 'none',
                         opacity: sending ? 0.6 : 1,
@@ -686,17 +686,17 @@ export default function InternalChat({ profile }) {
                         color: '#fff',
                         border: 'none',
                         borderRadius: 8,
-                        padding: '10px 18px',
-                        fontSize: 16,
+                        padding: '12px 20px',
+                        fontSize: 19,
                         fontWeight: 800,
                         cursor: (sending || !input.trim()) ? 'default' : 'pointer',
                         whiteSpace: 'nowrap',
-                        minHeight: 42,
+                        minHeight: 48,
                       }}>
                       {sending ? '⏳' : '➤'}
                     </button>
                   </div>
-                  <div style={{ fontSize: 9, color: G.dim, marginTop: 5, textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: G.dim, marginTop: 6, textAlign: 'center' }}>
                     Enter = trimite · Shift+Enter = linie nouă
                   </div>
                 </div>
