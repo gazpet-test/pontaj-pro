@@ -1,12 +1,11 @@
 // ════════════════════════════════════════════════════════════════════════════
-// CHATBOT GAZPET ERP - WIDGET HELP IN-APP (Etapa 9, 16.05.2026)
+// CHATBOT GAZPET ERP v2 - WIDGET HELP IN-APP (Etapa 9, 16.05.2026)
 // ════════════════════════════════════════════════════════════════════════════
-// Floating button dreapta-jos → modal cu chat AI
-// Răspunde la întrebări gen "Unde apăs să introduc un contract?" / 
-// "Unde editez service-ul la un utilaj?"
-// 
-// Stack: React + Edge Function Supabase /functions/v1/chatbot + Claude Haiku 4.5
-// Cost estimat: ~$0.004 per mesaj (~$5-15/lună la trafic normal)
+// v2 schimbări:
+//   - Mascotă custom „Inginerul" (SVG inline: cască galbenă + carte + zâmbet)
+//   - Font ~2x mai mare peste tot (13 → 18-20px)
+//   - Rate limit progresiv 20/10/5 cu badge vizibil + warning
+//   - Mesaje 429 (rate limit atins) afișate special
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useRef, useEffect } from 'react'
@@ -18,12 +17,69 @@ const G = {
   blue: '#58A6FF', green: '#3FB950', red: '#F85149', yellow: '#D29922',
   purple: '#BC8CFF', orange: '#F0883E',
   primary: '#1F6FEB',
+  helmet: '#F5C518',
+  book: '#E66B3C',
+  skin: '#F4C99A',
 }
 
-// Markdown simplu inline (bold + cod + linie nouă)
+// ════════ MASCOTA INGINERUL — SVG inline ════════════════════════════════════
+function InginerAvatar({ size = 'md', happy = true }) {
+  const px = size === 'sm' ? 28 : size === 'lg' ? 56 : 40
+  return (
+    <svg width={px} height={px} viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{ display: 'block' }}>
+      <defs>
+        <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor={G.primary} />
+          <stop offset="100%" stopColor={G.purple} />
+        </linearGradient>
+      </defs>
+      <circle cx="50" cy="50" r="48" fill="url(#bgGrad)" />
+      
+      <ellipse cx="50" cy="48" rx="22" ry="24" fill={G.skin} stroke="#8B5A2B" strokeWidth="0.8" />
+      <path d="M 30 38 Q 28 50 32 58" stroke="#3D2817" strokeWidth="2" fill="none" strokeLinecap="round" />
+      <path d="M 70 38 Q 72 50 68 58" stroke="#3D2817" strokeWidth="2" fill="none" strokeLinecap="round" />
+      
+      <path d="M 25 36 Q 26 22 50 20 Q 74 22 75 36 L 78 38 L 22 38 Z" fill={G.helmet} stroke="#8B6F00" strokeWidth="1.2" />
+      <path d="M 49 21 L 51 21 L 51 35 L 49 35 Z" fill="#C99A00" />
+      <ellipse cx="50" cy="37" rx="28" ry="2.5" fill="#D4A600" />
+      
+      <circle cx="42" cy="50" r="5" fill="none" stroke="#1A1A1A" strokeWidth="1.5" />
+      <circle cx="58" cy="50" r="5" fill="none" stroke="#1A1A1A" strokeWidth="1.5" />
+      <path d="M 47 50 L 53 50" stroke="#1A1A1A" strokeWidth="1.5" />
+      <circle cx="40" cy="48" r="1.5" fill="#fff" opacity="0.6" />
+      <circle cx="56" cy="48" r="1.5" fill="#fff" opacity="0.6" />
+      <circle cx="42" cy="50.5" r="1.2" fill="#1A1A1A" />
+      <circle cx="58" cy="50.5" r="1.2" fill="#1A1A1A" />
+      
+      <path d="M 50 53 L 49 58 L 51 58 Z" fill="#D4A37D" />
+      
+      {happy ? (
+        <path d="M 43 63 Q 50 68 57 63" stroke="#8B3A1A" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+      ) : (
+        <path d="M 44 65 L 56 65" stroke="#8B3A1A" strokeWidth="1.8" strokeLinecap="round" />
+      )}
+      
+      <g transform="translate(63, 70) rotate(-15)">
+        <rect x="0" y="0" width="22" height="16" rx="1" fill={G.book} stroke="#7A2E10" strokeWidth="0.8" />
+        <rect x="2" y="2" width="9" height="12" fill="#FFF8DC" stroke="#8B6F47" strokeWidth="0.4" />
+        <rect x="11" y="2" width="9" height="12" fill="#FFF8DC" stroke="#8B6F47" strokeWidth="0.4" />
+        <line x1="3.5" y1="5" x2="9.5" y2="5" stroke="#7A6F4F" strokeWidth="0.4" />
+        <line x1="3.5" y1="7" x2="9.5" y2="7" stroke="#7A6F4F" strokeWidth="0.4" />
+        <line x1="3.5" y1="9" x2="9.5" y2="9" stroke="#7A6F4F" strokeWidth="0.4" />
+        <line x1="12.5" y1="5" x2="18.5" y2="5" stroke="#7A6F4F" strokeWidth="0.4" />
+        <line x1="12.5" y1="7" x2="18.5" y2="7" stroke="#7A6F4F" strokeWidth="0.4" />
+        <line x1="12.5" y1="9" x2="18.5" y2="9" stroke="#7A6F4F" strokeWidth="0.4" />
+        <line x1="11" y1="0" x2="11" y2="16" stroke="#5A1F08" strokeWidth="0.8" />
+      </g>
+      
+      <path d="M 30 76 Q 50 70 70 76 L 70 95 L 30 95 Z" fill={G.primary} stroke="#0D4FB8" strokeWidth="0.5" />
+      <path d="M 47 76 L 50 84 L 53 76 L 51 86 L 49 86 Z" fill={G.red} />
+    </svg>
+  )
+}
+
 function renderInline(text) {
   if (!text) return null
-  // Înlocuiesc **bold** cu <strong>
   const parts = []
   let lastIdx = 0
   const regex = /\*\*([^*]+)\*\*/g
@@ -38,65 +94,83 @@ function renderInline(text) {
   return parts
 }
 
-// Render mesaj asistent cu suport linie nouă + list numerotată
 function renderAssistantMessage(text) {
   if (!text) return null
   const lines = text.split('\n')
   return lines.map((line, i) => {
-    if (line.trim() === '') return <div key={i} style={{ height: 6 }} />
+    if (line.trim() === '') return <div key={i} style={{ height: 8 }} />
     return (
-      <div key={i} style={{ marginBottom: 3 }}>
+      <div key={i} style={{ marginBottom: 5 }}>
         {renderInline(line)}
       </div>
     )
   })
 }
 
+function TierBadge({ tier, remaining, limit }) {
+  if (!tier) return null
+  if (tier === 'owner_unlimited') {
+    return (
+      <span style={{
+        fontSize: 11, padding: '3px 9px', borderRadius: 10,
+        background: G.purple + '22', color: G.purple, fontWeight: 700,
+        border: `1px solid ${G.purple}44`,
+      }}>♾️ Unlimited</span>
+    )
+  }
+  const isLow = remaining <= 2
+  const color = isLow ? G.red : (remaining <= 5 ? G.yellow : G.green)
+  return (
+    <span style={{
+      fontSize: 11, padding: '3px 9px', borderRadius: 10,
+      background: color + '22', color: color, fontWeight: 700,
+      border: `1px solid ${color}44`,
+    }}>
+      {remaining}/{limit} azi
+    </span>
+  )
+}
+
 export default function ChatbotWidget({ profile }) {
   const [open, setOpen] = useState(false)
-  const [messages, setMessages] = useState([
-    {
+  const [messages, setMessages] = useState(() => {
+    const numePrenume = profile?.name ? profile.name.split(' ').slice(-1)[0] : ''
+    return [{
       role: 'assistant',
-      content: `Salut${profile?.full_name ? ' ' + profile.full_name.split(' ')[0] : ''}! 👋\n\nSunt asistentul Gazpet ERP. Întreabă-mă orice despre app: **"Unde adaug un utilaj?"**, **"Cum editez un service?"**, **"Cum scot un raport ITM?"** etc.`,
-    },
-  ])
+      content: `Salut${numePrenume ? ' ' + numePrenume : ''}! 👋\n\nSunt **Inginerul Gazpet** — asistentul tău AI pentru aplicație. Întreabă-mă orice despre app:\n\n• **"Unde adaug un utilaj?"**\n• **"Cum editez un service?"**\n• **"Cum scot un raport ITM?"**`,
+    }]
+  })
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+  const [rateLimit, setRateLimit] = useState(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
 
-  // Auto-scroll la sfârșit când vin mesaje noi
   useEffect(() => {
     if (open && messagesEndRef.current) {
       messagesEndRef.current.scrollTo({ top: messagesEndRef.current.scrollHeight, behavior: 'smooth' })
     }
   }, [messages, loading, open])
 
-  // Focus input când deschid
   useEffect(() => {
     if (open && inputRef.current) {
       setTimeout(() => inputRef.current?.focus(), 100)
     }
   }, [open])
 
-  const send = async () => {
-    const trimmed = input.trim()
-    if (!trimmed || loading) return
+  const send = async (overrideText) => {
+    const text = (overrideText !== undefined ? overrideText : input).trim()
+    if (!text || loading) return
     
-    const userMsg = { role: 'user', content: trimmed }
+    const userMsg = { role: 'user', content: text }
     setMessages(p => [...p, userMsg])
     setInput('')
     setLoading(true)
-    setError(null)
     
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        throw new Error('Nu ești logat. Reîncarcă pagina.')
-      }
+      if (!session) throw new Error('Nu ești logat. Reîncarcă pagina.')
       
-      // Trim history la ultimele 10 mesaje pentru tokens
       const historyForAPI = messages.slice(-10).filter(m => m.role !== 'system')
       
       const url = `${supabase.supabaseUrl}/functions/v1/chatbot`
@@ -108,7 +182,7 @@ export default function ChatbotWidget({ profile }) {
           'apikey': supabase.supabaseKey || '',
         },
         body: JSON.stringify({
-          message: trimmed,
+          message: text,
           history: historyForAPI,
           context: { 
             page: window.location.pathname + window.location.search,
@@ -119,23 +193,32 @@ export default function ChatbotWidget({ profile }) {
       
       const data = await resp.json()
       
+      if (resp.status === 429) {
+        setRateLimit({ limit: data.limit, remaining: 0, tier: data.tier })
+        setMessages(p => [...p, { 
+          role: 'assistant', 
+          content: `⏸️ ${data.message || 'Ai atins limita zilnică.'}\n\nLimite Gazpet:\n• Primele 100 întrebări: **20/zi**\n• După 100: **10/zi**\n• După 1000: **5/zi**\n\nLimita se resetează la miezul nopții. 🌙`,
+          isRateLimit: true,
+        }])
+        return
+      }
+      
       if (!resp.ok) {
         throw new Error(data.error || data.detail || `Eroare ${resp.status}`)
       }
       
-      const assistantMsg = { 
+      if (data.rate_limit) setRateLimit(data.rate_limit)
+      
+      setMessages(p => [...p, { 
         role: 'assistant', 
         content: data.message || 'Răspuns gol primit.',
-        usage: data.usage,
-      }
-      setMessages(p => [...p, assistantMsg])
+      }])
     } catch (e) {
       console.error('Chatbot error:', e)
       const errMsg = e.message || 'Eroare necunoscută'
-      setError(errMsg)
       setMessages(p => [...p, { 
         role: 'assistant', 
-        content: `⚠️ Eroare: ${errMsg}\n\nÎncearcă din nou peste câteva secunde. Dacă persistă, contactează administratorul.`,
+        content: `⚠️ ${errMsg}\n\nÎncearcă din nou peste câteva secunde.`,
         isError: true,
       }])
     } finally {
@@ -145,14 +228,12 @@ export default function ChatbotWidget({ profile }) {
   }
   
   const clearChat = () => {
-    if (!confirm('Începi o conversație nouă? Istoricul curent se va pierde.')) return
-    setMessages([
-      {
-        role: 'assistant',
-        content: `Salut din nou! 👋 Cu ce te ajut?`,
-      },
-    ])
-    setError(null)
+    if (!confirm('Conversație nouă? Istoricul curent se pierde.')) return
+    const numePrenume = profile?.name ? profile.name.split(' ').slice(-1)[0] : ''
+    setMessages([{
+      role: 'assistant',
+      content: `Salut din nou${numePrenume ? ' ' + numePrenume : ''}! 👋 Cu ce te ajut?`,
+    }])
   }
 
   const handleKeyDown = (e) => {
@@ -162,7 +243,6 @@ export default function ChatbotWidget({ profile }) {
     }
   }
 
-  // Sugestii rapide când e gol
   const quickPrompts = [
     'Unde adaug un utilaj nou?',
     'Cum editez o fișă de service?',
@@ -172,80 +252,71 @@ export default function ChatbotWidget({ profile }) {
 
   return (
     <>
-      {/* FLOATING BUTTON */}
       <button
         onClick={() => setOpen(!open)}
-        title={open ? 'Închide chat' : 'Asistent AI Gazpet ERP'}
+        title={open ? 'Închide chat' : 'Inginerul Gazpet — Asistent AI'}
         style={{
           position: 'fixed',
           bottom: 24,
           right: 24,
-          width: 60,
-          height: 60,
+          width: 70,
+          height: 70,
           borderRadius: '50%',
-          background: open ? G.red : `linear-gradient(135deg, ${G.primary}, ${G.purple})`,
+          background: open ? G.red : 'transparent',
           color: '#fff',
-          border: 'none',
-          boxShadow: '0 4px 20px rgba(0,0,0,.4), 0 2px 6px rgba(31,111,235,.3)',
+          border: open ? 'none' : `3px solid ${G.primary}`,
+          boxShadow: '0 6px 24px rgba(0,0,0,.45), 0 2px 8px rgba(31,111,235,.35)',
           cursor: 'pointer',
-          fontSize: 26,
+          fontSize: 32,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           zIndex: 9998,
           transition: 'all .2s',
+          padding: 0,
+          overflow: 'hidden',
         }}
         onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)' }}
         onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
       >
-        {open ? '×' : '💬'}
+        {open ? '×' : <InginerAvatar size="lg" />}
       </button>
 
-      {/* CHAT PANEL */}
       {open && (
         <div style={{
           position: 'fixed',
-          bottom: 96,
+          bottom: 104,
           right: 24,
-          width: 'min(420px, calc(100vw - 32px))',
-          height: 'min(640px, calc(100vh - 140px))',
+          width: 'min(480px, calc(100vw - 32px))',
+          height: 'min(720px, calc(100vh - 140px))',
           background: G.surface,
           border: `1px solid ${G.border2}`,
-          borderRadius: 14,
-          boxShadow: '0 20px 60px rgba(0,0,0,.6), 0 4px 20px rgba(0,0,0,.3)',
+          borderRadius: 16,
+          boxShadow: '0 24px 70px rgba(0,0,0,.65), 0 6px 24px rgba(0,0,0,.35)',
           display: 'flex',
           flexDirection: 'column',
           zIndex: 9997,
           overflow: 'hidden',
         }}>
-          {/* HEADER */}
           <div style={{
             padding: '14px 18px',
             borderBottom: `1px solid ${G.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            background: `linear-gradient(135deg, ${G.primary}11, ${G.purple}11)`,
+            background: `linear-gradient(135deg, ${G.primary}15, ${G.purple}15)`,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
-                width: 34,
-                height: 34,
-                borderRadius: '50%',
-                background: `linear-gradient(135deg, ${G.primary}, ${G.purple})`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 18,
-              }}>🤖</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <InginerAvatar size="md" />
               <div>
-                <div style={{ fontSize: 14, fontWeight: 800, color: G.text }}>Asistent Gazpet</div>
-                <div style={{ fontSize: 10, color: G.muted, marginTop: 1 }}>
-                  Powered by Claude · răspunde la întrebări despre app
+                <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>Inginerul Gazpet</div>
+                <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
+                  Asistent AI · răspunde despre app
                 </div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {rateLimit && <TierBadge {...rateLimit} />}
               <button 
                 onClick={clearChat}
                 title="Conversație nouă"
@@ -254,8 +325,8 @@ export default function ChatbotWidget({ profile }) {
                   border: `1px solid ${G.border}`,
                   color: G.muted,
                   borderRadius: 6,
-                  padding: '4px 8px',
-                  fontSize: 12,
+                  padding: '5px 9px',
+                  fontSize: 14,
                   cursor: 'pointer',
                 }}>
                 🔄
@@ -267,61 +338,83 @@ export default function ChatbotWidget({ profile }) {
                   background: 'transparent',
                   border: 'none',
                   color: G.muted,
-                  fontSize: 22,
+                  fontSize: 26,
                   cursor: 'pointer',
                   lineHeight: 1,
                   padding: 0,
-                  width: 28,
+                  width: 32,
                 }}>
                 ×
               </button>
             </div>
           </div>
 
-          {/* MESSAGES */}
           <div 
             ref={messagesEndRef}
             style={{
               flex: 1,
               overflowY: 'auto',
-              padding: '14px 16px',
+              padding: '16px 18px',
               display: 'flex',
               flexDirection: 'column',
-              gap: 10,
+              gap: 12,
             }}>
             {messages.map((m, i) => (
               <div key={i} style={{
                 display: 'flex',
                 flexDirection: m.role === 'user' ? 'row-reverse' : 'row',
                 alignItems: 'flex-start',
-                gap: 8,
+                gap: 10,
               }}>
-                {/* Avatar */}
+                {m.role === 'user' ? (
+                  <div style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: '50%',
+                    background: G.primary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 16,
+                    fontWeight: 800,
+                    color: '#fff',
+                    flexShrink: 0,
+                  }}>
+                    {profile?.name?.[0]?.toUpperCase() || 'U'}
+                  </div>
+                ) : (
+                  <div style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: '50%',
+                    background: m.isError ? G.red : (m.isRateLimit ? G.yellow + '33' : 'transparent'),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    overflow: 'hidden',
+                  }}>
+                    {m.isError ? (
+                      <span style={{ fontSize: 18, color: '#fff', fontWeight: 800 }}>!</span>
+                    ) : m.isRateLimit ? (
+                      <span style={{ fontSize: 18 }}>⏸️</span>
+                    ) : (
+                      <InginerAvatar size="sm" happy={!m.isError} />
+                    )}
+                  </div>
+                )}
                 <div style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
-                  background: m.role === 'user' ? G.primary : (m.isError ? G.red : `linear-gradient(135deg, ${G.primary}, ${G.purple})`),
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 13,
-                  fontWeight: 800,
-                  color: '#fff',
-                  flexShrink: 0,
-                }}>
-                  {m.role === 'user' ? (profile?.full_name?.[0]?.toUpperCase() || 'U') : (m.isError ? '!' : '🤖')}
-                </div>
-                {/* Bubble */}
-                <div style={{
-                  maxWidth: 'calc(100% - 44px)',
-                  padding: '8px 12px',
-                  borderRadius: 12,
-                  background: m.role === 'user' ? G.primary + '22' : G.bg,
+                  maxWidth: 'calc(100% - 50px)',
+                  padding: '12px 16px',
+                  borderRadius: 14,
+                  background: m.role === 'user' ? G.primary + '22' : (m.isRateLimit ? G.yellow + '15' : G.bg),
                   color: G.text,
-                  border: `1px solid ${m.role === 'user' ? G.primary + '44' : (m.isError ? G.red + '44' : G.border)}`,
-                  fontSize: 13,
-                  lineHeight: 1.5,
+                  border: `1px solid ${
+                    m.role === 'user' ? G.primary + '44' : 
+                    (m.isError ? G.red + '44' : (m.isRateLimit ? G.yellow + '55' : G.border))
+                  }`,
+                  fontSize: 17,
+                  lineHeight: 1.55,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                 }}>
@@ -330,55 +423,48 @@ export default function ChatbotWidget({ profile }) {
               </div>
             ))}
             
-            {/* Loading indicator */}
             {loading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0, overflow: 'hidden' }}>
+                  <InginerAvatar size="sm" />
+                </div>
                 <div style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
-                  background: `linear-gradient(135deg, ${G.primary}, ${G.purple})`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 13,
-                  flexShrink: 0,
-                }}>🤖</div>
-                <div style={{
-                  padding: '10px 14px',
-                  borderRadius: 12,
+                  padding: '14px 18px',
+                  borderRadius: 14,
                   background: G.bg,
                   border: `1px solid ${G.border}`,
                   display: 'flex',
-                  gap: 5,
+                  gap: 7,
                 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out infinite both' }} />
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.2s infinite both' }} />
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.4s infinite both' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out infinite both' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.2s infinite both' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: G.muted, animation: 'cb-pulse 1.4s ease-in-out 0.4s infinite both' }} />
                 </div>
                 <style>{`@keyframes cb-pulse { 0%, 80%, 100% { opacity: 0.3 } 40% { opacity: 1 } }`}</style>
               </div>
             )}
 
-            {/* Quick prompts (când doar mesajul de bun venit) */}
             {messages.length === 1 && !loading && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 10, color: G.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.5px' }}>💡 Sugestii rapide:</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 13, color: G.muted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.6px', fontWeight: 700 }}>
+                  💡 Sugestii rapide:
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {quickPrompts.map((p, i) => (
                     <button
                       key={i}
-                      onClick={() => { setInput(p); setTimeout(send, 100) }}
+                      onClick={() => send(p)}
                       style={{
                         background: G.bg,
                         border: `1px solid ${G.border}`,
                         color: G.text,
                         textAlign: 'left',
-                        padding: '7px 11px',
-                        borderRadius: 8,
-                        fontSize: 12,
+                        padding: '11px 14px',
+                        borderRadius: 10,
+                        fontSize: 15,
                         cursor: 'pointer',
                         transition: 'all .15s',
+                        fontWeight: 500,
                       }}
                       onMouseEnter={e => { e.currentTarget.style.background = G.primary + '22'; e.currentTarget.style.borderColor = G.primary + '55' }}
                       onMouseLeave={e => { e.currentTarget.style.background = G.bg; e.currentTarget.style.borderColor = G.border }}
@@ -391,19 +477,18 @@ export default function ChatbotWidget({ profile }) {
             )}
           </div>
 
-          {/* INPUT */}
           <div style={{
-            padding: '10px 12px',
+            padding: '12px 14px',
             borderTop: `1px solid ${G.border}`,
             background: G.bg,
           }}>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Scrie întrebarea ta... (Enter pentru trimite, Shift+Enter pentru linie nouă)"
+                placeholder="Scrie întrebarea ta..."
                 rows={1}
                 disabled={loading}
                 style={{
@@ -411,39 +496,41 @@ export default function ChatbotWidget({ profile }) {
                   background: G.surface,
                   border: `1px solid ${G.border2}`,
                   color: G.text,
-                  borderRadius: 8,
-                  padding: '8px 12px',
-                  fontSize: 13,
+                  borderRadius: 10,
+                  padding: '11px 14px',
+                  fontSize: 16,
                   fontFamily: 'inherit',
                   resize: 'none',
-                  minHeight: 36,
-                  maxHeight: 100,
+                  minHeight: 44,
+                  maxHeight: 120,
                   outline: 'none',
                   opacity: loading ? 0.6 : 1,
+                  lineHeight: 1.45,
                 }}
                 onFocus={e => { e.target.style.borderColor = G.primary }}
                 onBlur={e => { e.target.style.borderColor = G.border2 }}
               />
               <button
-                onClick={send}
+                onClick={() => send()}
                 disabled={loading || !input.trim()}
                 style={{
                   background: (loading || !input.trim()) ? G.border2 : G.primary,
                   color: '#fff',
                   border: 'none',
-                  borderRadius: 8,
-                  padding: '8px 14px',
-                  fontSize: 13,
-                  fontWeight: 700,
+                  borderRadius: 10,
+                  padding: '11px 18px',
+                  fontSize: 17,
+                  fontWeight: 800,
                   cursor: (loading || !input.trim()) ? 'default' : 'pointer',
                   whiteSpace: 'nowrap',
                   transition: 'all .15s',
+                  minHeight: 44,
                 }}>
                 {loading ? '⏳' : '➤'}
               </button>
             </div>
-            <div style={{ fontSize: 9, color: G.dim, marginTop: 5, textAlign: 'center' }}>
-              AI poate face greșeli. Verifică info importantă.
+            <div style={{ fontSize: 11, color: G.dim, marginTop: 7, textAlign: 'center' }}>
+              Enter = trimite · Shift+Enter = linie nouă · AI poate face greșeli
             </div>
           </div>
         </div>
