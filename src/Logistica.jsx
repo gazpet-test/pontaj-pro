@@ -11,6 +11,7 @@ import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
+import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -1788,7 +1789,7 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
   )
 }
 
-function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved }) {
+function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, ultimaTelemetrieData, profile, accessLevel }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
   const [filterSub, setFilterSub] = useState('Toate')
@@ -4542,6 +4543,82 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
   
   return (
     <div>
+      {/* ──────────────────────────────────────────────────────────────────── */}
+      {/* ETAPA 8.5: Banner Import EvoGPS + notificare telemetrie veche       */}
+      {/* ──────────────────────────────────────────────────────────────────── */}
+      {(profile?.is_owner || ['admin','manager_proiect','logistica'].includes(profile?.role) || accessLevel === 'admin') && (() => {
+        const zileDe = ultimaTelemetrieData
+          ? Math.floor((Date.now() - new Date(ultimaTelemetrieData).getTime()) / 86400000)
+          : null
+        const niciOdata = ultimaTelemetrieData === null || ultimaTelemetrieData === undefined
+        // Severitate banner
+        let bannerBg = G.purple + '15'
+        let bannerBorder = G.purple + '55'
+        let icon = '🛰️'
+        let titlu = 'Telemetrie EvoGPS'
+        let mesaj = niciOdata 
+          ? 'Niciun import EvoGPS încă. Exportă raportul „Foaie de activitate zilnică" din portal și importă-l aici.'
+          : `Ultimul import: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} ${zileDe === 1 ? 'zi' : 'zile'})`
+        if (niciOdata) {
+          bannerBg = G.blue + '15'
+          bannerBorder = G.blue + '55'
+          icon = '📡'
+        } else if (zileDe > 14) {
+          bannerBg = G.red + '22'
+          bannerBorder = G.red + '88'
+          icon = '🚨'
+          titlu = 'ATENȚIE — Telemetrie veche'
+          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Te rugăm să exporți raportul săptămânal!`
+        } else if (zileDe > 7) {
+          bannerBg = G.yellow + '22'
+          bannerBorder = G.yellow + '88'
+          icon = '⚠️'
+          titlu = 'Telemetrie veche — necesită import'
+          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Recomandare: săptămânal sau bisăptămânal.`
+        }
+        return (
+          <div style={{
+            background: bannerBg,
+            border: `1px solid ${bannerBorder}`,
+            borderRadius: 12,
+            padding: '14px 18px',
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            flexWrap: 'wrap',
+          }}>
+            <div style={{fontSize: 28}}>{icon}</div>
+            <div style={{flex: 1, minWidth: 240}}>
+              <div style={{fontSize: 13, fontWeight: 800, color: G.text, marginBottom: 2}}>{titlu}</div>
+              <div style={{fontSize: 12, color: G.muted}}>{mesaj}</div>
+              {niciOdata && (
+                <div style={{fontSize: 11, color: G.muted, marginTop: 4, fontStyle: 'italic'}}>
+                  💡 Tip: portalul EvoGPS → Rapoarte → „Foaie de activitate zilnică" → export Excel pentru perioada dorită.
+                </div>
+              )}
+            </div>
+            <button 
+              onClick={onImportEvoGPS}
+              style={{
+                background: G.logistica,
+                color: '#0D1117',
+                border: 'none',
+                borderRadius: 8,
+                padding: '10px 18px',
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                whiteSpace: 'nowrap',
+              }}>
+              📥 Import XLSX EvoGPS
+            </button>
+          </div>
+        )
+      })()}
       {/* KPI — Cerute (de aprobat) e ROȘU PULSING dacă > 0 */}
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
         <div style={{
@@ -5908,6 +5985,232 @@ const thStyleAlim = { padding: '10px 12px', textAlign: 'left', color: '#8B949E',
 
 
 
+// ─── Etapa 8.5: Buton Alerte Globale + Sidebar lateral ──────────────────────
+function AlerteGlobalButton({ alerte, onClick }) {
+  const critice = alerte.filter(a => a.nivel === 'critic').length
+  const urgente = alerte.filter(a => a.nivel === 'urgent').length
+  const aproape = alerte.filter(a => a.nivel === 'aproape').length
+  const total = alerte.length
+  
+  if (total === 0) {
+    return (
+      <button onClick={onClick} style={{
+        background: G.green + '15',
+        border: `1px solid ${G.green}55`,
+        borderRadius: 8,
+        padding: '7px 14px',
+        fontSize: 12,
+        color: G.green,
+        fontWeight: 700,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+      }}>
+        ✓ Fără alerte
+      </button>
+    )
+  }
+  
+  const color = critice > 0 ? G.red : urgente > 0 ? G.orange : G.yellow
+  const icon = critice > 0 ? '🚨' : urgente > 0 ? '⚠️' : '🔔'
+  
+  return (
+    <button onClick={onClick} style={{
+      background: color + '22',
+      border: `1px solid ${color}`,
+      borderRadius: 8,
+      padding: '7px 14px',
+      fontSize: 12,
+      color: G.text,
+      fontWeight: 800,
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      animation: critice > 0 ? 'pulseAlerta 2s infinite' : 'none',
+    }}>
+      <span style={{fontSize: 14}}>{icon}</span>
+      <span>Alerte</span>
+      <span style={{
+        background: color,
+        color: '#0D1117',
+        padding: '1px 7px',
+        borderRadius: 10,
+        fontSize: 11,
+        fontWeight: 900,
+        minWidth: 20,
+        textAlign: 'center',
+      }}>{total}</span>
+      <style>{`@keyframes pulseAlerta { 0%, 100% { opacity: 1 } 50% { opacity: 0.7 } }`}</style>
+    </button>
+  )
+}
+
+function AlerteGlobaleSidebar({ open, onClose, alerte, onNavigate }) {
+  if (!open) return null
+  
+  // Grupare pe nivel
+  const grupate = {
+    critic: alerte.filter(a => a.nivel === 'critic'),
+    urgent: alerte.filter(a => a.nivel === 'urgent'),
+    aproape: alerte.filter(a => a.nivel === 'aproape'),
+  }
+  
+  const colorByNivel = { critic: G.red, urgent: G.orange, aproape: G.yellow }
+  const iconByNivel = { critic: '🚨', urgent: '⚠️', aproape: '🔔' }
+  const labelByNivel = { critic: 'CRITIC — Acțiune imediată', urgent: 'URGENT — Săptămâna asta', aproape: 'APROAPE — Săptămâna viitoare' }
+  
+  return (
+    <>
+      <div 
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          zIndex: 200,
+        }}
+      />
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 'min(480px, 100vw)',
+        background: G.bg,
+        borderLeft: `1px solid ${G.border}`,
+        zIndex: 201,
+        overflowY: 'auto',
+        padding: '20px 22px',
+        boxShadow: '-8px 0 32px rgba(0,0,0,0.5)',
+      }}>
+        {/* Header */}
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${G.border}`}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: G.text}}>🔔 Alerte Logistică</div>
+            <div style={{fontSize: 12, color: G.muted, marginTop: 2}}>
+              {alerte.length} total · {grupate.critic.length} critice · {grupate.urgent.length} urgente · {grupate.aproape.length} aproape
+            </div>
+          </div>
+          <button onClick={onClose} style={{background: 'transparent', border: 'none', color: G.muted, fontSize: 24, cursor: 'pointer'}}>×</button>
+        </div>
+        
+        {alerte.length === 0 ? (
+          <div style={{textAlign: 'center', padding: 40, color: G.muted}}>
+            <div style={{fontSize: 48, marginBottom: 12}}>✓</div>
+            <div style={{fontSize: 14, fontWeight: 700, color: G.green, marginBottom: 4}}>Toate la zi!</div>
+            <div style={{fontSize: 12}}>Nicio alertă activă în Logistică</div>
+          </div>
+        ) : (
+          ['critic', 'urgent', 'aproape'].map(nivel => grupate[nivel].length > 0 && (
+            <div key={nivel} style={{marginBottom: 18}}>
+              <div style={{
+                fontSize: 11,
+                fontWeight: 800,
+                color: colorByNivel[nivel],
+                textTransform: 'uppercase',
+                letterSpacing: '.6px',
+                marginBottom: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}>
+                <span style={{fontSize: 14}}>{iconByNivel[nivel]}</span>
+                {labelByNivel[nivel]} ({grupate[nivel].length})
+              </div>
+              {grupate[nivel].map((a, idx) => (
+                <div 
+                  key={`${a.tip}-${a.asset_id}-${idx}`}
+                  onClick={() => {
+                    if ((a.tip === 'revizie_km' || a.tip === 'revizie_data') && a.asset_id) onNavigate('service', a.asset_id)
+                    else if (a.tip === 'telemetrie_veche') onNavigate('alimentari', null)
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    background: G.surface,
+                    border: `1px solid ${colorByNivel[nivel]}55`,
+                    borderLeft: `3px solid ${colorByNivel[nivel]}`,
+                    borderRadius: 8,
+                    marginBottom: 6,
+                    cursor: 'pointer',
+                    transition: 'background .15s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = G.border}
+                  onMouseLeave={e => e.currentTarget.style.background = G.surface}
+                >
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8}}>
+                    <div style={{flex: 1, minWidth: 0}}>
+                      {a.tip === 'revizie_km' && (
+                        <>
+                          <div style={{fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 2}}>
+                            🔧 {a.marca} {a.model}
+                          </div>
+                          <div style={{fontSize: 11, color: G.muted, fontFamily: 'monospace'}}>
+                            {a.nr_inmatriculare}
+                          </div>
+                        </>
+                      )}
+                      {a.tip === 'revizie_data' && (
+                        <>
+                          <div style={{fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 2}}>
+                            📅 {a.marca} {a.model || ''}
+                          </div>
+                          <div style={{fontSize: 11, color: G.muted, fontFamily: a.nr_inmatriculare ? 'monospace' : 'inherit'}}>
+                            {a.nr_inmatriculare || 'Utilaj (fără număr înmatriculare)'}
+                          </div>
+                        </>
+                      )}
+                      {a.tip === 'telemetrie_veche' && (
+                        <>
+                          <div style={{fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 2}}>
+                            📡 Telemetrie EvoGPS veche
+                          </div>
+                          <div style={{fontSize: 11, color: G.muted}}>
+                            {a.mesaj}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div style={{textAlign: 'right', whiteSpace: 'nowrap'}}>
+                      {a.tip === 'revizie_km' && (
+                        <>
+                          <div style={{fontSize: 14, fontWeight: 800, color: colorByNivel[nivel]}}>
+                            {Number(a.km_ramase).toLocaleString('ro-RO')} km
+                          </div>
+                          <div style={{fontSize: 10, color: G.muted}}>până la revizie</div>
+                        </>
+                      )}
+                      {a.tip === 'revizie_data' && (
+                        <>
+                          <div style={{fontSize: 14, fontWeight: 800, color: colorByNivel[nivel]}}>
+                            {a.km_ramase} {a.km_ramase === 1 ? 'zi' : 'zile'}
+                          </div>
+                          <div style={{fontSize: 10, color: G.muted}}>până la revizie</div>
+                        </>
+                      )}
+                      {a.tip === 'telemetrie_veche' && (
+                        <div style={{fontSize: 14, fontWeight: 800, color: colorByNivel[nivel]}}>
+                          {a.km_ramase} zile
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))
+        )}
+        
+        <div style={{marginTop: 24, padding: 12, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 11, color: G.muted}}>
+          💡 <strong style={{color: G.text}}>Cum funcționează:</strong> alertele se actualizează automat după fiecare import EvoGPS sau service finalizat. Click pe alertă pentru a deschide modulul respectiv.
+        </div>
+      </div>
+    </>
+  )
+}
+
+
 export default function LogisticaPage() {
   const nav = useNavigate()
   const loc = useLocation()
@@ -5943,6 +6246,11 @@ export default function LogisticaPage() {
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
   const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
   const [toast, showToast] = useToast()
+  const [showImportEvo, setShowImportEvo] = useState(false)
+  // Etapa 8.5: Alerte globale + ultima telemetrie (pentru banner Alimentări)
+  const [ultimaTelemetrieData, setUltimaTelemetrieData] = useState(null)
+  const [alerteGlobale, setAlerteGlobale] = useState([])
+  const [showAlerte, setShowAlerte] = useState(false)
   
   useEffect(() => {
     const init = async () => {
@@ -5961,6 +6269,24 @@ export default function LogisticaPage() {
   
   useEffect(() => { if (accessLevel) loadAll() }, [accessLevel])
   
+  // Etapa 8.5: Auto-load ultima telemetrie + alerte globale
+  useEffect(() => {
+    if (!accessLevel) return
+    // Ultima dată telemetrie
+    supabase.from('logistica_telemetrie_zilnica')
+      .select('data')
+      .order('data', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => { setUltimaTelemetrieData(data?.data || null) })
+    // Alerte globale (revizii < 1500km + telemetrie veche)
+    supabase.from('v_logistica_alerte_globale')
+      .select('*')
+      .order('nivel')
+      .order('km_ramase')
+      .then(({ data }) => { setAlerteGlobale(data || []) })
+  }, [accessLevel])
+  
   // Sincronizez tab cu URL când se schimbă search-ul (ex: navigare din butonul global)
   useEffect(() => {
     const params = new URLSearchParams(loc.search)
@@ -5968,6 +6294,8 @@ export default function LogisticaPage() {
     const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari']
     if (t && valid.includes(t) && t !== tab) setTab(t)
   }, [loc.search])
+  
+  
   
   const loadAll = async () => {
     setLoad(true)
@@ -6401,6 +6729,10 @@ export default function LogisticaPage() {
       </div>
       
       {/* Bara de tab-uri */}
+      {/* Etapa 8.5: Header buton Alerte Globale */}
+      <div style={{display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 12, gap: 8}}>
+        <AlerteGlobalButton alerte={alerteGlobale} onClick={() => setShowAlerte(true)} />
+      </div>
       <TabsBar tab={tab} setTab={setTab} />
       
       {/* TAB: Alimentări (input bulk per zi) */}
@@ -6415,6 +6747,10 @@ export default function LogisticaPage() {
           setDataAlim={setDataAlim}
           canEdit={canEdit}
           showToast={showToast}
+          onImportEvoGPS={() => setShowImportEvo(true)}
+          ultimaTelemetrieData={ultimaTelemetrieData}
+          profile={profile}
+          accessLevel={accessLevel}
           onSaved={loadAll}
         />
       )}
@@ -6445,6 +6781,7 @@ export default function LogisticaPage() {
           showToast={showToast}
         />
       )}
+      
       
       {/* TAB: Arhivă Avize */}
       {tab === 'arhiva' && (
@@ -7090,6 +7427,33 @@ export default function LogisticaPage() {
           </div>
         </div>
       )}
+      
+      {/* Modal Import EvoGPS (Etapa 8.5) */}
+      {/* Etapa 8.5: Sidebar Alerte Globale */}
+      <AlerteGlobaleSidebar 
+        open={showAlerte}
+        onClose={() => setShowAlerte(false)}
+        alerte={alerteGlobale}
+        onNavigate={(targetTab, assetId) => {
+          setShowAlerte(false)
+          setTab(targetTab)
+          nav(`/logistica?tab=${targetTab}${assetId ? `&activ_id=${assetId}` : ''}`)
+        }}
+      />
+
+      <ImportEvoGPSModal 
+        open={showImportEvo} 
+        onClose={() => setShowImportEvo(false)} 
+        supabase={supabase}
+        profile={profile}
+        G={G}
+        S={S}
+        onSuccess={(n) => {
+          showToast(`✓ ${n} înregistrări telemetrie importate. km_actuali actualizat automat.`)
+          loadAll()       // refresh listă active (km_actuali update via trigger)
+          loadActive() // refresh listă active pt km_actuali updated
+        }}
+      />
     </>
   )
 }
