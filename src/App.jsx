@@ -8,6 +8,7 @@ import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
+import InternalChat from './InternalChat.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -7127,6 +7128,15 @@ function ChatbotWidgetGate() {
   return <ChatbotWidget profile={profile} />
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// INTERNAL CHAT GATE - afișează chat-ul intern DOAR pentru useri logați
+// ════════════════════════════════════════════════════════════════════════════
+function InternalChatGate() {
+  const { session, profile } = useAuth()
+  if (!session || !profile) return null
+  return <InternalChat profile={profile} />
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -7144,6 +7154,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
       <ChatbotWidgetGate />
+      <InternalChatGate />
     </AuthProvider>
   )
 }
