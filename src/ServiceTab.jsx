@@ -17,6 +17,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import { calcUrmService, urmServiceLevel, urmServiceColor, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
@@ -992,7 +994,14 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
         </div>
 
         <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:14, borderTop:`1px solid ${G.border}`}}>
-          <div>
+          <div style={{display:'flex', gap:8}}>
+            {/* ETAPA 8.7: Export PDF fișă */}
+            <button 
+              onClick={() => generateServicePDF(fisa, intrari, a, showToast)} 
+              style={{...S.btnS, fontSize:12, color:G.red, borderColor:G.red + '44'}}
+              title="Export PDF cu semnături">
+              📄 Export PDF
+            </button>
             {canEdit && editMode && (
               <button onClick={handleDeleteFisa} style={{...S.btnS, fontSize:12, color:G.red, borderColor:G.red + '55'}}>🗑 Șterge fișă</button>
             )}
@@ -1111,6 +1120,356 @@ function AcoperireFlotaModal({ active, fiseCountByActiv, canEdit, onClose, onCre
 // COMPONENTUL PRINCIPAL: SERVICE TAB
 // ════════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════════
+// ETAPA 8.7: GENERARE PDF FIȘĂ SERVICE
+// ════════════════════════════════════════════════════════════════════════════
+// Pattern din generateOrdinePDF (App.jsx): HTML offscreen → html2canvas → jsPDF
+// Semnatari hardcoded: MITRACHE ALEXANDRU (Director Dep Logistica) + 
+// OANCEA IONUT DANIEL (Junior Dep Logistica). Lookup semnături via 
+// hr_semnaturi_electronice (employee_id + activ=true). Dacă lipsesc → linie pentru semnătură manuală.
+
+const SEMNATARI_SERVICE_PDF = {
+  director: { id: 71, name: 'MITRACHE ALEXANDRU', functie: 'Director Departament Logistică', prefix: 'ing.' },
+  junior: { id: 86, name: 'OANCEA IONUȚ DANIEL', functie: 'Junior Departament Logistică', prefix: '' },
+}
+
+async function fetchSignatureAsDataURL(fisierPath) {
+  if (!fisierPath) return null
+  try {
+    const { data } = await supabase.storage.from('hr-semnaturi').createSignedUrl(fisierPath, 60)
+    if (!data?.signedUrl) return null
+    const resp = await fetch(data.signedUrl)
+    const blob = await resp.blob()
+    return new Promise(res => {
+      const reader = new FileReader()
+      reader.onloadend = () => res(reader.result)
+      reader.onerror = () => res(null)
+      reader.readAsDataURL(blob)
+    })
+  } catch (e) {
+    console.warn('fetchSignatureAsDataURL err:', e)
+    return null
+  }
+}
+
+async function generateServicePDF(fisa, intrari, activ, showToast) {
+  showToast('⏳ Generare PDF fișă service...', 'info')
+  try {
+    // Lookup semnături active
+    const { data: sem } = await supabase
+      .from('hr_semnaturi_electronice')
+      .select('employee_id, fisier_path')
+      .in('employee_id', [SEMNATARI_SERVICE_PDF.director.id, SEMNATARI_SERVICE_PDF.junior.id])
+      .eq('activ', true)
+    
+    const semDirector = sem?.find(s => s.employee_id === SEMNATARI_SERVICE_PDF.director.id)
+    const semJunior = sem?.find(s => s.employee_id === SEMNATARI_SERVICE_PDF.junior.id)
+    
+    const [semDirectorURL, semJuniorURL] = await Promise.all([
+      semDirector ? fetchSignatureAsDataURL(semDirector.fisier_path) : Promise.resolve(null),
+      semJunior ? fetchSignatureAsDataURL(semJunior.fisier_path) : Promise.resolve(null),
+    ])
+    
+    // Build HTML offscreen
+    const html = document.createElement('div')
+    html.style.cssText = 'position:fixed;top:-99999px;left:0;width:794px;background:#fff;color:#000;font-family:Arial,sans-serif;padding:28px;box-sizing:border-box;'
+    
+    const escapeHtml = (str) => String(str ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
+    
+    html.innerHTML = `
+      <div style="border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;">
+          <div>
+            <div style="font-size:9px;color:#666;">GAZPET INSTAL SRL · DEPARTAMENT LOGISTICĂ</div>
+            <div style="font-size:18px;font-weight:bold;margin-top:4px;">FIȘĂ SERVICE</div>
+            <div style="font-size:11px;color:#333;">${fisa.tip === 'reparatie' ? '⚙ Reparație' : '🔧 Mentenanță'} · #${fisa.id}</div>
+          </div>
+          <div style="text-align:right;font-size:10px;color:#666;">
+            <div>Data fișei: <strong style="color:#000;">${fisa.data_fisei ? new Date(fisa.data_fisei).toLocaleDateString('ro-RO') : '—'}</strong></div>
+            <div>Status: <strong style="color:#000;">${escapeHtml(fisa.status)}</strong></div>
+            ${fisa.finalizat_at ? `<div>Finalizat: <strong style="color:#000;">${new Date(fisa.finalizat_at).toLocaleDateString('ro-RO')}</strong></div>` : ''}
+          </div>
+        </div>
+      </div>
+      
+      <div style="background:#f3f4f6;padding:10px 14px;border-radius:4px;margin-bottom:12px;">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;letter-spacing:.5px;">UTILAJ / VEHICUL</div>
+        <div style="font-size:14px;font-weight:bold;">${escapeHtml((activ.marca || '') + ' ' + (activ.model || ''))}</div>
+        <div style="font-size:11px;color:#444;margin-top:4px;">
+          ${activ.cod_intern ? `Cod intern: <strong>${escapeHtml(activ.cod_intern)}</strong>` : ''}
+          ${activ.nr_inmatriculare ? ` · Plăcuță: <strong>${escapeHtml(activ.nr_inmatriculare)}</strong>` : ''}
+          ${activ.nr_inventar ? ` · Inv: <strong>${escapeHtml(activ.nr_inventar)}</strong>` : ''}
+          ${activ.an_fabricatie ? ` · An: <strong>${activ.an_fabricatie}</strong>` : ''}
+        </div>
+      </div>
+      
+      <table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px;">
+        <tr>
+          <td style="border:1px solid #999;padding:5px 8px;background:#fafafa;width:28%;"><strong>Titlu lucrări</strong></td>
+          <td style="border:1px solid #999;padding:5px 8px;">${escapeHtml(fisa.titlu) || '—'}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #999;padding:5px 8px;background:#fafafa;"><strong>Locație service</strong></td>
+          <td style="border:1px solid #999;padding:5px 8px;">${escapeHtml(fisa.locatie_service) || '—'}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #999;padding:5px 8px;background:#fafafa;"><strong>Factură</strong></td>
+          <td style="border:1px solid #999;padding:5px 8px;">${escapeHtml(fisa.numar_factura) || '—'}${fisa.data_factura ? ' · ' + new Date(fisa.data_factura).toLocaleDateString('ro-RO') : ''}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #999;padding:5px 8px;background:#fafafa;"><strong>Sumă totală</strong></td>
+          <td style="border:1px solid #999;padding:5px 8px;font-weight:bold;color:#16a34a;">
+            ${fisa.suma_factura != null ? Number(fisa.suma_factura).toLocaleString('ro-RO', { minimumFractionDigits: 2 }) + ' RON' : '—'}
+            ${fisa.manopera != null ? ` <span style="color:#666;font-weight:normal;font-size:9px;">(manoperă: ${Number(fisa.manopera).toLocaleString('ro-RO', { minimumFractionDigits: 2 })} RON)</span>` : ''}
+          </td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #999;padding:5px 8px;background:#fafafa;"><strong>KM intrare → ieșire</strong></td>
+          <td style="border:1px solid #999;padding:5px 8px;">
+            ${fisa.km_intrare != null ? Number(fisa.km_intrare).toLocaleString('ro-RO') + ' km' : '—'} → ${fisa.km_iesire != null ? Number(fisa.km_iesire).toLocaleString('ro-RO') + ' km' : '—'}
+          </td>
+        </tr>
+        ${(fisa.ore_intrare != null || fisa.ore_iesire != null) ? `
+        <tr>
+          <td style="border:1px solid #999;padding:5px 8px;background:#fafafa;"><strong>Ore intrare → ieșire</strong></td>
+          <td style="border:1px solid #999;padding:5px 8px;">${fisa.ore_intrare != null ? Number(fisa.ore_intrare) + ' h' : '—'} → ${fisa.ore_iesire != null ? Number(fisa.ore_iesire) + ' h' : '—'}</td>
+        </tr>` : ''}
+      </table>
+      
+      ${fisa.diagnostic_lucrari ? `
+        <div style="margin-bottom:12px;">
+          <div style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;letter-spacing:.5px;">DIAGNOSTIC & LUCRĂRI EFECTUATE</div>
+          <div style="font-size:11px;padding:8px 12px;border:1px solid #ccc;border-left:3px solid #16a34a;background:#fafafa;white-space:pre-wrap;">${escapeHtml(fisa.diagnostic_lucrari)}</div>
+        </div>
+      ` : ''}
+      
+      ${intrari.length > 0 ? `
+        <div style="margin-bottom:12px;">
+          <div style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;letter-spacing:.5px;">PIESE & OPERAȚII (${intrari.length})</div>
+          <table style="width:100%;border-collapse:collapse;font-size:9px;">
+            <thead>
+              <tr style="background:#1f2937;color:#fff;">
+                <th style="padding:6px 8px;text-align:left;width:40px;">Nr</th>
+                <th style="padding:6px 8px;text-align:left;">Denumire</th>
+                <th style="padding:6px 8px;text-align:left;width:140px;">Cod piesă</th>
+                <th style="padding:6px 8px;text-align:left;width:80px;">Cantitate</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${intrari.map((i, idx) => `
+                <tr style="${idx % 2 === 0 ? 'background:#fff' : 'background:#f9fafb'}">
+                  <td style="padding:5px 8px;border-bottom:1px solid #ddd;">${idx + 1}</td>
+                  <td style="padding:5px 8px;border-bottom:1px solid #ddd;">${escapeHtml(i.denumire) || '—'}</td>
+                  <td style="padding:5px 8px;border-bottom:1px solid #ddd;font-family:monospace;">${escapeHtml(i.cod_piesa) || '—'}</td>
+                  <td style="padding:5px 8px;border-bottom:1px solid #ddd;">${escapeHtml(i.cantitate) || '—'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : ''}
+      
+      ${(fisa.urmatoarea_km || fisa.urmatoarea_data || fisa.urmatoarea_ore) ? `
+        <div style="margin-bottom:12px;padding:8px 12px;background:#fef3c7;border-left:3px solid #f59e0b;font-size:10px;">
+          <strong>📅 Următorul service:</strong>
+          ${fisa.urmatoarea_km ? ` la <strong>${Number(fisa.urmatoarea_km).toLocaleString('ro-RO')} km</strong>` : ''}
+          ${fisa.urmatoarea_ore ? `${fisa.urmatoarea_km ? ' sau' : ''} la <strong>${Number(fisa.urmatoarea_ore)} ore</strong>` : ''}
+          ${fisa.urmatoarea_data ? `${(fisa.urmatoarea_km || fisa.urmatoarea_ore) ? ' sau' : ''} pe <strong>${new Date(fisa.urmatoarea_data).toLocaleDateString('ro-RO')}</strong>` : ''}
+        </div>
+      ` : ''}
+      
+      ${fisa.observatii ? `
+        <div style="margin-bottom:12px;">
+          <div style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;letter-spacing:.5px;">OBSERVAȚII</div>
+          <div style="font-size:10px;padding:8px 12px;border:1px solid #ccc;background:#fafafa;white-space:pre-wrap;">${escapeHtml(fisa.observatii)}</div>
+        </div>
+      ` : ''}
+      
+      <div style="display:flex;justify-content:space-around;margin-top:42px;padding-top:18px;border-top:2px solid #000;">
+        <div style="text-align:center;width:45%;">
+          <div style="height:54px;display:flex;align-items:flex-end;justify-content:center;">
+            ${semDirectorURL ? `<img src="${semDirectorURL}" style="max-height:54px;max-width:160px;" />` : '<div style="border-bottom:1px solid #999;width:160px;height:1px;margin-bottom:3px;"></div>'}
+          </div>
+          <div style="font-size:9px;color:#666;margin-top:6px;text-transform:uppercase;letter-spacing:.5px;">${SEMNATARI_SERVICE_PDF.director.functie}</div>
+          <div style="font-size:11px;font-weight:bold;margin-top:2px;">${SEMNATARI_SERVICE_PDF.director.prefix} ${SEMNATARI_SERVICE_PDF.director.name}</div>
+        </div>
+        <div style="text-align:center;width:45%;">
+          <div style="height:54px;display:flex;align-items:flex-end;justify-content:center;">
+            ${semJuniorURL ? `<img src="${semJuniorURL}" style="max-height:54px;max-width:160px;" />` : '<div style="border-bottom:1px solid #999;width:160px;height:1px;margin-bottom:3px;"></div>'}
+          </div>
+          <div style="font-size:9px;color:#666;margin-top:6px;text-transform:uppercase;letter-spacing:.5px;">${SEMNATARI_SERVICE_PDF.junior.functie}</div>
+          <div style="font-size:11px;font-weight:bold;margin-top:2px;">${SEMNATARI_SERVICE_PDF.junior.name}</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:14px;text-align:center;font-size:8px;color:#999;">
+        Generat automat din Gazpet ERP · ${new Date().toLocaleString('ro-RO')} · Fișa #${fisa.id}
+      </div>
+    `
+    document.body.appendChild(html)
+    
+    // Aștept 2x RAF pentru layout
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+    
+    // Canvas
+    const canvas = await html2canvas(html, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false })
+    document.body.removeChild(html)
+    
+    // PDF A4 portrait
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const pdfHeight = (canvas.height / canvas.width) * 210
+    pdf.addImage(canvas.toDataURL('image/png', 0.95), 'PNG', 0, 0, 210, Math.min(pdfHeight, 297), undefined, 'FAST')
+    
+    const safeFile = (s) => String(s || '').replace(/[^a-zA-Z0-9._-]/g, '_')
+    const fileName = `FisaService_${safeFile(activ.cod_intern || activ.nr_inmatriculare || activ.id)}_${fisa.data_fisei || 'undated'}_${fisa.id}.pdf`
+    pdf.save(fileName)
+    showToast(`✓ PDF generat: ${fileName}`, 'success')
+  } catch (e) {
+    console.error('generateServicePDF err:', e)
+    showToast('Eroare la generare PDF: ' + (e.message || 'necunoscută'), 'error')
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ETAPA 8.7: MODAL ISTORIC SERVICE PER UTILAJ
+// ════════════════════════════════════════════════════════════════════════════
+// Listă cronologică toate fișele service pentru un utilaj. Date deja există în BD.
+// Util pentru a vedea evoluția mentenanței + tendințe + total cheltuieli per utilaj.
+
+function IstoricServiceModal({ activ, onClose, onOpenFisa, showToast }) {
+  const [fise, setFise] = useState([])
+  const [loading, setLoading] = useState(true)
+  
+  useEffect(() => {
+    if (!activ?.id) return
+    setLoading(true)
+    supabase.from('logistica_service_fise')
+      .select('*, logistica_service_intrari(id, denumire, cod_piesa, cantitate)')
+      .eq('activ_id', activ.id)
+      .order('data_fisei', { ascending: false })
+      .order('id', { ascending: false })
+      .then(({ data, error }) => {
+        if (error) showToast(`Eroare istoric: ${error.message}`, 'error')
+        setFise(data || [])
+        setLoading(false)
+      })
+  }, [activ?.id, showToast])
+  
+  const stats = useMemo(() => {
+    const total = fise.length
+    const totalSum = fise.reduce((s, f) => s + Number(f.suma_factura || 0), 0)
+    const totalManopera = fise.reduce((s, f) => s + Number(f.manopera || 0), 0)
+    const finalizate = fise.filter(f => f.status === 'finalizat').length
+    const mentenante = fise.filter(f => f.tip === 'mentenanta').length
+    const reparatii = fise.filter(f => f.tip === 'reparatie').length
+    return { total, totalSum, totalManopera, finalizate, mentenante, reparatii }
+  }, [fise])
+  
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'30px 16px', overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding:22, width:'100%', maxWidth:1000, boxShadow:'0 20px 80px rgba(0,0,0,.6)', borderTop:`3px solid ${G.logistica}`}}>
+        
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${G.border}`}}>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:18, fontWeight:800, color:G.text, marginBottom:4}}>📜 Istoric Service</div>
+            <div style={{fontSize:13, color:G.muted}}>
+              <strong style={{color:G.text}}>{activ?.marca} {activ?.model}</strong>
+              {activ?.cod_intern && <span style={{color:G.logistica, fontFamily:'monospace', marginLeft:8}}>· {activ.cod_intern}</span>}
+              {activ?.nr_inmatriculare && <span style={{color:G.blue, fontFamily:'monospace', marginLeft:8}}>· {activ.nr_inmatriculare}</span>}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
+        </div>
+        
+        {/* Stats */}
+        <div style={{display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:10, marginBottom:16}}>
+          <div style={{...S.card, padding:'10px 14px', borderLeft:`3px solid ${G.logistica}`}}>
+            <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:3}}>📋 Total fișe</div>
+            <div style={{fontSize:22, fontWeight:800, color:G.text}}>{stats.total}</div>
+          </div>
+          <div style={{...S.card, padding:'10px 14px', borderLeft:`3px solid ${G.green}`}}>
+            <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:3}}>💰 Sumă totală</div>
+            <div style={{fontSize:18, fontWeight:800, color:G.green}}>{stats.totalSum.toLocaleString('ro-RO', {maximumFractionDigits:0})} RON</div>
+            {stats.totalManopera > 0 && <div style={{fontSize:10, color:G.muted, marginTop:2}}>din care manoperă: {stats.totalManopera.toLocaleString('ro-RO', {maximumFractionDigits:0})} RON</div>}
+          </div>
+          <div style={{...S.card, padding:'10px 14px', borderLeft:`3px solid ${G.green}`}}>
+            <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:3}}>🔧 Mentenanțe</div>
+            <div style={{fontSize:22, fontWeight:800, color:G.text}}>{stats.mentenante}</div>
+          </div>
+          <div style={{...S.card, padding:'10px 14px', borderLeft:`3px solid ${G.orange}`}}>
+            <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:3}}>⚙ Reparații</div>
+            <div style={{fontSize:22, fontWeight:800, color:G.text}}>{stats.reparatii}</div>
+          </div>
+          <div style={{...S.card, padding:'10px 14px', borderLeft:`3px solid ${G.blue}`}}>
+            <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:3}}>✓ Finalizate</div>
+            <div style={{fontSize:22, fontWeight:800, color:G.text}}>{stats.finalizate}<span style={{fontSize:14, color:G.muted}}>/{stats.total}</span></div>
+          </div>
+        </div>
+        
+        {loading ? (
+          <div style={{padding:60, textAlign:'center', color:G.muted}}>⏳ Se încarcă istoricul...</div>
+        ) : fise.length === 0 ? (
+          <div style={{padding:60, textAlign:'center', color:G.muted}}>
+            <div style={{fontSize:40, marginBottom:8}}>📋</div>
+            <div>Niciun service înregistrat pentru acest utilaj</div>
+          </div>
+        ) : (
+          <div style={{...S.card, overflow:'hidden', maxHeight:'55vh', overflowY:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
+              <thead style={{position:'sticky', top:0, background:G.surface, zIndex:1}}>
+                <tr style={{borderBottom:`1px solid ${G.border}`}}>
+                  <th style={{padding:'8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase', width:95}}>Data</th>
+                  <th style={{padding:'8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase', width:110}}>Tip</th>
+                  <th style={{padding:'8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase'}}>Titlu</th>
+                  <th style={{padding:'8px', textAlign:'right', color:G.muted, fontSize:10, textTransform:'uppercase', width:120}}>Sumă</th>
+                  <th style={{padding:'8px', textAlign:'center', color:G.muted, fontSize:10, textTransform:'uppercase', width:80}}>Intrări</th>
+                  <th style={{padding:'8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase', width:115}}>Status</th>
+                  <th style={{padding:'8px', textAlign:'right', color:G.muted, fontSize:10, textTransform:'uppercase', width:140}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {fise.map(f => {
+                  const nrIntrari = (f.logistica_service_intrari || []).length
+                  return (
+                    <tr key={f.id} style={{borderBottom:`1px solid ${G.border}`}}
+                        onMouseEnter={e => e.currentTarget.style.background = G.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <td style={{padding:'8px', fontSize:12, color:G.text, fontVariantNumeric:'tabular-nums'}}>{fmtDate(f.data_fisei)}</td>
+                      <td style={{padding:'8px'}}><TipBadge tip={f.tip} /></td>
+                      <td style={{padding:'8px', fontSize:12, color:G.text}}>
+                        <div style={{fontWeight:600, marginBottom:2, maxWidth:330, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{f.titlu || '—'}</div>
+                        {f.locatie_service && <div style={{fontSize:10, color:G.muted}}>📍 {f.locatie_service}</div>}
+                      </td>
+                      <td style={{padding:'8px', fontSize:13, fontWeight:700, color: f.suma_factura ? G.green : G.dim, fontVariantNumeric:'tabular-nums', textAlign:'right'}}>
+                        {f.suma_factura ? fmtRON(f.suma_factura) : '—'}
+                      </td>
+                      <td style={{padding:'8px', textAlign:'center', color:G.muted}}>{nrIntrari > 0 ? `📋 ${nrIntrari}` : '—'}</td>
+                      <td style={{padding:'8px'}}><StatusBadge status={f.status} /></td>
+                      <td style={{padding:'8px', textAlign:'right', whiteSpace:'nowrap'}}>
+                        <button 
+                          onClick={() => onOpenFisa(f.id)} 
+                          title="Detaliu fișă"
+                          style={{...S.btnS, padding:'6px 10px', fontSize:14, color:G.muted, marginRight:4}}>👁</button>
+                        <button 
+                          onClick={async () => {
+                            const intrari = f.logistica_service_intrari || []
+                            await generateServicePDF(f, intrari, activ, showToast)
+                          }} 
+                          title="Export PDF"
+                          style={{...S.btnS, padding:'6px 10px', fontSize:14, color:G.red, borderColor: G.red + '44'}}>📄</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [fise, setFise] = useState([])
   const [activeFull, setActiveFull] = useState([])
@@ -1132,6 +1491,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [newModal, setNewModal] = useState(null)
   const [detailModal, setDetailModal] = useState(null)
   const [acoperireModal, setAcoperireModal] = useState(false)
+  const [istoricModal, setIstoricModal] = useState(null)  // ETAPA 8.7: { activ }
 
   // ETAPA 8.6: handler click pe KPI Scadențe Service → setează filtru + sort
   const handleClickScadente = useCallback(() => {
@@ -1501,7 +1861,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                   <SortableTh col="suma_factura"  sortBy={sortBy} setSortBy={setSortBy} width={120} align="right">Sumă</SortableTh>
                   <SortableTh col="urmator"       sortBy={sortBy} setSortBy={setSortBy} width={150}>Următor</SortableTh>
                   <SortableTh col="status"        sortBy={sortBy} setSortBy={setSortBy} width={120}>Status</SortableTh>
-                  <th style={{width:140, padding:'10px 8px', borderBottom:`1px solid ${G.border}`, background:G.surface}}></th>
+                  <th style={{width:200, padding:'10px 8px', borderBottom:`1px solid ${G.border}`, background:G.surface}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1541,9 +1901,20 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                       <td style={{padding:'10px 8px'}}><UrmServiceBadge u={u} /></td>
                       <td style={{padding:'10px 8px'}}><StatusBadge status={f.status} /></td>
                       <td style={{padding:'10px 8px', textAlign:'right', whiteSpace:'nowrap'}}>
-                        <button onClick={() => setDetailModal(f.id)} title="Vezi detaliu" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.muted, marginRight:4}}>👁</button>
-                        {canEdit && <button onClick={() => setDetailModal(f.id)} title="Editează" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.logistica, marginRight:4}}>✎</button>}
-                        {canEdit && <button onClick={() => handleQuickDeleteFisa(f)} title="Șterge fișa" style={{...S.btnS, padding:'8px 12px', fontSize:16, color:G.red, borderColor:G.red + '44'}}>🗑</button>}
+                        <button onClick={() => setDetailModal(f.id)} title="Vezi detaliu" style={{...S.btnS, padding:'8px 10px', fontSize:16, color:G.muted, marginRight:3}}>👁</button>
+                        {canEdit && <button onClick={() => setDetailModal(f.id)} title="Editează" style={{...S.btnS, padding:'8px 10px', fontSize:16, color:G.logistica, marginRight:3}}>✎</button>}
+                        <button 
+                          onClick={() => setIstoricModal({ activ: a })} 
+                          title="Istoric service utilaj" 
+                          style={{...S.btnS, padding:'8px 10px', fontSize:14, color:G.blue, borderColor:G.blue + '44', marginRight:3}}>📜</button>
+                        <button 
+                          onClick={async () => {
+                            const intrari = f.logistica_service_intrari || []
+                            await generateServicePDF(f, intrari, a, showToast)
+                          }} 
+                          title="Export PDF" 
+                          style={{...S.btnS, padding:'8px 10px', fontSize:14, color:G.red, borderColor:G.red + '44', marginRight:3}}>📄</button>
+                        {canEdit && <button onClick={() => handleQuickDeleteFisa(f)} title="Șterge fișa" style={{...S.btnS, padding:'8px 10px', fontSize:14, color:G.red, borderColor:G.red + '44'}}>🗑</button>}
                       </td>
                     </tr>
                   )
@@ -1580,6 +1951,19 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
           canEdit={canEdit}
           onClose={() => setAcoperireModal(false)}
           onCreateFor={(activId) => { setAcoperireModal(false); setNewModal({ activPreset: activId }) }}
+        />
+      )}
+      
+      {/* ETAPA 8.7: Modal istoric service per utilaj */}
+      {istoricModal && (
+        <IstoricServiceModal
+          activ={istoricModal.activ}
+          onClose={() => setIstoricModal(null)}
+          onOpenFisa={(fisaId) => {
+            setIstoricModal(null)
+            setDetailModal(fisaId)
+          }}
+          showToast={showToast}
         />
       )}
     </>

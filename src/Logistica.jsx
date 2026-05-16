@@ -62,7 +62,11 @@ function Toast({ toast }) {
 }
 
 // ─── Badges ──────────────────────────────────────────────────────────────────
-function StareBadge({ stare }) {
+function StareBadge({ stare, deepSleep }) {
+  // ETAPA 8.7: Deep Sleep override - când e activ, afișez badge dedicat indiferent de stare
+  if (deepSleep) {
+    return <span style={{display:'inline-block',padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:700,letterSpacing:'.3px',background:'#8B5CF622',color:'#A78BFA'}}>💤 Deep Sleep</span>
+  }
   const cfg = {
     'Functional': { bg: G.green+'22', color: G.green, label: '✓ Funcțional' },
     'Nefunctional': { bg: G.red+'22', color: G.red, label: '✗ Nefuncțional' },
@@ -989,6 +993,10 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     necesita_pilot: a?.necesita_pilot || false,
     restrictii_ore: a?.restrictii_ore || '',
     note_transport_special: a?.note_transport_special || '',
+    // ETAPA 8.7: Deep Sleep — utilaj stricat lung, exclus din alerte
+    deep_sleep: a?.deep_sleep || false,
+    deep_sleep_motiv: a?.deep_sleep_motiv || '',
+    deep_sleep_data: a?.deep_sleep_data || '',
   })
   
   const [form, setForm] = useState(fromActiv(activ))
@@ -1080,16 +1088,30 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       necesita_pilot: !!form.necesita_pilot,
       restrictii_ore: form.restrictii_ore.trim() || null,
       note_transport_special: form.note_transport_special.trim() || null,
+      // ETAPA 8.7: Deep Sleep
+      deep_sleep: !!form.deep_sleep,
+      deep_sleep_motiv: form.deep_sleep ? (form.deep_sleep_motiv?.trim() || null) : null,
+      deep_sleep_data: form.deep_sleep ? (form.deep_sleep_data || new Date().toISOString().split('T')[0]) : null,
     }
     
     let result
     if (mode === 'create') {
       const { data: { user } } = await supabase.auth.getUser()
+      // ETAPA 8.7: setez deep_sleep_by când user-ul bifează la creare
+      if (form.deep_sleep) payload.deep_sleep_by = user?.id
       result = await supabase.from('logistica_active')
         .insert({ ...payload, created_by: user?.id })
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
         .single()
     } else {
+      // ETAPA 8.7: deep_sleep_by setat doar când utilajul TOCMAI a fost bifat (înainte nu era)
+      if (form.deep_sleep && !activ?.deep_sleep) {
+        const { data: { user } } = await supabase.auth.getUser()
+        payload.deep_sleep_by = user?.id
+      } else if (!form.deep_sleep) {
+        // Dacă a fost debifat → reset by/data
+        payload.deep_sleep_by = null
+      }
       result = await supabase.from('logistica_active')
         .update(payload).eq('id', activ.id)
         .select('*, logistica_categorii(tip, subcategorie), logistica_mentenanta_plan(urmatoarea_data, urmatoarea_ore)')
@@ -1159,7 +1181,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
               <div style={{display:'flex', gap: 8, alignItems:'center', flexWrap:'wrap', marginTop: 4}}>
                 {activ?.cod_intern && <span style={{background: G.blue+'22', color: G.blue, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 12}}>{activ.cod_intern}</span>}
                 {activ?.nr_inmatriculare && <span style={{background: G.purple+'22', color: G.purple, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 12}}>🚗 {activ.nr_inmatriculare}</span>}
-                <StareBadge stare={activ?.stare} />
+                <StareBadge stare={activ?.stare} deepSleep={activ?.deep_sleep} />
               </div>
             )}
           </div>
@@ -1221,6 +1243,53 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="An fabricație" value={form.an_fabricatie} onChange={v => setField('an_fabricatie', v)} type="number" placeholder="ex: 2018" readonly={isReadOnly} />
             <FieldSelect label="Stare" value={form.stare} onChange={v => setField('stare', v)} options={STARI} readonly={isReadOnly} />
           </div>
+        </div>
+        
+        {/* ETAPA 8.7: Deep Sleep — utilaj stricat lung, exclus din alerte */}
+        <div style={{marginBottom: 14, background: form.deep_sleep ? '#8B5CF622' : 'transparent', border: form.deep_sleep ? '1px solid #8B5CF655' : `1px dashed ${G.border}`, borderRadius: 10, padding: 14}}>
+          <div style={{display:'flex', alignItems:'center', gap:10, marginBottom: form.deep_sleep ? 12 : 0}}>
+            <input 
+              type="checkbox" 
+              id="deep_sleep_checkbox"
+              checked={!!form.deep_sleep} 
+              disabled={isReadOnly}
+              onChange={e => setField('deep_sleep', e.target.checked)}
+              style={{width:18, height:18, cursor: isReadOnly ? 'default' : 'pointer', accentColor: '#8B5CF6'}}
+            />
+            <label htmlFor="deep_sleep_checkbox" style={{flex:1, cursor: isReadOnly ? 'default' : 'pointer', userSelect:'none'}}>
+              <div style={{fontSize: 13, color: form.deep_sleep ? '#A78BFA' : G.text, fontWeight: 700}}>
+                💤 Deep Sleep {form.deep_sleep && <span style={{fontSize: 10, padding:'2px 8px', background:'#8B5CF633', color:'#A78BFA', borderRadius:10, marginLeft:8}}>ACTIV</span>}
+              </div>
+              <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                Utilaj/vehicul stricat pe perioadă lungă. <strong>Exclus complet din alerte</strong> (revizii, scadențe, telemetrie). De expertizat dacă mai folosim sau casăm.
+              </div>
+            </label>
+            {form.deep_sleep && activ?.deep_sleep_data && (
+              <div style={{fontSize: 11, color: G.muted, textAlign:'right'}}>
+                <div>din <strong style={{color:G.text}}>{new Date(activ.deep_sleep_data).toLocaleDateString('ro-RO')}</strong></div>
+                <div style={{fontSize:10, color:G.dim, marginTop:2}}>acum {Math.floor((Date.now() - new Date(activ.deep_sleep_data).getTime()) / 86400000)} zile</div>
+              </div>
+            )}
+          </div>
+          {form.deep_sleep && (
+            <div style={{display:'grid', gridTemplateColumns:'2fr 1fr', gap: 12}}>
+              <FieldTextarea 
+                label="Motiv deep sleep (opțional)" 
+                value={form.deep_sleep_motiv} 
+                onChange={v => setField('deep_sleep_motiv', v)} 
+                rows={2}
+                placeholder="ex: Așteptare expertiză - cutie viteze defectă. Decizie casare/reparare în curs."
+                readonly={isReadOnly}
+              />
+              <FieldText 
+                label="Data setării (default: azi)" 
+                value={form.deep_sleep_data} 
+                onChange={v => setField('deep_sleep_data', v)} 
+                type="date"
+                readonly={isReadOnly}
+              />
+            </div>
+          )}
         </div>
         
         <div style={{marginBottom: 14}}>
@@ -7431,7 +7500,7 @@ export default function LogisticaPage() {
                       <td style={{fontVariantNumeric: 'tabular-nums', color: G.muted, fontSize: 12}}>
                         {a.an_fabricatie || '—'}
                       </td>
-                      <td><StareBadge stare={a.stare} /></td>
+                      <td><StareBadge stare={a.stare} deepSleep={a.deep_sleep} /></td>
                       <td><MentenantaScadenta data={ment?.urmatoarea_data} ore={ment?.urmatoarea_ore} /></td>
                       <td style={{textAlign: 'center', color: G.dim}}>›</td>
                     </tr>
