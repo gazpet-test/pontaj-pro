@@ -7451,7 +7451,18 @@ export default function LogisticaPage() {
         onSuccess={(n) => {
           showToast(`✓ ${n} înregistrări telemetrie importate. km_actuali actualizat automat.`)
           loadAll()       // refresh listă active (km_actuali update via trigger)
-          loadActive() // refresh listă active pt km_actuali updated
+          // ETAPA 8.5 FIX: refresh banner ultima telemetrie + alerte globale (km_live nou poate trigger alerte revizie)
+          supabase.from('logistica_telemetrie_zilnica')
+            .select('data')
+            .order('data', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+            .then(({ data }) => { setUltimaTelemetrieData(data?.data || null) })
+          supabase.from('v_logistica_alerte_globale')
+            .select('*')
+            .order('nivel')
+            .order('km_ramase')
+            .then(({ data }) => { setAlerteGlobale(data || []) })
         }}
       />
     </>
