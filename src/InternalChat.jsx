@@ -344,6 +344,24 @@ export default function InternalChat({ profile }) {
     return () => clearInterval(interval)
   }, [currentUserId, loadChats])
 
+  // ─── Listen for external toggle events (button în navbar) ──────────
+  useEffect(() => {
+    const toggleHandler = (e) => {
+      if (e.detail && typeof e.detail.open === 'boolean') {
+        setOpen(e.detail.open)
+      } else {
+        setOpen(o => !o)
+      }
+    }
+    window.addEventListener('gazpet:chat-toggle', toggleHandler)
+    return () => window.removeEventListener('gazpet:chat-toggle', toggleHandler)
+  }, [])
+
+  // ─── Dispatch unread count to navbar button ─────────────────────────
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('gazpet:chat-unread', { detail: { count: totalUnread } }))
+  }, [totalUnread])
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -353,65 +371,14 @@ export default function InternalChat({ profile }) {
 
   const activeChat = chats.find(c => c.id === activeChatId)
   const senderMap = new Map(members.map(m => [m.user_id, m]))
+  const [showAdminModal, setShowAdminModal] = useState(false)
+  const [showNewChatModal, setShowNewChatModal] = useState(false)
 
   if (!currentUserId) return null
 
   return (
     <>
-      {/* FLOATING BUTTON sus dreapta */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        title="Chat intern Gazpet"
-        style={{
-          position: 'fixed',
-          top: 12,
-          right: 200,
-          width: 38,
-          height: 38,
-          borderRadius: '50%',
-          background: open ? G.red : G.primary,
-          color: '#fff',
-          border: 'none',
-          boxShadow: '0 2px 8px rgba(0,0,0,.4)',
-          cursor: 'pointer',
-          fontSize: 18,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 9996,
-          transition: 'all .2s',
-        }}
-        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)' }}
-        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
-      >
-        {open ? '×' : '💬'}
-        {/* Badge unread */}
-        {!open && totalUnread > 0 && (
-          <span style={{
-            position: 'absolute',
-            top: -4,
-            right: -4,
-            background: G.red,
-            color: '#fff',
-            borderRadius: '50%',
-            minWidth: 18,
-            height: 18,
-            fontSize: 11,
-            fontWeight: 800,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: `2px solid ${G.bg}`,
-            padding: '0 5px',
-            animation: 'ic-pulse 1.5s ease-in-out infinite',
-          }}>
-            {totalUnread > 99 ? '99+' : totalUnread}
-          </span>
-        )}
-        <style>{`@keyframes ic-pulse { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.15) } }`}</style>
-      </button>
-
-      {/* CHAT PANEL */}
+      {/* CHAT PANEL (butonul e în navbar via App.jsx Layout) */}
       {open && (
         <div style={{
           position: 'fixed',
@@ -444,20 +411,37 @@ export default function InternalChat({ profile }) {
               justifyContent: 'space-between',
             }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: G.text }}>Chat-uri</div>
-              <button
-                onClick={requestNotificationPermission}
-                title={notifyEnabled ? 'Notificări active' : 'Activează notificări browser'}
-                style={{
-                  background: notifyEnabled ? G.green + '22' : 'transparent',
-                  border: `1px solid ${notifyEnabled ? G.green : G.border}`,
-                  color: notifyEnabled ? G.green : G.muted,
-                  borderRadius: 6,
-                  padding: '4px 7px',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}>
-                {notifyEnabled ? '🔔' : '🔕'}
-              </button>
+              <div style={{ display: 'flex', gap: 5 }}>
+                <button
+                  onClick={() => setShowNewChatModal(true)}
+                  title="Chat nou"
+                  style={{
+                    background: G.primary + '22',
+                    border: `1px solid ${G.primary}55`,
+                    color: G.blue,
+                    borderRadius: 6,
+                    padding: '4px 9px',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}>
+                  ➕
+                </button>
+                <button
+                  onClick={requestNotificationPermission}
+                  title={notifyEnabled ? 'Notificări active' : 'Activează notificări browser'}
+                  style={{
+                    background: notifyEnabled ? G.green + '22' : 'transparent',
+                    border: `1px solid ${notifyEnabled ? G.green : G.border}`,
+                    color: notifyEnabled ? G.green : G.muted,
+                    borderRadius: 6,
+                    padding: '4px 7px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}>
+                  {notifyEnabled ? '🔔' : '🔕'}
+                </button>
+              </div>
             </div>
             
             {/* Chats list */}
@@ -568,8 +552,8 @@ export default function InternalChat({ profile }) {
                   </div>
                   {activeChat.my_role === 'admin' && (
                     <button
-                      title="Setări chat (în curând în Partea 2)"
-                      onClick={() => alert('⚙️ Setări admini va veni în Partea 2!\nVei putea invita/scoate membri și promova/retrograda admini (max 3).')}
+                      title="Setări membri & admini"
+                      onClick={() => setShowAdminModal(true)}
                       style={{
                         background: 'transparent',
                         border: `1px solid ${G.border}`,
@@ -725,6 +709,418 @@ export default function InternalChat({ profile }) {
           </div>
         </div>
       )}
+      
+      {/* MODAL ADMIN: gestionează membri */}
+      {showAdminModal && activeChat && (
+        <AdminChatModal
+          chat={activeChat}
+          members={members}
+          currentUserId={currentUserId}
+          onClose={() => setShowAdminModal(false)}
+          onUpdate={() => {
+            loadMembers(activeChatId)
+            loadChats()
+          }}
+        />
+      )}
+      
+      {/* MODAL CHAT NOU */}
+      {showNewChatModal && (
+        <NewChatModal
+          currentUserId={currentUserId}
+          onClose={() => setShowNewChatModal(false)}
+          onCreated={(newChatId) => {
+            setShowNewChatModal(false)
+            loadChats().then(() => setActiveChatId(newChatId))
+          }}
+        />
+      )}
     </>
+  )
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODAL ADMIN: gestionează membri + admini (max 3 admini)
+// ════════════════════════════════════════════════════════════════════════════
+function AdminChatModal({ chat, members, currentUserId, onClose, onUpdate }) {
+  const [allUsers, setAllUsers] = useState([])
+  const [search, setSearch] = useState('')
+  const [busyId, setBusyId] = useState(null)
+  const [showAdd, setShowAdd] = useState(false)
+  
+  const adminCount = members.filter(m => m.member_role === 'admin').length
+  const memberIds = new Set(members.map(m => m.user_id))
+  
+  useEffect(() => {
+    if (!showAdd) return
+    ;(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, name, email, role')
+          .order('name', { ascending: true })
+        if (error) throw error
+        setAllUsers(data || [])
+      } catch (e) {
+        console.error('loadAllUsers error:', e)
+      }
+    })()
+  }, [showAdd])
+  
+  const addMember = async (userId) => {
+    setBusyId(userId)
+    try {
+      const { error } = await supabase
+        .from('chat_members')
+        .insert({ chat_id: chat.id, user_id: userId, member_role: 'member' })
+      if (error) throw error
+      onUpdate()
+    } catch (e) {
+      alert('Eroare: ' + e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  
+  const removeMember = async (userId) => {
+    if (userId === currentUserId) {
+      if (!confirm('Vrei să PĂRĂSEȘTI chatul?')) return
+    } else {
+      if (!confirm('Sigur scoți userul din chat?')) return
+    }
+    setBusyId(userId)
+    try {
+      const { error } = await supabase
+        .from('chat_members')
+        .delete()
+        .eq('chat_id', chat.id)
+        .eq('user_id', userId)
+      if (error) throw error
+      onUpdate()
+      if (userId === currentUserId) onClose()
+    } catch (e) {
+      alert('Eroare: ' + e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  
+  const toggleAdmin = async (userId, currentRole) => {
+    const newRole = currentRole === 'admin' ? 'member' : 'admin'
+    if (newRole === 'admin' && adminCount >= 3) {
+      alert('⚠️ Max 3 admini per chat. Retrogradează unul mai întâi.')
+      return
+    }
+    if (newRole === 'member' && adminCount <= 1) {
+      alert('⚠️ Trebuie să fie minim 1 admin. Promovează pe altcineva mai întâi.')
+      return
+    }
+    setBusyId(userId)
+    try {
+      const { error } = await supabase
+        .from('chat_members')
+        .update({ member_role: newRole })
+        .eq('chat_id', chat.id)
+        .eq('user_id', userId)
+      if (error) throw error
+      onUpdate()
+    } catch (e) {
+      alert('Eroare: ' + e.message)
+    } finally {
+      setBusyId(null)
+    }
+  }
+  
+  const filteredUsers = allUsers.filter(u => 
+    !memberIds.has(u.id) && 
+    (u.name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase()))
+  )
+  
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 10000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: G.surface, border: `1px solid ${G.border2}`, borderRadius: 14,
+        width: 'min(560px, calc(100vw - 32px))', maxHeight: '85vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        boxShadow: '0 20px 60px rgba(0,0,0,.7)',
+      }}>
+        <div style={{ padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>⚙️ Setări „{chat.name}"</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
+              {members.length} membri · {adminCount}/3 admini
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: G.muted, fontSize: 26, cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 18px' }}>
+          {!showAdd ? (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 13, color: G.muted, fontWeight: 700 }}>MEMBRI</div>
+                <button onClick={() => setShowAdd(true)} style={{
+                  background: G.primary, color: '#fff', border: 'none', borderRadius: 6,
+                  padding: '6px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                }}>+ Adaugă membru</button>
+              </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {members.map(m => {
+                  const isAdmin = m.member_role === 'admin'
+                  const isMe = m.user_id === currentUserId
+                  return (
+                    <div key={m.user_id} style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '10px 12px', background: G.bg, border: `1px solid ${G.border}`,
+                      borderRadius: 8,
+                    }}>
+                      <Avatar name={m.name} userId={m.user_id} size={34} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>
+                          {m.name} {isMe && <span style={{ color: G.muted, fontWeight: 400 }}>(tu)</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: G.muted, display: 'flex', gap: 8, alignItems: 'center' }}>
+                          {isAdmin && <span style={{ color: G.yellow, fontWeight: 700 }}>👑 ADMIN</span>}
+                          {m.role && <span>· {m.role}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 5 }}>
+                        <button
+                          onClick={() => toggleAdmin(m.user_id, m.member_role)}
+                          disabled={busyId === m.user_id}
+                          title={isAdmin ? 'Retrogradează la membru' : 'Promovează la admin'}
+                          style={{
+                            background: isAdmin ? G.yellow + '22' : 'transparent',
+                            color: isAdmin ? G.yellow : G.muted,
+                            border: `1px solid ${isAdmin ? G.yellow : G.border}`,
+                            borderRadius: 6, padding: '5px 9px', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+                          }}>
+                          {isAdmin ? '⬇️' : '⬆️'}
+                        </button>
+                        <button
+                          onClick={() => removeMember(m.user_id)}
+                          disabled={busyId === m.user_id}
+                          title={isMe ? 'Părăsește chat' : 'Scoate din chat'}
+                          style={{
+                            background: G.red + '22', color: G.red,
+                            border: `1px solid ${G.red}55`,
+                            borderRadius: 6, padding: '5px 9px', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+                          }}>
+                          {isMe ? '🚪' : '🗑'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 13, color: G.muted, fontWeight: 700 }}>ADAUGĂ MEMBRU</div>
+                <button onClick={() => setShowAdd(false)} style={{
+                  background: 'transparent', color: G.muted, border: `1px solid ${G.border}`,
+                  borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer',
+                }}>← Înapoi</button>
+              </div>
+              
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Caută după nume sau email..."
+                autoFocus
+                style={{
+                  width: '100%', background: G.bg, border: `1px solid ${G.border2}`,
+                  color: G.text, borderRadius: 8, padding: '10px 14px', fontSize: 14,
+                  marginBottom: 10, outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 400, overflowY: 'auto' }}>
+                {filteredUsers.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 20, color: G.muted, fontSize: 13 }}>
+                    {search ? 'Niciun user găsit' : 'Toți userii sunt deja membri'}
+                  </div>
+                ) : filteredUsers.map(u => (
+                  <button
+                    key={u.id}
+                    onClick={() => addMember(u.id)}
+                    disabled={busyId === u.id}
+                    style={{
+                      background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8,
+                      padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10,
+                      cursor: 'pointer', textAlign: 'left',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = G.primary + '22' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = G.bg }}
+                  >
+                    <Avatar name={u.name} userId={u.id} size={30} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{u.name || u.email}</div>
+                      <div style={{ fontSize: 10, color: G.muted }}>{u.role || u.email}</div>
+                    </div>
+                    <span style={{ color: G.green, fontSize: 18 }}>+</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// MODAL CHAT NOU
+// ════════════════════════════════════════════════════════════════════════════
+function NewChatModal({ currentUserId, onClose, onCreated }) {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [emoji, setEmoji] = useState('💬')
+  const [creating, setCreating] = useState(false)
+  
+  const emojiOptions = ['💬', '🏗️', '🚛', '👥', '⚡', '🔧', '📋', '🎯', '🛠️', '🚨', '🎉', '☕']
+  
+  const create = async () => {
+    if (!name.trim()) {
+      alert('Numele chat-ului e obligatoriu')
+      return
+    }
+    setCreating(true)
+    try {
+      // 1. Creează chatul
+      const { data: chat, error: chatErr } = await supabase
+        .from('internal_chats')
+        .insert({
+          name: name.trim(),
+          description: description.trim() || null,
+          chat_type: 'group',
+          is_general: false,
+          avatar_emoji: emoji,
+          created_by: currentUserId,
+        })
+        .select()
+        .single()
+      if (chatErr) throw chatErr
+      
+      // 2. Adăugă creator-ul ca ADMIN
+      const { error: memErr } = await supabase
+        .from('chat_members')
+        .insert({
+          chat_id: chat.id,
+          user_id: currentUserId,
+          member_role: 'admin',
+        })
+      if (memErr) throw memErr
+      
+      onCreated(chat.id)
+    } catch (e) {
+      alert('Eroare la creare: ' + e.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+  
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 10000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: G.surface, border: `1px solid ${G.border2}`, borderRadius: 14,
+        width: 'min(480px, calc(100vw - 32px))',
+        boxShadow: '0 20px 60px rgba(0,0,0,.7)', overflow: 'hidden',
+      }}>
+        <div style={{ padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>➕ Chat nou</div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: G.muted, fontSize: 26, cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        
+        <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Emoji */}
+          <div>
+            <div style={{ fontSize: 12, color: G.muted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>Iconiță</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {emojiOptions.map(e => (
+                <button
+                  key={e}
+                  onClick={() => setEmoji(e)}
+                  style={{
+                    width: 38, height: 38, borderRadius: 8, fontSize: 20,
+                    background: emoji === e ? G.primary + '33' : G.bg,
+                    border: `1.5px solid ${emoji === e ? G.primary : G.border}`,
+                    cursor: 'pointer',
+                  }}>{e}</button>
+              ))}
+            </div>
+          </div>
+          
+          {/* Nume */}
+          <div>
+            <div style={{ fontSize: 12, color: G.muted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>Nume *</div>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="ex: Șantier Mihăești, Echipa Tehnică..."
+              autoFocus
+              maxLength={80}
+              style={{
+                width: '100%', background: G.bg, border: `1px solid ${G.border2}`,
+                color: G.text, borderRadius: 8, padding: '10px 14px', fontSize: 14,
+                outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          
+          {/* Descriere */}
+          <div>
+            <div style={{ fontSize: 12, color: G.muted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>Descriere (opțional)</div>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="La ce folosește chatul"
+              rows={2}
+              maxLength={200}
+              style={{
+                width: '100%', background: G.bg, border: `1px solid ${G.border2}`,
+                color: G.text, borderRadius: 8, padding: '10px 14px', fontSize: 13,
+                outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit',
+              }}
+            />
+          </div>
+          
+          <div style={{ fontSize: 11, color: G.muted, padding: '8px 10px', background: G.primary + '11', borderRadius: 6, border: `1px solid ${G.primary}33` }}>
+            ℹ️ Tu vei fi ADMIN. Adaugi membrii din ⚙️ Setări după ce creezi chat-ul (max 3 admini).
+          </div>
+        </div>
+        
+        <div style={{ padding: '12px 18px', borderTop: `1px solid ${G.border}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{
+            background: 'transparent', color: G.muted, border: `1px solid ${G.border}`,
+            borderRadius: 8, padding: '9px 18px', fontSize: 13, cursor: 'pointer',
+          }}>Anulează</button>
+          <button
+            onClick={create}
+            disabled={creating || !name.trim()}
+            style={{
+              background: (creating || !name.trim()) ? G.border2 : G.primary,
+              color: '#fff', border: 'none', borderRadius: 8,
+              padding: '9px 18px', fontSize: 14, fontWeight: 700,
+              cursor: (creating || !name.trim()) ? 'default' : 'pointer',
+            }}>
+            {creating ? '⏳ Creez...' : '✓ Creează chat'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

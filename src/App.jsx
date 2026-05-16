@@ -297,6 +297,71 @@ function ChangePasswordModal({ onClose }) {
   )
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CHAT NAV BUTTON — buton chat intern în navbar (comunica cu InternalChat via events)
+// ════════════════════════════════════════════════════════════════════════════
+function ChatNavButton() {
+  const [open, setOpen] = useState(false)
+  const [unread, setUnread] = useState(0)
+  
+  useEffect(() => {
+    const unreadHandler = (e) => setUnread(e.detail?.count || 0)
+    window.addEventListener('gazpet:chat-unread', unreadHandler)
+    return () => window.removeEventListener('gazpet:chat-unread', unreadHandler)
+  }, [])
+  
+  const toggle = () => {
+    const newState = !open
+    setOpen(newState)
+    window.dispatchEvent(new CustomEvent('gazpet:chat-toggle', { detail: { open: newState } }))
+  }
+  
+  return (
+    <button
+      onClick={toggle}
+      title="Chat intern Gazpet"
+      style={{
+        position: 'relative',
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '7px 12px',
+        background: open ? G.red + '22' : G.primary + '22',
+        color: open ? G.red : G.blue,
+        border: `1px solid ${open ? G.red + '55' : G.primary + '55'}`,
+        borderRadius: 8,
+        fontSize: 14,
+        fontWeight: 700,
+        cursor: 'pointer',
+        transition: 'all .15s',
+        fontFamily: 'inherit',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)' }}
+      onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
+    >
+      {open ? '✕' : '💬'} Chat
+      {!open && unread > 0 && (
+        <span style={{
+          background: G.red,
+          color: '#fff',
+          borderRadius: '50%',
+          minWidth: 18,
+          height: 18,
+          fontSize: 10,
+          fontWeight: 800,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 5px',
+          animation: 'cn-pulse 1.5s ease-in-out infinite',
+        }}>
+          {unread > 99 ? '99+' : unread}
+        </span>
+      )}
+      <style>{`@keyframes cn-pulse { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.18) } }`}</style>
+    </button>
+  )
+}
+
+
 function Layout({ children }) {
   const { profile, signOut } = useAuth()
   const nav = useNavigate(); const loc = useLocation()
@@ -352,6 +417,7 @@ function Layout({ children }) {
               🚚 Cere transport
             </button>
           )}
+          <ChatNavButton />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
             <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
@@ -414,7 +480,8 @@ function HomeDashboard() {
           <div style={{fontSize:18,fontWeight:800,color:'#58A6FF',fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
           <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
+        <ChatNavButton />
+        <div style={{display:'flex',alignItems:'center',gap:10,marginLeft:10}}>
           <Avatar name={profile?.name} id={1} size={32}/>
           <div>
             <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
