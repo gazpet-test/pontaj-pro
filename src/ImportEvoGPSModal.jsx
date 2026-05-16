@@ -220,11 +220,69 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
     return m
   }, [assetsBD])
 
+  // ETAPA 8.5 FIX: detectează conflict de marcă între nume EvoGPS și asset BD
+  // Pentru PREFIX match (nume trunchiat), verifică compatibilitatea brand-ului
+  // ca să evităm false positives ca „Mercedes AXOR PH 22" → „PH 22 CZZ VOLKSWAGEN"
+  const marcaCompatibila = (evogpsName, assetMarca) => {
+    if (!evogpsName || !assetMarca) return true // benefit of the doubt când lipsește info
+    
+    // Primul cuvânt din numele EvoGPS = de obicei marca (Mercedes-Benz / Nissan / Volkswagen)
+    const evoFirstWord = String(evogpsName).split(/\s+/)[0].toLowerCase()
+      .replace(/-/g, '')  // „mercedes-benz" → „mercedesbenz"
+    const bdMarca = String(assetMarca).toLowerCase().replace(/-/g, '').trim()
+    
+    if (!evoFirstWord || !bdMarca) return true
+    
+    // Direct match: unul conține pe celălalt
+    if (bdMarca.includes(evoFirstWord) || evoFirstWord.includes(bdMarca)) return true
+    
+    // Sinonime / abrevieri comune ale producătorilor
+    const sinonime = {
+      mercedesbenz: ['mercedes', 'mb'],
+      volkswagen: ['vw', 'volkswagen'],
+      man: ['man'],
+      iveco: ['iveco'],
+      mitsubishi: ['mitsubishi'],
+      nissan: ['nissan'],
+      renault: ['renault'],
+      dacia: ['dacia'],
+      ford: ['ford'],
+      toyota: ['toyota'],
+      skoda: ['skoda', 'škoda'],
+      subaru: ['subaru'],
+      maserati: ['maserati'],
+      bmw: ['bmw'],
+      audi: ['audi'],
+      opel: ['opel'],
+      peugeot: ['peugeot'],
+      citroen: ['citroen', 'citroën'],
+      hyundai: ['hyundai'],
+      kia: ['kia'],
+      fiat: ['fiat'],
+      caterpillar: ['cat', 'caterpillar'],
+      komatsu: ['komatsu'],
+      liebherr: ['liebherr'],
+      atlascopco: ['atlas', 'atlascopco'],
+      pramac: ['pramac'],
+      sunward: ['sunward'],
+      cummins: ['cummins'],
+      jcb: ['jcb'],
+      bobcat: ['bobcat'],
+    }
+    for (const [canonical, vals] of Object.entries(sinonime)) {
+      const matchEvo = evoFirstWord === canonical || vals.some(v => evoFirstWord.includes(v) || v.includes(evoFirstWord))
+      const matchBd = bdMarca === canonical || vals.some(v => bdMarca.includes(v) || v.includes(bdMarca))
+      if (matchEvo && matchBd) return true
+    }
+    return false
+  }
+
   // Auto-match: pentru fiecare vehicul EvoGPS, găsește asset_id
   const matchedVehicles = useMemo(() => {
     return parsedVehicles.map(v => {
       let asset = null
       let matchType = 'none' // 'exact' | 'prefix' | 'manual' | 'none'
+      let conflict = false   // true dacă PREFIX match dar marca incompatibilă
       // Manual override
       if (assignments[v.evogps_name]) {
         asset = assetsBD.find(a => a.id === assignments[v.evogps_name])
@@ -240,22 +298,33 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
           }
         }
       }
+      // NOU: pentru PREFIX match, verifică conflict marcă
+      // EXACT match NU verifică (numărul e match perfect deci sigur OK)
+      // MANUAL match e responsabilitatea userului
+      if (matchType === 'prefix' && asset) {
+        if (!marcaCompatibila(v.evogps_name, asset.marca)) {
+          conflict = true
+        }
+      }
       // Check duplicate per zi
       const daysWithStatus = v.days.map(d => ({
         ...d,
-        is_duplicate: asset ? existingTelem.has(`${asset.id}_${d.data}`) : false,
+        is_duplicate: asset && !conflict ? existingTelem.has(`${asset.id}_${d.data}`) : false,
       }))
-      return { ...v, asset, matchType, daysWithStatus }
+      return { ...v, asset, matchType, conflict, daysWithStatus }
     })
   }, [parsedVehicles, assignments, assetsBD, assetsByNr, existingTelem])
 
   const stats = useMemo(() => {
-    const s = { matched: 0, unmatched: 0, duplicate_days: 0, total_days: 0, new_days: 0 }
+    const s = { matched: 0, unmatched: 0, conflict: 0, duplicate_days: 0, total_days: 0, new_days: 0 }
     for (const v of matchedVehicles) {
-      if (v.asset) s.matched++; else s.unmatched++
+      if (v.conflict) s.conflict++
+      else if (v.asset) s.matched++
+      else s.unmatched++
       for (const d of v.daysWithStatus) {
         s.total_days++
-        if (d.is_duplicate) s.duplicate_days++; else if (v.asset) s.new_days++
+        if (d.is_duplicate) s.duplicate_days++
+        else if (v.asset && !v.conflict) s.new_days++
       }
     }
     return s
@@ -317,6 +386,7 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
     const rows = []
     for (const v of matchedVehicles) {
       if (!v.asset) continue
+      if (v.conflict) continue   // ETAPA 8.5 FIX: skip match-uri cu conflict de marcă (PREFIX dubios)
       for (const d of v.daysWithStatus) {
         if (d.is_duplicate) continue
         rows.push({
@@ -343,18 +413,32 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
     }
     setImporting(true)
     try {
-      // Insert în chunks de 500 (limite Supabase)
+      // ETAPA 8.5 FIX: dedup în memorie pe (asset_id, data, sursa) - păstrez ultima ocurență
+      // Asta protejează contra XLSX cu același vehicul detectat de 2x pentru aceeași zi
+      const dedupMap = new Map()
+      for (const r of rows) {
+        const key = `${r.asset_id}|${r.data}|${r.sursa || 'evogps'}`
+        dedupMap.set(key, r)  // ultima ocurență câștigă
+      }
+      const dedupedRows = Array.from(dedupMap.values())
+      const dupCount = rows.length - dedupedRows.length
+      if (dupCount > 0) {
+        console.warn(`[ImportEvoGPS] ${dupCount} duplicate eliminate din ${rows.length} rânduri`)
+      }
+      
+      // Upsert în chunks de 500 (limite Supabase) - ON CONFLICT face UPDATE in loc de eroare
       const chunkSize = 500
       let inserted = 0
-      for (let i = 0; i < rows.length; i += chunkSize) {
-        const chunk = rows.slice(i, i + chunkSize)
-        const { error, count } = await supabase
+      for (let i = 0; i < dedupedRows.length; i += chunkSize) {
+        const chunk = dedupedRows.slice(i, i + chunkSize)
+        const { error } = await supabase
           .from('logistica_telemetrie_zilnica')
-          .insert(chunk)
+          .upsert(chunk, { onConflict: 'asset_id,data,sursa', ignoreDuplicates: false })
         if (error) throw error
         inserted += chunk.length
       }
-      setToast({ type: 'success', msg: `✓ Importate ${inserted} înregistrări telemetrie din ${stats.matched} vehicule. km_actuali actualizat automat prin trigger.` })
+      const msgSuffix = dupCount > 0 ? ` (${dupCount} duplicate eliminate)` : ''
+      setToast({ type: 'success', msg: `✓ Importate ${inserted} înregistrări telemetrie din ${stats.matched} vehicule${msgSuffix}. km_actuali actualizat automat prin trigger.` })
       setStep('done')
       onSuccess && onSuccess(inserted)
     } catch (e) {
@@ -442,23 +526,37 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
           {/* STEP PREVIEW */}
           {step === 'preview' && (
             <div>
-              {/* Stats */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+              {/* Stats - 5 carduri (am adăugat Conflict marcă) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 16 }}>
                 <StatBox title="✓ Match auto" value={stats.matched} sub="vehicule" color={colors.green} colors={colors} />
+                <StatBox title="🚨 Conflict marcă" value={stats.conflict} sub="dubios — nu se importă" color={colors.red} colors={colors} />
                 <StatBox title="⚠ Nematche" value={stats.unmatched} sub="vehicule" color={colors.orange} colors={colors} />
                 <StatBox title="📅 Total zile" value={stats.total_days} sub={`${stats.new_days} noi · ${stats.duplicate_days} duplicate`} color={colors.blue} colors={colors} />
-                <StatBox title="📁 Fișier" value={file?.name?.slice(0, 18) || '-'} sub={`${(file?.size / 1024).toFixed(0)} KB`} color={colors.muted} colors={colors} />
+                <StatBox title="📁 Fișier" value={file?.name?.slice(0, 14) || '-'} sub={`${(file?.size / 1024).toFixed(0)} KB`} color={colors.muted} colors={colors} />
               </div>
 
-              {/* Tabs */}
-              <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${colors.border}`, marginBottom: 12 }}>
-                {['matched', 'unmatched', 'duplicate'].map(t => {
-                  const labels = { matched: '✓ Matched', unmatched: '⚠ Nematche', duplicate: '🔁 Duplicate' }
-                  const counts = { matched: stats.matched, unmatched: stats.unmatched, duplicate: stats.duplicate_days }
+              {/* Alertă vizibilă dacă există conflicte */}
+              {stats.conflict > 0 && (
+                <div style={{
+                  padding: '10px 14px', borderRadius: 6, marginBottom: 12,
+                  background: colors.red + '15', border: `1px solid ${colors.red}55`,
+                  color: colors.red, fontSize: 12, lineHeight: 1.5,
+                }}>
+                  🚨 <strong>{stats.conflict} vehicule au match dubios</strong> — numele EvoGPS e trunchiat (ex: „PH 22") și parser-ul l-a asociat cu PRIMA placă din BD care începe cu acel pattern, dar <strong>marca nu coincide</strong>. <strong>Aceste vehicule NU se vor importa</strong>. Recomandare: în EvoGPS modifică numele complet (ex: „Mercedes AXOR PH 22 ABC"), apoi re-export și re-import.
+                </div>
+              )}
+
+              {/* Tabs - 4 acum (am adăugat conflict) */}
+              <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${colors.border}`, marginBottom: 12, flexWrap: 'wrap' }}>
+                {['matched', 'conflict', 'unmatched', 'duplicate'].map(t => {
+                  const labels = { matched: '✓ Matched', conflict: '🚨 Conflict marcă', unmatched: '⚠ Nematche', duplicate: '🔁 Duplicate' }
+                  const counts = { matched: stats.matched, conflict: stats.conflict, unmatched: stats.unmatched, duplicate: stats.duplicate_days }
+                  const tabColor = { matched: colors.green, conflict: colors.red, unmatched: colors.orange, duplicate: colors.muted }
                   return (
                     <button key={t} onClick={() => setTab(t)} style={{
                       background: 'none', border: 'none', padding: '10px 16px', cursor: 'pointer',
-                      color: tab === t ? colors.text : colors.muted, fontWeight: tab === t ? 700 : 400,
+                      color: tab === t ? colors.text : (counts[t] > 0 ? tabColor[t] : colors.muted), 
+                      fontWeight: tab === t ? 700 : 400,
                       borderBottom: `2px solid ${tab === t ? colors.blue : 'transparent'}`, fontSize: 13,
                     }}>
                       {labels[t]} ({counts[t]})
@@ -470,9 +568,18 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
               {/* Tab content */}
               {tab === 'matched' && (
                 <VehiclesTable
-                  vehicles={matchedVehicles.filter(v => v.asset)}
+                  vehicles={matchedVehicles.filter(v => v.asset && !v.conflict)}
                   colors={colors}
                   showDays
+                />
+              )}
+              {tab === 'conflict' && (
+                <ConflictTable
+                  vehicles={matchedVehicles.filter(v => v.conflict)}
+                  assets={assetsBD}
+                  assignments={assignments}
+                  setAssignments={setAssignments}
+                  colors={colors}
                 />
               )}
               {tab === 'unmatched' && (
@@ -486,20 +593,21 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
               )}
               {tab === 'duplicate' && (
                 <DuplicatesTable
-                  vehicles={matchedVehicles.filter(v => v.asset && v.daysWithStatus.some(d => d.is_duplicate))}
+                  vehicles={matchedVehicles.filter(v => v.asset && !v.conflict && v.daysWithStatus.some(d => d.is_duplicate))}
                   colors={colors}
                 />
               )}
             </div>
           )}
 
-          {/* STEP DONE */}
+          {/* STEP DONE - cu raport vehicule fără GPS */}
           {step === 'done' && (
-            <div style={{ textAlign: 'center', padding: 40 }}>
-              <div style={{ fontSize: 60, marginBottom: 16 }}>✅</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: colors.green, marginBottom: 8 }}>Import finalizat!</div>
-              <div style={{ fontSize: 13, color: colors.muted }}>km_actuali actualizat automat în logistica_active pentru toate vehiculele importate.</div>
-            </div>
+            <DoneReport 
+              matchedVehicles={matchedVehicles}
+              assetsBD={assetsBD}
+              colors={colors}
+              fileSize={file?.size}
+            />
           )}
         </div>
 
@@ -700,6 +808,186 @@ function DuplicatesTable({ vehicles, colors }) {
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function ConflictTable({ vehicles, assets, assignments, setAssignments, colors }) {
+  if (vehicles.length === 0) return <div style={{ color: colors.green, fontSize: 13, padding: 20, textAlign: 'center' }}>✓ Niciun conflict de marcă — toate match-urile sunt sigure.</div>
+  return (
+    <div style={{ maxHeight: '50vh', overflowY: 'auto' }}>
+      <div style={{ fontSize: 12, color: colors.muted, marginBottom: 10, lineHeight: 1.5, padding: 10, background: colors.red + '11', borderRadius: 6, border: `1px solid ${colors.red}33` }}>
+        🚨 Aceste vehicule au numele EvoGPS <strong>trunchiat</strong> (ex: „Mercedes AXOR PH 22"). Parser-ul a găsit un vehicul în BD care începe cu acel pattern (ex: „PH 22 CZZ"), dar <strong>marca diferă</strong>. <strong>NU se vor importa</strong>. Soluție: în EvoGPS modifică numele vehiculului să fie complet (ex: „Mercedes AXOR PH 22 ABC"), apoi re-export și re-import. Sau asignează manual aici dacă match-ul e totuși corect.
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead style={{ position: 'sticky', top: 0, background: '#1C2128' }}>
+          <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+            <th style={{ padding: 8, textAlign: 'left', color: colors.muted }}>Nume EvoGPS</th>
+            <th style={{ padding: 8, textAlign: 'left', color: colors.muted }}>Nr extras</th>
+            <th style={{ padding: 8, textAlign: 'left', color: colors.muted }}>Match dubios BD</th>
+            <th style={{ padding: 8, textAlign: 'left', color: colors.muted }}>Corectare manuală</th>
+            <th style={{ padding: 8, textAlign: 'center', color: colors.muted }}>Zile</th>
+          </tr>
+        </thead>
+        <tbody>
+          {vehicles.map((v, i) => (
+            <tr key={i} style={{ borderBottom: `1px solid ${colors.border}33` }}>
+              <td style={{ padding: 8, color: colors.text, fontWeight: 600 }}>{v.evogps_name}</td>
+              <td style={{ padding: 8, color: colors.orange, fontFamily: 'monospace' }}>{v.nr_extracted}</td>
+              <td style={{ padding: 8 }}>
+                <div style={{ fontSize: 11 }}>
+                  <span style={{ color: colors.red, fontFamily: 'monospace', fontWeight: 700 }}>{v.asset?.nr_inmatriculare}</span>
+                  <span style={{ color: colors.muted, marginLeft: 4 }}>· {v.asset?.marca}</span>
+                </div>
+                <div style={{ fontSize: 10, color: colors.red, marginTop: 2 }}>⚠ marca diferă</div>
+              </td>
+              <td style={{ padding: 8 }}>
+                <select
+                  value={assignments[v.evogps_name] || ''}
+                  onChange={e => setAssignments({ ...assignments, [v.evogps_name]: Number(e.target.value) || null })}
+                  style={{ background: '#0D1117', color: colors.text, border: `1px solid ${colors.border}`, padding: '4px 8px', borderRadius: 4, fontSize: 12, minWidth: 280 }}
+                >
+                  <option value="">— Confirm manual / sau lasă neimportat —</option>
+                  {assets.filter(a => !a.vandut).map(a => (
+                    <option key={a.id} value={a.id}>{a.nr_inmatriculare} · {a.marca} {a.model?.slice(0, 30)}</option>
+                  ))}
+                </select>
+              </td>
+              <td style={{ padding: 8, textAlign: 'center', color: colors.text, fontWeight: 700 }}>{v.total_days}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function DoneReport({ matchedVehicles, assetsBD, colors, fileSize }) {
+  // Calculez RAPOARTE după import:
+  // 1. Vehicule fără GPS (în BD dar nu au fost importate niciodată via EvoGPS - inclusiv acest import)
+  // 2. Vehicule cu match dubios care n-au fost importate (conflict marcă)
+  // 3. Vehicule nematchete (parser nu a identificat)
+  
+  const reports = useMemo(() => {
+    // Asset IDs care AU primit import în această sesiune
+    const importateNow = new Set()
+    for (const v of matchedVehicles) {
+      if (v.asset && !v.conflict) importateNow.add(v.asset.id)
+    }
+    
+    // Vehicule active din BD care NU au fost importate
+    const faraGPS = assetsBD.filter(a => 
+      !a.vandut && 
+      !importateNow.has(a.id) &&
+      a.stare !== 'casata' &&
+      a.stare !== 'inactiv'
+    )
+    
+    // Conflict-uri (PREFIX match cu marca incompatibilă)
+    const conflicte = matchedVehicles.filter(v => v.conflict)
+    
+    // Nematched (nu am găsit nimic în BD)
+    const nematched = matchedVehicles.filter(v => !v.asset)
+    
+    return { faraGPS, conflicte, nematched, importateNow }
+  }, [matchedVehicles, assetsBD])
+  
+  return (
+    <div style={{ padding: 20 }}>
+      {/* Header success */}
+      <div style={{ textAlign: 'center', marginBottom: 30 }}>
+        <div style={{ fontSize: 60, marginBottom: 10 }}>✅</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: colors.green, marginBottom: 6 }}>Import finalizat cu succes!</div>
+        <div style={{ fontSize: 13, color: colors.muted }}>
+          {reports.importateNow.size} vehicule importate · km_actuali actualizat automat prin trigger
+        </div>
+      </div>
+      
+      {/* Raport 1: Vehicule fără GPS */}
+      {reports.faraGPS.length > 0 && (
+        <div style={{ marginBottom: 20, background: colors.orange + '11', border: `1px solid ${colors.orange}55`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: colors.orange, marginBottom: 8 }}>
+            🛰️ {reports.faraGPS.length} vehicule active fără GPS montat
+          </div>
+          <div style={{ fontSize: 12, color: colors.muted, marginBottom: 10, lineHeight: 1.5 }}>
+            Aceste vehicule sunt active în BD dar <strong>nu apar niciodată în raportul EvoGPS</strong>. Probabil <strong>nu au GPS montat</strong> sau e dezactivat. Verifică și instalează dispozitive GPS unde lipsesc.
+          </div>
+          <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: 11 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#1C2128' }}>
+                <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+                  <th style={{ padding: 6, textAlign: 'left', color: colors.muted }}>Nr înmatric.</th>
+                  <th style={{ padding: 6, textAlign: 'left', color: colors.muted }}>Marcă · Model</th>
+                  <th style={{ padding: 6, textAlign: 'left', color: colors.muted }}>Stare</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.faraGPS.slice(0, 100).map(a => (
+                  <tr key={a.id} style={{ borderBottom: `1px solid ${colors.border}22` }}>
+                    <td style={{ padding: 6, color: colors.text, fontFamily: 'monospace', fontWeight: 600 }}>{a.nr_inmatriculare || '-'}</td>
+                    <td style={{ padding: 6, color: colors.text }}>{a.marca} {a.model}</td>
+                    <td style={{ padding: 6, color: colors.muted, fontSize: 10 }}>{a.stare || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {reports.faraGPS.length > 100 && (
+              <div style={{ padding: 8, textAlign: 'center', color: colors.muted, fontStyle: 'italic' }}>... și încă {reports.faraGPS.length - 100} vehicule</div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Raport 2: Conflicte marcă */}
+      {reports.conflicte.length > 0 && (
+        <div style={{ marginBottom: 20, background: colors.red + '11', border: `1px solid ${colors.red}55`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: colors.red, marginBottom: 8 }}>
+            🚨 {reports.conflicte.length} vehicule cu nume EvoGPS trunchiat — NU s-au importat
+          </div>
+          <div style={{ fontSize: 12, color: colors.muted, marginBottom: 10, lineHeight: 1.5 }}>
+            <strong>În EvoGPS modifică numele vehiculului</strong> ca să fie complet (cu plăcuța întreagă). Apoi re-exportă raportul și re-importă aici.
+          </div>
+          <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: 11 }}>
+            {reports.conflicte.map((v, i) => (
+              <div key={i} style={{ padding: '4px 8px', borderBottom: `1px solid ${colors.border}22` }}>
+                <span style={{ color: colors.text, fontWeight: 600 }}>{v.evogps_name}</span>
+                <span style={{ color: colors.muted, marginLeft: 8 }}>→ ar trebui completat cu plăcuța întreagă</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+      {/* Raport 3: Nematched */}
+      {reports.nematched.length > 0 && (
+        <div style={{ marginBottom: 20, background: colors.orange + '11', border: `1px solid ${colors.orange}55`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: colors.orange, marginBottom: 8 }}>
+            ⚠ {reports.nematched.length} vehicule din EvoGPS nematchete în BD
+          </div>
+          <div style={{ fontSize: 12, color: colors.muted, marginBottom: 10, lineHeight: 1.5 }}>
+            Plăcuțele de înmatriculare din EvoGPS <strong>nu au fost găsite în BD</strong>. Probabil sunt: (1) vehicule închiriate pe care nu le ai în flotă, (2) format de nume neașteptat, (3) plăcuțe cu typo.
+          </div>
+          <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: 11 }}>
+            {reports.nematched.map((v, i) => (
+              <div key={i} style={{ padding: '4px 8px', borderBottom: `1px solid ${colors.border}22` }}>
+                <span style={{ color: colors.text }}>{v.evogps_name}</span>
+                {v.nr_extracted && <span style={{ color: colors.orange, marginLeft: 8, fontFamily: 'monospace' }}>({v.nr_extracted})</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+      {/* Summary final */}
+      <div style={{ marginTop: 20, padding: 14, background: '#0D1117', borderRadius: 8, fontSize: 12, color: colors.muted, lineHeight: 1.6 }}>
+        💡 <strong style={{ color: colors.text }}>Sumar audit GPS flotă:</strong>
+        <ul style={{ marginTop: 6, paddingLeft: 20 }}>
+          <li><strong style={{ color: colors.green }}>{reports.importateNow.size}</strong> vehicule au GPS funcțional + date noi importate</li>
+          {reports.faraGPS.length > 0 && <li><strong style={{ color: colors.orange }}>{reports.faraGPS.length}</strong> vehicule din BD <strong>fără GPS</strong> sau GPS dezactivat — verifică</li>}
+          {reports.conflicte.length > 0 && <li><strong style={{ color: colors.red }}>{reports.conflicte.length}</strong> conflicte nume EvoGPS — corectează în portal</li>}
+          {reports.nematched.length > 0 && <li><strong style={{ color: colors.orange }}>{reports.nematched.length}</strong> vehicule din EvoGPS care nu sunt în BD-ul Gazpet</li>}
+        </ul>
+      </div>
     </div>
   )
 }
