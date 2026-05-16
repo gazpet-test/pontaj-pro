@@ -141,10 +141,25 @@ function UrmServiceBadge({ u }) {
   )
 }
 
-function KPICard({ icon, label, value, color = G.blue, sub }) {
+function KPICard({ icon, label, value, color = G.blue, sub, onClick }) {
+  const clickable = typeof onClick === 'function'
   return (
-    <div style={{...S.card, padding:'14px 18px', flex:1, minWidth:160, borderLeft:`3px solid ${color}`}}>
-      <div style={{fontSize:11, color:G.muted, fontWeight:600, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:4}}>{icon} {label}</div>
+    <div 
+      onClick={onClick}
+      style={{
+        ...S.card, padding:'14px 18px', flex:1, minWidth:160, 
+        borderLeft:`3px solid ${color}`,
+        cursor: clickable ? 'pointer' : 'default',
+        transition: 'all .15s',
+        position: 'relative',
+      }}
+      onMouseEnter={e => { if (clickable) { e.currentTarget.style.background = G.bg; e.currentTarget.style.transform = 'translateY(-1px)' } }}
+      onMouseLeave={e => { if (clickable) { e.currentTarget.style.background = G.surface; e.currentTarget.style.transform = 'none' } }}
+    >
+      <div style={{fontSize:11, color:G.muted, fontWeight:600, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:4}}>
+        {icon} {label}
+        {clickable && <span style={{float:'right', fontSize:10, opacity:.5}}>↗ click filtru</span>}
+      </div>
       <div style={{fontSize:24, fontWeight:800, color:G.text, fontVariantNumeric:'tabular-nums'}}>{value}</div>
       {sub && <div style={{fontSize:11, color:G.muted, marginTop:2}}>{sub}</div>}
     </div>
@@ -1112,10 +1127,38 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [customEnd, setCustomEnd] = useState('')
 
   const [sortBy, setSortBy] = useState({ col:'data_fisei', dir:'desc' })
+  const [scadenteOnly, setScadenteOnly] = useState(false)  // ETAPA 8.6: filtru click-pe-KPI
 
   const [newModal, setNewModal] = useState(null)
   const [detailModal, setDetailModal] = useState(null)
   const [acoperireModal, setAcoperireModal] = useState(false)
+
+  // ETAPA 8.6: handler click pe KPI Scadențe Service → setează filtru + sort
+  const handleClickScadente = useCallback(() => {
+    setScadenteOnly(true)
+    setSearch('')
+    setCatFilter('Toate')
+    setTipF('Toate')
+    setStatusF('Toate')
+    setPerioadaF('toate')
+    setSortBy({ col:'urmator', dir:'asc' })
+    // Scroll smooth la tabel după 100ms (după re-render)
+    setTimeout(() => {
+      const tbl = document.querySelector('[data-service-table]')
+      if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+  }, [])
+
+  // ETAPA 8.6: handler quick-delete fișă direct din listă (fără să intri în modal)
+  const handleQuickDeleteFisa = useCallback(async (fisa) => {
+    const nrIntrari = (fisa.logistica_service_intrari || []).length
+    const titlu = fisa.titlu || `Fișă #${fisa.id}`
+    if (!confirm(`Ștergi fișa "${titlu}" și toate cele ${nrIntrari} intrări?\n\nAcțiunea NU poate fi anulată.`)) return
+    const { error } = await supabase.from('logistica_service_fise').delete().eq('id', fisa.id)
+    if (error) { showToast(`Eroare la ștergere: ${error.message}`, 'error'); return }
+    showToast(`✓ Fișa "${titlu}" ștearsă`, 'success')
+    setFise(p => p.filter(f => f.id !== fisa.id))
+  }, [showToast])
 
   const loadAll = useCallback(async () => {
     setLoad(true)
@@ -1220,6 +1263,15 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
           a.cod_intern, a.nr_inventar, a.nr_inmatriculare, a.marca, a.model].filter(Boolean).join(' '))
         if (!hay.includes(norm(search))) return false
       }
+      // ETAPA 8.6: filtru scadențe (când userul a apăsat KPI Scadențe Service)
+      if (scadenteOnly) {
+        // Vrem DOAR ultima fișă per activ care are scadență „aproape" sau „depasit"
+        if (ultimaFisaPerActiv[f.activ_id]?.id !== f.id) return false
+        const km = kmOreMap[f.activ_id]
+        const u = calcUrmService(f, km?.km_live, km?.ore_live)
+        const lvl = urmServiceLevel(u)
+        if (lvl !== 'depasit' && lvl !== 'aproape') return false
+      }
       return true
     })
 
@@ -1250,7 +1302,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       return 0
     })
     return r
-  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy, kmOreMap])
+  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy, kmOreMap, scadenteOnly, ultimaFisaPerActiv])
 
   const sumaFiltrata = useMemo(() => filtered.reduce((s, f) => s + Number(f.suma_factura || 0), 0), [filtered])
 
@@ -1301,8 +1353,9 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const resetFiltre = () => {
     setSearch(''); setCatFilter('Toate'); setTipF('Toate'); setStatusF('Toate')
     setPerioadaF('toate'); setCustomStart(''); setCustomEnd('')
+    setScadenteOnly(false)  // ETAPA 8.6
   }
-  const haveFiltre = search || catFilter !== 'Toate' || tipF !== 'Toate' || statusF !== 'Toate' || perioadaF !== 'toate'
+  const haveFiltre = search || catFilter !== 'Toate' || tipF !== 'Toate' || statusF !== 'Toate' || perioadaF !== 'toate' || scadenteOnly
 
   const scadIcon = kpi.scadDepasite > 0 ? '🚨' : kpi.scadAproape > 0 ? '⚠️' : '✅'
   const scadColor = kpi.scadDepasite > 0 ? G.red : kpi.scadAproape > 0 ? G.yellow : G.green
@@ -1321,9 +1374,28 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         <KPICard icon="💰" label="Sumă totală" value={kpi.sumaTotala.toLocaleString('ro-RO', {maximumFractionDigits:0}) + ' RON'} color={G.green} />
         <KPICard icon="📊" label="Acoperire flotă" value={`${kpi.acoperire}%`}
           color={kpi.acoperire >= 80 ? G.green : kpi.acoperire >= 50 ? G.yellow : G.red}
-          sub={kpi.fara > 0 ? `${kpi.fara} active fără fișă` : 'Toate active acoperite'} />
-        <KPICard icon={scadIcon} label="Scadențe service" value={scadValue} color={scadColor} sub={scadSub} />
+          sub={kpi.fara > 0 ? `${kpi.fara} active fără fișă` : 'Toate active acoperite'}
+          onClick={() => setAcoperireModal(true)} />
+        <KPICard icon={scadIcon} label="Scadențe service" value={scadValue} color={scadColor} sub={scadSub}
+          onClick={scadValue > 0 ? handleClickScadente : undefined} />
       </div>
+
+      {/* ETAPA 8.6: banner activ scadențe */}
+      {scadenteOnly && (
+        <div style={{
+          ...S.card, padding:'10px 14px', marginBottom:14,
+          borderLeft:`3px solid ${G.red}`,
+          background: G.red + '11',
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+        }}>
+          <div style={{fontSize:13, color:G.text}}>
+            🚨 <strong>Mod scadențe</strong> — afișez doar fișele cu următoarea revizie depășită sau aproape, sortate cronologic (cele mai vechi întâi)
+          </div>
+          <button onClick={() => setScadenteOnly(false)} style={{...S.btnS, padding:'5px 12px', fontSize:11, color:G.red, borderColor:G.red + '55'}}>
+            × Ieși din mod scadențe
+          </button>
+        </div>
+      )}
 
       <div style={{...S.card, padding:'10px 14px', marginBottom:14}}>
         <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
@@ -1416,7 +1488,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
           )}
         </div>
       ) : (
-        <div style={{...S.card, overflow:'hidden'}}>
+        <div style={{...S.card, overflow:'hidden'}} data-service-table>
           <div style={{overflowX:'auto'}}>
             <table style={{width:'100%', borderCollapse:'collapse'}}>
               <thead>
@@ -1429,7 +1501,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                   <SortableTh col="suma_factura"  sortBy={sortBy} setSortBy={setSortBy} width={120} align="right">Sumă</SortableTh>
                   <SortableTh col="urmator"       sortBy={sortBy} setSortBy={setSortBy} width={150}>Următor</SortableTh>
                   <SortableTh col="status"        sortBy={sortBy} setSortBy={setSortBy} width={120}>Status</SortableTh>
-                  <th style={{width:100, padding:'10px 8px', borderBottom:`1px solid ${G.border}`, background:G.surface}}></th>
+                  <th style={{width:140, padding:'10px 8px', borderBottom:`1px solid ${G.border}`, background:G.surface}}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1470,7 +1542,8 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                       <td style={{padding:'10px 8px'}}><StatusBadge status={f.status} /></td>
                       <td style={{padding:'10px 8px', textAlign:'right', whiteSpace:'nowrap'}}>
                         <button onClick={() => setDetailModal(f.id)} title="Vezi detaliu" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.muted, marginRight:4}}>👁</button>
-                        {canEdit && <button onClick={() => setDetailModal(f.id)} title="Editează" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.logistica}}>✎</button>}
+                        {canEdit && <button onClick={() => setDetailModal(f.id)} title="Editează" style={{...S.btnS, padding:'8px 12px', fontSize:18, color:G.logistica, marginRight:4}}>✎</button>}
+                        {canEdit && <button onClick={() => handleQuickDeleteFisa(f)} title="Șterge fișa" style={{...S.btnS, padding:'8px 12px', fontSize:16, color:G.red, borderColor:G.red + '44'}}>🗑</button>}
                       </td>
                     </tr>
                   )

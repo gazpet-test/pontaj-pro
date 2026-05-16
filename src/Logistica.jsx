@@ -2,7 +2,7 @@
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
@@ -1789,7 +1789,94 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
   )
 }
 
-function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, ultimaTelemetrieData, profile, accessLevel }) {
+// ETAPA 8.6: Componentă expand „Vezi perioade importate" sub banner EvoGPS
+function IstoricImporturiEvoExpand({ istoricImporturi }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!istoricImporturi || istoricImporturi.length === 0) return null
+  
+  const totalImporturi = istoricImporturi.length
+  const totalInregistrari = istoricImporturi.reduce((s, i) => s + (i.inregistrari || 0), 0)
+  
+  return (
+    <div style={{
+      background: G.surface,
+      border: `1px solid ${G.border}`,
+      borderRadius: 10,
+      marginBottom: 16,
+      overflow: 'hidden',
+    }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          width: '100%',
+          background: 'transparent',
+          border: 'none',
+          padding: '10px 16px',
+          color: G.muted,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
+        <span>
+          📅 <strong style={{color: G.text}}>{totalImporturi}</strong> {totalImporturi === 1 ? 'import EvoGPS' : 'importuri EvoGPS'} înregistrate · 
+          <strong style={{color: G.text, marginLeft: 4}}>{totalInregistrari.toLocaleString('ro-RO')}</strong> înregistrări totale
+        </span>
+        <span style={{fontSize: 11, color: G.muted}}>
+          {expanded ? '▲ Ascunde' : '▼ Vezi istoricul'}
+        </span>
+      </button>
+      
+      {expanded && (
+        <div style={{borderTop: `1px solid ${G.border}`, padding: '10px 16px'}}>
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
+              <thead>
+                <tr style={{borderBottom: `1px solid ${G.border}`}}>
+                  <th style={{padding: '6px 8px', textAlign: 'left', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Importat la</th>
+                  <th style={{padding: '6px 8px', textAlign: 'left', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Fișier</th>
+                  <th style={{padding: '6px 8px', textAlign: 'left', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Perioadă acoperită</th>
+                  <th style={{padding: '6px 8px', textAlign: 'center', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Vehicule</th>
+                  <th style={{padding: '6px 8px', textAlign: 'center', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Înregistrări</th>
+                </tr>
+              </thead>
+              <tbody>
+                {istoricImporturi.map((imp, i) => {
+                  const impDate = imp.imported_at ? new Date(imp.imported_at).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
+                  const prima = imp.prima_zi ? new Date(imp.prima_zi).toLocaleDateString('ro-RO') : '—'
+                  const ultima = imp.ultima_zi ? new Date(imp.ultima_zi).toLocaleDateString('ro-RO') : '—'
+                  const nrZile = (imp.prima_zi && imp.ultima_zi) ? Math.floor((new Date(imp.ultima_zi) - new Date(imp.prima_zi)) / 86400000) + 1 : null
+                  return (
+                    <tr key={i} style={{borderBottom: `1px solid ${G.border}33`}}>
+                      <td style={{padding: '6px 8px', color: G.text, fontSize: 11, fontVariantNumeric: 'tabular-nums'}}>{impDate}</td>
+                      <td style={{padding: '6px 8px', color: G.muted, fontSize: 11, fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={imp.file_name}>{imp.file_name || '—'}</td>
+                      <td style={{padding: '6px 8px', color: G.text, fontSize: 11}}>
+                        <span style={{color: G.green, fontWeight: 600}}>{prima}</span>
+                        <span style={{color: G.muted, margin: '0 4px'}}>→</span>
+                        <span style={{color: G.green, fontWeight: 600}}>{ultima}</span>
+                        {nrZile && <span style={{color: G.muted, marginLeft: 6, fontSize: 10}}>({nrZile} {nrZile === 1 ? 'zi' : 'zile'})</span>}
+                      </td>
+                      <td style={{padding: '6px 8px', textAlign: 'center', color: G.blue, fontWeight: 700}}>{imp.vehicule || 0}</td>
+                      <td style={{padding: '6px 8px', textAlign: 'center', color: G.purple, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>{(imp.inregistrari || 0).toLocaleString('ro-RO')}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop: 8, fontSize: 10, color: G.dim, fontStyle: 'italic'}}>
+            💡 Importurile mai vechi sunt arhivate când datele cele mai vechi sunt suprascrise de noi importuri pe aceleași perioade.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
   const [filterSub, setFilterSub] = useState('Toate')
@@ -2039,6 +2126,11 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
           </div>
         )
       })()}
+      
+      {/* ETAPA 8.6: Expand „Vezi perioade importate" SUB banner EvoGPS */}
+      {(profile?.is_owner || ['admin','manager_proiect','logistica'].includes(profile?.role) || accessLevel === 'admin') && istoricImporturi && istoricImporturi.length > 0 && (
+        <IstoricImporturiEvoExpand istoricImporturi={istoricImporturi} />
+      )}
             {/* ──────────────────────────────────────────────────────────────────── */}
       {/* SECȚIUNEA 2: Alimentări înregistrate (vizualizare + edit + ștergere) */}
       {/* ──────────────────────────────────────────────────────────────────── */}
@@ -6249,6 +6341,49 @@ export default function LogisticaPage() {
   const [showImportEvo, setShowImportEvo] = useState(false)
   // Etapa 8.5: Alerte globale + ultima telemetrie (pentru banner Alimentări)
   const [ultimaTelemetrieData, setUltimaTelemetrieData] = useState(null)
+  const [istoricImporturi, setIstoricImporturi] = useState([])  // ETAPA 8.6: history importuri EvoGPS
+  
+  const loadIstoricImporturi = useCallback(async () => {
+    // Grupez perioadele importate: pentru fiecare „sesiune" (raw_data.file + imported_at trunchiat la oră),
+    // afișez min-max data, vehicule unice, total înregistrări
+    const { data, error } = await supabase.rpc('get_istoric_importuri_evogps').catch(() => ({ data: null, error: 'rpc_missing' }))
+    if (error === 'rpc_missing' || error) {
+      // Fallback: query direct (mai lent dar nu necesită funcție SQL)
+      const { data: rows } = await supabase
+        .from('logistica_telemetrie_zilnica')
+        .select('asset_id, data, raw_data, created_at')
+        .eq('sursa', 'evogps')
+        .order('created_at', { ascending: false })
+        .limit(5000)
+      if (!rows) return setIstoricImporturi([])
+      // Grupez în JS pe (file, imported_at trunchiat la minut)
+      const groups = new Map()
+      for (const r of rows) {
+        const file = r.raw_data?.file || '?'
+        const importedAt = r.raw_data?.imported_at?.slice(0, 16) || r.created_at?.slice(0, 16) || '?'
+        const key = `${file}|${importedAt}`
+        if (!groups.has(key)) groups.set(key, { file, importedAt, dates: new Set(), assets: new Set(), count: 0 })
+        const g = groups.get(key)
+        g.dates.add(r.data)
+        g.assets.add(r.asset_id)
+        g.count++
+      }
+      const list = Array.from(groups.values()).map(g => {
+        const datesArr = Array.from(g.dates).sort()
+        return {
+          file_name: g.file,
+          imported_at: g.importedAt,
+          prima_zi: datesArr[0],
+          ultima_zi: datesArr[datesArr.length - 1],
+          vehicule: g.assets.size,
+          inregistrari: g.count,
+        }
+      }).sort((a, b) => b.imported_at.localeCompare(a.imported_at)).slice(0, 10)
+      setIstoricImporturi(list)
+    } else {
+      setIstoricImporturi(data || [])
+    }
+  }, [])
   const [alerteGlobale, setAlerteGlobale] = useState([])
   const [showAlerte, setShowAlerte] = useState(false)
   
@@ -6279,6 +6414,8 @@ export default function LogisticaPage() {
       .limit(1)
       .maybeSingle()
       .then(({ data }) => { setUltimaTelemetrieData(data?.data || null) })
+    // ETAPA 8.6: istoric importuri EvoGPS (per file + imported_at)
+    loadIstoricImporturi()
     // Alerte globale (revizii < 1500km + telemetrie veche)
     supabase.from('v_logistica_alerte_globale')
       .select('*')
@@ -6749,6 +6886,7 @@ export default function LogisticaPage() {
           showToast={showToast}
           onImportEvoGPS={() => setShowImportEvo(true)}
           ultimaTelemetrieData={ultimaTelemetrieData}
+          istoricImporturi={istoricImporturi}
           profile={profile}
           accessLevel={accessLevel}
           onSaved={loadAll}
@@ -7463,6 +7601,8 @@ export default function LogisticaPage() {
             .order('nivel')
             .order('km_ramase')
             .then(({ data }) => { setAlerteGlobale(data || []) })
+          // ETAPA 8.6: refresh istoric importuri
+          loadIstoricImporturi()
         }}
       />
     </>
