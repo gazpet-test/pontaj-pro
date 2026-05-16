@@ -5771,6 +5771,16 @@ function AdminPage() {
     if (profile?.is_owner === true && editMgr.can_modify_employees !== undefined) {
       updates.can_modify_employees = !!editMgr.can_modify_employees
     }
+    // WhatsApp: phone + enabled poate fi editat de orice owner; tier DOAR de owner (trigger BD verifică)
+    if (editMgr.phone_whatsapp !== undefined) {
+      updates.phone_whatsapp = editMgr.phone_whatsapp?.trim() || null
+    }
+    if (editMgr.whatsapp_enabled !== undefined) {
+      updates.whatsapp_enabled = !!editMgr.whatsapp_enabled
+    }
+    if (profile?.is_owner === true && editMgr.whatsapp_tier !== undefined) {
+      updates.whatsapp_tier = editMgr.whatsapp_tier || 'info'
+    }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
       // Update sites in profile_sites table — doar pentru rolurile care au șantiere alocate
@@ -6206,6 +6216,67 @@ function AdminPage() {
                 </label>
               </div>
             )}
+            {/* ════════════════ WhatsApp Notifications ════════════════ */}
+            <div style={{marginBottom:14,padding:14,background:editMgr.whatsapp_enabled?'#0F2A1F':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.whatsapp_enabled?'#25D366':G.border}66`}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+                <span style={{fontSize:18}}>📱</span>
+                <div style={{fontSize:13,fontWeight:800,color:editMgr.whatsapp_enabled?'#25D366':G.text}}>
+                  WhatsApp Business — Notificări
+                </div>
+              </div>
+              
+              {/* Telefon */}
+              <div style={{marginBottom:10}}>
+                <Lbl>Telefon WhatsApp (format internațional)</Lbl>
+                <input 
+                  style={{...S.input,fontFamily:'monospace'}} 
+                  value={editMgr.phone_whatsapp||''} 
+                  onChange={e=>setEditMgr({...editMgr,phone_whatsapp:e.target.value})}
+                  placeholder="+40712345678"
+                  pattern="^\+[0-9]{10,15}$"
+                />
+                <div style={{fontSize:10,color:G.muted,marginTop:3}}>Format: +40 urmat de prefix și număr, fără spații (ex: +40712345678)</div>
+              </div>
+              
+              {/* Tier - DOAR pentru owner */}
+              {profile?.is_owner === true && editMgr.id !== profile?.id && (
+                <div style={{marginBottom:10}}>
+                  <Lbl>📊 Tier alerte (cine ce primește) — doar OWNER setează</Lbl>
+                  <select 
+                    value={editMgr.whatsapp_tier || 'info'} 
+                    onChange={e=>setEditMgr({...editMgr,whatsapp_tier:e.target.value})} 
+                    style={{width:'100%'}}>
+                    <option value="critic">🔴 Critic (owners - tot inclusiv security)</option>
+                    <option value="manager">🟠 Manager (șefi proiect - echipa lor)</option>
+                    <option value="hr_contabil">🟡 HR/Contabil (plăți, concedii, ITM)</option>
+                    <option value="info">⚪ Info (doar UI banner, FĂRĂ WhatsApp)</option>
+                  </select>
+                  <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                    Tier-ul determină ce <strong>tipuri</strong> de alerte primește userul pe WhatsApp.
+                  </div>
+                </div>
+              )}
+              
+              {/* Toggle activ */}
+              <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',padding:'8px 10px',background:G.bg,borderRadius:6,border:`1px solid ${G.border}`}}>
+                <input type="checkbox"
+                  checked={!!editMgr.whatsapp_enabled}
+                  onChange={e=>setEditMgr({...editMgr,whatsapp_enabled:e.target.checked})}
+                  disabled={!editMgr.phone_whatsapp || editMgr.whatsapp_tier === 'info'}
+                  style={{accentColor:'#25D366',width:16,height:16}}
+                />
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:700,color:editMgr.whatsapp_enabled?'#25D366':G.text}}>
+                    {editMgr.whatsapp_enabled ? '✅ Notificări WhatsApp ACTIVE' : '⏸️ Notificări WhatsApp inactive'}
+                  </div>
+                  <div style={{fontSize:10,color:G.muted,marginTop:2}}>
+                    {!editMgr.phone_whatsapp ? '⚠️ Adaugă telefon mai întâi' : 
+                     editMgr.whatsapp_tier === 'info' ? '⚠️ Tier „Info" nu primește WhatsApp (doar UI)' :
+                     'Userul poate opt-out singur din contul propriu (când implementăm UI Setări)'}
+                  </div>
+                </div>
+              </label>
+            </div>
             {ROLES_WITH_SITES.includes(editMgr.role)&&(
               <div style={{marginBottom:18}}>
                 <Lbl>Șantiere Alocate (poate selecta mai multe)</Lbl>
