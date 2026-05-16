@@ -1964,6 +1964,81 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
   
   return (
     <div>
+      {/* ETAPA 8.5: Banner Import EvoGPS + notificare telemetrie veche       */}
+      {/* ──────────────────────────────────────────────────────────────────── */}
+      {(profile?.is_owner || ['admin','manager_proiect','logistica'].includes(profile?.role) || accessLevel === 'admin') && (() => {
+        const zileDe = ultimaTelemetrieData
+          ? Math.floor((Date.now() - new Date(ultimaTelemetrieData).getTime()) / 86400000)
+          : null
+        const niciOdata = ultimaTelemetrieData === null || ultimaTelemetrieData === undefined
+        // Severitate banner
+        let bannerBg = G.purple + '15'
+        let bannerBorder = G.purple + '55'
+        let icon = '🛰️'
+        let titlu = 'Telemetrie EvoGPS'
+        let mesaj = niciOdata 
+          ? 'Niciun import EvoGPS încă. Exportă raportul „Foaie de activitate zilnică" din portal și importă-l aici.'
+          : `Ultimul import: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} ${zileDe === 1 ? 'zi' : 'zile'})`
+        if (niciOdata) {
+          bannerBg = G.blue + '15'
+          bannerBorder = G.blue + '55'
+          icon = '📡'
+        } else if (zileDe > 14) {
+          bannerBg = G.red + '22'
+          bannerBorder = G.red + '88'
+          icon = '🚨'
+          titlu = 'ATENȚIE — Telemetrie veche'
+          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Te rugăm să exporți raportul săptămânal!`
+        } else if (zileDe > 7) {
+          bannerBg = G.yellow + '22'
+          bannerBorder = G.yellow + '88'
+          icon = '⚠️'
+          titlu = 'Telemetrie veche — necesită import'
+          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Recomandare: săptămânal sau bisăptămânal.`
+        }
+        return (
+          <div style={{
+            background: bannerBg,
+            border: `1px solid ${bannerBorder}`,
+            borderRadius: 12,
+            padding: '14px 18px',
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            flexWrap: 'wrap',
+          }}>
+            <div style={{fontSize: 28}}>{icon}</div>
+            <div style={{flex: 1, minWidth: 240}}>
+              <div style={{fontSize: 13, fontWeight: 800, color: G.text, marginBottom: 2}}>{titlu}</div>
+              <div style={{fontSize: 12, color: G.muted}}>{mesaj}</div>
+              {niciOdata && (
+                <div style={{fontSize: 11, color: G.muted, marginTop: 4, fontStyle: 'italic'}}>
+                  💡 Tip: portalul EvoGPS → Rapoarte → „Foaie de activitate zilnică" → export Excel pentru perioada dorită.
+                </div>
+              )}
+            </div>
+            <button 
+              onClick={onImportEvoGPS}
+              style={{
+                background: G.logistica,
+                color: '#0D1117',
+                border: 'none',
+                borderRadius: 8,
+                padding: '10px 18px',
+                fontSize: 13,
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                whiteSpace: 'nowrap',
+              }}>
+              📥 Import XLSX EvoGPS
+            </button>
+          </div>
+        )
+      })()}
             {/* ──────────────────────────────────────────────────────────────────── */}
       {/* SECȚIUNEA 2: Alimentări înregistrate (vizualizare + edit + ștergere) */}
       {/* ──────────────────────────────────────────────────────────────────── */}
@@ -4544,81 +4619,6 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
   return (
     <div>
       {/* ──────────────────────────────────────────────────────────────────── */}
-      {/* ETAPA 8.5: Banner Import EvoGPS + notificare telemetrie veche       */}
-      {/* ──────────────────────────────────────────────────────────────────── */}
-      {(profile?.is_owner || ['admin','manager_proiect','logistica'].includes(profile?.role) || accessLevel === 'admin') && (() => {
-        const zileDe = ultimaTelemetrieData
-          ? Math.floor((Date.now() - new Date(ultimaTelemetrieData).getTime()) / 86400000)
-          : null
-        const niciOdata = ultimaTelemetrieData === null || ultimaTelemetrieData === undefined
-        // Severitate banner
-        let bannerBg = G.purple + '15'
-        let bannerBorder = G.purple + '55'
-        let icon = '🛰️'
-        let titlu = 'Telemetrie EvoGPS'
-        let mesaj = niciOdata 
-          ? 'Niciun import EvoGPS încă. Exportă raportul „Foaie de activitate zilnică" din portal și importă-l aici.'
-          : `Ultimul import: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} ${zileDe === 1 ? 'zi' : 'zile'})`
-        if (niciOdata) {
-          bannerBg = G.blue + '15'
-          bannerBorder = G.blue + '55'
-          icon = '📡'
-        } else if (zileDe > 14) {
-          bannerBg = G.red + '22'
-          bannerBorder = G.red + '88'
-          icon = '🚨'
-          titlu = 'ATENȚIE — Telemetrie veche'
-          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Te rugăm să exporți raportul săptămânal!`
-        } else if (zileDe > 7) {
-          bannerBg = G.yellow + '22'
-          bannerBorder = G.yellow + '88'
-          icon = '⚠️'
-          titlu = 'Telemetrie veche — necesită import'
-          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Recomandare: săptămânal sau bisăptămânal.`
-        }
-        return (
-          <div style={{
-            background: bannerBg,
-            border: `1px solid ${bannerBorder}`,
-            borderRadius: 12,
-            padding: '14px 18px',
-            marginBottom: 16,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 14,
-            flexWrap: 'wrap',
-          }}>
-            <div style={{fontSize: 28}}>{icon}</div>
-            <div style={{flex: 1, minWidth: 240}}>
-              <div style={{fontSize: 13, fontWeight: 800, color: G.text, marginBottom: 2}}>{titlu}</div>
-              <div style={{fontSize: 12, color: G.muted}}>{mesaj}</div>
-              {niciOdata && (
-                <div style={{fontSize: 11, color: G.muted, marginTop: 4, fontStyle: 'italic'}}>
-                  💡 Tip: portalul EvoGPS → Rapoarte → „Foaie de activitate zilnică" → export Excel pentru perioada dorită.
-                </div>
-              )}
-            </div>
-            <button 
-              onClick={onImportEvoGPS}
-              style={{
-                background: G.logistica,
-                color: '#0D1117',
-                border: 'none',
-                borderRadius: 8,
-                padding: '10px 18px',
-                fontSize: 13,
-                fontWeight: 800,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                whiteSpace: 'nowrap',
-              }}>
-              📥 Import XLSX EvoGPS
-            </button>
-          </div>
-        )
-      })()}
       {/* KPI — Cerute (de aprobat) e ROȘU PULSING dacă > 0 */}
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
         <div style={{
