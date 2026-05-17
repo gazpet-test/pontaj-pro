@@ -7,7 +7,6 @@ import LogisticaPage from './Logistica.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
-import TichetePage from './TichetePage.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import InternalChat from './InternalChat.jsx'
@@ -7330,7 +7329,6 @@ export default function App() {
         <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
         <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
-        <Route path="/tichete" element={<ProtectedRoute><Layout><TichetePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>

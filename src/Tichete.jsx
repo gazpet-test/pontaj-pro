@@ -394,7 +394,7 @@ function TichetRow({ t, profiles, onClick, showDep = false }){
 // MODAL: TICHET NOU
 // ════════════════════════════════════════════════════════════════
 function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, show }){
-  const [step, setStep] = useState(forcedDep ? 2 : 1)  // 1: dep, 2: detalii
+  const [step, setStep] = useState(forcedDep ? 2 : 0)  // 0: AI quick, 1: dep manual, 2: detalii
   const [dep, setDep] = useState(forcedDep || null)
   const [form, setForm] = useState({
     subcategorie:'', titlu:'', descriere:'', urgenta:'normal',
@@ -403,8 +403,47 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
   const [saving, setSaving] = useState(false)
   const [poze, setPoze] = useState([])  // File[] pentru upload
   const fileRef = useRef(null)
+  
+  // AI state
+  const [aiTitlu, setAiTitlu] = useState('')
+  const [aiDescriere, setAiDescriere] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiSuggestion, setAiSuggestion] = useState(null)
+  const [aiError, setAiError] = useState('')
 
   const subsForDep = useMemo(()=>subcategorii.filter(s=>s.departament===dep), [subcategorii, dep])
+
+  // AI sugestie: apel edge function
+  const runAI = async()=>{
+    if(aiTitlu.trim().length < 3){ setAiError('Scrie cel putin 3 caractere'); return }
+    setAiLoading(true); setAiError(''); setAiSuggestion(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('suggest-tichet', {
+        body: { titlu: aiTitlu.trim(), descriere: aiDescriere.trim() }
+      })
+      if(error) throw error
+      if(data?.error) throw new Error(data.error)
+      setAiSuggestion(data)
+    } catch(e) {
+      setAiError('Eroare AI: ' + (e.message || 'necunoscut'))
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  // Aplica sugestia AI -> sare la Pas 2 cu totul pre-completat
+  const applyAI = ()=>{
+    if(!aiSuggestion) return
+    setDep(aiSuggestion.departament)
+    setForm({
+      ...form,
+      subcategorie: aiSuggestion.subcategorie,
+      urgenta: aiSuggestion.urgenta,
+      titlu: aiTitlu.trim(),
+      descriere: aiDescriere.trim()
+    })
+    setStep(2)
+  }
 
   const handleAddPoza = (e)=>{
     const files = Array.from(e.target.files || [])
@@ -457,9 +496,98 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
   }
 
   return (
-    <Modal onClose={onClose} title={step === 1 ? '🎫 Tichet nou - alege departament' : `🎫 Tichet nou - ${getDep(dep).nume}`} width={620}>
+    <Modal onClose={onClose} title={step === 0 ? '🤖 Tichet nou cu AI' : step === 1 ? '🎫 Tichet nou - alege departament' : `🎫 Tichet nou - ${getDep(dep).nume}`} width={620}>
+      {step === 0 && (
+        <div>
+          <div style={{padding:14,background:G.purpleDim,border:`1px solid ${G.purple}66`,borderRadius:10,marginBottom:16}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
+              <span style={{fontSize:24}}>🤖</span>
+              <strong style={{color:G.purple,fontSize:15}}>Asistent Claude Haiku</strong>
+            </div>
+            <div style={{fontSize:12,color:G.muted,lineHeight:1.5}}>
+              Scrie problema in propriile cuvinte si AI-ul iti alege automat departamentul + subcategoria + urgenta. 
+              Te poti razgandi oricand prin „Alege manual".
+            </div>
+          </div>
+
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div>
+              <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Titlu / Problema *</label>
+              <input type="text" value={aiTitlu} onChange={e=>{ setAiTitlu(e.target.value); setAiSuggestion(null); setAiError('') }}
+                     placeholder="Ex: Excavatorul JCB nu mai porneste la PH22"
+                     style={{width:'100%',padding:'12px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}} />
+            </div>
+            <div>
+              <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Detalii suplimentare (optional)</label>
+              <textarea value={aiDescriere} onChange={e=>{ setAiDescriere(e.target.value); setAiSuggestion(null); setAiError('') }}
+                        rows={3} placeholder="Ce s-a intamplat, cand, in ce conditii..."
+                        style={{width:'100%',padding:'10px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13,fontFamily:'inherit',resize:'vertical'}} />
+            </div>
+
+            {aiError && (
+              <div style={{padding:10,background:G.redDim,border:`1px solid ${G.red}66`,borderRadius:6,color:G.red,fontSize:13}}>
+                ⚠ {aiError}
+              </div>
+            )}
+
+            {aiSuggestion && (
+              <div style={{padding:14,background:G.greenDim,border:`1px solid ${G.green}66`,borderRadius:10}}>
+                <div style={{fontSize:11,color:G.muted,marginBottom:8,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>💡 Sugestie AI</div>
+                <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:8}}>
+                  <span style={{padding:'6px 12px',background:getDep(aiSuggestion.departament).color+'33',color:getDep(aiSuggestion.departament).color,borderRadius:6,fontSize:13,fontWeight:700}}>
+                    {getDep(aiSuggestion.departament).emoji} {getDep(aiSuggestion.departament).nume}
+                  </span>
+                  <span style={{fontSize:14,color:G.muted}}>→</span>
+                  <span style={{padding:'6px 12px',background:G.bg,color:G.text,borderRadius:6,fontSize:13}}>
+                    {subcategorii.find(s=>s.departament===aiSuggestion.departament && s.cod===aiSuggestion.subcategorie)?.emoji || '📌'}
+                    {' '}
+                    {subcategorii.find(s=>s.departament===aiSuggestion.departament && s.cod===aiSuggestion.subcategorie)?.denumire || aiSuggestion.subcategorie}
+                  </span>
+                  <span style={{padding:'6px 12px',background:getUrg(aiSuggestion.urgenta).color+'33',color:getUrg(aiSuggestion.urgenta).color,borderRadius:6,fontSize:13,fontWeight:700}}>
+                    {getUrg(aiSuggestion.urgenta).emoji} {getUrg(aiSuggestion.urgenta).label}
+                  </span>
+                </div>
+                {aiSuggestion.motiv && (
+                  <div style={{fontSize:12,color:G.muted,fontStyle:'italic',marginBottom:6}}>
+                    „{aiSuggestion.motiv}"
+                  </div>
+                )}
+                <div style={{display:'flex',gap:14,fontSize:10,color:G.dim,marginBottom:10}}>
+                  <span>📊 {aiSuggestion.confidence}% confident</span>
+                  {aiSuggestion._meta && <span>💰 ${aiSuggestion._meta.cost_usd}</span>}
+                </div>
+                <div style={{display:'flex',gap:8}}>
+                  <button onClick={applyAI} style={{flex:1,padding:'10px',background:G.green,color:'#fff',border:0,borderRadius:8,fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                    ✅ Aplica si continua
+                  </button>
+                  <button onClick={runAI} disabled={aiLoading} style={{padding:'10px 14px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:13,cursor:'pointer'}}>
+                    🔄 Reanalizeaza
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Butoane principale */}
+            {!aiSuggestion && (
+              <div style={{display:'flex',gap:8,marginTop:6}}>
+                <button onClick={runAI} disabled={aiLoading || aiTitlu.trim().length < 3}
+                        style={{flex:2,padding:'12px',background:aiLoading ? G.muted : G.purple,color:'#fff',border:0,borderRadius:8,fontSize:14,fontWeight:700,cursor:aiLoading?'wait':'pointer',opacity:aiTitlu.trim().length<3?0.5:1,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                  {aiLoading ? '⏳ Analizez...' : '🤖 Sugereaza automat cu AI'}
+                </button>
+                <button onClick={()=>setStep(1)} style={{flex:1,padding:'12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:13,cursor:'pointer'}}>
+                  Alege manual →
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {step === 1 && (
         <div>
+          <button onClick={()=>setStep(0)} style={{padding:'6px 12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:12,cursor:'pointer',marginBottom:12}}>
+            ← Foloseste AI
+          </button>
           <div style={{fontSize:13,color:G.muted,marginBottom:14}}>Selecteaza departamentul pentru care deschizi tichetul:</div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
             {DEPARTAMENTE.map(d=>(
@@ -481,8 +609,8 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
       {step === 2 && (
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
           {!forcedDep && (
-            <button onClick={()=>setStep(1)} style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:12,cursor:'pointer'}}>
-              ← Schimba departament
+            <button onClick={()=>setStep(0)} style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:12,cursor:'pointer'}}>
+              ← Inapoi (AI sau manual)
             </button>
           )}
 
