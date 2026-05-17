@@ -440,6 +440,29 @@ function Layout({ children }) {
           >
             🎫 Tichete
           </button>
+          <button
+            onClick={() => nav('/tichete?action=new')}
+            title="Deschide tichet nou rapid (avarie / defecțiune / reclamație)"
+            style={{
+              display:'flex', alignItems:'center', justifyContent:'center',
+              width: 34, height: 34,
+              padding: 0,
+              background: G.purple + '11',
+              color: G.purple,
+              border: `1px dashed ${G.purple}66`,
+              borderRadius: 8,
+              fontSize: 18,
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all .15s',
+              fontFamily: 'inherit',
+              marginLeft: -4,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.borderStyle = 'solid'; e.currentTarget.style.transform = 'scale(1.08)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = G.purple + '11'; e.currentTarget.style.borderStyle = 'dashed'; e.currentTarget.style.transform = 'scale(1)' }}
+          >
+            ＋
+          </button>
           <ChatNavButton />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>

@@ -22,13 +22,17 @@ const URGENTE = [
 ]
 
 const STATUS_INFO = {
-  deschis:    { label:'Deschis',           emoji:'🆕', color:G.red    },
-  atribuit:   { label:'Atribuit',          emoji:'➡️', color:G.orange },
-  in_lucru:   { label:'In lucru',          emoji:'🔧', color:G.yellow },
-  rezolvat:   { label:'Rezolvat',          emoji:'✅', color:G.green  },
-  confirmat:  { label:'Confirmat',         emoji:'🎉', color:G.purple },
-  inchis:     { label:'Inchis',            emoji:'🔒', color:G.muted  },
-  respins:    { label:'Respins',           emoji:'❌', color:G.red    }
+  deschis:           { label:'Deschis',              emoji:'🆕', color:G.red    },
+  in_analiza:        { label:'In analiză',           emoji:'🔍', color:G.blue   },
+  programat_service: { label:'Programat la service', emoji:'📅', color:G.purple },
+  in_service:        { label:'In service',           emoji:'🔧', color:G.yellow },
+  reparat:           { label:'Reparat - confirmă',   emoji:'✅', color:G.green  },
+  atribuit:          { label:'Atribuit',             emoji:'➡️', color:G.orange },
+  in_lucru:          { label:'In lucru',             emoji:'🔧', color:G.yellow },
+  rezolvat:          { label:'Rezolvat',             emoji:'✅', color:G.green  },
+  confirmat:         { label:'Confirmat',            emoji:'🎉', color:G.purple },
+  inchis:            { label:'Inchis',               emoji:'🔒', color:G.muted  },
+  respins:           { label:'Respins',              emoji:'❌', color:G.red    }
 }
 
 // ─────────────────────── Helpers ────────────────────────────
@@ -115,17 +119,19 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [openDetail,setOpenDetail]=useState(null)
   const [activeLogistica,setActiveLogistica]=useState([])  // pentru autocomplete entitate dep=logistica
   const [employeesList,setEmployeesList]=useState([])      // pentru autocomplete entitate dep=hr
+  const [serviceParteneri,setServiceParteneri]=useState([]) // pentru workflow logistica → service
 
   const loadAll = useCallback(async()=>{
     setLoading(true)
     try {
-      const [tk, sm, sc, pf, ac, em] = await Promise.all([
+      const [tk, sm, sc, pf, ac, em, sp] = await Promise.all([
         supabase.from('tichete').select('*').order('created_at',{ascending:false}).limit(500),
         supabase.from('v_tichete_summary').select('*'),
         supabase.from('tichete_subcategorii').select('*').eq('active',true).order('ordine'),
         supabase.from('profiles').select('id, name, role'),
-        supabase.from('logistica_active').select('id, cod_intern, nr_inmatriculare, marca, model').eq('vandut',false).eq('deep_sleep',false).order('marca'),
-        supabase.from('employees').select('id, name, functie').eq('active',true).order('name')
+        supabase.from('logistica_active').select('id, cod_intern, nr_inmatriculare, marca, model, serie_sasiu').eq('vandut',false).eq('deep_sleep',false).order('marca'),
+        supabase.from('employees').select('id, name, functie').eq('active',true).order('name'),
+        supabase.from('logistica_service_parteneri').select('id, nume, telefon, email, adresa, specializare').eq('activ',true).order('nume')
       ])
       setTichete(tk.data || [])
       const sMap = {}; (sm.data || []).forEach(s=>{ sMap[s.departament] = s })
@@ -134,6 +140,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       setProfiles(pf.data || [])
       setActiveLogistica(ac.data || [])
       setEmployeesList(em.data || [])
+      setServiceParteneri(sp.data || [])
     } catch(e){
       show('Eroare incarcare tichete: ' + e.message, 'error')
     } finally {
@@ -283,14 +290,22 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           <input type="text" placeholder="🔍 Cauta (numar, titlu, descriere)..." value={searchText} onChange={e=>setSearchText(e.target.value)}
                  style={{flex:'1 1 240px',padding:'10px 14px',background:G.surface,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13,outline:'none'}} />
           <select value={filtruStatus} onChange={e=>setFiltruStatus(e.target.value)} style={{padding:'10px 12px',background:G.surface,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13}}>
-            <option value="active">⚡ Active (deschis+atribuit+in_lucru+rezolvat)</option>
+            <option value="active">⚡ Active (deschise, în lucru)</option>
             <option value="toate">📋 Toate</option>
             <option value="deschis">🆕 Deschis</option>
-            <option value="atribuit">➡️ Atribuit</option>
-            <option value="in_lucru">🔧 In lucru</option>
-            <option value="rezolvat">✅ Rezolvat</option>
-            <option value="confirmat">🎉 Confirmat</option>
-            <option value="inchis">🔒 Inchis</option>
+            <optgroup label="Workflow Logistica">
+              <option value="in_analiza">🔍 În analiză</option>
+              <option value="programat_service">📅 Programat service</option>
+              <option value="in_service">🔧 În service</option>
+              <option value="reparat">✅ Reparat (așteaptă confirmare)</option>
+            </optgroup>
+            <optgroup label="Workflow generic">
+              <option value="atribuit">➡️ Atribuit</option>
+              <option value="in_lucru">🔧 În lucru</option>
+              <option value="rezolvat">✅ Rezolvat</option>
+              <option value="confirmat">🎉 Confirmat</option>
+            </optgroup>
+            <option value="inchis">🔒 Închis</option>
             <option value="respins">❌ Respins</option>
           </select>
           {URGENTE.map(u=>(
@@ -344,6 +359,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           profiles={profiles}
           subcategorii={subcategorii}
           profile={profile}
+          serviceParteneri={serviceParteneri}
           onClose={()=>setOpenDetail(null)}
           onChanged={()=>{ loadAll(); }}
           show={show}
@@ -803,7 +819,7 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALIU TICHET
 // ════════════════════════════════════════════════════════════════
-function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, onClose, onChanged, show }){
+function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, serviceParteneri = [], onClose, onChanged, show }){
   const [t, setT] = useState(initialT)
   const [comentarii, setComentarii] = useState([])
   const [istoric, setIstoric] = useState([])
@@ -813,6 +829,11 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const [saving, setSaving] = useState(false)
   const [showAtribuie, setShowAtribuie] = useState(false)
   const [showRezolva, setShowRezolva] = useState(false)
+  // Modale workflow logistica
+  const [showAnaliza, setShowAnaliza] = useState(false)
+  const [showProgramareService, setShowProgramareService] = useState(false)
+  const [showIntrareService, setShowIntrareService] = useState(false)
+  const [showReparat, setShowReparat] = useState(false)
 
   const dep = getDep(t.departament)
   const urg = getUrg(t.urgenta)
@@ -820,6 +841,8 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const sub = subcategorii.find(s=>s.departament===t.departament && s.cod===t.subcategorie)
   const isMine = t.deschis_de === profile?.id
   const isOwner = profile?.is_owner
+  const isLogistica = t.departament === 'logistica'
+  const partener = t.service_partener_id ? serviceParteneri.find(p=>p.id===t.service_partener_id) : null
   const responsabil = profiles.find(p=>p.id===t.persoana_responsabila)
   const deschisDe = profiles.find(p=>p.id===t.deschis_de)
   const rezolvatDe = profiles.find(p=>p.id===t.rezolvat_de)
@@ -897,6 +920,58 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
         <div style={{fontSize:11,color:G.muted,marginBottom:4,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>Descriere</div>
         <div style={{fontSize:14,color:G.text,whiteSpace:'pre-wrap',lineHeight:1.5}}>{t.descriere}</div>
       </div>
+
+      {/* Panou Logistica — snapshot km/ore + info service */}
+      {isLogistica && (t.km_snapshot != null || t.ore_snapshot != null || t.service_partener_id || t.firma_externa || t.data_intrare_service || t.data_estimata_reparatie || t.data_programare_service) && (
+        <div style={{padding:14,background:G.purple+'10',border:`1px solid ${G.purple}44`,borderRadius:8,marginBottom:14}}>
+          <div style={{fontSize:11,color:G.purple,marginBottom:8,fontWeight:700,textTransform:'uppercase',letterSpacing:0.5}}>🚛 Info Logistică</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))',gap:10,fontSize:13}}>
+            {t.km_snapshot != null && (
+              <div>
+                <div style={{color:G.muted,fontSize:11,marginBottom:2}}>Km la creare</div>
+                <div style={{color:G.text,fontWeight:700}}>{Number(t.km_snapshot).toLocaleString('ro-RO')} km</div>
+              </div>
+            )}
+            {t.ore_snapshot != null && (
+              <div>
+                <div style={{color:G.muted,fontSize:11,marginBottom:2}}>Ore la creare</div>
+                <div style={{color:G.text,fontWeight:700}}>{Number(t.ore_snapshot).toLocaleString('ro-RO')} h</div>
+              </div>
+            )}
+            {(partener || t.firma_externa) && (
+              <div>
+                <div style={{color:G.muted,fontSize:11,marginBottom:2}}>🏢 Service</div>
+                <div style={{color:G.text,fontWeight:700}}>{partener?.nume || t.firma_externa}</div>
+                {partener?.telefon && <div style={{color:G.dim,fontSize:11}}>{partener.telefon}</div>}
+              </div>
+            )}
+            {t.data_programare_service && (
+              <div>
+                <div style={{color:G.muted,fontSize:11,marginBottom:2}}>📅 Programare</div>
+                <div style={{color:G.text,fontWeight:700}}>{fmtDate(t.data_programare_service)}</div>
+              </div>
+            )}
+            {t.data_intrare_service && (
+              <div>
+                <div style={{color:G.muted,fontSize:11,marginBottom:2}}>🔧 Intrat service</div>
+                <div style={{color:G.text,fontWeight:700}}>{fmtDate(t.data_intrare_service)}</div>
+              </div>
+            )}
+            {t.data_estimata_reparatie && (
+              <div>
+                <div style={{color:G.muted,fontSize:11,marginBottom:2}}>⏳ Estimat reparat</div>
+                <div style={{color:G.text,fontWeight:700}}>{fmtDate(t.data_estimata_reparatie)}</div>
+                {t.status === 'in_service' && (() => {
+                  const diff = Math.floor((new Date() - new Date(t.data_estimata_reparatie))/(86400000))
+                  if(diff > 5) return <div style={{color:G.red,fontSize:11,fontWeight:600,marginTop:2}}>⚠️ Depășit cu {diff} zile</div>
+                  if(diff > 0) return <div style={{color:G.yellow,fontSize:11,marginTop:2}}>+{diff} zile peste</div>
+                  return null
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Poze */}
       {pozeUrls.length > 0 && (
@@ -1014,24 +1089,61 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
 
       {/* Action buttons în footer */}
       <div style={{display:'flex',gap:8,marginTop:18,paddingTop:14,borderTop:`1px solid ${G.border}`,flexWrap:'wrap'}}>
-        {t.status === 'deschis' && (
+        {/* ═══════ RAMURA LOGISTICA — workflow specific Analiză/Service/Reparat ═══════ */}
+        {isLogistica && t.status === 'deschis' && (
+          <>
+            <button onClick={()=>setShowAnaliza(true)} style={btnPrimary(G.blue)}>🔍 Trimite în analiză</button>
+            <button onClick={()=>setShowProgramareService(true)} style={btnPrimary(G.purple)}>📅 Programare service</button>
+            <button onClick={()=>{ const m=prompt('Motiv respingere:'); if(m) changeStatus('respins', { atribuit_de:profile.id, data_atribuire:new Date().toISOString(), motiv_respingere:m }) }} style={btnSecondary(G.red)}>❌ Respinge</button>
+          </>
+        )}
+        {isLogistica && t.status === 'in_analiza' && (
+          <>
+            <button onClick={()=>setShowIntrareService(true)} style={btnPrimary(G.yellow)}>🔧 Trimite la service</button>
+            <button onClick={()=>{ const m=prompt('Motiv respingere (după analiză):'); if(m) changeStatus('respins', { motiv_respingere:m }) }} style={btnSecondary(G.red)}>❌ Respinge după analiză</button>
+          </>
+        )}
+        {isLogistica && t.status === 'programat_service' && (
+          <>
+            <button onClick={()=>setShowIntrareService(true)} style={btnPrimary(G.yellow)}>✅ Confirmă intrare în service</button>
+            <button onClick={()=>{ if(confirm('Anulezi programarea? Tichetul revine la "Deschis".')) changeStatus('deschis', { data_programare_service:null, service_partener_id:null }) }} style={btnSecondary(G.muted)}>↩ Anulează programarea</button>
+          </>
+        )}
+        {isLogistica && t.status === 'in_service' && (
+          <button onClick={()=>setShowReparat(true)} style={btnPrimary(G.green)}>✅ Marchează reparat</button>
+        )}
+        {isLogistica && t.status === 'reparat' && isMine && (
+          <>
+            <button onClick={()=>changeStatus('inchis', { confirmat_de:profile.id, data_confirmare:new Date().toISOString() })} style={btnPrimary(G.purple)}>🎉 Confirm reparat - închide tichet</button>
+            <button onClick={()=>{ const m=prompt('Motiv (de ce nu e reparat?):'); if(m) changeStatus('in_service', { motiv_respingere:m }) }} style={btnSecondary(G.red)}>↩ Retrimite în service</button>
+          </>
+        )}
+        {isLogistica && t.status === 'reparat' && !isMine && (
+          <div style={{fontSize:13, color:G.muted, fontStyle:'italic', padding:'8px 0'}}>
+            ⏳ Așteaptă confirmarea de la {deschisDe?.name || 'creator'}
+          </div>
+        )}
+
+        {/* ═══════ RAMURA GENERICĂ — alte departamente ═══════ */}
+        {!isLogistica && t.status === 'deschis' && (
           <button onClick={()=>setShowAtribuie(true)} style={btnPrimary(G.orange)}>➡️ Atribuie</button>
         )}
-        {(t.status === 'atribuit' || t.status === 'in_lucru') && (
+        {!isLogistica && (t.status === 'atribuit' || t.status === 'in_lucru') && (
           <>
             {t.status === 'atribuit' && <button onClick={()=>changeStatus('in_lucru')} style={btnPrimary(G.yellow)}>🔧 Incepe lucrul</button>}
             <button onClick={()=>setShowRezolva(true)} style={btnPrimary(G.green)}>✅ Marcheaza rezolvat</button>
           </>
         )}
-        {t.status === 'rezolvat' && isMine && (
+        {!isLogistica && t.status === 'rezolvat' && isMine && (
           <>
             <button onClick={()=>changeStatus('confirmat', { confirmat_de:profile.id, data_confirmare:new Date().toISOString() })} style={btnPrimary(G.purple)}>🎉 Confirm rezolvat</button>
             <button onClick={()=>{ const m=prompt('Motiv respingere:'); if(m) changeStatus('respins', { confirmat_de:profile.id, data_confirmare:new Date().toISOString(), motiv_respingere:m }) }} style={btnSecondary(G.red)}>❌ Respinge</button>
           </>
         )}
-        {(t.status === 'confirmat' || t.status === 'respins') && isOwner && (
+        {!isLogistica && (t.status === 'confirmat' || t.status === 'respins') && isOwner && (
           <button onClick={()=>changeStatus('inchis')} style={btnPrimary(G.muted)}>🔒 Inchide</button>
         )}
+
         <div style={{flex:1}} />
         <button onClick={onClose} style={btnSecondary(G.muted)}>Inchide</button>
       </div>
@@ -1044,6 +1156,44 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
       {showRezolva && (
         <RezolvaModal tichet={t} profile={profile} onClose={()=>setShowRezolva(false)}
                       onSaved={(data)=>{ setShowRezolva(false); changeStatus('rezolvat', { ...data, rezolvat_de:profile.id, data_rezolvare:new Date().toISOString() }) }} />
+      )}
+      {showAnaliza && (
+        <AnalizaModal tichet={t} profile={profile} onClose={()=>setShowAnaliza(false)}
+                      onSaved={(nota)=>{
+                        setShowAnaliza(false)
+                        changeStatus('in_analiza', {
+                          atribuit_de: profile.id,
+                          data_atribuire: new Date().toISOString(),
+                          ...(nota ? { observatii: (t.observatii ? t.observatii + '\n---\n' : '') + 'Analiză inițiată: ' + nota } : {})
+                        })
+                      }} />
+      )}
+      {showProgramareService && (
+        <ProgramareServiceModal tichet={t} profile={profile} serviceParteneri={serviceParteneri}
+          onClose={()=>setShowProgramareService(false)}
+          onPartenerNou={async(nume)=>{
+            // Insert partener nou + reload
+            const { data, error } = await supabase.from('logistica_service_parteneri').insert({ nume, activ:true }).select().single()
+            if(error){ show('Eroare adăugare partener: '+error.message,'error'); return null }
+            show('Partener adăugat: '+nume,'success')
+            return data
+          }}
+          onSaved={(data)=>{ setShowProgramareService(false); changeStatus('programat_service', { ...data, atribuit_de:profile.id, data_atribuire:new Date().toISOString() }) }} />
+      )}
+      {showIntrareService && (
+        <IntrareServiceModal tichet={t} profile={profile} serviceParteneri={serviceParteneri}
+          onClose={()=>setShowIntrareService(false)}
+          onPartenerNou={async(nume)=>{
+            const { data, error } = await supabase.from('logistica_service_parteneri').insert({ nume, activ:true }).select().single()
+            if(error){ show('Eroare adăugare partener: '+error.message,'error'); return null }
+            show('Partener adăugat: '+nume,'success')
+            return data
+          }}
+          onSaved={(data)=>{ setShowIntrareService(false); changeStatus('in_service', { ...data, atribuit_de: t.atribuit_de || profile.id, data_atribuire: t.data_atribuire || new Date().toISOString() }) }} />
+      )}
+      {showReparat && (
+        <ReparatModal tichet={t} profile={profile} onClose={()=>setShowReparat(false)}
+                      onSaved={(data)=>{ setShowReparat(false); changeStatus('reparat', { ...data, rezolvat_de:profile.id, data_rezolvare:new Date().toISOString() }) }} />
       )}
     </Modal>
   )
@@ -1125,6 +1275,265 @@ function RezolvaModal({ tichet, profile, onClose, onSaved }){
             durata_ore: form.durata_ore ? Number(form.durata_ore) : null,
             cost: form.cost ? Number(form.cost) : null
           })} disabled={!form.descriere_interventie.trim()} style={btnPrimary(G.green)}>✅ Marcheaza rezolvat</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// COMPONENTĂ HELPER — combobox service partener cu „+Partener nou"
+// ════════════════════════════════════════════════════════════════
+function PartenerCombobox({ value, onChange, parteneri, onPartenerNou, label = 'Service partener' }){
+  const [adding, setAdding] = useState(false)
+  const [numeNou, setNumeNou] = useState('')
+  
+  return (
+    <div>
+      <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>{label}</label>
+      {!adding ? (
+        <div style={{display:'flex',gap:8}}>
+          <select value={value || ''} onChange={e=>onChange(e.target.value ? Number(e.target.value) : null)}
+                  style={{flex:1,padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}}>
+            <option value="">-- Alege --</option>
+            {parteneri.map(p=>(
+              <option key={p.id} value={p.id}>{p.nume}</option>
+            ))}
+          </select>
+          <button type="button" onClick={()=>setAdding(true)} 
+                  style={{padding:'11px 14px',background:'transparent',color:G.blue,border:`1px dashed ${G.blue}66`,borderRadius:8,fontSize:13,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>
+            + Partener nou
+          </button>
+        </div>
+      ) : (
+        <div style={{display:'flex',gap:8}}>
+          <input type="text" value={numeNou} onChange={e=>setNumeNou(e.target.value)} 
+                 placeholder="Nume firmă service (ex: SC AUTO STAR SRL)"
+                 autoFocus
+                 style={{flex:1,padding:'11px 14px',background:G.bg,border:`1px solid ${G.blue}`,borderRadius:8,color:G.text,fontSize:15}} />
+          <button type="button" onClick={async()=>{
+            if(!numeNou.trim()) return
+            const created = await onPartenerNou(numeNou.trim())
+            if(created){
+              onChange(created.id)
+              setNumeNou('')
+              setAdding(false)
+            }
+          }} disabled={!numeNou.trim()} style={btnPrimary(G.green)}>✓ Salvează</button>
+          <button type="button" onClick={()=>{ setAdding(false); setNumeNou('') }} style={btnSecondary(G.muted)}>Anulează</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// SUB-MODAL Analiza — trecere la in_analiza (notă opțională)
+// ════════════════════════════════════════════════════════════════
+function AnalizaModal({ tichet, profile, onClose, onSaved }){
+  const [nota, setNota] = useState('')
+  return (
+    <Modal onClose={onClose} title="🔍 Trimite în analiză" width={500}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{padding:12,background:G.blue+'15',border:`1px solid ${G.blue}44`,borderRadius:8,fontSize:13,color:G.text}}>
+          ℹ️ Ticket-ul intră în analiză. Sistemul te avertizează după 3 zile dacă rămâne în această stare.
+          Apoi treci la <strong>Trimite la service</strong> sau respingi.
+        </div>
+        <div>
+          <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Notă inițială (opțional)</label>
+          <textarea value={nota} onChange={e=>setNota(e.target.value)} rows={3}
+                    placeholder="Ex: trebuie verificat pe stand, suspectez baterie..."
+                    style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15,fontFamily:'inherit',resize:'vertical'}} />
+        </div>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+          <button onClick={onClose} style={btnSecondary(G.muted)}>Anulează</button>
+          <button onClick={()=>onSaved(nota.trim())} style={btnPrimary(G.blue)}>🔍 Trimite în analiză</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// SUB-MODAL Programare Service — data + partener
+// ════════════════════════════════════════════════════════════════
+function ProgramareServiceModal({ tichet, profile, serviceParteneri, onClose, onPartenerNou, onSaved }){
+  const [dataProgramare, setDataProgramare] = useState('')
+  const [partenerId, setPartenerId] = useState(null)
+  const [firmaTextLiber, setFirmaTextLiber] = useState('')
+  const [useTextLiber, setUseTextLiber] = useState(false)
+  
+  const canSave = dataProgramare && (useTextLiber ? firmaTextLiber.trim() : partenerId)
+  
+  return (
+    <Modal onClose={onClose} title="📅 Programare service" width={540}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{padding:12,background:G.purple+'15',border:`1px solid ${G.purple}44`,borderRadius:8,fontSize:13,color:G.text}}>
+          ℹ️ Setezi data la care utilajul/auto-ul va intra în service. Când ajunge data, treci la <strong>Confirmă intrare în service</strong>.
+        </div>
+        
+        <div>
+          <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Data programare service *</label>
+          <input type="date" value={dataProgramare} onChange={e=>setDataProgramare(e.target.value)}
+                 min={new Date().toISOString().slice(0,10)}
+                 style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+        </div>
+        
+        {!useTextLiber ? (
+          <>
+            <PartenerCombobox value={partenerId} onChange={setPartenerId} parteneri={serviceParteneri} 
+                              onPartenerNou={onPartenerNou} label="Service partener *" />
+            <button type="button" onClick={()=>setUseTextLiber(true)} 
+                    style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:0,fontSize:12,cursor:'pointer',textDecoration:'underline'}}>
+              sau scrie firmă (text liber)
+            </button>
+          </>
+        ) : (
+          <>
+            <div>
+              <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Firmă service (text liber) *</label>
+              <input type="text" value={firmaTextLiber} onChange={e=>setFirmaTextLiber(e.target.value)}
+                     placeholder="Nume firmă service"
+                     style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+            </div>
+            <button type="button" onClick={()=>{ setUseTextLiber(false); setFirmaTextLiber('') }}
+                    style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:0,fontSize:12,cursor:'pointer',textDecoration:'underline'}}>
+              ← înapoi la listă parteneri
+            </button>
+          </>
+        )}
+        
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+          <button onClick={onClose} style={btnSecondary(G.muted)}>Anulează</button>
+          <button onClick={()=>onSaved({
+            data_programare_service: dataProgramare,
+            service_partener_id: useTextLiber ? null : partenerId,
+            firma_externa: useTextLiber ? firmaTextLiber.trim() : null,
+            asignat_la: 'extern'
+          })} disabled={!canSave} style={btnPrimary(G.purple)}>📅 Programează</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// SUB-MODAL Intrare Service — data intrare + partener + estimată reparație
+// ════════════════════════════════════════════════════════════════
+function IntrareServiceModal({ tichet, profile, serviceParteneri, onClose, onPartenerNou, onSaved }){
+  const [dataIntrare, setDataIntrare] = useState(new Date().toISOString().slice(0,10))
+  const [dataEstimata, setDataEstimata] = useState('')
+  const [partenerId, setPartenerId] = useState(tichet.service_partener_id || null)
+  const [firmaTextLiber, setFirmaTextLiber] = useState(tichet.firma_externa || '')
+  const [useTextLiber, setUseTextLiber] = useState(!tichet.service_partener_id && !!tichet.firma_externa)
+  
+  const canSave = dataIntrare && dataEstimata && (useTextLiber ? firmaTextLiber.trim() : partenerId)
+  
+  return (
+    <Modal onClose={onClose} title="🔧 Intrare în service" width={560}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{padding:12,background:G.yellow+'15',border:`1px solid ${G.yellow}44`,borderRadius:8,fontSize:13,color:G.text}}>
+          ℹ️ Confirmi că utilajul/auto-ul a intrat efectiv în service. Sistemul te avertizează când e cu 5+ zile peste data estimată.
+        </div>
+        
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <div>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Data intrare *</label>
+            <input type="date" value={dataIntrare} onChange={e=>setDataIntrare(e.target.value)}
+                   style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+          </div>
+          <div>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Data estimată reparație *</label>
+            <input type="date" value={dataEstimata} onChange={e=>setDataEstimata(e.target.value)}
+                   min={dataIntrare || new Date().toISOString().slice(0,10)}
+                   style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+          </div>
+        </div>
+        
+        {!useTextLiber ? (
+          <>
+            <PartenerCombobox value={partenerId} onChange={setPartenerId} parteneri={serviceParteneri} 
+                              onPartenerNou={onPartenerNou} label="Service partener *" />
+            <button type="button" onClick={()=>setUseTextLiber(true)} 
+                    style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:0,fontSize:12,cursor:'pointer',textDecoration:'underline'}}>
+              sau scrie firmă (text liber)
+            </button>
+          </>
+        ) : (
+          <>
+            <div>
+              <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Firmă service (text liber) *</label>
+              <input type="text" value={firmaTextLiber} onChange={e=>setFirmaTextLiber(e.target.value)}
+                     placeholder="Nume firmă service"
+                     style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+            </div>
+            <button type="button" onClick={()=>{ setUseTextLiber(false); setFirmaTextLiber('') }}
+                    style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:0,fontSize:12,cursor:'pointer',textDecoration:'underline'}}>
+              ← înapoi la listă parteneri
+            </button>
+          </>
+        )}
+        
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+          <button onClick={onClose} style={btnSecondary(G.muted)}>Anulează</button>
+          <button onClick={()=>onSaved({
+            data_intrare_service: dataIntrare,
+            data_estimata_reparatie: dataEstimata,
+            service_partener_id: useTextLiber ? null : partenerId,
+            firma_externa: useTextLiber ? firmaTextLiber.trim() : null,
+            asignat_la: 'extern'
+          })} disabled={!canSave} style={btnPrimary(G.yellow)}>🔧 Confirmă intrare</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// SUB-MODAL Reparat — descriere intervenție + piese + cost + durată
+// ════════════════════════════════════════════════════════════════
+function ReparatModal({ tichet, profile, onClose, onSaved }){
+  const [form, setForm] = useState({ descriere_interventie:'', piese_schimbate:'', durata_ore:'', cost:'' })
+  return (
+    <Modal onClose={onClose} title="✅ Marchează reparat" width={540}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{padding:12,background:G.green+'15',border:`1px solid ${G.green}44`,borderRadius:8,fontSize:13,color:G.text}}>
+          ℹ️ Service-ul confirmă că s-a finalizat reparația. Creator-ul ({tichet.deschis_de ? 'cel care a deschis ticket-ul' : 'creator'}) va fi notificat pentru confirmare.
+        </div>
+        
+        <div>
+          <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Descriere intervenție *</label>
+          <textarea value={form.descriere_interventie} onChange={e=>setForm({...form,descriere_interventie:e.target.value})} rows={3}
+                    placeholder="Ce s-a făcut, cum s-a rezolvat..."
+                    style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15,fontFamily:'inherit',resize:'vertical'}} />
+        </div>
+        <div>
+          <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Piese schimbate (opt)</label>
+          <input type="text" value={form.piese_schimbate} onChange={e=>setForm({...form,piese_schimbate:e.target.value})}
+                 placeholder="Ex: alternator, baterie, ulei..."
+                 style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+          <div>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Durată (ore)</label>
+            <input type="number" step="0.5" value={form.durata_ore} onChange={e=>setForm({...form,durata_ore:e.target.value})}
+                   style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+          </div>
+          <div>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Cost (lei)</label>
+            <input type="number" step="0.01" value={form.cost} onChange={e=>setForm({...form,cost:e.target.value})}
+                   style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+          </div>
+        </div>
+        
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+          <button onClick={onClose} style={btnSecondary(G.muted)}>Anulează</button>
+          <button onClick={()=>onSaved({
+            descriere_interventie: form.descriere_interventie.trim(),
+            piese_schimbate: form.piese_schimbate.trim() || null,
+            durata_ore: form.durata_ore ? Number(form.durata_ore) : null,
+            cost: form.cost ? Number(form.cost) : null
+          })} disabled={!form.descriere_interventie.trim()} style={btnPrimary(G.green)}>✅ Marchează reparat</button>
         </div>
       </div>
     </Modal>
