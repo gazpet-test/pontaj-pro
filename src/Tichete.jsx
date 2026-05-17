@@ -113,21 +113,27 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [searchText,setSearchText]=useState('')
   const [openNew,setOpenNew]=useState(false)
   const [openDetail,setOpenDetail]=useState(null)
+  const [activeLogistica,setActiveLogistica]=useState([])  // pentru autocomplete entitate dep=logistica
+  const [employeesList,setEmployeesList]=useState([])      // pentru autocomplete entitate dep=hr
 
   const loadAll = useCallback(async()=>{
     setLoading(true)
     try {
-      const [tk, sm, sc, pf] = await Promise.all([
+      const [tk, sm, sc, pf, ac, em] = await Promise.all([
         supabase.from('tichete').select('*').order('created_at',{ascending:false}).limit(500),
         supabase.from('v_tichete_summary').select('*'),
         supabase.from('tichete_subcategorii').select('*').eq('active',true).order('ordine'),
-        supabase.from('profiles').select('id, name, role')
+        supabase.from('profiles').select('id, name, role'),
+        supabase.from('logistica_active').select('id, cod_intern, nr_inmatriculare, marca, model').eq('vandut',false).eq('deep_sleep',false).order('marca'),
+        supabase.from('employees').select('id, name, functie').eq('active',true).order('name')
       ])
       setTichete(tk.data || [])
       const sMap = {}; (sm.data || []).forEach(s=>{ sMap[s.departament] = s })
       setSummary(sMap)
       setSubcategorii(sc.data || [])
       setProfiles(pf.data || [])
+      setActiveLogistica(ac.data || [])
+      setEmployeesList(em.data || [])
     } catch(e){
       show('Eroare incarcare tichete: ' + e.message, 'error')
     } finally {
@@ -325,6 +331,8 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           subcategorii={subcategorii}
           profile={profile}
           forcedDep={filterDepartament}
+          activeLogistica={activeLogistica}
+          employeesList={employeesList}
           onClose={()=>setOpenNew(false)}
           onSaved={()=>{ setOpenNew(false); loadAll(); show('Tichet creat!', 'success') }}
           show={show}
@@ -393,7 +401,7 @@ function TichetRow({ t, profiles, onClick, showDep = false }){
 // ════════════════════════════════════════════════════════════════
 // MODAL: TICHET NOU
 // ════════════════════════════════════════════════════════════════
-function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, show }){
+function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, employeesList, onClose, onSaved, show }){
   const [step, setStep] = useState(forcedDep ? 2 : 0)  // 0: AI quick, 1: dep manual, 2: detalii
   const [dep, setDep] = useState(forcedDep || null)
   const [form, setForm] = useState({
@@ -412,6 +420,25 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
   const [aiError, setAiError] = useState('')
 
   const subsForDep = useMemo(()=>subcategorii.filter(s=>s.departament===dep), [subcategorii, dep])
+
+  // Entitate autocomplete: opțiuni dinamice pe baza departamentului
+  const entitateOptions = useMemo(()=>{
+    if(dep === 'logistica' && Array.isArray(activeLogistica)) {
+      return activeLogistica.map(a => ({
+        tip: 'activ_logistica',
+        id: a.id,
+        label: [a.nr_inmatriculare, a.marca, a.model].filter(Boolean).join(' · ') || a.cod_intern || `Activ #${a.id}`
+      })).filter(o => o.label && o.label.trim())
+    }
+    if(dep === 'hr' && Array.isArray(employeesList)) {
+      return employeesList.map(e => ({
+        tip: 'employee',
+        id: e.id,
+        label: [e.name, e.functie].filter(Boolean).join(' · ')
+      })).filter(o => o.label && o.label.trim())
+    }
+    return []
+  }, [dep, activeLogistica, employeesList])
 
   // AI sugestie: apel edge function
   const runAI = async()=>{
@@ -502,9 +529,9 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
           <div style={{padding:14,background:G.purpleDim,border:`1px solid ${G.purple}66`,borderRadius:10,marginBottom:16}}>
             <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}>
               <span style={{fontSize:24}}>🤖</span>
-              <strong style={{color:G.purple,fontSize:15}}>Asistent Claude Haiku</strong>
+              <strong style={{color:G.purple,fontSize:16}}>Asistent Claude Haiku</strong>
             </div>
-            <div style={{fontSize:12,color:G.muted,lineHeight:1.5}}>
+            <div style={{fontSize:13,color:G.muted,lineHeight:1.5}}>
               Scrie problema in propriile cuvinte si AI-ul iti alege automat departamentul + subcategoria + urgenta. 
               Te poti razgandi oricand prin „Alege manual".
             </div>
@@ -512,55 +539,55 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
 
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
             <div>
-              <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Titlu / Problema *</label>
+              <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Titlu / Problema *</label>
               <input type="text" value={aiTitlu} onChange={e=>{ setAiTitlu(e.target.value); setAiSuggestion(null); setAiError('') }}
                      placeholder="Ex: Excavatorul JCB nu mai porneste la PH22"
-                     style={{width:'100%',padding:'12px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}} />
+                     style={{width:'100%',padding:'12px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
             </div>
             <div>
-              <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Detalii suplimentare (optional)</label>
+              <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Detalii suplimentare (optional)</label>
               <textarea value={aiDescriere} onChange={e=>{ setAiDescriere(e.target.value); setAiSuggestion(null); setAiError('') }}
                         rows={3} placeholder="Ce s-a intamplat, cand, in ce conditii..."
-                        style={{width:'100%',padding:'10px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13,fontFamily:'inherit',resize:'vertical'}} />
+                        style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14,fontFamily:'inherit',resize:'vertical'}} />
             </div>
 
             {aiError && (
-              <div style={{padding:10,background:G.redDim,border:`1px solid ${G.red}66`,borderRadius:6,color:G.red,fontSize:13}}>
+              <div style={{padding:10,background:G.redDim,border:`1px solid ${G.red}66`,borderRadius:6,color:G.red,fontSize:14}}>
                 ⚠ {aiError}
               </div>
             )}
 
             {aiSuggestion && (
               <div style={{padding:14,background:G.greenDim,border:`1px solid ${G.green}66`,borderRadius:10}}>
-                <div style={{fontSize:11,color:G.muted,marginBottom:8,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>💡 Sugestie AI</div>
+                <div style={{fontSize:12,color:G.muted,marginBottom:8,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>💡 Sugestie AI</div>
                 <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:8}}>
-                  <span style={{padding:'6px 12px',background:getDep(aiSuggestion.departament).color+'33',color:getDep(aiSuggestion.departament).color,borderRadius:6,fontSize:13,fontWeight:700}}>
+                  <span style={{padding:'7px 14px',background:getDep(aiSuggestion.departament).color+'33',color:getDep(aiSuggestion.departament).color,borderRadius:6,fontSize:14,fontWeight:700}}>
                     {getDep(aiSuggestion.departament).emoji} {getDep(aiSuggestion.departament).nume}
                   </span>
-                  <span style={{fontSize:14,color:G.muted}}>→</span>
-                  <span style={{padding:'6px 12px',background:G.bg,color:G.text,borderRadius:6,fontSize:13}}>
+                  <span style={{fontSize:15,color:G.muted}}>→</span>
+                  <span style={{padding:'7px 14px',background:G.bg,color:G.text,borderRadius:6,fontSize:14}}>
                     {subcategorii.find(s=>s.departament===aiSuggestion.departament && s.cod===aiSuggestion.subcategorie)?.emoji || '📌'}
                     {' '}
                     {subcategorii.find(s=>s.departament===aiSuggestion.departament && s.cod===aiSuggestion.subcategorie)?.denumire || aiSuggestion.subcategorie}
                   </span>
-                  <span style={{padding:'6px 12px',background:getUrg(aiSuggestion.urgenta).color+'33',color:getUrg(aiSuggestion.urgenta).color,borderRadius:6,fontSize:13,fontWeight:700}}>
+                  <span style={{padding:'7px 14px',background:getUrg(aiSuggestion.urgenta).color+'33',color:getUrg(aiSuggestion.urgenta).color,borderRadius:6,fontSize:14,fontWeight:700}}>
                     {getUrg(aiSuggestion.urgenta).emoji} {getUrg(aiSuggestion.urgenta).label}
                   </span>
                 </div>
                 {aiSuggestion.motiv && (
-                  <div style={{fontSize:12,color:G.muted,fontStyle:'italic',marginBottom:6}}>
+                  <div style={{fontSize:13,color:G.muted,fontStyle:'italic',marginBottom:6}}>
                     „{aiSuggestion.motiv}"
                   </div>
                 )}
-                <div style={{display:'flex',gap:14,fontSize:10,color:G.dim,marginBottom:10}}>
+                <div style={{display:'flex',gap:14,fontSize:11,color:G.dim,marginBottom:10}}>
                   <span>📊 {aiSuggestion.confidence}% confident</span>
                   {aiSuggestion._meta && <span>💰 ${aiSuggestion._meta.cost_usd}</span>}
                 </div>
                 <div style={{display:'flex',gap:8}}>
-                  <button onClick={applyAI} style={{flex:1,padding:'10px',background:G.green,color:'#fff',border:0,borderRadius:8,fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                  <button onClick={applyAI} style={{flex:1,padding:'11px',background:G.green,color:'#fff',border:0,borderRadius:8,fontWeight:700,fontSize:15,cursor:'pointer'}}>
                     ✅ Aplica si continua
                   </button>
-                  <button onClick={runAI} disabled={aiLoading} style={{padding:'10px 14px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:13,cursor:'pointer'}}>
+                  <button onClick={runAI} disabled={aiLoading} style={{padding:'11px 16px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:14,cursor:'pointer'}}>
                     🔄 Reanalizeaza
                   </button>
                 </div>
@@ -571,10 +598,10 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
             {!aiSuggestion && (
               <div style={{display:'flex',gap:8,marginTop:6}}>
                 <button onClick={runAI} disabled={aiLoading || aiTitlu.trim().length < 3}
-                        style={{flex:2,padding:'12px',background:aiLoading ? G.muted : G.purple,color:'#fff',border:0,borderRadius:8,fontSize:14,fontWeight:700,cursor:aiLoading?'wait':'pointer',opacity:aiTitlu.trim().length<3?0.5:1,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                        style={{flex:2,padding:'13px',background:aiLoading ? G.muted : G.purple,color:'#fff',border:0,borderRadius:8,fontSize:15,fontWeight:700,cursor:aiLoading?'wait':'pointer',opacity:aiTitlu.trim().length<3?0.5:1,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
                   {aiLoading ? '⏳ Analizez...' : '🤖 Sugereaza automat cu AI'}
                 </button>
-                <button onClick={()=>setStep(1)} style={{flex:1,padding:'12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:13,cursor:'pointer'}}>
+                <button onClick={()=>setStep(1)} style={{flex:1,padding:'13px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:14,cursor:'pointer'}}>
                   Alege manual →
                 </button>
               </div>
@@ -585,10 +612,10 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
 
       {step === 1 && (
         <div>
-          <button onClick={()=>setStep(0)} style={{padding:'6px 12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:12,cursor:'pointer',marginBottom:12}}>
+          <button onClick={()=>setStep(0)} style={{padding:'7px 14px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:13,cursor:'pointer',marginBottom:12}}>
             ← Foloseste AI
           </button>
-          <div style={{fontSize:13,color:G.muted,marginBottom:14}}>Selecteaza departamentul pentru care deschizi tichetul:</div>
+          <div style={{fontSize:14,color:G.muted,marginBottom:14}}>Selecteaza departamentul pentru care deschizi tichetul:</div>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
             {DEPARTAMENTE.map(d=>(
               <button key={d.cod} onClick={()=>{ setDep(d.cod); setStep(2) }}
@@ -597,8 +624,8 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
                       onMouseLeave={e=>{ e.currentTarget.style.borderColor=G.border2; e.currentTarget.style.background=G.surface }}>
                 <span style={{fontSize:28}}>{d.emoji}</span>
                 <div>
-                  <div style={{fontSize:15,fontWeight:700,color:G.text}}>{d.nume}</div>
-                  <div style={{fontSize:11,color:G.muted,marginTop:2}}>{d.descriere}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:G.text}}>{d.nume}</div>
+                  <div style={{fontSize:12,color:G.muted,marginTop:2}}>{d.descriere}</div>
                 </div>
               </button>
             ))}
@@ -609,23 +636,23 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
       {step === 2 && (
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
           {!forcedDep && (
-            <button onClick={()=>setStep(0)} style={{alignSelf:'flex-start',padding:'6px 12px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:12,cursor:'pointer'}}>
+            <button onClick={()=>setStep(0)} style={{alignSelf:'flex-start',padding:'7px 14px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:13,cursor:'pointer'}}>
               ← Inapoi (AI sau manual)
             </button>
           )}
 
           {/* Subcategorie */}
           <div>
-            <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Subcategorie *</label>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Subcategorie *</label>
             <select value={form.subcategorie} onChange={e=>setForm({...form, subcategorie:e.target.value})}
-                    style={{width:'100%',padding:'10px 12px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}}>
+                    style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}}>
               <option value="">-- Alege --</option>
               {subsForDep.map(s=>(
                 <option key={s.cod} value={s.cod}>{s.emoji} {s.denumire}</option>
               ))}
             </select>
             {form.subcategorie && (
-              <div style={{fontSize:11,color:G.muted,marginTop:4}}>
+              <div style={{fontSize:12,color:G.muted,marginTop:5}}>
                 {subsForDep.find(s=>s.cod===form.subcategorie)?.descriere}
               </div>
             )}
@@ -633,13 +660,13 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
 
           {/* Urgenta */}
           <div>
-            <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Urgenta</label>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Urgenta</label>
             <div style={{display:'flex',gap:8}}>
               {URGENTE.map(u=>(
                 <button key={u.cod} type="button" onClick={()=>setForm({...form, urgenta:u.cod})}
-                        style={{flex:1,padding:'10px 12px',background:form.urgenta===u.cod ? u.color+'22' : G.bg,border:`1px solid ${form.urgenta===u.cod ? u.color : G.border2}`,borderRadius:8,cursor:'pointer',color:form.urgenta===u.cod ? u.color : G.text,fontWeight:form.urgenta===u.cod?700:400,fontSize:13}}>
+                        style={{flex:1,padding:'11px 14px',background:form.urgenta===u.cod ? u.color+'22' : G.bg,border:`1px solid ${form.urgenta===u.cod ? u.color : G.border2}`,borderRadius:8,cursor:'pointer',color:form.urgenta===u.cod ? u.color : G.text,fontWeight:form.urgenta===u.cod?700:400,fontSize:14}}>
                   <div>{u.emoji} {u.label}</div>
-                  <div style={{fontSize:10,color:G.muted,marginTop:2}}>{u.sla}</div>
+                  <div style={{fontSize:11,color:G.muted,marginTop:3}}>{u.sla}</div>
                 </button>
               ))}
             </div>
@@ -647,34 +674,68 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
 
           {/* Titlu */}
           <div>
-            <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Titlu * <span style={{color:G.dim,fontWeight:400}}>(scurt, esential)</span></label>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Titlu * <span style={{color:G.dim,fontWeight:400}}>(scurt, esential)</span></label>
             <input type="text" value={form.titlu} onChange={e=>setForm({...form, titlu:e.target.value})} maxLength={100}
                    placeholder="Ex: Alternator stricat PH 22 GZP"
-                   style={{width:'100%',padding:'10px 12px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}} />
+                   style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
           </div>
 
           {/* Descriere */}
           <div>
-            <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Descriere * <span style={{color:G.dim,fontWeight:400}}>(detalii, simptome, context)</span></label>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Descriere * <span style={{color:G.dim,fontWeight:400}}>(detalii, simptome, context)</span></label>
             <textarea value={form.descriere} onChange={e=>setForm({...form, descriere:e.target.value})} rows={4}
                       placeholder="Ce s-a intamplat, cand, in ce conditii, ce ai incercat..."
-                      style={{width:'100%',padding:'10px 12px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14,fontFamily:'inherit',resize:'vertical'}} />
+                      style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15,fontFamily:'inherit',resize:'vertical'}} />
           </div>
 
-          {/* Entitate opționala */}
+          {/* Entitate cu autocomplete pentru logistica/hr, text liber pentru rest */}
           <div>
-            <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>Entitate <span style={{color:G.dim,fontWeight:400}}>(opt - utilaj/auto/echipament/persoana)</span></label>
-            <input type="text" value={form.entitate_descriere} onChange={e=>setForm({...form, entitate_descriere:e.target.value})} maxLength={200}
-                   placeholder="Ex: PH 22 GZP / Excavator JCB 4CX / Drujba Stihl / etc."
-                   style={{width:'100%',padding:'10px 12px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}} />
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>
+              Entitate <span style={{color:G.dim,fontWeight:400}}>
+                {dep === 'logistica' ? '(opt - alege din lista activelor sau scrie liber)' :
+                 dep === 'hr'        ? '(opt - alege din lista angajatilor sau scrie liber)' :
+                                       '(opt - text liber)'}
+              </span>
+            </label>
+            <input type="text"
+                   list={entitateOptions.length > 0 ? `entitate-options-${dep}` : undefined}
+                   value={form.entitate_descriere}
+                   onChange={e=>{
+                     const val = e.target.value
+                     const matched = entitateOptions.find(o=>o.label===val)
+                     if(matched){
+                       setForm({...form, entitate_descriere:val, entitate_tip:matched.tip, entitate_id:matched.id})
+                     } else {
+                       setForm({...form, entitate_descriere:val, entitate_tip:null, entitate_id:null})
+                     }
+                   }}
+                   maxLength={200}
+                   placeholder={
+                     dep === 'logistica' ? 'Tasteaza sau alege: PH 22 GZP / Excavator JCB / etc.' :
+                     dep === 'hr'        ? 'Tasteaza sau alege un angajat' :
+                                           'Ex: birou contabilitate / imprimanta etaj 2 / etc.'
+                   }
+                   style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:15}} />
+            {entitateOptions.length > 0 && (
+              <datalist id={`entitate-options-${dep}`}>
+                {entitateOptions.map((o,i)=>(
+                  <option key={i} value={o.label} />
+                ))}
+              </datalist>
+            )}
+            {form.entitate_id && (
+              <div style={{fontSize:12,color:G.green,marginTop:5}}>
+                ✓ Asociat cu {form.entitate_tip === 'activ_logistica' ? 'activul' : 'angajatul'} din BD (id: {form.entitate_id})
+              </div>
+            )}
           </div>
 
           {/* Poze upload */}
           <div>
-            <label style={{fontSize:12,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>📸 Poze <span style={{color:G.dim,fontWeight:400}}>(opt - max 5)</span></label>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>📸 Poze <span style={{color:G.dim,fontWeight:400}}>(opt - max 5)</span></label>
             <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
               {poze.map((f,i)=>(
-                <div key={i} style={{position:'relative',width:60,height:60,borderRadius:6,overflow:'hidden',border:`1px solid ${G.border2}`}}>
+                <div key={i} style={{position:'relative',width:66,height:66,borderRadius:6,overflow:'hidden',border:`1px solid ${G.border2}`}}>
                   <img src={URL.createObjectURL(f)} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} />
                   <button type="button" onClick={()=>setPoze(p=>p.filter((_,idx)=>idx!==i))}
                           style={{position:'absolute',top:2,right:2,width:20,height:20,borderRadius:'50%',background:G.red,color:'#fff',border:0,cursor:'pointer',fontSize:11,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
@@ -682,7 +743,7 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
               ))}
               {poze.length < 5 && (
                 <button type="button" onClick={()=>fileRef.current?.click()}
-                        style={{width:60,height:60,borderRadius:6,background:G.bg,border:`1px dashed ${G.border2}`,color:G.muted,cursor:'pointer',fontSize:22}}>
+                        style={{width:66,height:66,borderRadius:6,background:G.bg,border:`1px dashed ${G.border2}`,color:G.muted,cursor:'pointer',fontSize:24}}>
                   +
                 </button>
               )}
@@ -692,10 +753,10 @@ function TichetFormModal({ subcategorii, profile, forcedDep, onClose, onSaved, s
 
           {/* Submit */}
           <div style={{display:'flex',gap:10,marginTop:8,justifyContent:'flex-end'}}>
-            <button onClick={onClose} disabled={saving} style={{padding:'10px 18px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:14,cursor:'pointer'}}>
+            <button onClick={onClose} disabled={saving} style={{padding:'11px 20px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:15,cursor:'pointer'}}>
               Anuleaza
             </button>
-            <button onClick={submit} disabled={saving} style={{padding:'10px 24px',background:G.blue,color:'#fff',border:0,borderRadius:8,fontSize:14,fontWeight:700,cursor:saving?'wait':'pointer',opacity:saving?0.7:1}}>
+            <button onClick={submit} disabled={saving} style={{padding:'11px 26px',background:G.blue,color:'#fff',border:0,borderRadius:8,fontSize:15,fontWeight:700,cursor:saving?'wait':'pointer',opacity:saving?0.7:1}}>
               {saving ? '⏳ Trimit...' : '🎫 Deschide tichet'}
             </button>
           </div>
