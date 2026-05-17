@@ -421,24 +421,52 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
 
   const subsForDep = useMemo(()=>subcategorii.filter(s=>s.departament===dep), [subcategorii, dep])
 
-  // Entitate autocomplete: opțiuni dinamice pe baza departamentului
+  // Helper: detectează tipul entitate din câmpurile activului
+  // Valori valide CHECK constraint: activ | auto | echipament | cladire | persoana | altele
+  const getActivTip = (a)=>{
+    const hasPlaca = a.nr_inmatriculare && a.nr_inmatriculare.trim() && !a.nr_inmatriculare.toUpperCase().trim().startsWith('NU ')
+    const hasSasiu = a.serie_sasiu && a.serie_sasiu.trim()
+    if(hasPlaca) return 'auto'
+    if(hasSasiu) return 'activ'  // utilaj
+    return 'echipament'
+  }
+
+  // Label inteligent — skip „NU ARE..." din nr_inmatriculare
+  const buildActivLabel = (a)=>{
+    const parts = []
+    if(a.nr_inmatriculare && !a.nr_inmatriculare.toUpperCase().trim().startsWith('NU ')) parts.push(a.nr_inmatriculare)
+    if(a.marca) parts.push(a.marca)
+    if(a.model) parts.push(a.model)
+    return parts.filter(Boolean).join(' · ') || a.cod_intern || `Activ #${a.id}`
+  }
+
+  // Entitate autocomplete: filtrată contextual pe subcategorie + tip BD corect
   const entitateOptions = useMemo(()=>{
     if(dep === 'logistica' && Array.isArray(activeLogistica)) {
-      return activeLogistica.map(a => ({
-        tip: 'activ_logistica',
+      let arr = activeLogistica
+      // Filtrare pe subcategorie selectată
+      const sub = form.subcategorie
+      if(sub === 'defectiune_auto')       arr = arr.filter(a => getActivTip(a) === 'auto')
+      else if(sub === 'avarie_utilaj')    arr = arr.filter(a => getActivTip(a) === 'activ')
+      else if(sub === 'stricat_echipament') arr = arr.filter(a => getActivTip(a) === 'echipament')
+      else if(sub === 'alimentare_anomalie') arr = arr.filter(a => getActivTip(a) !== 'echipament')
+      // documente_lipsa + altele + nicio subcategorie → arată tot
+      return arr.map(a => ({
+        tip: getActivTip(a),
         id: a.id,
-        label: [a.nr_inmatriculare, a.marca, a.model].filter(Boolean).join(' · ') || a.cod_intern || `Activ #${a.id}`
+        label: buildActivLabel(a)
       })).filter(o => o.label && o.label.trim())
     }
     if(dep === 'hr' && Array.isArray(employeesList)) {
       return employeesList.map(e => ({
-        tip: 'employee',
+        tip: 'persoana',
         id: e.id,
         label: [e.name, e.functie].filter(Boolean).join(' · ')
       })).filter(o => o.label && o.label.trim())
     }
     return []
-  }, [dep, activeLogistica, employeesList])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dep, form.subcategorie, activeLogistica, employeesList])
 
   // AI sugestie: apel edge function
   const runAI = async()=>{
@@ -725,7 +753,13 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
             )}
             {form.entitate_id && (
               <div style={{fontSize:12,color:G.green,marginTop:5}}>
-                ✓ Asociat cu {form.entitate_tip === 'activ_logistica' ? 'activul' : 'angajatul'} din BD (id: {form.entitate_id})
+                ✓ Asociat cu {
+                  form.entitate_tip === 'auto'       ? 'autovehiculul' :
+                  form.entitate_tip === 'activ'      ? 'utilajul' :
+                  form.entitate_tip === 'echipament' ? 'echipamentul' :
+                  form.entitate_tip === 'persoana'   ? 'persoana' :
+                                                       'entitatea'
+                } din BD (id: {form.entitate_id})
               </div>
             )}
           </div>
