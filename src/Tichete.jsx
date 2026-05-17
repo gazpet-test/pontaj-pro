@@ -150,6 +150,49 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
 
   useEffect(()=>{ loadAll() },[loadAll])
 
+  // Auto-open modal creare când URL conține ?action=new
+  useEffect(()=>{
+    const params = new URLSearchParams(window.location.search)
+    if(params.get('action') === 'new') {
+      setOpenNew(true)
+      // curăț URL ca să nu redeschidă la refresh
+      params.delete('action')
+      const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '')
+      window.history.replaceState({}, '', newUrl)
+    }
+  }, [])
+
+  // Ștergere tichet — DOAR pentru is_owner. Cleanup: comentarii/istoric prin CASCADE,
+  // notificări prin trigger BEFORE DELETE, poze/documente storage manual aici.
+  const handleDelete = async (t) => {
+    if(!profile?.is_owner) {
+      show('Doar owner-ul poate șterge tichete', 'error')
+      return
+    }
+    const confirmText = `Sigur ștergi tichetul ${t.numar_tichet}?\n\n"${t.titlu}"\n\nAceastă acțiune este IREVERSIBILĂ:\n• Comentariile și istoricul se șterg\n• Notificările asociate se șterg\n• Pozele/documentele din storage se șterg`
+    if(!window.confirm(confirmText)) return
+    
+    try {
+      // 1. Șterg pozele din storage (dacă există)
+      const allPaths = [...(t.poze_paths || []), ...(t.documente_paths || [])]
+      if(allPaths.length > 0) {
+        const { error: storageErr } = await supabase.storage.from('tichete').remove(allPaths)
+        if(storageErr) console.warn('Storage cleanup partial:', storageErr.message)
+      }
+      
+      // 2. DELETE row (CASCADE: comentarii + istoric, trigger: notificări)
+      const { error } = await supabase.from('tichete').delete().eq('id', t.id)
+      if(error) throw error
+      
+      show(`Tichet ${t.numar_tichet} șters`, 'success')
+      // Închid detail dacă e deschis exact acest tichet
+      if(openDetail?.id === t.id) setOpenDetail(null)
+      await loadAll()
+    } catch(e) {
+      show('Eroare ștergere: ' + e.message, 'error')
+    }
+  }
+
   // Tichete filtrate
   const tichetFilt = useMemo(()=>{
     let t = tichete
@@ -255,7 +298,8 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           </div>
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tichete.slice(0,10).map(t=>(
-              <TichetRow key={t.id} t={t} profiles={profiles} onClick={()=>setOpenDetail(t)} />
+              <TichetRow key={t.id} t={t} profiles={profiles} onClick={()=>setOpenDetail(t)}
+                         canDelete={profile?.is_owner} onDelete={handleDelete} />
             ))}
           </div>
         </div>
@@ -326,7 +370,9 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tichetFilt.map(t=>(
-              <TichetRow key={t.id} t={t} profiles={profiles} onClick={()=>setOpenDetail(t)} showDep={!filterDepartament && !activeDep} />
+              <TichetRow key={t.id} t={t} profiles={profiles} onClick={()=>setOpenDetail(t)}
+                         showDep={!filterDepartament && !activeDep}
+                         canDelete={profile?.is_owner} onDelete={handleDelete} />
             ))}
           </div>
         )}
@@ -362,6 +408,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           serviceParteneri={serviceParteneri}
           onClose={()=>setOpenDetail(null)}
           onChanged={()=>{ loadAll(); }}
+          onDelete={handleDelete}
           show={show}
         />
       )}
@@ -376,7 +423,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
 // ════════════════════════════════════════════════════════════════
 // TICHET ROW (lista)
 // ════════════════════════════════════════════════════════════════
-function TichetRow({ t, profiles, onClick, showDep = false }){
+function TichetRow({ t, profiles, onClick, showDep = false, canDelete = false, onDelete }){
   const dep = getDep(t.departament)
   const urg = getUrg(t.urgenta)
   const st = getSt(t.status)
@@ -401,13 +448,30 @@ function TichetRow({ t, profiles, onClick, showDep = false }){
         )}
       </div>
       {/* Meta */}
-      <div style={{textAlign:'right',flexShrink:0}}>
-        <div style={{fontSize:11,color:G.muted}}>{fmtRelative(t.created_at)}</div>
-        {deschis && (
-          <div style={{display:'flex',alignItems:'center',gap:5,justifyContent:'flex-end',marginTop:4}}>
-            <Avatar name={deschis.name} userId={deschis.id} size={22} />
-            <span style={{fontSize:11,color:G.dim}}>{deschis.name?.split(' ')[0]}</span>
-          </div>
+      <div style={{textAlign:'right',flexShrink:0,display:'flex',alignItems:'center',gap:10}}>
+        <div>
+          <div style={{fontSize:11,color:G.muted}}>{fmtRelative(t.created_at)}</div>
+          {deschis && (
+            <div style={{display:'flex',alignItems:'center',gap:5,justifyContent:'flex-end',marginTop:4}}>
+              <Avatar name={deschis.name} userId={deschis.id} size={22} />
+              <span style={{fontSize:11,color:G.dim}}>{deschis.name?.split(' ')[0]}</span>
+            </div>
+          )}
+        </div>
+        {canDelete && onDelete && (
+          <button 
+            onClick={(e)=>{ e.stopPropagation(); onDelete(t) }}
+            title="Șterge tichet (doar owner)"
+            style={{
+              padding:'6px 8px', background:'transparent', color:G.red+'99',
+              border:`1px solid ${G.red}33`, borderRadius:6, fontSize:14,
+              cursor:'pointer', transition:'all 0.15s',
+              display:'flex', alignItems:'center', justifyContent:'center'
+            }}
+            onMouseEnter={e=>{ e.currentTarget.style.background=G.red+'22'; e.currentTarget.style.color=G.red; e.currentTarget.style.borderColor=G.red }}
+            onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color=G.red+'99'; e.currentTarget.style.borderColor=G.red+'33' }}>
+            🗑
+          </button>
         )}
       </div>
     </div>
@@ -819,7 +883,7 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALIU TICHET
 // ════════════════════════════════════════════════════════════════
-function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, serviceParteneri = [], onClose, onChanged, show }){
+function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, serviceParteneri = [], onClose, onChanged, onDelete, show }){
   const [t, setT] = useState(initialT)
   const [comentarii, setComentarii] = useState([])
   const [istoric, setIstoric] = useState([])
@@ -1145,6 +1209,13 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
         )}
 
         <div style={{flex:1}} />
+        {isOwner && onDelete && (
+          <button onClick={()=>onDelete(t)} 
+                  title="Șterge tichet permanent (doar owner)"
+                  style={{padding:'10px 16px',background:'transparent',color:G.red,border:`1px solid ${G.red}66`,borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}}>
+            🗑 Șterge tichet
+          </button>
+        )}
         <button onClick={onClose} style={btnSecondary(G.muted)}>Inchide</button>
       </div>
 
