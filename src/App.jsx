@@ -6,6 +6,8 @@ import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
+import Tichete from './Tichete.jsx'
+import TichetePage from './TichetePage.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import InternalChat from './InternalChat.jsx'
@@ -381,6 +383,7 @@ function Layout({ children }) {
     ...(hasModuleAccess(profile, 'logistica') ? [{p:'/logistica',i:'🚛',l:'Logistică'}] : []),
     ...(hasModuleAccess(profile, 'hr') ? [{p:'/hr',i:'👥',l:'HR'}] : []),
     ...(hasModuleAccess(profile, 'administrativ') ? [{p:'/administrativ',i:'🏢',l:'Administrativ'}] : []),
+    { p:'/tichete', i:'🎫', l:'Tichete' },
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
     ...(isSuperAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
   ]
@@ -417,6 +420,27 @@ function Layout({ children }) {
               🚚 Cere transport
             </button>
           )}
+          <button
+            onClick={() => nav('/tichete')}
+            title="Modul Tichete - avarii, defecțiuni, reclamații"
+            style={{
+              display:'flex', alignItems:'center', gap:6,
+              padding:'7px 14px',
+              background: G.purple + '22',
+              color: G.purple,
+              border: `1px solid ${G.purple}55`,
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all .15s',
+              fontFamily: 'inherit',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = G.purple + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
+          >
+            🎫 Tichete
+          </button>
           <ChatNavButton />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
@@ -459,8 +483,9 @@ function HomeDashboard() {
     { path:null,        icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:false },
     { path:null,        icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:false },
     { path:null,        icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:false },
-    { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Ticketing', active:true, requireModule:'administrativ' },
+    { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Active', active:true, requireModule:'administrativ' },
     { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'hr' },
+    { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
     { path:null,        icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
@@ -481,6 +506,24 @@ function HomeDashboard() {
           <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
         </div>
         <ChatNavButton />
+        <button
+          onClick={() => nav('/tichete')}
+          title="Modul Tichete"
+          style={{
+            display:'flex', alignItems:'center', gap:6,
+            padding:'7px 14px',
+            background: '#BC8CFF22',
+            color: '#BC8CFF',
+            border: '1px solid #BC8CFF55',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            marginLeft: 4,
+          }}>
+          🎫 Tichete
+        </button>
         <div style={{display:'flex',alignItems:'center',gap:10,marginLeft:10}}>
           <Avatar name={profile?.name} id={1} size={32}/>
           <div>
@@ -7286,6 +7329,8 @@ export default function App() {
         <Route path="/logistica" element={<ProtectedRoute requireModule="logistica"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
         <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
+        <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
+        <Route path="/tichete" element={<ProtectedRoute><Layout><TichetePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>

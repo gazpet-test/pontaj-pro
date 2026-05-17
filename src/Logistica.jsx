@@ -12,6 +12,7 @@ import html2canvas from 'html2canvas'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
+import Tichete from './Tichete.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -6975,8 +6976,8 @@ export default function LogisticaPage() {
       {/* TAB: Service (placeholder) */}
       {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
       
-      {/* TAB: Tichete (placeholder) */}
-      {tab === 'tichete' && <PlaceholderTab label="Tichete" desc="Avarii · Defecțiuni · Reclamații · Rezolvări" emoji="🎫" />}
+      {/* TAB: Tichete - foloseste modulul global Tichete filtrat pe logistica */}
+      {tab === 'tichete' && <Tichete filterDepartament="logistica" noLayout={true} />}
       
       {/* TAB: Transporturi */}
       {tab === 'transporturi' && (
