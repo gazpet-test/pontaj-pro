@@ -1,9 +1,13 @@
 // ════════════════════════════════════════════════════════════════════════════
-// CHATBOT GAZPET ERP v2 - WIDGET HELP IN-APP (Etapa 9, 16.05.2026)
+// CHATBOT GAZPET ERP v4 - WIDGET „NENICU" (Etapa 11, 18.05.2026)
 // ════════════════════════════════════════════════════════════════════════════
-// v3 schimbări:
+// v4 schimbări:
+//   - Rebrand „Inginerul Gazpet" → „Nenicu" (mai cald, mai casual)
+//   - Mascotă PĂSTRATĂ (cască + carte = nenicu' care le știe toate)
+//   - Greeting nou: „Eu sunt Nenicul tău — te ajut cu app-ul"
+// v3 (anterior):
 //   - Mascotă custom „Inginerul" (SVG inline: cască galbenă + carte + zâmbet)
-//   - Font 2.5x mai mare peste tot (13 → 19-20px) - Razvan still small in v2
+//   - Font 2.5x mai mare peste tot (13 → 19-20px)
 //   - Rate limit progresiv 20/10/5 cu badge vizibil + warning
 //   - Mesaje 429 (rate limit atins) afișate special
 // ════════════════════════════════════════════════════════════════════════════
@@ -22,7 +26,7 @@ const G = {
   skin: '#F4C99A',
 }
 
-// ════════ MASCOTA INGINERUL — SVG inline ════════════════════════════════════
+// ════════ MASCOTA NENICU — SVG inline (cască + carte, intact din v3) ════════
 function InginerAvatar({ size = 'md', happy = true }) {
   const px = size === 'sm' ? 32 : size === 'lg' ? 60 : 44
   return (
@@ -137,7 +141,7 @@ export default function ChatbotWidget({ profile }) {
     const numePrenume = profile?.name ? profile.name.split(' ').slice(-1)[0] : ''
     return [{
       role: 'assistant',
-      content: `Salut${numePrenume ? ' ' + numePrenume : ''}! 👋\n\nSunt **Inginerul Gazpet** — asistentul tău AI pentru aplicație. Întreabă-mă orice despre app:\n\n• **"Unde adaug un utilaj?"**\n• **"Cum editez un service?"**\n• **"Cum scot un raport ITM?"**`,
+      content: `Salut${numePrenume ? ' ' + numePrenume : ''}! 👋\n\nEu sunt **Nenicul tău** — te ajut cu app-ul. Întreabă-mă orice:\n\n• **"Unde adaug un utilaj?"**\n• **"Cum editez un service?"**\n• **"Câte tichete urgente am acum?"**`,
     }]
   })
   const [input, setInput] = useState('')
@@ -254,7 +258,7 @@ export default function ChatbotWidget({ profile }) {
     <>
       <button
         onClick={() => setOpen(!open)}
-        title={open ? 'Închide chat' : 'Inginerul Gazpet — Asistent AI'}
+        title={open ? 'Închide chat' : 'Nenicu — Asistent AI'}
         style={{
           position: 'fixed',
           bottom: 24,
@@ -309,9 +313,9 @@ export default function ChatbotWidget({ profile }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <InginerAvatar size="md" />
               <div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: G.text }}>Inginerul Gazpet</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: G.text }}>Nenicu</div>
                 <div style={{ fontSize: 14, color: G.muted, marginTop: 2 }}>
-                  Asistent AI · răspunde despre app
+                  Nenicul tău AI · răspunde la tot
                 </div>
               </div>
             </div>
