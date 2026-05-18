@@ -993,6 +993,7 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
         <AmcSection
           accessLevel={accessLevel}
           showToast={showToast}
+          profile={profile}
         />
       )}
 

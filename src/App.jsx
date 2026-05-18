@@ -5836,6 +5836,10 @@ function AdminPage() {
     if (profile?.is_owner === true && editMgr.can_modify_employees !== undefined) {
       updates.can_modify_employees = !!editMgr.can_modify_employees
     }
+    // Scanner Documente AI (Vision): doar OWNER. Trigger BD enforce_owner_only_salary_flags protejeaza la fel.
+    if (profile?.is_owner === true && editMgr.can_use_document_scanner !== undefined) {
+      updates.can_use_document_scanner = !!editMgr.can_use_document_scanner
+    }
     // WhatsApp: phone + enabled poate fi editat de orice owner; tier DOAR de owner (trigger BD verifică)
     if (editMgr.phone_whatsapp !== undefined) {
       updates.phone_whatsapp = editMgr.phone_whatsapp?.trim() || null
@@ -6276,6 +6280,25 @@ function AdminPage() {
                     </div>
                     <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
                       Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite <strong>adăugare/editare/ștergere</strong> angajați în modulul HR. Necesar pentru personalul de resurse umane. <strong style={{color:G.purple}}>Separat de „Acces Date Personale"</strong> care permite DOAR vizualizare CNP/adresă (fără modificare).
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_use_document_scanner?'#0F1F3A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_use_document_scanner?G.blue:G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_use_document_scanner}
+                    onChange={e=>setEditMgr({...editMgr,can_use_document_scanner:e.target.checked})}
+                    style={{accentColor:G.blue,width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_use_document_scanner?G.blue:G.text}}>
+                      📷 Scanner Documente AI
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite scanare automată documente (ITP/RCA/Buletin/Aviz Medical etc.) cu Claude Vision AI. Costuri vizibile în <strong style={{color:G.green}}>Administrativ → Costuri AI</strong> (~$0.009/scan, ~0.05 RON).
                     </div>
                   </div>
                 </label>

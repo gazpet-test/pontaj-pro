@@ -36,6 +36,116 @@ const S = {
 const BUCKET = 'documente-personal'
 
 // ============================================================================
+// DESTINAȚII SCANNER (Etapa 12 Faza 3 — Refactor 18.05.2026)
+// ============================================================================
+// Routing dual: documente personale vs autorizații (medical/iscir/profesional/etc.)
+const DESTINATIE = {
+  PERSONALE: 'personale',     // hr_documente_personale + bucket documente-personal
+  AVIZ: 'aviz',               // hr_autorizatii (medical) + bucket avize
+  AUTORIZATIE: 'autorizatie', // hr_autorizatii (iscir/profesional/etc.) + bucket autorizatii
+}
+
+const BUCKET_MAP = {
+  [DESTINATIE.PERSONALE]: 'documente-personal',
+  [DESTINATIE.AVIZ]: 'avize',
+  [DESTINATIE.AUTORIZATIE]: 'autorizatii',
+}
+
+const TABEL_MAP = {
+  [DESTINATIE.PERSONALE]: 'hr_documente_personale',
+  [DESTINATIE.AVIZ]: 'hr_autorizatii',
+  [DESTINATIE.AUTORIZATIE]: 'hr_autorizatii',
+}
+
+// Mapare AI tip_document → { destinatie, categorie? }
+// Returneaza destinatia primara + categoria sugerata pentru hr_autorizatii
+function mapAiTipToDestinatie(tipAI) {
+  if (!tipAI) return { destinatie: DESTINATIE.PERSONALE, categorie: null }
+  const t = normalize(tipAI)
+  // Aviz medical / psihologic
+  if (t.includes('aviz medical') || t === 'aviz' || t.includes('apt medical') || t.includes('medical aviz')) {
+    return { destinatie: DESTINATIE.AVIZ, categorie: 'medical' }
+  }
+  if (t.includes('aviz psihologic') || t.includes('psihologic')) {
+    return { destinatie: DESTINATIE.AVIZ, categorie: 'medical' }
+  }
+  // Atestat ISCIR
+  if (t.includes('iscir') || t.includes('macaragiu') || t.includes('stivuitorist') ||
+      t.includes('excavatorist') || t.includes('buldoexcavatorist') || t.includes('rsvti') ||
+      t.includes('legator de sarcina') || t.includes('legator sarcina')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'iscir' }
+  }
+  // Atestat profesional (sofer/ADR/tahograf)
+  if (t.includes('adr') || t.includes('tahograf') ||
+      t.includes('atestat profesional sofer') || t.includes('atestat sofer') ||
+      t.includes('manager transport')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'transport' }
+  }
+  // Atestat profesional general (electrician/lăcătuș/instalator/sudor)
+  if (t.includes('electrician') || t.includes('lacatus') || t.includes('izolator') ||
+      t.includes('instalator gaze') || t.includes('iid') ||
+      t.includes('operator utilaj') || t.includes('mecanic auto') || t.includes('inginer sudor')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'profesional' }
+  }
+  // Sudor
+  if (t.includes('sudor') || t.includes('pehd')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'sudura' }
+  }
+  // ANRE
+  if (t.includes('anre') || t.includes('egd') || t.includes('egt') ||
+      t.includes('egiu') || t.includes('pgd') || t.includes('pgt') || t.includes('pgiu')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'anre' }
+  }
+  // ISU / SSM / PSI
+  if (t.includes('ssm') || t.includes('psi') || t.includes('cadru tehnic') ||
+      t.includes('insemex') || t.includes('prim ajutor')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'isu' }
+  }
+  // Mediu
+  if (t.includes('mediu') || t.includes('deseuri')) {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'mediu' }
+  }
+  // Atestat profesional generic → autorizatie (categoria de default profesional)
+  if (t.includes('atestat profesional') || t === 'atestat') {
+    return { destinatie: DESTINATIE.AUTORIZATIE, categorie: 'profesional' }
+  }
+  // Default: document personal (Buletin / Pasaport / Permis Conducere / Sedere / Munca)
+  return { destinatie: DESTINATIE.PERSONALE, categorie: null }
+}
+
+// Fuzzy match tip autorizatie (similar cu fuzzyMatchTip dar pe hr_autorizatii_tipuri.denumire)
+function fuzzyMatchTipAutorizatie(tipAI, tipuriAutorizatii, categorieFiltru = null) {
+  if (!tipAI || !tipuriAutorizatii?.length) return null
+  const target = normalize(tipAI)
+  // Filtrez pe categorie daca-i furnizata
+  const candidati = categorieFiltru
+    ? tipuriAutorizatii.filter(t => t.activ && t.categorie === categorieFiltru)
+    : tipuriAutorizatii.filter(t => t.activ)
+  if (!candidati.length) return null
+  // 1. Exact match (case+diacritic insensitive)
+  let m = candidati.find(t => normalize(t.denumire) === target)
+  if (m) return m
+  // 2. Contains bidirectional (lungime min 5 chars pentru a evita matches accidentale)
+  m = candidati.find(t => {
+    const tn = normalize(t.denumire)
+    if (tn.length < 5 || target.length < 5) return false
+    return tn.includes(target) || target.includes(tn)
+  })
+  if (m) return m
+  // 3. Token overlap (cuvinte de >=5 chars comune)
+  const tokensAI = target.split(' ').filter(t => t.length >= 5)
+  if (!tokensAI.length) return null
+  let bestMatch = null, bestScore = 0
+  for (const t of candidati) {
+    const tokensT = normalize(t.denumire).split(' ').filter(x => x.length >= 5)
+    const common = tokensAI.filter(x => tokensT.includes(x))
+    if (common.length > bestScore) { bestScore = common.length; bestMatch = t }
+  }
+  return (bestScore >= 1) ? bestMatch : null
+}
+
+
+// ============================================================================
 // HELPERS
 // ============================================================================
 
@@ -279,8 +389,13 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
   const [meta, setMeta] = useState(null)
 
   const [tipuri, setTipuri] = useState([])
+  const [tipuriAutorizatii, setTipuriAutorizatii] = useState([])
   const [loadingTipuri, setLoadingTipuri] = useState(true)
   const [warningTipNesuportat, setWarningTipNesuportat] = useState(null)
+
+  // Destinație document (auto-detectată din AI, schimbabilă manual)
+  const [destinatie, setDestinatie] = useState(DESTINATIE.PERSONALE)
+  const [categorieAutorizatie, setCategorieAutorizatie] = useState(null)
 
   const [form, setForm] = useState({
     employee_id: '',
@@ -293,18 +408,25 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
     observatii: '',
   })
 
-  // Încarcă tipuri documente personale
+  // Încarcă AMBELE tabele de tipuri (personale + autorizatii)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const { data, error } = await supabase
-        .from('hr_documente_personale_tipuri')
-        .select('id, cod, denumire, categorie, are_expirare')
-        .eq('activ', true)
-        .order('ordine', { nullsFirst: false })
+      const [perRes, autRes] = await Promise.all([
+        supabase.from('hr_documente_personale_tipuri')
+          .select('id, cod, denumire, categorie, are_expirare')
+          .eq('activ', true)
+          .order('ordine', { nullsFirst: false }),
+        supabase.from('hr_autorizatii_tipuri')
+          .select('id, cod, denumire, categorie, perioada_default_luni, activ')
+          .eq('activ', true)
+          .order('ordine', { nullsFirst: false }),
+      ])
       if (cancelled) return
-      if (error) showToast('Eroare tipuri: ' + error.message, 'error')
-      setTipuri(data || [])
+      if (perRes.error) showToast('Eroare tipuri personale: ' + perRes.error.message, 'error')
+      if (autRes.error) showToast('Eroare tipuri autorizații: ' + autRes.error.message, 'error')
+      setTipuri(perRes.data || [])
+      setTipuriAutorizatii(autRes.data || [])
       setLoadingTipuri(false)
     })()
     return () => { cancelled = true }
@@ -315,8 +437,22 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
     return () => { if (previewUrl) URL.revokeObjectURL(previewUrl) }
   }, [previewUrl])
 
-  const tipSelectat = useMemo(() => tipuri.find(t => t.id === Number(form.tip_id)), [tipuri, form.tip_id])
+  // tipSelectat depinde de destinație (personale → tipuri, autorizație/aviz → tipuriAutorizatii)
+  const tipuriCurente = destinatie === DESTINATIE.PERSONALE ? tipuri : tipuriAutorizatii
+  const tipSelectat = useMemo(() => tipuriCurente.find(t => t.id === Number(form.tip_id)), [tipuriCurente, form.tip_id])
   const empSelectat = useMemo(() => employees.find(e => e.id === Number(form.employee_id)), [employees, form.employee_id])
+
+  // Tipuri filtrate pe categorie (doar pentru autorizație/aviz)
+  const tipuriFiltrateAutorizatii = useMemo(() => {
+    if (destinatie === DESTINATIE.PERSONALE) return []
+    if (destinatie === DESTINATIE.AVIZ) {
+      return tipuriAutorizatii.filter(t => t.categorie === 'medical')
+    }
+    if (categorieAutorizatie) {
+      return tipuriAutorizatii.filter(t => t.categorie === categorieAutorizatie)
+    }
+    return tipuriAutorizatii
+  }, [tipuriAutorizatii, destinatie, categorieAutorizatie])
 
   const handleFile = (f) => {
     if (!f) return
@@ -371,25 +507,39 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
       setPropunere(data.propunere)
       setMeta(data.meta || null)
 
-      // Auto-match angajat + tip
+      // Auto-match angajat
       const emp = fuzzyMatchEmployee(data.propunere.nume_complet, employees)
-      const tip = fuzzyMatchTip(data.propunere.tip_document, tipuri)
 
-      // Verific dacă tipul detectat NU e suportat în BD documente personale
+      // Auto-detect destinație (personale / aviz / autorizație)
       const tipDetectat = data.propunere.tip_document
-      const tipuriSuportate = ['Buletin', 'Pasaport', 'Pașaport', 'Permis conducere', 'Permis de conducere']
-      const tipUnsuported = !tip && tipDetectat &&
-        !tipuriSuportate.some(t => normalize(tipDetectat).includes(normalize(t)))
+      const { destinatie: destDetectata, categorie: catDetectata } = mapAiTipToDestinatie(tipDetectat)
+      setDestinatie(destDetectata)
+      setCategorieAutorizatie(catDetectata)
 
-      if (tipUnsuported) {
-        setWarningTipNesuportat(tipDetectat)
+      // Match tip in tabela corespunzatoare
+      let tipMatch = null
+      let isFaraExpirare = false
+
+      if (destDetectata === DESTINATIE.PERSONALE) {
+        tipMatch = fuzzyMatchTip(tipDetectat, tipuri)
+        isFaraExpirare = tipMatch ? !tipMatch.are_expirare : false
+        // Warning daca AI a returnat tip generic „ALTUL" și nu am match
+        if (!tipMatch && tipDetectat && normalize(tipDetectat) === 'altul') {
+          setWarningTipNesuportat(tipDetectat)
+        } else {
+          setWarningTipNesuportat(null)
+        }
+      } else {
+        // Aviz medical sau Autorizație → filtrez pe categorie
+        tipMatch = fuzzyMatchTipAutorizatie(tipDetectat, tipuriAutorizatii, catDetectata)
+        // Autorizațiile au mereu expirare (cu excepție „Fără autorizație")
+        isFaraExpirare = false
+        setWarningTipNesuportat(null)
       }
-
-      const isFaraExpirare = tip ? !tip.are_expirare : false
 
       setForm({
         employee_id: emp?.id || '',
-        tip_id: tip?.id || '',
+        tip_id: tipMatch?.id || '',
         data_emitere: data.propunere.data_emitere || '',
         data_expirare: isFaraExpirare ? '' : (data.propunere.data_expirare || ''),
         emitent: data.propunere.emitent || '',
@@ -410,7 +560,12 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
     if (!form.tip_id)      { showToast('Selectează tipul documentului', 'error'); return }
     if (!tipSelectat) { showToast('Tip invalid', 'error'); return }
 
-    const tipAreExpirare = tipSelectat.are_expirare
+    const estePersonal = destinatie === DESTINATIE.PERSONALE
+    // Pentru personale, are_expirare; pentru autorizatii TOATE au expirare (cu exceptia „Fara autorizatie")
+    const tipAreExpirare = estePersonal
+      ? tipSelectat.are_expirare
+      : (normalize(tipSelectat.denumire) !== 'fara autorizatie')
+
     if (tipAreExpirare && !form.fara_expirare && !form.data_expirare) {
       showToast('Completează data expirării (sau bifează „fără expirare")', 'error')
       return
@@ -419,37 +574,62 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
     setStep(4)
 
     try {
-      // 1. Upload fișier
-      const storagePath = genStoragePath(form.employee_id, tipSelectat.cod, file.name)
-      const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, file, {
+      const bucketTarget = BUCKET_MAP[destinatie]
+      const tabelTarget = TABEL_MAP[destinatie]
+      const tipCod = tipSelectat.cod || `tip_${tipSelectat.id}`
+
+      // 1. Upload fișier in bucket-ul corespunzator
+      const storagePath = genStoragePath(form.employee_id, tipCod, file.name)
+      const { error: upErr } = await supabase.storage.from(bucketTarget).upload(storagePath, file, {
         contentType: file.type,
         upsert: false,
       })
-      if (upErr) throw new Error('Upload bucket: ' + upErr.message)
+      if (upErr) throw new Error('Upload bucket „' + bucketTarget + '": ' + upErr.message)
 
-      // 2. INSERT BD
-      const payload = {
-        employee_id: Number(form.employee_id),
-        tip_id: Number(form.tip_id),
-        numar_document: form.numar_document.trim() || null,
-        emitent: form.emitent.trim() || null,
-        data_emitere: form.data_emitere || null,
-        data_expirare: form.fara_expirare || !tipAreExpirare ? null : (form.data_expirare || null),
-        fara_expirare: form.fara_expirare || !tipAreExpirare,
-        fisier_path: storagePath,
-        fisier_nume: file.name,
-        fisier_size_bytes: file.size,
-        fisier_mime: file.type,
-        observatii: form.observatii.trim() || null,
-        uploadat_de: profile?.id || null,
-        activ: true,
+      // 2. Construiesc payload corespunzator
+      let payload
+      if (estePersonal) {
+        // hr_documente_personale
+        payload = {
+          employee_id: Number(form.employee_id),
+          tip_id: Number(form.tip_id),
+          numar_document: form.numar_document.trim() || null,
+          emitent: form.emitent.trim() || null,
+          data_emitere: form.data_emitere || null,
+          data_expirare: form.fara_expirare || !tipAreExpirare ? null : (form.data_expirare || null),
+          fara_expirare: form.fara_expirare || !tipAreExpirare,
+          fisier_path: storagePath,
+          fisier_nume: file.name,
+          fisier_size_bytes: file.size,
+          fisier_mime: file.type,
+          observatii: form.observatii.trim() || null,
+          uploadat_de: profile?.id || null,
+          activ: true,
+        }
+      } else {
+        // hr_autorizatii (aviz medical / iscir / profesional / etc.)
+        payload = {
+          employee_id: Number(form.employee_id),
+          tip_id: Number(form.tip_id),
+          numar_autorizatie: form.numar_document.trim() || null,
+          emitent: form.emitent.trim() || null,
+          data_emitere: form.data_emitere || null,
+          data_expirare: form.fara_expirare || !tipAreExpirare ? null : (form.data_expirare || null),
+          fara_expirare: form.fara_expirare || !tipAreExpirare,
+          fisier_path: storagePath,
+          fisier_nume: file.name,
+          fisier_size_bytes: file.size,
+          fisier_mime: file.type,
+          observatii: form.observatii.trim() || null,
+          uploadat_de: profile?.id || null,
+        }
       }
 
-      const { error: insErr } = await supabase.from('hr_documente_personale').insert(payload)
+      const { error: insErr } = await supabase.from(tabelTarget).insert(payload)
       if (insErr) {
         // Rollback storage
-        await supabase.storage.from(BUCKET).remove([storagePath])
-        throw new Error('INSERT BD: ' + insErr.message)
+        await supabase.storage.from(bucketTarget).remove([storagePath])
+        throw new Error('INSERT „' + tabelTarget + '": ' + insErr.message)
       }
 
       // 3. Marchez scanner_log ca saved_to_db (cel mai recent)
@@ -463,7 +643,9 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
           .limit(1)
       }
 
-      showToast('✓ Document salvat cu succes!', 'success')
+      const labelDestinatie = destinatie === DESTINATIE.PERSONALE ? 'Document personal'
+        : destinatie === DESTINATIE.AVIZ ? 'Aviz medical' : 'Autorizație'
+      showToast('✓ ' + labelDestinatie + ' salvat cu succes!', 'success')
       onSaved?.()
       onClose()
     } catch (e) {
@@ -573,12 +755,45 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
             <div>
               <ConfidenceBar pct={propunere.confidence_pct} />
 
-              {warningTipNesuportat && (
+              {/* Selector destinație document (auto-detectat din AI, schimbabil manual) */}
+              <div style={{padding:'12px 14px', background:G.surface, border:`1px solid ${G.border}`,
+                borderRadius:8, marginBottom:14}}>
+                <div style={{fontSize:11, color:G.muted, marginBottom:8, fontWeight:600, textTransform:'uppercase', letterSpacing:.5}}>
+                  📂 Unde se salvează documentul?
+                </div>
+                <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
+                  {[
+                    { val: DESTINATIE.PERSONALE, label: '🆔 Document Personal', hint: 'Buletin, Pașaport, Permis Conducere' },
+                    { val: DESTINATIE.AVIZ, label: '⚕ Aviz Medical', hint: 'Aviz Medical, Aviz Psihologic' },
+                    { val: DESTINATIE.AUTORIZATIE, label: '📜 Autorizație', hint: 'ISCIR, ANRE, ADR, Atestate profesionale' },
+                  ].map(opt => (
+                    <button key={opt.val}
+                      onClick={() => {
+                        setDestinatie(opt.val)
+                        setForm(f => ({...f, tip_id: ''}))
+                        if (opt.val === DESTINATIE.AVIZ) setCategorieAutorizatie('medical')
+                        if (opt.val === DESTINATIE.PERSONALE) setCategorieAutorizatie(null)
+                      }}
+                      style={{
+                        flex:1, minWidth:160, padding:'10px 12px', borderRadius:8,
+                        background: destinatie === opt.val ? G.hr+'25' : G.bg,
+                        border: `1.5px solid ${destinatie === opt.val ? G.hr : G.border}`,
+                        color: destinatie === opt.val ? G.text : G.muted,
+                        fontSize:12, fontWeight: destinatie === opt.val ? 700 : 500,
+                        cursor:'pointer', textAlign:'left',
+                      }}>
+                      <div>{opt.label}</div>
+                      <div style={{fontSize:10, marginTop:3, color: destinatie === opt.val ? G.text+'cc' : G.muted+'aa'}}>{opt.hint}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {warningTipNesuportat && destinatie === DESTINATIE.PERSONALE && (
                 <div style={{padding:'10px 14px', background:G.orange+'15', border:`1px solid ${G.orange}55`,
                   borderRadius:8, marginBottom:14, fontSize:12, color:G.text}}>
-                  ⚠️ AI a detectat <b>„{warningTipNesuportat}"</b> care NU se salvează în Documente Personale.
-                  Pentru avize medicale / atestate, folosește tab-ul <b>Autorizații</b> pentru adăugare manuală.
-                  Poți totuși să-l salvezi aici ca <b>„ALTUL"</b> dacă vrei.
+                  ⚠️ AI a detectat <b>„{warningTipNesuportat}"</b>. Dacă e <b>aviz medical / atestat ISCIR / atestat profesional</b>,
+                  schimbă destinația de mai sus pentru a salva în tabelul corect.
                 </div>
               )}
 
@@ -600,6 +815,32 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
                   </select>
                 </div>
 
+                {/* Categorie autorizație (doar pentru destinatie=autorizatie) */}
+                {destinatie === DESTINATIE.AUTORIZATIE && (
+                  <div style={{gridColumn:'1 / -1'}}>
+                    <label style={{fontSize:11, color:G.muted, marginBottom:5, display:'block'}}>
+                      🗂 Categorie autorizație
+                    </label>
+                    <select value={categorieAutorizatie || ''}
+                      onChange={(e) => {
+                        setCategorieAutorizatie(e.target.value || null)
+                        setForm(f => ({...f, tip_id: ''}))
+                      }}
+                      style={S.input}>
+                      <option value="">— Toate categoriile —</option>
+                      <option value="iscir">ISCIR (Macaragiu, Excavatorist, Stivuitorist, RSVTI)</option>
+                      <option value="profesional">Profesional (Electrician, Lăcătuș, Instalator, etc.)</option>
+                      <option value="transport">Transport (ADR, Tahograf, Atestat șofer)</option>
+                      <option value="sudura">Sudură (PEHD, Sudor electric)</option>
+                      <option value="anre">ANRE (Gaze distribuție/transport)</option>
+                      <option value="isu">ISU/SSM/PSI</option>
+                      <option value="mediu">Mediu (Deșeuri)</option>
+                      <option value="cursuri">Cursuri (Manager, Formator, Contabil)</option>
+                      <option value="altele">Altele</option>
+                    </select>
+                  </div>
+                )}
+
                 {/* Tip + Nr document */}
                 <div>
                   <label style={{fontSize:11, color:G.muted, marginBottom:5, display:'block'}}>
@@ -608,17 +849,30 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
                   <select value={form.tip_id}
                     onChange={(e) => {
                       const newTipId = e.target.value
-                      const newTip = tipuri.find(t => t.id === Number(newTipId))
-                      setForm(f => ({...f, tip_id: newTipId, fara_expirare: newTip ? !newTip.are_expirare : false}))
+                      const newTip = tipuriCurente.find(t => t.id === Number(newTipId))
+                      // are_expirare doar pentru personale; autorizatii au mereu expirare
+                      const newFaraExpirare = (destinatie === DESTINATIE.PERSONALE && newTip)
+                        ? !newTip.are_expirare
+                        : false
+                      setForm(f => ({...f, tip_id: newTipId, fara_expirare: newFaraExpirare}))
                     }}
                     style={{...S.input, borderColor: form.tip_id ? G.green+'77' : G.red+'77'}}>
                     <option value="">— Selectează tipul —</option>
-                    {tipuri.map(t => <option key={t.id} value={t.id}>{t.denumire}</option>)}
+                    {destinatie === DESTINATIE.PERSONALE
+                      ? tipuri.map(t => <option key={t.id} value={t.id}>{t.denumire}</option>)
+                      : tipuriFiltrateAutorizatii.map(t => (
+                          <option key={t.id} value={t.id}>
+                            {t.denumire}{categorieAutorizatie ? '' : ` · ${t.categorie}`}
+                          </option>
+                        ))
+                    }
                   </select>
                 </div>
 
                 <div>
-                  <label style={{fontSize:11, color:G.muted, marginBottom:5, display:'block'}}>🔢 Număr document</label>
+                  <label style={{fontSize:11, color:G.muted, marginBottom:5, display:'block'}}>
+                    🔢 {destinatie === DESTINATIE.PERSONALE ? 'Număr document' : 'Număr autorizație'}
+                  </label>
                   <input type="text" value={form.numar_document}
                     onChange={(e) => setForm(f => ({...f, numar_document: e.target.value}))}
                     style={S.input} placeholder="Serie + nr." />

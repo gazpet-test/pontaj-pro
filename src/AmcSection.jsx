@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
+import ScannerAmcButton from './ScannerAmcButton.jsx'
 
 // ─── Theme (sincron cu DocumenteFlotaPage.jsx) ──────────────────────────────
 const G = {
@@ -591,7 +592,7 @@ function TipuriAmcManager({ tipuri, onClose, onSaved, showToast }) {
 // SECȚIUNEA PRINCIPALĂ — Tab AMC din DocumenteFlotaPage
 // ════════════════════════════════════════════════════════════════════════════
 
-export default function AmcSection({ accessLevel, showToast }) {
+export default function AmcSection({ accessLevel, showToast, profile }) {
   const [docs, setDocs]     = useState([])
   const [tipuri, setTipuri] = useState([])
   const [load, setLoad]     = useState(true)
@@ -718,6 +719,15 @@ export default function AmcSection({ accessLevel, showToast }) {
             <button onClick={() => setShowTipuri(true)} title="Gestionare tipuri AMC" style={{...S.btnS, padding:'9px 12px', fontSize:12, color:G.muted}}>
               ⚙
             </button>
+          )}
+          {canEdit && (
+            <ScannerAmcButton
+              profile={profile}
+              showToast={showToast}
+              tipuri={tipuri}
+              onSaved={loadAll}
+              compact={false}
+            />
           )}
           {canEdit && (
             <button onClick={() => setModal({ mode:'add' })} style={{...S.btnP, background:G.logistica, color:'#000', padding:'9px 14px', fontSize:13}}>
