@@ -50,24 +50,60 @@ function fuzzyMatchEmployee(numeAI, employees) {
   const target = normalize(numeAI)
   if (!target) return null
 
-  // 1. Match exact (norm)
+  // 1. Match exact (norm full string)
   let best = employees.find(e => normalize(e.name) === target)
   if (best) return best
 
-  // 2. Match parțial — token overlap (≥2 tokens potriviți)
   const targetTokens = target.split(/\s+/).filter(t => t.length > 2)
-  if (targetTokens.length < 2) return null
+  if (targetTokens.length === 0) return null
 
+  // Helper: Hamming distance pentru typo-uri minore (tokens cu lungime egala, >= 5 chars)
+  // Prinde cazuri ca TABARCA<->TABIRCA (1 diff), NGUIEN<->NGUYEN (2 diffs)
+  const hammingClose = (a, b) => {
+    if (a.length !== b.length || a.length < 5) return false
+    let diffs = 0
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) { diffs++; if (diffs > 2) return false }
+    }
+    return diffs > 0  // exclude 0 (e match exact, deja gestionat)
+  }
+
+  // Scoring per angajat:
+  //   - exact token match = 2 pts
+  //   - hamming close (typo 1-2 chars) = 1.5 pts
+  //   - substring match (ambele tokens >= 4 chars) = 0.5 pts
+  // Substring restrictionat la >= 4 chars previne false positives ca:
+  //   "razvan".includes("van"), "mihail".includes("hai"), etc.
   const scored = employees.map(emp => {
     const empTokens = normalize(emp.name).split(/\s+/).filter(t => t.length > 2)
-    const matches = targetTokens.filter(t =>
-      empTokens.some(et => et === t || et.includes(t) || t.includes(et))
-    ).length
-    return { emp, score: matches }
-  }).filter(x => x.score >= 2)
+    let score = 0
+    let exactMatches = 0
+    for (const t of targetTokens) {
+      if (empTokens.some(et => et === t)) {
+        score += 2
+        exactMatches++
+        continue
+      }
+      if (t.length >= 5 && empTokens.some(et => hammingClose(et, t))) {
+        score += 1.5
+        continue
+      }
+      if (t.length >= 4 && empTokens.some(et =>
+        et.length >= 4 && (et.includes(t) || t.includes(et))
+      )) {
+        score += 0.5
+      }
+    }
+    return { emp, score, exactMatches }
+  })
 
-  scored.sort((a, b) => b.score - a.score)
-  return scored[0]?.emp || null
+  // Filter: minim 2 exact matches SAU score >= 3 (echivalent cu 2 exact, sau 1 exact + 1 hamming, etc.)
+  const filtered = scored.filter(x => x.exactMatches >= 2 || x.score >= 3)
+  filtered.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return b.exactMatches - a.exactMatches  // tie-break pe exact matches
+  })
+  return filtered[0]?.emp || null
 }
 
 function fuzzyMatchTip(tipAI, tipuri) {
