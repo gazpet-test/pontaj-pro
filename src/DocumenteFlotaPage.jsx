@@ -15,6 +15,7 @@ import { useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import AmcSection from './AmcSection.jsx'
 import PersonalSection from './PersonalSection.jsx'
+import DocumentScannerButton from './DocumentScannerButton.jsx'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -870,10 +871,14 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
           placeholder="🔎 Marcă, plăcuță, cod intern, nr document…"
           style={{...S.input, padding:'9px 12px'}}
         />
-        <div title="Adăugarea documentelor se face din detaliul utilajului (tab Active → click pe utilaj → secțiunea 📎 Documente)"
-             style={{...S.btnS, padding:'9px 14px', display:'flex', alignItems:'center', gap:8, opacity:.6, cursor:'help', borderStyle:'dashed', fontSize:12}}>
-          <span>ℹ️ Adaugă din pagina utilajului</span>
-        </div>
+        {(profile?.is_owner || profile?.can_use_document_scanner) ? (
+          <DocumentScannerButton profile={profile} showToast={showToast} onSaved={loadAll} />
+        ) : (
+          <div title="Adăugarea documentelor se face din detaliul utilajului (tab Active → click pe utilaj → secțiunea 📎 Documente)"
+               style={{...S.btnS, padding:'9px 14px', display:'flex', alignItems:'center', gap:8, opacity:.6, cursor:'help', borderStyle:'dashed', fontSize:12}}>
+            <span>ℹ️ Adaugă din pagina utilajului</span>
+          </div>
+        )}
       </div>
 
       <div style={{...S.card, overflow:'hidden'}}>
