@@ -7,6 +7,7 @@ import { supabase } from './lib/supabase.js'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
 import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
+import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 
 // Theme
 const G = {
@@ -111,6 +112,7 @@ export default function HRPage() {
   const isAdmin = ['admin', 'superadmin'].includes(profile?.role) || profile?.department === 'HR'
   const isSuperAdmin = profile?.role === 'superadmin'
   const canAccessPersonal = profile?.is_owner === true || profile?.can_access_personal_data === true
+  const canUseScanner = profile?.is_owner === true || profile?.can_use_document_scanner === true
   
   const loadAll = async () => {
     setLoad(true)
@@ -146,8 +148,13 @@ export default function HRPage() {
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
+    { key: 'scanner',     icon: '📷', label: 'Scanner AI', scannerOnly: true },
     { key: 'salarii',     icon: '💰', label: 'Salarii', superOnly: true },
-  ].filter(t => !t.superOnly || isSuperAdmin)
+  ].filter(t => {
+    if (t.superOnly && !isSuperAdmin) return false
+    if (t.scannerOnly && !canUseScanner) return false
+    return true
+  })
   
   return (
     <div style={S.page}>
@@ -189,6 +196,7 @@ export default function HRPage() {
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
+      {!load && tab === 'scanner' && canUseScanner && <TabScannerDocumenteHR profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
       
       {editEmp && (
