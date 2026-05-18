@@ -111,6 +111,40 @@ function fileToBase64(file) {
   })
 }
 
+// Resize automat pentru imagini > 2 MB (Anthropic Vision are limita 5 MB pe imagini)
+async function resizeImageToBlob(file, maxSide = 2048, quality = 0.85, sizeThreshold = 2 * 1024 * 1024) {
+  if (!file.type.startsWith('image/')) return file
+  if (file.size < sizeThreshold) return file
+
+  const img = await new Promise((resolve, reject) => {
+    const im = new Image()
+    im.onload = () => resolve(im)
+    im.onerror = () => reject(new Error('Imagine invalida'))
+    im.src = URL.createObjectURL(file)
+  })
+
+  let w = img.naturalWidth, h = img.naturalHeight
+  if (w > maxSide || h > maxSide) {
+    if (w > h) { h = Math.round(h * maxSide / w); w = maxSide }
+    else      { w = Math.round(w * maxSide / h); h = maxSide }
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(img, 0, 0, w, h)
+  URL.revokeObjectURL(img.src)
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) { reject(new Error('Canvas toBlob failed')); return }
+      const newName = file.name.replace(/\.[^.]+$/, '.jpg')
+      resolve(new File([blob], newName, { type: 'image/jpeg', lastModified: Date.now() }))
+    }, 'image/jpeg', quality)
+  })
+}
+
 function fmtBytes(n) {
   if (n < 1024) return n + ' B'
   if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB'
@@ -180,7 +214,7 @@ function DropZone({ onFile }) {
         <div style={{fontSize:14, color:G.text, fontWeight:600, marginBottom:6}}>
           {dragging ? 'Eliberează aici!' : 'Click sau drag&drop document'}
         </div>
-        <div style={{fontSize:11, color:G.muted}}>Imagini (JPG/PNG/WEBP) sau PDF · max 10MB</div>
+        <div style={{fontSize:11, color:G.muted}}>Imagini (JPG/PNG/WEBP, auto-resize la 2048px) sau PDF · max 15MB</div>
       </div>
 
       <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -250,8 +284,8 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
 
   const handleFile = (f) => {
     if (!f) return
-    if (f.size > 10 * 1024 * 1024) {
-      showToast(`Fișier prea mare (${fmtBytes(f.size)}). Max 10 MB.`, 'error')
+    if (f.size > 15 * 1024 * 1024) {
+      showToast(`Fișier prea mare (${fmtBytes(f.size)}). Max 15 MB.`, 'error')
       return
     }
     const accepted = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
@@ -274,11 +308,22 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
     setWarningTipNesuportat(null)
 
     try {
-      const b64 = await fileToBase64(file)
+      // Resize automat daca e imagine mare
+      let fileToSend = file
+      if (file.type.startsWith('image/') && file.size > 2 * 1024 * 1024) {
+        try {
+          fileToSend = await resizeImageToBlob(file, 2048, 0.85)
+          console.log(`[scan-hr] Resized: ${(file.size/1024/1024).toFixed(1)}MB -> ${(fileToSend.size/1024/1024).toFixed(1)}MB`)
+        } catch (e) {
+          console.warn('[scan-hr] Resize fail:', e)
+        }
+      }
+
+      const b64 = await fileToBase64(fileToSend)
       const { data, error } = await supabase.functions.invoke('scan-document', {
         body: {
           file_base64: b64,
-          mime_type: file.type,
+          mime_type: fileToSend.type,
           module: 'hr_general',
         }
       })
