@@ -11,7 +11,7 @@
 // - Banner sticky cu documente expirate sau urgente
 // - Permisiuni: doar OWNER (Razvan + Marilena) pot adăuga/edita
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 
 const G = {
@@ -77,6 +77,7 @@ export default function TabDocumenteFirma() {
   const [search, setSearch] = useState('')
   const [editDoc, setEditDoc] = useState(null)
   const [viewDoc, setViewDoc] = useState(null)
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false)
   const { show, Toast } = useToast()
 
   const loadAll = async () => {
@@ -248,7 +249,10 @@ export default function TabDocumenteFirma() {
           Versiuni vechi
         </label>
         {isOwner && (
-          <button onClick={() => setEditDoc({})} style={{...S.btnP, marginLeft:'auto'}}>+ Adaugă document</button>
+          <>
+            <button onClick={() => setBulkUploadOpen(true)} style={{...S.btnS, color:G.purple, borderColor:G.purple+'66', marginLeft:'auto'}}>📁 Bulk Upload PDFs</button>
+            <button onClick={() => setEditDoc({})} style={S.btnP}>+ Adaugă document</button>
+          </>
         )}
       </div>
 
@@ -356,6 +360,14 @@ export default function TabDocumenteFirma() {
             setEditDoc({ parent_id: viewDoc.parent_id || viewDoc.id, categorie: viewDoc.categorie, tip: viewDoc.tip, versiune: (viewDoc.versiune || 1) + 1 })
             setViewDoc(null)
           }}
+        />
+      )}
+
+      {bulkUploadOpen && (
+        <BulkUploadModal
+          onClose={() => setBulkUploadOpen(false)}
+          onDone={() => { setBulkUploadOpen(false); loadAll(); show('✓ Bulk upload complet') }}
+          onError={(e) => show('Eroare: ' + e, 'err')}
         />
       )}
 
@@ -656,6 +668,294 @@ function DocumentDetailModal({ doc, isOwner, onClose, onEdit, onDelete, onUpload
         )}
 
         <button onClick={onClose} style={{...S.btnS, marginTop:8}}>Închide</button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ─────────────────────── BULK UPLOAD MODAL ───────────────────────
+// Match-uiește fișiere PDF după nume cu records existente (ai_extracted_jsonb->original_filename)
+// Upload PDF în bucket + UPDATE pdf_path. Opțional: rulează AI parser pentru cele fără data valabilitate.
+function BulkUploadModal({ onClose, onDone, onError }) {
+  const [allRecords, setAllRecords] = useState([])
+  const [files, setFiles] = useState([])
+  const [matches, setMatches] = useState([])  // array of { file, record, status, error }
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState({ done: 0, total: 0, current: '' })
+  const [runAI, setRunAI] = useState(false)
+  const fileInputRef = useRef(null)
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from('documente_firma')
+        .select('id, tip, denumire, categorie, ai_extracted_jsonb, pdf_path')
+      setAllRecords(data || [])
+      setLoading(false)
+    })()
+  }, [])
+
+  const handleFiles = (fileList) => {
+    const arr = Array.from(fileList).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'))
+    setFiles(arr)
+    // Match prin nume fișier ↔ ai_extracted_jsonb.original_filename
+    const newMatches = arr.map(file => {
+      const rec = allRecords.find(r => 
+        r.ai_extracted_jsonb?.original_filename === file.name
+      )
+      return {
+        file,
+        record: rec || null,
+        status: rec ? (rec.pdf_path ? 'has_pdf' : 'ready') : 'no_match',
+        error: null,
+      }
+    })
+    setMatches(newMatches)
+  }
+
+  const handleUploadAll = async () => {
+    const toProcess = matches.filter(m => m.status === 'ready' || m.status === 'has_pdf')
+    if (toProcess.length === 0) return onError('Niciun match pentru upload')
+    
+    setUploading(true)
+    setProgress({ done: 0, total: toProcess.length, current: '' })
+    
+    const updatedMatches = [...matches]
+    let successCount = 0
+    let aiCount = 0
+    
+    for (let i = 0; i < toProcess.length; i++) {
+      const m = toProcess[i]
+      setProgress({ done: i, total: toProcess.length, current: m.file.name })
+      const idx = updatedMatches.findIndex(x => x.file === m.file)
+      
+      try {
+        // Path: <categorie>/<id>_<filename_safe>
+        const safeName = m.file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+        const path = `${m.record.categorie}/${m.record.id}_${safeName}`
+        
+        // Upload (upsert = replace if exists)
+        const { error: upErr } = await supabase.storage
+          .from('documente-firma')
+          .upload(path, m.file, { upsert: true, contentType: 'application/pdf' })
+        
+        if (upErr) {
+          updatedMatches[idx] = { ...m, status: 'error', error: upErr.message }
+          continue
+        }
+        
+        // UPDATE record cu pdf_path + size
+        const { error: updErr } = await supabase
+          .from('documente_firma')
+          .update({ pdf_path: path, pdf_size_bytes: m.file.size })
+          .eq('id', m.record.id)
+        
+        if (updErr) {
+          updatedMatches[idx] = { ...m, status: 'error', error: updErr.message }
+          continue
+        }
+        
+        updatedMatches[idx] = { ...m, status: 'done', error: null }
+        successCount++
+        
+        // Optional AI extract pentru records fără data_valabilitate
+        if (runAI && !m.record.ai_extracted_jsonb?.confidence) {
+          try {
+            const { data: { session } } = await supabase.auth.getSession()
+            const resp = await fetch(`${supabase.supabaseUrl}/functions/v1/parse-document-pdf`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${session?.access_token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ document_id: m.record.id, pdf_path: path })
+            })
+            if (resp.ok) aiCount++
+          } catch (e) {
+            // AI eșuat — nu blocăm upload-ul
+            console.error('AI parser err:', e)
+          }
+        }
+        
+        setMatches([...updatedMatches])
+      } catch (e) {
+        updatedMatches[idx] = { ...m, status: 'error', error: e.message }
+      }
+    }
+    
+    setMatches(updatedMatches)
+    setProgress({ done: toProcess.length, total: toProcess.length, current: '' })
+    setUploading(false)
+    
+    if (successCount > 0) {
+      const msg = `${successCount} PDF-uri urcate` + (runAI ? ` · ${aiCount} procesate AI` : '')
+      onDone(msg)
+    }
+  }
+
+  const readyCount = matches.filter(m => m.status === 'ready').length
+  const hasPdfCount = matches.filter(m => m.status === 'has_pdf').length
+  const noMatchCount = matches.filter(m => m.status === 'no_match').length
+  const doneCount = matches.filter(m => m.status === 'done').length
+  const errCount = matches.filter(m => m.status === 'error').length
+
+  return (
+    <ModalShell title="📁 Bulk Upload PDF-uri" onClose={uploading ? undefined : onClose} wide>
+      <div style={{display:'flex', flexDirection:'column', gap:14}}>
+        <div style={{padding:12, background:G.blue+'15', border:`1px solid ${G.blue}44`, borderRadius:8, fontSize:12, color:G.text, lineHeight:1.5}}>
+          📋 <strong>Cum funcționează:</strong> selectează toate cele <strong>34 PDF-uri</strong> din folder-ul Administrativ (Ctrl+A) sau folder-ul întreg. 
+          Fișierele sunt match-uite automat după nume cu record-urile existente în BD, apoi PDF-urile sunt urcate în Storage.
+        </div>
+
+        {loading ? (
+          <div style={{padding:30, textAlign:'center', color:G.muted}}>⏳ Se încarcă records-urile existente...</div>
+        ) : (
+          <>
+            {files.length === 0 && (
+              <div 
+                onDragOver={e => { e.preventDefault(); e.stopPropagation() }}
+                onDrop={e => { 
+                  e.preventDefault(); e.stopPropagation()
+                  if (e.dataTransfer?.files) handleFiles(e.dataTransfer.files)
+                }}
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  padding:'40px 20px', border:`2px dashed ${G.border2}`, borderRadius:10,
+                  background:G.bg, cursor:'pointer', textAlign:'center',
+                  transition:'all 0.2s'
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = G.purple; e.currentTarget.style.background = G.purple+'08' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = G.border2; e.currentTarget.style.background = G.bg }}
+              >
+                <div style={{fontSize:48, marginBottom:12}}>📂</div>
+                <div style={{fontSize:14, fontWeight:600, color:G.text, marginBottom:6}}>
+                  Click pentru a selecta fișiere sau drag&drop aici
+                </div>
+                <div style={{fontSize:11, color:G.muted}}>
+                  Selectează toate cele 34 PDF-uri din folder Administrativ (cu Ctrl+A în file picker)
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/pdf"
+                  multiple
+                  webkitdirectory=""
+                  directory=""
+                  onChange={e => handleFiles(e.target.files)}
+                  style={{display:'none'}}
+                />
+              </div>
+            )}
+
+            {files.length > 0 && (
+              <>
+                {/* SUMMARY */}
+                <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(110px, 1fr))', gap:10}}>
+                  <div style={{...S.card, padding:'10px 12px', textAlign:'center', borderColor:G.blue+'44'}}>
+                    <div style={{fontSize:24, fontWeight:800, color:G.blue}}>{files.length}</div>
+                    <div style={{fontSize:10, color:G.muted, textTransform:'uppercase'}}>Fișiere</div>
+                  </div>
+                  <div style={{...S.card, padding:'10px 12px', textAlign:'center', borderColor:G.green+'44'}}>
+                    <div style={{fontSize:24, fontWeight:800, color:G.green}}>{readyCount + doneCount}</div>
+                    <div style={{fontSize:10, color:G.muted, textTransform:'uppercase'}}>Match-uri OK</div>
+                  </div>
+                  {hasPdfCount > 0 && (
+                    <div style={{...S.card, padding:'10px 12px', textAlign:'center', borderColor:G.yellow+'44'}}>
+                      <div style={{fontSize:24, fontWeight:800, color:G.yellow}}>{hasPdfCount}</div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase'}}>Au deja PDF</div>
+                    </div>
+                  )}
+                  {noMatchCount > 0 && (
+                    <div style={{...S.card, padding:'10px 12px', textAlign:'center', borderColor:G.red+'44'}}>
+                      <div style={{fontSize:24, fontWeight:800, color:G.red}}>{noMatchCount}</div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase'}}>Fără match</div>
+                    </div>
+                  )}
+                  {errCount > 0 && (
+                    <div style={{...S.card, padding:'10px 12px', textAlign:'center', borderColor:G.red+'66'}}>
+                      <div style={{fontSize:24, fontWeight:800, color:G.red}}>{errCount}</div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase'}}>Erori</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* LISTA MATCH-URI */}
+                <div style={{maxHeight:300, overflowY:'auto', border:`1px solid ${G.border}`, borderRadius:8}}>
+                  {matches.map((m, i) => {
+                    const colorMap = {
+                      ready:    { c: G.green,  bg: G.green+'15',  icon: '✓',  label: 'Pregătit' },
+                      has_pdf:  { c: G.yellow, bg: G.yellow+'15', icon: '↻',  label: 'Are deja PDF (va înlocui)' },
+                      no_match: { c: G.red,    bg: G.red+'15',    icon: '✗',  label: 'Fără match' },
+                      done:     { c: G.green,  bg: G.green+'22',  icon: '✓',  label: 'Urcat' },
+                      error:    { c: G.red,    bg: G.red+'22',    icon: '⚠',  label: 'Eroare' },
+                    }[m.status]
+                    return (
+                      <div key={i} style={{
+                        display:'flex', alignItems:'center', gap:10, padding:'8px 12px',
+                        borderBottom: i < matches.length-1 ? `1px solid ${G.border}` : 'none',
+                        background: colorMap.bg, fontSize:11,
+                      }}>
+                        <span style={{fontSize:14, color: colorMap.c, fontWeight:800, width:18}}>{colorMap.icon}</span>
+                        <div style={{flex:1, minWidth:0}}>
+                          <div style={{color:G.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{m.file.name}</div>
+                          {m.record && <div style={{fontSize:10, color:G.muted}}>→ #{m.record.id} · {m.record.tip}</div>}
+                          {m.error && <div style={{fontSize:10, color:G.red}}>⚠ {m.error}</div>}
+                        </div>
+                        <span style={{fontSize:10, color: colorMap.c, fontWeight:700, whiteSpace:'nowrap'}}>{colorMap.label}</span>
+                        <span style={{fontSize:10, color:G.dim, whiteSpace:'nowrap'}}>{(m.file.size / 1024).toFixed(0)} KB</span>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* AI option */}
+                <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', padding:'10px 14px', background:G.purple+'15', borderRadius:8, border:`1px solid ${G.purple}44`}}>
+                  <input type="checkbox" checked={runAI} onChange={e => setRunAI(e.target.checked)} disabled={uploading} style={{accentColor:G.purple, width:16, height:16}} />
+                  <span style={{fontSize:12, color:G.text, fontWeight:600}}>
+                    🤖 Rulează AI Extract pe ISO 45001 (fără data valabilitate)
+                    <span style={{color:G.muted, fontWeight:400, marginLeft:6}}>· cost ~$0.04 (2 PDF-uri)</span>
+                  </span>
+                </label>
+
+                {/* PROGRESS */}
+                {uploading && (
+                  <div style={{padding:14, background:G.bg, borderRadius:8, border:`1px solid ${G.purple}66`}}>
+                    <div style={{display:'flex', justifyContent:'space-between', fontSize:11, color:G.muted, marginBottom:8}}>
+                      <span>📤 Upload în curs... {progress.done}/{progress.total}</span>
+                      <span style={{color:G.purple, fontWeight:700}}>{Math.round((progress.done / progress.total) * 100)}%</span>
+                    </div>
+                    <div style={{height:6, background:G.border, borderRadius:3, overflow:'hidden'}}>
+                      <div style={{height:'100%', width:`${(progress.done / progress.total) * 100}%`, background:G.purple, transition:'width 0.3s'}} />
+                    </div>
+                    {progress.current && (
+                      <div style={{fontSize:10, color:G.dim, marginTop:6, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                        ⏳ {progress.current}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{display:'flex', gap:10}}>
+                  <button onClick={() => { setFiles([]); setMatches([]) }} disabled={uploading} style={{...S.btnS, flex:1}}>
+                    🔄 Alege alte fișiere
+                  </button>
+                  <button 
+                    onClick={handleUploadAll} 
+                    disabled={uploading || (readyCount + hasPdfCount) === 0}
+                    style={{...S.btnP, flex:2, background:G.purple, opacity: (uploading || (readyCount + hasPdfCount) === 0) ? 0.6 : 1}}
+                  >
+                    {uploading ? `⏳ Upload ${progress.done}/${progress.total}...` : `🚀 Upload ${readyCount + hasPdfCount} PDF-uri`}
+                  </button>
+                </div>
+              </>
+            )}
+
+            <button onClick={onClose} disabled={uploading} style={{...S.btnS, marginTop:4}}>
+              {doneCount > 0 ? `Închide (${doneCount} urcate)` : 'Anulează'}
+            </button>
+          </>
+        )}
       </div>
     </ModalShell>
   )
