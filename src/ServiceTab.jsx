@@ -20,6 +20,7 @@ import * as XLSX from 'xlsx-js-style'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import { calcUrmService, urmServiceLevel, urmServiceColor, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
+import PieseCatalogSection from './PieseCatalogSection.jsx'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -1493,6 +1494,9 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [acoperireModal, setAcoperireModal] = useState(false)
   const [istoricModal, setIstoricModal] = useState(null)  // ETAPA 8.7: { activ }
 
+  // Etapa 12+ (19.05.2026): toggle între lista fișelor service și catalog piese
+  const [view, setView] = useState('fise')  // 'fise' | 'piese'
+
   // ETAPA 8.6: handler click pe KPI Scadențe Service → setează filtru + sort
   const handleClickScadente = useCallback(() => {
     setScadenteOnly(true)
@@ -1728,6 +1732,26 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
 
   return (
     <>
+      {/* Etapa 12+ Toggle view: Fișe Service ↔ Piese Catalog */}
+      <div style={{display:'flex', gap:8, marginBottom:14, borderBottom:`1px solid ${G.border}`, paddingBottom:0}}>
+        <button onClick={() => setView('fise')} style={{
+          background:'transparent', border:'none', color: view === 'fise' ? G.logistica : G.muted,
+          padding:'10px 18px', fontSize:14, fontWeight:700, cursor:'pointer',
+          borderBottom: view === 'fise' ? `2px solid ${G.logistica}` : '2px solid transparent',
+          marginBottom:-1,
+        }}>📋 Fișe Service</button>
+        <button onClick={() => setView('piese')} style={{
+          background:'transparent', border:'none', color: view === 'piese' ? G.logistica : G.muted,
+          padding:'10px 18px', fontSize:14, fontWeight:700, cursor:'pointer',
+          borderBottom: view === 'piese' ? `2px solid ${G.logistica}` : '2px solid transparent',
+          marginBottom:-1,
+        }}>🔧 Piese Catalog</button>
+      </div>
+
+      {view === 'piese' && <PieseCatalogSection canEdit={canEdit} showToast={showToast} />}
+
+      {view === 'fise' && (
+      <>
       <div style={{display:'flex', gap:12, marginBottom:14, flexWrap:'wrap'}}>
         <KPICard icon="📋" label="Total fișe" value={kpi.total} color={G.logistica}
           sub={`${kpi.programat} programate · ${kpi.in_lucru} în lucru · ${kpi.finalizat} finalizate`} />
@@ -1923,6 +1947,8 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
             </table>
           </div>
         </div>
+      )}
+      </>
       )}
 
       {newModal && (
