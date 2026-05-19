@@ -611,6 +611,7 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
       // Listing — folosim tabelul direct pentru a vedea și inactive (view filtrează activ=true)
       supabase.from('hr_documente_personale')
         .select('*, tip:hr_documente_personale_tipuri(cod, denumire, categorie, are_expirare), employee:employees(name, functie, departament_hr, cetatenie, cetatenie_secundara)')
+        .is('deleted_at', null)
         .order('uploadat_la', { ascending: false }),
       supabase.from('hr_documente_personale_tipuri').select('*').order('ordine'),
     ])
@@ -707,16 +708,14 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
   }, [documente, catFilter, statusFilter, search, sortBy, showInactive])
   
   const handleDelete = async (doc) => {
-    if (!confirm(`Ștergi documentul "${doc.tip_denumire}" pentru ${doc.employee_name}?\n\nFișierul din Storage va fi șters și el.`)) return
+    if (!confirm(`Ștergi documentul "${doc.tip_denumire}" pentru ${doc.employee_name}?\n\nVa fi mutat în Coșul HR și șters definitiv automat după perioada de retenție (default 30 zile). Poate fi restaurat oricând până atunci.`)) return
     
-    // Șterge fișierul din Storage întâi
-    if (doc.fisier_path) {
-      await supabase.storage.from(BUCKET).remove([doc.fisier_path])
-    }
-    
-    const { error } = await supabase.from('hr_documente_personale').delete().eq('id', doc.id)
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('hr_documente_personale')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: u?.user?.id })
+      .eq('id', doc.id)
     if (error) showToast('Eroare: ' + error.message, 'error')
-    else { showToast('✓ Document șters'); loadAll() }
+    else { showToast(`🗑 Document mutat în Coș: ${doc.tip_denumire}`); loadAll() }
   }
   
   // ─── Grupare per persoană (pentru viewMode='grouped') ─────

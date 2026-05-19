@@ -590,7 +590,7 @@ export default function TabSemnaturi({ profile, showToast }) {
     try {
       const [empsRes, semRes] = await Promise.all([
         supabase.from('employees').select('id, name, department, position, sites(name)').eq('active', true).order('name'),
-        supabase.from('hr_semnaturi_electronice').select('*').eq('activ', true),
+        supabase.from('hr_semnaturi_electronice').select('*').eq('activ', true).is('deleted_at', null),
       ])
       setEmployees(empsRes.data || [])
       const m = {}
@@ -628,18 +628,16 @@ export default function TabSemnaturi({ profile, showToast }) {
     return list
   }, [employees, semnaturi, deptFilter, search, showOnlyMissing])
   
-  // ─── Ștergere semnătură ───────────────────────────────────────────────────
+  // ─── Ștergere semnătură (SOFT DELETE → coș cu retenție configurabilă) ─────
   const deleteSemnatura = async (emp, sem) => {
-    if (!window.confirm(`Ștergi semnătura pentru ${emp.name}?\n\nFișierul Storage și înregistrarea BD vor fi șterse permanent. Acțiune ireversibilă.`)) return
+    if (!window.confirm(`Ștergi semnătura pentru ${emp.name}?\n\nVa fi mutată în Coșul HR și ștearsă definitiv automat după perioada de retenție (default 30 zile). Poate fi restaurată oricând până atunci.`)) return
     try {
-      // 1. Șterg Storage
-      if (sem.fisier_path) {
-        await supabase.storage.from(BUCKET).remove([sem.fisier_path])
-      }
-      // 2. Șterg BD
-      const { error } = await supabase.from('hr_semnaturi_electronice').delete().eq('id', sem.id)
+      const { data: u } = await supabase.auth.getUser()
+      const { error } = await supabase.from('hr_semnaturi_electronice')
+        .update({ deleted_at: new Date().toISOString(), deleted_by: u?.user?.id })
+        .eq('id', sem.id)
       if (error) throw error
-      showToast?.(`✓ Semnătură ștearsă: ${emp.name}`)
+      showToast?.(`🗑 Semnătură mutată în Coș: ${emp.name}`)
       load()
     } catch (e) {
       showToast?.('Eroare ștergere: ' + (e.message || e), 'error')
