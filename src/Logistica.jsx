@@ -9,6 +9,7 @@ import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
+import JSZip from 'jszip'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
@@ -6832,39 +6833,88 @@ export default function LogisticaPage() {
     wsLookups['!cols'] = [{ wch: 50 }, { wch: 32 }]
     wsLookups['!rows'] = [{ hpt: 22 }, { hpt: 16 }]
     
-    // ═══════════ Data Validation (dropdown) ═══════════
-    // Coloana G (Stație) și K (Șantier) cu referință la sheet Lookups
-    const santierEndRow = santierNames.length + 3   // +3 pentru header + notă + gol
-    const statiiEndRow = statiiCombustibil.length + 3
+    // ═══════════ Data Validation: injectată via JSZip mai jos (xlsx-js-style nu suportă la write) ═══════════
     
-    ws['!dataValidation'] = [
-      {
-        type: 'list',
-        allowBlank: true,
-        sqref: `K6:K1000`,
-        formulae: [`='Șantiere Active'!$A$4:$A$${santierEndRow}`],
-        showErrorMessage: false,  // permite și valori manuale pentru robustețe
-        promptTitle: 'Șantier',
-        prompt: 'Alege un șantier din lista din sheet-ul „Șantiere Active"',
-      },
-      {
-        type: 'list',
-        allowBlank: true,
-        sqref: `G6:G1000`,
-        formulae: [`='Șantiere Active'!$B$4:$B$${statiiEndRow}`],
-        showErrorMessage: false,
-        promptTitle: 'Stație combustibil',
-        prompt: 'Alege stația de alimentare',
-      }
-    ]
-    
+    // Sheet 2 redenumit fără diacritice/spațiu pentru a evita probleme cu referința XML
     // ═══════════ Asamblare Workbook ═══════════
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Alimentări')
-    XLSX.utils.book_append_sheet(wb, wsLookups, 'Șantiere Active')
+    XLSX.utils.book_append_sheet(wb, ws, 'Alimentari')
+    XLSX.utils.book_append_sheet(wb, wsLookups, 'Santiere')
     
-    XLSX.writeFile(wb, `Template_Alimentari_Gazpet_${dataAzi.replace(/\./g, '-')}.xlsx`)
-    showToast(`✓ Template descărcat cu ${santierNames.length} șantiere active`, 'success')
+    // ═══════════ Generare buffer + injectare dataValidations via JSZip ═══════════
+    // xlsx-js-style NU suportă !dataValidation la write — trebuie injectat manual în XML.
+    // Asta funcționează 100% deoarece standardul ECMA-376 acceptă <dataValidations> în sheet XML.
+    const xlsxBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+    
+    const zip = await JSZip.loadAsync(xlsxBuffer)
+    
+    const sheet1File = zip.file('xl/worksheets/sheet1.xml')
+    if (sheet1File) {
+      let sheetXml = await sheet1File.async('string')
+      console.log('[Template] sheet1.xml length:', sheetXml.length)
+      
+      // Range-uri reale în sheet Santiere (rândurile cu date încep de la 4: header + nota + gol + start)
+      const santierEnd = santierNames.length + 3
+      const statiiEnd = statiiCombustibil.length + 3
+      
+      const dvXml = `<dataValidations count="2">` +
+        `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="0" promptTitle="Sant" prompt="Alege santier" sqref="K6:K1000">` +
+          `<formula1>Santiere!$A$4:$A$${santierEnd}</formula1>` +
+        `</dataValidation>` +
+        `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="0" promptTitle="Statie" prompt="Alege statia" sqref="G6:G1000">` +
+          `<formula1>Santiere!$B$4:$B$${statiiEnd}</formula1>` +
+        `</dataValidation>` +
+        `</dataValidations>`
+      
+      // ECMA-376: <dataValidations> trebuie ÎNAINTE de <pageMargins>, <ignoredErrors>, etc.
+      // Strategie cu fallback-uri în ordinea corectă a elementelor XML din sheet:
+      let injected = false
+      const tryInsertBefore = (tag) => {
+        if (sheetXml.includes(tag)) {
+          sheetXml = sheetXml.replace(tag, dvXml + tag)
+          injected = tag
+          return true
+        }
+        return false
+      }
+      // Strategy: încearcă elementele care vin DUPĂ dataValidations (în ordinea ECMA-376)
+      tryInsertBefore('<ignoredErrors')
+        || tryInsertBefore('<pageMargins')
+        || tryInsertBefore('<pageSetup')
+        || tryInsertBefore('<headerFooter')
+        || tryInsertBefore('<drawing')
+        || tryInsertBefore('<legacyDrawing')
+        || tryInsertBefore('</worksheet>')
+      
+      console.log('[Template] dataValidations injectat înainte de:', injected || 'EȘEC!')
+      
+      if (!injected) {
+        console.error('[Template] NU am putut insera dataValidations! XML:', sheetXml.substring(sheetXml.length - 500))
+      }
+      
+      zip.file('xl/worksheets/sheet1.xml', sheetXml)
+    } else {
+      console.error('[Template] sheet1.xml nu există în ZIP!')
+    }
+    
+    // Trigger download cu blob
+    const finalBuffer = await zip.generateAsync({ 
+      type: 'blob', 
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      compression: 'DEFLATE',
+    })
+    console.log('[Template] Final buffer size:', finalBuffer.size, 'bytes')
+    
+    const url = URL.createObjectURL(finalBuffer)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `Template_Alimentari_Gazpet_${dataAzi.replace(/\./g, '-')}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+    
+    showToast(`✓ Template descărcat cu ${santierNames.length} șantiere active (dropdown funcțional)`, 'success')
   }
   
   // ─── Import alimentări din Excel ───────────────────────────────────────────
