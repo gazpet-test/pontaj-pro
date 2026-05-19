@@ -11,6 +11,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
+import ContracteTertiTab from './ContracteTertiTab.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -465,6 +466,7 @@ export default function AdministrativPage() {
     { key: 'documente',  icon: '📁', label: 'Documente firmă' },
     { key: 'furnizori',  icon: '🏢', label: 'Furnizori' },
     { key: 'ticketing',  icon: '🎫', label: 'Ticketing' },
+    { key: 'contracte_terti', icon: '📃', label: 'Contracte cu terți' },
     { key: 'contracte',  icon: '📜', label: 'Contracte comerciale' },
     { key: 'costuri_ai', icon: '💰', label: 'Costuri AI', ownerOnly: true },
   ].filter(t => !t.ownerOnly || isOwner)
@@ -478,7 +480,7 @@ export default function AdministrativPage() {
             <span style={{background: `linear-gradient(135deg, ${G.orange} 0%, ${G.purple} 100%)`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>Administrativ</span>
           </div>
           <div style={{fontSize:12, color:G.muted, marginTop:4}}>
-            Documente firmă · Furnizori · Ticketing · Contracte{isOwner ? ' · Costuri AI' : ''}
+            Documente firmă · Furnizori · Ticketing · Contracte terți · Contracte{isOwner ? ' · Costuri AI' : ''}
           </div>
         </div>
       </div>
@@ -505,8 +507,11 @@ export default function AdministrativPage() {
       {/* Etapa 14: Tab Ticketing activ (modul Tichete filtrat pe departament) */}
       {tab === 'ticketing' && <Tichete filterDepartament="administrativ" noLayout={true} />}
 
+      {/* Etapa 15 Faza 1: Tab Contracte cu terți (cu listă beneficiari real) */}
+      {tab === 'contracte_terti' && <ContracteTertiTab />}
+
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'documente' && '📁'}
