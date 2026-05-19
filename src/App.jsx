@@ -5840,6 +5840,12 @@ function AdminPage() {
     if (profile?.is_owner === true && editMgr.can_use_document_scanner !== undefined) {
       updates.can_use_document_scanner = !!editMgr.can_use_document_scanner
     }
+    // Etapa 14: 5 flag-uri receive_tichete_* — doar OWNER (trigger BD enforce_owner_only_salary_flags protejeaza)
+    ;['receive_tichete_logistica','receive_tichete_hr','receive_tichete_administrativ','receive_tichete_it','receive_tichete_comercial','receive_tichete_financiar'].forEach(flag => {
+      if (profile?.is_owner === true && editMgr[flag] !== undefined) {
+        updates[flag] = !!editMgr[flag]
+      }
+    })
     // WhatsApp: phone + enabled poate fi editat de orice owner; tier DOAR de owner (trigger BD verifică)
     if (editMgr.phone_whatsapp !== undefined) {
       updates.phone_whatsapp = editMgr.phone_whatsapp?.trim() || null
@@ -6302,6 +6308,46 @@ function AdminPage() {
                     </div>
                   </div>
                 </label>
+              </div>
+            )}
+            {/* ════════════════ Etapa 14: Tichete - flag-uri per departament ════════════════ */}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:14,background:'#1A1A1F',borderRadius:8,border:`1px solid ${G.border}66`}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+                  <span style={{fontSize:18}}>🎫</span>
+                  <div style={{fontSize:13,fontWeight:800,color:G.text}}>
+                    Tichete — Primește notificări pe departament
+                  </div>
+                </div>
+                <div style={{fontSize:10,color:G.muted,marginBottom:10,lineHeight:1.5}}>
+                  Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Utilizatorii cu flag bifat <strong>văd widgetul „Tichete deschise"</strong> în modulul respectiv, pot prelua tichete neatribuite, și primesc notificare in-app la fiecare tichet nou.
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(2, 1fr)',gap:8}}>
+                  {[
+                    { key:'receive_tichete_logistica',     label:'🚜 Logistica',     color:G.orange },
+                    { key:'receive_tichete_hr',            label:'👥 HR',            color:'#F778BA' },
+                    { key:'receive_tichete_administrativ', label:'🏢 Administrativ', color:G.blue   },
+                    { key:'receive_tichete_it',            label:'💻 IT',            color:G.purple },
+                    { key:'receive_tichete_comercial',     label:'🛒 Comercial',     color:G.green  },
+                    { key:'receive_tichete_financiar',     label:'💰 Financiar',     color:G.yellow },
+                  ].map(f => (
+                    <label key={f.key} style={{
+                      display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',
+                      background:editMgr[f.key]?f.color+'22':G.bg,
+                      border:`1px solid ${editMgr[f.key]?f.color+'88':G.border2}`,
+                      borderRadius:6
+                    }}>
+                      <input type="checkbox"
+                        checked={!!editMgr[f.key]}
+                        onChange={e=>setEditMgr({...editMgr,[f.key]:e.target.checked})}
+                        style={{accentColor:f.color,width:14,height:14}}
+                      />
+                      <span style={{fontSize:12,fontWeight:editMgr[f.key]?700:500,color:editMgr[f.key]?f.color:G.text}}>
+                        {f.label}
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
             {/* ════════════════ WhatsApp Notifications ════════════════ */}

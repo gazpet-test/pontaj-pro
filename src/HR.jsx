@@ -9,6 +9,7 @@ import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
+import TicheteWidget from './TicheteWidget.jsx'
 
 // Theme
 const G = {
@@ -179,6 +180,9 @@ export default function HRPage() {
           </div>
         </div>
       </div>
+      
+      {/* Etapa 14: Widget Tichete HR */}
+      {profile && <TicheteWidget departament="hr" profile={profile} accent={G.pink} />}
       
       {/* Tab navigation */}
       <div style={{display:'flex', gap:8, marginBottom:18, padding:8, background:G.surface, borderRadius:14, border:`1px solid ${G.border}`, flexWrap:'wrap'}}>

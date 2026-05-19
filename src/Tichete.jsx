@@ -491,6 +491,12 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
   const [saving, setSaving] = useState(false)
   const [poze, setPoze] = useState([])  // File[] pentru upload
   const fileRef = useRef(null)
+
+  // Etapa 14: atribuire la creare
+  const [responsabili, setResponsabili] = useState([])  // [{id, email, fullname}] cu flag receive_tichete_{dep}
+  const [defaultsMap, setDefaultsMap] = useState({})    // { departament: profile_id }
+  const [selectedResponsabil, setSelectedResponsabil] = useState(null)
+  const [respLoaded, setRespLoaded] = useState(false)
   
   // AI state
   const [aiTitlu, setAiTitlu] = useState('')
@@ -500,6 +506,56 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
   const [aiError, setAiError] = useState('')
 
   const subsForDep = useMemo(()=>subcategorii.filter(s=>s.departament===dep), [subcategorii, dep])
+
+  // Etapa 14: încarc defaults + lista de profiles ce pot fi atribuiți (per departament)
+  useEffect(()=>{
+    let cancelled = false
+    const loadAtribuibili = async () => {
+      try {
+        // 1) defaults map (1 query pentru toate departamentele)
+        const { data: defs } = await supabase
+          .from('tichete_default_responsabili')
+          .select('departament, profile_id')
+        if (cancelled) return
+        const dmap = {}
+        ;(defs || []).forEach(d => { dmap[d.departament] = d.profile_id })
+        setDefaultsMap(dmap)
+
+        // 2) toate profiles cu un flag receive_tichete_* true
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, email, name, is_owner, receive_tichete_logistica, receive_tichete_hr, receive_tichete_administrativ, receive_tichete_it, receive_tichete_comercial, receive_tichete_financiar')
+          .order('email')
+        if (cancelled) return
+        setResponsabili(profs || [])
+      } catch (e) {
+        console.warn('Atribuibili load error:', e?.message)
+      } finally {
+        if (!cancelled) setRespLoaded(true)
+      }
+    }
+    loadAtribuibili()
+    return () => { cancelled = true }
+  }, [])
+
+  // La schimbare departament: presetează responsabil = default din map (dacă există + are flag-ul)
+  useEffect(()=>{
+    if (!dep || !respLoaded) { setSelectedResponsabil(null); return }
+    const defaultId = defaultsMap[dep]
+    if (!defaultId) { setSelectedResponsabil(null); return }
+    // Verifică să aibă flag-ul corespunzător (sau is_owner)
+    const flag = `receive_tichete_${dep}`
+    const p = responsabili.find(r => r.id === defaultId)
+    if (p && (p.is_owner || p[flag])) setSelectedResponsabil(defaultId)
+    else setSelectedResponsabil(null)
+  }, [dep, respLoaded, defaultsMap, responsabili])
+
+  // Lista responsabili filtrată pentru departamentul curent
+  const responsabiliPentruDep = useMemo(()=>{
+    if (!dep) return []
+    const flag = `receive_tichete_${dep}`
+    return responsabili.filter(p => p.is_owner || p[flag])
+  }, [dep, responsabili])
 
   // Helper: detectează tipul entitate din câmpurile activului
   // Valori valide CHECK constraint: activ | auto | echipament | cladire | persoana | altele
@@ -592,8 +648,8 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
     }
     setSaving(true)
     try {
-      // 1. Insert tichet
-      const { data: tk, error } = await supabase.from('tichete').insert({
+      // Etapa 14: dacă responsabil setat → atribuire directă la creare (status='atribuit')
+      const payload = {
         departament: dep,
         subcategorie: form.subcategorie,
         titlu: form.titlu.trim(),
@@ -603,8 +659,16 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
         entitate_id: form.entitate_id || null,
         entitate_descriere: form.entitate_descriere || null,
         deschis_de: profile?.id,
-        status: 'deschis'
-      }).select().single()
+        status: selectedResponsabil ? 'atribuit' : 'deschis'
+      }
+      if (selectedResponsabil) {
+        payload.persoana_responsabila = selectedResponsabil
+        payload.atribuit_de = profile?.id
+        payload.data_atribuire = new Date().toISOString()
+        payload.asignat_la = 'intern'
+      }
+      // 1. Insert tichet
+      const { data: tk, error } = await supabase.from('tichete').insert(payload).select().single()
       if(error) throw error
 
       // 2. Upload poze daca exista
@@ -778,6 +842,30 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Etapa 14: Atribuie la — opțional, presetat la default per departament */}
+          <div>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>
+              👤 Atribuie la <span style={{color:G.dim,fontWeight:400}}>(opt - poate prelua altcineva din widget)</span>
+              {selectedResponsabil && defaultsMap[dep] === selectedResponsabil && (
+                <span style={{marginLeft:8, padding:'2px 8px', background:G.green+'22', color:G.green, borderRadius:10, fontSize:10, fontWeight:800, letterSpacing:0.5}}>
+                  🎯 DEFAULT
+                </span>
+              )}
+            </label>
+            <select value={selectedResponsabil || ''} onChange={e=>setSelectedResponsabil(e.target.value || null)}
+                    style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}}>
+              <option value="">— Nimeni (rămâne disponibil pentru preluare) —</option>
+              {responsabiliPentruDep.length === 0 && (
+                <option value="" disabled>Niciun utilizator cu flag receive_tichete_{dep}</option>
+              )}
+              {responsabiliPentruDep.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name || p.email}{p.is_owner ? ' · owner' : ''}{p.id === defaultsMap[dep] ? ' · default' : ''}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Titlu */}

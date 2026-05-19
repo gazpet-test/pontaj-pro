@@ -9,6 +9,8 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import Tichete from './Tichete.jsx'
+import TicheteWidget from './TicheteWidget.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -481,6 +483,9 @@ export default function AdministrativPage() {
         </div>
       </div>
 
+      {/* Etapa 14: Widget Tichete Administrativ */}
+      {profile && <TicheteWidget departament="administrativ" profile={profile} accent={G.orange} />}
+
       <div style={{display:'flex', gap:6, marginBottom:18, padding:6, background:G.surface, borderRadius:12, border:`1px solid ${G.border}`, flexWrap:'wrap'}}>
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
@@ -497,19 +502,20 @@ export default function AdministrativPage() {
       {/* Tab Costuri AI (real, nu placeholder) */}
       {tab === 'costuri_ai' && isOwner && <TabCosturiAI />}
 
-      {/* Placeholder tabs */}
-      {tab !== 'costuri_ai' && (
+      {/* Etapa 14: Tab Ticketing activ (modul Tichete filtrat pe departament) */}
+      {tab === 'ticketing' && <Tichete filterDepartament="administrativ" noLayout={true} />}
+
+      {/* Placeholder pentru tab-urile încă neimplementate */}
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'documente' && '📁'}
             {tab === 'furnizori' && '🏢'}
-            {tab === 'ticketing' && '🎫'}
             {tab === 'contracte' && '📜'}
           </div>
           <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:8}}>
             {tab === 'documente' && 'Documente Firmă'}
             {tab === 'furnizori' && 'Furnizori'}
-            {tab === 'ticketing' && 'Ticketing'}
             {tab === 'contracte' && 'Contracte Comerciale'}
           </div>
           <div style={{fontSize:13, color:G.muted, maxWidth:520, margin:'0 auto 16px', lineHeight:1.6}}>
@@ -520,10 +526,6 @@ export default function AdministrativPage() {
             {tab === 'furnizori' && (
               <>Bază de date <strong>furnizori</strong> cu:<br/>
               Date contact · Contracte · Plăți · Istoric comenzi · Termenele de plată</>
-            )}
-            {tab === 'ticketing' && (
-              <>Sistem <strong>tickete interne</strong>:<br/>
-              Solicitări de la angajați · Diviziuni · Asignare · SLA · Closure</>
             )}
             {tab === 'contracte' && (
               <>Contracte <strong>cu clienți și parteneri</strong>:<br/>

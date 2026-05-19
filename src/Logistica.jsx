@@ -13,6 +13,7 @@ import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import Tichete from './Tichete.jsx'
+import TicheteWidget from './TicheteWidget.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -6940,6 +6941,8 @@ export default function LogisticaPage() {
       <div style={{display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 12, gap: 8}}>
         <AlerteGlobalButton alerte={alerteGlobale} onClick={() => setShowAlerte(true)} />
       </div>
+      {/* Etapa 14: Widget Tichete Logistica */}
+      {profile && <TicheteWidget departament="logistica" profile={profile} accent={G.orange} />}
       <TabsBar tab={tab} setTab={setTab} />
       
       {/* TAB: Alimentări (input bulk per zi) */}
