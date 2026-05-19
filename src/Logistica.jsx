@@ -6671,36 +6671,87 @@ export default function LogisticaPage() {
   }
   
   // ─── Template Excel pentru Alimentări ──────────────────────────────────────
-  const downloadTemplateAlimentari = () => {
+  const downloadTemplateAlimentari = async () => {
+    // Load șantiere ACTIVE LIVE din BD (lista dinamică)
+    const { data: sitesActive } = await supabase
+      .from('sites')
+      .select('id, name, beneficiar_principal')
+      .eq('active', true)
+      .order('name')
+    
+    const santierNames = (sitesActive || []).map(s => s.name)
+    const statiiCombustibil = ['Petrom', 'OMV', 'Rompetrol', 'MOL', 'Lukoil', 'Socar', 'Gazpet - Oscar 1', 'Gazpet - Oscar 2']
+    
+    const dataAzi = new Date().toLocaleDateString('ro-RO')
+    
+    // ═══════════ SHEET 1: Alimentări (principal) ═══════════
     const aoa = [
       ['📋 Template Alimentări Combustibil — Gazpet Logistică'],
       ['Completați coloanele de mai jos. Coloana A trebuie să fie codul intern (TST...) sau plăcuța din ERP.'],
-      ['Datele se importă apoi prin butonul "📤 Import Excel" din modul Logistică.'],
+      [`Datele se importă apoi prin butonul "📤 Import Excel" din modul Logistică. ${santierNames.length} șantiere active actualizate ${dataAzi}.`],
       [],
-      ['Cod intern SAU Plăcuță', 'Data alimentării (DD-MM-YYYY)', 'Cantitate (litri)', 'Ore bord la alim.', 'Km la alim.', 'Ore lucrate efectiv', 'Stație', 'Card combustibil', 'Cost total (RON)', 'Număr factură', 'Observații'],
-      ['TST094', '01-05-2026', 50.5, 1250, '', 8, 'Petrom', '7059-XXXX-1234', 380.50, 'F-2026-0123', 'Alim. în drum spre Transgaz Orsova'],
-      ['PH 99 GAZ', '03-05-2026', 40, '', 145000, 6, 'OMV', '7059-XXXX-5678', 305.00, '', ''],
+      ['Cod intern SAU Plăcuță', 'Data alimentării (DD-MM-YYYY)', 'Cantitate (litri)', 'Ore bord la alim.', 'Km la alim.', 'Ore lucrate efectiv', 'Stație', 'Card combustibil', 'Cost total (RON)', 'Număr factură', 'Șantier'],
+      ['TST094', '01-05-2026', 50.5, 1250, '', 8, 'Petrom', '7059-XXXX-1234', 380.50, 'F-2026-0123', santierNames[0] || 'Sediu - Gazpet Instal'],
+      ['PH 99 GAZ', '03-05-2026', 40, '', 145000, 6, 'OMV', '7059-XXXX-5678', 305.00, '', santierNames[1] || ''],
     ]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     
-    const titleStyle = { font: { bold: true, sz: 14, color: { rgb: 'E3B341' } } }
-    const noteStyle = { font: { italic: true, sz: 10, color: { rgb: '8B949E' } } }
-    const headerStyle = {
-      fill: { fgColor: { rgb: '2D2A1A' } },
-      font: { bold: true, color: { rgb: 'E3B341' }, sz: 10 },
-      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-      border: { top: { style: 'thin', color: { rgb: '30363D' } }, bottom: { style: 'thin', color: { rgb: '30363D' } }, left: { style: 'thin', color: { rgb: '30363D' } }, right: { style: 'thin', color: { rgb: '30363D' } } }
+    // ─── Stiluri îmbunătățite (mai profi) ───
+    const titleStyle = { 
+      font: { bold: true, sz: 16, color: { rgb: 'E3B341' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+      fill: { fgColor: { rgb: '0D1117' } }
     }
-    const exampleStyle = { fill: { fgColor: { rgb: 'FFFCE0' } }, font: { italic: true, sz: 10, color: { rgb: '6E7681' } } }
+    const noteStyle = { 
+      font: { italic: true, sz: 10, color: { rgb: '8B949E' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+      fill: { fgColor: { rgb: '0D1117' } }
+    }
+    // Header: portocaliu Gazpet, text negru bold, border medium
+    const headerStyle = {
+      fill: { fgColor: { rgb: 'F0883E' } },
+      font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11, name: 'Calibri' },
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+      border: { 
+        top:    { style: 'medium', color: { rgb: '0D1117' } }, 
+        bottom: { style: 'medium', color: { rgb: '0D1117' } }, 
+        left:   { style: 'thin',   color: { rgb: '0D1117' } }, 
+        right:  { style: 'thin',   color: { rgb: '0D1117' } } 
+      }
+    }
+    // Header pentru coloana Șantier — culoare distinctă (verde) ca să iasă în evidență
+    const headerSantierStyle = {
+      ...headerStyle,
+      fill: { fgColor: { rgb: '3FB950' } },
+    }
+    // Header pentru Stație — culoare distinctă (albastru) ca să iasă în evidență
+    const headerStatieStyle = {
+      ...headerStyle,
+      fill: { fgColor: { rgb: '58A6FF' } },
+    }
+    const exampleStyle = { 
+      fill: { fgColor: { rgb: 'FFFCE0' } }, 
+      font: { italic: true, sz: 10, color: { rgb: '6E7681' } },
+      alignment: { vertical: 'center', wrapText: true },
+      border: {
+        top:    { style: 'thin', color: { rgb: 'D0D7DE' } },
+        bottom: { style: 'thin', color: { rgb: 'D0D7DE' } },
+        left:   { style: 'thin', color: { rgb: 'D0D7DE' } },
+        right:  { style: 'thin', color: { rgb: 'D0D7DE' } }
+      }
+    }
     
     if (ws['A1']) ws['A1'].s = titleStyle
     if (ws['A2']) ws['A2'].s = noteStyle
     if (ws['A3']) ws['A3'].s = noteStyle
     
-    const headerCells = ['A5','B5','C5','D5','E5','F5','G5','H5','I5','J5','K5']
+    // Header row 5 (index 4): coloane A-K
+    const headerCells = ['A5','B5','C5','D5','E5','F5','H5','I5','J5']  // toate cu portocaliu
     headerCells.forEach(a => { if (ws[a]) ws[a].s = headerStyle })
+    if (ws['G5']) ws['G5'].s = headerStatieStyle   // Stație = albastru
+    if (ws['K5']) ws['K5'].s = headerSantierStyle  // Șantier = verde
     
-    // Stiluri exemplu (rândurile 6 și 7)
+    // Style exemple (rândurile 6-7, indecșii 5-6)
     for (let r = 5; r <= 6; r++) {
       for (let c = 0; c < 11; c++) {
         const a = XLSX.utils.encode_cell({ r, c })
@@ -6708,20 +6759,112 @@ export default function LogisticaPage() {
       }
     }
     
-    ws['!cols'] = [
-      { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 14 },
-      { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 13 }, { wch: 14 }, { wch: 30 }
+    // Row heights (pentru cap de tabel mai aerisit)
+    ws['!rows'] = [
+      { hpt: 26 },  // titlu mai înalt
+      { hpt: 16 },  // notă 1
+      { hpt: 16 },  // notă 2
+      { hpt: 8 },   // gol
+      { hpt: 38 },  // header (înălțime pentru wrap text)
+      { hpt: 22 },  // exemplu 1
+      { hpt: 22 },  // exemplu 2
     ]
+    
+    // Column widths
+    ws['!cols'] = [
+      { wch: 22 }, { wch: 20 }, { wch: 14 }, { wch: 16 }, { wch: 14 },
+      { wch: 16 }, { wch: 18 }, { wch: 20 }, { wch: 15 }, { wch: 16 }, { wch: 42 }
+    ]
+    
     ws['!merges'] = [
       { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
       { s: { r: 1, c: 0 }, e: { r: 1, c: 10 } },
       { s: { r: 2, c: 0 }, e: { r: 2, c: 10 } },
     ]
     
+    // Freeze top (header + titluri rămân vizibile la scroll)
+    ws['!freeze'] = { xSplit: 0, ySplit: 5 }
+    
+    // ═══════════ SHEET 2: Șantiere Active (lookup vizibil) ═══════════
+    const lookupsAoa = [
+      ['📍 ȘANTIERE ACTIVE', '⛽ STAȚII COMBUSTIBIL'],
+      [`(${santierNames.length} șantiere · actualizat ${dataAzi})`, `(${statiiCombustibil.length} stații + rezervoare Gazpet)`],
+      [],
+      ...Array.from({length: Math.max(santierNames.length, statiiCombustibil.length)}, (_, i) => [
+        santierNames[i] || '',
+        statiiCombustibil[i] || ''
+      ])
+    ]
+    const wsLookups = XLSX.utils.aoa_to_sheet(lookupsAoa)
+    
+    const lookupHeaderStyle = {
+      fill: { fgColor: { rgb: '161B22' } },
+      font: { bold: true, sz: 12, color: { rgb: 'E3B341' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    }
+    const lookupNoteStyle = {
+      font: { italic: true, sz: 9, color: { rgb: '8B949E' } },
+    }
+    const lookupSantierStyle = {
+      fill: { fgColor: { rgb: 'EDFBEE' } },
+      font: { sz: 10, color: { rgb: '0D1117' } },
+      border: { top: { style: 'thin', color: { rgb: 'D0D7DE' } }, bottom: { style: 'thin', color: { rgb: 'D0D7DE' } } }
+    }
+    const lookupStatieStyle = {
+      fill: { fgColor: { rgb: 'DDF4FF' } },
+      font: { sz: 10, color: { rgb: '0D1117' } },
+      border: { top: { style: 'thin', color: { rgb: 'D0D7DE' } }, bottom: { style: 'thin', color: { rgb: 'D0D7DE' } } }
+    }
+    
+    if (wsLookups['A1']) wsLookups['A1'].s = lookupHeaderStyle
+    if (wsLookups['B1']) wsLookups['B1'].s = lookupHeaderStyle
+    if (wsLookups['A2']) wsLookups['A2'].s = lookupNoteStyle
+    if (wsLookups['B2']) wsLookups['B2'].s = lookupNoteStyle
+    
+    // Style pentru rândurile cu date
+    for (let i = 3; i < lookupsAoa.length; i++) {
+      const aS = XLSX.utils.encode_cell({ r: i, c: 0 })
+      const aSt = XLSX.utils.encode_cell({ r: i, c: 1 })
+      if (wsLookups[aS] && wsLookups[aS].v) wsLookups[aS].s = lookupSantierStyle
+      if (wsLookups[aSt] && wsLookups[aSt].v) wsLookups[aSt].s = lookupStatieStyle
+    }
+    
+    wsLookups['!cols'] = [{ wch: 50 }, { wch: 32 }]
+    wsLookups['!rows'] = [{ hpt: 22 }, { hpt: 16 }]
+    
+    // ═══════════ Data Validation (dropdown) ═══════════
+    // Coloana G (Stație) și K (Șantier) cu referință la sheet Lookups
+    const santierEndRow = santierNames.length + 3   // +3 pentru header + notă + gol
+    const statiiEndRow = statiiCombustibil.length + 3
+    
+    ws['!dataValidation'] = [
+      {
+        type: 'list',
+        allowBlank: true,
+        sqref: `K6:K1000`,
+        formulae: [`='Șantiere Active'!$A$4:$A$${santierEndRow}`],
+        showErrorMessage: false,  // permite și valori manuale pentru robustețe
+        promptTitle: 'Șantier',
+        prompt: 'Alege un șantier din lista din sheet-ul „Șantiere Active"',
+      },
+      {
+        type: 'list',
+        allowBlank: true,
+        sqref: `G6:G1000`,
+        formulae: [`='Șantiere Active'!$B$4:$B$${statiiEndRow}`],
+        showErrorMessage: false,
+        promptTitle: 'Stație combustibil',
+        prompt: 'Alege stația de alimentare',
+      }
+    ]
+    
+    // ═══════════ Asamblare Workbook ═══════════
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Alimentări')
-    XLSX.writeFile(wb, 'Template_Alimentari_Logistica.xlsx')
-    showToast('✓ Template descărcat — completați și importați înapoi', 'success')
+    XLSX.utils.book_append_sheet(wb, wsLookups, 'Șantiere Active')
+    
+    XLSX.writeFile(wb, `Template_Alimentari_Gazpet_${dataAzi.replace(/\./g, '-')}.xlsx`)
+    showToast(`✓ Template descărcat cu ${santierNames.length} șantiere active`, 'success')
   }
   
   // ─── Import alimentări din Excel ───────────────────────────────────────────
@@ -6738,6 +6881,28 @@ export default function LogisticaPage() {
       const ws = wb.Sheets[wb.SheetNames[0]]
       const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, raw: false })
       
+      // Load sites pentru match șantier
+      const { data: allSites } = await supabase.from('sites').select('id, name, active')
+      const sitesMap = allSites || []
+      
+      // Helper match șantier prin nume (case-insensitive + fuzzy fallback)
+      const normalizeStr = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+      const findSiteByName = (input) => {
+        if (!input) return null
+        const target = normalizeStr(input)
+        if (!target) return null
+        // Exact match
+        let m = sitesMap.find(s => normalizeStr(s.name) === target)
+        if (m) return m
+        // Contains match (input în nume site)
+        m = sitesMap.find(s => normalizeStr(s.name).includes(target))
+        if (m) return m
+        // Nume site în input
+        m = sitesMap.find(s => target.includes(normalizeStr(s.name)))
+        if (m) return m
+        return null
+      }
+      
       // Caut rândul cu header (cel cu "Cod intern" sau "Cantitate")
       let headerRow = -1
       for (let i = 0; i < Math.min(aoa.length, 10); i++) {
@@ -6747,6 +6912,11 @@ export default function LogisticaPage() {
         }
       }
       if (headerRow === -1) { showToast('Nu am găsit antetul în fișier. Folosește template-ul oficial!', 'error'); e.target.value = ''; return }
+      
+      // Detectez ce coloană este Șantier vs Observații (compatibilitate template nou + vechi)
+      const headerCells = (aoa[headerRow] || []).map(x => String(x || '').toLowerCase())
+      const santierColIdx = headerCells.findIndex(c => c.includes('șantier') || c.includes('santier'))
+      const observatiiColIdx = headerCells.findIndex(c => c.includes('observa'))
       
       const dataRows = aoa.slice(headerRow + 1).filter(r => r && r.length > 0 && (r[0] || r[1] || r[2]))
       
@@ -6796,6 +6966,34 @@ export default function LogisticaPage() {
           return
         }
         
+        // Citește șantier (template nou) sau observații (template vechi)
+        const santierRaw = santierColIdx >= 0 ? (r[santierColIdx] ? String(r[santierColIdx]).trim() : '') : ''
+        const observatiiRaw = observatiiColIdx >= 0 ? (r[observatiiColIdx] ? String(r[observatiiColIdx]).trim() : '') : ''
+        // Fallback compatibilitate: dacă template vechi cu „Observații" pe col K (idx 10), încearcă match șantier
+        const fallbackColK = (!santierColIdx || santierColIdx < 0) && !observatiiRaw ? (r[10] ? String(r[10]).trim() : '') : ''
+        
+        let siteId = null
+        let observatiiFinal = observatiiRaw || null
+        
+        if (santierRaw) {
+          const matchedSite = findSiteByName(santierRaw)
+          if (matchedSite) {
+            siteId = matchedSite.id
+          } else {
+            // Șantier necunoscut: pune ca observație ca să nu se piardă info
+            observatiiFinal = `[Șantier necunoscut: ${santierRaw}]` + (observatiiFinal ? ` · ${observatiiFinal}` : '')
+            errors.push(`Rând ${idx + headerRow + 2}: Șantier necunoscut „${santierRaw}" (alimentare importată fără șantier asociat)`)
+          }
+        } else if (fallbackColK) {
+          // Template vechi: încearcă match șantier pe coloana K, dacă nu match → tratează ca observație
+          const matchedSite = findSiteByName(fallbackColK)
+          if (matchedSite) {
+            siteId = matchedSite.id
+          } else {
+            observatiiFinal = fallbackColK
+          }
+        }
+        
         rows.push({
           active_id: matched.id,
           activ_label: `${matched.cod_intern || matched.nr_inmatriculare} · ${matched.marca || ''} ${matched.model || ''}`.trim(),
@@ -6808,7 +7006,9 @@ export default function LogisticaPage() {
           card_combustibil: r[7] ? String(r[7]).trim() : null,
           pret_total: r[8] ? Number(r[8]) : null,
           numar_factura: r[9] ? String(r[9]).trim() : null,
-          observatii: r[10] ? String(r[10]).trim() : null,
+          observatii: observatiiFinal,
+          site_id: siteId,
+          site_label: siteId ? (sitesMap.find(s => s.id === siteId)?.name || '—') : null,
         })
       })
       
@@ -6826,14 +7026,19 @@ export default function LogisticaPage() {
     const { data: { user } } = await supabase.auth.getUser()
     
     const payload = importPreview.rows.map(r => {
-      const { activ_label, ...rest } = r
+      const { activ_label, site_label, ...rest } = r  // strip label-uri UI-only
       return { ...rest, pret_per_litru: r.pret_total && r.cantitate_litri ? Number((r.pret_total / r.cantitate_litri).toFixed(4)) : null, created_by: user?.id }
     })
     
     const { error } = await supabase.from('logistica_alimentari').insert(payload)
     if (error) { showToast(`Eroare import: ${error.message}`, 'error'); return }
     
-    showToast(`✓ Import reușit: ${payload.length} alimentări`, 'success')
+    const cuSantier = payload.filter(p => p.site_id).length
+    const faraSantier = payload.length - cuSantier
+    const msg = faraSantier > 0 
+      ? `✓ Import reușit: ${payload.length} alimentări (${cuSantier} cu șantier, ${faraSantier} fără)`
+      : `✓ Import reușit: ${payload.length} alimentări cu șantier asociat`
+    showToast(msg, 'success')
     setImportPreview(null)
     loadAll()
   }
@@ -7605,6 +7810,7 @@ export default function LogisticaPage() {
                       <th style={{width: 70}}>Cantit.</th>
                       <th style={{width: 90}}>Stație</th>
                       <th style={{width: 80}}>Cost</th>
+                      <th style={{width: 180}}>Șantier</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -7615,6 +7821,12 @@ export default function LogisticaPage() {
                         <td style={{fontSize: 12, color: G.orange, fontWeight: 700}}>{r.cantitate_litri} L</td>
                         <td style={{fontSize: 11, color: G.muted}}>{r.statie_combustibil || '—'}</td>
                         <td style={{fontSize: 12, color: G.green, fontWeight: 600}}>{r.pret_total ? `${Number(r.pret_total).toFixed(2)} RON` : '—'}</td>
+                        <td style={{fontSize: 11}}>
+                          {r.site_label 
+                            ? <span style={{color: G.green, fontWeight: 600}}>📍 {r.site_label}</span> 
+                            : <span style={{color: G.dim, fontStyle: 'italic'}}>— fără șantier —</span>
+                          }
+                        </td>
                       </tr>
                     ))}
                   </tbody>
