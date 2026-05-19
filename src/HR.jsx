@@ -1,5 +1,5 @@
 // ===========================================================================
-// MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături
+// MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături · Coș
 // ===========================================================================
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -8,6 +8,7 @@ import { SalariiPage as SalariiOriginal } from './App.jsx'
 import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
+import TabCos from './TabCos.jsx'
 
 // Theme
 const G = {
@@ -77,10 +78,11 @@ function statusBadge(status, zile) {
 export default function HRPage() {
   const nav = useNavigate()
   const [profile, setProfile] = useState(null)
-  const [tab, setTab] = useState('personal')  // personal | autorizatii | alerte | documente | semnaturi | salarii
+  const [tab, setTab] = useState('personal')  // personal | autorizatii | alerte | documente | semnaturi | cos | scanner | salarii
   const [employees, setEmployees] = useState([])
   const [autorizatii, setAutorizatii] = useState([])
   const [tipuri, setTipuri] = useState([])
+  const [cosCount, setCosCount] = useState(0)  // Etapa 13: badge dinamic Coș
   const [load, setLoad] = useState(false)
   const [toast, setToast] = useState(null)
   const [editEmp, setEditEmp] = useState(null)
@@ -116,16 +118,19 @@ export default function HRPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [empRes, autRes, tipRes] = await Promise.all([
+    const [empRes, autRes, tipRes, cosRes] = await Promise.all([
       supabase.from('employees').select('*, sites(name)').eq('active', true)
         .or('termination_date.is.null,termination_date.gte.' + new Date().toISOString().split('T')[0])
         .order('name'),
       supabase.from('v_hr_autorizatii_status').select('*').order('data_expirare', { ascending: true, nullsFirst: false }),
       supabase.from('hr_autorizatii_tipuri').select('*').eq('activ', true).order('ordine'),
+      // Etapa 13: count itemi în Coș pentru badge tab
+      supabase.from('v_recycle_bin_hr').select('row_id', { count: 'exact', head: true }),
     ])
     setEmployees(empRes.data || [])
     setAutorizatii(autRes.data || [])
     setTipuri(tipRes.data || [])
+    setCosCount(cosRes.count || 0)
     setLoad(false)
   }
   
@@ -148,11 +153,13 @@ export default function HRPage() {
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
+    { key: 'cos',         icon: '🗑', label: 'Coș', badge: cosCount, personalOnly: true },
     { key: 'scanner',     icon: '📷', label: 'Scanner AI', scannerOnly: true },
     { key: 'salarii',     icon: '💰', label: 'Salarii', superOnly: true },
   ].filter(t => {
     if (t.superOnly && !isSuperAdmin) return false
     if (t.scannerOnly && !canUseScanner) return false
+    if (t.personalOnly && !canAccessPersonal) return false
     return true
   })
   
@@ -184,7 +191,7 @@ export default function HRPage() {
             transition:'all 0.15s', letterSpacing:0.3
           }}>
             <span style={{fontSize:18}}>{t.icon}</span> {t.label}
-            {t.badge > 0 && <span style={{padding:'3px 9px', background:G.red, color:'#fff', borderRadius:12, fontSize:13, fontWeight:800}}>{t.badge}</span>}
+            {t.badge > 0 && <span style={{padding:'3px 9px', background: t.key === 'cos' ? G.muted : G.red, color:'#fff', borderRadius:12, fontSize:13, fontWeight:800}}>{t.badge}</span>}
           </button>
         ))}
       </div>
@@ -196,6 +203,7 @@ export default function HRPage() {
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
+      {!load && tab === 'cos' && canAccessPersonal && <TabCos profile={profile} showToast={showToast} />}
       {!load && tab === 'scanner' && canUseScanner && <TabScannerDocumenteHR profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
       
@@ -368,11 +376,15 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
     return result
   }, [autorizatii, catFilter, statusFilter, search, sortBy])
   
+  // Etapa 13: soft delete → mutare în Coș (păstrat 30 zile, apoi cleanup automat prin pg_cron)
   const handleDelete = async (a) => {
-    if (!confirm(`Ștergi autorizația ${a.tip_denumire} pentru ${a.employee_name}?`)) return
-    const { error } = await supabase.from('hr_autorizatii').delete().eq('id', a.id)
+    if (!confirm(`Mută autorizația „${a.tip_denumire}" pentru ${a.employee_name} în Coș?\n\nVa rămâne în coș 30 zile, poate fi restaurată oricând până atunci din tab-ul 🗑 Coș.`)) return
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('hr_autorizatii')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: u?.user?.id })
+      .eq('id', a.id)
     if (error) showToast('Eroare: ' + error.message, 'error')
-    else { showToast('✓ Șters'); onReload() }
+    else { showToast(`🗑 Mutată în Coș: ${a.tip_denumire}`); onReload() }
   }
   
   return (
@@ -487,7 +499,7 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
                     <td style={{...tdStyle, textAlign:'right'}}>
                       <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
                         <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
-                        <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Șterge">🗑️</button>
+                        <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Mută în Coș">🗑️</button>
                       </div>
                     </td>
                   )}
@@ -675,11 +687,15 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   // Auto-calculate (real count) for display
   const realAutCount = autorizatii.length
   
+  // Etapa 13: soft delete (mutare în Coș)
   const handleDelete = async (a) => {
-    if (!confirm(`Ștergi autorizația ${a.tip_denumire}?`)) return
-    const { error } = await supabase.from('hr_autorizatii').delete().eq('id', a.id)
+    if (!confirm(`Mută autorizația „${a.tip_denumire}" în Coș?\n\nVa rămâne în coș 30 zile, poate fi restaurată oricând din tab-ul 🗑 Coș.`)) return
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('hr_autorizatii')
+      .update({ deleted_at: new Date().toISOString(), deleted_by: u?.user?.id })
+      .eq('id', a.id)
     if (error) showToast('Eroare: ' + error.message, 'error')
-    else { showToast('✓ Șters'); onReload() }
+    else { showToast(`🗑 Mutată în Coș: ${a.tip_denumire}`); onReload() }
   }
   
   const saveAreAut = async (val) => {
@@ -793,7 +809,7 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                           {isAdmin && (
                             <div style={{display:'flex', gap:4}}>
                               <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
-                              <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Șterge">🗑️</button>
+                              <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Mută în Coș">🗑️</button>
                             </div>
                           )}
                         </div>
