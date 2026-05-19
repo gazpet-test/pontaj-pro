@@ -12,6 +12,7 @@ import { supabase } from './lib/supabase.js'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import ContracteTertiTab from './ContracteTertiTab.jsx'
+import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -510,24 +511,21 @@ export default function AdministrativPage() {
       {/* Etapa 15 Faza 1: Tab Contracte cu terți (cu listă beneficiari real) */}
       {tab === 'contracte_terti' && <ContracteTertiTab />}
 
+      {/* Etapa 16: Tab Documente firmă (funcțional cu AI parser + alerte expirare) */}
+      {tab === 'documente' && <TabDocumenteFirma />}
+
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'documente' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
-            {tab === 'documente' && '📁'}
             {tab === 'furnizori' && '🏢'}
             {tab === 'contracte' && '📜'}
           </div>
           <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:8}}>
-            {tab === 'documente' && 'Documente Firmă'}
             {tab === 'furnizori' && 'Furnizori'}
             {tab === 'contracte' && 'Contracte Comerciale'}
           </div>
           <div style={{fontSize:13, color:G.muted, maxWidth:520, margin:'0 auto 16px', lineHeight:1.6}}>
-            {tab === 'documente' && (
-              <>Aici vor fi <strong>documentele oficiale ale firmei</strong>:<br/>
-              CUI · Acte constitutive · Statut · Bilanțuri · Audit · Asigurări companie</>
-            )}
             {tab === 'furnizori' && (
               <>Bază de date <strong>furnizori</strong> cu:<br/>
               Date contact · Contracte · Plăți · Istoric comenzi · Termenele de plată</>
