@@ -6,16 +6,11 @@ import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
+import ExecutiePage from './Executie.jsx'
 import Tichete from './Tichete.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import InternalChat from './InternalChat.jsx'
-// ════════════ Etapa 15 Faza 1: Module Comercial (placeholder) ════════════
-import ComercialPage from './Comercial.jsx'
-import AchizitiiPage from './Achizitii.jsx'
-import OfertarePage from './Ofertare.jsx'
-import CTCPage from './CTC.jsx'
-import MagaziePage from './Magazie.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -508,15 +503,13 @@ function HomeDashboard() {
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
     { path:null,        icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi · Cash flow · Bugete',     active:false },
     { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
-    { path:'/ofertare', icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:true, requireModule:'ofertare' },
-    { path:'/magazie',  icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:true, requireModule:'magazie' },
-    { path:'/comercial', icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:true, requireModule:'comercial' },
-    { path:'/achizitii', icon:'📥', label:'Achiziții',   color:'#3FB950', desc:'Inbox comenzi · Procesare · Recepție', active:true, requireModule:'achizitii' },
-    { path:'/ctc',      icon:'📑', label:'CTC',         color:'#BC8CFF', desc:'Cărți Tehnice · Arhivă documente', active:true, requireModule:'ctc' },
+    { path:null,        icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:false },
+    { path:null,        icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:false },
+    { path:null,        icon:'🛒', label:'Comercial',   color:'#A371F7', desc:'Vânzări · Contracte · CRM',        active:false },
     { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Active', active:true, requireModule:'administrativ' },
     { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'hr' },
     { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
-    { path:null,        icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Șantiere · Devize · Vreme live',   active:false },
+    { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
   const modules = allModules.filter(m => !m.active || !m.requireModule || hasModuleAccess(profile, m.requireModule))
@@ -5854,12 +5847,6 @@ function AdminPage() {
         updates[flag] = !!editMgr[flag]
       }
     })
-    // Etapa 15 Faza 1: 4 flag-uri Comercial — doar OWNER (trigger BD enforce_owner_only_salary_flags protejeaza)
-    ;['can_create_comenzi','can_process_achizitii','can_manage_stoc','can_access_ctc'].forEach(flag => {
-      if (profile?.is_owner === true && editMgr[flag] !== undefined) {
-        updates[flag] = !!editMgr[flag]
-      }
-    })
     // WhatsApp: phone + enabled poate fi editat de orice owner; tier DOAR de owner (trigger BD verifică)
     if (editMgr.phone_whatsapp !== undefined) {
       updates.phone_whatsapp = editMgr.phone_whatsapp?.trim() || null
@@ -6344,44 +6331,6 @@ function AdminPage() {
                     { key:'receive_tichete_it',            label:'💻 IT',            color:G.purple },
                     { key:'receive_tichete_comercial',     label:'🛒 Comercial',     color:G.green  },
                     { key:'receive_tichete_financiar',     label:'💰 Financiar',     color:G.yellow },
-                  ].map(f => (
-                    <label key={f.key} style={{
-                      display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',
-                      background:editMgr[f.key]?f.color+'22':G.bg,
-                      border:`1px solid ${editMgr[f.key]?f.color+'88':G.border2}`,
-                      borderRadius:6
-                    }}>
-                      <input type="checkbox"
-                        checked={!!editMgr[f.key]}
-                        onChange={e=>setEditMgr({...editMgr,[f.key]:e.target.checked})}
-                        style={{accentColor:f.color,width:14,height:14}}
-                      />
-                      <span style={{fontSize:12,fontWeight:editMgr[f.key]?700:500,color:editMgr[f.key]?f.color:G.text}}>
-                        {f.label}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-            {/* ════════════════ Etapa 15 Faza 1: Comercial - 4 flag-uri acces ════════════════ */}
-            {profile?.is_owner === true && editMgr.id !== profile?.id && (
-              <div style={{marginBottom:14,padding:14,background:'#1A1A1F',borderRadius:8,border:`1px solid ${G.border}66`}}>
-                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
-                  <span style={{fontSize:18}}>🛒</span>
-                  <div style={{fontSize:13,fontWeight:800,color:G.text}}>
-                    Comercial — Acces module Faza 4-6
-                  </div>
-                </div>
-                <div style={{fontSize:10,color:G.muted,marginBottom:10,lineHeight:1.5}}>
-                  Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Flag-urile bifate permit acces la modulele specifice când le construim (Faza 4 = Comenzi, Faza 5 = CTC, Faza 6 = Magazie). Acces la pagini NU înseamnă acces automat — modulele tot trebuie adăugate în <code style={{background:G.bg,padding:'1px 5px',borderRadius:3}}>user_module_access</code> separat.
-                </div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(2, 1fr)',gap:8}}>
-                  {[
-                    { key:'can_create_comenzi',     label:'🛒 Creează comenzi (MP)', color:'#A371F7' },
-                    { key:'can_process_achizitii',  label:'📥 Procesează Achiziții',  color:G.green   },
-                    { key:'can_manage_stoc',        label:'📦 Gestionează Magazie',   color:'#FF7B72' },
-                    { key:'can_access_ctc',         label:'📑 Acces CTC',             color:G.purple  },
                   ].map(f => (
                     <label key={f.key} style={{
                       display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',
@@ -7472,13 +7421,8 @@ export default function App() {
         <Route path="/logistica" element={<ProtectedRoute requireModule="logistica"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
         <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
+        <Route path="/executie" element={<ProtectedRoute><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
         <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
-        {/* ════════════ Etapa 15 Faza 1: Routes module Comercial ════════════ */}
-        <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
-        <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
-        <Route path="/ofertare" element={<ProtectedRoute requireModule="ofertare"><Layout><OfertarePage/></Layout></ProtectedRoute>}/>
-        <Route path="/ctc" element={<ProtectedRoute requireModule="ctc"><Layout><CTCPage/></Layout></ProtectedRoute>}/>
-        <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
