@@ -537,6 +537,7 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
   const rowMaster = (i) => 17 + Math.floor(i / 10) * 13 + (i % 10)
 
   // 4a. Header repetat la R14, R27, R40, ... per rand vizual
+  // În model header e MERGE pe 3 rânduri vertical (R14:R16, R27:R29, etc.) — fără gap între header și POZ-uri
   for (let randIdx = 0; randIdx < nrRanduriVizuale; randIdx++) {
     const headerRow = 14 + randIdx * 13
     setCell(ws, `BR${headerRow}`, 'POZ.', lookupHeaderStyle)
@@ -547,6 +548,14 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
     setCell(ws, `BW${headerRow}`, 'CANT.', lookupHeaderStyle)
     setCell(ws, `BX${headerRow}`, 'POZ. KM', lookupHeaderStyle)
     setCell(ws, `BY${headerRow}`, 'SUDURĂ', lookupHeaderStyle)
+    // Merge headers pe 3 rânduri (R14:R16, R27:R29, R40:R42, ...)
+    // SheetJS merges folosește 0-indexed: BR=69, BS=70, BT=71, BU=72, BV=73, BW=74, BX=75, BY=76
+    for (let col = 69; col <= 76; col++) {
+      allMerges.push({
+        s: { r: headerRow - 1, c: col },     // R14 = row index 13 (0-indexed)
+        e: { r: headerRow - 1 + 2, c: col }, // R16 = row index 15
+      })
+    }
   }
 
   // 4b. POZ-uri rânduri — formule la schema vizuală pentru țevi, valori directe pentru curbe/legări
