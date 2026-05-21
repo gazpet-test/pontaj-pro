@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import ImportExcelModal from './ImportExcelIzometrie.jsx'
+import { generateCentralizatorXlsx, buildCentralizatorFilename } from './exportCentralizatorXlsx.js'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -533,6 +534,9 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const [bulkSaving, setBulkSaving] = useState(false)
   const [swapping, setSwapping] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showExport, setShowExport] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportHistory, setExportHistory] = useState([]) // documente generate anterior
 
   const validationAborters = useRef({})
 
@@ -939,6 +943,93 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     await refetchTevi()
   }
 
+  // ───────── Export Centralizator Transgaz (Sub-faza E) ─────────
+  // Genereaza XLSX cu xlsx-js-style → upload Storage + INSERT log + download local
+  async function handleExportCentralizator() {
+    if (!pachet || !tevi.length) return
+    if (exporting) return
+
+    setExporting(true)
+    try {
+      // 1. Load proiect (avem pachet+tronson+tevi deja in scope)
+      const { data: proiect, error: errProiect } = await supabase
+        .from('executie_proiecte').select('*').eq('id', pachet.proiect_id).single()
+      if (errProiect) { onError('Eroare load proiect: ' + errProiect.message); return }
+
+      // 2. Generez bytes XLSX
+      const bytes = generateCentralizatorXlsx({ pachet, tronson, proiect, tevi })
+      const filename = buildCentralizatorFilename(pachet)
+      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+
+      // 3. Upload in Storage bucket executie-pachete-pdf
+      const ts = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+      const uniq = Math.random().toString(36).slice(2, 10)
+      const storagePath = `${pachet.id}/${ts}_${uniq}_${filename}`
+      const { error: errUp } = await supabase.storage
+        .from('executie-pachete-pdf')
+        .upload(storagePath, blob, { contentType: blob.type, upsert: false })
+
+      if (errUp) {
+        // Daca upload esueaza, totusi descarcam local (utilizatorul vede output)
+        onWarn('Storage upload esuat (' + errUp.message + '). Descarc local.')
+      } else {
+        // 4. INSERT log in executie_pachete_documente
+        const { data: { user } } = await supabase.auth.getUser()
+        const { error: errInsDoc } = await supabase.from('executie_pachete_documente').insert({
+          pachet_id: pachet.id,
+          tip_document: 'centralizator',
+          fisier_path: storagePath,
+          fisier_nume: filename,
+          fisier_size_bytes: bytes.length,
+          mime_type: blob.type,
+          observatii: `Export V1 (sheet 1 pixel-perfect + sheet 2 minimal lookup)`,
+          uploadat_de: user?.id || null,
+        })
+        if (errInsDoc) onWarn('Log audit esuat (' + errInsDoc.message + ')')
+        await loadExportHistory()
+      }
+
+      // 5. Download local (descarcare directa)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      onSuccess(`✓ ${filename} (${(bytes.length / 1024).toFixed(1)} KB)`)
+      setShowExport(false)
+    } catch (e) {
+      onError('Eroare generare XLSX: ' + (e.message || String(e)))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // ───────── Load istoric exporturi pentru pachet ─────────
+  const loadExportHistory = useCallback(async () => {
+    if (!pachetId) return
+    const { data } = await supabase
+      .from('executie_pachete_documente')
+      .select('*')
+      .eq('pachet_id', pachetId)
+      .order('uploadat_la', { ascending: false })
+    if (data) setExportHistory(data)
+  }, [pachetId])
+
+  useEffect(() => { loadExportHistory() }, [loadExportHistory])
+
+  // Download fisier istoric (signed URL)
+  async function downloadHistory(doc) {
+    const { data, error } = await supabase.storage
+      .from('executie-pachete-pdf')
+      .createSignedUrl(doc.fisier_path, 60)
+    if (error) { onError('Eroare signed URL: ' + error.message); return }
+    window.open(data.signedUrl, '_blank')
+  }
+
   // ───────── Bulk save (pentru rânduri rămase dirty după erori) ─────────
   async function saveBulkDirty() {
     if (!dirty.size) {
@@ -1074,11 +1165,19 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           🚧 Completează la șanț
         </button>
         <button
-          style={{ ...S.btnS, padding:'6px 12px', opacity: 0.5, cursor:'not-allowed' }}
-          title="Disponibil în Faza E"
-          disabled
+          onClick={() => setShowExport(true)}
+          disabled={!tevi.length || exporting}
+          style={{
+            ...S.btnS, padding:'6px 12px',
+            borderColor: tevi.length ? G.green : G.border,
+            color: tevi.length ? G.green : G.muted,
+            background: tevi.length ? G.green+'14' : 'transparent',
+            opacity: exporting ? 0.6 : (tevi.length ? 1 : 0.5),
+            cursor: (!tevi.length || exporting) ? 'not-allowed' : 'pointer',
+          }}
+          title={tevi.length ? 'Generează Centralizator XLSX pentru Transgaz' : 'Adaugă țevi în pachet întâi'}
         >
-          📤 Export Transgaz
+          {exporting ? '⏳ Generez...' : '📤 Export Transgaz'}
         </button>
         <button
           onClick={saveBulkDirty}
@@ -1194,6 +1293,143 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           onWarn={onWarn}
         />
       )}
+
+      {/* MODAL: Export Centralizator Transgaz */}
+      {showExport && (
+        <ExportCentralizatorModal
+          pachet={pachet}
+          tronson={tronson}
+          tevi={tevi}
+          exporting={exporting}
+          history={exportHistory}
+          onConfirm={handleExportCentralizator}
+          onClose={() => setShowExport(false)}
+          onDownloadHistory={downloadHistory}
+        />
+      )}
+    </div>
+  )
+}
+
+// ===========================================================================
+// EXPORT CENTRALIZATOR MODAL — confirmare + istoric versiuni
+// ===========================================================================
+
+function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, onConfirm, onClose, onDownloadHistory }) {
+  const teviCount = tevi.length
+  const totalLungime = tevi.reduce((s, t) => s + Number(t.lungime_m || 0), 0)
+  const pendingSant = tevi.filter(t => t.sudura_sant_pending).length
+  const filename = `${pachet.cod_document_full}${pachet.revizie > 0 ? `_rev${pachet.revizie}` : '_rev0'}_Centralizator.xlsx`
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.75)', display:'flex',
+      alignItems:'center', justifyContent:'center', zIndex:1000, padding:20,
+    }}>
+      <div style={{
+        background: G.surface, borderRadius:12, border:`1px solid ${G.border}`,
+        width:'100%', maxWidth:640, maxHeight:'90vh', overflowY:'auto',
+      }}>
+        {/* HEADER */}
+        <div style={{ padding:'18px 24px', borderBottom:`1px solid ${G.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize:17, fontWeight:700, color:G.green }}>📤 Export Centralizator Transgaz</div>
+            <div style={{ fontSize:12, color:G.muted, marginTop:4, fontFamily:'monospace' }}>
+              {pachet.cod_document_full}{pachet.revizie > 0 ? ` rev.${pachet.revizie}` : ''} · Tronson {tronson?.cod}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ ...S.btnS, padding:'6px 10px' }}>✕</button>
+        </div>
+
+        {/* CONFIRM ZONE */}
+        <div style={{ padding:'18px 24px' }}>
+          <div style={{ background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, padding:14, marginBottom:14 }}>
+            <div style={{ fontSize:13, fontWeight:600, marginBottom:8 }}>Conținut export:</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:10, fontSize:12 }}>
+              <div>
+                <div style={{ color:G.muted }}>Rânduri totale</div>
+                <div style={{ fontWeight:700, fontSize:16 }}>{teviCount}</div>
+              </div>
+              <div>
+                <div style={{ color:G.muted }}>Lungime totală</div>
+                <div style={{ fontWeight:700, fontSize:16 }}>{totalLungime.toFixed(2)} m</div>
+              </div>
+              <div>
+                <div style={{ color:G.muted }}>Pending șanț</div>
+                <div style={{ fontWeight:700, fontSize:16, color: pendingSant > 0 ? G.orange : G.text }}>{pendingSant}</div>
+              </div>
+            </div>
+            <div style={{ marginTop:10, paddingTop:10, borderTop:`1px solid ${G.border2}`, fontSize:12 }}>
+              <div><span style={{ color:G.muted }}>Fișier:</span> <span style={{ fontFamily:'monospace', color:G.green }}>{filename}</span></div>
+              <div style={{ marginTop:4 }}>
+                <span style={{ color:G.muted }}>Conține:</span> Sheet 1 CENTRALIZATOR pixel-perfect + Sheet 2 IZOMETRIE (V1: header + lookup table BS17:BZ).
+              </div>
+              <div style={{ marginTop:4, fontStyle:'italic', color:G.yellow, fontSize:11 }}>
+                ⚠ V1: schema vizuală cu blocuri 1:1 din sheet 2 vine în V2 după decoded pattern wrap
+              </div>
+            </div>
+          </div>
+
+          {/* ISTORIC EXPORTURI */}
+          {history && history.length > 0 && (
+            <div style={{ marginBottom:14 }}>
+              <div style={{ fontSize:13, fontWeight:600, marginBottom:8, color:G.muted }}>
+                📜 Istoric exporturi ({history.length})
+              </div>
+              <div style={{ background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, maxHeight:200, overflowY:'auto' }}>
+                {history.map(doc => (
+                  <div key={doc.id} style={{
+                    padding:'8px 12px', borderBottom:`1px solid ${G.border2}`,
+                    display:'flex', justifyContent:'space-between', alignItems:'center',
+                  }}>
+                    <div style={{ minWidth:0, flex:1 }}>
+                      <div style={{ fontSize:12, fontFamily:'monospace', color:G.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {doc.fisier_nume}
+                      </div>
+                      <div style={{ fontSize:10, color:G.muted, marginTop:2 }}>
+                        {doc.tip_document} · {fmtDate(doc.uploadat_la?.slice(0, 10))} · {(doc.fisier_size_bytes / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => onDownloadHistory(doc)}
+                      style={{ ...S.btnS, padding:'4px 10px', fontSize:11, borderColor:G.blue, color:G.blue }}
+                    >
+                      ⬇ Descarcă
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* INFO */}
+          <div style={{ background:G.purple+'11', border:`1px solid ${G.purple}33`, borderRadius:8, padding:12, fontSize:11, color:G.muted, lineHeight:1.6 }}>
+            La generare:
+            <ul style={{ margin:'6px 0 0 16px', padding:0 }}>
+              <li>Fișierul XLSX se descarcă automat în browser</li>
+              <li>O copie e salvată în Storage (bucket <code style={{ color:G.purple }}>executie-pachete-pdf</code>)</li>
+              <li>Audit log în <code style={{ color:G.purple }}>executie_pachete_documente</code></li>
+            </ul>
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <div style={{ padding:'14px 24px', borderTop:`1px solid ${G.border}`, display:'flex', justifyContent:'flex-end', gap:8 }}>
+          <button onClick={onClose} style={{...S.btnS, padding:'9px 18px'}}>Anulează</button>
+          <button
+            onClick={onConfirm}
+            disabled={exporting || !teviCount}
+            style={{
+              ...S.btnP, padding:'9px 20px',
+              background: G.green, color:'#fff',
+              opacity: exporting || !teviCount ? 0.5 : 1,
+              cursor: exporting || !teviCount ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {exporting ? '⏳ Generez...' : '📤 Generează & Descarcă'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
