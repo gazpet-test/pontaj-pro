@@ -982,7 +982,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           fisier_nume: filename,
           fisier_size_bytes: bytes.length,
           mime_type: blob.type,
-          observatii: `Export V1 (sheet 1 pixel-perfect + sheet 2 minimal lookup)`,
+          observatii: `Export V2 (sheet 1 pixel-perfect + sheet 2 schema vizuala)`,
           uploadat_de: user?.id || null,
         })
         if (errInsDoc) onWarn('Log audit esuat (' + errInsDoc.message + ')')
@@ -1362,10 +1362,7 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
             <div style={{ marginTop:10, paddingTop:10, borderTop:`1px solid ${G.border2}`, fontSize:12 }}>
               <div><span style={{ color:G.muted }}>Fișier:</span> <span style={{ fontFamily:'monospace', color:G.green }}>{filename}</span></div>
               <div style={{ marginTop:4 }}>
-                <span style={{ color:G.muted }}>Conține:</span> Sheet 1 CENTRALIZATOR pixel-perfect + Sheet 2 IZOMETRIE (V1: header + lookup table BS17:BZ).
-              </div>
-              <div style={{ marginTop:4, fontStyle:'italic', color:G.yellow, fontSize:11 }}>
-                ⚠ V1: schema vizuală cu blocuri 1:1 din sheet 2 vine în V2 după decoded pattern wrap
+                <span style={{ color:G.muted }}>Conține:</span> Sheet 1 CENTRALIZATOR pixel-perfect + Sheet 2 IZOMETRIE cu schema vizuală (blocuri 6-col/țeavă) + lookup table.
               </div>
             </div>
           </div>
