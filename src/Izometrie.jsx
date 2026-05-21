@@ -957,7 +957,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
       if (errProiect) { onError('Eroare load proiect: ' + errProiect.message); return }
 
       // 2. Generez bytes XLSX
-      const bytes = generateCentralizatorXlsx({ pachet, tronson, proiect, tevi })
+      const bytes = await generateCentralizatorXlsx({ pachet, tronson, proiect, tevi })
       const filename = buildCentralizatorFilename(pachet)
       const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
 
