@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import ImportExcelModal from './ImportExcelIzometrie.jsx'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
 const G = {
@@ -60,9 +61,10 @@ const fmtDate = (d) => {
 }
 
 // Extrage unghi din DIMENSIUNE (ex: "610.0X8.00 30°" → "30°")
+// Suportă atât ° (U+00B0 degree sign) cât și ˚ (U+02DA ring above — folosit în Excel Transgaz)
 const extractUnghi = (dim) => {
   if (!dim) return null
-  const m = String(dim).match(/(\d+)\s*°/)
+  const m = String(dim).match(/(\d+)\s*[°˚]/)
   return m ? `${m[1]}°` : null
 }
 
@@ -529,6 +531,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const [selected, setSelected] = useState(new Set()) // ids rânduri bifate
   const [saving, setSaving] = useState(false)
   const [bulkSaving, setBulkSaving] = useState(false)
+  const [showImport, setShowImport] = useState(false)
 
   const validationAborters = useRef({})
 
@@ -1024,6 +1027,13 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
         <div style={{ flex: 1 }} />
 
         <button
+          onClick={() => setShowImport(true)}
+          style={{...S.btnS, padding:'6px 12px', borderColor: G.purple, color: G.purple, background: G.purple+'14'}}
+          title="Import bulk din Excel Centralizator Transgaz"
+        >
+          📥 Import Excel
+        </button>
+        <button
           style={{ ...S.btnS, padding:'6px 12px', opacity: 0.5, cursor:'not-allowed' }}
           title="Disponibil în Faza C"
           disabled
@@ -1128,6 +1138,24 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           Click pe celulă · Tab→next · Enter→jos · Esc→cancel · Ctrl+V→paste Excel
         </div>
       </div>
+
+      {/* MODAL: Import Excel */}
+      {showImport && (
+        <ImportExcelModal
+          pachet={pachet}
+          tronson={tronson}
+          onClose={() => setShowImport(false)}
+          onSuccess={(msg) => {
+            setShowImport(false)
+            onSuccess(msg)
+            // Refresh complet după import
+            refetchPachet()
+            refetchTevi()
+          }}
+          onError={onError}
+          onWarn={onWarn}
+        />
+      )}
     </div>
   )
 }
