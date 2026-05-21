@@ -15,6 +15,7 @@
 // ===========================================================================
 
 import * as XLSX_mod from 'xlsx-js-style'
+import JSZip from 'jszip'
 import {
   TRANSGAZ_HEADER_CELLS, TRANSGAZ_HEADER_MERGES,
   TRANSGAZ_RAND_1_CELLS, TRANSGAZ_RAND_1_MERGES, TRANSGAZ_RAND_1_ROW_HEIGHTS,
@@ -187,55 +188,87 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
   }
 
   // ========== DATA ROWS R14+ ==========
-  // Stiluri pre-create (reused per row pentru reduce alocari)
-  const cellStyleNum = { font: FONT_BOLD, alignment: ALIGN_RIGHT, border: BORDER_THIN } // pentru POZ
+  // CONVENȚIE MODEL Transgaz _00033 (verificat 21.05.2026):
+  //   - A: POZ counter (1, 2, 3, ...)
+  //   - B: LOT cascadă (B15+ = =B{r-1}, B14 = valoare din BD)
+  //   - C, D, E, F, G, I, J: FORMULE VLOOKUP din IZOMETRIE!$BR$17:$BY$<lastRow>
+  //     C=col2 SERIE, D=col3 TIP, E=col4 DIM, F=col5 ȘARJĂ, G=col6 CANT, I=col7 POZ KM, J=col8 SUDURĂ
+  //   - H: TRONSON cascadă (H15+ = =H{r-1})
+  //   - K, L, M, O: valori directe (PM, PA-UT, UT, OBS)
+  //   - N: COD_DOC cascadă (N15+ = =N{r-1})
+  const cellStyleNum = { font: FONT_BOLD, alignment: ALIGN_RIGHT, border: BORDER_THIN }
   const cellStyleText = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN }
-  const cellStyleNumData = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN } // pentru CANT
-  const cellStyleSmall = { font: FONT_SMALL, alignment: ALIGN_CENTER, border: BORDER_THIN } // pentru K/L (9pt)
-  const cellStyleObs = { font: FONT_BASE, alignment: ALIGN_CENTER } // O fara border
+  const cellStyleNumData = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN }
+  const cellStyleSmall = { font: FONT_SMALL, alignment: ALIGN_CENTER, border: BORDER_THIN }
+  const cellStyleObs = { font: FONT_BASE, alignment: ALIGN_CENTER }
+
+  // Calc lastRow tabela master pentru range VLOOKUP dinamic
+  const teviRealeCount = tevi.filter(t => t.tip_rand === 'teava').length
+  const lastMasterTeavaRowS1 = teviRealeCount > 0 ? 17 + Math.floor((teviRealeCount - 1) / 10) * 13 + ((teviRealeCount - 1) % 10) : 17
+  const nrCurbeLegariS1 = tevi.length - teviRealeCount
+  const lastMasterRowS1 = lastMasterTeavaRowS1 + nrCurbeLegariS1
+  const vlookupRange = `IZOMETRIE!$BR$17:$BY$${lastMasterRowS1}`
 
   tevi.forEach((row, idx) => {
     const r = 14 + idx
     const poz = idx + 1
 
-    // A: POZ (numar, bold, right)
+    // A: POZ counter (valoare directă)
     setCell(ws, `A${r}`, poz, cellStyleNum)
-    // B: LOT
-    setCell(ws, `B${r}`, row.lot || '', cellStyleText)
-    // C: SERIE UNICA
-    setCell(ws, `C${r}`, row.serie_unica || '', cellStyleText)
-    // D: TIP
-    setCell(ws, `D${r}`, row.tip || '', cellStyleText)
-    // E: DIMENSIUNE
+
+    // B: LOT — B14 = valoare directă, B15+ = =B{r-1} cascadă
+    if (idx === 0) {
+      setCell(ws, `B${r}`, row.lot || '', cellStyleText)
+    } else {
+      ws[`B${r}`] = { f: `B${r - 1}`, v: row.lot || '', t: 's', s: cellStyleText }
+    }
+
+    // C: SERIE UNICĂ = VLOOKUP col 2
+    ws[`C${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},2,FALSE)`, v: row.serie_unica || '', t: 's', s: cellStyleText }
+    // D: TIP = VLOOKUP col 3
+    ws[`D${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},3,FALSE)`, v: row.tip || '', t: 's', s: cellStyleText }
+    // E: DIMENSIUNE = VLOOKUP col 4
     let dim = row.dimensiune || ''
     if (row.tip_rand === 'curba' && row.unghi_curba && !dim.includes(row.unghi_curba)) {
       dim = dim ? `${dim} ${row.unghi_curba}` : row.unghi_curba
     }
-    setCell(ws, `E${r}`, dim, cellStyleText)
-    // F: ȘARJA
-    setCell(ws, `F${r}`, row.sarja || '', cellStyleText)
-    // G: CANT (lungime_m, numeric cu format)
+    ws[`E${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},4,FALSE)`, v: dim, t: 's', s: cellStyleText }
+    // F: ȘARJĂ = VLOOKUP col 5
+    ws[`F${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},5,FALSE)`, v: row.sarja || '', t: 's', s: cellStyleText }
+    // G: CANT = VLOOKUP col 6
     if (row.lungime_m != null && row.lungime_m !== '') {
-      setNumCell(ws, `G${r}`, row.lungime_m, { ...cellStyleNumData, numFmt: '#,##0.00' })
+      ws[`G${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},6,FALSE)`, v: Number(row.lungime_m), t: 'n', s: { ...cellStyleNumData, numFmt: '#,##0.00' } }
     } else {
       setCell(ws, `G${r}`, '', cellStyleNumData)
     }
-    // H: TRONSON
-    setCell(ws, `H${r}`, tronson?.cod || '', cellStyleText)
-    // I: POZ. KM (formatted din m → KM+MMM)
+
+    // H: TRONSON — H14 = valoare, H15+ = =H{r-1} cascadă
+    if (idx === 0) {
+      setCell(ws, `H${r}`, tronson?.cod || '', cellStyleText)
+    } else {
+      ws[`H${r}`] = { f: `H${r - 1}`, v: tronson?.cod || '', t: 's', s: cellStyleText }
+    }
+
+    // I: POZ. KM = VLOOKUP col 7 (NU mai e valoare directă în model NOU _00033)
     const pozKmVal = row._poz_km != null ? row._poz_km : row.poz_km_m
-    setCell(ws, `I${r}`, formatPozKm(pozKmVal), cellStyleText)
-    // J: SUDURĂ (cu R sufix daca refacuta)
-    setCell(ws, `J${r}`, formatSudura(row), cellStyleText)
-    // K: PM (font 9pt)
+    ws[`I${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},7,FALSE)`, v: formatPozKm(pozKmVal), t: 's', s: cellStyleText }
+
+    // J: SUDURĂ = VLOOKUP col 8
+    ws[`J${r}`] = { f: `VLOOKUP($A${r},${vlookupRange},8,FALSE)`, v: formatSudura(row), t: 's', s: cellStyleText }
+
+    // K, L, M: PM, PA-UT, UT (valori directe)
     setCell(ws, `K${r}`, row.pm_cod || '', cellStyleSmall)
-    // L: PA-UT (font 9pt)
     setCell(ws, `L${r}`, row.pa_ut_cod || '', cellStyleSmall)
-    // M: UT
     setCell(ws, `M${r}`, row.ut_cod || '', cellStyleText)
-    // N: DOCUMENT (cod pachet + rev)
+
+    // N: DOCUMENT — N14 = valoare, N15+ = =N{r-1} cascadă
     const codDoc = pachet.cod_document_full + (pachet.revizie > 0 ? ` rev.${pachet.revizie}` : '')
-    setCell(ws, `N${r}`, codDoc, cellStyleText)
+    if (idx === 0) {
+      setCell(ws, `N${r}`, codDoc, cellStyleText)
+    } else {
+      ws[`N${r}`] = { f: `N${r - 1}`, v: codDoc, t: 's', s: cellStyleText }
+    }
+
     // O: OBS (fara border)
     setCell(ws, `O${r}`, row.observatii || '', cellStyleObs)
   })
@@ -259,6 +292,10 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
   ws['!rows'] = []
   ws['!rows'][11] = { hpt: 42.75 } // R12 cap tabel - inaltime ca in model
 
+  // ========== FREEZE PANES — primele 12 rânduri (header + cap tabel) ==========
+  // xlsx-js-style folosește !views array (NU !freeze obj)
+  ws['!views'] = [{ state: 'frozen', xSplit: 0, ySplit: 12, topLeftCell: 'A13', activePane: 'bottomLeft' }]
+
   // ========== SHEET RANGE ==========
   ws['!ref'] = `A1:O${lastDataRow}`
 
@@ -278,10 +315,15 @@ function buildSheet1Centralizator({ pachet, tronson, proiect, tevi }) {
 // ---------------------------------------------------------------------------
 
 // Cells variabile per rand vizual (mapping col → poziție bloc)
+// CONVENȚIE MODEL Transgaz (confirmat 21.05.2026):
+//   - Rand 1: 10 țevi (POZ 1-10) afișate în 10 blocuri normale H-BJ
+//   - Rand N>0: 10 țevi NOI + 1 wrap col B-G (DECORATION, fără SERIE/TIP sub)
+//   - SERIE val e la PRIMUL col al blocului asociat țevii (H pentru POZ 1, N pentru POZ 2, ...)
+//   - POZ KM val e la col+3 din bloc (K pentru bloc 1, Q pentru bloc 2, ...)
 const RAND_1_POZ_KM_COLS = ['K', 'Q', 'W', 'AC', 'AI', 'AO', 'AU', 'BA', 'BG', 'BM'] // 10 blocuri
-const RAND_1_SERIE_COLS = ['N', 'T', 'Z', 'AF', 'AL', 'AR', 'AX', 'BD', 'BJ']         // 9 țevi sub blocuri 0..8
-const RAND_N_POZ_KM_COLS = ['E', 'K', 'Q', 'W', 'AC', 'AI', 'AO', 'AU', 'BA', 'BG', 'BM'] // 11 (wrap + 10)
-const RAND_N_SERIE_COLS = ['H', 'N', 'T', 'Z', 'AF', 'AL', 'AR', 'AX', 'BD', 'BJ']         // 10 țevi (sub wrap + 9 normale)
+const RAND_1_SERIE_COLS = ['H', 'N', 'T', 'Z', 'AF', 'AL', 'AR', 'AX', 'BD', 'BJ']     // 10 țevi (POZ 1-10)
+const RAND_N_POZ_KM_COLS = ['K', 'Q', 'W', 'AC', 'AI', 'AO', 'AU', 'BA', 'BG', 'BM']   // 10 blocuri normale (skip wrap col E)
+const RAND_N_SERIE_COLS = ['H', 'N', 'T', 'Z', 'AF', 'AL', 'AR', 'AX', 'BD', 'BJ']     // 10 țevi noi
 
 // Helper: deep clone cell (xlsx-js-style obj { v, t, s, f })
 // IMPORTANT: cells cu DOAR style (border-only, fără valoare) trebuie să primească
@@ -346,13 +388,11 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
     ws['!merges'] = allMerges
     return ws
   }
-  // Rand 1 = 9 țevi (cu blocuri 0..8 ca tevaData; bloc 9 = wrap pentru rand 2)
-  // Rand N>0 = 9 țevi (wrap + blocuri 1..8)
-  // Total tevi consumate per N+1 randuri = 9 * (N+1) → nrRanduriVizuale = ceil(N/9)
-  const nrRanduriVizuale = Math.max(1, Math.ceil(nrTeviReale / 9))
+  // CONVENȚIE MODEL: 10 țevi/rand (rand 1 = POZ 1-10, rand 2 = POZ 11-20, ...)
+  const TEVI_PER_RAND = 10
+  const nrRanduriVizuale = Math.max(1, Math.ceil(nrTeviReale / TEVI_PER_RAND))
 
   // ========== 3. Generez fiecare rand vizual din template ==========
-  let pipeIdx = 0
   for (let randIdx = 0; randIdx < nrRanduriVizuale; randIdx++) {
     const outputRowBase = 17 + randIdx * 13 // R17, R30, R43, ...
     const isRand1 = randIdx === 0
@@ -362,12 +402,11 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
     const templateRowStart = isRand1 ? 17 : 30
     const rowOffset = outputRowBase - templateRowStart
 
-    // 3a. Copy cells din template cu rowOffset
-    // SKIP cells din cols >= 70 (BS+) — lookup table generăm separat mai jos
+    // 3a. Copy cells din template cu rowOffset (skip cols >= 70 — lookup table generăm separat)
     for (const [addr, cell] of Object.entries(templateCells)) {
       const p = parseAddr(addr)
       if (!p) continue
-      if (colToNum(p.col) >= 70) continue // skip lookup table cols
+      if (colToNum(p.col) >= 70) continue
       const newAddr = `${p.col}${p.row + rowOffset}`
       ws[newAddr] = cloneCell(cell)
     }
@@ -389,48 +428,67 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
     // 3d. SUBSTITUIESC valorile variabile
     const pozKmCols = isRand1 ? RAND_1_POZ_KM_COLS : RAND_N_POZ_KM_COLS
     const serieCols = isRand1 ? RAND_1_SERIE_COLS : RAND_N_SERIE_COLS
-
-    const pozKmRow = outputRowBase           // 17 / 30+offset
-    const sudRow = outputRowBase + 1         // 18 / 31+offset
-    const serieRow = outputRowBase + 4       // 21 / 34+offset
+    const pozKmRow = outputRowBase
+    const sudRow = outputRowBase + 1
+    const serieRow = outputRowBase + 4
     const tipRow = serieRow + 1
     const dimRow = serieRow + 2
     const sarjaRow = serieRow + 3
     const lungRow = serieRow + 4
 
-    // Determină tevi pentru acest rand vizual
-    // isRand1: 10 blocuri suduri (T_{pipeIdx}..T_{pipeIdx+9}), 9 țevi info sub blocuri 0..8
-    // isRandN: 11 blocuri (wrap + 10 noi), 10 țevi info sub blocuri 0..9 (inclusiv wrap)
-    const nrBlocuri = isRand1 ? 10 : 11
-    const nrTeviInfo = isRand1 ? 9 : 10
-    const teviRandStart = isRand1 ? pipeIdx : pipeIdx // wrap pe rand N>0 = pipes[pipeIdx] (= ultim bloc rand prev)
+    const pozStart = randIdx * TEVI_PER_RAND // POZ 1-10 pe rand 0, POZ 11-20 pe rand 1, etc.
 
-    for (let b = 0; b < nrBlocuri; b++) {
-      const sudPipe = teviReale[teviRandStart + b]
-      if (!sudPipe) {
-        // Nu mai există țevi — clear cells pentru blocurile suplimentare din template
-        const col = pozKmCols[b]
-        if (col) {
+    // === WRAP DECORATION pe rand N>0 (col B-G) ===
+    // Wrap = REPEAT ultima sudură din rand precedent (POZ pozStart, care e ultim POZ rand prev)
+    if (!isRand1) {
+      const wrapPipe = teviReale[pozStart - 1] // POZ {pozStart} = ultima teva rand prev (1-indexed)
+      if (wrapPipe) {
+        const wrapKmAddr = `E${pozKmRow}`
+        const wrapSudAddr = `E${sudRow}`
+        if (ws[wrapKmAddr]) {
+          ws[wrapKmAddr].v = formatPozKm(wrapPipe._poz_km != null ? wrapPipe._poz_km : wrapPipe.poz_km_m)
+          ws[wrapKmAddr].t = 's'
+          delete ws[wrapKmAddr].f
+        }
+        if (ws[wrapSudAddr]) {
+          ws[wrapSudAddr].v = formatSudura(wrapPipe)
+          ws[wrapSudAddr].t = 's'
+          delete ws[wrapSudAddr].f
+        }
+      }
+      // SERIE/TIP/etc sub wrap = DECORATION goale (template are cells fără value, păstrăm așa)
+    }
+
+    // === BLOCURI NORMALE (cols K..BM pentru POZ KM, H..BJ pentru SERIE) ===
+    // Rand 1: blocuri 0..9 = POZ 1..10
+    // Rand N>0: blocuri 0..9 = POZ {pozStart+1}..{pozStart+10}
+    for (let b = 0; b < TEVI_PER_RAND; b++) {
+      const pozIdx = pozStart + b // 0-indexed în teviReale
+      const pipe = teviReale[pozIdx]
+      const col_km = pozKmCols[b]
+      const col_serie = serieCols[b]
+
+      if (!pipe) {
+        // Nu mai există țevi — clear cells pentru blocurile suplimentare
+        if (col_km) {
           for (const r of [pozKmRow, sudRow]) {
-            const a = `${col}${r}`
-            if (ws[a]) ws[a].v = ''
+            const a = `${col_km}${r}`
+            if (ws[a]) { ws[a].v = ''; ws[a].t = 's'; delete ws[a].f }
           }
         }
-        const serieCol = b < serieCols.length ? serieCols[b] : null
-        if (serieCol) {
+        if (col_serie) {
           for (const r of [serieRow, tipRow, dimRow, sarjaRow, lungRow]) {
-            const a = `${serieCol}${r}`
-            if (ws[a]) { ws[a].v = ''; ws[a].t = 's' }
+            const a = `${col_serie}${r}`
+            if (ws[a]) { ws[a].v = ''; ws[a].t = 's'; delete ws[a].f }
           }
         }
         continue
       }
 
-      const col_km = pozKmCols[b]
       // POZ KM value
       const kmAddr = `${col_km}${pozKmRow}`
       if (ws[kmAddr]) {
-        const pozKmVal = formatPozKm(sudPipe._poz_km != null ? sudPipe._poz_km : sudPipe.poz_km_m)
+        const pozKmVal = formatPozKm(pipe._poz_km != null ? pipe._poz_km : pipe.poz_km_m)
         ws[kmAddr].v = pozKmVal
         ws[kmAddr].t = 's'
         delete ws[kmAddr].f
@@ -438,77 +496,131 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
       // SUDURA value
       const sudAddr = `${col_km}${sudRow}`
       if (ws[sudAddr]) {
-        ws[sudAddr].v = formatSudura(sudPipe)
+        ws[sudAddr].v = formatSudura(pipe)
         ws[sudAddr].t = 's'
         delete ws[sudAddr].f
       }
-
-      // SERIE/TIP/DIM/ȘARJĂ/LUNGIME (doar pentru blocurile cu teva info)
-      if (b < nrTeviInfo) {
-        const teva = sudPipe
-        const col_serie = serieCols[b]
-        if (col_serie) {
-          const fields = [
-            [`${col_serie}${serieRow}`, teva.serie_unica || '', 's'],
-            [`${col_serie}${tipRow}`, teva.tip || '', 's'],
-            [`${col_serie}${dimRow}`, teva.dimensiune || '', 's'],
-            [`${col_serie}${sarjaRow}`, teva.sarja || '', 's'],
-            [`${col_serie}${lungRow}`, teva.lungime_m != null ? Number(teva.lungime_m) : '', teva.lungime_m != null ? 'n' : 's'],
-          ]
-          for (const [addr, val, type] of fields) {
-            if (ws[addr]) {
-              ws[addr].v = val
-              ws[addr].t = type
-              delete ws[addr].f
-            }
-          }
+      // SERIE/TIP/DIM/ȘARJĂ/LUNGIME (la col_serie = primul col al blocului asociat țevii)
+      const fields = [
+        [`${col_serie}${serieRow}`, pipe.serie_unica || '', 's'],
+        [`${col_serie}${tipRow}`, pipe.tip || '', 's'],
+        [`${col_serie}${dimRow}`, pipe.dimensiune || '', 's'],
+        [`${col_serie}${sarjaRow}`, pipe.sarja || '', 's'],
+        [`${col_serie}${lungRow}`, pipe.lungime_m != null ? Number(pipe.lungime_m) : '', pipe.lungime_m != null ? 'n' : 's'],
+      ]
+      for (const [addr, val, type] of fields) {
+        if (ws[addr]) {
+          ws[addr].v = val
+          ws[addr].t = type
+          delete ws[addr].f
         }
       }
     }
-
-    pipeIdx += nrTeviInfo // consumat țevile cu info (9 pe rand 1, 10 pe rand N — primul wrap)
   }
 
-  // ========== 4. Lookup table BS14:BZ — generăm fresh (zeci de formule complexe in template) ==========
+  // ========== 4. Lookup table BR14:BY — FORMULE care trag din schema vizuală ==========
+  // CONVENȚIE MODEL Transgaz _00033 (verificat 21.05.2026):
+  //   - Tabela master 8 cols la BR-BY:
+  //     BR = POZ counter (BR17=1, BR18=BR17+1, cascadă)
+  //     BS = SERIE (=H21), BT = TIP (=H22), BU = DIM (=H23), BV = ȘARJĂ (=H24)
+  //     BW = CANT (=H25), BX = POZ KM (=K17), BY = SUDURĂ (=K18)
+  //   - Header la R14, R27, R40, ... (repetat per rand vizual, +13 rânduri)
+  //   - POZ-uri grupate per rand: R17-R26 (POZ 1-10), R30-R39 (POZ 11-20), R43-R52 (POZ 21-30), ...
+  //   - Pentru curbe/legări (NU sunt în schema vizuală) → valori directe din BD
   const lookupHeaderStyle = {
     font: FONT_BOLD, fill: FILL_DARKER, alignment: ALIGN_CENTER_WRAP, border: BORDER_THIN,
   }
-  setCell(ws, 'BS14', 'POZ.', lookupHeaderStyle)
-  setCell(ws, 'BT14', 'SERIE\nUNICĂ DE\nIDENTIFICARE', lookupHeaderStyle)
-  setCell(ws, 'BU14', 'TIP', lookupHeaderStyle)
-  setCell(ws, 'BV14', 'DIMENSIUNE', lookupHeaderStyle)
-  setCell(ws, 'BW14', 'ȘARJĂ', lookupHeaderStyle)
-  setCell(ws, 'BX14', 'CANT.', lookupHeaderStyle)
-  setCell(ws, 'BY14', 'POZ. KM', lookupHeaderStyle)
-  setCell(ws, 'BZ14', 'SUDURĂ', lookupHeaderStyle)
-
   const dataStyle = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN }
   const dataNumStyle = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN, numFmt: '#,##0.00' }
 
-  tevi.forEach((row, idx) => {
-    const r = 17 + idx
-    const poz = idx + 1
-    setNumCell(ws, `BS${r}`, poz, { ...dataStyle, font: FONT_BOLD })
-    setCell(ws, `BT${r}`, row.serie_unica || '', dataStyle)
-    setCell(ws, `BU${r}`, row.tip || '', dataStyle)
-    let dim = row.dimensiune || ''
-    if (row.tip_rand === 'curba' && row.unghi_curba && !dim.includes(row.unghi_curba)) {
-      dim = dim ? `${dim} ${row.unghi_curba}` : row.unghi_curba
-    }
-    setCell(ws, `BV${r}`, dim, dataStyle)
-    setCell(ws, `BW${r}`, row.sarja || '', dataStyle)
-    if (row.lungime_m != null && row.lungime_m !== '') {
-      setNumCell(ws, `BX${r}`, row.lungime_m, dataNumStyle)
+  // Helper: calc row în tabela master pentru POZ i (0-indexed)
+  const rowMaster = (i) => 17 + Math.floor(i / 10) * 13 + (i % 10)
+
+  // 4a. Header repetat la R14, R27, R40, ... per rand vizual
+  for (let randIdx = 0; randIdx < nrRanduriVizuale; randIdx++) {
+    const headerRow = 14 + randIdx * 13
+    setCell(ws, `BR${headerRow}`, 'POZ.', lookupHeaderStyle)
+    setCell(ws, `BS${headerRow}`, 'SERIE\nUNICĂ DE\nIDENTIFICARE', lookupHeaderStyle)
+    setCell(ws, `BT${headerRow}`, 'TIP', lookupHeaderStyle)
+    setCell(ws, `BU${headerRow}`, 'DIMENSIUNE', lookupHeaderStyle)
+    setCell(ws, `BV${headerRow}`, 'ȘARJĂ', lookupHeaderStyle)
+    setCell(ws, `BW${headerRow}`, 'CANT.', lookupHeaderStyle)
+    setCell(ws, `BX${headerRow}`, 'POZ. KM', lookupHeaderStyle)
+    setCell(ws, `BY${headerRow}`, 'SUDURĂ', lookupHeaderStyle)
+  }
+
+  // 4b. POZ-uri rânduri — formule la schema vizuală pentru țevi, valori directe pentru curbe/legări
+  const tableMasterRows = tevi
+
+  let teavaIdx = 0
+  tableMasterRows.forEach((row, idx) => {
+    let r
+    if (row.tip_rand === 'teava') {
+      r = rowMaster(teavaIdx)
     } else {
-      setCell(ws, `BX${r}`, '', dataStyle)
+      r = rowMaster(nrTeviReale - 1) + (idx - teavaIdx) + 1
     }
-    const pozKmVal = row._poz_km != null ? row._poz_km : row.poz_km_m
-    setCell(ws, `BY${r}`, formatPozKm(pozKmVal), dataStyle)
-    setCell(ws, `BZ${r}`, formatSudura(row), dataStyle)
+
+    // BR = POZ counter (formulă cascadă)
+    const poz = idx + 1
+    if (idx === 0) {
+      setNumCell(ws, `BR${r}`, poz, { ...dataStyle, font: FONT_BOLD })
+    } else {
+      // Formula =BR{r_prev}+1
+      let r_prev
+      if (row.tip_rand === 'teava' && tableMasterRows[idx - 1].tip_rand === 'teava') {
+        r_prev = rowMaster(teavaIdx - 1)
+        ws[`BR${r}`] = { f: `BR${r_prev}+1`, v: poz, t: 'n', s: { ...dataStyle, font: FONT_BOLD } }
+      } else {
+        // Mixed scenario sau curbă/legare — valoare directă
+        setNumCell(ws, `BR${r}`, poz, { ...dataStyle, font: FONT_BOLD })
+      }
+    }
+
+    if (row.tip_rand === 'teava') {
+      // Formule la schema vizuală
+      const rand_idx = Math.floor(teavaIdx / 10)
+      const pos = teavaIdx % 10
+      const schema_pozkm_row = 17 + rand_idx * 13
+      const schema_sud_row = schema_pozkm_row + 1
+      const schema_serie_row = schema_pozkm_row + 4
+      const col_km = RAND_1_POZ_KM_COLS[pos]
+      const col_serie = RAND_1_SERIE_COLS[pos]
+
+      ws[`BS${r}`] = { f: `${col_serie}${schema_serie_row}`, v: row.serie_unica || '', t: 's', s: dataStyle }
+      ws[`BT${r}`] = { f: `${col_serie}${schema_serie_row + 1}`, v: row.tip || '', t: 's', s: dataStyle }
+      ws[`BU${r}`] = { f: `${col_serie}${schema_serie_row + 2}`, v: row.dimensiune || '', t: 's', s: dataStyle }
+      ws[`BV${r}`] = { f: `${col_serie}${schema_serie_row + 3}`, v: row.sarja || '', t: 's', s: dataStyle }
+      ws[`BW${r}`] = { f: `${col_serie}${schema_serie_row + 4}`, v: row.lungime_m != null ? Number(row.lungime_m) : '', t: 'n', s: dataNumStyle }
+      ws[`BX${r}`] = { f: `${col_km}${schema_pozkm_row}`, v: formatPozKm(row._poz_km != null ? row._poz_km : row.poz_km_m), t: 's', s: dataStyle }
+      ws[`BY${r}`] = { f: `${col_km}${schema_sud_row}`, v: formatSudura(row), t: 's', s: dataStyle }
+      teavaIdx++
+    } else {
+      // Curbă/legare — valori directe
+      setCell(ws, `BS${r}`, row.serie_unica || '', dataStyle)
+      setCell(ws, `BT${r}`, row.tip || '', dataStyle)
+      let dim = row.dimensiune || ''
+      if (row.tip_rand === 'curba' && row.unghi_curba && !dim.includes(row.unghi_curba)) {
+        dim = dim ? `${dim} ${row.unghi_curba}` : row.unghi_curba
+      }
+      setCell(ws, `BU${r}`, dim, dataStyle)
+      setCell(ws, `BV${r}`, row.sarja || '', dataStyle)
+      if (row.lungime_m != null && row.lungime_m !== '') {
+        setNumCell(ws, `BW${r}`, row.lungime_m, dataNumStyle)
+      } else {
+        setCell(ws, `BW${r}`, '', dataStyle)
+      }
+      const pozKmVal = row._poz_km != null ? row._poz_km : row.poz_km_m
+      setCell(ws, `BX${r}`, formatPozKm(pozKmVal), dataStyle)
+      setCell(ws, `BY${r}`, formatSudura(row), dataStyle)
+    }
   })
 
   // ========== 5. Set merges + row heights + col widths ==========
   ws['!merges'] = allMerges
+
+  // Row R16 = 11.25 pt (din model — adăugat înainte de populare ws['!rows'])
+  rowHeights[16] = 11.25
 
   ws['!rows'] = []
   for (const [rIdx, h] of Object.entries(rowHeights)) {
@@ -516,23 +628,78 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
   }
 
   ws['!cols'] = []
-  for (const [cIdx, w] of Object.entries(TRANSGAZ_COL_WIDTHS)) {
-    ws['!cols'][parseInt(cIdx, 10)] = { wch: w }
+  // PENTRU MODEL TRANSGAZ _00033 — valori EXACTE din model.
+  // Cols schema vizuală: pattern repetitiv per BLOC (6 cols)
+  // Per bloc: [default=2.71, default=2.71, 2.71, 1.71, default=2.71, 2.71, 12.71]
+  // Folosim valoarea EXPLICITĂ din model (xlsx-js-style adaugă padding implicit dacă lăsăm default).
+  const COL_WIDTHS_MODEL = {
+    1: 2.71, 2: 4.86, 3: 2.71, 4: 1.71, // A B C D
+    // E (5) default 2.71
+    6: 2.71, 7: 12.71, // F G
+    // H (8) default 2.71
+    9: 2.71, 10: 1.71, // I J
+    // K (11) default 2.71
+    12: 2.71, 13: 12.71, // L M
+    // N (14) default
+    15: 2.71, 16: 1.71, // O P
+    // Q (17) default
+    18: 2.71, 19: 12.71, // R S
+    // T (20) default
+    21: 2.71, 22: 1.71, // U V
+    // W (23) default
+    24: 2.71, 25: 12.71, // X Y
+    // Z (26) default
+    27: 2.71, 28: 1.71, // AA AB
+    // AC (29) default
+    30: 2.71, 31: 12.71, // AD AE
+    // AF (32) default
+    33: 2.71, 34: 1.71, // AG AH
+    // AI (35) default
+    36: 2.71, 37: 12.71, // AJ AK
+    // AL (38) default
+    39: 2.71, 40: 1.71, // AM AN
+    // AO (41) default
+    42: 2.71, 43: 12.71, // AP AQ
+    // AR (44) default
+    45: 2.71, 46: 1.71, // AS AT
+    // AU (47) default
+    48: 2.71, 49: 12.71, // AV AW
+    // AX (50) default
+    51: 2.71, 52: 1.71, // AY AZ
+    // BA (53) default
+    54: 2.71, 55: 12.71, // BB BC
+    // BD (56) default
+    57: 2.71, 58: 1.71, // BE BF
+    // BG (59) default
+    60: 2.71, 61: 12.71, // BH BI
+    // BJ (62) default
+    63: 2.71, 64: 1.71, // BK BL
+    // BM (65) default
+    66: 2.71, 67: 12.71, // BN BO
+    // Lookup table BR-BY (cu BP, BQ înainte)
+    68: 2.71, 69: 3.57, // BP BQ
+    70: 4.57,  // BR (POZ counter)
+    71: 11.29, // BS (SERIE)
+    72: 3.29,  // BT (TIP)
+    73: 10.86, // BU (DIM)
+    74: 5.86,  // BV (ȘARJĂ)
+    75: 5.71,  // BW (CANT)
+    76: 7.57,  // BX (POZ KM)
+    77: 7.43,  // BY (SUDURĂ)
   }
-  // Lookup table cols BS-BZ (70-77) — width-uri default proprii
-  ws['!cols'][70] = { wch: 6 }
-  ws['!cols'][71] = { wch: 16 }
-  ws['!cols'][72] = { wch: 8 }
-  ws['!cols'][73] = { wch: 14 }
-  ws['!cols'][74] = { wch: 10 }
-  ws['!cols'][75] = { wch: 9 }
-  ws['!cols'][76] = { wch: 11 }
-  ws['!cols'][77] = { wch: 11 }
+  for (const [cIdx, w] of Object.entries(COL_WIDTHS_MODEL)) {
+    // SheetJS folosește 1-indexed in '!cols' array (index 0 = col A)
+    // openpyxl folosește 1-indexed cu litere. cIdx aici e 1=A, 2=B, ...
+    ws['!cols'][parseInt(cIdx, 10) - 1] = { wch: w }
+  }
 
   // ========== 6. Sheet range ==========
   const lastVisualRow = 17 + nrRanduriVizuale * 13
-  const lastLookupRow = Math.max(17 + tevi.length - 1, 16)
-  const lastRow = Math.max(lastVisualRow, lastLookupRow)
+  // Tabela master: ultim POZ țeavă + extra rows pentru curbe/legări
+  const lastMasterTeavaRow = nrTeviReale > 0 ? rowMaster(nrTeviReale - 1) : 16
+  const nrExtraMasterRows = tevi.length - nrTeviReale // curbe + legări
+  const lastMasterRow = lastMasterTeavaRow + nrExtraMasterRows
+  const lastRow = Math.max(lastVisualRow, lastMasterRow)
   ws['!ref'] = `A1:BZ${lastRow}`
 
   return ws
@@ -541,7 +708,7 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
 // ---------------------------------------------------------------------------
 // MAIN: Generate workbook + return as Uint8Array (bytes)
 // ---------------------------------------------------------------------------
-export function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi }) {
+export async function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi }) {
   if (!pachet) throw new Error('Pachet obligatoriu')
   if (!Array.isArray(tevi)) throw new Error('Lista tevi obligatorie')
 
@@ -561,7 +728,37 @@ export function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi }) {
 
   // Write to Uint8Array
   const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true })
-  return new Uint8Array(out)
+
+  // POST-PROCESS cu JSZip: adaug freeze panes pe Sheet 1 + cols exacte pe Sheet 2
+  // xlsx-js-style nu suportă freeze panes direct + face padding +0.83 char la widths.
+  const zip = await JSZip.loadAsync(out)
+
+  // Sheet 1: freeze panes A13
+  const sheet1Path = 'xl/worksheets/sheet1.xml'
+  let sheet1Xml = await zip.file(sheet1Path).async('string')
+  const sheetViewsXml = '<sheetViews><sheetView workbookViewId="0"><pane xSplit="0" ySplit="12" topLeftCell="A13" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+  if (sheet1Xml.includes('<sheetViews>')) {
+    sheet1Xml = sheet1Xml.replace(/<sheetViews>.*?<\/sheetViews>/, sheetViewsXml)
+  } else {
+    sheet1Xml = sheet1Xml.replace(/(<dimension[^/]*\/>)/, `$1${sheetViewsXml}`)
+  }
+  zip.file(sheet1Path, sheet1Xml)
+
+  // Sheet 2: cols widths EXACTE din model_new _00033 (xlsx-js-style adaugă padding implicit)
+  const sheet2Path = 'xl/worksheets/sheet2.xml'
+  let sheet2Xml = await zip.file(sheet2Path).async('string')
+  const colsModelXml = '<cols><col min="1" max="1" width="2.7109375" customWidth="1"/><col min="2" max="2" width="4.85546875" customWidth="1"/><col min="3" max="3" width="2.7109375" customWidth="1"/><col min="4" max="5" width="1.7109375" customWidth="1"/><col min="6" max="6" width="2.7109375"/><col min="7" max="8" width="12.7109375" customWidth="1"/><col min="9" max="9" width="2.7109375"/><col min="10" max="11" width="1.7109375" customWidth="1"/><col min="12" max="12" width="2.7109375"/><col min="13" max="14" width="12.7109375" customWidth="1"/><col min="15" max="15" width="2.7109375"/><col min="16" max="17" width="1.7109375" customWidth="1"/><col min="18" max="18" width="2.7109375"/><col min="19" max="20" width="12.7109375" customWidth="1"/><col min="21" max="21" width="2.7109375"/><col min="22" max="23" width="1.7109375" customWidth="1"/><col min="24" max="24" width="2.7109375"/><col min="25" max="26" width="12.7109375" customWidth="1"/><col min="27" max="27" width="2.7109375"/><col min="28" max="29" width="1.7109375" customWidth="1"/><col min="30" max="30" width="2.7109375"/><col min="31" max="32" width="12.7109375" customWidth="1"/><col min="33" max="33" width="2.7109375"/><col min="34" max="35" width="1.7109375" customWidth="1"/><col min="36" max="36" width="2.7109375"/><col min="37" max="38" width="12.7109375" customWidth="1"/><col min="39" max="39" width="2.7109375"/><col min="40" max="41" width="1.7109375" customWidth="1"/><col min="42" max="42" width="2.7109375"/><col min="43" max="44" width="12.7109375" customWidth="1"/><col min="45" max="45" width="2.7109375"/><col min="46" max="47" width="1.7109375" customWidth="1"/><col min="48" max="48" width="2.7109375"/><col min="49" max="50" width="12.7109375" customWidth="1"/><col min="51" max="51" width="2.7109375"/><col min="52" max="53" width="1.7109375" customWidth="1"/><col min="54" max="54" width="2.7109375"/><col min="55" max="56" width="12.7109375" customWidth="1"/><col min="57" max="57" width="2.7109375"/><col min="58" max="59" width="1.7109375" customWidth="1"/><col min="60" max="60" width="2.7109375"/><col min="61" max="62" width="12.7109375" customWidth="1"/><col min="63" max="63" width="2.7109375"/><col min="64" max="65" width="1.7109375" customWidth="1"/><col min="66" max="66" width="2.7109375"/><col min="67" max="67" width="12.7109375" customWidth="1"/><col min="68" max="68" width="2.7109375"/><col min="69" max="69" width="3.5703125" customWidth="1"/><col min="70" max="70" width="4.5703125" bestFit="1" customWidth="1"/><col min="71" max="71" width="11.28515625" bestFit="1" customWidth="1"/><col min="72" max="72" width="3.28515625" bestFit="1" customWidth="1"/><col min="73" max="73" width="10.85546875" bestFit="1" customWidth="1"/><col min="74" max="74" width="5.85546875" bestFit="1" customWidth="1"/><col min="75" max="75" width="5.7109375" bestFit="1" customWidth="1"/><col min="76" max="76" width="7.5703125" bestFit="1" customWidth="1"/><col min="77" max="77" width="7.42578125" bestFit="1" customWidth="1"/><col min="78" max="78" width="2.7109375" customWidth="1"/><col min="79" max="16384" width="2.7109375"/></cols>'
+  if (sheet2Xml.includes('<cols>')) {
+    sheet2Xml = sheet2Xml.replace(/<cols>.*?<\/cols>/, colsModelXml)
+  } else {
+    // Insert after <sheetFormatPr/> sau înainte de <sheetData>
+    sheet2Xml = sheet2Xml.replace(/(<sheetData>)/, `${colsModelXml}$1`)
+  }
+  zip.file(sheet2Path, sheet2Xml)
+
+  const finalBytes = await zip.generateAsync({ type: 'uint8array' })
+
+  return finalBytes
 }
 
 // ---------------------------------------------------------------------------
