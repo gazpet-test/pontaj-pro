@@ -1,16 +1,25 @@
 // ===========================================================================
 // MODUL IZOMETRIE — Pachete lansare țeavă · Tronsoane · Cumulat final
 // ===========================================================================
-// 20.05.2026 — FAZA 1 LIVE:
+// 21.05.2026 — FAZA 2:
+//   • Editor inline țevi cu URL param ?pachet=ID (toggle list ↔ editor)
+//   • Cell editing: click direct pe celulă, Tab/Enter/Esc/Ctrl+V paste
+//   • POZ KM auto-cascade client-side (preview optimist) + refetch după save
+//   • Validări live debounced 400ms (serie cross-proiect, sudură cross-tronson)
+//   • Salvare hibridă: optimistic per blur + buton manual „Salvează tot"
+//   • 4 butoane add rând: țeavă/curbă/legare/separator
+//   • Sufix R automat → sudura_refacuta=true + badge
+//   • Delete per rând + bulk delete prin checkbox
+// 20.05.2026 — FAZA 1:
 //   • Listare proiecte execuție (selectabile via dropdown header)
 //   • Sidebar cu 11 tronsoane T1-T11 + KPI mini (pachete + lungime)
 //   • Main: listă pachete pe tronson + creare pachet nou manual
-//   • Modal detalii pachet cu listare țevi read-only
-//   • Placeholder pentru bulk import Excel + editor inline (Faza 2)
+//   • Placeholder pentru bulk import Excel (Faza B viitor)
 // Stack: 8 tabele BD în public.executie_* + RLS permissive + 13 triggere
 // ===========================================================================
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 
 // Theme — paletă G consistentă cu Logistica/HR/Admin
@@ -38,7 +47,7 @@ const S = {
 const fmtKm = (m) => {
   if (m == null) return '—'
   const km = Math.floor(m / 1000)
-  const rest = m % 1000
+  const rest = Math.round(m % 1000)
   return `${km}+${String(rest).padStart(3,'0')}`
 }
 
@@ -48,6 +57,21 @@ const fmtDate = (d) => {
   if (!d) return '—'
   const dt = new Date(d)
   return `${String(dt.getDate()).padStart(2,'0')}.${String(dt.getMonth()+1).padStart(2,'0')}.${dt.getFullYear()}`
+}
+
+// Extrage unghi din DIMENSIUNE (ex: "610.0X8.00 30°" → "30°")
+const extractUnghi = (dim) => {
+  if (!dim) return null
+  const m = String(dim).match(/(\d+)\s*°/)
+  return m ? `${m[1]}°` : null
+}
+
+// Parse SUDURĂ cu sufix R → returnează { cod, refacuta }
+const parseSudura = (raw) => {
+  if (!raw) return { cod: null, refacuta: false }
+  const s = String(raw).trim()
+  if (s.endsWith('R')) return { cod: s.slice(0, -1).trim(), refacuta: true }
+  return { cod: s, refacuta: false }
 }
 
 // Toast minimal (consistent cu Logistica/HR)
@@ -69,7 +93,7 @@ function Toast({ toast }) {
       position:'fixed', bottom:24, right:24, padding:'12px 18px',
       background:G.card, border:`1px solid ${c}`, borderRadius:10,
       color:G.text, fontSize:13, fontWeight:500, zIndex:9999,
-      boxShadow:`0 8px 24px ${c}33`,
+      boxShadow:`0 8px 24px ${c}33`, maxWidth: 420,
     }}>
       {toast.msg}
     </div>
@@ -81,6 +105,10 @@ function Toast({ toast }) {
 // ===========================================================================
 
 export default function IzometriePage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const pachetIdFromUrl = searchParams.get('pachet')
+  const pachetEditorId = pachetIdFromUrl ? Number(pachetIdFromUrl) : null
+
   const [proiecte, setProiecte] = useState([])
   const [proiectId, setProiectId] = useState(null)
   const [tronsoane, setTronsoane] = useState([])
@@ -88,11 +116,10 @@ export default function IzometriePage() {
   const [pachete, setPachete] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNoPachet, setShowNoPachet] = useState(false)
-  const [detailPachet, setDetailPachet] = useState(null)
   const { toast, show } = useToast()
 
   // Stats per tronson
-  const [statsTronsoane, setStatsTronsoane] = useState({}) // { tronson_id: { nr_pachete, total_m } }
+  const [statsTronsoane, setStatsTronsoane] = useState({})
 
   useEffect(() => { loadProiecte() }, [])
   useEffect(() => { if (proiectId) loadTronsoane() }, [proiectId])
@@ -144,6 +171,23 @@ export default function IzometriePage() {
     setStatsTronsoane(stats)
   }
 
+  // Deschide editor pachet via URL
+  const openPachet = useCallback((pachetId) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.set('pachet', String(pachetId))
+      return next
+    }, { replace: false })
+  }, [setSearchParams])
+
+  const closePachet = useCallback(() => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.delete('pachet')
+      return next
+    }, { replace: false })
+  }, [setSearchParams])
+
   const proiectSelectat = useMemo(() => proiecte.find(p => p.id === proiectId), [proiecte, proiectId])
   const tronsonSelectat = useMemo(() => tronsoane.find(t => t.id === tronsonId), [tronsoane, tronsonId])
 
@@ -169,6 +213,26 @@ export default function IzometriePage() {
     )
   }
 
+  // === VIEW: Editor pachet (URL ?pachet=ID) ===
+  if (pachetEditorId) {
+    return (
+      <div style={S.page}>
+        <Toast toast={toast} />
+        <PachetEditor
+          pachetId={pachetEditorId}
+          tronsoane={tronsoane}
+          proiectId={proiectId}
+          onClose={closePachet}
+          onError={(msg) => show(msg, 'error')}
+          onSuccess={(msg) => show(msg, 'success')}
+          onWarn={(msg) => show(msg, 'warn')}
+          onPachetChanged={() => loadPachete()}
+        />
+      </div>
+    )
+  }
+
+  // === VIEW: Listare pachete (default) ===
   return (
     <div style={S.page}>
       <Toast toast={toast} />
@@ -272,7 +336,7 @@ export default function IzometriePage() {
                   <button style={S.btnP} onClick={() => setShowNoPachet(true)}>+ Pachet nou</button>
                   <button
                     style={{ ...S.btnS, opacity: 0.5, cursor:'not-allowed' }}
-                    title="Disponibil în Faza 2"
+                    title="Disponibil în Faza B"
                     disabled
                   >
                     📥 Import Excel
@@ -313,7 +377,7 @@ export default function IzometriePage() {
                       {pachete.map(p => (
                         <tr
                           key={p.id}
-                          onClick={() => setDetailPachet(p)}
+                          onClick={() => openPachet(p.id)}
                           style={{ borderBottom: `1px solid ${G.border2}`, cursor:'pointer', transition:'background .15s' }}
                           onMouseEnter={e => e.currentTarget.style.background = G.surface}
                           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
@@ -378,16 +442,10 @@ export default function IzometriePage() {
             setShowNoPachet(false)
             show(`Pachet ${pachet.cod_document_full} creat ✓`, 'success')
             loadPachete()
+            // Deschide automat editor pe pachetul nou creat
+            openPachet(pachet.id)
           }}
           onError={(msg) => show(msg, 'error')}
-        />
-      )}
-
-      {/* MODAL: Detalii pachet (read-only) */}
-      {detailPachet && (
-        <PachetDetailModal
-          pachet={detailPachet}
-          onClose={() => setDetailPachet(null)}
         />
       )}
     </div>
@@ -415,7 +473,915 @@ const tdStyle = {
 }
 
 // ===========================================================================
-// MODAL: Creare pachet nou
+// PACHET EDITOR — Faza 2 NOU
+// ===========================================================================
+// Editor inline pentru țevi dintr-un pachet de lansare.
+// - URL: /executie?tab=izometrie&pachet=ID
+// - Click pe celulă → edit; Tab/Enter/Esc navigation; Ctrl+V paste din Excel
+// - Validări live debounced 400ms (serie cross-proiect, sudură cross-tronson)
+// - Salvare hibridă: optimistic per blur + buton manual „Salvează tot"
+
+// Definire coloane editor — config-driven render
+const COL_DEFS = [
+  { key:'_select',     label:'',       width:36,  align:'center', edit:false, sticky:true },
+  { key:'poz_in_pachet', label:'#',     width:42,  align:'right',  edit:false },
+  { key:'tip_rand',    label:'Tip',    width:110, edit:false }, // badge readonly
+  { key:'lot',         label:'Lot',    width:68,  edit:'text' },
+  { key:'serie_unica', label:'Serie unică', width:140, edit:'text', validate:'serie', mono:true },
+  { key:'tip',         label:'Tip mat.',  width:78,  edit:'text' },
+  { key:'dimensiune',  label:'Dimensiune',width:140, edit:'text' },
+  { key:'sarja',       label:'Șarja', width:96,  edit:'text', mono:true },
+  { key:'lungime_m',   label:'Cant (m)', width:84,  align:'right', edit:'number' },
+  { key:'_poz_km',     label:'POZ KM', width:90,  align:'right', edit:false, mono:true },
+  { key:'sudura_cod',  label:'Sudură',width:100, edit:'text', validate:'sudura', mono:true },
+  { key:'pm_cod',      label:'PM',    width:88,  edit:'text', mono:true },
+  { key:'pa_ut_cod',   label:'PA-UT', width:100, edit:'text', mono:true },
+  { key:'ut_cod',      label:'UT',    width:80,  edit:'text', mono:true },
+  { key:'observatii',  label:'Obs',   width:180, edit:'text' },
+  { key:'_actions',    label:'',      width:44,  align:'center', edit:false },
+]
+
+// Câmpurile editabile pe tip_rand (separator = nimic, legare = doar sudura+PM)
+const EDITABLE_FIELDS = {
+  teava:    new Set(['lot','serie_unica','tip','dimensiune','sarja','lungime_m','sudura_cod','pm_cod','pa_ut_cod','ut_cod','observatii']),
+  curba:    new Set(['lot','serie_unica','tip','dimensiune','sarja','lungime_m','sudura_cod','pm_cod','pa_ut_cod','ut_cod','observatii']),
+  legare:   new Set(['sudura_cod','pm_cod','pa_ut_cod','ut_cod','observatii']),
+  separator:new Set(['observatii']),
+}
+
+// Culori badge pe tip
+const TIP_RAND_COLORS = {
+  teava: G.blue, curba: G.orange, legare: G.green, separator: G.muted,
+}
+
+// Câmpuri care pot avea cap-la-cap navigation (pentru Tab/Enter)
+const NAV_FIELDS = ['lot','serie_unica','tip','dimensiune','sarja','lungime_m','sudura_cod','pm_cod','pa_ut_cod','ut_cod','observatii']
+
+function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSuccess, onWarn, onPachetChanged }) {
+  const [pachet, setPachet] = useState(null)
+  const [tevi, setTevi] = useState([])
+  const [tronson, setTronson] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [editingCell, setEditingCell] = useState(null) // { rowId, field }
+  const [draft, setDraft] = useState('') // value în input curent
+  const [dirty, setDirty] = useState(new Set()) // ids rânduri cu modificări nesalvate (după eroare optimistic)
+  const [validation, setValidation] = useState({}) // { 'rowId:field': { ok: bool, msg: str } }
+  const [selected, setSelected] = useState(new Set()) // ids rânduri bifate
+  const [saving, setSaving] = useState(false)
+  const [bulkSaving, setBulkSaving] = useState(false)
+
+  const validationAborters = useRef({})
+
+  useEffect(() => { loadAll() }, [pachetId]) // eslint-disable-line
+
+  async function loadAll() {
+    setLoading(true)
+    // Pachet + țevi în paralel
+    const [pRes, tRes] = await Promise.all([
+      supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single(),
+      supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet'),
+    ])
+    if (pRes.error) { onError('Eroare load pachet: ' + pRes.error.message); setLoading(false); return }
+    if (tRes.error) { onError('Eroare load țevi: ' + tRes.error.message); setLoading(false); return }
+    setPachet(pRes.data)
+    setTevi(tRes.data || [])
+    const tron = tronsoane.find(t => t.id === pRes.data.tronson_id)
+    setTronson(tron)
+    setLoading(false)
+    setDirty(new Set())
+  }
+
+  // ───────── POZ KM cascade preview (client-side) ─────────
+  // BD trigger recalculează exact la INSERT/UPDATE. Aici preview optimist.
+  const teviWithPozKm = useMemo(() => {
+    if (!pachet) return tevi
+    let cumulat = pachet.km_start_m || 0
+    return tevi.map(t => {
+      const out = { ...t, _poz_km: cumulat }
+      // Avansăm cumulatul DOAR pe rânduri reale cu lungime
+      if ((t.tip_rand === 'teava' || t.tip_rand === 'curba') && t.lungime_m) {
+        cumulat += Number(t.lungime_m)
+      }
+      // separator + legare = NU avansează km (sunt markeri sau leg fizic)
+      return out
+    })
+  }, [tevi, pachet])
+
+  // ───────── Refetch pachet (după save țeavă, trigger recalculează totaluri) ─────────
+  async function refetchPachet() {
+    const { data } = await supabase.from('executie_pachete_lansare').select('*').eq('id', pachetId).single()
+    if (data) { setPachet(data); onPachetChanged && onPachetChanged() }
+  }
+
+  // ───────── Refetch toate țevile (după save, pentru poz_km_m corect din BD) ─────────
+  async function refetchTevi() {
+    const { data } = await supabase.from('executie_tevi').select('*').eq('pachet_id', pachetId).order('poz_in_pachet')
+    if (data) setTevi(data)
+  }
+
+  // ───────── Validare debounced ─────────
+  const debouncedValidate = useCallback((rowId, field, value) => {
+    const key = `${rowId}:${field}`
+    // Cancel previous
+    if (validationAborters.current[key]) validationAborters.current[key].abort()
+    if (!value || !String(value).trim()) {
+      setValidation(v => { const n = {...v}; delete n[key]; return n })
+      return
+    }
+    const ctrl = new AbortController()
+    validationAborters.current[key] = ctrl
+
+    const timeoutId = setTimeout(async () => {
+      if (ctrl.signal.aborted) return
+      try {
+        if (field === 'serie_unica') {
+          // serie unică cross-PROIECT: JOIN tevi → pachet → tronson → proiect
+          const { data, error } = await supabase
+            .from('executie_tevi')
+            .select('id, pachet_id, pachet:executie_pachete_lansare!inner(cod_document_full, proiect_id)')
+            .eq('serie_unica', String(value).trim())
+            .eq('pachet.proiect_id', proiectId)
+            .neq('id', rowId)
+            .limit(1)
+          if (ctrl.signal.aborted) return
+          if (error) return
+          if (data && data.length) {
+            const dup = data[0]
+            setValidation(v => ({ ...v, [key]: { ok:false, msg:`Serie duplicată în ${dup.pachet.cod_document_full}` } }))
+          } else {
+            setValidation(v => ({ ...v, [key]: { ok:true, msg:null } }))
+          }
+        } else if (field === 'sudura_cod') {
+          // sudură unică cross-TRONSON: JOIN tevi → pachet → tronson
+          const { cod } = parseSudura(value)
+          if (!cod) {
+            setValidation(v => { const n = {...v}; delete n[key]; return n })
+            return
+          }
+          const { data, error } = await supabase
+            .from('executie_tevi')
+            .select('id, pachet:executie_pachete_lansare!inner(cod_document_full, tronson_id)')
+            .eq('sudura_cod', cod)
+            .eq('pachet.tronson_id', pachet.tronson_id)
+            .neq('id', rowId)
+            .limit(1)
+          if (ctrl.signal.aborted) return
+          if (error) return
+          if (data && data.length) {
+            const dup = data[0]
+            setValidation(v => ({ ...v, [key]: { ok:false, msg:`Sudură duplicată în ${dup.pachet.cod_document_full}` } }))
+          } else {
+            setValidation(v => ({ ...v, [key]: { ok:true, msg:null } }))
+          }
+        }
+      } catch (e) {
+        // silent
+      }
+    }, 400)
+    // Atașăm cleanup
+    ctrl.signal.addEventListener('abort', () => clearTimeout(timeoutId))
+  }, [proiectId, pachet?.tronson_id])
+
+  // ───────── Add row ─────────
+  async function addRow(tip_rand) {
+    const newPoz = tevi.length + 1
+    const payload = {
+      pachet_id: pachetId,
+      poz_in_pachet: newPoz,
+      tip_rand,
+      tip: tip_rand === 'curba' ? 'CIC' : tip_rand === 'teava' ? 'L360' : null,
+    }
+    const { data, error } = await supabase
+      .from('executie_tevi').insert(payload).select().single()
+    if (error) { onError('Eroare adăugare rând: ' + error.message); return }
+    setTevi(prev => [...prev, data])
+    await refetchPachet()
+    onSuccess(`Rând ${tip_rand} adăugat`)
+  }
+
+  // ───────── Delete row(s) ─────────
+  async function deleteRow(rowId) {
+    if (!window.confirm('Ștergi acest rând? Acțiunea NU poate fi anulată.')) return
+    const { error } = await supabase.from('executie_tevi').delete().eq('id', rowId)
+    if (error) { onError('Eroare ștergere: ' + error.message); return }
+    setTevi(prev => prev.filter(r => r.id !== rowId))
+    setSelected(prev => { const n = new Set(prev); n.delete(rowId); return n })
+    await refetchPachet()
+    // Renumerotare automată via trigger BD — refetch pentru poz_in_pachet corect
+    await refetchTevi()
+    onSuccess('Rând șters')
+  }
+
+  async function deleteBulk() {
+    if (!selected.size) return
+    if (!window.confirm(`Ștergi ${selected.size} rânduri? Acțiunea NU poate fi anulată.`)) return
+    const { error } = await supabase.from('executie_tevi').delete().in('id', Array.from(selected))
+    if (error) { onError('Eroare ștergere bulk: ' + error.message); return }
+    setSelected(new Set())
+    await refetchPachet()
+    await refetchTevi()
+    onSuccess(`${selected.size} rânduri șterse`)
+  }
+
+  // ───────── Cell editing helpers ─────────
+  function startEdit(rowId, field) {
+    const row = tevi.find(r => r.id === rowId)
+    if (!row) return
+    if (!EDITABLE_FIELDS[row.tip_rand]?.has(field)) return
+    setEditingCell({ rowId, field })
+    setDraft(row[field] != null ? String(row[field]) : '')
+  }
+
+  function cancelEdit() {
+    setEditingCell(null)
+    setDraft('')
+  }
+
+  // commitEdit: saveBD + clear editing
+  async function commitEdit(opts = {}) {
+    if (!editingCell) return
+    const { rowId, field } = editingCell
+    const row = tevi.find(r => r.id === rowId)
+    if (!row) { cancelEdit(); return }
+
+    const original = row[field]
+    let newValue = draft
+
+    // Parse numeric
+    if (field === 'lungime_m') {
+      newValue = newValue.trim() === '' ? null : Number(newValue.replace(',', '.'))
+      if (newValue != null && (isNaN(newValue) || newValue < 0)) {
+        onError(`Valoare invalidă pentru ${field}: "${draft}"`)
+        cancelEdit()
+        return
+      }
+    } else if (typeof newValue === 'string') {
+      newValue = newValue.trim()
+      if (newValue === '') newValue = null
+    }
+
+    // Dacă nu s-a schimbat nimic, doar închidem
+    if (newValue === original || (newValue == null && original == null)) {
+      cancelEdit()
+      return
+    }
+
+    // Construim patch
+    const patch = { [field]: newValue }
+
+    // Special: sudura_cod cu sufix R → toggle sudura_refacuta
+    if (field === 'sudura_cod' && typeof newValue === 'string') {
+      const parsed = parseSudura(newValue)
+      patch.sudura_cod = parsed.cod
+      patch.sudura_refacuta = parsed.refacuta
+    }
+    // Special: serie_unica gol pe teava → flag sudura_sant_pending ștearsă auto?
+    // NU automat — user e responsabil. Doar logăm o avertizare la export.
+
+    // Special: dimensiune pe curba → re-extract unghi
+    if (field === 'dimensiune' && row.tip_rand === 'curba') {
+      patch.unghi_curba = extractUnghi(newValue)
+    }
+
+    // Optimistic update local
+    setTevi(prev => prev.map(r => r.id === rowId ? { ...r, ...patch } : r))
+    cancelEdit()
+
+    // Salvare BD
+    setSaving(true)
+    const { error } = await supabase.from('executie_tevi').update(patch).eq('id', rowId)
+    setSaving(false)
+
+    if (error) {
+      // Revert local
+      setTevi(prev => prev.map(r => r.id === rowId ? { ...r, [field]: original } : r))
+      setDirty(prev => new Set(prev).add(rowId))
+      onError(`Eroare salvare: ${error.message}`)
+      return
+    }
+
+    // Refetch pachet (totaluri actualizate de trigger) + tevi (poz_km_m din BD)
+    if (field === 'lungime_m' || field === 'sudura_cod' || field === 'pm_cod' || field === 'pa_ut_cod') {
+      await Promise.all([refetchPachet(), refetchTevi()])
+    } else {
+      // doar text update — refresh local pentru a vedea sudura_refacuta + unghi
+      const { data } = await supabase.from('executie_tevi').select('*').eq('id', rowId).single()
+      if (data) setTevi(prev => prev.map(r => r.id === rowId ? data : r))
+    }
+
+    // Validare pentru câmpul nou
+    if (field === 'serie_unica' || field === 'sudura_cod') {
+      debouncedValidate(rowId, field, newValue)
+    }
+
+    // Nav la următoarea celulă dacă cerut
+    if (opts.nav === 'tab' || opts.nav === 'enter') {
+      const navTo = nextEditableCell(rowId, field, opts.nav)
+      if (navTo) {
+        setTimeout(() => startEdit(navTo.rowId, navTo.field), 30)
+      }
+    }
+  }
+
+  // ───────── Navigation: Tab → next field, Enter → next row ─────────
+  function nextEditableCell(rowId, field, dir) {
+    const rowIdx = tevi.findIndex(r => r.id === rowId)
+    if (rowIdx === -1) return null
+    const row = tevi[rowIdx]
+    const allowed = EDITABLE_FIELDS[row.tip_rand]
+    if (!allowed) return null
+
+    if (dir === 'tab') {
+      // next field în NAV_FIELDS care e editabil pentru row.tip_rand
+      const idxField = NAV_FIELDS.indexOf(field)
+      for (let i = idxField + 1; i < NAV_FIELDS.length; i++) {
+        if (allowed.has(NAV_FIELDS[i])) return { rowId, field: NAV_FIELDS[i] }
+      }
+      // wrap la primul field din rândul următor
+      if (rowIdx + 1 < tevi.length) {
+        const nextRow = tevi[rowIdx + 1]
+        const nextAllowed = EDITABLE_FIELDS[nextRow.tip_rand]
+        for (const f of NAV_FIELDS) {
+          if (nextAllowed.has(f)) return { rowId: nextRow.id, field: f }
+        }
+      }
+      return null
+    } else if (dir === 'enter') {
+      // același field în rândul următor (dacă editabil acolo, altfel primul editabil)
+      if (rowIdx + 1 < tevi.length) {
+        const nextRow = tevi[rowIdx + 1]
+        const nextAllowed = EDITABLE_FIELDS[nextRow.tip_rand]
+        if (nextAllowed.has(field)) return { rowId: nextRow.id, field }
+        for (const f of NAV_FIELDS) {
+          if (nextAllowed.has(f)) return { rowId: nextRow.id, field: f }
+        }
+      }
+      return null
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
+    else if (e.key === 'Tab') { e.preventDefault(); commitEdit({ nav: 'tab' }) }
+    else if (e.key === 'Enter') { e.preventDefault(); commitEdit({ nav: 'enter' }) }
+  }
+
+  // ───────── Paste handling — Ctrl+V din Excel ─────────
+  async function handlePaste(e) {
+    if (!editingCell) return
+    const text = e.clipboardData.getData('text/plain')
+    if (!text) return
+    // Detect multi-cell paste (tab/newline)
+    const rows = text.split(/\r?\n/).filter(r => r.length > 0)
+    if (rows.length === 1 && !rows[0].includes('\t')) {
+      // single cell — let default behavior
+      return
+    }
+    e.preventDefault()
+    const matrix = rows.map(r => r.split('\t'))
+    const { rowId, field } = editingCell
+    const rowIdx = tevi.findIndex(r => r.id === rowId)
+    const fieldIdx = NAV_FIELDS.indexOf(field)
+    if (rowIdx === -1 || fieldIdx === -1) return
+
+    if (!window.confirm(`Lipesc ${matrix.length} rânduri × ${matrix[0].length} celule? Suprascriu valorile existente.`)) {
+      cancelEdit()
+      return
+    }
+
+    setSaving(true)
+    let okCount = 0, failCount = 0
+    for (let i = 0; i < matrix.length; i++) {
+      const targetRow = tevi[rowIdx + i]
+      if (!targetRow) break
+      const allowed = EDITABLE_FIELDS[targetRow.tip_rand]
+      const patch = {}
+      for (let j = 0; j < matrix[i].length && (fieldIdx + j) < NAV_FIELDS.length; j++) {
+        const targetField = NAV_FIELDS[fieldIdx + j]
+        if (!allowed.has(targetField)) continue
+        let val = matrix[i][j].trim()
+        if (val === '') { patch[targetField] = null; continue }
+        if (targetField === 'lungime_m') {
+          const n = Number(val.replace(',', '.'))
+          if (!isNaN(n)) patch[targetField] = n
+        } else if (targetField === 'sudura_cod') {
+          const p = parseSudura(val)
+          patch.sudura_cod = p.cod
+          patch.sudura_refacuta = p.refacuta
+        } else if (targetField === 'dimensiune' && targetRow.tip_rand === 'curba') {
+          patch.dimensiune = val
+          patch.unghi_curba = extractUnghi(val)
+        } else {
+          patch[targetField] = val
+        }
+      }
+      if (Object.keys(patch).length) {
+        const { error } = await supabase.from('executie_tevi').update(patch).eq('id', targetRow.id)
+        if (error) failCount++
+        else okCount++
+      }
+    }
+    setSaving(false)
+    cancelEdit()
+    await Promise.all([refetchPachet(), refetchTevi()])
+    if (failCount) onWarn(`Paste: ${okCount} OK, ${failCount} erori`)
+    else onSuccess(`Paste: ${okCount} rânduri actualizate`)
+  }
+
+  // ───────── Pending șanț toggle ─────────
+  async function togglePending(rowId) {
+    const row = tevi.find(r => r.id === rowId)
+    if (!row) return
+    const newVal = !row.sudura_sant_pending
+    setTevi(prev => prev.map(r => r.id === rowId ? { ...r, sudura_sant_pending: newVal } : r))
+    const { error } = await supabase.from('executie_tevi').update({ sudura_sant_pending: newVal }).eq('id', rowId)
+    if (error) {
+      setTevi(prev => prev.map(r => r.id === rowId ? { ...r, sudura_sant_pending: !newVal } : r))
+      onError('Eroare toggle pending: ' + error.message)
+      return
+    }
+    await refetchPachet()
+  }
+
+  // ───────── Bulk save (pentru rânduri rămase dirty după erori) ─────────
+  async function saveBulkDirty() {
+    if (!dirty.size) {
+      onSuccess('Nimic de salvat')
+      return
+    }
+    setBulkSaving(true)
+    let okCount = 0, failCount = 0
+    for (const rowId of dirty) {
+      const row = tevi.find(r => r.id === rowId)
+      if (!row) continue
+      // Trimit întregul rând (mai puține edge cases pentru bulk)
+      const patch = {
+        lot: row.lot, serie_unica: row.serie_unica, tip: row.tip,
+        dimensiune: row.dimensiune, sarja: row.sarja, lungime_m: row.lungime_m,
+        sudura_cod: row.sudura_cod, sudura_refacuta: row.sudura_refacuta,
+        sudura_sant_pending: row.sudura_sant_pending,
+        pm_cod: row.pm_cod, pa_ut_cod: row.pa_ut_cod, ut_cod: row.ut_cod,
+        observatii: row.observatii, unghi_curba: row.unghi_curba,
+      }
+      const { error } = await supabase.from('executie_tevi').update(patch).eq('id', rowId)
+      if (error) failCount++
+      else okCount++
+    }
+    setBulkSaving(false)
+    setDirty(new Set())
+    await Promise.all([refetchPachet(), refetchTevi()])
+    if (failCount) onWarn(`Salvare: ${okCount} OK, ${failCount} erori`)
+    else onSuccess(`${okCount} rânduri salvate`)
+  }
+
+  // ───────── Validation summary ─────────
+  const validationErrors = useMemo(() => {
+    return Object.values(validation).filter(v => v && v.ok === false).length
+  }, [validation])
+
+  // ───────── LOADING ─────────
+  if (loading) {
+    return <div style={{ padding: 40, color: G.muted, fontSize: 14 }}>Se încarcă pachetul...</div>
+  }
+  if (!pachet) {
+    return (
+      <div style={{...S.card, padding: 40, textAlign:'center'}}>
+        <div style={{ fontSize: 32, marginBottom: 8 }}>❌</div>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Pachetul nu a fost găsit</div>
+        <button style={S.btnS} onClick={onClose}>← Înapoi la listă</button>
+      </div>
+    )
+  }
+
+  // ───────── RENDER ─────────
+  const totalLungime = tevi.reduce((s, t) => s + Number(t.lungime_m || 0), 0)
+  const nrPending = tevi.filter(t => t.sudura_sant_pending).length
+
+  return (
+    <div>
+      {/* HEADER PACHET */}
+      <div style={{...S.card, padding:'16px 20px', marginBottom: 12}}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap: 12, flexWrap:'wrap' }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display:'flex', alignItems:'center', gap: 10, flexWrap:'wrap', marginBottom: 6 }}>
+              <button onClick={onClose} style={{...S.btnS, padding:'6px 10px'}}>
+                ← Înapoi
+              </button>
+              <span style={{ fontSize: 18, fontWeight: 700, fontFamily:'monospace', color: G.purple }}>
+                📦 {pachet.cod_document_full}
+              </span>
+              {pachet.revizie > 0 && (
+                <span style={{...S.badge, background: G.yellow+'22', color: G.yellow, fontSize: 12, padding: '3px 10px'}}>
+                  rev.{pachet.revizie}
+                </span>
+              )}
+              {pachet.respins_la && (
+                <span style={{...S.badge, background: G.red+'22', color: G.red}}>Respins</span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: G.muted }}>
+              Tronson <span style={{ color: G.purple, fontWeight: 600 }}>{tronson?.cod || '?'}</span>
+              {' · '}KM start: <span style={{ fontFamily:'monospace' }}>{fmtKm(pachet.km_start_m)}</span>
+              {' · '}Lansare: {fmtDate(pachet.data_lansare)}
+              {' · '}<span style={{ color: G.text, fontWeight: 600 }}>{tevi.length}</span> elemente
+              {' · '}<span style={{ color: G.text, fontWeight: 600 }}>{totalLungime.toFixed(2)}m</span>
+              {nrPending > 0 && <> · <span style={{ color: G.orange, fontWeight: 600 }}>{nrPending}</span> pending șanț</>}
+            </div>
+            {pachet.observatii && (
+              <div style={{ fontSize: 12, color: G.muted, marginTop: 8, fontStyle:'italic' }}>
+                ℹ {pachet.observatii}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* TOOLBAR */}
+      <div style={{...S.card, padding:'10px 14px', marginBottom: 12, display:'flex', alignItems:'center', gap: 6, flexWrap:'wrap'}}>
+        <button onClick={() => addRow('teava')} style={{...S.btnS, padding:'6px 12px', borderColor: G.blue, color: G.blue, background: G.blue+'14'}}>
+          ➕ Țeavă
+        </button>
+        <button onClick={() => addRow('curba')} style={{...S.btnS, padding:'6px 12px', borderColor: G.orange, color: G.orange, background: G.orange+'14'}}>
+          ➕ Curbă CIC
+        </button>
+        <button onClick={() => addRow('legare')} style={{...S.btnS, padding:'6px 12px', borderColor: G.green, color: G.green, background: G.green+'14'}}>
+          ➕ Legare
+        </button>
+        <button onClick={() => addRow('separator')} style={{...S.btnS, padding:'6px 12px'}}>
+          ➕ Separator
+        </button>
+
+        <div style={{ width: 1, height: 24, background: G.border, margin: '0 4px' }} />
+
+        <button
+          onClick={deleteBulk}
+          disabled={!selected.size}
+          style={{...S.btnS, padding:'6px 12px', opacity: selected.size ? 1 : 0.4, cursor: selected.size ? 'pointer' : 'not-allowed', borderColor: selected.size ? G.red : G.border, color: selected.size ? G.red : G.muted}}
+        >
+          🗑 Șterge ({selected.size})
+        </button>
+
+        <div style={{ flex: 1 }} />
+
+        <button
+          style={{ ...S.btnS, padding:'6px 12px', opacity: 0.5, cursor:'not-allowed' }}
+          title="Disponibil în Faza C"
+          disabled
+        >
+          🚧 Completează la șanț
+        </button>
+        <button
+          style={{ ...S.btnS, padding:'6px 12px', opacity: 0.5, cursor:'not-allowed' }}
+          title="Disponibil în Faza E"
+          disabled
+        >
+          📤 Export Transgaz
+        </button>
+        <button
+          onClick={saveBulkDirty}
+          disabled={!dirty.size || bulkSaving}
+          style={{...S.btnP, padding:'6px 14px', opacity: dirty.size ? 1 : 0.5, cursor: dirty.size ? 'pointer' : 'not-allowed'}}
+        >
+          {bulkSaving ? 'Salvez...' : `💾 Salvează (${dirty.size})`}
+        </button>
+      </div>
+
+      {/* TABEL EDITOR */}
+      <div style={{...S.card, overflow:'hidden'}}>
+        {tevi.length === 0 ? (
+          <div style={{ padding: '60px 20px', textAlign:'center' }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Pachet gol</div>
+            <div style={{ color: G.muted, fontSize: 13, marginBottom: 16 }}>
+              Adaugă primul rând cu butoanele din toolbar (sau așteaptă Faza B pentru import Excel)
+            </div>
+            <div style={{ display:'inline-flex', gap: 8 }}>
+              <button onClick={() => addRow('teava')} style={{...S.btnP, padding:'8px 14px'}}>➕ Prima țeavă</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ overflowX:'auto', maxHeight:'calc(100vh - 280px)' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12, minWidth: 1400 }}>
+              <thead style={{ position:'sticky', top: 0, background: G.surface, zIndex: 10 }}>
+                <tr style={{ borderBottom: `1px solid ${G.border}` }}>
+                  {COL_DEFS.map(col => (
+                    <th key={col.key} style={{
+                      ...thStyle,
+                      width: col.width,
+                      minWidth: col.width,
+                      textAlign: col.align || 'left',
+                      padding: '8px 8px',
+                    }}>
+                      {col.key === '_select' ? (
+                        <input
+                          type="checkbox"
+                          checked={selected.size === tevi.length && tevi.length > 0}
+                          onChange={(e) => setSelected(e.target.checked ? new Set(tevi.map(t => t.id)) : new Set())}
+                        />
+                      ) : col.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {teviWithPozKm.map(row => (
+                  <EditorRow
+                    key={row.id}
+                    row={row}
+                    isEditing={editingCell?.rowId === row.id ? editingCell.field : null}
+                    draft={draft}
+                    setDraft={setDraft}
+                    onStartEdit={(field) => startEdit(row.id, field)}
+                    onCommit={commitEdit}
+                    onCancel={cancelEdit}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
+                    validation={validation}
+                    onValidate={(field, val) => debouncedValidate(row.id, field, val)}
+                    selected={selected.has(row.id)}
+                    onToggleSelect={() => setSelected(prev => {
+                      const n = new Set(prev)
+                      if (n.has(row.id)) n.delete(row.id); else n.add(row.id)
+                      return n
+                    })}
+                    onDelete={() => deleteRow(row.id)}
+                    onTogglePending={() => togglePending(row.id)}
+                    dirty={dirty.has(row.id)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* FOOTER STATUS */}
+      <div style={{ padding: '12px 16px', marginTop: 8, display:'flex', justifyContent:'space-between', alignItems:'center', fontSize: 12, color: G.muted, flexWrap:'wrap', gap: 8 }}>
+        <div style={{ display:'flex', gap: 14, flexWrap:'wrap' }}>
+          {saving && <span style={{ color: G.blue }}>⏳ Salvez...</span>}
+          {!saving && dirty.size === 0 && <span style={{ color: G.green }}>✓ Toate salvate</span>}
+          {dirty.size > 0 && <span style={{ color: G.yellow }}>⚠ {dirty.size} nesalvate</span>}
+          <span>{tevi.length} rânduri</span>
+          {validationErrors > 0 && <span style={{ color: G.red }}>✕ {validationErrors} validări eșuate</span>}
+        </div>
+        <div style={{ fontFamily:'monospace', fontSize: 11 }}>
+          Click pe celulă · Tab→next · Enter→jos · Esc→cancel · Ctrl+V→paste Excel
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ===========================================================================
+// EDITOR ROW — un rând din tabel cu render condițional per coloană
+// ===========================================================================
+
+function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, dirty }) {
+  const rowBg = row.sudura_sant_pending ? G.yellowDim+'44' :
+                row.pachet_sudura_sant_id ? G.purpleDim+'44' :
+                dirty ? G.yellowDim+'22' : 'transparent'
+
+  // Separator → 1 colspan large
+  if (row.tip_rand === 'separator') {
+    return (
+      <tr style={{ background: G.surface+'66', borderBottom: `1px solid ${G.border2}` }}>
+        <td style={{...tdStyle, padding:'6px 8px', textAlign:'center'}}>
+          <input type="checkbox" checked={selected} onChange={onToggleSelect} />
+        </td>
+        <td style={{...tdStyle, padding:'6px 8px', color: G.muted, fontFamily:'monospace', textAlign:'right'}}>{row.poz_in_pachet}</td>
+        <td style={{ padding:'6px 8px' }}>
+          <span style={{...S.badge, background: G.muted+'22', color: G.muted}}>separator</span>
+        </td>
+        <td colSpan={COL_DEFS.length - 4} style={{ padding:'6px 14px', textAlign:'center', color: G.muted, fontStyle:'italic', fontSize: 11 }}>
+          {isEditing === 'observatii' ? (
+            <input
+              autoFocus
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onBlur={() => onCommit()}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              placeholder="— gap fizic în traseu mozaic —"
+              style={{...S.input, padding:'4px 8px', fontSize: 11, background: G.bg}}
+            />
+          ) : (
+            <div onClick={() => onStartEdit('observatii')} style={{ cursor:'pointer', padding: 4 }}>
+              {row.observatii || '— gap fizic în traseu mozaic —'}
+            </div>
+          )}
+        </td>
+        <td style={{...tdStyle, padding:'6px 8px', textAlign:'center'}}>
+          <button
+            onClick={onDelete}
+            title="Șterge rând"
+            style={{ background:'transparent', border:'none', color: G.red, cursor:'pointer', fontSize: 14, padding: 4 }}
+          >🗑</button>
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <tr style={{ background: rowBg, borderBottom: `1px solid ${G.border2}` }}>
+      {COL_DEFS.map(col => (
+        <Cell
+          key={col.key}
+          row={row}
+          col={col}
+          isEditing={isEditing === col.key}
+          draft={draft}
+          setDraft={setDraft}
+          onStartEdit={() => onStartEdit(col.key)}
+          onCommit={onCommit}
+          onCancel={onCancel}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          validation={validation}
+          onValidate={(val) => col.validate && onValidate(col.key, val)}
+          selected={selected}
+          onToggleSelect={onToggleSelect}
+          onDelete={onDelete}
+          onTogglePending={onTogglePending}
+        />
+      ))}
+    </tr>
+  )
+}
+
+// ===========================================================================
+// CELL — celula individuală cu render condițional editare
+// ===========================================================================
+
+function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending }) {
+  const vKey = `${row.id}:${col.key}`
+  const vState = validation[vKey]
+  const allowed = EDITABLE_FIELDS[row.tip_rand]
+  const isEditableField = col.edit && allowed?.has(col.key)
+
+  // Celula _select
+  if (col.key === '_select') {
+    return (
+      <td style={{...tdStyle, padding:'6px 8px', textAlign:'center', width: col.width}}>
+        <input type="checkbox" checked={selected} onChange={onToggleSelect} />
+      </td>
+    )
+  }
+
+  // Celula poz_in_pachet
+  if (col.key === 'poz_in_pachet') {
+    return (
+      <td style={{...tdStyle, padding:'6px 8px', textAlign:'right', color: G.muted, fontFamily:'monospace', fontSize: 11, width: col.width}}>
+        {row.poz_in_pachet}
+      </td>
+    )
+  }
+
+  // Celula tip_rand (badge readonly)
+  if (col.key === 'tip_rand') {
+    const c = TIP_RAND_COLORS[row.tip_rand] || G.muted
+    return (
+      <td style={{ padding:'6px 8px', width: col.width }}>
+        <span style={{...S.badge, background: c+'22', color: c, fontSize: 10}}>
+          {row.tip_rand}
+        </span>
+        {row.sudura_sant_pending && (
+          <span
+            onClick={onTogglePending}
+            title="Click pentru a anula pending"
+            style={{...S.badge, background: G.orange+'33', color: G.orange, fontSize: 10, marginLeft: 4, cursor:'pointer'}}
+          >
+            🚧 șanț
+          </span>
+        )}
+        {row.sudura_refacuta && (
+          <span style={{...S.badge, background: G.red+'33', color: G.red, fontSize: 10, marginLeft: 4}}>R</span>
+        )}
+      </td>
+    )
+  }
+
+  // Celula POZ KM (preview readonly)
+  if (col.key === '_poz_km') {
+    return (
+      <td style={{...tdStyle, padding:'6px 8px', textAlign:'right', color: G.muted, fontFamily:'monospace', fontSize: 11, width: col.width}}>
+        {fmtKm(row._poz_km)}
+      </td>
+    )
+  }
+
+  // Celula _actions (delete + pending toggle)
+  if (col.key === '_actions') {
+    return (
+      <td style={{...tdStyle, padding:'6px 4px', textAlign:'center', width: col.width}}>
+        <div style={{ display:'flex', justifyContent:'center', gap: 4 }}>
+          {(row.tip_rand === 'teava' || row.tip_rand === 'curba') && (
+            <button
+              onClick={onTogglePending}
+              title={row.sudura_sant_pending ? 'Anulează pending șanț' : 'Marchează pending șanț'}
+              style={{
+                background:'transparent', border:`1px solid ${row.sudura_sant_pending ? G.orange : G.border}`,
+                color: row.sudura_sant_pending ? G.orange : G.muted,
+                cursor:'pointer', fontSize: 12, padding:'2px 6px', borderRadius: 4,
+              }}
+            >🚧</button>
+          )}
+          <button
+            onClick={onDelete}
+            title="Șterge rând"
+            style={{ background:'transparent', border:'none', color: G.red, cursor:'pointer', fontSize: 14, padding: 2 }}
+          >🗑</button>
+        </div>
+      </td>
+    )
+  }
+
+  // Celule data readonly (rând non-editabil pe acest câmp)
+  if (!isEditableField) {
+    return (
+      <td style={{...tdStyle, padding:'6px 8px', color: G.dim, fontStyle:'italic', width: col.width}}>
+        {row[col.key] || '—'}
+      </td>
+    )
+  }
+
+  // ────── Celulă editabilă ──────
+  const value = row[col.key]
+  const displayValue = value == null || value === '' ? '' : String(value)
+
+  // Render specific pentru sudură cu R + PM warning
+  const isSuduraCell = col.key === 'sudura_cod'
+  const showR = isSuduraCell && row.sudura_refacuta
+  const isPMWarning = (col.key === 'pm_cod' || col.key === 'pa_ut_cod') && row.sudura_cod && !row[col.key] && !row.sudura_sant_pending
+  const isPendingPM = (col.key === 'pm_cod' || col.key === 'pa_ut_cod' || col.key === 'sudura_cod') && row.sudura_sant_pending
+
+  if (isEditing) {
+    const borderColor = vState && vState.ok === false ? G.red : G.purple
+    return (
+      <td style={{ padding: 2, width: col.width, position:'relative' }}>
+        <input
+          autoFocus
+          type={col.edit === 'number' ? 'number' : 'text'}
+          step={col.edit === 'number' ? '0.01' : undefined}
+          value={draft}
+          onChange={e => {
+            setDraft(e.target.value)
+            if (col.validate) onValidate(e.target.value)
+          }}
+          onBlur={() => onCommit()}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          style={{
+            width:'100%', padding:'5px 6px', background: G.bg, color: G.text,
+            border:`2px solid ${borderColor}`, borderRadius: 4, outline:'none',
+            fontSize: 12, fontFamily: col.mono ? 'monospace' : 'inherit',
+            textAlign: col.align || 'left',
+          }}
+        />
+        {vState && vState.ok === false && (
+          <div style={{
+            position:'absolute', top:'100%', left:0, marginTop: 2, zIndex: 20,
+            background: G.red, color:'#fff', padding:'4px 8px', borderRadius: 4,
+            fontSize: 11, whiteSpace:'nowrap', boxShadow:'0 4px 12px rgba(0,0,0,.4)',
+          }}>
+            ⚠ {vState.msg}
+          </div>
+        )}
+      </td>
+    )
+  }
+
+  // Celulă display (click → edit)
+  const cellColor = isPendingPM ? G.orange : isPMWarning ? G.yellow : (col.mono ? G.text : G.text)
+  const cellBg = isPMWarning ? G.yellowDim+'66' : (vState && vState.ok === false ? G.redDim+'44' : 'transparent')
+
+  return (
+    <td
+      onClick={onStartEdit}
+      style={{
+        padding:'6px 8px', cursor:'cell', width: col.width,
+        fontFamily: col.mono ? 'monospace' : 'inherit', fontSize: 12,
+        color: cellColor, background: cellBg,
+        textAlign: col.align || 'left',
+        position:'relative',
+      }}
+      title={vState && vState.ok === false ? `⚠ ${vState.msg}` : (isPMWarning ? `${col.label} lipsește deși SUDURA e populat` : '')}
+    >
+      {isPendingPM && !displayValue ? (
+        <span style={{ color: G.orange, fontStyle:'italic' }}>pending</span>
+      ) : displayValue || <span style={{ color: G.dim }}>—</span>}
+      {showR && <span style={{ color: G.red, fontWeight: 700, marginLeft: 4 }}>R</span>}
+      {col.key === 'dimensiune' && row.unghi_curba && (
+        <span style={{ color: G.orange, marginLeft: 4, fontSize: 10 }}>· {row.unghi_curba}</span>
+      )}
+      {vState && vState.ok === false && (
+        <span style={{ position:'absolute', top: 2, right: 2, color: G.red, fontSize: 11 }}>⚠</span>
+      )}
+    </td>
+  )
+}
+
+// ===========================================================================
+// MODAL: Creare pachet nou (NEATINS din Faza 1)
 // ===========================================================================
 
 function NoPachetModal({ tronson, proiectId, onClose, onSuccess, onError }) {
@@ -504,138 +1470,8 @@ function NoPachetModal({ tronson, proiectId, onClose, onSuccess, onError }) {
         </button>
       </div>
       <div style={{ marginTop: 16, padding: '10px 12px', background: G.purpleDim, borderRadius: 8, fontSize: 12, color: G.muted }}>
-        ℹ După creare, vei putea adăuga țevile prin editorul inline (Faza 2). Acum se creează doar pachetul cu cod auto-generat.
+        ℹ După creare se deschide automat editorul. Adaugă rândurile din toolbar sau așteaptă Faza B pentru import Excel.
       </div>
-    </ModalShell>
-  )
-}
-
-// ===========================================================================
-// MODAL: Detalii pachet (read-only — listă țevi)
-// ===========================================================================
-
-function PachetDetailModal({ pachet, onClose }) {
-  const [tevi, setTevi] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => { loadTevi() }, [pachet.id])
-
-  async function loadTevi() {
-    setLoading(true)
-    const { data, error } = await supabase
-      .from('executie_tevi').select('*')
-      .eq('pachet_id', pachet.id)
-      .order('poz_in_pachet')
-    setLoading(false)
-    if (error) { console.error(error); return }
-    setTevi(data || [])
-  }
-
-  const colorTipRand = (tip) => ({
-    teava: G.blue, curba: G.orange, legare: G.green, separator: G.muted
-  }[tip] || G.muted)
-
-  return (
-    <ModalShell onClose={onClose} maxWidth={1000}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4, fontFamily:'monospace', color: G.purple }}>
-            {pachet.cod_document_full}
-          </div>
-          <div style={{ fontSize: 12, color: G.muted }}>
-            Lansare: {fmtDate(pachet.data_lansare)} · km start: {fmtKm(pachet.km_start_m)} ·{' '}
-            {pachet.nr_tevi} elemente · {fmtLungime(pachet.total_lungime_m)} ·{' '}
-            {pachet.nr_pending_sant} pending șanț
-          </div>
-          {pachet.observatii && (
-            <div style={{ fontSize: 12, color: G.muted, marginTop: 8, fontStyle:'italic' }}>
-              {pachet.observatii}
-            </div>
-          )}
-        </div>
-        <button style={S.btnS} onClick={onClose}>✕ Închide</button>
-      </div>
-
-      {loading ? (
-        <div style={{ padding: 30, textAlign:'center', color: G.muted, fontSize: 13 }}>Se încarcă țevile...</div>
-      ) : tevi.length === 0 ? (
-        <div style={{ padding: 30, textAlign:'center' }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
-          <div style={{ color: G.muted, fontSize: 13, marginBottom: 16 }}>
-            Niciun rând în acest pachet
-          </div>
-          <div style={{ padding: '10px 12px', background: G.purpleDim, borderRadius: 8, fontSize: 12, color: G.muted, display:'inline-block' }}>
-            ℹ Editor inline țevi disponibil în Faza 2
-          </div>
-        </div>
-      ) : (
-        <div style={{ overflow:'auto', maxHeight: 'calc(80vh - 200px)' }}>
-          <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12 }}>
-            <thead style={{ position:'sticky', top: 0, background: G.surface }}>
-              <tr style={{ borderBottom: `1px solid ${G.border}` }}>
-                <th style={thStyle}>POZ</th>
-                <th style={thStyle}>Tip</th>
-                <th style={thStyle}>Serie</th>
-                <th style={thStyle}>TIP</th>
-                <th style={thStyle}>Dimensiune</th>
-                <th style={thStyle}>Șarja</th>
-                <th style={{...thStyle, textAlign:'right'}}>Cant.</th>
-                <th style={thStyle}>km</th>
-                <th style={thStyle}>Sudură</th>
-                <th style={thStyle}>PM</th>
-                <th style={thStyle}>PA-UT</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tevi.map(t => {
-                const isPending = t.sudura_sant_pending
-                const isSantInsert = !!t.pachet_sudura_sant_id
-                return (
-                  <tr key={t.id} style={{
-                    borderBottom: `1px solid ${G.border2}`,
-                    background: isSantInsert ? G.purpleDim+'44' : isPending ? G.yellowDim+'44' : 'transparent',
-                  }}>
-                    <td style={{...tdStyle, color: G.muted, fontFamily:'monospace'}}>{t.poz_in_pachet}</td>
-                    <td style={tdStyle}>
-                      <span style={{
-                        ...S.badge,
-                        background: colorTipRand(t.tip_rand)+'22',
-                        color: colorTipRand(t.tip_rand),
-                      }}>
-                        {t.tip_rand}
-                      </span>
-                    </td>
-                    <td style={{...tdStyle, fontFamily:'monospace', fontWeight: 600}}>
-                      {t.serie_unica || <span style={{ color: G.muted }}>—</span>}
-                    </td>
-                    <td style={tdStyle}>{t.tip || '—'}</td>
-                    <td style={tdStyle}>
-                      {t.dimensiune || '—'}
-                      {t.unghi_curba && <span style={{ color: G.orange, marginLeft: 4 }}>· {t.unghi_curba}</span>}
-                    </td>
-                    <td style={{...tdStyle, color: G.muted}}>{t.sarja || '—'}</td>
-                    <td style={{...tdStyle, textAlign:'right', fontFamily:'monospace'}}>{fmtLungime(t.lungime_m)}</td>
-                    <td style={{...tdStyle, fontFamily:'monospace', color: G.muted}}>{fmtKm(t.poz_km_m)}</td>
-                    <td style={tdStyle}>
-                      {t.sudura_cod ? (
-                        <span style={{ fontFamily:'monospace', color: G.green, fontWeight: 600 }}>
-                          {t.sudura_cod}{t.sudura_refacuta && <span style={{ color: G.orange }}> R</span>}
-                        </span>
-                      ) : isPending ? (
-                        <span style={{...S.badge, background: G.yellow+'22', color: G.yellow}}>pending</span>
-                      ) : (
-                        <span style={{ color: G.muted }}>—</span>
-                      )}
-                    </td>
-                    <td style={{...tdStyle, color: G.muted, fontSize: 11}}>{t.pm_cod || '—'}</td>
-                    <td style={{...tdStyle, color: G.muted, fontSize: 11}}>{t.pa_ut_cod || '—'}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
     </ModalShell>
   )
 }
