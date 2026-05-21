@@ -528,7 +528,7 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
   //   - POZ-uri grupate per rand: R17-R26 (POZ 1-10), R30-R39 (POZ 11-20), R43-R52 (POZ 21-30), ...
   //   - Pentru curbe/legări (NU sunt în schema vizuală) → valori directe din BD
   const lookupHeaderStyle = {
-    font: FONT_BOLD, fill: FILL_DARKER, alignment: ALIGN_CENTER_WRAP, border: BORDER_THIN,
+    font: { ...FONT_BOLD, sz: 8 }, fill: FILL_DARKER, alignment: ALIGN_CENTER_WRAP, border: BORDER_THIN,
   }
   const dataStyle = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN }
   const dataNumStyle = { font: FONT_BASE, alignment: ALIGN_CENTER, border: BORDER_THIN, numFmt: '#,##0.00' }
@@ -540,7 +540,7 @@ function buildSheet2FromTemplate({ pachet, tronson, proiect, tevi }) {
   for (let randIdx = 0; randIdx < nrRanduriVizuale; randIdx++) {
     const headerRow = 14 + randIdx * 13
     setCell(ws, `BR${headerRow}`, 'POZ.', lookupHeaderStyle)
-    setCell(ws, `BS${headerRow}`, 'SERIE\nUNICĂ DE\nIDENTIFICARE', lookupHeaderStyle)
+    setCell(ws, `BS${headerRow}`, 'SERIE\r\nUNICĂ DE\r\nIDENTIFICARE', lookupHeaderStyle)
     setCell(ws, `BT${headerRow}`, 'TIP', lookupHeaderStyle)
     setCell(ws, `BU${headerRow}`, 'DIMENSIUNE', lookupHeaderStyle)
     setCell(ws, `BV${headerRow}`, 'ȘARJĂ', lookupHeaderStyle)
@@ -761,6 +761,10 @@ export async function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi
       sheet2Xml = sheet2Xml.replace(/(<worksheet[^>]+)>/, '$1 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">')
     }
   }
+  // Scot merge B8:H8 ca textul "SCHEMĂ DE MONTAJ ÎNAINTE DE LANSARE..." să se extindă peste cells goale
+  sheet2Xml = sheet2Xml.replace(/<mergeCell ref="B8:H8"\/>/g, '')
+  // Update count attribute pe mergeCells dacă există
+  sheet2Xml = sheet2Xml.replace(/<mergeCells count="(\d+)">/, (m, c) => `<mergeCells count="${parseInt(c) - 1}">`)
   zip.file(sheet2Path, sheet2Xml)
 
   // Adaug drawing1.xml (săgeată albastră "SENS CURGERE GAZ", ancorată cols 7-12 rows 10-12)
