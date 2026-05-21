@@ -751,10 +751,34 @@ export async function generateCentralizatorXlsx({ pachet, tronson, proiect, tevi
   if (sheet2Xml.includes('<cols>')) {
     sheet2Xml = sheet2Xml.replace(/<cols>.*?<\/cols>/, colsModelXml)
   } else {
-    // Insert after <sheetFormatPr/> sau înainte de <sheetData>
     sheet2Xml = sheet2Xml.replace(/(<sheetData>)/, `${colsModelXml}$1`)
   }
+  // Inject <drawing> reference în sheet2.xml înainte de </worksheet>
+  if (!sheet2Xml.includes('<drawing ')) {
+    sheet2Xml = sheet2Xml.replace(/(<\/worksheet>)/, '<drawing r:id="rId1"/>$1')
+    // Adaug namespace r dacă lipsește în root <worksheet>
+    if (!sheet2Xml.includes('xmlns:r=')) {
+      sheet2Xml = sheet2Xml.replace(/(<worksheet[^>]+)>/, '$1 xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">')
+    }
+  }
   zip.file(sheet2Path, sheet2Xml)
+
+  // Adaug drawing1.xml (săgeată albastră "SENS CURGERE GAZ", ancorată cols 7-12 rows 10-12)
+  const drawingXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:from><xdr:col>7</xdr:col><xdr:colOff>9524</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>12</xdr:col><xdr:colOff>828674</xdr:colOff><xdr:row>12</xdr:row><xdr:rowOff>9525</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="Arrow: Right 1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="1952624" y="1333500"/><a:ext cx="2257425" cy="276225"/></a:xfrm><a:prstGeom prst="rightArrow"><a:avLst/></a:prstGeom></xdr:spPr><xdr:style><a:lnRef idx="2"><a:schemeClr val="accent1"><a:shade val="50000"/></a:schemeClr></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></xdr:style><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip" rtlCol="0" anchor="t"/><a:lstStyle/><a:p><a:pPr algn="l"/><a:endParaRPr lang="en-US" sz="1100"/></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>'
+  zip.file('xl/drawings/drawing1.xml', drawingXml)
+
+  // Adaug relations pentru sheet2 → drawing
+  const sheet2RelsPath = 'xl/worksheets/_rels/sheet2.xml.rels'
+  const sheet2RelsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>'
+  zip.file(sheet2RelsPath, sheet2RelsXml)
+
+  // Update [Content_Types].xml cu Override pentru drawing1.xml
+  let contentTypesXml = await zip.file('[Content_Types].xml').async('string')
+  if (!contentTypesXml.includes('drawing1.xml')) {
+    const drawingOverride = '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+    contentTypesXml = contentTypesXml.replace('</Types>', `${drawingOverride}</Types>`)
+    zip.file('[Content_Types].xml', contentTypesXml)
+  }
 
   const finalBytes = await zip.generateAsync({ type: 'uint8array' })
 
