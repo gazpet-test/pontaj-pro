@@ -1030,6 +1030,22 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     window.open(data.signedUrl, '_blank')
   }
 
+  async function deleteHistory(doc) {
+    // 1. Șterg fișierul din Storage (best-effort, nu blochez dacă lipsește)
+    const { error: errStorage } = await supabase.storage
+      .from('executie-pachete-pdf')
+      .remove([doc.fisier_path])
+    if (errStorage) console.warn('Storage delete:', errStorage.message)
+    // 2. Șterg înregistrarea din BD
+    const { error: errDb } = await supabase
+      .from('executie_pachete_documente')
+      .delete()
+      .eq('id', doc.id)
+    if (errDb) { onError('Eroare ștergere: ' + errDb.message); return }
+    onSuccess(`Șters: ${doc.fisier_nume}`)
+    await loadExportHistory()
+  }
+
   // ───────── Bulk save (pentru rânduri rămase dirty după erori) ─────────
   async function saveBulkDirty() {
     if (!dirty.size) {
@@ -1305,6 +1321,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           onConfirm={handleExportCentralizator}
           onClose={() => setShowExport(false)}
           onDownloadHistory={downloadHistory}
+          onDeleteHistory={deleteHistory}
         />
       )}
     </div>
@@ -1315,7 +1332,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 // EXPORT CENTRALIZATOR MODAL — confirmare + istoric versiuni
 // ===========================================================================
 
-function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, onConfirm, onClose, onDownloadHistory }) {
+function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, onConfirm, onClose, onDownloadHistory, onDeleteHistory }) {
   const teviCount = tevi.length
   const totalLungime = tevi.reduce((s, t) => s + Number(t.lungime_m || 0), 0)
   const pendingSant = tevi.filter(t => t.sudura_sant_pending).length
@@ -1387,12 +1404,25 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
                         {doc.tip_document} · {fmtDate(doc.uploadat_la?.slice(0, 10))} · {(doc.fisier_size_bytes / 1024).toFixed(1)} KB
                       </div>
                     </div>
-                    <button
-                      onClick={() => onDownloadHistory(doc)}
-                      style={{ ...S.btnS, padding:'4px 10px', fontSize:11, borderColor:G.blue, color:G.blue }}
-                    >
-                      ⬇ Descarcă
-                    </button>
+                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                      <button
+                        onClick={() => onDownloadHistory(doc)}
+                        style={{ ...S.btnS, padding:'4px 10px', fontSize:11, borderColor:G.blue, color:G.blue }}
+                      >
+                        ⬇ Descarcă
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Șterge definitiv "${doc.fisier_nume}"?\n\nFișierul va fi eliminat din Storage și din istoric.`)) {
+                            onDeleteHistory(doc)
+                          }
+                        }}
+                        style={{ ...S.btnS, padding:'4px 8px', fontSize:11, borderColor:G.red, color:G.red }}
+                        title="Șterge"
+                      >
+                        🗑
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
