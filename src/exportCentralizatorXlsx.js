@@ -416,44 +416,49 @@ function buildSheet2IzometrieFull({ pachet, tronson, proiect, tevi }) {
     const colBase = COL_START_RAND1 // toate randurile incep la col H (MVP — wrap col B in V3)
 
     // Pentru fiecare bloc din rand: 10 blocuri total
-    // - Bloc 0: sudura "start" (intrare in rand)
-    // - Blocuri 1-9: sudura + teava precedenta
     for (let blocIdx = 0; blocIdx < BLOCURI_PER_RAND; blocIdx++) {
       const blocColBase = colBase + blocIdx * BLOC_COLS
 
-      // Teava ASOCIATA cu blocul = teava de DUPA sudura (sub bloc curent → in bloc URMATOR)
-      // Excepție: la blocul ultim, nu mai e teava de afișat
       let sudData = null
       let tevaData = null
 
-      // Pe rand N, primul bloc e wrap conexiune cu randul N-1
       if (randIdx > 0 && blocIdx === 0) {
-        // Sudura de la sfârșitul randului anterior (= ultima teava prev)
-        const lastTevaPrev = teviReale[tevaIdx - 1]
-        if (lastTevaPrev) {
+        // WRAP CONEXIUNE: bloc 0 al rand N>0 = aceeasi sudura ca bloc 9 al rand N-1
+        // teviReale[tevaIdx] e SUDURA + TEAVA care urmeaza (= prima teava noua a rand curent)
+        const wrapPipe = teviReale[tevaIdx]
+        if (wrapPipe) {
           sudData = {
-            poz_km_str: formatPozKm(lastTevaPrev._poz_km != null ? lastTevaPrev._poz_km + (Number(lastTevaPrev.lungime_m) || 0) : null),
-            sudura_cod: formatSudura(lastTevaPrev),
+            poz_km_str: formatPozKm(wrapPipe._poz_km != null ? wrapPipe._poz_km : wrapPipe.poz_km_m),
+            sudura_cod: formatSudura(wrapPipe),
           }
+          tevaData = wrapPipe   // afișez teva sub wrap (între wrap și bloc 1)
+          tevaIdx++             // consum teva
         }
-      } else {
-        // Bloc normal — sudura curenta
+      } else if (blocIdx < BLOCURI_PER_RAND - 1) {
+        // BLOC NORMAL (NU ultim): sud + teva afișată la dreapta
         const currTeava = teviReale[tevaIdx]
         if (currTeava) {
           sudData = {
             poz_km_str: formatPozKm(currTeava._poz_km != null ? currTeava._poz_km : currTeava.poz_km_m),
             sudura_cod: formatSudura(currTeava),
           }
-          // Teava care vine DUPĂ sudura (afisata in dreapta blocului curent)
-          // Va fi teava urmatoare daca nu suntem la ultim bloc
-          if (blocIdx < BLOCURI_PER_RAND - 1) {
-            tevaData = currTeava
-            tevaIdx++
+          tevaData = currTeava
+          tevaIdx++
+        }
+      } else {
+        // BLOC ULTIM (blocIdx === BLOCURI_PER_RAND - 1): doar sudura, fara teva
+        // Aceasta sud va deveni WRAP-ul rand urmator
+        const lastPipe = teviReale[tevaIdx]
+        if (lastPipe) {
+          sudData = {
+            poz_km_str: formatPozKm(lastPipe._poz_km != null ? lastPipe._poz_km : lastPipe.poz_km_m),
+            sudura_cod: formatSudura(lastPipe),
           }
+          // tevaData = NIL (e ultim bloc, NU incrementam tevaIdx)
         }
       }
 
-      // Doar dacă avem măcar sudData, renderez blocul
+      // Render doar daca avem macar sudData
       if (sudData) {
         renderBlock(ws, rowBase, blocColBase, sudData, tevaData, merges)
       }
