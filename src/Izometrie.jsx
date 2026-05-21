@@ -555,18 +555,24 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   }
 
   // ───────── POZ KM cascade preview (client-side) ─────────
-  // BD trigger recalculează exact la INSERT/UPDATE. Aici preview optimist.
+  // BD trigger recalculează exact la INSERT/UPDATE (TODO trigger fn_executie_tevi_calc_poz_km).
+  // FORMULA: pachet.km_start_m = POZ KM al rândului 1 (= prima sudură pe pachet).
+  // POZ KM al elementului i:
+  //   - i=0 (primul): km_start (= prima sudură, fie legare fie capăt prima țeavă)
+  //   - i>0 + teava/curba cu lungime: cumulat += lungime ÎNAINTE de atribuire (= poziția sudurii la capătul țevii)
+  //   - legare: nu adaugă lungime, dar are POZ KM = poziția sudurii (= cumulat curent)
+  //   - separator: POZ KM = NULL (fără semnificație fizică)
   const teviWithPozKm = useMemo(() => {
     if (!pachet) return tevi
     let cumulat = pachet.km_start_m || 0
-    return tevi.map(t => {
-      const out = { ...t, _poz_km: cumulat }
-      // Avansăm cumulatul DOAR pe rânduri reale cu lungime
-      if ((t.tip_rand === 'teava' || t.tip_rand === 'curba') && t.lungime_m) {
+    return tevi.map((t, i) => {
+      // Pentru i>0, adunăm lungimea elementului CURENT ÎNAINTE de atribuire
+      // (POZ KM = poziția sudurii la capătul țevii curente)
+      if (i > 0 && (t.tip_rand === 'teava' || t.tip_rand === 'curba') && t.lungime_m) {
         cumulat += Number(t.lungime_m)
       }
-      // separator + legare = NU avansează km (sunt markeri sau leg fizic)
-      return out
+      // Separator → NULL, restul → cumulat curent
+      return { ...t, _poz_km: t.tip_rand === 'separator' ? null : cumulat }
     })
   }, [tevi, pachet])
 

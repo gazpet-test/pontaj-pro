@@ -260,6 +260,21 @@ function parseCentralizator(workbook) {
   const codExcel = Object.entries(codCounts).sort((a,b) => b[1]-a[1])[0]?.[0] || null
   const tronsonExcel = Object.entries(tronsonCounts).sort((a,b) => b[1]-a[1])[0]?.[0] || null
 
+  // Detectează km_start din primul rând real (NON-separator) cu POZ KM
+  let detectedKmStart = null
+  let detectedKmStartRaw = null
+  for (const r of rows) {
+    if (r.tip_rand === 'separator') continue
+    if (r._raw_poz_km) {
+      const norm = normalizePozKm(r._raw_poz_km)
+      if (norm != null) {
+        detectedKmStart = norm
+        detectedKmStartRaw = String(r._raw_poz_km).trim()
+        break
+      }
+    }
+  }
+
   // Cleanup cod (strip „rev.X" suffix pentru match cu cod_document_full)
   let codClean = codExcel
   let revExcel = null
@@ -287,6 +302,8 @@ function parseCentralizator(workbook) {
       revExcel,
       tronsonExcel,
       lastRealRow: lastRealRow + 1,
+      detectedKmStart,
+      detectedKmStartRaw,
     }
   }
 }
@@ -307,6 +324,7 @@ export default function ImportExcelModal({ pachet, tronson, onClose, onSuccess, 
     mode: 'append', // 'append' | 'replace'
     skipConflicts: true,
     updateCod: false,
+    applyKmStart: false, // default OFF, devine ON dacă pachet.km_start_m e NULL
   })
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [result, setResult] = useState(null) // { ok, skipped, errors }
@@ -375,7 +393,11 @@ export default function ImportExcelModal({ pachet, tronson, onClose, onSuccess, 
 
       // Decide mode default: REPLACE dacă pachetul are 0-1 rânduri (gol), APPEND altfel
       const defaultMode = existingTeviCount <= 1 ? 'replace' : 'append'
-      setOptions(o => ({ ...o, mode: defaultMode }))
+      // Auto-apply km_start dacă pachetul nu îl are deja setat (sau diferă)
+      const shouldApplyKmStart = summary.detectedKmStart != null
+        && (pachet.km_start_m == null || pachet.km_start_m !== summary.detectedKmStart)
+        && pachet.km_start_m == null // doar dacă e NULL, ca să nu suprascriem accidental
+      setOptions(o => ({ ...o, mode: defaultMode, applyKmStart: shouldApplyKmStart }))
 
       setParsed({ rows, summary })
       setConflicts(conf)
@@ -427,6 +449,19 @@ export default function ImportExcelModal({ pachet, tronson, onClose, onSuccess, 
         .order('poz_in_pachet', { ascending: false })
         .limit(1)
       pozStart = (maxData?.[0]?.poz_in_pachet || 0) + 1
+    }
+
+    // Apply km_start_m ÎNAINTE de INSERT țevi (ca trigger BD să poată recalcula poz_km_m)
+    if (options.applyKmStart && parsed.summary.detectedKmStart != null) {
+      const { error: kmErr } = await supabase
+        .from('executie_pachete_lansare')
+        .update({ km_start_m: parsed.summary.detectedKmStart })
+        .eq('id', pachet.id)
+      if (kmErr) {
+        setResult({ ok: 0, errors: [{ error: 'Update km_start_m eșuat: ' + kmErr.message }] })
+        setStage('done')
+        return
+      }
     }
 
     // Build payloads
@@ -698,6 +733,18 @@ function PreviewStage({ parsed, conflicts, options, setOptions, pachet, tronson,
   const hasConflicts = conflicts.serie.length > 0 || conflicts.sudura.length > 0
   const codMatch = summary.codClean && summary.codClean === pachet.cod_document_full
   const tronsonMatch = !summary.tronsonExcel || summary.tronsonExcel === tronson?.cod
+  const kmStartMatch = summary.detectedKmStart != null 
+    && pachet.km_start_m != null 
+    && Math.abs(summary.detectedKmStart - pachet.km_start_m) < 1
+  const hasKmStartInfo = summary.detectedKmStart != null && !kmStartMatch
+
+  // Formatare km pentru afișaj
+  const fmtKmDisplay = (m) => {
+    if (m == null) return '—'
+    const km = Math.floor(m / 1000)
+    const rest = Math.round(m % 1000)
+    return `${km}+${String(rest).padStart(3,'0')}`
+  }
 
   // Calculează cât va fi efectiv inserat după opțiuni
   const willInsert = useMemo(() => {
@@ -730,7 +777,7 @@ function PreviewStage({ parsed, conflicts, options, setOptions, pachet, tronson,
       </div>
 
       {/* AVERTISMENTE */}
-      {(!tronsonMatch || !codMatch || summary.cccCorrections.length > 0 || hasConflicts) && (
+      {(!tronsonMatch || !codMatch || hasKmStartInfo || summary.cccCorrections.length > 0 || hasConflicts) && (
         <div style={{ marginBottom: 16, padding: '12px 14px', background: G.yellowDim+'88', border: `1px solid ${G.yellow}55`, borderRadius: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: G.yellow, marginBottom: 8 }}>⚠ Atenție</div>
           <div style={{ fontSize: 12, color: G.text, lineHeight: 1.7 }}>
@@ -752,6 +799,23 @@ function PreviewStage({ parsed, conflicts, options, setOptions, pachet, tronson,
                     onChange={e => setOptions({...options, updateCod: e.target.checked})}
                   />
                   <span>Actualizează codul pachetului la cel din Excel</span>
+                </label>
+              </div>
+            )}
+            {hasKmStartInfo && (
+              <div style={{ display:'flex', alignItems:'center', gap: 8, marginTop: 4, flexWrap:'wrap' }}>
+                <span>
+                  KM start detectat din primul rând Excel: <code style={{ color: G.orange }}>{summary.detectedKmStartRaw}</code> (= <strong>{fmtKmDisplay(summary.detectedKmStart)}</strong>, {summary.detectedKmStart}m)
+                  {pachet.km_start_m == null && <> · pachetul are <code style={{ color: G.red }}>km_start_m = NULL</code></>}
+                  {pachet.km_start_m != null && <> · pachetul are <code style={{ color: G.purple }}>{fmtKmDisplay(pachet.km_start_m)}</code></>}
+                </span>
+                <label style={{ cursor:'pointer', display:'flex', alignItems:'center', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={options.applyKmStart}
+                    onChange={e => setOptions({...options, applyKmStart: e.target.checked})}
+                  />
+                  <span>Aplică <code>{fmtKmDisplay(summary.detectedKmStart)}</code> ca km_start_m al pachetului</span>
                 </label>
               </div>
             )}
