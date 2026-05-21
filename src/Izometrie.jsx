@@ -500,7 +500,7 @@ const COL_DEFS = [
   { key:'pa_ut_cod',   label:'PA-UT', width:100, edit:'text', mono:true },
   { key:'ut_cod',      label:'UT',    width:80,  edit:'text', mono:true },
   { key:'observatii',  label:'Obs',   width:180, edit:'text' },
-  { key:'_actions',    label:'',      width:44,  align:'center', edit:false },
+  { key:'_actions',    label:'',      width:108, align:'center', edit:false },
 ]
 
 // Câmpurile editabile pe tip_rand (separator = nimic, legare = doar sudura+PM)
@@ -531,6 +531,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const [selected, setSelected] = useState(new Set()) // ids rânduri bifate
   const [saving, setSaving] = useState(false)
   const [bulkSaving, setBulkSaving] = useState(false)
+  const [swapping, setSwapping] = useState(false)
   const [showImport, setShowImport] = useState(false)
 
   const validationAborters = useRef({})
@@ -912,6 +913,32 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     await refetchPachet()
   }
 
+  // ───────── Swap pozitie randuri (butoanele ↑↓) ─────────
+  // Apeleaza RPC fn_executie_swap_tevi_pozitie pentru swap atomic.
+  // Triggerul BD recalculeaza automat POZ KM cascade.
+  async function swapPosition(rowId, direction) {
+    if (swapping) return
+    const idx = tevi.findIndex(r => r.id === rowId)
+    if (idx < 0) return
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (targetIdx < 0 || targetIdx >= tevi.length) return
+    const otherRow = tevi[targetIdx]
+    if (!otherRow) return
+
+    setSwapping(true)
+    const { error } = await supabase.rpc('fn_executie_swap_tevi_pozitie', {
+      p_id_a: rowId,
+      p_id_b: otherRow.id,
+    })
+    setSwapping(false)
+    if (error) {
+      onError('Eroare reordonare: ' + error.message)
+      return
+    }
+    // Refresh pentru poz_km_m recalculat din BD
+    await refetchTevi()
+  }
+
   // ───────── Bulk save (pentru rânduri rămase dirty după erori) ─────────
   async function saveBulkDirty() {
     if (!dirty.size) {
@@ -1077,7 +1104,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           </div>
         ) : (
           <div style={{ overflowX:'auto', maxHeight:'calc(100vh - 280px)' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12, minWidth: 1400 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12, minWidth: 1464 }}>
               <thead style={{ position:'sticky', top: 0, background: G.surface, zIndex: 10 }}>
                 <tr style={{ borderBottom: `1px solid ${G.border}` }}>
                   {COL_DEFS.map(col => (
@@ -1100,7 +1127,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
                 </tr>
               </thead>
               <tbody>
-                {teviWithPozKm.map(row => (
+                {teviWithPozKm.map((row, idx) => (
                   <EditorRow
                     key={row.id}
                     row={row}
@@ -1122,6 +1149,11 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
                     })}
                     onDelete={() => deleteRow(row.id)}
                     onTogglePending={() => togglePending(row.id)}
+                    onSwapUp={() => swapPosition(row.id, 'up')}
+                    onSwapDown={() => swapPosition(row.id, 'down')}
+                    isFirst={idx === 0}
+                    isLast={idx === teviWithPozKm.length - 1}
+                    swapping={swapping}
                     dirty={dirty.has(row.id)}
                   />
                 ))}
@@ -1170,7 +1202,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
 // EDITOR ROW — un rând din tabel cu render condițional per coloană
 // ===========================================================================
 
-function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, dirty }) {
+function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping, dirty }) {
   const rowBg = row.sudura_sant_pending ? G.yellowDim+'44' :
                 row.pachet_sudura_sant_id ? G.purpleDim+'44' :
                 dirty ? G.yellowDim+'22' : 'transparent'
@@ -1204,12 +1236,38 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
             </div>
           )}
         </td>
-        <td style={{...tdStyle, padding:'6px 8px', textAlign:'center'}}>
-          <button
-            onClick={onDelete}
-            title="Șterge rând"
-            style={{ background:'transparent', border:'none', color: G.red, cursor:'pointer', fontSize: 14, padding: 4 }}
-          >🗑</button>
+        <td style={{...tdStyle, padding:'6px 4px', textAlign:'center'}}>
+          <div style={{ display:'flex', justifyContent:'center', gap: 2, alignItems:'center' }}>
+            <button
+              onClick={onSwapUp}
+              disabled={isFirst || swapping}
+              title="Mută rândul sus"
+              style={{
+                background:'transparent', border:`1px solid ${isFirst ? G.border : G.purple}`,
+                color: isFirst ? G.dim : G.purple,
+                cursor: (isFirst || swapping) ? 'not-allowed' : 'pointer',
+                fontSize: 11, padding:'1px 5px', borderRadius: 3, lineHeight: 1,
+                opacity: (isFirst || swapping) ? 0.35 : 1,
+              }}
+            >↑</button>
+            <button
+              onClick={onSwapDown}
+              disabled={isLast || swapping}
+              title="Mută rândul jos"
+              style={{
+                background:'transparent', border:`1px solid ${isLast ? G.border : G.purple}`,
+                color: isLast ? G.dim : G.purple,
+                cursor: (isLast || swapping) ? 'not-allowed' : 'pointer',
+                fontSize: 11, padding:'1px 5px', borderRadius: 3, lineHeight: 1,
+                opacity: (isLast || swapping) ? 0.35 : 1,
+              }}
+            >↓</button>
+            <button
+              onClick={onDelete}
+              title="Șterge rând"
+              style={{ background:'transparent', border:'none', color: G.red, cursor:'pointer', fontSize: 14, padding: 2 }}
+            >🗑</button>
+          </div>
         </td>
       </tr>
     )
@@ -1236,6 +1294,11 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
           onToggleSelect={onToggleSelect}
           onDelete={onDelete}
           onTogglePending={onTogglePending}
+          onSwapUp={onSwapUp}
+          onSwapDown={onSwapDown}
+          isFirst={isFirst}
+          isLast={isLast}
+          swapping={swapping}
         />
       ))}
     </tr>
@@ -1246,7 +1309,7 @@ function EditorRow({ row, isEditing, draft, setDraft, onStartEdit, onCommit, onC
 // CELL — celula individuală cu render condițional editare
 // ===========================================================================
 
-function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending }) {
+function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onCancel, onKeyDown, onPaste, validation, onValidate, selected, onToggleSelect, onDelete, onTogglePending, onSwapUp, onSwapDown, isFirst, isLast, swapping }) {
   const vKey = `${row.id}:${col.key}`
   const vState = validation[vKey]
   const allowed = EDITABLE_FIELDS[row.tip_rand]
@@ -1303,11 +1366,35 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
     )
   }
 
-  // Celula _actions (delete + pending toggle)
+  // Celula _actions (swap up/down + pending toggle + delete)
   if (col.key === '_actions') {
     return (
       <td style={{...tdStyle, padding:'6px 4px', textAlign:'center', width: col.width}}>
-        <div style={{ display:'flex', justifyContent:'center', gap: 4 }}>
+        <div style={{ display:'flex', justifyContent:'center', gap: 2, alignItems:'center' }}>
+          <button
+            onClick={onSwapUp}
+            disabled={isFirst || swapping}
+            title="Mută rândul sus"
+            style={{
+              background:'transparent', border:`1px solid ${isFirst ? G.border : G.purple}`,
+              color: isFirst ? G.dim : G.purple,
+              cursor: (isFirst || swapping) ? 'not-allowed' : 'pointer',
+              fontSize: 11, padding:'1px 5px', borderRadius: 3, lineHeight: 1,
+              opacity: (isFirst || swapping) ? 0.35 : 1,
+            }}
+          >↑</button>
+          <button
+            onClick={onSwapDown}
+            disabled={isLast || swapping}
+            title="Mută rândul jos"
+            style={{
+              background:'transparent', border:`1px solid ${isLast ? G.border : G.purple}`,
+              color: isLast ? G.dim : G.purple,
+              cursor: (isLast || swapping) ? 'not-allowed' : 'pointer',
+              fontSize: 11, padding:'1px 5px', borderRadius: 3, lineHeight: 1,
+              opacity: (isLast || swapping) ? 0.35 : 1,
+            }}
+          >↓</button>
           {(row.tip_rand === 'teava' || row.tip_rand === 'curba') && (
             <button
               onClick={onTogglePending}
