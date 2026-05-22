@@ -5918,12 +5918,30 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
   }, [filtered])
   
   // Agregare pe UTILAJ + Consum real pe ultimele 7 zile
+  // FIX 22.05.2026: calculez ore_lucrate din diff ore_la_alimentare (citirea bordului) între alimentari succesive,
+  // în loc să mă bazez pe ore_lucrate_efectiv (introdus manual, lipsă la majoritate)
   const aggUtilaj = useMemo(() => {
     const map = new Map()
     // Pentru consumul real, filtrez DIN NOU pe ultimele 7 zile (independent de perioadaFilter)
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
     const sevenDaysStr = sevenDaysAgo.toISOString().split('T')[0]
+    
+    // PAS 1: Sortez alimentari per utilaj cronologic pentru a putea calcula diff ore corect
+    const perUtilajSorted = new Map() // activId -> [alim ordonate cronologic]
+    filtered.forEach(a => {
+      const av = a.logistica_active
+      if (!av?.id) return
+      if (!perUtilajSorted.has(av.id)) perUtilajSorted.set(av.id, [])
+      perUtilajSorted.get(av.id).push(a)
+    })
+    perUtilajSorted.forEach(arr => {
+      arr.sort((x, y) => {
+        const da = (x.data_alimentare || '') + '_' + String(x.id).padStart(10, '0')
+        const db = (y.data_alimentare || '') + '_' + String(y.id).padStart(10, '0')
+        return da.localeCompare(db)
+      })
+    })
     
     filtered.forEach(a => {
       const av = a.logistica_active
@@ -5942,7 +5960,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
           pragAlerta: av.prag_alerta_consum ? Number(av.prag_alerta_consum) : 10,
           nrAlim: 0, totalLitri: 0, totalCost: 0,
           // Pe ultimele 7 zile pentru consum real
-          litri7z: 0, oreLucrate7z: 0, nrAlim7z: 0,
+          litri7z: 0, oreLucrate7z: 0, kmParcursi7z: 0, nrAlim7z: 0,
           rows: []
         })
       }
@@ -5952,19 +5970,51 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
       x.totalCost += Number(a.pret_total || 0)
       x.rows.push(a)
       
-      // Pentru ultimele 7 zile
+      // Pentru ultimele 7 zile - calculez ore din diff bord cu alimentarea PRECEDENTĂ
       if (a.data_alimentare >= sevenDaysStr) {
         x.nrAlim7z += 1
         x.litri7z += Number(a.cantitate_litri || 0)
-        if (a.ore_lucrate_efectiv && Number(a.ore_lucrate_efectiv) > 0) {
+        
+        // Găsesc alimentarea PRECEDENTĂ pentru același utilaj
+        const sortedList = perUtilajSorted.get(av.id) || []
+        const idx = sortedList.findIndex(s => s.id === a.id)
+        const prev = idx > 0 ? sortedList[idx - 1] : null
+        
+        if (prev) {
+          // Calc diff ore bord (pentru utilaje cu ore_la_alimentare populat)
+          if (a.ore_la_alimentare != null && prev.ore_la_alimentare != null) {
+            const diffOre = Number(a.ore_la_alimentare) - Number(prev.ore_la_alimentare)
+            // Diff valid: >0.5h și <500h (evită ore_regress și diff absurd între alim foarte rare)
+            if (diffOre > 0.5 && diffOre < 500) {
+              x.oreLucrate7z += diffOre
+            }
+          }
+          // Calc diff km bord (pentru utilaje cu km_la_alimentare populat)
+          if (a.km_la_alimentare != null && prev.km_la_alimentare != null) {
+            const diffKm = Number(a.km_la_alimentare) - Number(prev.km_la_alimentare)
+            if (diffKm > 5 && diffKm < 5000) {
+              x.kmParcursi7z += diffKm
+            }
+          }
+        }
+        
+        // Fallback: dacă există ore_lucrate_efectiv (introdus manual), îl iau ca backup
+        // DOAR dacă nu am calculat încă din diff (utilaj cu 1 alim în 7z + ore_lucrate_efectiv vechi style)
+        if (!prev && a.ore_lucrate_efectiv && Number(a.ore_lucrate_efectiv) > 0) {
           x.oreLucrate7z += Number(a.ore_lucrate_efectiv)
         }
       }
     })
     
     return Array.from(map.values()).map(x => {
-      // Consum real = litri / ore_lucrate (doar dacă avem date)
-      const consumReal = x.oreLucrate7z > 0 ? x.litri7z / x.oreLucrate7z : null
+      // Consum real - aleg unitatea care se potrivește cu norma
+      let consumReal = null
+      if (x.unitateNorma === 'l/100km' && x.kmParcursi7z > 0) {
+        consumReal = x.litri7z * 100 / x.kmParcursi7z
+      } else if (x.oreLucrate7z > 0) {
+        // Default: l/h sau kWh/h
+        consumReal = x.litri7z / x.oreLucrate7z
+      }
       let stareConsum = null  // null | 'ok' | 'warning' | 'critic'
       let abaterePct = null
       if (consumReal !== null && x.norma) {
