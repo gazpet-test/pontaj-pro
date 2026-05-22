@@ -233,8 +233,9 @@ const parseEvoGPSWorkbook = (arrayBuffer) => {
 }
 
 // MAIN COMPONENT
-export default function ImportEvoGPSModal({ open, onClose, supabase, profile, onSuccess, G, S }) {
+export default function ImportEvoGPSModal({ open, onClose, supabase, profile, onSuccess, G, S, expectedType }) {
   // G = global colors, S = styles (le pasăm din App.jsx ca să avem coerență)
+  // expectedType: 'masini' | 'utilaje' | null - tipul așteptat (afișaj + validare)
   const fileRef = useRef(null)
   const [file, setFile] = useState(null)
   const [dragOver, setDragOver] = useState(false)
@@ -561,8 +562,16 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
         {/* Header */}
         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: colors.text }}>🛰️ Import telemetrie EvoGPS</div>
-            <div style={{ fontSize: 11, color: colors.muted, marginTop: 2 }}>Etapa 8.5 — descarcă raportul „Foaie de activitate zilnica" din EvoGPS Rapoarte și importă aici (XLSX)</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: colors.text }}>
+              {expectedType === 'masini' ? '🚗 Import KM mașini' : expectedType === 'utilaje' ? '🏗️ Import ore utilaje' : '🛰️ Import telemetrie EvoGPS'}
+            </div>
+            <div style={{ fontSize: 11, color: colors.muted, marginTop: 2 }}>
+              {expectedType === 'masini' 
+                ? 'Pentru autoturisme, autoutilitare, camioane — raport „Foaie de activitate zilnică" (cu plăcuțe înmatriculare)'
+                : expectedType === 'utilaje'
+                ? 'Pentru excavatoare, buldozere, generatoare — raport „DAILYACTIVITY" (cu nume utilaj, fără plăcuțe)'
+                : 'Descarcă raportul din EvoGPS Rapoarte și importă aici (XLSX)'}
+            </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: colors.muted, cursor: 'pointer', fontSize: 22 }}>✕</button>
         </div>
@@ -643,6 +652,29 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
                   🚨 <strong>{stats.conflict} vehicule au match dubios</strong> — numele EvoGPS e trunchiat (ex: „PH 22") și parser-ul l-a asociat cu PRIMA placă din BD care începe cu acel pattern, dar <strong>marca nu coincide</strong>. <strong>Aceste vehicule NU se vor importa</strong>. Recomandare: în EvoGPS modifică numele complet (ex: „Mercedes AXOR PH 22 ABC"), apoi re-export și re-import.
                 </div>
               )}
+
+              {/* Warning dacă tipul detectat NU corespunde celui așteptat (ETAPA 2 — 22.05.2026) */}
+              {expectedType && (() => {
+                const withPlate = parsedVehicles.filter(v => v.has_plate).length
+                const withoutPlate = parsedVehicles.filter(v => !v.has_plate).length
+                const total = withPlate + withoutPlate
+                if (total === 0) return null
+                const isMostlyMasini = withPlate > withoutPlate
+                const isMostlyUtilaje = withoutPlate > withPlate
+                const mismatch = (expectedType === 'masini' && isMostlyUtilaje) || (expectedType === 'utilaje' && isMostlyMasini)
+                if (mismatch) {
+                  return (
+                    <div style={{
+                      padding: '10px 14px', borderRadius: 6, marginBottom: 12,
+                      background: colors.orange + '15', border: `1px solid ${colors.orange}88`,
+                      color: colors.orange, fontSize: 12, lineHeight: 1.5,
+                    }}>
+                      ⚠️ <strong>Atenție — raport posibil greșit:</strong> ai apăsat butonul <strong>{expectedType === 'masini' ? '🚗 Import KM mașini' : '🏗️ Import ore utilaje'}</strong>, dar fișierul conține majoritar {isMostlyUtilaje ? `${withoutPlate} utilaje (fără plăcuțe) și doar ${withPlate} mașini` : `${withPlate} mașini (cu plăcuțe) și doar ${withoutPlate} utilaje`}. Verifică să fie raportul corect din portalul EvoGPS. Importul va merge oricum (parserul tratează ambele tipuri), dar e mai bine să eviți confuzia.
+                    </div>
+                  )
+                }
+                return null
+              })()}
 
               {/* Tabs - 4 acum (am adăugat conflict) */}
               <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${colors.border}`, marginBottom: 12, flexWrap: 'wrap' }}>

@@ -2177,7 +2177,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
     <div>
       {/* ETAPA 8.5: Banner Import EvoGPS + notificare telemetrie veche       */}
       {/* ──────────────────────────────────────────────────────────────────── */}
-      {(profile?.is_owner || ['admin','manager_proiect','logistica'].includes(profile?.role) || accessLevel === 'admin') && (() => {
+      {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin') && (() => {
         const zileDe = ultimaTelemetrieData
           ? Math.floor((Date.now() - new Date(ultimaTelemetrieData).getTime()) / 86400000)
           : null
@@ -2225,34 +2225,58 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
               <div style={{fontSize: 12, color: G.muted}}>{mesaj}</div>
               {niciOdata && (
                 <div style={{fontSize: 11, color: G.muted, marginTop: 4, fontStyle: 'italic'}}>
-                  💡 Tip: portalul EvoGPS → Rapoarte → „Foaie de activitate zilnică" → export Excel pentru perioada dorită.
+                  💡 Tip: portalul EvoGPS → Rapoarte → exportă raportul potrivit pentru fiecare tip de vehicul.
                 </div>
               )}
             </div>
-            <button 
-              onClick={onImportEvoGPS}
-              style={{
-                background: G.logistica,
-                color: '#0D1117',
-                border: 'none',
-                borderRadius: 8,
-                padding: '10px 18px',
-                fontSize: 13,
-                fontWeight: 800,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                whiteSpace: 'nowrap',
-              }}>
-              📥 Import XLSX EvoGPS
-            </button>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+              <button 
+                onClick={() => onImportEvoGPS('masini')}
+                title="Pentru autoturisme, autoutilitare, camioane (raport „Foaie de activitate zilnică”)"
+                style={{
+                  background: G.blue,
+                  color: '#0D1117',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '9px 16px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
+                  justifyContent: 'flex-start',
+                }}>
+                🚗 Import KM mașini
+              </button>
+              <button 
+                onClick={() => onImportEvoGPS('utilaje')}
+                title="Pentru excavatoare, buldozere, generatoare (raport „DAILYACTIVITY”)"
+                style={{
+                  background: G.orange,
+                  color: '#0D1117',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '9px 16px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
+                  justifyContent: 'flex-start',
+                }}>
+                🏗️ Import ore utilaje
+              </button>
+            </div>
           </div>
         )
       })()}
       
       {/* ETAPA 8.6: Expand „Vezi perioade importate" SUB banner EvoGPS */}
-      {(profile?.is_owner || ['admin','manager_proiect','logistica'].includes(profile?.role) || accessLevel === 'admin') && istoricImporturi && istoricImporturi.length > 0 && (
+      {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin') && istoricImporturi && istoricImporturi.length > 0 && (
         <IstoricImporturiEvoExpand istoricImporturi={istoricImporturi} />
       )}
             {/* ──────────────────────────────────────────────────────────────────── */}
@@ -6462,7 +6486,7 @@ export default function LogisticaPage() {
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
   const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
   const [toast, showToast] = useToast()
-  const [showImportEvo, setShowImportEvo] = useState(false)
+  const [showImportEvo, setShowImportEvo] = useState(null) // null | 'masini' | 'utilaje'
   // Etapa 8.5: Alerte globale + ultima telemetrie (pentru banner Alimentări)
   const [ultimaTelemetrieData, setUltimaTelemetrieData] = useState(null)
   const [istoricImporturi, setIstoricImporturi] = useState([])  // ETAPA 8.6: history importuri EvoGPS
@@ -7264,7 +7288,7 @@ export default function LogisticaPage() {
           setDataAlim={setDataAlim}
           canEdit={canEdit}
           showToast={showToast}
-          onImportEvoGPS={() => setShowImportEvo(true)}
+          onImportEvoGPS={(mode) => setShowImportEvo(mode)}
           ultimaTelemetrieData={ultimaTelemetrieData}
           istoricImporturi={istoricImporturi}
           profile={profile}
@@ -7982,8 +8006,9 @@ export default function LogisticaPage() {
       />
 
       <ImportEvoGPSModal 
-        open={showImportEvo} 
-        onClose={() => setShowImportEvo(false)} 
+        open={!!showImportEvo} 
+        expectedType={showImportEvo}
+        onClose={() => setShowImportEvo(null)} 
         supabase={supabase}
         profile={profile}
         G={G}
