@@ -7720,6 +7720,7 @@ export default function LogisticaPage() {
                   <SortableTh col="tip" sortBy={sortBy} setSortBy={setSortBy} width={170}>Categorie</SortableTh>
                   <SortableTh col="an" sortBy={sortBy} setSortBy={setSortBy} width={60}>An</SortableTh>
                   <SortableTh col="stare" sortBy={sortBy} setSortBy={setSortBy} width={120}>Stare</SortableTh>
+                  <th style={{padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', width: 110}}>KM / Ore</th>
                   <SortableTh col="mentenanta" sortBy={sortBy} setSortBy={setSortBy} width={150}>Mentenanță</SortableTh>
                   <th style={{width: 50}}></th>
                 </tr>
@@ -7760,6 +7761,20 @@ export default function LogisticaPage() {
                         {a.an_fabricatie || '—'}
                       </td>
                       <td><StareBadge stare={a.stare} deepSleep={a.deep_sleep} /></td>
+                      <td style={{textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontFamily: 'monospace', fontSize: 12, paddingRight: 12}}>
+                        {(() => {
+                          const tipCat = cat?.tip
+                          const esteUtilaj = tipCat === 'Utilaj'
+                          const esteVehicul = ['Autoturism', 'Autoutilitară', 'Camion', 'Cap tractor'].includes(tipCat)
+                          if (esteUtilaj && a.ore_functionare_actuale != null) {
+                            return <span style={{color: G.orange, fontWeight: 700}}>🕒 {Number(a.ore_functionare_actuale).toLocaleString('ro-RO')} <span style={{color: G.muted, fontWeight: 400}}>h</span></span>
+                          }
+                          if (esteVehicul && a.km_actuali != null) {
+                            return <span style={{color: G.blue, fontWeight: 700}}>🛣️ {Number(a.km_actuali).toLocaleString('ro-RO')} <span style={{color: G.muted, fontWeight: 400}}>km</span></span>
+                          }
+                          return <span style={{color: G.dim}}>—</span>
+                        })()}
+                      </td>
                       <td><MentenantaScadenta data={ment?.urmatoarea_data} ore={ment?.urmatoarea_ore} /></td>
                       <td style={{textAlign: 'center', color: G.dim}}>›</td>
                     </tr>
