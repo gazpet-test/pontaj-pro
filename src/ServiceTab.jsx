@@ -14,7 +14,7 @@
 // în src/lib/service.js pentru reutilizare (Acasă, etc.).
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import jsPDF from 'jspdf'
@@ -671,6 +671,10 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
   const [saving, setSaving] = useState(false)
   const [confirmFinalize, setConfirmFinalize] = useState(false)
   const [form, setForm] = useState({})
+  // ETAPA 12.5: Atașamente Fișa Service (PDF/poză scan-uri originale)
+  const [atasamente, setAtasamente] = useState([])
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const fileInputRef = useRef(null)
 
   const loadAll = useCallback(async () => {
     setLoad(true)
@@ -693,9 +697,17 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
       kmOreData = ko || null
     }
 
+    // ETAPA 12.5: Fetch atașamente fișă
+    const { data: ats } = await supabase
+      .from('logistica_service_fise_documente')
+      .select('*, autor:profiles!uploadat_de(name)')
+      .eq('fisa_id', fisaId)
+      .order('uploadat_la', { ascending: false })
+
     setFisa(f)
     setIntrari(ints || [])
     setKmOre(kmOreData)
+    setAtasamente(ats || [])
     setForm({
       tip: f?.tip || 'mentenanta',
       data_fisei: f?.data_fisei || todayISO(),
@@ -721,6 +733,99 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
   useEffect(() => { loadAll() }, [loadAll])
 
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  // ETAPA 12.5: Handler upload atașament
+  const handleUploadAtasament = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // reset input
+    if (!file) return
+    
+    // Validări
+    const validMime = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+    if (!validMime.includes(file.type)) {
+      showToast('Acceptat: PDF, JPG, PNG, WEBP', 'warn'); return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Fișier max 10 MB', 'warn'); return
+    }
+    
+    setUploadingFile(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const ts = Date.now()
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 80)
+      const path = `${fisaId}/${ts}_${safeName}`
+      
+      // 1. Upload Storage
+      const { error: upErr } = await supabase.storage
+        .from('service-fise-documente')
+        .upload(path, file, { contentType: file.type, upsert: false })
+      if (upErr) throw upErr
+      
+      // 2. INSERT BD
+      const { error: insErr } = await supabase
+        .from('logistica_service_fise_documente')
+        .insert({
+          fisa_id: fisaId,
+          fisier_path: path,
+          fisier_nume: file.name,
+          fisier_size_bytes: file.size,
+          fisier_mime: file.type,
+          uploadat_de: user?.id || null,
+        })
+      if (insErr) {
+        // Rollback Storage dacă INSERT BD eșuează
+        await supabase.storage.from('service-fise-documente').remove([path])
+        throw insErr
+      }
+      
+      showToast(`✓ Atașat: ${file.name}`, 'success')
+      // Reload atașamente
+      const { data: ats } = await supabase
+        .from('logistica_service_fise_documente')
+        .select('*, autor:profiles!uploadat_de(name)')
+        .eq('fisa_id', fisaId)
+        .order('uploadat_la', { ascending: false })
+      setAtasamente(ats || [])
+    } catch (err) {
+      console.error('Upload atașament:', err)
+      showToast(`Eroare upload: ${err.message || 'unknown'}`, 'error')
+    }
+    setUploadingFile(false)
+  }
+  
+  // ETAPA 12.5: Handler vizualizare atașament (signed URL 60s)
+  const handleViewAtasament = async (atas) => {
+    const { data, error } = await supabase.storage
+      .from('service-fise-documente')
+      .createSignedUrl(atas.fisier_path, 60)
+    if (error || !data?.signedUrl) {
+      showToast('Nu pot deschide fișierul', 'error'); return
+    }
+    window.open(data.signedUrl, '_blank')
+  }
+  
+  // ETAPA 12.5: Handler ștergere atașament
+  const handleDeleteAtasament = async (atas) => {
+    if (!confirm(`Ștergi atașamentul "${atas.fisier_nume}"?`)) return
+    try {
+      // 1. Delete BD (cascade-safe)
+      const { error: delErr } = await supabase
+        .from('logistica_service_fise_documente')
+        .delete()
+        .eq('id', atas.id)
+      if (delErr) throw delErr
+      
+      // 2. Delete Storage (best-effort; nu eșuăm dacă fails)
+      await supabase.storage.from('service-fise-documente').remove([atas.fisier_path])
+      
+      showToast('✓ Atașament șters', 'success')
+      setAtasamente(prev => prev.filter(a => a.id !== atas.id))
+    } catch (err) {
+      console.error('Delete atașament:', err)
+      showToast(`Eroare: ${err.message || 'unknown'}`, 'error')
+    }
+  }
 
   const saveEdits = async () => {
     setSaving(true)
@@ -991,6 +1096,89 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+
+        {/* ETAPA 12.5: Atașamente Fișa Service (PDF/poză scan-uri originale) */}
+        <div style={{marginBottom: 14, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10, padding: 14}}>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 10}}>
+            <div>
+              <div style={{fontSize: 13, color: G.text, fontWeight: 700}}>📎 Documente atașate ({atasamente.length})</div>
+              <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                Scan-uri originale, facturi service, poze utilaj înainte/după. Max 10MB per fișier (PDF/JPG/PNG/WEBP).
+              </div>
+            </div>
+            {canEdit && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,image/jpeg,image/png,image/webp"
+                  onChange={handleUploadAtasament}
+                  style={{display: 'none'}}
+                />
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingFile}
+                  style={{
+                    padding: '8px 14px', fontSize: 12, fontWeight: 700,
+                    background: G.logistica, color: '#000', border: 'none',
+                    borderRadius: 8, cursor: uploadingFile ? 'wait' : 'pointer',
+                    opacity: uploadingFile ? 0.6 : 1,
+                  }}
+                >
+                  {uploadingFile ? '⏳ Upload...' : '➕ Atașează fișier'}
+                </button>
+              </>
+            )}
+          </div>
+          
+          {atasamente.length === 0 ? (
+            <div style={{fontSize: 11, color: G.muted, fontStyle: 'italic', padding: '8px 0'}}>
+              Niciun atașament. {canEdit && 'Folosește butonul „➕ Atașează fișier" pentru a urca PDF/poză.'}
+            </div>
+          ) : (
+            <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+              {atasamente.map(atas => {
+                const isImg = atas.fisier_mime?.startsWith('image/')
+                const icon = isImg ? '🖼️' : '📄'
+                const sizeKB = atas.fisier_size_bytes ? Math.round(atas.fisier_size_bytes / 1024) : 0
+                return (
+                  <div key={atas.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '8px 12px', background: G.bg, border: `1px solid ${G.border}`, borderRadius: 6,
+                  }}>
+                    <div style={{fontSize: 18}}>{icon}</div>
+                    <div style={{flex: 1, minWidth: 0}}>
+                      <div style={{fontSize: 12, color: G.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={atas.fisier_nume}>
+                        {atas.fisier_nume}
+                      </div>
+                      <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                        {sizeKB ? `${sizeKB.toLocaleString('ro-RO')} KB` : ''} 
+                        {atas.autor?.name && ` · uploadat de ${atas.autor.name}`}
+                        {atas.uploadat_la && ` · ${new Date(atas.uploadat_la).toLocaleDateString('ro-RO')}`}
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => handleViewAtasament(atas)}
+                      style={{...S.btnS, padding: '5px 10px', fontSize: 11, color: G.blue, borderColor: G.blue + '55'}}
+                      title="Deschide într-un tab nou"
+                    >
+                      📥 Vezi
+                    </button>
+                    {canEdit && (
+                      <button 
+                        onClick={() => handleDeleteAtasament(atas)}
+                        style={{...S.btnS, padding: '5px 8px', fontSize: 12, color: G.red, borderColor: G.red + '44'}}
+                        title="Șterge atașament"
+                      >
+                        🗑
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

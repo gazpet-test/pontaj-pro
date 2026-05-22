@@ -1060,6 +1060,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   const [showAlim, setShowAlim] = useState(false)
   const [istoric, setIstoric] = useState([])
   const [alimentari, setAlimentari] = useState([])
+  // ETAPA 12.5: Ajustare km/ore cu audit
+  const [kmNou, setKmNou] = useState('')
+  const [oreNou, setOreNou] = useState('')
+  const [motivAjust, setMotivAjust] = useState('')
+  const [savingAjust, setSavingAjust] = useState(false)
+  const [istoricAjustari, setIstoricAjustari] = useState([])
+  const [showIstoricAjust, setShowIstoricAjust] = useState(false)
   
   // Fetch istoric + alimentări când se deschide în view
   useEffect(() => {
@@ -1076,6 +1083,94 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         .then(({ data }) => setAlimentari(data || []))
     }
   }, [mode, activ?.id])
+  
+  // ETAPA 12.5: Fetch istoric ajustări km/ore + reset input-uri când se schimbă activ-ul
+  useEffect(() => {
+    if (activ?.id && (mode === 'view' || mode === 'edit')) {
+      supabase.from('logistica_active_km_ore_ajustari')
+        .select('*, autor:profiles!created_by(name)')
+        .eq('activ_id', activ.id)
+        .order('created_at', { ascending: false })
+        .limit(20)
+        .then(({ data }) => setIstoricAjustari(data || []))
+    }
+    setKmNou('')
+    setOreNou('')
+    setMotivAjust('')
+  }, [activ?.id, mode])
+  
+  // ETAPA 12.5: Handler ajustare km/ore cu audit
+  const handleAjustareKmOre = async () => {
+    const kmCurent = activ?.km_actuali != null ? Number(activ.km_actuali) : null
+    const oreCurent = activ?.ore_functionare_actuale != null ? Number(activ.ore_functionare_actuale) : null
+    const kmNouNum = kmNou !== '' ? Number(kmNou) : null
+    const oreNouNum = oreNou !== '' ? Number(oreNou) : null
+    
+    // Validare: cel puțin una din valori e modificată
+    const kmModificat = kmNouNum !== null && kmNouNum !== kmCurent
+    const oreModificat = oreNouNum !== null && oreNouNum !== oreCurent
+    if (!kmModificat && !oreModificat) {
+      showToast('Introdu cel puțin o valoare nouă diferită de cea curentă', 'warn')
+      return
+    }
+    
+    // Validare numerică
+    if (kmNouNum !== null && (isNaN(kmNouNum) || kmNouNum < 0)) {
+      showToast('Km nou trebuie să fie ≥ 0', 'warn'); return
+    }
+    if (oreNouNum !== null && (isNaN(oreNouNum) || oreNouNum < 0)) {
+      showToast('Ore nou trebuie să fie ≥ 0', 'warn'); return
+    }
+    
+    // Avertizare dacă reducere mare (peste 50%)
+    if (kmModificat && kmCurent && kmNouNum < kmCurent * 0.5) {
+      if (!confirm(`⚠️ Reduci km de la ${kmCurent.toLocaleString('ro-RO')} la ${kmNouNum.toLocaleString('ro-RO')} (peste 50% reducere). Sigur?`)) return
+    }
+    if (oreModificat && oreCurent && oreNouNum < oreCurent * 0.5) {
+      if (!confirm(`⚠️ Reduci ore de la ${oreCurent.toLocaleString('ro-RO')} la ${oreNouNum.toLocaleString('ro-RO')} (peste 50% reducere). Sigur?`)) return
+    }
+    
+    setSavingAjust(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      
+      // 1. INSERT audit
+      const auditPayload = {
+        activ_id: activ.id,
+        km_vechi: kmModificat ? kmCurent : null,
+        km_nou: kmModificat ? kmNouNum : null,
+        ore_vechi: oreModificat ? oreCurent : null,
+        ore_nou: oreModificat ? oreNouNum : null,
+        motiv: motivAjust.trim() || null,
+        created_by: user?.id || null,
+      }
+      const { error: auditErr } = await supabase.from('logistica_active_km_ore_ajustari').insert(auditPayload)
+      if (auditErr) throw auditErr
+      
+      // 2. UPDATE active
+      const updatePayload = {}
+      if (kmModificat) updatePayload.km_actuali = kmNouNum
+      if (oreModificat) updatePayload.ore_functionare_actuale = oreNouNum
+      const { error: updErr } = await supabase.from('logistica_active').update(updatePayload).eq('id', activ.id)
+      if (updErr) throw updErr
+      
+      showToast('✓ Km/ore ajustate (audit salvat)', 'success')
+      setKmNou(''); setOreNou(''); setMotivAjust('')
+      // Re-fetch istoric ajustări
+      const { data: newIst } = await supabase.from('logistica_active_km_ore_ajustari')
+        .select('*, autor:profiles!created_by(name)')
+        .eq('activ_id', activ.id)
+        .order('created_at', { ascending: false })
+        .limit(20)
+      setIstoricAjustari(newIst || [])
+      // Refresh parent list (km_actuali update vizibil în tabel)
+      onSaved?.()
+    } catch (e) {
+      console.error('Eroare ajustare km/ore:', e)
+      showToast(`Eroare: ${e.message || 'unknown'}`, 'error')
+    }
+    setSavingAjust(false)
+  }
   
   const tipuri = useMemo(() => ['', ...Array.from(new Set(categorii.map(c => c.tip))).sort()], [categorii])
   const subcategoriiDisponibile = useMemo(() => {
@@ -1346,6 +1441,128 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             </div>
           )}
         </div>
+        
+        {/* ETAPA 12.5: Ajustare manuală km/ore cu audit - vizibil doar la edit/view pe utilaj existent */}
+        {activ?.id && (mode === 'edit' || mode === 'view') && canEdit && (
+          <div style={{marginBottom: 14, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10, padding: 14}}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 12}}>
+              <div>
+                <div style={{fontSize: 13, color: G.text, fontWeight: 700}}>📏 Ajustare manuală km/ore</div>
+                <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                  Corectare valori curente (km_actuali / ore_functionare_actuale) cu audit istoric. Util când import EvoGPS sau parsing XLSX a polluat datele.
+                </div>
+              </div>
+              {istoricAjustari.length > 0 && (
+                <button onClick={() => setShowIstoricAjust(s => !s)} style={{
+                  padding: '6px 12px', fontSize: 11, fontWeight: 600,
+                  background: 'transparent', color: G.muted, border: `1px solid ${G.border}`,
+                  borderRadius: 8, cursor: 'pointer',
+                }}>
+                  📜 Istoric ({istoricAjustari.length}) {showIstoricAjust ? '▼' : '▶'}
+                </button>
+              )}
+            </div>
+            
+            {/* Valori curente afișate prominent */}
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
+              <div style={{background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, padding: '10px 12px'}}>
+                <div style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>
+                  🛣️ KM Actuali
+                </div>
+                <div style={{fontSize: 20, fontWeight: 800, color: G.blue, fontVariantNumeric: 'tabular-nums'}}>
+                  {activ.km_actuali != null ? Number(activ.km_actuali).toLocaleString('ro-RO') : '—'}
+                  <span style={{fontSize: 11, color: G.muted, fontWeight: 400, marginLeft: 6}}>km</span>
+                </div>
+              </div>
+              <div style={{background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, padding: '10px 12px'}}>
+                <div style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 4}}>
+                  🕒 Ore Funcționare
+                </div>
+                <div style={{fontSize: 20, fontWeight: 800, color: G.orange, fontVariantNumeric: 'tabular-nums'}}>
+                  {activ.ore_functionare_actuale != null ? Number(activ.ore_functionare_actuale).toLocaleString('ro-RO') : '—'}
+                  <span style={{fontSize: 11, color: G.muted, fontWeight: 400, marginLeft: 6}}>h</span>
+                </div>
+              </div>
+            </div>
+            
+            {!isReadOnly && (
+              <>
+                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 10}}>
+                  <FieldText 
+                    label="Km nou (las gol = nemodificat)" 
+                    value={kmNou} 
+                    onChange={v => setKmNou(v)} 
+                    type="number" 
+                    placeholder={activ.km_actuali != null ? `ex: ${Number(activ.km_actuali).toLocaleString('ro-RO')}` : 'ex: 12500'} 
+                  />
+                  <FieldText 
+                    label="Ore nou (las gol = nemodificat)" 
+                    value={oreNou} 
+                    onChange={v => setOreNou(v)} 
+                    type="number" 
+                    placeholder={activ.ore_functionare_actuale != null ? `ex: ${Number(activ.ore_functionare_actuale).toLocaleString('ro-RO')}` : 'ex: 2122'} 
+                  />
+                </div>
+                <FieldTextarea 
+                  label="Motiv ajustare (opțional dar recomandat)" 
+                  value={motivAjust} 
+                  onChange={v => setMotivAjust(v)} 
+                  rows={2}
+                  placeholder="ex: Citire greșită din EvoGPS - era km al altei mașini / Corectare după inspecție fizică / Reset bord după reparație contor"
+                />
+                <div style={{marginTop: 10, display:'flex', gap:10, alignItems:'center', justifyContent:'flex-end'}}>
+                  {(kmNou !== '' || oreNou !== '') && (
+                    <div style={{fontSize: 11, color: G.muted}}>
+                      {kmNou !== '' && <span>🛣️ <strong style={{color: G.blue}}>{Number(kmNou).toLocaleString('ro-RO')}</strong> km </span>}
+                      {oreNou !== '' && <span>🕒 <strong style={{color: G.orange}}>{Number(oreNou).toLocaleString('ro-RO')}</strong> h</span>}
+                    </div>
+                  )}
+                  <button 
+                    onClick={handleAjustareKmOre} 
+                    disabled={savingAjust || (kmNou === '' && oreNou === '')}
+                    style={{
+                      padding: '8px 16px', fontSize: 12, fontWeight: 700,
+                      background: (kmNou === '' && oreNou === '') ? G.surface : G.blue,
+                      color: (kmNou === '' && oreNou === '') ? G.muted : '#fff',
+                      border: 'none', borderRadius: 8, 
+                      cursor: (savingAjust || (kmNou === '' && oreNou === '')) ? 'not-allowed' : 'pointer',
+                      opacity: savingAjust ? 0.6 : 1,
+                    }}
+                  >
+                    {savingAjust ? '⏳ Se salvează...' : '💾 Salvează ajustarea'}
+                  </button>
+                </div>
+              </>
+            )}
+            
+            {/* Istoric ajustări - expandable */}
+            {showIstoricAjust && istoricAjustari.length > 0 && (
+              <div style={{marginTop: 14, paddingTop: 12, borderTop: `1px solid ${G.border}`}}>
+                <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8}}>📜 Istoric ajustări</div>
+                <div style={{maxHeight: 240, overflowY: 'auto'}}>
+                  {istoricAjustari.map(aj => (
+                    <div key={aj.id} style={{padding: 8, marginBottom: 6, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 6, fontSize: 11}}>
+                      <div style={{display:'flex', justifyContent:'space-between', marginBottom: 4}}>
+                        <div style={{color: G.muted}}>
+                          <strong style={{color: G.text}}>{aj.autor?.name || 'Necunoscut'}</strong> · {new Date(aj.created_at).toLocaleString('ro-RO')}
+                        </div>
+                      </div>
+                      <div style={{display:'flex', gap: 14, flexWrap:'wrap'}}>
+                        {aj.km_nou != null && (
+                          <div>🛣️ <span style={{color: G.muted}}>{aj.km_vechi != null ? Number(aj.km_vechi).toLocaleString('ro-RO') : '—'}</span> → <strong style={{color: G.blue}}>{Number(aj.km_nou).toLocaleString('ro-RO')}</strong> km</div>
+                        )}
+                        {aj.ore_nou != null && (
+                          <div>🕒 <span style={{color: G.muted}}>{aj.ore_vechi != null ? Number(aj.ore_vechi).toLocaleString('ro-RO') : '—'}</span> → <strong style={{color: G.orange}}>{Number(aj.ore_nou).toLocaleString('ro-RO')}</strong> h</div>
+                        )}
+                      </div>
+                      {aj.motiv && <div style={{marginTop: 4, color: G.text, fontStyle: 'italic'}}>„{aj.motiv}"</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         
         <div style={{marginBottom: 14}}>
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>⚙️ Tehnice</div>
