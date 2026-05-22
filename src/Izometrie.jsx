@@ -413,8 +413,27 @@ export default function IzometriePage() {
                           <td style={tdStyle}>
                             {p.respins_la ? (
                               <span style={{...S.badge, background: G.red+'22', color: G.red}}>Respins</span>
+                            ) : p.status === 'aprobat' ? (
+                              <span
+                                style={{...S.badge, background: G.green+'22', color: G.green, fontWeight: 600}}
+                                title={p.aprobat_la ? `Aprobat la ${fmtDate(p.aprobat_la.slice(0,10))}` : 'Aprobat de Transgaz'}
+                              >
+                                ✅ Aprobat
+                              </span>
+                            ) : p.status === 'lansat' ? (
+                              <span style={{...S.badge, background: G.purple+'22', color: G.purple, fontWeight: 600}}>
+                                🚀 Lansat
+                              </span>
+                            ) : p.status === 'finalizat' ? (
+                              <span style={{...S.badge, background: G.blue+'22', color: G.blue, fontWeight: 600}}>
+                                🏁 Finalizat
+                              </span>
+                            ) : p.status === 'trimis_aprobare' ? (
+                              <span style={{...S.badge, background: G.yellow+'22', color: G.yellow}}>
+                                ⏳ La aprobare
+                              </span>
                             ) : (
-                              <span style={{...S.badge, background: G.green+'22', color: G.green}}>Activ</span>
+                              <span style={{...S.badge, background: G.muted+'22', color: G.muted}}>Draft</span>
                             )}
                           </td>
                         </tr>
