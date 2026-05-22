@@ -675,6 +675,12 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
   const [atasamente, setAtasamente] = useState([])
   const [uploadingFile, setUploadingFile] = useState(false)
   const fileInputRef = useRef(null)
+  // ETAPA 12.5: Ajustare rapidă km/ore activ DIN fișa service (fără să iesi)
+  const [showAjustAct, setShowAjustAct] = useState(false)
+  const [kmActivNou, setKmActivNou] = useState('')
+  const [oreActivNou, setOreActivNou] = useState('')
+  const [motivAjustActiv, setMotivAjustActiv] = useState('')
+  const [savingAjustActiv, setSavingAjustActiv] = useState(false)
 
   const loadAll = useCallback(async () => {
     setLoad(true)
@@ -827,6 +833,70 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
     }
   }
 
+  // ETAPA 12.5: Handler ajustare rapidă km/ore ACTIV din fișa service (cu audit)
+  const handleAjustareKmOreActiv = async () => {
+    if (!fisa?.activ_id) return
+    const a = fisa.logistica_active || {}
+    const kmCurent = a.km_actuali != null ? Number(a.km_actuali) : null
+    const oreCurent = a.ore_functionare_actuale != null ? Number(a.ore_functionare_actuale) : null
+    const kmNouNum = kmActivNou !== '' ? Number(kmActivNou) : null
+    const oreNouNum = oreActivNou !== '' ? Number(oreActivNou) : null
+    
+    const kmModificat = kmNouNum !== null && kmNouNum !== kmCurent
+    const oreModificat = oreNouNum !== null && oreNouNum !== oreCurent
+    if (!kmModificat && !oreModificat) {
+      showToast('Introdu cel puțin o valoare nouă diferită de cea curentă', 'warn'); return
+    }
+    if (kmNouNum !== null && (isNaN(kmNouNum) || kmNouNum < 0)) {
+      showToast('Km nou trebuie să fie ≥ 0', 'warn'); return
+    }
+    if (oreNouNum !== null && (isNaN(oreNouNum) || oreNouNum < 0)) {
+      showToast('Ore nou trebuie să fie ≥ 0', 'warn'); return
+    }
+    
+    // Avertizare dacă reducere mare (peste 50%)
+    if (kmModificat && kmCurent && kmNouNum < kmCurent * 0.5) {
+      if (!confirm(`⚠️ Reduci km de la ${kmCurent.toLocaleString('ro-RO')} la ${kmNouNum.toLocaleString('ro-RO')} (peste 50% reducere). Sigur?`)) return
+    }
+    if (oreModificat && oreCurent && oreNouNum < oreCurent * 0.5) {
+      if (!confirm(`⚠️ Reduci ore de la ${oreCurent.toLocaleString('ro-RO')} la ${oreNouNum.toLocaleString('ro-RO')} (peste 50% reducere). Sigur?`)) return
+    }
+    
+    setSavingAjustActiv(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      
+      const auditPayload = {
+        activ_id: fisa.activ_id,
+        km_vechi: kmModificat ? kmCurent : null,
+        km_nou: kmModificat ? kmNouNum : null,
+        ore_vechi: oreModificat ? oreCurent : null,
+        ore_nou: oreModificat ? oreNouNum : null,
+        motiv: motivAjustActiv.trim() ? `[Din fișă #${fisa.id}] ${motivAjustActiv.trim()}` : `[Din fișă #${fisa.id}]`,
+        created_by: user?.id || null,
+      }
+      const { error: auditErr } = await supabase.from('logistica_active_km_ore_ajustari').insert(auditPayload)
+      if (auditErr) throw auditErr
+      
+      const updatePayload = {}
+      if (kmModificat) updatePayload.km_actuali = kmNouNum
+      if (oreModificat) updatePayload.ore_functionare_actuale = oreNouNum
+      const { error: updErr } = await supabase.from('logistica_active').update(updatePayload).eq('id', fisa.activ_id)
+      if (updErr) throw updErr
+      
+      showToast('✓ Km/ore activ ajustate (audit salvat)', 'success')
+      setKmActivNou(''); setOreActivNou(''); setMotivAjustActiv('')
+      setShowAjustAct(false)
+      // Reload fișa ca să se actualizeze afișarea
+      await loadAll()
+      onSaved?.()
+    } catch (e) {
+      console.error('Eroare ajustare km/ore activ:', e)
+      showToast(`Eroare: ${e.message || 'unknown'}`, 'error')
+    }
+    setSavingAjustActiv(false)
+  }
+
   const saveEdits = async () => {
     setSaving(true)
     const payload = {
@@ -966,17 +1036,117 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
             <div style={{fontSize:11, color:G.dim, marginTop:3}}>
               ID #{fisa.id} · {fmtDate(fisa.data_fisei)} · {intrari.length} intrări
               {kmAfisat != null && <span> · KM curent: <strong style={{color:G.muted}}>{Number(kmAfisat).toLocaleString('ro-RO')}</strong></span>}
-              {oreAfisat != null && <span> · Ore curente: <strong style={{color:G.muted}}>{oreAfisat}</strong></span>}
+              {oreAfisat != null && <span> · Ore curente: <strong style={{color:G.muted}}>{Number(oreAfisat).toLocaleString('ro-RO')}</strong></span>}
               {fisa.finalizat_at && ` · finalizat ${fmtDate(fisa.finalizat_at)}`}
             </div>
           </div>
           <div style={{display:'flex', gap:6}}>
+            {canEdit && fisa.activ_id && (
+              <button 
+                onClick={() => setShowAjustAct(s => !s)} 
+                style={{...S.btnS, fontSize:12, padding:'5px 10px', color: showAjustAct ? G.blue : G.muted, borderColor: showAjustAct ? G.blue : G.border}}
+                title="Ajustare rapidă km/ore activ (cu audit)"
+              >
+                📏 {showAjustAct ? 'Ascunde' : 'Ajustează km/ore'}
+              </button>
+            )}
             {canEdit && !editMode && (
               <button onClick={() => setEditMode(true)} style={{...S.btnS, fontSize:12, padding:'5px 10px'}}>✎ Editează</button>
             )}
             <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
           </div>
         </div>
+        
+        {/* ETAPA 12.5: Ajustare rapidă km/ore activ DIN fișa service (fără să iesi) */}
+        {showAjustAct && canEdit && fisa.activ_id && (() => {
+          const a = fisa.logistica_active || {}
+          const kmManual = a.km_actuali != null ? Number(a.km_actuali) : null
+          const oreManual = a.ore_functionare_actuale != null ? Number(a.ore_functionare_actuale) : null
+          const oreLive = kmOre?.ore_live != null ? Number(kmOre.ore_live) : null
+          const kmLive = kmOre?.km_live != null ? Number(kmOre.km_live) : null
+          // Detectare polluare: diferență mare între live și manual înseamnă o fișă/alimentare istorică are valori greșite
+          const orePollutat = oreLive != null && oreManual != null && (oreLive - oreManual) > 100000
+          const kmPollutat = kmLive != null && kmManual != null && (kmLive - kmManual) > 100000
+          return (
+            <div style={{marginBottom: 14, background: G.bg, border: `2px dashed ${G.blue}55`, borderRadius: 10, padding: 14}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10}}>
+                <div>
+                  <div style={{fontSize: 13, color: G.text, fontWeight: 700}}>📏 Ajustare km/ore activ (rapid)</div>
+                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                    Corectează valorile `logistica_active.km_actuali` și `ore_functionare_actuale` direct din fișă. Audit cu referință la fișa #{fisa.id}.
+                  </div>
+                </div>
+              </div>
+              
+              {/* Discrepancy warning */}
+              {(orePollutat || kmPollutat) && (
+                <div style={{marginBottom: 10, padding: 10, background: G.yellow + '22', border: `1px solid ${G.yellow}55`, borderRadius: 8, fontSize: 11, color: G.text}}>
+                  ⚠️ <strong>Valori inconsecvente detectate.</strong> View-ul `v_active_km_ore` calculează GREATEST din mai multe surse (manual, alimentări, fișe service, telemetrie).
+                  {orePollutat && <div style={{marginTop: 4}}>🕒 Ore: <strong style={{color: G.muted}}>{oreManual?.toLocaleString('ro-RO')}</strong> (manual) vs <strong style={{color: G.red}}>{oreLive?.toLocaleString('ro-RO')}</strong> (live). Probabil o fișă service istorică are <code>ore_intrare/ore_iesire</code> polluat.</div>}
+                  {kmPollutat && <div style={{marginTop: 4}}>🛣️ Km: <strong style={{color: G.muted}}>{kmManual?.toLocaleString('ro-RO')}</strong> (manual) vs <strong style={{color: G.red}}>{kmLive?.toLocaleString('ro-RO')}</strong> (live).</div>}
+                  <div style={{marginTop: 6, fontSize: 10, color: G.muted}}>
+                    💡 Ajustarea aici corectează doar `logistica_active`. Pentru valoarea „live" trebuie să editezi și fișele cu valori greșite (Edit → modifică Ore Intrare/Ore Ieșire).
+                  </div>
+                </div>
+              )}
+              
+              {/* Valori curente compacte */}
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10, marginBottom: 10}}>
+                <div style={{background: G.surface, border: `1px solid ${G.border}`, borderRadius: 6, padding: '8px 10px'}}>
+                  <div style={{fontSize: 9, color: G.muted, fontWeight: 700, textTransform: 'uppercase'}}>🛣️ KM Manual</div>
+                  <div style={{fontSize: 16, fontWeight: 800, color: G.blue, fontVariantNumeric: 'tabular-nums'}}>
+                    {kmManual != null ? kmManual.toLocaleString('ro-RO') : '—'}
+                  </div>
+                </div>
+                <div style={{background: G.surface, border: `1px solid ${G.border}`, borderRadius: 6, padding: '8px 10px'}}>
+                  <div style={{fontSize: 9, color: G.muted, fontWeight: 700, textTransform: 'uppercase'}}>🕒 Ore Manual</div>
+                  <div style={{fontSize: 16, fontWeight: 800, color: G.orange, fontVariantNumeric: 'tabular-nums'}}>
+                    {oreManual != null ? oreManual.toLocaleString('ro-RO') : '—'}
+                  </div>
+                </div>
+              </div>
+              
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10, marginBottom: 8}}>
+                <div>
+                  <label style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: 4}}>Km nou (las gol = nemodificat)</label>
+                  <input type="number" value={kmActivNou} onChange={e => setKmActivNou(e.target.value)} 
+                    placeholder={kmManual != null ? `ex: ${kmManual.toLocaleString('ro-RO')}` : 'ex: 12500'}
+                    style={{...S.input, width: '100%'}} />
+                </div>
+                <div>
+                  <label style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: 4}}>Ore nou (las gol = nemodificat)</label>
+                  <input type="number" value={oreActivNou} onChange={e => setOreActivNou(e.target.value)} 
+                    placeholder={oreManual != null ? `ex: ${oreManual.toLocaleString('ro-RO')}` : 'ex: 2122'}
+                    style={{...S.input, width: '100%'}} />
+                </div>
+              </div>
+              <div style={{marginBottom: 8}}>
+                <label style={{fontSize: 10, color: G.muted, fontWeight: 700, textTransform: 'uppercase', display: 'block', marginBottom: 4}}>Motiv (opțional dar recomandat)</label>
+                <textarea value={motivAjustActiv} onChange={e => setMotivAjustActiv(e.target.value)} rows={2}
+                  placeholder="ex: Polluare import XLSX vechi - ore_intrare era data formattată"
+                  style={{...S.input, width: '100%', resize: 'vertical', fontFamily: 'inherit'}} />
+              </div>
+              <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
+                <button onClick={() => { setShowAjustAct(false); setKmActivNou(''); setOreActivNou(''); setMotivAjustActiv('') }} 
+                  style={{...S.btnS, fontSize: 12}}>Anulează</button>
+                <button 
+                  onClick={handleAjustareKmOreActiv} 
+                  disabled={savingAjustActiv || (kmActivNou === '' && oreActivNou === '')}
+                  style={{
+                    padding: '7px 14px', fontSize: 12, fontWeight: 700,
+                    background: (kmActivNou === '' && oreActivNou === '') ? G.surface : G.blue,
+                    color: (kmActivNou === '' && oreActivNou === '') ? G.muted : '#fff',
+                    border: 'none', borderRadius: 6,
+                    cursor: (savingAjustActiv || (kmActivNou === '' && oreActivNou === '')) ? 'not-allowed' : 'pointer',
+                    opacity: savingAjustActiv ? 0.6 : 1,
+                  }}
+                >
+                  {savingAjustActiv ? '⏳ Se salvează...' : '💾 Salvează ajustarea'}
+                </button>
+              </div>
+            </div>
+          )
+        })()}
 
         {canEdit && fisa.status !== 'finalizat' && !editMode && (
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, marginBottom:14}}>
