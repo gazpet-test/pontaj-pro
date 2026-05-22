@@ -252,7 +252,19 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
   const [saving, setSaving] = useState(false)
   const [lastEdited, setLastEdited] = useState(null)  // 'total' | 'pret' | null
   const [pretMediuGazpet, setPretMediuGazpet] = useState(null)
+  // Anomalie ore/km la alimentare (Razvan 22.05.2026)
+  const [anomalieConfirmata, setAnomalieConfirmata] = useState(false)
+  const [anomalieMotiv, setAnomalieMotiv] = useState('')
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  // Detectez anomalie: ore/km la alimentare < valoarea actuală din activ
+  const oreNoi = Number(form.ore_la_alimentare) || 0
+  const kmNoi = Number(form.km_la_alimentare) || 0
+  const oreActuale = activ?.ore_functionare_actuale || 0
+  const kmActuale = activ?.km_actuali || 0
+  const anomalieOre = oreNoi > 0 && oreActuale > 0 && oreNoi < oreActuale
+  const anomalieKm = kmNoi > 0 && kmActuale > 0 && kmNoi < kmActuale
+  const hasAnomalie = anomalieOre || anomalieKm
   
   const isGazpet = isStatieGazpet(form.statie_combustibil)
   const rezervorActiv = useMemo(
@@ -358,6 +370,8 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
       rezervor_id: isGazpet && rezervorActiv ? rezervorActiv.id : null,
       site_id: form.site_id ? Number(form.site_id) : null,
       created_by: user?.id,
+      anomalie_confirmata: hasAnomalie ? anomalieConfirmata : false,
+      anomalie_motiv: hasAnomalie && anomalieMotiv.trim() ? anomalieMotiv.trim() : null,
     }
     
     const { error } = await supabase.from('logistica_alimentari').insert(payload)
@@ -428,6 +442,41 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
           <FieldText label="Ore lucrate efectiv" value={form.ore_lucrate_efectiv} onChange={v => setField('ore_lucrate_efectiv', v)} type="number" placeholder="ex: 8" />
         </div>
         
+        {/* Warning anomalie ore/km mai mici decât cele actuale (Razvan 22.05.2026) */}
+        {hasAnomalie && (
+          <div style={{padding: 12, background: G.redDim, border: `2px solid ${G.red}`, borderRadius: 8, marginBottom: 14}}>
+            <div style={{fontSize: 13, fontWeight: 700, color: G.red, marginBottom: 6}}>
+              ⚠️ Anomalie detectată — valoare mai mică decât cea actuală în sistem
+            </div>
+            <div style={{fontSize: 11, color: G.text, marginBottom: 10, lineHeight: 1.6}}>
+              {anomalieOre && (
+                <div>🕒 <strong>Ore introduse:</strong> {oreNoi.toLocaleString('ro-RO')} h &nbsp;·&nbsp; <strong>Ore actuale în sistem:</strong> {oreActuale.toLocaleString('ro-RO')} h &nbsp;·&nbsp; <strong style={{color: G.red}}>Diferență: -{(oreActuale - oreNoi).toLocaleString('ro-RO')} h</strong></div>
+              )}
+              {anomalieKm && (
+                <div>🛣️ <strong>Km introduși:</strong> {kmNoi.toLocaleString('ro-RO')} km &nbsp;·&nbsp; <strong>Km actuali în sistem:</strong> {kmActuale.toLocaleString('ro-RO')} km &nbsp;·&nbsp; <strong style={{color: G.red}}>Diferență: -{(kmActuale - kmNoi).toLocaleString('ro-RO')} km</strong></div>
+              )}
+            </div>
+            <FieldTextarea 
+              label="Motiv (obligatoriu)" 
+              value={anomalieMotiv} 
+              onChange={setAnomalieMotiv} 
+              rows={2} 
+              placeholder="ex: defect contor, schimbat ceasul, etc." 
+            />
+            <label style={{display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10, cursor: 'pointer', padding: 8, background: '#1a1a1a', borderRadius: 6, border: `1px solid ${anomalieConfirmata ? G.green : G.red}55`}}>
+              <input 
+                type="checkbox" 
+                checked={anomalieConfirmata} 
+                onChange={e => setAnomalieConfirmata(e.target.checked)}
+                style={{marginTop: 2, cursor: 'pointer'}}
+              />
+              <span style={{fontSize: 12, fontWeight: 600, color: anomalieConfirmata ? G.green : G.text}}>
+                Am luat la cunoștință — verific situația. Razvan/Marilena/admin_logistica vor primi notificare.
+              </span>
+            </label>
+          </div>
+        )}
+        
         <div style={{marginBottom: 4}}>
           <div style={{fontSize: 11, color: G.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6}}>
             💳 Cost <span style={{fontSize: 10, color: G.muted, fontWeight: 500, textTransform: 'none', letterSpacing: 0}}>
@@ -464,7 +513,10 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
         
         <div style={{display:'flex', justifyContent:'flex-end', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
           <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving}>Anulează</button>
-          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: G.orange, opacity: saving ? .6 : 1, cursor: saving ? 'wait' : 'pointer'}}>
+          <button onClick={handleSave} 
+            disabled={saving || (hasAnomalie && (!anomalieConfirmata || !anomalieMotiv.trim()))} 
+            title={hasAnomalie && !anomalieConfirmata ? 'Bifează „Am luat la cunoștință” și completează motivul' : hasAnomalie && !anomalieMotiv.trim() ? 'Completează motivul anomaliei' : ''}
+            style={{...S.btnP, background: G.orange, opacity: (saving || (hasAnomalie && (!anomalieConfirmata || !anomalieMotiv.trim()))) ? .5 : 1, cursor: (saving || (hasAnomalie && (!anomalieConfirmata || !anomalieMotiv.trim()))) ? 'not-allowed' : 'pointer'}}>
             {saving ? '⏳ Se salvează...' : '✓ Înregistrează alimentarea'}
           </button>
         </div>
