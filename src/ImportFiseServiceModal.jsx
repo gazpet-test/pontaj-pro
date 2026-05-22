@@ -70,10 +70,179 @@ function parseInt2(val) {
   return n == null ? null : Math.round(n)
 }
 
+// Parse string „DD.MM.YYYY / NNNH" sau „DD.MM.YYYY / N.NNNH" → { data, ore }
+function parseDataOre(val) {
+  if (val == null || val === '') return null
+  const s = String(val).trim()
+  const parts = s.split(/\s*\/\s*/)
+  const data = parseDate(parts[0])
+  let ore = null
+  if (parts[1]) {
+    // Extrage doar cifre (ignoră H suffix, ignoră . ca separator mii)
+    const digits = parts[1].replace(/[^\d]/g, '')
+    ore = digits ? parseInt(digits, 10) : null
+    if (isNaN(ore)) ore = null
+  }
+  return { data, ore }
+}
+
+// ── Parser pentru formatul „Carte service utilaj" (2 foi: Mentenanta + Reparatii)
+function parseCarteServiceXLSX(wb) {
+  const rows = []
+  const utilaj = {}  // header utilaj — comun pentru ambele foi
+  
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName]
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
+    
+    const sn = sheetName.toLowerCase()
+    const tip = (sn.includes('reparatii') || sn.includes('reparații') || sn.includes('reparatie')) 
+      ? 'reparatie' : 'mentenanta'
+    
+    // Parse header utilaj (rândurile 0-15)
+    for (let r = 0; r < Math.min(data.length, 16); r++) {
+      const row = data[r] || []
+      const labelL = String(row[0] || '').toLowerCase()
+      const valL = row[2] != null && row[2] !== '' ? row[2] : (row[1] || null)
+      const labelR = String(row[5] || '').toLowerCase()
+      const valR = row[7] != null && row[7] !== '' ? row[7] : (row[6] || null)
+      
+      if (labelL.includes('denumire utilaj') && valL) utilaj.denumire = String(valL).trim()
+      else if (labelL.startsWith('model') && valL) utilaj.model = String(valL).trim()
+      else if (labelL.includes('serie sasiu') && valL) utilaj.serie_sasiu = String(valL).trim()
+      else if (labelL.includes('serie motor') && valL) utilaj.serie_motor = String(valL).trim()
+      else if (labelL.includes('nr. inmatriculare') && valL) utilaj.nr_inmat = String(valL).trim()
+      else if (labelL.includes('inmatriculare') && valL) utilaj.nr_inmat = String(valL).trim()
+      
+      if (labelR.includes('cod intern') && valR) utilaj.cod_intern = String(valR).trim()
+    }
+    
+    // Caut rândul cu header tabel (conține „Denumire Piesa")
+    let tabelHeaderRow = -1
+    for (let r = 0; r < Math.min(data.length, 25); r++) {
+      const row = data[r] || []
+      const text = row.map(c => String(c || '').toLowerCase()).join(' ')
+      if (text.includes('denumire piesa') || text.includes('denumire piesă') || text.includes('denumire lucrare')) {
+        tabelHeaderRow = r
+        break
+      }
+    }
+    if (tabelHeaderRow === -1) continue
+    
+    // Detectez care sunt coloanele după header (ar trebui să fie: Data, Nr, Denumire, Cod, Cantitate, ...)
+    const headerCols = (data[tabelHeaderRow] || []).map(h => normalizeForFuzzy(h))
+    const col = {
+      data: headerCols.findIndex(h => h === 'data'),
+      denumire: headerCols.findIndex(h => h.includes('denumire')),
+      cod: headerCols.findIndex(h => h.includes('cod piesa')),
+      cantitate: headerCols.findIndex(h => h.includes('cantitate')),
+      serv_efectuat: headerCols.findIndex(h => h.includes('service efectuat')),
+      serv_de_efectuat: headerCols.findIndex(h => h.includes('service de efectuat')),
+      locatie: headerCols.findIndex(h => h.includes('locatie')),
+      obs: headerCols.findIndex(h => h === 'obs' || h.includes('observ')),
+    }
+    
+    // Grupez piesele per dată (1 fișă = 1 intervenție = N piese cu aceeași dată)
+    const grupuri = new Map()
+    for (let r = tabelHeaderRow + 1; r < data.length; r++) {
+      const row = data[r] || []
+      if (row.every(c => c == null || c === '')) continue
+      
+      const dataStr = parseDate(col.data >= 0 ? row[col.data] : null)
+      const denumirePiesa = col.denumire >= 0 ? String(row[col.denumire] || '').trim() : ''
+      if (!dataStr || !denumirePiesa) continue
+      
+      if (!grupuri.has(dataStr)) {
+        grupuri.set(dataStr, { data: dataStr, piese: [], locatie: '', obs: '', ore_intrare: null, data_intrare: null, urmatoarea_ore: null, urmatoarea_data: null })
+      }
+      const grup = grupuri.get(dataStr)
+      
+      const cantitate = col.cantitate >= 0 ? String(row[col.cantitate] || '').trim() : ''
+      const codPiesa = col.cod >= 0 ? String(row[col.cod] || '').trim() : ''
+      grup.piese.push({ denumire: denumirePiesa, cod: codPiesa, cantitate })
+      
+      // Date/Ore service efectuat (mentenanta) — col 5 = ora curentă la intervenție
+      if (col.serv_efectuat >= 0 && row[col.serv_efectuat]) {
+        const p = parseDataOre(row[col.serv_efectuat])
+        if (p && p.ore != null && !grup.ore_intrare) grup.ore_intrare = p.ore
+        if (p && p.data && !grup.data_intrare) grup.data_intrare = p.data
+      }
+      // Date/Ore service DE efectuat (următoarea revizie) — col 6
+      if (col.serv_de_efectuat >= 0 && row[col.serv_de_efectuat]) {
+        const p = parseDataOre(row[col.serv_de_efectuat])
+        if (p && p.ore != null && !grup.urmatoarea_ore) grup.urmatoarea_ore = p.ore
+        if (p && p.data && !grup.urmatoarea_data) grup.urmatoarea_data = p.data
+      }
+      // Locatie
+      if (col.locatie >= 0 && row[col.locatie] && !grup.locatie) {
+        grup.locatie = String(row[col.locatie]).trim()
+      }
+      // Observații
+      if (col.obs >= 0 && row[col.obs]) {
+        const o = String(row[col.obs]).trim()
+        if (o) grup.obs = grup.obs ? grup.obs + ' · ' + o : o
+      }
+    }
+    
+    // Construiesc fișele finale
+    for (const grup of grupuri.values()) {
+      const titlu = tip === 'mentenanta'
+        ? (grup.ore_intrare ? `Revizie ${grup.ore_intrare}H — ${grup.piese.length} piese` : `Mentenanță — ${grup.piese.length} piese`)
+        : (grup.piese[0]?.denumire ? `${grup.piese[0].denumire}${grup.piese.length > 1 ? ` + ${grup.piese.length - 1} piese` : ''}` : 'Reparație')
+      const diagnostic = grup.piese
+        .map(p => `${p.denumire}${p.cantitate ? ' ×' + p.cantitate : ''}${p.cod ? ' [' + p.cod + ']' : ''}`)
+        .join(' · ')
+      
+      // Match utilaj — punem cod_intern dacă există, altfel folosim denumirea/modelul ca placuta (fuzzy match)
+      const nrInmat = utilaj.nr_inmat && !['NU ARE', 'NUARE', '-'].includes(utilaj.nr_inmat.toUpperCase()) 
+        ? utilaj.nr_inmat : ''
+      const fallbackId = utilaj.denumire || utilaj.model || ''
+      
+      rows.push({
+        raw_row: 0,
+        data_fisei: grup.data,
+        cod_tst: utilaj.cod_intern || '',
+        placuta: nrInmat || fallbackId,
+        tip,
+        status: 'finalizat',
+        titlu,
+        locatie_service: grup.locatie || '',
+        numar_factura: '',
+        suma_factura: null,
+        manopera: null,
+        km_intrare: null,
+        km_iesire: null,
+        ore_intrare: grup.ore_intrare,
+        ore_iesire: null,
+        diagnostic_lucrari: diagnostic,
+        urmatoarea_km: null,
+        urmatoarea_ore: grup.urmatoarea_ore,
+        urmatoarea_data: grup.urmatoarea_data,
+        observatii: grup.obs || '',
+      })
+    }
+  }
+  return rows
+}
+
 // ── Parser XLSX ──────────────────────────────────────────────────────────
 async function parseXLSX(file) {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array' })
+  
+  // Detectare format „Carte service utilaj" (foi Mentenanta + Reparatii)
+  const sheetNames = wb.SheetNames.map(s => s.toLowerCase())
+  const isCarteService = sheetNames.some(s => 
+    s.includes('mentenanta') || s.includes('mentenanță') || 
+    s.includes('reparatii') || s.includes('reparații') || s.includes('reparatie')
+  )
+  if (isCarteService) {
+    const rows = parseCarteServiceXLSX(wb)
+    if (rows.length === 0) throw new Error('Format „Carte service" detectat, dar fără intervenții valide (verifică datele și piesele).')
+    return rows
+  }
+  
+  // Format standard - tabel cu coloane Data + Cod TST/Plăcuță
   const ws = wb.Sheets[wb.SheetNames[0]]
   if (!ws) throw new Error('Foaie Excel goală')
   const data = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
