@@ -537,6 +537,10 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
   const [showExport, setShowExport] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportHistory, setExportHistory] = useState([]) // documente generate anterior
+  // Sub-faza Y: Upload PDF aprobat Transgaz
+  const [showAprobat, setShowAprobat] = useState(false)
+  const [uploadingAprobat, setUploadingAprobat] = useState(false)
+  const [aprobariHistory, setAprobariHistory] = useState([])
 
   const validationAborters = useRef({})
 
@@ -1015,13 +1019,26 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
       .from('executie_pachete_documente')
       .select('*')
       .eq('pachet_id', pachetId)
+      .eq('tip_document', 'centralizator')
       .order('uploadat_la', { ascending: false })
     if (data) setExportHistory(data)
   }, [pachetId])
 
-  useEffect(() => { loadExportHistory() }, [loadExportHistory])
+  // ───────── Load istoric aprobări Transgaz ─────────
+  const loadAprobariHistory = useCallback(async () => {
+    if (!pachetId) return
+    const { data } = await supabase
+      .from('executie_pachete_documente')
+      .select('*')
+      .eq('pachet_id', pachetId)
+      .eq('tip_document', 'pdf_aprobare_transgaz')
+      .order('uploadat_la', { ascending: false })
+    if (data) setAprobariHistory(data)
+  }, [pachetId])
 
-  // Download fisier istoric (signed URL)
+  useEffect(() => { loadExportHistory(); loadAprobariHistory() }, [loadExportHistory, loadAprobariHistory])
+
+  // Download fisier istoric (signed URL) - reutilizat pentru ambele tipuri
   async function downloadHistory(doc) {
     const { data, error } = await supabase.storage
       .from('executie-pachete-pdf')
@@ -1044,6 +1061,114 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
     if (errDb) { onError('Eroare ștergere: ' + errDb.message); return }
     onSuccess(`Șters: ${doc.fisier_nume}`)
     await loadExportHistory()
+  }
+
+  // ───────── Sub-faza Y: Upload PDF aprobat Transgaz ─────────
+  async function handleUploadAprobat(file) {
+    if (!file) return
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      onError('Doar fișiere PDF acceptate')
+      return
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      onError('Fișier prea mare (max 50 MB)')
+      return
+    }
+    setUploadingAprobat(true)
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      const uniq = Math.random().toString(36).slice(2, 10)
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const storagePath = `${pachetId}/${today}_${uniq}_aprobat_${safeName}`
+
+      // 1. Upload Storage
+      const { error: errUp } = await supabase.storage
+        .from('executie-pachete-pdf')
+        .upload(storagePath, file, { contentType: 'application/pdf' })
+      if (errUp) { onError('Upload eroare: ' + errUp.message); return }
+
+      // 2. INSERT documente
+      const { error: errDoc } = await supabase
+        .from('executie_pachete_documente')
+        .insert({
+          pachet_id: pachetId,
+          tip_document: 'pdf_aprobare_transgaz',
+          fisier_path: storagePath,
+          fisier_nume: file.name,
+          fisier_size_bytes: file.size,
+          mime_type: 'application/pdf',
+        })
+      if (errDoc) {
+        // Rollback Storage
+        await supabase.storage.from('executie-pachete-pdf').remove([storagePath])
+        onError('Eroare BD documente: ' + errDoc.message)
+        return
+      }
+
+      // 3. UPDATE pachet status → aprobat
+      const { error: errUpd } = await supabase
+        .from('executie_pachete_lansare')
+        .update({
+          status: 'aprobat',
+          aprobat_la: new Date().toISOString(),
+          pdf_aprobare_path: storagePath,
+          pdf_aprobare_nume: file.name,
+        })
+        .eq('id', pachetId)
+      if (errUpd) { onError('Eroare update pachet: ' + errUpd.message); return }
+
+      onSuccess(`✅ Pachet APROBAT! PDF: ${file.name}`)
+      await Promise.all([loadAprobariHistory(), refetchPachet()])
+    } finally {
+      setUploadingAprobat(false)
+    }
+  }
+
+  async function deleteAprobatHistory(doc) {
+    // 1. Șterg fișierul din Storage
+    const { error: errStorage } = await supabase.storage
+      .from('executie-pachete-pdf')
+      .remove([doc.fisier_path])
+    if (errStorage) console.warn('Storage delete:', errStorage.message)
+    // 2. Șterg înregistrarea
+    const { error: errDb } = await supabase
+      .from('executie_pachete_documente')
+      .delete()
+      .eq('id', doc.id)
+    if (errDb) { onError('Eroare ștergere: ' + errDb.message); return }
+
+    // 3. Recalculez status pachet: dacă a rămas vreo aprobare → pun cea mai recentă; altfel revin la draft
+    const { data: remaining } = await supabase
+      .from('executie_pachete_documente')
+      .select('*')
+      .eq('pachet_id', pachetId)
+      .eq('tip_document', 'pdf_aprobare_transgaz')
+      .order('uploadat_la', { ascending: false })
+      .limit(1)
+    if (remaining && remaining.length > 0) {
+      // Mai există aprobări — pun-o pe cea mai recentă ca activă
+      await supabase
+        .from('executie_pachete_lansare')
+        .update({
+          pdf_aprobare_path: remaining[0].fisier_path,
+          pdf_aprobare_nume: remaining[0].fisier_nume,
+          aprobat_la: remaining[0].uploadat_la,
+        })
+        .eq('id', pachetId)
+    } else {
+      // Nu mai există nicio aprobare — revin la draft
+      await supabase
+        .from('executie_pachete_lansare')
+        .update({
+          status: 'draft',
+          aprobat_la: null,
+          pdf_aprobare_path: null,
+          pdf_aprobare_nume: null,
+        })
+        .eq('id', pachetId)
+    }
+    onSuccess(`Șters: ${doc.fisier_nume}`)
+    await Promise.all([loadAprobariHistory(), refetchPachet()])
   }
 
   // ───────── Bulk save (pentru rânduri rămase dirty după erori) ─────────
@@ -1116,6 +1241,11 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
               {pachet.revizie > 0 && (
                 <span style={{...S.badge, background: G.yellow+'22', color: G.yellow, fontSize: 12, padding: '3px 10px'}}>
                   rev.{pachet.revizie}
+                </span>
+              )}
+              {pachet.status === 'aprobat' && (
+                <span style={{...S.badge, background: G.green+'22', color: G.green, fontSize: 12, padding: '3px 10px'}}>
+                  ✅ APROBAT TRANSGAZ {pachet.aprobat_la && `· ${fmtDate(pachet.aprobat_la.slice(0,10))}`}
                 </span>
               )}
               {pachet.respins_la && (
@@ -1194,6 +1324,19 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           title={tevi.length ? 'Generează Centralizator XLSX pentru Transgaz' : 'Adaugă țevi în pachet întâi'}
         >
           {exporting ? '⏳ Generez...' : '📤 Export Transgaz'}
+        </button>
+        <button
+          onClick={() => setShowAprobat(true)}
+          style={{
+            ...S.btnS, padding:'6px 12px',
+            borderColor: pachet.status === 'aprobat' ? G.green : G.purple,
+            color: pachet.status === 'aprobat' ? G.green : G.purple,
+            background: (pachet.status === 'aprobat' ? G.green : G.purple) + '14',
+            fontWeight: 600,
+          }}
+          title="Upload PDF aprobat de Transgaz"
+        >
+          {pachet.status === 'aprobat' ? `✅ Aprobat (${aprobariHistory.length})` : `📥 PDF aprobat${aprobariHistory.length ? ` (${aprobariHistory.length})` : ''}`}
         </button>
         <button
           onClick={saveBulkDirty}
@@ -1322,6 +1465,20 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           onClose={() => setShowExport(false)}
           onDownloadHistory={downloadHistory}
           onDeleteHistory={deleteHistory}
+        />
+      )}
+
+      {/* MODAL: Upload PDF aprobat Transgaz */}
+      {showAprobat && (
+        <UploadAprobatModal
+          pachet={pachet}
+          tronson={tronson}
+          uploading={uploadingAprobat}
+          history={aprobariHistory}
+          onUpload={handleUploadAprobat}
+          onClose={() => setShowAprobat(false)}
+          onDownloadHistory={downloadHistory}
+          onDeleteHistory={deleteAprobatHistory}
         />
       )}
     </div>
@@ -1454,6 +1611,217 @@ function ExportCentralizatorModal({ pachet, tronson, tevi, exporting, history, o
             }}
           >
             {exporting ? '⏳ Generez...' : '📤 Generează & Descarcă'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ===========================================================================
+// UPLOAD APROBAT MODAL — Sub-faza Y: upload PDF aprobat de Transgaz
+// ===========================================================================
+
+function UploadAprobatModal({ pachet, tronson, uploading, history, onUpload, onClose, onDownloadHistory, onDeleteHistory }) {
+  const [file, setFile] = useState(null)
+  const [dragOver, setDragOver] = useState(false)
+  const fileInputRef = useRef(null)
+  const isAprobat = pachet.status === 'aprobat'
+
+  function handleFileSelect(f) {
+    if (!f) return
+    if (!f.name.toLowerCase().endsWith('.pdf') && f.type !== 'application/pdf') {
+      alert('Doar fișiere PDF acceptate')
+      return
+    }
+    if (f.size > 50 * 1024 * 1024) {
+      alert('Fișier prea mare (max 50 MB)')
+      return
+    }
+    setFile(f)
+  }
+
+  function handleDrop(e) {
+    e.preventDefault(); setDragOver(false)
+    const f = e.dataTransfer.files[0]
+    handleFileSelect(f)
+  }
+
+  async function handleConfirm() {
+    if (!file) return
+    await onUpload(file)
+    setFile(null)
+  }
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex: 1000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding: 20,
+    }}>
+      <div style={{
+        background: G.card, border:`1px solid ${G.border}`, borderRadius: 12,
+        maxWidth: 640, width:'100%', maxHeight:'90vh', display:'flex', flexDirection:'column',
+      }}>
+        {/* HEADER */}
+        <div style={{ padding:'18px 24px', borderBottom:`1px solid ${G.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: G.green }}>
+              ✅ Upload PDF aprobat Transgaz
+            </div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 4, fontFamily:'monospace' }}>
+              {pachet.cod_document_full} · Tronson {tronson?.cod || '?'}
+            </div>
+          </div>
+          <button onClick={onClose} style={{...S.btnS, padding:'6px 12px', fontSize: 18}}>×</button>
+        </div>
+
+        {/* CONȚINUT */}
+        <div style={{ padding:'18px 24px', overflowY:'auto' }}>
+          {/* Status curent */}
+          <div style={{ background: G.bg, border:`1px solid ${G.border}`, borderRadius: 8, padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: G.muted, marginBottom: 4 }}>Status pachet</div>
+            <div style={{ display:'flex', alignItems:'center', gap: 10, flexWrap:'wrap' }}>
+              <span style={{
+                ...S.badge, padding:'4px 12px', fontSize: 13, fontWeight: 600,
+                background: (isAprobat ? G.green : G.muted) + '22',
+                color: isAprobat ? G.green : G.muted,
+              }}>
+                {isAprobat ? '✅ APROBAT' : '📝 DRAFT'}
+              </span>
+              {isAprobat && pachet.aprobat_la && (
+                <span style={{ fontSize: 12, color: G.muted }}>
+                  aprobat la {fmtDate(pachet.aprobat_la.slice(0, 10))}
+                </span>
+              )}
+              {isAprobat && pachet.pdf_aprobare_nume && (
+                <span style={{ fontSize: 12, color: G.muted, fontFamily:'monospace' }}>
+                  · {pachet.pdf_aprobare_nume}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* DROP ZONE */}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            style={{
+              border: `2px dashed ${dragOver ? G.green : (file ? G.green : G.border)}`,
+              borderRadius: 10, padding: '28px 20px', textAlign:'center', cursor:'pointer',
+              background: dragOver ? G.green+'14' : (file ? G.green+'08' : G.bg),
+              transition: 'all 0.15s',
+              marginBottom: 14,
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,application/pdf"
+              onChange={e => handleFileSelect(e.target.files[0])}
+              style={{ display:'none' }}
+            />
+            {file ? (
+              <div>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: G.green, marginBottom: 4, wordBreak:'break-all' }}>
+                  {file.name}
+                </div>
+                <div style={{ fontSize: 12, color: G.muted }}>
+                  {(file.size / 1024).toFixed(1)} KB · gata de upload
+                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); setFile(null) }}
+                  style={{...S.btnS, padding:'4px 10px', fontSize: 11, marginTop: 10, borderColor: G.red, color: G.red}}
+                >
+                  Schimbă fișier
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 32, marginBottom: 8, opacity: 0.6 }}>📥</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: G.text, marginBottom: 4 }}>
+                  Drag & drop PDF aprobat de Transgaz aici
+                </div>
+                <div style={{ fontSize: 12, color: G.muted }}>
+                  sau click pentru a alege fișierul (max 50 MB)
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ISTORIC APROBĂRI */}
+          {history && history.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: G.muted }}>
+                📜 Istoric aprobări ({history.length})
+              </div>
+              <div style={{ background: G.bg, border:`1px solid ${G.border}`, borderRadius: 8, maxHeight: 200, overflowY:'auto' }}>
+                {history.map(doc => (
+                  <div key={doc.id} style={{
+                    padding:'8px 12px', borderBottom:`1px solid ${G.border2}`,
+                    display:'flex', justifyContent:'space-between', alignItems:'center',
+                  }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12, fontFamily:'monospace', color: G.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {doc.fisier_nume}
+                      </div>
+                      <div style={{ fontSize: 10, color: G.muted, marginTop: 2 }}>
+                        {fmtDate(doc.uploadat_la?.slice(0, 10))} · {(doc.fisier_size_bytes / 1024).toFixed(1)} KB
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', gap: 6, alignItems:'center' }}>
+                      <button
+                        onClick={() => onDownloadHistory(doc)}
+                        style={{...S.btnS, padding:'4px 10px', fontSize: 11, borderColor: G.blue, color: G.blue}}
+                      >
+                        ⬇ Descarcă
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Șterge definitiv "${doc.fisier_nume}"?\n\nDacă e ultima aprobare, pachetul revine la status DRAFT.`)) {
+                            onDeleteHistory(doc)
+                          }
+                        }}
+                        style={{...S.btnS, padding:'4px 8px', fontSize: 11, borderColor: G.red, color: G.red}}
+                        title="Șterge"
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* INFO */}
+          <div style={{ background: G.green+'11', border:`1px solid ${G.green}33`, borderRadius: 8, padding: 12, fontSize: 11, color: G.muted, lineHeight: 1.6 }}>
+            La upload:
+            <ul style={{ margin:'6px 0 0 16px', padding: 0 }}>
+              <li>PDF-ul e salvat în Storage (bucket <code style={{ color: G.green }}>executie-pachete-pdf</code>)</li>
+              <li>Pachetul devine <strong style={{ color: G.green }}>APROBAT</strong> → gata de lansare în teren</li>
+              <li>Audit log în <code style={{ color: G.green }}>executie_pachete_documente</code></li>
+              <li>Istoricul aprobărilor e păstrat (poți avea revizii multiple)</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <div style={{ padding:'14px 24px', borderTop:`1px solid ${G.border}`, display:'flex', justifyContent:'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={{...S.btnS, padding:'9px 18px'}}>Anulează</button>
+          <button
+            onClick={handleConfirm}
+            disabled={!file || uploading}
+            style={{
+              ...S.btnP, padding:'9px 20px',
+              background: G.green, color:'#fff',
+              opacity: !file || uploading ? 0.5 : 1,
+              cursor: !file || uploading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {uploading ? '⏳ Upload...' : '✅ Salvează & Marchează aprobat'}
           </button>
         </div>
       </div>
