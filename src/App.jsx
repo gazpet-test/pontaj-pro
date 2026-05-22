@@ -1319,15 +1319,11 @@ function PontajPage() {
   useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
   // Verific dacă data afișată e în interiorul unei perioade exportate ca plată
+  // Folosesc RPC SECURITY DEFINER ca să funcționeze pentru orice user authenticated (RLS bypass controlat)
   useEffect(() => {
     (async () => {
       const { data } = await supabase
-        .from('diurna_payments')
-        .select('id,period_from,period_to,payment_date,total_amount')
-        .lte('period_from', date)
-        .gte('period_to', date)
-        .order('payment_date', { ascending: false })
-        .limit(1)
+        .rpc('fn_get_export_period_for_date', { p_date: date })
       if (data && data.length > 0) {
         setIsDateExported(true)
         setExportPeriodInfo(data[0])
@@ -1466,8 +1462,8 @@ function PontajPage() {
             <div style={{fontSize:13,fontWeight:700,color:G.orange}}>Zi din perioadă deja exportată ca plată</div>
             <div style={{fontSize:11,color:G.text,marginTop:2}}>
               Plată export <strong>{new Date(exportPeriodInfo.period_from).toLocaleDateString('ro-RO')}</strong> — <strong>{new Date(exportPeriodInfo.period_to).toLocaleDateString('ro-RO')}</strong>
-              {' · '}{Number(exportPeriodInfo.total_amount).toFixed(0)} RON
-              {' · '}data plății {new Date(exportPeriodInfo.payment_date).toLocaleDateString('ro-RO')}
+              {exportPeriodInfo.total_amount != null && <>{' · '}{Number(exportPeriodInfo.total_amount).toFixed(0)} RON</>}
+              {exportPeriodInfo.payment_date && <>{' · '}data plății {new Date(exportPeriodInfo.payment_date).toLocaleDateString('ro-RO')}</>}
             </div>
             <div style={{fontSize:11,color:G.muted,marginTop:4}}>
               ⚠ Orice modificare la pontaj (ore, diurnă, masă) va cere <strong>parola de cont</strong>. După modificare, refă exportul pentru această perioadă.
