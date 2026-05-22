@@ -379,8 +379,8 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
   }
 
   const executeImport = async () => {
-    if (!profile?.is_owner && !['admin', 'manager_proiect', 'logistica'].includes(profile?.role)) {
-      setToast({ type: 'error', msg: 'Acces interzis - doar manager/owner pot importa.' })
+    if (!profile?.is_owner && !['superadmin', 'admin_logistica'].includes(profile?.role)) {
+      setToast({ type: 'error', msg: 'Acces interzis - doar admin logistică sau owner pot importa.' })
       return
     }
     const rows = []
