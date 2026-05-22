@@ -371,6 +371,269 @@ function ChatNavButton() {
 }
 
 
+// ════════════════════════════════════════════════════════════════════════════
+// NOTIFICATION BELL — clopoțel notificări cu badge count + dropdown listă
+// Auto-refresh la 30s. Click pe item → marchează read_at + navigate la link_to.
+// ════════════════════════════════════════════════════════════════════════════
+function NotificationBell() {
+  const { profile } = useAuth()
+  const nav = useNavigate()
+  const [open, setOpen] = useState(false)
+  const [notifs, setNotifs] = useState([])
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const dropdownRef = useRef(null)
+  
+  const loadNotifs = useCallback(async () => {
+    if (!profile?.id) return
+    setLoading(true)
+    // Iau ultimele 30, prioritar necitite + recente
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('id, type, modul, title, message, link_to, read_at, created_at')
+      .eq('profile_id', profile.id)
+      .order('created_at', { ascending: false })
+      .limit(30)
+    if (!error) {
+      setNotifs(data || [])
+      setUnreadCount((data || []).filter(n => !n.read_at).length)
+    }
+    setLoading(false)
+  }, [profile?.id])
+  
+  useEffect(() => {
+    loadNotifs()
+    // Auto-refresh la 30s
+    const t = setInterval(loadNotifs, 30000)
+    return () => clearInterval(t)
+  }, [loadNotifs])
+  
+  // Close dropdown la click în afara lui
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+  
+  const markAsRead = async (id) => {
+    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id)
+    setNotifs(prev => prev.map(n => n.id === id ? { ...n, read_at: new Date().toISOString() } : n))
+    setUnreadCount(c => Math.max(0, c - 1))
+  }
+  
+  const markAllAsRead = async () => {
+    const unreadIds = notifs.filter(n => !n.read_at).map(n => n.id)
+    if (unreadIds.length === 0) return
+    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).in('id', unreadIds)
+    setNotifs(prev => prev.map(n => n.read_at ? n : { ...n, read_at: new Date().toISOString() }))
+    setUnreadCount(0)
+  }
+  
+  const handleClickNotif = (n) => {
+    if (!n.read_at) markAsRead(n.id)
+    setOpen(false)
+    if (n.link_to) nav(n.link_to)
+  }
+  
+  const timeAgo = (iso) => {
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000
+    if (diff < 60) return 'acum'
+    if (diff < 3600) return `${Math.floor(diff/60)} min`
+    if (diff < 86400) return `${Math.floor(diff/3600)} h`
+    if (diff < 604800) return `${Math.floor(diff/86400)} zile`
+    return new Date(iso).toLocaleDateString('ro-RO', { day: '2-digit', month: 'short' })
+  }
+  
+  const iconForType = (type) => {
+    if (type === 'warning' || type === 'error') return '⚠️'
+    if (type === 'success') return '✓'
+    if (type === 'info') return 'ℹ'
+    return '🔔'
+  }
+  
+  const colorForType = (type) => {
+    if (type === 'warning') return G.yellow
+    if (type === 'error') return G.red
+    if (type === 'success') return G.green
+    return G.blue
+  }
+  
+  return (
+    <div ref={dropdownRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={`Notificări${unreadCount > 0 ? ` (${unreadCount} necitite)` : ''}`}
+        style={{
+          position: 'relative',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 38, height: 38,
+          background: open ? G.blue + '22' : (unreadCount > 0 ? G.red + '11' : 'transparent'),
+          color: open ? G.blue : (unreadCount > 0 ? G.red : G.muted),
+          border: `1px solid ${open ? G.blue + '55' : (unreadCount > 0 ? G.red + '44' : G.border)}`,
+          borderRadius: 8,
+          fontSize: 18,
+          cursor: 'pointer',
+          transition: 'all .15s',
+          fontFamily: 'inherit',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)' }}
+        onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
+      >
+        🔔
+        {unreadCount > 0 && (
+          <span style={{
+            position: 'absolute',
+            top: -4,
+            right: -4,
+            background: G.red,
+            color: '#fff',
+            borderRadius: '50%',
+            minWidth: 18,
+            height: 18,
+            fontSize: 10,
+            fontWeight: 800,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '0 5px',
+            border: `2px solid #fff`,
+            animation: 'nb-pulse 1.8s ease-in-out infinite',
+          }}>
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </button>
+      
+      {open && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 8px)',
+          right: 0,
+          width: 400,
+          maxHeight: 540,
+          background: G.surface,
+          border: `1px solid ${G.border}`,
+          borderRadius: 12,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            padding: '12px 16px',
+            borderBottom: `1px solid ${G.border}`,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>
+              🔔 Notificări {unreadCount > 0 && <span style={{ color: G.red, fontWeight: 600 }}>· {unreadCount} noi</span>}
+            </div>
+            {unreadCount > 0 && (
+              <button
+                onClick={markAllAsRead}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: G.blue,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  padding: 4,
+                }}
+              >
+                Marchează toate
+              </button>
+            )}
+          </div>
+          
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {loading && notifs.length === 0 && (
+              <div style={{ padding: 40, textAlign: 'center', color: G.muted, fontSize: 13 }}>⏳ Se încarcă...</div>
+            )}
+            {!loading && notifs.length === 0 && (
+              <div style={{ padding: 40, textAlign: 'center', color: G.muted, fontSize: 13 }}>
+                <div style={{ fontSize: 36, marginBottom: 8 }}>🔕</div>
+                <div>Nicio notificare</div>
+              </div>
+            )}
+            {notifs.map(n => (
+              <div
+                key={n.id}
+                onClick={() => handleClickNotif(n)}
+                style={{
+                  padding: '12px 16px',
+                  borderBottom: `1px solid ${G.border}`,
+                  cursor: 'pointer',
+                  background: n.read_at ? 'transparent' : G.blue + '08',
+                  transition: 'background .15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = G.border + '44' }}
+                onMouseLeave={e => { e.currentTarget.style.background = n.read_at ? 'transparent' : G.blue + '08' }}
+              >
+                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                  <div style={{
+                    fontSize: 16,
+                    width: 26, height: 26,
+                    background: colorForType(n.type) + '22',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>{iconForType(n.type)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: 13,
+                      fontWeight: n.read_at ? 500 : 700,
+                      color: G.text,
+                      marginBottom: 2,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                    }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.title}</span>
+                      <span style={{ fontSize: 11, color: G.muted, fontWeight: 500, flexShrink: 0 }}>{timeAgo(n.created_at)}</span>
+                    </div>
+                    {n.modul && (
+                      <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{n.modul}</div>
+                    )}
+                    <div style={{
+                      fontSize: 12,
+                      color: G.muted,
+                      lineHeight: 1.4,
+                      whiteSpace: 'pre-wrap',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 4,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden',
+                    }}>{n.message}</div>
+                    {!n.read_at && (
+                      <div style={{
+                        marginTop: 6,
+                        display: 'inline-block',
+                        width: 8, height: 8,
+                        background: G.blue,
+                        borderRadius: '50%',
+                      }}/>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes nb-pulse { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.2) } }`}</style>
+    </div>
+  )
+}
+
+
 function Layout({ children }) {
   const { profile, signOut } = useAuth()
   const nav = useNavigate(); const loc = useLocation()
@@ -472,6 +735,7 @@ function Layout({ children }) {
             ＋
           </button>
           <ChatNavButton />
+          <NotificationBell />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
             <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>
