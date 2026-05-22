@@ -21,6 +21,7 @@ import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import { calcUrmService, urmServiceLevel, urmServiceColor, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
 import PieseCatalogSection from './PieseCatalogSection.jsx'
+import ImportFiseServiceModal from './ImportFiseServiceModal.jsx'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -1492,6 +1493,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [newModal, setNewModal] = useState(null)
   const [detailModal, setDetailModal] = useState(null)
   const [acoperireModal, setAcoperireModal] = useState(false)
+  const [importModal, setImportModal] = useState(false)
   const [istoricModal, setIstoricModal] = useState(null)  // ETAPA 8.7: { activ }
 
   // Etapa 12+ (19.05.2026): toggle între lista fișelor service și catalog piese
@@ -1853,6 +1855,11 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
           </button>
           <button onClick={exportExcel} disabled={filtered.length === 0} style={{...S.btnS, opacity: filtered.length === 0 ? .4 : 1}}>📥 Excel</button>
           {canEdit && (
+            <button onClick={() => setImportModal(true)} style={{...S.btnS, color: G.purple, borderColor: G.purple + '55'}} title="Import fișe vechi din XLSX (istoric)">
+              📤 Import
+            </button>
+          )}
+          {canEdit && (
             <button onClick={() => setNewModal({})} style={{...S.btnP, background:G.logistica, color:'#000'}}>+ Fișă nouă</button>
           )}
         </div>
@@ -1990,6 +1997,21 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
             setDetailModal(fisaId)
           }}
           showToast={showToast}
+        />
+      )}
+      
+      {/* Import fișe service istorice din XLSX (22.05.2026) */}
+      {importModal && (
+        <ImportFiseServiceModal
+          open={importModal}
+          onClose={() => setImportModal(false)}
+          supabase={supabase}
+          G={G}
+          S={S}
+          onSuccess={(n) => {
+            showToast(`✓ ${n} fișe service importate`, 'success')
+            loadAll()
+          }}
         />
       )}
     </>
