@@ -1355,8 +1355,15 @@ function PontajPage() {
   const loadRecs=async()=>{ setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); const m={}; (data||[]).forEach(r=>{m[r.employee_id]=r}); setRecs(m); setLoad(false) }
 
   // Helper: cere parolă pentru zile exportate (Razvan 22.05.2026 - parolă per modificare)
+  // Gate de permisiune: doar Razvan + Marilena (is_owner) + Natalia Udrea (can_modify_employees)
+  const canEditRetroactivePontaj = profile?.is_owner === true || profile?.can_modify_employees === true
   const requestPasswordIfExported = (empName) => new Promise((resolve) => {
     if (!isDateExported) { resolve(true); return }
+    if (!canEditRetroactivePontaj) {
+      showToast('🚫 Modificare retroactivă blocată — doar Trusu Razvan, Marilena și Natalia pot modifica zile exportate. Contactează unul dintre ei.', 'error')
+      resolve(false)
+      return
+    }
     setPasswordPrompt({
       employeeName: empName,
       onConfirm: () => resolve(true),
@@ -1456,17 +1463,22 @@ function PontajPage() {
         ☕ Pauza masă 12–13 se scade automat &nbsp;·&nbsp; 💰 Diurnă {diurnaAmt} RON/zi &nbsp;·&nbsp; Șantierul obligatoriu la ore
       </div>
       {isDateExported && exportPeriodInfo && (
-        <div style={{background:G.orange+'14',border:`2px solid ${G.orange}`,borderRadius:10,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-          <span style={{fontSize:20}}>🔒</span>
+        <div style={{background:(canEditRetroactivePontaj?G.orange:G.red)+'14',border:`2px solid ${canEditRetroactivePontaj?G.orange:G.red}`,borderRadius:10,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <span style={{fontSize:20}}>{canEditRetroactivePontaj?'🔒':'🚫'}</span>
           <div style={{flex:1,minWidth:200}}>
-            <div style={{fontSize:13,fontWeight:700,color:G.orange}}>Zi din perioadă deja exportată ca plată</div>
+            <div style={{fontSize:13,fontWeight:700,color:canEditRetroactivePontaj?G.orange:G.red}}>
+              Zi din perioadă deja exportată ca plată
+            </div>
             <div style={{fontSize:11,color:G.text,marginTop:2}}>
               Plată export <strong>{new Date(exportPeriodInfo.period_from).toLocaleDateString('ro-RO')}</strong> — <strong>{new Date(exportPeriodInfo.period_to).toLocaleDateString('ro-RO')}</strong>
               {exportPeriodInfo.total_amount != null && <>{' · '}{Number(exportPeriodInfo.total_amount).toFixed(0)} RON</>}
               {exportPeriodInfo.payment_date && <>{' · '}data plății {new Date(exportPeriodInfo.payment_date).toLocaleDateString('ro-RO')}</>}
             </div>
             <div style={{fontSize:11,color:G.muted,marginTop:4}}>
-              ⚠ Orice modificare la pontaj (ore, diurnă, masă) va cere <strong>parola de cont</strong>. După modificare, refă exportul pentru această perioadă.
+              {canEditRetroactivePontaj
+                ? <>⚠ Orice modificare la pontaj (ore, diurnă, masă) va cere <strong>parola de cont</strong>. După modificare, refă exportul pentru această perioadă.</>
+                : <>🚫 <strong>Modificare blocată.</strong> Doar <strong>Trusu Razvan</strong>, <strong>Marilena</strong> și <strong>Natalia Udrea</strong> pot modifica zile deja exportate. Contactează unul dintre ei pentru corecții retroactive.</>
+              }
             </div>
           </div>
         </div>
