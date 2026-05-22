@@ -489,19 +489,19 @@ const COL_DEFS = [
   { key:'_select',     label:'',       width:36,  align:'center', edit:false, sticky:true },
   { key:'poz_in_pachet', label:'#',     width:42,  align:'right',  edit:false },
   { key:'tip_rand',    label:'Tip',    width:110, edit:false }, // badge readonly
-  { key:'lot',         label:'Lot',    width:68,  edit:'text' },
-  { key:'serie_unica', label:'Serie unică', width:140, edit:'text', validate:'serie', mono:true },
-  { key:'tip',         label:'Tip mat.',  width:78,  edit:'text' },
+  { key:'lot',         label:'Lot',    width:50,  edit:'text' },
+  { key:'serie_unica', label:'Serie unică', width:110, edit:'text', validate:'serie', mono:true },
+  { key:'tip',         label:'Tip mat.',  width:62,  edit:'text' },
   { key:'dimensiune',  label:'Dimensiune',width:140, edit:'text' },
-  { key:'sarja',       label:'Șarja', width:96,  edit:'text', mono:true },
-  { key:'lungime_m',   label:'Cant (m)', width:84,  align:'right', edit:'number' },
-  { key:'_poz_km',     label:'POZ KM', width:90,  align:'right', edit:false, mono:true },
-  { key:'sudura_cod',  label:'Sudură',width:100, edit:'text', validate:'sudura', mono:true },
-  { key:'pm_cod',      label:'PM',    width:88,  edit:'text', mono:true },
-  { key:'pa_ut_cod',   label:'PA-UT', width:100, edit:'text', mono:true },
-  { key:'ut_cod',      label:'UT',    width:80,  edit:'text', mono:true },
-  { key:'observatii',  label:'Obs',   width:180, edit:'text' },
-  { key:'_actions',    label:'',      width:108, align:'center', edit:false },
+  { key:'sarja',       label:'Șarja', width:90,  edit:'text', mono:true },
+  { key:'lungime_m',   label:'Cant (m)', width:60,  align:'right', edit:'number' },
+  { key:'_poz_km',     label:'POZ KM', width:78,  align:'right', edit:false, mono:true },
+  { key:'sudura_cod',  label:'Sudură',width:88,  edit:'text', validate:'sudura', mono:true },
+  { key:'pm_cod',      label:'PM',    width:80,  edit:'text', mono:true },
+  { key:'pa_ut_cod',   label:'PA-UT', width:92,  edit:'text', mono:true },
+  { key:'ut_cod',      label:'UT',    width:54,  edit:'text', mono:true },
+  { key:'observatii',  label:'Obs',   width:104, edit:'text' },
+  { key:'_actions',    label:'',      width:170, align:'center', edit:false },
 ]
 
 // Câmpurile editabile pe tip_rand (separator = nimic, legare = doar sudura+PM)
@@ -1219,7 +1219,7 @@ function PachetEditor({ pachetId, tronsoane, proiectId, onClose, onError, onSucc
           </div>
         ) : (
           <div style={{ overflowX:'auto', maxHeight:'calc(100vh - 280px)' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12, minWidth: 1464 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize: 12, minWidth: 1356 }}>
               <thead style={{ position:'sticky', top: 0, background: G.surface, zIndex: 10 }}>
                 <tr style={{ borderBottom: `1px solid ${G.border}` }}>
                   {COL_DEFS.map(col => (
@@ -1633,7 +1633,7 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
   if (col.key === '_actions') {
     return (
       <td style={{...tdStyle, padding:'6px 4px', textAlign:'center', width: col.width}}>
-        <div style={{ display:'flex', justifyContent:'center', gap: 2, alignItems:'center' }}>
+        <div style={{ display:'flex', justifyContent:'center', gap: 5, alignItems:'center' }}>
           <button
             onClick={onSwapUp}
             disabled={isFirst || swapping}
@@ -1642,8 +1642,9 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
               background:'transparent', border:`1px solid ${isFirst ? G.border : G.purple}`,
               color: isFirst ? G.dim : G.purple,
               cursor: (isFirst || swapping) ? 'not-allowed' : 'pointer',
-              fontSize: 11, padding:'1px 5px', borderRadius: 3, lineHeight: 1,
+              fontSize: 16, padding:'4px 9px', borderRadius: 4, lineHeight: 1,
               opacity: (isFirst || swapping) ? 0.35 : 1,
+              minWidth: 28, fontWeight: 600,
             }}
           >↑</button>
           <button
@@ -1654,8 +1655,9 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
               background:'transparent', border:`1px solid ${isLast ? G.border : G.purple}`,
               color: isLast ? G.dim : G.purple,
               cursor: (isLast || swapping) ? 'not-allowed' : 'pointer',
-              fontSize: 11, padding:'1px 5px', borderRadius: 3, lineHeight: 1,
+              fontSize: 16, padding:'4px 9px', borderRadius: 4, lineHeight: 1,
               opacity: (isLast || swapping) ? 0.35 : 1,
+              minWidth: 28, fontWeight: 600,
             }}
           >↓</button>
           {(row.tip_rand === 'teava' || row.tip_rand === 'curba') && (
@@ -1665,14 +1667,14 @@ function Cell({ row, col, isEditing, draft, setDraft, onStartEdit, onCommit, onC
               style={{
                 background:'transparent', border:`1px solid ${row.sudura_sant_pending ? G.orange : G.border}`,
                 color: row.sudura_sant_pending ? G.orange : G.muted,
-                cursor:'pointer', fontSize: 12, padding:'2px 6px', borderRadius: 4,
+                cursor:'pointer', fontSize: 18, padding:'3px 8px', borderRadius: 4, lineHeight: 1,
               }}
             >🚧</button>
           )}
           <button
             onClick={onDelete}
             title="Șterge rând"
-            style={{ background:'transparent', border:'none', color: G.red, cursor:'pointer', fontSize: 14, padding: 2 }}
+            style={{ background:'transparent', border:'none', color: G.red, cursor:'pointer', fontSize: 20, padding: '3px 5px', lineHeight: 1 }}
           >🗑</button>
         </div>
       </td>
