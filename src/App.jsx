@@ -1307,10 +1307,36 @@ function PontajPage() {
   const [onlyDiurna,setOnlyDiurna]=useState(false)
   const [date,setDate]=useState(todayStr()); const [load,setLoad]=useState(true); const [saving,setSaving]=useState(null)
   const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15); const [toast,showToast]=useToast()
+  // Password gate pe zile deja exportate ca diurna_payments (Razvan 22.05.2026)
+  const [isDateExported,setIsDateExported]=useState(false)
+  const [exportPeriodInfo,setExportPeriodInfo]=useState(null) // {period_from, period_to, payment_date, total_amount}
+  const [passwordPrompt,setPasswordPrompt]=useState(null) // {onConfirm, onCancel, employeeName}
+  const [pwdInput,setPwdInput]=useState('')
+  const [pwdErr,setPwdErr]=useState('')
+  const [pwdVerifying,setPwdVerifying]=useState(false)
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
+  // Verific dacă data afișată e în interiorul unei perioade exportate ca plată
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from('diurna_payments')
+        .select('id,period_from,period_to,payment_date,total_amount')
+        .lte('period_from', date)
+        .gte('period_to', date)
+        .order('payment_date', { ascending: false })
+        .limit(1)
+      if (data && data.length > 0) {
+        setIsDateExported(true)
+        setExportPeriodInfo(data[0])
+      } else {
+        setIsDateExported(false)
+        setExportPeriodInfo(null)
+      }
+    })()
+  }, [date])
   const loadSettings=async()=>{ const {data}=await supabase.from('settings').select('*'); const d=data?.find(s=>s.key==='diurna_amount'); if(d) setDiurnaAmt(Number(d.value)); const s=data?.find(x=>x.key==='meal_supplement_amount'); if(s) setSuplAmt(Number(s.value)) }
   const loadSites=async()=>{ const {data}=await supabase.from('sites').select('*').eq('active',true).order('name'); setSites(data||[]) }
   const loadEmps=async()=>{
@@ -1332,7 +1358,42 @@ function PontajPage() {
   }
   const loadRecs=async()=>{ setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); const m={}; (data||[]).forEach(r=>{m[r.employee_id]=r}); setRecs(m); setLoad(false) }
 
+  // Helper: cere parolă pentru zile exportate (Razvan 22.05.2026 - parolă per modificare)
+  const requestPasswordIfExported = (empName) => new Promise((resolve) => {
+    if (!isDateExported) { resolve(true); return }
+    setPasswordPrompt({
+      employeeName: empName,
+      onConfirm: () => resolve(true),
+      onCancel: () => resolve(false),
+    })
+  })
+
+  const handlePwdConfirm = async () => {
+    if (!profile?.email) { setPwdErr('Lipsește email contul'); return }
+    if (!pwdInput) { setPwdErr('Introdu parola'); return }
+    setPwdVerifying(true); setPwdErr('')
+    const { error } = await supabase.auth.signInWithPassword({ email: profile.email, password: pwdInput })
+    if (error) {
+      setPwdErr('Parolă greșită'); setPwdVerifying(false); return
+    }
+    setPwdVerifying(false)
+    setPwdInput(''); setPwdErr('')
+    if (passwordPrompt?.onConfirm) passwordPrompt.onConfirm()
+    setPasswordPrompt(null)
+  }
+  const handlePwdCancel = () => {
+    setPwdInput(''); setPwdErr(''); setPwdVerifying(false)
+    if (passwordPrompt?.onCancel) passwordPrompt.onCancel()
+    setPasswordPrompt(null)
+  }
+
   const saveRecord = async (emp, fields) => {
+    // Gate parolă dacă data afișată e în perioadă deja exportată
+    const okAuth = await requestPasswordIfExported(emp.name)
+    if (!okAuth) {
+      showToast('Modificare anulată — parolă necesară pentru zi plătită', 'warn')
+      return
+    }
     setSaving(emp.id)
     // site_id: use per-day record site if exists, else employee default
     const recSiteId = recs[emp.id]?.site_id ?? emp.site_id ?? null
@@ -1343,6 +1404,12 @@ function PontajPage() {
     setSaving(null)
   }
   const allocate = async (emp, siteId) => {
+    // Gate parolă dacă data afișată e în perioadă deja exportată
+    const okAuth = await requestPasswordIfExported(emp.name)
+    if (!okAuth) {
+      showToast('Realocare anulată — parolă necesară pentru zi plătită', 'warn')
+      return
+    }
     // Salvam site_id in pontaj_records pentru ziua selectata (nu global pe angajat)
     const uid=(await supabase.auth.getUser()).data.user?.id
     const {data:rec}=await supabase.from('pontaj_records')
@@ -1392,6 +1459,22 @@ function PontajPage() {
       <div style={{background:'#1A2A3A',border:`1px solid ${G.blue}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:'#79C0FF'}}>
         ☕ Pauza masă 12–13 se scade automat &nbsp;·&nbsp; 💰 Diurnă {diurnaAmt} RON/zi &nbsp;·&nbsp; Șantierul obligatoriu la ore
       </div>
+      {isDateExported && exportPeriodInfo && (
+        <div style={{background:G.orange+'14',border:`2px solid ${G.orange}`,borderRadius:10,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <span style={{fontSize:20}}>🔒</span>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{fontSize:13,fontWeight:700,color:G.orange}}>Zi din perioadă deja exportată ca plată</div>
+            <div style={{fontSize:11,color:G.text,marginTop:2}}>
+              Plată export <strong>{new Date(exportPeriodInfo.period_from).toLocaleDateString('ro-RO')}</strong> — <strong>{new Date(exportPeriodInfo.period_to).toLocaleDateString('ro-RO')}</strong>
+              {' · '}{Number(exportPeriodInfo.total_amount).toFixed(0)} RON
+              {' · '}data plății {new Date(exportPeriodInfo.payment_date).toLocaleDateString('ro-RO')}
+            </div>
+            <div style={{fontSize:11,color:G.muted,marginTop:4}}>
+              ⚠ Orice modificare la pontaj (ore, diurnă, masă) va cere <strong>parola de cont</strong>. După modificare, refă exportul pentru această perioadă.
+            </div>
+          </div>
+        </div>
+      )}
       {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
         <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier:</div>
         <div style={{fontSize:11,lineHeight:1.7,flexWrap:'wrap',display:'flex',gap:'4px 10px'}}>
@@ -1400,9 +1483,49 @@ function PontajPage() {
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
+      {passwordPrompt && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+          <div style={{background:G.card,border:`2px solid ${G.orange}`,borderRadius:12,maxWidth:440,width:'100%',padding:24,boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
+              <span style={{fontSize:32}}>🔒</span>
+              <div>
+                <div style={{fontSize:17,fontWeight:700,color:G.orange}}>Parolă necesară</div>
+                <div style={{fontSize:12,color:G.muted,marginTop:2}}>Modificare pontaj pe zi exportată</div>
+              </div>
+            </div>
+            <div style={{background:G.bg,border:`1px solid ${G.border}`,borderRadius:8,padding:'10px 14px',marginBottom:14,fontSize:12,lineHeight:1.5}}>
+              <div><strong>Angajat:</strong> {passwordPrompt.employeeName}</div>
+              <div><strong>Data:</strong> {new Date(date).toLocaleDateString('ro-RO')}</div>
+              {exportPeriodInfo && (
+                <div style={{color:G.orange,marginTop:4}}>
+                  ⚠ Plătit deja în export {new Date(exportPeriodInfo.period_from).toLocaleDateString('ro-RO')} — {new Date(exportPeriodInfo.period_to).toLocaleDateString('ro-RO')}
+                </div>
+              )}
+            </div>
+            <div style={{fontSize:12,color:G.muted,marginBottom:8}}>Confirmă parola contului <strong>{profile?.email}</strong>:</div>
+            <input
+              type="password"
+              value={pwdInput}
+              onChange={e=>{setPwdInput(e.target.value); setPwdErr('')}}
+              onKeyDown={e=>{ if(e.key==='Enter') handlePwdConfirm(); else if(e.key==='Escape') handlePwdCancel() }}
+              autoFocus
+              placeholder="Parolă..."
+              disabled={pwdVerifying}
+              style={{...S.input,width:'100%',padding:'10px 14px',fontSize:14,fontFamily:'monospace'}}
+            />
+            {pwdErr && <div style={{color:G.red,fontSize:11,marginTop:6}}>❌ {pwdErr}</div>}
+            <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+              <button onClick={handlePwdCancel} disabled={pwdVerifying} style={{...S.btnS,padding:'9px 18px'}}>Anulează</button>
+              <button onClick={handlePwdConfirm} disabled={pwdVerifying||!pwdInput} style={{...S.btnP,padding:'9px 20px',background:G.orange,color:'#fff',opacity:pwdVerifying||!pwdInput?0.5:1,cursor:pwdVerifying||!pwdInput?'not-allowed':'pointer'}}>
+                {pwdVerifying ? '⏳ Verific...' : '🔓 Confirmă & modifică'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   )
 }
