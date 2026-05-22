@@ -1060,8 +1060,9 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   const [showAlim, setShowAlim] = useState(false)
   const [istoric, setIstoric] = useState([])
   const [alimentari, setAlimentari] = useState([])
+  const [telemetrie7, setTelemetrie7] = useState([])  // ETAPA 3: ultimele 7 zile EvoGPS
   
-  // Fetch istoric + alimentări când se deschide în view
+  // Fetch istoric + alimentări + telemetrie 7 zile când se deschide în view
   useEffect(() => {
     if (mode === 'view' && activ?.id) {
       supabase.from('logistica_mentenanta_istoric')
@@ -1074,6 +1075,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         .eq('active_id', activ.id)
         .order('data_alimentare', { ascending: false })
         .then(({ data }) => setAlimentari(data || []))
+      // ETAPA 3 (22.05.2026): ultima activitate + timeline 7 zile
+      supabase.from('logistica_telemetrie_zilnica')
+        .select('data, ora_inceput, ora_sfarsit, timp_miscare_secunde, timp_stationare_secunde, timp_total_secunde, total_km_zi, km_sfarsit_zi')
+        .eq('asset_id', activ.id)
+        .order('data', { ascending: false })
+        .limit(7)
+        .then(({ data }) => setTelemetrie7(data || []))
     }
   }, [mode, activ?.id])
   
@@ -1284,6 +1292,141 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             </div>
           </div>
         )}
+        
+        {/* ETAPA 3 (22.05.2026): Panel activitate EvoGPS + match ore bord */}
+        {mode === 'view' && (activ?.ore_actuale_evogps != null || activ?.ore_functionare_actuale != null || telemetrie7.length > 0) && (() => {
+          const oreBord = activ?.ore_functionare_actuale
+          const oreEvogps = activ?.ore_actuale_evogps
+          const kmActuali = activ?.km_actuali
+          const hasBoth = oreBord != null && oreEvogps != null
+          const diff = hasBoth ? Math.abs(oreBord - oreEvogps) : null
+          const matchColor = !hasBoth ? G.muted : diff < 20 ? G.green : diff < 100 ? G.yellow : G.red
+          const matchLabel = !hasBoth ? '—' : diff < 20 ? '✓ Match OK' : diff < 100 ? '⚠ Diferență mică' : '🚨 Diferență mare'
+          const ultima = telemetrie7[0]
+          const fmtSec = (s) => {
+            if (!s || s === 0) return '—'
+            const h = Math.floor(s / 3600)
+            const m = Math.floor((s % 3600) / 60)
+            return h > 0 ? `${h}h ${m}m` : `${m}m`
+          }
+          const fmtOra = (t) => t ? String(t).slice(0, 5) : '—'
+          const isVehiculRutier = ['Autoturism', 'Autoutilitară', 'Camion', 'Cap tractor'].includes(activ?.logistica_categorii?.tip)
+          const isUtilaj = activ?.logistica_categorii?.tip === 'Utilaj'
+          // Calc max timp_total pentru scaling timeline bars
+          const maxTimpTotal = Math.max(...telemetrie7.map(t => t.timp_total_secunde || 0), 1)
+          return (
+            <div style={{marginBottom: 14, padding: 12, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 10}}>
+              <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8}}>
+                <div style={{fontSize: 11, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>
+                  🛰️ Activitate EvoGPS
+                </div>
+                {hasBoth && (
+                  <div style={{padding: '3px 10px', background: matchColor + '22', border: `1px solid ${matchColor}55`, borderRadius: 12, fontSize: 11, color: matchColor, fontWeight: 700}}>
+                    {matchLabel} {hasBoth && `· Δ ${diff} h`}
+                  </div>
+                )}
+              </div>
+              
+              {/* Row 1: Cifre actuale */}
+              <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 12}}>
+                {kmActuali != null && (
+                  <div style={{padding: 8, background: G.surface, borderRadius: 6}}>
+                    <div style={{fontSize: 10, color: G.muted, marginBottom: 2}}>🛣️ KM actuali</div>
+                    <div style={{fontSize: 15, fontWeight: 800, color: G.blue, fontFamily: 'monospace'}}>{Number(kmActuali).toLocaleString('ro-RO')} <span style={{fontSize: 11, color: G.muted, fontWeight: 400}}>km</span></div>
+                  </div>
+                )}
+                {oreBord != null && (
+                  <div style={{padding: 8, background: G.surface, borderRadius: 6}}>
+                    <div style={{fontSize: 10, color: G.muted, marginBottom: 2}}>🕒 Ore bord <span style={{fontSize: 9, fontStyle: 'italic'}}>(alimentări)</span></div>
+                    <div style={{fontSize: 15, fontWeight: 800, color: G.orange, fontFamily: 'monospace'}}>{Number(oreBord).toLocaleString('ro-RO')} <span style={{fontSize: 11, color: G.muted, fontWeight: 400}}>h</span></div>
+                  </div>
+                )}
+                {oreEvogps != null && (
+                  <div style={{padding: 8, background: G.surface, borderRadius: 6}}>
+                    <div style={{fontSize: 10, color: G.muted, marginBottom: 2}}>🛰️ Ore EvoGPS <span style={{fontSize: 9, fontStyle: 'italic'}}>(tracker)</span></div>
+                    <div style={{fontSize: 15, fontWeight: 800, color: G.purple, fontFamily: 'monospace'}}>{Number(oreEvogps).toLocaleString('ro-RO')} <span style={{fontSize: 11, color: G.muted, fontWeight: 400}}>h</span></div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Row 2: Ultima activitate */}
+              {ultima && (
+                <div style={{padding: 10, background: G.surface, borderRadius: 6, marginBottom: 10}}>
+                  <div style={{fontSize: 10, color: G.muted, marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.3px'}}>
+                    📅 Ultima activitate · {new Date(ultima.data).toLocaleDateString('ro-RO', {weekday: 'short', day: '2-digit', month: 'short'})}
+                  </div>
+                  <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(95px, 1fr))', gap: 8, fontSize: 11}}>
+                    <div>
+                      <div style={{color: G.muted}}>Pornit</div>
+                      <div style={{color: G.text, fontWeight: 700, fontFamily: 'monospace'}}>{fmtOra(ultima.ora_inceput)} → {fmtOra(ultima.ora_sfarsit)}</div>
+                    </div>
+                    <div>
+                      <div style={{color: G.muted}}>🚗 În mișcare</div>
+                      <div style={{color: G.blue, fontWeight: 700}}>{fmtSec(ultima.timp_miscare_secunde)}</div>
+                    </div>
+                    <div>
+                      <div style={{color: G.muted}}>⚙ Staționar pornit</div>
+                      <div style={{color: G.orange, fontWeight: 700}}>{fmtSec(ultima.timp_stationare_secunde)}</div>
+                    </div>
+                    <div>
+                      <div style={{color: G.muted}}>⏱ Timp total</div>
+                      <div style={{color: G.green, fontWeight: 700}}>{fmtSec(ultima.timp_total_secunde)}</div>
+                    </div>
+                    {ultima.total_km_zi > 0 && (
+                      <div>
+                        <div style={{color: G.muted}}>📏 Distanță</div>
+                        <div style={{color: G.purple, fontWeight: 700, fontFamily: 'monospace'}}>{Number(ultima.total_km_zi).toFixed(1)} km</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Row 3: Timeline 7 zile */}
+              {telemetrie7.length > 0 && (
+                <div>
+                  <div style={{fontSize: 10, color: G.muted, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.3px'}}>
+                    📊 Activitate ultimele {telemetrie7.length} {telemetrie7.length === 1 ? 'zi' : 'zile'}
+                  </div>
+                  <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+                    {[...telemetrie7].reverse().map((t, i) => {
+                      const dz = new Date(t.data)
+                      const ziNume = dz.toLocaleDateString('ro-RO', {weekday: 'short', day: '2-digit', month: '2-digit'})
+                      const totalSec = t.timp_total_secunde || 0
+                      const miscareSec = t.timp_miscare_secunde || 0
+                      const statSec = t.timp_stationare_secunde || 0
+                      const ratio = totalSec / maxTimpTotal
+                      const isInactiv = totalSec === 0
+                      const miscareW = totalSec > 0 ? (miscareSec / totalSec * 100) : 0
+                      const statW = totalSec > 0 ? (statSec / totalSec * 100) : 0
+                      return (
+                        <div key={i} style={{display: 'flex', alignItems: 'center', gap: 8, fontSize: 11}}>
+                          <div style={{width: 80, color: G.muted, fontFamily: 'monospace', fontSize: 10}}>{ziNume}</div>
+                          <div style={{flex: 1, height: 18, background: isInactiv ? G.surface : G.bg, borderRadius: 3, position: 'relative', overflow: 'hidden', border: `1px solid ${G.border}`}}>
+                            {!isInactiv && (
+                              <div style={{width: `${ratio * 100}%`, height: '100%', display: 'flex'}}>
+                                <div style={{width: `${miscareW}%`, height: '100%', background: G.blue}} title={`Mișcare: ${fmtSec(miscareSec)}`} />
+                                <div style={{width: `${statW}%`, height: '100%', background: G.orange}} title={`Staționar: ${fmtSec(statSec)}`} />
+                              </div>
+                            )}
+                            {isInactiv && (
+                              <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: G.muted, fontSize: 10, fontStyle: 'italic'}}>inactiv</div>
+                            )}
+                          </div>
+                          <div style={{width: 65, textAlign: 'right', color: isInactiv ? G.muted : G.text, fontWeight: 600, fontFamily: 'monospace', fontSize: 10}}>{fmtSec(totalSec)}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div style={{display: 'flex', gap: 14, marginTop: 6, fontSize: 10, color: G.muted, justifyContent: 'flex-end'}}>
+                    <span><span style={{display: 'inline-block', width: 10, height: 10, background: G.blue, borderRadius: 2, marginRight: 4, verticalAlign: 'middle'}}/>Mișcare</span>
+                    <span><span style={{display: 'inline-block', width: 10, height: 10, background: G.orange, borderRadius: 2, marginRight: 4, verticalAlign: 'middle'}}/>Staționar pornit {isUtilaj && '(lucru efectiv)'}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
         
         <div style={{marginBottom: 14}}>
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🆔 Identificare</div>
