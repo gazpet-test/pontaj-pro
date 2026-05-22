@@ -33,6 +33,37 @@ const extractNrFromEvoName = (name) => {
   return normalizeNr(lastMatch)
 }
 
+// Helpers fuzzy match pentru utilaje fără plăcuță (DAILYACTIVITY)
+const normalizeForFuzzy = (s) => {
+  if (!s) return ''
+  return String(s).toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ').trim()
+}
+const fuzzyTokenize = (s) => normalizeForFuzzy(s).split(' ').filter(t => t.length >= 2)
+const fuzzyMatchAsset = (evoName, assets) => {
+  if (!evoName) return { asset: null, score: 0 }
+  const evoTokens = new Set(fuzzyTokenize(evoName))
+  if (evoTokens.size === 0) return { asset: null, score: 0 }
+  let best = null
+  let bestScore = 0
+  for (const a of assets) {
+    if (a.deep_sleep || a.vandut) continue
+    const target = [a.marca, a.model, a.cod_intern, a.nr_inmatriculare].filter(Boolean).join(' ')
+    const targetTokens = new Set(fuzzyTokenize(target))
+    if (targetTokens.size === 0) continue
+    let common = 0
+    for (const t of evoTokens) if (targetTokens.has(t)) common++
+    const score = common / Math.min(evoTokens.size, targetTokens.size)
+    if (score > bestScore && (common >= 2 || score >= 0.6)) {
+      bestScore = score
+      best = a
+    }
+  }
+  return { asset: best, score: bestScore }
+}
+
 // „12.05.2026" sau Date obj → '2026-05-12' (ISO)
 const parseDataRO = (val) => {
   if (!val) return null
@@ -115,17 +146,40 @@ const parseEvoGPSWorkbook = (arrayBuffer) => {
     const scanStart = Math.max(prevHeaderRow + 3, headerRow - 60) // max 60 sus, dar nu peste prev header
     
     let vehicleName = null
-    // Scan de la cel mai apropiat de header (mai sigur că e numele corect)
+    let hasPlate = false
+    // Pas 1: caut PRIORITAR un nume cu plăcuță (vehicule rutiere)
     for (let r = headerRow - 1; r >= scanStart; r--) {
       for (let c = 0; c <= 35; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r, c })]
         const v = cell?.v
         if (typeof v === 'string' && v.trim() && NR_REGEX_TEST.test(v)) {
           vehicleName = String(v).trim()
+          hasPlate = true
           break
         }
       }
       if (vehicleName) break
+    }
+    // Pas 2 (DAILYACTIVITY - utilaje fără plăcuță): caut orice string non-tehnic
+    if (!vehicleName) {
+      const HEADER_SKIP = ['data', 'oră', 'ora', 'total', 'timp', 'distanță', 'distanta', 'kilometraj', 'viteză', 'viteza', 'consum', 'funcţionare', 'functionare', 'motor', 'grafic', 'individual', 'general', 'foaie', 'activitate', 'versiune', 'tipărire', 'tiparire']
+      for (let r = headerRow - 1; r >= scanStart; r--) {
+        for (let c = 0; c <= 35; c++) {
+          const cell = ws[XLSX.utils.encode_cell({ r, c })]
+          const v = cell?.v
+          if (typeof v === 'string' && v.trim() && v.trim().length >= 3) {
+            const vLow = v.trim().toLowerCase()
+            // Skip headers de tabel + valori scurte (numere, ore)
+            if (HEADER_SKIP.some(h => vLow.includes(h))) continue
+            if (/^\d+[\.,\d]*$/.test(v.trim())) continue  // doar număr
+            if (/^\d{1,2}[\.\:]\d{2}/.test(v.trim())) continue  // oră / dată
+            vehicleName = String(v).trim()
+            hasPlate = false
+            break
+          }
+        }
+        if (vehicleName) break
+      }
     }
 
     // 3. Citesc zilele după header. Max 50 zile (acoperă luni complete + tampon).
@@ -143,9 +197,11 @@ const parseEvoGPSWorkbook = (arrayBuffer) => {
       const get = (col) => ws[XLSX.utils.encode_cell({ r, c: col })]?.v
       const distanta = parseNumber(get(COL.DISTANTA))
       const kilometraj = parseNumber(get(COL.KILOMETRAJ))
+      const timpTotalSec = parseTimpEvo(get(COL.TIMP_TOTAL))
 
-      // Zi fără activitate → skip dacă distanta și kilometraj sunt ambele goale/„-"
-      if (distanta == null && kilometraj == null) continue
+      // Zi fără activitate → skip dacă TOATE sunt goale/„-" (distanță, kilometraj, timp total)
+      // La utilaje staționare distanța poate fi 0 dar timp_total > 0 (motor pornit, n-a mers)
+      if (distanta == null && kilometraj == null && (timpTotalSec == null || timpTotalSec === 0)) continue
 
       days.push({
         data: dataISO,
@@ -153,7 +209,7 @@ const parseEvoGPSWorkbook = (arrayBuffer) => {
         ora_sfarsit: parseOraEvo(get(COL.ORA_SF)),
         timp_miscare_secunde: parseTimpEvo(get(COL.TIMP_MISCARE)),
         timp_stationare_secunde: parseTimpEvo(get(COL.TIMP_STAT)),
-        timp_total_secunde: parseTimpEvo(get(COL.TIMP_TOTAL)),
+        timp_total_secunde: timpTotalSec,
         total_km_zi: distanta,
         km_sfarsit_zi: kilometraj,
         viteza_maxima_kmh: parseNumber(get(COL.VITEZA)),
@@ -163,10 +219,11 @@ const parseEvoGPSWorkbook = (arrayBuffer) => {
     }
 
     if (!vehicleName) continue
-    const nr_extracted = extractNrFromEvoName(vehicleName)
+    const nr_extracted = hasPlate ? extractNrFromEvoName(vehicleName) : null
     vehicles.push({
       evogps_name: vehicleName,
       nr_extracted,
+      has_plate: hasPlate,
       days,
       total_days: days.length,
     })
@@ -190,16 +247,17 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
   const [toast, setToast] = useState(null)
   const [tab, setTab] = useState('matched')
   const [step, setStep] = useState('upload') // 'upload' | 'preview' | 'done'
+  const [diferenteOre, setDiferenteOre] = useState([]) // ETAPA 2: discrepanțe ore bord vs EvoGPS după import
 
   // Load assets BD la deschidere modal
   useEffect(() => {
     if (!open) return
-    setStep('upload'); setFile(null); setParsedVehicles([]); setAssignments({}); setToast(null)
+    setStep('upload'); setFile(null); setParsedVehicles([]); setAssignments({}); setToast(null); setDiferenteOre([])
     ;(async () => {
       try {
         const { data, error } = await supabase
           .from('logistica_active')
-          .select('id, nr_inmatriculare, marca, model, km_actuali, vandut, stare')
+          .select('id, nr_inmatriculare, marca, model, cod_intern, km_actuali, ore_functionare_actuale, ore_actuale_evogps, vandut, deep_sleep, stare')
           .order('nr_inmatriculare')
         if (error) throw error
         setAssetsBD(data || [])
@@ -277,12 +335,14 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
     return false
   }
 
-  // Auto-match: pentru fiecare vehicul EvoGPS, găsește asset_id
+  // Auto-match: pentru fiecare vehicul EvoGPS, găsește asset_id (folosește helperii fuzzy din modul)
+  
   const matchedVehicles = useMemo(() => {
     return parsedVehicles.map(v => {
       let asset = null
-      let matchType = 'none' // 'exact' | 'prefix' | 'manual' | 'none'
+      let matchType = 'none' // 'exact' | 'prefix' | 'manual' | 'fuzzy' | 'none'
       let conflict = false   // true dacă PREFIX match dar marca incompatibilă
+      let fuzzy_score = null
       // Manual override
       if (assignments[v.evogps_name]) {
         asset = assetsBD.find(a => a.id === assignments[v.evogps_name])
@@ -296,6 +356,14 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
           for (const [nrm, a] of assetsByNr) {
             if (nrm.startsWith(v.nr_extracted)) { asset = a; matchType = 'prefix'; break }
           }
+        }
+      } else if (!v.has_plate) {
+        // Utilaj fără plăcuță (DAILYACTIVITY): fuzzy match pe marca+model+cod
+        const { asset: fAsset, score } = fuzzyMatchAsset(v.evogps_name, assetsBD)
+        if (fAsset) {
+          asset = fAsset
+          matchType = 'fuzzy'
+          fuzzy_score = score
         }
       }
       // NOU: pentru PREFIX match, verifică conflict marcă
@@ -311,7 +379,7 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
         ...d,
         is_duplicate: asset && !conflict ? existingTelem.has(`${asset.id}_${d.data}`) : false,
       }))
-      return { ...v, asset, matchType, conflict, daysWithStatus }
+      return { ...v, asset, matchType, conflict, fuzzy_score, daysWithStatus }
     })
   }, [parsedVehicles, assignments, assetsBD, assetsByNr, existingTelem])
 
@@ -342,13 +410,18 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
       const vehicles = parseEvoGPSWorkbook(buf)
       if (vehicles.length === 0) throw new Error('Niciun vehicul găsit în fișier. Verifică formatul.')
       setParsedVehicles(vehicles)
-      // Check existing telemetry pentru aceste asset+date
+      // Check existing telemetry pentru aceste asset+date (ETAPA 2: include și utilaje fuzzy matched)
       const assetIds = new Set()
       const dates = new Set()
       for (const v of vehicles) {
-        const nr = v.nr_extracted
-        if (!nr) continue
-        const a = assetsByNr.get(nr) || [...assetsByNr.values()].find(x => normalizeNr(x.nr_inmatriculare).startsWith(nr))
+        let a = null
+        if (v.nr_extracted) {
+          a = assetsByNr.get(v.nr_extracted) || [...assetsByNr.values()].find(x => normalizeNr(x.nr_inmatriculare).startsWith(v.nr_extracted))
+        } else if (!v.has_plate) {
+          // Utilaj fără plăcuță - fuzzy match pe marca+model
+          const { asset: fAsset } = fuzzyMatchAsset(v.evogps_name, assetsBD)
+          if (fAsset) a = fAsset
+        }
         if (a) assetIds.add(a.id)
         for (const d of v.days) dates.add(d.data)
       }
@@ -439,6 +512,31 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
       }
       const msgSuffix = dupCount > 0 ? ` (${dupCount} duplicate eliminate)` : ''
       setToast({ type: 'success', msg: `✓ Importate ${inserted} înregistrări telemetrie din ${stats.matched} vehicule${msgSuffix}. km_actuali actualizat automat prin trigger.` })
+      
+      // ETAPA 2 (22.05.2026): după import, verific diferențele ore bord vs EvoGPS
+      // Apel RPC SECURITY DEFINER care creează notificări automat + returnează lista
+      try {
+        const assetIds = [...new Set(dedupedRows.map(r => r.asset_id))]
+        const dates = dedupedRows.map(r => r.data).sort()
+        const dataFrom = dates[0]
+        const dataTo = dates[dates.length - 1]
+        if (assetIds.length > 0 && dataFrom && dataTo) {
+          const { data: diferente, error: difErr } = await supabase
+            .rpc('fn_check_diferenta_ore_bord_evogps', { 
+              p_asset_ids: assetIds, 
+              p_data_from: dataFrom, 
+              p_data_to: dataTo, 
+              p_prag_ore: 20 
+            })
+          if (!difErr && diferente && diferente.length > 0) {
+            setDiferenteOre(diferente)
+            console.warn(`[ImportEvoGPS] ${diferente.length} utilaje cu diferență ore > 20h — notificări create automat.`)
+          }
+        }
+      } catch (difCheckErr) {
+        console.warn('[ImportEvoGPS] Verificare diferențe ore eșuată (non-critică):', difCheckErr)
+      }
+      
       setStep('done')
       onSuccess && onSuccess(inserted)
     } catch (e) {
@@ -607,6 +705,7 @@ export default function ImportEvoGPSModal({ open, onClose, supabase, profile, on
               assetsBD={assetsBD}
               colors={colors}
               fileSize={file?.size}
+              diferenteOre={diferenteOre}
             />
           )}
         </div>
@@ -862,7 +961,7 @@ function ConflictTable({ vehicles, assets, assignments, setAssignments, colors }
   )
 }
 
-function DoneReport({ matchedVehicles, assetsBD, colors, fileSize }) {
+function DoneReport({ matchedVehicles, assetsBD, colors, fileSize, diferenteOre = [] }) {
   // Calculez RAPOARTE după import:
   // 1. Vehicule fără GPS (în BD dar nu au fost importate niciodată via EvoGPS - inclusiv acest import)
   // 2. Vehicule cu match dubios care n-au fost importate (conflict marcă)
@@ -978,6 +1077,41 @@ function DoneReport({ matchedVehicles, assetsBD, colors, fileSize }) {
         </div>
       )}
       
+      {/* Raport 4 (ETAPA 2): Diferențe ore bord vs EvoGPS */}
+      {diferenteOre.length > 0 && (
+        <div style={{ marginBottom: 20, background: colors.red + '11', border: `2px solid ${colors.red}`, borderRadius: 8, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: colors.red, marginBottom: 8 }}>
+            ⚠️ {diferenteOre.length} {diferenteOre.length === 1 ? 'utilaj cu' : 'utilaje cu'} diferență mare ore bord vs EvoGPS
+          </div>
+          <div style={{ fontSize: 12, color: colors.muted, marginBottom: 10, lineHeight: 1.5 }}>
+            EvoGPS raportează ore lucrate DIFERIT față de contorul de bord (citit la alimentare). Diferență &gt; 20h pe perioada importată.
+            <strong style={{ color: colors.text }}> Notificări trimise automat</strong> către Razvan + Marilena + admin_logistica. Verifică starea tracker-ului sau corectitudinea citirilor.
+          </div>
+          <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: 11 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#1C2128' }}>
+                <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+                  <th style={{ padding: 6, textAlign: 'left', color: colors.muted }}>Utilaj</th>
+                  <th style={{ padding: 6, textAlign: 'right', color: colors.muted }}>EvoGPS</th>
+                  <th style={{ padding: 6, textAlign: 'right', color: colors.muted }}>Bord</th>
+                  <th style={{ padding: 6, textAlign: 'right', color: colors.muted }}>Diferență</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diferenteOre.map((d, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${colors.border}22` }}>
+                    <td style={{ padding: 6, color: colors.text, fontWeight: 600 }}>{d.r_asset_nume}</td>
+                    <td style={{ padding: 6, textAlign: 'right', color: colors.blue, fontFamily: 'monospace' }}>{Number(d.r_evogps_delta_ore).toFixed(1)} h</td>
+                    <td style={{ padding: 6, textAlign: 'right', color: colors.orange, fontFamily: 'monospace' }}>{Number(d.r_bord_delta_ore).toFixed(1)} h</td>
+                    <td style={{ padding: 6, textAlign: 'right', color: colors.red, fontFamily: 'monospace', fontWeight: 700 }}>{Number(d.r_diferenta_ore).toFixed(1)} h</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      
       {/* Summary final */}
       <div style={{ marginTop: 20, padding: 14, background: '#0D1117', borderRadius: 8, fontSize: 12, color: colors.muted, lineHeight: 1.6 }}>
         💡 <strong style={{ color: colors.text }}>Sumar audit GPS flotă:</strong>
@@ -986,6 +1120,7 @@ function DoneReport({ matchedVehicles, assetsBD, colors, fileSize }) {
           {reports.faraGPS.length > 0 && <li><strong style={{ color: colors.orange }}>{reports.faraGPS.length}</strong> vehicule din BD <strong>fără GPS</strong> sau GPS dezactivat — verifică</li>}
           {reports.conflicte.length > 0 && <li><strong style={{ color: colors.red }}>{reports.conflicte.length}</strong> conflicte nume EvoGPS — corectează în portal</li>}
           {reports.nematched.length > 0 && <li><strong style={{ color: colors.orange }}>{reports.nematched.length}</strong> vehicule din EvoGPS care nu sunt în BD-ul Gazpet</li>}
+          {diferenteOre.length > 0 && <li><strong style={{ color: colors.red }}>{diferenteOre.length}</strong> utilaje cu <strong>diferență ore bord vs EvoGPS &gt; 20h</strong> — notificări trimise</li>}
         </ul>
       </div>
     </div>
