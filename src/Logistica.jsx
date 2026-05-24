@@ -13,6 +13,7 @@ import JSZip from 'jszip'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
+import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
@@ -2232,7 +2233,7 @@ function IstoricImporturiEvoExpand({ istoricImporturi }) {
   )
 }
 
-function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
+function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, onImportRompetrol, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
   const [filterSub, setFilterSub] = useState('Toate')
@@ -2407,7 +2408,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
   
   return (
     <div>
-      {/* ETAPA 8.5: Banner Import EvoGPS + notificare telemetrie veche       */}
+      {/* ETAPA 8.5 + 24.05.2026: Banner Import Telemetrie (EvoGPS + Rompetrol)  */}
       {/* ──────────────────────────────────────────────────────────────────── */}
       {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin') && (() => {
         const zileDe = ultimaTelemetrieData
@@ -2418,9 +2419,9 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
         let bannerBg = G.purple + '15'
         let bannerBorder = G.purple + '55'
         let icon = '🛰️'
-        let titlu = 'Telemetrie EvoGPS'
+        let titlu = 'Telemetrie'
         let mesaj = niciOdata 
-          ? 'Niciun import EvoGPS încă. Exportă raportul „Foaie de activitate zilnică" din portal și importă-l aici.'
+          ? 'Niciun import telemetrie încă. Exportă rapoartele din EvoGPS sau Rompetrol și importă-le aici.'
           : `Ultimul import: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} ${zileDe === 1 ? 'zi' : 'zile'})`
         if (niciOdata) {
           bannerBg = G.blue + '15'
@@ -2431,13 +2432,13 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
           bannerBorder = G.red + '88'
           icon = '🚨'
           titlu = 'ATENȚIE — Telemetrie veche'
-          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Te rugăm să exporți raportul săptămânal!`
+          mesaj = `Ultimul import telemetrie: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Te rugăm să exporți rapoartele săptămânal!`
         } else if (zileDe > 7) {
           bannerBg = G.yellow + '22'
           bannerBorder = G.yellow + '88'
           icon = '⚠️'
           titlu = 'Telemetrie veche — necesită import'
-          mesaj = `Ultimul import EvoGPS: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Recomandare: săptămânal sau bisăptămânal.`
+          mesaj = `Ultimul import telemetrie: ${fmtDate(ultimaTelemetrieData)} (acum ${zileDe} zile). Recomandare: săptămânal sau bisăptămânal.`
         }
         return (
           <div style={{
@@ -2457,14 +2458,14 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
               <div style={{fontSize: 12, color: G.muted}}>{mesaj}</div>
               {niciOdata && (
                 <div style={{fontSize: 11, color: G.muted, marginTop: 4, fontStyle: 'italic'}}>
-                  💡 Tip: portalul EvoGPS → Rapoarte → exportă raportul potrivit pentru fiecare tip de vehicul.
+                  💡 Tip: din portalul EvoGPS → Rapoarte (km/ore) · din contul Rompetrol → raport „Refilling" (alimentări).
                 </div>
               )}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
               <button 
                 onClick={() => onImportEvoGPS('masini')}
-                title="Pentru autoturisme, autoutilitare, camioane (raport „Foaie de activitate zilnică”)"
+                title="EvoGPS: autoturisme, autoutilitare, camioane (raport „Foaie de activitate zilnică”)"
                 style={{
                   background: G.blue,
                   color: '#0D1117',
@@ -2480,11 +2481,11 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                   whiteSpace: 'nowrap',
                   justifyContent: 'flex-start',
                 }}>
-                🚗 Import KM mașini
+                🚗 Import KM mașini (EvoGPS)
               </button>
               <button 
                 onClick={() => onImportEvoGPS('utilaje')}
-                title="Pentru excavatoare, buldozere, generatoare (raport „DAILYACTIVITY”)"
+                title="EvoGPS: excavatoare, buldozere, generatoare (raport „DAILYACTIVITY”)"
                 style={{
                   background: G.orange,
                   color: '#0D1117',
@@ -2500,7 +2501,27 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                   whiteSpace: 'nowrap',
                   justifyContent: 'flex-start',
                 }}>
-                🏗️ Import ore utilaje
+                🏗️ Import ore utilaje (EvoGPS)
+              </button>
+              <button 
+                onClick={() => onImportRompetrol && onImportRompetrol()}
+                title='Rompetrol: import alimentări din raport „Refilling" (Excel .xls/.xlsx). Match pe nr înmatriculare. Cardurile GAZPET1-21 vor fi atribuite ulterior prin QR.'
+                style={{
+                  background: G.green,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '9px 16px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
+                  justifyContent: 'flex-start',
+                }}>
+                🟢 Import Rompetrol (.xls)
               </button>
             </div>
           </div>
@@ -6770,6 +6791,7 @@ export default function LogisticaPage() {
   const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
   const [toast, showToast] = useToast()
   const [showImportEvo, setShowImportEvo] = useState(null) // null | 'masini' | 'utilaje'
+  const [showImportRompetrol, setShowImportRompetrol] = useState(false) // 24.05.2026: modal import Rompetrol
   // Etapa 8.5: Alerte globale + ultima telemetrie (pentru banner Alimentări)
   const [ultimaTelemetrieData, setUltimaTelemetrieData] = useState(null)
   const [istoricImporturi, setIstoricImporturi] = useState([])  // ETAPA 8.6: history importuri EvoGPS
@@ -7585,6 +7607,7 @@ export default function LogisticaPage() {
           canEdit={canEdit}
           showToast={showToast}
           onImportEvoGPS={(mode) => setShowImportEvo(mode)}
+          onImportRompetrol={() => setShowImportRompetrol(true)}
           ultimaTelemetrieData={ultimaTelemetrieData}
           istoricImporturi={istoricImporturi}
           profile={profile}
@@ -8354,6 +8377,20 @@ export default function LogisticaPage() {
           loadIstoricImporturi()
         }}
       />
+      
+      {/* 24.05.2026: Modal Import Rompetrol */}
+      {showImportRompetrol && (
+        <ImportRompetrolModal
+          active={active}
+          profile={profile}
+          showToast={showToast}
+          onClose={() => setShowImportRompetrol(false)}
+          onSaved={() => {
+            loadAll()
+            setShowImportRompetrol(false)
+          }}
+        />
+      )}
     </>
   )
 }
