@@ -50,8 +50,33 @@ function parseNormaConsum(text) {
   const m = String(text).trim().match(/^([\d.,]+)\s*(l\/h|l\/100km|kWh\/h|kWh\/100km)?$/i)
   if (!m) return { norma: null, unitate: null }
   const norma = parseFloat(String(m[1]).replace(',', '.'))
-  const unitate = m[2] || 'l/h'
+  const unitate = normalizeUnitate(m[2]) || 'l/h'
   return { norma: isNaN(norma) ? null : norma, unitate }
+}
+
+// Normalize tip_carburant — orice limbă/format → valoare BD validă
+function normalizeTipCarburant(v) {
+  if (!v) return null
+  const s = String(v).toLowerCase().trim()
+  if (/^(diesel|motorin[ăa]|gasóleo|gasoil|dizel)$/i.test(s)) return 'motorina'
+  if (/^(benzin[ăa]|petrol|gasoline|essence|gasolina|95|98)$/i.test(s)) return 'benzina'
+  if (/^(electric|electrico|electrique|ev|battery)$/i.test(s)) return 'electric'
+  if (/^(hibrid|hybrid|hybride)$/i.test(s)) return 'hibrid'
+  if (/^(gpl|lpg|autogas|propan|gaz)$/i.test(s)) return 'gpl'
+  // Dacă valoarea e deja una validă în BD, o păstrăm
+  if (['motorina','benzina','electric','hibrid','gpl','N/A'].includes(s)) return s
+  return null
+}
+
+// Normalize unitate_norma
+function normalizeUnitate(v) {
+  if (!v) return null
+  const s = String(v).toLowerCase().trim()
+  if (/^l\s*\/\s*h$/.test(s)) return 'l/h'
+  if (/^l\s*\/\s*100\s*km$/.test(s)) return 'l/100km'
+  if (/^kwh\s*\/\s*h$/.test(s)) return 'kWh/h'
+  if (/^kwh\s*\/\s*100\s*km$/.test(s)) return 'kWh/100km'
+  return null
 }
 
 // ─── Component principal ──────────────────────────────────────────────────────
@@ -118,7 +143,15 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
       if (tip?.aplicabil && sg.tinta_tip === 'logistica_active' && sg.tinta_id && sg.valoare_noua) {
         const upd = {}
         if (sg.camp_propus === 'tip_carburant') {
-          upd.tip_carburant = sg.valoare_noua
+          // Normalize defensive: „Diesel" -> „motorina", „Petrol" -> „benzina", etc.
+          const tipNormalizat = normalizeTipCarburant(sg.valoare_noua)
+          if (!tipNormalizat) {
+            showToast(`Valoarea „${sg.valoare_noua}" nu poate fi normalizată automat. Aplică manual din modul Active.`, 'warning')
+            setProcessing(false)
+            setConfirmApply(null)
+            return
+          }
+          upd.tip_carburant = tipNormalizat
         } else if (sg.camp_propus === 'norma_consum') {
           const { norma, unitate } = parseNormaConsum(sg.valoare_noua)
           if (norma != null) {
@@ -130,7 +163,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
           // Adaug în observații audit
           const { data: actCur } = await supabase
             .from('logistica_active').select('observatii').eq('id', sg.tinta_id).maybeSingle()
-          const obsAudit = `[Scorilos aprobat ${new Date().toLocaleString('ro-RO', { dateStyle: 'short' })}] ${sg.camp_propus}=${sg.valoare_noua} (confidence ${fmtConf(sg.confidence)}${sg.source_url ? ', sursa: ' + sg.source_url : ''})`
+          const obsAudit = `[Scorilos aprobat ${new Date().toLocaleString('ro-RO', { dateStyle: 'short' })}] ${sg.camp_propus}=${JSON.stringify(upd[sg.camp_propus] !== undefined ? upd[sg.camp_propus] : sg.valoare_noua)} (confidence ${fmtConf(sg.confidence)}${sg.source_url ? ', sursa: ' + sg.source_url : ''})`
           upd.observatii = (actCur?.observatii ? actCur.observatii + '\n' : '') + obsAudit
           
           const { error: errUpd } = await supabase
