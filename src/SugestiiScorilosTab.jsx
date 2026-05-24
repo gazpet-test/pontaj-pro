@@ -87,6 +87,9 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   const [filterSev, setFilterSev] = useState('all')
   const [confirmApply, setConfirmApply] = useState(null) // sugestie de aprobat
   const [confirmReject, setConfirmReject] = useState(null) // sugestie de respins
+  const [confirmAction, setConfirmAction] = useState(null) // sugestie pentru acțiune custom
+  const [actionType, setActionType] = useState('') // deep_sleep | vandut | non_motor | feedback
+  const [actionMotiv, setActionMotiv] = useState('') // motiv/feedback text liber
   const [processing, setProcessing] = useState(false)
 
   const loadSugestii = useCallback(async () => {
@@ -222,6 +225,103 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     }
   }
   
+  // ─── Acțiune pe activ: deep_sleep / vandut / non_motor / feedback ────────────
+  const applyAction = async (sg, type, motiv) => {
+    if (!type) {
+      showToast('Selectează o acțiune', 'warning')
+      return
+    }
+    if ((type === 'deep_sleep' || type === 'feedback') && !motiv?.trim()) {
+      showToast('Motivul/feedback-ul e obligatoriu pentru această acțiune', 'warning')
+      return
+    }
+    setProcessing(true)
+    try {
+      const now = new Date()
+      const dataStr = now.toLocaleString('ro-RO', { dateStyle: 'short' })
+      const auditPrefix = `[Razvan + Scorilos ${dataStr}]`
+      
+      // 1. UPDATE logistica_active în funcție de acțiune
+      if (sg.tinta_tip === 'logistica_active' && sg.tinta_id) {
+        const upd = {}
+        let auditMsg = ''
+        
+        if (type === 'deep_sleep') {
+          upd.deep_sleep = true
+          upd.deep_sleep_motiv = motiv
+          upd.deep_sleep_data = now.toISOString().slice(0, 10)
+          upd.deep_sleep_by = profile?.id
+          auditMsg = `Marcat DEEP SLEEP: ${motiv}`
+        } else if (type === 'vandut') {
+          upd.vandut = true
+          auditMsg = `Marcat VÂNDUT/SCOS DIN UZ${motiv ? ': ' + motiv : ''}`
+        } else if (type === 'non_motor') {
+          upd.non_motor = true
+          if (!sg.tip_carburant) upd.tip_carburant = 'electric'
+          if (sg.norma_consum == null) upd.norma_consum = 0
+          auditMsg = `Marcat NON-MOTOR (echipament staționar fără combustibil)${motiv ? ': ' + motiv : ''}`
+        } else if (type === 'feedback') {
+          auditMsg = `Feedback Razvan: ${motiv}`
+        }
+        
+        // Adaug în observații
+        const { data: actCur } = await supabase
+          .from('logistica_active').select('observatii').eq('id', sg.tinta_id).maybeSingle()
+        upd.observatii = (actCur?.observatii ? actCur.observatii + '\n' : '') + `${auditPrefix} ${auditMsg}`
+        
+        if (Object.keys(upd).length > 1) { // mai mult de doar observatii
+          const { error: errUpd } = await supabase
+            .from('logistica_active').update(upd).eq('id', sg.tinta_id)
+          if (errUpd) throw errUpd
+        } else {
+          // doar observatii (caz feedback) — face UPDATE doar pe observatii
+          await supabase.from('logistica_active').update({ observatii: upd.observatii }).eq('id', sg.tinta_id)
+        }
+      }
+      
+      // 2. Salvez lecția în claude_context pentru ca Scorilos să o citească la patrula viitoare
+      const tags = ['scorilos_feedback', `activ_${sg.tinta_id}`, `actiune_${type}`]
+      const titluLectie = type === 'feedback' 
+        ? `Feedback Razvan pentru ${sg.tinta_descriere}`
+        : `Activ ${sg.tinta_descriere} marcat ${type}`
+      const continutLectie = `Activul "${sg.tinta_descriere}" (id ${sg.tinta_id}) a primit acțiune "${type}" prin UI Sugestii Scorilos pe ${dataStr}.\n\nMotiv/feedback Razvan: ${motiv || '(fără text)'}\n\nContext sugestie originală:\n- Tip: ${sg.tip_sugestie}\n- Motivare Scorilos: ${sg.motivare}\n${sg.source_url ? '- Sursă: ' + sg.source_url : ''}\n\nScorilos NU mai trebuie să propună acțiuni similare pe acest activ.`
+      
+      await supabase.from('claude_context').insert({
+        category: type === 'feedback' ? 'razvan_pref' : 'decision',
+        title: titluLectie,
+        content: continutLectie,
+        priority: 'medium',
+        tags: tags,
+        active: true,
+      })
+      
+      // 3. Marchez sugestia ca auto_aplicat
+      await supabase.from('claude_bot_sugestii').update({
+        status: 'auto_aplicat',
+        aprobat_de: profile?.id,
+        aprobat_la: now.toISOString(),
+        motivare: (sg.motivare || '') + `\n[Razvan: aplicat acțiune "${type}" → ${motiv || '(fără text)'}]`,
+      }).eq('id', sg.id)
+      
+      const actLabel = {
+        deep_sleep: '💤 Deep Sleep',
+        vandut: '💰 Vândut',
+        non_motor: '🔌 Non-motor',
+        feedback: '💬 Feedback'
+      }[type] || type
+      
+      showToast(`✓ ${actLabel} aplicat pe ${sg.tinta_descriere}`, 'success')
+      setConfirmAction(null)
+      setActionType('')
+      setActionMotiv('')
+      await loadSugestii()
+      if (onApplied) onApplied()
+    } catch (e) {
+      showToast('Eroare acțiune: ' + (e.message || e), 'error')
+    }
+    setProcessing(false)
+  }
+  
   // ─── Card sugestie ──────────────────────────────────────────────────────────
   const renderCard = (sg) => {
     const tip = TIP_META[sg.tip_sugestie] || { label: sg.tip_sugestie, icon: '?', color: G.muted, aplicabil: false }
@@ -336,6 +436,26 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
                 </button>
               )}
               
+              {/* NOU: Acțiune custom pe activ */}
+              {sg.tinta_tip === 'logistica_active' && sg.tinta_id && (
+                <button 
+                  onClick={() => { setConfirmAction(sg); setActionType(''); setActionMotiv('') }}
+                  disabled={processing}
+                  style={{
+                    padding: '7px 14px',
+                    background: G.purple + '22',
+                    color: G.purple,
+                    border: `1px solid ${G.purple}55`,
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: processing ? 'wait' : 'pointer',
+                    fontFamily: 'inherit',
+                  }}>
+                  🛠️ Acțiune
+                </button>
+              )}
+              
               <button 
                 onClick={() => setConfirmReject(sg)}
                 disabled={processing}
@@ -353,6 +473,215 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
                 ✗ Respinge
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  
+  // ─── Modal acțiune custom (deep_sleep / vandut / non_motor / feedback) ─────
+  const renderActionModal = () => {
+    if (!confirmAction) return null
+    const sg = confirmAction
+    
+    const ACTIONS = [
+      { 
+        key: 'deep_sleep', 
+        icon: '💤', 
+        label: 'Deep Sleep', 
+        desc: 'Utilaj stricat pe perioadă lungă (așteptare reparație/casare). Va fi exclus din alerte și scan-uri.',
+        color: G.purple,
+        requireMotiv: true,
+        motivLabel: 'Motivul deep sleep (obligatoriu)',
+        motivPlaceholder: 'Ex: așteaptă expertiza, decizie casare, vândut viitor...',
+      },
+      { 
+        key: 'vandut', 
+        icon: '💰', 
+        label: 'Vândut / Scos din uz', 
+        desc: 'Utilaj scos definitiv din flotă. Va fi ascuns din toate listările active.',
+        color: G.orange,
+        requireMotiv: false,
+        motivLabel: 'Detalii (opțional)',
+        motivPlaceholder: 'Ex: vândut 15.05.2026 către...',
+      },
+      { 
+        key: 'non_motor', 
+        icon: '🔌', 
+        label: 'Non-motor (fără combustibil)', 
+        desc: 'Echipament staționar (compresor electric, sudură electrofuziune, remorcă pasivă). Va fi exclus din scan consum.',
+        color: G.green,
+        requireMotiv: false,
+        motivLabel: 'Detalii (opțional)',
+        motivPlaceholder: 'Ex: alimentare 230V, fără motor termic...',
+      },
+      { 
+        key: 'feedback', 
+        icon: '💬', 
+        label: 'Doar feedback pentru Scorilos', 
+        desc: 'Salvează observații libere care vor influența patrulele viitoare. Activul rămâne neschimbat.',
+        color: G.blue,
+        requireMotiv: true,
+        motivLabel: 'Mesaj pentru Scorilos (obligatoriu)',
+        motivPlaceholder: 'Ex: motorul e demontat din 2023, nu mai propune normă...',
+      },
+    ]
+    
+    const actCurent = ACTIONS.find(a => a.key === actionType)
+    
+    return (
+      <div onClick={() => { setConfirmAction(null); setActionType(''); setActionMotiv('') }} style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        background: 'rgba(0,0,0,0.7)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: 16,
+      }}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: G.surface, borderRadius: 12,
+          border: `1px solid ${G.border}`,
+          padding: 22, width: '100%', maxWidth: 580,
+          maxHeight: '90vh', overflowY: 'auto',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: 16, color: G.text }}>
+            🛠️ Acțiune pe activ
+          </h3>
+          <div style={{ fontSize: 12, color: G.muted, marginBottom: 14 }}>
+            Decizii directe care se aplică pe activ + salvează context pentru Scorilos.
+          </div>
+          
+          <div style={{ background: G.surface2, padding: 10, borderRadius: 6, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: G.text }}>{sg.tinta_descriere}</div>
+            <div style={{ fontSize: 11, color: G.muted, marginTop: 4 }}>
+              {sg.motivare?.slice(0, 200)}{sg.motivare?.length > 200 ? '…' : ''}
+            </div>
+          </div>
+          
+          {/* Lista de acțiuni - butoane mari */}
+          {!actionType && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {ACTIONS.map(a => (
+                <button
+                  key={a.key}
+                  onClick={() => setActionType(a.key)}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 12,
+                    padding: '12px 14px',
+                    background: G.surface2,
+                    border: `1px solid ${G.border}`,
+                    borderLeft: `4px solid ${a.color}`,
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all .15s',
+                    fontFamily: 'inherit',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = a.color + '15'; e.currentTarget.style.borderColor = a.color + '88' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = G.surface2; e.currentTarget.style.borderColor = G.border }}
+                >
+                  <div style={{ fontSize: 22 }}>{a.icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: a.color, marginBottom: 3 }}>{a.label}</div>
+                    <div style={{ fontSize: 11, color: G.muted, lineHeight: 1.4 }}>{a.desc}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          
+          {/* Pas 2: introducere motiv */}
+          {actionType && actCurent && (
+            <>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px',
+                background: actCurent.color + '15',
+                border: `1px solid ${actCurent.color}55`,
+                borderRadius: 8,
+                marginBottom: 14,
+              }}>
+                <div style={{ fontSize: 22 }}>{actCurent.icon}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: actCurent.color }}>{actCurent.label}</div>
+                  <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{actCurent.desc}</div>
+                </div>
+                <button
+                  onClick={() => { setActionType(''); setActionMotiv('') }}
+                  style={{
+                    background: 'transparent', border: 'none',
+                    color: G.muted, cursor: 'pointer', fontSize: 16,
+                    fontFamily: 'inherit', padding: 4,
+                  }}>← schimbă</button>
+              </div>
+              
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, color: G.muted, marginBottom: 5 }}>
+                  {actCurent.motivLabel}
+                </label>
+                <textarea
+                  value={actionMotiv}
+                  onChange={e => setActionMotiv(e.target.value)}
+                  placeholder={actCurent.motivPlaceholder}
+                  rows={4}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    background: G.bg,
+                    color: G.text,
+                    border: `1px solid ${G.border}`,
+                    borderRadius: 6,
+                    fontSize: 13,
+                    fontFamily: 'inherit',
+                    resize: 'vertical',
+                    boxSizing: 'border-box',
+                  }}/>
+              </div>
+              
+              <div style={{ 
+                fontSize: 11, color: G.muted, 
+                background: G.surface2, padding: 10, borderRadius: 6,
+                marginBottom: 14,
+              }}>
+                💡 Lecția se salvează în <code style={{color:G.text}}>claude_context</code> ca Scorilos să o citească la patrula viitoare și să NU mai propună acțiuni similare.
+              </div>
+            </>
+          )}
+          
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <button 
+              onClick={() => { setConfirmAction(null); setActionType(''); setActionMotiv('') }}
+              disabled={processing}
+              style={{
+                padding: '8px 16px',
+                background: 'transparent',
+                color: G.muted,
+                border: `1px solid ${G.border}`,
+                borderRadius: 6,
+                fontSize: 13,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}>
+              Anulează
+            </button>
+            {actionType && (
+              <button 
+                onClick={() => applyAction(sg, actionType, actionMotiv)}
+                disabled={processing || (actCurent?.requireMotiv && !actionMotiv.trim())}
+                style={{
+                  padding: '8px 18px',
+                  background: actCurent?.color || G.green,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: processing ? 'wait' : 'pointer',
+                  fontFamily: 'inherit',
+                  opacity: (actCurent?.requireMotiv && !actionMotiv.trim()) ? 0.5 : 1,
+                }}>
+                {processing ? '…' : `${actCurent?.icon} Aplică ${actCurent?.label}`}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -593,6 +922,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
       {filtered.map(renderCard)}
       
       {renderConfirmModal()}
+      {renderActionModal()}
     </div>
   )
 }
