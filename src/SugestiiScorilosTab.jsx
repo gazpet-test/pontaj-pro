@@ -23,6 +23,7 @@ const TIP_META = {
   specs_negaste: { label: 'Specs negăsite', icon: '🔍', color: G.muted, aplicabil: false },
   pattern_recurent: { label: 'Pattern fraudă', icon: '🚨', color: G.red, aplicabil: false },
   drift_consum: { label: 'Drift consum', icon: '📈', color: G.yellow, aplicabil: false },
+  anomalie_alimentare: { label: 'Anomalie alimentare', icon: '⚠️', color: G.orange, aplicabil: false },
 }
 
 const SEV_META = {
@@ -102,6 +103,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
       .from('claude_bot_sugestii')
       .select('id, bot_run_id, tip_sugestie, tinta_tip, tinta_id, tinta_descriere, camp_propus, valoare_veche, valoare_noua, motivare, source_url, confidence, severity, status, created_at')
       .eq('status', 'propus')
+      .eq('tinta_tip', 'logistica_active')
       .order('severity', { ascending: false })
       .order('confidence', { ascending: false, nullsLast: true })
       .order('created_at', { ascending: false })

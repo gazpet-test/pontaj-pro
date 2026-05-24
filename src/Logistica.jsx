@@ -6887,12 +6887,14 @@ export default function LogisticaPage() {
   }, [loc.search])
   
   // ETAPA 12.8: încarc numărul de sugestii Scorilos pendente pentru badge tab (doar owner)
+  // FIX 24.05.2026: filtru tinta_tip='logistica_active' ca să NU mai apară HR Chuck
   const loadSugestiiPendenteCount = useCallback(async () => {
     if (!profile?.is_owner) { setSugestiiPendente(0); return }
     const { count } = await supabase
       .from('claude_bot_sugestii')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'propus')
+      .eq('tinta_tip', 'logistica_active')
     setSugestiiPendente(count || 0)
   }, [profile?.is_owner])
   
