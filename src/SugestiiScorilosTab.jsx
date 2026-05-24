@@ -93,6 +93,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   const [actionNormaNoua, setActionNormaNoua] = useState('') // pentru edit_consum
   const [actionUnitateNoua, setActionUnitateNoua] = useState('l/h') // pentru edit_consum
   const [actionActivCurent, setActionActivCurent] = useState(null) // norma + unitate curente
+  const [actionZileSilentiere, setActionZileSilentiere] = useState(7) // pentru silentiere
   const [processing, setProcessing] = useState(false)
 
   const loadSugestii = useCallback(async () => {
@@ -235,13 +236,13 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     }
   }
   
-  // ─── Acțiune pe activ: deep_sleep / vandut / non_motor / feedback / edit_consum ──
+  // ─── Acțiune pe activ: deep_sleep / vandut / non_motor / feedback / edit_consum / silentiate ──
   const applyAction = async (sg, type, motiv) => {
     if (!type) {
       showToast('Selectează o acțiune', 'warning')
       return
     }
-    if ((type === 'deep_sleep' || type === 'feedback') && !motiv?.trim()) {
+    if ((type === 'deep_sleep' || type === 'feedback' || type === 'silentiate') && !motiv?.trim()) {
       showToast('Motivul/feedback-ul e obligatoriu pentru această acțiune', 'warning')
       return
     }
@@ -256,11 +257,64 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
         return
       }
     }
+    if (type === 'silentiate') {
+      const zile = parseInt(actionZileSilentiere)
+      if (isNaN(zile) || zile < 1 || zile > 90) {
+        showToast('Zilele trebuie să fie un număr între 1 și 90', 'warning')
+        return
+      }
+    }
     setProcessing(true)
     try {
       const now = new Date()
       const dataStr = now.toLocaleString('ro-RO', { dateStyle: 'short' })
       const auditPrefix = `[Razvan + Scorilos ${dataStr}]`
+      
+      // SPECIAL: silentiate — NU modifică logistica_active, ci doar inserează în claude_bot_silentiate
+      if (type === 'silentiate') {
+        const zile = parseInt(actionZileSilentiere)
+        const silentiatPana = new Date(now.getTime() + zile * 24 * 3600 * 1000).toISOString().slice(0, 10)
+        
+        // UPSERT: dacă există deja silentiere pentru aceeași combinație, o suprascriu
+        const { error: errSil } = await supabase
+          .from('claude_bot_silentiate')
+          .upsert({
+            tinta_tip: sg.tinta_tip,
+            tinta_id: sg.tinta_id,
+            tinta_descriere: sg.tinta_descriere,
+            tip_sugestie: sg.tip_sugestie,
+            silentiat_pana: silentiatPana,
+            motiv: motiv,
+            silentiat_de: profile?.id,
+            silentiat_la: now.toISOString(),
+          }, { onConflict: 'tinta_tip,tinta_id,tip_sugestie' })
+        if (errSil) throw errSil
+        
+        // Marchez sugestia curentă ca auto_aplicat (dispare din UI)
+        await supabase.from('claude_bot_sugestii').update({
+          status: 'auto_aplicat',
+          aprobat_de: profile?.id,
+          aprobat_la: now.toISOString(),
+          motivare: (sg.motivare || '') + `\n[Silentiat ${zile} zile (până ${silentiatPana}): ${motiv}]`,
+        }).eq('id', sg.id)
+        
+        // Lecție pentru Scorilos
+        await supabase.from('claude_context').insert({
+          category: 'decision',
+          title: `Silentiat ${sg.tip_sugestie} pentru ${sg.tinta_descriere} - ${zile} zile`,
+          content: `Razvan a silentiat alerta "${sg.tip_sugestie}" pentru activul "${sg.tinta_descriere}" (id ${sg.tinta_id}) până la ${silentiatPana} (${zile} zile).\n\nMotiv: ${motiv}\n\nScorilos NU mai propune sugestie de acest tip pentru acest activ până la data expirării.`,
+          priority: 'low',
+          tags: ['scorilos_silentiat', `activ_${sg.tinta_id}`, `tip_${sg.tip_sugestie}`],
+          active: true,
+        })
+        
+        showToast(`🔇 Alertă silențiată ${zile} zile (până ${silentiatPana})`, 'success')
+        closeActionModal()
+        await loadSugestii()
+        if (onApplied) onApplied()
+        setProcessing(false)
+        return
+      }
       
       // 1. UPDATE logistica_active în funcție de acțiune
       if (sg.tinta_tip === 'logistica_active' && sg.tinta_id) {
@@ -338,16 +392,12 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
         vandut: '💰 Vândut',
         non_motor: '🔌 Non-motor',
         edit_consum: '📝 Normă consum',
-        feedback: '💬 Feedback'
+        feedback: '💬 Feedback',
+        silentiate: '🔇 Silentiat'
       }[type] || type
       
       showToast(`✓ ${actLabel} aplicat pe ${sg.tinta_descriere}`, 'success')
-      setConfirmAction(null)
-      setActionType('')
-      setActionMotiv('')
-      setActionNormaNoua('')
-      setActionUnitateNoua('l/h')
-      setActionActivCurent(null)
+      closeActionModal()
       await loadSugestii()
       if (onApplied) onApplied()
     } catch (e) {
@@ -360,6 +410,9 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   const onPickAction = async (key) => {
     setActionType(key)
     setActionMotiv('')
+    if (key === 'silentiate') {
+      setActionZileSilentiere(7) // default 7 zile
+    }
     if (key === 'edit_consum' && confirmAction?.tinta_id) {
       const { data } = await supabase.from('logistica_active')
         .select('norma_consum, unitate_norma')
@@ -382,6 +435,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     setActionNormaNoua('')
     setActionUnitateNoua('l/h')
     setActionActivCurent(null)
+    setActionZileSilentiere(7)
   }
   
   // ─── Card sugestie ──────────────────────────────────────────────────────────
@@ -548,6 +602,16 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     
     const ACTIONS = [
       { 
+        key: 'silentiate', 
+        icon: '🔇', 
+        label: 'Suspendă alerta (N zile)', 
+        desc: 'Util când datele sunt insuficiente (puține alimentări/ore). Scorilos nu mai propune alertă de acest tip pentru acest activ N zile. Util pentru pattern fraudă incipient.',
+        color: G.muted || '#8B949E',
+        requireMotiv: true,
+        motivLabel: 'De ce silențiezi (obligatoriu)',
+        motivPlaceholder: 'Ex: date insuficiente, aștept mai multe alimentări/ore în sistem...',
+      },
+      { 
         key: 'edit_consum', 
         icon: '📝', 
         label: 'Editare normă consum', 
@@ -601,9 +665,11 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     
     const actCurent = ACTIONS.find(a => a.key === actionType)
     const isEditConsum = actionType === 'edit_consum'
+    const isSilentiate = actionType === 'silentiate'
     const submitDisabled = processing 
       || (actCurent?.requireMotiv && !actionMotiv.trim())
       || (isEditConsum && (!actionNormaNoua || isNaN(parseFloat(String(actionNormaNoua).replace(',','.')))))
+      || (isSilentiate && (isNaN(parseInt(actionZileSilentiere)) || parseInt(actionZileSilentiere) < 1))
     
     return (
       <div onClick={closeActionModal} style={{
@@ -682,13 +748,64 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
                   <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{actCurent.desc}</div>
                 </div>
                 <button
-                  onClick={() => { setActionType(''); setActionMotiv(''); setActionActivCurent(null); setActionNormaNoua(''); setActionUnitateNoua('l/h') }}
+                  onClick={() => { setActionType(''); setActionMotiv(''); setActionActivCurent(null); setActionNormaNoua(''); setActionUnitateNoua('l/h'); setActionZileSilentiere(7) }}
                   style={{
                     background: 'transparent', border: 'none',
                     color: G.muted, cursor: 'pointer', fontSize: 16,
                     fontFamily: 'inherit', padding: 4,
                   }}>← schimbă</button>
               </div>
+              
+              {/* SPECIAL: silentiate - input zile + butoane rapide */}
+              {isSilentiate && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: G.muted, marginBottom: 5 }}>
+                    Suspendă alerta pentru câte zile?
+                  </label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <input
+                      type="number"
+                      min="1"
+                      max="90"
+                      value={actionZileSilentiere}
+                      onChange={e => setActionZileSilentiere(e.target.value)}
+                      style={{
+                        width: 100, padding: 10,
+                        background: G.bg, color: G.text,
+                        border: `1px solid ${G.border}`,
+                        borderRadius: 6, fontSize: 14, fontFamily: 'inherit',
+                        boxSizing: 'border-box',
+                      }}/>
+                    <span style={{ fontSize: 13, color: G.muted }}>zile</span>
+                    {actionZileSilentiere && !isNaN(parseInt(actionZileSilentiere)) && (
+                      <span style={{ fontSize: 11, color: G.muted, marginLeft: 4 }}>
+                        → până {new Date(Date.now() + parseInt(actionZileSilentiere) * 86400000).toLocaleDateString('ro-RO')}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {[3, 7, 14, 30].map(z => (
+                      <button
+                        key={z}
+                        type="button"
+                        onClick={() => setActionZileSilentiere(z)}
+                        style={{
+                          padding: '5px 12px',
+                          background: parseInt(actionZileSilentiere) === z ? (G.muted + '33') : 'transparent',
+                          color: parseInt(actionZileSilentiere) === z ? G.text : G.muted,
+                          border: `1px solid ${G.border}`,
+                          borderRadius: 5,
+                          fontSize: 11,
+                          fontWeight: 500,
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}>
+                        {z} zile
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               
               {/* SPECIAL: edit_consum - input norma + select unitate */}
               {isEditConsum && (
