@@ -32,7 +32,7 @@ function isCardBrand(s) {
 // Parse data din Excel — Rompetrol format „2026-05-01 08:17:39" sau Date object
 function parseDataAlim(val) {
   if (!val) return null
-  if (val instanceof Date) return val.toISOString().slice(0, 10)
+  if (val instanceof Date && !isNaN(val.getTime())) return val.toISOString().slice(0, 10)
   const s = String(val).trim()
   // Format „2026-05-01 08:17:39" sau „2026-05-01"
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
@@ -43,62 +43,105 @@ function parseDataAlim(val) {
   return null
 }
 
+// Helper: ia valoarea din primă coloană non-null dintr-un range
+function firstNonNull(row, indices) {
+  for (const i of indices) {
+    const v = row[i]
+    if (v !== null && v !== undefined && v !== '') return v
+  }
+  return null
+}
+
+// Helper: parse număr (acceptă „1,234.56" sau „1234,56" sau Number direct)
+function parseNum(v) {
+  if (v === null || v === undefined || v === '') return null
+  if (typeof v === 'number') return isNaN(v) ? null : v
+  const s = String(v).replace(/\s/g, '').replace(/[^\d.,-]/g, '')
+  // Heuristic: dacă are atât . cât și , presupun comma=mii, dot=zecimal
+  let normalized = s
+  if (s.includes(',') && s.includes('.')) {
+    normalized = s.replace(/,/g, '')
+  } else if (s.includes(',') && !s.includes('.')) {
+    normalized = s.replace(',', '.')
+  }
+  const n = parseFloat(normalized)
+  return isNaN(n) ? null : n
+}
+
 // Parser principal Excel Rompetrol
+// Layout Excel Rompetrol (descoperit empiric):
+//   Col 2  = label „Vehicul:" / „Total Vehicul:" / „Data" / data alimentare
+//   Col 7  = nume vehicul (după „Vehicul:")
+//   Col 11 = Cantitate (litri)
+//   Col 14 = Valoare (RON)
+//   Col 17 = Km la bord
+//   Col 28 = Ore func motor
 function parseRompetrolExcel(workbook) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]]
-  // Convert la array of arrays (raw cells)
-  const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null })
+  // raw: true ca să avem Date objects + Numbers (nu stringuri formatate)
+  const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null })
   
-  const sections = [] // array de { vehicul, alimentari: [{data, cantitate, valoare, km, ore}] }
+  const sections = []
   let curentSection = null
   let inDataRows = false
   
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] || []
-    const cell0 = (row[0] != null) ? String(row[0]).trim() : ''
-    const cell1 = (row[1] != null) ? String(row[1]).trim() : ''
     
-    // Detecție header secțiune „Vehicul: XYZ"
-    if (cell0 === 'Vehicul:' && cell1) {
+    // Cell-uri cheie din layout-ul Rompetrol
+    const labelCell = row[2] // poate fi „Vehicul:" / „Total Vehicul:" / „Data" / data alimentare
+    const labelStr = (labelCell != null) ? String(labelCell).trim() : ''
+    
+    // Detecție header secțiune „Vehicul:" (NU „Total Vehicul:" care-i row total final)
+    if (labelStr === 'Vehicul:') {
       // Salvez secțiunea anterioară dacă există
       if (curentSection && curentSection.alimentari.length > 0) {
-        // Verific dacă e duplicat — Rompetrol pune total + detail pentru același vehicul
         const existing = sections.find(s => s.vehicul === curentSection.vehicul)
-        if (!existing) {
-          sections.push(curentSection)
-        }
+        if (!existing) sections.push(curentSection)
       }
-      curentSection = { vehicul: cell1, alimentari: [] }
+      // Numele vehiculului în Col 7
+      const vehiculRaw = row[7]
+      const vehicul = vehiculRaw != null ? String(vehiculRaw).trim() : ''
+      if (vehicul) {
+        curentSection = { vehicul, alimentari: [] }
+      } else {
+        curentSection = null
+      }
       inDataRows = false
       continue
     }
     
-    // Detecție header tabel „Data | Cantitate | Valoare | Km la bord | ..."
-    if (cell0 === 'Data' && cell1 === 'Cantitate') {
+    // „Total Vehicul:" = sfârșit secțiune, NU bagaj ca secțiune nouă
+    if (labelStr === 'Total Vehicul:') {
+      inDataRows = false
+      continue
+    }
+    
+    // Detecție header tabel „Data" + „Cantitate" (Col 2 + Col 11)
+    if (labelStr === 'Data' && String(row[11] || '').trim() === 'Cantitate') {
       inDataRows = true
       continue
     }
     
-    // Detecție rândur date (date+timestamp + numere)
-    if (inDataRows && curentSection && cell0) {
-      const dataAlim = parseDataAlim(cell0)
+    // Detecție rânduri date (data în Col 2 + cantitate în Col 11)
+    if (inDataRows && curentSection && labelCell != null) {
+      const dataAlim = parseDataAlim(labelCell)
       if (!dataAlim) {
-        // Posibil fin de secțiune (rând gol / total)
-        inDataRows = false
+        // Nu-i data validă → posibil end of section
         continue
       }
-      const cantitate = parseFloat(String(row[1] || '').replace(',', '.')) || 0
-      const valoare = parseFloat(String(row[2] || '').replace(',', '.')) || 0
-      const km = parseInt(String(row[3] || '').replace(/[^\d-]/g, '')) || null
-      const ore = parseInt(String(row[7] || '').replace(/[^\d-]/g, '')) || null
+      const cantitate = parseNum(row[11])
+      const valoare = parseNum(row[14])
+      const km = parseNum(row[17])
+      const ore = parseNum(row[28])
       
-      if (cantitate > 0) {
+      if (cantitate != null && cantitate > 0) {
         curentSection.alimentari.push({
           data_alimentare: dataAlim,
-          cantitate_litri: cantitate,
-          pret_total: valoare > 0 ? valoare : null,
-          km_la_alimentare: km && km > 100 ? km : null, // ignor km mici sau invalizi
-          ore_la_alimentare: ore && ore > 0 ? ore : null,
+          cantitate_litri: Number(cantitate.toFixed(2)),
+          pret_total: valoare != null && valoare > 0 ? Number(valoare.toFixed(2)) : null,
+          km_la_alimentare: km != null && km > 100 ? Math.round(km) : null, // ignor km mici/invalizi
+          ore_la_alimentare: ore != null && ore > 0 ? Math.round(ore) : null,
           raw_row: i + 1, // pentru debug
         })
       }
@@ -152,6 +195,12 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
       const wb = XLSX.read(buf, { type: 'array', cellDates: true })
       const secs = parseRompetrolExcel(wb)
       setSections(secs)
+      
+      if (secs.length === 0) {
+        showToast?.('⚠️ Excel-ul nu pare să fie un raport Rompetrol valid. Nu am găsit nicio secțiune „Vehicul:".', 'warning')
+        setParsing(false)
+        return
+      }
       
       // Match per secțiune
       const matched = [], carduri = [], nematched = [], duplicate = []
