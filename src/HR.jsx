@@ -10,6 +10,7 @@ import TabSemnaturi from './TabSemnaturi.jsx'
 import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
+import SugestiiChuckTab from './SugestiiChuckTab.jsx'
 
 // Theme
 const G = {
@@ -84,6 +85,7 @@ export default function HRPage() {
   const [autorizatii, setAutorizatii] = useState([])
   const [tipuri, setTipuri] = useState([])
   const [cosCount, setCosCount] = useState(0)  // Etapa 13: badge dinamic Coș
+  const [chuckCount, setChuckCount] = useState(0)  // 24.05.2026: badge sugestii Chuck Norris
   const [load, setLoad] = useState(false)
   const [toast, setToast] = useState(null)
   const [editEmp, setEditEmp] = useState(null)
@@ -119,7 +121,7 @@ export default function HRPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [empRes, autRes, tipRes, cosRes] = await Promise.all([
+    const [empRes, autRes, tipRes, cosRes, chuckRes] = await Promise.all([
       supabase.from('employees').select('*, sites(name)').eq('active', true)
         .or('termination_date.is.null,termination_date.gte.' + new Date().toISOString().split('T')[0])
         .order('name'),
@@ -127,11 +129,15 @@ export default function HRPage() {
       supabase.from('hr_autorizatii_tipuri').select('*').eq('activ', true).order('ordine'),
       // Etapa 13: count itemi în Coș pentru badge tab
       supabase.from('v_recycle_bin_hr').select('row_id', { count: 'exact', head: true }),
+      // 24.05.2026: count sugestii Chuck Norris (status propus, doar high+critic în badge)
+      supabase.from('claude_bot_sugestii').select('id', { count: 'exact', head: true })
+        .in('tinta_tip', ['hr_autorizatii', 'employee']).eq('status', 'propus').in('severity', ['critic', 'high']),
     ])
     setEmployees(empRes.data || [])
     setAutorizatii(autRes.data || [])
     setTipuri(tipRes.data || [])
     setCosCount(cosRes.count || 0)
+    setChuckCount(chuckRes.count || 0)
     setLoad(false)
   }
   
@@ -152,6 +158,7 @@ export default function HRPage() {
     { key: 'personal',    icon: '👥', label: 'Angajați' },
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z },
+    { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'cos',         icon: '🗑', label: 'Coș', badge: cosCount, personalOnly: true },
@@ -195,7 +202,7 @@ export default function HRPage() {
             transition:'all 0.15s', letterSpacing:0.3
           }}>
             <span style={{fontSize:18}}>{t.icon}</span> {t.label}
-            {t.badge > 0 && <span style={{padding:'3px 9px', background: t.key === 'cos' ? G.muted : G.red, color:'#fff', borderRadius:12, fontSize:13, fontWeight:800}}>{t.badge}</span>}
+            {t.badge > 0 && <span style={{padding:'3px 9px', background: t.key === 'cos' ? G.muted : (t.chuckColor ? G.red : G.red), color:'#fff', borderRadius:12, fontSize:13, fontWeight:800}}>{t.badge}</span>}
           </button>
         ))}
       </div>
@@ -205,6 +212,7 @@ export default function HRPage() {
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
       {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} />}
+      {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'cos' && canAccessPersonal && <TabCos profile={profile} showToast={showToast} />}
