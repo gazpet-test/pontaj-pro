@@ -7612,6 +7612,22 @@ export default function LogisticaPage() {
           profile={profile} 
           showToast={showToast} 
           setTab={setTab}
+          openActiv={async (activId) => {
+            // Caut activul în lista încărcată
+            let a = active.find(x => x.id === activId)
+            // Dacă nu-l găsesc (filtrat sau lista nu-l conține), îl încarc direct din BD
+            if (!a) {
+              const { data, error } = await supabase
+                .from('logistica_active').select('*').eq('id', activId).maybeSingle()
+              if (error || !data) {
+                showToast(`Nu pot deschide activul #${activId}: ${error?.message || 'inexistent'}`, 'error')
+                return
+              }
+              a = data
+            }
+            setTab('lista')
+            setModal({ mode: 'view', activ: a })
+          }}
           onApplied={() => { loadAll(); loadSugestiiPendenteCount() }}
         />
       )}

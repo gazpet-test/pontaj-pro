@@ -80,7 +80,7 @@ function normalizeUnitate(v) {
 }
 
 // ─── Component principal ──────────────────────────────────────────────────────
-export default function SugestiiScorilosTab({ profile, showToast, onApplied, setTab }) {
+export default function SugestiiScorilosTab({ profile, showToast, onApplied, setTab, openActiv }) {
   const [sugestii, setSugestii] = useState([])
   const [load, setLoad] = useState(false)
   const [filterTip, setFilterTip] = useState('all')
@@ -218,10 +218,17 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   }
   
   const mergiLaActiv = (sg) => {
-    if (sg.tinta_tip === 'logistica_active' && sg.tinta_id && setTab) {
-      // Navigare la tab Active + scroll la activ (necesită integrare cu lista active)
-      setTab('lista')
-      showToast(`Navighez la activul #${sg.tinta_id}: ${sg.tinta_descriere}`, 'info')
+    if (sg.tinta_tip === 'logistica_active' && sg.tinta_id) {
+      // Preferat: deschide direct modal cu activul prin callback părinte
+      if (openActiv) {
+        openActiv(sg.tinta_id)
+        return
+      }
+      // Fallback: doar navigare la tab Active
+      if (setTab) {
+        setTab('lista')
+        showToast(`Caută activul #${sg.tinta_id}: ${sg.tinta_descriere}`, 'info')
+      }
     }
   }
   
@@ -420,7 +427,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
               ) : (
                 <button 
                   onClick={() => mergiLaActiv(sg)}
-                  disabled={!setTab}
+                  disabled={!openActiv && !setTab}
                   style={{
                     padding: '7px 14px',
                     background: G.blue + '22',
