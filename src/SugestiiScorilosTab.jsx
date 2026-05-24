@@ -88,8 +88,11 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   const [confirmApply, setConfirmApply] = useState(null) // sugestie de aprobat
   const [confirmReject, setConfirmReject] = useState(null) // sugestie de respins
   const [confirmAction, setConfirmAction] = useState(null) // sugestie pentru acțiune custom
-  const [actionType, setActionType] = useState('') // deep_sleep | vandut | non_motor | feedback
+  const [actionType, setActionType] = useState('') // deep_sleep | vandut | non_motor | feedback | edit_consum
   const [actionMotiv, setActionMotiv] = useState('') // motiv/feedback text liber
+  const [actionNormaNoua, setActionNormaNoua] = useState('') // pentru edit_consum
+  const [actionUnitateNoua, setActionUnitateNoua] = useState('l/h') // pentru edit_consum
+  const [actionActivCurent, setActionActivCurent] = useState(null) // norma + unitate curente
   const [processing, setProcessing] = useState(false)
 
   const loadSugestii = useCallback(async () => {
@@ -232,7 +235,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     }
   }
   
-  // ─── Acțiune pe activ: deep_sleep / vandut / non_motor / feedback ────────────
+  // ─── Acțiune pe activ: deep_sleep / vandut / non_motor / feedback / edit_consum ──
   const applyAction = async (sg, type, motiv) => {
     if (!type) {
       showToast('Selectează o acțiune', 'warning')
@@ -241,6 +244,17 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     if ((type === 'deep_sleep' || type === 'feedback') && !motiv?.trim()) {
       showToast('Motivul/feedback-ul e obligatoriu pentru această acțiune', 'warning')
       return
+    }
+    if (type === 'edit_consum') {
+      const normaParsed = parseFloat(String(actionNormaNoua).replace(',', '.'))
+      if (isNaN(normaParsed) || normaParsed < 0) {
+        showToast('Norma trebuie să fie un număr valid (>= 0)', 'warning')
+        return
+      }
+      if (!motiv?.trim()) {
+        showToast('Motivul update-ului e obligatoriu pentru a păstra audit', 'warning')
+        return
+      }
     }
     setProcessing(true)
     try {
@@ -267,6 +281,13 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
           if (!sg.tip_carburant) upd.tip_carburant = 'electric'
           if (sg.norma_consum == null) upd.norma_consum = 0
           auditMsg = `Marcat NON-MOTOR (echipament staționar fără combustibil)${motiv ? ': ' + motiv : ''}`
+        } else if (type === 'edit_consum') {
+          const normaParsed = parseFloat(String(actionNormaNoua).replace(',', '.'))
+          const vechiNorma = actionActivCurent?.norma_consum
+          const vechiUnitate = actionActivCurent?.unitate_norma
+          upd.norma_consum = normaParsed
+          upd.unitate_norma = actionUnitateNoua
+          auditMsg = `Update normă consum: ${vechiNorma ?? '∅'} ${vechiUnitate ?? ''} → ${normaParsed} ${actionUnitateNoua} (motiv: ${motiv})`
         } else if (type === 'feedback') {
           auditMsg = `Feedback Razvan: ${motiv}`
         }
@@ -290,11 +311,13 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
       const tags = ['scorilos_feedback', `activ_${sg.tinta_id}`, `actiune_${type}`]
       const titluLectie = type === 'feedback' 
         ? `Feedback Razvan pentru ${sg.tinta_descriere}`
+        : type === 'edit_consum'
+        ? `Normă consum actualizată pentru ${sg.tinta_descriere}`
         : `Activ ${sg.tinta_descriere} marcat ${type}`
-      const continutLectie = `Activul "${sg.tinta_descriere}" (id ${sg.tinta_id}) a primit acțiune "${type}" prin UI Sugestii Scorilos pe ${dataStr}.\n\nMotiv/feedback Razvan: ${motiv || '(fără text)'}\n\nContext sugestie originală:\n- Tip: ${sg.tip_sugestie}\n- Motivare Scorilos: ${sg.motivare}\n${sg.source_url ? '- Sursă: ' + sg.source_url : ''}\n\nScorilos NU mai trebuie să propună acțiuni similare pe acest activ.`
+      const continutLectie = `Activul "${sg.tinta_descriere}" (id ${sg.tinta_id}) a primit acțiune "${type}" prin UI Sugestii Scorilos pe ${dataStr}.\n\nMotiv/feedback Razvan: ${motiv || '(fără text)'}\n${type === 'edit_consum' ? `\nNormă veche: ${actionActivCurent?.norma_consum ?? '∅'} ${actionActivCurent?.unitate_norma ?? ''}\nNormă nouă: ${actionNormaNoua} ${actionUnitateNoua}\n` : ''}\nContext sugestie originală:\n- Tip: ${sg.tip_sugestie}\n- Motivare Scorilos: ${sg.motivare}\n${sg.source_url ? '- Sursă: ' + sg.source_url : ''}\n\nScorilos NU mai trebuie să propună acțiuni similare pe acest activ.`
       
       await supabase.from('claude_context').insert({
-        category: type === 'feedback' ? 'razvan_pref' : 'decision',
+        category: (type === 'feedback' || type === 'edit_consum') ? 'razvan_pref' : 'decision',
         title: titluLectie,
         content: continutLectie,
         priority: 'medium',
@@ -314,6 +337,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
         deep_sleep: '💤 Deep Sleep',
         vandut: '💰 Vândut',
         non_motor: '🔌 Non-motor',
+        edit_consum: '📝 Normă consum',
         feedback: '💬 Feedback'
       }[type] || type
       
@@ -321,12 +345,43 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
       setConfirmAction(null)
       setActionType('')
       setActionMotiv('')
+      setActionNormaNoua('')
+      setActionUnitateNoua('l/h')
+      setActionActivCurent(null)
       await loadSugestii()
       if (onApplied) onApplied()
     } catch (e) {
       showToast('Eroare acțiune: ' + (e.message || e), 'error')
     }
     setProcessing(false)
+  }
+  
+  // ─── Handler pick acțiune: pentru edit_consum pre-load norma curenta ─────────
+  const onPickAction = async (key) => {
+    setActionType(key)
+    setActionMotiv('')
+    if (key === 'edit_consum' && confirmAction?.tinta_id) {
+      const { data } = await supabase.from('logistica_active')
+        .select('norma_consum, unitate_norma')
+        .eq('id', confirmAction.tinta_id).maybeSingle()
+      if (data) {
+        setActionActivCurent(data)
+        if (data.norma_consum != null) setActionNormaNoua(String(data.norma_consum))
+        if (data.unitate_norma) setActionUnitateNoua(data.unitate_norma)
+      } else {
+        setActionActivCurent({ norma_consum: null, unitate_norma: null })
+      }
+    }
+  }
+  
+  // Reset state când se închide modalul de acțiune
+  const closeActionModal = () => {
+    setConfirmAction(null)
+    setActionType('')
+    setActionMotiv('')
+    setActionNormaNoua('')
+    setActionUnitateNoua('l/h')
+    setActionActivCurent(null)
   }
   
   // ─── Card sugestie ──────────────────────────────────────────────────────────
@@ -486,12 +541,22 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     )
   }
   
-  // ─── Modal acțiune custom (deep_sleep / vandut / non_motor / feedback) ─────
+  // ─── Modal acțiune custom (deep_sleep / vandut / non_motor / feedback / edit_consum) ──
   const renderActionModal = () => {
     if (!confirmAction) return null
     const sg = confirmAction
     
     const ACTIONS = [
+      { 
+        key: 'edit_consum', 
+        icon: '📝', 
+        label: 'Editare normă consum', 
+        desc: 'Actualizează norma de consum a utilajului direct, fără să intri în modul Active. Util când drift-ul indică o normă veche greșită.',
+        color: G.yellow || '#D29922',
+        requireMotiv: true,
+        motivLabel: 'De ce schimbi norma (obligatoriu — audit)',
+        motivPlaceholder: 'Ex: norma vechi era subestimată, recalibrat după media reală 30 zile...',
+      },
       { 
         key: 'deep_sleep', 
         icon: '💤', 
@@ -535,9 +600,13 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     ]
     
     const actCurent = ACTIONS.find(a => a.key === actionType)
+    const isEditConsum = actionType === 'edit_consum'
+    const submitDisabled = processing 
+      || (actCurent?.requireMotiv && !actionMotiv.trim())
+      || (isEditConsum && (!actionNormaNoua || isNaN(parseFloat(String(actionNormaNoua).replace(',','.')))))
     
     return (
-      <div onClick={() => { setConfirmAction(null); setActionType(''); setActionMotiv('') }} style={{
+      <div onClick={closeActionModal} style={{
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
         background: 'rgba(0,0,0,0.7)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -570,7 +639,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
               {ACTIONS.map(a => (
                 <button
                   key={a.key}
-                  onClick={() => setActionType(a.key)}
+                  onClick={() => onPickAction(a.key)}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 12,
                     padding: '12px 14px',
@@ -596,7 +665,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
             </div>
           )}
           
-          {/* Pas 2: introducere motiv */}
+          {/* Pas 2: introducere motiv (și norma pentru edit_consum) */}
           {actionType && actCurent && (
             <>
               <div style={{
@@ -613,13 +682,75 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
                   <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{actCurent.desc}</div>
                 </div>
                 <button
-                  onClick={() => { setActionType(''); setActionMotiv('') }}
+                  onClick={() => { setActionType(''); setActionMotiv(''); setActionActivCurent(null); setActionNormaNoua(''); setActionUnitateNoua('l/h') }}
                   style={{
                     background: 'transparent', border: 'none',
                     color: G.muted, cursor: 'pointer', fontSize: 16,
                     fontFamily: 'inherit', padding: 4,
                   }}>← schimbă</button>
               </div>
+              
+              {/* SPECIAL: edit_consum - input norma + select unitate */}
+              {isEditConsum && (
+                <>
+                  <div style={{
+                    background: G.bg, border: `1px dashed ${G.border}`,
+                    padding: '10px 12px', borderRadius: 6, marginBottom: 12,
+                    display: 'flex', alignItems: 'center', gap: 10,
+                  }}>
+                    <div style={{ fontSize: 12, color: G.muted }}>Norma curentă în BD:</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: G.text }}>
+                      {actionActivCurent ? (
+                        actionActivCurent.norma_consum != null 
+                          ? `${actionActivCurent.norma_consum} ${actionActivCurent.unitate_norma || 'l/h'}`
+                          : '∅ (nesetată)'
+                      ) : 'se încarcă...'}
+                    </div>
+                  </div>
+                  
+                  <div style={{ marginBottom: 14, display: 'flex', gap: 10 }}>
+                    <div style={{ flex: 2 }}>
+                      <label style={{ display: 'block', fontSize: 12, color: G.muted, marginBottom: 5 }}>
+                        Normă nouă
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={actionNormaNoua}
+                        onChange={e => setActionNormaNoua(e.target.value)}
+                        placeholder="Ex: 18.5"
+                        style={{
+                          width: '100%', padding: 10,
+                          background: G.bg, color: G.text,
+                          border: `1px solid ${G.border}`,
+                          borderRadius: 6, fontSize: 14, fontFamily: 'inherit',
+                          boxSizing: 'border-box',
+                        }}/>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ display: 'block', fontSize: 12, color: G.muted, marginBottom: 5 }}>
+                        Unitate
+                      </label>
+                      <select
+                        value={actionUnitateNoua}
+                        onChange={e => setActionUnitateNoua(e.target.value)}
+                        style={{
+                          width: '100%', padding: 10,
+                          background: G.bg, color: G.text,
+                          border: `1px solid ${G.border}`,
+                          borderRadius: 6, fontSize: 14, fontFamily: 'inherit',
+                          boxSizing: 'border-box',
+                        }}>
+                        <option value="l/h">l/h</option>
+                        <option value="l/100km">l/100km</option>
+                        <option value="kWh/h">kWh/h</option>
+                        <option value="kWh/100km">kWh/100km</option>
+                      </select>
+                    </div>
+                  </div>
+                </>
+              )}
               
               <div style={{ marginBottom: 14 }}>
                 <label style={{ display: 'block', fontSize: 12, color: G.muted, marginBottom: 5 }}>
@@ -629,7 +760,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
                   value={actionMotiv}
                   onChange={e => setActionMotiv(e.target.value)}
                   placeholder={actCurent.motivPlaceholder}
-                  rows={4}
+                  rows={isEditConsum ? 3 : 4}
                   style={{
                     width: '100%',
                     padding: 10,
@@ -656,7 +787,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
           
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
             <button 
-              onClick={() => { setConfirmAction(null); setActionType(''); setActionMotiv('') }}
+              onClick={closeActionModal}
               disabled={processing}
               style={{
                 padding: '8px 16px',
@@ -673,7 +804,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
             {actionType && (
               <button 
                 onClick={() => applyAction(sg, actionType, actionMotiv)}
-                disabled={processing || (actCurent?.requireMotiv && !actionMotiv.trim())}
+                disabled={submitDisabled}
                 style={{
                   padding: '8px 18px',
                   background: actCurent?.color || G.green,
@@ -684,7 +815,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
                   fontWeight: 600,
                   cursor: processing ? 'wait' : 'pointer',
                   fontFamily: 'inherit',
-                  opacity: (actCurent?.requireMotiv && !actionMotiv.trim()) ? 0.5 : 1,
+                  opacity: submitDisabled ? 0.5 : 1,
                 }}>
                 {processing ? '…' : `${actCurent?.icon} Aplică ${actCurent?.label}`}
               </button>
