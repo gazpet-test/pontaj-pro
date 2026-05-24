@@ -15,6 +15,7 @@ import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.js
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
+import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -1925,7 +1926,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
 
 // ─── Pagina principală ───────────────────────────────────────────────────────
 // ─── Bara de tab-uri pentru pagina Logistică ─────────────────────────────────
-function TabsBar({ tab, setTab }) {
+function TabsBar({ tab, setTab, isOwner = false, sugestiiCount = 0 }) {
   const tabs = [
     { key: 'lista',     icon: '📋', label: 'Active' },
     { key: 'alimentari',icon: '⛽', label: 'Alimentări' },
@@ -1935,6 +1936,7 @@ function TabsBar({ tab, setTab }) {
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
     { key: 'arhiva_alimentari', icon: '📊', label: 'Arhivă Alimentări' },
+    ...(isOwner ? [{ key: 'bot-sugestii', icon: '⚔️', label: 'Sugestii Scorilos', badge: sugestiiCount }] : []),
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -1957,6 +1959,19 @@ function TabsBar({ tab, setTab }) {
           }}>
             <span style={{fontSize: 14}}>{t.icon}</span>
             {t.label}
+            {t.badge != null && t.badge > 0 && (
+              <span style={{
+                marginLeft: 4,
+                padding: '1px 6px',
+                background: active ? G.logistica : G.red,
+                color: '#fff',
+                borderRadius: 10,
+                fontSize: 10,
+                fontWeight: 700,
+                minWidth: 18,
+                textAlign: 'center',
+              }}>{t.badge}</span>
+            )}
           </button>
         )
       })}
@@ -6744,10 +6759,11 @@ export default function LogisticaPage() {
   const [alerteTransp, setAlerteTransp] = useState([])     // transporturi cu status='cerut'
   const [transpBlocate, setTranspBlocate] = useState([])   // aprobate sau in_tranzit cu data depășită
   const [kpiTransp, setKpiTransp] = useState({ cerute: 0, aprobate: 0, inTranzit: 0, livrate: 0 })  // KPI transporturi luna curentă
+  const [sugestiiPendente, setSugestiiPendente] = useState(0)  // ETAPA 12.8: count sugestii Scorilos pentru badge tab
   const [tab, setTab] = useState(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
-    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari']
+    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari','bot-sugestii']
     return valid.includes(t) ? t : 'lista'
   })  // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete' | 'transporturi' | 'arhiva'
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
@@ -6844,9 +6860,21 @@ export default function LogisticaPage() {
   useEffect(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
-    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari']
+    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari','bot-sugestii']
     if (t && valid.includes(t) && t !== tab) setTab(t)
   }, [loc.search])
+  
+  // ETAPA 12.8: încarc numărul de sugestii Scorilos pendente pentru badge tab (doar owner)
+  const loadSugestiiPendenteCount = useCallback(async () => {
+    if (!profile?.is_owner) { setSugestiiPendente(0); return }
+    const { count } = await supabase
+      .from('claude_bot_sugestii')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'propus')
+    setSugestiiPendente(count || 0)
+  }, [profile?.is_owner])
+  
+  useEffect(() => { loadSugestiiPendenteCount() }, [loadSugestiiPendenteCount])
   
   
   
@@ -7542,7 +7570,7 @@ export default function LogisticaPage() {
       </div>
       {/* Etapa 14: Widget Tichete Logistica */}
       {profile && <TicheteWidget departament="logistica" profile={profile} accent={G.orange} />}
-      <TabsBar tab={tab} setTab={setTab} />
+      <TabsBar tab={tab} setTab={setTab} isOwner={!!profile?.is_owner} sugestiiCount={sugestiiPendente} />
       
       {/* TAB: Alimentări (input bulk per zi) */}
       {tab === 'alimentari' && (
@@ -7577,6 +7605,16 @@ export default function LogisticaPage() {
       
       {/* TAB: Service (placeholder) */}
       {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
+      
+      {/* TAB: Sugestii Scorilos — Etapa 12.8 (doar owner) */}
+      {tab === 'bot-sugestii' && profile?.is_owner && (
+        <SugestiiScorilosTab 
+          profile={profile} 
+          showToast={showToast} 
+          setTab={setTab}
+          onApplied={() => { loadAll(); loadSugestiiPendenteCount() }}
+        />
+      )}
       
       {/* TAB: Tichete - foloseste modulul global Tichete filtrat pe logistica */}
       {tab === 'tichete' && <Tichete filterDepartament="logistica" noLayout={true} />}
