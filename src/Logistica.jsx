@@ -10,6 +10,7 @@ import LOGO_B64 from './logo.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import JSZip from 'jszip'
+import ImportWhatsAppModal from './ImportWhatsAppModal.jsx'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
@@ -2233,7 +2234,7 @@ function IstoricImporturiEvoExpand({ istoricImporturi }) {
   )
 }
 
-function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, onImportRompetrol, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
+function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, onImportRompetrol, onImportWhatsApp, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
   const [filterSub, setFilterSub] = useState('Toate')
@@ -2522,6 +2523,26 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                   justifyContent: 'flex-start',
                 }}>
                 🟢 Import Rompetrol (.xls)
+              </button>
+              <button 
+                onClick={() => onImportWhatsApp && onImportWhatsApp()}
+                title='WhatsApp: import arhivă .zip din grupul motorină pentru alocare șantiere automate la alimentări Rompetrol. ANAF-safe (păstrează caption + autor + timestamp + poză bon).'
+                style={{
+                  background: '#25D366',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '9px 16px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
+                  justifyContent: 'flex-start',
+                }}>
+                📲 Import WhatsApp (.zip)
               </button>
             </div>
           </div>
@@ -6792,6 +6813,7 @@ export default function LogisticaPage() {
   const [toast, showToast] = useToast()
   const [showImportEvo, setShowImportEvo] = useState(null) // null | 'masini' | 'utilaje'
   const [showImportRompetrol, setShowImportRompetrol] = useState(false) // 24.05.2026: modal import Rompetrol
+  const [showImportWhatsApp, setShowImportWhatsApp] = useState(false) // 25.05.2026: modal import WhatsApp
   // Etapa 8.5: Alerte globale + ultima telemetrie (pentru banner Alimentări)
   const [ultimaTelemetrieData, setUltimaTelemetrieData] = useState(null)
   const [istoricImporturi, setIstoricImporturi] = useState([])  // ETAPA 8.6: history importuri EvoGPS
@@ -7612,6 +7634,7 @@ export default function LogisticaPage() {
           showToast={showToast}
           onImportEvoGPS={(mode) => setShowImportEvo(mode)}
           onImportRompetrol={() => setShowImportRompetrol(true)}
+          onImportWhatsApp={() => setShowImportWhatsApp(true)}
           ultimaTelemetrieData={ultimaTelemetrieData}
           istoricImporturi={istoricImporturi}
           profile={profile}
@@ -8392,6 +8415,19 @@ export default function LogisticaPage() {
           onSaved={() => {
             loadAll()
             setShowImportRompetrol(false)
+          }}
+        />
+      )}
+      
+      {/* 25.05.2026: Modal Import WhatsApp */}
+      {showImportWhatsApp && (
+        <ImportWhatsAppModal
+          profile={profile}
+          showToast={showToast}
+          onClose={() => setShowImportWhatsApp(false)}
+          onImported={() => {
+            loadAll()
+            setShowImportWhatsApp(false)
           }}
         />
       )}
