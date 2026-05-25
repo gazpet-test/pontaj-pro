@@ -1,18 +1,20 @@
 // ════════════════════════════════════════════════════════════════════════════
-// OCRValidateBulkModal — Validare OCR Vision pe bonuri Rompetrol
-// 25.05.2026 — Etapa 4 WhatsApp Motorină
+// OCRValidateBulkModal v2 — Validare OCR Vision SMART pe bonuri Rompetrol
+// 25.05.2026 — Etapa 4.5 cu tipuri de dovezi + buton Accept 1-click
+// ════════════════════════════════════════════════════════════════════════════
+// NOU v2:
+//   - 6 categorii statusuri (match / acceptat_vizual / discrepancy / invalid / ilizibil / no_poza)
+//   - Display tip_dovada (bon_fiscal / display_pompa / combo_placuta / bon_alta_statie etc.)
+//   - Buton ✓ Accept manual 1-click (fără motiv) pe rânduri cu discrepancy/invalid/ilizibil
+//   - Buton ✗ Respinge inline cu confirmare
+//   - Refresh state local cu noile statusuri după decisions
 // ════════════════════════════════════════════════════════════════════════════
 // Workflow:
-//   1. Fetch alimentări cu poză din v_alimentari_pt_ocr (status: NULL/pending/discrepancy/unreadable)
+//   1. Fetch alimentări din v_alimentari_pt_ocr (status='pending')
 //   2. User confirmă rularea (vede cost estimat + durată)
-//   3. Trigger Edge Function `analyze_bon_rompetrol` în batches de 10 IDs
+//   3. Trigger Edge Function `analyze_bon_rompetrol` v2 (clasifică tip_dovada)
 //   4. Progress bar real-time + buton stop
-//   5. Summary la final: match / discrepancy / unreadable / errors + listă detalii
-// ════════════════════════════════════════════════════════════════════════════
-// Toleranțe pe Edge Function:
-//   - Litri: ±3% sau ±3L (care e mai mare)
-//   - LEI:   ±2% sau ±5 RON (care e mai mare)
-// Model: claude-haiku-4-5-20251001 (~0.05¢ per bon estimat)
+//   5. Summary final: 6 categorii + listă cu buton Accept/Respinge inline
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useCallback } from 'react'
@@ -22,20 +24,37 @@ const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   blue:'#58A6FF', green:'#3FB950', red:'#F85149', yellow:'#D29922',
-  purple:'#BC8CFF', orange:'#F0883E', logistica:'#E3B341',
+  purple:'#BC8CFF', orange:'#F0883E', cyan:'#79C0FF', logistica:'#E3B341',
   greenDim:'#1A3A1A', redDim:'#3A1A1A', yellowDim:'#3A2A0A',
 }
 
-const BATCH_SIZE = 10           // max ID-uri per call Edge Function (evită timeout 60s)
-const COST_PER_BON = 0.001      // estimat USD/bon Haiku 4.5 Vision
+const BATCH_SIZE = 10
+const COST_PER_BON = 0.003   // estimat USD/bon Haiku 4.5 v2 (prompt mai lung)
 
+// 25.05.2026 v2: 6 categorii noi (înainte erau 5)
 const STATUS_META = {
-  match:       { icon: '✅', color: G.green, label: 'Match' },
-  discrepancy: { icon: '⚠️', color: G.orange, label: 'Discrepanță' },
-  unreadable:  { icon: '👁️', color: G.muted, label: 'Ilizibil' },
-  no_poza:     { icon: '📭', color: G.dim, label: 'Fără poză' },
-  error:       { icon: '❌', color: G.red, label: 'Eroare' },
-  pending:     { icon: '⏳', color: G.blue, label: 'Pending' },
+  match:           { icon: '✅', color: G.green,  label: 'Match' },
+  acceptat_vizual: { icon: '👁️', color: G.cyan,   label: 'Dovadă vizuală' },
+  discrepancy:     { icon: '⚠️', color: G.orange, label: 'Discrepanță' },
+  invalid:         { icon: '🚨', color: G.red,    label: 'Bon invalid' },
+  ilizibil:        { icon: '🌫️', color: G.muted,  label: 'Ilizibil' },
+  no_poza:         { icon: '📭', color: G.dim,    label: 'Fără poză' },
+  error:           { icon: '❌', color: G.red,    label: 'Eroare' },
+  pending:         { icon: '⏳', color: G.blue,   label: 'Pending' },
+  accepted_manual: { icon: '✓',  color: G.green,  label: 'Accept manual' },
+  rejected_manual: { icon: '✗',  color: G.red,    label: 'Respins manual' },
+}
+
+// 25.05.2026 v2: cele 7 tipuri dovezi clasificate de Vision
+const TIP_DOVADA_META = {
+  bon_fiscal_rompetrol:    { icon: '🧾', color: G.green,  label: 'Bon fiscal' },
+  display_pompa:           { icon: '📺', color: G.cyan,   label: 'Display pompă' },
+  combo_placuta_plus_bon:  { icon: '📷', color: G.cyan,   label: 'Plăcuța + bon' },
+  caption_explicit:        { icon: '💬', color: G.blue,   label: 'Caption explicit' },
+  bon_alta_statie:         { icon: '🚨', color: G.red,    label: 'Altă stație!' },
+  bon_alta_data:           { icon: '🚨', color: G.red,    label: 'Altă dată!' },
+  bon_alt_produs:          { icon: '🚨', color: G.red,    label: 'Alt produs!' },
+  ilizibil:                { icon: '🌫️', color: G.muted,  label: 'Ilizibil' },
 }
 
 const fmtDate = (iso) => {
@@ -44,14 +63,20 @@ const fmtDate = (iso) => {
 }
 
 export default function OCRValidateBulkModal({ profile, showToast, onClose, onFinished }) {
-  const [phase, setPhase] = useState('loading') // loading | confirm | running | done
+  const [phase, setPhase] = useState('loading')
   const [alimentari, setAlimentari] = useState([])
   const [progress, setProgress] = useState({ done: 0, total: 0, current: null })
   const [allResults, setAllResults] = useState([])
-  const [aggSummary, setAggSummary] = useState({ match: 0, discrepancy: 0, unreadable: 0, no_poza: 0, errors: 0 })
+  const [aggSummary, setAggSummary] = useState({ 
+    match: 0, acceptat_vizual: 0, discrepancy: 0, invalid: 0, 
+    ilizibil: 0, no_poza: 0, errors: 0 
+  })
   const [totalCost, setTotalCost] = useState(0)
   const [shouldStop, setShouldStop] = useState(false)
   const [error, setError] = useState(null)
+  // 25.05.2026 v2: tracking accept/respinge manual (set de id-uri deja decise)
+  const [decidedIds, setDecidedIds] = useState({}) // { [id]: 'accepted_manual' | 'rejected_manual' }
+  const [decidingId, setDecidingId] = useState(null) // loading per rând
   
   // ──────────────────── 1. FETCH LISTA AT MOUNT ────────────────────
   const loadAlim = useCallback(async () => {
@@ -80,7 +105,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
     setProgress({ done: 0, total: alimentari.length, current: alimentari[0]?.id || null })
     
     const ids = alimentari.map(a => a.id)
-    let agg = { match: 0, discrepancy: 0, unreadable: 0, no_poza: 0, errors: 0 }
+    let agg = { match: 0, acceptat_vizual: 0, discrepancy: 0, invalid: 0, ilizibil: 0, no_poza: 0, errors: 0 }
     let allRes = []
     let totalCostUsd = 0
     
@@ -89,21 +114,15 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
         if (shouldStop) break
         
         const batch = ids.slice(i, i + BATCH_SIZE)
-        setProgress({ 
-          done: i, 
-          total: ids.length, 
-          current: batch[0]
-        })
+        setProgress({ done: i, total: ids.length, current: batch[0] })
         
         const { data, error: invokeErr } = await supabase.functions.invoke('analyze_bon_rompetrol', {
           body: { alim_ids: batch }
         })
         
         if (invokeErr) {
-          // Eroare per batch — log + continue
           console.error('Batch OCR failed:', invokeErr)
           showToast(`Eroare batch ${i / BATCH_SIZE + 1}: ${invokeErr.message || 'unknown'}`, 'warn')
-          // Marchez tot batch-ul ca error
           batch.forEach(id => {
             allRes.push({ id, status: 'error', error: invokeErr.message })
             agg.errors++
@@ -120,20 +139,20 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
           continue
         }
         
-        // Agreg rezultate
         const batchResults = data.results || []
         allRes = allRes.concat(batchResults)
         
         const s = data.summary || {}
         agg.match += s.match || 0
+        agg.acceptat_vizual += s.acceptat_vizual || 0
         agg.discrepancy += s.discrepancy || 0
-        agg.unreadable += s.unreadable || 0
+        agg.invalid += s.invalid || 0
+        agg.ilizibil += s.ilizibil || 0
         agg.no_poza += s.no_poza || 0
         agg.errors += s.errors || 0
         
         totalCostUsd += data.meta?.cost_usd || 0
         
-        // Update state pentru UI live
         setAggSummary({ ...agg })
         setAllResults([...allRes])
         setTotalCost(totalCostUsd)
@@ -145,12 +164,18 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
       }
       
       setPhase('done')
-      const totalProcesat = agg.match + agg.discrepancy + agg.unreadable + agg.no_poza + agg.errors
+      const totalProcesat = agg.match + agg.acceptat_vizual + agg.discrepancy + agg.invalid 
+                           + agg.ilizibil + agg.no_poza + agg.errors
       
       if (agg.errors > 0) {
-        showToast(`OCR finalizat cu ${agg.errors} erori. Vezi detaliile.`, 'warn')
+        showToast(`OCR finalizat cu ${agg.errors} erori. Vezi detalii.`, 'warn')
       } else {
-        showToast(`✅ OCR finalizat: ${totalProcesat} bonuri procesate`, 'success')
+        const reviewNeeded = agg.discrepancy + agg.invalid + agg.ilizibil
+        const autoOk = agg.match + agg.acceptat_vizual
+        showToast(
+          `✅ OCR finalizat: ${autoOk} auto-OK · ${reviewNeeded} necesită revizuire · ${totalProcesat} total`, 
+          'success'
+        )
       }
     } catch (e) {
       console.error('Eroare runOCR:', e)
@@ -159,24 +184,51 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
     }
   }, [alimentari, shouldStop, showToast])
   
-  // Aggregate lookup pentru lista rezultate finală
-  const alimById = alimentari.reduce((m, a) => { m[a.id] = a; return m }, {})
+  // ──────────────────── 3. DECIZIE MANUALĂ (Accept / Respinge) ────────────────────
+  // 25.05.2026 v2: 1-click fără motiv per cerere Razvan
+  const handleManualDecision = useCallback(async (alimId, decision) => {
+    if (decidingId) return // anti-double-click
+    setDecidingId(alimId)
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('fn_ocr_decide_manual', {
+        p_alim_id: alimId,
+        p_decision: decision  // 'accept' sau 'reject'
+      })
+      
+      if (rpcErr) {
+        showToast(`Eroare: ${rpcErr.message}`, 'warn')
+        return
+      }
+      
+      if (data?.ok) {
+        const newStatus = data.new_status
+        setDecidedIds(prev => ({ ...prev, [alimId]: newStatus }))
+        const action = decision === 'accept' ? '✓ Acceptat' : '✗ Respins'
+        showToast(`${action} alim #${alimId}`, 'success')
+      } else {
+        showToast(`Răspuns neașteptat de la BD`, 'warn')
+      }
+    } catch (e) {
+      showToast(`Eroare: ${e.message}`, 'warn')
+    } finally {
+      setDecidingId(null)
+    }
+  }, [decidingId, showToast])
   
-  // ──────────────────── RENDER ────────────────────
+  const alimById = alimentari.reduce((m, a) => { m[a.id] = a; return m }, {})
   
   return (
     <div 
       style={{
         position:'fixed', inset:0, background:'rgba(0,0,0,0.78)',
-        zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center',
-        padding:20
+        zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20
       }} 
       onClick={() => { if (phase !== 'running') onClose() }}
     >
       <div 
         style={{
           background:G.surface, border:`1px solid ${G.border2}`, borderRadius:14,
-          width:'100%', maxWidth:1100, maxHeight:'92vh', overflow:'hidden',
+          width:'100%', maxWidth:1180, maxHeight:'92vh', overflow:'hidden',
           display:'flex', flexDirection:'column'
         }} 
         onClick={e => e.stopPropagation()}
@@ -188,7 +240,13 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
           display:'flex', justifyContent:'space-between', alignItems:'center', gap:16
         }}>
           <div>
-            <div style={{fontSize:18, fontWeight:800, color:G.blue}}>🔍 Validare OCR Vision pe bonuri Rompetrol</div>
+            <div style={{fontSize:18, fontWeight:800, color:G.blue}}>
+              🔍 Validare OCR Vision SMART pe bonuri Rompetrol
+              <span style={{
+                marginLeft:10, fontSize:10, padding:'2px 7px', borderRadius:6,
+                background:G.purple+'22', color:G.purple, fontWeight:700
+              }}>v2</span>
+            </div>
             <div style={{fontSize:12, color:G.muted, marginTop:2}}>
               {phase === 'loading' && 'Se încarcă lista...'}
               {phase === 'confirm' && `${alimentari.length} alimentări de validat`}
@@ -223,50 +281,68 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
             </div>
           )}
           
-          {/* FAZA 2: CONFIRM (înainte de rulare) */}
+          {/* FAZA 2: CONFIRM */}
           {phase === 'confirm' && (
             <div>
               {alimentari.length === 0 ? (
-                <div style={{textAlign:'center', padding:'60px 20px', color:G.green, fontSize:16, fontWeight:700}}>
-                  🎉 Nicio alimentare de validat momentan!
-                  <div style={{fontSize:12, color:G.muted, fontWeight:400, marginTop:8}}>
-                    Toate alimentările cu poză au fost validate prin OCR.
+                <div style={{
+                  textAlign:'center', padding:'60px 20px',
+                  background:G.bg, border:`1px solid ${G.border}`, borderRadius:10
+                }}>
+                  <div style={{fontSize:42, marginBottom:12}}>✅</div>
+                  <div style={{fontSize:15, color:G.green, fontWeight:700, marginBottom:6}}>
+                    Niciun bon de validat momentan!
+                  </div>
+                  <div style={{fontSize:12, color:G.muted}}>
+                    Toate alimentările Rompetrol cu poză au fost deja validate prin OCR.
                   </div>
                 </div>
               ) : (
                 <>
-                  {/* Statistici prediction */}
+                  {/* Info despre upgrade v2 */}
                   <div style={{
-                    display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:12, marginBottom:20
+                    background:G.purple+'15', border:`1px solid ${G.purple}55`, borderRadius:10,
+                    padding:'14px 18px', marginBottom:18
                   }}>
-                    <div style={{background:G.bg, border:`1px solid ${G.border}`, borderRadius:10, padding:14, textAlign:'center'}}>
-                      <div style={{fontSize:22, fontWeight:900, color:G.blue}}>{alimentari.length}</div>
-                      <div style={{fontSize:11, color:G.muted, marginTop:4}}>Alimentări de validat</div>
+                    <div style={{fontSize:13, color:G.purple, fontWeight:800, marginBottom:6}}>
+                      🆕 Upgrade v2 — Vision OCR SMART
                     </div>
-                    <div style={{background:G.bg, border:`1px solid ${G.border}`, borderRadius:10, padding:14, textAlign:'center'}}>
-                      <div style={{fontSize:22, fontWeight:900, color:G.green}}>
-                        ~${(alimentari.length * COST_PER_BON).toFixed(3)}
-                      </div>
-                      <div style={{fontSize:11, color:G.muted, marginTop:4}}>Cost estimat (Haiku 4.5)</div>
-                    </div>
-                    <div style={{background:G.bg, border:`1px solid ${G.border}`, borderRadius:10, padding:14, textAlign:'center'}}>
-                      <div style={{fontSize:22, fontWeight:900, color:G.purple}}>
-                        ~{Math.ceil(alimentari.length * 3 / 60)} min
-                      </div>
-                      <div style={{fontSize:11, color:G.muted, marginTop:4}}>Durată estimată</div>
+                    <div style={{fontSize:11, color:G.text, lineHeight:1.6}}>
+                      Vision clasifică acum poza în <strong>7 tipuri de dovezi</strong>:<br/>
+                      🧾 Bon fiscal · 📺 Display pompă · 📷 Plăcuța+bon · 💬 Caption · 🚨 Altă stație/dată/produs · 🌫️ Ilizibil
+                      <br/>
+                      → <strong>Display-ul pompei și combo plăcuța+bon</strong> sunt acceptate automat ca dovadă vizuală (OK pentru ANAF).<br/>
+                      → <strong>Bonurile din alte stații/date</strong> sunt marcate ca <span style={{color:G.red, fontWeight:700}}>POSIBILĂ FRAUDĂ</span>.
                     </div>
                   </div>
                   
-                  {/* Info despre toleranțe */}
+                  {/* Cost estimat */}
                   <div style={{
                     background:G.bg, border:`1px solid ${G.border}`, borderRadius:10,
-                    padding:'12px 16px', marginBottom:20, fontSize:12, color:G.muted, lineHeight:1.6
+                    padding:'14px 18px', marginBottom:18,
+                    display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14
                   }}>
-                    <div style={{color:G.text, fontWeight:700, marginBottom:6}}>📐 Toleranțe match:</div>
-                    <div>• <strong style={{color:G.text}}>Cantitate</strong>: ±3% sau ±3 L (care e mai mare)</div>
-                    <div>• <strong style={{color:G.text}}>LEI total</strong>: ±2% sau ±5 RON (care e mai mare)</div>
-                    <div style={{marginTop:6, color:G.dim, fontStyle:'italic'}}>
-                      Vision citește bonul, compară cu valorile declarate. Status: ✅ match / ⚠️ discrepancy / 👁️ ilizibil
+                    <div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:4}}>Total alimentări</div>
+                      <div style={{fontSize:20, fontWeight:900, color:G.blue}}>{alimentari.length}</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:4}}>Cost estimat</div>
+                      <div style={{fontSize:20, fontWeight:900, color:G.green}}>
+                        ~${(alimentari.length * COST_PER_BON).toFixed(3)}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:4}}>Durată est.</div>
+                      <div style={{fontSize:20, fontWeight:900, color:G.yellow}}>
+                        ~{Math.ceil(alimentari.length * 6 / 60)} min
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', marginBottom:4}}>Model AI</div>
+                      <div style={{fontSize:11, fontFamily:'monospace', color:G.purple, marginTop:4}}>
+                        haiku-4-5
+                      </div>
                     </div>
                   </div>
                   
@@ -288,12 +364,10 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
                           {a.marca} {a.model?.substring(0, 20)} 
                           {a.nr_inmatriculare && <span style={{color:G.blue, marginLeft:6, fontFamily:'monospace'}}>{a.nr_inmatriculare}</span>}
                         </span>
-                        <span style={{color:G.orange, fontWeight:700, marginRight:10}}>{Number(a.cantitate_litri).toFixed(1)} L</span>
-                        <span style={{color:G.muted, fontSize:10}}>
-                          {a.ocr_status === 'discrepancy' && '⚠️ re-validare'}
-                          {a.ocr_status === 'unreadable' && '👁️ retry'}
-                          {!a.ocr_status && '🆕 nou'}
+                        <span style={{color:G.orange, fontWeight:700, marginRight:10}}>
+                          {Number(a.cantitate_litri).toFixed(1)} L
                         </span>
+                        <span style={{color:G.muted, fontSize:10}}>🆕 nou</span>
                       </div>
                     ))}
                     {alimentari.length > 50 && (
@@ -316,8 +390,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
                 padding:'20px 22px', marginBottom:20
               }}>
                 <div style={{
-                  display:'flex', justifyContent:'space-between', alignItems:'center',
-                  marginBottom:12
+                  display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12
                 }}>
                   <div style={{fontSize:14, fontWeight:700, color:G.text}}>
                     🔄 {progress.done} / {progress.total} procesate
@@ -341,21 +414,21 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
                 )}
               </div>
               
-              {/* Stats live */}
+              {/* Stats live - 6 categorii noi */}
               <div style={{
-                display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:8, marginBottom:20
+                display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap:8, marginBottom:20
               }}>
-                {['match', 'discrepancy', 'unreadable', 'no_poza', 'errors'].map(k => {
+                {['match', 'acceptat_vizual', 'discrepancy', 'invalid', 'ilizibil', 'errors'].map(k => {
                   const meta = STATUS_META[k] || STATUS_META[k === 'errors' ? 'error' : 'match']
                   return (
                     <div key={k} style={{
                       background:G.bg, border:`1px solid ${G.border}`, borderRadius:8,
-                      padding:'10px 8px', textAlign:'center'
+                      padding:'10px 6px', textAlign:'center'
                     }}>
-                      <div style={{fontSize:18, fontWeight:900, color: meta.color}}>
+                      <div style={{fontSize:16, fontWeight:900, color: meta.color}}>
                         {meta.icon} {aggSummary[k] || 0}
                       </div>
-                      <div style={{fontSize:10, color:G.muted, marginTop:2}}>{meta.label}</div>
+                      <div style={{fontSize:9, color:G.muted, marginTop:2}}>{meta.label}</div>
                     </div>
                   )
                 })}
@@ -370,84 +443,203 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
           {/* FAZA 4: DONE - REZULTATE */}
           {phase === 'done' && (
             <div>
-              {/* Summary mare */}
+              {/* Summary mare - 6 categorii */}
               <div style={{
-                display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:10, marginBottom:20
+                display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap:10, marginBottom:18
               }}>
-                {['match', 'discrepancy', 'unreadable', 'no_poza', 'errors'].map(k => {
+                {['match', 'acceptat_vizual', 'discrepancy', 'invalid', 'ilizibil', 'errors'].map(k => {
                   const meta = STATUS_META[k] || STATUS_META[k === 'errors' ? 'error' : 'match']
                   return (
                     <div key={k} style={{
                       background:G.bg, border:`1px solid ${meta.color}55`, borderRadius:10,
-                      padding:'14px 10px', textAlign:'center'
+                      padding:'12px 8px', textAlign:'center'
                     }}>
-                      <div style={{fontSize:32}}>{meta.icon}</div>
-                      <div style={{fontSize:26, fontWeight:900, color: meta.color, marginTop:4}}>
+                      <div style={{fontSize:26}}>{meta.icon}</div>
+                      <div style={{fontSize:22, fontWeight:900, color: meta.color, marginTop:4}}>
                         {aggSummary[k] || 0}
                       </div>
-                      <div style={{fontSize:11, color:G.muted, marginTop:2}}>{meta.label}</div>
+                      <div style={{fontSize:10, color:G.muted, marginTop:2}}>{meta.label}</div>
                     </div>
                   )
                 })}
               </div>
               
+              {/* Helper text — cu instrucțiuni clare pentru Marilena */}
+              {(aggSummary.discrepancy + aggSummary.invalid + aggSummary.ilizibil) > 0 && (
+                <div style={{
+                  background:G.yellowDim, border:`1px solid ${G.yellow}66`, borderRadius:8,
+                  padding:'10px 14px', marginBottom:14, fontSize:12, color:G.text
+                }}>
+                  💡 <strong style={{color:G.yellow}}>Revizuire manuală necesară</strong> pentru 
+                  {' '}{aggSummary.discrepancy + aggSummary.invalid + aggSummary.ilizibil} alimentări marcate cu ⚠️/🚨/🌫️.
+                  Apasă <span style={{color:G.green, fontWeight:700}}>✓ Accept</span> sau 
+                  {' '}<span style={{color:G.red, fontWeight:700}}>✗ Respinge</span> pe fiecare rând din tabel.
+                </div>
+              )}
+              
               <div style={{
                 background:G.bg, border:`1px solid ${G.border}`, borderRadius:8,
-                padding:'10px 16px', marginBottom:20, fontSize:12, color:G.muted
+                padding:'10px 16px', marginBottom:14, fontSize:12, color:G.muted
               }}>
                 💰 Cost total: <strong style={{color:G.green}}>${totalCost.toFixed(4)}</strong> · 
                 Model: <code style={{fontSize:11, color:G.blue}}>claude-haiku-4-5</code> · 
                 {allResults.length} alimentări procesate
               </div>
               
-              {/* Listă rezultate */}
+              {/* Listă rezultate cu butoane Accept/Respinge */}
               {allResults.length > 0 && (
                 <div style={{
                   background:G.bg, border:`1px solid ${G.border}`, borderRadius:10,
-                  maxHeight:380, overflow:'auto'
+                  maxHeight:430, overflow:'auto'
                 }}>
                   <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
-                    <thead style={{position:'sticky', top:0, background:G.surface}}>
+                    <thead style={{position:'sticky', top:0, background:G.surface, zIndex:1}}>
                       <tr style={{borderBottom:`2px solid ${G.border2}`}}>
                         <th style={thS}>Data</th>
                         <th style={thS}>Vehicul</th>
                         <th style={{...thS, textAlign:'right'}}>Decl. L</th>
                         <th style={{...thS, textAlign:'right'}}>Decl. RON</th>
                         <th style={thS}>Status</th>
-                        <th style={thS}>Detalii OCR</th>
+                        <th style={thS}>Tip dovadă</th>
+                        <th style={thS}>Detalii</th>
+                        <th style={{...thS, textAlign:'center'}}>Acțiuni</th>
                       </tr>
                     </thead>
                     <tbody>
                       {allResults.map(r => {
                         const a = alimById[r.id] || {}
-                        const meta = STATUS_META[r.status] || STATUS_META.error
+                        // 25.05.2026 v2: status efectiv = decision manuală dacă există, altfel status OCR
+                        const effectiveStatus = decidedIds[r.id] || r.status
+                        const statusMeta = STATUS_META[effectiveStatus] || STATUS_META.error
+                        const tipMeta = r.tip_dovada ? TIP_DOVADA_META[r.tip_dovada] : null
+                        const isAlreadyDecided = !!decidedIds[r.id]
+                        const needsReview = ['discrepancy', 'invalid', 'ilizibil'].includes(r.status) && !isAlreadyDecided
+                        const isDeciding = decidingId === r.id
+                        
                         return (
-                          <tr key={r.id} style={{borderBottom:`1px solid ${G.border}88`}}>
-                            <td style={{padding:'6px 10px', fontFamily:'monospace', color:G.text}}>{fmtDate(a.data_alimentare)}</td>
-                            <td style={{padding:'6px 10px', color:G.text}}>
-                              {a.marca} {a.model?.substring(0, 20)}
-                              {a.nr_inmatriculare && <span style={{color:G.blue, marginLeft:5, fontFamily:'monospace', fontSize:10}}>{a.nr_inmatriculare}</span>}
+                          <tr key={r.id} style={{
+                            borderBottom:`1px solid ${G.border}88`,
+                            background: isAlreadyDecided ? (
+                              decidedIds[r.id] === 'accepted_manual' ? G.green+'08' : G.red+'08'
+                            ) : 'transparent',
+                            opacity: isAlreadyDecided ? 0.85 : 1,
+                          }}>
+                            <td style={{padding:'7px 10px', fontFamily:'monospace', color:G.text}}>
+                              {fmtDate(a.data_alimentare)}
                             </td>
-                            <td style={{padding:'6px 10px', textAlign:'right', color:G.orange, fontWeight:700}}>{a.cantitate_litri ? Number(a.cantitate_litri).toFixed(1) : '—'}</td>
-                            <td style={{padding:'6px 10px', textAlign:'right', color:G.green, fontWeight:600}}>{a.pret_total ? Number(a.pret_total).toFixed(2) : '—'}</td>
-                            <td style={{padding:'6px 10px'}}>
+                            <td style={{padding:'7px 10px', color:G.text}}>
+                              {a.marca} {a.model?.substring(0, 20)}
+                              {a.nr_inmatriculare && (
+                                <span style={{
+                                  color:G.blue, marginLeft:5, fontFamily:'monospace', fontSize:10
+                                }}>{a.nr_inmatriculare}</span>
+                              )}
+                            </td>
+                            <td style={{
+                              padding:'7px 10px', textAlign:'right', color:G.orange, fontWeight:700
+                            }}>
+                              {a.cantitate_litri ? Number(a.cantitate_litri).toFixed(1) : '—'}
+                            </td>
+                            <td style={{
+                              padding:'7px 10px', textAlign:'right', color:G.green, fontWeight:600
+                            }}>
+                              {a.pret_total ? Number(a.pret_total).toFixed(2) : '—'}
+                            </td>
+                            <td style={{padding:'7px 10px'}}>
                               <span style={{
-                                color: meta.color, fontWeight:700,
-                                background: meta.color + '22', padding:'2px 8px', borderRadius:6, fontSize:10
+                                color: statusMeta.color, fontWeight:700,
+                                background: statusMeta.color + '22', 
+                                padding:'2px 8px', borderRadius:6, fontSize:10,
+                                whiteSpace:'nowrap'
                               }}>
-                                {meta.icon} {meta.label}
+                                {statusMeta.icon} {statusMeta.label}
                               </span>
                             </td>
-                            <td style={{padding:'6px 10px', fontSize:10, color:G.muted}}>
+                            <td style={{padding:'7px 10px'}}>
+                              {tipMeta ? (
+                                <span style={{
+                                  color: tipMeta.color, fontWeight:600,
+                                  background: tipMeta.color + '15', 
+                                  padding:'2px 6px', borderRadius:5, fontSize:9,
+                                  whiteSpace:'nowrap'
+                                }}>
+                                  {tipMeta.icon} {tipMeta.label}
+                                </span>
+                              ) : (
+                                <span style={{color:G.dim, fontSize:9}}>—</span>
+                              )}
+                            </td>
+                            <td style={{padding:'7px 10px', fontSize:10, color:G.muted, maxWidth:200}}>
                               {r.status === 'discrepancy' && (
                                 <span>
-                                  {r.diff_litri > 0 && `Δ litri: ${r.diff_litri} L `}
-                                  {r.diff_lei > 0 && `· Δ LEI: ${r.diff_lei}`}
+                                  {r.diff_litri > 0 && `Δ L: ${r.diff_litri}`}
+                                  {r.diff_lei > 0 && r.diff_litri > 0 && ' · '}
+                                  {r.diff_lei > 0 && `Δ RON: ${r.diff_lei}`}
                                 </span>
                               )}
-                              {r.status === 'unreadable' && (r.notes || 'poza ilizibilă')}
-                              {r.status === 'error' && <span style={{color:G.red}}>{r.error?.substring(0, 50)}</span>}
-                              {r.status === 'match' && <span style={{color:G.green}}>OCR confirmă</span>}
+                              {r.status === 'invalid' && (
+                                <span style={{color:G.red, fontWeight:600}}>
+                                  {r.notes?.substring(0, 80) || 'Bon suspect'}
+                                </span>
+                              )}
+                              {r.status === 'ilizibil' && (
+                                <span>{r.notes?.substring(0, 80) || 'poză ilizibilă'}</span>
+                              )}
+                              {r.status === 'error' && (
+                                <span style={{color:G.red}}>{r.error?.substring(0, 80)}</span>
+                              )}
+                              {r.status === 'match' && (
+                                <span style={{color:G.green}}>✓ Cifre coincid</span>
+                              )}
+                              {r.status === 'acceptat_vizual' && (
+                                <span style={{color:G.cyan}}>👁️ Dovadă vizuală OK</span>
+                              )}
+                            </td>
+                            {/* COLOANĂ ACȚIUNI - butoane Accept/Respinge 1-click */}
+                            <td style={{padding:'7px 8px', textAlign:'center', whiteSpace:'nowrap'}}>
+                              {needsReview ? (
+                                <div style={{display:'flex', gap:4, justifyContent:'center'}}>
+                                  <button
+                                    onClick={() => handleManualDecision(r.id, 'accept')}
+                                    disabled={isDeciding}
+                                    title="Accept manual (1-click, fără motiv)"
+                                    style={{
+                                      background: G.green, color:'#fff', border:'none',
+                                      borderRadius:5, padding:'4px 8px', fontSize:10, fontWeight:800,
+                                      cursor: isDeciding ? 'wait' : 'pointer',
+                                      opacity: isDeciding ? 0.5 : 1,
+                                    }}
+                                  >
+                                    ✓ Accept
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      if (confirm(`Respinge alim #${r.id}?\n\nVa rămâne în BD dar marcată ca respinsă.`)) {
+                                        handleManualDecision(r.id, 'reject')
+                                      }
+                                    }}
+                                    disabled={isDeciding}
+                                    title="Respinge manual"
+                                    style={{
+                                      background: G.red, color:'#fff', border:'none',
+                                      borderRadius:5, padding:'4px 8px', fontSize:10, fontWeight:800,
+                                      cursor: isDeciding ? 'wait' : 'pointer',
+                                      opacity: isDeciding ? 0.5 : 1,
+                                    }}
+                                  >
+                                    ✗
+                                  </button>
+                                </div>
+                              ) : isAlreadyDecided ? (
+                                <span style={{
+                                  fontSize:10, color: decidedIds[r.id] === 'accepted_manual' ? G.green : G.red,
+                                  fontWeight:700
+                                }}>
+                                  {decidedIds[r.id] === 'accepted_manual' ? '✓ Decis' : '✗ Decis'}
+                                </span>
+                              ) : (
+                                <span style={{color:G.dim, fontSize:10}}>—</span>
+                              )}
                             </td>
                           </tr>
                         )
