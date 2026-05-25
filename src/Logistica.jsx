@@ -11,6 +11,7 @@ import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import JSZip from 'jszip'
 import ImportWhatsAppModal from './ImportWhatsAppModal.jsx'
+import FaraSantierBulkModal from './FaraSantierBulkModal.jsx'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
@@ -47,6 +48,40 @@ const TIPURI_CARBURANT = [
 ]
 const FIRME = ['Gazpet Instal', 'Gazpet Invest', 'Alt proprietar']
 const UNITATI_NORMA = ['l/h', 'l/100km', 'kWh/h', 'kWh/100km']
+
+// ─── 25.05.2026: WhatsApp Import helpers ──────────────────────────────────────
+// Verifică dacă o alimentare are șantier alocat prin WhatsApp Import
+const isWhatsAppAlocat = (alim) => alim?.sursa_alocare_santier === 'whatsapp' || alim?.sursa_alocare_santier === 'format_strict'
+
+// Badge mic 📲 cu tooltip on hover (caption + autor + msg_dt)
+function WhatsAppBadge({ alim, size = 'small' }) {
+  const isStrict = alim?.sursa_alocare_santier === 'format_strict'
+  const tooltip = [
+    isStrict ? '📲 WhatsApp (format strict)' : '📲 WhatsApp',
+    alim?.whatsapp_autor ? `Autor: ${alim.whatsapp_autor}` : null,
+    alim?.whatsapp_msg_dt ? `Postat: ${new Date(alim.whatsapp_msg_dt).toLocaleString('ro-RO')}` : null,
+    alim?.whatsapp_caption ? `\n"${alim.whatsapp_caption.slice(0, 200)}${alim.whatsapp_caption.length > 200 ? '...' : ''}"` : null,
+  ].filter(Boolean).join('\n')
+  
+  const dim = size === 'small' ? { fontSize: 10, padding: '1px 5px' } : { fontSize: 11, padding: '2px 7px' }
+  
+  return (
+    <span 
+      title={tooltip}
+      style={{
+        display:'inline-flex', alignItems:'center', gap:3,
+        background: '#25D366' + (isStrict ? '' : '22'),
+        color: isStrict ? '#000' : '#25D366',
+        border: `1px solid ${isStrict ? '#25D366' : '#25D36655'}`,
+        borderRadius: 6, fontWeight: 700, lineHeight: 1.2,
+        cursor: 'help', whiteSpace: 'nowrap',
+        ...dim
+      }}
+    >
+      📲{isStrict && <span style={{fontSize: 8, fontWeight: 800}}>✓</span>}
+    </span>
+  )
+}
 
 const daysUntil = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
@@ -1853,6 +1888,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                   </div>
                   <div style={{color: G.muted, fontSize: 11}}>
                     {a.statie_combustibil && <span style={{color: G.text}}>{a.statie_combustibil}</span>}
+                    {isWhatsAppAlocat(a) && <> <WhatsAppBadge alim={a} /></>}
                     {a.ore_la_alimentare && <> · {a.ore_la_alimentare.toLocaleString('ro-RO')} ore bord</>}
                     {a.km_la_alimentare && <> · {a.km_la_alimentare.toLocaleString('ro-RO')} km</>}
                     {a.ore_lucrate_efectiv && <> · {a.ore_lucrate_efectiv}h lucrate</>}
@@ -2252,6 +2288,20 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
   const [loadingAlim, setLoadingAlim] = useState(false)
   const [editAlim, setEditAlim] = useState(null)
   
+  // 25.05.2026: State pentru modal bulk-edit „Fără șantier" + count
+  const [showFaraSantier, setShowFaraSantier] = useState(false)
+  const [faraSantierCount, setFaraSantierCount] = useState(0)
+  
+  const loadFaraSantierCount = useCallback(async () => {
+    const { count } = await supabase
+      .from('logistica_alimentari')
+      .select('*', { count: 'exact', head: true })
+      .is('site_id', null)
+    setFaraSantierCount(count || 0)
+  }, [])
+  
+  useEffect(() => { loadFaraSantierCount() }, [loadFaraSantierCount])
+  
   // Calculez preț mediu Gazpet per fiecare rezervor activ
   useEffect(() => {
     const ids = (rezervoare || []).map(r => r.id).filter(Boolean)
@@ -2544,6 +2594,30 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                 }}>
                 📲 Import WhatsApp (.zip)
               </button>
+              {/* 25.05.2026: Buton bulk-edit „Fără șantier" */}
+              {faraSantierCount > 0 && (
+                <button 
+                  onClick={() => setShowFaraSantier(true)}
+                  title={`${faraSantierCount} alimentări nu au șantier alocat. Click pentru alocare manuală bulk.`}
+                  style={{
+                    background: G.red,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '9px 16px',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
+                    justifyContent: 'flex-start',
+                    animation: faraSantierCount > 20 ? 'pulse 2s infinite' : 'none',
+                  }}>
+                  🚨 Fără șantier ({faraSantierCount})
+                </button>
+              )}
             </div>
           </div>
         )
@@ -2643,7 +2717,12 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                           {a.statie_combustibil || '—'}
                         </td>
                         <td style={{padding: '8px 12px', fontSize: 11, color: G.text}}>
-                          {a.sites?.name || <span style={{color: G.muted}}>—</span>}
+                          {a.sites?.name ? (
+                            <span style={{display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap'}}>
+                              {a.sites.name}
+                              {isWhatsAppAlocat(a) && <WhatsAppBadge alim={a} />}
+                            </span>
+                          ) : <span style={{color: G.muted}}>—</span>}
                         </td>
                         <td style={{padding: '8px 12px', textAlign: 'right', fontFamily: 'monospace', color: G.muted}}>
                           {a.ore_la_alimentare || '—'}
@@ -2836,6 +2915,22 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
           onClose={() => setEditAlim(null)}
           onSaved={() => { setEditAlim(null); fetchAlimentari(); onSaved() }}
           showToast={showToast}
+        />
+      )}
+      
+      {/* 25.05.2026: Modal bulk-edit „Fără șantier" */}
+      {showFaraSantier && (
+        <FaraSantierBulkModal
+          sites={sites}
+          profile={profile}
+          showToast={showToast}
+          onClose={() => setShowFaraSantier(false)}
+          onSaved={() => {
+            setShowFaraSantier(false)
+            loadFaraSantierCount()
+            fetchAlimentari()
+            if (onSaved) onSaved()
+          }}
         />
       )}
     </div>
@@ -6500,7 +6595,14 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                       <td style={{padding: '8px 12px', color: isStatieGazpet(a.statie_combustibil) ? G.logistica : G.text, fontWeight: isStatieGazpet(a.statie_combustibil) ? 600 : 400}}>
                         {a.statie_combustibil || '—'}
                       </td>
-                      <td style={{padding: '8px 12px', color: G.text}}>{a.sites?.name || '—'}</td>
+                      <td style={{padding: '8px 12px', color: G.text}}>
+                        {a.sites?.name ? (
+                          <span style={{display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap'}}>
+                            {a.sites.name}
+                            {isWhatsAppAlocat(a) && <WhatsAppBadge alim={a} />}
+                          </span>
+                        ) : '—'}
+                      </td>
                       <td style={{padding: '8px 12px', textAlign: 'right', fontFamily: 'monospace', color: G.muted, fontVariantNumeric: 'tabular-nums'}}>
                         {a.ore_la_alimentare ?? '—'}
                       </td>
