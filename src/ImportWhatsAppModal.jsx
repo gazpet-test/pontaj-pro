@@ -275,7 +275,10 @@ async function uploadPozaForAlim(zip, alimId, msg) {
   const path = `${ym}/${alimId}_${hashShort}.${ext}`
   
   // 3. Upload (upsert: true = idempotent la re-import)
-  const blob = await file.async('blob')
+  // 25.05.2026 BUGFIX: JSZip.async('blob') returnează 'application/octet-stream' care e respins
+  // de bucket (allowed: image/jpeg, image/png, image/webp). Reconstrucție explicit cu MIME corect.
+  const arrayBuffer = await file.async('arraybuffer')
+  const blob = new Blob([arrayBuffer], { type: contentType })
   const { error: upErr } = await supabase.storage
     .from('whatsapp-motorina-bonuri')
     .upload(path, blob, { contentType, upsert: true })
