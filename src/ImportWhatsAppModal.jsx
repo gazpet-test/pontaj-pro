@@ -318,7 +318,9 @@ export default function ImportWhatsAppModal({
         let best = null
         for (const msg of newMessages) {
           const diffH = Math.abs((msg.dt - alimDt) / 3600000)
-          if (diffH > 36) continue
+          // Window 72h: șoferii postează uneori în prima zi a turei următoare 
+          // (după ce-au terminat tura curentă, dorm, mănâncă, apoi își amintesc)
+          if (diffH > 72) continue
           
           if (!msg.parsed) continue
           // Match cu plăcuța vehiculului
