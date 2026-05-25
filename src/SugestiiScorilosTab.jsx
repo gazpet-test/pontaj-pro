@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 // SUGESTII SCORILOS — tab nou în Logistica pentru review/aprobare bot suggestions
 // Etapa 12.8 (23.05.2026): UI listă + filtre + aplică/respinge per sugestie
-// Vizibil DOAR pentru profile.is_owner === true
+// Vizibil pentru: profile.is_owner=true OR profile.role='admin_logistica' (regula 25.05.2026 Razvan)
 // ════════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
@@ -1023,13 +1023,15 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   }
   
   // ─── Render principal ──────────────────────────────────────────────────────
-  if (!profile?.is_owner) {
+  // FIX 25.05.2026: vizibil pentru toți din departamentul Logistica (owner + admin_logistica)
+  const canSeeScorilos = !!profile?.is_owner || profile?.role === 'admin_logistica'
+  if (!canSeeScorilos) {
     return (
       <div style={{
         padding: 30, textAlign: 'center', background: G.surface,
         borderRadius: 10, border: `1px solid ${G.border}`, color: G.muted,
       }}>
-        🛡️ Acces restricționat — doar owner-ii Gazpet pot revizui sugestiile Scorilos.
+        🛡️ Acces restricționat — doar membrii departamentului Logistică pot revizui sugestiile Scorilos.
       </div>
     )
   }
