@@ -2687,29 +2687,31 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                   🚨 Fără șantier ({faraSantierCount})
                 </button>
               )}
-              {/* 25.05.2026 Etapa 4: Buton Validează OCR Vision */}
-              {ocrPendingCount > 0 && (
-                <button 
-                  onClick={() => setShowOcrValidate(true)}
-                  title={`${ocrPendingCount} alimentări au poză bon dar nu sunt validate prin OCR. Click pentru validare automată cu Claude Vision.`}
-                  style={{
-                    background: '#58A6FF',
-                    color: '#000',
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '9px 16px',
-                    fontSize: 12,
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    whiteSpace: 'nowrap',
-                    justifyContent: 'flex-start',
-                  }}>
-                  🔍 Validează OCR ({ocrPendingCount})
-                </button>
-              )}
+              {/* 25.05.2026 Etapa 4: Buton Validează OCR Vision - mereu vizibil, disabled când N=0 */}
+              <button 
+                onClick={() => ocrPendingCount > 0 && setShowOcrValidate(true)}
+                disabled={ocrPendingCount === 0}
+                title={ocrPendingCount > 0 
+                  ? `${ocrPendingCount} alimentări au poză bon nevalidate prin OCR. Click pentru validare automată cu Claude Vision.`
+                  : 'Niciun bon de validat momentan. Butonul devine activ când există alimentări cu poză nevalidate.'}
+                style={{
+                  background: ocrPendingCount > 0 ? '#58A6FF' : G.surface,
+                  color: ocrPendingCount > 0 ? '#000' : G.muted,
+                  border: ocrPendingCount > 0 ? 'none' : `1px solid ${G.border}`,
+                  borderRadius: 8,
+                  padding: '9px 16px',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: ocrPendingCount > 0 ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  whiteSpace: 'nowrap',
+                  justifyContent: 'flex-start',
+                  opacity: ocrPendingCount > 0 ? 1 : 0.6,
+                }}>
+                🔍 Validează OCR ({ocrPendingCount})
+              </button>
             </div>
           </div>
         )
