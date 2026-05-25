@@ -320,6 +320,7 @@ export default function ImportWhatsAppModal({
   const [confirmed, setConfirmed] = useState(new Set())  // ID-uri match-uri confirmate
   // 25.05.2026: stats pentru poze (Etapa 4 OCR prerequisite)
   const [backfillStats, setBackfillStats] = useState({ checked: 0, uploaded: 0, skipped: 0, errors: 0 })
+  const [backfillErrors, setBackfillErrors] = useState([])  // 25.05.2026: detalii erori backfill (vizibile Step 3)
   const [pozeUploadedNew, setPozeUploadedNew] = useState(0)  // poze uploadate pe match-uri noi
   // 25.05.2026: errori detaliate pentru debugging upload (vizibile în Step 4)
   const [uploadErrors, setUploadErrors] = useState([])
@@ -469,13 +470,14 @@ export default function ImportWhatsAppModal({
       setProgress('📷 Backfill poze pentru alimentări procesate anterior...')
       const messagesWithImages = analyzed.filter(m => m.imageFile)
       const bfStats = { checked: 0, uploaded: 0, skipped: 0, errors: 0 }
+      const bfErrList = []  // 25.05.2026: erori detaliate backfill
       
       for (const msg of messagesWithImages) {
         bfStats.checked++
         // Caut alimentare deja matched cu acest mesaj DAR fără poză
         const { data: existingAlim } = await supabase
           .from('logistica_alimentari')
-          .select('id, whatsapp_poza_path')
+          .select('id, whatsapp_poza_path, active_id, logistica_active(nr_inmatriculare)')
           .eq('whatsapp_autor', msg.author)
           .eq('whatsapp_msg_dt', msg.dt.toISOString())
           .is('whatsapp_poza_path', null)
@@ -488,9 +490,19 @@ export default function ImportWhatsAppModal({
         else { 
           bfStats.errors++ 
           console.warn(`Backfill failed pentru alim #${existingAlim.id}:`, result)
+          bfErrList.push({
+            alim_id: existingAlim.id,
+            plac: existingAlim.logistica_active?.nr_inmatriculare || '?',
+            imageFile: msg.imageFile,
+            reason: result.reason,
+            detail: result.error || '',
+            autor: msg.author,
+            data: msg.dt.toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
+          })
         }
       }
       setBackfillStats(bfStats)
+      setBackfillErrors(bfErrList)
       
       setStep(3)
       setProgress('')
@@ -779,6 +791,57 @@ export default function ImportWhatsAppModal({
                   {backfillStats.skipped > 0 && <span style={{fontSize:11, color:G.muted}}>· {backfillStats.skipped} skip (deja au poza sau nu matchează BD)</span>}
                   {backfillStats.errors > 0 && <span style={{fontSize:11, color:G.red, fontWeight:700}}>· {backfillStats.errors} erori</span>}
                   <span style={{fontSize:10, color:G.muted, marginLeft:'auto'}}>pregătit pentru OCR ✨</span>
+                </div>
+              )}
+              
+              {/* 25.05.2026: BANNER ROȘU DETALII ERORI BACKFILL - vizibil în Step 3 */}
+              {backfillErrors.length > 0 && (
+                <div style={{
+                  background:G.red+'22', border:`1px solid ${G.red}`, borderRadius:10,
+                  padding:'12px 16px', marginBottom:16,
+                }}>
+                  <div style={{fontSize:13, color:G.red, fontWeight:800, marginBottom:8, display:'flex', alignItems:'center', gap:8}}>
+                    ⚠️ {backfillErrors.length} {backfillErrors.length === 1 ? 'eroare' : 'erori'} la backfill poze 
+                    <span style={{fontSize:11, color:G.muted, fontWeight:500}}>(alimentări cu sursa='whatsapp' care nu au primit poza din arhivă)</span>
+                  </div>
+                  <div style={{
+                    background:G.bg, border:`1px solid ${G.border}`, borderRadius:8,
+                    maxHeight:240, overflow:'auto', fontSize:11, fontFamily:'monospace',
+                  }}>
+                    <table style={{width:'100%', borderCollapse:'collapse'}}>
+                      <thead style={{position:'sticky', top:0, background:G.surface}}>
+                        <tr>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>ALIM</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>PLĂCUȚA</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>AUTOR · DATA</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>FIȘIER IMG</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>MOTIV</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>DETALIU</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {backfillErrors.map((e, i) => (
+                          <tr key={i} style={{borderTop:`1px solid ${G.border}66`}}>
+                            <td style={{padding:'6px 10px', color:G.text}}>#{e.alim_id}</td>
+                            <td style={{padding:'6px 10px', color:G.blue, fontWeight:700}}>{e.plac}</td>
+                            <td style={{padding:'6px 10px', color:G.muted, maxWidth:150, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={e.autor + ' · ' + e.data}>
+                              {e.autor} · {e.data}
+                            </td>
+                            <td style={{padding:'6px 10px', color:G.muted, maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={e.imageFile}>
+                              {e.imageFile || '—'}
+                            </td>
+                            <td style={{padding:'6px 10px', color:G.red, fontWeight:700}}>{e.reason}</td>
+                            <td style={{padding:'6px 10px', color:G.muted, maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={e.detail}>
+                              {e.detail || '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{marginTop:10, fontSize:11, color:G.muted, lineHeight:1.6}}>
+                    💡 <strong>reason</strong>: <code>not_in_zip</code>=fișier inexistent în arhivă (foarte probabil — pozele au fost șterse din telefon înainte de export) · <code>upload_error</code>=RLS storage policy · <code>update_error</code>=BD UPDATE eșuat
+                  </div>
                 </div>
               )}
               
