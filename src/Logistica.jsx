@@ -2326,6 +2326,135 @@ function IstoricImporturiEvoExpand({ istoricImporturi }) {
   )
 }
 
+// 25.05.2026 Etapa 5: Istoric importuri WhatsApp - similar EvoGPS expand
+function IstoricImporturiWhatsAppExpand() {
+  const [expanded, setExpanded] = useState(false)
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+  
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from('whatsapp_imports_log')
+        .select('*')
+        .order('uploaded_at', { ascending: false })
+        .limit(50)
+      setHistory(data || [])
+      setLoading(false)
+    }
+    load()
+  }, [])
+  
+  if (loading || history.length === 0) return null
+  
+  const total = history.length
+  const totalMatched = history.reduce((s, h) => s + (h.alimentari_matched || 0), 0)
+  const totalMessages = history.reduce((s, h) => s + (h.total_messages || 0), 0)
+  const ultimul = history[0]?.uploaded_at ? new Date(history[0].uploaded_at) : null
+  const zileTrecute = ultimul ? Math.floor((Date.now() - ultimul.getTime()) / 86400000) : null
+  
+  return (
+    <div style={{
+      background: G.surface,
+      border: `1px solid ${G.border}`,
+      borderRadius: 10,
+      marginBottom: 16,
+      overflow: 'hidden',
+    }}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          width: '100%',
+          background: 'transparent',
+          border: 'none',
+          padding: '10px 16px',
+          color: G.muted,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
+        <span>
+          📲 <strong style={{color: G.text}}>{total}</strong> {total === 1 ? 'import WhatsApp' : 'importuri WhatsApp'} înregistrate · 
+          <strong style={{color: '#25D366', marginLeft: 4}}>{totalMatched}</strong> match · 
+          <strong style={{color: G.text, marginLeft: 4}}>{totalMessages.toLocaleString('ro-RO')}</strong> mesaje procesate
+          {zileTrecute !== null && (
+            <span style={{
+              marginLeft: 10, fontSize: 11,
+              color: zileTrecute > 7 ? G.red : zileTrecute > 3 ? G.orange : G.green,
+              fontWeight: 700,
+            }}>
+              · Ultimul: {zileTrecute === 0 ? 'azi' : zileTrecute === 1 ? 'ieri' : `acum ${zileTrecute} zile`}
+            </span>
+          )}
+        </span>
+        <span style={{fontSize: 11, color: G.muted}}>
+          {expanded ? '▲ Ascunde' : '▼ Vezi istoricul'}
+        </span>
+      </button>
+      
+      {expanded && (
+        <div style={{borderTop: `1px solid ${G.border}`, padding: '10px 16px'}}>
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
+              <thead>
+                <tr style={{borderBottom: `1px solid ${G.border}`}}>
+                  <th style={{padding: '6px 8px', textAlign: 'left', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Importat la</th>
+                  <th style={{padding: '6px 8px', textAlign: 'left', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Fișier</th>
+                  <th style={{padding: '6px 8px', textAlign: 'left', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Perioadă filtrată</th>
+                  <th style={{padding: '6px 8px', textAlign: 'center', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Mesaje</th>
+                  <th style={{padding: '6px 8px', textAlign: 'center', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Match</th>
+                  <th style={{padding: '6px 8px', textAlign: 'center', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Ambigue</th>
+                  <th style={{padding: '6px 8px', textAlign: 'center', color: G.muted, fontSize: 10, textTransform: 'uppercase', fontWeight: 700}}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((imp, i) => {
+                  const impDate = imp.uploaded_at ? new Date(imp.uploaded_at).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
+                  const prima = imp.date_range_start ? new Date(imp.date_range_start).toLocaleDateString('ro-RO') : '—'
+                  const ultima = imp.date_range_end ? new Date(imp.date_range_end).toLocaleDateString('ro-RO') : 'azi'
+                  const sizeMb = imp.filesize_bytes ? (imp.filesize_bytes / 1024 / 1024).toFixed(1) + ' MB' : ''
+                  const statusColor = imp.status === 'success' ? G.green : imp.status === 'partial' ? G.orange : G.muted
+                  return (
+                    <tr key={imp.id || i} style={{borderBottom: `1px solid ${G.border}33`}}>
+                      <td style={{padding: '6px 8px', color: G.text, fontSize: 11, fontVariantNumeric: 'tabular-nums'}}>{impDate}</td>
+                      <td style={{padding: '6px 8px', color: G.muted, fontSize: 11, fontFamily: 'monospace', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={imp.filename}>
+                        {imp.filename || '—'} {sizeMb && <span style={{color: G.dim}}>· {sizeMb}</span>}
+                      </td>
+                      <td style={{padding: '6px 8px', color: G.text, fontSize: 11}}>
+                        <span style={{color: '#25D366', fontWeight: 600}}>{prima}</span>
+                        <span style={{color: G.muted, margin: '0 4px'}}>→</span>
+                        <span style={{color: '#25D366', fontWeight: 600}}>{ultima}</span>
+                      </td>
+                      <td style={{padding: '6px 8px', textAlign: 'center', color: G.blue, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>{(imp.total_messages || 0).toLocaleString('ro-RO')}</td>
+                      <td style={{padding: '6px 8px', textAlign: 'center', color: G.green, fontWeight: 700}}>{imp.alimentari_matched || 0}</td>
+                      <td style={{padding: '6px 8px', textAlign: 'center', color: G.orange, fontWeight: 600}}>{imp.alimentari_ambigue || 0}</td>
+                      <td style={{padding: '6px 8px', textAlign: 'center'}}>
+                        <span style={{
+                          color: statusColor, fontWeight: 700, fontSize: 10,
+                          textTransform: 'uppercase', padding: '2px 8px',
+                          background: statusColor + '22', borderRadius: 5,
+                        }}>
+                          {imp.status === 'success' ? '✓ OK' : imp.status === 'partial' ? '⚠ Parțial' : '— '}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop: 8, fontSize: 10, color: G.dim, fontStyle: 'italic'}}>
+            💡 Importurile WhatsApp sunt audit-trail pentru ANAF - păstrăm filename + dimensiune + interval procesat + count match-uri pentru fiecare upload.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, onImportRompetrol, onImportWhatsApp, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
@@ -2738,6 +2867,11 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
       {/* ETAPA 8.6: Expand „Vezi perioade importate" SUB banner EvoGPS */}
       {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin') && istoricImporturi && istoricImporturi.length > 0 && (
         <IstoricImporturiEvoExpand istoricImporturi={istoricImporturi} />
+      )}
+      
+      {/* 25.05.2026 Etapa 5: Expand „Vezi istoricul WhatsApp" */}
+      {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin') && (
+        <IstoricImporturiWhatsAppExpand />
       )}
       
       {/* 25.05.2026 ETAPA 5: Banner alertă Rompetrol fără WhatsApp (window 96h) */}

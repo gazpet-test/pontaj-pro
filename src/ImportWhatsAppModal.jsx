@@ -321,6 +321,8 @@ export default function ImportWhatsAppModal({
   // 25.05.2026: stats pentru poze (Etapa 4 OCR prerequisite)
   const [backfillStats, setBackfillStats] = useState({ checked: 0, uploaded: 0, skipped: 0, errors: 0 })
   const [pozeUploadedNew, setPozeUploadedNew] = useState(0)  // poze uploadate pe match-uri noi
+  // 25.05.2026: errori detaliate pentru debugging upload (vizibile în Step 4)
+  const [uploadErrors, setUploadErrors] = useState([])
   const fileInputRef = useRef(null)
   
   // Drag&drop handlers
@@ -511,6 +513,17 @@ export default function ImportWhatsAppModal({
       let updated = 0
       let pozeNew = 0  // 25.05.2026: count poze uploadate pe match-uri noi
       let errors = []
+      const uploadErrList = []  // 25.05.2026: erori detaliate upload poze (vizibile în Step 4)
+      
+      // 25.05.2026: Verificare critică zipInstance înainte de loop
+      if (!zipInstance) {
+        uploadErrList.push({ 
+          alim_id: 0, 
+          plac: 'GLOBAL', 
+          reason: 'no_zip', 
+          detail: 'zipInstance e null la momentul Aplic! State React a pierdut referința. Probabil bug de timing.' 
+        })
+      }
       
       for (const m of toUpdate) {
         const { error } = await supabase
@@ -533,17 +546,36 @@ export default function ImportWhatsAppModal({
           if (m.msg.imageFile && zipInstance) {
             const result = await uploadPozaForAlim(zipInstance, m.alim.id, m.msg)
             if (result.ok) pozeNew++
-            else console.warn(`Poza upload failed pentru alim #${m.alim.id}:`, result)
+            else {
+              console.warn(`Poza upload failed pentru alim #${m.alim.id}:`, result)
+              uploadErrList.push({
+                alim_id: m.alim.id,
+                plac: m.alim.nr_inmatriculare || '?',
+                imageFile: m.msg.imageFile,
+                reason: result.reason,
+                detail: result.error || ''
+              })
+            }
           } else if (!m.msg.imageFile) {
             // Fără poză = setez ocr_status la 'no_poza' explicit ca să nu apară în coada OCR
             await supabase
               .from('logistica_alimentari')
               .update({ ocr_status: 'no_poza' })
               .eq('id', m.alim.id)
+          } else if (m.msg.imageFile && !zipInstance) {
+            // Caz suspicios: ar trebui să avem zipInstance
+            uploadErrList.push({
+              alim_id: m.alim.id,
+              plac: m.alim.nr_inmatriculare || '?',
+              imageFile: m.msg.imageFile,
+              reason: 'no_zip_in_state',
+              detail: 'zipInstance era null deși mesajul are imageFile'
+            })
           }
         }
       }
       setPozeUploadedNew(pozeNew)
+      setUploadErrors(uploadErrList)
       
       // Audit log
       await supabase.from('whatsapp_imports_log').insert({
@@ -887,6 +919,57 @@ export default function ImportWhatsAppModal({
                     <div style={{marginTop:6, fontSize:11, color:G.dim}}>
                       → gata pentru validare Vision OCR (butonul 🔍 din header Alimentări)
                     </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* 25.05.2026: BANNER ERORI UPLOAD - vizibil pentru debugging */}
+              {uploadErrors.length > 0 && (
+                <div style={{
+                  background:G.red+'22', border:`1px solid ${G.red}`, borderRadius:10,
+                  padding:'14px 18px', marginBottom:24, textAlign:'left',
+                  maxWidth:720, margin:'0 auto 24px',
+                }}>
+                  <div style={{fontSize:14, color:G.red, fontWeight:800, marginBottom:8, display:'flex', alignItems:'center', gap:8}}>
+                    ⚠️ {uploadErrors.length} {uploadErrors.length === 1 ? 'eroare' : 'erori'} la upload poze 
+                    <span style={{fontSize:11, color:G.muted, fontWeight:500}}>(alocările s-au făcut, dar pozele NU au ajuns în bucket)</span>
+                  </div>
+                  <div style={{
+                    background:G.bg, border:`1px solid ${G.border}`, borderRadius:8,
+                    maxHeight:200, overflow:'auto', fontSize:11, fontFamily:'monospace',
+                  }}>
+                    <table style={{width:'100%', borderCollapse:'collapse'}}>
+                      <thead style={{position:'sticky', top:0, background:G.surface}}>
+                        <tr>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>ALIM</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>PLĂCUȚA</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>FIȘIER</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>MOTIV</th>
+                          <th style={{padding:'6px 10px', textAlign:'left', color:G.muted, fontSize:10}}>DETALIU</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {uploadErrors.map((e, i) => (
+                          <tr key={i} style={{borderTop:`1px solid ${G.border}66`}}>
+                            <td style={{padding:'6px 10px', color:G.text}}>#{e.alim_id}</td>
+                            <td style={{padding:'6px 10px', color:G.blue}}>{e.plac}</td>
+                            <td style={{padding:'6px 10px', color:G.muted, maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={e.imageFile}>
+                              {e.imageFile || '—'}
+                            </td>
+                            <td style={{padding:'6px 10px', color:G.red, fontWeight:700}}>{e.reason}</td>
+                            <td style={{padding:'6px 10px', color:G.muted, maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={e.detail}>
+                              {e.detail || '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{marginTop:10, fontSize:11, color:G.muted, lineHeight:1.6}}>
+                    💡 <strong>reason</strong>: <code>no_zip</code>=zipInstance null · <code>no_image</code>=msg fără imageFile · <code>not_in_zip</code>=fișier inexistent în zip · <code>upload_error</code>=storage policy/RLS · <code>update_error</code>=BD UPDATE eșuat
+                  </div>
+                  <div style={{marginTop:6, fontSize:11, color:G.dim, fontStyle:'italic'}}>
+                    Trimite captura de ecran la dev. Alimentările alocate fără poză vor fi re-prinse la următorul import via backfill.
                   </div>
                 </div>
               )}
