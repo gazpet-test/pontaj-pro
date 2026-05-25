@@ -1927,7 +1927,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
 
 // ─── Pagina principală ───────────────────────────────────────────────────────
 // ─── Bara de tab-uri pentru pagina Logistică ─────────────────────────────────
-function TabsBar({ tab, setTab, isOwner = false, sugestiiCount = 0 }) {
+function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0 }) {
   const tabs = [
     { key: 'lista',     icon: '📋', label: 'Active' },
     { key: 'alimentari',icon: '⛽', label: 'Alimentări' },
@@ -1937,7 +1937,7 @@ function TabsBar({ tab, setTab, isOwner = false, sugestiiCount = 0 }) {
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
     { key: 'arhiva_alimentari', icon: '📊', label: 'Arhivă Alimentări' },
-    ...(isOwner ? [{ key: 'bot-sugestii', icon: '⚔️', label: 'Sugestii Scorilos', badge: sugestiiCount }] : []),
+    ...(canSeeBotSugestii ? [{ key: 'bot-sugestii', icon: '⚔️', label: 'Sugestii Scorilos', badge: sugestiiCount }] : []),
   ]
   return (
     <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`, flexWrap: 'wrap'}}>
@@ -6886,17 +6886,19 @@ export default function LogisticaPage() {
     if (t && valid.includes(t) && t !== tab) setTab(t)
   }, [loc.search])
   
-  // ETAPA 12.8: încarc numărul de sugestii Scorilos pendente pentru badge tab (doar owner)
+  // ETAPA 12.8: încarc numărul de sugestii Scorilos pendente pentru badge tab
   // FIX 24.05.2026: filtru tinta_tip='logistica_active' ca să NU mai apară HR Chuck
+  // FIX 25.05.2026: extins acces și pentru admin_logistica (Cristiana, Mitrache, etc.)
   const loadSugestiiPendenteCount = useCallback(async () => {
-    if (!profile?.is_owner) { setSugestiiPendente(0); return }
+    const canSee = !!profile?.is_owner || profile?.role === 'admin_logistica'
+    if (!canSee) { setSugestiiPendente(0); return }
     const { count } = await supabase
       .from('claude_bot_sugestii')
       .select('id', { count: 'exact', head: true })
       .eq('status', 'propus')
       .eq('tinta_tip', 'logistica_active')
     setSugestiiPendente(count || 0)
-  }, [profile?.is_owner])
+  }, [profile?.is_owner, profile?.role])
   
   useEffect(() => { loadSugestiiPendenteCount() }, [loadSugestiiPendenteCount])
   
@@ -7594,7 +7596,7 @@ export default function LogisticaPage() {
       </div>
       {/* Etapa 14: Widget Tichete Logistica */}
       {profile && <TicheteWidget departament="logistica" profile={profile} accent={G.orange} />}
-      <TabsBar tab={tab} setTab={setTab} isOwner={!!profile?.is_owner} sugestiiCount={sugestiiPendente} />
+      <TabsBar tab={tab} setTab={setTab} canSeeBotSugestii={!!profile?.is_owner || profile?.role === 'admin_logistica'} sugestiiCount={sugestiiPendente} />
       
       {/* TAB: Alimentări (input bulk per zi) */}
       {tab === 'alimentari' && (
@@ -7631,8 +7633,8 @@ export default function LogisticaPage() {
       {/* TAB: Service (placeholder) */}
       {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
       
-      {/* TAB: Sugestii Scorilos — Etapa 12.8 (doar owner) */}
-      {tab === 'bot-sugestii' && profile?.is_owner && (
+      {/* TAB: Sugestii Scorilos — Etapa 12.8 (owner + admin_logistica) */}
+      {tab === 'bot-sugestii' && (profile?.is_owner || profile?.role === 'admin_logistica') && (
         <SugestiiScorilosTab 
           profile={profile} 
           showToast={showToast} 
