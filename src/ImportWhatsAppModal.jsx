@@ -42,24 +42,48 @@ async function hashMessage(autor, dt, caption) {
     .map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-// Parser linii WhatsApp text
+// Parser linii WhatsApp text - suportă AMBELE formate Android + iOS
+// Format Android: "5/21/26, 13:24 - Author: text" + "IMG-NNN-WANNN.jpg (file attached)"
+// Format iOS:     "[21.05.2026, 13:24:00] Author: text" + "<atașare: NNNN-PHOTO-YYYY-MM-DD-HH-MM-SS.jpg>"
+// 25.05.2026: descoperit la export arhivă Razvan (iPhone) - vechea regex doar Android nu prindea nimic
 function parseWhatsAppText(text) {
-  const datePat = /^(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}) - /
-  const lines = text.split('\n')
+  // Detect format: prima linie de mesaj real (ignorăm header-ul criptat al WhatsApp)
+  // Android: începe cu DIGIT (ex 5/21/26)  
+  // iOS: începe cu '[' (cu/fără U+200E LRM înainte)
+  const datePatAndroid = /^(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}) - /
+  const datePatIos     = /^\u200E?\[(\d{1,2})\.(\d{1,2})\.(\d{4}),\s+(\d{1,2}):(\d{2}):(\d{2})\]\s+/
+  
+  // 25.05.2026: arhiva iOS folosește CRLF — trebuie să normalizez line endings ÎNAINTE de split
+  // Altfel `\r` la final strică regex match-ul cu `$`
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '').split('\n')
   const messages = []
   let current = null
   
   for (const line of lines) {
-    if (datePat.test(line)) {
+    // Android line start?
+    const matchAndroid = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}) - ([^:]+?): (.*)$/)
+    // iOS line start?
+    const matchIos = line.match(/^\u200E?\[(\d{1,2})\.(\d{1,2})\.(\d{4}),\s+(\d{1,2}):(\d{2}):(\d{2})\]\s+([^:]+?):\s?(.*)$/)
+    
+    if (matchAndroid) {
       if (current) messages.push(current)
-      const m = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4}), (\d{1,2}:\d{2}) - ([^:]+?): (.*)$/)
-      if (m) {
-        current = {
-          date: m[1], time: m[2],
-          author: m[3].trim(),
-          text: m[4], extraLines: []
-        }
-      } else current = null
+      current = {
+        format: 'android',
+        date: matchAndroid[1], time: matchAndroid[2],
+        author: matchAndroid[3].trim(),
+        text: matchAndroid[4], extraLines: []
+      }
+    } else if (matchIos) {
+      if (current) messages.push(current)
+      current = {
+        format: 'ios',
+        // m[1]=day, m[2]=month, m[3]=year, m[4]=hh, m[5]=mm, m[6]=ss
+        date: `${matchIos[1]}.${matchIos[2]}.${matchIos[3]}`, 
+        time: `${matchIos[4]}:${matchIos[5]}`,
+        iosParts: { day: matchIos[1], month: matchIos[2], year: matchIos[3], hh: matchIos[4], mm: matchIos[5], ss: matchIos[6] },
+        author: matchIos[7].trim(),
+        text: matchIos[8], extraLines: []
+      }
     } else if (current) {
       current.extraLines.push(line)
     }
@@ -69,23 +93,53 @@ function parseWhatsAppText(text) {
   // Combinez și extrag nume imagine
   for (const m of messages) {
     const full = m.text + (m.extraLines.length ? '\n' + m.extraLines.join('\n') : '')
-    // Detect imagine atașată
-    const imgMatch = full.match(/IMG-[\w-]+\.jpg/)
-    m.imageFile = imgMatch ? imgMatch[0] : null
+    
+    // Detect imagine atașată - DUAL format
+    // Android: IMG-20260521-WA0001.jpg (file attached)
+    // iOS:     <atașare: 00000123-PHOTO-2026-05-21-13-24-00.jpg>  (sau <attached:>, etc.)
+    const imgAndroid = full.match(/IMG-[\w-]+\.(jpg|jpeg|png|webp)/i)
+    const imgIos     = full.match(/<(?:ata[sș]are|attached|attachment):\s*([\w.-]+\.(?:jpg|jpeg|png|webp))>/i)
+    
+    if (imgAndroid) {
+      m.imageFile = imgAndroid[0]
+    } else if (imgIos) {
+      m.imageFile = imgIos[1]  // doar filename, fără tag-ul <atașare:>
+    } else {
+      m.imageFile = null
+    }
+    
+    // Caption curat: scot ambele formate de attachment + media-omitted
     m.caption = full
-      .replace(/IMG-[\w-]+\.jpg \(file attached\)/, '')
-      .replace(/<Media omitted>/, '')
+      .replace(/\u200E?<(?:ata[sș]are|attached|attachment):\s*[\w.-]+\.(?:jpg|jpeg|png|webp)>/gi, '')
+      .replace(/IMG-[\w-]+\.(?:jpg|jpeg|png|webp)\s*\(file attached\)/gi, '')
+      .replace(/<Media omitted>/gi, '')
+      .replace(/\u200E?Imagine omis[ăa]/gi, '')  // iOS RO
+      .replace(/\u200E/g, '')  // scot toate LRM-urile reziduale
+      .replace(/\s+/g, ' ')  // normalizez whitespace
       .trim()
     
-    // Parse data WhatsApp (M/D/YY HH:MM)
+    // Parse data WhatsApp
     try {
-      const parts = m.date.split('/')
-      let year = parseInt(parts[2], 10)
-      if (year < 100) year += 2000  // YY → 20YY
-      const month = parseInt(parts[0], 10) - 1
-      const day = parseInt(parts[1], 10)
-      const [hh, mm] = m.time.split(':').map(x => parseInt(x, 10))
-      m.dt = new Date(year, month, day, hh, mm)
+      if (m.format === 'ios') {
+        const p = m.iosParts
+        m.dt = new Date(
+          parseInt(p.year, 10), 
+          parseInt(p.month, 10) - 1, 
+          parseInt(p.day, 10), 
+          parseInt(p.hh, 10), 
+          parseInt(p.mm, 10), 
+          parseInt(p.ss, 10)
+        )
+      } else {
+        // Android M/D/YY HH:MM
+        const parts = m.date.split('/')
+        let year = parseInt(parts[2], 10)
+        if (year < 100) year += 2000  // YY → 20YY
+        const month = parseInt(parts[0], 10) - 1
+        const day = parseInt(parts[1], 10)
+        const [hh, mm] = m.time.split(':').map(x => parseInt(x, 10))
+        m.dt = new Date(year, month, day, hh, mm)
+      }
     } catch { m.dt = null }
   }
   
