@@ -1,7 +1,7 @@
 // ===========================================================================
 // MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături · Coș
 // ===========================================================================
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
@@ -86,6 +86,7 @@ export default function HRPage() {
   const [tipuri, setTipuri] = useState([])
   const [cosCount, setCosCount] = useState(0)  // Etapa 13: badge dinamic Coș
   const [chuckCount, setChuckCount] = useState(0)  // 24.05.2026: badge sugestii Chuck Norris
+  const [arhiva, setArhiva] = useState([])  // 25.05.2026: autorizații angajați cu contract încheiat
   const [load, setLoad] = useState(false)
   const [toast, setToast] = useState(null)
   const [editEmp, setEditEmp] = useState(null)
@@ -121,7 +122,7 @@ export default function HRPage() {
   
   const loadAll = async () => {
     setLoad(true)
-    const [empRes, autRes, tipRes, cosRes, chuckRes] = await Promise.all([
+    const [empRes, autRes, tipRes, cosRes, chuckRes, arhRes] = await Promise.all([
       supabase.from('employees').select('*, sites(name)').eq('active', true)
         .or('termination_date.is.null,termination_date.gte.' + new Date().toISOString().split('T')[0])
         .order('name'),
@@ -132,12 +133,15 @@ export default function HRPage() {
       // 24.05.2026: count sugestii Chuck Norris (status propus, doar high+critic în badge)
       supabase.from('claude_bot_sugestii').select('id', { count: 'exact', head: true })
         .in('tinta_tip', ['hr_autorizatii', 'employee']).eq('status', 'propus').in('severity', ['critic', 'high']),
+      // 25.05.2026: Arhivă autorizații pentru angajații cu contract încheiat
+      supabase.from('v_hr_autorizatii_arhiva').select('*'),
     ])
     setEmployees(empRes.data || [])
     setAutorizatii(autRes.data || [])
     setTipuri(tipRes.data || [])
     setCosCount(cosRes.count || 0)
     setChuckCount(chuckRes.count || 0)
+    setArhiva(arhRes.data || [])
     setLoad(false)
   }
   
@@ -161,6 +165,7 @@ export default function HRPage() {
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
+    { key: 'arhiva',      icon: '📦', label: 'Arhivă', badge: arhiva.length, personalOnly: true },
     { key: 'cos',         icon: '🗑', label: 'Coș', badge: cosCount, personalOnly: true },
     { key: 'scanner',     icon: '📷', label: 'Scanner AI', scannerOnly: true },
     { key: 'salarii',     icon: '💰', label: 'Salarii', superOnly: true },
@@ -215,6 +220,7 @@ export default function HRPage() {
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
+      {!load && tab === 'arhiva' && canAccessPersonal && <TabArhivaAutorizatii arhiva={arhiva} showToast={showToast} />}
       {!load && tab === 'cos' && canAccessPersonal && <TabCos profile={profile} showToast={showToast} />}
       {!load && tab === 'scanner' && canUseScanner && <TabScannerDocumenteHR profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
@@ -1158,6 +1164,230 @@ function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast
           <button onClick={save} disabled={saving || !tipId} style={{...S.btnP, opacity: (saving || !tipId) ? 0.5 : 1}}>{saving ? '...' : '✓ Salvează modificările'}</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ===========================================================================
+// 25.05.2026: TAB ARHIVĂ AUTORIZAȚII — pentru angajații cu contract încheiat
+// Read-only. Folosit pentru istoric ANAF / control ITM.
+// ===========================================================================
+function TabArhivaAutorizatii({ arhiva, showToast }) {
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState('terminare_desc') // terminare_desc | nume_asc | tip
+  const [previewPdf, setPreviewPdf] = useState(null)
+  
+  const handleViewPdf = useCallback(async (path) => {
+    if (!path) { showToast('Fără fișier atașat', 'warning'); return }
+    const { data, error } = await supabase.storage.from('autorizatii').createSignedUrl(path, 60)
+    if (error) { showToast('Eroare deschidere PDF: ' + error.message, 'error'); return }
+    setPreviewPdf(data.signedUrl)
+  }, [showToast])
+  
+  // Group by angajat
+  const grupate = useMemo(() => {
+    let filtered = arhiva
+    if (search) {
+      const s = search.toLowerCase()
+      filtered = arhiva.filter(a => 
+        (a.employee_name || '').toLowerCase().includes(s) ||
+        (a.tip_denumire || '').toLowerCase().includes(s) ||
+        (a.tip_cod || '').toLowerCase().includes(s)
+      )
+    }
+    
+    const map = new Map()
+    filtered.forEach(a => {
+      if (!map.has(a.employee_id)) {
+        map.set(a.employee_id, {
+          employee_id: a.employee_id,
+          employee_name: a.employee_name,
+          functie: a.functie,
+          departament_hr: a.departament_hr,
+          termination_date: a.termination_date,
+          zile_de_la_terminare: a.zile_de_la_terminare,
+          autorizatii: []
+        })
+      }
+      map.get(a.employee_id).autorizatii.push(a)
+    })
+    
+    let arr = Array.from(map.values())
+    
+    if (sortBy === 'terminare_desc') {
+      arr.sort((a, b) => new Date(b.termination_date) - new Date(a.termination_date))
+    } else if (sortBy === 'nume_asc') {
+      arr.sort((a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''))
+    } else if (sortBy === 'tip') {
+      arr.sort((a, b) => b.autorizatii.length - a.autorizatii.length)
+    }
+    
+    return arr
+  }, [arhiva, search, sortBy])
+  
+  const totalAngajati = grupate.length
+  const totalAutorizatii = grupate.reduce((s, g) => s + g.autorizatii.length, 0)
+  
+  return (
+    <div>
+      {/* Header info */}
+      <div style={{
+        background: G.surface, border:`1px solid ${G.border}`, borderRadius:12,
+        padding:'14px 18px', marginBottom:16,
+        display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:12
+      }}>
+        <div style={{display:'flex', alignItems:'center', gap:14}}>
+          <div style={{fontSize:28}}>📦</div>
+          <div>
+            <div style={{fontSize:15, fontWeight:800, color:G.text}}>
+              Arhivă Autorizații
+            </div>
+            <div style={{fontSize:11, color:G.muted, marginTop:2, lineHeight:1.5}}>
+              Autorizațiile angajaților cu contract încheiat — păstrate pentru istoric ANAF / control ITM. 
+              <strong style={{color:G.text}}> {totalAutorizatii} autorizații</strong> pentru 
+              <strong style={{color:G.text}}> {totalAngajati} foști angajați</strong>.
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Toolbar filtre */}
+      <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
+        <input
+          type="text"
+          placeholder="🔍 Caută după nume, tip autorizație, cod..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{...S.input, flex:1, minWidth:260, padding:'10px 14px'}}
+        />
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          style={{...S.input, padding:'10px 14px', minWidth:200}}>
+          <option value="terminare_desc">📅 Sort: Terminare recent</option>
+          <option value="nume_asc">🔤 Sort: Nume A-Z</option>
+          <option value="tip">📋 Sort: Câte autorizații</option>
+        </select>
+      </div>
+      
+      {grupate.length === 0 ? (
+        <div style={{
+          padding:50, textAlign:'center', background:G.surface,
+          border:`1px solid ${G.border}`, borderRadius:12
+        }}>
+          <div style={{fontSize:50, marginBottom:14, opacity:0.5}}>📦</div>
+          <div style={{fontSize:14, color:G.muted}}>
+            {search ? 'Nimic găsit pentru "' + search + '"' : 'Nu există autorizații în arhivă'}
+          </div>
+        </div>
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:14}}>
+          {grupate.map(g => (
+            <div key={g.employee_id} style={{
+              background:G.surface, border:`1px solid ${G.border}`,
+              borderRadius:12, overflow:'hidden', opacity:0.92
+            }}>
+              {/* Header angajat */}
+              <div style={{
+                background:G.bg, padding:'12px 18px',
+                borderBottom:`1px solid ${G.border}`,
+                display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8
+              }}>
+                <div>
+                  <div style={{fontSize:14, fontWeight:700, color:G.text, marginBottom:2}}>
+                    👤 {g.employee_name}
+                  </div>
+                  <div style={{fontSize:11, color:G.muted}}>
+                    {g.functie || '—'}{g.departament_hr ? ' · ' + g.departament_hr : ''}
+                  </div>
+                </div>
+                <div style={{
+                  background: G.red+'22', border:`1px solid ${G.red}55`,
+                  padding:'5px 11px', borderRadius:8,
+                  fontSize:11, color:G.red, fontWeight:700
+                }}>
+                  🔒 Contract încheiat {new Date(g.termination_date).toLocaleDateString('ro-RO')}
+                  <span style={{color:G.muted, marginLeft:6, fontWeight:400}}>
+                    (acum {g.zile_de_la_terminare} {g.zile_de_la_terminare === 1 ? 'zi' : 'zile'})
+                  </span>
+                </div>
+              </div>
+              
+              {/* Lista autorizații */}
+              <div style={{padding:'4px 8px'}}>
+                <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
+                  <tbody>
+                    {g.autorizatii.map(a => {
+                      const statusColor = a.status_la_terminare === 'expirat_la_terminare' ? G.red 
+                        : a.status_la_terminare === 'fara_exp' ? G.muted 
+                        : G.green
+                      const statusLabel = a.status_la_terminare === 'expirat_la_terminare' ? 'Expirat la terminare'
+                        : a.status_la_terminare === 'fara_exp' ? 'Fără expirare'
+                        : a.status_la_terminare === 'fara_data' ? 'Fără dată'
+                        : 'Valid la terminare'
+                      return (
+                        <tr key={a.id} style={{borderTop:`1px solid ${G.border}33`}}>
+                          <td style={{padding:'10px 12px', width:'30%'}}>
+                            <div style={{fontWeight:600, color:G.text, marginBottom:2}}>
+                              {a.tip_denumire}
+                            </div>
+                            <div style={{fontSize:10, color:G.muted, textTransform:'uppercase'}}>
+                              {a.tip_categorie} · {a.tip_cod}
+                            </div>
+                          </td>
+                          <td style={{padding:'10px 12px', width:'18%', color:G.muted, fontSize:11}}>
+                            {a.numar_autorizatie && <div>Nr: <strong style={{color:G.text}}>{a.numar_autorizatie}</strong></div>}
+                            {a.emitent && <div style={{fontSize:10}}>{a.emitent}</div>}
+                          </td>
+                          <td style={{padding:'10px 12px', width:'18%', fontSize:11}}>
+                            {a.data_emitere && <div>Emis: {new Date(a.data_emitere).toLocaleDateString('ro-RO')}</div>}
+                            {a.data_expirare && <div style={{color:G.muted}}>Exp: {new Date(a.data_expirare).toLocaleDateString('ro-RO')}</div>}
+                          </td>
+                          <td style={{padding:'10px 12px', width:'18%'}}>
+                            <span style={{
+                              padding:'3px 9px', background:statusColor+'22', color:statusColor,
+                              borderRadius:6, fontSize:10, fontWeight:700, textTransform:'uppercase'
+                            }}>{statusLabel}</span>
+                          </td>
+                          <td style={{padding:'10px 12px', textAlign:'right', width:'16%'}}>
+                            {a.fisier_path && (
+                              <button
+                                onClick={() => handleViewPdf(a.fisier_path)}
+                                style={{
+                                  background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`,
+                                  borderRadius:6, padding:'5px 12px', fontSize:11, fontWeight:600, cursor:'pointer'
+                                }}>
+                                📄 Vezi PDF
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {/* Modal preview PDF */}
+      {previewPdf && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:20
+        }} onClick={() => setPreviewPdf(null)}>
+          <div style={{
+            background:G.surface, borderRadius:12, padding:14, width:'95vw', height:'90vh',
+            display:'flex', flexDirection:'column'
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+              <div style={{fontSize:14, fontWeight:700, color:G.text}}>📄 Vizualizare autorizație</div>
+              <button onClick={() => setPreviewPdf(null)} style={{background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
+            </div>
+            <iframe src={previewPdf} style={{flex:1, border:`1px solid ${G.border}`, borderRadius:8}} title="Autorizație"/>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
