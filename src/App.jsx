@@ -76,7 +76,9 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
   const { session, profile } = useAuth()
   if (session === undefined) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
-  if (adminOnly && !profile?.is_owner) return <Navigate to="/" replace />
+  // 25.05.2026: AdminPage acces permisiv granular - is_owner SAU can_modify_employees (Natalia HR)
+  // Filtrarea tab-urilor sensibile (Setări) e făcută în interiorul AdminPage
+  if (adminOnly && !(profile?.is_owner || profile?.can_modify_employees)) return <Navigate to="/" replace />
   if (salaryAccess && !profile?.can_access_salarii && !profile?.is_owner) return <Navigate to="/" replace />
   if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
@@ -6436,12 +6438,40 @@ function AdminPage() {
     XLSX.writeFile(wb,'template_calendar_2027.xlsx')
   }
 
-  const tabs=[['sites','🏗️ Șantiere'],['managers','👤 Manageri'],['employees','👥 Angajați'],['calendar','📅 Calendar'],['semnaturi','🖋️ Semnături'],['settings','⚙️ Setări']]
+  // 25.05.2026: Tab-urile vizibile per flag - Setări strict is_owner
+  const allTabs = [
+    ['sites',     '🏗️ Șantiere'],
+    ['managers',  '👤 Manageri'],
+    ['employees', '👥 Angajați'],
+    ['calendar',  '📅 Calendar'],
+    ['semnaturi', '🖋️ Semnături'],
+    ['settings',  '⚙️ Setări'],  // restricted is_owner only
+  ]
+  const tabs = allTabs.filter(([v]) => {
+    if (v === 'settings' && !isSuperAdmin) return false  // doar is_owner vede Setări
+    return true
+  })
+  
+  // 25.05.2026: dacă tab-ul curent e restricționat (ex Natalia pe 'settings'), redirect la 'employees'
+  useEffect(() => {
+    if (!isSuperAdmin && tab === 'settings') setTab('employees')
+  }, [isSuperAdmin, tab])
 
   return (
     <Layout>
       <Toast toast={toast}/>
-      <div style={{fontSize:19,fontWeight:800,marginBottom:18}}>⚙ Administrare</div>
+      <div style={{fontSize:19,fontWeight:800,marginBottom:18}}>
+        ⚙ Administrare
+        {!isSuperAdmin && (
+          <span style={{
+            fontSize: 11, color: G.muted, fontWeight: 500, marginLeft: 12,
+            background: G.purple+'22', padding: '3px 9px', borderRadius: 6,
+            border: `1px solid ${G.purple}55`,
+          }}>
+            🔓 Acces granular HR
+          </span>
+        )}
+      </div>
       <div style={{display:'flex',gap:6,marginBottom:20,borderBottom:`1px solid ${G.border}`,paddingBottom:10}}>
         {tabs.map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{...S.btnS,background:tab===v?'#21262D':G.bg,color:tab===v?G.text:G.muted,fontSize:12}}>{l}</button>)}
       </div>
@@ -7180,7 +7210,7 @@ function AdminPage() {
         </div>
       )}
 
-      {tab==='settings'&&(
+      {tab==='settings'&&isSuperAdmin&&(
         <div style={{maxWidth:680}}>
           {/* === MESAJ PENTRU UTILIZATORI — afișat ca banner în top-ul tuturor paginilor === */}
           <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.purple}`}}>
