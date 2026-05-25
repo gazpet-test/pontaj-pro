@@ -426,9 +426,11 @@ export default function ImportWhatsAppModal({
         let best = null
         for (const msg of newMessages) {
           const diffH = Math.abs((msg.dt - alimDt) / 3600000)
-          // Window 72h: șoferii postează uneori în prima zi a turei următoare 
-          // (după ce-au terminat tura curentă, dorm, mănâncă, apoi își amintesc)
-          if (diffH > 72) continue
+          // Window 96h (25.05.2026): șoferii postează uneori cu întârziere semnificativă
+          // (cap tractor MAN PH 24 FAO, vehicule cu cursă lungă, weekend, concedii).
+          // Tradeoff: mai multe match-uri legitime pentru istoric vs risc mic de false-positives
+          // (filtrul vehicle.id strict pe plăcuța previne 99% din false matches).
+          if (diffH > 96) continue
           
           if (!msg.parsed) continue
           // Match cu plăcuța vehiculului

@@ -2371,6 +2371,20 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
   
   useEffect(() => { loadOcrPendingCount() }, [loadOcrPendingCount])
   
+  // 25.05.2026 Etapa 5: Banner alertă „Rompetrol fără WhatsApp" în ultimele 4 zile
+  const [rompetrolFaraWaList, setRompetrolFaraWaList] = useState([])
+  const [rompetrolFaraWaExpanded, setRompetrolFaraWaExpanded] = useState(false)
+  
+  const loadRompetrolFaraWa = useCallback(async () => {
+    const { data } = await supabase
+      .from('v_rompetrol_fara_whatsapp')
+      .select('*')
+      .limit(100)
+    setRompetrolFaraWaList(data || [])
+  }, [])
+  
+  useEffect(() => { loadRompetrolFaraWa() }, [loadRompetrolFaraWa])
+  
   // Calculez preț mediu Gazpet per fiecare rezervor activ
   useEffect(() => {
     const ids = (rezervoare || []).map(r => r.id).filter(Boolean)
@@ -2452,6 +2466,10 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
       .order('id', { ascending: false })
     setAlimList(data || [])
     setLoadingAlim(false)
+    // 25.05.2026 Etapa 5: refresh banner Rompetrol fără WhatsApp + count-uri legate
+    loadRompetrolFaraWa()
+    loadFaraSantierCount()
+    loadOcrPendingCount()
   }
   
   useEffect(() => { fetchAlimentari() }, [perioadaF, customStart, customEnd])
@@ -2720,6 +2738,131 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
       {/* ETAPA 8.6: Expand „Vezi perioade importate" SUB banner EvoGPS */}
       {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin') && istoricImporturi && istoricImporturi.length > 0 && (
         <IstoricImporturiEvoExpand istoricImporturi={istoricImporturi} />
+      )}
+      
+      {/* 25.05.2026 ETAPA 5: Banner alertă Rompetrol fără WhatsApp (window 96h) */}
+      {rompetrolFaraWaList.length > 0 && (
+        <div style={{
+          background: rompetrolFaraWaList.length >= 5 ? '#F8514922' : '#F0883E22',
+          border: `1px solid ${rompetrolFaraWaList.length >= 5 ? G.red : G.orange}`,
+          borderRadius: 10,
+          padding: '12px 16px',
+          marginBottom: 18,
+          animation: rompetrolFaraWaList.length >= 10 ? 'pulse 3s infinite' : 'none',
+        }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}>
+            <div style={{display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0}}>
+              <div style={{fontSize: 24}}>📲</div>
+              <div style={{flex: 1, minWidth: 0}}>
+                <div style={{
+                  fontSize: 13, 
+                  fontWeight: 800, 
+                  color: rompetrolFaraWaList.length >= 5 ? G.red : G.orange,
+                  marginBottom: 2,
+                }}>
+                  {rompetrolFaraWaList.length} alimentări Rompetrol fără WhatsApp (ultimele 4 zile)
+                </div>
+                <div style={{fontSize: 11, color: G.muted, lineHeight: 1.4}}>
+                  Aceste alimentări au fost importate din factura Rompetrol DAR șoferii nu au postat în WhatsApp cu plăcuța + șantier. 
+                  Verifică dacă lipsește exportul WhatsApp recent sau anunță șoferii.
+                </div>
+              </div>
+            </div>
+            <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+              <button 
+                onClick={() => setRompetrolFaraWaExpanded(v => !v)}
+                style={{
+                  background: 'transparent',
+                  color: rompetrolFaraWaList.length >= 5 ? G.red : G.orange,
+                  border: `1px solid ${rompetrolFaraWaList.length >= 5 ? G.red : G.orange}66`,
+                  borderRadius: 8,
+                  padding: '7px 12px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}>
+                {rompetrolFaraWaExpanded ? '▲ Ascunde' : '▼ Vezi lista'}
+              </button>
+              {faraSantierCount > 0 && (
+                <button 
+                  onClick={() => setShowFaraSantier(true)}
+                  style={{
+                    background: rompetrolFaraWaList.length >= 5 ? G.red : G.orange,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '7px 14px',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}>
+                  🛠 Aloc bulk
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* Lista expandabilă cu detalii */}
+          {rompetrolFaraWaExpanded && (
+            <div style={{
+              marginTop: 14,
+              background: G.bg,
+              border: `1px solid ${G.border}`,
+              borderRadius: 8,
+              maxHeight: 260,
+              overflow: 'auto',
+            }}>
+              <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 11}}>
+                <thead style={{position: 'sticky', top: 0, background: G.surface}}>
+                  <tr style={{borderBottom: `1px solid ${G.border2}`}}>
+                    <th style={{padding: '8px 10px', textAlign: 'left', color: G.muted, fontWeight: 700, textTransform: 'uppercase', fontSize: 10}}>Data</th>
+                    <th style={{padding: '8px 10px', textAlign: 'left', color: G.muted, fontWeight: 700, textTransform: 'uppercase', fontSize: 10}}>Vehicul</th>
+                    <th style={{padding: '8px 10px', textAlign: 'left', color: G.muted, fontWeight: 700, textTransform: 'uppercase', fontSize: 10}}>Plăcuța</th>
+                    <th style={{padding: '8px 10px', textAlign: 'right', color: G.muted, fontWeight: 700, textTransform: 'uppercase', fontSize: 10}}>Litri</th>
+                    <th style={{padding: '8px 10px', textAlign: 'right', color: G.muted, fontWeight: 700, textTransform: 'uppercase', fontSize: 10}}>RON</th>
+                    <th style={{padding: '8px 10px', textAlign: 'center', color: G.muted, fontWeight: 700, textTransform: 'uppercase', fontSize: 10}}>Zile</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rompetrolFaraWaList.map(a => {
+                    const zile = a.zile_de_la_alim || 0
+                    const zileColor = zile <= 1 ? G.green : zile <= 2 ? G.orange : G.red
+                    return (
+                      <tr key={a.id} style={{borderBottom: `1px solid ${G.border}66`}}>
+                        <td style={{padding: '6px 10px', fontFamily: 'monospace', color: G.text}}>
+                          {new Date(a.data_alimentare).toLocaleDateString('ro-RO', {day: '2-digit', month: '2-digit'})}
+                        </td>
+                        <td style={{padding: '6px 10px', color: G.text}}>
+                          {a.marca} {a.model?.substring(0, 15)}
+                        </td>
+                        <td style={{padding: '6px 10px', color: G.blue, fontFamily: 'monospace', fontWeight: 700}}>
+                          {a.nr_inmatriculare || a.cod_intern || '—'}
+                        </td>
+                        <td style={{padding: '6px 10px', textAlign: 'right', color: G.orange, fontWeight: 700}}>
+                          {a.cantitate_litri ? Number(a.cantitate_litri).toFixed(1) : '—'}
+                        </td>
+                        <td style={{padding: '6px 10px', textAlign: 'right', color: G.green, fontWeight: 600}}>
+                          {a.pret_total ? Number(a.pret_total).toFixed(2) : '—'}
+                        </td>
+                        <td style={{padding: '6px 10px', textAlign: 'center', color: zileColor, fontWeight: 700}}>
+                          {zile === 0 ? 'azi' : zile === 1 ? 'ieri' : `${zile}z`}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
             {/* ──────────────────────────────────────────────────────────────────── */}
       {/* SECȚIUNEA 2: Alimentări înregistrate (vizualizare + edit + ștergere) */}
@@ -3023,6 +3166,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
           onSaved={() => {
             setShowFaraSantier(false)
             loadFaraSantierCount()
+            loadRompetrolFaraWa()
             fetchAlimentari()
             if (onSaved) onSaved()
           }}
