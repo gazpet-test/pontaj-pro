@@ -245,7 +245,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
               <span style={{
                 marginLeft:10, fontSize:10, padding:'2px 7px', borderRadius:6,
                 background:G.purple+'22', color:G.purple, fontWeight:700
-              }}>v2</span>
+              }}>v4</span>
             </div>
             <div style={{fontSize:12, color:G.muted, marginTop:2}}>
               {phase === 'loading' && 'Se încarcă lista...'}
