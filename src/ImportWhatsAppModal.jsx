@@ -193,6 +193,55 @@ function parseCaptionMessage(caption, sites, vehicles) {
   }
 }
 
+// 25.05.2026 — Etapa 4 OCR prerequisite: upload poza bon WhatsApp în bucket
+// Path strategy: {YYYY-MM}/{alim_id}_{msg_hash[:8]}.{ext}
+// Returnează { ok, path, reason, error }
+async function uploadPozaForAlim(zip, alimId, msg) {
+  if (!msg.imageFile) return { ok: false, reason: 'no_image' }
+  if (!zip) return { ok: false, reason: 'no_zip' }
+  
+  // 1. Caut fișierul în zip (root sau subfolder)
+  let file = zip.file(msg.imageFile)
+  if (!file) {
+    // Încerc lookup pe filename only (zip-ul WhatsApp uneori are subfolder)
+    const fname = msg.imageFile.split('/').pop()
+    zip.forEach((relPath, f) => {
+      if (!file && relPath.endsWith(fname) && !f.dir) file = f
+    })
+  }
+  if (!file) return { ok: false, reason: 'not_in_zip' }
+  
+  // 2. Path & content type
+  const extMatch = msg.imageFile.match(/\.(jpg|jpeg|png|webp)$/i)
+  const extRaw = (extMatch ? extMatch[1] : 'jpg').toLowerCase()
+  const ext = extRaw === 'jpeg' ? 'jpg' : extRaw
+  const contentType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`
+  const ym = msg.dt.toISOString().slice(0, 7)  // YYYY-MM
+  const hashShort = (msg.hash || '').slice(0, 8) || Date.now().toString(36)
+  const path = `${ym}/${alimId}_${hashShort}.${ext}`
+  
+  // 3. Upload (upsert: true = idempotent la re-import)
+  const blob = await file.async('blob')
+  const { error: upErr } = await supabase.storage
+    .from('whatsapp-motorina-bonuri')
+    .upload(path, blob, { contentType, upsert: true })
+  if (upErr) return { ok: false, reason: 'upload_error', error: upErr.message }
+  
+  // 4. Update alimentare cu path-ul + reset ocr_status la 'pending' ca să intre în următorul OCR bulk
+  const { error: updErr } = await supabase
+    .from('logistica_alimentari')
+    .update({ 
+      whatsapp_poza_path: path,
+      ocr_status: 'pending',
+      ocr_data: null,
+      ocr_validated_at: null,
+    })
+    .eq('id', alimId)
+  if (updErr) return { ok: false, reason: 'update_error', error: updErr.message }
+  
+  return { ok: true, path }
+}
+
 // ──────────────────────────────────────────────────────────────
 // COMPONENTA MODAL
 // ──────────────────────────────────────────────────────────────
@@ -205,6 +254,7 @@ export default function ImportWhatsAppModal({
 }) {
   const [step, setStep] = useState(1)  // 1=upload, 2=parsing, 3=review, 4=done
   const [zipFile, setZipFile] = useState(null)
+  const [zipInstance, setZipInstance] = useState(null)  // 25.05.2026: instanță JSZip pentru upload poze
   const [processing, setProcessing] = useState(false)
   const [progress, setProgress] = useState('')
   const [parsedMessages, setParsedMessages] = useState([])
@@ -214,6 +264,9 @@ export default function ImportWhatsAppModal({
   const [matches, setMatches] = useState([])  // rezultat match
   const [dateRangeFilter, setDateRangeFilter] = useState({ start: '2026-05-01', end: '' })
   const [confirmed, setConfirmed] = useState(new Set())  // ID-uri match-uri confirmate
+  // 25.05.2026: stats pentru poze (Etapa 4 OCR prerequisite)
+  const [backfillStats, setBackfillStats] = useState({ checked: 0, uploaded: 0, skipped: 0, errors: 0 })
+  const [pozeUploadedNew, setPozeUploadedNew] = useState(0)  // poze uploadate pe match-uri noi
   const fileInputRef = useRef(null)
   
   // Drag&drop handlers
@@ -256,6 +309,7 @@ export default function ImportWhatsAppModal({
       // 2. Dezarhivez .zip
       setProgress('📦 Dezarhivez fișierul .zip...')
       const zip = await JSZip.loadAsync(zipFile)
+      setZipInstance(zip)  // 25.05.2026: salvez pentru upload poze în applyMatches
       
       // 3. Caut _chat.txt
       setProgress('📄 Caut _chat.txt...')
@@ -350,6 +404,36 @@ export default function ImportWhatsAppModal({
       setConfirmed(autoConfirmed)
       setMatches(matches)
       setParsedMessages(newMessages)
+      
+      // 25.05.2026 — DUAL MODE: Backfill poze pentru alimentări deja procesate WhatsApp fără poză
+      // Scanez TOATE mesajele (inclusiv cele dedup-uite) cu imageFile, caut alimentare matched
+      // anterior cu (autor + msg_dt) DAR fără whatsapp_poza_path → upload poza retroactiv.
+      setProgress('📷 Backfill poze pentru alimentări procesate anterior...')
+      const messagesWithImages = analyzed.filter(m => m.imageFile)
+      const bfStats = { checked: 0, uploaded: 0, skipped: 0, errors: 0 }
+      
+      for (const msg of messagesWithImages) {
+        bfStats.checked++
+        // Caut alimentare deja matched cu acest mesaj DAR fără poză
+        const { data: existingAlim } = await supabase
+          .from('logistica_alimentari')
+          .select('id, whatsapp_poza_path')
+          .eq('whatsapp_autor', msg.author)
+          .eq('whatsapp_msg_dt', msg.dt.toISOString())
+          .is('whatsapp_poza_path', null)
+          .maybeSingle()
+        
+        if (!existingAlim) { bfStats.skipped++; continue }
+        
+        const result = await uploadPozaForAlim(zip, existingAlim.id, msg)
+        if (result.ok) bfStats.uploaded++
+        else { 
+          bfStats.errors++ 
+          console.warn(`Backfill failed pentru alim #${existingAlim.id}:`, result)
+        }
+      }
+      setBackfillStats(bfStats)
+      
       setStep(3)
       setProgress('')
     } catch (err) {
@@ -369,6 +453,7 @@ export default function ImportWhatsAppModal({
     try {
       const toUpdate = matches.filter(m => confirmed.has(m.alim.id))
       let updated = 0
+      let pozeNew = 0  // 25.05.2026: count poze uploadate pe match-uri noi
       let errors = []
       
       for (const m of toUpdate) {
@@ -386,8 +471,23 @@ export default function ImportWhatsAppModal({
           .eq('id', m.alim.id)
         
         if (error) errors.push(`#${m.alim.id}: ${error.message}`)
-        else updated++
+        else {
+          updated++
+          // 25.05.2026: Upload poza bonului dacă mesajul are imageFile
+          if (m.msg.imageFile && zipInstance) {
+            const result = await uploadPozaForAlim(zipInstance, m.alim.id, m.msg)
+            if (result.ok) pozeNew++
+            else console.warn(`Poza upload failed pentru alim #${m.alim.id}:`, result)
+          } else if (!m.msg.imageFile) {
+            // Fără poză = setez ocr_status la 'no_poza' explicit ca să nu apară în coada OCR
+            await supabase
+              .from('logistica_alimentari')
+              .update({ ocr_status: 'no_poza' })
+              .eq('id', m.alim.id)
+          }
+        }
       }
+      setPozeUploadedNew(pozeNew)
       
       // Audit log
       await supabase.from('whatsapp_imports_log').insert({
@@ -438,7 +538,7 @@ export default function ImportWhatsAppModal({
     } finally {
       setProcessing(false)
     }
-  }, [matches, confirmed, profile, zipFile, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast])
+  }, [matches, confirmed, profile, zipFile, zipInstance, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast])
   
   // ────────────────────── RENDER ──────────────────────
   
@@ -561,7 +661,7 @@ export default function ImportWhatsAppModal({
             <div>
               {/* Stats */}
               <div style={{
-                display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:20
+                display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:12
               }}>
                 {[
                   { label:'Mesaje noi parsate', val: parsedMessages.length, color: G.blue },
@@ -578,6 +678,35 @@ export default function ImportWhatsAppModal({
                   </div>
                 ))}
               </div>
+              
+              {/* 25.05.2026 — Badge Backfill poze (dual-mode) */}
+              {backfillStats.checked > 0 && (
+                <div style={{
+                  background:'#25D36622', border:`1px solid #25D36655`, borderRadius:10,
+                  padding:'10px 14px', marginBottom:16, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'
+                }}>
+                  <span style={{fontSize:18}}>📷</span>
+                  <span style={{fontSize:12, color:G.text, fontWeight:700}}>Backfill poze pe alimentări procesate anterior:</span>
+                  <span style={{fontSize:12, color:G.green, fontWeight:800}}>✅ {backfillStats.uploaded} uploaded</span>
+                  {backfillStats.skipped > 0 && <span style={{fontSize:11, color:G.muted}}>· {backfillStats.skipped} skip (deja au poza sau nu matchează BD)</span>}
+                  {backfillStats.errors > 0 && <span style={{fontSize:11, color:G.red, fontWeight:700}}>· {backfillStats.errors} erori</span>}
+                  <span style={{fontSize:10, color:G.muted, marginLeft:'auto'}}>pregătit pentru OCR ✨</span>
+                </div>
+              )}
+              
+              {/* Info poze noi pentru match-uri confirmate */}
+              {(() => {
+                const cuPoza = matches.filter(m => confirmed.has(m.alim.id) && m.msg.imageFile).length
+                if (cuPoza === 0) return null
+                return (
+                  <div style={{
+                    background: G.bg, border:`1px dashed #25D36655`, borderRadius:8,
+                    padding:'8px 12px', marginBottom:14, fontSize:11, color:G.muted
+                  }}>
+                    📷 La salvare vom uploada și <strong style={{color:'#25D366'}}>{cuPoza} poze noi</strong> de bonuri pentru ANAF + Vision OCR.
+                  </div>
+                )
+              })()}
               
               {matches.length === 0 ? (
                 <div style={{
@@ -683,14 +812,35 @@ export default function ImportWhatsAppModal({
               <div style={{fontSize:18, fontWeight:800, color:G.green, marginBottom:10}}>
                 Import finalizat cu succes!
               </div>
-              <div style={{fontSize:13, color:G.muted, marginBottom:30, lineHeight:1.6}}>
+              <div style={{fontSize:13, color:G.muted, marginBottom:20, lineHeight:1.6}}>
                 {confirmed.size} alimentări au primit șantier alocat din WhatsApp.<br/>
                 Audit log salvat pentru ANAF.
               </div>
-              <button onClick={onClose} style={{
-                padding:'12px 30px', background:G.logistica, color:'#000',
-                border:'none', borderRadius:10, fontSize:14, fontWeight:800, cursor:'pointer'
-              }}>Închide</button>
+              
+              {/* 25.05.2026: Stats poze upload */}
+              {(pozeUploadedNew > 0 || backfillStats.uploaded > 0) && (
+                <div style={{
+                  background:'#25D36622', border:`1px solid #25D36655`, borderRadius:10,
+                  padding:'14px 18px', marginBottom:24, display:'inline-block', textAlign:'left',
+                  maxWidth:520
+                }}>
+                  <div style={{fontSize:13, color:G.text, fontWeight:700, marginBottom:8}}>📷 Poze bonuri uploadate:</div>
+                  <div style={{fontSize:12, color:G.muted, lineHeight:1.7}}>
+                    {pozeUploadedNew > 0 && <div>✅ <strong style={{color:'#25D366'}}>{pozeUploadedNew} poze noi</strong> (pe match-urile alocate acum)</div>}
+                    {backfillStats.uploaded > 0 && <div>♻️ <strong style={{color:'#25D366'}}>{backfillStats.uploaded} poze backfill</strong> (pe alimentări procesate anterior)</div>}
+                    <div style={{marginTop:6, fontSize:11, color:G.dim}}>
+                      → gata pentru validare Vision OCR (butonul 🔍 din header Alimentări)
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              <div>
+                <button onClick={onClose} style={{
+                  padding:'12px 30px', background:G.logistica, color:'#000',
+                  border:'none', borderRadius:10, fontSize:14, fontWeight:800, cursor:'pointer'
+                }}>Închide</button>
+              </div>
             </div>
           )}
           

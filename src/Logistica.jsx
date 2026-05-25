@@ -12,6 +12,7 @@ import html2canvas from 'html2canvas'
 import JSZip from 'jszip'
 import ImportWhatsAppModal from './ImportWhatsAppModal.jsx'
 import FaraSantierBulkModal from './FaraSantierBulkModal.jsx'
+import OCRValidateBulkModal from './OCRValidateBulkModal.jsx'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
@@ -79,6 +80,60 @@ function WhatsAppBadge({ alim, size = 'small' }) {
       }}
     >
       📲{isStrict && <span style={{fontSize: 8, fontWeight: 800}}>✓</span>}
+    </span>
+  )
+}
+
+// 25.05.2026 Etapa 4 OCR — Badge pentru status validare Vision OCR pe bonul fiscal
+const OCR_STATUS_META = {
+  match:        { icon: '✅', color: '#3FB950', bg: '#3FB95022', border: '#3FB95055', label: 'OCR Match' },
+  discrepancy:  { icon: '⚠️', color: '#F0883E', bg: '#F0883E22', border: '#F0883E55', label: 'OCR Discrepanță' },
+  unreadable:   { icon: '👁️', color: '#8B949E', bg: '#8B949E22', border: '#8B949E55', label: 'OCR Ilizibil' },
+  pending:      { icon: '⏳', color: '#58A6FF', bg: '#58A6FF22', border: '#58A6FF55', label: 'OCR Pending' },
+}
+
+function OCRBadge({ alim, size = 'small' }) {
+  const status = alim?.ocr_status
+  if (!status || status === 'no_poza') return null
+  
+  const meta = OCR_STATUS_META[status]
+  if (!meta) return null
+  
+  const data = alim?.ocr_data || {}
+  const tooltipLines = [`${meta.icon} ${meta.label}`]
+  
+  if (status === 'match') {
+    tooltipLines.push(`OCR confirmă: ${data.litri || '?'} L · ${data.lei_total || '?'} RON`)
+    if (data.statie) tooltipLines.push(`Stație bon: ${data.statie}`)
+  } else if (status === 'discrepancy') {
+    tooltipLines.push(`Declarat: ${alim.cantitate_litri || '?'} L · ${alim.pret_total ? Number(alim.pret_total).toFixed(2) + ' RON' : '?'}`)
+    tooltipLines.push(`OCR bon: ${data.litri || '?'} L · ${data.lei_total ? Number(data.lei_total).toFixed(2) + ' RON' : '?'}`)
+    if (data.diferenta_litri && !data.litri_match) tooltipLines.push(`Diff litri: ${data.diferenta_litri} L (tol ${data.tolerance_litri})`)
+    if (data.diferenta_lei && !data.lei_match) tooltipLines.push(`Diff LEI: ${data.diferenta_lei} RON (tol ${data.tolerance_lei})`)
+  } else if (status === 'unreadable') {
+    tooltipLines.push(data.notes || data.error || 'Vision nu a putut citi bonul')
+  }
+  
+  if (alim?.ocr_validated_at) {
+    tooltipLines.push(`\nValidat: ${new Date(alim.ocr_validated_at).toLocaleString('ro-RO')}`)
+  }
+  
+  const dim = size === 'small' ? { fontSize: 10, padding: '1px 5px' } : { fontSize: 11, padding: '2px 7px' }
+  
+  return (
+    <span 
+      title={tooltipLines.join('\n')}
+      style={{
+        display:'inline-flex', alignItems:'center', gap:3,
+        background: meta.bg,
+        color: meta.color,
+        border: `1px solid ${meta.border}`,
+        borderRadius: 6, fontWeight: 700, lineHeight: 1.2,
+        cursor: 'help', whiteSpace: 'nowrap',
+        ...dim
+      }}
+    >
+      {meta.icon}
     </span>
   )
 }
@@ -1889,6 +1944,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                   <div style={{color: G.muted, fontSize: 11}}>
                     {a.statie_combustibil && <span style={{color: G.text}}>{a.statie_combustibil}</span>}
                     {isWhatsAppAlocat(a) && <> <WhatsAppBadge alim={a} /></>}
+                    {a.ocr_status && a.ocr_status !== 'no_poza' && <> <OCRBadge alim={a} /></>}
                     {a.ore_la_alimentare && <> · {a.ore_la_alimentare.toLocaleString('ro-RO')} ore bord</>}
                     {a.km_la_alimentare && <> · {a.km_la_alimentare.toLocaleString('ro-RO')} km</>}
                     {a.ore_lucrate_efectiv && <> · {a.ore_lucrate_efectiv}h lucrate</>}
@@ -2302,6 +2358,19 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
   
   useEffect(() => { loadFaraSantierCount() }, [loadFaraSantierCount])
   
+  // 25.05.2026 Etapa 4 OCR: State pentru modal validare Vision OCR + count pending
+  const [showOcrValidate, setShowOcrValidate] = useState(false)
+  const [ocrPendingCount, setOcrPendingCount] = useState(0)
+  
+  const loadOcrPendingCount = useCallback(async () => {
+    const { count } = await supabase
+      .from('v_alimentari_pt_ocr')
+      .select('*', { count: 'exact', head: true })
+    setOcrPendingCount(count || 0)
+  }, [])
+  
+  useEffect(() => { loadOcrPendingCount() }, [loadOcrPendingCount])
+  
   // Calculez preț mediu Gazpet per fiecare rezervor activ
   useEffect(() => {
     const ids = (rezervoare || []).map(r => r.id).filter(Boolean)
@@ -2618,6 +2687,29 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                   🚨 Fără șantier ({faraSantierCount})
                 </button>
               )}
+              {/* 25.05.2026 Etapa 4: Buton Validează OCR Vision */}
+              {ocrPendingCount > 0 && (
+                <button 
+                  onClick={() => setShowOcrValidate(true)}
+                  title={`${ocrPendingCount} alimentări au poză bon dar nu sunt validate prin OCR. Click pentru validare automată cu Claude Vision.`}
+                  style={{
+                    background: '#58A6FF',
+                    color: '#000',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '9px 16px',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
+                    justifyContent: 'flex-start',
+                  }}>
+                  🔍 Validează OCR ({ocrPendingCount})
+                </button>
+              )}
             </div>
           </div>
         )
@@ -2721,6 +2813,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
                             <span style={{display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap'}}>
                               {a.sites.name}
                               {isWhatsAppAlocat(a) && <WhatsAppBadge alim={a} />}
+                              <OCRBadge alim={a} />
                             </span>
                           ) : <span style={{color: G.muted}}>—</span>}
                         </td>
@@ -2928,6 +3021,20 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
           onSaved={() => {
             setShowFaraSantier(false)
             loadFaraSantierCount()
+            fetchAlimentari()
+            if (onSaved) onSaved()
+          }}
+        />
+      )}
+      
+      {/* 25.05.2026 Etapa 4: Modal validare Vision OCR */}
+      {showOcrValidate && (
+        <OCRValidateBulkModal
+          profile={profile}
+          showToast={showToast}
+          onClose={() => setShowOcrValidate(false)}
+          onFinished={() => {
+            loadOcrPendingCount()
             fetchAlimentari()
             if (onSaved) onSaved()
           }}
@@ -6600,6 +6707,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                           <span style={{display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap'}}>
                             {a.sites.name}
                             {isWhatsAppAlocat(a) && <WhatsAppBadge alim={a} />}
+                            <OCRBadge alim={a} />
                           </span>
                         ) : '—'}
                       </td>
