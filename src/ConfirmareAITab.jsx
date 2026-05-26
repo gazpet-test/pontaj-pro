@@ -33,17 +33,38 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
           whatsapp_caption, whatsapp_autor, whatsapp_msg_dt, whatsapp_poza_path,
           site_id, active_id,
           is_card_swap, card_swap_with,
-          active:logistica_active!active_id(id, nr_inmatriculare, marca, model, tip_carburant),
-          card_pair:logistica_alimentari!card_swap_with(
-            id, data_alimentare, cantitate_litri, pret_total, 
-            active:logistica_active!active_id(nr_inmatriculare, marca, model)
-          )
+          active:logistica_active!active_id(id, nr_inmatriculare, marca, model, tip_carburant)
         `)
         .in('sursa_alocare_santier', ['whatsapp_external_pending', 'plate_ai_orphan'])
         .order('created_at', { ascending: false })
       
       if (error) throw error
-      setAlim(data || [])
+      
+      // Fetch separat perechi card_swap (nested join self-ref nu merge clean în Supabase)
+      const swapIds = (data || [])
+        .filter(a => a.is_card_swap && a.card_swap_with)
+        .map(a => a.card_swap_with)
+      
+      let pairMap = new Map()
+      if (swapIds.length > 0) {
+        const { data: pairs, error: pairErr } = await supabase
+          .from('logistica_alimentari')
+          .select(`
+            id, data_alimentare, cantitate_litri, pret_total, observatii,
+            active:logistica_active!active_id(nr_inmatriculare, marca, model)
+          `)
+          .in('id', swapIds)
+        if (pairErr) console.warn('Pair fetch error:', pairErr)
+        pairMap = new Map((pairs || []).map(p => [p.id, p]))
+      }
+      
+      // Atașez card_pair manual
+      const enriched = (data || []).map(a => ({
+        ...a,
+        card_pair: a.is_card_swap && a.card_swap_with ? pairMap.get(a.card_swap_with) : null
+      }))
+      
+      setAlim(enriched)
     } catch (e) {
       console.error('Eroare loadData ConfirmareAI:', e)
       showToast('Eroare încărcare alimentări: ' + e.message, 'error')
@@ -321,18 +342,32 @@ function AlimCard({ alim, G, S, sites, editingSiteId, setEditingSiteId, onShowPo
               <div style={{fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 2}}>🚛 Fizic (poză)</div>
               <div style={{fontWeight: 700}}>{v.nr_inmatriculare}</div>
               <div style={{fontSize: 10, color: G.muted}}>{v.marca} {v.model}</div>
+              <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                📅 {alim.data_alimentare} · 🪪 alim #{alim.id}
+              </div>
             </div>
-            <div>
+            <div style={{borderLeft: `1px dashed ${G.red}44`, paddingLeft: 8}}>
               <div style={{fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 2}}>💳 Card (factură)</div>
               <div style={{fontWeight: 700}}>{cardPair.active?.nr_inmatriculare || '?'}</div>
               <div style={{fontSize: 10, color: G.muted}}>
-                {cardPair.active?.marca} {cardPair.active?.model} · alim #{cardPair.id}
+                {cardPair.active?.marca} {cardPair.active?.model}
               </div>
+              <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                📅 {cardPair.data_alimentare} · 🪪 alim #{cardPair.id}
+              </div>
+              {cardPair.observatii && cardPair.observatii.includes('Import Rompetrol Excel') && (
+                <div style={{
+                  display: 'inline-block', marginTop: 4, padding: '2px 6px', borderRadius: 4,
+                  background: G.purple + '22', color: G.purple, fontSize: 9, fontWeight: 700,
+                }}>
+                  📊 Din factura Rompetrol
+                </div>
+              )}
             </div>
           </div>
-          <div style={{fontSize: 10, color: G.muted, marginTop: 6, lineHeight: 1.4}}>
-            Cardul de motorină al <strong>{cardPair.active?.nr_inmatriculare}</strong> a fost folosit pentru alimentarea fizică a <strong>{v.nr_inmatriculare}</strong>. 
-            Factura Rompetrol arată consumul pe vehiculul cardului, dar motorina a intrat fizic în alt rezervor.
+          <div style={{fontSize: 10, color: G.muted, marginTop: 8, lineHeight: 1.4, borderTop: `1px solid ${G.red}22`, paddingTop: 6}}>
+            Cardul de motorină al <strong style={{color: G.red}}>{cardPair.active?.nr_inmatriculare}</strong> a fost folosit pentru alimentarea fizică a <strong style={{color: G.green}}>{v.nr_inmatriculare}</strong>. 
+            Factura Rompetrol arată consumul pe vehiculul cardului ({Number(cardPair.cantitate_litri).toFixed(1)}L · {Number(cardPair.pret_total).toFixed(0)} RON), dar motorina a intrat fizic în alt rezervor.
           </div>
         </div>
       )}
