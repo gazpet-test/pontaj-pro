@@ -3405,6 +3405,9 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   const [tip, setTip] = useState(T?.tip || 'utilaj')
   const [activTransportatId, setActivTransportatId] = useState(T?.activ_transportat_id ? String(T.activ_transportat_id) : '')
   const [continutDescriere, setContinutDescriere] = useState(T?.continut_descriere || '')
+  // 26.05.2026: Conținut multiplu - utilaje + marfă în aceeași listă
+  const [continutItems, setContinutItems] = useState([])  // [{ tempId, tip:'utilaj'|'marfa', active_id?, denumire?, cantitate?, unitate_masura?, observatii?, ordine }]
+  const [continutLoading, setContinutLoading] = useState(false)
   const [plecareTip, setPlecareTip] = useState(T?.plecare_tip || 'sediu')
   const [plecareSiteId, setPlecareSiteId] = useState(T?.plecare_site_id ? String(T.plecare_site_id) : '')
   const [plecareLocText, setPlecareLocText] = useState(T?.plecare_locatie_text || '')
@@ -3437,6 +3440,79 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   useEffect(() => {
     supabase.from('profiles').select('id, name, role, email').order('name').then(({ data }) => setProfilesList(data || []))
   }, [])
+  
+  // 26.05.2026: Load conținut multiplu la edit (dacă există în logistica_transporturi_continut)
+  useEffect(() => {
+    if (!T?.id) return
+    setContinutLoading(true)
+    supabase
+      .from('logistica_transporturi_continut')
+      .select('id, tip, active_id, denumire, cantitate, unitate_masura, observatii, ordine')
+      .eq('transport_id', T.id)
+      .order('ordine', { ascending: true })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Eroare load continut:', error)
+        } else if (data && data.length > 0) {
+          // Migrate existing → state cu tempId pentru tracking în UI
+          setContinutItems(data.map((it, idx) => ({
+            tempId: 'db_' + it.id,
+            dbId: it.id,
+            tip: it.tip,
+            active_id: it.active_id || null,
+            denumire: it.denumire || '',
+            cantitate: it.cantitate || '',
+            unitate_masura: it.unitate_masura || '',
+            observatii: it.observatii || '',
+            ordine: it.ordine ?? idx,
+          })))
+        }
+        setContinutLoading(false)
+      })
+  }, [T?.id])
+  
+  // Helpers pentru continut items
+  const addContinutUtilaj = () => {
+    setContinutItems(items => [...items, {
+      tempId: 'new_' + Date.now() + '_' + items.length,
+      tip: 'utilaj',
+      active_id: null,
+      denumire: '',
+      cantitate: '',
+      unitate_masura: '',
+      observatii: '',
+      ordine: items.length,
+    }])
+  }
+  const addContinutMarfa = () => {
+    setContinutItems(items => [...items, {
+      tempId: 'new_' + Date.now() + '_' + items.length,
+      tip: 'marfa',
+      active_id: null,
+      denumire: '',
+      cantitate: '',
+      unitate_masura: 'buc',
+      observatii: '',
+      ordine: items.length,
+    }])
+  }
+  const updateContinutItem = (tempId, field, val) => {
+    setContinutItems(items => items.map(it => it.tempId === tempId ? { ...it, [field]: val } : it))
+  }
+  const removeContinutItem = (tempId) => {
+    setContinutItems(items => items.filter(it => it.tempId !== tempId).map((it, idx) => ({ ...it, ordine: idx })))
+  }
+  const moveContinutItem = (tempId, dir) => {
+    setContinutItems(items => {
+      const idx = items.findIndex(it => it.tempId === tempId)
+      if (idx < 0) return items
+      const newIdx = idx + dir
+      if (newIdx < 0 || newIdx >= items.length) return items
+      const reordered = [...items]
+      ;[reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]]
+      return reordered.map((it, i) => ({ ...it, ordine: i }))
+    })
+  }
   
   // Load alocări site → manager (din profile_sites)
   useEffect(() => {
@@ -3576,13 +3652,14 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   }
   
   const handleSave = async () => {
-    // Validări
-    if (tip === 'utilaj' && !activTransportatId) {
-      showToast('Selectează utilajul de transportat', 'warn')
+    // Validări - skip single dacă avem conținut multiplu (continutItems non-empty)
+    const hasMultiContinut = continutItems.length > 0
+    if (!hasMultiContinut && tip === 'utilaj' && !activTransportatId) {
+      showToast('Selectează utilajul de transportat (sau adaugă în lista de conținut)', 'warn')
       return
     }
-    if (tip === 'mic_tesa' && !continutDescriere.trim()) {
-      showToast('Descrie ce se transportă', 'warn')
+    if (!hasMultiContinut && tip === 'mic_tesa' && !continutDescriere.trim()) {
+      showToast('Descrie ce se transportă (sau adaugă în lista de conținut)', 'warn')
       return
     }
     if (plecareTip === 'site' && !plecareSiteId) {
@@ -3618,10 +3695,41 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     }
     
     setSaving(true)
+    
+    // 26.05.2026: Determin dacă folosim conținut multiplu (cel puțin 1 item)
+    const useMultiContinut = continutItems.length > 0
+    
+    // Validare items conținut
+    if (useMultiContinut) {
+      for (const it of continutItems) {
+        if (it.tip === 'utilaj' && !it.active_id) {
+          showToast('Selectează utilajul pentru fiecare rând din conținut', 'warn')
+          setSaving(false)
+          return
+        }
+        if (it.tip === 'marfa' && (!it.denumire || !it.denumire.trim())) {
+          showToast('Completează denumirea pentru fiecare rând de marfă', 'warn')
+          setSaving(false)
+          return
+        }
+      }
+    }
+    
+    // Detect regim special: ORICE utilaj din lista marcat cu regim_transport_special
+    const anyRegimSpecial = useMultiContinut
+      ? continutItems.some(it => it.tip === 'utilaj' && active.find(a => a.id === it.active_id)?.regim_transport_special)
+      : !!(activSelectat?.regim_transport_special)
+    
     const payload = {
       tip,
-      activ_transportat_id: tip === 'utilaj' ? Number(activTransportatId) : null,
-      continut_descriere: tip === 'mic_tesa' ? continutDescriere.trim() : null,
+      // Legacy: păstrez primul utilaj ca activ_transportat_id pentru compatibilitate
+      activ_transportat_id: useMultiContinut 
+        ? (continutItems.find(it => it.tip === 'utilaj')?.active_id || null)
+        : (tip === 'utilaj' ? Number(activTransportatId) : null),
+      continut_descriere: useMultiContinut 
+        ? null  // se citește din logistica_transporturi_continut
+        : (tip === 'mic_tesa' ? continutDescriere.trim() : null),
+      continut_multiplu: useMultiContinut,
       plecare_tip: plecareTip,
       plecare_site_id: plecareTip === 'site' ? Number(plecareSiteId) : null,
       plecare_locatie_text: plecareTip === 'alta' ? plecareLocText.trim() : null,
@@ -3639,7 +3747,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
       sofer_id: null,  // legacy
       sofer_extern_nume: soferMode === 'extern' ? soferExternNume.trim() : null,
       sofer_extern_telefon: soferMode === 'extern' ? (soferExternTel.trim() || null) : null,
-      necesita_regim_special: !!(activSelectat?.regim_transport_special),
+      necesita_regim_special: anyRegimSpecial,
       cost_estimat: costEstimat ? Number(costEstimat) : null,
       observatii: observatii.trim() || null,
       manager_plecare_id: managerPlecareId || null,
@@ -3647,17 +3755,49 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     }
     
     let error
+    let transportId
     if (isEdit) {
       // Update — păstrăm status și solicitant_id originale
       const result = await supabase.from('logistica_transporturi').update(payload).eq('id', T.id)
       error = result.error
+      transportId = T.id
     } else {
       // Insert nou — adăugăm status='cerut' și solicitant_id
       payload.status = 'cerut'
       payload.solicitant_id = profile?.id
       payload.data_solicitarii = new Date().toISOString()
-      const result = await supabase.from('logistica_transporturi').insert(payload)
+      const result = await supabase.from('logistica_transporturi').insert(payload).select('id').single()
       error = result.error
+      transportId = result.data?.id
+    }
+    
+    // 26.05.2026: Persist continut multiplu - DELETE all + INSERT batch
+    if (!error && useMultiContinut && transportId) {
+      // Șterg conținutul vechi (la edit) și insert nou (mai simplu decât diff)
+      const { error: delErr } = await supabase
+        .from('logistica_transporturi_continut')
+        .delete()
+        .eq('transport_id', transportId)
+      if (delErr) console.warn('Delete continut vechi:', delErr)
+      
+      const inserts = continutItems.map((it, idx) => ({
+        transport_id: transportId,
+        tip: it.tip,
+        active_id: it.tip === 'utilaj' ? it.active_id : null,
+        denumire: it.tip === 'marfa' ? it.denumire.trim() : null,
+        cantitate: it.cantitate ? Number(it.cantitate) : null,
+        unitate_masura: it.unitate_masura || null,
+        observatii: it.observatii?.trim() || null,
+        ordine: idx,
+        created_by: profile?.id || null,
+      }))
+      const { error: insErr } = await supabase
+        .from('logistica_transporturi_continut')
+        .insert(inserts)
+      if (insErr) {
+        error = insErr
+        console.error('Insert continut nou:', insErr)
+      }
     }
     
     setSaving(false)
@@ -3720,12 +3860,150 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
           </div>
         )}
         
-        {/* TIP UTILAJ */}
-        {tip === 'utilaj' && (
+        {/* 26.05.2026: CONȚINUT TRANSPORT (utilaje + marfă în aceeași listă) */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>
+            📦 Conținut transport (utilaje + marfă)
+          </div>
+          <div style={{fontSize:11, color:G.muted, marginBottom:8, lineHeight:1.4}}>
+            Adaugă <strong>fiecare utilaj</strong> cărat (cap tractor + remorca le-am specificat sus) și/sau <strong>marfa</strong> (țevi, piese, materiale). Lista apare în avizul de transport.
+          </div>
+          
+          {continutLoading ? (
+            <div style={{padding:14, textAlign:'center', color:G.muted, fontSize:12}}>⏳ Încărcare conținut...</div>
+          ) : continutItems.length === 0 ? (
+            <div style={{padding:14, background:G.bg, border:`1px dashed ${G.border}`, borderRadius:8, textAlign:'center', color:G.muted, fontSize:12}}>
+              Niciun rând adăugat încă. Apasă butoanele de mai jos.
+            </div>
+          ) : (
+            <div style={{display:'flex', flexDirection:'column', gap:6}}>
+              {continutItems.map((it, idx) => {
+                const isUtilaj = it.tip === 'utilaj'
+                const activeOpt = isUtilaj && it.active_id ? active.find(a => a.id === it.active_id) : null
+                const rowColor = isUtilaj ? G.blue : G.green
+                return (
+                  <div key={it.tempId} style={{
+                    display:'flex', gap:6, padding:8,
+                    background:G.bg, border:`1px solid ${rowColor}33`, borderRadius:8,
+                    alignItems:'flex-start',
+                  }}>
+                    {/* Drag handle + ordine */}
+                    <div style={{display:'flex', flexDirection:'column', gap:2, paddingTop:4}}>
+                      <button type="button" onClick={() => moveContinutItem(it.tempId, -1)} disabled={idx === 0}
+                        style={{padding:'2px 6px', background:'transparent', border:`1px solid ${G.border}`, borderRadius:4, color:G.muted, cursor:idx===0?'not-allowed':'pointer', fontSize:10, opacity:idx===0?.3:1}}>▲</button>
+                      <button type="button" onClick={() => moveContinutItem(it.tempId, 1)} disabled={idx === continutItems.length - 1}
+                        style={{padding:'2px 6px', background:'transparent', border:`1px solid ${G.border}`, borderRadius:4, color:G.muted, cursor:idx===continutItems.length-1?'not-allowed':'pointer', fontSize:10, opacity:idx===continutItems.length-1?.3:1}}>▼</button>
+                    </div>
+                    
+                    {/* Badge tip */}
+                    <div style={{
+                      padding:'4px 8px', borderRadius:6, fontSize:10, fontWeight:700,
+                      background:rowColor + '22', color:rowColor, minWidth:60, textAlign:'center',
+                      letterSpacing:.5, textTransform:'uppercase', flexShrink:0, alignSelf:'center',
+                    }}>
+                      {isUtilaj ? '🚛 Utilaj' : '📦 Marfă'}
+                    </div>
+                    
+                    {/* Conținut rând */}
+                    <div style={{flex:1, display:'flex', flexDirection:'column', gap:6}}>
+                      {isUtilaj ? (
+                        <select
+                          value={it.active_id || ''}
+                          onChange={e => updateContinutItem(it.tempId, 'active_id', e.target.value ? Number(e.target.value) : null)}
+                          style={{...S.input, fontSize:12}}
+                        >
+                          <option value="">— Selectează utilaj —</option>
+                          {active
+                            .filter(a => !a.vandut && !a.deep_sleep)
+                            .map(a => (
+                              <option key={a.id} value={a.id}>
+                                {(a.cod_intern || a.nr_inmatriculare || `#${a.id}`)} · {a.marca || ''} {a.model || ''}{a.regim_transport_special ? ' ⚠️ REGIM SPECIAL' : ''}
+                              </option>
+                            ))
+                          }
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={it.denumire || ''}
+                          onChange={e => updateContinutItem(it.tempId, 'denumire', e.target.value)}
+                          placeholder="Denumire marfă (ex: țeavă PE100 d160, manometru, cot 90°)"
+                          style={{...S.input, fontSize:12}}
+                        />
+                      )}
+                      
+                      {/* Rând 2: cantitate + UM + observații */}
+                      <div style={{display:'grid', gridTemplateColumns:'1fr 100px 2fr', gap:6}}>
+                        <input
+                          type="number" step="0.01"
+                          value={it.cantitate || ''}
+                          onChange={e => updateContinutItem(it.tempId, 'cantitate', e.target.value)}
+                          placeholder={isUtilaj ? 'Buc' : 'Cant'}
+                          style={{...S.input, fontSize:12}}
+                        />
+                        <input
+                          type="text"
+                          value={it.unitate_masura || ''}
+                          onChange={e => updateContinutItem(it.tempId, 'unitate_masura', e.target.value)}
+                          placeholder={isUtilaj ? 'buc' : 'm/kg/buc/L'}
+                          style={{...S.input, fontSize:12}}
+                        />
+                        <input
+                          type="text"
+                          value={it.observatii || ''}
+                          onChange={e => updateContinutItem(it.tempId, 'observatii', e.target.value)}
+                          placeholder="Observații (opțional)"
+                          style={{...S.input, fontSize:12}}
+                        />
+                      </div>
+                      
+                      {/* Detalii utilaj selectat */}
+                      {isUtilaj && activeOpt && (
+                        <div style={{fontSize:10, color:G.muted, display:'flex', gap:10, flexWrap:'wrap'}}>
+                          {activeOpt.nr_inmatriculare && <span>🚗 {activeOpt.nr_inmatriculare}</span>}
+                          {activeOpt.greutate_kg && <span>⚖️ {activeOpt.greutate_kg} kg</span>}
+                          {(activeOpt.lungime_m || activeOpt.latime_m || activeOpt.inaltime_m) && (
+                            <span>📐 {activeOpt.lungime_m || '?'}×{activeOpt.latime_m || '?'}×{activeOpt.inaltime_m || '?'} m</span>
+                          )}
+                          {activeOpt.regim_transport_special && <span style={{color:G.red, fontWeight:700}}>⚠️ REGIM SPECIAL</span>}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Buton remove */}
+                    <button type="button" onClick={() => removeContinutItem(it.tempId)}
+                      style={{padding:'6px 8px', background:G.red + '22', color:G.red, border:`1px solid ${G.red}44`, borderRadius:6, cursor:'pointer', fontSize:14, alignSelf:'flex-start'}}
+                      title="Șterge rând"
+                    >🗑</button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          
+          <div style={{display:'flex', gap:8, marginTop:10}}>
+            <button type="button" onClick={addContinutUtilaj}
+              style={{padding:'8px 14px', background:G.blue + '22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:7, cursor:'pointer', fontSize:12, fontWeight:600}}
+            >🚛 + Adaugă utilaj</button>
+            <button type="button" onClick={addContinutMarfa}
+              style={{padding:'8px 14px', background:G.green + '22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:7, cursor:'pointer', fontSize:12, fontWeight:600}}
+            >📦 + Adaugă marfă</button>
+            {continutItems.length > 0 && (
+              <div style={{marginLeft:'auto', fontSize:11, color:G.muted, alignSelf:'center'}}>
+                {continutItems.filter(i => i.tip === 'utilaj').length} utilaje + {continutItems.filter(i => i.tip === 'marfa').length} marfă
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* LEGACY: TIP UTILAJ - afișat DOAR dacă nu folosim conținut multiplu */}
+        {tip === 'utilaj' && continutItems.length === 0 && (
           <div style={{marginBottom:14}}>
-            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>🚛 Activ de transportat</div>
+            <div style={{fontSize:11, color:G.muted, fontWeight:600, marginBottom:8}}>
+              ⚙️ Mod single (legacy) - alege un singur utilaj. Sau folosește lista de mai sus pentru multiple.
+            </div>
             <FieldSelect 
-              label="Selectează activul" 
+              label="Selectează activul (mod single)" 
               value={activTransportatId} 
               onChange={setActivTransportatId}
               options={[{label:'— alege —', value:''}, ...activeTransportabile.map(a => ({
@@ -3755,10 +4033,12 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
           </div>
         )}
         
-        {/* TIP MIC TESA */}
-        {tip === 'mic_tesa' && (
+        {/* LEGACY: TIP MIC TESA - afișat DOAR dacă nu folosim conținut multiplu */}
+        {tip === 'mic_tesa' && continutItems.length === 0 && (
           <div style={{marginBottom:14}}>
-            <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:8}}>📄 Conținut transport</div>
+            <div style={{fontSize:11, color:G.muted, fontWeight:600, marginBottom:8}}>
+              ⚙️ Mod single (legacy) - descriere text liber. Sau folosește lista de mai sus pentru multiple.
+            </div>
             <FieldTextarea 
               label="Ce se transportă (descriere detaliată)"
               value={continutDescriere}
