@@ -944,20 +944,37 @@ export default function ImportWhatsAppModal({
               })()}
               
               {matches.length === 0 ? (
-                <div style={{
-                  padding:40, textAlign:'center', background:G.bg, 
-                  borderRadius:10, border:`1px solid ${G.border}`
-                }}>
-                  <div style={{fontSize:50, marginBottom:14}}>🤷</div>
-                  <div style={{fontSize:15, color:G.text, fontWeight:700}}>
-                    Niciun match găsit pentru această perioadă
-                  </div>
-                  <div style={{fontSize:12, color:G.muted, marginTop:10, lineHeight:1.6}}>
-                    Posibile motive: mesajele din arhivă nu menționează plăcuțele auto ale<br/>
-                    alimentărilor Rompetrol din BD, SAU mesajele sunt din altă perioadă.<br/>
-                    Pentru istoricul mai 2026, va trebui editare manuală pe alimentări.
-                  </div>
-                </div>
+                (() => {
+                  const orphanCount = parsedMessages.filter(m => m.imageFile && !m.parsed?.vehicle).length
+                  return (
+                    <div style={{
+                      padding:30, textAlign:'center', background:G.bg, 
+                      borderRadius:10, border:`1px solid ${G.border}`
+                    }}>
+                      <div style={{fontSize:50, marginBottom:14}}>{orphanCount > 0 ? '🤖' : '🤷'}</div>
+                      <div style={{fontSize:15, color:G.text, fontWeight:700, marginBottom:12}}>
+                        {orphanCount > 0 
+                          ? `${orphanCount} poze orfane găsite - gata pentru AI`
+                          : 'Niciun match direct găsit pentru această perioadă'}
+                      </div>
+                      <div style={{fontSize:12, color:G.muted, lineHeight:1.7, maxWidth:550, margin:'0 auto'}}>
+                        {orphanCount > 0 ? (
+                          <>
+                            Aceste mesaje au poze (bonuri / spate mașini) dar caption-ul nu identifică plăcuța.<br/>
+                            Apasă <strong style={{color:G.green}}>💾 Salvez {orphanCount} poze orfane</strong> ca să le salvăm în BD pentru procesare AI.<br/>
+                            Apoi rulezi <code style={{background:G.surface, padding:'2px 6px', borderRadius:4, color:G.blue}}>detect_plate_orphan_msgs</code> care identifică automat plăcuțele cu Vision OCR.
+                          </>
+                        ) : (
+                          <>
+                            Posibile motive: mesajele din arhivă nu menționează plăcuțele auto ale<br/>
+                            alimentărilor Rompetrol din BD, SAU mesajele sunt din altă perioadă.<br/>
+                            Pentru istoricul mai 2026, va trebui editare manuală pe alimentări.
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()
               ) : (
                 <div style={{maxHeight:'45vh', overflow:'auto', border:`1px solid ${G.border}`, borderRadius:10}}>
                   <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
@@ -1028,14 +1045,27 @@ export default function ImportWhatsAppModal({
                   padding:'10px 22px', background:G.surface, color:G.text,
                   border:`1px solid ${G.border}`, borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:600
                 }}>Anulează</button>
-                <button onClick={applyMatches} disabled={confirmed.size === 0 || processing}
-                  style={{
-                    padding:'10px 22px', background: confirmed.size ? G.green : G.dim, color:'#fff',
-                    border:'none', borderRadius:8, fontSize:13, fontWeight:700,
-                    cursor: confirmed.size ? 'pointer' : 'not-allowed'
-                  }}>
-                  {processing ? 'Salvez...' : `✅ Aplic ${confirmed.size} alocări`}
-                </button>
+                {/* 26.05.2026 FIX B: permite click chiar fara confirmari, daca exista mesaje cu poze orfane (vor fi salvate ca pending_plate_detection) */}
+                {(() => {
+                  const orphanCount = parsedMessages.filter(m => m.imageFile && !m.parsed?.vehicle).length
+                  const canApply = confirmed.size > 0 || orphanCount > 0
+                  const labelText = processing 
+                    ? 'Salvez...' 
+                    : confirmed.size > 0 
+                      ? `✅ Aplic ${confirmed.size} alocări${orphanCount > 0 ? ` + ${orphanCount} poze orfane` : ''}`
+                      : `💾 Salvez ${orphanCount} poze orfane pentru AI`
+                  return (
+                    <button onClick={applyMatches} disabled={!canApply || processing}
+                      style={{
+                        padding:'10px 22px', 
+                        background: canApply ? G.green : G.dim, color:'#fff',
+                        border:'none', borderRadius:8, fontSize:13, fontWeight:700,
+                        cursor: canApply ? 'pointer' : 'not-allowed'
+                      }}>
+                      {labelText}
+                    </button>
+                  )
+                })()}
               </div>
             </div>
           )}
