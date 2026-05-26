@@ -1,7 +1,14 @@
-// ImportWhatsAppModal.jsx
+// ImportWhatsAppModal.jsx v3
 // 25.05.2026 - Import .zip WhatsApp grup motorină + match Rompetrol
+// 26.05.2026 - FIX B: Suport pentru mesaje orfane (poze fără caption text)
 // Parser hibrid: format strict v2 (după 26.05) + fallback tolerant (mai 2026 istoric)
 // Pentru ANAF: stochează caption + autor + timestamp + poza bon ca dovadă auditabilă
+//
+// 26.05.2026 FIX B v3:
+//   - Acceptă mesaje cu DOAR poze (caption gol/scurt)
+//   - Upload pozele orfane în bucket cu prefix 'orphan/'
+//   - Salvează în whatsapp_messages_processed cu status='pending_plate_detection'
+//   - Plate detection se face ulterior cu Vision OCR (Edge Function separată)
 
 import { useState, useRef, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
@@ -390,8 +397,11 @@ export default function ImportWhatsAppModal({
       if (startDt) messages = messages.filter(m => m.dt >= startDt)
       if (endDt) messages = messages.filter(m => m.dt <= endDt)
       
-      // 6. Doar mesaje cu caption non-empty (filtru basic)
-      messages = messages.filter(m => m.caption && m.caption.length > 3)
+      // 6. Filtru: acceptă mesaje cu caption non-empty SAU mesaje cu doar poze (FIX B 26.05.2026)
+      // Înainte: messages.filter(m => m.caption && m.caption.length > 3) — ÎN BUG = ignora pozele orfane (cazul Shashika)
+      messages = messages.filter(m => 
+        (m.caption && m.caption.length > 3) || m.imageFile
+      )
       
       setProgress(`🔍 Analizez ${messages.length} mesaje...`)
       
@@ -592,6 +602,52 @@ export default function ImportWhatsAppModal({
       setPozeUploadedNew(pozeNew)
       setUploadErrors(uploadErrList)
       
+      // 26.05.2026 FIX B: Upload pozele orfane (caption gol/scurt fără plăcuța identificabilă)
+      // Aceste mesaje vor fi procesate ulterior cu Vision OCR pentru identificare plăcuța
+      setProgress('📤 Upload poze orfane...')
+      const orphanUploads = new Map()  // msg.hash -> photo_path uploadat
+      
+      const orphanMsgs = parsedMessages.filter(m => {
+        if (!m.imageFile) return false  // fără poză = nu e orfan
+        if (!zipInstance) return false
+        // Orfan = NU a fost matched cu o alimentare specifică prin parser (parsed.vehicle null)
+        const isMatched = matches.find(x => x.msg === m)
+        if (isMatched && confirmed.has(isMatched.alim.id)) return false
+        // Plus, dacă parsed.vehicle există dar nu s-a confirmat, tot e orfan
+        return !m.parsed?.vehicle
+      })
+      
+      for (const om of orphanMsgs) {
+        // Path special pentru orfani: orphan/{YYYY-MM}/{hash[:8]}_{filename}
+        const yyyymm = om.dt.toISOString().slice(0, 7)  // 2026-05
+        const ext = (om.imageFile.match(/\.(jpg|jpeg|png|webp)$/i)?.[1] || 'jpg').toLowerCase()
+        const contentType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+        const path = `orphan/${yyyymm}/${om.hash.slice(0, 8)}.${ext}`
+        
+        try {
+          let file = zipInstance.file(om.imageFile)
+          if (!file) {
+            const fname = om.imageFile.split('/').pop()
+            zipInstance.forEach((relPath, f) => {
+              if (!file && relPath.endsWith(fname) && !f.dir) file = f
+            })
+          }
+          if (!file) continue
+          
+          const arrayBuffer = await file.async('arraybuffer')
+          const blob = new Blob([arrayBuffer], { type: contentType })
+          const { error: upErr } = await supabase.storage
+            .from('whatsapp-motorina-bonuri')
+            .upload(path, blob, { contentType, upsert: true })
+          
+          if (!upErr) {
+            orphanUploads.set(om.hash, path)
+          }
+        } catch (e) {
+          console.warn('Orphan upload failed:', om.hash, e)
+        }
+      }
+      
       // Audit log
       await supabase.from('whatsapp_imports_log').insert({
         uploaded_by: profile?.id,
@@ -606,17 +662,39 @@ export default function ImportWhatsAppModal({
         date_range_start: dateRangeFilter.start || null,
         date_range_end: dateRangeFilter.end || null,
         status: errors.length === 0 ? 'success' : 'partial',
+        observatii: orphanUploads.size > 0 
+          ? `Orphan poze uploadate: ${orphanUploads.size} (pending plate detection)` 
+          : null,
       })
       
       // Salvez hash-urile mesajelor procesate (anti-dedup viitor)
-      const toSaveHashes = parsedMessages.map(m => ({
-        msg_hash: m.hash,
-        msg_dt: m.dt.toISOString(),
-        autor: m.author,
-        caption_preview: (m.caption || '').slice(0, 200),
-        status: matches.find(x => x.msg === m) ? 
-          (confirmed.has(matches.find(x => x.msg === m).alim.id) ? 'matched' : 'ambig') : 'no_match',
-      }))
+      // 26.05.2026 FIX B: Includ și mesajele orfane cu photo_path + status='pending_plate_detection'
+      const toSaveHashes = parsedMessages.map(m => {
+        const matchInfo = matches.find(x => x.msg === m)
+        const isConfirmedMatch = matchInfo && confirmed.has(matchInfo.alim.id)
+        const orphanPath = orphanUploads.get(m.hash)
+        
+        let status
+        if (isConfirmedMatch) {
+          status = 'matched'
+        } else if (matchInfo) {
+          status = 'ambig'
+        } else if (orphanPath) {
+          status = 'pending_plate_detection'  // orfan cu poză - pentru procesare Vision ulterior
+        } else {
+          status = 'no_match'
+        }
+        
+        return {
+          msg_hash: m.hash,
+          msg_dt: m.dt.toISOString(),
+          autor: m.author,
+          caption_preview: (m.caption || '').slice(0, 200),
+          status,
+          photo_path: orphanPath || null,
+          alimentare_id: isConfirmedMatch ? matchInfo.alim.id : null,
+        }
+      })
       
       // Upsert hashes (în batches de 100)
       for (let i = 0; i < toSaveHashes.length; i += 100) {
@@ -627,7 +705,10 @@ export default function ImportWhatsAppModal({
       }
       
       if (errors.length === 0) {
-        showToast(`✅ ${updated} alimentări actualizate cu succes!`, 'success')
+        const orphanInfo = orphanUploads.size > 0 
+          ? ` · ${orphanUploads.size} poze orfane salvate pentru procesare AI` 
+          : ''
+        showToast(`✅ ${updated} alimentări actualizate${orphanInfo}`, 'success')
       } else {
         showToast(`⚠️ ${updated} actualizate, ${errors.length} erori`, 'warn')
         console.error('Erori:', errors)
