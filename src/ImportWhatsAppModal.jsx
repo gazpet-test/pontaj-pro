@@ -10,7 +10,7 @@
 //   - Salvează în whatsapp_messages_processed cu status='pending_plate_detection'
 //   - Plate detection se face ulterior cu Vision OCR (Edge Function separată)
 
-import { useState, useRef, useMemo, useCallback } from 'react'
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import JSZip from 'jszip'
 
@@ -334,6 +334,11 @@ export default function ImportWhatsAppModal({
   const [pozeUploadedNew, setPozeUploadedNew] = useState(0)  // poze uploadate pe match-uri noi
   // 25.05.2026: errori detaliate pentru debugging upload (vizibile în Step 4)
   const [uploadErrors, setUploadErrors] = useState([])
+  // 26.05.2026 FIX B: state pentru procesare AI Vision pe pozele orfane
+  const [aiProcessing, setAiProcessing] = useState(false)
+  const [aiProgress, setAiProgress] = useState('')
+  const [aiResults, setAiResults] = useState(null)  // { total, plates_detected, matched, cost_usd, batches }
+  const [pendingPlateCount, setPendingPlateCount] = useState(0)  // câte mesaje pending în BD (refresh la step 4)
   const fileInputRef = useRef(null)
   
   // Drag&drop handlers
@@ -723,6 +728,105 @@ export default function ImportWhatsAppModal({
       setProcessing(false)
     }
   }, [matches, confirmed, profile, zipFile, zipInstance, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast])
+  
+  // 26.05.2026 FIX B: Procesare AI Vision pe pozele orfane (apel Edge Function detect_plate_orphan_msgs)
+  const processOrphansWithAI = useCallback(async () => {
+    setAiProcessing(true)
+    setAiProgress('🤖 Pornesc Vision OCR...')
+    
+    let totalProcessed = 0, totalMatched = 0, totalPlatesDetected = 0
+    let totalCost = 0, batchNr = 0, totalErrors = 0
+    const allResults = []
+    
+    try {
+      while (true) {
+        batchNr++
+        setAiProgress(`🤖 Batch ${batchNr} - procesez (max 30 mesaje per batch)...`)
+        
+        const t0 = Date.now()
+        const { data, error } = await supabase.functions.invoke('detect_plate_orphan_msgs')
+        const dt = ((Date.now() - t0) / 1000).toFixed(1)
+        
+        if (error) {
+          console.error('Eroare Edge Function:', error)
+          setAiProgress(`❌ Eroare batch ${batchNr}: ${error.message || 'unknown'}`)
+          break
+        }
+        
+        if (!data?.summary?.total || data.summary.total === 0) {
+          setAiProgress(`✅ Gata - nu mai sunt mesaje orfane de procesat`)
+          break
+        }
+        
+        totalProcessed += data.summary.total
+        totalMatched += data.summary.matched
+        totalPlatesDetected += data.summary.plates_detected
+        totalCost += data.meta?.cost_usd || 0
+        totalErrors += data.summary.errors || 0
+        if (data.results) allResults.push(...data.results)
+        
+        setAiProgress(
+          `Batch ${batchNr}: ${data.summary.total} procesate · ${data.summary.plates_detected} plăcuțe · ${data.summary.matched} match-uri (${dt}s, $${data.meta?.cost_usd})`
+        )
+        
+        // Pauză 1.5 sec între batch-uri (politicos cu Anthropic API)
+        await new Promise(r => setTimeout(r, 1500))
+        
+        // Safety: nu mai mult de 20 batch-uri (= max 600 mesaje per sesiune)
+        if (batchNr >= 20) {
+          setAiProgress('⚠️ Limit safety - 20 batch-uri rulate. Re-lansează pentru restul.')
+          break
+        }
+      }
+      
+      setAiResults({
+        total: totalProcessed,
+        plates_detected: totalPlatesDetected,
+        matched: totalMatched,
+        errors: totalErrors,
+        cost_usd: totalCost,
+        batches: batchNr,
+        details: allResults,
+      })
+      
+      // Refresh count pending plate (probabil 0 acum)
+      const { count } = await supabase
+        .from('whatsapp_messages_processed')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending_plate_detection')
+        .is('plate_detected', null)
+      setPendingPlateCount(count || 0)
+      
+      // Refresh listă alimentări fără șantier (poate s-au alocat mai multe)
+      if (onImported) onImported()
+      
+      showToast(
+        `✅ AI procesat ${totalProcessed} poze · ${totalPlatesDetected} plăcuțe identificate · ${totalMatched} match-uri cu alimentări`,
+        'success'
+      )
+    } catch (e) {
+      console.error('Eroare procesare AI:', e)
+      setAiProgress(`❌ Eroare: ${e.message || String(e)}`)
+      showToast('Eroare procesare AI: ' + (e.message || String(e)), 'error')
+    } finally {
+      setAiProcessing(false)
+    }
+  }, [showToast, onImported])
+  
+  // 26.05.2026: La intrare în Step 4, fac count pending pentru a afișa butonul AI cu badge corect
+  useEffect(() => {
+    if (step !== 4) return
+    let cancelled = false
+    ;(async () => {
+      const { count } = await supabase
+        .from('whatsapp_messages_processed')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending_plate_detection')
+        .is('plate_detected', null)
+      if (!cancelled) setPendingPlateCount(count || 0)
+    })()
+    return () => { cancelled = true }
+  }, [step])
   
   // ────────────────────── RENDER ──────────────────────
   
@@ -1152,6 +1256,74 @@ export default function ImportWhatsAppModal({
               )}
               
               <div>
+                {/* 26.05.2026 FIX B: BUTON AI VISION - vizibil daca exista poze pending */}
+                {pendingPlateCount > 0 && !aiResults && (
+                  <div style={{
+                    background: G.purple+'18', border:`2px solid ${G.purple}66`, borderRadius:14,
+                    padding:'20px 24px', marginBottom:20, maxWidth:600, margin:'0 auto 20px',
+                    textAlign:'center'
+                  }}>
+                    <div style={{fontSize:14, fontWeight:800, color:G.purple, marginBottom:6}}>
+                      🤖 {pendingPlateCount} poze orfane gata pentru AI
+                    </div>
+                    <div style={{fontSize:12, color:G.muted, marginBottom:14, lineHeight:1.6}}>
+                      Vision OCR (Haiku 4.5) va identifica plăcuțele auto din poze și va face match cu alimentările fără șantier.
+                      <br/>
+                      Estimat: ~${(pendingPlateCount * 0.0035).toFixed(2)} cost · ~{Math.ceil(pendingPlateCount/30)*30}sec timp.
+                    </div>
+                    <button 
+                      onClick={processOrphansWithAI} 
+                      disabled={aiProcessing}
+                      style={{
+                        padding:'12px 28px', 
+                        background: aiProcessing ? G.dim : G.purple, 
+                        color:'#fff',
+                        border:'none', borderRadius:10, fontSize:14, fontWeight:800,
+                        cursor: aiProcessing ? 'wait' : 'pointer',
+                        boxShadow: aiProcessing ? 'none' : `0 4px 12px ${G.purple}55`,
+                      }}>
+                      {aiProcessing ? '⏳ Procesez...' : `🤖 Identifică plăcuțele cu AI (${pendingPlateCount})`}
+                    </button>
+                    {aiProgress && (
+                      <div style={{
+                        marginTop:12, padding:'8px 14px', background:G.bg, borderRadius:8,
+                        fontSize:11, fontFamily:'monospace', color:G.text
+                      }}>
+                        {aiProgress}
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {/* 26.05.2026 FIX B: REZULTATE AI - vizibil dupa procesare */}
+                {aiResults && (
+                  <div style={{
+                    background: G.green+'18', border:`2px solid ${G.green}66`, borderRadius:14,
+                    padding:'20px 24px', marginBottom:20, maxWidth:600, margin:'0 auto 20px',
+                    textAlign:'left'
+                  }}>
+                    <div style={{fontSize:14, fontWeight:800, color:G.green, marginBottom:12, textAlign:'center'}}>
+                      🎯 AI Vision a terminat - {aiResults.batches} batch-uri rulate
+                    </div>
+                    <div style={{
+                      display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:10, fontSize:12, color:G.muted, marginBottom:12
+                    }}>
+                      <div>📷 <strong style={{color:G.text}}>{aiResults.total}</strong> poze procesate</div>
+                      <div>🔢 <strong style={{color:G.blue}}>{aiResults.plates_detected}</strong> plăcuțe identificate</div>
+                      <div>✅ <strong style={{color:G.green}}>{aiResults.matched}</strong> match-uri cu alimentări</div>
+                      <div>💸 <strong style={{color:G.text}}>${aiResults.cost_usd.toFixed(4)}</strong> cost total</div>
+                    </div>
+                    {aiResults.errors > 0 && (
+                      <div style={{fontSize:11, color:G.red, marginBottom:8}}>
+                        ⚠️ {aiResults.errors} erori la procesare (ilizibil / format Vision)
+                      </div>
+                    )}
+                    <div style={{fontSize:11, color:G.dim, fontStyle:'italic', textAlign:'center', marginTop:8}}>
+                      Alimentările match-uite au primit automat şantier + poză + intră la OCR Vision pentru validare cifre.
+                    </div>
+                  </div>
+                )}
+                
                 <button onClick={onClose} style={{
                   padding:'12px 30px', background:G.logistica, color:'#000',
                   border:'none', borderRadius:10, fontSize:14, fontWeight:800, cursor:'pointer'
