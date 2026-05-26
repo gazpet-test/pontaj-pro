@@ -32,7 +32,12 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
           ocr_tip_dovada, sursa_alocare_santier,
           whatsapp_caption, whatsapp_autor, whatsapp_msg_dt, whatsapp_poza_path,
           site_id, active_id,
-          active:logistica_active(id, nr_inmatriculare, marca, model, tip_carburant)
+          is_card_swap, card_swap_with,
+          active:logistica_active!active_id(id, nr_inmatriculare, marca, model, tip_carburant),
+          card_pair:logistica_alimentari!card_swap_with(
+            id, data_alimentare, cantitate_litri, pret_total, 
+            active:logistica_active!active_id(nr_inmatriculare, marca, model)
+          )
         `)
         .in('sursa_alocare_santier', ['whatsapp_external_pending', 'plate_ai_orphan'])
         .order('created_at', { ascending: false })
@@ -54,6 +59,7 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
     if (filter === 'all') return alim
     if (filter === 'external') return alim.filter(a => a.sursa_alocare_santier === 'whatsapp_external_pending')
     if (filter === 'plate_ai') return alim.filter(a => a.sursa_alocare_santier === 'plate_ai_orphan')
+    if (filter === 'card_swap') return alim.filter(a => a.is_card_swap)
     return alim
   }, [alim, filter])
   
@@ -61,6 +67,7 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
     total: alim.length,
     external: alim.filter(a => a.sursa_alocare_santier === 'whatsapp_external_pending').length,
     plate_ai: alim.filter(a => a.sursa_alocare_santier === 'plate_ai_orphan').length,
+    card_swap: alim.filter(a => a.is_card_swap).length,
     cu_santier: alim.filter(a => a.site_id != null).length,
     fara_santier: alim.filter(a => a.site_id == null).length,
   }), [alim])
@@ -178,6 +185,7 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
         <StatCard label="Total" val={stats.total} color={G.text} icon="📋" />
         <StatCard label="Bon extern AI" val={stats.external} color={G.purple} icon="🤖" />
         <StatCard label="Plate AI orphan" val={stats.plate_ai} color={G.blue} icon="🔍" />
+        <StatCard label="🔴 Card SWAP" val={stats.card_swap} color={G.red} icon="🔴" />
         <StatCard label="Cu șantier" val={stats.cu_santier} color={G.green} icon="✓" />
         <StatCard label="Fără șantier" val={stats.fara_santier} color={G.orange} icon="⚠" />
       </div>
@@ -188,6 +196,7 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
           {key: 'all', label: 'Toate', icon: '📋'},
           {key: 'external', label: 'Bon extern AI', icon: '🤖'},
           {key: 'plate_ai', label: 'Plate AI orphan', icon: '🔍'},
+          {key: 'card_swap', label: 'Card SWAP', icon: '🔴'},
         ].map(f => (
           <button key={f.key} onClick={() => setFilter(f.key)} style={{
             padding: '8px 14px', borderRadius: 8, border: `1px solid ${filter === f.key ? G.logistica : G.border}`,
@@ -259,15 +268,22 @@ function StatCard({ label, val, color, icon }) {
 function AlimCard({ alim, G, S, sites, editingSiteId, setEditingSiteId, onShowPoza, onConfirm, onRespinge, onEdit, processing, canEdit }) {
   const v = alim.active || {}
   const isExternal = alim.sursa_alocare_santier === 'whatsapp_external_pending'
-  const accentColor = isExternal ? G.purple : G.blue
-  const sourceLabel = isExternal ? '🤖 Bon extern AI' : '🔍 Plate AI orphan'
+  const isCardSwap = !!alim.is_card_swap
+  const cardPair = alim.card_pair || null  // alimentarea pereche (cea cu cardul)
+  const accentColor = isCardSwap ? G.red : (isExternal ? G.purple : G.blue)
+  const sourceLabel = isCardSwap 
+    ? '🔴 CARD SWAP detectat' 
+    : (isExternal ? '🤖 Bon extern AI' : '🔍 Plate AI orphan')
   const ocrData = alim.ocr_data || {}
   const dataOld = alim.data_alimentare && new Date(alim.data_alimentare) < new Date('2026-01-01')
   
   return (
     <div style={{
-      background: G.surface, border: `2px solid ${accentColor}44`, borderRadius: 12,
+      background: G.surface, 
+      border: `2px solid ${accentColor}${isCardSwap ? '88' : '44'}`, 
+      borderRadius: 12,
       padding: 14, position: 'relative', opacity: processing ? 0.5 : 1,
+      boxShadow: isCardSwap ? `0 0 0 1px ${G.red}33 inset` : 'none',
     }}>
       {/* Header */}
       <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10}}>
@@ -290,6 +306,36 @@ function AlimCard({ alim, G, S, sites, editingSiteId, setEditingSiteId, onShowPo
           📅 {alim.data_alimentare}
         </div>
       </div>
+      
+      {/* Panou CARD SWAP - afișat doar dacă is_card_swap=true */}
+      {isCardSwap && cardPair && (
+        <div style={{
+          background: G.red + '15', border: `1px dashed ${G.red}66`, borderRadius: 8,
+          padding: 10, marginBottom: 10,
+        }}>
+          <div style={{fontSize: 11, fontWeight: 700, color: G.red, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6}}>
+            🔴 CARD SWAP — Implicații ANAF
+          </div>
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11, color: G.text}}>
+            <div>
+              <div style={{fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 2}}>🚛 Fizic (poză)</div>
+              <div style={{fontWeight: 700}}>{v.nr_inmatriculare}</div>
+              <div style={{fontSize: 10, color: G.muted}}>{v.marca} {v.model}</div>
+            </div>
+            <div>
+              <div style={{fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 2}}>💳 Card (factură)</div>
+              <div style={{fontWeight: 700}}>{cardPair.active?.nr_inmatriculare || '?'}</div>
+              <div style={{fontSize: 10, color: G.muted}}>
+                {cardPair.active?.marca} {cardPair.active?.model} · alim #{cardPair.id}
+              </div>
+            </div>
+          </div>
+          <div style={{fontSize: 10, color: G.muted, marginTop: 6, lineHeight: 1.4}}>
+            Cardul de motorină al <strong>{cardPair.active?.nr_inmatriculare}</strong> a fost folosit pentru alimentarea fizică a <strong>{v.nr_inmatriculare}</strong>. 
+            Factura Rompetrol arată consumul pe vehiculul cardului, dar motorina a intrat fizic în alt rezervor.
+          </div>
+        </div>
+      )}
       
       {/* Vehicul + autor */}
       <div style={{fontSize: 14, fontWeight: 700, color: G.text, marginBottom: 4}}>
