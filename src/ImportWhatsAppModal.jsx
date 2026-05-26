@@ -813,9 +813,9 @@ export default function ImportWhatsAppModal({
     }
   }, [showToast, onImported])
   
-  // 26.05.2026: La intrare în Step 4, fac count pending pentru a afișa butonul AI cu badge corect
+  // 26.05.2026: La intrare în Step 3 sau Step 4, fac count pending pentru a afișa butonul AI cu badge corect
   useEffect(() => {
-    if (step !== 4) return
+    if (step !== 3 && step !== 4) return
     let cancelled = false
     ;(async () => {
       const { count } = await supabase
@@ -966,6 +966,68 @@ export default function ImportWhatsAppModal({
                   </div>
                 ))}
               </div>
+              
+              {/* 26.05.2026 FIX B: PANOU AI VISION în Step 3 - vizibil daca exista poze pending in BD */}
+              {pendingPlateCount > 0 && !aiResults && (
+                <div style={{
+                  background: G.purple+'18', border:`2px solid ${G.purple}66`, borderRadius:12,
+                  padding:'16px 20px', marginBottom:16, display:'flex', alignItems:'center', gap:14, flexWrap:'wrap'
+                }}>
+                  <div style={{fontSize:32}}>🤖</div>
+                  <div style={{flex:1, minWidth:240}}>
+                    <div style={{fontSize:13, fontWeight:800, color:G.purple, marginBottom:4}}>
+                      {pendingPlateCount} poze orfane pending în BD - gata pentru AI Vision
+                    </div>
+                    <div style={{fontSize:11, color:G.muted, lineHeight:1.5}}>
+                      De la importuri anterioare. Vision OCR identifică plăcuțele și face match cu alimentări.
+                      Estimat: ~${(pendingPlateCount * 0.0035).toFixed(2)} cost · ~{Math.ceil(pendingPlateCount/30)*30}sec
+                    </div>
+                    {aiProgress && (
+                      <div style={{
+                        marginTop:8, padding:'6px 10px', background:G.bg, borderRadius:6,
+                        fontSize:10, fontFamily:'monospace', color:G.text
+                      }}>{aiProgress}</div>
+                    )}
+                  </div>
+                  <button 
+                    onClick={processOrphansWithAI} 
+                    disabled={aiProcessing}
+                    style={{
+                      padding:'10px 18px', 
+                      background: aiProcessing ? G.dim : G.purple, 
+                      color:'#fff',
+                      border:'none', borderRadius:8, fontSize:12, fontWeight:800,
+                      cursor: aiProcessing ? 'wait' : 'pointer',
+                      boxShadow: aiProcessing ? 'none' : `0 3px 10px ${G.purple}55`,
+                      whiteSpace:'nowrap',
+                    }}>
+                    {aiProcessing ? '⏳ Procesez...' : `🤖 Identifică plăcuțele (${pendingPlateCount})`}
+                  </button>
+                </div>
+              )}
+              
+              {/* 26.05.2026 FIX B: Rezultate AI in Step 3 dupa procesare */}
+              {aiResults && (
+                <div style={{
+                  background: G.green+'18', border:`2px solid ${G.green}66`, borderRadius:12,
+                  padding:'14px 20px', marginBottom:16, display:'flex', gap:14, flexWrap:'wrap', alignItems:'center'
+                }}>
+                  <div style={{fontSize:28}}>🎯</div>
+                  <div style={{flex:1, minWidth:240}}>
+                    <div style={{fontSize:13, fontWeight:800, color:G.green, marginBottom:4}}>
+                      AI Vision a terminat - {aiResults.batches} batch-uri
+                    </div>
+                    <div style={{fontSize:11, color:G.muted, lineHeight:1.5}}>
+                      📷 {aiResults.total} procesate · 🔢 <strong style={{color:G.blue}}>{aiResults.plates_detected}</strong> plăcuțe · ✅ <strong style={{color:G.green}}>{aiResults.matched}</strong> match-uri · 💸 ${aiResults.cost_usd.toFixed(4)}
+                    </div>
+                    {aiResults.errors > 0 && (
+                      <div style={{fontSize:11, color:G.red, marginTop:3}}>
+                        ⚠️ {aiResults.errors} erori (ilizibil / parse Vision)
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               
               {/* 25.05.2026 — Badge Backfill poze (dual-mode) */}
               {backfillStats.checked > 0 && (
