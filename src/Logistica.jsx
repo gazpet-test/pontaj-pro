@@ -11,6 +11,7 @@ import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import JSZip from 'jszip'
 import ImportWhatsAppModal from './ImportWhatsAppModal.jsx'
+import ConfirmareAITab from './ConfirmareAITab.jsx'
 import FaraSantierBulkModal from './FaraSantierBulkModal.jsx'
 import OCRValidateBulkModal from './OCRValidateBulkModal.jsx'
 import ServiceTab from './ServiceTab.jsx'
@@ -2020,10 +2021,11 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
 
 // ─── Pagina principală ───────────────────────────────────────────────────────
 // ─── Bara de tab-uri pentru pagina Logistică ─────────────────────────────────
-function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0 }) {
+function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0, confirmareAICount = 0 }) {
   const tabs = [
     { key: 'lista',     icon: '📋', label: 'Active' },
     { key: 'alimentari',icon: '⛽', label: 'Alimentări' },
+    { key: 'confirmare_ai', icon: '🤖', label: 'Confirmă AI', badge: confirmareAICount },
     { key: 'documente', icon: '📎', label: 'Documente' },
     { key: 'service',   icon: '🔧', label: 'Service' },
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
@@ -7292,12 +7294,13 @@ export default function LogisticaPage() {
   const [transpBlocate, setTranspBlocate] = useState([])   // aprobate sau in_tranzit cu data depășită
   const [kpiTransp, setKpiTransp] = useState({ cerute: 0, aprobate: 0, inTranzit: 0, livrate: 0 })  // KPI transporturi luna curentă
   const [sugestiiPendente, setSugestiiPendente] = useState(0)  // ETAPA 12.8: count sugestii Scorilos pentru badge tab
+  const [confirmareAICount, setConfirmareAICount] = useState(0)  // 26.05.2026 ETAPA 4.6: count alimentări AI pending
   const [tab, setTab] = useState(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
-    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari','bot-sugestii']
+    const valid = ['lista','alimentari','confirmare_ai','documente','service','tichete','transporturi','arhiva','arhiva_alimentari','bot-sugestii']
     return valid.includes(t) ? t : 'lista'
-  })  // 'lista' | 'alimentari' | 'documente' | 'service' | 'tichete' | 'transporturi' | 'arhiva'
+  })  // 'lista' | 'alimentari' | 'confirmare_ai' | 'documente' | 'service' | 'tichete' | 'transporturi' | 'arhiva'
   const [dataAlim, setDataAlim] = useState(new Date().toISOString().split('T')[0]) // pt tab Alimentări
   const [ultimeAlim, setUltimeAlim] = useState({})           // map active_id → ultima alimentare
   const [toast, showToast] = useToast()
@@ -7413,6 +7416,17 @@ export default function LogisticaPage() {
   }, [profile?.is_owner, profile?.role])
   
   useEffect(() => { loadSugestiiPendenteCount() }, [loadSugestiiPendenteCount])
+  
+  // 26.05.2026 ETAPA 4.6: count alimentări AI pending confirmare
+  const loadConfirmareAICount = useCallback(async () => {
+    const { count } = await supabase
+      .from('logistica_alimentari')
+      .select('id', { count: 'exact', head: true })
+      .in('sursa_alocare_santier', ['whatsapp_external_pending', 'plate_ai_orphan'])
+    setConfirmareAICount(count || 0)
+  }, [])
+  
+  useEffect(() => { loadConfirmareAICount() }, [loadConfirmareAICount])
   
   
   
@@ -8108,7 +8122,7 @@ export default function LogisticaPage() {
       </div>
       {/* Etapa 14: Widget Tichete Logistica */}
       {profile && <TicheteWidget departament="logistica" profile={profile} accent={G.orange} />}
-      <TabsBar tab={tab} setTab={setTab} canSeeBotSugestii={!!profile?.is_owner || profile?.role === 'admin_logistica'} sugestiiCount={sugestiiPendente} />
+      <TabsBar tab={tab} setTab={setTab} canSeeBotSugestii={!!profile?.is_owner || profile?.role === 'admin_logistica'} sugestiiCount={sugestiiPendente} confirmareAICount={confirmareAICount} />
       
       {/* TAB: Alimentări (input bulk per zi) */}
       {tab === 'alimentari' && (
@@ -8130,6 +8144,24 @@ export default function LogisticaPage() {
           profile={profile}
           accessLevel={accessLevel}
           onSaved={loadAll}
+        />
+      )}
+      
+      {/* 26.05.2026 ETAPA 4.6: TAB Confirmare AI — alimentări create de Vision din poze WhatsApp orfane */}
+      {tab === 'confirmare_ai' && (
+        <ConfirmareAITab
+          G={G} S={S}
+          supabase={supabase}
+          profile={profile}
+          accessLevel={accessLevel}
+          sites={sites}
+          showToast={showToast}
+          onSaved={() => { loadAll(); loadConfirmareAICount() }}
+          onEdit={(alimRow) => {
+            // Re-folosesc modal-ul de edit din AlimentariBulkPage
+            // Pentru moment, doar showToast - integrarea cu modal Edit se va face ulterior
+            showToast('Pentru editare detaliată, intră în tab Alimentări → caut alimentarea #' + alimRow.id, 'info')
+          }}
         />
       )}
       
