@@ -27,6 +27,8 @@ const TIP_META = {
   // 27.05.2026 Scorilos v16: Cross-check Rompetrol vs EvoGPS
   alim_fara_telemetrie: { label: 'Alim fără GPS', icon: '🛰️', color: '#A78BFA', aplicabil: false },
   km_discrepancy_evogps: { label: 'KM discrepancy', icon: '🚩', color: '#F97316', aplicabil: false },
+  // 27.05.2026 Scorilos v17: Raport vehicule fără GPS montat (info, NU fraudă)
+  vehicul_fara_gps_history: { label: 'GPS lipsă/defect', icon: '📡', color: '#0EA5E9', aplicabil: false },
   dimensiuni_lipsa: { label: 'Dimensiuni', icon: '📐', color: G.blue, aplicabil: false },
   dimensiuni_negaste: { label: 'Dim negăsite', icon: '🔍', color: G.muted, aplicabil: false },
 }
