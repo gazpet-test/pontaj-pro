@@ -4679,6 +4679,20 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [actionLoading, setActionLoading] = useState(false)
   const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
   const [showAviz, setShowAviz] = useState(false)  // PAS 5F: deschide modal aviz
+  // 27.05.2026: Iterația 2 - load lista conținut multiplu (dacă există)
+  const [continutItems, setContinutItems] = useState([])
+  
+  useEffect(() => {
+    if (T?.id && T?.continut_multiplu) {
+      supabase.from('logistica_transporturi_continut')
+        .select('*, asset:logistica_active!active_id(id, cod_intern, marca, model, nr_inmatriculare, regim_transport_special)')
+        .eq('transport_id', T.id)
+        .order('ordine')
+        .then(({ data }) => setContinutItems(data || []))
+    } else {
+      setContinutItems([])
+    }
+  }, [T?.id, T?.continut_multiplu])
   
   const isAprobator = isAprobatorTransport(profile)
   const isSolicitant = profile?.id === T.solicitant_id
@@ -4825,9 +4839,78 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
         {/* Detalii activ/conținut */}
         <div style={{marginBottom:12}}>
           <div style={{fontSize:11, color:G.logistica, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>
-            {T.tip === 'utilaj' ? '🚛 Activ transportat' : '📄 Conținut'}
+            {T.continut_multiplu ? '📦 Conținut transport (multiplu)' : (T.tip === 'utilaj' ? '🚛 Activ transportat' : '📄 Conținut')}
           </div>
-          {T.tip === 'utilaj' && T.activ_transportat ? (
+          {/* 27.05.2026: Lista conținut multiplu (utilaje + marfă) */}
+          {T.continut_multiplu && continutItems.length > 0 ? (
+            <div style={{padding: 0, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, overflow: 'hidden'}}>
+              <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12}}>
+                <thead>
+                  <tr style={{background: G.surface}}>
+                    <th style={{width: 30, padding: '6px 8px', textAlign: 'center', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`}}>#</th>
+                    <th style={{width: 80, padding: '6px 8px', textAlign: 'center', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Tip</th>
+                    <th style={{padding: '6px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Denumire</th>
+                    <th style={{width: 90, padding: '6px 8px', textAlign: 'center', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Cantitate</th>
+                    <th style={{padding: '6px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Observații</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {continutItems.map((it, idx) => {
+                    const isUtilaj = it.tip === 'utilaj'
+                    const asset = it.asset
+                    const numeAfisat = isUtilaj && asset
+                      ? `${asset.cod_intern || ''} ${asset.marca || ''} ${asset.model || ''}`.trim()
+                      : (it.denumire || '—')
+                    return (
+                      <tr key={it.id || idx} style={{borderBottom: idx < continutItems.length - 1 ? `1px solid ${G.border}66` : 'none'}}>
+                        <td style={{padding: '8px 8px', textAlign: 'center', fontSize: 11, color: G.muted, fontWeight: 700}}>{idx + 1}</td>
+                        <td style={{padding: '8px 8px', textAlign: 'center'}}>
+                          <span style={{
+                            display: 'inline-block', padding: '2px 8px', borderRadius: 10,
+                            fontSize: 10, fontWeight: 700,
+                            background: isUtilaj ? G.logistica + '22' : G.orange + '22',
+                            color: isUtilaj ? G.logistica : G.orange,
+                          }}>{isUtilaj ? '🚛 Utilaj' : '📦 Marfă'}</span>
+                        </td>
+                        <td style={{padding: '8px 8px', fontSize: 12, color: G.text}}>
+                          <div style={{fontWeight: 600}}>{numeAfisat}</div>
+                          {isUtilaj && asset?.regim_transport_special && (
+                            <div style={{fontSize: 10, color: G.red, fontWeight: 700, marginTop: 2}}>⚠️ REGIM TRANSPORT SPECIAL</div>
+                          )}
+                          {isUtilaj && asset?.nr_inmatriculare && (
+                            <div style={{fontSize: 10, color: G.muted, marginTop: 1}}>{asset.nr_inmatriculare}</div>
+                          )}
+                        </td>
+                        <td style={{padding: '8px 8px', textAlign: 'center', fontSize: 12, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+                          {it.cantitate ? (
+                            <span style={{fontWeight: 600}}>
+                              {Number(it.cantitate).toLocaleString('ro-RO', {maximumFractionDigits: 2})}
+                              {it.um && <span style={{color: G.muted, marginLeft: 3, fontSize: 10}}>{it.um}</span>}
+                            </span>
+                          ) : (
+                            <span style={{color: G.dim}}>—</span>
+                          )}
+                        </td>
+                        <td style={{padding: '8px 8px', fontSize: 11, color: G.muted, maxWidth: 200}}>
+                          {it.observatii || <span style={{color: G.dim}}>—</span>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              <div style={{padding: '6px 10px', background: G.surface, borderTop: `1px solid ${G.border}`, fontSize: 10, color: G.muted, textAlign: 'center'}}>
+                Total: <strong style={{color: G.text}}>{continutItems.length} items</strong>
+                {' · '}
+                <strong style={{color: G.logistica}}>{continutItems.filter(i => i.tip === 'utilaj').length}</strong> utilaje
+                {' + '}
+                <strong style={{color: G.orange}}>{continutItems.filter(i => i.tip === 'marfa').length}</strong> marfă
+                {continutItems.some(i => i.asset?.regim_transport_special) && (
+                  <span style={{color: G.red, marginLeft: 8, fontWeight: 700}}>⚠️ Conține regim special</span>
+                )}
+              </div>
+            </div>
+          ) : T.tip === 'utilaj' && T.activ_transportat ? (
             <div style={{padding:10, background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13}}>
               <div style={{color:G.text, fontWeight:600}}>{T.activ_transportat.cod_intern || formatActiv(T.activ_transportat)} · {T.activ_transportat.marca} {T.activ_transportat.model}</div>
               {T.activ_transportat.regim_transport_special && <div style={{fontSize:11, color:G.red, fontWeight:600, marginTop:4}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
@@ -5387,6 +5470,21 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
   const [showSetariEmail, setShowSetariEmail] = useState(false)
   const [trimisLoading, setTrimisLoading] = useState(false)
   
+  // 27.05.2026: Iterația 2 - load conținut multiplu pentru PDF aviz
+  const [continutItems, setContinutItems] = useState([])
+  
+  useEffect(() => {
+    if (T?.id && T?.continut_multiplu) {
+      supabase.from('logistica_transporturi_continut')
+        .select('*, asset:logistica_active!active_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special)')
+        .eq('transport_id', T.id)
+        .order('ordine')
+        .then(({ data }) => setContinutItems(data || []))
+    } else {
+      setContinutItems([])
+    }
+  }, [T?.id, T?.continut_multiplu])
+  
   // Pas 4: Semnături electronice
   const [showSemnatura, setShowSemnatura] = useState(null)  // 'expeditor' | 'sofer' | 'destinatar' | null
   const [semnExpData, setSemnExpData] = useState(T.semnatura_expeditor_data || null)
@@ -5635,7 +5733,9 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       `Bună ziua,`,
       ``,
       `Vă transmitem avizul de însoțire marfă ${T.numar_transport}:`,
-      `• Activ: ${T.tip === 'utilaj' && T.activ_transportat ? `${T.activ_transportat.cod_intern || ''} ${T.activ_transportat.marca || ''} ${T.activ_transportat.model || ''}`.trim() : (T.continut_descriere || '—')}`,
+      `• Activ: ${T.continut_multiplu 
+        ? `📦 Conținut multiplu (${continutItems.length} items: ${continutItems.filter(i => i.tip === 'utilaj').length} utilaje + ${continutItems.filter(i => i.tip === 'marfa').length} marfă)`
+        : T.tip === 'utilaj' && T.activ_transportat ? `${T.activ_transportat.cod_intern || ''} ${T.activ_transportat.marca || ''} ${T.activ_transportat.model || ''}`.trim() : (T.continut_descriere || '—')}`,
       `• Plecare → Destinație: ${formatLocatie(T.plecare_tip, T.plecare_site, T.plecare_locatie_text)} → ${formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}`,
       `• Data: ${T.data_transport}${T.ora_plecare ? ' · ' + T.ora_plecare.substring(0,5) : ''}`,
       `• Șofer: ${T.sofer_employee?.name || T.sofer_extern_nume || '—'}`,
@@ -5867,31 +5967,76 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>1</td>
-                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
-                      {T.tip === 'utilaj' && T.activ_transportat ? (
-                        <>
-                          <div style={{fontWeight:'bold'}}>{T.activ_transportat.marca} {T.activ_transportat.model}</div>
-                          {T.activ_transportat.regim_transport_special && <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
-                        </>
-                      ) : (
-                        <div style={{whiteSpace:'pre-wrap'}}>{T.continut_descriere || '—'}</div>
-                      )}
-                    </td>
-                    <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
-                      {T.tip === 'utilaj' && T.activ_transportat ? (
-                        <>
-                          {T.activ_transportat.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{T.activ_transportat.nr_inventar}</strong></div>}
-                          {T.activ_transportat.cod_intern && <div>Cod intern: <strong>{T.activ_transportat.cod_intern}</strong></div>}
-                          {T.activ_transportat.nr_inmatriculare && <div>Nr. înmatriculare: {T.activ_transportat.nr_inmatriculare}</div>}
-                          {T.activ_transportat.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {T.activ_transportat.serie_sasiu}</div>}
-                        </>
-                      ) : '—'}
-                    </td>
-                    <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{T.tip === 'utilaj' ? 'buc' : '—'}</td>
-                    <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>{T.tip === 'utilaj' ? '1' : '—'}</td>
-                  </tr>
+                  {T.continut_multiplu && continutItems.length > 0 ? (
+                    // 27.05.2026: Iterația 2 - render N rânduri pentru conținut multiplu
+                    continutItems.map((it, idx) => {
+                      const isUtilaj = it.tip === 'utilaj'
+                      const asset = it.asset
+                      const denumire = isUtilaj && asset 
+                        ? `${asset.marca || ''} ${asset.model || ''}`.trim()
+                        : (it.denumire || '—')
+                      return (
+                        <tr key={it.id || idx}>
+                          <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{idx + 1}</td>
+                          <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
+                            <div style={{fontWeight:'bold'}}>{denumire}</div>
+                            <div style={{fontSize:9, color:'#6B7280', marginTop:2}}>
+                              {isUtilaj ? '🚛 Utilaj' : '📦 Marfă'}
+                            </div>
+                            {isUtilaj && asset?.regim_transport_special && (
+                              <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>
+                            )}
+                            {it.observatii && (
+                              <div style={{fontSize:9, color:'#6B7280', marginTop:2, fontStyle:'italic'}}>{it.observatii}</div>
+                            )}
+                          </td>
+                          <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
+                            {isUtilaj && asset ? (
+                              <>
+                                {asset.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{asset.nr_inventar}</strong></div>}
+                                {asset.cod_intern && <div>Cod intern: <strong>{asset.cod_intern}</strong></div>}
+                                {asset.nr_inmatriculare && <div>Nr. înmatr.: {asset.nr_inmatriculare}</div>}
+                                {asset.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {asset.serie_sasiu}</div>}
+                              </>
+                            ) : '—'}
+                          </td>
+                          <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
+                            {it.um || (isUtilaj ? 'buc' : '—')}
+                          </td>
+                          <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>
+                            {it.cantitate ? Number(it.cantitate).toLocaleString('ro-RO', {maximumFractionDigits: 2}) : (isUtilaj ? '1' : '—')}
+                          </td>
+                        </tr>
+                      )
+                    })
+                  ) : (
+                    // Single item legacy (utilaj sau materiale text)
+                    <tr>
+                      <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>1</td>
+                      <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>
+                        {T.tip === 'utilaj' && T.activ_transportat ? (
+                          <>
+                            <div style={{fontWeight:'bold'}}>{T.activ_transportat.marca} {T.activ_transportat.model}</div>
+                            {T.activ_transportat.regim_transport_special && <div style={{fontSize:9, color:'#DC2626', fontWeight:'bold', marginTop:2}}>⚠️ REGIM TRANSPORT SPECIAL</div>}
+                          </>
+                        ) : (
+                          <div style={{whiteSpace:'pre-wrap'}}>{T.continut_descriere || '—'}</div>
+                        )}
+                      </td>
+                      <td style={{padding:'8px 8px', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontFamily:'monospace', fontSize:10}}>
+                        {T.tip === 'utilaj' && T.activ_transportat ? (
+                          <>
+                            {T.activ_transportat.nr_inventar && <div style={{fontWeight:'bold', color:'#1E40AF'}}>Nr. inventar: <strong>{T.activ_transportat.nr_inventar}</strong></div>}
+                            {T.activ_transportat.cod_intern && <div>Cod intern: <strong>{T.activ_transportat.cod_intern}</strong></div>}
+                            {T.activ_transportat.nr_inmatriculare && <div>Nr. înmatriculare: {T.activ_transportat.nr_inmatriculare}</div>}
+                            {T.activ_transportat.serie_sasiu && <div style={{color:'#6B7280'}}>Serie șasiu: {T.activ_transportat.serie_sasiu}</div>}
+                          </>
+                        ) : '—'}
+                      </td>
+                      <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB'}}>{T.tip === 'utilaj' ? 'buc' : '—'}</td>
+                      <td style={{padding:'8px 8px', textAlign:'center', verticalAlign:'top', borderBottom:'1px solid #D1D5DB', fontWeight:'bold'}}>{T.tip === 'utilaj' ? '1' : '—'}</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -6192,7 +6337,9 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
         'Data': t.data_transport || '',
         'Ora': t.ora_plecare ? t.ora_plecare.substring(0, 5) : '',
         'Tip': t.tip === 'utilaj' ? 'Utilaj' : 'Mic TESA',
-        'Activ / Conținut': t.tip === 'utilaj' && t.activ_transportat
+        'Activ / Conținut': t.continut_multiplu
+          ? '📦 Conținut multiplu (vezi detalii în transport)'
+          : t.tip === 'utilaj' && t.activ_transportat
           ? `${t.activ_transportat.cod_intern || ''} ${t.activ_transportat.marca || ''} ${t.activ_transportat.model || ''}`.trim()
           : (t.continut_descriere || ''),
         'Mijloc principal': t.masina ? formatActiv(t.masina) : '',
@@ -6394,10 +6541,25 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                       {t.ora_plecare && <div style={{fontSize:10, color:G.muted}}>{t.ora_plecare.substring(0,5)}</div>}
                     </td>
                     <td style={tdStyle}>
-                      <span style={{fontSize:18}}>{t.tip === 'utilaj' ? '🚛' : '📄'}</span>
+                      <span style={{fontSize:18}}>{t.continut_multiplu ? '📦' : (t.tip === 'utilaj' ? '🚛' : '📄')}</span>
                     </td>
                     <td style={tdStyle}>
-                      {t.tip === 'utilaj' && t.activ_transportat ? (
+                      {t.continut_multiplu ? (
+                        <div>
+                          <div style={{fontSize: 12, color: '#A78BFA', fontWeight: 700}}>
+                            📦 Conținut multiplu
+                          </div>
+                          <div style={{fontSize: 10, color: G.muted, marginTop: 2}}>
+                            Click pe rând pentru lista completă
+                          </div>
+                          {(t.masina || t.remorca) && (
+                            <div style={{marginTop:4, fontSize:10, color:G.logistica}}>
+                              🚛 {t.masina ? formatActiv(t.masina) : <span style={{color:G.muted}}>fără mijloc</span>}
+                              {t.remorca && <span> + {formatActiv(t.remorca)} <span style={{color:G.muted}}>({t.remorca.logistica_categorii?.tip})</span></span>}
+                            </div>
+                          )}
+                        </div>
+                      ) : t.tip === 'utilaj' && t.activ_transportat ? (
                         <div>
                           <div style={{fontSize:12, color:G.text, fontWeight:600}}>{t.activ_transportat.cod_intern} · {t.activ_transportat.marca}</div>
                           <div style={{fontSize:10, color:G.muted}}>{t.activ_transportat.model}{t.activ_transportat.regim_transport_special && <span style={{color:G.red, marginLeft:4}}>⚠️ Regim special</span>}</div>
