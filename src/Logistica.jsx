@@ -1138,7 +1138,7 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
 }
 
 // ─── Modal Form (View / Edit / Create) ───────────────────────────────────────
-function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervoare, sites, pretMotorina }) {
+function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervoare, sites, pretMotorina, prefilComodat }) {
   const [mode, setMode] = useState(initialMode)
   const [saving, setSaving] = useState(false)
   
@@ -1176,7 +1176,8 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     deep_sleep_motiv: a?.deep_sleep_motiv || '',
     deep_sleep_data: a?.deep_sleep_data || '',
     // 27.05.2026: Contract de comodat (vehicul personal angajat folosit la firmă)
-    tip_proprietate: a?.tip_proprietate || 'firma',
+    // Dacă prefilComodat=true (din butonul „+ Adaugă vehicul comodat" din sub-tab Contracte), pre-selectez tip=comodat
+    tip_proprietate: a?.tip_proprietate || (prefilComodat ? 'comodat' : 'firma'),
     comodat_employee_id: a?.comodat_employee_id || null,
     comodat_data_start: a?.comodat_data_start || '',
     comodat_data_sfarsit: a?.comodat_data_sfarsit || '',
@@ -1206,8 +1207,8 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   // Load employees pentru dropdown proprietar comodat
   useEffect(() => {
     supabase.from('employees')
-      .select('id, name, cnp')
-      .eq('activ', true)
+      .select('id, name')
+      .eq('active', true)
       .order('name')
       .then(({ data }) => setEmployeesList(data || []))
   }, [])
@@ -7836,6 +7837,205 @@ function AlerteGlobaleSidebar({ open, onClose, alerte, onNavigate }) {
 }
 
 
+// ─── 27.05.2026: Secțiune Contracte Comodat (sub-tab Active) ─────────────────
+function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCreateComodat, canEdit, showToast }) {
+  const [comodatList, setComodatList] = useState([])
+  const [load, setLoad] = useState(true)
+  const [statusFilter, setStatusFilter] = useState('Toate')
+  const [search, setSearch] = useState('')
+  
+  const loadComodat = useCallback(async () => {
+    setLoad(true)
+    const { data, error } = await supabase
+      .from('v_vehicule_comodat')
+      .select('*')
+    if (error) {
+      showToast?.('Eroare încărcare comodat: ' + error.message, 'error')
+      setLoad(false)
+      return
+    }
+    setComodatList(data || [])
+    setLoad(false)
+  }, [showToast])
+  
+  useEffect(() => { loadComodat() }, [loadComodat])
+  
+  const filtered = useMemo(() => {
+    let r = [...comodatList]
+    if (statusFilter !== 'Toate') r = r.filter(v => v.status_contract === statusFilter)
+    if (search) {
+      const s = search.toLowerCase()
+      r = r.filter(v => 
+        (v.nr_inmatriculare || '').toLowerCase().includes(s) ||
+        (v.vehicul || '').toLowerCase().includes(s) ||
+        (v.proprietar_nume || '').toLowerCase().includes(s)
+      )
+    }
+    return r
+  }, [comodatList, statusFilter, search])
+  
+  const stats = useMemo(() => ({
+    total: comodatList.length,
+    activ: comodatList.filter(v => v.status_contract === 'activ').length,
+    expirate: comodatList.filter(v => v.status_contract === 'expirat').length,
+    expira_30z: comodatList.filter(v => v.status_contract === 'expira_30z').length,
+    incomplete: comodatList.filter(v => v.status_contract === 'incomplet').length,
+  }), [comodatList])
+  
+  const STATUS_INFO = {
+    'activ': { label: '✓ Activ', color: G.green, bg: G.green + '22' },
+    'expirat': { label: '🔴 EXPIRAT', color: G.red, bg: G.red + '22' },
+    'expira_30z': { label: '⚠️ Expiră <30z', color: G.orange, bg: G.orange + '22' },
+    'incomplet': { label: '◌ Incomplet', color: G.muted, bg: G.bg },
+    'inca_inactiv': { label: '⏳ Încă inactiv', color: G.blue, bg: G.blue + '22' },
+  }
+  
+  // Vehicule firmă cu plăcuța neînregistrată ca comodat (pentru a oferi „convert la comodat")
+  const handleClickAdd = () => {
+    if (canEdit && onCreateComodat) onCreateComodat()
+  }
+  
+  return (
+    <div>
+      {/* Header info + buton */}
+      <div style={{...S.card, padding: 14, marginBottom: 14}}>
+        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap'}}>
+          <div style={{flex: 1, minWidth: 240}}>
+            <div style={{fontSize: 14, fontWeight: 700, color: G.text, marginBottom: 4}}>
+              📄 Contracte de Comodat — vehicule personale cu drept de utilizare firmă
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              Pentru ANAF: motorina decontată pe aceste vehicule trebuie să aibă contract activ la data alimentării.
+            </div>
+          </div>
+          {canEdit && (
+            <button onClick={handleClickAdd} style={{...S.btnP, background: '#F59E0B', color: '#000'}}>
+              + Adaugă vehicul comodat
+            </button>
+          )}
+        </div>
+      </div>
+      
+      {/* Stats cards */}
+      <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
+        <KPICard icon="📄" label="Total comodat" value={stats.total} color={G.blue} />
+        <KPICard icon="✓" label="Active" value={stats.activ} color={G.green} />
+        <KPICard icon="🔴" label="Expirate" value={stats.expirate} color={G.red} />
+        <KPICard icon="⚠️" label="Expiră <30z" value={stats.expira_30z} color={G.orange} />
+        <KPICard icon="◌" label="Incomplete" value={stats.incomplete} color={G.muted} />
+      </div>
+      
+      {/* Filtre */}
+      <div style={{...S.card, padding: 14, marginBottom: 14}}>
+        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center'}}>
+          <input placeholder="🔍 Caută plăcuța, marcă, proprietar..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, width: 280}} />
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{...S.input, padding: '8px 12px'}}>
+            <option value="Toate">Toate statusurile</option>
+            <option value="activ">Doar active</option>
+            <option value="expirat">Doar EXPIRATE</option>
+            <option value="expira_30z">Expiră &lt;30z</option>
+            <option value="incomplet">Incomplete (date lipsă)</option>
+          </select>
+          {(search || statusFilter !== 'Toate') && (
+            <button onClick={() => { setSearch(''); setStatusFilter('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
+              ✕ Șterge filtre
+            </button>
+          )}
+        </div>
+      </div>
+      
+      {/* Tabel */}
+      {load ? (
+        <div style={{display: 'flex', justifyContent: 'center', padding: 60}}>
+          <div className="sp" style={{width: 32, height: 32}}/>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{...S.card, padding: 60, textAlign: 'center', color: G.muted}}>
+          <div style={{fontSize: 40, marginBottom: 12}}>📄</div>
+          <div style={{fontSize: 14, marginBottom: 8}}>
+            {comodatList.length === 0 
+              ? 'Niciun vehicul comodat înregistrat încă.'
+              : 'Niciun rezultat cu filtrele aplicate.'}
+          </div>
+          {comodatList.length === 0 && canEdit && (
+            <button onClick={handleClickAdd} style={{...S.btnP, background: '#F59E0B', color: '#000', marginTop: 12}}>
+              + Adaugă primul vehicul comodat
+            </button>
+          )}
+        </div>
+      ) : (
+        <div style={{...S.card, overflow: 'hidden'}}>
+          <div style={{overflowX: 'auto'}}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{width: 110, padding: '10px 12px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Plăcuța</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Vehicul</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>👤 Proprietar</th>
+                  <th style={{width: 110, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data start</th>
+                  <th style={{width: 110, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data sfârșit</th>
+                  <th style={{width: 130, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Status</th>
+                  <th style={{width: 70, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>📎 PDF</th>
+                  <th style={{width: 30}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(v => {
+                  const cfgStatus = STATUS_INFO[v.status_contract] || STATUS_INFO['incomplet']
+                  const fullActiv = active.find(a => a.id === v.active_id)
+                  return (
+                    <tr key={v.active_id} onClick={() => fullActiv && onEditActiv?.(fullActiv)} style={{cursor: fullActiv ? 'pointer' : 'default'}}>
+                      <td style={{padding: '10px 12px', fontSize: 12, fontWeight: 700, color: G.purple}}>
+                        {v.nr_inmatriculare || <span style={{color: G.dim, fontWeight: 400}}>—</span>}
+                      </td>
+                      <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
+                        {v.vehicul}
+                      </td>
+                      <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
+                        {v.proprietar_nume || <span style={{color: G.dim}}>— neasignat —</span>}
+                      </td>
+                      <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, textAlign: 'center'}}>
+                        {v.comodat_data_start || <span style={{color: G.dim}}>—</span>}
+                      </td>
+                      <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, textAlign: 'center'}}>
+                        {v.comodat_data_sfarsit || <span style={{color: G.dim}}>nedeterminat</span>}
+                        {v.zile_pana_expirare != null && (
+                          <div style={{fontSize: 10, color: v.zile_pana_expirare < 0 ? G.red : (v.zile_pana_expirare <= 30 ? G.orange : G.muted), marginTop: 2, fontWeight: 600}}>
+                            {v.zile_pana_expirare < 0 ? `${Math.abs(v.zile_pana_expirare)} zile întârziere` : `${v.zile_pana_expirare} zile rămase`}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{padding: '10px 8px', textAlign: 'center'}}>
+                        <span style={{
+                          display: 'inline-block', padding: '3px 10px', borderRadius: 12,
+                          fontSize: 11, fontWeight: 700, letterSpacing: '.3px',
+                          background: cfgStatus.bg, color: cfgStatus.color,
+                        }}>{cfgStatus.label}</span>
+                      </td>
+                      <td style={{padding: '10px 8px', textAlign: 'center'}}>
+                        {v.are_pdf ? (
+                          <span style={{color: G.green, fontSize: 14}} title="Contract PDF încărcat">📎</span>
+                        ) : (
+                          <span style={{color: G.dim, fontSize: 11}} title="PDF lipsă">—</span>
+                        )}
+                      </td>
+                      <td style={{padding: '10px 8px', textAlign: 'center', color: G.dim}}>›</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{padding: '10px 14px', borderTop: `1px solid ${G.border}`, fontSize: 11, color: G.muted, background: G.bg}}>
+            {filtered.length} vehicule afișate · click pe rând pentru editare contract
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 export default function LogisticaPage() {
   const nav = useNavigate()
   const loc = useLocation()
@@ -7850,6 +8050,12 @@ export default function LogisticaPage() {
   const [tipF, setTipF] = useState('Toate')
   const [subF, setSubF] = useState('Toate')
   const [stareF, setStareF] = useState('Toate')
+  // 27.05.2026: filtru tip proprietate (firmă/comodat/închiriat)
+  const [proprietateF, setProprietateF] = useState('Toate')
+  // 27.05.2026: sub-tab Active pentru Contracte Comodat
+  const [activeSubTab, setActiveSubTab] = useState('lista') // 'lista' | 'comodat'
+  const [employeesComodat, setEmployeesComodat] = useState({}) // {id: name}
+  const [comodatAlerte, setComodatAlerte] = useState({ expirate: 0, expira_30z: 0, incomplete: 0 })
   const [sortBy, setSortBy] = useState({ col: 'marca', dir: 'asc' })  // sortare tabel
   const [modal, setModal] = useState(null)
   const [rezervoare, setRezervoare] = useState([])         // [Gazpet - Oscar 1, Gazpet - Oscar 2]
@@ -8082,6 +8288,24 @@ export default function LogisticaPage() {
     const map = {}
     ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
     setUltimeAlim(map)
+    
+    // 27.05.2026: Load employees pentru tooltip ComodatBadge + alerte comodat
+    const [empRes, vehComodatRes] = await Promise.all([
+      supabase.from('employees').select('id, name').eq('active', true),
+      supabase.from('v_vehicule_comodat').select('active_id, status_contract')
+    ])
+    const empMap = {}
+    ;(empRes.data || []).forEach(e => { empMap[e.id] = e.name })
+    setEmployeesComodat(empMap)
+    
+    const alertCount = { expirate: 0, expira_30z: 0, incomplete: 0 }
+    ;(vehComodatRes.data || []).forEach(v => {
+      if (v.status_contract === 'expirat') alertCount.expirate++
+      else if (v.status_contract === 'expira_30z') alertCount.expira_30z++
+      else if (v.status_contract === 'incomplet') alertCount.incomplete++
+    })
+    setComodatAlerte(alertCount)
+    
     setLoad(false)
   }
   
@@ -8604,6 +8828,8 @@ export default function LogisticaPage() {
       if (tipF !== 'Toate' && cat?.tip !== tipF) return false
       if (subF !== 'Toate' && cat?.subcategorie !== subF) return false
       if (stareF !== 'Toate' && a.stare !== stareF) return false
+      // 27.05.2026: filtru tip proprietate
+      if (proprietateF !== 'Toate' && (a.tip_proprietate || 'firma') !== proprietateF) return false
       return true
     })
     
@@ -8630,7 +8856,7 @@ export default function LogisticaPage() {
       return String(va).localeCompare(String(vb), 'ro') * dir
     })
     return result
-  }, [active, search, tipF, subF, stareF, sortBy])
+  }, [active, search, tipF, subF, stareF, proprietateF, sortBy])
   
   // Calculez alerte mentenanță (pentru widget)
   const alerteMentenanta = useMemo(() => {
@@ -8806,6 +9032,63 @@ export default function LogisticaPage() {
       
       {/* TAB: Active (default — conținutul existent) */}
       {tab === 'lista' && (<>
+      
+      {/* 27.05.2026: Sub-tab bar Lista Active vs Contracte Comodat */}
+      <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`}}>
+        <button onClick={() => setActiveSubTab('lista')} style={{
+          padding: '8px 14px', borderRadius: 7, border: 'none', cursor: 'pointer',
+          fontSize: 13, fontWeight: activeSubTab === 'lista' ? 700 : 500,
+          background: activeSubTab === 'lista' ? G.logistica + '22' : 'transparent',
+          color: activeSubTab === 'lista' ? G.logistica : G.muted,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>📋 Lista Active</button>
+        <button onClick={() => setActiveSubTab('comodat')} style={{
+          padding: '8px 14px', borderRadius: 7, border: 'none', cursor: 'pointer',
+          fontSize: 13, fontWeight: activeSubTab === 'comodat' ? 700 : 500,
+          background: activeSubTab === 'comodat' ? '#F59E0B22' : 'transparent',
+          color: activeSubTab === 'comodat' ? '#F59E0B' : G.muted,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          📄 Contracte Comodat
+          {(comodatAlerte.expirate + comodatAlerte.expira_30z + comodatAlerte.incomplete) > 0 && (
+            <span style={{
+              marginLeft: 4, padding: '1px 6px',
+              background: comodatAlerte.expirate > 0 ? G.red : (comodatAlerte.expira_30z > 0 ? G.orange : G.muted),
+              color: '#fff', borderRadius: 10, fontSize: 10, fontWeight: 700, minWidth: 18, textAlign: 'center',
+            }}>{comodatAlerte.expirate + comodatAlerte.expira_30z + comodatAlerte.incomplete}</span>
+          )}
+        </button>
+      </div>
+      
+      {/* Banner alerte comodat (vizibil indiferent de sub-tab dacă există probleme) */}
+      {(comodatAlerte.expirate > 0 || comodatAlerte.expira_30z > 0 || comodatAlerte.incomplete > 0) && activeSubTab === 'lista' && (
+        <div onClick={() => setActiveSubTab('comodat')} style={{
+          ...S.card, padding: '10px 14px', marginBottom: 12, cursor: 'pointer',
+          borderLeft: `3px solid ${comodatAlerte.expirate > 0 ? G.red : G.orange}`,
+          background: comodatAlerte.expirate > 0 ? G.red + '11' : '#F59E0B11',
+        }}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 10, fontSize: 13}}>
+            <span style={{fontSize: 18}}>{comodatAlerte.expirate > 0 ? '🔴' : '⚠️'}</span>
+            <strong style={{color: G.text}}>Contracte Comodat - atenție necesară:</strong>
+            {comodatAlerte.expirate > 0 && <span style={{color: G.red, fontWeight: 700}}>{comodatAlerte.expirate} EXPIRATE</span>}
+            {comodatAlerte.expira_30z > 0 && <span style={{color: G.orange, fontWeight: 700}}>{comodatAlerte.expira_30z} expiră &lt;30z</span>}
+            {comodatAlerte.incomplete > 0 && <span style={{color: G.muted, fontWeight: 700}}>{comodatAlerte.incomplete} incomplete</span>}
+            <span style={{flex: 1, textAlign: 'right', color: G.muted, fontSize: 11}}>→ Click pentru detalii</span>
+          </div>
+        </div>
+      )}
+      
+      {/* Render condiționat: lista activelor SAU contracte comodat */}
+      {activeSubTab === 'comodat' ? (
+        <ContracteComodatSection 
+          active={active}
+          employeesComodat={employeesComodat}
+          onEditActiv={(a) => setModal({ mode: 'edit', activ: a })}
+          onCreateComodat={() => setModal({ mode: 'create', activ: null, prefilComodat: true })}
+          canEdit={canEdit}
+          showToast={showToast}
+        />
+      ) : (<>
       
       {kpi && (
         <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
@@ -9212,8 +9495,15 @@ export default function LogisticaPage() {
             <option value="Nefunctional">Nefuncțional</option>
             <option value="In_service">În service</option>
           </select>
-          {(search || tipF !== 'Toate' || subF !== 'Toate' || stareF !== 'Toate') && (
-            <button onClick={() => { setSearch(''); setTipF('Toate'); setSubF('Toate'); setStareF('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
+          {/* 27.05.2026: Filtru tip proprietate (firmă/comodat/închiriat) */}
+          <select value={proprietateF} onChange={e => setProprietateF(e.target.value)} title="Filtrare după tip proprietate">
+            <option value="Toate">🏢 Toate proprietățile</option>
+            <option value="firma">🏢 Doar firmă</option>
+            <option value="comodat">📄 Doar comodat</option>
+            <option value="inchiriat">🔑 Doar închiriate</option>
+          </select>
+          {(search || tipF !== 'Toate' || subF !== 'Toate' || stareF !== 'Toate' || proprietateF !== 'Toate') && (
+            <button onClick={() => { setSearch(''); setTipF('Toate'); setSubF('Toate'); setStareF('Toate'); setProprietateF('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
               ✕ Șterge filtre
             </button>
           )}
@@ -9281,6 +9571,18 @@ export default function LogisticaPage() {
                       </td>
                       <td style={{fontSize: 12, fontWeight: 600, color: G.purple}}>
                         {a.nr_inmatriculare || <span style={{color: G.dim, fontWeight: 400}}>—</span>}
+                        {/* 27.05.2026: Badge proprietate (comodat / închiriat) sub plăcuța */}
+                        {a.tip_proprietate && a.tip_proprietate !== 'firma' && (
+                          <div style={{marginTop: 3}}>
+                            <ComodatBadge
+                              tipProprietate={a.tip_proprietate}
+                              proprietarNume={employeesComodat[a.comodat_employee_id]}
+                              dataStart={a.comodat_data_start}
+                              dataSfarsit={a.comodat_data_sfarsit}
+                              compact={true}
+                            />
+                          </div>
+                        )}
                       </td>
                       <td>
                         <div style={{fontWeight: 600, color: G.text}}>
@@ -9328,6 +9630,8 @@ export default function LogisticaPage() {
         </div>
       )}
       
+      </>)}{/* end activeSubTab === 'lista' */}
+      
       </>)}
       
       {modal && (
@@ -9339,6 +9643,7 @@ export default function LogisticaPage() {
           rezervoare={rezervoare}
           sites={sites}
           pretMotorina={pretMotorina}
+          prefilComodat={modal.prefilComodat}
           onClose={() => setModal(null)}
           onSaved={handleSaved}
           showToast={showToast}
