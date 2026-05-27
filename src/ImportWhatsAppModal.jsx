@@ -178,6 +178,30 @@ function detectSite(text, sitesWithAliases) {
   return null
 }
 
+// 27.05.2026: Detect subcontractor din caption folosind aliases LIVE
+// Returnează primul subcontractor cu match (aliases sortate desc by length)
+function detectSubcontractor(text, subcontractoriWithAliases) {
+  if (!text) return null
+  const norm = normalize(text)
+  
+  const allPairs = []
+  for (const s of subcontractoriWithAliases) {
+    for (const alias of (s.aliases || [])) {
+      allPairs.push({ alias, subcontractor: s })
+    }
+  }
+  allPairs.sort((a, b) => b.alias.length - a.alias.length)
+  
+  for (const { alias, subcontractor } of allPairs) {
+    const aliasEsc = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const pattern = new RegExp('(?<![a-z])' + aliasEsc + '(?![a-z])')
+    if (pattern.test(norm)) {
+      return subcontractor
+    }
+  }
+  return null
+}
+
 // Detect vehicul din caption (plăcuță auto sau cod UT/TST)
 function findVehicleInText(text, vehicles) {
   if (!text || !vehicles?.length) return null
@@ -224,12 +248,14 @@ function extractLitri(text) {
 }
 
 // Parser principal — analizează un caption și returnează componentele identificate
-function parseCaptionMessage(caption, sites, vehicles) {
+function parseCaptionMessage(caption, sites, vehicles, subcontractori = []) {
   if (!caption) return null
   
   const site = detectSite(caption, sites)
   const vehicleResult = findVehicleInText(caption, vehicles)
   const litri = extractLitri(caption)
+  // 27.05.2026: detectare subcontractor pentru flag „posibilă cesiune"
+  const subcontractor = detectSubcontractor(caption, subcontractori)
   
   let foundCount = 0
   if (site) foundCount++
@@ -248,6 +274,8 @@ function parseCaptionMessage(caption, sites, vehicles) {
     site,
     vehicle: vehicleResult?.vehicle || null,
     litri,
+    subcontractor,  // 27.05.2026: dacă != null → posibilă cesiune bulk către subcontractor
+    isCesiunePossible: !!subcontractor,  // flag rapid pentru UI
     foundCount,
     score: Math.round(score * 100) / 100,
     formatStrict: foundCount === 3 && hasSeparator && isShort,
@@ -325,7 +353,11 @@ export default function ImportWhatsAppModal({
   const [sites, setSites] = useState([])
   const [vehicles, setVehicles] = useState([])
   const [alimentariFaraSantier, setAlimentariFaraSantier] = useState([])
+  const [subcontractori, setSubcontractori] = useState([])  // 27.05.2026: pentru detect cesiuni
   const [matches, setMatches] = useState([])  // rezultat match
+  // 27.05.2026: cesiuni subcontractor detectate (rânduri NOI, nu match cu alimentări)
+  const [cesiuniDetectate, setCesiuniDetectate] = useState([])
+  const [confirmedCesiuni, setConfirmedCesiuni] = useState(new Set())
   const [dateRangeFilter, setDateRangeFilter] = useState({ start: '2026-05-01', end: '' })
   const [confirmed, setConfirmed] = useState(new Set())  // ID-uri match-uri confirmate
   // 25.05.2026: stats pentru poze (Etapa 4 OCR prerequisite)
@@ -361,22 +393,24 @@ export default function ImportWhatsAppModal({
     setStep(2)
     
     try {
-      // 1. Load BD data (sites cu aliases + vehicule active)
+      // 1. Load BD data (sites cu aliases + vehicule active + subcontractori cu aliases)
       setProgress('📚 Încarc datele din BD...')
-      const [sitesRes, vehiclesRes, alimRes] = await Promise.all([
+      const [sitesRes, vehiclesRes, alimRes, subcRes] = await Promise.all([
         supabase.from('sites').select('id, name, aliases').eq('active', true).order('name'),
         supabase.from('logistica_active')
           .select('id, marca, model, nr_inmatriculare, cod_intern')
           .eq('vandut', false).eq('deep_sleep', false),
         supabase.from('v_alimentari_fara_santier').select('*'),
+        supabase.from('logistica_subcontractori').select('id, nume_scurt, denumire_legala, aliases').eq('active', true),
       ])
       
-      if (sitesRes.error || vehiclesRes.error || alimRes.error) {
-        throw new Error('Eroare BD: ' + (sitesRes.error?.message || vehiclesRes.error?.message || alimRes.error?.message))
+      if (sitesRes.error || vehiclesRes.error || alimRes.error || subcRes.error) {
+        throw new Error('Eroare BD: ' + (sitesRes.error?.message || vehiclesRes.error?.message || alimRes.error?.message || subcRes.error?.message))
       }
       setSites(sitesRes.data || [])
       setVehicles(vehiclesRes.data || [])
       setAlimentariFaraSantier(alimRes.data || [])
+      setSubcontractori(subcRes.data || [])
       
       // 2. Dezarhivez .zip
       setProgress('📦 Dezarhivez fișierul .zip...')
@@ -412,7 +446,7 @@ export default function ImportWhatsAppModal({
       
       // 7. Analizez fiecare mesaj
       const analyzed = messages.map(m => {
-        const parsed = parseCaptionMessage(m.caption, sitesRes.data || [], vehiclesRes.data || [])
+        const parsed = parseCaptionMessage(m.caption, sitesRes.data || [], vehiclesRes.data || [], subcRes.data || [])
         return { ...m, parsed }
       })
       
@@ -481,6 +515,58 @@ export default function ImportWhatsAppModal({
       setConfirmed(autoConfirmed)
       setMatches(matches)
       setParsedMessages(newMessages)
+      
+      // 27.05.2026: Detect cesiuni subcontractor — mesaje cu mention subcontractor + litri
+      // NU se face match cu alimentări existente, ci creem rânduri NOI în logistica_cesiuni_subcontractor
+      const cesiuni = newMessages
+        .filter(m => m.parsed?.subcontractor && m.parsed?.litri)
+        .map(m => ({
+          msg: m,
+          subcontractor: m.parsed.subcontractor,
+          site: m.parsed.site,  // poate fi null
+          litri: m.parsed.litri,
+          data_cesiune: m.dt.toISOString().slice(0, 10),
+        }))
+      setCesiuniDetectate(cesiuni)
+      // Pre-confirm cesiunile detectate (default checked)
+      setConfirmedCesiuni(new Set(cesiuni.map((_, idx) => idx)))
+      
+      // 27.05.2026: INSERT cesiuni subcontractor confirmate
+      // Mesajele detectate cu subcontractor + litri → INSERT direct în logistica_cesiuni_subcontractor
+      let cesiuniCreated = 0
+      const cesiuniHashesSaved = new Set()  // pentru a marca mesajele ca procesate
+      
+      if (cesiuniDetectate.length > 0 && confirmedCesiuni.size > 0) {
+        setProgress('🤝 Creez cesiuni subcontractor...')
+        const cesiuniPayload = []
+        for (let idx = 0; idx < cesiuniDetectate.length; idx++) {
+          if (!confirmedCesiuni.has(idx)) continue
+          const c = cesiuniDetectate[idx]
+          cesiuniPayload.push({
+            subcontractor_id: c.subcontractor.id,
+            data_cesiune: c.data_cesiune,
+            cantitate_litri: c.litri,
+            site_id: c.site?.id || null,
+            rezervor_id: null,  // detectat din WhatsApp - nu știm rezervorul sursă
+            status_compensare: 'pending',
+            observatii: `Detectat WhatsApp ${c.msg.author}: "${(c.msg.caption || '').slice(0, 150)}"`,
+            creator_id: profile?.id,
+          })
+          cesiuniHashesSaved.add(c.msg.hash)
+        }
+        
+        if (cesiuniPayload.length > 0) {
+          const { error: cesErr } = await supabase
+            .from('logistica_cesiuni_subcontractor')
+            .insert(cesiuniPayload)
+          if (cesErr) {
+            console.error('Eroare INSERT cesiuni:', cesErr)
+            showToast('⚠️ Cesiuni nu s-au putut crea: ' + cesErr.message, 'warn')
+          } else {
+            cesiuniCreated = cesiuniPayload.length
+          }
+        }
+      }
       
       // 25.05.2026 — DUAL MODE: Backfill poze pentru alimentări deja procesate WhatsApp fără poză
       // Scanez TOATE mesajele (inclusiv cele dedup-uite) cu imageFile, caut alimentare matched
@@ -682,6 +768,8 @@ export default function ImportWhatsAppModal({
         let status
         if (isConfirmedMatch) {
           status = 'matched'
+        } else if (cesiuniHashesSaved.has(m.hash)) {
+          status = 'cesiune_subcontractor'  // 27.05.2026: marcare specială pentru cesiuni
         } else if (matchInfo) {
           status = 'ambig'
         } else if (orphanPath) {
@@ -713,7 +801,10 @@ export default function ImportWhatsAppModal({
         const orphanInfo = orphanUploads.size > 0 
           ? ` · ${orphanUploads.size} poze orfane salvate pentru procesare AI` 
           : ''
-        showToast(`✅ ${updated} alimentări actualizate${orphanInfo}`, 'success')
+        const cesiuniInfo = cesiuniCreated > 0 
+          ? ` · 🤝 ${cesiuniCreated} cesiuni subcontractor create` 
+          : ''
+        showToast(`✅ ${updated} alimentări actualizate${cesiuniInfo}${orphanInfo}`, 'success')
       } else {
         showToast(`⚠️ ${updated} actualizate, ${errors.length} erori`, 'warn')
         console.error('Erori:', errors)
@@ -727,7 +818,7 @@ export default function ImportWhatsAppModal({
     } finally {
       setProcessing(false)
     }
-  }, [matches, confirmed, profile, zipFile, zipInstance, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast])
+  }, [matches, confirmed, profile, zipFile, zipInstance, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast, cesiuniDetectate, confirmedCesiuni])
   
   // 26.05.2026 FIX B: Procesare AI Vision pe pozele orfane (apel Edge Function detect_plate_orphan_msgs)
   const processOrphansWithAI = useCallback(async () => {
@@ -949,13 +1040,14 @@ export default function ImportWhatsAppModal({
             <div>
               {/* Stats */}
               <div style={{
-                display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:12
+                display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:12, marginBottom:12
               }}>
                 {[
                   { label:'Mesaje noi parsate', val: parsedMessages.length, color: G.blue },
                   { label:'Alimentări Rompetrol fără șantier', val: alimentariFaraSantier.length, color: G.muted },
                   { label:'Match-uri găsite', val: matches.length, color: G.green },
                   { label:'Confirmate', val: confirmed.size, color: G.logistica },
+                  { label:'🤝 Cesiuni subcontractor', val: cesiuniDetectate.length, color: '#A78BFA' },
                 ].map((s, i) => (
                   <div key={i} style={{
                     background:G.bg, border:`1px solid ${G.border}`, borderRadius:10,
@@ -966,6 +1058,88 @@ export default function ImportWhatsAppModal({
                   </div>
                 ))}
               </div>
+              
+              {/* 27.05.2026: SECȚIUNE NOUĂ — Cesiuni subcontractor detectate */}
+              {cesiuniDetectate.length > 0 && (
+                <div style={{
+                  background: '#8B5CF618', border: '2px solid #8B5CF666', borderRadius: 12,
+                  padding: '14px 18px', marginBottom: 16,
+                }}>
+                  <div style={{display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap'}}>
+                    <span style={{fontSize: 22}}>🤝</span>
+                    <div style={{flex: 1, minWidth: 240}}>
+                      <div style={{fontSize: 14, fontWeight: 800, color: '#A78BFA', marginBottom: 2}}>
+                        {cesiuniDetectate.length} cesiuni subcontractor detectate în WhatsApp
+                      </div>
+                      <div style={{fontSize: 11, color: G.muted}}>
+                        Mesajele de mai jos menționează un subcontractor (ex: ARA). Vor crea rânduri NOI în <strong style={{color: G.text}}>logistica_cesiuni_subcontractor</strong> (NU alimentări vehicule).
+                      </div>
+                    </div>
+                    <div style={{display: 'flex', gap: 6}}>
+                      <button onClick={() => setConfirmedCesiuni(new Set(cesiuniDetectate.map((_, idx) => idx)))} 
+                        style={{padding: '6px 12px', background: G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer'}}>
+                        ✓ Toate
+                      </button>
+                      <button onClick={() => setConfirmedCesiuni(new Set())} 
+                        style={{padding: '6px 12px', background: G.surface, color: G.muted, border: `1px solid ${G.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer'}}>
+                        ✕ Nimic
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div style={{maxHeight: 280, overflowY: 'auto', borderRadius: 8, background: G.bg, border: `1px solid ${G.border}`}}>
+                    <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                      <thead style={{position: 'sticky', top: 0, background: G.surface, zIndex: 1}}>
+                        <tr>
+                          <th style={{width: 40, padding: '8px 6px', textAlign: 'center', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`}}></th>
+                          <th style={{width: 80, padding: '8px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Data</th>
+                          <th style={{padding: '8px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Autor</th>
+                          <th style={{padding: '8px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Subcontractor</th>
+                          <th style={{width: 70, padding: '8px 8px', textAlign: 'right', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Litri</th>
+                          <th style={{padding: '8px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Șantier</th>
+                          <th style={{padding: '8px 8px', textAlign: 'left', fontSize: 10, color: G.muted, fontWeight: 700, borderBottom: `1px solid ${G.border}`, textTransform: 'uppercase'}}>Caption</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cesiuniDetectate.map((c, idx) => {
+                          const checked = confirmedCesiuni.has(idx)
+                          return (
+                            <tr key={idx} style={{borderBottom: `1px solid ${G.border}66`, opacity: checked ? 1 : 0.5}}>
+                              <td style={{padding: '8px 6px', textAlign: 'center'}}>
+                                <input type="checkbox" checked={checked} onChange={() => {
+                                  setConfirmedCesiuni(prev => {
+                                    const next = new Set(prev)
+                                    if (next.has(idx)) next.delete(idx)
+                                    else next.add(idx)
+                                    return next
+                                  })
+                                }} style={{cursor: 'pointer', accentColor: '#A78BFA'}} />
+                              </td>
+                              <td style={{padding: '8px 8px', fontSize: 11, color: G.text, fontFamily: 'monospace'}}>{c.data_cesiune}</td>
+                              <td style={{padding: '8px 8px', fontSize: 11, color: G.muted}}>{c.msg.author}</td>
+                              <td style={{padding: '8px 8px', fontSize: 11, fontWeight: 700, color: '#A78BFA'}}>
+                                {c.subcontractor.nume_scurt}
+                                <div style={{fontSize: 9, color: G.muted, marginTop: 1, fontWeight: 400}}>{c.subcontractor.denumire_legala}</div>
+                              </td>
+                              <td style={{padding: '8px 8px', textAlign: 'right', fontSize: 12, fontWeight: 700, color: G.orange}}>{c.litri}L</td>
+                              <td style={{padding: '8px 8px', fontSize: 11, color: c.site ? G.text : G.dim}}>
+                                {c.site?.name || '— fără șantier —'}
+                              </td>
+                              <td style={{padding: '8px 8px', fontSize: 10, color: G.muted, maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={c.msg.caption}>
+                                {(c.msg.caption || '').slice(0, 60)}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  <div style={{marginTop: 10, fontSize: 11, color: G.muted, textAlign: 'center'}}>
+                    💡 <strong style={{color: '#A78BFA'}}>{confirmedCesiuni.size}</strong> cesiuni vor fi create la confirmare · status default: <code style={{background: G.bg, padding: '1px 6px', borderRadius: 4}}>pending</code> compensare
+                  </div>
+                </div>
+              )}
               
               {/* 26.05.2026 FIX B: PANOU AI VISION în Step 3 - vizibil daca exista poze pending in BD */}
               {pendingPlateCount > 0 && !aiResults && (
