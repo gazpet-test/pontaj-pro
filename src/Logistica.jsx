@@ -8957,7 +8957,7 @@ export default function LogisticaPage() {
         .order('marca', { ascending: true }).order('model', { ascending: true }),
       supabase.from('logistica_categorii').select('*').order('tip').order('subcategorie'),
       supabase.from('v_kpi_logistica').select('*').single(),
-      supabase.from('logistica_rezervoare').select('*').like('nume', 'Gazpet - Oscar%').order('nume'),
+      supabase.from('logistica_rezervoare').select('*').eq('activ', true).order('tip').order('nume'),
       supabase.from('sites').select('id, name').order('name'),
       supabase.from('logistica_setari').select('key, value').in('key', ['pret_motorina_ron', 'pret_motorina_actualizat']),
       supabase.from('v_alimentari_kpi').select('*').single(),
@@ -9852,7 +9852,7 @@ export default function LogisticaPage() {
       
       {/* Widget Rezervoare Gazpet (Oscar 1 + Oscar 2) + Preț motorină (compact) */}
       <div style={{display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap'}}>
-        {(rezervoare || []).map((rez) => {
+        {(rezervoare || []).filter(r => r.tip === 'rezervor_propriu' || !r.tip).map((rez) => {
           const stoc = Number(rez.stoc_curent_litri || 0)
           const cap = Number(rez.capacitate_litri || 0)
           const pragProc = Number(rez.prag_alerta_procent || 10)
