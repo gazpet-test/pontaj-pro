@@ -174,9 +174,10 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
     
     try {
       // 1. Șterg pozele din storage (dacă există)
+      // FIX 27.05.2026: bucket tichete -> tichete-atasamente
       const allPaths = [...(t.poze_paths || []), ...(t.documente_paths || [])]
       if(allPaths.length > 0) {
-        const { error: storageErr } = await supabase.storage.from('tichete').remove(allPaths)
+        const { error: storageErr } = await supabase.storage.from('tichete-atasamente').remove(allPaths)
         if(storageErr) console.warn('Storage cleanup partial:', storageErr.message)
       }
       
@@ -672,17 +673,28 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
       if(error) throw error
 
       // 2. Upload poze daca exista
+      // FIX 27.05.2026: schimbat bucket 'tichete' (no RLS) -> 'tichete-atasamente' + error vizibil
       if(poze.length > 0){
         const paths = []
+        const failed = []
         for(const f of poze){
           const ext = f.name.split('.').pop()
           const path = `${tk.id}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
-          const { error: upErr } = await supabase.storage.from('tichete').upload(path, f, { contentType: f.type })
-          if(upErr) console.warn('Eroare upload:', upErr)
-          else paths.push(path)
+          const { error: upErr } = await supabase.storage.from('tichete-atasamente').upload(path, f, { contentType: f.type })
+          if(upErr) {
+            console.error('Eroare upload poza:', upErr)
+            failed.push(`${f.name}: ${upErr.message}`)
+          } else {
+            paths.push(path)
+          }
         }
         if(paths.length > 0){
           await supabase.from('tichete').update({ poze_paths: paths }).eq('id', tk.id)
+        }
+        if(failed.length > 0){
+          show(`⚠️ ${failed.length} poze nu s-au încărcat: ${failed.join('; ')}`, 'error')
+        } else if(paths.length > 0){
+          show(`✅ ${paths.length} poze încărcate`, 'success')
         }
       }
 
@@ -1010,10 +1022,11 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
     setIstoric(istRes.data || [])
 
     // Signed URLs poze
+    // FIX 27.05.2026: schimbat bucket 'tichete' -> 'tichete-atasamente'
     if(tkRes.data?.poze_paths?.length > 0){
       const urls = []
       for(const p of tkRes.data.poze_paths){
-        const { data } = await supabase.storage.from('tichete').createSignedUrl(p, 600)
+        const { data } = await supabase.storage.from('tichete-atasamente').createSignedUrl(p, 600)
         if(data?.signedUrl) urls.push({ path:p, url:data.signedUrl })
       }
       setPozeUrls(urls)
