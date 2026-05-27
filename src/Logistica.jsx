@@ -8082,6 +8082,613 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
 }
 
 
+// ─── 27.05.2026: Secțiune Subcontractori + Cesiuni Motorină ──────────────────
+function SubcontractoriSection({ sites, rezervoare, pretMotorina, canEdit, profile, showToast, onRefreshRezervoare }) {
+  const [subcontractori, setSubcontractori] = useState([])
+  const [cesiuni, setCesiuni] = useState([])
+  const [load, setLoad] = useState(true)
+  const [modal, setModal] = useState(null) // null | { type: 'subcontractor'|'cesiune', data: ... }
+  const [vizibil, setVizibil] = useState('cesiuni') // 'cesiuni' | 'subcontractori'
+  const [searchCes, setSearchCes] = useState('')
+  const [statusF, setStatusF] = useState('Toate')
+  const [subcF, setSubcF] = useState('Toate')
+  
+  const loadData = useCallback(async () => {
+    setLoad(true)
+    const [subcRes, cesRes] = await Promise.all([
+      supabase.from('logistica_subcontractori').select('*').order('nume_scurt'),
+      supabase.from('logistica_cesiuni_subcontractor').select(`
+        *,
+        logistica_subcontractori (id, nume_scurt, denumire_legala),
+        logistica_rezervoare (id, nume),
+        sites (id, name)
+      `).order('data_cesiune', { ascending: false }).limit(500),
+    ])
+    if (subcRes.error) { showToast?.('Eroare subcontractori: ' + subcRes.error.message, 'error') }
+    if (cesRes.error) { showToast?.('Eroare cesiuni: ' + cesRes.error.message, 'error') }
+    setSubcontractori(subcRes.data || [])
+    setCesiuni(cesRes.data || [])
+    setLoad(false)
+  }, [showToast])
+  
+  useEffect(() => { loadData() }, [loadData])
+  
+  const cesiuniFiltered = useMemo(() => {
+    let r = [...cesiuni]
+    if (subcF !== 'Toate') r = r.filter(c => c.subcontractor_id === Number(subcF))
+    if (statusF !== 'Toate') r = r.filter(c => c.status_compensare === statusF)
+    if (searchCes) {
+      const s = searchCes.toLowerCase()
+      r = r.filter(c => 
+        (c.logistica_subcontractori?.nume_scurt || '').toLowerCase().includes(s) ||
+        (c.sites?.name || '').toLowerCase().includes(s) ||
+        (c.factura_compensare_nr || '').toLowerCase().includes(s) ||
+        (c.observatii || '').toLowerCase().includes(s)
+      )
+    }
+    return r
+  }, [cesiuni, subcF, statusF, searchCes])
+  
+  const stats = useMemo(() => {
+    const totalL = cesiuni.reduce((sum, c) => sum + Number(c.cantitate_litri || 0), 0)
+    const totalRON = cesiuni.reduce((sum, c) => sum + Number(c.pret_total || 0), 0)
+    const pendingRON = cesiuni.filter(c => c.status_compensare === 'pending').reduce((sum, c) => sum + Number(c.pret_total || 0), 0)
+    return {
+      totalSubc: subcontractori.filter(s => s.active).length,
+      totalCes: cesiuni.length,
+      totalL,
+      totalRON,
+      pendingRON,
+      nrPending: cesiuni.filter(c => c.status_compensare === 'pending').length,
+    }
+  }, [subcontractori, cesiuni])
+  
+  const STATUS_INFO = {
+    'pending': { label: '⏳ Pending compensare', color: G.orange, bg: G.orange + '22' },
+    'compensat': { label: '✓ Compensat', color: G.green, bg: G.green + '22' },
+    'partial': { label: '◐ Parțial', color: G.yellow, bg: G.yellow + '22' },
+  }
+  
+  const handleSaveCesiune = () => {
+    setModal(null)
+    loadData()
+    onRefreshRezervoare?.()  // refresh stoc rezervor în parent
+  }
+  
+  const handleDelete = async (cesiune) => {
+    if (!confirm(`Șterge cesiunea de ${cesiune.cantitate_litri}L din ${cesiune.data_cesiune}?\n\nATENȚIE: Stocul rezervorului va fi restabilit cu ${cesiune.cantitate_litri}L.`)) return
+    const { error } = await supabase.from('logistica_cesiuni_subcontractor').delete().eq('id', cesiune.id)
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    showToast?.('Cesiune ștearsă · stoc rezervor restabilit', 'success')
+    loadData()
+    onRefreshRezervoare?.()
+  }
+  
+  return (
+    <div>
+      {/* Header info + butoane */}
+      <div style={{...S.card, padding: 14, marginBottom: 14}}>
+        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap'}}>
+          <div style={{flex: 1, minWidth: 240}}>
+            <div style={{fontSize: 14, fontWeight: 700, color: G.text, marginBottom: 4}}>
+              🤝 Subcontractori & Cesiuni Motorină
+            </div>
+            <div style={{fontSize: 12, color: G.muted}}>
+              Cesiune bulk către subcontractor (ex: <strong style={{color: '#A78BFA'}}>ARA - ARANEW CONS</strong>) — fără vehicul fizic. Compensare contra facturilor de servicii primite.
+            </div>
+          </div>
+          {canEdit && (
+            <div style={{display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+              <button onClick={() => setModal({ type: 'subcontractor', data: null })} style={{...S.btnS, background: G.surface, color: '#A78BFA', borderColor: '#8B5CF655', fontWeight: 600}}>
+                👤 + Subcontractor
+              </button>
+              <button onClick={() => setModal({ type: 'cesiune', data: null })} style={{...S.btnP, background: '#8B5CF6', color: '#fff'}}>
+                ⛽ + Cesiune nouă
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      
+      {/* Stats */}
+      <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
+        <KPICard icon="👥" label="Subcontractori activi" value={stats.totalSubc} color="#A78BFA" />
+        <KPICard icon="📝" label="Total cesiuni" value={stats.totalCes} color={G.blue} />
+        <KPICard icon="⛽" label="Total litri" value={Math.round(stats.totalL).toLocaleString('ro-RO')} color={G.orange} sub="L" />
+        <KPICard icon="💰" label="Total valoare" value={Math.round(stats.totalRON).toLocaleString('ro-RO')} color={G.green} sub="RON" />
+        <KPICard icon="⏳" label="Pending compensare" value={stats.nrPending} color={G.red} sub={`${Math.round(stats.pendingRON).toLocaleString('ro-RO')} RON`} />
+      </div>
+      
+      {/* Sub-bar mini: Cesiuni vs Lista subcontractori */}
+      <div style={{display: 'flex', gap: 4, marginBottom: 12, padding: 3, background: G.surface, borderRadius: 8, border: `1px solid ${G.border}`, width: 'fit-content'}}>
+        <button onClick={() => setVizibil('cesiuni')} style={{
+          padding: '6px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+          fontSize: 12, fontWeight: vizibil === 'cesiuni' ? 700 : 500,
+          background: vizibil === 'cesiuni' ? '#8B5CF622' : 'transparent',
+          color: vizibil === 'cesiuni' ? '#A78BFA' : G.muted,
+        }}>⛽ Cesiuni motorină ({cesiuni.length})</button>
+        <button onClick={() => setVizibil('subcontractori')} style={{
+          padding: '6px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
+          fontSize: 12, fontWeight: vizibil === 'subcontractori' ? 700 : 500,
+          background: vizibil === 'subcontractori' ? '#8B5CF622' : 'transparent',
+          color: vizibil === 'subcontractori' ? '#A78BFA' : G.muted,
+        }}>👥 Lista subcontractori ({subcontractori.length})</button>
+      </div>
+      
+      {/* CESIUNI tab */}
+      {vizibil === 'cesiuni' && (<>
+        {/* Filtre cesiuni */}
+        <div style={{...S.card, padding: 14, marginBottom: 14}}>
+          <div style={{display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center'}}>
+            <input placeholder="🔍 Caută subcontractor, factură, observații..." value={searchCes} onChange={e => setSearchCes(e.target.value)} style={{...S.input, width: 280}} />
+            <select value={subcF} onChange={e => setSubcF(e.target.value)} style={{...S.input, padding: '8px 12px'}}>
+              <option value="Toate">Toți subcontractorii</option>
+              {subcontractori.filter(s => s.active).map(s => (
+                <option key={s.id} value={s.id}>{s.nume_scurt} - {s.denumire_legala}</option>
+              ))}
+            </select>
+            <select value={statusF} onChange={e => setStatusF(e.target.value)} style={{...S.input, padding: '8px 12px'}}>
+              <option value="Toate">Toate statusurile</option>
+              <option value="pending">⏳ Pending</option>
+              <option value="compensat">✓ Compensate</option>
+              <option value="partial">◐ Parțiale</option>
+            </select>
+            {(searchCes || subcF !== 'Toate' || statusF !== 'Toate') && (
+              <button onClick={() => { setSearchCes(''); setSubcF('Toate'); setStatusF('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
+                ✕ Șterge filtre
+              </button>
+            )}
+          </div>
+        </div>
+        
+        {/* Tabel cesiuni */}
+        {load ? (
+          <div style={{display: 'flex', justifyContent: 'center', padding: 60}}><div className="sp" style={{width: 32, height: 32}}/></div>
+        ) : cesiuniFiltered.length === 0 ? (
+          <div style={{...S.card, padding: 60, textAlign: 'center', color: G.muted}}>
+            <div style={{fontSize: 40, marginBottom: 12}}>⛽</div>
+            <div style={{fontSize: 14, marginBottom: 8}}>
+              {cesiuni.length === 0 ? 'Nicio cesiune înregistrată încă.' : 'Niciun rezultat cu filtrele aplicate.'}
+            </div>
+            {cesiuni.length === 0 && canEdit && (
+              <button onClick={() => setModal({ type: 'cesiune', data: null })} style={{...S.btnP, background: '#8B5CF6', color: '#fff', marginTop: 12}}>
+                ⛽ + Înregistrează prima cesiune
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{...S.card, overflow: 'hidden'}}>
+            <div style={{overflowX: 'auto'}}>
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{width: 100, padding: '10px 12px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data</th>
+                    <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Subcontractor</th>
+                    <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Șantier</th>
+                    <th style={{width: 90, padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Litri</th>
+                    <th style={{width: 100, padding: '10px 8px', textAlign: 'right', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Valoare</th>
+                    <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Rezervor</th>
+                    <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Factură compensare</th>
+                    <th style={{width: 160, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Status</th>
+                    {canEdit && <th style={{width: 70}}></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {cesiuniFiltered.map(c => {
+                    const cfgStatus = STATUS_INFO[c.status_compensare] || STATUS_INFO['pending']
+                    return (
+                      <tr key={c.id} onClick={() => canEdit && setModal({ type: 'cesiune', data: c })} style={{cursor: canEdit ? 'pointer' : 'default'}}>
+                        <td style={{padding: '10px 12px', fontSize: 12, color: G.text, fontFamily: 'monospace'}}>{c.data_cesiune}</td>
+                        <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
+                          <div style={{fontWeight: 700, color: '#A78BFA'}}>{c.logistica_subcontractori?.nume_scurt}</div>
+                          <div style={{fontSize: 11, color: G.muted, marginTop: 1}}>{c.logistica_subcontractori?.denumire_legala}</div>
+                        </td>
+                        <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
+                          {c.sites?.name || <span style={{color: G.dim}}>—</span>}
+                        </td>
+                        <td style={{padding: '10px 8px', textAlign: 'right', fontSize: 13, fontWeight: 700, color: G.orange, fontVariantNumeric: 'tabular-nums'}}>
+                          {Number(c.cantitate_litri).toLocaleString('ro-RO', {maximumFractionDigits: 1})} L
+                        </td>
+                        <td style={{padding: '10px 8px', textAlign: 'right', fontSize: 12, color: G.green, fontVariantNumeric: 'tabular-nums', fontWeight: 600}}>
+                          {c.pret_total ? Math.round(Number(c.pret_total)).toLocaleString('ro-RO') + ' RON' : <span style={{color: G.dim}}>—</span>}
+                        </td>
+                        <td style={{padding: '10px 8px', fontSize: 11, color: G.muted}}>
+                          {c.logistica_rezervoare?.nume || <span style={{color: G.dim}}>—</span>}
+                        </td>
+                        <td style={{padding: '10px 8px', fontSize: 11, color: G.text}}>
+                          {c.factura_compensare_nr ? (
+                            <>
+                              <div style={{fontWeight: 600}}>{c.factura_compensare_nr}</div>
+                              {c.factura_compensare_data && <div style={{fontSize: 10, color: G.muted, marginTop: 1}}>{c.factura_compensare_data}</div>}
+                            </>
+                          ) : <span style={{color: G.dim}}>— de adăugat —</span>}
+                        </td>
+                        <td style={{padding: '10px 8px', textAlign: 'center'}}>
+                          <span style={{display: 'inline-block', padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, letterSpacing: '.3px', background: cfgStatus.bg, color: cfgStatus.color}}>
+                            {cfgStatus.label}
+                          </span>
+                        </td>
+                        {canEdit && (
+                          <td style={{padding: '10px 8px', textAlign: 'center'}}>
+                            <button onClick={e => { e.stopPropagation(); handleDelete(c) }} style={{background: 'transparent', border: 'none', color: G.red, fontSize: 14, cursor: 'pointer', padding: '4px 8px'}} title="Șterge cesiune">🗑</button>
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{padding: '10px 14px', borderTop: `1px solid ${G.border}`, fontSize: 11, color: G.muted, background: G.bg}}>
+              {cesiuniFiltered.length} cesiuni afișate · click pe rând pentru editare
+            </div>
+          </div>
+        )}
+      </>)}
+      
+      {/* SUBCONTRACTORI tab */}
+      {vizibil === 'subcontractori' && (
+        load ? (
+          <div style={{display: 'flex', justifyContent: 'center', padding: 60}}><div className="sp" style={{width: 32, height: 32}}/></div>
+        ) : subcontractori.length === 0 ? (
+          <div style={{...S.card, padding: 60, textAlign: 'center', color: G.muted}}>
+            <div style={{fontSize: 40, marginBottom: 12}}>👥</div>
+            <div style={{fontSize: 14, marginBottom: 8}}>Niciun subcontractor încă.</div>
+            {canEdit && (
+              <button onClick={() => setModal({ type: 'subcontractor', data: null })} style={{...S.btnP, background: '#8B5CF6', color: '#fff', marginTop: 12}}>
+                + Adaugă primul subcontractor
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{...S.card, overflow: 'hidden'}}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{width: 100, padding: '10px 12px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Nume scurt</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Denumire legală</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>CUI</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Contact</th>
+                  <th style={{width: 90, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Status</th>
+                  <th style={{width: 30}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {subcontractori.map(s => (
+                  <tr key={s.id} onClick={() => canEdit && setModal({ type: 'subcontractor', data: s })} style={{cursor: canEdit ? 'pointer' : 'default'}}>
+                    <td style={{padding: '10px 12px', fontSize: 13, fontWeight: 700, color: '#A78BFA'}}>{s.nume_scurt}</td>
+                    <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>{s.denumire_legala}</td>
+                    <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, fontFamily: 'monospace'}}>{s.cui || <span style={{color: G.dim}}>—</span>}</td>
+                    <td style={{padding: '10px 8px', fontSize: 11, color: G.muted}}>
+                      {s.contact_nume && <div style={{color: G.text}}>{s.contact_nume}</div>}
+                      {s.contact_telefon && <div>{s.contact_telefon}</div>}
+                      {s.contact_email && <div>{s.contact_email}</div>}
+                      {!s.contact_nume && !s.contact_telefon && !s.contact_email && <span style={{color: G.dim}}>—</span>}
+                    </td>
+                    <td style={{padding: '10px 8px', textAlign: 'center'}}>
+                      <span style={{display: 'inline-block', padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: s.active ? G.green + '22' : G.bg, color: s.active ? G.green : G.muted}}>
+                        {s.active ? '✓ Activ' : '✗ Inactiv'}
+                      </span>
+                    </td>
+                    <td style={{padding: '10px 8px', textAlign: 'center', color: G.dim}}>›</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+      
+      {/* Modal subcontractor */}
+      {modal?.type === 'subcontractor' && (
+        <SubcontractorModal 
+          subc={modal.data}
+          onClose={() => setModal(null)}
+          onSaved={() => { setModal(null); loadData() }}
+          showToast={showToast}
+        />
+      )}
+      
+      {/* Modal cesiune */}
+      {modal?.type === 'cesiune' && (
+        <CesiuneModal 
+          cesiune={modal.data}
+          subcontractori={subcontractori}
+          sites={sites}
+          rezervoare={rezervoare}
+          pretMotorina={pretMotorina}
+          profile={profile}
+          onClose={() => setModal(null)}
+          onSaved={handleSaveCesiune}
+          showToast={showToast}
+        />
+      )}
+    </div>
+  )
+}
+
+
+// Modal CRUD subcontractor (simple)
+function SubcontractorModal({ subc, onClose, onSaved, showToast }) {
+  const [form, setForm] = useState({
+    nume_scurt: subc?.nume_scurt || '',
+    denumire_legala: subc?.denumire_legala || '',
+    cui: subc?.cui || '',
+    contact_nume: subc?.contact_nume || '',
+    contact_telefon: subc?.contact_telefon || '',
+    contact_email: subc?.contact_email || '',
+    observatii: subc?.observatii || '',
+    active: subc?.active ?? true,
+  })
+  const [saving, setSaving] = useState(false)
+  const isEdit = !!subc?.id
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  
+  const handleSave = async () => {
+    if (!form.nume_scurt.trim() || !form.denumire_legala.trim()) {
+      showToast?.('Nume scurt și denumire legală sunt obligatorii', 'warn')
+      return
+    }
+    setSaving(true)
+    const payload = {
+      nume_scurt: form.nume_scurt.trim(),
+      denumire_legala: form.denumire_legala.trim(),
+      cui: form.cui.trim() || null,
+      contact_nume: form.contact_nume.trim() || null,
+      contact_telefon: form.contact_telefon.trim() || null,
+      contact_email: form.contact_email.trim() || null,
+      observatii: form.observatii.trim() || null,
+      active: !!form.active,
+      updated_at: new Date().toISOString(),
+    }
+    const { error } = isEdit 
+      ? await supabase.from('logistica_subcontractori').update(payload).eq('id', subc.id)
+      : await supabase.from('logistica_subcontractori').insert(payload)
+    setSaving(false)
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    showToast?.(isEdit ? 'Subcontractor actualizat' : 'Subcontractor nou adăugat', 'success')
+    onSaved?.()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20}}>
+      <div onClick={e => e.stopPropagation()} style={{background: G.surface, borderRadius: 12, padding: 24, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${G.border}`}}>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, paddingBottom: 12, borderBottom: `1px solid ${G.border}`}}>
+          <div style={{fontSize: 18, fontWeight: 800, color: G.text}}>
+            {isEdit ? '✏️ Editează subcontractor' : '+ Subcontractor nou'}
+          </div>
+          <button onClick={onClose} style={{background: 'transparent', border: 'none', color: G.muted, fontSize: 20, cursor: 'pointer'}}>×</button>
+        </div>
+        
+        <div style={{display: 'grid', gap: 12}}>
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10}}>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Nume scurt <span style={{color: G.red}}>*</span></label>
+              <input type="text" value={form.nume_scurt} onChange={e => setField('nume_scurt', e.target.value)} placeholder="ex: ARA" style={{...S.input, width: '100%'}} />
+            </div>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Denumire legală <span style={{color: G.red}}>*</span></label>
+              <input type="text" value={form.denumire_legala} onChange={e => setField('denumire_legala', e.target.value)} placeholder="ex: ARANEW CONS SRL" style={{...S.input, width: '100%'}} />
+            </div>
+          </div>
+          <div>
+            <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>CUI</label>
+            <input type="text" value={form.cui} onChange={e => setField('cui', e.target.value)} placeholder="ex: RO12345678" style={{...S.input, width: '100%'}} />
+          </div>
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Contact nume</label>
+              <input type="text" value={form.contact_nume} onChange={e => setField('contact_nume', e.target.value)} style={{...S.input, width: '100%'}} />
+            </div>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Telefon</label>
+              <input type="text" value={form.contact_telefon} onChange={e => setField('contact_telefon', e.target.value)} style={{...S.input, width: '100%'}} />
+            </div>
+          </div>
+          <div>
+            <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Email</label>
+            <input type="email" value={form.contact_email} onChange={e => setField('contact_email', e.target.value)} style={{...S.input, width: '100%'}} />
+          </div>
+          <div>
+            <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Observații</label>
+            <textarea value={form.observatii} onChange={e => setField('observatii', e.target.value)} rows={2} placeholder="ex: șantiere asignate, contract servicii nr X" style={{...S.input, width: '100%', resize: 'vertical'}} />
+          </div>
+          <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '8px 0'}}>
+            <input type="checkbox" checked={form.active} onChange={e => setField('active', e.target.checked)} style={{width: 16, height: 16, accentColor: G.green}} />
+            <span style={{fontSize: 13, color: G.text}}>Subcontractor activ</span>
+          </label>
+        </div>
+        
+        <div style={{display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18, paddingTop: 12, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} disabled={saving} style={{...S.btnS, padding: '8px 16px'}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: '#8B5CF6', color: '#fff', padding: '8px 18px'}}>
+            {saving ? '...' : (isEdit ? '✓ Salvează' : '+ Adaugă')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// Modal CRUD cesiune
+function CesiuneModal({ cesiune, subcontractori, sites, rezervoare, pretMotorina, profile, onClose, onSaved, showToast }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [form, setForm] = useState({
+    subcontractor_id: cesiune?.subcontractor_id || '',
+    data_cesiune: cesiune?.data_cesiune || today,
+    cantitate_litri: cesiune?.cantitate_litri || '',
+    pret_per_litru: cesiune?.pret_per_litru || (pretMotorina ? Number(pretMotorina).toFixed(4) : ''),
+    pret_total: cesiune?.pret_total || '',
+    rezervor_id: cesiune?.rezervor_id || (rezervoare?.[0]?.id || ''),
+    site_id: cesiune?.site_id || '',
+    factura_compensare_nr: cesiune?.factura_compensare_nr || '',
+    factura_compensare_data: cesiune?.factura_compensare_data || '',
+    status_compensare: cesiune?.status_compensare || 'pending',
+    observatii: cesiune?.observatii || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const isEdit = !!cesiune?.id
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  
+  // Auto-calc pret_total din cantitate × pret/L
+  useEffect(() => {
+    const L = Number(form.cantitate_litri || 0)
+    const pl = Number(form.pret_per_litru || 0)
+    if (L > 0 && pl > 0) {
+      setForm(p => ({ ...p, pret_total: (L * pl).toFixed(2) }))
+    }
+  }, [form.cantitate_litri, form.pret_per_litru])
+  
+  const rezervorAles = rezervoare?.find(r => r.id === Number(form.rezervor_id))
+  const stocActualRez = rezervorAles ? Number(rezervorAles.stoc_curent_litri || 0) : 0
+  const stocDupa = stocActualRez - Number(form.cantitate_litri || 0)
+  const insuficient = stocDupa < 0
+  
+  const handleSave = async () => {
+    if (!form.subcontractor_id) { showToast?.('Alege subcontractorul', 'warn'); return }
+    if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) { showToast?.('Cantitate litri trebuie > 0', 'warn'); return }
+    if (insuficient && !isEdit) {
+      if (!confirm(`⚠️ ATENȚIE: Stocul rezervorului va deveni NEGATIV (${stocDupa.toFixed(1)}L).\nContinui oricum?`)) return
+    }
+    setSaving(true)
+    const payload = {
+      subcontractor_id: Number(form.subcontractor_id),
+      data_cesiune: form.data_cesiune,
+      cantitate_litri: Number(form.cantitate_litri),
+      pret_per_litru: form.pret_per_litru ? Number(form.pret_per_litru) : null,
+      pret_total: form.pret_total ? Number(form.pret_total) : null,
+      rezervor_id: form.rezervor_id ? Number(form.rezervor_id) : null,
+      site_id: form.site_id ? Number(form.site_id) : null,
+      factura_compensare_nr: form.factura_compensare_nr.trim() || null,
+      factura_compensare_data: form.factura_compensare_data || null,
+      status_compensare: form.status_compensare,
+      observatii: form.observatii.trim() || null,
+      updated_at: new Date().toISOString(),
+    }
+    if (!isEdit) payload.creator_id = profile?.id
+    
+    const { error } = isEdit
+      ? await supabase.from('logistica_cesiuni_subcontractor').update(payload).eq('id', cesiune.id)
+      : await supabase.from('logistica_cesiuni_subcontractor').insert(payload)
+    setSaving(false)
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    showToast?.(isEdit ? 'Cesiune actualizată' : `Cesiune ${form.cantitate_litri}L înregistrată · stoc rezervor scăzut`, 'success')
+    onSaved?.()
+  }
+  
+  return (
+    <div onClick={onClose} style={{position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20}}>
+      <div onClick={e => e.stopPropagation()} style={{background: G.surface, borderRadius: 12, padding: 24, width: '100%', maxWidth: 640, maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${G.border}`}}>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, paddingBottom: 12, borderBottom: `1px solid ${G.border}`}}>
+          <div style={{fontSize: 18, fontWeight: 800, color: G.text}}>
+            {isEdit ? '✏️ Editează cesiune' : '⛽ + Cesiune motorină nouă'}
+          </div>
+          <button onClick={onClose} style={{background: 'transparent', border: 'none', color: G.muted, fontSize: 20, cursor: 'pointer'}}>×</button>
+        </div>
+        
+        <div style={{display: 'grid', gap: 12}}>
+          <div style={{display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10}}>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Subcontractor <span style={{color: G.red}}>*</span></label>
+              <select value={form.subcontractor_id} onChange={e => setField('subcontractor_id', e.target.value)} style={{...S.input, width: '100%', fontSize: 13}}>
+                <option value="">— Alege subcontractor —</option>
+                {subcontractori.filter(s => s.active).map(s => (
+                  <option key={s.id} value={s.id}>{s.nume_scurt} - {s.denumire_legala}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Data cesiune <span style={{color: G.red}}>*</span></label>
+              <input type="date" value={form.data_cesiune} onChange={e => setField('data_cesiune', e.target.value)} style={{...S.input, width: '100%'}} />
+            </div>
+          </div>
+          
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10}}>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Cantitate (litri) <span style={{color: G.red}}>*</span></label>
+              <input type="number" step="0.01" min="0" value={form.cantitate_litri} onChange={e => setField('cantitate_litri', e.target.value)} placeholder="ex: 200" style={{...S.input, width: '100%', fontWeight: 700, color: G.orange}} />
+            </div>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Preț / L (RON)</label>
+              <input type="number" step="0.0001" min="0" value={form.pret_per_litru} onChange={e => setField('pret_per_litru', e.target.value)} placeholder={pretMotorina ? Number(pretMotorina).toFixed(2) : '7.50'} style={{...S.input, width: '100%'}} />
+            </div>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Total (RON) — auto</label>
+              <input type="number" value={form.pret_total} onChange={e => setField('pret_total', e.target.value)} placeholder="auto" style={{...S.input, width: '100%', color: G.green, fontWeight: 700}} />
+            </div>
+          </div>
+          
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Rezervor sursă</label>
+              <select value={form.rezervor_id} onChange={e => setField('rezervor_id', e.target.value)} style={{...S.input, width: '100%'}}>
+                <option value="">— niciun rezervor (manual) —</option>
+                {(rezervoare || []).map(r => (
+                  <option key={r.id} value={r.id}>{r.nume} (stoc: {Math.round(Number(r.stoc_curent_litri || 0)).toLocaleString('ro-RO')}L)</option>
+                ))}
+              </select>
+              {rezervorAles && form.cantitate_litri && (
+                <div style={{fontSize: 11, marginTop: 4, color: insuficient ? G.red : G.muted}}>
+                  Stoc după cesiune: <strong style={{color: insuficient ? G.red : G.text}}>{stocDupa.toFixed(1)}L</strong>
+                  {insuficient && <span style={{color: G.red, fontWeight: 700}}> ⚠️ INSUFICIENT</span>}
+                </div>
+              )}
+            </div>
+            <div>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Șantier (opțional)</label>
+              <select value={form.site_id} onChange={e => setField('site_id', e.target.value)} style={{...S.input, width: '100%'}}>
+                <option value="">— fără șantier —</option>
+                {(sites || []).map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          
+          {/* Compensare facturi */}
+          <div style={{padding: 12, background: G.bg, borderRadius: 8, border: `1px solid ${G.border}`}}>
+            <div style={{fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 10}}>
+              📑 Compensare cu factura subcontractor
+            </div>
+            <div style={{display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10}}>
+              <div>
+                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Nr factură compensare</label>
+                <input type="text" value={form.factura_compensare_nr} onChange={e => setField('factura_compensare_nr', e.target.value)} placeholder="ex: ARA-2026-0145" style={{...S.input, width: '100%'}} />
+              </div>
+              <div>
+                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Data factură</label>
+                <input type="date" value={form.factura_compensare_data} onChange={e => setField('factura_compensare_data', e.target.value)} style={{...S.input, width: '100%'}} />
+              </div>
+              <div>
+                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Status</label>
+                <select value={form.status_compensare} onChange={e => setField('status_compensare', e.target.value)} style={{...S.input, width: '100%'}}>
+                  <option value="pending">⏳ Pending</option>
+                  <option value="partial">◐ Parțial</option>
+                  <option value="compensat">✓ Compensat</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          
+          <div>
+            <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Observații</label>
+            <textarea value={form.observatii} onChange={e => setField('observatii', e.target.value)} rows={2} placeholder="ex: cesiune pentru utilajele ARA pe Butimanu" style={{...S.input, width: '100%', resize: 'vertical'}} />
+          </div>
+        </div>
+        
+        <div style={{display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18, paddingTop: 12, borderTop: `1px solid ${G.border}`}}>
+          <button onClick={onClose} disabled={saving} style={{...S.btnS, padding: '8px 16px'}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, background: '#8B5CF6', color: '#fff', padding: '8px 18px'}}>
+            {saving ? '...' : (isEdit ? '✓ Salvează' : '⛽ Înregistrează cesiunea')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 export default function LogisticaPage() {
   const nav = useNavigate()
   const loc = useLocation()
@@ -9079,7 +9686,7 @@ export default function LogisticaPage() {
       {/* TAB: Active (default — conținutul existent) */}
       {tab === 'lista' && (<>
       
-      {/* 27.05.2026: Sub-tab bar Lista Active vs Contracte Comodat */}
+      {/* 27.05.2026: Sub-tab bar Lista Active vs Contracte Vehicule vs Subcontractori */}
       <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`}}>
         <button onClick={() => setActiveSubTab('lista')} style={{
           padding: '8px 14px', borderRadius: 7, border: 'none', cursor: 'pointer',
@@ -9104,6 +9711,13 @@ export default function LogisticaPage() {
             }}>{comodatAlerte.expirate + comodatAlerte.expira_30z + comodatAlerte.incomplete}</span>
           )}
         </button>
+        <button onClick={() => setActiveSubTab('subcontractori')} style={{
+          padding: '8px 14px', borderRadius: 7, border: 'none', cursor: 'pointer',
+          fontSize: 13, fontWeight: activeSubTab === 'subcontractori' ? 700 : 500,
+          background: activeSubTab === 'subcontractori' ? '#8B5CF622' : 'transparent',
+          color: activeSubTab === 'subcontractori' ? '#A78BFA' : G.muted,
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>🤝 Subcontractori</button>
       </div>
       
       {/* Banner alerte contracte vehicule (vizibil indiferent de sub-tab dacă există probleme) */}
@@ -9124,7 +9738,7 @@ export default function LogisticaPage() {
         </div>
       )}
       
-      {/* Render condiționat: lista activelor SAU contracte comodat */}
+      {/* Render condiționat: lista active SAU contracte vehicule SAU subcontractori */}
       {activeSubTab === 'comodat' ? (
         <ContracteComodatSection 
           active={active}
@@ -9133,6 +9747,16 @@ export default function LogisticaPage() {
           onCreateComodat={() => setModal({ mode: 'create', activ: null, prefilComodat: true })}
           canEdit={canEdit}
           showToast={showToast}
+        />
+      ) : activeSubTab === 'subcontractori' ? (
+        <SubcontractoriSection 
+          sites={sites}
+          rezervoare={rezervoare}
+          pretMotorina={pretMotorina}
+          canEdit={canEdit}
+          profile={profile}
+          showToast={showToast}
+          onRefreshRezervoare={loadAll}
         />
       ) : (<>
       
