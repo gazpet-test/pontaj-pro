@@ -24,6 +24,11 @@ const TIP_META = {
   pattern_recurent: { label: 'Pattern fraudă', icon: '🚨', color: G.red, aplicabil: false },
   drift_consum: { label: 'Drift consum', icon: '📈', color: G.yellow, aplicabil: false },
   anomalie_alimentare: { label: 'Anomalie alimentare', icon: '⚠️', color: G.orange, aplicabil: false },
+  // 27.05.2026 Scorilos v16: Cross-check Rompetrol vs EvoGPS
+  alim_fara_telemetrie: { label: 'Alim fără GPS', icon: '🛰️', color: '#A78BFA', aplicabil: false },
+  km_discrepancy_evogps: { label: 'KM discrepancy', icon: '🚩', color: '#F97316', aplicabil: false },
+  dimensiuni_lipsa: { label: 'Dimensiuni', icon: '📐', color: G.blue, aplicabil: false },
+  dimensiuni_negaste: { label: 'Dim negăsite', icon: '🔍', color: G.muted, aplicabil: false },
 }
 
 const SEV_META = {
