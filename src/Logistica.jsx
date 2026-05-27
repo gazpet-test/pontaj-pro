@@ -174,6 +174,35 @@ function StareBadge({ stare, deepSleep }) {
   return <span style={{display:'inline-block',padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:700,letterSpacing:'.3px',background:c.bg,color:c.color}}>{c.label}</span>
 }
 
+// 27.05.2026: Badge pentru vehicule comodat (proprietate personală cu contract)
+function ComodatBadge({ tipProprietate, proprietarNume, dataStart, dataSfarsit, compact = false }) {
+  if (!tipProprietate || tipProprietate === 'firma') return null
+  
+  if (tipProprietate === 'inchiriat') {
+    return <span style={{display:'inline-block',padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:700,letterSpacing:'.3px',background:'#06B6D422',color:'#22D3EE'}} title="Vehicul închiriat / leasing">🔑 ÎNCHIRIAT</span>
+  }
+  
+  // Comodat
+  const now = new Date()
+  const expired = dataSfarsit && new Date(dataSfarsit) < now
+  const expira30 = dataSfarsit && !expired && (new Date(dataSfarsit) - now) / (1000*60*60*24) <= 30
+  
+  const bgColor = expired ? '#EF444422' : (expira30 ? '#F59E0B33' : '#F59E0B22')
+  const textColor = expired ? '#EF4444' : '#F59E0B'
+  const icon = expired ? '🔴' : (expira30 ? '⚠️' : '📄')
+  const label = expired ? 'COMODAT EXPIRAT' : 'COMODAT'
+  const tooltip = `Proprietar: ${proprietarNume || '?'}${dataStart ? ' · Start: ' + dataStart : ''}${dataSfarsit ? ' · Sfârșit: ' + dataSfarsit + (expired ? ' (EXPIRAT)' : expira30 ? ' (expiră curând)' : '') : ' · Nedeterminat'}`
+  
+  return (
+    <span 
+      style={{display:'inline-block',padding:compact?'2px 8px':'3px 10px',borderRadius:12,fontSize:compact?10:11,fontWeight:700,letterSpacing:'.3px',background:bgColor,color:textColor}}
+      title={tooltip}
+    >
+      {icon} {label}{!compact && proprietarNume ? ` · ${proprietarNume.split(' ')[0]}` : ''}
+    </span>
+  )
+}
+
 function MentenantaScadenta({ data, ore }) {
   if (!data && !ore) return <span style={{color: G.dim, fontSize: 12}}>—</span>
   const days = daysUntil(data)
@@ -1146,6 +1175,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     deep_sleep: a?.deep_sleep || false,
     deep_sleep_motiv: a?.deep_sleep_motiv || '',
     deep_sleep_data: a?.deep_sleep_data || '',
+    // 27.05.2026: Contract de comodat (vehicul personal angajat folosit la firmă)
+    tip_proprietate: a?.tip_proprietate || 'firma',
+    comodat_employee_id: a?.comodat_employee_id || null,
+    comodat_data_start: a?.comodat_data_start || '',
+    comodat_data_sfarsit: a?.comodat_data_sfarsit || '',
+    comodat_contract_path: a?.comodat_contract_path || '',
+    comodat_observatii: a?.comodat_observatii || '',
   })
   
   const [form, setForm] = useState(fromActiv(activ))
@@ -1161,6 +1197,70 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   const [savingAjust, setSavingAjust] = useState(false)
   const [istoricAjustari, setIstoricAjustari] = useState([])
   const [showIstoricAjust, setShowIstoricAjust] = useState(false)
+  
+  // 27.05.2026: Comodat - employees list + upload state
+  const [employeesList, setEmployeesList] = useState([])
+  const [uploadingContract, setUploadingContract] = useState(false)
+  const [contractPreviewUrl, setContractPreviewUrl] = useState(null)
+  
+  // Load employees pentru dropdown proprietar comodat
+  useEffect(() => {
+    supabase.from('employees')
+      .select('id, name, cnp')
+      .eq('activ', true)
+      .order('name')
+      .then(({ data }) => setEmployeesList(data || []))
+  }, [])
+  
+  // Upload PDF contract comodat în bucket
+  const handleUploadContract = async (file) => {
+    if (!file) return
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Fișier prea mare (max 10MB)', 'warn')
+      return
+    }
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+    if (!allowedTypes.includes(file.type)) {
+      showToast('Format invalid (acceptat: PDF, JPG, PNG, WEBP)', 'warn')
+      return
+    }
+    setUploadingContract(true)
+    try {
+      const vehiculId = activ?.id || 'new'
+      const dateStr = new Date().toISOString().slice(0, 10)
+      const uuid = Math.random().toString(36).slice(2, 10)
+      const ext = file.name.split('.').pop() || 'pdf'
+      const path = `${vehiculId}/${dateStr}_${uuid}.${ext}`
+      
+      const { error: uploadErr } = await supabase.storage
+        .from('contracte-comodat')
+        .upload(path, file, { upsert: false, contentType: file.type })
+      
+      if (uploadErr) throw uploadErr
+      
+      setField('comodat_contract_path', path)
+      showToast(`✅ Contract încărcat: ${file.name}`, 'success')
+    } catch (e) {
+      console.error('Upload contract:', e)
+      showToast('Eroare upload: ' + e.message, 'error')
+    } finally {
+      setUploadingContract(false)
+    }
+  }
+  
+  // Preview PDF contract existent
+  const handlePreviewContract = async () => {
+    if (!form.comodat_contract_path) return
+    try {
+      const { data, error } = await supabase.storage
+        .from('contracte-comodat')
+        .createSignedUrl(form.comodat_contract_path, 60)
+      if (error) throw error
+      setContractPreviewUrl(data.signedUrl)
+    } catch (e) {
+      showToast('Eroare preview: ' + e.message, 'error')
+    }
+  }
   
   // Fetch istoric + alimentări când se deschide în view
   useEffect(() => {
@@ -1336,6 +1436,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       deep_sleep: !!form.deep_sleep,
       deep_sleep_motiv: form.deep_sleep ? (form.deep_sleep_motiv?.trim() || null) : null,
       deep_sleep_data: form.deep_sleep ? (form.deep_sleep_data || new Date().toISOString().split('T')[0]) : null,
+      // 27.05.2026: Contract de comodat
+      tip_proprietate: form.tip_proprietate || 'firma',
+      comodat_employee_id: form.tip_proprietate === 'comodat' ? (form.comodat_employee_id || null) : null,
+      comodat_data_start: form.tip_proprietate === 'comodat' ? (form.comodat_data_start || null) : null,
+      comodat_data_sfarsit: form.tip_proprietate === 'comodat' ? (form.comodat_data_sfarsit || null) : null,
+      comodat_contract_path: form.tip_proprietate === 'comodat' ? (form.comodat_contract_path?.trim() || null) : null,
+      comodat_observatii: form.tip_proprietate === 'comodat' ? (form.comodat_observatii?.trim() || null) : null,
     }
     
     let result
@@ -1426,6 +1533,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                 {activ?.cod_intern && <span style={{background: G.blue+'22', color: G.blue, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 12}}>{activ.cod_intern}</span>}
                 {activ?.nr_inmatriculare && <span style={{background: G.purple+'22', color: G.purple, fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 12}}>🚗 {activ.nr_inmatriculare}</span>}
                 <StareBadge stare={activ?.stare} deepSleep={activ?.deep_sleep} />
+                {/* 27.05.2026: Badge proprietate vehicul (comodat / închiriat) */}
+                <ComodatBadge 
+                  tipProprietate={activ?.tip_proprietate}
+                  proprietarNume={employeesList.find(e => e.id === activ?.comodat_employee_id)?.name}
+                  dataStart={activ?.comodat_data_start}
+                  dataSfarsit={activ?.comodat_data_sfarsit}
+                />
               </div>
             )}
           </div>
@@ -1487,6 +1601,155 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="An fabricație" value={form.an_fabricatie} onChange={v => setField('an_fabricatie', v)} type="number" placeholder="ex: 2018" readonly={isReadOnly} />
             <FieldSelect label="Stare" value={form.stare} onChange={v => setField('stare', v)} options={STARI} readonly={isReadOnly} />
           </div>
+        </div>
+        
+        {/* 27.05.2026: Contract de Comodat — vehicul personal angajat folosit la firmă */}
+        <div style={{
+          marginBottom: 14, 
+          background: form.tip_proprietate === 'comodat' ? '#F59E0B22' : 'transparent', 
+          border: form.tip_proprietate === 'comodat' ? '1px solid #F59E0B66' : `1px dashed ${G.border}`, 
+          borderRadius: 10, padding: 14
+        }}>
+          <div style={{fontSize: 11, color: form.tip_proprietate === 'comodat' ? '#F59E0B' : G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10}}>
+            📄 Proprietate vehicul
+          </div>
+          
+          {/* Radio tip proprietate */}
+          <div style={{display: 'flex', gap: 10, marginBottom: form.tip_proprietate === 'comodat' ? 14 : 0, flexWrap: 'wrap'}}>
+            {[
+              {val: 'firma', label: '🏢 Firmă', desc: 'Vehicul în proprietatea firmei (default)'},
+              {val: 'comodat', label: '📄 Comodat', desc: 'Vehicul personal cu contract'},
+              {val: 'inchiriat', label: '🔑 Închiriat', desc: 'Leasing / rent-a-car'},
+            ].map(opt => (
+              <label key={opt.val} style={{
+                display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer',
+                padding: '8px 14px', borderRadius: 8,
+                background: form.tip_proprietate === opt.val ? (opt.val === 'comodat' ? '#F59E0B33' : G.surface) : G.bg,
+                border: `1px solid ${form.tip_proprietate === opt.val ? (opt.val === 'comodat' ? '#F59E0B' : G.logistica) : G.border}`,
+                fontSize: 12, fontWeight: form.tip_proprietate === opt.val ? 700 : 500,
+                color: form.tip_proprietate === opt.val ? G.text : G.muted, flex: '1 1 200px',
+              }}>
+                <input
+                  type="radio" name="tip_proprietate"
+                  value={opt.val}
+                  checked={form.tip_proprietate === opt.val}
+                  disabled={isReadOnly}
+                  onChange={e => setField('tip_proprietate', e.target.value)}
+                  style={{width: 14, height: 14}}
+                />
+                <div>
+                  <div>{opt.label}</div>
+                  <div style={{fontSize: 9, color: G.muted, fontWeight: 400, marginTop: 1}}>{opt.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+          
+          {/* Panou Comodat - vizibil doar dacă tip_proprietate=comodat */}
+          {form.tip_proprietate === 'comodat' && (
+            <div style={{padding: 14, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8}}>
+              <div style={{fontSize: 11, color: '#F59E0B', fontWeight: 700, marginBottom: 10}}>
+                Contract de Comodat — Detalii
+              </div>
+              
+              {/* Proprietar (employee) */}
+              <div style={{marginBottom: 12}}>
+                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                  👤 Proprietar (angajat Gazpet)
+                </label>
+                <select
+                  value={form.comodat_employee_id || ''}
+                  onChange={e => setField('comodat_employee_id', e.target.value ? Number(e.target.value) : null)}
+                  disabled={isReadOnly}
+                  style={{...S.input, width: '100%', fontSize: 13}}
+                >
+                  <option value="">— Selectează angajatul proprietar —</option>
+                  {employeesList.map(e => (
+                    <option key={e.id} value={e.id}>{e.name}</option>
+                  ))}
+                </select>
+              </div>
+              
+              {/* Date contract */}
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12}}>
+                <div>
+                  <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                    📅 Data început contract <span style={{color: G.red}}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={form.comodat_data_start || ''}
+                    onChange={e => setField('comodat_data_start', e.target.value)}
+                    disabled={isReadOnly}
+                    style={{...S.input, width: '100%'}}
+                  />
+                </div>
+                <div>
+                  <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                    📅 Data sfârșit (gol = nedeterminat)
+                  </label>
+                  <input
+                    type="date"
+                    value={form.comodat_data_sfarsit || ''}
+                    onChange={e => setField('comodat_data_sfarsit', e.target.value)}
+                    disabled={isReadOnly}
+                    style={{...S.input, width: '100%'}}
+                  />
+                </div>
+              </div>
+              
+              {/* Upload PDF contract */}
+              <div style={{marginBottom: 12}}>
+                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                  📎 Contract PDF / poză (max 10MB)
+                </label>
+                {form.comodat_contract_path ? (
+                  <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
+                    <div style={{flex: 1, padding: '8px 12px', background: G.green + '22', color: G.green, borderRadius: 6, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6}}>
+                      ✅ Contract încărcat
+                    </div>
+                    <button type="button" onClick={handlePreviewContract}
+                      style={{padding: '8px 14px', background: G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600}}
+                    >👁 Preview</button>
+                    {!isReadOnly && (
+                      <button type="button" onClick={() => setField('comodat_contract_path', '')}
+                        style={{padding: '8px 12px', background: G.red + '22', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600}}
+                      >🗑 Șterge</button>
+                    )}
+                  </div>
+                ) : (
+                  <label style={{
+                    display: 'block', padding: '14px', textAlign: 'center',
+                    background: G.bg, border: `2px dashed ${G.border}`, borderRadius: 8,
+                    cursor: isReadOnly || uploadingContract ? 'not-allowed' : 'pointer',
+                    color: G.muted, fontSize: 12,
+                  }}>
+                    <input type="file" accept=".pdf,image/jpeg,image/png,image/webp" 
+                      onChange={e => handleUploadContract(e.target.files?.[0])}
+                      disabled={isReadOnly || uploadingContract}
+                      style={{display: 'none'}}
+                    />
+                    {uploadingContract ? '⏳ Se încarcă...' : '📎 Click pentru a încărca contractul (PDF / JPG / PNG)'}
+                  </label>
+                )}
+              </div>
+              
+              {/* Observații */}
+              <div>
+                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                  📝 Observații (opțional)
+                </label>
+                <textarea
+                  value={form.comodat_observatii || ''}
+                  onChange={e => setField('comodat_observatii', e.target.value)}
+                  disabled={isReadOnly}
+                  rows={2}
+                  placeholder="ex: mențiuni legale, restricții utilizare, durată implicită"
+                  style={{...S.input, width: '100%', resize: 'vertical', fontSize: 12}}
+                />
+              </div>
+            </div>
+          )}
         </div>
         
         {/* ETAPA 8.7: Deep Sleep — utilaj stricat lung, exclus din alerte */}
@@ -2014,6 +2277,32 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           }}
           showToast={showToast}
         />
+      )}
+      
+      {/* 27.05.2026: Modal preview contract comodat PDF */}
+      {contractPreviewUrl && (
+        <div onClick={() => setContractPreviewUrl(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 99999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, cursor: 'pointer',
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: G.surface, borderRadius: 10, padding: 14,
+            width: '90%', height: '90vh', maxWidth: 900, display: 'flex', flexDirection: 'column',
+          }}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
+              <div style={{fontSize: 14, fontWeight: 700, color: G.text}}>📄 Contract de Comodat</div>
+              <button onClick={() => setContractPreviewUrl(null)} style={{
+                padding: '6px 14px', background: G.red, color: '#fff', border: 'none',
+                borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+              }}>✕ Închide</button>
+            </div>
+            {contractPreviewUrl.toLowerCase().includes('.pdf') ? (
+              <iframe src={contractPreviewUrl} style={{flex: 1, border: 'none', borderRadius: 6, background: '#fff'}} title="Contract Comodat" />
+            ) : (
+              <img src={contractPreviewUrl} alt="Contract Comodat" style={{flex: 1, objectFit: 'contain', maxHeight: '100%', borderRadius: 6, background: '#fff'}} />
+            )}
+          </div>
+        </div>
       )}
     </div>
   )
