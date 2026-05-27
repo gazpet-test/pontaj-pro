@@ -2366,6 +2366,7 @@ function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0, co
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
     { key: 'arhiva_alimentari', icon: '📊', label: 'Arhivă Alimentări' },
+    { key: 'audit_anaf', icon: '💰', label: 'Split ANAF' },
     ...(canSeeBotSugestii ? [{ key: 'bot-sugestii', icon: '⚔️', label: 'Sugestii Scorilos', badge: sugestiiCount }] : []),
   ]
   return (
@@ -7816,6 +7817,345 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
 const thStyleAlim = { padding: '10px 12px', textAlign: 'left', color: '#8B949E', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px' }
 
 
+// ============================================================
+// SPLIT ANAF — Audit firmă vs comodat vs cesiune (27.05.2026)
+// 3 perspective: lunar / trimestrial / anual
+// 3 categorii: firmă proprie / comodat / cesiune subcontractor
+// ============================================================
+function AuditAnafSplitPage({ profile, showToast }) {
+  const [subTab, setSubTab] = useState('lunar')  // lunar | trim | anual
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [statieFilter, setStatieFilter] = useState('Toate')  // filtru opțional pe stație în detail
+  const [statiiList, setStatiiList] = useState([])
+  
+  const VIEW_MAP = {
+    lunar: { view: 'v_audit_split_lunar', label_col: 'luna_label', order_col: 'luna' },
+    trim:  { view: 'v_audit_split_trim',  label_col: 'trim_label', order_col: 'trimestru' },
+    anual: { view: 'v_audit_split_anual', label_col: 'year_num',   order_col: 'an' },
+  }
+  
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const cfg = VIEW_MAP[subTab]
+        const { data, error } = await supabase.from(cfg.view).select('*').order(cfg.order_col, { ascending: false })
+        if (cancelled) return
+        if (error) throw error
+        setRows(data || [])
+      } catch (e) {
+        showToast?.('Eroare la încărcare: ' + e.message, 'error')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [subTab])
+  
+  // Încarc lista stații distincte din detail (pentru filtru export Excel)
+  useEffect(() => {
+    let cancelled = false
+    async function loadStatii() {
+      const oneYearAgo = new Date(Date.now() - 365*24*3600*1000).toISOString().slice(0,10)
+      const { data } = await supabase
+        .from('v_audit_split_detail')
+        .select('statie_combustibil')
+        .gte('data_op', oneYearAgo)
+        .limit(1000)
+      if (cancelled || !data) return
+      const setS = new Set()
+      data.forEach(r => r.statie_combustibil && setS.add(r.statie_combustibil))
+      setStatiiList([...setS].sort())
+    }
+    loadStatii()
+    return () => { cancelled = true }
+  }, [])
+  
+  // KPI ultima perioadă completă (al doilea rând, primul e luna curentă incompletă pentru lunar)
+  const ultimaCompleta = rows.length > 0 ? rows[subTab === 'lunar' ? Math.min(1, rows.length - 1) : 0] : null
+  
+  // Helpers formatare
+  const fmtL = (v) => (Number(v) || 0).toLocaleString('ro-RO', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+  const fmtLei = (v) => (Number(v) || 0).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const pct = (part, total) => {
+    const p = Number(part) || 0, t = Number(total) || 0
+    if (t === 0) return '0%'
+    return ((p / t) * 100).toFixed(1) + '%'
+  }
+  
+  // EXPORT Excel format ANAF
+  async function exportExcel() {
+    try {
+      const XLSX = await import('xlsx-js-style')
+      const wb = XLSX.utils.book_new()
+      
+      // SHEET 1: Centralizator pe perioadă
+      const headerRow = subTab === 'lunar' ? 'Luna' : (subTab === 'trim' ? 'Trimestru' : 'An')
+      const cfg = VIEW_MAP[subTab]
+      const centralizator = [
+        [`Audit Split ANAF — ${subTab === 'lunar' ? 'Lunar 12 luni' : (subTab === 'trim' ? 'Trimestrial' : 'Anual')}`],
+        [`Generat: ${new Date().toLocaleString('ro-RO')} | Operator: ${profile?.name || 'N/A'}`],
+        [],
+        [headerRow, 'Firmă proprie L', 'Firmă proprie Lei', 'Op firmă',
+         'Comodat L', 'Comodat Lei', 'Op comodat',
+         'Cesiune L', 'Cesiune Lei', 'Op cesiune',
+         'TOTAL L', 'TOTAL Lei', 'TOTAL Op'],
+      ]
+      let sumL = 0, sumLei = 0, sumOp = 0, sumFirL = 0, sumFirLei = 0, sumComL = 0, sumComLei = 0, sumCesL = 0, sumCesLei = 0
+      rows.forEach(r => {
+        const label = subTab === 'lunar' ? r.luna_label : (subTab === 'trim' ? r.trim_label : r.year_num)
+        centralizator.push([
+          label,
+          Number(r.litri_firma) || 0, Number(r.lei_firma) || 0, r.nr_op_firma,
+          Number(r.litri_comodat) || 0, Number(r.lei_comodat) || 0, r.nr_op_comodat,
+          Number(r.litri_cesiune) || 0, Number(r.lei_cesiune) || 0, r.nr_op_cesiune,
+          Number(r.litri_total) || 0, Number(r.lei_total) || 0, r.nr_op_total,
+        ])
+        sumFirL += Number(r.litri_firma) || 0
+        sumFirLei += Number(r.lei_firma) || 0
+        sumComL += Number(r.litri_comodat) || 0
+        sumComLei += Number(r.lei_comodat) || 0
+        sumCesL += Number(r.litri_cesiune) || 0
+        sumCesLei += Number(r.lei_cesiune) || 0
+        sumL += Number(r.litri_total) || 0
+        sumLei += Number(r.lei_total) || 0
+        sumOp += r.nr_op_total || 0
+      })
+      centralizator.push(['TOTAL', sumFirL, sumFirLei, '—', sumComL, sumComLei, '—', sumCesL, sumCesLei, '—', sumL, sumLei, sumOp])
+      
+      const ws1 = XLSX.utils.aoa_to_sheet(centralizator)
+      ws1['!cols'] = [{wch:20},{wch:14},{wch:14},{wch:10},{wch:14},{wch:14},{wch:10},{wch:14},{wch:14},{wch:10},{wch:14},{wch:14},{wch:10}]
+      // Style title
+      if (ws1['A1']) ws1['A1'].s = { font: { bold: true, sz: 14 }, alignment: { horizontal: 'left' } }
+      if (ws1['A2']) ws1['A2'].s = { font: { italic: true, sz: 10, color: { rgb: '666666' } } }
+      // Header row style (row 4 in Excel terms, index 3)
+      const headerCols = ['A','B','C','D','E','F','G','H','I','J','K','L','M']
+      headerCols.forEach(col => {
+        const cell = ws1[`${col}4`]
+        if (cell) cell.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '2563EB' } }, alignment: { horizontal: 'center' } }
+      })
+      // Total row style
+      const lastRow = centralizator.length
+      headerCols.forEach(col => {
+        const cell = ws1[`${col}${lastRow}`]
+        if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: 'FEF3C7' } } }
+      })
+      XLSX.utils.book_append_sheet(wb, ws1, 'Centralizator')
+      
+      // SHEET 2: Detaliu cu toate operațiunile (cu filtru stație opțional)
+      const earliest = rows.length > 0 ? (rows[rows.length-1].luna || rows[rows.length-1].trimestru || rows[rows.length-1].an) : new Date().toISOString().slice(0,10)
+      let detailQuery = supabase.from('v_audit_split_detail')
+        .select('*')
+        .gte('data_op', earliest)
+        .order('data_op', { ascending: false })
+        .limit(5000)
+      if (statieFilter !== 'Toate') {
+        detailQuery = detailQuery.eq('statie_combustibil', statieFilter)
+      }
+      const { data: detail } = await detailQuery
+      
+      if (detail && detail.length > 0) {
+        const detailRows = [
+          ['Data', 'Sursa', 'Categorie ANAF', 'Stație', 'Vehicul/Subcontractor', 'Nr înmatr', 'Litri', 'Preț/L', 'Valoare Lei', 'Nr factură', 'Observații']
+        ]
+        detail.forEach(d => {
+          detailRows.push([
+            d.data_op, d.sursa_record,
+            d.categorie === 'firma_proprie' ? 'Firmă proprie' : (d.categorie === 'comodat' ? 'Comodat' : 'Cesiune subcontractor'),
+            d.statie_combustibil || '—',
+            d.vehicul || d.subcontractor_nume || '—',
+            d.nr_inmatriculare || '—',
+            Number(d.cantitate_litri) || 0,
+            Number(d.pret_per_litru) || 0,
+            Number(d.valoare_lei) || 0,
+            d.numar_factura || '—',
+            (d.observatii || '').slice(0, 100),
+          ])
+        })
+        const ws2 = XLSX.utils.aoa_to_sheet(detailRows)
+        ws2['!cols'] = [{wch:12},{wch:12},{wch:20},{wch:25},{wch:30},{wch:14},{wch:10},{wch:10},{wch:14},{wch:16},{wch:40}]
+        // Header style
+        ['A','B','C','D','E','F','G','H','I','J','K'].forEach(col => {
+          const cell = ws2[`${col}1`]
+          if (cell) cell.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '2563EB' } } }
+        })
+        XLSX.utils.book_append_sheet(wb, ws2, `Detaliu (${detail.length} op)`)
+      }
+      
+      const fileName = `audit_split_anaf_${subTab}_${new Date().toISOString().slice(0,10)}.xlsx`
+      XLSX.writeFile(wb, fileName)
+      showToast?.(`Export gata: ${fileName}`, 'success')
+    } catch (e) {
+      showToast?.('Eroare export: ' + e.message, 'error')
+    }
+  }
+  
+  return (
+    <div>
+      <div style={{...S.card, padding: 18, marginBottom: 14, background: 'linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%)', border: '1px solid #F59E0B'}}>
+        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: '#92400E', marginBottom: 4}}>💰 Audit Split ANAF</div>
+            <div style={{fontSize: 12, color: '#78350F'}}>
+              Defalcare alimentări + cesiuni pe 3 categorii contabile distincte ANAF: 🏢 Firmă proprie · 📋 Comodat (vehicule închiriate) · 🔧 Cesiune subcontractor
+            </div>
+          </div>
+          <button onClick={exportExcel} disabled={loading || rows.length === 0} style={{
+            padding: '10px 18px', background: '#059669', color: '#fff', border: 'none', borderRadius: 8,
+            fontWeight: 700, fontSize: 13, cursor: loading ? 'wait' : 'pointer', opacity: loading ? .6 : 1,
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}>📥 Export Excel ANAF</button>
+        </div>
+      </div>
+      
+      {/* Sub-tabs perspective */}
+      <div style={{display: 'flex', gap: 4, marginBottom: 14, padding: 4, background: G.surface, borderRadius: 10, border: `1px solid ${G.border}`}}>
+        {[
+          { key: 'lunar', icon: '📅', label: 'Lunar (12 luni)' },
+          { key: 'trim',  icon: '🗓️', label: 'Trimestrial (Q1-Q4)' },
+          { key: 'anual', icon: '📆', label: 'Anual (5 ani)' },
+        ].map(t => {
+          const active = subTab === t.key
+          return (
+            <button key={t.key} onClick={() => setSubTab(t.key)} style={{
+              padding: '8px 16px', borderRadius: 7, border: 'none', cursor: 'pointer',
+              fontSize: 13, fontWeight: active ? 700 : 500,
+              background: active ? G.logistica + '22' : 'transparent',
+              color: active ? G.logistica : G.muted,
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <span style={{fontSize: 14}}>{t.icon}</span>
+              {t.label}
+            </button>
+          )
+        })}
+        {/* Filter stație opțional (afectează doar exportul Excel) */}
+        <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8}}>
+          <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>Filtru export:</span>
+          <select value={statieFilter} onChange={e => setStatieFilter(e.target.value)} style={{
+            padding: '6px 10px', borderRadius: 6, border: `1px solid ${G.border}`, fontSize: 12,
+            background: G.surface, color: G.text,
+          }}>
+            <option value="Toate">Toate stațiile</option>
+            {statiiList.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      
+      {/* KPI Cards pentru ultima perioadă completă */}
+      {ultimaCompleta && (
+        <div style={{marginBottom: 14}}>
+          <div style={{fontSize: 12, color: G.muted, marginBottom: 8, fontWeight: 600}}>
+            Ultima perioadă completă: <strong style={{color: G.text}}>
+              {subTab === 'lunar' ? ultimaCompleta.luna_label : (subTab === 'trim' ? ultimaCompleta.trim_label : ultimaCompleta.year_num)}
+            </strong>
+          </div>
+          <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12}}>
+            {/* Firmă proprie */}
+            <div style={{...S.card, padding: 16, borderLeft: '4px solid #10B981'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
+                <span style={{fontSize: 22}}>🏢</span>
+                <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>FIRMĂ PROPRIE</div>
+              </div>
+              <div style={{fontSize: 24, fontWeight: 800, color: '#10B981', marginBottom: 2}}>{fmtLei(ultimaCompleta.lei_firma)} lei</div>
+              <div style={{fontSize: 12, color: G.muted}}>{fmtL(ultimaCompleta.litri_firma)} L · {ultimaCompleta.nr_op_firma} op · {pct(ultimaCompleta.litri_firma, ultimaCompleta.litri_total)}</div>
+            </div>
+            {/* Comodat */}
+            <div style={{...S.card, padding: 16, borderLeft: '4px solid #F59E0B'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
+                <span style={{fontSize: 22}}>📋</span>
+                <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>COMODAT / ÎNCHIRIAT</div>
+              </div>
+              <div style={{fontSize: 24, fontWeight: 800, color: '#F59E0B', marginBottom: 2}}>{fmtLei(ultimaCompleta.lei_comodat)} lei</div>
+              <div style={{fontSize: 12, color: G.muted}}>{fmtL(ultimaCompleta.litri_comodat)} L · {ultimaCompleta.nr_op_comodat} op · {pct(ultimaCompleta.litri_comodat, ultimaCompleta.litri_total)}</div>
+            </div>
+            {/* Cesiune */}
+            <div style={{...S.card, padding: 16, borderLeft: '4px solid #8B5CF6'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
+                <span style={{fontSize: 22}}>🔧</span>
+                <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>CESIUNE SUBCONTRACTOR</div>
+              </div>
+              <div style={{fontSize: 24, fontWeight: 800, color: '#8B5CF6', marginBottom: 2}}>{fmtLei(ultimaCompleta.lei_cesiune)} lei</div>
+              <div style={{fontSize: 12, color: G.muted}}>{fmtL(ultimaCompleta.litri_cesiune)} L · {ultimaCompleta.nr_op_cesiune} op · {pct(ultimaCompleta.litri_cesiune, ultimaCompleta.litri_total)}</div>
+            </div>
+            {/* Total */}
+            <div style={{...S.card, padding: 16, borderLeft: '4px solid #2563EB', background: '#EFF6FF'}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8}}>
+                <span style={{fontSize: 22}}>💰</span>
+                <div style={{fontSize: 13, fontWeight: 700, color: G.text}}>TOTAL</div>
+              </div>
+              <div style={{fontSize: 24, fontWeight: 800, color: '#2563EB', marginBottom: 2}}>{fmtLei(ultimaCompleta.lei_total)} lei</div>
+              <div style={{fontSize: 12, color: G.muted}}>{fmtL(ultimaCompleta.litri_total)} L · {ultimaCompleta.nr_op_total} op</div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Tabel istoric per perioadă */}
+      <div style={S.card}>
+        <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, fontWeight: 700, color: G.text, fontSize: 14}}>
+          📊 Istoric defalcat — {subTab === 'lunar' ? '12 luni' : (subTab === 'trim' ? '8 trimestre' : '5 ani')}
+        </div>
+        {loading ? (
+          <div style={{padding: 40, textAlign: 'center', color: G.muted}}>Se încarcă...</div>
+        ) : rows.length === 0 ? (
+          <div style={{padding: 40, textAlign: 'center', color: G.muted}}>Niciun rezultat.</div>
+        ) : (
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13}}>
+              <thead>
+                <tr style={{background: G.bg}}>
+                  <th style={thStyleAlim}>Perioadă</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#10B981'}}>🏢 Firmă L</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#10B981'}}>🏢 Firmă Lei</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#F59E0B'}}>📋 Comodat L</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#F59E0B'}}>📋 Comodat Lei</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#8B5CF6'}}>🔧 Cesiune L</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#8B5CF6'}}>🔧 Cesiune Lei</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#2563EB'}}>💰 TOTAL L</th>
+                  <th style={{...thStyleAlim, textAlign: 'right', color: '#2563EB'}}>💰 TOTAL Lei</th>
+                  <th style={{...thStyleAlim, textAlign: 'center'}}>Op</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const isEmpty = !r.litri_total || Number(r.litri_total) === 0
+                  return (
+                    <tr key={i} style={{borderTop: `1px solid ${G.border}`, opacity: isEmpty ? 0.4 : 1}}>
+                      <td style={{padding: '10px 12px', fontWeight: 600, color: G.text}}>
+                        {subTab === 'lunar' ? r.luna_label : (subTab === 'trim' ? r.trim_label : r.year_num)}
+                      </td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: G.text}}>{fmtL(r.litri_firma)}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: G.text, fontWeight: 600}}>{fmtLei(r.lei_firma)}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: G.muted}}>{Number(r.litri_comodat) > 0 ? fmtL(r.litri_comodat) : '—'}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: G.muted}}>{Number(r.lei_comodat) > 0 ? fmtLei(r.lei_comodat) : '—'}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: G.muted}}>{Number(r.litri_cesiune) > 0 ? fmtL(r.litri_cesiune) : '—'}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: G.muted}}>{Number(r.lei_cesiune) > 0 ? fmtLei(r.lei_cesiune) : '—'}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: '#2563EB', fontWeight: 700}}>{fmtL(r.litri_total)}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'right', color: '#2563EB', fontWeight: 700}}>{fmtLei(r.lei_total)}</td>
+                      <td style={{padding: '10px 12px', textAlign: 'center', color: G.muted}}>{r.nr_op_total || 0}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      <div style={{marginTop: 12, padding: '10px 14px', background: G.bg, borderRadius: 8, fontSize: 11, color: G.muted, lineHeight: 1.6}}>
+        💡 <strong>Notă pentru contabilitate:</strong> Cele 3 categorii sunt înregistrate pe conturi distincte ANAF. 
+        <br/>• <strong>Firmă proprie</strong> = vehicule deținute de Gazpet Instal (cheltuieli deductibile integral).
+        <br/>• <strong>Comodat/închiriat</strong> = vehicule cu contract activ comodat sau închiriere de la altă firmă (cu limită lunară agreată).
+        <br/>• <strong>Cesiune subcontractor</strong> = motorină predată subcontractorilor cu compensare prin factură ulterioară.
+      </div>
+    </div>
+  )
+}
+
 
 // ─── Etapa 8.5: Buton Alerte Globale + Sidebar lateral ──────────────────────
 function AlerteGlobalButton({ alerte, onClick }) {
@@ -9922,6 +10262,11 @@ export default function LogisticaPage() {
           pretMotorina={pretMotorina}
           showToast={showToast} 
         />
+      )}
+      
+      {/* TAB: Split ANAF (Audit firmă vs comodat vs cesiune) - 27.05.2026 */}
+      {tab === 'audit_anaf' && (
+        <AuditAnafSplitPage profile={profile} showToast={showToast} />
       )}
       
       {/* TAB: Active (default — conținutul existent) */}
