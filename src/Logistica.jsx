@@ -1183,6 +1183,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     comodat_data_sfarsit: a?.comodat_data_sfarsit || '',
     comodat_contract_path: a?.comodat_contract_path || '',
     comodat_observatii: a?.comodat_observatii || '',
+    comodat_litri_lunari_agreati: a?.comodat_litri_lunari_agreati || '',
     // 27.05.2026: Pentru vehicule ÎNCHIRIATE - numele firmei furnizoare
     inchiriere_furnizor: a?.inchiriere_furnizor || '',
   })
@@ -1446,6 +1447,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       comodat_data_sfarsit: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_data_sfarsit || null) : null,
       comodat_contract_path: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_contract_path?.trim() || null) : null,
       comodat_observatii: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_observatii?.trim() || null) : null,
+      comodat_litri_lunari_agreati: form.tip_proprietate === 'comodat' && form.comodat_litri_lunari_agreati ? Number(form.comodat_litri_lunari_agreati) : null,
       inchiriere_furnizor: form.tip_proprietate === 'inchiriat' ? (form.inchiriere_furnizor?.trim() || null) : null,
     }
     
@@ -1673,6 +1675,26 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                       <option key={e.id} value={e.id}>{e.name}</option>
                     ))}
                   </select>
+                </div>
+              )}
+              
+              {/* COMODAT: Limită lunară agreată */}
+              {form.tip_proprietate === 'comodat' && (
+                <div style={{marginBottom: 12}}>
+                  <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                    ⛽ Cantitate motorină / lună agreată (L) — opțional
+                  </label>
+                  <input
+                    type="number" step="0.01" min="0"
+                    value={form.comodat_litri_lunari_agreati || ''}
+                    onChange={e => setField('comodat_litri_lunari_agreati', e.target.value)}
+                    disabled={isReadOnly}
+                    placeholder="ex: 200"
+                    style={{...S.input, width: '100%', fontSize: 13}}
+                  />
+                  <div style={{fontSize: 10, color: G.muted, marginTop: 4}}>
+                    Sistemul va alerta când consumul lunar depășește această limită. Lasă gol dacă nu există limită.
+                  </div>
                 </div>
               )}
               
@@ -7862,6 +7884,7 @@ function AlerteGlobaleSidebar({ open, onClose, alerte, onNavigate }) {
 // ─── 27.05.2026: Secțiune Contracte Vehicule (Comodat + Închiriate) — sub-tab Active
 function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCreateComodat, canEdit, showToast }) {
   const [contracteList, setContracteList] = useState([])
+  const [consumLunaCurenta, setConsumLunaCurenta] = useState({}) // { active_id: { total_L, procent, status } }
   const [load, setLoad] = useState(true)
   const [statusFilter, setStatusFilter] = useState('Toate')
   const [tipFilter, setTipFilter] = useState('Toate') // NOU: Toate / comodat / inchiriat
@@ -7869,15 +7892,22 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
   
   const loadContracte = useCallback(async () => {
     setLoad(true)
-    const { data, error } = await supabase
-      .from('v_vehicule_contracte')
-      .select('*')
-    if (error) {
-      showToast?.('Eroare încărcare contracte: ' + error.message, 'error')
+    const lunaCurenta = new Date().toISOString().slice(0, 7) // 'YYYY-MM'
+    const [contracteRes, consumRes] = await Promise.all([
+      supabase.from('v_vehicule_contracte').select('*'),
+      supabase.from('v_audit_motorina_comodat').select('active_id, total_L, litri_lunari_agreati, procent_din_agreat, status_limita_lunara').eq('luna', lunaCurenta),
+    ])
+    if (contracteRes.error) {
+      showToast?.('Eroare încărcare contracte: ' + contracteRes.error.message, 'error')
       setLoad(false)
       return
     }
-    setContracteList(data || [])
+    setContracteList(contracteRes.data || [])
+    const consumMap = {}
+    ;(consumRes.data || []).forEach(c => {
+      consumMap[c.active_id] = c
+    })
+    setConsumLunaCurenta(consumMap)
     setLoad(false)
   }, [showToast])
   
@@ -7898,15 +7928,19 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
     return r
   }, [contracteList, tipFilter, statusFilter, search])
   
-  const stats = useMemo(() => ({
-    total: contracteList.length,
-    comodat: contracteList.filter(v => v.tip_proprietate === 'comodat').length,
-    inchiriat: contracteList.filter(v => v.tip_proprietate === 'inchiriat').length,
-    activ: contracteList.filter(v => v.status_contract === 'activ').length,
-    expirate: contracteList.filter(v => v.status_contract === 'expirat').length,
-    expira_30z: contracteList.filter(v => v.status_contract === 'expira_30z').length,
-    incomplete: contracteList.filter(v => v.status_contract === 'incomplet').length,
-  }), [contracteList])
+  const stats = useMemo(() => {
+    const depasiri = Object.values(consumLunaCurenta).filter(c => c.status_limita_lunara === 'depasit').length
+    return {
+      total: contracteList.length,
+      comodat: contracteList.filter(v => v.tip_proprietate === 'comodat').length,
+      inchiriat: contracteList.filter(v => v.tip_proprietate === 'inchiriat').length,
+      activ: contracteList.filter(v => v.status_contract === 'activ').length,
+      expirate: contracteList.filter(v => v.status_contract === 'expirat').length,
+      expira_30z: contracteList.filter(v => v.status_contract === 'expira_30z').length,
+      incomplete: contracteList.filter(v => v.status_contract === 'incomplet').length,
+      depasiri,
+    }
+  }, [contracteList, consumLunaCurenta])
   
   const STATUS_INFO = {
     'activ': { label: '✓ Activ', color: G.green, bg: G.green + '22' },
@@ -7946,6 +7980,17 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
         </div>
       </div>
       
+      {/* Banner alertă depășire limită lunară */}
+      {stats.depasiri > 0 && (
+        <div style={{...S.card, padding: '10px 14px', marginBottom: 12, borderLeft: `3px solid ${G.red}`, background: G.red + '11'}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 10, fontSize: 13}}>
+            <span style={{fontSize: 18}}>🚨</span>
+            <strong style={{color: G.text}}>Depășire limită lunară comodat:</strong>
+            <span style={{color: G.red, fontWeight: 700}}>{stats.depasiri} vehicule au depășit cantitatea agreată în {new Date().toLocaleDateString('ro-RO', {month: 'long', year: 'numeric'})}</span>
+          </div>
+        </div>
+      )}
+      
       {/* Stats cards */}
       <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
         <KPICard icon="📄" label="Total" value={stats.total} color={G.blue} />
@@ -7954,7 +7999,7 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
         <KPICard icon="✓" label="Active" value={stats.activ} color={G.green} />
         <KPICard icon="🔴" label="Expirate" value={stats.expirate} color={G.red} />
         <KPICard icon="⚠️" label="Expiră <30z" value={stats.expira_30z} color={G.orange} />
-        <KPICard icon="◌" label="Incomplete" value={stats.incomplete} color={G.muted} />
+        {stats.depasiri > 0 && <KPICard icon="🚨" label="Depășiri lună" value={stats.depasiri} color={G.red} />}
       </div>
       
       {/* Filtre */}
@@ -8010,8 +8055,8 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
                   <th style={{width: 110, padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Plăcuța</th>
                   <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Vehicul</th>
                   <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>👤 Proprietar / Furnizor</th>
-                  <th style={{width: 110, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data start</th>
-                  <th style={{width: 110, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data sfârșit</th>
+                  <th style={{width: 130, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>⛽ L lună / agreați</th>
+                  <th style={{width: 100, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data sfârșit</th>
                   <th style={{width: 130, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Status</th>
                   <th style={{width: 70, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>📎 PDF</th>
                   <th style={{width: 30}}></th>
@@ -8022,6 +8067,9 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
                   const cfgStatus = STATUS_INFO[v.status_contract] || STATUS_INFO['incomplet']
                   const cfgTip = TIP_INFO[v.tip_proprietate] || { icon: '?', label: '?', color: G.muted, bg: G.bg }
                   const fullActiv = active.find(a => a.id === v.active_id)
+                  const consum = consumLunaCurenta[v.active_id]
+                  const limita = fullActiv?.comodat_litri_lunari_agreati
+                  
                   return (
                     <tr key={v.active_id} onClick={() => fullActiv && onEditActiv?.(fullActiv)} style={{cursor: fullActiv ? 'pointer' : 'default'}}>
                       <td style={{padding: '10px 12px', textAlign: 'center'}}>
@@ -8034,20 +8082,35 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
                       <td style={{padding: '10px 8px', fontSize: 12, fontWeight: 700, color: G.purple}}>
                         {v.nr_inmatriculare || <span style={{color: G.dim, fontWeight: 400}}>—</span>}
                       </td>
-                      <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
-                        {v.vehicul}
-                      </td>
+                      <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>{v.vehicul}</td>
                       <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
                         {v.proprietar_nume || <span style={{color: G.dim}}>— neasignat —</span>}
                       </td>
-                      <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, textAlign: 'center'}}>
-                        {v.data_start || <span style={{color: G.dim}}>—</span>}
+                      <td style={{padding: '10px 8px', textAlign: 'center', fontSize: 12}}>
+                        {v.tip_proprietate === 'comodat' && limita ? (
+                          <div>
+                            <div style={{fontWeight: 700, color: consum?.status_limita_lunara === 'depasit' ? G.red : (consum?.status_limita_lunara === 'aproape' ? G.orange : G.text)}}>
+                              {consum ? Math.round(Number(consum.total_L)).toLocaleString('ro-RO') : 0} / {Math.round(Number(limita)).toLocaleString('ro-RO')} L
+                            </div>
+                            {consum && consum.procent_din_agreat != null && (
+                              <div style={{fontSize: 10, fontWeight: 700, marginTop: 2, color: consum.status_limita_lunara === 'depasit' ? G.red : (consum.status_limita_lunara === 'aproape' ? G.orange : G.green)}}>
+                                {consum.procent_din_agreat}%
+                                {consum.status_limita_lunara === 'depasit' && ' 🚨'}
+                                {consum.status_limita_lunara === 'aproape' && ' ⚠️'}
+                              </div>
+                            )}
+                          </div>
+                        ) : v.tip_proprietate === 'comodat' ? (
+                          <span style={{color: G.dim, fontSize: 11}}>fără limită</span>
+                        ) : (
+                          <span style={{color: G.dim}}>—</span>
+                        )}
                       </td>
                       <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, textAlign: 'center'}}>
                         {v.data_sfarsit || <span style={{color: G.dim}}>nedeterminat</span>}
                         {v.zile_pana_expirare != null && (
                           <div style={{fontSize: 10, color: v.zile_pana_expirare < 0 ? G.red : (v.zile_pana_expirare <= 30 ? G.orange : G.muted), marginTop: 2, fontWeight: 600}}>
-                            {v.zile_pana_expirare < 0 ? `${Math.abs(v.zile_pana_expirare)} zile întârziere` : `${v.zile_pana_expirare} zile rămase`}
+                            {v.zile_pana_expirare < 0 ? `${Math.abs(v.zile_pana_expirare)}z întârziere` : `${v.zile_pana_expirare}z rămase`}
                           </div>
                         )}
                       </td>
@@ -8073,7 +8136,7 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
             </table>
           </div>
           <div style={{padding: '10px 14px', borderTop: `1px solid ${G.border}`, fontSize: 11, color: G.muted, background: G.bg}}>
-            {filtered.length} vehicule afișate · click pe rând pentru editare contract
+            {filtered.length} vehicule afișate · click pe rând pentru editare contract · consum L lună curentă din alimentări LIVE
           </div>
         </div>
       )}
@@ -8621,17 +8684,33 @@ function CesiuneModal({ cesiune, subcontractori, sites, rezervoare, pretMotorina
           
           <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
             <div>
-              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Rezervor sursă</label>
+              <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>Sursă combustibil</label>
               <select value={form.rezervor_id} onChange={e => setField('rezervor_id', e.target.value)} style={{...S.input, width: '100%'}}>
-                <option value="">— niciun rezervor (manual) —</option>
-                {(rezervoare || []).map(r => (
-                  <option key={r.id} value={r.id}>{r.nume} (stoc: {Math.round(Number(r.stoc_curent_litri || 0)).toLocaleString('ro-RO')}L)</option>
-                ))}
+                <option value="">— niciuna (manual) —</option>
+                {(rezervoare || []).filter(r => r.tip === 'rezervor_propriu' || !r.tip).length > 0 && (
+                  <optgroup label="🛢️ Rezervoare proprii (cu stoc)">
+                    {(rezervoare || []).filter(r => r.tip === 'rezervor_propriu' || !r.tip).map(r => (
+                      <option key={r.id} value={r.id}>{r.nume} (stoc: {Math.round(Number(r.stoc_curent_litri || 0)).toLocaleString('ro-RO')}L)</option>
+                    ))}
+                  </optgroup>
+                )}
+                {(rezervoare || []).filter(r => r.tip === 'statie_externa').length > 0 && (
+                  <optgroup label="⛽ Stații externe (card Gazpet)">
+                    {(rezervoare || []).filter(r => r.tip === 'statie_externa').map(r => (
+                      <option key={r.id} value={r.id}>{r.nume}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
-              {rezervorAles && form.cantitate_litri && (
+              {rezervorAles && rezervorAles.tip === 'rezervor_propriu' && form.cantitate_litri && (
                 <div style={{fontSize: 11, marginTop: 4, color: insuficient ? G.red : G.muted}}>
                   Stoc după cesiune: <strong style={{color: insuficient ? G.red : G.text}}>{stocDupa.toFixed(1)}L</strong>
                   {insuficient && <span style={{color: G.red, fontWeight: 700}}> ⚠️ INSUFICIENT</span>}
+                </div>
+              )}
+              {rezervorAles && rezervorAles.tip === 'statie_externa' && (
+                <div style={{fontSize: 11, marginTop: 4, color: '#22D3EE'}}>
+                  ⛽ Stație externă - fără tracking stoc local
                 </div>
               )}
             </div>
