@@ -1183,6 +1183,8 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     comodat_data_sfarsit: a?.comodat_data_sfarsit || '',
     comodat_contract_path: a?.comodat_contract_path || '',
     comodat_observatii: a?.comodat_observatii || '',
+    // 27.05.2026: Pentru vehicule ÎNCHIRIATE - numele firmei furnizoare
+    inchiriere_furnizor: a?.inchiriere_furnizor || '',
   })
   
   const [form, setForm] = useState(fromActiv(activ))
@@ -1437,13 +1439,14 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       deep_sleep: !!form.deep_sleep,
       deep_sleep_motiv: form.deep_sleep ? (form.deep_sleep_motiv?.trim() || null) : null,
       deep_sleep_data: form.deep_sleep ? (form.deep_sleep_data || new Date().toISOString().split('T')[0]) : null,
-      // 27.05.2026: Contract de comodat
+      // 27.05.2026: Contract de comodat / Închiriere
       tip_proprietate: form.tip_proprietate || 'firma',
       comodat_employee_id: form.tip_proprietate === 'comodat' ? (form.comodat_employee_id || null) : null,
-      comodat_data_start: form.tip_proprietate === 'comodat' ? (form.comodat_data_start || null) : null,
-      comodat_data_sfarsit: form.tip_proprietate === 'comodat' ? (form.comodat_data_sfarsit || null) : null,
-      comodat_contract_path: form.tip_proprietate === 'comodat' ? (form.comodat_contract_path?.trim() || null) : null,
-      comodat_observatii: form.tip_proprietate === 'comodat' ? (form.comodat_observatii?.trim() || null) : null,
+      comodat_data_start: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_data_start || null) : null,
+      comodat_data_sfarsit: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_data_sfarsit || null) : null,
+      comodat_contract_path: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_contract_path?.trim() || null) : null,
+      comodat_observatii: (form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') ? (form.comodat_observatii?.trim() || null) : null,
+      inchiriere_furnizor: form.tip_proprietate === 'inchiriat' ? (form.inchiriere_furnizor?.trim() || null) : null,
     }
     
     let result
@@ -1646,36 +1649,55 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             ))}
           </div>
           
-          {/* Panou Comodat - vizibil doar dacă tip_proprietate=comodat */}
-          {form.tip_proprietate === 'comodat' && (
+          {/* Panou Comodat sau Închiriat - vizibil când tip_proprietate != firma */}
+          {(form.tip_proprietate === 'comodat' || form.tip_proprietate === 'inchiriat') && (
             <div style={{padding: 14, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8}}>
-              <div style={{fontSize: 11, color: '#F59E0B', fontWeight: 700, marginBottom: 10}}>
-                Contract de Comodat — Detalii
+              <div style={{fontSize: 11, color: form.tip_proprietate === 'comodat' ? '#F59E0B' : '#22D3EE', fontWeight: 700, marginBottom: 10}}>
+                {form.tip_proprietate === 'comodat' ? 'Contract de Comodat' : 'Contract de Închiriere / Leasing'} — Detalii
               </div>
               
-              {/* Proprietar (employee) */}
-              <div style={{marginBottom: 12}}>
-                <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
-                  👤 Proprietar (angajat Gazpet)
-                </label>
-                <select
-                  value={form.comodat_employee_id || ''}
-                  onChange={e => setField('comodat_employee_id', e.target.value ? Number(e.target.value) : null)}
-                  disabled={isReadOnly}
-                  style={{...S.input, width: '100%', fontSize: 13}}
-                >
-                  <option value="">— Selectează angajatul proprietar —</option>
-                  {employeesList.map(e => (
-                    <option key={e.id} value={e.id}>{e.name}</option>
-                  ))}
-                </select>
-              </div>
+              {/* COMODAT: Proprietar angajat */}
+              {form.tip_proprietate === 'comodat' && (
+                <div style={{marginBottom: 12}}>
+                  <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                    👤 Proprietar (angajat Gazpet)
+                  </label>
+                  <select
+                    value={form.comodat_employee_id || ''}
+                    onChange={e => setField('comodat_employee_id', e.target.value ? Number(e.target.value) : null)}
+                    disabled={isReadOnly}
+                    style={{...S.input, width: '100%', fontSize: 13}}
+                  >
+                    <option value="">— Selectează angajatul proprietar —</option>
+                    {employeesList.map(e => (
+                      <option key={e.id} value={e.id}>{e.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              
+              {/* ÎNCHIRIAT: Furnizor (text liber) */}
+              {form.tip_proprietate === 'inchiriat' && (
+                <div style={{marginBottom: 12}}>
+                  <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
+                    🏢 Furnizor / Firmă închiriere
+                  </label>
+                  <input
+                    type="text"
+                    value={form.inchiriere_furnizor || ''}
+                    onChange={e => setField('inchiriere_furnizor', e.target.value)}
+                    disabled={isReadOnly}
+                    placeholder="ex: ALD Automotive, Porsche Leasing, Avis Rent-a-Car..."
+                    style={{...S.input, width: '100%', fontSize: 13}}
+                  />
+                </div>
+              )}
               
               {/* Date contract */}
               <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12}}>
                 <div>
                   <label style={{fontSize: 11, color: G.muted, marginBottom: 4, display: 'block', fontWeight: 600}}>
-                    📅 Data început contract <span style={{color: G.red}}>*</span>
+                    📅 Data început contract {form.tip_proprietate === 'comodat' && <span style={{color: G.red}}>*</span>}
                   </label>
                   <input
                     type="date"
@@ -1745,7 +1767,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                   onChange={e => setField('comodat_observatii', e.target.value)}
                   disabled={isReadOnly}
                   rows={2}
-                  placeholder="ex: mențiuni legale, restricții utilizare, durată implicită"
+                  placeholder={form.tip_proprietate === 'comodat' ? "ex: mențiuni legale, restricții utilizare, durată implicită" : "ex: număr contract leasing, condiții speciale"}
                   style={{...S.input, width: '100%', resize: 'vertical', fontSize: 12}}
                 />
               </div>
@@ -7837,31 +7859,33 @@ function AlerteGlobaleSidebar({ open, onClose, alerte, onNavigate }) {
 }
 
 
-// ─── 27.05.2026: Secțiune Contracte Comodat (sub-tab Active) ─────────────────
+// ─── 27.05.2026: Secțiune Contracte Vehicule (Comodat + Închiriate) — sub-tab Active
 function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCreateComodat, canEdit, showToast }) {
-  const [comodatList, setComodatList] = useState([])
+  const [contracteList, setContracteList] = useState([])
   const [load, setLoad] = useState(true)
   const [statusFilter, setStatusFilter] = useState('Toate')
+  const [tipFilter, setTipFilter] = useState('Toate') // NOU: Toate / comodat / inchiriat
   const [search, setSearch] = useState('')
   
-  const loadComodat = useCallback(async () => {
+  const loadContracte = useCallback(async () => {
     setLoad(true)
     const { data, error } = await supabase
-      .from('v_vehicule_comodat')
+      .from('v_vehicule_contracte')
       .select('*')
     if (error) {
-      showToast?.('Eroare încărcare comodat: ' + error.message, 'error')
+      showToast?.('Eroare încărcare contracte: ' + error.message, 'error')
       setLoad(false)
       return
     }
-    setComodatList(data || [])
+    setContracteList(data || [])
     setLoad(false)
   }, [showToast])
   
-  useEffect(() => { loadComodat() }, [loadComodat])
+  useEffect(() => { loadContracte() }, [loadContracte])
   
   const filtered = useMemo(() => {
-    let r = [...comodatList]
+    let r = [...contracteList]
+    if (tipFilter !== 'Toate') r = r.filter(v => v.tip_proprietate === tipFilter)
     if (statusFilter !== 'Toate') r = r.filter(v => v.status_contract === statusFilter)
     if (search) {
       const s = search.toLowerCase()
@@ -7872,15 +7896,17 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
       )
     }
     return r
-  }, [comodatList, statusFilter, search])
+  }, [contracteList, tipFilter, statusFilter, search])
   
   const stats = useMemo(() => ({
-    total: comodatList.length,
-    activ: comodatList.filter(v => v.status_contract === 'activ').length,
-    expirate: comodatList.filter(v => v.status_contract === 'expirat').length,
-    expira_30z: comodatList.filter(v => v.status_contract === 'expira_30z').length,
-    incomplete: comodatList.filter(v => v.status_contract === 'incomplet').length,
-  }), [comodatList])
+    total: contracteList.length,
+    comodat: contracteList.filter(v => v.tip_proprietate === 'comodat').length,
+    inchiriat: contracteList.filter(v => v.tip_proprietate === 'inchiriat').length,
+    activ: contracteList.filter(v => v.status_contract === 'activ').length,
+    expirate: contracteList.filter(v => v.status_contract === 'expirat').length,
+    expira_30z: contracteList.filter(v => v.status_contract === 'expira_30z').length,
+    incomplete: contracteList.filter(v => v.status_contract === 'incomplet').length,
+  }), [contracteList])
   
   const STATUS_INFO = {
     'activ': { label: '✓ Activ', color: G.green, bg: G.green + '22' },
@@ -7890,7 +7916,11 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
     'inca_inactiv': { label: '⏳ Încă inactiv', color: G.blue, bg: G.blue + '22' },
   }
   
-  // Vehicule firmă cu plăcuța neînregistrată ca comodat (pentru a oferi „convert la comodat")
+  const TIP_INFO = {
+    'comodat': { icon: '📄', label: 'Comodat', color: '#F59E0B', bg: '#F59E0B22' },
+    'inchiriat': { icon: '🔑', label: 'Închiriat', color: '#22D3EE', bg: '#06B6D422' },
+  }
+  
   const handleClickAdd = () => {
     if (canEdit && onCreateComodat) onCreateComodat()
   }
@@ -7902,15 +7932,15 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
         <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap'}}>
           <div style={{flex: 1, minWidth: 240}}>
             <div style={{fontSize: 14, fontWeight: 700, color: G.text, marginBottom: 4}}>
-              📄 Contracte de Comodat — vehicule personale cu drept de utilizare firmă
+              📄 Contracte Vehicule — Comodat & Închiriate
             </div>
             <div style={{fontSize: 12, color: G.muted}}>
-              Pentru ANAF: motorina decontată pe aceste vehicule trebuie să aibă contract activ la data alimentării.
+              📄 <strong style={{color: '#F59E0B'}}>Comodat</strong> = vehicul personal angajat cu contract · 🔑 <strong style={{color: '#22D3EE'}}>Închiriat</strong> = leasing/rent-a-car. Pentru ANAF: motorina decontată trebuie să aibă contract activ la data alimentării.
             </div>
           </div>
           {canEdit && (
             <button onClick={handleClickAdd} style={{...S.btnP, background: '#F59E0B', color: '#000'}}>
-              + Adaugă vehicul comodat
+              + Adaugă vehicul cu contract
             </button>
           )}
         </div>
@@ -7918,7 +7948,9 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
       
       {/* Stats cards */}
       <div style={{display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap'}}>
-        <KPICard icon="📄" label="Total comodat" value={stats.total} color={G.blue} />
+        <KPICard icon="📄" label="Total" value={stats.total} color={G.blue} />
+        <KPICard icon="📄" label="Comodat" value={stats.comodat} color="#F59E0B" />
+        <KPICard icon="🔑" label="Închiriate" value={stats.inchiriat} color="#22D3EE" />
         <KPICard icon="✓" label="Active" value={stats.activ} color={G.green} />
         <KPICard icon="🔴" label="Expirate" value={stats.expirate} color={G.red} />
         <KPICard icon="⚠️" label="Expiră <30z" value={stats.expira_30z} color={G.orange} />
@@ -7928,7 +7960,12 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
       {/* Filtre */}
       <div style={{...S.card, padding: 14, marginBottom: 14}}>
         <div style={{display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center'}}>
-          <input placeholder="🔍 Caută plăcuța, marcă, proprietar..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, width: 280}} />
+          <input placeholder="🔍 Caută plăcuța, marcă, proprietar, furnizor..." value={search} onChange={e => setSearch(e.target.value)} style={{...S.input, width: 280}} />
+          <select value={tipFilter} onChange={e => setTipFilter(e.target.value)} style={{...S.input, padding: '8px 12px'}}>
+            <option value="Toate">Toate tipurile</option>
+            <option value="comodat">📄 Doar comodat</option>
+            <option value="inchiriat">🔑 Doar închiriate</option>
+          </select>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{...S.input, padding: '8px 12px'}}>
             <option value="Toate">Toate statusurile</option>
             <option value="activ">Doar active</option>
@@ -7936,8 +7973,8 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
             <option value="expira_30z">Expiră &lt;30z</option>
             <option value="incomplet">Incomplete (date lipsă)</option>
           </select>
-          {(search || statusFilter !== 'Toate') && (
-            <button onClick={() => { setSearch(''); setStatusFilter('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
+          {(search || statusFilter !== 'Toate' || tipFilter !== 'Toate') && (
+            <button onClick={() => { setSearch(''); setStatusFilter('Toate'); setTipFilter('Toate') }} style={{...S.btnS, fontSize: 12, color: G.muted}}>
               ✕ Șterge filtre
             </button>
           )}
@@ -7953,13 +7990,13 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
         <div style={{...S.card, padding: 60, textAlign: 'center', color: G.muted}}>
           <div style={{fontSize: 40, marginBottom: 12}}>📄</div>
           <div style={{fontSize: 14, marginBottom: 8}}>
-            {comodatList.length === 0 
-              ? 'Niciun vehicul comodat înregistrat încă.'
+            {contracteList.length === 0 
+              ? 'Niciun vehicul cu contract înregistrat încă.'
               : 'Niciun rezultat cu filtrele aplicate.'}
           </div>
-          {comodatList.length === 0 && canEdit && (
+          {contracteList.length === 0 && canEdit && (
             <button onClick={handleClickAdd} style={{...S.btnP, background: '#F59E0B', color: '#000', marginTop: 12}}>
-              + Adaugă primul vehicul comodat
+              + Adaugă primul vehicul
             </button>
           )}
         </div>
@@ -7969,9 +8006,10 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
             <table>
               <thead>
                 <tr>
-                  <th style={{width: 110, padding: '10px 12px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Plăcuța</th>
+                  <th style={{width: 90, padding: '10px 12px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Tip</th>
+                  <th style={{width: 110, padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Plăcuța</th>
                   <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Vehicul</th>
-                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>👤 Proprietar</th>
+                  <th style={{padding: '10px 8px', textAlign: 'left', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>👤 Proprietar / Furnizor</th>
                   <th style={{width: 110, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data start</th>
                   <th style={{width: 110, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Data sfârșit</th>
                   <th style={{width: 130, padding: '10px 8px', textAlign: 'center', color: G.muted, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px'}}>Status</th>
@@ -7982,10 +8020,18 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
               <tbody>
                 {filtered.map(v => {
                   const cfgStatus = STATUS_INFO[v.status_contract] || STATUS_INFO['incomplet']
+                  const cfgTip = TIP_INFO[v.tip_proprietate] || { icon: '?', label: '?', color: G.muted, bg: G.bg }
                   const fullActiv = active.find(a => a.id === v.active_id)
                   return (
                     <tr key={v.active_id} onClick={() => fullActiv && onEditActiv?.(fullActiv)} style={{cursor: fullActiv ? 'pointer' : 'default'}}>
-                      <td style={{padding: '10px 12px', fontSize: 12, fontWeight: 700, color: G.purple}}>
+                      <td style={{padding: '10px 12px', textAlign: 'center'}}>
+                        <span style={{
+                          display: 'inline-block', padding: '3px 8px', borderRadius: 10,
+                          fontSize: 10, fontWeight: 700,
+                          background: cfgTip.bg, color: cfgTip.color,
+                        }}>{cfgTip.icon} {cfgTip.label}</span>
+                      </td>
+                      <td style={{padding: '10px 8px', fontSize: 12, fontWeight: 700, color: G.purple}}>
                         {v.nr_inmatriculare || <span style={{color: G.dim, fontWeight: 400}}>—</span>}
                       </td>
                       <td style={{padding: '10px 8px', fontSize: 12, color: G.text}}>
@@ -7995,10 +8041,10 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
                         {v.proprietar_nume || <span style={{color: G.dim}}>— neasignat —</span>}
                       </td>
                       <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, textAlign: 'center'}}>
-                        {v.comodat_data_start || <span style={{color: G.dim}}>—</span>}
+                        {v.data_start || <span style={{color: G.dim}}>—</span>}
                       </td>
                       <td style={{padding: '10px 8px', fontSize: 12, color: G.muted, textAlign: 'center'}}>
-                        {v.comodat_data_sfarsit || <span style={{color: G.dim}}>nedeterminat</span>}
+                        {v.data_sfarsit || <span style={{color: G.dim}}>nedeterminat</span>}
                         {v.zile_pana_expirare != null && (
                           <div style={{fontSize: 10, color: v.zile_pana_expirare < 0 ? G.red : (v.zile_pana_expirare <= 30 ? G.orange : G.muted), marginTop: 2, fontWeight: 600}}>
                             {v.zile_pana_expirare < 0 ? `${Math.abs(v.zile_pana_expirare)} zile întârziere` : `${v.zile_pana_expirare} zile rămase`}
@@ -8289,17 +8335,17 @@ export default function LogisticaPage() {
     ;(ultimeRes.data || []).forEach(u => { map[u.active_id] = u })
     setUltimeAlim(map)
     
-    // 27.05.2026: Load employees pentru tooltip ComodatBadge + alerte comodat
-    const [empRes, vehComodatRes] = await Promise.all([
+    // 27.05.2026: Load employees pentru tooltip ComodatBadge + alerte contracte (comodat + închiriate)
+    const [empRes, vehContracteRes] = await Promise.all([
       supabase.from('employees').select('id, name').eq('active', true),
-      supabase.from('v_vehicule_comodat').select('active_id, status_contract')
+      supabase.from('v_vehicule_contracte').select('active_id, status_contract')
     ])
     const empMap = {}
     ;(empRes.data || []).forEach(e => { empMap[e.id] = e.name })
     setEmployeesComodat(empMap)
     
     const alertCount = { expirate: 0, expira_30z: 0, incomplete: 0 }
-    ;(vehComodatRes.data || []).forEach(v => {
+    ;(vehContracteRes.data || []).forEach(v => {
       if (v.status_contract === 'expirat') alertCount.expirate++
       else if (v.status_contract === 'expira_30z') alertCount.expira_30z++
       else if (v.status_contract === 'incomplet') alertCount.incomplete++
@@ -9049,7 +9095,7 @@ export default function LogisticaPage() {
           color: activeSubTab === 'comodat' ? '#F59E0B' : G.muted,
           display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          📄 Contracte Comodat
+          📄 Contracte Vehicule
           {(comodatAlerte.expirate + comodatAlerte.expira_30z + comodatAlerte.incomplete) > 0 && (
             <span style={{
               marginLeft: 4, padding: '1px 6px',
@@ -9060,7 +9106,7 @@ export default function LogisticaPage() {
         </button>
       </div>
       
-      {/* Banner alerte comodat (vizibil indiferent de sub-tab dacă există probleme) */}
+      {/* Banner alerte contracte vehicule (vizibil indiferent de sub-tab dacă există probleme) */}
       {(comodatAlerte.expirate > 0 || comodatAlerte.expira_30z > 0 || comodatAlerte.incomplete > 0) && activeSubTab === 'lista' && (
         <div onClick={() => setActiveSubTab('comodat')} style={{
           ...S.card, padding: '10px 14px', marginBottom: 12, cursor: 'pointer',
@@ -9069,7 +9115,7 @@ export default function LogisticaPage() {
         }}>
           <div style={{display: 'flex', alignItems: 'center', gap: 10, fontSize: 13}}>
             <span style={{fontSize: 18}}>{comodatAlerte.expirate > 0 ? '🔴' : '⚠️'}</span>
-            <strong style={{color: G.text}}>Contracte Comodat - atenție necesară:</strong>
+            <strong style={{color: G.text}}>Contracte Vehicule - atenție necesară:</strong>
             {comodatAlerte.expirate > 0 && <span style={{color: G.red, fontWeight: 700}}>{comodatAlerte.expirate} EXPIRATE</span>}
             {comodatAlerte.expira_30z > 0 && <span style={{color: G.orange, fontWeight: 700}}>{comodatAlerte.expira_30z} expiră &lt;30z</span>}
             {comodatAlerte.incomplete > 0 && <span style={{color: G.muted, fontWeight: 700}}>{comodatAlerte.incomplete} incomplete</span>}
