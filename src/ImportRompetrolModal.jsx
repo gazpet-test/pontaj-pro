@@ -158,13 +158,36 @@ function parseRompetrolExcel(workbook) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// MATCH QR ↔ linie listă: litri (±0.5L) + dată (±2 zile) [+ plăcuța dacă strictActiveId]
+// Întoarce QR-ul cel mai potrivit nelegat, sau null
+// ─────────────────────────────────────────────────────────────────────────
+function findQrMatch(qrList, reserved, litri, data, strictActiveId) {
+  const dLista = new Date(data + 'T00:00:00').getTime()
+  let best = null, bestScore = -1
+  for (const qr of qrList) {
+    if (reserved.has(qr.id)) continue
+    if (strictActiveId != null && qr.active_id !== strictActiveId) continue
+    const dLitri = Math.abs(Number(qr.cantitate_litri) - litri)
+    if (dLitri > 0.5) continue
+    const dQr = new Date(qr.data_alimentare + 'T00:00:00').getTime()
+    const dZile = Math.abs((dQr - dLista) / 86400000)
+    if (dZile > 2) continue
+    // scor: litri exact (max 5) + dată apropiată (max 4) + vehicul potrivit (10)
+    let score = (0.5 - dLitri) * 10 + (2 - dZile) * 2
+    if (strictActiveId == null && qr.active_id != null) score += 0 // card: orice vehicul
+    if (score > bestScore) { bestScore = score; best = qr }
+  }
+  return best
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // COMPONENT MODAL
 // ─────────────────────────────────────────────────────────────────────────
 export default function ImportRompetrolModal({ active, profile, showToast, onClose, onSaved }) {
   const [file, setFile] = useState(null)
   const [parsing, setParsing] = useState(false)
   const [sections, setSections] = useState([])
-  const [matchResults, setMatchResults] = useState({ matched: [], carduri: [], nematched: [], duplicate: [] })
+  const [matchResults, setMatchResults] = useState({ matched: [], carduri: [], nematched: [], duplicate: [], qrMatched: [], carduriFaraQR: [] })
   const [importing, setImporting] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef(null)
@@ -204,9 +227,9 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
       
       // Match per secțiune
       const matched = [], carduri = [], nematched = [], duplicate = []
+      const qrMatched = [], carduriFaraQR = []
       
       // Pre-fetch BD: alimentări existente per active_id în interval (pentru detectare duplicate)
-      // Fac un singur query la final pentru a evita N+1
       const allDates = secs.flatMap(s => s.alimentari.map(a => a.data_alimentare)).filter(Boolean)
       const minDate = allDates.length ? allDates.sort()[0] : null
       const maxDate = allDates.length ? allDates.sort()[allDates.length - 1] : null
@@ -223,26 +246,32 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
         `${e.active_id}|${e.data_alimentare}|${Number(e.cantitate_litri).toFixed(2)}`
       ))
       
+      // Pre-fetch QR pending_match (rompetrol) în interval extins ±2 zile — pentru match
+      let qrPending = []
+      if (minDate && maxDate) {
+        const dMin = new Date(minDate + 'T00:00:00'); dMin.setDate(dMin.getDate() - 2)
+        const dMax = new Date(maxDate + 'T00:00:00'); dMax.setDate(dMax.getDate() + 2)
+        const { data: qr } = await supabase.from('logistica_alimentari')
+          .select('id, active_id, data_alimentare, cantitate_litri, logistica_active(nr_inmatriculare, marca, model)')
+          .eq('qr_status', 'pending_match')
+          .eq('qr_sursa', 'rompetrol')
+          .gte('data_alimentare', dMin.toISOString().slice(0, 10))
+          .lte('data_alimentare', dMax.toISOString().slice(0, 10))
+        qrPending = qr || []
+      }
+      const reserved = new Set()  // QR-uri deja rezervate de o linie din listă
+      
       for (const sec of secs) {
         const vehKey = normalizeNrInmat(sec.vehicul)
+        const esteCard = isCardBrand(sec.vehicul)
         
-        if (isCardBrand(sec.vehicul)) {
-          // Card brand GAZPET1-21 → SKIP (QR ulterior)
-          carduri.push({
-            ...sec,
-            motiv: 'Card brand (GAZPET) — atribuire ulterioară prin QR code',
-            total_litri: sec.alimentari.reduce((a, b) => a + (b.cantitate_litri || 0), 0),
-            total_valoare: sec.alimentari.reduce((a, b) => a + (b.pret_total || 0), 0),
-          })
-          continue
-        }
-        
-        // Caut activ cu nr_inmatriculare match
-        const activ = (active || []).find(a => 
+        // Caut activ cu nr_inmatriculare match (doar pentru secțiuni pe plăcuță)
+        const activ = esteCard ? null : (active || []).find(a => 
           a.nr_inmatriculare && normalizeNrInmat(a.nr_inmatriculare) === vehKey
         )
         
-        if (!activ) {
+        // ── Secțiune pe PLĂCUȚĂ fără match BD → nematched
+        if (!esteCard && !activ) {
           nematched.push({
             ...sec,
             motiv: `Nicio mașină în BD cu nr înmatriculare „${sec.vehicul}"`,
@@ -251,34 +280,85 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
           continue
         }
         
-        // Pentru fiecare alimentare, verific duplicate
-        const newAlim = []
-        const dupAlim = []
+        // ── Procesez fiecare alimentare: QR match → duplicat → insert nou
+        const newAlim = []      // de inserat ca alimentare nouă (plăcuță, fără QR)
+        const dupAlim = []      // duplicate (deja în BD)
+        const cardFaraQrAlim = [] // card GAZPETx fără QR → real_fara_qr
+        
         for (const a of sec.alimentari) {
-          const key = `${activ.id}|${a.data_alimentare}|${Number(a.cantitate_litri).toFixed(2)}`
-          if (existSet.has(key)) {
-            dupAlim.push(a)
+          const pretL = a.pret_total && a.cantitate_litri
+            ? Number((a.pret_total / a.cantitate_litri).toFixed(4)) : null
+          
+          // 1) Caut QR pending potrivit (plăcuța strict pe vehicul; cardul pe orice vehicul)
+          const qr = findQrMatch(qrPending, reserved, a.cantitate_litri, a.data_alimentare, activ ? activ.id : null)
+          if (qr) {
+            reserved.add(qr.id)
+            qrMatched.push({
+              qr_id: qr.id,
+              vehicul_qr: qr.logistica_active
+                ? `${qr.logistica_active.marca || ''} ${qr.logistica_active.model || ''} (${qr.logistica_active.nr_inmatriculare || '—'})`.trim()
+                : `#${qr.active_id}`,
+              sursa_linie: sec.vehicul,
+              card: esteCard ? sec.vehicul : null,
+              data: a.data_alimentare,
+              litri: a.cantitate_litri,
+              pret_total: a.pret_total,
+              pret_per_litru: pretL,
+            })
+            continue
+          }
+          
+          // 2) Fără QR: dacă-i plăcuță, verific duplicat apoi insert; dacă-i card, real_fara_qr
+          if (activ) {
+            const key = `${activ.id}|${a.data_alimentare}|${Number(a.cantitate_litri).toFixed(2)}`
+            if (existSet.has(key)) dupAlim.push(a)
+            else newAlim.push(a)
           } else {
-            newAlim.push(a)
+            // Card GAZPETx fără QR → alimentare „fără QR" (real_fara_qr)
+            cardFaraQrAlim.push({ ...a, pret_per_litru: pretL, card: sec.vehicul })
           }
         }
         
-        if (newAlim.length > 0) {
-          matched.push({
+        // Agregare rezultate per secțiune
+        if (activ) {
+          if (newAlim.length > 0) {
+            matched.push({
+              ...sec, activ,
+              alimentari_noi: newAlim,
+              alimentari_duplicate: dupAlim,
+              total_litri: newAlim.reduce((a, b) => a + (b.cantitate_litri || 0), 0),
+              total_valoare: newAlim.reduce((a, b) => a + (b.pret_total || 0), 0),
+            })
+          }
+          if (dupAlim.length > 0 && newAlim.length === 0) {
+            duplicate.push({ ...sec, activ, alimentari_duplicate: dupAlim })
+          }
+        } else if (esteCard) {
+          // Secțiune card: ce-a rămas fără QR
+          if (cardFaraQrAlim.length > 0) {
+            carduriFaraQR.push({
+              vehicul: sec.vehicul,
+              alimentari: cardFaraQrAlim,
+              total_litri: cardFaraQrAlim.reduce((a, b) => a + (b.cantitate_litri || 0), 0),
+              total_valoare: cardFaraQrAlim.reduce((a, b) => a + (b.pret_total || 0), 0),
+            })
+          }
+          // info card (pentru afișaj — câte au mers pe QR)
+          const nrQr = sec.alimentari.length - cardFaraQrAlim.length
+          carduri.push({
             ...sec,
-            activ,
-            alimentari_noi: newAlim,
-            alimentari_duplicate: dupAlim,
-            total_litri: newAlim.reduce((a, b) => a + (b.cantitate_litri || 0), 0),
-            total_valoare: newAlim.reduce((a, b) => a + (b.pret_total || 0), 0),
+            motiv: nrQr > 0
+              ? `${nrQr} legate la QR · ${cardFaraQrAlim.length} fără QR`
+              : 'Card brand — fără QR (atribuire ulterioară)',
+            total_litri: sec.alimentari.reduce((a, b) => a + (b.cantitate_litri || 0), 0),
+            total_valoare: sec.alimentari.reduce((a, b) => a + (b.pret_total || 0), 0),
+            nr_qr: nrQr,
+            nr_fara_qr: cardFaraQrAlim.length,
           })
-        }
-        if (dupAlim.length > 0 && newAlim.length === 0) {
-          duplicate.push({ ...sec, activ, alimentari_duplicate: dupAlim })
         }
       }
       
-      setMatchResults({ matched, carduri, nematched, duplicate })
+      setMatchResults({ matched, carduri, nematched, duplicate, qrMatched, carduriFaraQR })
     } catch (e) {
       showToast?.('Eroare parsare Excel: ' + (e.message || e), 'error')
     }
@@ -287,14 +367,19 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
   
   // ─── Import în BD ──────────────────────────────────────────────────────
   const handleImport = async () => {
-    if (!matchResults.matched.length) {
+    const { matched, qrMatched, carduriFaraQR } = matchResults
+    if (!matched.length && !qrMatched.length && !carduriFaraQR.length) {
       showToast?.('Nimic de importat', 'warning')
       return
     }
     setImporting(true)
     try {
+      const azi = new Date().toLocaleDateString('ro-RO')
+      let totalInsert = 0, totalQr = 0, totalFaraQr = 0
+
+      // 1) Alimentări noi pe PLĂCUȚĂ (fără QR) — insert normal
       const inserts = []
-      for (const m of matchResults.matched) {
+      for (const m of matched) {
         for (const a of m.alimentari_noi) {
           inserts.push({
             active_id: m.activ.id,
@@ -303,28 +388,82 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
             km_la_alimentare: a.km_la_alimentare,
             ore_la_alimentare: a.ore_la_alimentare,
             pret_total: a.pret_total,
-            pret_per_litru: a.pret_total && a.cantitate_litri 
-              ? Number((a.pret_total / a.cantitate_litri).toFixed(4)) 
-              : null,
+            pret_per_litru: a.pret_total && a.cantitate_litri
+              ? Number((a.pret_total / a.cantitate_litri).toFixed(4)) : null,
             statie_combustibil: 'Rompetrol',
-            card_combustibil: null, // pentru nr înmatriculare; carduri GAZPET vor seta câmpul ăsta
-            observatii: `[Import Rompetrol Excel ${new Date().toLocaleDateString('ro-RO')}]`,
+            card_combustibil: null,
+            observatii: `[Import Rompetrol Excel ${azi}]`,
             created_by: profile?.id || null,
           })
         }
       }
-      
-      // Insert batch (1000 max per chunk)
       const CHUNK = 500
-      let total = 0
       for (let i = 0; i < inserts.length; i += CHUNK) {
         const chunk = inserts.slice(i, i + CHUNK)
         const { error } = await supabase.from('logistica_alimentari').insert(chunk)
         if (error) throw error
-        total += chunk.length
+        totalInsert += chunk.length
       }
-      
-      showToast?.(`✓ Import Rompetrol: ${total} alimentări noi importate pentru ${matchResults.matched.length} mașini`, 'success')
+
+      // 2) QR-uri pending → completez cu preț (+card) și marchez matched
+      for (const q of qrMatched) {
+        const upd = {
+          qr_status: 'matched',
+          pret_total: q.pret_total,
+          pret_per_litru: q.pret_per_litru,
+          statie_combustibil: 'Rompetrol',
+        }
+        if (q.card) upd.card_combustibil = q.card
+        const { error } = await supabase.from('logistica_alimentari').update(upd).eq('id', q.qr_id)
+        if (error) throw error
+        totalQr++
+      }
+
+      // 3) Carduri GAZPETx fără QR → alimentări „fără QR" (real_fara_qr)
+      const insFaraQr = []
+      let nealocatId = null
+      if (carduriFaraQR.length > 0) {
+        const { data: na } = await supabase.from('logistica_active')
+          .select('id').eq('cod_intern', 'NEALOCAT').maybeSingle()
+        nealocatId = na?.id || null
+      }
+      for (const c of carduriFaraQR) {
+        for (const a of c.alimentari) {
+          insFaraQr.push({
+            active_id: nealocatId,
+            data_alimentare: a.data_alimentare,
+            cantitate_litri: a.cantitate_litri,
+            km_la_alimentare: a.km_la_alimentare,
+            ore_la_alimentare: a.ore_la_alimentare,
+            pret_total: a.pret_total,
+            pret_per_litru: a.pret_per_litru,
+            statie_combustibil: 'Rompetrol',
+            card_combustibil: c.vehicul,
+            qr_sursa: 'rompetrol',
+            qr_status: 'real_fara_qr',
+            observatii: `[Import Rompetrol ${azi}] card ${c.vehicul} — fără QR (atribuie vehicul/șantier)`,
+            created_by: profile?.id || null,
+          })
+        }
+      }
+      for (let i = 0; i < insFaraQr.length; i += CHUNK) {
+        const chunk = insFaraQr.slice(i, i + CHUNK)
+        const { error } = await supabase.from('logistica_alimentari').insert(chunk)
+        if (error) throw error
+        totalFaraQr += chunk.length
+      }
+
+      // 4) Re-match server-side (prinde QR-uri apărute între timp ↔ real_fara_qr)
+      let rematchMsg = ''
+      try {
+        const { data: rm } = await supabase.rpc('fn_match_qr_rompetrol')
+        if (rm && rm.matched > 0) rematchMsg = ` · ${rm.matched} re-match automat`
+      } catch (_) { /* nu blocăm importul */ }
+
+      showToast?.(
+        `✓ Import Rompetrol: ${totalInsert} pe plăcuță · ${totalQr} legate la QR · ${totalFaraQr} fără QR${rematchMsg}`,
+        'success'
+      )
       if (onSaved) onSaved()
       onClose()
     } catch (e) {
@@ -332,7 +471,6 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
     }
     setImporting(false)
   }
-  
   const totalLitriDeImportat = matchResults.matched.reduce((s, m) => s + m.total_litri, 0)
   const totalValoareDeImportat = matchResults.matched.reduce((s, m) => s + (m.total_valoare || 0), 0)
   const totalAlimDeImportat = matchResults.matched.reduce((s, m) => s + m.alimentari_noi.length, 0)
@@ -411,7 +549,7 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
               <strong>📄 {file.name}</strong> · {(file.size / 1024).toFixed(1)} KB
             </div>
             <button
-              onClick={() => { setFile(null); setSections([]); setMatchResults({ matched: [], carduri: [], nematched: [], duplicate: [] }) }}
+              onClick={() => { setFile(null); setSections([]); setMatchResults({ matched: [], carduri: [], nematched: [], duplicate: [], qrMatched: [], carduriFaraQR: [] }) }}
               style={{
                 padding: '4px 10px', background: 'transparent',
                 color: G.muted, border: `1px solid ${G.border}`,
@@ -432,10 +570,14 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
         {!parsing && sections.length > 0 && (
           <>
             {/* Summary KPIs */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-              <KPI label="Matched (import)" value={matchResults.matched.length} color={G.green} icon="✓" />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
+              <KPI label="Legate la QR" value={matchResults.qrMatched.length} color={G.blue} icon="🔗" />
+              <KPI label="Pe plăcuță (nou)" value={totalAlimDeImportat} color={G.green} icon="✓" />
+              <KPI label="Fără QR (ANAF)" value={matchResults.carduriFaraQR.reduce((s, c) => s + c.alimentari.length, 0)} color={G.orange} icon="📋" />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
               <KPI label="Carduri GAZPET" value={matchResults.carduri.length} color={G.purple} icon="🎫" />
-              <KPI label="Fără match BD" value={matchResults.nematched.length} color={G.orange} icon="?" />
+              <KPI label="Fără match BD" value={matchResults.nematched.length} color={G.red} icon="?" />
               <KPI label="Doar duplicate" value={matchResults.duplicate.length} color={G.muted} icon="↺" />
             </div>
             
@@ -454,6 +596,36 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
                   Valoare: <strong style={{ color: G.text }}>{totalValoareDeImportat.toFixed(2)} RON</strong>
                 </div>
               </div>
+            )}
+            
+            {/* Lista QR legate */}
+            {matchResults.qrMatched.length > 0 && (
+              <SectionList
+                titlu={`🔗 Legate la QR — ${matchResults.qrMatched.length} alimentări (vehicul din QR + preț din listă)`}
+                color={G.blue}
+                items={matchResults.qrMatched.map(q => ({
+                  vehicul: q.vehicul_qr,
+                  activ: `${q.data} · ${q.card ? `card ${q.card}` : 'plăcuță'} → completez preț`,
+                  alim_count: 1,
+                  total_litri: q.litri,
+                  total_valoare: q.pret_total,
+                }))}
+              />
+            )}
+            
+            {/* Lista fără QR (real_fara_qr) */}
+            {matchResults.carduriFaraQR.length > 0 && (
+              <SectionList
+                titlu={`📋 Fără QR — ${matchResults.carduriFaraQR.reduce((s, c) => s + c.alimentari.length, 0)} alimentări pe ${matchResults.carduriFaraQR.length} carduri (pentru ANAF, atribui vehicul ulterior)`}
+                color={G.orange}
+                items={matchResults.carduriFaraQR.map(c => ({
+                  vehicul: c.vehicul,
+                  activ: 'card fără QR — vizibil în reconciliere pentru alocare manuală',
+                  alim_count: c.alimentari.length,
+                  total_litri: c.total_litri,
+                  total_valoare: c.total_valoare,
+                }))}
+              />
             )}
             
             {/* Lista matched */}
@@ -528,16 +700,16 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
               </button>
               <button
                 onClick={handleImport}
-                disabled={importing || matchResults.matched.length === 0}
+                disabled={importing || (matchResults.matched.length === 0 && matchResults.qrMatched.length === 0 && matchResults.carduriFaraQR.length === 0)}
                 style={{
                   padding: '10px 22px',
                   background: importing ? G.muted : G.green,
                   color: '#fff', border: 'none',
                   borderRadius: 8, fontSize: 13, fontWeight: 700,
-                  cursor: (importing || matchResults.matched.length === 0) ? 'not-allowed' : 'pointer',
-                  opacity: matchResults.matched.length === 0 ? 0.5 : 1,
+                  cursor: (importing || (matchResults.matched.length === 0 && matchResults.qrMatched.length === 0 && matchResults.carduriFaraQR.length === 0)) ? 'not-allowed' : 'pointer',
+                  opacity: (matchResults.matched.length === 0 && matchResults.qrMatched.length === 0 && matchResults.carduriFaraQR.length === 0) ? 0.5 : 1,
                 }}>
-                {importing ? '⏳ Import...' : `✓ Importă ${totalAlimDeImportat} alimentări`}
+                {importing ? '⏳ Import...' : `✓ Procesează (${totalAlimDeImportat + matchResults.qrMatched.length + matchResults.carduriFaraQR.reduce((s, c) => s + c.alimentari.length, 0)} alim)`}
               </button>
             </div>
           </>

@@ -92,6 +92,9 @@ export default function QrUtilajPage() {
   const [bonCod, setBonCod] = useState('')               // cod bon (leaga)
   const [bonVerificat, setBonVerificat] = useState(null) // info bon după lookup
   const [bonVerifLoading, setBonVerifLoading] = useState(false)
+  // Șantier ales de șofer (v5)
+  const [santiere, setSantiere] = useState([])
+  const [siteSelectat, setSiteSelectat] = useState(null)
   
   // Load info utilaj
   useEffect(() => {
@@ -109,6 +112,8 @@ export default function QrUtilajPage() {
         setUltimeAlim(res.ultime_alimentari || [])
         setDocumente(res.documente || [])
         setService(res.service || null)
+        setSantiere(res.santiere || [])
+        setSiteSelectat(res.utilaj?.site_id || null)
         setStep('info')
       } catch (e) {
         if (!cancelled) {
@@ -222,6 +227,7 @@ export default function QrUtilajPage() {
         bon_mode: bonMode,
         total_litri_bon: bonMode === 'creeaza_bon' ? parseFloat(totalBon) : null,
         bon_cod: bonMode === 'leaga_bon' ? bonCod.trim() : null,
+        site_id: siteSelectat || null,
       })
       if (res.error) {
         setError(res.error)
@@ -666,6 +672,34 @@ export default function QrUtilajPage() {
                   fontSize: 16, fontWeight: 700, color: P.muted, pointerEvents: 'none',
                 }}>L</div>
               </div>
+            </div>
+          )}
+          
+          {/* Alege șantierul (unde lucrează utilajul azi) */}
+          {santiere.length > 0 && (
+            <div style={{marginBottom: 16}}>
+              <div style={{fontSize: 14, fontWeight: 700, color: P.text, marginBottom: 4}}>
+                📍 Șantier
+              </div>
+              <div style={{fontSize: 11, color: P.muted, marginBottom: 8}}>
+                Unde lucrează utilajul azi? (pentru alocare corectă)
+              </div>
+              <select
+                value={siteSelectat || ''}
+                onChange={e => setSiteSelectat(e.target.value ? parseInt(e.target.value) : null)}
+                style={{
+                  width: '100%', padding: '12px 14px', fontSize: 15,
+                  background: P.bg, color: siteSelectat ? P.text : P.muted,
+                  border: `2px solid ${siteSelectat ? P.primary : P.border}`,
+                  borderRadius: 10, outline: 'none', boxSizing: 'border-box',
+                  appearance: 'none', cursor: 'pointer',
+                }}
+              >
+                <option value="">— Alege șantierul —</option>
+                {santiere.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
             </div>
           )}
           

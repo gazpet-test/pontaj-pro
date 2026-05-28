@@ -7956,6 +7956,13 @@ function QrReconciliereTab({ profile, showToast }) {
   const [pozaModal, setPozaModal] = useState(null)   // { bonUrl, pompaUrl, alim }
   const [pozaLoading, setPozaLoading] = useState(false)
   const [processingId, setProcessingId] = useState(null)
+  // Match QR ↔ Rompetrol + carduri fără QR (real_fara_qr)
+  const [matchRunning, setMatchRunning] = useState(false)
+  const [faraQr, setFaraQr] = useState([])
+  const [fqLoading, setFqLoading] = useState(true)
+  const [alocModal, setAlocModal] = useState(null)   // { alim, activeId, siteId }
+  const [activeList, setActiveList] = useState([])
+  const [siteList, setSiteList] = useState([])
   
   useEffect(() => {
     let cancelled = false
@@ -8024,6 +8031,89 @@ function QrReconciliereTab({ profile, showToast }) {
     }
   }
   useEffect(() => { loadDeVerificat() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  
+  // Load alimentări „fără QR" (real_fara_qr) — din lista Rompetrol, fără QR corespunzător
+  async function loadFaraQr() {
+    setFqLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('logistica_alimentari')
+        .select('id, data_alimentare, cantitate_litri, card_combustibil, pret_total, pret_per_litru, statie_combustibil, km_la_alimentare')
+        .eq('qr_status', 'real_fara_qr')
+        .order('data_alimentare', { ascending: false })
+      if (error) throw error
+      setFaraQr(data || [])
+    } catch (e) {
+      showToast?.('Eroare fără-QR: ' + e.message, 'error')
+    } finally {
+      setFqLoading(false)
+    }
+  }
+  useEffect(() => { loadFaraQr() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  
+  // Load utilaje + șantiere (pentru alocare manuală a alimentărilor fără QR)
+  useEffect(() => {
+    let cancelled = false
+    async function loadRefs() {
+      const [{ data: act }, { data: st }] = await Promise.all([
+        supabase.from('logistica_active')
+          .select('id, nr_inmatriculare, cod_intern, marca, model')
+          .eq('vandut', false).eq('deep_sleep', false).eq('non_motor', false)
+          .order('nr_inmatriculare', { nullsFirst: false }),
+        supabase.from('sites').select('id, name, active').order('name'),
+      ])
+      if (cancelled) return
+      setActiveList(act || [])
+      setSiteList((st || []).filter(s => s.active !== false))
+    }
+    loadRefs()
+    return () => { cancelled = true }
+  }, [])
+  
+  // Rulează match-ul automat QR ↔ Rompetrol (RPC server-side)
+  async function ruleazaMatch() {
+    setMatchRunning(true)
+    try {
+      const { data, error } = await supabase.rpc('fn_match_qr_rompetrol')
+      if (error) throw error
+      const m = data?.matched || 0
+      const amb = data?.ambigue || 0
+      showToast?.(
+        m > 0
+          ? `🔗 ${m} alimentări legate automat${amb > 0 ? ` · ${amb} ambigue (verifică manual)` : ''}`
+          : (amb > 0 ? `${amb} ambigue — verifică manual` : 'Niciun match nou'),
+        m > 0 ? 'success' : 'info'
+      )
+      await Promise.all([loadDeVerificat(), loadFaraQr()])
+    } catch (e) {
+      showToast?.('Eroare match: ' + e.message, 'error')
+    } finally {
+      setMatchRunning(false)
+    }
+  }
+  
+  // Salvează alocarea manuală (vehicul + șantier) pentru o alimentare fără QR
+  async function salveazaAlocare() {
+    if (!alocModal?.activeId) { showToast?.('Alege un utilaj', 'warning'); return }
+    setProcessingId(alocModal.alim.id)
+    try {
+      const upd = {
+        active_id: alocModal.activeId,
+        qr_status: 'matched',
+        sursa_alocare_santier: alocModal.siteId ? 'manual' : null,
+      }
+      if (alocModal.siteId) upd.site_id = alocModal.siteId
+      const { error } = await supabase.from('logistica_alimentari').update(upd).eq('id', alocModal.alim.id)
+      if (error) throw error
+      showToast?.('✓ Alimentare alocată', 'success')
+      setFaraQr(prev => prev.filter(f => f.id !== alocModal.alim.id))
+      setAlocModal(null)
+    } catch (e) {
+      showToast?.('Eroare alocare: ' + e.message, 'error')
+    } finally {
+      setProcessingId(null)
+    }
+  }
   
   // Deschide pozele (bon + pompă) prin signed URL
   async function veziPoze(alim) {
@@ -8144,10 +8234,17 @@ function QrReconciliereTab({ profile, showToast }) {
               <span style={{marginLeft: 8, padding: '2px 9px', borderRadius: 12, fontSize: 12, fontWeight: 700, background: '#F0883E22', color: '#F0883E'}}>{deVerificat.length}</span>
             )}
           </div>
-          <button onClick={loadDeVerificat} style={{
-            padding: '4px 10px', background: 'transparent', color: G.muted,
-            border: `1px solid ${G.border}`, borderRadius: 5, fontSize: 11, cursor: 'pointer',
-          }}>🔄 Reîmprospătează</button>
+          <div style={{display: 'flex', gap: 8}}>
+            <button onClick={ruleazaMatch} disabled={matchRunning} style={{
+              padding: '5px 12px', background: matchRunning ? G.muted : '#1F6FEB', color: '#fff',
+              border: 'none', borderRadius: 6, fontSize: 11, fontWeight: 700,
+              cursor: matchRunning ? 'wait' : 'pointer',
+            }}>{matchRunning ? '⏳ Rulez...' : '🔗 Match QR ↔ Rompetrol'}</button>
+            <button onClick={loadDeVerificat} style={{
+              padding: '4px 10px', background: 'transparent', color: G.muted,
+              border: `1px solid ${G.border}`, borderRadius: 5, fontSize: 11, cursor: 'pointer',
+            }}>🔄 Reîmprospătează</button>
+          </div>
         </div>
         {dvLoading ? <div style={{padding: 30, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
         deVerificat.length === 0 ? (
@@ -8221,6 +8318,63 @@ function QrReconciliereTab({ profile, showToast }) {
                     </tr>
                   )
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      
+      {/* Section: Alimentări fără QR (real_fara_qr) — din lista Rompetrol, fără QR */}
+      <div style={{...S.card, marginBottom: 14}}>
+        <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>
+            📋 Alimentări fără QR
+            {faraQr.length > 0 && (
+              <span style={{marginLeft: 8, padding: '2px 9px', borderRadius: 12, fontSize: 12, fontWeight: 700, background: '#F0883E22', color: '#F0883E'}}>{faraQr.length}</span>
+            )}
+            <span style={{marginLeft: 10, fontSize: 11, fontWeight: 400, color: G.muted}}>card Rompetrol fără scanare QR — alocă vehicul (ANAF)</span>
+          </div>
+          <button onClick={loadFaraQr} style={{
+            padding: '4px 10px', background: 'transparent', color: G.muted,
+            border: `1px solid ${G.border}`, borderRadius: 5, fontSize: 11, cursor: 'pointer',
+          }}>🔄 Reîmprospătează</button>
+        </div>
+        {fqLoading ? <div style={{padding: 30, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
+        faraQr.length === 0 ? (
+          <div style={{padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>
+            ✅ Nicio alimentare fără QR — toate cardurile sunt legate.
+          </div>
+        ) : (
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13}}>
+              <thead>
+                <tr style={{background: G.bg}}>
+                  <th style={thStyleAlim}>Dată</th>
+                  <th style={thStyleAlim}>Card</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Litri</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Preț</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {faraQr.map(f => (
+                  <tr key={f.id} style={{borderTop: `1px solid ${G.border}`}}>
+                    <td style={tdStyleAlim}>{f.data_alimentare}</td>
+                    <td style={tdStyleAlim}>
+                      <span style={{padding: '2px 8px', borderRadius: 6, background: '#A371F722', color: '#A371F7', fontWeight: 700, fontSize: 12}}>
+                        {f.card_combustibil || '—'}
+                      </span>
+                    </td>
+                    <td style={{...tdStyleAlim, textAlign: 'right', fontWeight: 600}}>{Number(f.cantitate_litri).toFixed(2)} L</td>
+                    <td style={{...tdStyleAlim, textAlign: 'right'}}>{f.pret_total ? `${Number(f.pret_total).toFixed(2)} lei` : '—'}</td>
+                    <td style={{...tdStyleAlim, textAlign: 'right'}}>
+                      <button onClick={() => setAlocModal({ alim: f, activeId: null, siteId: null })} style={{
+                        padding: '5px 12px', background: '#2EA043', color: '#fff', border: 'none',
+                        borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                      }}>🚛 Alocă vehicul</button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -8350,6 +8504,63 @@ function QrReconciliereTab({ profile, showToast }) {
           </div>
         )}
       </div>
+      
+      {/* Modal alocare vehicul/șantier pentru alimentare fără QR */}
+      {alocModal && (
+        <div onClick={() => setAlocModal(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: G.surface, borderRadius: 14, maxWidth: 480, width: '100%',
+            border: `1px solid ${G.border}`, padding: 22,
+          }}>
+            <div style={{fontWeight: 800, color: G.text, fontSize: 16, marginBottom: 4}}>🚛 Alocă vehicul</div>
+            <div style={{fontSize: 12, color: G.muted, marginBottom: 16}}>
+              {alocModal.alim.data_alimentare} · {Number(alocModal.alim.cantitate_litri).toFixed(2)} L · card {alocModal.alim.card_combustibil || '—'}
+              {alocModal.alim.pret_total ? ` · ${Number(alocModal.alim.pret_total).toFixed(2)} lei` : ''}
+            </div>
+            
+            <div style={{fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 6}}>Vehicul / utilaj *</div>
+            <select
+              value={alocModal.activeId || ''}
+              onChange={e => setAlocModal({ ...alocModal, activeId: e.target.value ? parseInt(e.target.value) : null })}
+              style={{width: '100%', padding: '10px 12px', fontSize: 14, background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, marginBottom: 14, boxSizing: 'border-box'}}
+            >
+              <option value="">— Alege vehiculul —</option>
+              {activeList.map(a => (
+                <option key={a.id} value={a.id}>
+                  {(a.nr_inmatriculare || a.cod_intern || `#${a.id}`)} — {a.marca || ''} {a.model || ''}
+                </option>
+              ))}
+            </select>
+            
+            <div style={{fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 6}}>Șantier (opțional)</div>
+            <select
+              value={alocModal.siteId || ''}
+              onChange={e => setAlocModal({ ...alocModal, siteId: e.target.value ? parseInt(e.target.value) : null })}
+              style={{width: '100%', padding: '10px 12px', fontSize: 14, background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, marginBottom: 20, boxSizing: 'border-box'}}
+            >
+              <option value="">— Fără șantier —</option>
+              {siteList.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            
+            <div style={{display: 'flex', gap: 10, justifyContent: 'flex-end'}}>
+              <button onClick={() => setAlocModal(null)} disabled={processingId === alocModal.alim.id} style={{
+                padding: '9px 16px', background: 'transparent', color: G.muted,
+                border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, cursor: 'pointer',
+              }}>Anulează</button>
+              <button onClick={salveazaAlocare} disabled={!alocModal.activeId || processingId === alocModal.alim.id} style={{
+                padding: '9px 18px', background: (!alocModal.activeId || processingId === alocModal.alim.id) ? G.muted : '#2EA043',
+                color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                cursor: (!alocModal.activeId || processingId === alocModal.alim.id) ? 'not-allowed' : 'pointer',
+              }}>{processingId === alocModal.alim.id ? '⏳ Salvez...' : '✓ Alocă'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Modal poze bon + pompă */}
       {pozaModal && (
