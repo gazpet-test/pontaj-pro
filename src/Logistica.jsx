@@ -7825,6 +7825,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
 }
 
 const thStyleAlim = { padding: '10px 12px', textAlign: 'left', color: '#8B949E', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px' }
+const tdStyleAlim = { padding: '10px 12px', textAlign: 'left', color: '#E6EDF3', fontSize: 13 }
 
 
 // ============================================================
@@ -10304,7 +10305,7 @@ export default function LogisticaPage() {
         .order('data_transport', { ascending: true })
         .limit(30),
     ])
-    setActive(activeRes.data || [])
+    setActive((activeRes.data || []).filter(a => a.cod_intern !== 'NEALOCAT'))
     setCategorii(catRes.data || [])
     setKpi(kpiRes.data || null)
     setRezervoare(rezRes.data || [])
