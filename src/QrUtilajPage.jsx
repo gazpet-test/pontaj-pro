@@ -95,6 +95,9 @@ export default function QrUtilajPage() {
   // Șantier ales de șofer (v5)
   const [santiere, setSantiere] = useState([])
   const [siteSelectat, setSiteSelectat] = useState(null)
+  // Ore/km bord (v6) — opțional, după metric_tip utilaj
+  const [oreBord, setOreBord] = useState('')
+  const [kmBord, setKmBord] = useState('')
   
   // Load info utilaj
   useEffect(() => {
@@ -228,6 +231,8 @@ export default function QrUtilajPage() {
         total_litri_bon: bonMode === 'creeaza_bon' ? parseFloat(totalBon) : null,
         bon_cod: bonMode === 'leaga_bon' ? bonCod.trim() : null,
         site_id: siteSelectat || null,
+        ore_la_alimentare: oreBord ? parseInt(oreBord, 10) : null,
+        km_la_alimentare: kmBord ? parseInt(kmBord, 10) : null,
       })
       if (res.error) {
         setError(res.error)
@@ -703,6 +708,51 @@ export default function QrUtilajPage() {
             </div>
           )}
           
+          {/* Ore funcționare / km bord — opțional, după tipul utilajului */}
+          {utilaj && utilaj.metric_tip === 'km' ? (
+            <div style={{marginBottom: 16}}>
+              <div style={{fontSize: 14, fontWeight: 700, color: P.text, marginBottom: 4}}>
+                🛣️ Km la bord <span style={{fontWeight: 400, color: P.muted, fontSize: 12}}>(opțional)</span>
+              </div>
+              {utilaj.km_actuali != null && (
+                <div style={{fontSize: 11, color: P.muted, marginBottom: 8}}>
+                  Ultima valoare: {Number(utilaj.km_actuali).toLocaleString('ro-RO')} km
+                </div>
+              )}
+              <input
+                type="number" inputMode="numeric" value={kmBord}
+                onChange={e => setKmBord(e.target.value)}
+                placeholder="ex: 125400"
+                style={{
+                  width: '100%', padding: '12px 14px', fontSize: 16,
+                  background: P.bg, color: P.text, border: `2px solid ${kmBord ? P.primary : P.border}`,
+                  borderRadius: 10, outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          ) : (utilaj && (utilaj.metric_tip === 'ore' || utilaj.metric_tip === 'none' || !utilaj.metric_tip)) ? (
+            <div style={{marginBottom: 16}}>
+              <div style={{fontSize: 14, fontWeight: 700, color: P.text, marginBottom: 4}}>
+                ⏱️ Ore funcționare bord <span style={{fontWeight: 400, color: P.muted, fontSize: 12}}>(opțional)</span>
+              </div>
+              {utilaj.ore_functionare != null && (
+                <div style={{fontSize: 11, color: P.muted, marginBottom: 8}}>
+                  Ultima valoare: {Number(utilaj.ore_functionare).toLocaleString('ro-RO')} ore
+                </div>
+              )}
+              <input
+                type="number" inputMode="numeric" value={oreBord}
+                onChange={e => setOreBord(e.target.value)}
+                placeholder="ex: 3450"
+                style={{
+                  width: '100%', padding: '12px 14px', fontSize: 16,
+                  background: P.bg, color: P.text, border: `2px solid ${oreBord ? P.primary : P.border}`,
+                  borderRadius: 10, outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          ) : null}
+          
           <div style={{fontSize: 15, fontWeight: 700, marginBottom: 6, color: P.text}}>
             {bonMode === 'individual' ? 'Câți litri ai alimentat?' : 'Cât a luat ACEST utilaj?'}
           </div>
@@ -907,6 +957,7 @@ export default function QrUtilajPage() {
             setPin(''); setSursa(null); setCantitate(''); setResult(null)
             setFotoBon(null); setFotoPreview(null); setFotoPompa(null); setFotoPompaPreview(null)
             setBonMode('individual'); setTotalBon(''); setBonCod(''); setBonVerificat(null)
+            setOreBord(''); setKmBord('')
             setStep('info')
           }} style={{
             padding: '14px 28px', background: P.success, color: '#fff',
