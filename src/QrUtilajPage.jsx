@@ -60,12 +60,17 @@ export default function QrUtilajPage() {
   const [error, setError] = useState('')
   const [utilaj, setUtilaj] = useState(null)
   const [ultimeAlim, setUltimeAlim] = useState([])
+  const [documente, setDocumente] = useState([])
+  const [service, setService] = useState(null)
   const [pin, setPin] = useState('')
   const [sursa, setSursa] = useState(null)  // 'oscar' | 'rompetrol' | 'benzinarie'
   const [cantitate, setCantitate] = useState('')
   const [geo, setGeo] = useState({ lat: null, lng: null })
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
+  const [fotoBon, setFotoBon] = useState(null)        // base64 comprimat
+  const [fotoPreview, setFotoPreview] = useState(null) // preview URL
+  const [fotoProcessing, setFotoProcessing] = useState(false)
   
   // Load info utilaj
   useEffect(() => {
@@ -81,6 +86,8 @@ export default function QrUtilajPage() {
         }
         setUtilaj(res.utilaj)
         setUltimeAlim(res.ultime_alimentari || [])
+        setDocumente(res.documente || [])
+        setService(res.service || null)
         setStep('info')
       } catch (e) {
         if (!cancelled) {
@@ -92,6 +99,42 @@ export default function QrUtilajPage() {
     load()
     return () => { cancelled = true }
   }, [id])
+  
+  // Comprimare imagine client-side (canvas → max 1200px → JPEG 0.7)
+  async function handleFotoSelect(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFotoProcessing(true)
+    try {
+      const img = new Image()
+      const reader = new FileReader()
+      const loaded = new Promise((resolve, reject) => {
+        reader.onload = () => { img.src = reader.result; }
+        reader.onerror = reject
+        img.onload = () => resolve()
+        img.onerror = reject
+      })
+      reader.readAsDataURL(file)
+      await loaded
+      const maxDim = 1200
+      let w = img.width, h = img.height
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = Math.round(h * maxDim / w); w = maxDim }
+        else { w = Math.round(w * maxDim / h); h = maxDim }
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = w; canvas.height = h
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, w, h)
+      const base64 = canvas.toDataURL('image/jpeg', 0.7)
+      setFotoBon(base64)
+      setFotoPreview(base64)
+    } catch (err) {
+      setError('Eroare procesare poză. Încearcă din nou.')
+    } finally {
+      setFotoProcessing(false)
+    }
+  }
   
   // Geolocation (opțional, NU blocăm dacă refuză)
   useEffect(() => {
@@ -114,6 +157,7 @@ export default function QrUtilajPage() {
         qr_sursa: sursa,
         geo_lat: geo.lat,
         geo_lng: geo.lng,
+        foto_base64: (sursa !== 'oscar' && fotoBon) ? fotoBon : null,
       })
       if (res.error) {
         setError(res.error)
@@ -207,6 +251,57 @@ export default function QrUtilajPage() {
                 ))}
               </div>
             </details>
+          )}
+        </div>
+      )}
+      
+      {/* CARD DOCUMENTE + SERVICE (afișat pe step info) */}
+      {utilaj && step === 'info' && (documente.length > 0 || service) && (
+        <div style={{
+          background: P.surface, border: `1px solid ${P.border}`,
+          padding: 16, borderRadius: 12, marginBottom: 16,
+        }}>
+          {/* Service scadență */}
+          {service && (
+            <div style={{
+              padding: 12, borderRadius: 8, marginBottom: documente.length > 0 ? 12 : 0,
+              background: service.nivel === 'critic' ? '#7F1D1D' : service.nivel === 'urgent' ? '#78350F' : '#1E3A2F',
+              border: `1px solid ${service.nivel === 'critic' ? P.danger : service.nivel === 'urgent' ? P.warning : P.success}`,
+            }}>
+              <div style={{fontSize: 11, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 4}}>
+                🔧 Service
+              </div>
+              <div style={{fontSize: 13, fontWeight: 600, color: P.text}}>
+                {service.mesaj}
+              </div>
+            </div>
+          )}
+          
+          {/* Documente */}
+          {documente.length > 0 && (
+            <div>
+              <div style={{fontSize: 11, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8}}>
+                📋 Documente
+              </div>
+              <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                {documente.map((d, i) => {
+                  const cfg = d.status === 'expirat' ? { c: P.danger, icon: '🚨', txt: `expirat de ${Math.abs(d.zile)} zile` }
+                    : d.status === 'expira_curand' ? { c: P.warning, icon: '⚠️', txt: `expiră în ${d.zile} zile` }
+                    : d.status === 'valid' ? { c: P.success, icon: '✅', txt: `valid (${d.zile} zile)` }
+                    : { c: P.muted, icon: '➖', txt: 'fără dată' }
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '8px 10px', background: P.bg, borderRadius: 6,
+                      borderLeft: `3px solid ${cfg.c}`,
+                    }}>
+                      <span style={{fontSize: 13, fontWeight: 600, color: P.text}}>{cfg.icon} {d.nume}</span>
+                      <span style={{fontSize: 11, color: cfg.c, fontWeight: 600}}>{cfg.txt}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -369,19 +464,66 @@ export default function QrUtilajPage() {
               fontSize: 20, fontWeight: 700, color: P.muted, pointerEvents: 'none',
             }}>L</div>
           </div>
+          
+          {/* FOTO BON - doar pentru Rompetrol / Benzinărie */}
+          {sursa !== 'oscar' && (
+            <div style={{marginTop: 16}}>
+              <div style={{fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 4}}>
+                📸 Poză bon {sursa === 'rompetrol' ? '(recomandat pentru match perfect)' : '(obligatoriu pentru benzinărie)'}
+              </div>
+              <div style={{fontSize: 11, color: P.muted, marginBottom: 10}}>
+                Fotografiază bonul fiscal — ajută biroul la reconciliere și ANAF.
+              </div>
+              {!fotoPreview ? (
+                <label style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  padding: 16, background: P.bg, border: `2px dashed ${P.border}`,
+                  borderRadius: 10, cursor: 'pointer', color: P.muted, fontSize: 14, fontWeight: 600,
+                }}>
+                  {fotoProcessing ? '⏳ Se procesează...' : '📷 Fă o poză bonului'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFotoSelect}
+                    style={{display: 'none'}}
+                    disabled={fotoProcessing}
+                  />
+                </label>
+              ) : (
+                <div style={{position: 'relative'}}>
+                  <img src={fotoPreview} alt="Bon" style={{
+                    width: '100%', maxHeight: 200, objectFit: 'contain',
+                    borderRadius: 10, border: `1px solid ${P.border}`, background: P.bg,
+                  }} />
+                  <button onClick={() => { setFotoBon(null); setFotoPreview(null) }} style={{
+                    position: 'absolute', top: 8, right: 8, width: 32, height: 32,
+                    background: P.danger, color: '#fff', border: 'none', borderRadius: '50%',
+                    fontSize: 16, cursor: 'pointer', fontWeight: 700,
+                  }}>×</button>
+                  <div style={{
+                    position: 'absolute', bottom: 8, left: 8, padding: '4px 10px',
+                    background: 'rgba(16,185,129,0.9)', color: '#fff', borderRadius: 6,
+                    fontSize: 11, fontWeight: 700,
+                  }}>✅ Bon atașat</div>
+                </div>
+              )}
+            </div>
+          )}
+          
           <button
             onClick={doSubmit}
-            disabled={!cantitate || parseFloat(cantitate) <= 0 || submitting}
+            disabled={!cantitate || parseFloat(cantitate) <= 0 || submitting || (sursa === 'benzinarie' && !fotoBon)}
             style={{
               width: '100%', marginTop: 16, padding: 18,
-              background: (!cantitate || parseFloat(cantitate) <= 0) ? P.border : P.success,
+              background: (!cantitate || parseFloat(cantitate) <= 0 || (sursa === 'benzinarie' && !fotoBon)) ? P.border : P.success,
               color: '#fff', border: 'none', borderRadius: 10,
               fontWeight: 800, fontSize: 18,
               cursor: (submitting || !cantitate) ? 'wait' : 'pointer',
               opacity: submitting ? 0.7 : 1,
             }}
           >
-            {submitting ? '⏳ Se trimite...' : '✅ Trimite alimentarea'}
+            {submitting ? '⏳ Se trimite...' : (sursa === 'benzinarie' && !fotoBon) ? '📸 Adaugă poza bonului' : '✅ Trimite alimentarea'}
           </button>
           <button onClick={() => setStep('sursa')} style={{
             width: '100%', marginTop: 8, padding: 10, background: 'transparent',
