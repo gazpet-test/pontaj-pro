@@ -431,7 +431,11 @@ export default function QrUtilajPage() {
         marginTop: 30, textAlign: 'center', fontSize: 11, color: P.muted,
         padding: '12px 0',
       }}>
-        🔒 Sistem securizat Gazpet Instal · {new Date().getFullYear()}
+        <div>🔒 Sistem securizat · Gazpet Instal</div>
+        <div style={{marginTop: 6, fontSize: 12, fontWeight: 600, color: P.text, letterSpacing: '0.02em'}}>
+          Sistem intern Gazpet · <span style={{color: P.primary}}>by Trusu Razvan</span>
+        </div>
+        <div style={{marginTop: 4, fontSize: 10, color: P.muted}}>{new Date().getFullYear()}</div>
       </div>
     </div>
   )
