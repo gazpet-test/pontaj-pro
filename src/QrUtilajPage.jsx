@@ -52,6 +52,18 @@ async function submitAlimentare(payload) {
   return await res.json()
 }
 
+async function lookupBon(cod) {
+  const url = `${SUPABASE_URL}/functions/v1/qr-bon-comun-lookup?cod=${encodeURIComponent(cod)}`
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'apikey': SUPABASE_ANON_KEY,
+    },
+  })
+  return await res.json()
+}
+
 // ─── Componentă principală ──────────────────────────────────────────
 export default function QrUtilajPage() {
   const { id } = useParams()
@@ -74,6 +86,12 @@ export default function QrUtilajPage() {
   const [fotoPompa, setFotoPompa] = useState(null)        // base64 poza pompa
   const [fotoPompaPreview, setFotoPompaPreview] = useState(null)
   const [fotoPompaProcessing, setFotoPompaProcessing] = useState(false)
+  // Bon comun (Opțiunea A) - 28.05.2026
+  const [bonMode, setBonMode] = useState('individual')  // individual | creeaza_bon | leaga_bon
+  const [totalBon, setTotalBon] = useState('')           // total litri bon (creeaza)
+  const [bonCod, setBonCod] = useState('')               // cod bon (leaga)
+  const [bonVerificat, setBonVerificat] = useState(null) // info bon după lookup
+  const [bonVerifLoading, setBonVerifLoading] = useState(false)
   
   // Load info utilaj
   useEffect(() => {
@@ -158,6 +176,26 @@ export default function QrUtilajPage() {
     }
   }
   
+  // Verifică codul bonului comun (lookup)
+  async function verifBon() {
+    if (!bonCod || bonCod.length < 3) return
+    setBonVerifLoading(true)
+    setBonVerificat(null)
+    try {
+      const res = await lookupBon(bonCod.trim())
+      if (res.error) {
+        setError(res.error)
+      } else {
+        setBonVerificat(res.bon)
+        setError('')
+      }
+    } catch (e) {
+      setError('Eroare verificare bon. Încearcă din nou.')
+    } finally {
+      setBonVerifLoading(false)
+    }
+  }
+  
   // Geolocation (opțional, NU blocăm dacă refuză)
   useEffect(() => {
     if ('geolocation' in navigator) {
@@ -181,6 +219,9 @@ export default function QrUtilajPage() {
         geo_lng: geo.lng,
         foto_base64: (sursa !== 'oscar' && fotoBon) ? fotoBon : null,
         foto_pompa_base64: (sursa !== 'oscar' && fotoPompa) ? fotoPompa : null,
+        bon_mode: bonMode,
+        total_litri_bon: bonMode === 'creeaza_bon' ? parseFloat(totalBon) : null,
+        bon_cod: bonMode === 'leaga_bon' ? bonCod.trim() : null,
       })
       if (res.error) {
         setError(res.error)
@@ -404,7 +445,7 @@ export default function QrUtilajPage() {
             🛢️ De unde alimentezi?
           </div>
           <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-            <button onClick={() => { setSursa('oscar'); setStep('cantitate') }} style={{
+            <button onClick={() => { setSursa('oscar'); setBonMode('individual'); setStep('cantitate') }} style={{
               padding: 20, background: P.oscar, color: '#fff', border: 'none',
               borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: 'pointer',
               textAlign: 'left', boxShadow: '0 4px 12px rgba(59, 130, 246, .3)',
@@ -415,7 +456,7 @@ export default function QrUtilajPage() {
                 Alimentare directă din rezervorul Gazpet
               </div>
             </button>
-            <button onClick={() => { setSursa('rompetrol'); setStep('cantitate') }} style={{
+            <button onClick={() => { setSursa('rompetrol'); setStep('bon_tip') }} style={{
               padding: 20, background: P.rompetrol, color: '#fff', border: 'none',
               borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: 'pointer',
               textAlign: 'left', boxShadow: '0 4px 12px rgba(245, 158, 11, .3)',
@@ -426,7 +467,7 @@ export default function QrUtilajPage() {
                 Stație Rompetrol cu card combustibil Gazpet
               </div>
             </button>
-            <button onClick={() => { setSursa('benzinarie'); setStep('cantitate') }} style={{
+            <button onClick={() => { setSursa('benzinarie'); setStep('bon_tip') }} style={{
               padding: 20, background: P.benzinarie, color: '#fff', border: 'none',
               borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: 'pointer',
               textAlign: 'left', boxShadow: '0 4px 12px rgba(139, 92, 246, .3)',
@@ -445,6 +486,131 @@ export default function QrUtilajPage() {
         </div>
       )}
       
+      {/* STEP: BON_TIP - individual vs bon comun */}
+      {step === 'bon_tip' && (
+        <div>
+          <div style={{fontSize: 15, fontWeight: 700, marginBottom: 4, color: P.text, textAlign: 'center'}}>
+            🧾 Cum e bonul?
+          </div>
+          <div style={{fontSize: 12, color: P.muted, marginBottom: 14, textAlign: 'center'}}>
+            Bonul e doar pentru acest utilaj, sau alimentezi mai multe utilaje din același bon?
+          </div>
+          <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+            <button onClick={() => { setBonMode('individual'); setStep('cantitate') }} style={{
+              padding: 18, background: P.surface, color: P.text, border: `1px solid ${P.border}`,
+              borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: 'pointer', textAlign: 'left',
+            }}>
+              <div style={{fontSize: 22, marginBottom: 4}}>🚛</div>
+              <div>Doar acest utilaj</div>
+              <div style={{fontSize: 12, color: P.muted, marginTop: 4, fontWeight: 500}}>
+                Un bon = un utilaj (cazul normal)
+              </div>
+            </button>
+            <button onClick={() => { setBonMode('creeaza_bon'); setStep('cantitate') }} style={{
+              padding: 18, background: '#1E3A5F', color: '#fff', border: `1px solid ${P.primary}`,
+              borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: 'pointer', textAlign: 'left',
+            }}>
+              <div style={{fontSize: 22, marginBottom: 4}}>📋</div>
+              <div>Bon comun — sunt primul</div>
+              <div style={{fontSize: 12, opacity: 0.85, marginTop: 4, fontWeight: 500}}>
+                Creez bonul (ex: 500L) și primesc un cod pentru ceilalți șoferi
+              </div>
+            </button>
+            <button onClick={() => { setBonMode('leaga_bon'); setBonVerificat(null); setBonCod(''); setStep('bon_cod') }} style={{
+              padding: 18, background: '#3D2F5F', color: '#fff', border: `1px solid ${P.benzinarie}`,
+              borderRadius: 12, fontWeight: 700, fontSize: 15, cursor: 'pointer', textAlign: 'left',
+            }}>
+              <div style={{fontSize: 22, marginBottom: 4}}>🔗</div>
+              <div>Bon comun — continui un bon</div>
+              <div style={{fontSize: 12, opacity: 0.85, marginTop: 4, fontWeight: 500}}>
+                Am un cod de la alt șofer (alimentez din bonul lui)
+              </div>
+            </button>
+          </div>
+          <button onClick={() => setStep('sursa')} style={{
+            width: '100%', marginTop: 12, padding: 10, background: 'transparent',
+            color: P.muted, border: 'none', fontSize: 13, cursor: 'pointer',
+          }}>← Înapoi</button>
+        </div>
+      )}
+      
+      {/* STEP: BON_COD - tastez codul bonului existent */}
+      {step === 'bon_cod' && (
+        <div style={{
+          background: P.surface, border: `1px solid ${P.border}`,
+          padding: 20, borderRadius: 12,
+        }}>
+          <div style={{fontSize: 15, fontWeight: 700, marginBottom: 6, color: P.text}}>
+            🔗 Codul bonului
+          </div>
+          <div style={{fontSize: 12, color: P.muted, marginBottom: 16}}>
+            Tastează codul primit de la șoferul care a creat bonul.
+          </div>
+          <input
+            type="tel"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={6}
+            value={bonCod}
+            onChange={e => { setBonCod(e.target.value.replace(/\D/g, '')); setBonVerificat(null) }}
+            placeholder="••••"
+            autoFocus
+            style={{
+              width: '100%', padding: '16px 18px', fontSize: 28, textAlign: 'center',
+              letterSpacing: '0.4em', fontWeight: 800,
+              background: P.bg, color: P.text, border: `2px solid ${P.border}`,
+              borderRadius: 10, outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+          
+          {/* Info bon verificat */}
+          {bonVerificat && (
+            <div style={{
+              marginTop: 12, padding: 12, background: '#064E3B', borderRadius: 8,
+              border: `1px solid ${P.success}`,
+            }}>
+              <div style={{fontSize: 13, fontWeight: 700, color: '#A7F3D0', marginBottom: 4}}>
+                ✅ Bon găsit
+              </div>
+              <div style={{fontSize: 12, color: '#D1FAE5'}}>
+                {bonVerificat.qr_sursa === 'rompetrol' ? '⛽ Rompetrol' : '🏪 Benzinărie'} · Total {bonVerificat.total_litri}L
+              </div>
+              <div style={{fontSize: 12, color: '#D1FAE5', marginTop: 2}}>
+                Rămas: <strong style={{color: '#fff'}}>{bonVerificat.litri_ramasi}L</strong> ({bonVerificat.nr_utilaje} utilaje deja)
+              </div>
+            </div>
+          )}
+          
+          {!bonVerificat ? (
+            <button
+              onClick={verifBon}
+              disabled={bonCod.length < 3 || bonVerifLoading}
+              style={{
+                width: '100%', marginTop: 16, padding: 16,
+                background: bonCod.length >= 3 ? P.benzinarie : P.border,
+                color: '#fff', border: 'none', borderRadius: 10,
+                fontWeight: 800, fontSize: 16,
+                cursor: bonCod.length >= 3 ? 'pointer' : 'not-allowed',
+                opacity: bonCod.length >= 3 ? 1 : 0.5,
+              }}
+            >{bonVerifLoading ? '⏳ Se verifică...' : '🔍 Verifică bonul'}</button>
+          ) : (
+            <button
+              onClick={() => setStep('cantitate')}
+              style={{
+                width: '100%', marginTop: 16, padding: 16,
+                background: P.success, color: '#fff', border: 'none', borderRadius: 10,
+                fontWeight: 800, fontSize: 16, cursor: 'pointer',
+              }}
+            >Continuă →</button>
+          )}
+          <button onClick={() => setStep('bon_tip')} style={{
+            width: '100%', marginTop: 8, padding: 10, background: 'transparent',
+            color: P.muted, border: 'none', fontSize: 13, cursor: 'pointer',
+          }}>← Înapoi</button>
+        </div>
+      )}
+      
       {/* STEP: CANTITATE */}
       {step === 'cantitate' && (
         <div style={{
@@ -457,12 +623,57 @@ export default function QrUtilajPage() {
             color: '#fff', borderRadius: 6, fontSize: 11, fontWeight: 700, marginBottom: 12,
           }}>
             {sursa === 'oscar' ? '💧 OSCAR' : sursa === 'rompetrol' ? '⛽ ROMPETROL' : '🏪 BENZINĂRIE'}
+            {bonMode === 'creeaza_bon' && ' · 📋 BON COMUN NOU'}
+            {bonMode === 'leaga_bon' && bonVerificat && ` · 🔗 BON ${bonVerificat.cod_bon}`}
           </div>
+          
+          {/* Info bon legat */}
+          {bonMode === 'leaga_bon' && bonVerificat && (
+            <div style={{
+              padding: 10, background: P.bg, borderRadius: 8, marginBottom: 14,
+              fontSize: 12, color: P.muted,
+            }}>
+              🔗 Bon {bonVerificat.cod_bon}: rămas <strong style={{color: P.success}}>{bonVerificat.litri_ramasi}L</strong> din {bonVerificat.total_litri}L
+            </div>
+          )}
+          
+          {/* Câmp TOTAL BON - doar la creează_bon */}
+          {bonMode === 'creeaza_bon' && (
+            <div style={{marginBottom: 16}}>
+              <div style={{fontSize: 14, fontWeight: 700, color: P.text, marginBottom: 4}}>
+                📋 Total litri pe bon (tot bonul)
+              </div>
+              <div style={{fontSize: 11, color: P.muted, marginBottom: 8}}>
+                Cantitatea TOTALĂ de pe bonul fiscal (ex: 500L care se împarte la mai multe utilaje).
+              </div>
+              <div style={{position: 'relative'}}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0.1"
+                  step="0.1"
+                  value={totalBon}
+                  onChange={e => setTotalBon(e.target.value)}
+                  placeholder="500"
+                  style={{
+                    width: '100%', padding: '12px 50px 12px 16px', fontSize: 24, textAlign: 'right',
+                    fontWeight: 700, background: P.bg, color: P.primary, border: `2px solid ${P.primary}`,
+                    borderRadius: 10, outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+                <div style={{
+                  position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)',
+                  fontSize: 16, fontWeight: 700, color: P.muted, pointerEvents: 'none',
+                }}>L</div>
+              </div>
+            </div>
+          )}
+          
           <div style={{fontSize: 15, fontWeight: 700, marginBottom: 6, color: P.text}}>
-            Câți litri ai alimentat?
+            {bonMode === 'individual' ? 'Câți litri ai alimentat?' : 'Cât a luat ACEST utilaj?'}
           </div>
           <div style={{fontSize: 12, color: P.muted, marginBottom: 16}}>
-            Introduce cantitatea exactă (poți pune și zecimale).
+            {bonMode === 'individual' ? 'Introduce cantitatea exactă (poți pune și zecimale).' : 'Cantitatea pusă în utilajul curent (din bonul comun).'}
           </div>
           <div style={{position: 'relative'}}>
             <input
@@ -488,8 +699,8 @@ export default function QrUtilajPage() {
             }}>L</div>
           </div>
           
-          {/* FOTO BON - doar pentru Rompetrol / Benzinărie */}
-          {sursa !== 'oscar' && (
+          {/* FOTO BON - doar pentru Rompetrol / Benzinărie, NU la leaga_bon (bonul are deja foto) */}
+          {sursa !== 'oscar' && bonMode !== 'leaga_bon' && (
             <div style={{marginTop: 16}}>
               <div style={{fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 4}}>
                 📸 Poză bon {sursa === 'rompetrol' ? '(recomandat pentru match perfect)' : '(obligatoriu pentru benzinărie)'}
@@ -534,8 +745,8 @@ export default function QrUtilajPage() {
             </div>
           )}
           
-          {/* FOTO POMPĂ - afișaj litri/lei (dublă dovadă) - doar Rompetrol/Benzinărie */}
-          {sursa !== 'oscar' && (
+          {/* FOTO POMPĂ - afișaj litri/lei (dublă dovadă) - NU la leaga_bon */}
+          {sursa !== 'oscar' && bonMode !== 'leaga_bon' && (
             <div style={{marginTop: 14}}>
               <div style={{fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 4}}>
                 ⛽ Poză pompă (afișaj litri/lei) <span style={{color: P.muted, fontWeight: 400}}>— opțional</span>
@@ -580,24 +791,37 @@ export default function QrUtilajPage() {
             </div>
           )}
           
-          <button
-            onClick={doSubmit}
-            disabled={!cantitate || parseFloat(cantitate) <= 0 || submitting || (sursa === 'benzinarie' && !fotoBon)}
-            style={{
-              width: '100%', marginTop: 16, padding: 18,
-              background: (!cantitate || parseFloat(cantitate) <= 0 || (sursa === 'benzinarie' && !fotoBon)) ? P.border : P.success,
-              color: '#fff', border: 'none', borderRadius: 10,
-              fontWeight: 800, fontSize: 18,
-              cursor: (submitting || !cantitate) ? 'wait' : 'pointer',
-              opacity: submitting ? 0.7 : 1,
-            }}
-          >
-            {submitting ? '⏳ Se trimite...' : (sursa === 'benzinarie' && !fotoBon) ? '📸 Adaugă poza bonului' : '✅ Trimite alimentarea'}
-          </button>
-          <button onClick={() => setStep('sursa')} style={{
+          {(() => {
+            const cantOk = cantitate && parseFloat(cantitate) > 0
+            const benzinarieFotoLipsa = sursa === 'benzinarie' && bonMode !== 'leaga_bon' && !fotoBon
+            const totalBonLipsa = bonMode === 'creeaza_bon' && (!totalBon || parseFloat(totalBon) <= 0)
+            const totalBonPreaMic = bonMode === 'creeaza_bon' && totalBon && cantitate && parseFloat(totalBon) < parseFloat(cantitate)
+            const blocat = !cantOk || submitting || benzinarieFotoLipsa || totalBonLipsa || totalBonPreaMic
+            let label = '✅ Trimite alimentarea'
+            if (submitting) label = '⏳ Se trimite...'
+            else if (totalBonLipsa) label = '📋 Completează totalul bonului'
+            else if (totalBonPreaMic) label = '⚠️ Cantitatea > total bon'
+            else if (benzinarieFotoLipsa) label = '📸 Adaugă poza bonului'
+            else if (bonMode === 'creeaza_bon') label = '✅ Creează bon + trimite'
+            return (
+              <button
+                onClick={doSubmit}
+                disabled={blocat}
+                style={{
+                  width: '100%', marginTop: 16, padding: 18,
+                  background: blocat && !submitting ? P.border : P.success,
+                  color: '#fff', border: 'none', borderRadius: 10,
+                  fontWeight: 800, fontSize: 18,
+                  cursor: submitting ? 'wait' : (blocat ? 'not-allowed' : 'pointer'),
+                  opacity: submitting ? 0.7 : 1,
+                }}
+              >{label}</button>
+            )
+          })()}
+          <button onClick={() => setStep(sursa === 'oscar' ? 'sursa' : 'bon_tip')} style={{
             width: '100%', marginTop: 8, padding: 10, background: 'transparent',
             color: P.muted, border: 'none', fontSize: 13, cursor: 'pointer',
-          }}>← Schimbă sursa</button>
+          }}>← Înapoi</button>
         </div>
       )}
       
@@ -614,6 +838,25 @@ export default function QrUtilajPage() {
           <div style={{fontSize: 14, color: '#D1FAE5', marginBottom: 20, lineHeight: 1.5}}>
             {result.message}
           </div>
+          
+          {/* COD BON MARE - când a creat bon comun nou */}
+          {result.bon_mode === 'creeaza_bon' && result.bon_comun_cod && (
+            <div style={{
+              background: '#1E3A5F', border: `2px solid ${P.primary}`,
+              borderRadius: 12, padding: 16, marginBottom: 20,
+            }}>
+              <div style={{fontSize: 12, color: '#93C5FD', marginBottom: 6, fontWeight: 600}}>
+                📋 SPUNE ACEST COD CELORLALȚI ȘOFERI:
+              </div>
+              <div style={{fontSize: 48, fontWeight: 900, color: '#fff', letterSpacing: '0.1em'}}>
+                {result.bon_comun_cod}
+              </div>
+              <div style={{fontSize: 11, color: '#93C5FD', marginTop: 6}}>
+                Ei scanează utilajul lor → Rompetrol/Benzinărie → „Continui un bon" → tastează {result.bon_comun_cod}
+              </div>
+            </div>
+          )}
+          
           <div style={{
             background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: 12,
             fontSize: 12, color: '#A7F3D0', marginBottom: 20, textAlign: 'left',
@@ -621,11 +864,15 @@ export default function QrUtilajPage() {
             <div>👤 Șofer: <strong style={{color: '#fff'}}>{result.sofer_nume}</strong></div>
             <div>🚛 Utilaj: <strong style={{color: '#fff'}}>{result.utilaj}</strong></div>
             <div>⛽ Cantitate: <strong style={{color: '#fff'}}>{result.cantitate_litri} L</strong></div>
+            {result.bon_comun_cod && result.bon_mode !== 'creeaza_bon' && (
+              <div>🔗 Bon comun: <strong style={{color: '#fff'}}>{result.bon_comun_cod}</strong></div>
+            )}
             <div>📡 Ref: #{result.alimentare_id}</div>
           </div>
           <button onClick={() => {
             setPin(''); setSursa(null); setCantitate(''); setResult(null)
             setFotoBon(null); setFotoPreview(null); setFotoPompa(null); setFotoPompaPreview(null)
+            setBonMode('individual'); setTotalBon(''); setBonCod(''); setBonVerificat(null)
             setStep('info')
           }} style={{
             padding: '14px 28px', background: P.success, color: '#fff',
