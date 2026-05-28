@@ -7950,6 +7950,12 @@ function QrReconciliereTab({ profile, showToast }) {
   const [loading, setLoading] = useState(true)
   const [pinsSoferi, setPinsSoferi] = useState([])
   const [pinsLoading, setPinsLoading] = useState(false)
+  // Alimentări QR de verificat (review_birou + pending_match) + modal poze
+  const [deVerificat, setDeVerificat] = useState([])
+  const [dvLoading, setDvLoading] = useState(true)
+  const [pozaModal, setPozaModal] = useState(null)   // { bonUrl, pompaUrl, alim }
+  const [pozaLoading, setPozaLoading] = useState(false)
+  const [processingId, setProcessingId] = useState(null)
   
   useEffect(() => {
     let cancelled = false
@@ -7993,6 +7999,75 @@ function QrReconciliereTab({ profile, showToast }) {
     loadPins()
     return () => { cancelled = true }
   }, [])
+  
+  // Load alimentări QR de verificat
+  async function loadDeVerificat() {
+    setDvLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('logistica_alimentari')
+        .select(`
+          id, data_alimentare, cantitate_litri, qr_sursa, qr_status,
+          qr_foto_path, qr_foto_pompa_path, qr_submit_la, statie_combustibil,
+          site_id, bon_comun_id,
+          active:logistica_active!active_id(nr_inmatriculare, cod_intern, marca, model),
+          sofer:employees!qr_sofer_id(name)
+        `)
+        .in('qr_status', ['review_birou', 'pending_match'])
+        .order('qr_submit_la', { ascending: false, nullsFirst: false })
+      if (error) throw error
+      setDeVerificat(data || [])
+    } catch (e) {
+      showToast?.('Eroare verificat: ' + e.message, 'error')
+    } finally {
+      setDvLoading(false)
+    }
+  }
+  useEffect(() => { loadDeVerificat() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  
+  // Deschide pozele (bon + pompă) prin signed URL
+  async function veziPoze(alim) {
+    setPozaLoading(true)
+    setPozaModal({ bonUrl: null, pompaUrl: null, alim })
+    try {
+      let bonUrl = null, pompaUrl = null
+      if (alim.qr_foto_path) {
+        const { data } = await supabase.storage.from('qr-bonuri').createSignedUrl(alim.qr_foto_path, 120)
+        bonUrl = data?.signedUrl || null
+      }
+      if (alim.qr_foto_pompa_path) {
+        const { data } = await supabase.storage.from('qr-bonuri').createSignedUrl(alim.qr_foto_pompa_path, 120)
+        pompaUrl = data?.signedUrl || null
+      }
+      setPozaModal({ bonUrl, pompaUrl, alim })
+    } catch (e) {
+      showToast?.('Eroare poze: ' + e.message, 'error')
+      setPozaModal(null)
+    } finally {
+      setPozaLoading(false)
+    }
+  }
+  
+  // Validează (→ matched) sau Respinge (→ rejected)
+  async function decideAlim(id, nouStatus) {
+    const verb = nouStatus === 'matched' ? 'validezi' : 'respingi'
+    if (nouStatus === 'rejected' && !confirm(`Sigur ${verb} această alimentare? Va fi marcată ca respinsă.`)) return
+    setProcessingId(id)
+    try {
+      const { error } = await supabase
+        .from('logistica_alimentari')
+        .update({ qr_status: nouStatus })
+        .eq('id', id)
+      if (error) throw error
+      showToast?.(nouStatus === 'matched' ? 'Validat ✓' : 'Respins', nouStatus === 'matched' ? 'success' : 'info')
+      setDeVerificat(prev => prev.filter(a => a.id !== id))
+      if (pozaModal?.alim?.id === id) setPozaModal(null)
+    } catch (e) {
+      showToast?.('Eroare: ' + e.message, 'error')
+    } finally {
+      setProcessingId(null)
+    }
+  }
   
   const statusColors = {
     ok: { bg: '#10B98122', color: '#10B981', label: '✅ OK (<5% diff)' },
@@ -8058,6 +8133,98 @@ function QrReconciliereTab({ profile, showToast }) {
             </div>
           </div>
         </div>
+      </div>
+      
+      {/* Section: Alimentări QR de verificat */}
+      <div style={{...S.card, marginBottom: 14}}>
+        <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>
+            🔍 Alimentări QR de verificat
+            {deVerificat.length > 0 && (
+              <span style={{marginLeft: 8, padding: '2px 9px', borderRadius: 12, fontSize: 12, fontWeight: 700, background: '#F0883E22', color: '#F0883E'}}>{deVerificat.length}</span>
+            )}
+          </div>
+          <button onClick={loadDeVerificat} style={{
+            padding: '4px 10px', background: 'transparent', color: G.muted,
+            border: `1px solid ${G.border}`, borderRadius: 5, fontSize: 11, cursor: 'pointer',
+          }}>🔄 Reîmprospătează</button>
+        </div>
+        {dvLoading ? <div style={{padding: 30, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
+        deVerificat.length === 0 ? (
+          <div style={{padding: 30, textAlign: 'center', color: G.muted, fontSize: 13}}>
+            ✅ Nimic de verificat — toate alimentările QR sunt reconciliate.
+          </div>
+        ) : (
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13}}>
+              <thead>
+                <tr style={{background: G.bg}}>
+                  <th style={thStyleAlim}>Dată</th>
+                  <th style={thStyleAlim}>Utilaj</th>
+                  <th style={thStyleAlim}>Șofer</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Litri</th>
+                  <th style={thStyleAlim}>Sursă</th>
+                  <th style={{...thStyleAlim, textAlign: 'center'}}>Status</th>
+                  <th style={{...thStyleAlim, textAlign: 'center'}}>Poze</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deVerificat.map(a => {
+                  const ut = a.active || {}
+                  const utLabel = ut.nr_inmatriculare || ut.cod_intern || '—'
+                  const utModel = [ut.marca, ut.model].filter(Boolean).join(' ')
+                  const sursaInfo = a.qr_sursa === 'rompetrol'
+                    ? { emoji: '⛽', label: 'Rompetrol', color: '#F59E0B' }
+                    : a.qr_sursa === 'benzinarie'
+                      ? { emoji: '🏪', label: 'Benzinărie', color: '#8B5CF6' }
+                      : { emoji: '💧', label: 'Oscar', color: '#10B981' }
+                  const statInfo = a.qr_status === 'review_birou'
+                    ? { label: 'review_birou', bg: '#8B5CF622', color: '#8B5CF6' }
+                    : { label: 'pending_match', bg: '#F59E0B22', color: '#F59E0B' }
+                  const nrPoze = (a.qr_foto_path ? 1 : 0) + (a.qr_foto_pompa_path ? 1 : 0)
+                  const busy = processingId === a.id
+                  return (
+                    <tr key={a.id} style={{borderTop: `1px solid ${G.border}`}}>
+                      <td style={{padding: '8px 12px', color: G.text, whiteSpace: 'nowrap'}}>{a.data_alimentare}</td>
+                      <td style={{padding: '8px 12px'}}>
+                        <div style={{color: G.text, fontWeight: 600}}>{utLabel}</div>
+                        {utModel && <div style={{color: G.muted, fontSize: 11}}>{utModel}</div>}
+                      </td>
+                      <td style={{padding: '8px 12px', color: G.muted}}>{a.sofer?.name || '—'}</td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: G.text, fontWeight: 700}}>{Number(a.cantitate_litri).toFixed(2)} L</td>
+                      <td style={{padding: '8px 12px', color: sursaInfo.color, fontWeight: 600, whiteSpace: 'nowrap'}}>
+                        {sursaInfo.emoji} {sursaInfo.label}
+                        {a.bon_comun_id && <span style={{marginLeft: 4, fontSize: 10, color: G.muted}}>🔗bon</span>}
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'center'}}>
+                        <code style={{padding: '2px 7px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: statInfo.bg, color: statInfo.color}}>{statInfo.label}</code>
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'center'}}>
+                        {nrPoze > 0 ? (
+                          <button onClick={() => veziPoze(a)} style={{
+                            padding: '4px 10px', background: '#58A6FF18', color: '#58A6FF',
+                            border: '1px solid #58A6FF44', borderRadius: 5, fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap',
+                          }}>📸 {nrPoze}</button>
+                        ) : <span style={{color: G.muted, fontSize: 11}}>—</span>}
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap'}}>
+                        <button disabled={busy} onClick={() => decideAlim(a.id, 'matched')} style={{
+                          padding: '4px 10px', background: busy ? G.border : '#10B98118', color: '#10B981',
+                          border: '1px solid #10B98155', borderRadius: 5, fontSize: 11, cursor: busy ? 'wait' : 'pointer', marginRight: 4,
+                        }}>✅ Validează</button>
+                        <button disabled={busy} onClick={() => decideAlim(a.id, 'rejected')} style={{
+                          padding: '4px 10px', background: 'transparent', color: '#F85149',
+                          border: '1px solid #F8514955', borderRadius: 5, fontSize: 11, cursor: busy ? 'wait' : 'pointer',
+                        }}>⛔ Respinge</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
       
       {/* Section: PIN-uri șoferi */}
@@ -8183,6 +8350,71 @@ function QrReconciliereTab({ profile, showToast }) {
           </div>
         )}
       </div>
+      
+      {/* Modal poze bon + pompă */}
+      {pozaModal && (
+        <div onClick={() => setPozaModal(null)} style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: G.surface, borderRadius: 14, maxWidth: 920, width: '100%',
+            maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${G.border}`,
+          }}>
+            <div style={{padding: '16px 20px', borderBottom: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+              <div>
+                <div style={{fontWeight: 700, color: G.text, fontSize: 15}}>
+                  📸 Dovezi — {pozaModal.alim?.active?.nr_inmatriculare || pozaModal.alim?.active?.cod_intern || 'alimentare'}
+                </div>
+                <div style={{fontSize: 12, color: G.muted, marginTop: 2}}>
+                  {pozaModal.alim?.data_alimentare} · {Number(pozaModal.alim?.cantitate_litri).toFixed(2)} L · {pozaModal.alim?.sofer?.name || '—'}
+                </div>
+              </div>
+              <button onClick={() => setPozaModal(null)} style={{
+                width: 32, height: 32, borderRadius: 8, background: G.bg, color: G.text,
+                border: `1px solid ${G.border}`, fontSize: 18, cursor: 'pointer',
+              }}>×</button>
+            </div>
+            <div style={{padding: 20}}>
+              {pozaLoading ? (
+                <div style={{padding: 40, textAlign: 'center', color: G.muted}}>Se încarcă pozele...</div>
+              ) : (
+                <div style={{display: 'grid', gridTemplateColumns: (pozaModal.bonUrl && pozaModal.pompaUrl) ? '1fr 1fr' : '1fr', gap: 16}}>
+                  {pozaModal.bonUrl && (
+                    <div>
+                      <div style={{fontSize: 12, fontWeight: 700, color: G.muted, marginBottom: 8}}>📄 BON FISCAL</div>
+                      <a href={pozaModal.bonUrl} target="_blank" rel="noopener noreferrer">
+                        <img src={pozaModal.bonUrl} alt="Bon" style={{width: '100%', borderRadius: 8, border: `1px solid ${G.border}`, cursor: 'zoom-in'}} />
+                      </a>
+                    </div>
+                  )}
+                  {pozaModal.pompaUrl && (
+                    <div>
+                      <div style={{fontSize: 12, fontWeight: 700, color: G.muted, marginBottom: 8}}>⛽ AFIȘAJ POMPĂ</div>
+                      <a href={pozaModal.pompaUrl} target="_blank" rel="noopener noreferrer">
+                        <img src={pozaModal.pompaUrl} alt="Pompă" style={{width: '100%', borderRadius: 8, border: `1px solid ${G.border}`, cursor: 'zoom-in'}} />
+                      </a>
+                    </div>
+                  )}
+                  {!pozaModal.bonUrl && !pozaModal.pompaUrl && (
+                    <div style={{padding: 30, textAlign: 'center', color: G.muted}}>Fără poze atașate.</div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div style={{padding: '14px 20px', borderTop: `1px solid ${G.border}`, display: 'flex', justifyContent: 'flex-end', gap: 8}}>
+              <button onClick={() => decideAlim(pozaModal.alim.id, 'rejected')} disabled={processingId === pozaModal.alim?.id} style={{
+                padding: '8px 16px', background: 'transparent', color: '#F85149',
+                border: '1px solid #F8514955', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}>⛔ Respinge</button>
+              <button onClick={() => decideAlim(pozaModal.alim.id, 'matched')} disabled={processingId === pozaModal.alim?.id} style={{
+                padding: '8px 16px', background: '#10B981', color: '#fff',
+                border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              }}>✅ Validează</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
