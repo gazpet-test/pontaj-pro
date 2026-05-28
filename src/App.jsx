@@ -18,6 +18,8 @@ import CTCPage from './CTC.jsx'
 import MagaziePage from './Magazie.jsx'
 // ════════════ Modul Execuție (Izometrie - Pachete lansare țeavă, 20.05.2026) ════════════
 import ExecutiePage from './Executie.jsx'
+// ════════════ QR Utilaje (27.05.2026) ════════════
+import QrUtilajPage from './QrUtilajPage.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -7893,6 +7895,8 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage/>}/>
+        {/* Route PUBLIC pentru QR scan utilaj - FĂRĂ ProtectedRoute, accesibil pentru șoferi fără cont */}
+        <Route path="/q/:id" element={<QrUtilajPage/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
         <Route path="/panou" element={<ProtectedRoute requireModule="pontajpro"><DashboardPage/></ProtectedRoute>}/>
         <Route path="/pontaj" element={<ProtectedRoute requireModule="pontajpro"><PontajPage/></ProtectedRoute>}/>

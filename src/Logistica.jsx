@@ -1192,6 +1192,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
   const [showMent, setShowMent] = useState(false)
   const [showAlim, setShowAlim] = useState(false)
+  const [showQrModal, setShowQrModal] = useState(false)
   const [istoric, setIstoric] = useState([])
   const [alimentari, setAlimentari] = useState([])
   // ETAPA 12.5: Ajustare km/ore cu audit
@@ -1557,6 +1558,9 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                 </button>
                 <button onClick={() => setShowMent(true)} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55'}}>
                   ✅ Mentenanță
+                </button>
+                <button onClick={() => setShowQrModal(true)} style={{...S.btnS, fontSize: 12, color: '#8B5CF6', borderColor: '#8B5CF6' + '55'}} title="Generează QR pentru print + lipire pe utilaj">
+                  🏷️ QR
                 </button>
                 <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
                   ✏️ Editează
@@ -2324,6 +2328,11 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         />
       )}
       
+      {/* 27.05.2026: Modal QR generator pentru print + lipire pe utilaj */}
+      {showQrModal && activ && (
+        <QrPrintModal activ={activ} onClose={() => setShowQrModal(false)} />
+      )}
+      
       {/* 27.05.2026: Modal preview contract comodat PDF */}
       {contractPreviewUrl && (
         <div onClick={() => setContractPreviewUrl(null)} style={{
@@ -2367,6 +2376,7 @@ function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0, co
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
     { key: 'arhiva_alimentari', icon: '📊', label: 'Arhivă Alimentări' },
     { key: 'audit_anaf', icon: '💰', label: 'Split ANAF' },
+    { key: 'qr_recon',  icon: '📱', label: 'QR & Reconciliere' },
     ...(canSeeBotSugestii ? [{ key: 'bot-sugestii', icon: '⚔️', label: 'Sugestii Scorilos', badge: sugestiiCount }] : []),
   ]
   return (
@@ -7818,6 +7828,367 @@ const thStyleAlim = { padding: '10px 12px', textAlign: 'left', color: '#8B949E',
 
 
 // ============================================================
+// QR PRINT MODAL - generator QR pentru utilaj (27.05.2026)
+// Folosește api.qrserver.com (zero deps, gratis, reliable)
+// ============================================================
+function QrPrintModal({ activ, onClose }) {
+  const qrUrl = `${window.location.origin}/q/${activ.id}`
+  const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrUrl)}&margin=10`
+  
+  function doPrint() {
+    const w = window.open('', '_blank', 'width=600,height=800')
+    if (!w) { alert('Permite popup-urile ca să tipărești QR.'); return }
+    w.document.write(`
+      <html>
+        <head>
+          <title>QR ${activ.nr_inmatriculare || activ.cod_intern || activ.id}</title>
+          <style>
+            @page { size: A6 portrait; margin: 10mm; }
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 20px; }
+            .container { border: 2px solid #000; padding: 20px; border-radius: 12px; max-width: 280px; margin: 0 auto; }
+            h1 { font-size: 14px; margin: 0 0 4px; }
+            .vehicle { font-size: 18px; font-weight: 800; margin: 6px 0; }
+            .plate { font-size: 24px; font-weight: 900; padding: 6px 12px; background: #000; color: #fff; border-radius: 6px; display: inline-block; margin: 6px 0; letter-spacing: 1px; }
+            .qr { margin: 14px 0; }
+            .qr img { width: 200px; height: 200px; }
+            .instr { font-size: 11px; color: #444; margin-top: 10px; line-height: 1.4; }
+            .footer { font-size: 9px; color: #888; margin-top: 12px; }
+            @media print { body { padding: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>⛽ ALIMENTARE GAZPET</h1>
+            <div class="vehicle">${activ.marca || ''} ${activ.model || ''}</div>
+            ${activ.nr_inmatriculare ? `<div class="plate">${activ.nr_inmatriculare}</div>` : ''}
+            ${activ.cod_intern ? `<div style="font-size:12px;color:#666;">Cod: ${activ.cod_intern}</div>` : ''}
+            <div class="qr"><img src="${qrImg}" alt="QR" /></div>
+            <div class="instr">
+              📱 <strong>Scanează cu telefonul</strong><br/>
+              Tastează PIN-ul tău și cantitatea alimentată
+            </div>
+            <div class="footer">Gazpet Instal · ID utilaj #${activ.id}</div>
+          </div>
+          <script>setTimeout(() => window.print(), 500);<\/script>
+        </body>
+      </html>
+    `)
+    w.document.close()
+  }
+  
+  function copyUrl() {
+    navigator.clipboard?.writeText(qrUrl)
+      .then(() => alert('URL copiat: ' + qrUrl))
+      .catch(() => prompt('Copiază URL-ul:', qrUrl))
+  }
+  
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 99999,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, cursor: 'pointer',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: G.surface, borderRadius: 12, padding: 24, maxWidth: 480, width: '100%',
+        border: `1px solid ${G.border}`, cursor: 'default',
+      }}>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16}}>
+          <div style={{fontSize: 18, fontWeight: 800, color: G.text}}>🏷️ Cod QR pentru utilaj</div>
+          <button onClick={onClose} style={{background: 'transparent', border: 'none', color: G.muted, fontSize: 22, cursor: 'pointer'}}>×</button>
+        </div>
+        
+        <div style={{textAlign: 'center', padding: 16, background: '#fff', borderRadius: 10, marginBottom: 12}}>
+          <img src={qrImg} alt="QR Code" style={{width: 280, height: 280, maxWidth: '100%'}} />
+        </div>
+        
+        <div style={{padding: 12, background: G.bg, borderRadius: 8, marginBottom: 12}}>
+          <div style={{fontSize: 11, color: G.muted, marginBottom: 4, fontWeight: 600}}>UTILAJ</div>
+          <div style={{fontSize: 14, color: G.text, fontWeight: 700, marginBottom: 2}}>
+            {activ.marca} {activ.model}
+          </div>
+          {activ.nr_inmatriculare && (
+            <div style={{fontSize: 13, color: '#8B5CF6', fontWeight: 800}}>{activ.nr_inmatriculare}</div>
+          )}
+          <div style={{fontSize: 11, color: G.muted, marginTop: 8}}>URL: <code style={{background: G.surface, padding: '2px 6px', borderRadius: 3, fontSize: 10}}>{qrUrl}</code></div>
+        </div>
+        
+        <div style={{padding: 12, background: '#1F2937', borderRadius: 8, fontSize: 12, color: '#D1D5DB', marginBottom: 14, lineHeight: 1.5}}>
+          📋 <strong>Instrucțiuni:</strong>
+          <ol style={{margin: '6px 0 0 18px', padding: 0}}>
+            <li>Click <strong>Print A6</strong> pentru a tipări codul</li>
+            <li>Lamează hârtia (sau pune-o într-un folie protectoare)</li>
+            <li>Lipește pe utilaj într-un loc vizibil (cabină / capac / aripă)</li>
+            <li>Asigură-te că șoferul cunoaște PIN-ul lui personal</li>
+          </ol>
+        </div>
+        
+        <div style={{display: 'flex', gap: 8}}>
+          <button onClick={doPrint} style={{
+            flex: 1, padding: 12, background: '#2563EB', color: '#fff',
+            border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+          }}>🖨️ Print A6</button>
+          <button onClick={copyUrl} style={{
+            flex: 1, padding: 12, background: G.bg, color: G.text,
+            border: `1px solid ${G.border}`, borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+          }}>📋 Copiază URL</button>
+          <button onClick={onClose} style={{
+            padding: 12, background: 'transparent', color: G.muted,
+            border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, cursor: 'pointer',
+          }}>Închide</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ============================================================
+// QR RECONCILIERE TAB - audit reconciliere lunară (27.05.2026)
+// Folosește v_qr_reconciliere_lunara
+// ============================================================
+function QrReconciliereTab({ profile, showToast }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [pinsSoferi, setPinsSoferi] = useState([])
+  const [pinsLoading, setPinsLoading] = useState(false)
+  
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      try {
+        const { data, error } = await supabase
+          .from('v_qr_reconciliere_lunara')
+          .select('*')
+          .order('luna', { ascending: false })
+        if (cancelled) return
+        if (error) throw error
+        setRows(data || [])
+      } catch (e) {
+        showToast?.('Eroare: ' + e.message, 'error')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+  
+  // Load PIN-uri șoferi
+  useEffect(() => {
+    let cancelled = false
+    async function loadPins() {
+      setPinsLoading(true)
+      try {
+        const { data } = await supabase
+          .from('employees')
+          .select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la')
+          .eq('active', true)
+          .order('name')
+        if (cancelled) return
+        setPinsSoferi(data || [])
+      } finally {
+        if (!cancelled) setPinsLoading(false)
+      }
+    }
+    loadPins()
+    return () => { cancelled = true }
+  }, [])
+  
+  const statusColors = {
+    ok: { bg: '#10B98122', color: '#10B981', label: '✅ OK (<5% diff)' },
+    atentie: { bg: '#F59E0B22', color: '#F59E0B', label: '⚠️ Atenție (5-15%)' },
+    critic: { bg: '#EF444422', color: '#EF4444', label: '🚨 Critic (>15%)' },
+    qr_fara_real: { bg: '#8B5CF622', color: '#8B5CF6', label: '📱 QR fără factură' },
+    real_fara_qr: { bg: '#6B728022', color: '#6B7280', label: '📋 Factură fără QR' },
+  }
+  
+  const fmtL = (v) => Math.round(Number(v) || 0).toLocaleString('ro-RO')
+  
+  async function setPin(employeeId, newPin) {
+    if (!newPin || newPin.length < 4) {
+      showToast?.('PIN minim 4 cifre', 'error')
+      return
+    }
+    if (!/^\d+$/.test(newPin)) {
+      showToast?.('PIN doar cifre', 'error')
+      return
+    }
+    // Verifică unicitate
+    const exists = pinsSoferi.find(p => p.id !== employeeId && p.qr_pin === newPin && p.qr_pin_active)
+    if (exists) {
+      showToast?.(`PIN deja folosit de ${exists.name}`, 'error')
+      return
+    }
+    const { error } = await supabase
+      .from('employees')
+      .update({ qr_pin: newPin, qr_pin_active: true, qr_pin_creat_la: new Date().toISOString() })
+      .eq('id', employeeId)
+    if (error) {
+      showToast?.('Eroare: ' + error.message, 'error')
+    } else {
+      showToast?.('PIN setat ✓', 'success')
+      // Reload pins
+      const { data } = await supabase.from('employees').select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la').eq('active', true).order('name')
+      setPinsSoferi(data || [])
+    }
+  }
+  
+  async function togglePin(employeeId, newActive) {
+    const { error } = await supabase
+      .from('employees').update({ qr_pin_active: newActive })
+      .eq('id', employeeId)
+    if (error) {
+      showToast?.('Eroare: ' + error.message, 'error')
+    } else {
+      showToast?.(newActive ? 'PIN activat ✓' : 'PIN dezactivat', 'success')
+      const { data } = await supabase.from('employees').select('id, name, functie, qr_pin, qr_pin_active, qr_pin_creat_la').eq('active', true).order('name')
+      setPinsSoferi(data || [])
+    }
+  }
+  
+  return (
+    <div>
+      {/* Header info */}
+      <div style={{...S.card, padding: 18, marginBottom: 14, background: 'linear-gradient(135deg, #4C1D95 0%, #7C3AED 100%)', border: '1px solid #8B5CF6'}}>
+        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12}}>
+          <div>
+            <div style={{fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 4}}>📱 Reconciliere QR Alimentări</div>
+            <div style={{fontSize: 12, color: '#EDE9FE'}}>
+              Comparație total scos din rezervor / factură Rompetrol vs total raportat prin QR per lună. Toleranță &lt;5% = OK, 5-15% = atenție, &gt;15% = critic.
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Section: PIN-uri șoferi */}
+      <div style={{...S.card, marginBottom: 14}}>
+        <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+          <div style={{fontWeight: 700, color: G.text, fontSize: 14}}>🔑 PIN-uri șoferi ({pinsSoferi.filter(p => p.qr_pin_active).length} active)</div>
+        </div>
+        <div style={{maxHeight: 300, overflowY: 'auto'}}>
+          {pinsLoading ? <div style={{padding: 20, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
+          pinsSoferi.length === 0 ? <div style={{padding: 20, textAlign: 'center', color: G.muted}}>Niciun angajat activ.</div> :
+          (
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13}}>
+              <thead>
+                <tr style={{background: G.bg}}>
+                  <th style={thStyleAlim}>Nume</th>
+                  <th style={thStyleAlim}>Funcție</th>
+                  <th style={{...thStyleAlim, textAlign: 'center'}}>PIN actual</th>
+                  <th style={{...thStyleAlim, textAlign: 'center'}}>Status</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Acțiuni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pinsSoferi.map(s => (
+                  <tr key={s.id} style={{borderTop: `1px solid ${G.border}`}}>
+                    <td style={{padding: '8px 12px', color: G.text, fontWeight: 600}}>{s.name}</td>
+                    <td style={{padding: '8px 12px', color: G.muted, fontSize: 12}}>{s.functie || '—'}</td>
+                    <td style={{padding: '8px 12px', textAlign: 'center'}}>
+                      <code style={{
+                        background: s.qr_pin ? G.bg : 'transparent',
+                        padding: s.qr_pin ? '3px 8px' : 0,
+                        borderRadius: 4,
+                        color: s.qr_pin ? '#8B5CF6' : G.muted,
+                        fontWeight: 700, letterSpacing: '0.1em',
+                      }}>{s.qr_pin || '—'}</code>
+                    </td>
+                    <td style={{padding: '8px 12px', textAlign: 'center'}}>
+                      {s.qr_pin && (
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                          background: s.qr_pin_active ? '#10B98122' : '#6B728022',
+                          color: s.qr_pin_active ? '#10B981' : '#6B7280',
+                        }}>{s.qr_pin_active ? '✅ Activ' : '⏸️ Inactiv'}</span>
+                      )}
+                    </td>
+                    <td style={{padding: '8px 12px', textAlign: 'right'}}>
+                      <button onClick={() => {
+                        const newPin = prompt(`PIN nou pentru ${s.name} (4-6 cifre):`, s.qr_pin || '')
+                        if (newPin !== null && newPin.length >= 4) setPin(s.id, newPin)
+                      }} style={{
+                        padding: '4px 10px', background: 'transparent', color: '#8B5CF6',
+                        border: '1px solid #8B5CF655', borderRadius: 5, fontSize: 11, cursor: 'pointer', marginRight: 4,
+                      }}>{s.qr_pin ? '✏️ Schimbă' : '➕ Set PIN'}</button>
+                      {s.qr_pin && (
+                        <button onClick={() => togglePin(s.id, !s.qr_pin_active)} style={{
+                          padding: '4px 10px', background: 'transparent',
+                          color: s.qr_pin_active ? G.muted : '#10B981',
+                          border: `1px solid ${s.qr_pin_active ? G.border : '#10B98155'}`,
+                          borderRadius: 5, fontSize: 11, cursor: 'pointer',
+                        }}>{s.qr_pin_active ? '⏸️ Dezactivează' : '✅ Activează'}</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      
+      {/* Section: Reconciliere */}
+      <div style={S.card}>
+        <div style={{padding: '14px 18px', borderBottom: `1px solid ${G.border}`, fontWeight: 700, color: G.text, fontSize: 14}}>
+          📊 Reconciliere lunară per sursă
+        </div>
+        {loading ? <div style={{padding: 40, textAlign: 'center', color: G.muted}}>Se încarcă...</div> :
+        rows.length === 0 ? <div style={{padding: 40, textAlign: 'center', color: G.muted}}>Nicio dată încă. După ce șoferii încep să folosească QR-urile, vor apărea aici.</div> :
+        (
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 13}}>
+              <thead>
+                <tr style={{background: G.bg}}>
+                  <th style={thStyleAlim}>Luna</th>
+                  <th style={thStyleAlim}>Sursă</th>
+                  <th style={thStyleAlim}>Card / Rezervor</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Real (L)</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>QR (L)</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Δ (L)</th>
+                  <th style={{...thStyleAlim, textAlign: 'right'}}>Acoperire</th>
+                  <th style={{...thStyleAlim, textAlign: 'center'}}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const status = statusColors[r.status_reconciliere] || statusColors.real_fara_qr
+                  return (
+                    <tr key={i} style={{borderTop: `1px solid ${G.border}`}}>
+                      <td style={{padding: '8px 12px', color: G.text, fontWeight: 600}}>{r.luna_iso}</td>
+                      <td style={{padding: '8px 12px', color: G.text}}>
+                        {r.sursa === 'oscar' ? '💧 Oscar' : r.sursa === 'rompetrol' ? '⛽ Rompetrol' : '🏪 Benzinărie'}
+                      </td>
+                      <td style={{padding: '8px 12px', color: G.muted, fontSize: 11}}>
+                        {r.card_combustibil || (r.rezervor_id ? `Rezervor #${r.rezervor_id}` : '—')}
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: G.text, fontWeight: 600}}>{fmtL(r.litri_real)}</td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: '#8B5CF6', fontWeight: 600}}>{fmtL(r.litri_qr)}</td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: Math.abs(Number(r.diferenta_litri)) > 500 ? '#EF4444' : G.muted}}>
+                        {Number(r.diferenta_litri) > 0 ? '+' : ''}{fmtL(r.diferenta_litri)}
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'right', color: G.text}}>
+                        {r.procent_acoperire_qr != null ? `${r.procent_acoperire_qr}%` : '—'}
+                      </td>
+                      <td style={{padding: '8px 12px', textAlign: 'center'}}>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                          background: status.bg, color: status.color,
+                        }}>{status.label}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+// ============================================================
 // SPLIT ANAF — Audit firmă vs comodat vs cesiune (27.05.2026)
 // 3 perspective: lunar / trimestrial / anual
 // 3 categorii: firmă proprie / comodat / cesiune subcontractor
@@ -10267,6 +10638,11 @@ export default function LogisticaPage() {
       {/* TAB: Split ANAF (Audit firmă vs comodat vs cesiune) - 27.05.2026 */}
       {tab === 'audit_anaf' && (
         <AuditAnafSplitPage profile={profile} showToast={showToast} />
+      )}
+      
+      {/* TAB: QR & Reconciliere (PIN-uri șoferi + audit reconciliere) - 27.05.2026 */}
+      {tab === 'qr_recon' && (
+        <QrReconciliereTab profile={profile} showToast={showToast} />
       )}
       
       {/* TAB: Active (default — conținutul existent) */}
