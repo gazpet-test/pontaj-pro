@@ -71,6 +71,9 @@ export default function QrUtilajPage() {
   const [fotoBon, setFotoBon] = useState(null)        // base64 comprimat
   const [fotoPreview, setFotoPreview] = useState(null) // preview URL
   const [fotoProcessing, setFotoProcessing] = useState(false)
+  const [fotoPompa, setFotoPompa] = useState(null)        // base64 poza pompa
+  const [fotoPompaPreview, setFotoPompaPreview] = useState(null)
+  const [fotoPompaProcessing, setFotoPompaProcessing] = useState(false)
   
   // Load info utilaj
   useEffect(() => {
@@ -101,38 +104,57 @@ export default function QrUtilajPage() {
   }, [id])
   
   // Comprimare imagine client-side (canvas → max 1200px → JPEG 0.7)
+  async function comprimaImagine(file) {
+    const img = new Image()
+    const reader = new FileReader()
+    const loaded = new Promise((resolve, reject) => {
+      reader.onload = () => { img.src = reader.result; }
+      reader.onerror = reject
+      img.onload = () => resolve()
+      img.onerror = reject
+    })
+    reader.readAsDataURL(file)
+    await loaded
+    const maxDim = 1200
+    let w = img.width, h = img.height
+    if (w > maxDim || h > maxDim) {
+      if (w > h) { h = Math.round(h * maxDim / w); w = maxDim }
+      else { w = Math.round(w * maxDim / h); h = maxDim }
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = w; canvas.height = h
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0, w, h)
+    return canvas.toDataURL('image/jpeg', 0.7)
+  }
+  
   async function handleFotoSelect(e) {
     const file = e.target.files?.[0]
     if (!file) return
     setFotoProcessing(true)
     try {
-      const img = new Image()
-      const reader = new FileReader()
-      const loaded = new Promise((resolve, reject) => {
-        reader.onload = () => { img.src = reader.result; }
-        reader.onerror = reject
-        img.onload = () => resolve()
-        img.onerror = reject
-      })
-      reader.readAsDataURL(file)
-      await loaded
-      const maxDim = 1200
-      let w = img.width, h = img.height
-      if (w > maxDim || h > maxDim) {
-        if (w > h) { h = Math.round(h * maxDim / w); w = maxDim }
-        else { w = Math.round(w * maxDim / h); h = maxDim }
-      }
-      const canvas = document.createElement('canvas')
-      canvas.width = w; canvas.height = h
-      const ctx = canvas.getContext('2d')
-      ctx.drawImage(img, 0, 0, w, h)
-      const base64 = canvas.toDataURL('image/jpeg', 0.7)
+      const base64 = await comprimaImagine(file)
       setFotoBon(base64)
       setFotoPreview(base64)
     } catch (err) {
-      setError('Eroare procesare poză. Încearcă din nou.')
+      setError('Eroare procesare poză bon. Încearcă din nou.')
     } finally {
       setFotoProcessing(false)
+    }
+  }
+  
+  async function handleFotoPompaSelect(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFotoPompaProcessing(true)
+    try {
+      const base64 = await comprimaImagine(file)
+      setFotoPompa(base64)
+      setFotoPompaPreview(base64)
+    } catch (err) {
+      setError('Eroare procesare poză pompă. Încearcă din nou.')
+    } finally {
+      setFotoPompaProcessing(false)
     }
   }
   
@@ -158,6 +180,7 @@ export default function QrUtilajPage() {
         geo_lat: geo.lat,
         geo_lng: geo.lng,
         foto_base64: (sursa !== 'oscar' && fotoBon) ? fotoBon : null,
+        foto_pompa_base64: (sursa !== 'oscar' && fotoPompa) ? fotoPompa : null,
       })
       if (res.error) {
         setError(res.error)
@@ -511,6 +534,52 @@ export default function QrUtilajPage() {
             </div>
           )}
           
+          {/* FOTO POMPĂ - afișaj litri/lei (dublă dovadă) - doar Rompetrol/Benzinărie */}
+          {sursa !== 'oscar' && (
+            <div style={{marginTop: 14}}>
+              <div style={{fontSize: 13, fontWeight: 700, color: P.text, marginBottom: 4}}>
+                ⛽ Poză pompă (afișaj litri/lei) <span style={{color: P.muted, fontWeight: 400}}>— opțional</span>
+              </div>
+              <div style={{fontSize: 11, color: P.muted, marginBottom: 10}}>
+                Fotografiază afișajul pompei — dublă dovadă alături de bon.
+              </div>
+              {!fotoPompaPreview ? (
+                <label style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  padding: 16, background: P.bg, border: `2px dashed ${P.border}`,
+                  borderRadius: 10, cursor: 'pointer', color: P.muted, fontSize: 14, fontWeight: 600,
+                }}>
+                  {fotoPompaProcessing ? '⏳ Se procesează...' : '📷 Fă o poză pompei'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFotoPompaSelect}
+                    style={{display: 'none'}}
+                    disabled={fotoPompaProcessing}
+                  />
+                </label>
+              ) : (
+                <div style={{position: 'relative'}}>
+                  <img src={fotoPompaPreview} alt="Pompă" style={{
+                    width: '100%', maxHeight: 200, objectFit: 'contain',
+                    borderRadius: 10, border: `1px solid ${P.border}`, background: P.bg,
+                  }} />
+                  <button onClick={() => { setFotoPompa(null); setFotoPompaPreview(null) }} style={{
+                    position: 'absolute', top: 8, right: 8, width: 32, height: 32,
+                    background: P.danger, color: '#fff', border: 'none', borderRadius: '50%',
+                    fontSize: 16, cursor: 'pointer', fontWeight: 700,
+                  }}>×</button>
+                  <div style={{
+                    position: 'absolute', bottom: 8, left: 8, padding: '4px 10px',
+                    background: 'rgba(245,158,11,0.9)', color: '#fff', borderRadius: 6,
+                    fontSize: 11, fontWeight: 700,
+                  }}>✅ Pompă atașată</div>
+                </div>
+              )}
+            </div>
+          )}
+          
           <button
             onClick={doSubmit}
             disabled={!cantitate || parseFloat(cantitate) <= 0 || submitting || (sursa === 'benzinarie' && !fotoBon)}
@@ -555,7 +624,9 @@ export default function QrUtilajPage() {
             <div>📡 Ref: #{result.alimentare_id}</div>
           </div>
           <button onClick={() => {
-            setPin(''); setSursa(null); setCantitate(''); setResult(null); setStep('info')
+            setPin(''); setSursa(null); setCantitate(''); setResult(null)
+            setFotoBon(null); setFotoPreview(null); setFotoPompa(null); setFotoPompaPreview(null)
+            setStep('info')
           }} style={{
             padding: '14px 28px', background: P.success, color: '#fff',
             border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: 'pointer',
