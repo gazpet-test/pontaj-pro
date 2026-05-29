@@ -36,6 +36,7 @@ const TIP_META = {
 const SEV_META = {
   critic: { label: 'CRITIC', color: G.red, bg: G.red + '22' },
   high: { label: 'HIGH', color: G.orange, bg: G.orange + '22' },
+  warning: { label: 'WARNING', color: G.yellow, bg: G.yellow + '22' },
   info: { label: 'INFO', color: G.blue, bg: G.blue + '22' },
 }
 
@@ -450,7 +451,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   // ─── Card sugestie ──────────────────────────────────────────────────────────
   const renderCard = (sg) => {
     const tip = TIP_META[sg.tip_sugestie] || { label: sg.tip_sugestie, icon: '?', color: G.muted, aplicabil: false }
-    const sev = SEV_META[sg.severity || 'info']
+    const sev = SEV_META[sg.severity || 'info'] || SEV_META.info
     
     return (
       <div key={sg.id} style={{
@@ -1138,6 +1139,7 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
             { key: 'all', label: 'Toate', count: stats._total },
             { key: 'critic', label: '🔴 Critic', count: statsSev.critic, color: G.red },
             { key: 'high', label: '🟠 High', count: statsSev.high, color: G.orange },
+            { key: 'warning', label: '🟡 Warning', count: statsSev.warning || 0, color: G.yellow },
             { key: 'info', label: '🔵 Info', count: statsSev.info, color: G.blue },
           ].filter(x => x.count > 0).map(opt => (
             <button 
