@@ -988,6 +988,7 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const [comentarii, setComentarii] = useState([])
   const [istoric, setIstoric] = useState([])
   const [pozeUrls, setPozeUrls] = useState([])
+  const [brokenPoze, setBrokenPoze] = useState({})  // index -> true cand <img> onError
   const [comText, setComText] = useState('')
   const [tab, setTab] = useState('timeline')  // 'timeline' | 'comentarii' | 'rezolvare'
   const [saving, setSaving] = useState(false)
@@ -1022,18 +1023,31 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
     setIstoric(istRes.data || [])
 
     // Signed URLs poze
-    // FIX 27.05.2026: schimbat bucket 'tichete' -> 'tichete-atasamente'
+    // FIX 27.05.2026: bucket 'tichete' -> 'tichete-atasamente' (singurul cu RLS policies)
+    // FIX 29.05.2026: surfacing erori — createSignedUrl nu mai eșuează silent.
+    //   La fail: păstrăm intrarea cu url:null ca să randăm placeholder „poză indisponibilă" + toast.
+    setBrokenPoze({})
     if(tkRes.data?.poze_paths?.length > 0){
       const urls = []
+      const failed = []
       for(const p of tkRes.data.poze_paths){
-        const { data } = await supabase.storage.from('tichete-atasamente').createSignedUrl(p, 600)
-        if(data?.signedUrl) urls.push({ path:p, url:data.signedUrl })
+        const { data, error } = await supabase.storage.from('tichete-atasamente').createSignedUrl(p, 600)
+        if(error || !data?.signedUrl){
+          console.error('Eroare semnare poză:', p, error)
+          failed.push(p.split('/').pop() || p)
+          urls.push({ path:p, url:null })  // placeholder în UI, nu <img> gol
+        } else {
+          urls.push({ path:p, url:data.signedUrl })
+        }
       }
       setPozeUrls(urls)
+      if(failed.length > 0){
+        show(`⚠️ ${failed.length} ${failed.length===1?'poză nu a putut fi afișată':'poze nu au putut fi afișate'}: ${failed.join(', ')}`, 'error')
+      }
     } else {
       setPozeUrls([])
     }
-  }, [t.id])
+  }, [t.id, show])
 
   useEffect(()=>{ reload() }, [reload])
 
@@ -1143,11 +1157,24 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
         <div style={{marginBottom:14}}>
           <div style={{fontSize:11,color:G.muted,marginBottom:8,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>📸 Poze ({pozeUrls.length})</div>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            {pozeUrls.map((p,i)=>(
-              <a key={i} href={p.url} target="_blank" rel="noreferrer" style={{display:'block',width:100,height:100,borderRadius:6,overflow:'hidden',border:`1px solid ${G.border2}`}}>
-                <img src={p.url} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}} />
-              </a>
-            ))}
+            {pozeUrls.map((p,i)=>{
+              // FIX 29.05.2026: fără url (semnare eșuată) sau <img> care dă onError → placeholder vizibil
+              const broken = !p.url || brokenPoze[i]
+              if(broken){
+                return (
+                  <div key={i} title={p.path}
+                       style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:4,width:100,height:100,borderRadius:6,border:`1px dashed ${G.red}66`,background:G.redDim,color:G.red,fontSize:10,textAlign:'center',padding:4,boxSizing:'border-box'}}>
+                    <span style={{fontSize:22}}>⚠️</span>
+                    <span>poză indisponibilă</span>
+                  </div>
+                )
+              }
+              return (
+                <a key={i} href={p.url} target="_blank" rel="noreferrer" style={{display:'block',width:100,height:100,borderRadius:6,overflow:'hidden',border:`1px solid ${G.border2}`}}>
+                  <img src={p.url} alt="" onError={()=>setBrokenPoze(b=>({...b,[i]:true}))} style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                </a>
+              )
+            })}
           </div>
         </div>
       )}
