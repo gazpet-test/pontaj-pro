@@ -14,6 +14,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import IzometriePage from './Izometrie.jsx'
+import TabSantiere from './TabSantiere.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -54,7 +55,7 @@ const fmtDate = v => {
 const SUB_TABS = [
   { key: 'proiecte',  label: 'Proiecte',     icon: '🗂️',  color: G.executie, active: true,  desc: 'Dashboard proiecte · Termene · Stadiu · Ofertare' },
   { key: 'izometrie', label: 'Izometrie',    icon: '📐',  color: G.purple,   active: true,  desc: 'Pachete lansare · Tronsoane · Cumulat final' },
-  { key: 'santiere',  label: 'Șantiere',     icon: '🏗️', color: G.blue,     active: false, desc: 'Echipe pe tură · Alocare utilaje · Progres activități' },
+  { key: 'santiere',  label: 'Șantiere',     icon: '🏗️', color: G.blue,     active: true, desc: 'Echipe pe tură · Alocare utilaje · Progres activități' },
   { key: 'devize',    label: 'Devize',       icon: '📋',  color: G.green,    active: false, desc: 'Devize ofertă · Antemăsurători · Estimări' },
   { key: 'vreme',     label: 'Vreme live',   icon: '☁️',  color: G.yellow,   active: false, desc: 'Prognoză 7 zile · Alerte meteo per șantier' },
 ]
@@ -152,6 +153,7 @@ export default function ExecutiePage() {
         <>
           {tab === 'proiecte'  && <DashboardProiectePage onGoToIzometrie={goToIzometrie} />}
           {tab === 'izometrie' && <IzometriePage />}
+          {tab === 'santiere'  && <TabSantiere />}
         </>
       )}
     </div>
