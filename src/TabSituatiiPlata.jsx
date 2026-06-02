@@ -8,6 +8,7 @@
 // - KPI: total facturate, în pregătire, valoare bază vs ajustată
 // - Tabel detaliat CRUD
 // - Coeficient ajustare (conf OUG 97 / AA)
+// - Badge ⚠️ ajustare fără Act Adițional + modal completare AA
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@supabase/supabase-js'
@@ -73,6 +74,83 @@ function useToast() {
     }}>{t.msg}</div>
   ) : null
   return { show, Toast }
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL ACT ADIȚIONAL
+// ══════════════════════════════════════════════════════════
+function AAModal({ sl, onClose, onSaved, showToast }) {
+  const [form, setForm] = useState({
+    act_aditional_nr:   sl.act_aditional_nr   || '',
+    act_aditional_data: sl.act_aditional_data  || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k,v) => setForm(f=>({...f,[k]:v}))
+
+  const handleSave = async () => {
+    if (!form.act_aditional_nr.trim()) { showToast('Numărul AA este obligatoriu', 'err'); return }
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('executie_situatii_plata')
+        .update({
+          act_aditional_nr:   form.act_aditional_nr.trim().toUpperCase(),
+          act_aditional_data: form.act_aditional_data || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', sl.id)
+      if (error) throw error
+      showToast(`Act Adițional ${form.act_aditional_nr} salvat! ✅`, 'ok')
+      onSaved()
+    } catch(e) {
+      showToast('Eroare: ' + e.message, 'err')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.85)', zIndex:1020,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:24,
+    }} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{
+        background:G.surface, border:`1px solid ${G.orange}`, borderRadius:14,
+        width:'100%', maxWidth:420,
+      }}>
+        <div style={{padding:'16px 20px', borderBottom:`1px solid ${G.border}`, display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+          <div>
+            <div style={{fontSize:15, fontWeight:700}}>⚠️ Act Adițional — {sl.nr_situatie}</div>
+            <div style={{fontSize:12, color:G.muted, marginTop:2}}>
+              Ajustare inflație: <span style={{color:G.orange, fontWeight:600}}>{fmtLei(sl.valoare_ajustare_lei)}</span> neacoperită
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
+        </div>
+        <div style={{padding:'18px 20px', display:'flex', flexDirection:'column', gap:12}}>
+          <div>
+            <label style={S.label}>Număr Act Adițional *</label>
+            <input value={form.act_aditional_nr} onChange={e=>set('act_aditional_nr',e.target.value)}
+              style={S.input} placeholder="ex: AA1, AA2" autoFocus />
+          </div>
+          <div>
+            <label style={S.label}>Data semnării</label>
+            <input type="date" value={form.act_aditional_data} onChange={e=>set('act_aditional_data',e.target.value)} style={S.input} />
+          </div>
+          <div style={{
+            background:G.orange+'11', border:`1px solid ${G.orange}33`,
+            borderRadius:8, padding:'10px 12px', fontSize:12, color:G.muted,
+          }}>
+            După salvare, alerta dispare automat pentru <strong style={{color:G.text}}>{sl.nr_situatie}</strong>.
+          </div>
+        </div>
+        <div style={{padding:'12px 20px', borderTop:`1px solid ${G.border}`, display:'flex', gap:10, justifyContent:'flex-end', background:G.bg, borderRadius:'0 0 14px 14px'}}>
+          <button onClick={onClose} style={{padding:'9px 16px', background:G.border, border:'none', borderRadius:7, color:G.text, cursor:'pointer', fontSize:13}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{
+            padding:'9px 18px', background:saving?G.muted:G.orange, border:'none',
+            borderRadius:7, color:'#0D1117', fontSize:13, cursor:saving?'not-allowed':'pointer', fontWeight:700,
+          }}>{saving ? 'Se salvează...' : '✅ Salvează AA'}</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ══════════════════════════════════════════════════════════
@@ -265,6 +343,7 @@ export default function TabSituatiiPlata() {
   const [loading, setLoading]     = useState(false)
   const [editItem, setEditItem]   = useState(null)
   const [deleteConf, setDeleteConf] = useState(null)
+  const [aaModal, setAaModal]     = useState(null) // SL pentru care completam AA
   const { show: showToast, Toast } = useToast()
 
   useEffect(() => {
@@ -313,7 +392,8 @@ export default function TabSituatiiPlata() {
     const facturate = lista.filter(s=>['facturata','incasata'].includes(s.status)).reduce((a,s)=>a+(parseFloat(s.valoare_ajustata_lei)||0),0)
     const inPreg    = lista.filter(s=>s.status==='in_pregatire').length
     const aprobate  = lista.filter(s=>['aprobata','facturata','incasata'].includes(s.status)).length
-    return { totalBaza, totalAj, facturate, inPreg, aprobate, nrSL: sitPlata.length, total: lista.length }
+    const alerteAA  = lista.filter(s=>parseFloat(s.valoare_ajustare_lei||0)>0 && !s.act_aditional_nr).length
+    return { totalBaza, totalAj, facturate, inPreg, aprobate, nrSL: sitPlata.length, total: lista.length, alerteAA }
   }, [lista])
 
   const proiectCurent = proiecte.find(p=>String(p.id)===proiectId)
@@ -386,6 +466,24 @@ export default function TabSituatiiPlata() {
         ))}
       </div>
 
+      {/* ─── BANNER ALERTE ACT ADIȚIONAL ─── */}
+      {kpi.alerteAA > 0 && (
+        <div style={{
+          background:G.orange+'15', border:`1px solid ${G.orange}44`, borderRadius:10,
+          padding:'12px 16px', marginBottom:20, display:'flex', alignItems:'center', gap:12,
+        }}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700, fontSize:13, color:G.orange}}>
+              {kpi.alerteAA} situație{kpi.alerteAA>1?'i':''} cu ajustare inflație fără Act Adițional semnat
+            </div>
+            <div style={{fontSize:12, color:G.muted, marginTop:2}}>
+              Apasă ⚠️ pe fiecare SL pentru a completa numărul și data AA
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── TIMELINE ─── */}
       {lista.length > 0 && (
         <div style={{
@@ -419,6 +517,21 @@ export default function TabSituatiiPlata() {
                   )}
                   {s.nr_factura && (
                     <div style={{fontSize:10, color:G.dim, marginTop:2}}>🧾 {s.nr_factura}</div>
+                  )}
+                  {parseFloat(s.valoare_ajustare_lei||0)>0 && !s.act_aditional_nr && (
+                    <div
+                      onClick={e=>{e.stopPropagation(); setAaModal(s)}}
+                      title="Ajustare fără Act Adițional — click pentru a completa"
+                      style={{
+                        marginTop:6, fontSize:10, fontWeight:700,
+                        color:G.orange, cursor:'pointer',
+                        background:G.orange+'22', borderRadius:4,
+                        padding:'2px 6px', display:'inline-block',
+                      }}
+                    >⚠️ Lipsă AA</div>
+                  )}
+                  {s.act_aditional_nr && (
+                    <div style={{fontSize:10, color:G.teal, marginTop:4}}>✅ {s.act_aditional_nr}</div>
                   )}
                 </div>
               )
@@ -497,24 +610,35 @@ export default function TabSituatiiPlata() {
                       }}>{si.icon} {si.label}</span>
                     </td>
                     <td style={{padding:'10px 12px', color:s.nr_factura?G.text:G.dim, fontSize:12, whiteSpace:'nowrap'}}>
-                      {s.nr_factura || '—'}
+                      {s.nr_factura || (s.factura_cumulata ? <span style={{color:G.muted, fontSize:11}}>📎 {s.cumulata_cu_sl}</span> : '—')}
                     </td>
                     <td style={{padding:'10px 12px', color:G.muted, fontSize:12, whiteSpace:'nowrap'}}>{fmtDate(s.data_factura)}</td>
                     <td style={{padding:'10px 12px'}}>
-                      {canEdit && (
-                        <div style={{display:'flex', gap:6}}>
+                      <div style={{display:'flex', gap:6, alignItems:'center'}}>
+                        {parseFloat(s.valoare_ajustare_lei||0)>0 && (
+                          s.act_aditional_nr ? (
+                            <span style={{fontSize:11, color:G.teal, fontWeight:600, whiteSpace:'nowrap'}}>✅ {s.act_aditional_nr}</span>
+                          ) : (
+                            <button onClick={()=>setAaModal(s)} title="Completează Act Adițional" style={{
+                              padding:'4px 8px', background:G.orange+'22',
+                              border:`1px solid ${G.orange}55`, borderRadius:6,
+                              color:G.orange, cursor:'pointer', fontSize:11, fontWeight:700, whiteSpace:'nowrap',
+                            }}>⚠️ AA lipsă</button>
+                          )
+                        )}
+                        {canEdit && (
                           <button onClick={()=>setEditItem(s)} style={{
                             padding:'5px 10px', background:G.border2, border:'none',
                             borderRadius:6, color:G.muted, cursor:'pointer', fontSize:12,
                           }}>✏️</button>
-                          {isOwner && (
-                            <button onClick={()=>setDeleteConf(s)} style={{
-                              padding:'5px 10px', background:G.red+'22', border:'none',
-                              borderRadius:6, color:G.red, cursor:'pointer', fontSize:12,
-                            }}>🗑</button>
-                          )}
-                        </div>
-                      )}
+                        )}
+                        {isOwner && (
+                          <button onClick={()=>setDeleteConf(s)} style={{
+                            padding:'5px 10px', background:G.red+'22', border:'none',
+                            borderRadius:6, color:G.red, cursor:'pointer', fontSize:12,
+                          }}>🗑</button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -541,6 +665,15 @@ export default function TabSituatiiPlata() {
           proiectId={parseInt(proiectId)}
           onClose={()=>setEditItem(null)}
           onSaved={()=>{ setEditItem(null); loadLista() }}
+          showToast={showToast}
+        />
+      )}
+
+      {aaModal && (
+        <AAModal
+          sl={aaModal}
+          onClose={()=>setAaModal(null)}
+          onSaved={()=>{ setAaModal(null); loadLista() }}
           showToast={showToast}
         />
       )}
