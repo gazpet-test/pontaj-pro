@@ -1,14 +1,15 @@
 // ════════════════════════════════════════════════════════════════
 // ContracteTertiTab.jsx — Sub-tab Administrativ „Contracte cu terți"
-// v2 LIVE 19.05.2026 (Etapa 15 Faza 2 — CRUD funcțional + AI parser)
+// v3 LIVE 02.06.2026 — Extensie: categorii + sens + partener liber
+//                       + acte adiționale + acces can_manage_contracts
 //
-// Features:
-// - 2 sub-tab-uri: 🏢 Beneficiari + 📃 Contracte
-// - CRUD Beneficiari complet (Add/Edit/Toggle activ)
-// - CRUD Contracte cu upload PDF în bucket privat contracte-terti
-// - Buton „🤖 Extract cu AI" → Edge Function parse-contract-pdf
-// - Display extras AI (clauze: penalități, garanții, plată, reziliere)
-// - Permisiuni: doar OWNER (Razvan + Marilena) pot adăuga/edita
+// Features (v3 cumulat față de v2):
+// - 3 sub-tab-uri: 🏢 Beneficiari + 📃 Contracte + 📎 Acte Adiționale
+// - Câmpuri noi: categorie (executie/prestari/paza/altele) + sens (incasare/plata)
+//               + partener_text (furnizori ad-hoc fără beneficiar_id)
+// - Acces extins: is_owner SAU can_manage_contracts (Alexandra Curca)
+// - Filtre contracte: categorie + sens
+// - Inline acte adiționale expandable per contract
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
@@ -17,11 +18,11 @@ const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   blue:'#58A6FF', green:'#3FB950', red:'#F85149', yellow:'#D29922',
-  purple:'#BC8CFF', orange:'#F0883E', pink:'#EC6CB9'
+  purple:'#BC8CFF', orange:'#F0883E', pink:'#EC6CB9', teal:'#2DD4BF',
 }
 
 const S = {
-  input: { width:'100%', padding:'8px 12px', background:G.bg, border:`1px solid ${G.border2}`, borderRadius:6, color:G.text, fontSize:13, outline:'none' },
+  input: { width:'100%', padding:'8px 12px', background:G.bg, border:`1px solid ${G.border2}`, borderRadius:6, color:G.text, fontSize:13, outline:'none', boxSizing:'border-box' },
   btnP:  { padding:'9px 16px', background:G.green, color:'#fff', border:'none', borderRadius:7, cursor:'pointer', fontSize:13, fontWeight:700 },
   btnS:  { padding:'9px 16px', background:G.surface, color:G.text, border:`1px solid ${G.border2}`, borderRadius:7, cursor:'pointer', fontSize:13, fontWeight:600 },
   btnD:  { padding:'9px 16px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}44`, borderRadius:7, cursor:'pointer', fontSize:13, fontWeight:600 },
@@ -37,11 +38,32 @@ const STATUS_INFO = {
   reziliat:   { label:'Reziliat',   color:G.red,    icon:'⛔' },
 }
 
-const fmtLei = (n) => n ? new Intl.NumberFormat('ro-RO', { style:'currency', currency:'RON', maximumFractionDigits:0 }).format(n) : '—'
-const fmtEur = (n) => n ? new Intl.NumberFormat('ro-RO', { style:'currency', currency:'EUR', maximumFractionDigits:0 }).format(n) : '—'
-const fmtDate = (s) => s ? new Date(s).toLocaleDateString('ro-RO', { day:'2-digit', month:'short', year:'numeric' }) : '—'
+const CAT_INFO = {
+  executie:        { label:'Execuție',         icon:'🏗️', color:G.orange },
+  prestari_servicii: { label:'Prestări servicii', icon:'🔧', color:G.blue   },
+  paza:            { label:'Pază',              icon:'🛡️', color:G.purple },
+  altele:          { label:'Altele',            icon:'📄', color:G.muted  },
+}
 
-// Toast simplu
+const SENS_INFO = {
+  incasare: { label:'Încasare', icon:'⬇', color:G.green },
+  plata:    { label:'Plată',    icon:'⬆', color:G.orange },
+}
+
+const TIP_ACT_INFO = {
+  prelungire: { label:'Prelungire', icon:'📅', color:G.blue   },
+  majorare:   { label:'Majorare',   icon:'📈', color:G.green  },
+  reducere:   { label:'Reducere',   icon:'📉', color:G.yellow },
+  modificare: { label:'Modificare', icon:'✏️', color:G.purple },
+  reziliere:  { label:'Reziliere',  icon:'⛔', color:G.red    },
+}
+
+const fmtLei = n => n ? new Intl.NumberFormat('ro-RO', { style:'currency', currency:'RON', maximumFractionDigits:0 }).format(n) : '—'
+const fmtEur = n => n ? new Intl.NumberFormat('ro-RO', { style:'currency', currency:'EUR', maximumFractionDigits:0 }).format(n) : '—'
+const fmtDate = s => s ? new Date(s).toLocaleDateString('ro-RO', { day:'2-digit', month:'short', year:'numeric' }) : '—'
+const fmtVal = c => c.valoare_actuala_lei ? fmtLei(c.valoare_actuala_lei) : c.valoare_lei ? fmtLei(c.valoare_lei) : c.valoare_eur ? fmtEur(c.valoare_eur) : '—'
+const getPartener = (c, benefMap) => c.partener_text || benefMap[c.beneficiar_id] || '—'
+
 function useToast() {
   const [toast, setToast] = useState(null)
   const show = (msg, kind='ok') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 4000) }
@@ -56,8 +78,11 @@ function useToast() {
   return { show, Toast }
 }
 
+// ══════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ══════════════════════════════════════════════════════════
 export default function ContracteTertiTab() {
-  const [subTab, setSubTab] = useState('beneficiari')
+  const [subTab, setSubTab] = useState('contracte')
   const [profile, setProfile] = useState(null)
   const [beneficiari, setBeneficiari] = useState([])
   const [contracte, setContracte] = useState([])
@@ -71,12 +96,15 @@ export default function ContracteTertiTab() {
   const loadAll = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
-      const { data } = await supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).single()
+      const { data } = await supabase.from('profiles')
+        .select('id, name, is_owner, can_manage_contracts').eq('id', user.id).single()
       setProfile(data)
     }
     const [bRes, cRes] = await Promise.all([
       supabase.from('beneficiari').select('*').order('nume'),
-      supabase.from('contracte_terti').select('*').order('data_semnare', { ascending: false, nullsFirst: false }).order('id', { ascending: false })
+      supabase.from('contracte_terti').select('*')
+        .order('data_semnare', { ascending: false, nullsFirst: false })
+        .order('id', { ascending: false })
     ])
     setBeneficiari(bRes.data || [])
     setContracte(cRes.data || [])
@@ -85,7 +113,8 @@ export default function ContracteTertiTab() {
 
   useEffect(() => { loadAll() }, [])
 
-  const isOwner = profile?.is_owner === true
+  const canWrite = profile?.is_owner === true || profile?.can_manage_contracts === true
+  const isOwner  = profile?.is_owner === true
 
   if (loading) {
     return <div style={{padding:40, textAlign:'center', color:G.muted, fontSize:13}}>⏳ Se încarcă...</div>
@@ -99,12 +128,12 @@ export default function ContracteTertiTab() {
         background:`linear-gradient(135deg, ${G.orange}22, ${G.surface})`,
         border:`1px solid ${G.orange}44`, borderRadius:12
       }}>
-        <div style={{display:'flex', alignItems:'center', gap:14}}>
+        <div style={{display:'flex', alignItems:'center', gap:14, flexWrap:'wrap'}}>
           <span style={{fontSize:32}}>📃</span>
           <div style={{flex:1}}>
             <div style={{fontSize:20, fontWeight:800, color:G.orange}}>Contracte cu terți</div>
             <div style={{fontSize:12, color:G.muted, marginTop:2}}>
-              Contracte de lucrări per beneficiar · Upload PDF + extract AI automat al clauzelor
+              Execuție · Prestări servicii · Pază · Altele — Upload PDF + extract AI automat al clauzelor
             </div>
           </div>
           <div style={{textAlign:'right', fontSize:11, color:G.muted}}>
@@ -112,18 +141,23 @@ export default function ContracteTertiTab() {
             <div>📃 <strong style={{color:G.text}}>{contracte.length}</strong> contracte</div>
           </div>
         </div>
-        {!isOwner && (
+        {!canWrite && (
           <div style={{marginTop:12, padding:'8px 12px', background:G.yellow+'22', borderRadius:6, fontSize:11, color:G.yellow}}>
-            ⚠ Doar owner-ii (Razvan + Marilena) pot adăuga / edita contracte. Tu poți doar vizualiza.
+            ⚠ Poți doar vizualiza contractele. Adăugarea/editarea necesită drepturi speciale.
+          </div>
+        )}
+        {canWrite && !isOwner && (
+          <div style={{marginTop:12, padding:'8px 12px', background:G.green+'22', borderRadius:6, fontSize:11, color:G.green}}>
+            ✓ Ai acces de editare pentru contracte. Ștergerea este rezervată proprietarilor.
           </div>
         )}
       </div>
 
       {/* SUB-TABS */}
-      <div style={{display:'flex', gap:6, padding:6, background:G.surface, borderRadius:10, border:`1px solid ${G.border}`, width:'fit-content'}}>
+      <div style={{display:'flex', gap:6, padding:6, background:G.surface, borderRadius:10, border:`1px solid ${G.border}`, width:'fit-content', flexWrap:'wrap'}}>
         {[
-          { key:'beneficiari', icon:'🏢', label:'Beneficiari', count:beneficiari.length },
           { key:'contracte',   icon:'📃', label:'Contracte',   count:contracte.length },
+          { key:'beneficiari', icon:'🏢', label:'Beneficiari', count:beneficiari.length },
         ].map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)} style={{
             padding:'9px 16px', borderRadius:7, border:'none', cursor:'pointer',
@@ -141,15 +175,12 @@ export default function ContracteTertiTab() {
         ))}
       </div>
 
-      {/* CONTENT */}
       {subTab === 'beneficiari' && (
         <BeneficiariSubTab 
-          beneficiari={beneficiari}
-          contracte={contracte}
-          isOwner={isOwner}
+          beneficiari={beneficiari} contracte={contracte} isOwner={isOwner}
           onAdd={() => setEditBen({})}
-          onEdit={(b) => setEditBen(b)}
-          onToggleActiv={async (b) => {
+          onEdit={b => setEditBen(b)}
+          onToggleActiv={async b => {
             const { error } = await supabase.from('beneficiari').update({ activ: !b.activ }).eq('id', b.id)
             if (error) show('Eroare: ' + error.message, 'err')
             else { show(`✓ ${b.nume} ${!b.activ ? 'activat' : 'dezactivat'}`); loadAll() }
@@ -159,13 +190,12 @@ export default function ContracteTertiTab() {
 
       {subTab === 'contracte' && (
         <ContracteSubTab 
-          contracte={contracte}
-          beneficiari={beneficiari}
-          isOwner={isOwner}
+          contracte={contracte} beneficiari={beneficiari}
+          canWrite={canWrite} isOwner={isOwner}
           onAdd={() => setEditCon({})}
-          onView={(c) => setViewCon(c)}
-          onEdit={(c) => setEditCon(c)}
-          onDelete={async (c) => {
+          onView={c => setViewCon(c)}
+          onEdit={c => setEditCon(c)}
+          onDelete={async c => {
             if (!confirm(`Șterge contract „${c.denumire}"?\n\nIREVERSIBIL. PDF-ul rămâne în Storage.`)) return
             const { error } = await supabase.from('contracte_terti').delete().eq('id', c.id)
             if (error) show('Eroare: ' + error.message, 'err')
@@ -174,31 +204,29 @@ export default function ContracteTertiTab() {
         />
       )}
 
-      {/* MODALE */}
       {editBen && (
         <BeneficiarModal
           item={editBen}
           onClose={() => setEditBen(null)}
           onSaved={() => { setEditBen(null); loadAll(); show('✓ Beneficiar salvat') }}
-          onError={(e) => show('Eroare: ' + e, 'err')}
+          onError={e => show('Eroare: ' + e, 'err')}
         />
       )}
       {editCon && (
         <ContractModal
-          item={editCon}
-          beneficiari={beneficiari}
+          item={editCon} beneficiari={beneficiari}
           onClose={() => setEditCon(null)}
           onSaved={() => { setEditCon(null); loadAll(); show('✓ Contract salvat') }}
-          onError={(e) => show('Eroare: ' + e, 'err')}
+          onError={e => show('Eroare: ' + e, 'err')}
           onAiSuccess={() => { setEditCon(null); loadAll(); show('🤖 AI extract complet · contract actualizat', 'ok') }}
         />
       )}
       {viewCon && (
         <ContractDetailModal
-          contract={viewCon}
-          beneficiari={beneficiari}
+          contract={viewCon} beneficiari={beneficiari} canWrite={canWrite} isOwner={isOwner}
           onClose={() => setViewCon(null)}
           onEdit={() => { setEditCon(viewCon); setViewCon(null) }}
+          onReload={() => { loadAll() }}
         />
       )}
 
@@ -207,7 +235,9 @@ export default function ContracteTertiTab() {
   )
 }
 
-// ───────────────────────────── BENEFICIARI ─────────────────────────────
+// ══════════════════════════════════════════════════════════
+// BENEFICIARI SUB-TAB (nemodificat față de v2)
+// ══════════════════════════════════════════════════════════
 function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onToggleActiv }) {
   const [search, setSearch] = useState('')
   const [showInactive, setShowInactive] = useState(false)
@@ -217,87 +247,53 @@ function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onT
     if (!showInactive) list = list.filter(b => b.activ)
     if (search.trim()) {
       const s = search.toLowerCase()
-      list = list.filter(b => 
-        (b.nume || '').toLowerCase().includes(s) ||
-        (b.cod_fiscal || '').toLowerCase().includes(s) ||
-        (b.observatii || '').toLowerCase().includes(s)
-      )
+      list = list.filter(b => (b.nume||'').toLowerCase().includes(s) || (b.cod_fiscal||'').toLowerCase().includes(s))
     }
     return list
   }, [beneficiari, search, showInactive])
 
-  const contracteCount = (id) => contracte.filter(c => c.beneficiar_id === id).length
+  const contracteCount = id => contracte.filter(c => c.beneficiar_id === id).length
 
   return (
     <div style={{display:'flex', flexDirection:'column', gap:14}}>
       <div style={{display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
-        <input
-          placeholder="🔍 Caută beneficiar..."
-          style={{...S.input, flex:1, minWidth:240, maxWidth:380}}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:G.muted, cursor:'pointer'}}>
+        <input placeholder="🔍 Caută beneficiar..." style={{...S.input, flex:1, minWidth:240, maxWidth:380, boxSizing:'border-box'}}
+          value={search} onChange={e => setSearch(e.target.value)} />
+        <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:G.muted, cursor:'pointer', whiteSpace:'nowrap'}}>
           <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
           Afișează inactivi
         </label>
-        {isOwner && (
-          <button onClick={onAdd} style={{...S.btnP, marginLeft:'auto'}}>+ Adaugă beneficiar</button>
-        )}
+        {isOwner && <button onClick={onAdd} style={{...S.btnP, marginLeft:'auto', whiteSpace:'nowrap'}}>+ Adaugă beneficiar</button>}
       </div>
-
       {filtered.length === 0 ? (
         <div style={{padding:40, textAlign:'center', color:G.muted, fontSize:13, ...S.card}}>
-          {search ? '🔍 Niciun rezultat pentru căutare' : '📭 Niciun beneficiar de afișat'}
+          {search ? '🔍 Niciun rezultat' : '📭 Niciun beneficiar de afișat'}
         </div>
       ) : (
         <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:12}}>
           {filtered.map(b => (
-            <div key={b.id} style={{
-              ...S.card,
-              opacity: b.activ ? 1 : 0.55,
-              transition:'opacity 0.2s'
-            }}>
+            <div key={b.id} style={{...S.card, opacity: b.activ ? 1 : 0.55}}>
               <div style={{display:'flex', alignItems:'flex-start', gap:10, marginBottom:10}}>
-                <div style={{
-                  width:40, height:40, borderRadius:8,
-                  background:G.orange+'22', border:`1px solid ${G.orange}44`,
-                  display:'flex', alignItems:'center', justifyContent:'center', fontSize:20
-                }}>🏢</div>
+                <div style={{width:40, height:40, borderRadius:8, background:G.orange+'22', border:`1px solid ${G.orange}44`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20}}>🏢</div>
                 <div style={{flex:1, minWidth:0}}>
                   <div style={{fontSize:14, fontWeight:700, color:G.text, marginBottom:2}}>{b.nume}</div>
-                  {b.cod_fiscal && (
-                    <div style={{fontSize:11, color:G.dim, fontFamily:'monospace'}}>{b.cod_fiscal}</div>
-                  )}
+                  {b.cod_fiscal && <div style={{fontSize:11, color:G.dim, fontFamily:'monospace'}}>{b.cod_fiscal}</div>}
                 </div>
                 {!b.activ && <span style={{fontSize:10, padding:'2px 6px', background:G.red+'22', color:G.red, borderRadius:4, fontWeight:600}}>INACTIV</span>}
               </div>
-              {b.observatii && (
-                <div style={{fontSize:11, color:G.muted, lineHeight:1.5, marginBottom:10, fontStyle:'italic'}}>
-                  {b.observatii}
-                </div>
-              )}
-              {(b.contact_email || b.telefon || b.adresa) && (
-                <div style={{fontSize:11, color:G.dim, marginBottom:10, display:'flex', flexDirection:'column', gap:3}}>
+              {(b.contact_email || b.telefon) && (
+                <div style={{fontSize:11, color:G.dim, marginBottom:8, display:'flex', flexDirection:'column', gap:2}}>
                   {b.contact_email && <div>📧 {b.contact_email}</div>}
                   {b.telefon && <div>☎ {b.telefon}</div>}
-                  {b.adresa && <div>📍 {b.adresa}</div>}
                 </div>
               )}
-              <div style={{
-                display:'flex', alignItems:'center', gap:8, paddingTop:10,
-                borderTop:`1px solid ${G.border}`
-              }}>
+              <div style={{display:'flex', alignItems:'center', gap:8, paddingTop:10, borderTop:`1px solid ${G.border}`}}>
                 <span style={{fontSize:11, color:G.dim}}>Contracte:</span>
-                <span style={{fontSize:12, fontWeight:700, color: contracteCount(b.id) > 0 ? G.green : G.dim}}>
-                  {contracteCount(b.id)}
-                </span>
+                <span style={{fontSize:12, fontWeight:700, color: contracteCount(b.id) > 0 ? G.green : G.dim}}>{contracteCount(b.id)}</span>
                 {isOwner && (
                   <div style={{marginLeft:'auto', display:'flex', gap:6}}>
-                    <button onClick={() => onEdit(b)} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>✏️ Edit</button>
-                    <button onClick={() => onToggleActiv(b)} style={{...S.btnS, padding:'4px 10px', fontSize:11, color: b.activ ? G.yellow : G.green}}>
-                      {b.activ ? '⏸' : '▶'}
-                    </button>
+                    <button onClick={() => onEdit(b)} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>✏️</button>
+                    <button onClick={() => onToggleActiv(b)} style={{...S.btnS, padding:'4px 10px', fontSize:11, color: b.activ ? G.yellow : G.green}}>{b.activ ? '⏸' : '▶'}</button>
                   </div>
                 )}
               </div>
@@ -309,211 +305,244 @@ function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onT
   )
 }
 
-// ───────────────────────────── CONTRACTE ─────────────────────────────
-function ContracteSubTab({ contracte, beneficiari, isOwner, onAdd, onView, onEdit, onDelete }) {
+// ══════════════════════════════════════════════════════════
+// CONTRACTE SUB-TAB — cu filtre categorie + sens
+// ══════════════════════════════════════════════════════════
+function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onView, onEdit, onDelete }) {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
-  const [filterBenef, setFilterBenef] = useState('all')
+  const [filterCat, setFilterCat] = useState('all')
+  const [filterSens, setFilterSens] = useState('all')
+  const [expandedId, setExpandedId] = useState(null)
 
   const benefMap = useMemo(() => Object.fromEntries(beneficiari.map(b => [b.id, b.nume])), [beneficiari])
 
   const filtered = useMemo(() => {
     let list = contracte
     if (filterStatus !== 'all') list = list.filter(c => c.status === filterStatus)
-    if (filterBenef !== 'all') list = list.filter(c => c.beneficiar_id === Number(filterBenef))
+    if (filterCat   !== 'all') list = list.filter(c => c.categorie === filterCat)
+    if (filterSens  !== 'all') list = list.filter(c => c.sens === filterSens)
     if (search.trim()) {
       const s = search.toLowerCase()
       list = list.filter(c =>
-        (c.denumire || '').toLowerCase().includes(s) ||
-        (c.numar_contract || '').toLowerCase().includes(s) ||
-        (benefMap[c.beneficiar_id] || '').toLowerCase().includes(s)
+        (c.denumire||'').toLowerCase().includes(s) ||
+        (c.numar_contract||'').toLowerCase().includes(s) ||
+        (c.partener_text||'').toLowerCase().includes(s) ||
+        (benefMap[c.beneficiar_id]||'').toLowerCase().includes(s)
       )
     }
     return list
-  }, [contracte, search, filterStatus, filterBenef, benefMap])
+  }, [contracte, search, filterStatus, filterCat, filterSens, benefMap])
 
   return (
     <div style={{display:'flex', flexDirection:'column', gap:14}}>
+      {/* Filtre */}
       <div style={{display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
-        <input
-          placeholder="🔍 Caută contract..."
-          style={{...S.input, flex:1, minWidth:200, maxWidth:300}}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{...S.input, width:'auto', minWidth:140}}>
+        <input placeholder="🔍 Caută contract / beneficiar..." style={{...S.input, flex:1, minWidth:200, maxWidth:280, boxSizing:'border-box'}}
+          value={search} onChange={e => setSearch(e.target.value)} />
+        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{...S.input, width:'auto', minWidth:160, boxSizing:'border-box'}}>
+          <option value="all">📂 Toate categoriile</option>
+          {Object.entries(CAT_INFO).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+        </select>
+        <select value={filterSens} onChange={e => setFilterSens(e.target.value)} style={{...S.input, width:'auto', minWidth:140, boxSizing:'border-box'}}>
+          <option value="all">↕ Ambele sensuri</option>
+          {Object.entries(SENS_INFO).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+        </select>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{...S.input, width:'auto', minWidth:140, boxSizing:'border-box'}}>
           <option value="all">📊 Toate statusurile</option>
-          {Object.entries(STATUS_INFO).map(([k, v]) => (
-            <option key={k} value={k}>{v.icon} {v.label}</option>
-          ))}
+          {Object.entries(STATUS_INFO).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
         </select>
-        <select value={filterBenef} onChange={e => setFilterBenef(e.target.value)} style={{...S.input, width:'auto', minWidth:160}}>
-          <option value="all">🏢 Toți beneficiarii</option>
-          {beneficiari.filter(b => b.activ).map(b => (
-            <option key={b.id} value={b.id}>{b.nume}</option>
-          ))}
-        </select>
-        {isOwner && (
-          <button onClick={onAdd} style={{...S.btnP, marginLeft:'auto'}}>+ Contract nou</button>
-        )}
+        {canWrite && <button onClick={onAdd} style={{...S.btnP, marginLeft:'auto', whiteSpace:'nowrap'}}>+ Contract nou</button>}
       </div>
 
       {filtered.length === 0 ? (
         <div style={{padding:40, textAlign:'center', color:G.muted, fontSize:13, ...S.card}}>
-          {search || filterStatus !== 'all' || filterBenef !== 'all'
+          {search || filterStatus !== 'all' || filterCat !== 'all' || filterSens !== 'all'
             ? '🔍 Niciun rezultat pentru filtrele alese'
-            : '📭 Niciun contract încă. Apasă „+ Contract nou" pentru a adăuga.'}
+            : (canWrite ? '📭 Niciun contract. Apasă „+ Contract nou".' : '📭 Niciun contract înregistrat.')}
         </div>
       ) : (
-        <div style={{...S.card, padding:0, overflow:'auto'}}>
-          <table style={{width:'100%', borderCollapse:'collapse', fontSize:12}}>
-            <thead>
-              <tr style={{background:G.bg, borderBottom:`1px solid ${G.border}`}}>
-                <th style={{padding:'12px 14px', textAlign:'left', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>Nr.</th>
-                <th style={{padding:'12px 14px', textAlign:'left', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>Denumire</th>
-                <th style={{padding:'12px 14px', textAlign:'left', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>Beneficiar</th>
-                <th style={{padding:'12px 14px', textAlign:'right', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>Valoare</th>
-                <th style={{padding:'12px 14px', textAlign:'left', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>Termen</th>
-                <th style={{padding:'12px 14px', textAlign:'center', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>Status</th>
-                <th style={{padding:'12px 14px', textAlign:'center', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}>AI</th>
-                <th style={{padding:'12px 14px', textAlign:'right', color:G.muted, fontSize:11, fontWeight:700, textTransform:'uppercase'}}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(c => {
-                const si = STATUS_INFO[c.status] || STATUS_INFO.draft
-                return (
-                  <tr key={c.id} style={{borderBottom:`1px solid ${G.border}`, cursor:'pointer'}}
-                      onClick={() => onView(c)}
-                      onMouseEnter={e => e.currentTarget.style.background = G.bg}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{padding:'12px 14px', color:G.dim, fontFamily:'monospace', fontSize:11}}>{c.numar_contract || `#${c.id}`}</td>
-                    <td style={{padding:'12px 14px', color:G.text, fontWeight:600}}>{c.denumire}</td>
-                    <td style={{padding:'12px 14px', color:G.muted}}>{benefMap[c.beneficiar_id] || '—'}</td>
-                    <td style={{padding:'12px 14px', textAlign:'right', color:G.text, fontVariantNumeric:'tabular-nums', fontSize:11}}>
-                      {c.valoare_lei ? fmtLei(c.valoare_lei) : c.valoare_eur ? fmtEur(c.valoare_eur) : '—'}
-                    </td>
-                    <td style={{padding:'12px 14px', color:G.muted, fontSize:11}}>{fmtDate(c.data_termen)}</td>
-                    <td style={{padding:'12px 14px', textAlign:'center'}}>
-                      <span style={{padding:'3px 9px', borderRadius:12, background:si.color+'22', color:si.color, fontSize:10, fontWeight:700}}>
-                        {si.icon} {si.label}
-                      </span>
-                    </td>
-                    <td style={{padding:'12px 14px', textAlign:'center'}}>
-                      {c.ai_extracted_at ? (
-                        <span title={`Extras AI la ${fmtDate(c.ai_extracted_at)}`} style={{color:G.purple, fontSize:14}}>🤖</span>
-                      ) : c.pdf_path ? (
-                        <span title="PDF încărcat, AI încă neaplicat" style={{color:G.dim, fontSize:14}}>📄</span>
-                      ) : (
-                        <span title="Fără PDF" style={{color:G.dim, fontSize:14}}>—</span>
-                      )}
-                    </td>
-                    <td style={{padding:'12px 14px', textAlign:'right'}} onClick={e => e.stopPropagation()}>
-                      <div style={{display:'flex', gap:6, justifyContent:'flex-end'}}>
-                        <button onClick={() => onView(c)} style={{...S.btnS, padding:'4px 8px', fontSize:11}} title="Vezi detalii">👁</button>
-                        {isOwner && (
-                          <>
-                            <button onClick={() => onEdit(c)} style={{...S.btnS, padding:'4px 8px', fontSize:11}} title="Editează">✏️</button>
-                            <button onClick={() => onDelete(c)} style={{...S.btnD, padding:'4px 8px', fontSize:11}} title="Șterge">🗑</button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+        <div style={{display:'flex', flexDirection:'column', gap:10}}>
+          {filtered.map(c => {
+            const si = STATUS_INFO[c.status] || STATUS_INFO.draft
+            const ci = CAT_INFO[c.categorie] || CAT_INFO.altele
+            const sei = SENS_INFO[c.sens] || SENS_INFO.incasare
+            const isExpanded = expandedId === c.id
+            return (
+              <div key={c.id} style={{...S.card, padding:0, overflow:'hidden'}}>
+                {/* Row principal */}
+                <div style={{display:'grid', gridTemplateColumns:'auto 1fr auto auto auto auto auto', alignItems:'center', gap:0, padding:'12px 14px', cursor:'pointer'}}
+                  onClick={() => onView(c)}
+                  onMouseEnter={e => e.currentTarget.style.background = G.bg}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  
+                  {/* Categorie */}
+                  <div style={{marginRight:12, fontSize:20}} title={ci.label}>{ci.icon}</div>
+                  
+                  {/* Info */}
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:13, fontWeight:700, color:G.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{c.denumire}</div>
+                    <div style={{fontSize:11, color:G.muted, marginTop:2}}>
+                      {c.numar_contract && <span style={{fontFamily:'monospace'}}>{c.numar_contract} · </span>}
+                      {getPartener(c, benefMap)}
+                      {c.data_termen && <span> · ⏰ {fmtDate(c.data_termen)}</span>}
+                    </div>
+                  </div>
+
+                  {/* Valoare */}
+                  <div style={{textAlign:'right', fontSize:12, fontWeight:700, color:sei.color, marginRight:12, whiteSpace:'nowrap'}}>
+                    {sei.icon} {fmtVal(c)}
+                  </div>
+
+                  {/* Status */}
+                  <div style={{marginRight:8}}>
+                    <span style={{padding:'3px 9px', borderRadius:12, background:si.color+'22', color:si.color, fontSize:10, fontWeight:700, whiteSpace:'nowrap'}}>
+                      {si.icon} {si.label}
+                    </span>
+                  </div>
+
+                  {/* AI icon */}
+                  <div style={{marginRight:8, fontSize:16}} title={c.ai_extracted_at ? 'AI extras' : c.pdf_path ? 'PDF fără AI' : 'Fără PDF'}>
+                    {c.ai_extracted_at ? '🤖' : c.pdf_path ? '📄' : <span style={{color:G.dim}}>—</span>}
+                  </div>
+
+                  {/* Actions */}
+                  <div style={{display:'flex', gap:4}} onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => setExpandedId(isExpanded ? null : c.id)}
+                      title="Acte adiționale"
+                      style={{...S.btnS, padding:'4px 8px', fontSize:11, color: isExpanded ? G.orange : G.muted}}
+                    >📎 {isExpanded ? '▲' : '▼'}</button>
+                    <button onClick={() => onView(c)} style={{...S.btnS, padding:'4px 8px', fontSize:11}}>👁</button>
+                    {canWrite && <button onClick={() => onEdit(c)} style={{...S.btnS, padding:'4px 8px', fontSize:11}}>✏️</button>}
+                    {isOwner  && <button onClick={() => onDelete(c)} style={{...S.btnD, padding:'4px 8px', fontSize:11}}>🗑</button>}
+                  </div>
+                </div>
+
+                {/* Acte adiționale expandable */}
+                {isExpanded && (
+                  <ActeAditionaleSection contractId={c.id} canWrite={canWrite} />
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
-// ───────────────────────────── MODALE ─────────────────────────────
-function BeneficiarModal({ item, onClose, onSaved, onError }) {
-  const isNew = !item.id
-  const [f, setF] = useState({
-    nume: item.nume || '',
-    cod_fiscal: item.cod_fiscal || '',
-    adresa: item.adresa || '',
-    contact_email: item.contact_email || '',
-    telefon: item.telefon || '',
-    observatii: item.observatii || '',
-    activ: item.activ !== false,
-  })
-  const [saving, setSaving] = useState(false)
+// ══════════════════════════════════════════════════════════
+// ACTE ADIȚIONALE — expandable inline
+// ══════════════════════════════════════════════════════════
+function ActeAditionaleSection({ contractId, canWrite }) {
+  const [acte, setActe] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editAct, setEditAct] = useState(null)
+  const [toast, setToast] = useState(null)
+  const show = (msg, kind='ok') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 3500) }
 
-  const handleSave = async () => {
-    if (!f.nume.trim()) return onError('Numele e obligatoriu')
-    setSaving(true)
-    const payload = {
-      nume: f.nume.trim(),
-      cod_fiscal: f.cod_fiscal.trim() || null,
-      adresa: f.adresa.trim() || null,
-      contact_email: f.contact_email.trim() || null,
-      telefon: f.telefon.trim() || null,
-      observatii: f.observatii.trim() || null,
-      activ: f.activ,
-    }
-    const { error } = isNew
-      ? await supabase.from('beneficiari').insert(payload)
-      : await supabase.from('beneficiari').update(payload).eq('id', item.id)
-    setSaving(false)
-    if (error) onError(error.message)
-    else onSaved()
+  const load = async () => {
+    setLoading(true)
+    const { data } = await supabase.from('contracte_acte_aditionale')
+      .select('*').eq('contract_id', contractId).order('data_semnare', { ascending: true })
+    setActe(data || [])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [contractId])
+
+  const handleDelete = async act => {
+    if (!confirm(`Șterge actul adițional „${act.numar_act}"?`)) return
+    const { error } = await supabase.from('contracte_acte_aditionale').delete().eq('id', act.id)
+    if (error) show('Eroare: ' + error.message, 'err')
+    else { show('✓ Act șters'); load() }
   }
 
   return (
-    <ModalShell title={isNew ? '+ Adaugă beneficiar' : `✏️ Editează: ${item.nume}`} onClose={onClose}>
-      <div style={{display:'flex', flexDirection:'column', gap:14}}>
-        <div>
-          <label style={S.lbl}>Nume <span style={{color:G.red}}>*</span></label>
-          <input style={S.input} value={f.nume} onChange={e => setF({...f, nume:e.target.value})} placeholder="ex: Transgaz" autoFocus />
-        </div>
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
-          <div>
-            <label style={S.lbl}>Cod fiscal</label>
-            <input style={S.input} value={f.cod_fiscal} onChange={e => setF({...f, cod_fiscal:e.target.value})} placeholder="RO12345678" />
-          </div>
-          <div>
-            <label style={S.lbl}>Telefon</label>
-            <input style={S.input} value={f.telefon} onChange={e => setF({...f, telefon:e.target.value})} placeholder="+40 21 234 5678" />
-          </div>
-        </div>
-        <div>
-          <label style={S.lbl}>Email contact</label>
-          <input style={S.input} type="email" value={f.contact_email} onChange={e => setF({...f, contact_email:e.target.value})} placeholder="contracte@beneficiar.ro" />
-        </div>
-        <div>
-          <label style={S.lbl}>Adresă</label>
-          <input style={S.input} value={f.adresa} onChange={e => setF({...f, adresa:e.target.value})} placeholder="Adresă completă" />
-        </div>
-        <div>
-          <label style={S.lbl}>Observații</label>
-          <textarea style={{...S.input, minHeight:60, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} placeholder="Note interne..." />
-        </div>
-        <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
-          <input type="checkbox" checked={f.activ} onChange={e => setF({...f, activ:e.target.checked})} style={{width:16, height:16, accentColor:G.green}} />
-          <span style={{fontSize:13, color:G.text, fontWeight:600}}>Beneficiar activ</span>
-        </label>
-        <div style={{display:'flex', gap:10, marginTop:8}}>
-          <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
-          <button onClick={handleSave} disabled={saving} style={{...S.btnP, flex:2, opacity: saving ? 0.6 : 1}}>
-            {saving ? '⏳ Se salvează...' : isNew ? '+ Adaugă' : '✓ Salvează modificări'}
+    <div style={{borderTop:`1px solid ${G.border}`, background:G.bg, padding:'12px 16px'}}>
+      {toast && (
+        <div style={{position:'fixed', bottom:24, left:24, padding:'10px 16px', background: toast.kind==='err' ? G.red : G.green, color:'#fff', borderRadius:8, fontSize:12, fontWeight:600, zIndex:10001}}>{toast.msg}</div>
+      )}
+      <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10}}>
+        <span style={{fontSize:12, fontWeight:700, color:G.orange}}>📎 Acte adiționale</span>
+        <span style={{fontSize:11, color:G.dim}}>({acte.length})</span>
+        {canWrite && (
+          <button onClick={() => setEditAct({ contract_id: contractId })}
+            style={{...S.btnP, padding:'4px 12px', fontSize:11, marginLeft:'auto', background:G.orange}}>
+            + Adaugă act
           </button>
-        </div>
+        )}
       </div>
-    </ModalShell>
+
+      {loading ? (
+        <div style={{fontSize:11, color:G.dim}}>⏳ Se încarcă...</div>
+      ) : acte.length === 0 ? (
+        <div style={{fontSize:11, color:G.dim, fontStyle:'italic'}}>
+          Niciun act adițional. {canWrite ? 'Apasă „+ Adaugă act" pentru a adăuga.' : ''}
+        </div>
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:6}}>
+          {acte.map(act => {
+            const ti = TIP_ACT_INFO[act.tip] || { label:'—', icon:'📄', color:G.muted }
+            return (
+              <div key={act.id} style={{
+                display:'flex', alignItems:'center', gap:10,
+                padding:'8px 12px', background:G.surface, borderRadius:7,
+                border:`1px solid ${G.border}`
+              }}>
+                <span title={ti.label} style={{fontSize:16, color:ti.color}}>{ti.icon}</span>
+                <div style={{flex:1, minWidth:0}}>
+                  <div style={{fontSize:12, fontWeight:700, color:G.text}}>{act.numar_act}</div>
+                  <div style={{fontSize:10, color:G.muted}}>
+                    {fmtDate(act.data_semnare)}
+                    {act.valoare_noua_lei ? ` · ${fmtLei(act.valoare_noua_lei)}` : ''}
+                    {act.data_termen_noua ? ` · termen: ${fmtDate(act.data_termen_noua)}` : ''}
+                    {act.observatii ? ` · ${act.observatii}` : ''}
+                  </div>
+                </div>
+                {act.pdf_path && (
+                  <button onClick={async () => {
+                    const { data } = await supabase.storage.from('contracte-terti').createSignedUrl(act.pdf_path, 600)
+                    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+                  }} style={{...S.btnS, padding:'3px 8px', fontSize:10}}>📄 PDF</button>
+                )}
+                {canWrite && (
+                  <>
+                    <button onClick={() => setEditAct(act)} style={{...S.btnS, padding:'3px 8px', fontSize:10}}>✏️</button>
+                    <button onClick={() => handleDelete(act)} style={{...S.btnD, padding:'3px 8px', fontSize:10}}>🗑</button>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {editAct && (
+        <ActAditionalModal
+          item={editAct}
+          onClose={() => setEditAct(null)}
+          onSaved={() => { setEditAct(null); load(); show('✓ Act adițional salvat') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+    </div>
   )
 }
 
+// ══════════════════════════════════════════════════════════
+// CONTRACT MODAL — cu categorie + sens + partener_text
+// ══════════════════════════════════════════════════════════
 function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSuccess }) {
   const isNew = !item.id
   const [f, setF] = useState({
     beneficiar_id: item.beneficiar_id || '',
+    partener_text: item.partener_text || '',
     numar_contract: item.numar_contract || '',
     denumire: item.denumire || '',
+    categorie: item.categorie || 'executie',
+    sens: item.sens || 'incasare',
     valoare_lei: item.valoare_lei || '',
     valoare_eur: item.valoare_eur || '',
     data_semnare: item.data_semnare || '',
@@ -526,11 +555,13 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
+  // Mod partener: 'beneficiar' (din lista) sau 'text' (ad-hoc)
+  const [partenerMode, setPartenerMode] = useState(item.partener_text ? 'text' : 'beneficiar')
 
-  const handleUpload = async (file) => {
+  const handleUpload = async file => {
     if (!file) return
     if (file.size > 20 * 1024 * 1024) return onError('PDF prea mare (max 20MB)')
-    if (file.type !== 'application/pdf') return onError('Doar fișiere PDF acceptate')
+    if (file.type !== 'application/pdf') return onError('Doar fișiere PDF')
     setUploading(true)
     const ts = new Date().toISOString().replace(/[:.]/g, '-')
     const path = `${item.id || 'new'}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
@@ -542,12 +573,16 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
 
   const handleSaveAndAi = async (alsoAi = false) => {
     if (!f.denumire.trim()) return onError('Denumirea e obligatorie')
-    if (!f.beneficiar_id) return onError('Selectează beneficiar')
+    if (partenerMode === 'beneficiar' && !f.beneficiar_id) return onError('Selectează beneficiar')
+    if (partenerMode === 'text' && !f.partener_text.trim()) return onError('Completează partenerul')
     setSaving(true)
     const payload = {
-      beneficiar_id: Number(f.beneficiar_id),
+      beneficiar_id: partenerMode === 'beneficiar' && f.beneficiar_id ? Number(f.beneficiar_id) : null,
+      partener_text: partenerMode === 'text' ? f.partener_text.trim() : null,
       numar_contract: f.numar_contract.trim() || null,
       denumire: f.denumire.trim(),
+      categorie: f.categorie,
+      sens: f.sens,
       valoare_lei: f.valoare_lei ? Number(f.valoare_lei) : null,
       valoare_eur: f.valoare_eur ? Number(f.valoare_eur) : null,
       data_semnare: f.data_semnare || null,
@@ -569,17 +604,13 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       if (error) { setSaving(false); return onError(error.message) }
     }
     setSaving(false)
-    
     if (alsoAi && f.pdf_path) {
       setAiLoading(true)
       const { data: { session } } = await supabase.auth.getSession()
       try {
         const resp = await fetch(`${supabase.supabaseUrl}/functions/v1/parse-contract-pdf`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session?.access_token}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ contract_id: contractId, pdf_path: f.pdf_path })
         })
         const result = await resp.json()
@@ -590,34 +621,70 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         setAiLoading(false)
         onError(`AI parser exception: ${e.message}`)
       }
-    } else {
-      onSaved()
-    }
+    } else { onSaved() }
   }
 
   return (
     <ModalShell title={isNew ? '+ Contract nou' : `✏️ ${item.denumire}`} onClose={onClose} wide>
       <div style={{display:'flex', flexDirection:'column', gap:14}}>
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
+        {/* Categorie + Sens */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
           <div>
-            <label style={S.lbl}>Beneficiar <span style={{color:G.red}}>*</span></label>
-            <select style={S.input} value={f.beneficiar_id} onChange={e => setF({...f, beneficiar_id:e.target.value})}>
-              <option value="">— Selectează —</option>
-              {beneficiari.filter(b => b.activ).map(b => (
-                <option key={b.id} value={b.id}>{b.nume}</option>
-              ))}
+            <label style={S.lbl}>Categorie</label>
+            <select style={S.input} value={f.categorie} onChange={e => setF({...f, categorie:e.target.value})}>
+              {Object.entries(CAT_INFO).map(([k,v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
             </select>
           </div>
           <div>
-            <label style={S.lbl}>Număr contract</label>
-            <input style={S.input} value={f.numar_contract} onChange={e => setF({...f, numar_contract:e.target.value})} placeholder="ex: 12345/2026" />
+            <label style={S.lbl}>Sens financiar</label>
+            <select style={S.input} value={f.sens} onChange={e => setF({...f, sens:e.target.value})}>
+              {Object.entries(SENS_INFO).map(([k,v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+            </select>
           </div>
         </div>
+
+        {/* Partener */}
         <div>
-          <label style={S.lbl}>Denumire <span style={{color:G.red}}>*</span></label>
-          <input style={S.input} value={f.denumire} onChange={e => setF({...f, denumire:e.target.value})} placeholder="Obiectul contractului" autoFocus />
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4}}>
+            <label style={S.lbl}>Partener <span style={{color:G.red}}>*</span></label>
+            <div style={{display:'flex', gap:6}}>
+              <button onClick={() => setPartenerMode('beneficiar')}
+                style={{padding:'2px 8px', borderRadius:5, border:'none', cursor:'pointer', fontSize:10, fontWeight:700,
+                  background: partenerMode==='beneficiar' ? G.orange : G.border2, color: partenerMode==='beneficiar' ? '#fff' : G.muted}}>
+                Din lista
+              </button>
+              <button onClick={() => setPartenerMode('text')}
+                style={{padding:'2px 8px', borderRadius:5, border:'none', cursor:'pointer', fontSize:10, fontWeight:700,
+                  background: partenerMode==='text' ? G.orange : G.border2, color: partenerMode==='text' ? '#fff' : G.muted}}>
+                Liber
+              </button>
+            </div>
+          </div>
+          {partenerMode === 'beneficiar' ? (
+            <select style={S.input} value={f.beneficiar_id} onChange={e => setF({...f, beneficiar_id:e.target.value})}>
+              <option value="">— Selectează din lista beneficiari —</option>
+              {beneficiari.filter(b => b.activ).map(b => <option key={b.id} value={b.id}>{b.nume}</option>)}
+            </select>
+          ) : (
+            <input style={S.input} value={f.partener_text} onChange={e => setF({...f, partener_text:e.target.value})}
+              placeholder="Denumire firmă furnizor / prestator / partener ad-hoc" />
+          )}
         </div>
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
+
+        {/* Nr contract + Denumire */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 2fr', gap:12}}>
+          <div>
+            <label style={S.lbl}>Număr contract</label>
+            <input style={S.input} value={f.numar_contract} onChange={e => setF({...f, numar_contract:e.target.value})} placeholder="12345/2026" />
+          </div>
+          <div>
+            <label style={S.lbl}>Denumire <span style={{color:G.red}}>*</span></label>
+            <input style={S.input} value={f.denumire} onChange={e => setF({...f, denumire:e.target.value})} placeholder="Obiectul contractului" />
+          </div>
+        </div>
+
+        {/* Valori */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
           <div>
             <label style={S.lbl}>Valoare LEI (RON)</label>
             <input type="number" style={S.input} value={f.valoare_lei} onChange={e => setF({...f, valoare_lei:e.target.value})} placeholder="1500000" />
@@ -627,7 +694,9 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             <input type="number" style={S.input} value={f.valoare_eur} onChange={e => setF({...f, valoare_eur:e.target.value})} placeholder="300000" />
           </div>
         </div>
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:14}}>
+
+        {/* Date */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12}}>
           <div>
             <label style={S.lbl}>Data semnare</label>
             <input type="date" style={S.input} value={f.data_semnare} onChange={e => setF({...f, data_semnare:e.target.value})} />
@@ -641,25 +710,25 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             <input type="date" style={S.input} value={f.data_termen} onChange={e => setF({...f, data_termen:e.target.value})} />
           </div>
         </div>
+
         <div>
           <label style={S.lbl}>Status</label>
           <select style={S.input} value={f.status} onChange={e => setF({...f, status:e.target.value})}>
-            {Object.entries(STATUS_INFO).map(([k, v]) => (
-              <option key={k} value={k}>{v.icon} {v.label}</option>
-            ))}
+            {Object.entries(STATUS_INFO).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
           </select>
         </div>
+
         <div>
           <label style={S.lbl}>Observații</label>
           <textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} />
         </div>
 
-        {/* PDF UPLOAD ZONE */}
-        <div style={{padding:16, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:8}}>
-          <div style={{fontSize:12, fontWeight:700, color:G.muted, marginBottom:10}}>📄 PDF Contract</div>
+        {/* PDF Upload */}
+        <div style={{padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:8}}>
+          <div style={{fontSize:12, fontWeight:700, color:G.muted, marginBottom:8}}>📄 PDF Contract</div>
           {f.pdf_path ? (
             <div style={{display:'flex', alignItems:'center', gap:10}}>
-              <span style={{fontSize:24}}>📄</span>
+              <span style={{fontSize:22}}>📄</span>
               <div style={{flex:1, minWidth:0}}>
                 <div style={{fontSize:12, color:G.green, fontWeight:600}}>✓ PDF încărcat</div>
                 <div style={{fontSize:10, color:G.dim, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{f.pdf_path}</div>
@@ -668,37 +737,28 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             </div>
           ) : (
             <div>
-              <input
-                type="file"
-                accept="application/pdf"
-                onChange={e => handleUpload(e.target.files?.[0])}
-                disabled={uploading}
-                style={{fontSize:12, color:G.muted}}
-              />
-              <div style={{fontSize:11, color:G.dim, marginTop:6}}>
-                {uploading ? '⏳ Upload...' : 'Max 20MB · doar PDF · stocat privat în Supabase Storage'}
-              </div>
+              <input type="file" accept="application/pdf" onChange={e => handleUpload(e.target.files?.[0])} disabled={uploading} style={{fontSize:12, color:G.muted}} />
+              <div style={{fontSize:11, color:G.dim, marginTop:6}}>{uploading ? '⏳ Upload...' : 'Max 20MB · PDF · stocat privat'}</div>
             </div>
           )}
         </div>
 
-        <div style={{display:'flex', gap:10, marginTop:8}}>
+        {/* Butoane */}
+        <div style={{display:'flex', gap:10, marginTop:6}}>
           <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
-          <button onClick={() => handleSaveAndAi(false)} disabled={saving || uploading || aiLoading} style={{...S.btnP, flex:1.5, opacity: (saving||uploading||aiLoading) ? 0.6 : 1, background:G.surface, color:G.text, border:`1px solid ${G.border2}`}}>
-            {saving ? '⏳ ...' : '✓ Salvează'}
+          <button onClick={() => handleSaveAndAi(false)} disabled={saving||uploading||aiLoading}
+            style={{...S.btnP, flex:1.5, background:G.surface, color:G.text, border:`1px solid ${G.border2}`, opacity:(saving||uploading||aiLoading)?0.6:1}}>
+            {saving ? '⏳...' : '✓ Salvează'}
           </button>
-          <button 
-            onClick={() => handleSaveAndAi(true)} 
-            disabled={saving || uploading || aiLoading || !f.pdf_path}
-            style={{...S.btnP, flex:1.5, background:G.purple, opacity: (!f.pdf_path||saving||uploading||aiLoading) ? 0.6 : 1}}
-            title={!f.pdf_path ? 'Încarcă întâi un PDF' : 'Salvează + extrage clauze cu Claude AI'}
-          >
+          <button onClick={() => handleSaveAndAi(true)} disabled={saving||uploading||aiLoading||!f.pdf_path}
+            style={{...S.btnP, flex:1.5, background:G.purple, opacity:(!f.pdf_path||saving||uploading||aiLoading)?0.6:1}}
+            title={!f.pdf_path ? 'Încarcă întâi PDF' : 'Salvează + extrage cu Claude AI'}>
             {aiLoading ? '🤖 AI extrage...' : '🤖 Salvează + Extract AI'}
           </button>
         </div>
         {aiLoading && (
           <div style={{padding:10, background:G.purple+'22', borderRadius:6, fontSize:11, color:G.purple, textAlign:'center'}}>
-            ⏳ Claude analizează PDF-ul... (poate dura 10-30 secunde pentru contracte mari)
+            ⏳ Claude analizează PDF-ul... (10-30 secunde)
           </div>
         )}
       </div>
@@ -706,10 +766,129 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   )
 }
 
-function ContractDetailModal({ contract, beneficiari, onClose, onEdit }) {
+// ══════════════════════════════════════════════════════════
+// ACT ADIȚIONAL MODAL
+// ══════════════════════════════════════════════════════════
+function ActAditionalModal({ item, onClose, onSaved, onError }) {
+  const isNew = !item.id
+  const [f, setF] = useState({
+    numar_act: item.numar_act || '',
+    data_semnare: item.data_semnare || '',
+    tip: item.tip || 'modificare',
+    valoare_noua_lei: item.valoare_noua_lei || '',
+    valoare_noua_eur: item.valoare_noua_eur || '',
+    durata_noua_zile: item.durata_noua_zile || '',
+    data_termen_noua: item.data_termen_noua || '',
+    observatii: item.observatii || '',
+    pdf_path: item.pdf_path || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+
+  const handleUpload = async file => {
+    if (!file || file.size > 20*1024*1024 || file.type !== 'application/pdf') return onError('PDF max 20MB')
+    setUploading(true)
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    const path = `acte/${item.contract_id}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+    const { error } = await supabase.storage.from('contracte-terti').upload(path, file, { upsert: false })
+    setUploading(false)
+    if (error) return onError(`Upload eșuat: ${error.message}`)
+    setF({...f, pdf_path: path})
+  }
+
+  const handleSave = async () => {
+    if (!f.numar_act.trim()) return onError('Numărul actului e obligatoriu')
+    setSaving(true)
+    const payload = {
+      contract_id: item.contract_id,
+      numar_act: f.numar_act.trim(),
+      data_semnare: f.data_semnare || null,
+      tip: f.tip || null,
+      valoare_noua_lei: f.valoare_noua_lei ? Number(f.valoare_noua_lei) : null,
+      valoare_noua_eur: f.valoare_noua_eur ? Number(f.valoare_noua_eur) : null,
+      durata_noua_zile: f.durata_noua_zile ? Number(f.durata_noua_zile) : null,
+      data_termen_noua: f.data_termen_noua || null,
+      observatii: f.observatii.trim() || null,
+      pdf_path: f.pdf_path || null,
+    }
+    const { error } = isNew
+      ? await supabase.from('contracte_acte_aditionale').insert(payload)
+      : await supabase.from('contracte_acte_aditionale').update(payload).eq('id', item.id)
+    setSaving(false)
+    if (error) onError(error.message)
+    else onSaved()
+  }
+
+  return (
+    <ModalShell title={isNew ? '+ Act adițional nou' : `✏️ ${item.numar_act}`} onClose={onClose}>
+      <div style={{display:'flex', flexDirection:'column', gap:12}}>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+          <div>
+            <label style={S.lbl}>Număr act *</label>
+            <input style={S.input} value={f.numar_act} onChange={e => setF({...f, numar_act:e.target.value})} placeholder="Act. 1/2026" autoFocus />
+          </div>
+          <div>
+            <label style={S.lbl}>Tip</label>
+            <select style={S.input} value={f.tip} onChange={e => setF({...f, tip:e.target.value})}>
+              {Object.entries(TIP_ACT_INFO).map(([k,v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label style={S.lbl}>Data semnare</label>
+          <input type="date" style={S.input} value={f.data_semnare} onChange={e => setF({...f, data_semnare:e.target.value})} />
+        </div>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+          <div>
+            <label style={S.lbl}>Valoare nouă LEI</label>
+            <input type="number" style={S.input} value={f.valoare_noua_lei} onChange={e => setF({...f, valoare_noua_lei:e.target.value})} placeholder="0" />
+          </div>
+          <div>
+            <label style={S.lbl}>Durată nouă (zile)</label>
+            <input type="number" style={S.input} value={f.durata_noua_zile} onChange={e => setF({...f, durata_noua_zile:e.target.value})} placeholder="90" />
+          </div>
+        </div>
+        <div>
+          <label style={S.lbl}>Termen nou</label>
+          <input type="date" style={S.input} value={f.data_termen_noua} onChange={e => setF({...f, data_termen_noua:e.target.value})} />
+        </div>
+        <div>
+          <label style={S.lbl}>Observații</label>
+          <textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} />
+        </div>
+        {/* PDF */}
+        <div style={{padding:10, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:7}}>
+          <div style={{fontSize:11, fontWeight:700, color:G.muted, marginBottom:6}}>📄 PDF Act adițional</div>
+          {f.pdf_path ? (
+            <div style={{display:'flex', alignItems:'center', gap:8}}>
+              <span style={{color:G.green, fontSize:12}}>✓ {f.pdf_path.split('/').pop()}</span>
+              <button onClick={() => setF({...f, pdf_path:''})} style={{...S.btnS, padding:'3px 8px', fontSize:10, color:G.red}}>✕</button>
+            </div>
+          ) : (
+            <input type="file" accept="application/pdf" onChange={e => handleUpload(e.target.files?.[0])} disabled={uploading} style={{fontSize:11, color:G.muted}} />
+          )}
+          {uploading && <div style={{fontSize:10, color:G.dim, marginTop:4}}>⏳ Upload...</div>}
+        </div>
+        <div style={{display:'flex', gap:10}}>
+          <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving||uploading} style={{...S.btnP, flex:2, opacity:(saving||uploading)?0.6:1}}>
+            {saving ? '⏳...' : isNew ? '+ Adaugă act' : '✓ Salvează'}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// CONTRACT DETAIL MODAL — cu categorie + sens + acte aditionale
+// ══════════════════════════════════════════════════════════
+function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose, onEdit }) {
   const [pdfUrl, setPdfUrl] = useState(null)
   const benefMap = Object.fromEntries(beneficiari.map(b => [b.id, b.nume]))
   const si = STATUS_INFO[contract.status] || STATUS_INFO.draft
+  const ci = CAT_INFO[contract.categorie] || CAT_INFO.altele
+  const sei = SENS_INFO[contract.sens] || SENS_INFO.incasare
   const clauze = contract.ai_clauze_jsonb || {}
   const subClauze = clauze.clauze || {}
 
@@ -723,114 +902,127 @@ function ContractDetailModal({ contract, beneficiari, onClose, onEdit }) {
   return (
     <ModalShell title={contract.denumire} onClose={onClose} wide>
       <div style={{display:'flex', flexDirection:'column', gap:16}}>
-        {/* Header info */}
-        <div style={{display:'flex', alignItems:'center', gap:10, padding:'12px 16px', background:G.bg, borderRadius:8, flexWrap:'wrap'}}>
-          <span style={{padding:'4px 10px', borderRadius:14, background:si.color+'22', color:si.color, fontSize:11, fontWeight:700}}>
-            {si.icon} {si.label}
-          </span>
-          {contract.numar_contract && (
-            <span style={{fontSize:12, color:G.muted, fontFamily:'monospace'}}>📄 {contract.numar_contract}</span>
-          )}
+        {/* Badges */}
+        <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+          <span style={{padding:'4px 10px', borderRadius:14, background:ci.color+'22', color:ci.color, fontSize:11, fontWeight:700}}>{ci.icon} {ci.label}</span>
+          <span style={{padding:'4px 10px', borderRadius:14, background:sei.color+'22', color:sei.color, fontSize:11, fontWeight:700}}>{sei.icon} {sei.label}</span>
+          <span style={{padding:'4px 10px', borderRadius:14, background:si.color+'22', color:si.color, fontSize:11, fontWeight:700}}>{si.icon} {si.label}</span>
+          {contract.numar_contract && <span style={{fontSize:11, color:G.muted, fontFamily:'monospace'}}>📄 {contract.numar_contract}</span>}
           <div style={{flex:1}} />
-          <button onClick={onEdit} style={{...S.btnS, padding:'6px 12px', fontSize:12}}>✏️ Editează</button>
+          {canWrite && <button onClick={onEdit} style={{...S.btnS, padding:'6px 12px', fontSize:12}}>✏️ Editează</button>}
         </div>
 
-        {/* Detalii grid */}
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
-          <DetailRow label="🏢 Beneficiar" value={benefMap[contract.beneficiar_id] || '—'} />
-          <DetailRow label="💰 Valoare" value={
-            contract.valoare_lei ? fmtLei(contract.valoare_lei) :
-            contract.valoare_eur ? fmtEur(contract.valoare_eur) : '—'
-          } />
-          <DetailRow label="📅 Data semnare" value={fmtDate(contract.data_semnare)} />
-          <DetailRow label="📅 Data termen" value={fmtDate(contract.data_termen)} />
-          <DetailRow label="⏱ Termen execuție" value={contract.termen_executie_zile ? `${contract.termen_executie_zile} zile` : '—'} />
-          <DetailRow label="🤖 Extract AI" value={contract.ai_extracted_at ? fmtDate(contract.ai_extracted_at) : 'Neaplicat'} />
+        {/* Grid info */}
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+          {[
+            ['🏢 Partener', getPartener(contract, benefMap)],
+            ['💰 Valoare', fmtVal(contract)],
+            ['📅 Data semnare', fmtDate(contract.data_semnare)],
+            ['📅 Data termen', fmtDate(contract.data_termen)],
+            ['⏱ Termen execuție', contract.termen_executie_zile ? `${contract.termen_executie_zile} zile` : '—'],
+            ['🤖 Extract AI', contract.ai_extracted_at ? fmtDate(contract.ai_extracted_at) : 'Neaplicat'],
+          ].map(([lbl, val]) => (
+            <div key={lbl} style={{background:G.bg, borderRadius:7, padding:'8px 12px'}}>
+              <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', letterSpacing:'.4px', marginBottom:2}}>{lbl}</div>
+              <div style={{fontSize:13, fontWeight:600, color:G.text}}>{val}</div>
+            </div>
+          ))}
         </div>
 
         {contract.observatii && (
-          <div style={{...S.card, background:G.bg}}>
+          <div style={{...S.card, background:G.bg, padding:'10px 14px'}}>
             <div style={S.lbl}>📝 Observații</div>
             <div style={{fontSize:13, color:G.text, lineHeight:1.5}}>{contract.observatii}</div>
           </div>
         )}
 
-        {/* AI extracted */}
+        {/* AI extras */}
         {contract.ai_extracted_at && (
           <div style={{padding:14, background:G.purple+'11', border:`1px solid ${G.purple}44`, borderRadius:10}}>
-            <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap'}}>
-              <span style={{fontSize:18}}>🤖</span>
-              <div style={{fontSize:13, fontWeight:700, color:G.purple}}>Clauze extrase de Claude AI</div>
-              {clauze.confidence && (
-                <span style={{marginLeft:'auto', padding:'2px 8px', background:G.purple+'22', borderRadius:10, fontSize:11, color:G.purple, fontWeight:700}}>
-                  Confidence: {clauze.confidence}%
-                </span>
-              )}
+            <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10}}>
+              <span style={{fontSize:16}}>🤖</span>
+              <span style={{fontSize:13, fontWeight:700, color:G.purple}}>Clauze extrase de Claude AI</span>
+              {clauze.confidence && <span style={{marginLeft:'auto', padding:'2px 8px', background:G.purple+'22', borderRadius:10, fontSize:10, color:G.purple, fontWeight:700}}>Confidence: {clauze.confidence}%</span>}
             </div>
-            <div style={{display:'flex', flexDirection:'column', gap:10}}>
-              {subClauze.penalitati && <ClauzaRow icon="⚠" label="Penalități" value={subClauze.penalitati} />}
-              {subClauze.garantii && <ClauzaRow icon="🛡" label="Garanții" value={subClauze.garantii} />}
-              {subClauze.plata && <ClauzaRow icon="💰" label="Plată" value={subClauze.plata} />}
-              {subClauze.reziliere && <ClauzaRow icon="⛔" label="Reziliere" value={subClauze.reziliere} />}
-              {subClauze.observatii && <ClauzaRow icon="📌" label="Alte clauze" value={subClauze.observatii} />}
-              {!subClauze.penalitati && !subClauze.garantii && !subClauze.plata && !subClauze.reziliere && !subClauze.observatii && (
-                <div style={{fontSize:12, color:G.muted, fontStyle:'italic'}}>Nicio clauză extrasă specific (contractul nu conține sau confidence prea mic)</div>
-              )}
-            </div>
+            {[['⚠', 'Penalități', subClauze.penalitati], ['🛡', 'Garanții', subClauze.garantii], ['💰', 'Plată', subClauze.plata], ['⛔', 'Reziliere', subClauze.reziliere], ['📌', 'Alte clauze', subClauze.observatii]]
+              .filter(([,, val]) => val)
+              .map(([icon, lbl, val]) => (
+                <div key={lbl} style={{padding:'7px 12px', background:G.surface, borderRadius:6, marginBottom:6}}>
+                  <div style={{fontSize:10, fontWeight:700, color:G.purple, marginBottom:2}}>{icon} {lbl}</div>
+                  <div style={{fontSize:12, color:G.text, lineHeight:1.5}}>{val}</div>
+                </div>
+              ))
+            }
           </div>
         )}
 
-        {/* PDF link */}
+        {/* Acte adiționale în detail modal */}
+        <ActeAditionaleSection contractId={contract.id} canWrite={canWrite} />
+
         {pdfUrl && (
           <a href={pdfUrl} target="_blank" rel="noopener noreferrer" style={{
             display:'inline-flex', alignItems:'center', gap:8, padding:'10px 14px',
             background:G.blue+'22', color:G.blue, textDecoration:'none',
-            borderRadius:8, fontSize:13, fontWeight:600,
-            border:`1px solid ${G.blue}44`, justifyContent:'center'
-          }}>
-            📄 Deschide PDF în tab nou
-          </a>
+            borderRadius:8, fontSize:13, fontWeight:600, border:`1px solid ${G.blue}44`, justifyContent:'center'
+          }}>📄 Deschide PDF în tab nou</a>
         )}
 
-        <button onClick={onClose} style={{...S.btnS, marginTop:8}}>Închide</button>
+        <button onClick={onClose} style={{...S.btnS, marginTop:4}}>Închide</button>
       </div>
     </ModalShell>
   )
 }
 
-function DetailRow({ label, value }) {
+// ══════════════════════════════════════════════════════════
+// BENEFICIAR MODAL (nemodificat)
+// ══════════════════════════════════════════════════════════
+function BeneficiarModal({ item, onClose, onSaved, onError }) {
+  const isNew = !item.id
+  const [f, setF] = useState({ nume:item.nume||'', cod_fiscal:item.cod_fiscal||'', adresa:item.adresa||'', contact_email:item.contact_email||'', telefon:item.telefon||'', observatii:item.observatii||'', activ:item.activ!==false })
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    if (!f.nume.trim()) return onError('Numele e obligatoriu')
+    setSaving(true)
+    const payload = { nume:f.nume.trim(), cod_fiscal:f.cod_fiscal.trim()||null, adresa:f.adresa.trim()||null, contact_email:f.contact_email.trim()||null, telefon:f.telefon.trim()||null, observatii:f.observatii.trim()||null, activ:f.activ }
+    const { error } = isNew ? await supabase.from('beneficiari').insert(payload) : await supabase.from('beneficiari').update(payload).eq('id', item.id)
+    setSaving(false)
+    if (error) onError(error.message)
+    else onSaved()
+  }
+
   return (
-    <div>
-      <div style={S.lbl}>{label}</div>
-      <div style={{fontSize:13, color:G.text, fontWeight:600}}>{value}</div>
-    </div>
+    <ModalShell title={isNew ? '+ Adaugă beneficiar' : `✏️ ${item.nume}`} onClose={onClose}>
+      <div style={{display:'flex', flexDirection:'column', gap:12}}>
+        <div><label style={S.lbl}>Nume *</label><input style={S.input} value={f.nume} onChange={e => setF({...f,nume:e.target.value})} autoFocus /></div>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+          <div><label style={S.lbl}>Cod fiscal</label><input style={S.input} value={f.cod_fiscal} onChange={e => setF({...f,cod_fiscal:e.target.value})} placeholder="RO12345678" /></div>
+          <div><label style={S.lbl}>Telefon</label><input style={S.input} value={f.telefon} onChange={e => setF({...f,telefon:e.target.value})} /></div>
+        </div>
+        <div><label style={S.lbl}>Email contact</label><input style={S.input} type="email" value={f.contact_email} onChange={e => setF({...f,contact_email:e.target.value})} /></div>
+        <div><label style={S.lbl}>Adresă</label><input style={S.input} value={f.adresa} onChange={e => setF({...f,adresa:e.target.value})} /></div>
+        <div><label style={S.lbl}>Observații</label><textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f,observatii:e.target.value})} /></div>
+        <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+          <input type="checkbox" checked={f.activ} onChange={e => setF({...f,activ:e.target.checked})} style={{accentColor:G.green}} />
+          <span style={{fontSize:13, color:G.text, fontWeight:600}}>Beneficiar activ</span>
+        </label>
+        <div style={{display:'flex', gap:10}}>
+          <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving} style={{...S.btnP, flex:2, opacity:saving?0.6:1}}>{saving ? '⏳...' : isNew ? '+ Adaugă' : '✓ Salvează'}</button>
+        </div>
+      </div>
+    </ModalShell>
   )
 }
 
-function ClauzaRow({ icon, label, value }) {
-  return (
-    <div style={{padding:'8px 12px', background:G.surface, borderRadius:6}}>
-      <div style={{fontSize:11, fontWeight:700, color:G.purple, marginBottom:3}}>{icon} {label}</div>
-      <div style={{fontSize:12, color:G.text, lineHeight:1.5}}>{value}</div>
-    </div>
-  )
-}
-
+// ══════════════════════════════════════════════════════════
+// MODAL SHELL
+// ══════════════════════════════════════════════════════════
 function ModalShell({ title, onClose, children, wide }) {
   return (
-    <div onClick={onClose} style={{
-      position:'fixed', inset:0, background:'rgba(0,0,0,0.7)',
-      display:'flex', alignItems:'center', justifyContent:'center',
-      zIndex:9999, padding:20
-    }}>
-      <div onClick={e => e.stopPropagation()} style={{
-        background:G.surface, border:`1px solid ${G.border2}`, borderRadius:14,
-        width:'100%', maxWidth: wide ? 720 : 480,
-        maxHeight:'90vh', overflow:'auto',
-        padding:'22px 26px',
-        boxShadow:'0 20px 60px rgba(0,0,0,0.5)'
-      }}>
-        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18}}>
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999, padding:20}}>
+      <div onClick={e => e.stopPropagation()} style={{background:G.surface, border:`1px solid ${G.border2}`, borderRadius:14, width:'100%', maxWidth: wide ? 720 : 480, maxHeight:'90vh', overflow:'auto', padding:'22px 26px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)'}}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16}}>
           <div style={{fontSize:17, fontWeight:800, color:G.text}}>{title}</div>
           <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer', padding:0, lineHeight:1}}>×</button>
         </div>

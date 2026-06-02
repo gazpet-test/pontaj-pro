@@ -451,7 +451,7 @@ export default function AdministrativPage() {
       if (user) {
         const { data } = await supabase
           .from('profiles')
-          .select('id, name, email, is_owner')
+          .select('id, name, email, is_owner, can_manage_contracts')
           .eq('id', user.id)
           .single()
         setProfile(data)
@@ -462,6 +462,7 @@ export default function AdministrativPage() {
   }, [])
 
   const isOwner = profile?.is_owner === true
+  const canManageContracts = profile?.can_manage_contracts === true
 
   const tabs = [
     { key: 'documente',  icon: '📁', label: 'Documente firmă' },
