@@ -1175,6 +1175,8 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     deep_sleep: a?.deep_sleep || false,
     deep_sleep_motiv: a?.deep_sleep_motiv || '',
     deep_sleep_data: a?.deep_sleep_data || '',
+    // Fără service Gazpet — utilaj comodat/închiriat, exclus din acoperire flotă & scadențe service
+    fara_service_gazpet: a?.fara_service_gazpet || false,
     // 27.05.2026: Contract de comodat (vehicul personal angajat folosit la firmă)
     // Dacă prefilComodat=true (din butonul „+ Adaugă vehicul comodat" din sub-tab Contracte), pre-selectez tip=comodat
     tip_proprietate: a?.tip_proprietate || (prefilComodat ? 'comodat' : 'firma'),
@@ -1441,6 +1443,8 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       deep_sleep: !!form.deep_sleep,
       deep_sleep_motiv: form.deep_sleep ? (form.deep_sleep_motiv?.trim() || null) : null,
       deep_sleep_data: form.deep_sleep ? (form.deep_sleep_data || new Date().toISOString().split('T')[0]) : null,
+      // Fără service Gazpet — exclus din acoperire flotă & scadențe service
+      fara_service_gazpet: !!form.fara_service_gazpet,
       // 27.05.2026: Contract de comodat / Închiriere
       tip_proprietate: form.tip_proprietate || 'firma',
       comodat_employee_id: form.tip_proprietate === 'comodat' ? (form.comodat_employee_id || null) : null,
@@ -1847,7 +1851,29 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             </div>
           )}
         </div>
-        
+
+        {/* Fără service Gazpet — comodat/închiriat, exclus din acoperire flotă & scadențe service */}
+        <div style={{marginBottom: 14, background: form.fara_service_gazpet ? '#F59E0B22' : 'transparent', border: form.fara_service_gazpet ? '1px solid #F59E0B55' : `1px dashed ${G.border}`, borderRadius: 10, padding: 14}}>
+          <div style={{display:'flex', alignItems:'center', gap:10}}>
+            <input
+              type="checkbox"
+              id="fara_service_gazpet_checkbox"
+              checked={!!form.fara_service_gazpet}
+              disabled={isReadOnly}
+              onChange={e => setField('fara_service_gazpet', e.target.checked)}
+              style={{width:18, height:18, cursor: isReadOnly ? 'default' : 'pointer', accentColor: '#F59E0B'}}
+            />
+            <label htmlFor="fara_service_gazpet_checkbox" style={{flex:1, cursor: isReadOnly ? 'default' : 'pointer', userSelect:'none'}}>
+              <div style={{fontSize: 13, color: form.fara_service_gazpet ? '#FBBF24' : G.text, fontWeight: 700}}>
+                🚫 Fără service Gazpet (comodat/închiriat)
+              </div>
+              <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                Service-ul nu este în sarcina Gazpet. <strong>Exclus din acoperire flotă și scadențe service.</strong>
+              </div>
+            </label>
+          </div>
+        </div>
+
         {/* ETAPA 12.5: Ajustare manuală km/ore cu audit - vizibil doar la edit/view pe utilaj existent */}
         {activ?.id && (mode === 'edit' || mode === 'view') && canEdit && (
           <div style={{marginBottom: 14, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10, padding: 14}}>

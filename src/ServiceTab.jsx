@@ -1393,7 +1393,7 @@ function AcoperireFlotaModal({ active, fiseCountByActiv, canEdit, onClose, onCre
   const [catFilter, setCatFilter] = useState('Toate')
 
   const fara = useMemo(() => {
-    return active.filter(a => !fiseCountByActiv[a.id] || fiseCountByActiv[a.id] === 0)
+    return active.filter(a => !a.fara_service_gazpet && (!fiseCountByActiv[a.id] || fiseCountByActiv[a.id] === 0))
   }, [active, fiseCountByActiv])
 
   const filtered = useMemo(() => {
@@ -1894,7 +1894,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         .order('id', { ascending:false }),
       supabase
         .from('logistica_active')
-        .select('id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)')
+        .select('id, cod_intern, nr_inventar, nr_inmatriculare, marca, model, stare, fara_service_gazpet, km_actuali, ore_functionare_actuale, categorie_id, logistica_categorii:categorie_id(tip, subcategorie)')
         .order('cod_intern', { nullsFirst:false }),
       supabase
         .from('logistica_service_itemi_preset')
@@ -1950,11 +1950,13 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
     const in_lucru = fise.filter(f => f.status === 'in_lucru').length
     const finalizat = fise.filter(f => f.status === 'finalizat').length
     const sumaTotala = fise.reduce((s, f) => s + Number(f.suma_factura || 0), 0)
-    const fara = activeFull.filter(a => !fiseCountByActiv[a.id]).length
+    const fara = activeFull.filter(a => !a.fara_service_gazpet && !fiseCountByActiv[a.id]).length
     const acoperire = activeFull.length > 0 ? Math.round((1 - fara / activeFull.length) * 100) : 0
 
     let scadDepasite = 0, scadAproape = 0
     for (const f of Object.values(ultimaFisaPerActiv)) {
+      // Exclud activele fără service Gazpet (comodat/închiriat) din scadențe
+      if (activMap[f.activ_id]?.fara_service_gazpet) continue
       // Pachet C: folosim km/ore live din view
       const km = kmOreMap[f.activ_id]
       const u = calcUrmService(f, km?.km_live, km?.ore_live)
@@ -1963,7 +1965,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       else if (lvl === 'aproape') scadAproape++
     }
     return { total, programat, in_lucru, finalizat, sumaTotala, fara, acoperire, scadDepasite, scadAproape }
-  }, [fise, activeFull, fiseCountByActiv, ultimaFisaPerActiv, kmOreMap])
+  }, [fise, activeFull, fiseCountByActiv, ultimaFisaPerActiv, kmOreMap, activMap])
 
   const filtered = useMemo(() => {
     let dStart = null, dEnd = null
@@ -1989,6 +1991,8 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       }
       // ETAPA 8.6: filtru scadențe (când userul a apăsat KPI Scadențe Service)
       if (scadenteOnly) {
+        // Exclud activele fără service Gazpet (comodat/închiriat)
+        if (activMap[f.activ_id]?.fara_service_gazpet) return false
         // Vrem DOAR ultima fișă per activ care are scadență „aproape" sau „depasit"
         if (ultimaFisaPerActiv[f.activ_id]?.id !== f.id) return false
         const km = kmOreMap[f.activ_id]
@@ -2026,7 +2030,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       return 0
     })
     return r
-  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy, kmOreMap, scadenteOnly, ultimaFisaPerActiv])
+  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy, kmOreMap, scadenteOnly, ultimaFisaPerActiv, activMap])
 
   const sumaFiltrata = useMemo(() => filtered.reduce((s, f) => s + Number(f.suma_factura || 0), 0), [filtered])
 
