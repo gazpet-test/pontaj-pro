@@ -91,7 +91,7 @@ export default function TabSantiere() {
         setProfile(prof)
       }
       const [pRes, eRes] = await Promise.all([
-        supabase.from('executie_proiecte').select('id,cod_intern,nume,activ').eq('activ',true).order('cod_intern'),
+        supabase.from('executie_proiecte').select('id,cod_intern,nume,activ,site_id').eq('activ',true).order('cod_intern'),
         supabase.from('employees').select('id,name,functie,department').eq('active',true).order('name'),
       ])
       setProiecte(pRes.data || [])
@@ -119,6 +119,12 @@ export default function TabSantiere() {
 
   const canWrite = profile?.is_owner || ['superadmin','manager_santier'].includes(profile?.role)
   const isOwner  = profile?.is_owner === true
+
+  // Site-ul proiectului selectat
+  const currentSiteId = useMemo(() => {
+    const p = proiecte.find(p => String(p.id) === String(proiectId))
+    return p?.site_id || null
+  }, [proiecte, proiectId])
 
   // KPI pe meserie
   const kpiMeserie = useMemo(() => {
@@ -400,6 +406,17 @@ export default function TabSantiere() {
         />
       )}
 
+      {/* ─── UTILAJE PE TURĂ ─── */}
+      <UtilajeTura
+        proiectId={proiectId}
+        proiecte={proiecte}
+        siteId={currentSiteId}
+        dataStart={dataStart}
+        dataEnd={dataEnd}
+        canWrite={canWrite}
+        isOwner={isOwner}
+      />
+
       <Toast />
     </div>
   )
@@ -593,6 +610,427 @@ function AlocareModal({ item, proiecte, employees, defaultProiectId, defaultStar
             <button onClick={handleSave} disabled={saving}
               style={{...S.btn, flex:2, background:saving?G.muted:G.executie, color:'#0D1117', opacity:saving?0.6:1}}>
               {saving ? '⏳ Se salvează...' : isNew ? '＋ Adaugă în tură' : '💾 Salvează'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// SECȚIUNE UTILAJE PE TURĂ (adăugată în main component prin export separat)
+// ══════════════════════════════════════════════════════════
+export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, canWrite, isOwner }) {
+  const [utilaje, setUtilaje] = useState([])       // toate utilajele active
+  const [alocari, setAlocari] = useState([])        // alocari in fereastra
+  const [allUtilaje, setAllUtilaje] = useState([]) // pentru autocomplete
+  const [loading, setLoading] = useState(true)
+  const [editAlocare, setEditAlocare] = useState(null)
+  const [filterCat, setFilterCat] = useState('all')
+  const { show, Toast } = useToast()
+
+  const loadUtilaje = useCallback(async () => {
+    if (!siteId && !proiectId) return
+    setLoading(true)
+    try {
+      // Utilaje pe șantier + toate pentru autocomplete
+      const [uRes, aRes, allRes] = await Promise.all([
+        // Utilaje fizic pe site
+        supabase.from('logistica_active')
+          .select(`id, marca, model, cod_intern, nr_inmatriculare, stare, site_id, 
+                   km_actuali, ore_functionare_actuale, deep_sleep, 
+                   logistica_categorii(tip)`)
+          .eq('vandut', false)
+          .eq('site_id', siteId || 0)
+          .order('marca'),
+        // Alocări formale în fereastra
+        siteId ? supabase.from('logistica_alocari')
+          .select(`id, active_id, status, data_start, data_end, justificare,
+                   logistica_active(id, marca, model, cod_intern, nr_inmatriculare, stare, 
+                                    logistica_categorii(tip))`)
+          .eq('site_id', siteId)
+          .in('status', ['aprobat','in_tranzit','livrat'])
+          .gte('data_end', dataStart)
+          .lte('data_start', dataEnd) : { data: [] },
+        // Toate utilajele pentru modal
+        supabase.from('logistica_active')
+          .select('id, marca, model, cod_intern, nr_inmatriculare, stare, logistica_categorii(tip)')
+          .eq('vandut', false).eq('deep_sleep', false).order('marca').limit(300),
+      ])
+      setUtilaje(uRes.data || [])
+      setAlocari(aRes.data || [])
+      setAllUtilaje(allRes.data || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [siteId, proiectId, dataStart, dataEnd]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadUtilaje() }, [loadUtilaje])
+
+  // Categorii distincte
+  const categorii = useMemo(() => {
+    const cats = new Set()
+    utilaje.forEach(u => { if (u.logistica_categorii?.tip) cats.add(u.logistica_categorii.tip) })
+    alocari.forEach(a => { if (a.logistica_active?.logistica_categorii?.tip) cats.add(a.logistica_active.logistica_categorii.tip) })
+    return Array.from(cats).sort()
+  }, [utilaje, alocari])
+
+  // KPI
+  const totalPeSite = utilaje.length
+  const nefunctionale = utilaje.filter(u => u.stare === 'Nefunctional' || u.deep_sleep).length
+  const functionale = totalPeSite - nefunctionale
+  const alocateFornal = alocari.length
+
+  // IDs deja alocate formal (pentru a nu dubla)
+  const alocateIds = new Set(alocari.map(a => a.active_id))
+
+  // Utilaje filtrate pentru afișare
+  const utilajeFiltrate = useMemo(() => {
+    let list = utilaje
+    if (filterCat !== 'all') list = list.filter(u => u.logistica_categorii?.tip === filterCat)
+    return list
+  }, [utilaje, filterCat])
+
+  const alociFilterate = useMemo(() => {
+    if (filterCat === 'all') return alocari
+    return alocari.filter(a => a.logistica_active?.logistica_categorii?.tip === filterCat)
+  }, [alocari, filterCat])
+
+  const handleDeleteAlocare = async a => {
+    if (!confirm(`Elimini ${a.logistica_active?.marca} ${a.logistica_active?.model} din tură?`)) return
+    const { error } = await supabase.from('logistica_alocari').delete().eq('id', a.id)
+    if (error) show('Eroare: ' + error.message, 'err')
+    else { show('✓ Utilaj eliminat din tură'); loadUtilaje() }
+  }
+
+  const utilizareLabel = u => {
+    if (u.deep_sleep) return { label:'💤 Deep Sleep', color:'#8B5CF6' }
+    if (u.stare === 'Nefunctional') return { label:'🔴 Nefuncțional', color:G.red }
+    if (alocateIds.has(u.id)) return { label:'✅ Alocat tură', color:G.green }
+    return { label:'🟡 Liber', color:G.yellow }
+  }
+
+  if (!siteId) return (
+    <div style={{padding:'20px 0', textAlign:'center', color:G.dim, fontSize:12}}>
+      ⚠ Proiectul selectat nu are un șantier asociat — setează șantierul în Dashboard Proiecte.
+    </div>
+  )
+
+  return (
+    <div style={{marginTop:28}}>
+      {/* ─── SEPARATOR ─── */}
+      <div style={{display:'flex', alignItems:'center', gap:14, marginBottom:18}}>
+        <div style={{height:1, flex:1, background:G.border}} />
+        <div style={{fontSize:14, fontWeight:800, color:G.text, display:'flex', alignItems:'center', gap:8}}>
+          🚜 Utilaje pe tură
+        </div>
+        <div style={{height:1, flex:1, background:G.border}} />
+        {canWrite && (
+          <button onClick={() => setEditAlocare({ site_id: siteId, data_start: dataStart, data_end: dataEnd })}
+            style={{...S.btn, background:G.orange, color:'#fff', padding:'7px 14px', fontSize:12}}>
+            ＋ Adaugă utilaj
+          </button>
+        )}
+      </div>
+
+      {/* ─── KPI UTILAJE ─── */}
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(120px,1fr))', gap:10, marginBottom:18}}>
+        {[
+          { label:'Pe șantier', value:totalPeSite, icon:'🏗️', color:G.executie },
+          { label:'Funcționale', value:functionale, icon:'✅', color:G.green },
+          { label:'Nefuncționale', value:nefunctionale, icon:'🔴', color:G.red },
+          { label:'Alocate tură', value:alocateFornal, icon:'📋', color:G.orange },
+          { label:'Libere (est.)', value:Math.max(0, functionale - alocateFornal), icon:'🟡', color:G.yellow },
+        ].map((k, i) => (
+          <div key={i} style={{
+            background:G.surface, border:`1px solid ${G.border}`, borderRadius:9,
+            padding:'10px 14px', textAlign:'center'
+          }}>
+            <div style={{fontSize:18, marginBottom:3}}>{k.icon}</div>
+            <div style={{fontSize:22, fontWeight:800, color:k.color}}>{k.value}</div>
+            <div style={{fontSize:10, color:G.muted, marginTop:1}}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ─── FILTRU CATEGORIE ─── */}
+      {categorii.length > 1 && (
+        <div style={{display:'flex', gap:6, flexWrap:'wrap', marginBottom:14}}>
+          <button onClick={() => setFilterCat('all')}
+            style={{...S.btn, padding:'4px 12px', fontSize:11,
+              background: filterCat==='all' ? G.orange+'33' : G.border2,
+              color: filterCat==='all' ? G.orange : G.muted,
+              border:`1px solid ${filterCat==='all' ? G.orange : G.border}`}}>
+            Toate ({utilaje.length})
+          </button>
+          {categorii.map(cat => {
+            const cnt = utilaje.filter(u => u.logistica_categorii?.tip === cat).length
+            return (
+              <button key={cat} onClick={() => setFilterCat(filterCat===cat ? 'all' : cat)}
+                style={{...S.btn, padding:'4px 12px', fontSize:11,
+                  background: filterCat===cat ? G.orange+'33' : G.border2,
+                  color: filterCat===cat ? G.orange : G.muted,
+                  border:`1px solid ${filterCat===cat ? G.orange : G.border}`}}>
+                {cat} ({cnt})
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ─── ALOCĂRI FORMALE ─── */}
+      {alociFilterate.length > 0 && (
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:11, fontWeight:700, color:G.orange, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:8}}>
+            📋 Alocate formal în tură ({alociFilterate.length})
+          </div>
+          <div style={{display:'flex', flexDirection:'column', gap:6}}>
+            {alociFilterate.map(a => {
+              const u = a.logistica_active || {}
+              return (
+                <div key={a.id} style={{
+                  display:'grid', gridTemplateColumns:'1fr auto auto auto', alignItems:'center', gap:12,
+                  padding:'10px 14px', background:G.green+'11',
+                  border:`1px solid ${G.green}44`, borderRadius:8
+                }}>
+                  <div>
+                    <span style={{fontWeight:700, color:G.text, fontSize:13}}>
+                      {u.marca} {u.model}
+                    </span>
+                    {u.nr_inmatriculare && <span style={{color:G.muted, fontSize:11, marginLeft:8}}>{u.nr_inmatriculare}</span>}
+                    {u.cod_intern && <span style={{color:G.dim, fontSize:10, marginLeft:6}}>({u.cod_intern})</span>}
+                  </div>
+                  <span style={{padding:'2px 8px', borderRadius:10, fontSize:10, fontWeight:700, background:G.green+'22', color:G.green}}>
+                    ✅ Alocat
+                  </span>
+                  <div style={{fontSize:10, color:G.muted}}>
+                    {fmtDateShort(a.data_start)} → {fmtDateShort(a.data_end)}
+                  </div>
+                  {(canWrite) && (
+                    <button onClick={() => handleDeleteAlocare(a)}
+                      style={{...S.btn, padding:'3px 8px', fontSize:10, background:G.red+'22', color:G.red, border:`1px solid ${G.red}44`}}>
+                      🗑
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── UTILAJE PE ȘANTIER ─── */}
+      {loading ? (
+        <div style={{padding:30, textAlign:'center', color:G.muted, fontSize:12}}>⏳ Se încarcă utilajele...</div>
+      ) : utilajeFiltrate.length === 0 ? (
+        <div style={{
+          padding:'30px 20px', textAlign:'center', color:G.muted,
+          background:G.surface, border:`1px solid ${G.border}`, borderRadius:10, fontSize:13
+        }}>
+          <div style={{fontSize:32, marginBottom:8}}>🚜</div>
+          Niciun utilaj fizic înregistrat pe șantierul acestui proiect.
+          <div style={{fontSize:11, marginTop:6}}>Utilajele se alocă din modulul Logistică → pagina utilajului → câmpul Șantier.</div>
+        </div>
+      ) : (
+        <>
+          <div style={{fontSize:11, fontWeight:700, color:G.muted, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:8}}>
+            🏗️ Utilaje fizice pe șantier ({utilajeFiltrate.length})
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px,1fr))', gap:10}}>
+            {utilajeFiltrate.map(u => {
+              const uz = utilizareLabel(u)
+              const cat = u.logistica_categorii?.tip || '—'
+              return (
+                <div key={u.id} style={{
+                  background:G.surface, border:`1px solid ${G.border}`,
+                  borderRadius:9, padding:'12px 14px',
+                  borderLeft:`3px solid ${uz.color}`,
+                }}>
+                  <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8, marginBottom:8}}>
+                    <div style={{flex:1, minWidth:0}}>
+                      <div style={{fontWeight:700, color:G.text, fontSize:13, lineHeight:1.2}}>
+                        {u.marca} {u.model}
+                      </div>
+                      <div style={{fontSize:10, color:G.dim, marginTop:2}}>
+                        {u.nr_inmatriculare || u.cod_intern || '—'}
+                        {u.cod_intern && u.nr_inmatriculare && ` · ${u.cod_intern}`}
+                      </div>
+                    </div>
+                    <span style={{
+                      padding:'2px 7px', borderRadius:10, fontSize:9, fontWeight:700,
+                      background: uz.color+'22', color: uz.color, whiteSpace:'nowrap', flexShrink:0
+                    }}>{uz.label}</span>
+                  </div>
+                  <div style={{display:'flex', gap:12, fontSize:10, color:G.muted}}>
+                    <span>📂 {cat}</span>
+                    {u.km_actuali && <span>🛣 {u.km_actuali.toLocaleString('ro-RO')} km</span>}
+                    {u.ore_functionare_actuale && <span>⏱ {Math.round(u.ore_functionare_actuale)} h</span>}
+                  </div>
+                  {canWrite && !alocateIds.has(u.id) && !u.deep_sleep && u.stare !== 'Nefunctional' && (
+                    <button
+                      onClick={() => setEditAlocare({
+                        site_id: siteId, active_id: u.id,
+                        _utilaj_label: `${u.marca} ${u.model} ${u.nr_inmatriculare||u.cod_intern||''}`,
+                        data_start: dataStart, data_end: dataEnd
+                      })}
+                      style={{...S.btn, marginTop:8, width:'100%', padding:'5px', fontSize:11,
+                        background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}44`}}>
+                      + Adaugă în tură
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {/* MODAL ALOCARE UTILAJ */}
+      {editAlocare && (
+        <AlocareUtilajModal
+          item={editAlocare}
+          allUtilaje={allUtilaje}
+          onClose={() => setEditAlocare(null)}
+          onSaved={() => { setEditAlocare(null); loadUtilaje(); show('✓ Utilaj adăugat în tură') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+
+      <Toast />
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL ALOCARE UTILAJ
+// ══════════════════════════════════════════════════════════
+function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
+  const isNew = !item.id
+  const [f, setF] = useState({
+    active_id:   item.active_id || '',
+    site_id:     item.site_id   || '',
+    data_start:  item.data_start || '',
+    data_end:    item.data_end   || '',
+    justificare: item.justificare || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [utilajSearch, setUtilajSearch] = useState(item._utilaj_label || '')
+  const [showList, setShowList] = useState(false)
+
+  const utilajFiltered = useMemo(() => {
+    if (!utilajSearch.trim() || utilajSearch.length < 2) return []
+    const s = utilajSearch.toLowerCase()
+    return allUtilaje.filter(u =>
+      `${u.marca} ${u.model} ${u.nr_inmatriculare||''} ${u.cod_intern||''}`.toLowerCase().includes(s)
+    ).slice(0, 8)
+  }, [utilajSearch, allUtilaje])
+
+  const selectUtilaj = u => {
+    setF(f => ({...f, active_id: u.id}))
+    setUtilajSearch(`${u.marca} ${u.model} ${u.nr_inmatriculare || u.cod_intern || ''}`)
+    setShowList(false)
+  }
+
+  const handleSave = async () => {
+    if (!f.active_id) return onError('Selectează utilajul')
+    if (!f.data_start || !f.data_end) return onError('Completează fereastra turei')
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error } = await supabase.from('logistica_alocari').insert({
+      active_id:   Number(f.active_id),
+      site_id:     Number(f.site_id),
+      status:      'aprobat',
+      data_start:  f.data_start,
+      data_end:    f.data_end,
+      justificare: f.justificare.trim() || 'Alocare tură',
+      solicitata_de: user?.id,
+      aprobata_de:   user?.id,
+      data_cerere:   new Date().toISOString(),
+      data_decizie:  new Date().toISOString(),
+    })
+    setSaving(false)
+    if (error) onError(error.message)
+    else onSaved()
+  }
+
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:24
+    }}>
+      <div style={{
+        background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:480, padding:'22px 26px',
+        boxShadow:'0 20px 60px rgba(0,0,0,.5)'
+      }}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18}}>
+          <div style={{fontSize:16, fontWeight:800, color:G.text}}>
+            🚜 {isNew ? 'Adaugă utilaj în tură' : 'Editează alocare'}
+          </div>
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer'}}>×</button>
+        </div>
+
+        <div style={{display:'flex', flexDirection:'column', gap:14}}>
+          {/* Utilaj autocomplete */}
+          <div style={{position:'relative'}}>
+            <label style={S.lbl}>Utilaj * {f.active_id && <span style={{color:G.green}}>✓</span>}</label>
+            <input value={utilajSearch}
+              onChange={e => { setUtilajSearch(e.target.value); setShowList(true); if(!e.target.value) setF({...f,active_id:''}) }}
+              onFocus={() => setShowList(true)}
+              placeholder="Caută marcă, model, plăcuță, cod intern..."
+              style={S.input} />
+            {showList && utilajFiltered.length > 0 && (
+              <div style={{
+                position:'absolute', top:'100%', left:0, right:0, zIndex:100,
+                background:G.surface, border:`1px solid ${G.border}`, borderRadius:6,
+                boxShadow:'0 8px 24px rgba(0,0,0,.4)', maxHeight:200, overflowY:'auto'
+              }}>
+                {utilajFiltered.map(u => (
+                  <div key={u.id} onClick={() => selectUtilaj(u)}
+                    onMouseDown={ev => ev.preventDefault()}
+                    style={{padding:'9px 14px', cursor:'pointer', borderBottom:`1px solid ${G.border}`}}
+                    onMouseEnter={ev => ev.currentTarget.style.background=G.bg}
+                    onMouseLeave={ev => ev.currentTarget.style.background='transparent'}>
+                    <div style={{fontWeight:600, color:G.text, fontSize:12}}>
+                      {u.marca} {u.model}
+                    </div>
+                    <div style={{fontSize:10, color:G.muted}}>
+                      {u.nr_inmatriculare || u.cod_intern} · {u.logistica_categorii?.tip} · {u.stare}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Fereastră */}
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+            <div>
+              <label style={S.lbl}>Start tură *</label>
+              <input type="date" value={f.data_start} onChange={e => setF({...f,data_start:e.target.value})} style={S.input} />
+            </div>
+            <div>
+              <label style={S.lbl}>End tură *</label>
+              <input type="date" value={f.data_end} onChange={e => setF({...f,data_end:e.target.value})} style={S.input} />
+            </div>
+          </div>
+
+          <div>
+            <label style={S.lbl}>Justificare / Notă</label>
+            <input value={f.justificare} onChange={e => setF({...f,justificare:e.target.value})}
+              style={S.input} placeholder="ex: Excavație tronson 3" />
+          </div>
+
+          <div style={{padding:'8px 12px', background:G.orange+'11', border:`1px solid ${G.orange}44`, borderRadius:6, fontSize:11, color:G.orange}}>
+            ✅ Alocarea se aprobă automat — status „Aprobat" direct.
+          </div>
+
+          <div style={{display:'flex', gap:10}}>
+            <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.text}}>Anulează</button>
+            <button onClick={handleSave} disabled={saving}
+              style={{...S.btn, flex:2, background:saving?G.muted:G.orange, color:'#fff', opacity:saving?0.6:1}}>
+              {saving ? '⏳...' : '🚜 Adaugă în tură'}
             </button>
           </div>
         </div>
