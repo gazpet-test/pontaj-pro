@@ -659,7 +659,7 @@ function Layout({ children }) {
     ...(hasModuleAccess(profile, 'administrativ') ? [{p:'/administrativ',i:'🏢',l:'Administrativ'}] : []),
     { p:'/tichete', i:'🎫', l:'Tichete' },
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
-    ...(isSuperAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
+    ...((isSuperAdmin || profile?.can_modify_employees === true)?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
   ]
   return (
     <div style={S.page}><style>{css}</style>
@@ -6450,13 +6450,13 @@ function AdminPage() {
     ['settings',  '⚙️ Setări'],  // restricted is_owner only
   ]
   const tabs = allTabs.filter(([v]) => {
-    if (v === 'settings' && !isSuperAdmin) return false  // doar is_owner vede Setări
+    if (!isSuperAdmin && !['employees','semnaturi'].includes(v)) return false  // non-owner (can_modify_employees): Angajați + Semnături
     return true
   })
   
   // 25.05.2026: dacă tab-ul curent e restricționat (ex Natalia pe 'settings'), redirect la 'employees'
   useEffect(() => {
-    if (!isSuperAdmin && tab === 'settings') setTab('employees')
+    if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
   }, [isSuperAdmin, tab])
 
   return (
