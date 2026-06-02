@@ -15,6 +15,9 @@ import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere from './TabSantiere.jsx'
+import TabTronsoane from './TabTronsoane.jsx'
+import TabSituatiiPlata from './TabSituatiiPlata.jsx'
+import TabDocumenteNAS from './TabDocumenteNAS.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -55,9 +58,12 @@ const fmtDate = v => {
 const SUB_TABS = [
   { key: 'proiecte',  label: 'Proiecte',     icon: '🗂️',  color: G.executie, active: true,  desc: 'Dashboard proiecte · Termene · Stadiu · Ofertare' },
   { key: 'izometrie', label: 'Izometrie',    icon: '📐',  color: G.purple,   active: true,  desc: 'Pachete lansare · Tronsoane · Cumulat final' },
-  { key: 'santiere',  label: 'Șantiere',     icon: '🏗️', color: G.blue,     active: true, desc: 'Echipe pe tură · Alocare utilaje · Progres activități' },
-  { key: 'devize',    label: 'Devize',       icon: '📋',  color: G.green,    active: false, desc: 'Devize ofertă · Antemăsurători · Estimări' },
-  { key: 'vreme',     label: 'Vreme live',   icon: '☁️',  color: G.yellow,   active: false, desc: 'Prognoză 7 zile · Alerte meteo per șantier' },
+  { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,     active: true,  desc: 'Echipe pe tură · Alocare utilaje · Progres activități' },
+  { key: 'tronsoane',      label: 'Tronsoane',      icon: '📍',  color: G.teal,     active: true,  desc: 'Program execuție · Status per tronson · Suduri · Lungime' },
+  { key: 'situatii_plata', label: 'Situații plată', icon: '💰',  color: G.orange,   active: true,  desc: 'SL1–SL6 · NCS · Facturare · Tracking valori' },
+  { key: 'documente',      label: 'Documente',      icon: '📂',  color: G.purple,   active: true,  desc: 'Arhivă NAS · Propunere tehnică · Corespondență · Calitate' },
+  { key: 'devize',         label: 'Devize',         icon: '📋',  color: G.green,    active: false, desc: 'Devize ofertă · Antemăsurători · Estimări' },
+  { key: 'vreme',          label: 'Vreme live',     icon: '☁️',  color: G.yellow,   active: false, desc: 'Prognoză 7 zile · Alerte meteo per șantier' },
 ]
 
 // ===========================================================================
@@ -151,9 +157,12 @@ export default function ExecutiePage() {
         <PlaceholderTab tab={activeTabDef} />
       ) : (
         <>
-          {tab === 'proiecte'  && <DashboardProiectePage onGoToIzometrie={goToIzometrie} />}
-          {tab === 'izometrie' && <IzometriePage />}
-          {tab === 'santiere'  && <TabSantiere />}
+          {tab === 'proiecte'        && <DashboardProiectePage onGoToIzometrie={goToIzometrie} />}
+          {tab === 'izometrie'       && <IzometriePage />}
+          {tab === 'santiere'        && <TabSantiere />}
+          {tab === 'tronsoane'       && <TabTronsoane />}
+          {tab === 'situatii_plata'  && <TabSituatiiPlata />}
+          {tab === 'documente'       && <TabDocumenteNAS />}
         </>
       )}
     </div>
