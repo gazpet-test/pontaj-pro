@@ -289,11 +289,26 @@ function DashboardProiectePage({ onSelectProiect }) {
   useEffect(() => { loadAll() }, [loadAll])
 
   const isOwner = profile?.is_owner === true
-  const totalProiecte = proiecte.length
-  const proiecteActive = proiecte.filter(p => p.activ).length
-  const totalLungime = proiecte.reduce((acc, p) => acc + parseFloat(p.lungime_totala_m || 0), 0)
-  const totalPachete = proiecte.reduce((acc, p) => acc + (p.nr_pachete || 0), 0)
-  const totalTronsoane = proiecte.reduce((acc, p) => acc + (p.nr_tronsoane || 0), 0)
+  const [alertFilter, setAlertFilter] = useState(null)
+
+  const kpiAlerte = useMemo(() => {
+    const cuTermen = proiecte.filter(p => p.activ && p.data_termen && p.zile_pana_termen !== null)
+    return {
+      total:   proiecte.length,
+      active:  proiecte.filter(p => p.activ).length,
+      depasit: cuTermen.filter(p => p.zile_pana_termen < 0),
+      critic:  cuTermen.filter(p => p.zile_pana_termen >= 0 && p.zile_pana_termen < 30),
+      atentie: cuTermen.filter(p => p.zile_pana_termen >= 30 && p.zile_pana_termen <= 60),
+    }
+  }, [proiecte])
+
+  const proiecteVizibile = useMemo(() => {
+    if (!alertFilter) return proiecte
+    if (alertFilter === 'depasit') return kpiAlerte.depasit
+    if (alertFilter === 'critic')  return kpiAlerte.critic
+    if (alertFilter === 'atentie') return kpiAlerte.atentie
+    return proiecte
+  }, [proiecte, alertFilter, kpiAlerte])
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1400, margin: '0 auto' }}>
@@ -324,30 +339,82 @@ function DashboardProiectePage({ onSelectProiect }) {
         )}
       </div>
 
-      {/* KPI globale */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 28 }}>
-        {[
-          { label: 'Proiecte active', value: `${proiecteActive}/${totalProiecte}`, icon: '📁', color: G.executie },
-          { label: 'Tronsoane total', value: totalTronsoane, icon: '📏', color: G.purple },
-          { label: 'Pachete lansate', value: totalPachete, icon: '📦', color: G.blue },
-          { label: 'Lungime totală', value: fmtM(totalLungime), icon: '📐', color: G.teal },
-        ].map((kpi, i) => (
-          <div key={i} style={{
-            background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10,
-            padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14,
-          }}>
-            <div style={{
-              width: 38, height: 38, borderRadius: 9,
-              background: kpi.color + '22', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 18, flexShrink: 0,
-            }}>{kpi.icon}</div>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: kpi.color, lineHeight: 1 }}>{kpi.value}</div>
-              <div style={{ fontSize: 11, color: G.muted, marginTop: 3 }}>{kpi.label}</div>
-            </div>
+      {/* KPI alerte — clickabile */}
+      {(() => {
+        const KPI = [
+          { id: null,      label: 'Proiecte active',    value: `${kpiAlerte.active}/${kpiAlerte.total}`, icon: '📁', color: G.executie, count: 0 },
+          { id: 'depasit', label: 'Termen depășit',     value: kpiAlerte.depasit.length, icon: '🔴', color: G.red,    count: kpiAlerte.depasit.length },
+          { id: 'critic',  label: 'Critic (< 30 zile)', value: kpiAlerte.critic.length,  icon: '🟠', color: G.orange, count: kpiAlerte.critic.length  },
+          { id: 'atentie', label: 'Atenție (30–60 zile)',value: kpiAlerte.atentie.length, icon: '🟡', color: G.yellow, count: kpiAlerte.atentie.length },
+        ]
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: alertFilter ? 12 : 28 }}>
+            {KPI.map(kpi => {
+              const isActive = alertFilter === kpi.id
+              const clickable = kpi.id !== null && kpi.count > 0
+              return (
+                <div key={kpi.id || 'active'}
+                  onClick={() => clickable && setAlertFilter(isActive ? null : kpi.id)}
+                  style={{
+                    background: isActive ? kpi.color + '1A' : G.surface,
+                    border: `${isActive ? 2 : 1}px solid ${isActive ? kpi.color : kpi.count > 0 && kpi.id ? kpi.color + '55' : G.border}`,
+                    borderRadius: 10, padding: '16px 18px',
+                    display: 'flex', alignItems: 'center', gap: 14,
+                    cursor: clickable ? 'pointer' : 'default',
+                    transition: 'all .15s ease', position: 'relative',
+                  }}
+                  onMouseEnter={e => { if (clickable && !isActive) e.currentTarget.style.transform = 'translateY(-1px)' }}
+                  onMouseLeave={e => { if (clickable) e.currentTarget.style.transform = 'none' }}
+                >
+                  {/* Dot pulsant pentru depășit */}
+                  {kpi.id === 'depasit' && kpi.count > 0 && (
+                    <div style={{
+                      position: 'absolute', top: 10, right: 10,
+                      width: 8, height: 8, borderRadius: '50%',
+                      background: G.red, boxShadow: `0 0 0 3px ${G.red}44`,
+                    }} />
+                  )}
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 9,
+                    background: kpi.color + '22',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 20, flexShrink: 0,
+                  }}>{kpi.icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: kpi.count > 0 && kpi.id ? kpi.color : kpi.id ? G.muted : kpi.color, lineHeight: 1 }}>{kpi.value}</div>
+                    <div style={{ fontSize: 11, color: G.muted, marginTop: 3 }}>{kpi.label}</div>
+                  </div>
+                  {clickable && (
+                    <div style={{ fontSize: 9, color: isActive ? kpi.color : G.dim, fontWeight: 700, textAlign: 'right', textTransform: 'uppercase', letterSpacing: '.3px', lineHeight: 1.4 }}>
+                      {isActive ? '✕ Reset' : '↗ Filtru'}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
-        ))}
-      </div>
+        )
+      })()}
+
+      {/* Banner filtru activ */}
+      {alertFilter && (
+        <div style={{
+          background: (alertFilter === 'depasit' ? G.red : alertFilter === 'critic' ? G.orange : G.yellow) + '12',
+          border: `1px solid ${(alertFilter === 'depasit' ? G.red : alertFilter === 'critic' ? G.orange : G.yellow)}40`,
+          borderRadius: 8, padding: '10px 16px', marginBottom: 20,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: alertFilter === 'depasit' ? G.red : alertFilter === 'critic' ? G.orange : G.yellow }}>
+            {alertFilter === 'depasit' && `🔴 ${kpiAlerte.depasit.length} proiecte cu termenul DEPĂȘIT`}
+            {alertFilter === 'critic'  && `🟠 ${kpiAlerte.critic.length} proiecte CRITICE (mai puțin de 30 zile)`}
+            {alertFilter === 'atentie' && `🟡 ${kpiAlerte.atentie.length} proiecte cu ATENȚIE (30–60 zile)`}
+          </span>
+          <button onClick={() => setAlertFilter(null)} style={{
+            background: 'transparent', border: 'none', color: G.muted,
+            cursor: 'pointer', fontSize: 16, padding: '0 4px',
+          }}>✕ Toate proiectele</button>
+        </div>
+      )}
 
       {/* Carduri proiecte */}
       {loading ? (
@@ -355,15 +422,17 @@ function DashboardProiectePage({ onSelectProiect }) {
           <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
           <div>Se încarcă proiectele...</div>
         </div>
-      ) : proiecte.length === 0 ? (
+      ) : proiecteVizibile.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px 0', color: G.muted }}>
           <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }}>📁</div>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Niciun proiect înregistrat</div>
-          {isOwner && <div style={{ fontSize: 13 }}>Apasă „＋ Proiect nou" pentru a adăuga primul proiect.</div>}
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
+            {alertFilter ? 'Niciun proiect pentru filtrul selectat' : 'Niciun proiect înregistrat'}
+          </div>
+          {isOwner && !alertFilter && <div style={{ fontSize: 13 }}>Apasă „＋ Proiect nou" pentru a adăuga primul proiect.</div>}
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(520px, 1fr))', gap: 20 }}>
-          {proiecte.map(p => (
+          {proiecteVizibile.map(p => (
             <ProiectCard
               key={p.id}
               proiect={p}
