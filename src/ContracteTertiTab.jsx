@@ -2,14 +2,10 @@
 // ContracteTertiTab.jsx — Sub-tab Administrativ „Contracte cu terți"
 // v3 LIVE 02.06.2026 — Extensie: categorii + sens + partener liber
 //                       + acte adiționale + acces can_manage_contracts
-//
-// Features (v3 cumulat față de v2):
-// - 3 sub-tab-uri: 🏢 Beneficiari + 📃 Contracte + 📎 Acte Adiționale
-// - Câmpuri noi: categorie (executie/prestari/paza/altele) + sens (incasare/plata)
-//               + partener_text (furnizori ad-hoc fără beneficiar_id)
-// - Acces extins: is_owner SAU can_manage_contracts (Alexandra Curca)
-// - Filtre contracte: categorie + sens
-// - Inline acte adiționale expandable per contract
+// v4 03.06.2026 — Drag & drop PDF + link la Proiect Execuție
+//   • Zona PDF: drag & drop + highlight vizual
+//   • Câmp „Proiect Execuție asociat" (vizibil când categorie=executie)
+//   • La salvare: UPDATE executie_proiecte.contract_id + sync date
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
@@ -557,6 +553,33 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   const [aiLoading, setAiLoading] = useState(false)
   // Mod partener: 'beneficiar' (din lista) sau 'text' (ad-hoc)
   const [partenerMode, setPartenerMode] = useState(item.partener_text ? 'text' : 'beneficiar')
+  // Drag & drop PDF
+  const [dragOver, setDragOver] = useState(false)
+  // Link la Proiect Execuție
+  const [proiecteExec, setProiecteExec]   = useState([])
+  const [proiectExecId, setProiectExecId] = useState('')
+
+  // Încarcă proiectele execuție + detectează linkul curent
+  useEffect(() => {
+    const loadProiecte = async () => {
+      const { data } = await supabase
+        .from('executie_proiecte')
+        .select('id, cod_intern, nume')
+        .eq('activ', true)
+        .order('cod_intern')
+      setProiecteExec(data || [])
+      // Detectez proiectul legat de contractul curent (dacă e edit)
+      if (!isNew && item.id) {
+        const { data: linked } = await supabase
+          .from('executie_proiecte')
+          .select('id')
+          .eq('contract_id', item.id)
+          .maybeSingle()
+        if (linked?.id) setProiectExecId(String(linked.id))
+      }
+    }
+    loadProiecte()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleUpload = async file => {
     if (!file) return
@@ -569,6 +592,12 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     setUploading(false)
     if (error) return onError(`Upload eșuat: ${error.message}`)
     setF({...f, pdf_path: path})
+  }
+
+  const handleDrop = e => {
+    e.preventDefault(); setDragOver(false)
+    const file = e.dataTransfer?.files?.[0]
+    if (file) handleUpload(file)
   }
 
   const handleSaveAndAi = async (alsoAi = false) => {
@@ -604,6 +633,29 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       if (error) { setSaving(false); return onError(error.message) }
     }
     setSaving(false)
+
+    // ─── Sincronizare cu Proiect Execuție ────────────────────────────────
+    if (f.categorie === 'executie' && proiectExecId) {
+      // Dezleagă eventualul proiect anterior (dacă s-a schimbat selecția)
+      await supabase.from('executie_proiecte')
+        .update({ contract_id: null })
+        .eq('contract_id', contractId)
+        .neq('id', Number(proiectExecId))
+      // Leagă proiectul selectat + sync date esențiale
+      await supabase.from('executie_proiecte').update({
+        contract_id:   contractId,
+        nr_contract:   f.numar_contract.trim() || null,
+        data_contract: f.data_semnare || null,
+        valoare_lei:   f.valoare_lei ? Number(f.valoare_lei) : null,
+        valoare_eur:   f.valoare_eur ? Number(f.valoare_eur) : null,
+      }).eq('id', Number(proiectExecId))
+    } else if (f.categorie === 'executie' && !proiectExecId && !isNew) {
+      // Dacă a fost golit câmpul → dezleagă
+      await supabase.from('executie_proiecte')
+        .update({ contract_id: null })
+        .eq('contract_id', contractId)
+    }
+
     if (alsoAi && f.pdf_path) {
       setAiLoading(true)
       const { data: { session } } = await supabase.auth.getSession()
@@ -723,9 +775,47 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           <textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} />
         </div>
 
-        {/* PDF Upload */}
-        <div style={{padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:8}}>
-          <div style={{fontSize:12, fontWeight:700, color:G.muted, marginBottom:8}}>📄 PDF Contract</div>
+        {/* ── Proiect Execuție asociat (vizibil doar pentru categorie=executie) ── */}
+        {f.categorie === 'executie' && (
+          <div style={{padding:12, background:G.surface, border:`1px solid ${G.blue}33`, borderRadius:8}}>
+            <label style={{...S.lbl, color:G.blue}}>🔗 Proiect Execuție asociat</label>
+            <select
+              value={proiectExecId}
+              onChange={e => setProiectExecId(e.target.value)}
+              style={S.input}
+            >
+              <option value="">— Neselectat —</option>
+              {proiecteExec.map(p => (
+                <option key={p.id} value={p.id}>{p.cod_intern} · {p.nume?.slice(0, 55)}</option>
+              ))}
+            </select>
+            {proiectExecId ? (
+              <div style={{fontSize:11, color:G.blue, marginTop:6, display:'flex', alignItems:'center', gap:6}}>
+                <span>✓</span> La salvare: nr. contract, valoare și data semnare se vor sincroniza automat în proiect.
+              </div>
+            ) : (
+              <div style={{fontSize:11, color:G.dim, marginTop:6}}>
+                Selectează proiectul pentru a sincroniza datele contractuale.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PDF Upload cu Drag & Drop ──────────────────────────────────── */}
+        <div
+          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+          onDragEnter={e => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          style={{
+            padding:14, background:G.bg,
+            border:`2px dashed ${dragOver ? G.blue : f.pdf_path ? G.green + '88' : G.border2}`,
+            borderRadius:8, transition:'border-color .15s ease',
+            outline: dragOver ? `1px solid ${G.blue}44` : 'none',
+          }}>
+          <div style={{fontSize:12, fontWeight:700, color: dragOver ? G.blue : G.muted, marginBottom:8}}>
+            📄 PDF Contract {dragOver && <span style={{fontWeight:400, color:G.blue}}>· Eliberați pentru upload</span>}
+          </div>
           {f.pdf_path ? (
             <div style={{display:'flex', alignItems:'center', gap:10}}>
               <span style={{fontSize:22}}>📄</span>
@@ -737,8 +827,17 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             </div>
           ) : (
             <div>
-              <input type="file" accept="application/pdf" onChange={e => handleUpload(e.target.files?.[0])} disabled={uploading} style={{fontSize:12, color:G.muted}} />
-              <div style={{fontSize:11, color:G.dim, marginTop:6}}>{uploading ? '⏳ Upload...' : 'Max 20MB · PDF · stocat privat'}</div>
+              <label style={{
+                display:'inline-flex', alignItems:'center', gap:8, cursor:'pointer',
+                padding:'8px 16px', background: G.surface, border:`1px solid ${G.border2}`,
+                borderRadius:7, fontSize:13, color:G.text, fontWeight:600,
+              }}>
+                📎 Alege fișier
+                <input type="file" accept="application/pdf" onChange={e => handleUpload(e.target.files?.[0])} disabled={uploading} style={{display:'none'}} />
+              </label>
+              <span style={{fontSize:11, color:G.dim, marginLeft:12}}>
+                {uploading ? '⏳ Upload...' : 'sau trage PDF-ul direct aici · Max 20MB'}
+              </span>
             </div>
           )}
         </div>
