@@ -7,6 +7,9 @@
 //   • /executie              → Dashboard proiecte (carduri click-to-open)
 //   • /executie?proiect=X    → Context proiect (breadcrumb + sub-tab-uri)
 //   • /executie?proiect=X&tab=santiere|tronsoane|situatii_plata|izometrie|documente
+// 03.06.2026 — ProiectEditModal: nr_contract, data_contract, Ordin de începere
+//              Secțiune „Documente anexă la contract" cu upload/download
+//              Tabel executie_documente_contract + bucket executie-contracte
 // ===========================================================================
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
@@ -547,7 +550,7 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
       <div style={{ padding: '14px 20px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
           <div>
-            <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>Start</div>
+            <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>Ord. Înc.</div>
             <div style={{ fontSize: 13, fontWeight: 600, color: G.text }}>{fmtDate(p.data_start)}</div>
           </div>
           <div>
@@ -654,12 +657,12 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
         <div style={{ padding: '20px 24px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
             {[
-              { label: 'Data start', value: fmtDate(p.data_start) },
+              { label: 'Ordin de începere', value: fmtDate(p.data_start) },
               { label: 'Termen finalizare', value: fmtDate(p.data_termen) },
               { label: 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
               { label: 'Valoare ofertă', value: p.oferta_valoare ? fmtLei(p.oferta_valoare) : '—' },
-              { label: 'Nr. contract', value: p.numar_contract || '—' },
-              { label: 'Data semnare', value: fmtDate(p.contract_data_semnare) },
+              { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
+              { label: 'Data semnare', value: fmtDate(p.data_contract || p.contract_data_semnare) },
               { label: 'Status contract', value: p.contract_status || '—' },
               { label: 'Termen contractual', value: p.contract_zile ? `${p.contract_zile} zile` : '—' },
             ].map((row, i) => (
@@ -743,29 +746,66 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
 }
 
 // ===========================================================================
+// TIPURI DOCUMENTE ANEXĂ CONTRACT
+// ===========================================================================
+const TIPURI_DOC_CONTRACT = [
+  { value: 'contract',           label: '📜 Contract principal' },
+  { value: 'act_aditional',      label: '➕ Act adițional' },
+  { value: 'garantie_exec',      label: '🏦 Garanție bună execuție' },
+  { value: 'garantie_eliberare', label: '🔓 Eliberare garanție' },
+  { value: 'ordin_incepere',     label: '🚦 Ordin de începere' },
+  { value: 'autorizatie',        label: '📋 Autorizație construcție' },
+  { value: 'aviz',               label: '📌 Aviz de amplasament' },
+  { value: 'grafic',             label: '📅 Grafic de execuție' },
+  { value: 'protocol_receptie',  label: '✅ Protocol recepție' },
+  { value: 'altele',             label: '📎 Altele' },
+]
+const BUCKET_CONTRACTE = 'executie-contracte'
+
+// ===========================================================================
 // PROIECT EDIT MODAL (owner-only)
 // ===========================================================================
 function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const isNew = proiect._isNew === true
   const [form, setForm] = useState({
-    cod_intern:  proiect.cod_intern  || '',
-    nume:        proiect.nume        || '',
-    beneficiar:  proiect.beneficiar  || '',
-    observatii:  proiect.observatii  || '',
-    data_start:  proiect.data_start  || '',
-    data_termen: proiect.data_termen || '',
-    valoare_lei: proiect.valoare_lei || '',
-    valoare_eur: proiect.valoare_eur || '',
-    site_id:     proiect.site_id     || '',
-    activ:       proiect.activ !== false,
+    cod_intern:    proiect.cod_intern    || '',
+    nume:          proiect.nume          || '',
+    beneficiar:    proiect.beneficiar    || '',
+    observatii:    proiect.observatii    || '',
+    nr_contract:   proiect.nr_contract   || '',
+    data_contract: proiect.data_contract || '',
+    data_start:    proiect.data_start    || '',
+    data_termen:   proiect.data_termen   || '',
+    valoare_lei:   proiect.valoare_lei   || '',
+    valoare_eur:   proiect.valoare_eur   || '',
+    site_id:       proiect.site_id       || '',
+    activ:         proiect.activ !== false,
   })
   const [sites, setSites] = useState([])
   const [saving, setSaving] = useState(false)
 
+  // ─── Documente anexă contract ────────────────────────────────────────────
+  const [docsContract, setDocsContract]   = useState([])
+  const [uploadingDoc, setUploadingDoc]   = useState(false)
+  const [uploadTip, setUploadTip]         = useState('contract')
+  const fileInputRef = useState(null)
+
+  const loadDocs = async () => {
+    if (isNew) return
+    const { data } = await supabase
+      .from('executie_documente_contract')
+      .select('*')
+      .eq('proiect_id', proiect.id)
+      .eq('activ', true)
+      .order('uploadat_la', { ascending: false })
+    setDocsContract(data || [])
+  }
+
   useEffect(() => {
     supabase.from('sites').select('id, name').eq('active', true).order('name')
       .then(({ data }) => setSites(data || []))
-  }, [])
+    loadDocs()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -776,17 +816,19 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     setSaving(true)
     try {
       const payload = {
-        cod_intern:  form.cod_intern.trim(),
-        nume:        form.nume.trim(),
-        beneficiar:  form.beneficiar.trim() || null,
-        observatii:  form.observatii.trim() || null,
-        data_start:  form.data_start || null,
-        data_termen: form.data_termen || null,
-        valoare_lei: form.valoare_lei ? parseFloat(form.valoare_lei) : null,
-        valoare_eur: form.valoare_eur ? parseFloat(form.valoare_eur) : null,
-        site_id:     form.site_id ? parseInt(form.site_id) : null,
-        activ:       form.activ,
-        updated_at:  new Date().toISOString(),
+        cod_intern:    form.cod_intern.trim(),
+        nume:          form.nume.trim(),
+        beneficiar:    form.beneficiar.trim() || null,
+        observatii:    form.observatii.trim() || null,
+        nr_contract:   form.nr_contract.trim() || null,
+        data_contract: form.data_contract || null,
+        data_start:    form.data_start || null,
+        data_termen:   form.data_termen || null,
+        valoare_lei:   form.valoare_lei ? parseFloat(form.valoare_lei) : null,
+        valoare_eur:   form.valoare_eur ? parseFloat(form.valoare_eur) : null,
+        site_id:       form.site_id ? parseInt(form.site_id) : null,
+        activ:         form.activ,
+        updated_at:    new Date().toISOString(),
       }
       let error
       if (isNew) {
@@ -806,6 +848,51 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     }
   }
 
+  // ─── Upload document ──────────────────────────────────────────────────────
+  const handleUploadDoc = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploadingDoc(true)
+    try {
+      const safeName = file.name.replace(/\s+/g, '_')
+      const path = `${proiect.id}/${uploadTip}/${Date.now()}_${safeName}`
+      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file)
+      if (upErr) throw upErr
+      const { data: { user } } = await supabase.auth.getUser()
+      const { error: insErr } = await supabase.from('executie_documente_contract').insert({
+        proiect_id:       proiect.id,
+        tip_document:     uploadTip,
+        fisier_path:      path,
+        fisier_nume:      file.name,
+        fisier_size_bytes: file.size,
+        fisier_mime:      file.type || 'application/pdf',
+        uploadat_de:      user?.id,
+      })
+      if (insErr) throw insErr
+      showToast('Document adăugat!', 'success')
+      loadDocs()
+    } catch(e) {
+      showToast('Eroare upload: ' + e.message, 'error')
+    } finally {
+      setUploadingDoc(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleOpenDoc = async (path) => {
+    const { data } = await supabase.storage.from(BUCKET_CONTRACTE).createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+    else showToast('Eroare la deschidere URL', 'error')
+  }
+
+  const handleDeleteDoc = async (doc) => {
+    if (!confirm(`Ștergi "${doc.fisier_nume}"? (ireversibil)`)) return
+    await supabase.storage.from(BUCKET_CONTRACTE).remove([doc.fisier_path])
+    await supabase.from('executie_documente_contract').update({ activ: false }).eq('id', doc.id)
+    showToast('Document șters', 'success')
+    loadDocs()
+  }
+
   const fieldStyle = {
     width: '100%', boxSizing: 'border-box',
     background: G.bg, border: `1px solid ${G.border}`, borderRadius: 7,
@@ -815,6 +902,10 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     fontSize: 11, color: G.muted, textTransform: 'uppercase',
     letterSpacing: '.5px', marginBottom: 5, display: 'block',
   }
+  const secTitle = {
+    fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase',
+    letterSpacing: '.6px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6,
+  }
 
   return (
     <div style={{
@@ -823,14 +914,18 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     }} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{
         background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14,
-        width: '100%', maxWidth: 580, maxHeight: '85vh', overflow: 'auto',
+        width: '100%', maxWidth: 600, maxHeight: '90vh', overflow: 'auto',
       }}>
-        <div style={{ padding: '18px 24px', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        {/* Header modal */}
+        <div style={{ padding: '18px 24px', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, background: G.surface, zIndex: 1 }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{isNew ? '＋ Proiect nou' : `✏️ Editează: ${proiect.cod_intern}`}</div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: G.muted, fontSize: 22, cursor: 'pointer' }}>×</button>
         </div>
 
-        <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* ── Identificare proiect ─────────────────────────────────────── */}
+          <div style={secTitle}><span>📁</span> Identificare</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Cod intern *</label>
@@ -855,17 +950,42 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             </select>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div>
-              <label style={labelStyle}>Data start</label>
-              <input type="date" value={form.data_start} onChange={e => set('data_start', e.target.value)} style={fieldStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Termen finalizare</label>
-              <input type="date" value={form.data_termen} onChange={e => set('data_termen', e.target.value)} style={fieldStyle} />
+          {/* ── Date contractuale ───────────────────────────────────────── */}
+          <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 14 }}>
+            <div style={secTitle}><span>📑</span> Contract</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={labelStyle}>Nr. contract</label>
+                <input
+                  value={form.nr_contract}
+                  onChange={e => set('nr_contract', e.target.value)}
+                  style={fieldStyle}
+                  placeholder="ex: 30/CTG1/2025"
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>Data semnare contract</label>
+                <input type="date" value={form.data_contract} onChange={e => set('data_contract', e.target.value)} style={fieldStyle} />
+              </div>
             </div>
           </div>
 
+          {/* ── Termene ─────────────────────────────────────────────────── */}
+          <div>
+            <div style={secTitle}><span>📅</span> Termene</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={labelStyle}>Ordin de începere</label>
+                <input type="date" value={form.data_start} onChange={e => set('data_start', e.target.value)} style={fieldStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Termen finalizare</label>
+                <input type="date" value={form.data_termen} onChange={e => set('data_termen', e.target.value)} style={fieldStyle} />
+              </div>
+            </div>
+          </div>
+
+          {/* ── Valori ──────────────────────────────────────────────────── */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Valoare contract (RON)</label>
@@ -877,10 +997,11 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             </div>
           </div>
 
+          {/* ── Observații ──────────────────────────────────────────────── */}
           <div>
             <label style={labelStyle}>Observații</label>
             <textarea value={form.observatii} onChange={e => set('observatii', e.target.value)}
-              style={{ ...fieldStyle, resize: 'vertical', minHeight: 70 }}
+              style={{ ...fieldStyle, resize: 'vertical', minHeight: 60 }}
               placeholder="Notițe suplimentare despre proiect..." />
           </div>
 
@@ -888,11 +1009,113 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             <input type="checkbox" checked={form.activ} onChange={e => set('activ', e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
             <span style={{ fontSize: 13, color: G.text, fontWeight: 600 }}>Proiect activ</span>
           </label>
+
+          {/* ── Documente anexă la contract ─────────────────────────────── */}
+          <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 14 }}>
+            <div style={{ ...secTitle, marginBottom: 12 }}>
+              <span>📎</span> Documente anexă la contract
+              {!isNew && docsContract.length > 0 && (
+                <span style={{ marginLeft: 4, background: G.executie + '22', color: G.executie, borderRadius: 10, padding: '1px 8px', fontSize: 10, fontWeight: 700 }}>
+                  {docsContract.length}
+                </span>
+              )}
+            </div>
+
+            {isNew ? (
+              <div style={{
+                background: G.card2, border: `1px dashed ${G.border}`, borderRadius: 8,
+                padding: '14px 16px', fontSize: 12, color: G.muted, textAlign: 'center',
+              }}>
+                💾 Salvați proiectul mai întâi, apoi adăugați documentele contractuale.
+              </div>
+            ) : (
+              <>
+                {/* Bar upload */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+                  <select
+                    value={uploadTip}
+                    onChange={e => setUploadTip(e.target.value)}
+                    style={{ ...fieldStyle, flex: 1 }}
+                  >
+                    {TIPURI_DOC_CONTRACT.map(t => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                  <label style={{
+                    padding: '9px 16px', background: uploadingDoc ? G.muted : G.executie,
+                    border: 'none', borderRadius: 7, color: '#0D1117', fontSize: 13,
+                    cursor: uploadingDoc ? 'not-allowed' : 'pointer', fontWeight: 700,
+                    whiteSpace: 'nowrap', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
+                    opacity: uploadingDoc ? 0.65 : 1,
+                  }}>
+                    {uploadingDoc ? '⏳ Upload...' : '📎 Adaugă'}
+                    <input
+                      type="file"
+                      accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.xls,.xlsx"
+                      onChange={handleUploadDoc}
+                      disabled={uploadingDoc}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                </div>
+
+                {/* Lista documente */}
+                {docsContract.length === 0 ? (
+                  <div style={{
+                    background: G.card2, borderRadius: 8, padding: '12px 14px',
+                    fontSize: 12, color: G.dim, textAlign: 'center', fontStyle: 'italic',
+                  }}>
+                    Niciun document adăugat încă.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
+                    {docsContract.map(doc => {
+                      const tipLabel = TIPURI_DOC_CONTRACT.find(t => t.value === doc.tip_document)?.label || doc.tip_document
+                      const sizeKB = doc.fisier_size_bytes ? ` · ${(doc.fisier_size_bytes / 1024).toFixed(0)} KB` : ''
+                      return (
+                        <div key={doc.id} style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          background: G.card2, borderRadius: 8, padding: '9px 12px',
+                          border: `1px solid ${G.border}`,
+                        }}>
+                          <span style={{ fontSize: 20, flexShrink: 0 }}>📄</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: G.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {doc.fisier_nume}
+                            </div>
+                            <div style={{ fontSize: 10, color: G.muted, marginTop: 2 }}>
+                              {tipLabel}{sizeKB}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleOpenDoc(doc.fisier_path)}
+                            style={{
+                              background: G.executie + '22', border: `1px solid ${G.executie}44`,
+                              borderRadius: 6, color: G.executie, fontSize: 11,
+                              cursor: 'pointer', padding: '4px 10px', fontWeight: 600, flexShrink: 0,
+                            }}>📂</button>
+                          <button
+                            onClick={() => handleDeleteDoc(doc)}
+                            style={{
+                              background: 'transparent', border: 'none', color: G.red,
+                              fontSize: 16, cursor: 'pointer', padding: '2px 4px', flexShrink: 0,
+                            }}>🗑</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
         </div>
 
+        {/* Footer */}
         <div style={{
           padding: '14px 24px', borderTop: `1px solid ${G.border}`,
           display: 'flex', gap: 10, justifyContent: 'flex-end', background: G.bg,
+          position: 'sticky', bottom: 0,
         }}>
           <button onClick={onClose} style={{ padding: '9px 18px', background: G.border, border: 'none', borderRadius: 7, color: G.text, fontSize: 13, cursor: 'pointer' }}>Anulează</button>
           <button onClick={handleSave} disabled={saving} style={{
