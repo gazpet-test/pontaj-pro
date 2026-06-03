@@ -91,6 +91,14 @@ def main():
     hash_list = list(h2p.keys())
     print(f"   Proiecte linkate: {len(hash_list)}\n")
 
+    # Filtru optional pe un singur proiect (ex: PROIECT_HASH=abc PROIECT_ID=1 python scanner_ai.py)
+    ph = os.environ.get('PROIECT_HASH', '')
+    pi = os.environ.get('PROIECT_ID', '')
+    if ph and pi:
+        h2p = {ph: int(pi)}
+        hash_list = [ph]
+        print(f"   Filtru proiect: ID={pi} hash={ph[:8]}...\n")
+
     if not hash_list:
         print("Niciun proiect linkat. Stop."); return
 
