@@ -12,6 +12,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { useNavigate } from 'react-router-dom'
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -393,6 +394,15 @@ export default function TabSituatiiPlata({ proiectId: proiectIdProp }) {
   // Valoarea totala e vizibila doar pentru cei cu acces salarii sau owner
   const showValori = isOwner || profile?.can_access_salarii
 
+  const nav = useNavigate()
+  // SL fără factură pentru proiectul curent
+  const [slFaraFactura, setSlFaraFactura] = useState([])
+  useEffect(() => {
+    if (!proiectId) return
+    supabase.from('v_sl_fara_factura').select('id,nr_situatie,luna,an').eq('proiect_id', proiectId)
+      .then(({ data }) => setSlFaraFactura(data || []))
+  }, [proiectId, lista]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const kpi = useMemo(() => {
     const sitPlata  = lista.filter(s=>s.tip==='situatie_plata')
     const totalBaza = lista.reduce((a,s)=>a+(parseFloat(s.valoare_baza_lei)||0),0)
@@ -422,6 +432,30 @@ export default function TabSituatiiPlata({ proiectId: proiectIdProp }) {
   return (
     <div style={{padding:'24px 28px', maxWidth:1400, margin:'0 auto'}}>
       <Toast />
+
+      {/* ─── ALERTĂ SL fără factură ─── */}
+      {slFaraFactura.length > 0 && (
+        <div style={{
+          background:G.orange+'0D', border:`1px solid ${G.orange}44`,
+          borderRadius:8, padding:'10px 14px', marginBottom:16,
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap',
+        }}>
+          <div style={{display:'flex',alignItems:'center',gap:8,fontSize:13}}>
+            <span style={{color:G.orange}}>📄</span>
+            <span style={{color:G.orange,fontWeight:700}}>
+              {slFaraFactura.length === 1
+                ? `${slFaraFactura[0].nr_situatie} (${LUNI[(slFaraFactura[0].luna||1)-1]} ${slFaraFactura[0].an}) nu are factură emisă`
+                : `${slFaraFactura.length} situații fără factură: ${slFaraFactura.map(s=>s.nr_situatie).join(', ')}`}
+            </span>
+          </div>
+          <button onClick={() => nav('/financiar')} style={{
+            padding:'6px 14px', background:G.orange, border:'none',
+            borderRadius:7, color:'#0D1117', fontSize:12, cursor:'pointer', fontWeight:700, flexShrink:0,
+          }}>
+            💰 Emite în Financiar →
+          </button>
+        </div>
+      )}
 
       {/* ─── HEADER ─── */}
       <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:20, gap:16, flexWrap:'wrap'}}>

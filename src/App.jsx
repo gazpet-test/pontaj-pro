@@ -18,6 +18,7 @@ import CTCPage from './CTC.jsx'
 import MagaziePage from './Magazie.jsx'
 // ════════════ Modul Execuție (Izometrie - Pachete lansare țeavă, 20.05.2026) ════════════
 import ExecutiePage from './Executie.jsx'
+import FinanciarPage from './Financiar.jsx'
 // ════════════ QR Utilaje (27.05.2026) ════════════
 import QrUtilajPage from './QrUtilajPage.jsx'
 
@@ -659,7 +660,7 @@ function Layout({ children }) {
     ...(hasModuleAccess(profile, 'administrativ') ? [{p:'/administrativ',i:'🏢',l:'Administrativ'}] : []),
     { p:'/tichete', i:'🎫', l:'Tichete' },
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
-    ...((isSuperAdmin || profile?.can_modify_employees === true)?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
+    ...(isSuperAdmin?[{p:'/admin',i:'⚙️',l:'Admin'}]:[]),
   ]
   return (
     <div style={S.page}><style>{css}</style>
@@ -776,7 +777,7 @@ function HomeDashboard() {
 
   const allModules = [
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
-    { path:null,        icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi · Cash flow · Bugete',     active:false },
+    { path:'/financiar', icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi emise · Generator · Email · NAS', active:true },
     { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
     { path:'/ofertare', icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:true, requireModule:'ofertare' },
     { path:'/magazie',  icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:true, requireModule:'magazie' },
@@ -6450,13 +6451,13 @@ function AdminPage() {
     ['settings',  '⚙️ Setări'],  // restricted is_owner only
   ]
   const tabs = allTabs.filter(([v]) => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(v)) return false  // non-owner (can_modify_employees): Angajați + Semnături
+    if (v === 'settings' && !isSuperAdmin) return false  // doar is_owner vede Setări
     return true
   })
   
   // 25.05.2026: dacă tab-ul curent e restricționat (ex Natalia pe 'settings'), redirect la 'employees'
   useEffect(() => {
-    if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
+    if (!isSuperAdmin && tab === 'settings') setTab('employees')
   }, [isSuperAdmin, tab])
 
   return (
@@ -7904,6 +7905,7 @@ export default function App() {
         <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
         <Route path="/executie" element={<ProtectedRoute><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
+        <Route path="/financiar" element={<ProtectedRoute><Layout><FinanciarPage/></Layout></ProtectedRoute>}/>
         <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
         {/* ════════════ Etapa 15 Faza 1: Routes module Comercial ════════════ */}
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
