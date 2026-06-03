@@ -510,12 +510,20 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
               {p.nume}
             </div>
           </div>
-          <div style={{
-            padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-            background: p.activ ? G.green + '22' : G.border,
-            color: p.activ ? G.green : G.muted, flexShrink: 0,
-          }}>
-            {p.activ ? '● Activ' : '○ Inactiv'}
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+            {p.este_sistat && (
+              <div style={{
+                padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                background: G.yellow + '22', color: G.yellow,
+              }}>💤 Sistat</div>
+            )}
+            <div style={{
+              padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: p.activ ? G.green + '22' : G.border,
+              color: p.activ ? G.green : G.muted,
+            }}>
+              {p.activ ? '● Activ' : '○ Inactiv'}
+            </div>
           </div>
         </div>
         <div style={{ fontSize: 12, color: G.muted, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -555,14 +563,34 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
           </div>
           <div>
             <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>Termen</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: terminStatus?.color || G.text }}>{fmtDate(p.data_termen)}</div>
-            {terminStatus && (
-              <div style={{
-                display: 'inline-block', marginTop: 3,
-                padding: '1px 6px', borderRadius: 4,
-                fontSize: 10, fontWeight: 600,
-                color: terminStatus.color, background: terminStatus.bg,
-              }}>{terminStatus.label}</div>
+            {p.este_sistat ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 600, color: G.yellow }}>
+                  {p.data_ultima_sistare ? fmtDate(p.data_ultima_sistare) : fmtDate(p.data_termen)}
+                </div>
+                <div style={{ display:'inline-block', marginTop:3, padding:'1px 6px', borderRadius:4, fontSize:10, fontWeight:600, color: G.yellow, background: G.yellow + '22' }}>
+                  ⏸ Sistat din ordin
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 600, color: terminStatus?.color || G.text }}>
+                  {fmtDate(p.data_termen)}
+                  {(p.prelungire_totala_luni > 0) && (
+                    <span style={{ marginLeft: 6, fontSize: 10, background: G.blue + '22', color: G.blue, borderRadius: 8, padding:'1px 6px' }}>
+                      +{p.prelungire_totala_luni}L AA
+                    </span>
+                  )}
+                </div>
+                {terminStatus && (
+                  <div style={{
+                    display: 'inline-block', marginTop: 3,
+                    padding: '1px 6px', borderRadius: 4,
+                    fontSize: 10, fontWeight: 600,
+                    color: terminStatus.color, background: terminStatus.bg,
+                  }}>{terminStatus.label}</div>
+                )}
+              </>
             )}
           </div>
           <div>
@@ -571,7 +599,7 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
               <>
                 <div style={{ fontSize: 13, fontWeight: 700, color: pctColor }}>{pct}%</div>
                 <div style={{ height: 4, background: G.border, borderRadius: 2, marginTop: 4 }}>
-                  <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, pct))}%`, borderRadius: 2, background: pctColor, transition: 'width .5s' }} />
+                  <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, pct))}%`, borderRadius: 2, background: p.este_sistat ? G.yellow : pctColor, transition: 'width .5s' }} />
                 </div>
               </>
             ) : (
@@ -658,13 +686,15 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
             {[
               { label: 'Ordin de începere', value: fmtDate(p.data_start) },
-              { label: 'Termen finalizare', value: fmtDate(p.data_termen) },
+              { label: 'Termen finalizare', value: p.este_sistat
+                  ? `⏸ Sistat (${p.data_ultima_sistare ? fmtDate(p.data_ultima_sistare) : 'manual'})`
+                  : fmtDate(p.data_termen) + (p.prelungire_totala_luni > 0 ? ` +${p.prelungire_totala_luni} luni AA` : '') },
               { label: 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
               { label: 'Valoare ofertă', value: p.oferta_valoare ? fmtLei(p.oferta_valoare) : '—' },
               { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
               { label: 'Data semnare', value: fmtDate(p.data_contract || p.contract_data_semnare) },
-              { label: 'Status contract', value: p.contract_status || '—' },
-              { label: 'Termen contractual', value: p.contract_zile ? `${p.contract_zile} zile` : '—' },
+              { label: 'Acte adiționale', value: p.nr_acte_aditionale > 0 ? `${p.nr_acte_aditionale} acte · +${p.prelungire_totala_luni} luni` : '—' },
+              { label: 'Ordine sistare', value: p.nr_ordine_sistare > 0 ? `${p.nr_ordine_sistare} ordine${p.este_sistat ? ' · ⏸ Activ' : ' · reluat'}` : '—' },
             ].map((row, i) => (
               <div key={i} style={{ background: G.bg, borderRadius: 8, padding: '10px 14px' }}>
                 <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>{row.label}</div>
@@ -780,31 +810,63 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     valoare_eur:   proiect.valoare_eur   || '',
     site_id:       proiect.site_id       || '',
     activ:         proiect.activ !== false,
+    manual_sistat: proiect.manual_sistat === true,
   })
-  const [sites, setSites] = useState([])
+  const [sites, setSites]   = useState([])
   const [saving, setSaving] = useState(false)
 
   // ─── Documente anexă contract ────────────────────────────────────────────
-  const [docsContract, setDocsContract]   = useState([])
-  const [uploadingDoc, setUploadingDoc]   = useState(false)
-  const [uploadTip, setUploadTip]         = useState('contract')
-  const fileInputRef = useState(null)
+  const [docsContract, setDocsContract] = useState([])
+  const [uploadingDoc, setUploadingDoc] = useState(false)
+  const [uploadTip, setUploadTip]       = useState('contract')
+
+  // ─── Acte adiționale ────────────────────────────────────────────────────
+  const [acteAditionale, setActeAditionale]   = useState([])
+  const [expandActs, setExpandActs]           = useState(false)
+  const [showAddAct, setShowAddAct]           = useState(false)
+  const [savingAct, setSavingAct]             = useState(false)
+  const [formAct, setFormAct]                 = useState({ numar_act:'', data_semnare:'', prelungire_luni:'0', descriere:'' })
+
+  // ─── Ordine de sistare ───────────────────────────────────────────────────
+  const [ordineSistare, setOrdineSistare]     = useState([])
+  const [expandOrdine, setExpandOrdine]       = useState(false)
+  const [showAddOrdine, setShowAddOrdine]     = useState(false)
+  const [savingOrdine, setSavingOrdine]       = useState(false)
+  const [formOrdine, setFormOrdine]           = useState({ numar_ordin:'', data_sistare:'', data_reluare:'', motiv:'' })
+  const [editReluareId, setEditReluareId]     = useState(null) // id ordin pentru care adăugăm reluare
+  const [reluareData, setReluareData]         = useState('')
 
   const loadDocs = async () => {
     if (isNew) return
     const { data } = await supabase
       .from('executie_documente_contract')
-      .select('*')
-      .eq('proiect_id', proiect.id)
-      .eq('activ', true)
+      .select('*').eq('proiect_id', proiect.id).eq('activ', true)
       .order('uploadat_la', { ascending: false })
     setDocsContract(data || [])
+  }
+
+  const loadActs = async () => {
+    if (isNew) return
+    const { data } = await supabase
+      .from('executie_acte_aditionale')
+      .select('*').eq('proiect_id', proiect.id).eq('activ', true)
+      .order('creat_la')
+    setActeAditionale(data || [])
+  }
+
+  const loadOrdine = async () => {
+    if (isNew) return
+    const { data } = await supabase
+      .from('executie_ordine_sistare')
+      .select('*').eq('proiect_id', proiect.id).eq('activ', true)
+      .order('data_sistare')
+    setOrdineSistare(data || [])
   }
 
   useEffect(() => {
     supabase.from('sites').select('id, name').eq('active', true).order('name')
       .then(({ data }) => setSites(data || []))
-    loadDocs()
+    loadDocs(); loadActs(); loadOrdine()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -828,6 +890,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
         valoare_eur:   form.valoare_eur ? parseFloat(form.valoare_eur) : null,
         site_id:       form.site_id ? parseInt(form.site_id) : null,
         activ:         form.activ,
+        manual_sistat: form.manual_sistat,
         updated_at:    new Date().toISOString(),
       }
       let error
@@ -893,6 +956,72 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     loadDocs()
   }
 
+  // ─── Acte adiționale ──────────────────────────────────────────────────────
+  const handleAddAct = async () => {
+    if (!formAct.numar_act.trim()) { showToast('Numărul actului e obligatoriu', 'error'); return }
+    setSavingAct(true)
+    try {
+      const { error } = await supabase.from('executie_acte_aditionale').insert({
+        proiect_id:              proiect.id,
+        numar_act:               formAct.numar_act.trim(),
+        data_semnare:            formAct.data_semnare || null,
+        prelungire_luni:         parseInt(formAct.prelungire_luni) || 0,
+        descriere:               formAct.descriere.trim() || null,
+      })
+      if (error) throw error
+      showToast('Act adițional adăugat!', 'success')
+      setFormAct({ numar_act:'', data_semnare:'', prelungire_luni:'0', descriere:'' })
+      setShowAddAct(false)
+      loadActs()
+    } catch(e) { showToast('Eroare: ' + e.message, 'error') }
+    finally { setSavingAct(false) }
+  }
+
+  const handleDeleteAct = async (id) => {
+    if (!confirm('Ștergi actul adițional?')) return
+    await supabase.from('executie_acte_aditionale').update({ activ: false }).eq('id', id)
+    showToast('Act adițional șters', 'success')
+    loadActs()
+  }
+
+  // ─── Ordine de sistare ────────────────────────────────────────────────────
+  const handleAddOrdine = async () => {
+    if (!formOrdine.data_sistare) { showToast('Data sistare e obligatorie', 'error'); return }
+    setSavingOrdine(true)
+    try {
+      const { error } = await supabase.from('executie_ordine_sistare').insert({
+        proiect_id:   proiect.id,
+        numar_ordin:  formOrdine.numar_ordin.trim() || null,
+        data_sistare: formOrdine.data_sistare,
+        data_reluare: formOrdine.data_reluare || null,
+        motiv:        formOrdine.motiv.trim() || null,
+      })
+      if (error) throw error
+      showToast('Ordin de sistare adăugat!', 'success')
+      setFormOrdine({ numar_ordin:'', data_sistare:'', data_reluare:'', motiv:'' })
+      setShowAddOrdine(false)
+      loadOrdine()
+    } catch(e) { showToast('Eroare: ' + e.message, 'error') }
+    finally { setSavingOrdine(false) }
+  }
+
+  const handleSetReluare = async (id) => {
+    if (!reluareData) { showToast('Selectează data reluării', 'error'); return }
+    const { error } = await supabase.from('executie_ordine_sistare')
+      .update({ data_reluare: reluareData }).eq('id', id)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('Reluare înregistrată!', 'success')
+    setEditReluareId(null); setReluareData('')
+    loadOrdine()
+  }
+
+  const handleDeleteOrdine = async (id) => {
+    if (!confirm('Ștergi ordinul de sistare?')) return
+    await supabase.from('executie_ordine_sistare').update({ activ: false }).eq('id', id)
+    showToast('Ordin șters', 'success')
+    loadOrdine()
+  }
+
   const fieldStyle = {
     width: '100%', boxSizing: 'border-box',
     background: G.bg, border: `1px solid ${G.border}`, borderRadius: 7,
@@ -956,18 +1085,214 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div>
                 <label style={labelStyle}>Nr. contract</label>
-                <input
-                  value={form.nr_contract}
-                  onChange={e => set('nr_contract', e.target.value)}
-                  style={fieldStyle}
-                  placeholder="ex: 30/CTG1/2025"
-                />
+                <input value={form.nr_contract} onChange={e => set('nr_contract', e.target.value)} style={fieldStyle} placeholder="ex: 30/CTG1/2025" />
               </div>
               <div>
                 <label style={labelStyle}>Data semnare contract</label>
                 <input type="date" value={form.data_contract} onChange={e => set('data_contract', e.target.value)} style={fieldStyle} />
               </div>
             </div>
+
+            {/* ── Acte adiționale ──────────────────────────────────────── */}
+            {!isNew && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: expandActs ? 10 : 0 }}>
+                  <button onClick={() => setExpandActs(v => !v)} style={{
+                    background: 'transparent', border: 'none', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 7, padding: 0,
+                  }}>
+                    <span style={{ fontSize: 12, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px' }}>
+                      {expandActs ? '▾' : '▸'} Acte adiționale
+                    </span>
+                    {acteAditionale.length > 0 && (
+                      <span style={{ background: G.blue + '33', color: G.blue, borderRadius: 10, padding: '1px 8px', fontSize: 10, fontWeight: 700 }}>
+                        {acteAditionale.length} · +{acteAditionale.reduce((s, a) => s + (a.prelungire_luni || 0), 0)} luni
+                      </span>
+                    )}
+                  </button>
+                  {expandActs && (
+                    <button onClick={() => { setShowAddAct(v => !v); setFormAct({ numar_act:'', data_semnare:'', prelungire_luni:'0', descriere:'' }) }} style={{
+                      padding: '4px 10px', background: G.blue + '22', border: `1px solid ${G.blue}44`,
+                      borderRadius: 6, color: G.blue, fontSize: 11, cursor: 'pointer', fontWeight: 700,
+                    }}>＋ Adaugă</button>
+                  )}
+                </div>
+
+                {expandActs && (
+                  <div style={{ paddingLeft: 4 }}>
+                    {/* Form add act */}
+                    {showAddAct && (
+                      <div style={{ background: G.card2, borderRadius: 8, padding: '12px 14px', marginBottom: 10, border: `1px solid ${G.blue}33` }}>
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 8 }}>
+                          <div>
+                            <label style={labelStyle}>Nr. act *</label>
+                            <input value={formAct.numar_act} onChange={e => setFormAct(f => ({...f, numar_act: e.target.value}))} style={fieldStyle} placeholder="ex: AA1 / Act Ad. nr.1" />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Data semnare</label>
+                            <input type="date" value={formAct.data_semnare} onChange={e => setFormAct(f => ({...f, data_semnare: e.target.value}))} style={fieldStyle} />
+                          </div>
+                        </div>
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap: 8, marginBottom: 8 }}>
+                          <div>
+                            <label style={labelStyle}>Prelungire (luni)</label>
+                            <input type="number" min="0" max="60" value={formAct.prelungire_luni} onChange={e => setFormAct(f => ({...f, prelungire_luni: e.target.value}))} style={fieldStyle} />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Descriere</label>
+                            <input value={formAct.descriere} onChange={e => setFormAct(f => ({...f, descriere: e.target.value}))} style={fieldStyle} placeholder="Modificări aduse prin act" />
+                          </div>
+                        </div>
+                        <div style={{ display:'flex', gap: 8, justifyContent:'flex-end' }}>
+                          <button onClick={() => setShowAddAct(false)} style={{ padding:'6px 12px', background: G.border, border:'none', borderRadius: 6, color: G.text, fontSize: 12, cursor:'pointer' }}>Anulează</button>
+                          <button onClick={handleAddAct} disabled={savingAct} style={{ padding:'6px 14px', background: G.blue, border:'none', borderRadius: 6, color:'#0D1117', fontSize: 12, fontWeight: 700, cursor: savingAct ? 'not-allowed':'pointer', opacity: savingAct ? 0.6 : 1 }}>{savingAct ? '...' : '✓ Salvează'}</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Lista acte */}
+                    {acteAditionale.length === 0 && !showAddAct && (
+                      <div style={{ fontSize: 12, color: G.dim, fontStyle: 'italic', padding: '6px 0' }}>Niciun act adițional.</div>
+                    )}
+                    {acteAditionale.map(act => (
+                      <div key={act.id} style={{
+                        display:'flex', alignItems:'center', gap: 10,
+                        background: G.card2, borderRadius: 8, padding: '9px 12px',
+                        marginBottom: 6, border: `1px solid ${G.border}`,
+                      }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: G.text }}>
+                            {act.numar_act}
+                            {act.prelungire_luni > 0 && (
+                              <span style={{ marginLeft: 8, background: G.blue + '22', color: G.blue, borderRadius: 8, padding: '1px 7px', fontSize: 10 }}>
+                                +{act.prelungire_luni} luni
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 10, color: G.muted, marginTop: 2 }}>
+                            {act.data_semnare ? fmtDate(act.data_semnare) : 'fără dată'}
+                            {act.descriere ? ` · ${act.descriere}` : ''}
+                          </div>
+                        </div>
+                        <button onClick={() => handleDeleteAct(act.id)} style={{ background:'transparent', border:'none', color: G.red, fontSize: 15, cursor:'pointer', padding:'2px 4px' }}>🗑</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Ordine de sistare ────────────────────────────────────── */}
+            {!isNew && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: expandOrdine ? 10 : 0 }}>
+                  <button onClick={() => setExpandOrdine(v => !v)} style={{
+                    background: 'transparent', border: 'none', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 7, padding: 0,
+                  }}>
+                    <span style={{ fontSize: 12, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px' }}>
+                      {expandOrdine ? '▾' : '▸'} Ordine de sistare
+                    </span>
+                    {ordineSistare.length > 0 && (
+                      <span style={{
+                        background: ordineSistare.some(o => !o.data_reluare) ? G.yellow + '33' : G.border,
+                        color: ordineSistare.some(o => !o.data_reluare) ? G.yellow : G.muted,
+                        borderRadius: 10, padding: '1px 8px', fontSize: 10, fontWeight: 700,
+                      }}>
+                        {ordineSistare.length}
+                        {ordineSistare.some(o => !o.data_reluare) && ' · Activ sistat'}
+                      </span>
+                    )}
+                  </button>
+                  {expandOrdine && (
+                    <button onClick={() => { setShowAddOrdine(v => !v); setFormOrdine({ numar_ordin:'', data_sistare:'', data_reluare:'', motiv:'' }) }} style={{
+                      padding: '4px 10px', background: G.yellow + '22', border: `1px solid ${G.yellow}44`,
+                      borderRadius: 6, color: G.yellow, fontSize: 11, cursor: 'pointer', fontWeight: 700,
+                    }}>＋ Adaugă</button>
+                  )}
+                </div>
+
+                {expandOrdine && (
+                  <div style={{ paddingLeft: 4 }}>
+                    {/* Form add ordin */}
+                    {showAddOrdine && (
+                      <div style={{ background: G.card2, borderRadius: 8, padding: '12px 14px', marginBottom: 10, border: `1px solid ${G.yellow}33` }}>
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 8 }}>
+                          <div>
+                            <label style={labelStyle}>Nr. ordin</label>
+                            <input value={formOrdine.numar_ordin} onChange={e => setFormOrdine(f => ({...f, numar_ordin: e.target.value}))} style={fieldStyle} placeholder="ex: OS-2026-01" />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Data sistare *</label>
+                            <input type="date" value={formOrdine.data_sistare} onChange={e => setFormOrdine(f => ({...f, data_sistare: e.target.value}))} style={fieldStyle} />
+                          </div>
+                        </div>
+                        <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap: 8, marginBottom: 8 }}>
+                          <div>
+                            <label style={labelStyle}>Data reluare</label>
+                            <input type="date" value={formOrdine.data_reluare} onChange={e => setFormOrdine(f => ({...f, data_reluare: e.target.value}))} style={fieldStyle} />
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Motiv</label>
+                            <input value={formOrdine.motiv} onChange={e => setFormOrdine(f => ({...f, motiv: e.target.value}))} style={fieldStyle} placeholder="ex: condiții meteo, incident..." />
+                          </div>
+                        </div>
+                        <div style={{ display:'flex', gap: 8, justifyContent:'flex-end' }}>
+                          <button onClick={() => setShowAddOrdine(false)} style={{ padding:'6px 12px', background: G.border, border:'none', borderRadius: 6, color: G.text, fontSize: 12, cursor:'pointer' }}>Anulează</button>
+                          <button onClick={handleAddOrdine} disabled={savingOrdine} style={{ padding:'6px 14px', background: G.yellow, border:'none', borderRadius: 6, color:'#0D1117', fontSize: 12, fontWeight: 700, cursor: savingOrdine ? 'not-allowed':'pointer', opacity: savingOrdine ? 0.6 : 1 }}>{savingOrdine ? '...' : '✓ Salvează'}</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Lista ordine */}
+                    {ordineSistare.length === 0 && !showAddOrdine && (
+                      <div style={{ fontSize: 12, color: G.dim, fontStyle: 'italic', padding: '6px 0' }}>Niciun ordin de sistare.</div>
+                    )}
+                    {ordineSistare.map(os => {
+                      const activ = !os.data_reluare
+                      return (
+                        <div key={os.id} style={{
+                          background: activ ? G.yellow + '0D' : G.card2,
+                          borderRadius: 8, padding: '10px 12px', marginBottom: 6,
+                          border: `1px solid ${activ ? G.yellow + '44' : G.border}`,
+                        }}>
+                          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap: 8 }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: activ ? G.yellow : G.text, display:'flex', alignItems:'center', gap: 8 }}>
+                                {activ && <span>⏸</span>}
+                                {os.numar_ordin || 'Fără nr. ordin'}
+                                {activ && <span style={{ background: G.yellow + '22', color: G.yellow, borderRadius: 8, padding:'1px 7px', fontSize:10 }}>Activ</span>}
+                              </div>
+                              <div style={{ fontSize: 10, color: G.muted, marginTop: 3, display:'flex', gap: 10, flexWrap:'wrap' }}>
+                                <span>Sistat: {fmtDate(os.data_sistare)}</span>
+                                {os.data_reluare && <span style={{ color: G.green }}>Reluat: {fmtDate(os.data_reluare)}</span>}
+                                {os.motiv && <span>· {os.motiv}</span>}
+                              </div>
+                              {/* Înregistrare reluare inline */}
+                              {activ && editReluareId === os.id && (
+                                <div style={{ display:'flex', gap: 6, marginTop: 8, alignItems:'center' }}>
+                                  <input type="date" value={reluareData} onChange={e => setReluareData(e.target.value)} style={{ ...fieldStyle, flex:1, padding:'6px 10px', fontSize:12 }} />
+                                  <button onClick={() => handleSetReluare(os.id)} style={{ padding:'6px 12px', background: G.green, border:'none', borderRadius:6, color:'#0D1117', fontSize:12, fontWeight:700, cursor:'pointer' }}>✓</button>
+                                  <button onClick={() => { setEditReluareId(null); setReluareData('') }} style={{ padding:'6px 10px', background: G.border, border:'none', borderRadius:6, color:G.text, fontSize:12, cursor:'pointer' }}>✕</button>
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display:'flex', gap: 4, flexShrink:0 }}>
+                              {activ && editReluareId !== os.id && (
+                                <button onClick={() => { setEditReluareId(os.id); setReluareData('') }} style={{ padding:'4px 9px', background: G.green + '22', border:`1px solid ${G.green}44`, borderRadius:6, color:G.green, fontSize:10, cursor:'pointer', fontWeight:700 }}>
+                                  ▶ Reluare
+                                </button>
+                              )}
+                              <button onClick={() => handleDeleteOrdine(os.id)} style={{ background:'transparent', border:'none', color: G.red, fontSize:14, cursor:'pointer', padding:'2px 4px' }}>🗑</button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── Termene ─────────────────────────────────────────────────── */}
@@ -1005,10 +1330,19 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               placeholder="Notițe suplimentare despre proiect..." />
           </div>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={form.activ} onChange={e => set('activ', e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
-            <span style={{ fontSize: 13, color: G.text, fontWeight: 600 }}>Proiect activ</span>
-          </label>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
+              <input type="checkbox" checked={form.activ} onChange={e => set('activ', e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+              <span style={{ fontSize: 13, color: G.text, fontWeight: 600 }}>Proiect activ</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
+              <input type="checkbox" checked={form.manual_sistat} onChange={e => set('manual_sistat', e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer', accentColor: G.yellow }} />
+              <span style={{ fontSize: 13, color: form.manual_sistat ? G.yellow : G.text, fontWeight: form.manual_sistat ? 700 : 500 }}>
+                💤 Sistat manual
+              </span>
+              {form.manual_sistat && <span style={{ fontSize: 11, color: G.muted }}>(fără ordin formal)</span>}
+            </label>
+          </div>
 
           {/* ── Documente anexă la contract ─────────────────────────────── */}
           <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 14 }}>
