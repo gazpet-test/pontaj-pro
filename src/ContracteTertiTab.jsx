@@ -575,7 +575,34 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           .select('id')
           .eq('contract_id', item.id)
           .maybeSingle()
-        if (linked?.id) setProiectExecId(String(linked.id))
+        if (linked?.id) {
+          setProiectExecId(String(linked.id))
+        } else if (data?.length && f.categorie === 'executie' && !item.id) {
+          // Smart auto-match: compară denumire contract cu cod_intern + nume proiect
+          const score = (den, p) => {
+            const d = den.toLowerCase()
+            const kws = (p.cod_intern + ' ' + (p.nume||'')).toLowerCase().split(/[\s_\-\/]+/).filter(w=>w.length>3)
+            return kws.length ? kws.filter(w=>d.includes(w)).length / kws.length : 0
+          }
+          const best = data.reduce((b,p) => {
+            const s = score(f.denumire||'', p)
+            return s > (b.score||0) ? { ...p, score: s } : b
+          }, {})
+          if ((best.score||0) >= 0.4) setProiectExecId(String(best.id))
+        }
+      }
+      // Smart auto-match pentru contract NOU de tip executie
+      if (isNew && data?.length && f.categorie === 'executie' && f.denumire) {
+        const score = (den, p) => {
+          const d = den.toLowerCase()
+          const kws = (p.cod_intern + ' ' + (p.nume||'')).toLowerCase().split(/[\s_\-\/]+/).filter(w=>w.length>3)
+          return kws.length ? kws.filter(w=>d.includes(w)).length / kws.length : 0
+        }
+        const best = data.reduce((b,p) => {
+          const s = score(f.denumire, p)
+          return s > (b.score||0) ? { ...p, score: s } : b
+        }, {})
+        if ((best.score||0) >= 0.4) setProiectExecId(String(best.id))
       }
     }
     loadProiecte()
@@ -775,7 +802,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           <textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} />
         </div>
 
-        {/* ── Proiect Execuție asociat (vizibil doar pentru categorie=executie) ── */}
+          {/* ── Proiect Execuție asociat (vizibil doar pentru categorie=executie) ── */}
         {f.categorie === 'executie' && (
           <div style={{padding:12, background:G.surface, border:`1px solid ${G.blue}33`, borderRadius:8}}>
             <label style={{...S.lbl, color:G.blue}}>🔗 Proiect Execuție asociat</label>
@@ -790,12 +817,24 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
               ))}
             </select>
             {proiectExecId ? (
-              <div style={{fontSize:11, color:G.blue, marginTop:6, display:'flex', alignItems:'center', gap:6}}>
-                <span>✓</span> La salvare: nr. contract, valoare și data semnare se vor sincroniza automat în proiect.
+              <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:8}}>
+                <span style={{color:G.blue}}>✓</span>
+                <span style={{color:G.blue}}>La salvare: nr. contract, valoare și data semnare se sincronizează automat în proiect.</span>
+                {proiecteExec.find(p=>String(p.id)===proiectExecId) && !isNew && (() => {
+                  // Indicator auto-detectat
+                  const d = (f.denumire||'').toLowerCase()
+                  const p = proiecteExec.find(px=>String(px.id)===proiectExecId)
+                  if (!p) return null
+                  const kws = (p.cod_intern+' '+(p.nume||'')).toLowerCase().split(/[\s_\-\/]+/).filter(w=>w.length>3)
+                  const s = kws.length ? Math.round(kws.filter(w=>d.includes(w)).length/kws.length*100) : 0
+                  return s >= 40 ? (
+                    <span style={{background:G.green+'22',color:G.green,borderRadius:8,padding:'1px 7px',fontSize:10}}>🎯 Auto-detectat {s}%</span>
+                  ) : null
+                })()}
               </div>
             ) : (
               <div style={{fontSize:11, color:G.dim, marginTop:6}}>
-                Selectează proiectul pentru a sincroniza datele contractuale.
+                {f.denumire?.length > 5 ? '💡 Completați denumirea contractului pentru auto-detectare proiect.' : 'Selectați proiectul pentru sincronizare automată.'}
               </div>
             )}
           </div>

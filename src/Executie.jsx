@@ -554,6 +554,38 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
         ))}
       </div>
 
+      {/* Rând materiale tehnice (din documente contractuale AI) */}
+      {(p.curbe_buc != null || p.robineti_buc != null || p.flanse_electroizolate_buc != null) && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+          borderBottom: `1px solid ${G.border}`,
+          background: G.blue + '05',
+        }}>
+          {[
+            { label: 'Curbe',      value: p.curbe_buc ?? '—',                    icon: '🔄', color: G.teal },
+            { label: 'Robineți',   value: p.robineti_buc ?? '—',                 icon: '🔩', color: G.orange },
+            { label: 'Flanșe EI',  value: p.flanse_electroizolate_buc ?? '—',    icon: '⚡', color: G.yellow },
+            { label: 'Mat. spec.', value: p.alte_materiale?.length ? `${p.alte_materiale.length} tip.` : '—', icon: '📦', color: G.muted },
+          ].map((k, i) => (
+            <div key={i} style={{
+              padding: '8px 0', textAlign: 'center',
+              borderRight: i < 3 ? `1px solid ${G.border}` : 'none',
+            }}>
+              <div style={{ fontSize: 14, marginBottom: 1 }}>{k.icon}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: k.color }}>{k.value}</div>
+              <div style={{ fontSize: 9, color: G.dim, marginTop: 1 }}>{k.label} · buc</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Dacă lipsesc datele tehnice și lipsesc și datele contractuale */}
+      {p.curbe_buc == null && !p.data_start && isOwner && (
+        <div style={{ padding: '6px 14px', fontSize: 10, color: G.dim, background: G.bg, borderBottom: `1px solid ${G.border}`, display:'flex', alignItems:'center', gap:6 }}>
+          <span>💡</span> Adaugă contract + documente tehnice pentru a popula cantitățile cu AI.
+        </div>
+      )}
+
       {/* Termene */}
       <div style={{ padding: '14px 20px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
@@ -739,6 +771,51 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
             )}
           </div>
 
+          {/* Cantități tehnice din documente AI */}
+          {(p.curbe_buc != null || p.robineti_buc != null || p.flanse_electroizolate_buc != null || p.alte_materiale?.length > 0) && (
+            <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px' }}>
+                  📋 Cantități tehnice (din documente contractuale)
+                </div>
+                {p.docs_ai_confidence > 0 && (
+                  <span style={{ fontSize: 10, color: G.blue, background: G.blue + '22', padding: '2px 8px', borderRadius: 8 }}>
+                    🤖 AI {p.docs_ai_confidence}% conf.
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: p.alte_materiale?.length ? 12 : 0 }}>
+                {[
+                  { label: 'Curbe', value: p.curbe_buc, icon: '🔄', color: G.teal, um: 'buc' },
+                  { label: 'Robineți / Vane', value: p.robineti_buc, icon: '🔩', color: G.orange, um: 'buc' },
+                  { label: 'Flanșe EI', value: p.flanse_electroizolate_buc, icon: '⚡', color: G.yellow, um: 'buc' },
+                ].map((s, i) => (
+                  <div key={i} style={{ textAlign: 'center', padding: '8px 0' }}>
+                    <div style={{ fontSize: 20, marginBottom: 3 }}>{s.icon}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: s.value != null ? s.color : G.dim }}>
+                      {s.value ?? '—'}
+                    </div>
+                    <div style={{ fontSize: 11, color: G.text }}>{s.label}</div>
+                    <div style={{ fontSize: 9, color: G.dim }}>{s.um}</div>
+                  </div>
+                ))}
+              </div>
+              {p.alte_materiale?.length > 0 && (
+                <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 10 }}>
+                  <div style={{ fontSize: 10, color: G.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.4px' }}>Alte materiale principale</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {p.alte_materiale.map((m, i) => (
+                      <div key={i} style={{ background: G.card2, border: `1px solid ${G.border}`, borderRadius: 6, padding: '4px 10px', fontSize: 11 }}>
+                        <span style={{ color: G.muted }}>{m.denumire}</span>
+                        <span style={{ color: G.text, fontWeight: 700, marginLeft: 6 }}>{m.cantitate} {m.um}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {p.observatii && (
             <div style={{ background: G.bg, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: G.muted }}>
               <span style={{ fontWeight: 700, color: G.text }}>Observații: </span>{p.observatii}
@@ -815,10 +892,76 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const [sites, setSites]   = useState([])
   const [saving, setSaving] = useState(false)
 
-  // ─── Documente anexă contract ────────────────────────────────────────────
-  const [docsContract, setDocsContract] = useState([])
-  const [uploadingDoc, setUploadingDoc] = useState(false)
-  const [uploadTip, setUploadTip]       = useState('contract')
+  // ─── Documente tehnice contractuale ─────────────────────────────────────
+  const [docPaths, setDocPaths] = useState({
+    caiet_sarcini:      proiect.doc_caiet_sarcini_path      || null,
+    propunere_tehnica:  proiect.doc_propunere_tehnica_path  || null,
+    propunere_financiara: proiect.doc_propunere_financiara_path || null,
+  })
+  const [uploadingTehnic, setUploadingTehnic] = useState(null) // tipul care se uploadează
+  const [extractingAI, setExtractingAI]       = useState(false)
+  const [cantitati, setCantitati]             = useState({
+    curbe_buc:                proiect.curbe_buc                    ?? null,
+    robineti_buc:             proiect.robineti_buc                 ?? null,
+    flanse_electroizolate_buc: proiect.flanse_electroizolate_buc   ?? null,
+    alte_materiale:           proiect.alte_materiale               || null,
+    docs_ai_confidence:       proiect.docs_ai_confidence           || 0,
+  })
+
+  const DOC_TEHNICE = [
+    { key: 'propunere_financiara', label: '💰 Propunere financiară', hint: 'Deviz — sursa primară pentru cantități' },
+    { key: 'propunere_tehnica',    label: '🔧 Propunere tehnică',    hint: 'Metodologie + cantități secundare' },
+    { key: 'caiet_sarcini',        label: '📋 Caiet de sarcini',     hint: 'Specificații tehnice Transgaz' },
+  ]
+
+  const handleUploadDocTehnic = async (tip, file) => {
+    if (!file || !proiect.id) return
+    setUploadingTehnic(tip)
+    try {
+      const safeName = file.name.replace(/\s+/g, '_')
+      const path = `${proiect.id}/docs_tehnice/${tip}_${Date.now()}_${safeName}`
+      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file, { upsert: true })
+      if (upErr) throw upErr
+      // Salvăm path în BD
+      const colMap = { caiet_sarcini: 'doc_caiet_sarcini_path', propunere_tehnica: 'doc_propunere_tehnica_path', propunere_financiara: 'doc_propunere_financiara_path' }
+      await supabase.from('executie_proiecte').update({ [colMap[tip]]: path, updated_at: new Date().toISOString() }).eq('id', proiect.id)
+      setDocPaths(prev => ({ ...prev, [tip]: path }))
+      showToast(`${tip.replace(/_/g, ' ')} încărcat!`, 'success')
+    } catch(e) { showToast('Eroare upload: ' + e.message, 'error') }
+    finally { setUploadingTehnic(null) }
+  }
+
+  const handleExtractAI = async () => {
+    if (!proiect.id) { showToast('Salvați proiectul mai întâi', 'error'); return }
+    const hasDoc = Object.values(docPaths).some(v => v)
+    if (!hasDoc) { showToast('Încărcați cel puțin un document tehnic', 'error'); return }
+    setExtractingAI(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-project-docs-ai`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proiect_id: proiect.id }),
+      })
+      const res = await resp.json()
+      if (!resp.ok) throw new Error(res.error || 'Eroare extracție')
+      const r = res.rezultat
+      setCantitati({
+        curbe_buc: r.curbe_buc ?? null,
+        robineti_buc: r.robineti_buc ?? null,
+        flanse_electroizolate_buc: r.flanse_electroizolate_buc ?? null,
+        alte_materiale: r.alte_materiale || null,
+        docs_ai_confidence: r.confidence || 0,
+      })
+      showToast(`AI extras cu ${r.confidence}% încredere din ${res.docs_procesate} doc.`, 'success')
+    } catch(e) { showToast('Eroare AI: ' + e.message, 'error') }
+    finally { setExtractingAI(false) }
+  }
+
+  const handleOpenDocTehnic = async (path) => {
+    const { data } = await supabase.storage.from(BUCKET_CONTRACTE).createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
 
   // ─── Acte adiționale ────────────────────────────────────────────────────
   const [acteAditionale, setActeAditionale]   = useState([])
@@ -1342,6 +1485,91 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               </span>
               {form.manual_sistat && <span style={{ fontSize: 11, color: G.muted }}>(fără ordin formal)</span>}
             </label>
+          </div>
+
+          {/* ── Documentație tehnică + AI ─────────────────────────────────── */}
+          <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={secTitle}><span>🤖</span> Documentație tehnică — extracție AI</div>
+              {!isNew && (
+                <button onClick={handleExtractAI} disabled={extractingAI || !Object.values(docPaths).some(v=>v)} style={{
+                  padding:'6px 14px', background: extractingAI ? G.muted : G.purple,
+                  border:'none', borderRadius:7, color:'#0D1117', fontSize:12,
+                  cursor: extractingAI ? 'not-allowed' : 'pointer', fontWeight:700,
+                  opacity: (extractingAI || !Object.values(docPaths).some(v=>v)) ? 0.6 : 1, whiteSpace:'nowrap',
+                }}>
+                  {extractingAI ? '⏳ AI extrage...' : '🤖 Extrage cantități'}
+                </button>
+              )}
+            </div>
+
+            {/* Upload 3 documente tehnice */}
+            <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
+              {DOC_TEHNICE.map(dt => (
+                <div key={dt.key} style={{
+                  display:'flex', alignItems:'center', gap:10,
+                  background:G.card2, borderRadius:8, padding:'10px 12px',
+                  border:`1px solid ${docPaths[dt.key] ? G.green+'55' : G.border}`,
+                }}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:600,color:G.text}}>{dt.label}</div>
+                    {docPaths[dt.key] ? (
+                      <div style={{fontSize:10,color:G.green,marginTop:2}}>
+                        ✓ Încărcat
+                        <button onClick={()=>handleOpenDocTehnic(docPaths[dt.key])} style={{background:'transparent',border:'none',color:G.blue,fontSize:10,cursor:'pointer',marginLeft:8}}>📂 Deschide</button>
+                      </div>
+                    ) : (
+                      <div style={{fontSize:10,color:G.dim,marginTop:2}}>{dt.hint}</div>
+                    )}
+                  </div>
+                  {!isNew && (
+                    <label style={{
+                      padding:'5px 12px',
+                      background: uploadingTehnic===dt.key ? G.muted : docPaths[dt.key] ? G.border2 : G.executie+'22',
+                      border:`1px solid ${docPaths[dt.key] ? G.border : G.executie+'55'}`,
+                      borderRadius:6, color:docPaths[dt.key]?G.muted:G.executie,
+                      fontSize:11, cursor:uploadingTehnic===dt.key?'not-allowed':'pointer', fontWeight:600,
+                      flexShrink:0, opacity:uploadingTehnic===dt.key?0.6:1,
+                    }}>
+                      {uploadingTehnic===dt.key ? '⏳' : docPaths[dt.key] ? '↻ Înlocuiește' : '📎 Adaugă'}
+                      <input type="file" accept=".pdf" onChange={e=>{const f=e.target.files?.[0];if(f)handleUploadDocTehnic(dt.key,f);e.target.value='';}} disabled={uploadingTehnic===dt.key} style={{display:'none'}} />
+                    </label>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Cantități extrase AI */}
+            {(cantitati.curbe_buc!=null||cantitati.robineti_buc!=null||cantitati.flanse_electroizolate_buc!=null) && (
+              <div style={{background:G.purple+'0D',borderRadius:8,padding:'12px 14px',border:`1px solid ${G.purple}33`}}>
+                <div style={{fontSize:11,color:G.purple,fontWeight:700,marginBottom:10,display:'flex',alignItems:'center',gap:8}}>
+                  🤖 Cantități extrase AI
+                  {cantitati.docs_ai_confidence>0 && <span style={{background:G.purple+'22',padding:'1px 8px',borderRadius:10,fontSize:10}}>{cantitati.docs_ai_confidence}% conf.</span>}
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+                  {[{label:'Curbe',value:cantitati.curbe_buc,icon:'🔄',color:G.teal},{label:'Robineți',value:cantitati.robineti_buc,icon:'🔩',color:G.orange},{label:'Flanșe EI',value:cantitati.flanse_electroizolate_buc,icon:'⚡',color:G.yellow}].map((k,i)=>(
+                    <div key={i} style={{textAlign:'center',padding:'8px 0'}}>
+                      <div style={{fontSize:18}}>{k.icon}</div>
+                      <div style={{fontSize:16,fontWeight:800,color:k.color}}>{k.value??'—'}</div>
+                      <div style={{fontSize:10,color:G.muted}}>{k.label} · buc</div>
+                    </div>
+                  ))}
+                </div>
+                {cantitati.alte_materiale?.length>0 && (
+                  <div style={{marginTop:10,borderTop:`1px solid ${G.border}`,paddingTop:8}}>
+                    <div style={{fontSize:10,color:G.muted,marginBottom:5}}>Alte materiale:</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+                      {cantitati.alte_materiale.map((m,i)=>(
+                        <span key={i} style={{background:G.card2,border:`1px solid ${G.border}`,borderRadius:6,padding:'2px 8px',fontSize:10}}>
+                          {m.denumire}: <strong>{m.cantitate} {m.um}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {isNew && <div style={{fontSize:11,color:G.dim,fontStyle:'italic',padding:'6px 0'}}>💡 Salvați proiectul mai întâi, apoi adăugați documentele tehnice.</div>}
           </div>
 
           {/* ── Documente anexă la contract ─────────────────────────────── */}
