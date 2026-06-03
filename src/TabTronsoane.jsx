@@ -271,10 +271,13 @@ function TronsonModal({ tronson, proiectId, onClose, onSaved, showToast }) {
 
 // ══════════════════════════════════════════════════════════
 // MAIN COMPONENT
+// proiectId: prop opțional — când vine din ProiectContextView (Executie.jsx)
+//   nu mai afișăm selectorii, tab-ul e în contextul proiectului selectat.
+//   Când lipsește, tab-ul funcționează standalone cu selector propriu.
 // ══════════════════════════════════════════════════════════
-export default function TabTronsoane() {
+export default function TabTronsoane({ proiectId: proiectIdProp }) {
   const [proiecte, setProiecte]     = useState([])
-  const [proiectId, setProiectId]   = useState('')
+  const [proiectId, setProiectId]   = useState(proiectIdProp ? String(proiectIdProp) : '')
   const [tronsoane, setTronsoane]   = useState([])
   const [profile, setProfile]       = useState(null)
   const [loading, setLoading]       = useState(false)
@@ -284,7 +287,7 @@ export default function TabTronsoane() {
   const [filterJudet, setFilterJudet]   = useState('all')
   const { show: showToast, Toast } = useToast()
 
-  // Load proiecte + profile
+  // Load profile + proiecte (doar în modul standalone, nu din context)
   useEffect(() => {
     const init = async () => {
       const { data:{user} } = await supabase.auth.getUser()
@@ -292,12 +295,19 @@ export default function TabTronsoane() {
         const { data:prof } = await supabase.from('profiles').select('id,is_owner,role').eq('id',user.id).single()
         setProfile(prof)
       }
-      const { data } = await supabase.from('executie_proiecte').select('id,cod_intern,nume,activ').eq('activ',true).order('cod_intern')
-      setProiecte(data || [])
-      if (data?.length) setProiectId(String(data[0].id))
+      if (!proiectIdProp) {
+        const { data } = await supabase.from('executie_proiecte').select('id,cod_intern,nume,activ').eq('activ',true).order('cod_intern')
+        setProiecte(data || [])
+        if (data?.length) setProiectId(String(data[0].id))
+      }
     }
     init()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync cu prop când proiectul se schimbă din context
+  useEffect(() => {
+    if (proiectIdProp) setProiectId(String(proiectIdProp))
+  }, [proiectIdProp])
 
   const loadTronsoane = useCallback(async () => {
     if (!proiectId) return
@@ -376,16 +386,18 @@ export default function TabTronsoane() {
           <div style={{color:G.muted, fontSize:13, marginTop:4}}>Program pe tronsoane · Status · Suduri · Lungime</div>
         </div>
         <div style={{display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
-          {/* Selector proiect */}
-          <select
-            value={proiectId}
-            onChange={e=>setProiectId(e.target.value)}
-            style={{...S.input, width:300, background:G.surface}}
-          >
-            {proiecte.map(p=>(
-              <option key={p.id} value={p.id}>{p.cod_intern} — {p.nume.slice(0,50)}</option>
-            ))}
-          </select>
+          {/* Selector proiect — ascuns când tab-ul e în context proiect */}
+          {!proiectIdProp && (
+            <select
+              value={proiectId}
+              onChange={e=>setProiectId(e.target.value)}
+              style={{...S.input, width:300, background:G.surface}}
+            >
+              {proiecte.map(p=>(
+                <option key={p.id} value={p.id}>{p.cod_intern} — {p.nume.slice(0,50)}</option>
+              ))}
+            </select>
+          )}
           {canEdit && (
             <button onClick={()=>setEditItem({})} style={{
               padding:'9px 16px', background:G.executie, border:'none',

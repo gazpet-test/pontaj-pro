@@ -1,17 +1,15 @@
 // ===========================================================================
-// MODUL EXECUȚIE — Dashboard Proiecte + Sub-tab navigation
+// MODUL EXECUȚIE — Dashboard Proiecte + Context Proiect
 // ===========================================================================
 // 20.05.2026 — FAZA 1: sub-tab shell
-// 02.06.2026 — FAZA A: dashboard proiecte (durata/termen/stadiu) — DEFAULT TAB
-//   • Tab „🗂️ Proiecte" ACTIV — dashboard KPI per proiect, editare proprietar
-//   • Tab „📐 Izometrie" ACTIV — pachete lansare țeavă, tronsoane, cumulat
-//   • Tab „🏗️ Șantiere" placeholder (Faza B — alocare personal/utilaje pe tură)
-//   • Tab „📋 Devize" placeholder (Faza C)
-//   • Tab „☁️ Vreme live" placeholder (Faza D)
-// URL deep-link: /executie?tab=proiecte | izometrie | santiere | devize | vreme
+// 02.06.2026 — FAZA A+B+C: dashboard proiecte, alocare personal, utilaje tură
+// 03.06.2026 — REFACTOR NAVIGARE: context per proiect
+//   • /executie              → Dashboard proiecte (carduri click-to-open)
+//   • /executie?proiect=X    → Context proiect (breadcrumb + sub-tab-uri)
+//   • /executie?proiect=X&tab=santiere|tronsoane|situatii_plata|izometrie|documente
 // ===========================================================================
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere from './TabSantiere.jsx'
@@ -25,79 +23,67 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 )
 
-// ---------------------------------------------------------------------------
-// Theme G — consistent cu restul modulelor
-// ---------------------------------------------------------------------------
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D', text:'#E6EDF3',
   muted:'#8B949E', dim:'#6E7681', border:'#30363D', border2:'#21262D',
   blue:'#58A6FF', green:'#2EA043', greenBg:'#238636', yellow:'#D29922', orange:'#F0883E',
   red:'#F85149', purple:'#A371F7', teal:'#2DD4BF', pink:'#F778BA',
-  executie:'#58A6FF', // accent modul Execuție
+  executie:'#58A6FF',
 }
 
-const fmtM = v => { // 3970.85 → "3.97 km"
+const fmtM = v => {
   if (!v) return '—'
   const km = parseFloat(v) / 1000
   return km >= 1 ? `${km.toFixed(2)} km` : `${Math.round(parseFloat(v))} m`
 }
-
 const fmtLei = v => {
   if (!v) return '—'
   return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON', maximumFractionDigits: 0 }).format(v)
 }
-
 const fmtDate = v => {
   if (!v) return '—'
   return new Date(v).toLocaleDateString('ro-RO', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
 // ---------------------------------------------------------------------------
-// SUB-TAB DEFINITIONS
+// Tab-uri contextuale (apar doar când e selectat un proiect)
 // ---------------------------------------------------------------------------
-const SUB_TABS = [
-  { key: 'proiecte',  label: 'Proiecte',     icon: '🗂️',  color: G.executie, active: true,  desc: 'Dashboard proiecte · Termene · Stadiu · Ofertare' },
-  { key: 'izometrie', label: 'Izometrie',    icon: '📐',  color: G.purple,   active: true,  desc: 'Pachete lansare · Tronsoane · Cumulat final' },
-  { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,     active: true,  desc: 'Echipe pe tură · Alocare utilaje · Progres activități' },
-  { key: 'tronsoane',      label: 'Tronsoane',      icon: '📍',  color: G.teal,     active: true,  desc: 'Program execuție · Status per tronson · Suduri · Lungime' },
-  { key: 'situatii_plata', label: 'Situații plată', icon: '💰',  color: G.orange,   active: true,  desc: 'SL1–SL6 · NCS · Facturare · Tracking valori' },
-  { key: 'documente',      label: 'Documente',      icon: '📂',  color: G.purple,   active: true,  desc: 'Arhivă NAS · Propunere tehnică · Corespondență · Calitate' },
-  { key: 'devize',         label: 'Devize',         icon: '📋',  color: G.green,    active: false, desc: 'Devize ofertă · Antemăsurători · Estimări' },
-  { key: 'vreme',          label: 'Vreme live',     icon: '☁️',  color: G.yellow,   active: false, desc: 'Prognoză 7 zile · Alerte meteo per șantier' },
+const CONTEXT_TABS = [
+  { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,   desc: 'Personal tură · Utilaje' },
+  { key: 'tronsoane',      label: 'Tronsoane',      icon: '📍', color: G.teal,   desc: 'Program · Status · Suduri' },
+  { key: 'situatii_plata', label: 'Situații plată', icon: '💰', color: G.orange, desc: 'SL1–SL6 · NCS · Facturare' },
+  { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Cumulat' },
+  { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Arhivă NAS' },
 ]
 
 // ===========================================================================
-// MAIN COMPONENT — ExecutiePage (shell)
+// MAIN COMPONENT — ExecutiePage (shell cu navigare proiect în URL)
 // ===========================================================================
 export default function ExecutiePage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const initTab = searchParams.get('tab') || 'proiecte'
-  const [tab, setTab] = useState(initTab)
+  const proiectIdStr = searchParams.get('proiect') // null sau '1','2',...
+  const tabStr = searchParams.get('tab') || 'santiere'
 
-  useEffect(() => {
-    const current = searchParams.get('tab')
-    if (current !== tab) setSearchParams({ tab }, { replace: true })
-  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const urlTab = searchParams.get('tab')
-    if (urlTab && urlTab !== tab) setTab(urlTab)
-  }, [searchParams]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const activeTabDef = SUB_TABS.find(t => t.key === tab) || SUB_TABS[0]
-  const isPlaceholder = !activeTabDef.active
-
-  const goToIzometrie = () => setTab('izometrie')
+  // Navighează la contextul unui proiect
+  const goToProiect = (id, tab = 'santiere') => {
+    setSearchParams({ proiect: String(id), tab }, { replace: false })
+  }
+  // Revine la dashboard
+  const goBack = () => setSearchParams({}, { replace: false })
+  // Schimbă tab-ul în contextul curent
+  const changeTab = (tab) => setSearchParams({ proiect: proiectIdStr, tab }, { replace: true })
 
   return (
     <div style={{ background: G.bg, minHeight: 'calc(100vh - 60px)', color: G.text }}>
-      {/* ─────────── SUB-TAB NAVIGATION (sticky) ─────────── */}
+
+      {/* ─── NAV BAR STICKY ─── */}
       <div style={{
         position: 'sticky', top: 60, zIndex: 50,
         background: G.surface, borderBottom: `1px solid ${G.border}`,
         padding: '0 28px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflowX: 'auto' }}>
+
           {/* Logo modul */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10,
@@ -112,72 +98,169 @@ export default function ExecutiePage() {
             }}>🏗️</div>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '-.2px' }}>Execuție</div>
-              <div style={{ fontSize: 10, color: G.muted, marginTop: -1 }}>Sub-module operaționale</div>
+              <div style={{ fontSize: 10, color: G.muted, marginTop: -1 }}>Proiecte operaționale</div>
             </div>
           </div>
 
-          {/* Tab buttons */}
-          {SUB_TABS.map(t => {
-            const isActive = tab === t.key
-            const disabled = !t.active
-            return (
-              <button
-                key={t.key}
-                onClick={() => !disabled && setTab(t.key)}
-                disabled={disabled}
-                title={disabled ? `${t.label} — disponibil în Faza viitoare` : t.desc}
-                style={{
-                  padding: '14px 16px', background: 'transparent', border: 'none',
-                  borderBottom: `2px solid ${isActive ? t.color : 'transparent'}`,
-                  color: disabled ? G.dim : isActive ? t.color : G.text,
-                  cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 13,
-                  fontWeight: isActive ? 700 : 500, transition: 'all .15s ease',
-                  display: 'flex', alignItems: 'center', gap: 7,
-                  opacity: disabled ? 0.5 : 1, whiteSpace: 'nowrap', flexShrink: 0,
-                }}
-                onMouseEnter={e => { if (!disabled && !isActive) e.currentTarget.style.color = t.color }}
-                onMouseLeave={e => { if (!disabled && !isActive) e.currentTarget.style.color = G.text }}
-              >
-                <span style={{ fontSize: 16 }}>{t.icon}</span>
-                {t.label}
-                {disabled && (
-                  <span style={{
-                    fontSize: 9, padding: '2px 5px', background: G.border2, color: G.muted,
-                    borderRadius: 4, marginLeft: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.3px',
-                  }}>soon</span>
-                )}
-              </button>
-            )
-          })}
+          {/* Buton Proiecte (nivelul 1 — mereu vizibil) */}
+          <button
+            onClick={goBack}
+            title="Toate proiectele"
+            style={{
+              padding: '14px 16px', background: 'transparent', border: 'none',
+              borderBottom: `2px solid ${!proiectIdStr ? G.executie : 'transparent'}`,
+              color: !proiectIdStr ? G.executie : G.text,
+              cursor: 'pointer', fontSize: 13,
+              fontWeight: !proiectIdStr ? 700 : 500,
+              transition: 'all .15s ease',
+              display: 'flex', alignItems: 'center', gap: 7,
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+            onMouseEnter={e => { if (proiectIdStr) e.currentTarget.style.color = G.executie }}
+            onMouseLeave={e => { if (proiectIdStr) e.currentTarget.style.color = G.text }}
+          >
+            <span style={{ fontSize: 16 }}>🗂️</span> Proiecte
+          </button>
+
+          {/* Separator + tab-uri contextuale (doar când proiect selectat) */}
+          {proiectIdStr && <>
+            <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
+
+            {CONTEXT_TABS.map(t => {
+              const isActive = tabStr === t.key
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => changeTab(t.key)}
+                  title={t.desc}
+                  style={{
+                    padding: '14px 16px', background: 'transparent', border: 'none',
+                    borderBottom: `2px solid ${isActive ? t.color : 'transparent'}`,
+                    color: isActive ? t.color : G.text,
+                    cursor: 'pointer', fontSize: 13,
+                    fontWeight: isActive ? 700 : 500,
+                    transition: 'all .15s ease',
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                  onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = t.color }}
+                  onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = G.text }}
+                >
+                  <span style={{ fontSize: 15 }}>{t.icon}</span>
+                  {t.label}
+                </button>
+              )
+            })}
+          </>}
         </div>
       </div>
 
-      {/* ─────────── CONTENT ─────────── */}
-      {isPlaceholder ? (
-        <PlaceholderTab tab={activeTabDef} />
+      {/* ─── CONTENT ─── */}
+      {!proiectIdStr ? (
+        <DashboardProiectePage onSelectProiect={goToProiect} />
       ) : (
-        <>
-          {tab === 'proiecte'        && <DashboardProiectePage onGoToIzometrie={goToIzometrie} />}
-          {tab === 'izometrie'       && <IzometriePage />}
-          {tab === 'santiere'        && <TabSantiere />}
-          {tab === 'tronsoane'       && <TabTronsoane />}
-          {tab === 'situatii_plata'  && <TabSituatiiPlata />}
-          {tab === 'documente'       && <TabDocumenteNAS />}
-        </>
+        <ProiectContextView
+          proiectId={proiectIdStr}
+          tab={tabStr}
+          onBack={goBack}
+        />
       )}
     </div>
   )
 }
 
 // ===========================================================================
-// DASHBOARD PROIECTE — Tab principal
+// CONTEXT VIEW — banner proiect + renderează tab-ul cu proiectId prop
 // ===========================================================================
-function DashboardProiectePage({ onGoToIzometrie }) {
+function ProiectContextView({ proiectId, tab, onBack }) {
+  const [proiect, setProiect] = useState(null)
+
+  useEffect(() => {
+    supabase.from('v_executie_dashboard')
+      .select('*').eq('id', proiectId).single()
+      .then(({ data }) => setProiect(data))
+  }, [proiectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div>
+      {/* Breadcrumb / info banner proiect */}
+      <div style={{
+        background: G.executie + '0C', borderBottom: `1px solid ${G.executie}20`,
+        padding: '8px 28px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      }}>
+        <button onClick={onBack} style={{
+          background: 'transparent', border: `1px solid ${G.border}`, borderRadius: 6,
+          color: G.muted, cursor: 'pointer', fontSize: 12, padding: '4px 10px',
+          display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+        }}>← Proiecte</button>
+
+        <span style={{ color: G.border }}>|</span>
+
+        {proiect ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1 }}>
+            <span style={{ fontSize: 11, color: G.executie, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px' }}>
+              {proiect.cod_intern}
+            </span>
+            <span style={{ color: G.border }}>·</span>
+            <span style={{ fontSize: 12, color: G.text }}>{proiect.nume?.slice(0, 80)}</span>
+            {proiect.site_name && (
+              <>
+                <span style={{ color: G.border }}>·</span>
+                <span style={{ fontSize: 11, color: G.muted }}>📍 {proiect.site_name}</span>
+              </>
+            )}
+          </div>
+        ) : (
+          <span style={{ fontSize: 12, color: G.muted }}>Se încarcă...</span>
+        )}
+
+        {/* Badge termen */}
+        {proiect?.data_termen && (
+          <div style={{
+            marginLeft: 'auto', fontSize: 11, padding: '3px 10px',
+            borderRadius: 6, fontWeight: 700, flexShrink: 0,
+            background: (
+              proiect.zile_pana_termen < 0 ? G.red :
+              proiect.zile_pana_termen <= 30 ? G.red :
+              proiect.zile_pana_termen <= 90 ? G.yellow : G.green
+            ) + '22',
+            color: (
+              proiect.zile_pana_termen < 0 ? G.red :
+              proiect.zile_pana_termen <= 30 ? G.red :
+              proiect.zile_pana_termen <= 90 ? G.yellow : G.green
+            ),
+          }}>
+            📅 {fmtDate(proiect.data_termen)}
+            {proiect.zile_pana_termen !== null && (
+              <span style={{ marginLeft: 6 }}>
+                {proiect.zile_pana_termen >= 0
+                  ? `· ${proiect.zile_pana_termen}z rămase`
+                  : `· depășit ${Math.abs(proiect.zile_pana_termen)}z`}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Tab content cu proiectId prop */}
+      {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
+      {tab === 'tronsoane'      && <TabTronsoane     proiectId={proiectId} />}
+      {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
+      {tab === 'izometrie'      && <IzometriePage    initialProiectId={Number(proiectId)} />}
+      {tab === 'documente'      && <TabDocumenteNAS  proiectId={proiectId} />}
+    </div>
+  )
+}
+
+// ===========================================================================
+// DASHBOARD PROIECTE — Tab principal (carduri cu click-to-open)
+// ===========================================================================
+function DashboardProiectePage({ onSelectProiect }) {
   const [proiecte, setProiecte] = useState([])
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState(null)
   const [selectedProiect, setSelectedProiect] = useState(null)
-  const [editProiect, setEditProiect] = useState(null) // owner-only
+  const [editProiect, setEditProiect] = useState(null)
   const [toast, setToast] = useState(null)
 
   const showToast = (msg, type = 'info') => {
@@ -188,17 +271,12 @@ function DashboardProiectePage({ onGoToIzometrie }) {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      // Profile (pentru is_owner check)
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         const { data: prof } = await supabase.from('profiles').select('id,is_owner,role').eq('id', user.id).single()
         setProfile(prof)
       }
-      // Dashboard data
-      const { data, error } = await supabase
-        .from('v_executie_dashboard')
-        .select('*')
-        .order('id')
+      const { data, error } = await supabase.from('v_executie_dashboard').select('*').order('id')
       if (error) throw error
       setProiecte(data || [])
     } catch(e) {
@@ -211,8 +289,6 @@ function DashboardProiectePage({ onGoToIzometrie }) {
   useEffect(() => { loadAll() }, [loadAll])
 
   const isOwner = profile?.is_owner === true
-
-  // Stats globale
   const totalProiecte = proiecte.length
   const proiecteActive = proiecte.filter(p => p.activ).length
   const totalLungime = proiecte.reduce((acc, p) => acc + parseFloat(p.lungime_totala_m || 0), 0)
@@ -231,31 +307,24 @@ function DashboardProiectePage({ onGoToIzometrie }) {
         }}>{toast.msg}</div>
       )}
 
-      {/* ─── HEADER ─── */}
+      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: G.text }}>
-            🗂️ Dashboard Proiecte
-          </h2>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: G.text }}>🗂️ Dashboard Proiecte</h2>
           <div style={{ color: G.muted, fontSize: 13, marginTop: 4 }}>
-            Monitorizare termene · Stadiu execuție · Linkuri ofertare și contract
+            Monitorizare termene · Click pe proiect pentru a intra în context
           </div>
         </div>
         {isOwner && (
-          <button
-            onClick={() => setEditProiect({ _isNew: true, activ: true })}
-            style={{
-              padding: '9px 18px', background: G.executie, border: 'none',
-              borderRadius: 8, color: '#0D1117', fontWeight: 700, fontSize: 13,
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-            }}
-          >
-            ＋ Proiect nou
-          </button>
+          <button onClick={() => setEditProiect({ _isNew: true, activ: true })} style={{
+            padding: '9px 18px', background: G.executie, border: 'none',
+            borderRadius: 8, color: '#0D1117', fontWeight: 700, fontSize: 13,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+          }}>＋ Proiect nou</button>
         )}
       </div>
 
-      {/* ─── KPI GLOBALE ─── */}
+      {/* KPI globale */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 28 }}>
         {[
           { label: 'Proiecte active', value: `${proiecteActive}/${totalProiecte}`, icon: '📁', color: G.executie },
@@ -280,7 +349,7 @@ function DashboardProiectePage({ onGoToIzometrie }) {
         ))}
       </div>
 
-      {/* ─── CARDURI PROIECTE ─── */}
+      {/* Carduri proiecte */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px 0', color: G.muted }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
@@ -290,11 +359,7 @@ function DashboardProiectePage({ onGoToIzometrie }) {
         <div style={{ textAlign: 'center', padding: '60px 0', color: G.muted }}>
           <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }}>📁</div>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Niciun proiect înregistrat</div>
-          {isOwner && (
-            <div style={{ fontSize: 13 }}>
-              Apasă „＋ Proiect nou" pentru a adăuga primul proiect.
-            </div>
-          )}
+          {isOwner && <div style={{ fontSize: 13 }}>Apasă „＋ Proiect nou" pentru a adăuga primul proiect.</div>}
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(520px, 1fr))', gap: 20 }}>
@@ -303,22 +368,22 @@ function DashboardProiectePage({ onGoToIzometrie }) {
               key={p.id}
               proiect={p}
               isOwner={isOwner}
+              onOpen={(tab) => onSelectProiect(p.id, tab)}
               onDetail={() => setSelectedProiect(p)}
               onEdit={() => setEditProiect(p)}
-              onGoToIzometrie={onGoToIzometrie}
             />
           ))}
         </div>
       )}
 
-      {/* ─── MODALS ─── */}
+      {/* Modals */}
       {selectedProiect && (
         <ProiectDetailModal
           proiect={selectedProiect}
           isOwner={isOwner}
           onClose={() => setSelectedProiect(null)}
           onEdit={() => { setEditProiect(selectedProiect); setSelectedProiect(null) }}
-          onGoToIzometrie={onGoToIzometrie}
+          onOpen={(tab) => { setSelectedProiect(null); onSelectProiect(selectedProiect.id, tab) }}
         />
       )}
       {editProiect && (
@@ -334,10 +399,9 @@ function DashboardProiectePage({ onGoToIzometrie }) {
 }
 
 // ===========================================================================
-// PROIECT CARD
+// PROIECT CARD — click pe titlu sau "→ Deschide" navighează la context
 // ===========================================================================
-function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie }) {
-  // Calcul status termen
+function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
   const terminStatus = (() => {
     if (!p.data_termen) return null
     const zile = p.zile_pana_termen
@@ -359,28 +423,25 @@ function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie })
       onMouseEnter={e => { e.currentTarget.style.boxShadow = `0 4px 20px rgba(88,166,255,.12)`; e.currentTarget.style.transform = 'translateY(-1px)' }}
       onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'none' }}
     >
-      {/* Accent top strip */}
+      {/* Accent strip */}
       <div style={{ height: 3, background: `linear-gradient(90deg, ${G.executie}, ${G.purple})` }} />
 
-      {/* Card header */}
+      {/* Header */}
       <div style={{ padding: '18px 20px 14px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 4 }}>
               {p.cod_intern}
             </div>
-            <div style={{
-              fontSize: 14, fontWeight: 700, color: G.text, lineHeight: 1.35,
-              cursor: 'pointer',
-            }} onClick={onDetail}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: G.text, lineHeight: 1.35, cursor: 'pointer' }}
+              onClick={() => onOpen('santiere')}>
               {p.nume}
             </div>
           </div>
           <div style={{
             padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
             background: p.activ ? G.green + '22' : G.border,
-            color: p.activ ? G.green : G.muted,
-            flexShrink: 0,
+            color: p.activ ? G.green : G.muted, flexShrink: 0,
           }}>
             {p.activ ? '● Activ' : '○ Inactiv'}
           </div>
@@ -416,12 +477,10 @@ function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie })
       {/* Termene */}
       <div style={{ padding: '14px 20px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-          {/* Start */}
           <div>
             <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>Start</div>
             <div style={{ fontSize: 13, fontWeight: 600, color: G.text }}>{fmtDate(p.data_start)}</div>
           </div>
-          {/* Termen */}
           <div>
             <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>Termen</div>
             <div style={{ fontSize: 13, fontWeight: 600, color: terminStatus?.color || G.text }}>{fmtDate(p.data_termen)}</div>
@@ -434,7 +493,6 @@ function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie })
               }}>{terminStatus.label}</div>
             )}
           </div>
-          {/* % timp scurs */}
           <div>
             <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>Timp scurs</div>
             {pct !== null ? (
@@ -445,19 +503,11 @@ function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie })
                 </div>
               </>
             ) : (
-              <div style={{ fontSize: 12, color: G.dim }}>
-                {isOwner ? (
-                  <span
-                    style={{ cursor: 'pointer', color: G.executie, textDecoration: 'underline dotted' }}
-                    onClick={e => { e.stopPropagation(); /* setEditProiect via callback */ }}
-                  >Setează date...</span>
-                ) : '—'}
-              </div>
+              <div style={{ fontSize: 12, color: G.dim }}>—</div>
             )}
           </div>
         </div>
 
-        {/* Fara date warning */}
         {(!p.data_start || !p.data_termen) && isOwner && (
           <div style={{
             marginTop: 10, padding: '7px 10px',
@@ -477,29 +527,25 @@ function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie })
         background: G.bg,
       }}>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={onDetail}
-            style={{
-              padding: '6px 12px', background: G.card2, border: `1px solid ${G.border}`,
-              borderRadius: 6, color: G.text, fontSize: 12, cursor: 'pointer', fontWeight: 600,
-            }}
-          >🔍 Detalii</button>
-          <button
-            onClick={onGoToIzometrie}
-            style={{
-              padding: '6px 12px', background: G.purple + '22', border: `1px solid ${G.purple}55`,
-              borderRadius: 6, color: G.purple, fontSize: 12, cursor: 'pointer', fontWeight: 600,
-            }}
-          >📐 Izometrie →</button>
+          {/* Buton principal: deschide contextul proiectului */}
+          <button onClick={() => onOpen('santiere')} style={{
+            padding: '6px 14px', background: G.executie, border: 'none',
+            borderRadius: 6, color: '#0D1117', fontSize: 12, cursor: 'pointer', fontWeight: 700,
+          }}>→ Deschide</button>
+          <button onClick={onDetail} style={{
+            padding: '6px 12px', background: G.card2, border: `1px solid ${G.border}`,
+            borderRadius: 6, color: G.text, fontSize: 12, cursor: 'pointer', fontWeight: 600,
+          }}>🔍 Detalii</button>
+          <button onClick={() => onOpen('izometrie')} style={{
+            padding: '6px 12px', background: G.purple + '22', border: `1px solid ${G.purple}55`,
+            borderRadius: 6, color: G.purple, fontSize: 12, cursor: 'pointer', fontWeight: 600,
+          }}>📐 Izometrie</button>
         </div>
         {isOwner && (
-          <button
-            onClick={onEdit}
-            style={{
-              padding: '6px 12px', background: 'transparent', border: `1px solid ${G.border}`,
-              borderRadius: 6, color: G.muted, fontSize: 12, cursor: 'pointer',
-            }}
-          >✏️ Editează</button>
+          <button onClick={onEdit} style={{
+            padding: '6px 12px', background: 'transparent', border: `1px solid ${G.border}`,
+            borderRadius: 6, color: G.muted, fontSize: 12, cursor: 'pointer',
+          }}>✏️ Editează</button>
         )}
       </div>
     </div>
@@ -507,9 +553,9 @@ function ProiectCard({ proiect: p, isOwner, onDetail, onEdit, onGoToIzometrie })
 }
 
 // ===========================================================================
-// PROIECT DETAIL MODAL (read-only)
+// PROIECT DETAIL MODAL (read-only quick view)
 // ===========================================================================
-function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onGoToIzometrie }) {
+function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', zIndex: 1000,
@@ -537,7 +583,6 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onGoToIzomet
 
         {/* Body */}
         <div style={{ padding: '20px 24px' }}>
-          {/* Info grid */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
             {[
               { label: 'Data start', value: fmtDate(p.data_start) },
@@ -592,7 +637,6 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onGoToIzomet
             )}
           </div>
 
-          {/* Observatii */}
           {p.observatii && (
             <div style={{ background: G.bg, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: G.muted }}>
               <span style={{ fontWeight: 700, color: G.text }}>Observații: </span>{p.observatii}
@@ -605,14 +649,18 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onGoToIzomet
           padding: '14px 24px', borderTop: `1px solid ${G.border}`,
           display: 'flex', gap: 10, justifyContent: 'flex-end', background: G.bg,
         }}>
-          <button onClick={onGoToIzometrie} style={{
+          <button onClick={() => onOpen('izometrie')} style={{
             padding: '8px 16px', background: G.purple + '22', border: `1px solid ${G.purple}55`,
             borderRadius: 7, color: G.purple, fontSize: 13, cursor: 'pointer', fontWeight: 600,
-          }}>📐 Mergi la Izometrie</button>
+          }}>📐 Izometrie</button>
+          <button onClick={() => onOpen('santiere')} style={{
+            padding: '8px 16px', background: G.executie, border: 'none',
+            borderRadius: 7, color: '#0D1117', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+          }}>→ Deschide proiect</button>
           {isOwner && (
             <button onClick={onEdit} style={{
-              padding: '8px 16px', background: G.executie, border: 'none',
-              borderRadius: 7, color: '#0D1117', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+              padding: '8px 16px', background: G.border2, border: `1px solid ${G.border}`,
+              borderRadius: 7, color: G.text, fontSize: 13, cursor: 'pointer',
             }}>✏️ Editează</button>
           )}
           <button onClick={onClose} style={{
@@ -694,7 +742,10 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     background: G.bg, border: `1px solid ${G.border}`, borderRadius: 7,
     padding: '9px 12px', color: G.text, fontSize: 13, outline: 'none',
   }
-  const labelStyle = { fontSize: 11, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 5, display: 'block' }
+  const labelStyle = {
+    fontSize: 11, color: G.muted, textTransform: 'uppercase',
+    letterSpacing: '.5px', marginBottom: 5, display: 'block',
+  }
 
   return (
     <div style={{
@@ -705,31 +756,26 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
         background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14,
         width: '100%', maxWidth: 580, maxHeight: '85vh', overflow: 'auto',
       }}>
-        {/* Header */}
         <div style={{ padding: '18px 24px', borderBottom: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{isNew ? '＋ Proiect nou' : `✏️ Editează: ${proiect.cod_intern}`}</div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: G.muted, fontSize: 22, cursor: 'pointer' }}>×</button>
         </div>
 
-        {/* Body */}
         <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Cod intern *</label>
-              <input value={form.cod_intern} onChange={e => set('cod_intern', e.target.value)}
-                style={fieldStyle} placeholder="ex: PRUNISOR_JUPA" />
+              <input value={form.cod_intern} onChange={e => set('cod_intern', e.target.value)} style={fieldStyle} placeholder="ex: PRUNISOR_JUPA" />
             </div>
             <div>
               <label style={labelStyle}>Beneficiar</label>
-              <input value={form.beneficiar} onChange={e => set('beneficiar', e.target.value)}
-                style={fieldStyle} placeholder="ex: S.N.T.G.N. TRANSGAZ S.A." />
+              <input value={form.beneficiar} onChange={e => set('beneficiar', e.target.value)} style={fieldStyle} placeholder="ex: S.N.T.G.N. TRANSGAZ S.A." />
             </div>
           </div>
 
           <div>
             <label style={labelStyle}>Denumire proiect *</label>
-            <input value={form.nume} onChange={e => set('nume', e.target.value)}
-              style={fieldStyle} placeholder="Denumire completă a proiectului" />
+            <input value={form.nume} onChange={e => set('nume', e.target.value)} style={fieldStyle} placeholder="Denumire completă a proiectului" />
           </div>
 
           <div>
@@ -754,13 +800,11 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Valoare contract (RON)</label>
-              <input type="number" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)}
-                style={fieldStyle} placeholder="0" min="0" step="1000" />
+              <input type="number" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} style={fieldStyle} placeholder="0" min="0" step="1000" />
             </div>
             <div>
               <label style={labelStyle}>Valoare contract (EUR)</label>
-              <input type="number" value={form.valoare_eur} onChange={e => set('valoare_eur', e.target.value)}
-                style={fieldStyle} placeholder="0" min="0" step="1000" />
+              <input type="number" value={form.valoare_eur} onChange={e => set('valoare_eur', e.target.value)} style={fieldStyle} placeholder="0" min="0" step="1000" />
             </div>
           </div>
 
@@ -771,53 +815,21 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               placeholder="Notițe suplimentare despre proiect..." />
           </div>
 
-          {/* Activ toggle */}
           <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={form.activ} onChange={e => set('activ', e.target.checked)}
-              style={{ width: 16, height: 16, cursor: 'pointer' }} />
+            <input type="checkbox" checked={form.activ} onChange={e => set('activ', e.target.checked)} style={{ width: 16, height: 16, cursor: 'pointer' }} />
             <span style={{ fontSize: 13, color: G.text, fontWeight: 600 }}>Proiect activ</span>
           </label>
         </div>
 
-        {/* Footer */}
         <div style={{
           padding: '14px 24px', borderTop: `1px solid ${G.border}`,
           display: 'flex', gap: 10, justifyContent: 'flex-end', background: G.bg,
         }}>
-          <button onClick={onClose} style={{
-            padding: '9px 18px', background: G.border, border: 'none',
-            borderRadius: 7, color: G.text, fontSize: 13, cursor: 'pointer',
-          }}>Anulează</button>
+          <button onClick={onClose} style={{ padding: '9px 18px', background: G.border, border: 'none', borderRadius: 7, color: G.text, fontSize: 13, cursor: 'pointer' }}>Anulează</button>
           <button onClick={handleSave} disabled={saving} style={{
             padding: '9px 18px', background: saving ? G.muted : G.executie, border: 'none',
             borderRadius: 7, color: '#0D1117', fontSize: 13, cursor: saving ? 'not-allowed' : 'pointer', fontWeight: 700,
           }}>{saving ? 'Se salvează...' : isNew ? '＋ Crează proiect' : '💾 Salvează'}</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ===========================================================================
-// PLACEHOLDER pentru sub-tab-urile inactive
-// ===========================================================================
-function PlaceholderTab({ tab }) {
-  return (
-    <div style={{ padding: '24px 28px' }}>
-      <div style={{
-        background: G.card, border: `1px solid ${G.border}`, borderRadius: 12,
-        padding: '60px 40px', textAlign: 'center',
-      }}>
-        <div style={{ fontSize: 56, marginBottom: 16, opacity: 0.6 }}>{tab.icon}</div>
-        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: tab.color }}>{tab.label}</div>
-        <div style={{ color: G.muted, fontSize: 14, marginBottom: 20, maxWidth: 480, margin: '0 auto 20px' }}>{tab.desc}</div>
-        <div style={{
-          display: 'inline-block', padding: '8px 16px',
-          background: tab.color + '22', border: `1px solid ${tab.color}55`,
-          borderRadius: 8, color: tab.color, fontSize: 12, fontWeight: 600,
-          textTransform: 'uppercase', letterSpacing: '.5px',
-        }}>
-          🚧 În dezvoltare — disponibil într-o fază viitoare
         </div>
       </div>
     </div>

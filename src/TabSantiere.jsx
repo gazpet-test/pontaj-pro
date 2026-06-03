@@ -60,8 +60,9 @@ function useToast() {
 
 // ══════════════════════════════════════════════════════════
 // MAIN COMPONENT
+// proiectId: prop opțional — când vine din ProiectContextView, ascundem selectorii
 // ══════════════════════════════════════════════════════════
-export default function TabSantiere() {
+export default function TabSantiere({ proiectId: proiectIdProp }) {
   const [proiecte, setProiecte] = useState([])
   const [employees, setEmployees] = useState([])
   const [alocari, setAlocari] = useState([])
@@ -69,7 +70,7 @@ export default function TabSantiere() {
   const [loading, setLoading] = useState(true)
 
   // Filtre
-  const [proiectId, setProiectId] = useState('')
+  const [proiectId, setProiectId] = useState(proiectIdProp ? String(proiectIdProp) : '')
   const [dataStart, setDataStart] = useState(() => {
     const d = new Date(); d.setDate(1); return d.toISOString().slice(0,10)
   })
@@ -81,6 +82,11 @@ export default function TabSantiere() {
 
   const [editAlocare, setEditAlocare] = useState(null)
   const { show, Toast } = useToast()
+
+  // Sync cu prop când proiectul se schimbă din context
+  useEffect(() => {
+    if (proiectIdProp) setProiectId(String(proiectIdProp))
+  }, [proiectIdProp])
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -96,7 +102,7 @@ export default function TabSantiere() {
       ])
       setProiecte(pRes.data || [])
       setEmployees(eRes.data || [])
-      if (!proiectId && pRes.data?.length > 0) setProiectId(String(pRes.data[0].id))
+      if (!proiectIdProp && !proiectId && pRes.data?.length > 0) setProiectId(String(pRes.data[0].id))
     } finally {
       setLoading(false)
     }
@@ -179,14 +185,17 @@ export default function TabSantiere() {
       <div style={{
         background:G.surface, border:`1px solid ${G.border}`, borderRadius:10,
         padding:'16px 20px', marginBottom:20,
-        display:'grid', gridTemplateColumns:'2fr 1fr 1fr auto', gap:14, alignItems:'end'
+        display:'grid', gridTemplateColumns: proiectIdProp ? '1fr 1fr auto' : '2fr 1fr 1fr auto', gap:14, alignItems:'end'
       }}>
-        <div>
-          <label style={S.lbl}>Proiect</label>
-          <select value={proiectId} onChange={e => setProiectId(e.target.value)} style={S.input}>
-            {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern} — {p.nume.slice(0,50)}</option>)}
-          </select>
-        </div>
+        {/* Selector proiect — ascuns când vine din ProiectContextView */}
+        {!proiectIdProp && (
+          <div>
+            <label style={S.lbl}>Proiect</label>
+            <select value={proiectId} onChange={e => setProiectId(e.target.value)} style={S.input}>
+              {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern} — {p.nume.slice(0,50)}</option>)}
+            </select>
+          </div>
+        )}
         <div>
           <label style={S.lbl}>Start tură</label>
           <input type="date" value={dataStart} onChange={e => setDataStart(e.target.value)} style={S.input} />
