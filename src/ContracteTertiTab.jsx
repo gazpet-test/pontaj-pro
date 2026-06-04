@@ -676,11 +676,17 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         valoare_lei:   f.valoare_lei ? Number(f.valoare_lei) : null,
         valoare_eur:   f.valoare_eur ? Number(f.valoare_eur) : null,
       }).eq('id', Number(proiectExecId))
-    } else if (f.categorie === 'executie' && !proiectExecId && !isNew) {
-      // Dacă a fost golit câmpul → dezleagă
-      await supabase.from('executie_proiecte')
-        .update({ contract_id: null })
-        .eq('contract_id', contractId)
+    } else if (f.categorie === 'executie' && !proiectExecId) {
+      if (!isNew) {
+        // Dacă a fost golit câmpul → dezleagă proiectul anterior
+        await supabase.from('executie_proiecte')
+          .update({ contract_id: null })
+          .eq('contract_id', contractId)
+      }
+      // ⚠️ Contract de execuție salvat fără proiect — avertizăm și rămânem în modal
+      onError('⚠️ Contractul a fost salvat, dar nu e legat la niciun proiect de Execuție! Selectează proiectul din câmpul de mai jos și re-salvează.')
+      setSaving(false)
+      return
     }
 
     if (alsoAi && f.pdf_path) {

@@ -302,16 +302,26 @@ function DashboardProiectePage({ onSelectProiect }) {
       depasit: cuTermen.filter(p => p.zile_pana_termen < 0),
       critic:  cuTermen.filter(p => p.zile_pana_termen >= 0 && p.zile_pana_termen < 30),
       atentie: cuTermen.filter(p => p.zile_pana_termen >= 30 && p.zile_pana_termen <= 60),
+      fara_contract: proiecte.filter(p => p.activ && !p.are_contract),
+      fara_date:     proiecte.filter(p => p.activ && !p.are_date),
     }
   }, [proiecte])
 
   const proiecteVizibile = useMemo(() => {
     if (!alertFilter) return proiecte
-    if (alertFilter === 'depasit') return kpiAlerte.depasit
-    if (alertFilter === 'critic')  return kpiAlerte.critic
-    if (alertFilter === 'atentie') return kpiAlerte.atentie
+    if (alertFilter === 'depasit')         return kpiAlerte.depasit
+    if (alertFilter === 'critic')          return kpiAlerte.critic
+    if (alertFilter === 'atentie')         return kpiAlerte.atentie
+    if (alertFilter === 'fara_contract')   return kpiAlerte.fara_contract
+    if (alertFilter === 'fara_date')       return kpiAlerte.fara_date
     return proiecte
   }, [proiecte, alertFilter, kpiAlerte])
+
+  // Proiecte cu probleme de configurare (pentru banner)
+  const proiecteIncomplete = useMemo(
+    () => proiecte.filter(p => p.activ && p.nr_probleme > 0),
+    [proiecte]
+  )
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1400, margin: '0 auto' }}>
@@ -323,6 +333,43 @@ function DashboardProiectePage({ onSelectProiect }) {
           background: toast.type === 'error' ? G.red : toast.type === 'success' ? G.greenBg : G.blue,
           color: '#fff', boxShadow: '0 4px 20px rgba(0,0,0,.5)',
         }}>{toast.msg}</div>
+      )}
+
+      {/* Banner sănătate configurare */}
+      {proiecteIncomplete.length > 0 && !alertFilter && (
+        <div style={{
+          background: G.orange + '0D', border: `1px solid ${G.orange}44`,
+          borderRadius: 10, padding: '12px 16px', marginBottom: 20,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 18 }}>⚠️</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: G.orange }}>
+                {proiecteIncomplete.length} proiect{proiecteIncomplete.length > 1 ? 'e' : ''} cu configurare incompletă
+              </div>
+              <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>
+                {kpiAlerte.fara_contract?.length > 0 && `${kpiAlerte.fara_contract.length} fără contract`}
+                {kpiAlerte.fara_contract?.length > 0 && kpiAlerte.fara_date?.length > 0 && ' · '}
+                {kpiAlerte.fara_date?.length > 0 && `${kpiAlerte.fara_date.length} fără termene`}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {kpiAlerte.fara_contract?.length > 0 && (
+              <button onClick={() => setAlertFilter('fara_contract')} style={{
+                padding: '5px 12px', background: G.orange + '22', border: `1px solid ${G.orange}55`,
+                borderRadius: 7, color: G.orange, fontSize: 11, cursor: 'pointer', fontWeight: 700,
+              }}>⚠️ {kpiAlerte.fara_contract.length} fără contract</button>
+            )}
+            {kpiAlerte.fara_date?.length > 0 && (
+              <button onClick={() => setAlertFilter('fara_date')} style={{
+                padding: '5px 12px', background: G.yellow + '22', border: `1px solid ${G.yellow}55`,
+                borderRadius: 7, color: G.yellow, fontSize: 11, cursor: 'pointer', fontWeight: 700,
+              }}>📅 {kpiAlerte.fara_date.length} fără termene</button>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Header */}
@@ -509,6 +556,26 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
               onClick={() => onOpen('santiere')}>
               {p.nume}
             </div>
+            {/* Badge-uri sănătate: apar doar când lipsesc legăturile */}
+            {p.nr_probleme > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+                {!p.are_santier && (
+                  <span style={{ fontSize: 9, padding: '2px 8px', background: G.red + '18', color: G.red, borderRadius: 8, fontWeight: 700, border: `1px solid ${G.red}44` }}>
+                    🔴 Lipsă șantier
+                  </span>
+                )}
+                {!p.are_contract && (
+                  <span style={{ fontSize: 9, padding: '2px 8px', background: G.orange + '18', color: G.orange, borderRadius: 8, fontWeight: 700, border: `1px solid ${G.orange}44` }}>
+                    ⚠️ Lipsă contract
+                  </span>
+                )}
+                {!p.are_date && (
+                  <span style={{ fontSize: 9, padding: '2px 8px', background: G.yellow + '18', color: G.yellow, borderRadius: 8, fontWeight: 700, border: `1px solid ${G.yellow}44` }}>
+                    📅 Lipsă termene
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
             {p.este_sistat && (
