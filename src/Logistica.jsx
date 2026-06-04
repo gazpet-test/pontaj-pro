@@ -7983,7 +7983,7 @@ function QrBulkPrintModal({ onClose }) {
   useEffect(() => {
     supabase.from('logistica_active')
       .select('id, cod_intern, nr_inmatriculare, marca, model, tip_vehicul, deep_sleep')
-      .eq('active', true)
+      .eq('vandut', false)
       .order('cod_intern')
       .then(({ data }) => { setActives(data || []); setLoading(false) })
   }, [])
