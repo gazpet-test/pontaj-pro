@@ -6138,6 +6138,9 @@ function AdminPage() {
   const isAdmin = isSuperAdmin
   const [tab,setTab]=useState('sites')
   const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
+  const [depozite,setDepozite]=useState([]); const [savingDep,setSavingDep]=useState(false)
+  const [depForm,setDepForm]=useState({name:'',cod_3litere:'',site_id:'',adresa:''})
+  const [editDep,setEditDep]=useState(null)
   const [calDays,setCalDays]=useState([]); const [settings,setSettings]=useState({diurna_amount:'50',work_hours_per_day:'8'})
   const [load,setLoad]=useState(true); const [toast,showToast]=useToast()
   const fileRef=useRef(null); const calRef=useRef(null)
@@ -6169,7 +6172,7 @@ function AdminPage() {
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st,ps,fs,os]=await Promise.all([
+    const [s,p,e,c,st,ps,fs,os,dep]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
@@ -6178,8 +6181,10 @@ function AdminPage() {
       supabase.from('profile_sites').select('*'),
       supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
       supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
+      supabase.from('logistica_depozite').select('*,sites(name)').order('name'),
     ])
     setSites(s.data||[])
+    setDepozite(dep.data||[])
     // Attach site_ids to each manager
     const mgrs=(p.data||[]).map(m=>({...m,site_ids:(ps.data||[]).filter(x=>x.profile_id===m.id).map(x=>x.site_id)}))
     setManagers(mgrs)
@@ -6998,6 +7003,7 @@ function AdminPage() {
       )}
 
       {tab==='sites'&&(
+        <>
         <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
           <div style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
@@ -7019,6 +7025,77 @@ function AdminPage() {
             <button style={{...S.btnP,width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:7}} onClick={addSite} disabled={addingSite}>{addingSite?<><div className="sp"/>...</>:'+ Adaugă'}</button>
           </div>
         </div>
+
+        {/* ═══════════ DEPOZITE MATERIALE ═══════════ */}
+        <div style={{marginTop:22}}>
+          <div style={{fontSize:14,fontWeight:800,color:G.text,marginBottom:12,display:'flex',alignItems:'center',gap:8}}>
+            🏭 Depozite materiale
+            <span style={{fontSize:10,color:G.muted,fontWeight:500}}>— locații fizice de stocare (legate la șantier, generează seria avizului)</span>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
+            <div style={{...S.card,overflow:'hidden'}}>
+              <table><thead><tr style={{background:G.bg}}>
+                <th>Depozit</th><th>Serie aviz</th><th>Șantier</th><th>Adresă</th><th>Status</th><th></th>
+              </tr></thead>
+              <tbody>{depozite.map(d=>(
+                <tr key={d.id}>
+                  <td style={{fontWeight:700}}>{d.name}</td>
+                  <td><span style={{fontFamily:'monospace',fontSize:11,padding:'2px 7px',background:G.purple+'22',color:G.purple,borderRadius:5,fontWeight:700}}>GAZ/TR/INTERN/{d.cod_3litere}</span></td>
+                  <td style={{color:G.muted,fontSize:12}}>{d.sites?.name||<span style={{color:G.dim}}>—</span>}</td>
+                  <td style={{fontSize:11,color:G.muted}}>{d.adresa||'—'}</td>
+                  <td><span style={{padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700,background:d.activ?G.greenDim:G.redDim,color:d.activ?G.green:G.red}}>{d.activ?'● Activ':'○ Inactiv'}</span></td>
+                  <td style={{display:'flex',gap:5}}>
+                    <button onClick={()=>setEditDep(d)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️</button>
+                    <button onClick={async()=>{await supabase.from('logistica_depozite').update({activ:!d.activ}).eq('id',d.id);loadAll()}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>{d.activ?'Dezact.':'Activ.'}</button>
+                  </td>
+                </tr>
+              ))}{!depozite.length&&<tr><td colSpan={6} style={{textAlign:'center',color:G.muted,padding:24,fontSize:12}}>Niciun depozit adăugat</td></tr>}</tbody>
+              </table>
+            </div>
+            <div style={{...S.card,padding:20}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>{editDep?'✏️ Editează depozit':'+ Depozit nou'}</div>
+              {[{l:'Nume depozit',k:'name',ph:'ex: Balvanești'},{l:'Cod 3 litere',k:'cod_3litere',ph:'ex: BAL',max:3},{l:'Adresă',k:'adresa',ph:'Localitate, județ'}].map(f=>(
+                <div key={f.k} style={{marginBottom:10}}>
+                  <Lbl>{f.l}</Lbl>
+                  <input style={S.input} placeholder={f.ph} maxLength={f.max||100}
+                    value={editDep?editDep[f.k]||'':depForm[f.k]}
+                    onChange={e=>{const v=f.k==='cod_3litere'?e.target.value.toUpperCase().replace(/[^A-Z]/g,'').substring(0,3):e.target.value;editDep?setEditDep({...editDep,[f.k]:v}):setDepForm({...depForm,[f.k]:v})}}/>
+                </div>
+              ))}
+              <div style={{marginBottom:14}}>
+                <Lbl>Șantier asociat</Lbl>
+                <select style={S.input} value={editDep?editDep.site_id||'':depForm.site_id} onChange={e=>editDep?setEditDep({...editDep,site_id:e.target.value}):setDepForm({...depForm,site_id:e.target.value})}>
+                  <option value=''>— Fără șantier —</option>
+                  {sites.filter(s=>s.active).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              {editDep?(
+                <div style={{display:'flex',gap:8}}>
+                  <button onClick={()=>setEditDep(null)} style={{...S.btnS,flex:1}}>Anulează</button>
+                  <button disabled={savingDep} style={{...S.btnP,flex:1}} onClick={async()=>{
+                    if(!editDep.name||!editDep.cod_3litere){showToast('Completați numele și codul','warn');return}
+                    setSavingDep(true)
+                    await supabase.from('logistica_depozite').update({name:editDep.name,cod_3litere:editDep.cod_3litere,site_id:editDep.site_id?parseInt(editDep.site_id):null,adresa:editDep.adresa||null}).eq('id',editDep.id)
+                    showToast('✓ Depozit actualizat');setEditDep(null);loadAll();setSavingDep(false)
+                  }}>✓ Salvează</button>
+                </div>
+              ):(
+                <button disabled={savingDep||!depForm.name||!depForm.cod_3litere} style={{...S.btnP,width:'100%'}} onClick={async()=>{
+                  if(!depForm.name||!depForm.cod_3litere){showToast('Completați numele și codul','warn');return}
+                  setSavingDep(true)
+                  const cod=depForm.cod_3litere.toUpperCase()
+                  await supabase.from('logistica_depozite').insert({name:depForm.name,cod_3litere:cod,site_id:depForm.site_id?parseInt(depForm.site_id):null,adresa:depForm.adresa||null})
+                  await supabase.from('avize_serii_counter').upsert({serie:`GAZ/TR/INTERN/${cod}`,last_nr:0},{onConflict:'serie',ignoreDuplicates:true})
+                  showToast(`✓ ${depForm.name} adăugat`);setDepForm({name:'',cod_3litere:'',site_id:'',adresa:''});loadAll();setSavingDep(false)
+                }}>+ Adaugă depozit</button>
+              )}
+              <div style={{marginTop:10,padding:'8px 10px',background:G.bg,borderRadius:6,fontSize:10,color:G.muted}}>
+                💡 Codul 3 litere → seria avizului: <strong style={{color:G.purple,fontFamily:'monospace'}}>GAZ/TR/INTERN/BAL</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+        </>
       )}
 
       {tab==='managers'&&(
@@ -7051,6 +7128,7 @@ function AdminPage() {
               <option value="sef_echipa">🏗️ Șef Echipă</option>
               <option value="contabilitate">💵 Contabilitate</option>
               <option value="hr">👥 HR</option>
+              <option value="gestionar">🏭 Gestionar</option>
             </select></div>
             <div style={{marginBottom:10}}><Lbl>🏢 Departament (opțional)</Lbl><select value={nDept} onChange={e=>setNDept(e.target.value)} style={{width:'100%'}}>
               <option value="">— niciunul —</option>
