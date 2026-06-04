@@ -1132,6 +1132,11 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
+  // ─── Documente contract (atașamente) ────────────────────────────────────
+  const [docsContract, setDocsContract]        = useState([])
+  const [addingDoc, setAddingDoc]              = useState(false)
+  const [uploadingDoc, setUploadingDoc]        = useState(false)
+
   // ─── Acte adiționale ────────────────────────────────────────────────────
   const [acteAditionale, setActeAditionale]   = useState([])
   const [expandActs, setExpandActs]           = useState(false)
