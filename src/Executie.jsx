@@ -578,6 +578,12 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
             )}
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+            {p.isc_faza_determinanta && (
+              <div style={{
+                padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+                background: '#EF444422', color: '#EF4444', border: '1px solid #EF444444',
+              }}>🏛️ ISC·FD</div>
+            )}
             {p.este_sistat && (
               <div style={{
                 padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
@@ -780,6 +786,13 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
 // PROIECT DETAIL MODAL (read-only quick view)
 // ===========================================================================
 function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
+  const [personnel, setPersonnel] = useState({})
+  useEffect(() => {
+    const ids = [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id].filter(Boolean)
+    if (!ids.length) return
+    supabase.from('employees').select('id, name, functie').in('id', ids)
+      .then(({ data }) => { const m = {}; (data||[]).forEach(e => { m[e.id] = e }); setPersonnel(m) })
+  }, [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id])
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', zIndex: 1000,
@@ -826,6 +839,46 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
               </div>
             ))}
           </div>
+
+          {/* Echipă proiect + ISC */}
+          {(p.mp_employee_id || p.rts_employee_id || p.rte_employee_id || p.coordonator_transgaz || p.isc_faza_determinanta) && (
+            <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10 }}>
+                👥 Echipă proiect
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
+                {[
+                  { label: 'Manager Proiect (MP)',          id: p.mp_employee_id },
+                  { label: 'Resp. Tehnic Execuție (RTE)',   id: p.rte_employee_id },
+                  { label: 'Resp. Tehnic Sudură (RTS)',     id: p.rts_employee_id },
+                  { label: 'Coordonator Transgaz',          val: p.coordonator_transgaz },
+                ].filter(r => r.id || r.val).map((r, i) => (
+                  <div key={i} style={{ background: G.card2, borderRadius: 7, padding: '8px 12px' }}>
+                    <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 2 }}>{r.label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: G.text }}>
+                      {r.val || personnel[r.id]?.name || '⏳ se încarcă...'}
+                    </div>
+                    {r.id && personnel[r.id]?.functie && (
+                      <div style={{ fontSize: 10, color: G.muted }}>{personnel[r.id].functie}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {p.isc_faza_determinanta && (
+                <div style={{ marginTop: 10, display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'#EF444418', borderRadius:7, border:'1px solid #EF444444' }}>
+                  <span style={{ fontSize: 18 }}>🏛️</span>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444' }}>ISC – Faza Determinantă ACTIVĂ</div>
+                    {p.doc_itp_ai_faze_det > 0 && (
+                      <div style={{ fontSize: 10, color: G.muted }}>
+                        {p.doc_itp_ai_faze_det} faze determinate detectate · {p.doc_itp_ai_confidence}% confidence AI
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Stadiu execuție */}
           <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
@@ -1057,18 +1110,32 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     site_id:       proiect.site_id       || '',
     activ:         proiect.activ !== false,
     manual_sistat: proiect.manual_sistat === true,
+    // ─── Persoane cheie ─────────────────────────────────────────────────────
+    mp_employee_id:       proiect.mp_employee_id        || '',
+    rts_employee_id:      proiect.rts_employee_id       || '',
+    rte_employee_id:      proiect.rte_employee_id       || '',
+    coordonator_transgaz: proiect.coordonator_transgaz  || '',
+    isc_faza_determinanta: proiect.isc_faza_determinanta === true,
   })
+  const [employees, setEmployees] = useState([]) // pentru dropdownuri persoane cheie
   const [sites, setSites]   = useState([])
   const [saving, setSaving] = useState(false)
 
   // ─── Documente tehnice contractuale ─────────────────────────────────────
   const [docPaths, setDocPaths] = useState({
-    caiet_sarcini:      proiect.doc_caiet_sarcini_path      || null,
-    propunere_tehnica:  proiect.doc_propunere_tehnica_path  || null,
+    caiet_sarcini:       proiect.doc_caiet_sarcini_path       || null,
+    propunere_tehnica:   proiect.doc_propunere_tehnica_path   || null,
     propunere_financiara: proiect.doc_propunere_financiara_path || null,
+    itp_pccvi:           proiect.doc_itp_pccvi_path           || null,
   })
-  const [uploadingTehnic, setUploadingTehnic] = useState(null) // tipul care se uploadează
+  const [uploadingTehnic, setUploadingTehnic] = useState(null)
   const [extractingAI, setExtractingAI]       = useState(false)
+  const [extractingITP, setExtractingITP]     = useState(false)
+  const [itpAI, setItpAI] = useState({
+    participants: [],
+    faze_det: proiect.doc_itp_ai_faze_det    || 0,
+    confidence: proiect.doc_itp_ai_confidence || 0,
+  })
   const [cantitati, setCantitati]             = useState({
     curbe_buc:                proiect.curbe_buc                    ?? null,
     robineti_buc:             proiect.robineti_buc                 ?? null,
@@ -1081,6 +1148,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     { key: 'propunere_financiara', label: '💰 Propunere financiară', hint: 'Deviz — sursa primară pentru cantități' },
     { key: 'propunere_tehnica',    label: '🔧 Propunere tehnică',    hint: 'Metodologie + cantități secundare' },
     { key: 'caiet_sarcini',        label: '📋 Caiet de sarcini',     hint: 'Specificații tehnice Transgaz' },
+    { key: 'itp_pccvi',            label: '🔍 ITP-PCCVI',            hint: 'Plan de inspecții și încercări — participanți + faze determinate' },
   ]
 
   const handleUploadDocTehnic = async (tip, file) => {
@@ -1092,7 +1160,12 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
       const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file, { upsert: true })
       if (upErr) throw upErr
       // Salvăm path în BD
-      const colMap = { caiet_sarcini: 'doc_caiet_sarcini_path', propunere_tehnica: 'doc_propunere_tehnica_path', propunere_financiara: 'doc_propunere_financiara_path' }
+      const colMap = {
+        caiet_sarcini:        'doc_caiet_sarcini_path',
+        propunere_tehnica:    'doc_propunere_tehnica_path',
+        propunere_financiara: 'doc_propunere_financiara_path',
+        itp_pccvi:            'doc_itp_pccvi_path',
+      }
       await supabase.from('executie_proiecte').update({ [colMap[tip]]: path, updated_at: new Date().toISOString() }).eq('id', proiect.id)
       setDocPaths(prev => ({ ...prev, [tip]: path }))
       showToast(`${tip.replace(/_/g, ' ')} încărcat!`, 'success')
@@ -1125,6 +1198,28 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
       showToast(`AI extras cu ${r.confidence}% încredere din ${res.docs_procesate} doc.`, 'success')
     } catch(e) { showToast('Eroare AI: ' + e.message, 'error') }
     finally { setExtractingAI(false) }
+  }
+
+  const handleExtractITP = async () => {
+    if (!proiect.id) { showToast('Salvați proiectul mai întâi', 'error'); return }
+    if (!docPaths.itp_pccvi) { showToast('Încărcați mai întâi ITP-PCCVI', 'error'); return }
+    setExtractingITP(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/extract-itp-ai`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proiect_id: proiect.id }),
+      })
+      const res = await resp.json()
+      if (!resp.ok) throw new Error(res.error || 'Eroare extracție ITP')
+      const r = res.rezultat
+      setItpAI({ participants: r.participants_confirmed || [], faze_det: r.faze_determinate_isc_count || 0, confidence: r.confidence || 0 })
+      // Auto-completează ISC dacă detectat
+      if (r.isc_faza_determinanta !== undefined) set('isc_faza_determinanta', r.isc_faza_determinanta)
+      showToast(`ITP analizat: ${r.faze_determinate_isc_count || 0} FD-uri ISC, ${r.confidence}% confidence`, 'success')
+    } catch(e) { showToast('Eroare AI ITP: ' + e.message, 'error') }
+    finally { setExtractingITP(false) }
   }
 
   const handleOpenDocTehnic = async (path) => {
@@ -1184,6 +1279,8 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   useEffect(() => {
     supabase.from('sites').select('id, name').eq('active', true).order('name')
       .then(({ data }) => setSites(data || []))
+    supabase.from('employees').select('id, name, functie').eq('active', true).order('name')
+      .then(({ data }) => setEmployees(data || []))
     loadDocs(); loadActs(); loadOrdine()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1209,6 +1306,12 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
         site_id:       form.site_id ? parseInt(form.site_id) : null,
         activ:         form.activ,
         manual_sistat: form.manual_sistat,
+        // persoane cheie
+        mp_employee_id:       form.mp_employee_id  ? parseInt(form.mp_employee_id)  : null,
+        rts_employee_id:      form.rts_employee_id ? parseInt(form.rts_employee_id) : null,
+        rte_employee_id:      form.rte_employee_id ? parseInt(form.rte_employee_id) : null,
+        coordonator_transgaz: form.coordonator_transgaz.trim() || null,
+        isc_faza_determinanta: form.isc_faza_determinanta,
         updated_at:    new Date().toISOString(),
       }
       let error
@@ -1662,6 +1765,41 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             </label>
           </div>
 
+          {/* ── Persoane cheie + ISC ─────────────────────────────────────── */}
+          <div style={{ borderTop:`1px solid ${G.border}`, paddingTop:14, marginBottom:4 }}>
+            <div style={secTitle}><span>👥</span> Persoane cheie & ISC</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginTop:10 }}>
+              {[
+                { key:'mp_employee_id',  label:'MP — Manager Proiect',         emoji:'👤' },
+                { key:'rte_employee_id', label:'RTE — Resp. Tehnic Execuție',  emoji:'⚙️' },
+                { key:'rts_employee_id', label:'RTS — Resp. Tehnic Sudură',    emoji:'🔥' },
+              ].map(f => (
+                <div key={f.key}>
+                  <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>{f.emoji} {f.label}</label>
+                  <select value={form[f.key]||''} onChange={e=>set(f.key, e.target.value)} style={{...S.input,fontSize:12,padding:'6px 8px'}}>
+                    <option value=''>— Neatribuit —</option>
+                    {employees.map(emp => (
+                      <option key={emp.id} value={emp.id}>{emp.name}{emp.functie ? ` · ${emp.functie}` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop:10 }}>
+              <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>🏢 Coordonator Transgaz</label>
+              <input style={{...S.input,fontSize:12}} placeholder='Nume și prenume (persoana de la beneficiar)' value={form.coordonator_transgaz} onChange={e=>set('coordonator_transgaz',e.target.value)} />
+            </div>
+            <div style={{ marginTop:10 }}>
+              <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer', padding:'9px 12px', borderRadius:8, background: form.isc_faza_determinanta ? '#EF444418':'#0D1117', border:`1px solid ${form.isc_faza_determinanta?'#EF4444':'#30363D'}` }}>
+                <input type='checkbox' checked={!!form.isc_faza_determinanta} onChange={e=>set('isc_faza_determinanta',e.target.checked)} style={{accentColor:'#EF4444',width:15,height:15}} />
+                <div>
+                  <div style={{ fontSize:12, fontWeight:700, color: form.isc_faza_determinanta ? '#EF4444' : G.text }}>🏛️ ISC – Faza Determinantă</div>
+                  <div style={{ fontSize:10, color:G.muted }}>Inspectoratul de Stat în Construcții prezent la faze determinate</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
           {/* ── Documentație tehnică + AI ─────────────────────────────────── */}
           <div style={{ borderTop: `1px solid ${G.border}`, paddingTop: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -1678,7 +1816,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               )}
             </div>
 
-            {/* Upload 3 documente tehnice */}
+            {/* Upload 4 documente tehnice */}
             <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
               {DOC_TEHNICE.map(dt => (
                 <div key={dt.key} style={{
@@ -1745,6 +1883,36 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               </div>
             )}
             {isNew && <div style={{fontSize:11,color:G.dim,fontStyle:'italic',padding:'6px 0'}}>💡 Salvați proiectul mai întâi, apoi adăugați documentele tehnice.</div>}
+
+            {/* ITP AI — buton + rezultate */}
+            {!isNew && docPaths.itp_pccvi && (
+              <div style={{ marginTop:10, padding:'12px 14px', background:'#0D1117', border:`1px solid ${form.isc_faza_determinanta?'#EF444444':G.border}`, borderRadius:9 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: itpAI.confidence>0 ? 10 : 0 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:G.text }}>🔍 Analiză AI — ITP-PCCVI</div>
+                  <button onClick={handleExtractITP} disabled={extractingITP} style={{
+                    padding:'5px 12px', background: extractingITP ? G.muted : '#EF4444',
+                    border:'none', borderRadius:6, color:'#fff', fontSize:11,
+                    cursor: extractingITP ? 'not-allowed' : 'pointer', fontWeight:700,
+                    opacity: extractingITP ? 0.6 : 1,
+                  }}>
+                    {extractingITP ? '⏳ Analizez...' : '🔬 Extrage participanți'}
+                  </button>
+                </div>
+                {itpAI.confidence > 0 && (
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6, fontSize:11 }}>
+                    <span style={{ padding:'3px 8px', borderRadius:8, background:'#2DD4BF22', color:'#2DD4BF', fontWeight:700 }}>
+                      📊 {itpAI.faze_det} FD-uri ISC
+                    </span>
+                    <span style={{ padding:'3px 8px', borderRadius:8, background:G.purple+'22', color:G.purple, fontWeight:700 }}>
+                      {itpAI.confidence}% confidence
+                    </span>
+                    {itpAI.participants.map(p => (
+                      <span key={p} style={{ padding:'3px 8px', borderRadius:8, background:G.card2, color:G.text, fontWeight:600 }}>{p}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── Documente anexă la contract ─────────────────────────────── */}
