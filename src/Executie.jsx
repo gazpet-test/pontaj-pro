@@ -1776,7 +1776,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               ].map(f => (
                 <div key={f.key}>
                   <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>{f.emoji} {f.label}</label>
-                  <select value={form[f.key]||''} onChange={e=>set(f.key, e.target.value)} style={{...S.input,fontSize:12,padding:'6px 8px'}}>
+                  <select value={form[f.key]||''} onChange={e=>set(f.key, e.target.value)} style={{...fieldStyle,fontSize:12,padding:'6px 8px'}}>
                     <option value=''>— Neatribuit —</option>
                     {employees.map(emp => (
                       <option key={emp.id} value={emp.id}>{emp.name}{emp.functie ? ` · ${emp.functie}` : ''}</option>
@@ -1787,7 +1787,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             </div>
             <div style={{ marginTop:10 }}>
               <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>🏢 Coordonator Transgaz</label>
-              <input style={{...S.input,fontSize:12}} placeholder='Nume și prenume (persoana de la beneficiar)' value={form.coordonator_transgaz} onChange={e=>set('coordonator_transgaz',e.target.value)} />
+              <input style={{...fieldStyle,fontSize:12}} placeholder='Nume și prenume (persoana de la beneficiar)' value={form.coordonator_transgaz} onChange={e=>set('coordonator_transgaz',e.target.value)} />
             </div>
             <div style={{ marginTop:10 }}>
               <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer', padding:'9px 12px', borderRadius:8, background: form.isc_faza_determinanta ? '#EF444418':'#0D1117', border:`1px solid ${form.isc_faza_determinanta?'#EF4444':'#30363D'}` }}>
