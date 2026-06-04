@@ -1136,6 +1136,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const [docsContract, setDocsContract]        = useState([])
   const [addingDoc, setAddingDoc]              = useState(false)
   const [uploadingDoc, setUploadingDoc]        = useState(false)
+  const [uploadTip, setUploadTip]              = useState(TIPURI_DOC_CONTRACT[0]?.value || '')
 
   // ─── Acte adiționale ────────────────────────────────────────────────────
   const [acteAditionale, setActeAditionale]   = useState([])
