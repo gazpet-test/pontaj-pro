@@ -6146,6 +6146,7 @@ function AdminPage() {
   const [deletingSite,setDeletingSite]=useState(null) // site being confirmed for delete
   const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager_santier'); const [nPwd,setNPwd]=useState(''); const [nDept,setNDept]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
+  const [editMgrModules,setEditMgrModules]=useState({}) // acces module pentru editMgr (key→bool)
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [eHireDate,setEHireDate]=useState(''); const [addingE,setAddingE]=useState(false)
   const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
   const [empSearch,setEmpSearch]=useState('')
@@ -6278,6 +6279,16 @@ function AdminPage() {
       await supabase.from('profile_sites').delete().eq('profile_id',editMgr.id)
       if(ROLES_WITH_SITES.includes(editMgr.role) && editMgr.site_ids?.length>0){
         await supabase.from('profile_sites').insert(editMgr.site_ids.map(sid=>({profile_id:editMgr.id,site_id:sid})))
+      }
+      // ════ Sync user_module_access — doar Owner (DELETE all + re-INSERT selectate) ════
+      if (profile?.is_owner === true) {
+        await supabase.from('user_module_access').delete().eq('profile_id', editMgr.id)
+        const selectedMods = Object.entries(editMgrModules).filter(([,v])=>v).map(([k])=>k)
+        if (selectedMods.length > 0) {
+          await supabase.from('user_module_access').insert(
+            selectedMods.map(mod => ({ profile_id: editMgr.id, module: mod, access_level: 'editor' }))
+          )
+        }
       }
       // Update email și în auth.users (dacă schimbat) — via RPC
       if (updates.email) {
@@ -6832,6 +6843,44 @@ function AdminPage() {
                 </div>
               </div>
             )}
+            {/* ════════════════ Acces Module — Owner Only ════════════════ */}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:14,background:'#15111F',borderRadius:8,border:`1px solid ${G.purple}55`}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:18}}>🗂️</span>
+                    <div style={{fontSize:13,fontWeight:800,color:G.text}}>Acces Module</div>
+                  </div>
+                  <span style={{fontSize:10,padding:'2px 8px',background:G.purple+'22',color:G.purple,borderRadius:10,fontWeight:700}}>OWNER ONLY</span>
+                </div>
+                <div style={{fontSize:10,color:G.muted,marginBottom:10,lineHeight:1.5}}>
+                  Bifează modulele vizibile în navigație. Tichete + Execuție + Financiar sunt accesibile tuturor dar apar în meniu doar dacă sunt bifate. Sensibile (Salarii, Date Personale) → flag-urile de mai sus.
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                  {[
+                    {key:'logistica',    label:'Logistică',    emoji:'🚜', color:G.yellow},
+                    {key:'administrativ',label:'Administrativ',emoji:'🏢', color:G.blue},
+                    {key:'comercial',    label:'Comercial',    emoji:'🛒', color:G.green},
+                    {key:'achizitii',    label:'Achiziții',    emoji:'📥', color:G.purple},
+                    {key:'ofertare',     label:'Ofertare',     emoji:'💡', color:'#2DD4BF'},
+                    {key:'magazie',      label:'Magazie',      emoji:'📦', color:G.orange},
+                    {key:'ctc',          label:'CTC',          emoji:'📑', color:'#58A6FF'},
+                    {key:'executie',     label:'Execuție',     emoji:'⚙️', color:G.green},
+                    {key:'financiar',    label:'Financiar',    emoji:'💰', color:'#2EA043'},
+                    {key:'hr',           label:'HR',           emoji:'👥', color:'#EC6CB9'},
+                    {key:'pontajpro',    label:'PontajPRO',    emoji:'📊', color:'#58A6FF'},
+                  ].map(m => {
+                    const active = !!editMgrModules[m.key]
+                    return (
+                      <label key={m.key} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'7px 9px',background:active?m.color+'22':G.bg,border:`1px solid ${active?m.color+'88':G.border2}`,borderRadius:6}}>
+                        <input type="checkbox" checked={active} onChange={e=>setEditMgrModules({...editMgrModules,[m.key]:e.target.checked})} style={{accentColor:m.color,width:13,height:13}}/>
+                        <span style={{fontSize:11,fontWeight:active?700:500,color:active?m.color:G.text,whiteSpace:'nowrap'}}>{m.emoji} {m.label}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
             {/* ════════════════ WhatsApp Notifications ════════════════ */}
             <div style={{marginBottom:14,padding:14,background:editMgr.whatsapp_enabled?'#0F2A1F':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.whatsapp_enabled?'#25D366':G.border}66`}}>
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
@@ -6986,7 +7035,7 @@ function AdminPage() {
                   {m.department && <div style={{color:G.blue,marginTop:2,fontSize:10,fontWeight:600}}>🏢 {m.department}</div>}
                   {!m.department && (m.site_ids||[]).length===0 && <span style={{color:G.dim}}>—</span>}
                 </td>
-                <td><button onClick={()=>setEditMgr({...m, original_email: m.email})} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
+                <td><button onClick={async()=>{setEditMgr({...m,original_email:m.email});const{data:ma}=await supabase.from('user_module_access').select('module').eq('profile_id',m.id);const mods={};(ma||[]).forEach(x=>{mods[x.module]=true});setEditMgrModules(mods)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
           </div>
