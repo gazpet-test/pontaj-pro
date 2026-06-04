@@ -7969,10 +7969,144 @@ function QrPrintModal({ activ, onClose }) {
 
 
 // ============================================================
-// QR RECONCILIERE TAB - audit reconciliere lunară (27.05.2026)
+// ============================================================
+// QR BULK PRINT MODAL - export toate QR-urile dintr-un singur click
+// Format: A4 portrait, 3 carduri / rând, auto-print
+// 04.06.2026
+// ============================================================
+function QrBulkPrintModal({ onClose }) {
+  const [actives, setActives] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('all') // all | auto | utilaj | echipament
+  const BASE = window.location.origin
+
+  useEffect(() => {
+    supabase.from('logistica_active')
+      .select('id, cod_intern, nr_inmatriculare, marca, model, tip_vehicul, deep_sleep')
+      .eq('active', true)
+      .order('cod_intern')
+      .then(({ data }) => { setActives(data || []); setLoading(false) })
+  }, [])
+
+  const filtered = actives.filter(a => {
+    if (a.deep_sleep) return false
+    if (filter === 'all') return true
+    const tip = (a.tip_vehicul || '').toLowerCase()
+    if (filter === 'auto') return tip.includes('auto') || tip.includes('duba') || tip.includes('camion') || tip.includes('vehicul') || tip.includes('suv')
+    if (filter === 'utilaj') return !tip.includes('auto') && !tip.includes('duba') && !tip.includes('camion') && !tip.includes('vehicul') && !tip.includes('suv') && !tip.includes('echip')
+    if (filter === 'echipament') return tip.includes('echip') || tip.includes('generator') || tip.includes('compresor') || tip.includes('macara')
+    return true
+  })
+
+  function doBulkPrint() {
+    const w = window.open('', '_blank', 'width=900,height=700')
+    if (!w) { alert('Permite popup-urile pentru print!'); return }
+
+    const cards = filtered.map(a => {
+      const url = `${BASE}/q/${a.id}`
+      const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=5`
+      const plate = a.nr_inmatriculare || a.cod_intern || `#${a.id}`
+      const vehicle = [a.marca, a.model].filter(Boolean).join(' ') || '—'
+      return `
+        <div class="card">
+          <div class="top">⛽ ALIMENTARE GAZPET</div>
+          <div class="plate">${plate}</div>
+          ${a.cod_intern ? `<div class="cod">${a.cod_intern}</div>` : ''}
+          <div class="qr"><img src="${qrSrc}" loading="eager" /></div>
+          <div class="vehicle">${vehicle}</div>
+          <div class="instr">📱 Scanează cu telefonul · tastează PIN</div>
+        </div>`
+    }).join('')
+
+    w.document.write(`<!DOCTYPE html><html><head>
+      <meta charset="utf-8"/>
+      <title>QR Bulk — Gazpet Instal (${filtered.length} utilaje)</title>
+      <style>
+        * { box-sizing: border-box; }
+        @page { size: A4 portrait; margin: 8mm; }
+        body { font-family: -apple-system, Arial, sans-serif; margin: 0; padding: 4mm; }
+        .info { font-size: 10px; color: #666; text-align: center; margin-bottom: 6mm; border-bottom: 1px solid #ccc; padding-bottom: 4mm; }
+        .grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 5mm; }
+        .card { border: 1.5px solid #333; border-radius: 8px; padding: 7px; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+        .top { font-size: 7.5px; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; margin-bottom: 3px; }
+        .plate { font-size: 14px; font-weight: 900; background: #111; color: #fff; padding: 4px 10px; border-radius: 5px; display: inline-block; letter-spacing: 1.5px; margin-bottom: 2px; }
+        .cod { font-size: 8.5px; color: #555; margin-bottom: 3px; }
+        .qr img { width: 110px; height: 110px; display: block; margin: 0 auto; }
+        .vehicle { font-size: 9px; color: #333; font-weight: 700; margin-top: 4px; }
+        .instr { font-size: 8px; color: #777; margin-top: 3px; }
+        @media print { .info { display: none; } }
+      </style>
+    </head><body>
+      <div class="info">Gazpet Instal — ${filtered.length} coduri QR · ${new Date().toLocaleDateString('ro-RO')}</div>
+      <div class="grid">${cards}</div>
+      <script>
+        const imgs = document.querySelectorAll('img');
+        let loaded = 0; const total = imgs.length;
+        function tryPrint() { if (loaded >= total) setTimeout(() => window.print(), 400); }
+        if (total === 0) { setTimeout(() => window.print(), 400); }
+        imgs.forEach(img => {
+          if (img.complete && img.naturalWidth > 0) { loaded++; tryPrint(); }
+          else { img.onload = img.onerror = () => { loaded++; tryPrint(); }; }
+        });
+      <\/script>
+    </body></html>`)
+    w.document.close()
+  }
+
+  const tipCounts = {
+    all: actives.filter(a => !a.deep_sleep).length,
+    auto: actives.filter(a => !a.deep_sleep && ['auto','duba','camion','vehicul','suv'].some(t => (a.tip_vehicul||'').toLowerCase().includes(t))).length,
+    utilaj: actives.filter(a => !a.deep_sleep && !['auto','duba','camion','vehicul','suv','echip','generator','compresor','macara'].some(t => (a.tip_vehicul||'').toLowerCase().includes(t))).length,
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',zIndex:99999,display:'flex',alignItems:'center',justifyContent:'center',padding:20,cursor:'pointer'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:G.surface,borderRadius:12,padding:24,maxWidth:480,width:'100%',border:`1px solid ${G.border}`,cursor:'default'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontSize:18,fontWeight:800,color:G.text}}>🖨️ Export toate QR-urile</div>
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer'}}>×</button>
+        </div>
+        {loading ? (
+          <div style={{textAlign:'center',padding:30,color:G.muted}}>⏳ Se încarcă utilajele...</div>
+        ) : (
+          <>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:11,color:G.muted,fontWeight:600,marginBottom:8}}>FILTREAZĂ UTILAJELE:</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                {[{k:'all',l:'🚛 Toate',c:tipCounts.all},{k:'auto',l:'🚗 Auto',c:tipCounts.auto},{k:'utilaj',l:'🔧 Utilaje',c:tipCounts.utilaj}].map(f=>(
+                  <button key={f.k} onClick={()=>setFilter(f.k)} style={{
+                    padding:'8px 6px',borderRadius:7,border:`2px solid ${filter===f.k?G.blue:G.border2}`,
+                    background:filter===f.k?G.blue+'22':G.bg,color:filter===f.k?G.blue:G.muted,
+                    fontWeight:filter===f.k?800:500,fontSize:11,cursor:'pointer',
+                  }}>
+                    {f.l}<br/><span style={{fontSize:14,fontWeight:800,color:filter===f.k?G.blue:G.text}}>{f.c}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{padding:'10px 14px',background:G.bg,borderRadius:8,marginBottom:14,fontSize:12,color:G.muted,lineHeight:1.6}}>
+              📄 Se vor genera <strong style={{color:G.text,fontSize:14}}>{filtered.length}</strong> coduri QR pe <strong style={{color:G.text}}>{Math.ceil(filtered.length/9)}</strong> pagini A4 (3 × 3 per pagină).<br/>
+              💡 Imprimă → taie → lamează → lipește pe utilaj.
+            </div>
+            <button onClick={doBulkPrint} disabled={filtered.length===0} style={{
+              width:'100%',padding:14,background:filtered.length===0?G.muted:'#2563EB',color:'#fff',
+              border:'none',borderRadius:8,fontWeight:800,fontSize:14,cursor:filtered.length===0?'not-allowed':'pointer',
+            }}>
+              🖨️ Print {filtered.length} QR-uri — PDF / Imprimantă
+            </button>
+            <div style={{marginTop:8,fontSize:10,color:G.dim,textAlign:'center'}}>
+              Se deschide o pagină nouă → toate imaginile se încarcă → dialog print automat
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
 // Folosește v_qr_reconciliere_lunara
 // ============================================================
 function QrReconciliereTab({ profile, showToast }) {
+  const [showBulkQr, setShowBulkQr] = useState(false)
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [pinsSoferi, setPinsSoferi] = useState([])
@@ -8249,6 +8383,13 @@ function QrReconciliereTab({ profile, showToast }) {
               Comparație total scos din rezervor / factură Rompetrol vs total raportat prin QR per lună. Toleranță &lt;5% = OK, 5-15% = atenție, &gt;15% = critic.
             </div>
           </div>
+          <button onClick={() => setShowBulkQr(true)} style={{
+            padding: '9px 16px', background: 'rgba(255,255,255,0.15)', color: '#fff',
+            border: '2px solid rgba(255,255,255,0.4)', borderRadius: 8,
+            fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+          }}>
+            🖨️ Export toate QR-urile
+          </button>
         </div>
       </div>
       
@@ -8653,6 +8794,7 @@ function QrReconciliereTab({ profile, showToast }) {
           </div>
         </div>
       )}
+      {showBulkQr && <QrBulkPrintModal onClose={() => setShowBulkQr(false)} />}
     </div>
   )
 }
