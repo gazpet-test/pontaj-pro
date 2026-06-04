@@ -7982,19 +7982,23 @@ function QrBulkPrintModal({ onClose }) {
 
   useEffect(() => {
     supabase.from('logistica_active')
-      .select('id, cod_intern, nr_inmatriculare, marca, model, tip_vehicul, deep_sleep')
+      .select('id, cod_intern, nr_inmatriculare, marca, model, deep_sleep, tip_proprietate')
       .eq('vandut', false)
-      .order('cod_intern')
-      .then(({ data }) => { setActives(data || []); setLoading(false) })
+      .order('cod_intern', { nullsFirst: false })
+      .then(({ data, error }) => {
+        if (error) console.error('QR bulk load error:', error)
+        setActives(data || [])
+        setLoading(false)
+      })
   }, [])
 
   const filtered = actives.filter(a => {
     if (a.deep_sleep) return false
     if (filter === 'all') return true
-    const tip = (a.tip_vehicul || '').toLowerCase()
-    if (filter === 'auto') return tip.includes('auto') || tip.includes('duba') || tip.includes('camion') || tip.includes('vehicul') || tip.includes('suv')
-    if (filter === 'utilaj') return !tip.includes('auto') && !tip.includes('duba') && !tip.includes('camion') && !tip.includes('vehicul') && !tip.includes('suv') && !tip.includes('echip')
-    if (filter === 'echipament') return tip.includes('echip') || tip.includes('generator') || tip.includes('compresor') || tip.includes('macara')
+    // Auto = are nr inmatriculare (vehicule rutiere)
+    if (filter === 'auto') return !!a.nr_inmatriculare
+    // Utilaj = fără nr inmatriculare (echipamente, utilaje grele)
+    if (filter === 'utilaj') return !a.nr_inmatriculare
     return true
   })
 
@@ -8054,9 +8058,9 @@ function QrBulkPrintModal({ onClose }) {
   }
 
   const tipCounts = {
-    all: actives.filter(a => !a.deep_sleep).length,
-    auto: actives.filter(a => !a.deep_sleep && ['auto','duba','camion','vehicul','suv'].some(t => (a.tip_vehicul||'').toLowerCase().includes(t))).length,
-    utilaj: actives.filter(a => !a.deep_sleep && !['auto','duba','camion','vehicul','suv','echip','generator','compresor','macara'].some(t => (a.tip_vehicul||'').toLowerCase().includes(t))).length,
+    all:    actives.filter(a => !a.deep_sleep).length,
+    auto:   actives.filter(a => !a.deep_sleep && !!a.nr_inmatriculare).length,
+    utilaj: actives.filter(a => !a.deep_sleep && !a.nr_inmatriculare).length,
   }
 
   return (
