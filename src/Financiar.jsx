@@ -259,12 +259,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         const { data: nextNr } = await supabase.rpc('fn_get_next_nr_factura', { p_serie: form.serie })
         nrFinal = nextNr
       }
-      const dataObj = new Date(form.data)
-      const anFactura = dataObj.getFullYear()
       const payload = {
         serie: form.serie, nr: parseInt(nrFinal),
-        nr_complet: `${form.serie}-${nrFinal}`,
-        an: anFactura,
         data: form.data,
         beneficiar_id: form.beneficiar_id ? parseInt(form.beneficiar_id) : null,
         beneficiar_nume: form.beneficiar_nume.trim(),
