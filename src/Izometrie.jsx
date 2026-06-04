@@ -107,13 +107,16 @@ function Toast({ toast }) {
 // MAIN COMPONENT
 // ===========================================================================
 
-export default function IzometriePage() {
+export default function IzometriePage({ initialProiectId } = {}) {
+  // initialProiectId: când e furnizat din Executie.jsx → lock la acel proiect, ascunde dropdown
+  const lockedMode = Boolean(initialProiectId)
+
   const [searchParams, setSearchParams] = useSearchParams()
   const pachetIdFromUrl = searchParams.get('pachet')
   const pachetEditorId = pachetIdFromUrl ? Number(pachetIdFromUrl) : null
 
   const [proiecte, setProiecte] = useState([])
-  const [proiectId, setProiectId] = useState(null)
+  const [proiectId, setProiectId] = useState(lockedMode ? initialProiectId : null)
   const [tronsoane, setTronsoane] = useState([])
   const [tronsonId, setTronsonId] = useState(null)
   const [pachete, setPachete] = useState([])
@@ -136,7 +139,9 @@ export default function IzometriePage() {
       .eq('activ', true).order('created_at')
     if (error) { show('Eroare load proiecte: ' + error.message, 'error'); setLoading(false); return }
     setProiecte(data || [])
-    if (data?.length && !proiectId) setProiectId(data[0].id)
+    // În mod lock (din Executie.jsx): rămânem pe proiectul primit
+    // În mod standalone (/izometrie): selectăm primul proiect
+    if (!lockedMode && data?.length && !proiectId) setProiectId(data[0].id)
     setLoading(false)
   }
 
@@ -250,15 +255,31 @@ export default function IzometriePage() {
             {proiectSelectat?.nume || 'Selectează proiect'}
           </div>
         </div>
-        <select
-          value={proiectId || ''}
-          onChange={e => { setProiectId(Number(e.target.value)); setTronsonId(null) }}
-          style={{ ...S.input, width: 280, fontWeight: 600, cursor:'pointer' }}
-        >
-          {proiecte.map(p => (
-            <option key={p.id} value={p.id}>{p.cod_intern} — {p.beneficiar}</option>
-          ))}
-        </select>
+
+        {/* Selector proiect: dropdown în modul standalone, badge locked în contextul proiectului */}
+        {lockedMode ? (
+          <div style={{
+            display:'flex', alignItems:'center', gap:10,
+            background: '#58A6FF22', border:'1px solid #58A6FF55',
+            borderRadius:10, padding:'10px 16px',
+          }}>
+            <span style={{fontSize:16}}>🏗️</span>
+            <div>
+              <div style={{fontSize:13,fontWeight:800,color:'#58A6FF'}}>{proiectSelectat?.cod_intern}</div>
+              <div style={{fontSize:11,color:'#8B949E',marginTop:1}}>{proiectSelectat?.beneficiar}</div>
+            </div>
+          </div>
+        ) : (
+          <select
+            value={proiectId || ''}
+            onChange={e => { setProiectId(Number(e.target.value)); setTronsonId(null) }}
+            style={{ ...S.input, width: 280, fontWeight: 600, cursor:'pointer' }}
+          >
+            {proiecte.map(p => (
+              <option key={p.id} value={p.id}>{p.cod_intern} — {p.beneficiar}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* ─────────── LAYOUT 2 COLOANE ─────────── */}

@@ -586,6 +586,31 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
         </div>
       )}
 
+      {/* ── Rând personal (din Pontaj) ── */}
+      {p.pontaj_zile_om > 0 && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+          borderBottom: `1px solid ${G.border}`,
+          background: '#2DD4BF08',
+        }}>
+          {[
+            { label: 'Angajați',   value: p.pontaj_angajati,    icon: '👷', color: G.teal },
+            { label: 'Zile-om',    value: p.pontaj_zile_om?.toLocaleString('ro-RO'), icon: '📅', color: G.text },
+            { label: 'Diurne',     value: p.pontaj_zile_diurna?.toLocaleString('ro-RO'), icon: '🍽️', color: G.yellow },
+            { label: 'Supl. hrană',value: p.pontaj_zile_supliment > 0 ? p.pontaj_zile_supliment?.toLocaleString('ro-RO') : '—', icon: '🥗', color: p.pontaj_zile_supliment > 0 ? G.orange : G.dim },
+          ].map((k, i) => (
+            <div key={i} style={{
+              padding: '7px 0', textAlign: 'center',
+              borderRight: i < 3 ? `1px solid ${G.border}` : 'none',
+            }}>
+              <div style={{ fontSize: 13, marginBottom: 1 }}>{k.icon}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: k.color }}>{k.value}</div>
+              <div style={{ fontSize: 9, color: G.dim, marginTop: 1 }}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Termene */}
       <div style={{ padding: '14px 20px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
@@ -819,6 +844,83 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
           {p.observatii && (
             <div style={{ background: G.bg, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: G.muted }}>
               <span style={{ fontWeight: 700, color: G.text }}>Observații: </span>{p.observatii}
+            </div>
+          )}
+
+          {/* ── Cheltuieli personal (din Pontaj) ── */}
+          {p.pontaj_zile_om > 0 && (
+            <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 12, display:'flex', alignItems:'center', gap:8 }}>
+                👷 Cheltuieli personal
+                <span style={{ fontSize: 10, color: G.dim, textTransform: 'none', fontWeight: 400 }}>live din Pontaj</span>
+                {p.pontaj_prima_zi && (
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: G.dim }}>
+                    {new Date(p.pontaj_prima_zi).toLocaleDateString('ro-RO')} → {new Date(p.pontaj_ultima_zi).toLocaleDateString('ro-RO')}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 12 }}>
+                {[
+                  { label: 'Angajați distincti', value: p.pontaj_angajati, icon: '👷', color: G.teal, sub: 'care au lucrat' },
+                  { label: 'Zile-om cumulate', value: (p.pontaj_zile_om||0).toLocaleString('ro-RO'), icon: '📅', color: G.text, sub: 'person-days' },
+                  { label: 'Ore estimate', value: ((p.pontaj_ore_estimate||0)).toLocaleString('ro-RO'), icon: '🕐', color: G.blue, sub: '× 8h/zi' },
+                  { label: 'Zile cu diurnă', value: (p.pontaj_zile_diurna||0).toLocaleString('ro-RO'), icon: '🍽️', color: G.yellow, sub: 'deplasare' },
+                ].map((s, i) => (
+                  <div key={i} style={{ textAlign: 'center', padding: '8px 4px' }}>
+                    <div style={{ fontSize: 18, marginBottom: 3 }}>{s.icon}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: s.color }}>{s.value}</div>
+                    <div style={{ fontSize: 11, color: G.text, fontWeight: 600 }}>{s.label}</div>
+                    <div style={{ fontSize: 9, color: G.dim }}>{s.sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Supliment hrană + bare vizuale */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                {/* Diurne vs Zile-om */}
+                <div style={{ background: G.surface, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                    <span style={{ fontSize: 11, color: G.muted }}>🍽️ Zile cu diurnă</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: G.yellow }}>
+                      {p.pontaj_zile_om > 0 ? Math.round(p.pontaj_zile_diurna / p.pontaj_zile_om * 100) : 0}%
+                    </span>
+                  </div>
+                  <div style={{ height: 6, background: G.border, borderRadius: 3 }}>
+                    <div style={{
+                      height: '100%', borderRadius: 3,
+                      width: `${p.pontaj_zile_om > 0 ? Math.min(100, p.pontaj_zile_diurna / p.pontaj_zile_om * 100) : 0}%`,
+                      background: G.yellow,
+                    }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: G.dim, marginTop: 4 }}>
+                    {(p.pontaj_zile_diurna||0).toLocaleString('ro-RO')} din {(p.pontaj_zile_om||0).toLocaleString('ro-RO')} zile
+                  </div>
+                </div>
+
+                {/* Supliment hrană */}
+                <div style={{ background: G.surface, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                    <span style={{ fontSize: 11, color: G.muted }}>🥗 Supliment hrană</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: G.orange }}>
+                      {p.pontaj_zile_om > 0 ? Math.round((p.pontaj_zile_supliment||0) / p.pontaj_zile_om * 100) : 0}%
+                    </span>
+                  </div>
+                  <div style={{ height: 6, background: G.border, borderRadius: 3 }}>
+                    <div style={{
+                      height: '100%', borderRadius: 3,
+                      width: `${p.pontaj_zile_om > 0 ? Math.min(100, (p.pontaj_zile_supliment||0) / p.pontaj_zile_om * 100) : 0}%`,
+                      background: G.orange,
+                    }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: G.dim, marginTop: 4 }}>
+                    {(p.pontaj_zile_supliment||0).toLocaleString('ro-RO')} din {(p.pontaj_zile_om||0).toLocaleString('ro-RO')} zile
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 8, fontSize: 10, color: G.dim, fontStyle: 'italic' }}>
+                * Orele sunt estimate la 8h/zi. Pentru valoarea exactă a costurilor de personal, consultați raportul salarial din modulul HR.
+              </div>
             </div>
           )}
         </div>
