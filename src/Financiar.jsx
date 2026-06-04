@@ -173,6 +173,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     situatie_plata_ids: item?.situatie_plata_ids || (slDefault ? [slDefault.id] : []),
     email_destinatar: item?.email_destinatar || 'marilena.tudorache@gazpet.ro',
     status: item?.status || 'in_pregatire',
+    titlu_scurt: item?.titlu_scurt || '',
   })
   const [saving, setSaving]       = useState(false)
   const [genPDF, setGenPDF]       = useState(false)
@@ -280,6 +281,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         proiect_id: form.proiect_id ? parseInt(form.proiect_id) : null,
         situatie_plata_ids: form.situatie_plata_ids.length ? form.situatie_plata_ids.map(Number) : null,
         email_destinatar: form.email_destinatar.trim() || null,
+        titlu_scurt: form.titlu_scurt.trim() || null,
         status: form.status,
         updated_at: new Date().toISOString(),
       }
@@ -319,7 +321,26 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       const W=210, H=Math.min(297, (canvas.height/canvas.width)*(210))
       doc.addImage(imgData,'JPEG',0,0,W,H,'','FAST')
       const pdfBlob = doc.output('blob')
-      const fileName = `${fData.serie}-${fData.nr}_${fData.data}.pdf`
+
+      // Format data: 2026-06-04 → 04.06.2026
+      const dataRaw = fData.data || new Date().toISOString().slice(0,10)
+      const [yy, mm, dd] = String(dataRaw).split('-')
+      const dataFmt = `${dd}.${mm}.${yy}`
+
+      // Beneficiar scurt (ex: TRANSGAZ din SNTGN TRANSGAZ S.A.)
+      const benef = (fData.beneficiar_nume || form.beneficiar_nume || '')
+        .replace(/S\.?R\.?L\.?|S\.?A\.?/gi,'').trim()
+        .split(/\s+/).filter(w=>w.length>2).slice(-2).join('_')
+        .replace(/[^a-zA-Z0-9_]/g,'')
+
+      // Titlu scurt opțional — sanitizat
+      const titlu = (fData.titlu_scurt || form.titlu_scurt || '')
+        .trim().replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_.\-]/g,'')
+
+      const nrComplet = `${fData.serie||'GAZ'}-${fData.nr}`
+      const fileName = titlu
+        ? `Factura_GAZPET_${nrComplet}_${benef}_${titlu}_${dataFmt}.pdf`
+        : `Factura_GAZPET_${nrComplet}_${benef}_${dataFmt}.pdf`
       const path = `${fData.an || new Date().getFullYear()}/${fileName}`
       const { error: upErr } = await supabase.storage.from('facturi-emise').upload(path, pdfBlob, { contentType:'application/pdf', upsert:true })
       if (!upErr) {
@@ -506,6 +527,12 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
 
           {/* Email */}
           <div>
+            <label style={S.lbl}>📝 Titlu scurt (pentru numele PDF)</label>
+            <input value={form.titlu_scurt} onChange={e=>set('titlu_scurt',e.target.value)} style={fieldStyle} placeholder="ex: Transgaz Caldararu sit.4" />
+            <div style={{fontSize:10,color:'#888',marginTop:3}}>
+              Apare în numele fișierului: Factura_GAZPET_GAZ-363_TRANSGAZ_{form.titlu_scurt||'...'}_04.06.2026.pdf
+            </div>
+
             <label style={S.lbl}>📧 Email destinatar</label>
             <input value={form.email_destinatar} onChange={e=>set('email_destinatar',e.target.value)} style={fieldStyle} placeholder="marilena.tudorache@gazpet.ro" type="email" />
           </div>
