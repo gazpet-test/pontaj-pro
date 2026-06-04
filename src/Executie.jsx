@@ -53,9 +53,8 @@ const fmtDate = v => {
 // ---------------------------------------------------------------------------
 const CONTEXT_TABS = [
   { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,   desc: 'Personal tură · Utilaje' },
-  { key: 'tronsoane',      label: 'Tronsoane',      icon: '📍', color: G.teal,   desc: 'Program · Status · Suduri' },
   { key: 'situatii_plata', label: 'Situații plată', icon: '💰', color: G.orange, desc: 'SL1–SL6 · NCS · Facturare' },
-  { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Cumulat' },
+  { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Tronsoane · Cumulat' },
   { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Arhivă NAS' },
 ]
 
@@ -130,7 +129,7 @@ export default function ExecutiePage() {
             <span style={{ color: G.border, fontSize: 20, marginInline: 2, flexShrink: 0 }}>›</span>
 
             {CONTEXT_TABS.map(t => {
-              const isActive = tabStr === t.key
+              const isActive = tabStr === t.key || (t.key === 'izometrie' && tabStr === 'tronsoane')
               return (
                 <button
                   key={t.key}
@@ -177,6 +176,9 @@ export default function ExecutiePage() {
 // ===========================================================================
 function ProiectContextView({ proiectId, tab, onBack }) {
   const [proiect, setProiect] = useState(null)
+  // Sub-tab izometrie: 'izometrie' | 'tronsoane'
+  // Dacă vine cu tab=tronsoane (link vechi), auto-selectăm sub-tab tronsoane
+  const [izSubTab, setIzSubTab] = useState(tab === 'tronsoane' ? 'tronsoane' : 'izometrie')
 
   useEffect(() => {
     supabase.from('v_executie_dashboard')
@@ -247,10 +249,40 @@ function ProiectContextView({ proiectId, tab, onBack }) {
 
       {/* Tab content cu proiectId prop */}
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
-      {tab === 'tronsoane'      && <TabTronsoane     proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
-      {tab === 'izometrie'      && <IzometriePage    initialProiectId={Number(proiectId)} />}
       {tab === 'documente'      && <TabDocumenteNAS  proiectId={proiectId} />}
+
+      {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
+      {(tab === 'izometrie' || tab === 'tronsoane') && (
+        <div>
+          {/* Sub-tab bar */}
+          <div style={{
+            display:'flex', gap:0, borderBottom:`1px solid ${G.border}`,
+            background:G.surface, paddingLeft:28,
+          }}>
+            {[
+              {key:'izometrie', label:'📐 Izometrie',  desc:'Pachete · Lansare · Cumulat'},
+              {key:'tronsoane', label:'📍 Tronsoane',   desc:'Program · Status · Suduri'},
+            ].map(st => {
+              const active = izSubTab === st.key
+              return (
+                <button key={st.key} onClick={()=>setIzSubTab(st.key)} title={st.desc} style={{
+                  padding:'10px 18px', background:'transparent', border:'none',
+                  borderBottom:`2px solid ${active ? G.purple : 'transparent'}`,
+                  color: active ? G.purple : G.muted,
+                  cursor:'pointer', fontSize:12, fontWeight: active ? 700 : 500,
+                  transition:'all .15s',
+                }}>
+                  {st.label}
+                </button>
+              )
+            })}
+          </div>
+          {/* Content */}
+          {izSubTab === 'izometrie' && <IzometriePage initialProiectId={Number(proiectId)} />}
+          {izSubTab === 'tronsoane' && <TabTronsoane  proiectId={proiectId} />}
+        </div>
+      )}
     </div>
   )
 }
