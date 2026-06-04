@@ -10,12 +10,7 @@
 //   • Alertă în TabSituatiiPlata dacă SL fără factură
 // ===========================================================================
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-)
+import { supabase } from './lib/supabase.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
@@ -156,7 +151,7 @@ function buildInvoiceHTML(f) {
 // ===========================================================================
 // MODAL FACTURĂ — creare / editare
 // ===========================================================================
-function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, onClose, onSaved, showToast }) {
+function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profileId, onClose, onSaved, showToast }) {
   const isNew = !item?.id
   const [form, setForm] = useState({
     serie:       item?.serie || 'GAZ',
@@ -264,8 +259,12 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, onClo
         const { data: nextNr } = await supabase.rpc('fn_get_next_nr_factura', { p_serie: form.serie })
         nrFinal = nextNr
       }
+      const dataObj = new Date(form.data)
+      const anFactura = dataObj.getFullYear()
       const payload = {
         serie: form.serie, nr: parseInt(nrFinal),
+        nr_complet: `${form.serie}-${nrFinal}`,
+        an: anFactura,
         data: form.data,
         beneficiar_id: form.beneficiar_id ? parseInt(form.beneficiar_id) : null,
         beneficiar_nume: form.beneficiar_nume.trim(),
@@ -283,7 +282,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, onClo
         delegat_awb:  form.delegat_awb.trim()  || null,
         termen_plata_zile: parseInt(form.termen_plata_zile)||30,
         proiect_id: form.proiect_id ? parseInt(form.proiect_id) : null,
-        situatie_plata_ids: form.situatie_plata_ids.length ? form.situatie_plata_ids : null,
+        situatie_plata_ids: form.situatie_plata_ids.length ? form.situatie_plata_ids.map(Number) : null,
         email_destinatar: form.email_destinatar.trim() || null,
         status: form.status,
         updated_at: new Date().toISOString(),
@@ -291,6 +290,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, onClo
       let savedId = item?.id
       let err
       if (isNew) {
+        if (profileId) payload.created_by = profileId
         const res = await supabase.from('facturi_emise').insert(payload).select('id').single()
         err = res.error; savedId = res.data?.id
       } else {
@@ -597,6 +597,8 @@ export default function FinanciarPage() {
       emise:    f.filter(x => x.status !== 'in_pregatire').length,
       incasat:  f.filter(x => x.status === 'incasata').reduce((s,x) => s+(parseFloat(x.total)||0),0),
       restant:  f.filter(x => x.status === 'restanta').reduce((s,x) => s+(parseFloat(x.total)||0),0),
+      totalNeta: f.reduce((s,x) => s+(parseFloat(x.valoare_neta)||0),0),
+      totalTva:  f.reduce((s,x) => s+(parseFloat(x.tva)||0),0),
       totalVal: f.reduce((s,x) => s+(parseFloat(x.total)||0),0),
     }
   }, [facturiFiltrate])
@@ -653,7 +655,7 @@ export default function FinanciarPage() {
             <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
               {slAlert.map(sl => (
                 <div key={sl.id} style={{background:G.card2,borderRadius:8,padding:'8px 12px',border:`1px solid ${G.border}`,display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{fontSize:11,fontWeight:700,color:G.executie}}>{sl.cod_intern}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:G.green}}>{sl.cod_intern}</span>
                   <span style={{fontSize:11,color:G.text}}>{sl.nr_situatie} · {LUNI[(sl.luna||1)-1]} {sl.an}</span>
                   {sl.valoare_baza_lei && <span style={{fontSize:11,color:G.green,fontFamily:'monospace'}}>{fmtLei(sl.valoare_baza_lei)}</span>}
                   {canWrite && (
@@ -781,9 +783,11 @@ export default function FinanciarPage() {
               </tbody>
               <tfoot>
                 <tr style={{borderTop:`2px solid ${G.border}`,background:G.surface}}>
-                  <td colSpan={6} style={{padding:'10px 12px',fontWeight:700,color:G.muted,fontSize:12}}>TOTAL ({filterAn||'toți anii'})</td>
-                  <td style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontFamily:'monospace',color:G.orange}}>{fmtLei(kpi.totalVal)}</td>
-                  <td colSpan={3}/>
+                  <td colSpan={3} style={{padding:'10px 12px',fontWeight:700,color:G.muted,fontSize:12}}>TOTAL {filterAn ? `(${filterAn})` : '(toți anii)'}</td>
+                  <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontFamily:'monospace',color:G.text}}>{fmtLei(kpi.totalNeta)}</td>
+                  <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontFamily:'monospace',color:G.yellow}}>{fmtLei(kpi.totalTva)}</td>
+                  <td style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontFamily:'monospace',color:G.financiar}}>{fmtLei(kpi.totalVal)}</td>
+                  <td colSpan={4}/>
                 </tr>
               </tfoot>
             </table>
@@ -804,6 +808,7 @@ export default function FinanciarPage() {
           slDefault={editItem?._fromSL || null}
           proiectDefault={editItem?.proiect_id || null}
           beneficiariLista={beneficiari}
+          profileId={profile?.id || null}
           onClose={() => setEditItem(null)}
           onSaved={() => { setEditItem(null); loadAll() }}
           showToast={showToast}
