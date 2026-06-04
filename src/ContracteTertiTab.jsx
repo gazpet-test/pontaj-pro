@@ -555,57 +555,55 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   const [partenerMode, setPartenerMode] = useState(item.partener_text ? 'text' : 'beneficiar')
   // Drag & drop PDF
   const [dragOver, setDragOver] = useState(false)
-  // Link la Proiect Execuție
-  const [proiecteExec, setProiecteExec]   = useState([])
-  const [proiectExecId, setProiectExecId] = useState('')
+  // Link la Șantier (site_id) → auto-găsit proiect Execuție
+  const [siteLista, setSiteLista]         = useState([])
+  const [siteIdSelectat, setSiteIdSelectat] = useState('')
+  // Alias pentru compatibilitate cu codul de salvare existent
+  const proiecteExec = siteLista
+  const proiectExecId = siteIdSelectat   // ⚠️ acum e site_id, nu project_id
+  const setProiectExecId = setSiteIdSelectat
 
-  // Încarcă proiectele execuție + detectează linkul curent
+  // Încarcă SITES (nu executie_proiecte) + detectează linkul curent
   useEffect(() => {
-    const loadProiecte = async () => {
-      const { data } = await supabase
-        .from('executie_proiecte')
-        .select('id, cod_intern, nume')
-        .eq('activ', true)
-        .order('cod_intern')
-      setProiecteExec(data || [])
-      // Detectez proiectul legat de contractul curent (dacă e edit)
+    const loadSites = async () => {
+      // Încarcă toate șantierele active (fără Sediu)
+      const { data: sites } = await supabase
+        .from('sites')
+        .select('id, name')
+        .not('name', 'ilike', '%sediu%')
+        .order('name')
+      setSiteLista(sites || [])
+
       if (!isNew && item.id) {
+        // Detectez șantierul prin proiectul legat de contract
         const { data: linked } = await supabase
           .from('executie_proiecte')
-          .select('id')
+          .select('site_id')
           .eq('contract_id', item.id)
           .maybeSingle()
-        if (linked?.id) {
-          setProiectExecId(String(linked.id))
-        } else if (data?.length && f.categorie === 'executie' && !item.id) {
-          // Smart auto-match: compară denumire contract cu cod_intern + nume proiect
-          const score = (den, p) => {
-            const d = den.toLowerCase()
-            const kws = (p.cod_intern + ' ' + (p.nume||'')).toLowerCase().split(/[\s_\-\/]+/).filter(w=>w.length>3)
-            return kws.length ? kws.filter(w=>d.includes(w)).length / kws.length : 0
-          }
-          const best = data.reduce((b,p) => {
-            const s = score(f.denumire||'', p)
-            return s > (b.score||0) ? { ...p, score: s } : b
-          }, {})
-          if ((best.score||0) >= 0.4) setProiectExecId(String(best.id))
+        if (linked?.site_id) {
+          setSiteIdSelectat(String(linked.site_id))
         }
       }
-      // Smart auto-match pentru contract NOU de tip executie
-      if (isNew && data?.length && f.categorie === 'executie' && f.denumire) {
-        const score = (den, p) => {
+
+      // Smart auto-match: compară denumire contract cu numele șantierului
+      if (f.categorie === 'executie' && f.denumire && sites?.length) {
+        const score = (den, s) => {
           const d = den.toLowerCase()
-          const kws = (p.cod_intern + ' ' + (p.nume||'')).toLowerCase().split(/[\s_\-\/]+/).filter(w=>w.length>3)
-          return kws.length ? kws.filter(w=>d.includes(w)).length / kws.length : 0
+          // Cuvinte cheie din numele șantierului (>3 litere, fără "gazpet/transgaz/gaze")
+          const stopWords = new Set(['gazpet','transgaz','gaze','natural','naturale','conducta','cond','transport'])
+          const kws = s.name.toLowerCase().split(/[\s\-_\/]+/)
+            .filter(w => w.length > 3 && !stopWords.has(w))
+          return kws.length ? kws.filter(w => d.includes(w)).length / kws.length : 0
         }
-        const best = data.reduce((b,p) => {
-          const s = score(f.denumire, p)
-          return s > (b.score||0) ? { ...p, score: s } : b
+        const best = (sites || []).reduce((b, s) => {
+          const sc = score(f.denumire, s)
+          return sc > (b._sc || 0) ? { ...s, _sc: sc } : b
         }, {})
-        if ((best.score||0) >= 0.4) setProiectExecId(String(best.id))
+        if ((best._sc || 0) >= 0.35) setSiteIdSelectat(String(best.id))
       }
     }
-    loadProiecte()
+    loadSites()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleUpload = async file => {
@@ -661,21 +659,31 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     }
     setSaving(false)
 
-    // ─── Sincronizare cu Proiect Execuție ────────────────────────────────
+    // ─── Sincronizare Șantier → Proiect Execuție → Contract ─────────────────
     if (f.categorie === 'executie' && proiectExecId) {
-      // Dezleagă eventualul proiect anterior (dacă s-a schimbat selecția)
-      await supabase.from('executie_proiecte')
-        .update({ contract_id: null })
-        .eq('contract_id', contractId)
-        .neq('id', Number(proiectExecId))
-      // Leagă proiectul selectat + sync date esențiale
-      await supabase.from('executie_proiecte').update({
-        contract_id:   contractId,
-        nr_contract:   f.numar_contract.trim() || null,
-        data_contract: f.data_semnare || null,
-        valoare_lei:   f.valoare_lei ? Number(f.valoare_lei) : null,
-        valoare_eur:   f.valoare_eur ? Number(f.valoare_eur) : null,
-      }).eq('id', Number(proiectExecId))
+      // proiectExecId = site_id → găsim proiectul prin șantier
+      const { data: proiectGasit } = await supabase
+        .from('executie_proiecte')
+        .select('id')
+        .eq('site_id', Number(proiectExecId))
+        .eq('activ', true)
+        .maybeSingle()
+
+      if (proiectGasit) {
+        // Dezleagă eventualul proiect anterior (alt șantier)
+        await supabase.from('executie_proiecte')
+          .update({ contract_id: null })
+          .eq('contract_id', contractId)
+          .neq('id', proiectGasit.id)
+        // Leagă proiectul șantierului selectat + sync date
+        await supabase.from('executie_proiecte').update({
+          contract_id:   contractId,
+          nr_contract:   f.numar_contract.trim() || null,
+          data_contract: f.data_semnare || null,
+          valoare_lei:   f.valoare_lei ? Number(f.valoare_lei) : null,
+          valoare_eur:   f.valoare_eur ? Number(f.valoare_eur) : null,
+        }).eq('id', proiectGasit.id)
+      }
     } else if (f.categorie === 'executie' && !proiectExecId) {
       if (!isNew) {
         // Dacă a fost golit câmpul → dezleagă proiectul anterior
@@ -683,8 +691,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           .update({ contract_id: null })
           .eq('contract_id', contractId)
       }
-      // ⚠️ Contract de execuție salvat fără proiect — avertizăm și rămânem în modal
-      onError('⚠️ Contractul a fost salvat, dar nu e legat la niciun proiect de Execuție! Selectează proiectul din câmpul de mai jos și re-salvează.')
+      // ⚠️ Contract de execuție salvat fără șantier asociat
+      onError('⚠️ Contractul a fost salvat, dar nu e legat la niciun Șantier! Selectează șantierul din câmpul de mai jos și re-salvează.')
       setSaving(false)
       return
     }
@@ -808,39 +816,43 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           <textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} />
         </div>
 
-          {/* ── Proiect Execuție asociat (vizibil doar pentru categorie=executie) ── */}
+          {/* ── 📍 Șantier asociat → sincronizare automată cu Proiect Execuție ── */}
         {f.categorie === 'executie' && (
           <div style={{padding:12, background:G.surface, border:`1px solid ${G.blue}33`, borderRadius:8}}>
-            <label style={{...S.lbl, color:G.blue}}>🔗 Proiect Execuție asociat</label>
+            <label style={{...S.lbl, color:G.blue}}>📍 Șantier asociat</label>
+            <div style={{fontSize:10, color:G.dim, marginBottom:6}}>
+              Selectează șantierul → contractul se sincronizează automat cu proiectul de Execuție al acelui șantier.
+            </div>
             <select
               value={proiectExecId}
               onChange={e => setProiectExecId(e.target.value)}
               style={S.input}
             >
               <option value="">— Neselectat —</option>
-              {proiecteExec.map(p => (
-                <option key={p.id} value={p.id}>{p.cod_intern} · {p.nume?.slice(0, 55)}</option>
+              {proiecteExec.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
             {proiectExecId ? (
-              <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:8}}>
-                <span style={{color:G.blue}}>✓</span>
-                <span style={{color:G.blue}}>La salvare: nr. contract, valoare și data semnare se sincronizează automat în proiect.</span>
-                {proiecteExec.find(p=>String(p.id)===proiectExecId) && !isNew && (() => {
-                  // Indicator auto-detectat
+              <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+                <span style={{color:G.teal}}>✓</span>
+                <span style={{color:G.teal}}>La salvare: nr. contract, valoare și data semnare se sincronizează automat în Execuție.</span>
+                {(() => {
+                  // Indicator auto-detectat (compară site name cu denumire contract)
                   const d = (f.denumire||'').toLowerCase()
-                  const p = proiecteExec.find(px=>String(px.id)===proiectExecId)
-                  if (!p) return null
-                  const kws = (p.cod_intern+' '+(p.nume||'')).toLowerCase().split(/[\s_\-\/]+/).filter(w=>w.length>3)
-                  const s = kws.length ? Math.round(kws.filter(w=>d.includes(w)).length/kws.length*100) : 0
-                  return s >= 40 ? (
-                    <span style={{background:G.green+'22',color:G.green,borderRadius:8,padding:'1px 7px',fontSize:10}}>🎯 Auto-detectat {s}%</span>
+                  const site = proiecteExec.find(s => String(s.id) === proiectExecId)
+                  if (!site) return null
+                  const stopWords = new Set(['gazpet','transgaz','gaze','natural','naturale','conducta','transport'])
+                  const kws = site.name.toLowerCase().split(/[\s\-_\/]+/).filter(w=>w.length>3 && !stopWords.has(w))
+                  const sc = kws.length ? Math.round(kws.filter(w=>d.includes(w)).length/kws.length*100) : 0
+                  return sc >= 35 ? (
+                    <span style={{background:G.green+'22',color:G.green,borderRadius:8,padding:'1px 7px',fontSize:10}}>🎯 Auto-detectat {sc}%</span>
                   ) : null
                 })()}
               </div>
             ) : (
-              <div style={{fontSize:11, color:G.dim, marginTop:6}}>
-                {f.denumire?.length > 5 ? '💡 Completați denumirea contractului pentru auto-detectare proiect.' : 'Selectați proiectul pentru sincronizare automată.'}
+              <div style={{fontSize:11, color:G.orange, marginTop:6, fontWeight:600}}>
+                ⚠️ Fără șantier — contractul de execuție nu va apărea în modulul Execuție.
               </div>
             )}
           </div>
