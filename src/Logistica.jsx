@@ -3806,8 +3806,9 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   const [siteManagers, setSiteManagers] = useState({})  // map site_id → profile_id
   const [employees, setEmployees] = useState([])
   const [saving, setSaving] = useState(false)
-  
-  // Load profiles (pentru dropdown manageri — doar useri sistem)
+  // 04.06.2026: Transport intern în șantier + transport țeavă
+  const [internSantier, setInternSantier]   = useState(T?.transport_intern_santier === true)
+  const [transportTeava, setTransportTeava] = useState(T?.transport_teava === true)
   useEffect(() => {
     supabase.from('profiles').select('id, name, role, email').order('name').then(({ data }) => setProfilesList(data || []))
   }, [])
@@ -4123,6 +4124,8 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
       observatii: observatii.trim() || null,
       manager_plecare_id: managerPlecareId || null,
       manager_destinatie_id: managerDestinatieId || null,
+      transport_intern_santier: internSantier,
+      transport_teava: transportTeava,
     }
     
     let error
@@ -4674,6 +4677,34 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
         {/* COST + OBSERVAȚII */}
         <div style={{marginBottom:14, display:'grid', gridTemplateColumns:'1fr 2fr', gap:10}}>
           <FieldText label="Cost estimat (RON)" type="number" value={costEstimat} onChange={setCostEstimat} placeholder="opțional" />
+          {/* ── Transport intern + țeavă ─────────────────────────────────── */}
+          <div style={{display:'flex', gap:10, flexWrap:'wrap', marginBottom:4}}>
+            <label onClick={()=>setInternSantier(v=>!v)} style={{
+              display:'flex', alignItems:'center', gap:8, cursor:'pointer',
+              padding:'9px 14px', borderRadius:8, userSelect:'none', flex:1, minWidth:180,
+              background: internSantier ? '#2563EB22' : G.bg,
+              border:`1.5px solid ${internSantier ? '#2563EB' : G.border2}`,
+            }}>
+              <input type="checkbox" checked={internSantier} onChange={e=>setInternSantier(e.target.checked)} style={{accentColor:'#2563EB',width:14,height:14}}/>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:internSantier?'#2563EB':G.text}}>🏗️ Transport intern în șantier</div>
+                <div style={{fontSize:10,color:G.muted}}>Poate fi auto-aprobat de inițiator</div>
+              </div>
+            </label>
+            <label onClick={()=>setTransportTeava(v=>!v)} style={{
+              display:'flex', alignItems:'center', gap:8, cursor:'pointer',
+              padding:'9px 14px', borderRadius:8, userSelect:'none', flex:1, minWidth:180,
+              background: transportTeava ? G.orange+'22' : G.bg,
+              border:`1.5px solid ${transportTeava ? G.orange : G.border2}`,
+            }}>
+              <input type="checkbox" checked={transportTeava} onChange={e=>setTransportTeava(e.target.checked)} style={{accentColor:G.orange,width:14,height:14}}/>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:transportTeava?G.orange:G.text}}>🔩 Transport țeavă/fitinguri</div>
+                <div style={{fontSize:10,color:G.muted}}>Generează Aviz de Însoțire Marfă</div>
+              </div>
+            </label>
+          </div>
+
           <FieldTextarea label="Observații" value={observatii} onChange={setObservatii} rows={2} placeholder="orice altceva relevant..." />
         </div>
         
@@ -4735,6 +4766,8 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const isSolicitant = profile?.id === T.solicitant_id
   const isManagerDestinatie = profile?.id === T.manager_destinatie_id
   const isManagerPlecare = profile?.id === T.manager_plecare_id
+  // 04.06.2026: Transport intern → inițiatorul poate auto-aproba
+  const canSelfApprove = T.transport_intern_santier === true && isSolicitant
   const status = T.status
   
   // Load employees (pentru când Logistică alege șofer la aprobare)
@@ -4762,14 +4795,17 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   
   // ---- Acțiuni ----
   const handleAproba = async () => {
-    // Dacă sofer_aloca_logistica și fără șofer → cere alegerea ÎNTÂI
-    if (T.sofer_aloca_logistica && !T.sofer_employee_id && !showAlegeSofer) {
-      setShowAlegeSofer(true)
-      return
-    }
-    if (showAlegeSofer && !soferEmployeeId) {
-      showToast('Selectează șoferul înainte de aprobare', 'warn')
-      return
+    // Transport intern: skip orice cerință de șofer — se aprobă direct
+    if (!T.transport_intern_santier) {
+      // Dacă sofer_aloca_logistica și fără șofer → cere alegerea ÎNTÂI
+      if (T.sofer_aloca_logistica && !T.sofer_employee_id && !showAlegeSofer) {
+        setShowAlegeSofer(true)
+        return
+      }
+      if (showAlegeSofer && !soferEmployeeId) {
+        showToast('Selectează șoferul înainte de aprobare', 'warn')
+        return
+      }
     }
     
     setActionLoading(true)
@@ -5163,12 +5199,18 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
             <button onClick={handleAnuleaza} disabled={actionLoading} style={{...S.btnS, color:G.muted}}>🗑️ Anulează cererea</button>
           )}
           
-          {/* === STATUS = CERUT — APROBĂ / RESPINGE (doar aprobatori) === */}
-          {status === 'cerut' && isAprobator && !showRespingere && (
+          {/* === STATUS = CERUT — APROBĂ / RESPINGE === */}
+          {status === 'cerut' && (isAprobator || canSelfApprove) && !showRespingere && (
             <>
-              <button onClick={() => setShowRespingere(true)} disabled={actionLoading} style={{...S.btnS, color:G.red, borderColor:G.red+'88'}}>✗ Respinge</button>
-              <button onClick={handleAproba} disabled={actionLoading} style={{...S.btnP, background:G.green}}>
-                {showAlegeSofer ? '✓ Aprobă cu acest șofer' : (T.sofer_aloca_logistica && !T.sofer_employee_id ? '✓ Aprobă (alege șofer)' : '✓ Aprobă')}
+              {isAprobator && (
+                <button onClick={() => setShowRespingere(true)} disabled={actionLoading} style={{...S.btnS, color:G.red, borderColor:G.red+'88'}}>✗ Respinge</button>
+              )}
+              <button onClick={handleAproba} disabled={actionLoading} style={{...S.btnP, background: canSelfApprove && !isAprobator ? '#2563EB' : G.green}}>
+                {canSelfApprove && !isAprobator
+                  ? '🏗️ Aprobă intern'
+                  : showAlegeSofer ? '✓ Aprobă cu acest șofer'
+                  : (T.sofer_aloca_logistica && !T.sofer_employee_id ? '✓ Aprobă (alege șofer)' : '✓ Aprobă')
+                }
               </button>
             </>
           )}
