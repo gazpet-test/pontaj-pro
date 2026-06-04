@@ -6660,6 +6660,8 @@ function AdminPage() {
                 <option value="sef_echipa">🏗️ Șef Echipă</option>
                 <option value="contabilitate">💵 Contabilitate</option>
                 <option value="hr">👥 HR</option>
+                <option value="gestionar">🏭 Gestionar</option>
+                <option value="magazioner">📦 Magazioner</option>
               </select>
             </div>
             <div style={{marginBottom:12}}><Lbl>🏢 Departament</Lbl>
@@ -6671,6 +6673,10 @@ function AdminPage() {
                 <option value="HR">👥 HR</option>
                 <option value="Administrativ">🏢 Administrativ</option>
                 <option value="Contabilitate">💵 Contabilitate</option>
+                <option value="Financiar">💰 Financiar</option>
+                <option value="Comercial">🛒 Comercial</option>
+                <option value="Ofertare">📋 Ofertare</option>
+                <option value="Magazie">📦 Magazie</option>
                 <option value="IT">💻 IT</option>
               </select>
               <div style={{fontSize:10,color:G.muted,marginTop:3}}>Pe viitor: drepturile pot fi legate de departament</div>
@@ -7129,6 +7135,7 @@ function AdminPage() {
               <option value="contabilitate">💵 Contabilitate</option>
               <option value="hr">👥 HR</option>
               <option value="gestionar">🏭 Gestionar</option>
+              <option value="magazioner">📦 Magazioner</option>
             </select></div>
             <div style={{marginBottom:10}}><Lbl>🏢 Departament (opțional)</Lbl><select value={nDept} onChange={e=>setNDept(e.target.value)} style={{width:'100%'}}>
               <option value="">— niciunul —</option>
@@ -7138,6 +7145,10 @@ function AdminPage() {
               <option value="HR">👥 HR</option>
               <option value="Administrativ">🏢 Administrativ</option>
               <option value="Contabilitate">💵 Contabilitate</option>
+              <option value="Financiar">💰 Financiar</option>
+              <option value="Comercial">🛒 Comercial</option>
+              <option value="Ofertare">📋 Ofertare</option>
+              <option value="Magazie">📦 Magazie</option>
               <option value="IT">💻 IT</option>
             </select></div>
             {ROLES_WITH_SITES.includes(nRole)&&<div style={{marginBottom:14}}><Lbl>Șantier Alocat (poți adăuga mai multe după salvare, din butonul Edit)</Lbl><select value={nSite} onChange={e=>setNSite(e.target.value)} style={{width:'100%'}}><option value="">— selectează —</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></div>}
