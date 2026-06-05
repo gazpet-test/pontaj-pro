@@ -180,6 +180,23 @@ function findQrMatch(qrList, reserved, litri, data, strictActiveId) {
   return best
 }
 
+// Match bon comun: cauta un bon comun cu total_litri_bon ±0.5L și data ±2 zile
+function findBonComunMatch(bonList, bonReserved, litri, data) {
+  const dLista = new Date(data + 'T00:00:00').getTime()
+  let best = null, bestScore = -1
+  for (const bc of bonList) {
+    if (bonReserved.has(bc.bon_comun_id)) continue
+    const dLitri = Math.abs(bc.total_litri_bon - litri)
+    if (dLitri > 0.5) continue
+    const dBc = new Date(bc.data_min + 'T00:00:00').getTime()
+    const dZile = Math.abs((dBc - dLista) / 86400000)
+    if (dZile > 2) continue
+    const score = (0.5 - dLitri) * 10 + (2 - dZile) * 2
+    if (score > bestScore) { bestScore = score; best = bc }
+  }
+  return best
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // COMPONENT MODAL
 // ─────────────────────────────────────────────────────────────────────────
@@ -248,6 +265,7 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
       
       // Pre-fetch QR pending_match (rompetrol) în interval extins ±2 zile — pentru match
       let qrPending = []
+      let bonuriComune = []  // bon comun rompetrol cu total litri — pentru match agregat
       if (minDate && maxDate) {
         const dMin = new Date(minDate + 'T00:00:00'); dMin.setDate(dMin.getDate() - 2)
         const dMax = new Date(maxDate + 'T00:00:00'); dMax.setDate(dMax.getDate() + 2)
@@ -258,8 +276,31 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
           .gte('data_alimentare', dMin.toISOString().slice(0, 10))
           .lte('data_alimentare', dMax.toISOString().slice(0, 10))
         qrPending = qr || []
+
+        // Bonuri comune rompetrol: grupez alimentarile cu bon_comun_id pe total
+        const { data: bcRows } = await supabase.from('logistica_alimentari')
+          .select('bon_comun_id, data_alimentare, cantitate_litri, logistica_bonuri_comune!inner(id, cod_bon, total_litri_bon, qr_sursa)')
+          .eq('qr_sursa', 'rompetrol')
+          .eq('logistica_bonuri_comune.qr_sursa', 'rompetrol')
+          .not('bon_comun_id', 'is', null)
+          .gte('data_alimentare', dMin.toISOString().slice(0, 10))
+          .lte('data_alimentare', dMax.toISOString().slice(0, 10))
+        // Grupez pe bon_comun_id → total litri + data minima
+        const bcMap = {}
+        for (const r of (bcRows || [])) {
+          const bid = r.bon_comun_id
+          if (!bcMap[bid]) bcMap[bid] = {
+            bon_comun_id: bid,
+            cod_bon: r.logistica_bonuri_comune?.cod_bon,
+            total_litri_bon: Number(r.logistica_bonuri_comune?.total_litri_bon || 0),
+            data_min: r.data_alimentare,
+          }
+          if (r.data_alimentare < bcMap[bid].data_min) bcMap[bid].data_min = r.data_alimentare
+        }
+        bonuriComune = Object.values(bcMap)
       }
-      const reserved = new Set()  // QR-uri deja rezervate de o linie din listă
+      const reserved = new Set()       // QR-uri individuale deja rezervate
+      const bonComunReserved = new Set() // bon_comun_id-uri deja rezervate
       
       for (const sec of secs) {
         const vehKey = normalizeNrInmat(sec.vehicul)
@@ -304,6 +345,26 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
               litri: a.cantitate_litri,
               pret_total: a.pret_total,
               pret_per_litru: pretL,
+            })
+            continue
+          }
+
+          // 1b) Caut BON COMUN potrivit: total ±0.5L + data ±2 zile
+          const bc = findBonComunMatch(bonuriComune, bonComunReserved, a.cantitate_litri, a.data_alimentare)
+          if (bc) {
+            bonComunReserved.add(bc.bon_comun_id)
+            qrMatched.push({
+              qr_id: null,
+              bon_comun_id: bc.bon_comun_id,
+              cod_bon: bc.cod_bon,
+              vehicul_qr: `Bon comun ${bc.cod_bon} (${bc.total_litri_bon}L total)`,
+              sursa_linie: sec.vehicul,
+              card: esteCard ? sec.vehicul : null,
+              data: a.data_alimentare,
+              litri: a.cantitate_litri,
+              pret_total: a.pret_total,
+              pret_per_litru: pretL,
+              is_bon_comun: true,
             })
             continue
           }
@@ -407,6 +468,26 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
 
       // 2) QR-uri pending → completez cu preț (+card) și marchez matched
       for (const q of qrMatched) {
+        if (q.is_bon_comun) {
+          // Bon comun: actualizez TOATE alimentarile cu bon_comun_id + pret per litru
+          const pretL = q.pret_per_litru
+          const { error } = await supabase.from('logistica_alimentari').update({
+            pret_per_litru: pretL,
+            pret_total: pretL ? null : null,  // se calculează per rând mai jos
+            statie_combustibil: 'Rompetrol',
+            card_combustibil: q.card || null,
+          }).eq('bon_comun_id', q.bon_comun_id)
+          if (error) throw error
+          // Update pret_total individual: cantitate * pretL per fiecare rand
+          const { data: bonRows } = await supabase.from('logistica_alimentari')
+            .select('id, cantitate_litri').eq('bon_comun_id', q.bon_comun_id)
+          for (const br of (bonRows || [])) {
+            const ptRow = pretL ? Number((Number(br.cantitate_litri) * pretL).toFixed(2)) : null
+            await supabase.from('logistica_alimentari').update({ pret_total: ptRow }).eq('id', br.id)
+          }
+          totalQr++
+          continue
+        }
         const upd = {
           qr_status: 'matched',
           pret_total: q.pret_total,
