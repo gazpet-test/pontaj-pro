@@ -84,7 +84,10 @@ export default function TabDocumenteFirma() {
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
       const { data } = await supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).single()
-      setProfile(data)
+      // Verifică și accesul la nivel de modul (admin pe 'administrativ' = poate edita)
+      const { data: modAccess } = await supabase.from('user_module_access')
+        .select('access_level').eq('profile_id', user.id).eq('module', 'administrativ').maybeSingle()
+      setProfile({ ...data, _adminAccess: modAccess?.access_level === 'admin' })
     }
     const { data } = await supabase.from('v_documente_firma_alerte').select('*').order('data_valabilitate', { ascending: true, nullsFirst: false })
     // Adaug și documente inactive separat dacă vrem să afișăm istoric
@@ -106,7 +109,7 @@ export default function TabDocumenteFirma() {
 
   useEffect(() => { loadAll() }, [showInactive])
 
-  const isOwner = profile?.is_owner === true
+  const isOwner = profile?.is_owner === true || profile?._adminAccess === true
 
   const filtered = useMemo(() => {
     let list = docs
@@ -171,7 +174,7 @@ export default function TabDocumenteFirma() {
         </div>
         {!isOwner && (
           <div style={{marginTop:12, padding:'8px 12px', background:G.yellow+'22', borderRadius:6, fontSize:11, color:G.yellow}}>
-            ⚠ Doar owner-ii (Razvan + Marilena) pot uploada / edita. Tu poți doar vizualiza.
+            ⚠ Doar utilizatorii cu acces Admin pe modul Administrativ pot uploada / edita. Tu poți doar vizualiza.
           </div>
         )}
       </div>
