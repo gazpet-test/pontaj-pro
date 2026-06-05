@@ -308,7 +308,7 @@ function DashboardProiectePage({ onSelectProiect }) {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role').eq('id', user.id).single()
+        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_manage_contracts').eq('id', user.id).single()
         setProfile(prof)
       }
       const { data, error } = await supabase.from('v_executie_dashboard').select('*').order('id')
@@ -324,6 +324,7 @@ function DashboardProiectePage({ onSelectProiect }) {
   useEffect(() => { loadAll() }, [loadAll])
 
   const isOwner = profile?.is_owner === true
+  const canEdit = isOwner || profile?.can_manage_contracts === true
   const [alertFilter, setAlertFilter] = useState(null)
 
   const kpiAlerte = useMemo(() => {
@@ -519,6 +520,7 @@ function DashboardProiectePage({ onSelectProiect }) {
               key={p.id}
               proiect={p}
               isOwner={isOwner}
+              canEdit={canEdit}
               onOpen={(tab) => onSelectProiect(p.id, tab)}
               onDetail={() => setSelectedProiect(p)}
               onEdit={() => setEditProiect(p)}
@@ -532,6 +534,7 @@ function DashboardProiectePage({ onSelectProiect }) {
         <ProiectDetailModal
           proiect={selectedProiect}
           isOwner={isOwner}
+          canEdit={canEdit}
           onClose={() => setSelectedProiect(null)}
           onEdit={() => { setEditProiect(selectedProiect); setSelectedProiect(null) }}
           onOpen={(tab) => { setSelectedProiect(null); onSelectProiect(selectedProiect.id, tab) }}
@@ -552,7 +555,7 @@ function DashboardProiectePage({ onSelectProiect }) {
 // ===========================================================================
 // PROIECT CARD — click pe titlu sau "→ Deschide" navighează la context
 // ===========================================================================
-function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
+function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit }) {
   const terminStatus = (() => {
     if (!p.data_termen) return null
     const zile = p.zile_pana_termen
@@ -803,7 +806,7 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
             borderRadius: 6, color: G.purple, fontSize: 12, cursor: 'pointer', fontWeight: 600,
           }}>📐 Izometrie</button>
         </div>
-        {isOwner && (
+        {canEdit && (
           <button onClick={onEdit} style={{
             padding: '6px 12px', background: 'transparent', border: `1px solid ${G.border}`,
             borderRadius: 6, color: G.muted, fontSize: 12, cursor: 'pointer',
@@ -817,7 +820,7 @@ function ProiectCard({ proiect: p, isOwner, onOpen, onDetail, onEdit }) {
 // ===========================================================================
 // PROIECT DETAIL MODAL (read-only quick view)
 // ===========================================================================
-function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
+function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onOpen }) {
   const [personnel, setPersonnel] = useState({})
   useEffect(() => {
     const ids = [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id].filter(Boolean)
@@ -1090,7 +1093,7 @@ function ProiectDetailModal({ proiect: p, isOwner, onClose, onEdit, onOpen }) {
             padding: '8px 16px', background: G.executie, border: 'none',
             borderRadius: 7, color: '#0D1117', fontSize: 13, cursor: 'pointer', fontWeight: 700,
           }}>→ Deschide proiect</button>
-          {isOwner && (
+          {canEdit && (
             <button onClick={onEdit} style={{
               padding: '8px 16px', background: G.border2, border: `1px solid ${G.border}`,
               borderRadius: 7, color: G.text, fontSize: 13, cursor: 'pointer',
