@@ -1177,6 +1177,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     deep_sleep_data: a?.deep_sleep_data || '',
     // Fără service Gazpet — utilaj comodat/închiriat, exclus din acoperire flotă & scadențe service
     fara_service_gazpet: a?.fara_service_gazpet || false,
+    non_motor: a?.non_motor || false,
     // 27.05.2026: Contract de comodat (vehicul personal angajat folosit la firmă)
     // Dacă prefilComodat=true (din butonul „+ Adaugă vehicul comodat" din sub-tab Contracte), pre-selectez tip=comodat
     tip_proprietate: a?.tip_proprietate || (prefilComodat ? 'comodat' : 'firma'),
@@ -1445,6 +1446,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       deep_sleep_data: form.deep_sleep ? (form.deep_sleep_data || new Date().toISOString().split('T')[0]) : null,
       // Fără service Gazpet — exclus din acoperire flotă & scadențe service
       fara_service_gazpet: !!form.fara_service_gazpet,
+      non_motor: !!form.non_motor,
       // 27.05.2026: Contract de comodat / Închiriere
       tip_proprietate: form.tip_proprietate || 'firma',
       comodat_employee_id: form.tip_proprietate === 'comodat' ? (form.comodat_employee_id || null) : null,
@@ -1869,6 +1871,28 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
               </div>
               <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
                 Service-ul nu este în sarcina Gazpet. <strong>Exclus din acoperire flotă și scadențe service.</strong>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {/* Checkbox non_motor — echipamente fara motor termic (nu se alimenteaza cu combustibil) */}
+        <div style={{marginBottom: 14, background: form.non_motor ? '#EF444422' : 'transparent', border: form.non_motor ? '1px solid #EF444455' : `1px dashed ${G.border}`, borderRadius: 10, padding: 14}}>
+          <div style={{display:'flex', alignItems:'center', gap:10}}>
+            <input
+              type="checkbox"
+              id="non_motor_checkbox"
+              checked={!!form.non_motor}
+              disabled={isReadOnly}
+              onChange={e => setField('non_motor', e.target.checked)}
+              style={{width:18, height:18, cursor: isReadOnly ? 'default' : 'pointer', accentColor: '#EF4444'}}
+            />
+            <label htmlFor="non_motor_checkbox" style={{flex:1, cursor: isReadOnly ? 'default' : 'pointer', userSelect:'none'}}>
+              <div style={{fontSize: 13, color: form.non_motor ? '#EF4444' : G.text, fontWeight: 700}}>
+                ⚡ Fără motor termic (nu se alimentează cu combustibil)
+              </div>
+              <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>
+                Echipament electric sau remorcă fără motor. <strong>Exclus din QR alimentare.</strong> Debifează pentru echipamente cu motor diesel montate pe remorci (ex: motocompresoare).
               </div>
             </label>
           </div>
@@ -7861,7 +7885,22 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                       <td style={{padding: '8px 12px', textAlign: 'right', color: a.pret_total ? G.green : G.muted, fontWeight: 600, fontVariantNumeric: 'tabular-nums'}}>
                         {a.pret_total ? `${Number(a.pret_total).toFixed(2)} RON` : '—'}
                       </td>
-                      <td style={{padding: '8px 12px', color: G.muted, fontSize: 11}}>{a.profile_creator?.name?.split(' ')[0] || '—'}</td>
+                      <td style={{padding: '8px 12px', color: G.muted, fontSize: 11}}>
+                        {(() => {
+                          // QR: [QR] Șofer: MITRACHE ALEXANDRU
+                          if (a.observatii) {
+                            const m = a.observatii.match(/\[QR\]\s*[ȘS]ofer:\s*(.+)/i)
+                            if (m) return <span style={{color:G.green,fontWeight:600,fontSize:10}}>📱 {m[1].trim().split(' ')[0]}</span>
+                          }
+                          // WhatsApp autor
+                          if (a.whatsapp_autor) return <span style={{color:'#25D366',fontSize:10}}>💬 {a.whatsapp_autor}</span>
+                          // Creator din profil
+                          if (a.profile_creator?.name) return a.profile_creator.name.split(' ')[0]
+                          // Fallback sursă
+                          if ((a.statie_combustibil||'').toLowerCase().includes('rompetrol')) return <span style={{color:G.yellow,fontSize:10}}>📄 Rompetrol</span>
+                          return '—'
+                        })()}
+                      </td>
                       <td style={{padding: '8px 12px', textAlign: 'center', display: 'flex', gap: 4, justifyContent: 'center'}}>
                         {isAdmin && (
                           <>
