@@ -748,7 +748,43 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   const [showAddAut, setShowAddAut] = useState(false)
   const [editingAreAut, setEditingAreAut] = useState(false)
   const [areAut, setAreAut] = useState(employee.are_autorizatii || false)
-  
+  const [uploadingId, setUploadingId] = useState(null)
+  const uploadRef = useRef(null)
+  const uploadTarget = useRef(null)
+
+  const handleViewPdf = useCallback(async (path) => {
+    if (!path) { showToast('Nicio dovadă atașată', 'warning'); return }
+    const { data, error } = await supabase.storage.from('autorizatii').createSignedUrl(path, 120)
+    if (error) { showToast('Eroare deschidere: ' + error.message, 'error'); return }
+    window.open(data.signedUrl, '_blank')
+  }, [showToast])
+
+  const handleUploadPdf = useCallback(async (autId, employeeId, file) => {
+    if (!file) return
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+    if (!allowed.includes(file.type)) { showToast('Acceptat: PDF, JPG, PNG, WEBP', 'error'); return }
+    if (file.size > 10 * 1024 * 1024) { showToast('Fișier prea mare (max 10MB)', 'error'); return }
+    setUploadingId(autId)
+    try {
+      const compressed = await compressFileBeforeUpload(file)
+      const ext = compressed.name.split('.').pop()
+      const path = `${employeeId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('autorizatii').upload(path, compressed, { upsert: false })
+      if (upErr) throw upErr
+      const { error: dbErr } = await supabase.from('hr_autorizatii').update({
+        fisier_path: path, fisier_nume: file.name,
+        fisier_size_bytes: file.size, fisier_mime: file.type
+      }).eq('id', autId)
+      if (dbErr) throw dbErr
+      showToast('✅ Fișier încărcat', 'success')
+      onReload()
+    } catch (e) {
+      showToast('Eroare upload: ' + e.message, 'error')
+    } finally {
+      setUploadingId(null)
+    }
+  }, [showToast, onReload])
+
   // Auto-calculate (real count) for display
   const realAutCount = autorizatii.length
   
@@ -873,10 +909,12 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                           {statusBadge(a.status, a.zile_pana_expirare)}
                           {isAdmin && (
                             <div style={{display:'flex', gap:4}}>
+                              <input ref={uploadRef} type="file" accept=".pdf,image/*" style={{display:'none'}}
+                                onChange={e => { const f=e.target.files?.[0]; if(f&&uploadTarget.current) handleUploadPdf(uploadTarget.current.id, uploadTarget.current.employee_id, f); e.target.value='' }} />
                               <button onClick={() => handleViewPdf(a.fisier_path)}
                                 style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
                                 title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
-                              <button onClick={() => { uploadTargetRef.current={id:a.id,employee_id:a.employee_id}; uploadRefGlobal.current?.click() }}
+                              <button onClick={() => { uploadTarget.current={id:a.id,employee_id:a.employee_id}; uploadRef.current?.click() }}
                                 disabled={uploadingId===a.id}
                                 style={{padding:'4px 8px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
                                 title={a.fisier_path ? 'Înlocuiește fișier' : 'Adaugă PDF/poză'}>
