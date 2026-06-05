@@ -60,7 +60,7 @@ const LUNI = ['Ian','Feb','Mar','Apr','Mai','Iun','Iul','Aug','Sep','Oct','Nov',
 
 const fmtLei = v => {
   if (!v && v !== 0) return '—'
-  return new Intl.NumberFormat('ro-RO', { style:'currency', currency:'RON', maximumFractionDigits:0 }).format(v)
+  return new Intl.NumberFormat('ro-RO', { style:'currency', currency:'RON', minimumFractionDigits:2, maximumFractionDigits:2 }).format(v)
 }
 const fmtDate = d => d ? new Date(d).toLocaleDateString('ro-RO', {day:'2-digit', month:'short', year:'numeric'}) : '—'
 
