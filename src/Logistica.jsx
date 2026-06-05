@@ -7788,7 +7788,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                         <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>
                           <div style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:5}}>
                             <span>{u.norma !== null ? `${u.norma} ${u.unitateNorma}` : '—'}</span>
-                            {canEdit && <button onClick={() => setEditNormaModal({ activId: u.activId, norma: u.norma ?? '', unitateNorma: u.unitateNorma || 'l/h', pragAlerta: u.pragAlerta ?? 15, marca: u.marca, model: u.model })} style={{background:'transparent',border:`1px solid ${G.border}`,borderRadius:4,cursor:'pointer',color:G.muted,fontSize:10,padding:'1px 5px',lineHeight:'14px'}} title="Editează normă consum">✏️</button>}
+                            {isAdmin && <button onClick={() => setEditNormaModal({ activId: u.activId, norma: u.norma ?? '', unitateNorma: u.unitateNorma || 'l/h', pragAlerta: u.pragAlerta ?? 15, marca: u.marca, model: u.model })} style={{background:'transparent',border:`1px solid ${G.border}`,borderRadius:4,cursor:'pointer',color:G.muted,fontSize:10,padding:'1px 5px',lineHeight:'14px'}} title="Editează normă consum">✏️</button>}
                           </div>
                         </td>
                         <td style={{padding: '8px 12px', textAlign: 'center'}}>
