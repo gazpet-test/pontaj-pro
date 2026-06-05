@@ -7179,6 +7179,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
   const [editAlim, setEditAlim] = useState(null)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [viewMode, setViewMode] = useState('toate')  // 'toate' | 'santier' | 'utilaj'
+  const [editNormaModal, setEditNormaModal] = useState(null)  // { activId, norma, unitateNorma, pragAlerta, marca, model }
   
   const isAdmin = ['superadmin', 'admin_logistica'].includes(profile?.role)
   
@@ -7784,7 +7785,12 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                         <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: stareColor, fontWeight: 700}}>
                           {u.consumReal !== null ? `${u.consumReal.toFixed(2)} ${u.unitateNorma}` : '—'}
                         </td>
-                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>{u.norma !== null ? `${u.norma} ${u.unitateNorma}` : '—'}</td>
+                        <td style={{padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: G.muted}}>
+                          <div style={{display:'flex',alignItems:'center',justifyContent:'flex-end',gap:5}}>
+                            <span>{u.norma !== null ? `${u.norma} ${u.unitateNorma}` : '—'}</span>
+                            {canEdit && <button onClick={() => setEditNormaModal({ activId: u.activId, norma: u.norma ?? '', unitateNorma: u.unitateNorma || 'l/h', pragAlerta: u.pragAlerta ?? 15, marca: u.marca, model: u.model })} style={{background:'transparent',border:`1px solid ${G.border}`,borderRadius:4,cursor:'pointer',color:G.muted,fontSize:10,padding:'1px 5px',lineHeight:'14px'}} title="Editează normă consum">✏️</button>}
+                          </div>
+                        </td>
                         <td style={{padding: '8px 12px', textAlign: 'center'}}>
                           <span style={{display: 'inline-block', padding: '3px 8px', borderRadius: 12, fontSize: 10, fontWeight: 700, background: stareColor + '22', color: stareColor, border: `1px solid ${stareColor}55`, whiteSpace: 'nowrap'}}>
                             {stareLabel}
@@ -7803,6 +7809,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
             </div>
           </div>
         </div>
+
       ) : (
         <div style={{...S.card, padding: 0, overflow: 'hidden'}}>
           <div style={{overflowX: 'auto'}}>
@@ -7888,6 +7895,58 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
           showToast={showToast}
         />
       )}
+
+      {/* Modal editare rapidă normă consum — din view Per utilaj */}
+      {editNormaModal && (() => {
+        const m = editNormaModal
+        const saveNorma = async () => {
+          const normaVal = m.norma === '' ? null : Number(m.norma)
+          const { error } = await supabase.from('logistica_active').update({
+            norma_consum: normaVal,
+            unitate_norma: m.unitateNorma,
+            prag_alerta_consum: Number(m.pragAlerta) || 15,
+          }).eq('id', m.activId)
+          if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+          showToast(`✓ Normă actualizată: ${normaVal ?? '—'} ${m.unitateNorma}`)
+          setEditNormaModal(null)
+          loadArhiva()
+        }
+        return (
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:9990,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setEditNormaModal(null)}>
+            <div style={{background:G.surface,borderRadius:12,padding:24,width:360,maxWidth:'95vw',border:`1px solid ${G.border2}`}} onClick={e=>e.stopPropagation()}>
+              <div style={{fontSize:14,fontWeight:700,color:G.text,marginBottom:4}}>✏️ Editează normă consum</div>
+              <div style={{fontSize:11,color:G.muted,marginBottom:16}}>{m.marca} {m.model}</div>
+              <label style={{fontSize:11,color:G.muted,display:'block',marginBottom:4}}>Normă consum</label>
+              <div style={{display:'flex',gap:8,marginBottom:12}}>
+                <input type="number" value={m.norma} onChange={e=>setEditNormaModal({...m,norma:e.target.value})}
+                  style={{...S.input,flex:1}} placeholder="ex: 12.5" step="0.1" min="0"/>
+                <select value={m.unitateNorma} onChange={e=>setEditNormaModal({...m,unitateNorma:e.target.value})} style={{...S.input,width:120}}>
+                  <option value="l/h">l/h</option>
+                  <option value="l/100km">l/100km</option>
+                  <option value="kWh/h">kWh/h</option>
+                  <option value="kWh/100km">kWh/100km</option>
+                </select>
+              </div>
+              <label style={{fontSize:11,color:G.muted,display:'block',marginBottom:6}}>Prag alertă (%)</label>
+              <div style={{display:'flex',gap:6,marginBottom:8}}>
+                {[10,15,20,25,30].map(p=>(
+                  <button key={p} onClick={()=>setEditNormaModal({...m,pragAlerta:p})}
+                    style={{flex:1,padding:'6px 0',borderRadius:6,border:`1px solid ${m.pragAlerta===p?G.orange:G.border2}`,background:m.pragAlerta===p?G.orange+'22':'transparent',color:m.pragAlerta===p?G.orange:G.muted,fontSize:11,fontWeight:m.pragAlerta===p?700:400,cursor:'pointer'}}>
+                    {p}%
+                  </button>
+                ))}
+              </div>
+              <div style={{fontSize:10,color:G.muted,marginBottom:16}}>
+                Warning la &gt;{m.pragAlerta}% · Critic la &gt;{m.pragAlerta*2}%
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>setEditNormaModal(null)} style={{...S.btnS,flex:1,padding:'8px 0'}}>Anulează</button>
+                <button onClick={saveNorma} style={{...S.btnP,flex:2,padding:'8px 0',background:G.orange}}>✓ Salvează normă</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
