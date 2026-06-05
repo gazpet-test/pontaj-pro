@@ -179,7 +179,7 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
     const b = parseFloat(form.valoare_baza_lei)
     const c = parseFloat(form.coeficient_ajustare)
     if (isNaN(b) || isNaN(c)) return null
-    return Math.round(b * c)
+    return Math.round((b * c - b) * 100) / 100  // diferența ajustare = VB × (coef - 1)
   }, [form.valoare_baza_lei, form.coeficient_ajustare])
 
   const handleSave = async () => {
@@ -195,6 +195,12 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
         data_depunere:       form.data_depunere || null,
         valoare_baza_lei:    form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null,
         coeficient_ajustare: parseFloat(form.coeficient_ajustare) || 1,
+        valoare_ajustare_lei: (() => {
+          const b = parseFloat(form.valoare_baza_lei)
+          const c = parseFloat(form.coeficient_ajustare)
+          if (isNaN(b) || isNaN(c) || c === 1) return 0
+          return Math.round((b * c - b) * 100) / 100
+        })(),
         status:              form.status,
         nr_factura:          form.nr_factura.trim() || null,
         data_factura:        form.data_factura || null,
@@ -283,7 +289,7 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
               background:G.green+'11', border:`1px solid ${G.green}33`, borderRadius:8,
               padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center',
             }}>
-              <span style={{fontSize:13, color:G.muted}}>Valoare ajustată calculată:</span>
+              <span style={{fontSize:13, color:G.muted}}>Diferență ajustare ICC (VB × coef − VB):</span>
               <span style={{fontSize:15, fontWeight:800, color:G.green}}>{fmtLei(valAjustata)}</span>
             </div>
           )}
