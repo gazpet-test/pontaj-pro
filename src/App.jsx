@@ -6150,6 +6150,7 @@ function AdminPage() {
   const [nEmail,setNEmail]=useState(''); const [nName,setNName]=useState(''); const [nSite,setNSite]=useState(''); const [nRole,setNRole]=useState('manager_santier'); const [nPwd,setNPwd]=useState(''); const [nDept,setNDept]=useState(''); const [creating,setCreating]=useState(false)
   const [editMgr,setEditMgr]=useState(null) // manager being edited
   const [editMgrModules,setEditMgrModules]=useState({}) // acces module pentru editMgr (key→bool)
+  const [editMgrModuleLevels,setEditMgrModuleLevels]=useState({}) // nivel acces per modul: 'editor'|'admin'
   const [eName,setEName]=useState(''); const [eDept,setEDept]=useState(DEPARTMENTS[0]); const [ePos,setEPos]=useState(''); const [eSite,setESite]=useState(''); const [eHireDate,setEHireDate]=useState(''); const [addingE,setAddingE]=useState(false)
   const [empStatusFilter,setEmpStatusFilter]=useState('active') // all | active | inactive
   const [empSearch,setEmpSearch]=useState('')
@@ -6291,7 +6292,7 @@ function AdminPage() {
         const selectedMods = Object.entries(editMgrModules).filter(([,v])=>v).map(([k])=>k)
         if (selectedMods.length > 0) {
           await supabase.from('user_module_access').insert(
-            selectedMods.map(mod => ({ profile_id: editMgr.id, module: mod, access_level: 'editor' }))
+            selectedMods.map(mod => ({ profile_id: editMgr.id, module: mod, access_level: editMgrModuleLevels[mod] || 'editor' }))
           )
         }
       }
@@ -6882,11 +6883,24 @@ function AdminPage() {
                     {key:'pontajpro',    label:'PontajPRO',    emoji:'📊', color:'#58A6FF'},
                   ].map(m => {
                     const active = !!editMgrModules[m.key]
+                    const lvl = editMgrModuleLevels[m.key] || 'editor'
                     return (
-                      <label key={m.key} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'7px 9px',background:active?m.color+'22':G.bg,border:`1px solid ${active?m.color+'88':G.border2}`,borderRadius:6}}>
-                        <input type="checkbox" checked={active} onChange={e=>setEditMgrModules({...editMgrModules,[m.key]:e.target.checked})} style={{accentColor:m.color,width:13,height:13}}/>
-                        <span style={{fontSize:11,fontWeight:active?700:500,color:active?m.color:G.text,whiteSpace:'nowrap'}}>{m.emoji} {m.label}</span>
-                      </label>
+                      <div key={m.key} style={{background:active?m.color+'22':G.bg,border:`1px solid ${active?m.color+'88':G.border2}`,borderRadius:6,overflow:'hidden'}}>
+                        <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',padding:'7px 9px'}}>
+                          <input type="checkbox" checked={active} onChange={e=>setEditMgrModules({...editMgrModules,[m.key]:e.target.checked})} style={{accentColor:m.color,width:13,height:13}}/>
+                          <span style={{fontSize:11,fontWeight:active?700:500,color:active?m.color:G.text,whiteSpace:'nowrap',flex:1}}>{m.emoji} {m.label}</span>
+                        </label>
+                        {active && (
+                          <select
+                            value={lvl}
+                            onChange={e=>setEditMgrModuleLevels({...editMgrModuleLevels,[m.key]:e.target.value})}
+                            style={{width:'100%',fontSize:10,padding:'2px 6px',background:m.color+'11',border:`none`,borderTop:`1px solid ${m.color+'33'}`,color:m.color,cursor:'pointer',outline:'none'}}
+                          >
+                            <option value="editor">👁 Vizualizare (editor)</option>
+                            <option value="admin">✏️ Editare completă (admin)</option>
+                          </select>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
@@ -7118,7 +7132,7 @@ function AdminPage() {
                   {m.department && <div style={{color:G.blue,marginTop:2,fontSize:10,fontWeight:600}}>🏢 {m.department}</div>}
                   {!m.department && (m.site_ids||[]).length===0 && <span style={{color:G.dim}}>—</span>}
                 </td>
-                <td><button onClick={async()=>{setEditMgr({...m,original_email:m.email});const{data:ma}=await supabase.from('user_module_access').select('module').eq('profile_id',m.id);const mods={};(ma||[]).forEach(x=>{mods[x.module]=true});setEditMgrModules(mods)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
+                <td><button onClick={async()=>{setEditMgr({...m,original_email:m.email});const{data:ma}=await supabase.from('user_module_access').select('module, access_level').eq('profile_id',m.id);const mods={};const levels={};(ma||[]).forEach(x=>{mods[x.module]=true;levels[x.module]=x.access_level||'editor'});setEditMgrModules(mods);setEditMgrModuleLevels(levels)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
           </div>
