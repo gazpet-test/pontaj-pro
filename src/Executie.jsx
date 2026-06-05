@@ -1142,6 +1142,9 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     site_id:       proiect.site_id       || '',
     activ:         proiect.activ !== false,
     manual_sistat: proiect.manual_sistat === true,
+    // ─── NAS Scanner mapping ──────────────────────────────────────────────────
+    numar_inventar:   proiect.numar_inventar   || '',
+    nas_folder_path:  proiect.nas_folder_path  || '',
     // ─── Persoane cheie ─────────────────────────────────────────────────────
     mp_employee_id:       proiect.mp_employee_id        || '',
     rts_employee_id:      proiect.rts_employee_id       || '',
@@ -1331,6 +1334,8 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
         observatii:    form.observatii.trim() || null,
         nr_contract:   form.nr_contract.trim() || null,
         data_contract: form.data_contract || null,
+        numar_inventar: form.numar_inventar ? parseInt(String(form.numar_inventar)) : null,
+        nas_folder_path: form.nas_folder_path.trim() || null,
         data_start:    form.data_start || null,
         data_termen:   form.data_termen || null,
         valoare_lei:   form.valoare_lei ? parseFloat(form.valoare_lei) : null,
@@ -1795,6 +1800,23 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               </span>
               {form.manual_sistat && <span style={{ fontSize: 11, color: G.muted }}>(fără ordin formal)</span>}
             </label>
+          </div>
+
+          {/* ── NAS Scanner mapping ─────────────────────────────────────── */}
+          <div style={{margin:'4px 0 10px',padding:'12px 14px',background:G.bg,borderRadius:8,border:`1px solid ${G.border2}`}}>
+            <div style={{...secTitle,marginBottom:10}}><span>🗂️</span> NAS Scanner — mapare folder</div>
+            <div style={{display:'grid',gridTemplateColumns:'160px 1fr',gap:10}}>
+              <div>
+                <label style={labelStyle}>Nr. inventar NAS</label>
+                <input type="number" value={form.numar_inventar} onChange={e=>set('numar_inventar',e.target.value)} style={fieldStyle} placeholder="ex: 152" min="1" />
+                <div style={{fontSize:10,color:G.muted,marginTop:2}}>Numărul din față folderului NAS</div>
+              </div>
+              <div>
+                <label style={labelStyle}>Cale folder NAS (relativ)</label>
+                <input value={form.nas_folder_path} onChange={e=>set('nas_folder_path',e.target.value)} style={fieldStyle} placeholder="1.TRANSGAZ/152. LOT 2 Prunisor-Jupa" />
+                <div style={{fontSize:10,color:G.muted,marginTop:2}}>AI-ul folosește numărul pentru a lega automat documentele la proiect</div>
+              </div>
+            </div>
           </div>
 
           {/* ── Persoane cheie + ISC ─────────────────────────────────────── */}
