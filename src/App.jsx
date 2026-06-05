@@ -6252,6 +6252,7 @@ function AdminPage() {
     // Modifică Angajați (HR write): doar OWNER (trigger BD verifică la fel). Separat de can_access_personal_data care e DOAR vizualizare GDPR.
     if (profile?.is_owner === true && editMgr.can_modify_employees !== undefined) {
       updates.can_modify_employees = !!editMgr.can_modify_employees
+      updates.can_manage_contracts = !!editMgr.can_manage_contracts
     }
     // Scanner Documente AI (Vision): doar OWNER. Trigger BD enforce_owner_only_salary_flags protejeaza la fel.
     if (profile?.is_owner === true && editMgr.can_use_document_scanner !== undefined) {
@@ -6740,6 +6741,7 @@ function AdminPage() {
               </div>
             )}
             {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <>
               <div style={{marginBottom:14,padding:12,background:editMgr.can_modify_employees?'#2A1F0F':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_modify_employees?G.orange:G.border}66`}}>
                 <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
                   <input type="checkbox"
@@ -6757,6 +6759,24 @@ function AdminPage() {
                   </div>
                 </label>
               </div>
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_manage_contracts?'#1F2A1F':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_manage_contracts?'#2EA043':G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_manage_contracts}
+                    onChange={e=>setEditMgr({...editMgr,can_manage_contracts:e.target.checked})}
+                    style={{accentColor:'#2EA043',width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_manage_contracts?'#2EA043':G.text}}>
+                      📋 Contracte cu Terți (WRITE)
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Permite <strong>adăugare/editare contracte</strong> în Administrativ → Contracte cu Terți. Fără acest flag, utilizatorul poate doar vizualiza. Necesar pentru personalul care gestionează contractele.
+                    </div>
+                  </div>
+                </label>
+              </div>
+              </>
             )}
             {profile?.is_owner === true && editMgr.id !== profile?.id && (
               <div style={{marginBottom:14,padding:12,background:editMgr.can_use_document_scanner?'#0F1F3A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_use_document_scanner?G.blue:G.border}66`}}>
