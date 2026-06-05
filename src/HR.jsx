@@ -168,7 +168,7 @@ export default function HRPage() {
     { key: 'arhiva',      icon: '📦', label: 'Arhivă', badge: arhiva.length, personalOnly: true },
     { key: 'cos',         icon: '🗑', label: 'Coș', badge: cosCount, personalOnly: true },
     { key: 'scanner',     icon: '📷', label: 'Scanner AI', scannerOnly: true },
-    { key: 'salarii',     icon: '💰', label: 'Salarii', superOnly: true },
+
   ].filter(t => {
     if (t.superOnly && !isSuperAdmin) return false
     if (t.scannerOnly && !canUseScanner) return false
@@ -368,6 +368,41 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
   const [catFilter, setCatFilter] = useState('Toate')
   const [statusFilter, setStatusFilter] = useState('toate')
   const [sortBy, setSortBy] = useState('nume')  // nume | tip | expirare | status
+  const [uploadingId, setUploadingId] = useState(null)
+  const uploadRefGlobal = useRef(null)
+  const uploadTargetRef = useRef(null) // { id, employee_id }
+
+  const handleViewPdf = useCallback(async (path) => {
+    if (!path) { showToast('Nicio dovadă atașată', 'warning'); return }
+    const { data, error } = await supabase.storage.from('autorizatii').createSignedUrl(path, 120)
+    if (error) { showToast('Eroare deschidere: ' + error.message, 'error'); return }
+    window.open(data.signedUrl, '_blank')
+  }, [showToast])
+
+  const handleUploadPdf = useCallback(async (autId, employeeId, file) => {
+    if (!file) return
+    const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+    if (!allowed.includes(file.type)) { showToast('Acceptat: PDF, JPG, PNG, WEBP', 'error'); return }
+    if (file.size > 10 * 1024 * 1024) { showToast('Fișier prea mare (max 10MB)', 'error'); return }
+    setUploadingId(autId)
+    try {
+      const ext = file.name.split('.').pop()
+      const path = `${employeeId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('autorizatii').upload(path, file, { upsert: false })
+      if (upErr) throw upErr
+      const { error: dbErr } = await supabase.from('hr_autorizatii').update({
+        fisier_path: path, fisier_nume: file.name,
+        fisier_size_bytes: file.size, fisier_mime: file.type
+      }).eq('id', autId)
+      if (dbErr) throw dbErr
+      showToast('✅ Fișier încărcat', 'success')
+      onReload()
+    } catch (e) {
+      showToast('Eroare upload: ' + e.message, 'error')
+    } finally {
+      setUploadingId(null)
+    }
+  }, [showToast, onReload])
   
   const filtered = useMemo(() => {
     let result = autorizatii.filter(a => {
@@ -516,6 +551,16 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
                   {isAdmin && (
                     <td style={{...tdStyle, textAlign:'right'}}>
                       <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
+                        <input ref={uploadRefGlobal} type="file" accept=".pdf,image/*" style={{display:'none'}}
+                          onChange={e => { const f=e.target.files?.[0]; if(f&&uploadTargetRef.current) handleUploadPdf(uploadTargetRef.current.id, uploadTargetRef.current.employee_id, f); e.target.value='' }} />
+                        <button onClick={() => handleViewPdf(a.fisier_path)}
+                          style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+                          title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
+                        <button onClick={() => { uploadTargetRef.current={id:a.id,employee_id:a.employee_id}; uploadRefGlobal.current?.click() }}
+                          disabled={uploadingId===a.id}
+                          style={{padding:'4px 8px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+                          title={a.fisier_path ? 'Înlocuiește fișier' : 'Adaugă PDF/poză'}>
+                          {uploadingId===a.id ? '⏳' : '📎'}</button>
                         <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
                         <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Mută în Coș">🗑️</button>
                       </div>
@@ -826,6 +871,14 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                           {statusBadge(a.status, a.zile_pana_expirare)}
                           {isAdmin && (
                             <div style={{display:'flex', gap:4}}>
+                              <button onClick={() => handleViewPdf(a.fisier_path)}
+                                style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+                                title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
+                              <button onClick={() => { uploadTargetRef.current={id:a.id,employee_id:a.employee_id}; uploadRefGlobal.current?.click() }}
+                                disabled={uploadingId===a.id}
+                                style={{padding:'4px 8px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+                                title={a.fisier_path ? 'Înlocuiește fișier' : 'Adaugă PDF/poză'}>
+                                {uploadingId===a.id ? '⏳' : '📎'}</button>
                               <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
                               <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Mută în Coș">🗑️</button>
                             </div>
