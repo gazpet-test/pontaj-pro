@@ -37,9 +37,19 @@ function parseDataAlim(val) {
   // Format „2026-05-01 08:17:39" sau „2026-05-01"
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
   if (m) return `${m[1]}-${m[2]}-${m[3]}`
-  // Format „01.05.2026" 
+  // Format „01.05.2026 08:17:39" sau „01.05.2026"
   const m2 = s.match(/^(\d{2})\.(\d{2})\.(\d{4})/)
   if (m2) return `${m2[3]}-${m2[2]}-${m2[1]}`
+  return null
+}
+
+// Extrage ora HH:MM din string data+ora Rompetrol (ex: "05.06.2026 12:21:29")
+function parseOraAlim(val) {
+  if (!val) return null
+  const s = String(val).trim()
+  // Format "DD.MM.YYYY HH:MM:SS" sau "YYYY-MM-DD HH:MM:SS"
+  const m = s.match(/(\d{2}):(\d{2})(?::\d{2})?/)
+  if (m) return parseInt(m[1]) * 60 + parseInt(m[2])  // minute față de miezul nopții
   return null
 }
 
@@ -138,6 +148,7 @@ function parseRompetrolExcel(workbook) {
       if (cantitate != null && cantitate > 0) {
         curentSection.alimentari.push({
           data_alimentare: dataAlim,
+          ora_alimentare: parseOraAlim(labelCell),  // minute față de miezul nopții (pentru match timp)
           cantitate_litri: Number(cantitate.toFixed(2)),
           pret_total: valoare != null && valoare > 0 ? Number(valoare.toFixed(2)) : null,
           km_la_alimentare: km != null && km > 100 ? Math.round(km) : null, // ignor km mici/invalizi
@@ -161,7 +172,7 @@ function parseRompetrolExcel(workbook) {
 // MATCH QR ↔ linie listă: litri (±0.5L) + dată (±2 zile) [+ plăcuța dacă strictActiveId]
 // Întoarce QR-ul cel mai potrivit nelegat, sau null
 // ─────────────────────────────────────────────────────────────────────────
-function findQrMatch(qrList, reserved, litri, data, strictActiveId) {
+function findQrMatch(qrList, reserved, litri, data, strictActiveId, oraRompetrol) {
   const dLista = new Date(data + 'T00:00:00').getTime()
   let best = null, bestScore = -1
   for (const qr of qrList) {
@@ -172,9 +183,17 @@ function findQrMatch(qrList, reserved, litri, data, strictActiveId) {
     const dQr = new Date(qr.data_alimentare + 'T00:00:00').getTime()
     const dZile = Math.abs((dQr - dLista) / 86400000)
     if (dZile > 2) continue
-    // scor: litri exact (max 5) + dată apropiată (max 4) + vehicul potrivit (10)
+    // scor: litri exact (max 5) + dată apropiată (max 4)
     let score = (0.5 - dLitri) * 10 + (2 - dZile) * 2
-    if (strictActiveId == null && qr.active_id != null) score += 0 // card: orice vehicul
+    // BONUS timp: dacă avem ora Rompetrol + qr_submit_la → comparăm
+    if (oraRompetrol != null && qr.qr_submit_la) {
+      const qrDate = new Date(qr.qr_submit_la)
+      const qrMin = qrDate.getHours() * 60 + qrDate.getMinutes()
+      // diferența în minute între ora Rompetrol și ora QR submit
+      const dMin = Math.abs(oraRompetrol - qrMin)
+      const dMinAjustat = Math.min(dMin, 1440 - dMin) // wrap midnight
+      if (dMinAjustat <= 120) score += (120 - dMinAjustat) / 24  // max +5 puncte la 0 min diferență
+    }
     if (score > bestScore) { bestScore = score; best = qr }
   }
   return best
@@ -270,7 +289,7 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
         const dMin = new Date(minDate + 'T00:00:00'); dMin.setDate(dMin.getDate() - 2)
         const dMax = new Date(maxDate + 'T00:00:00'); dMax.setDate(dMax.getDate() + 2)
         const { data: qr } = await supabase.from('logistica_alimentari')
-          .select('id, active_id, data_alimentare, cantitate_litri, logistica_active(nr_inmatriculare, marca, model)')
+          .select('id, active_id, data_alimentare, cantitate_litri, qr_submit_la, logistica_active(nr_inmatriculare, marca, model)')
           .eq('qr_status', 'pending_match')
           .eq('qr_sursa', 'rompetrol')
           .gte('data_alimentare', dMin.toISOString().slice(0, 10))
@@ -331,7 +350,7 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
             ? Number((a.pret_total / a.cantitate_litri).toFixed(4)) : null
           
           // 1) Caut QR pending potrivit (plăcuța strict pe vehicul; cardul pe orice vehicul)
-          const qr = findQrMatch(qrPending, reserved, a.cantitate_litri, a.data_alimentare, activ ? activ.id : null)
+          const qr = findQrMatch(qrPending, reserved, a.cantitate_litri, a.data_alimentare, activ ? activ.id : null, a.ora_alimentare ?? null)
           if (qr) {
             reserved.add(qr.id)
             qrMatched.push({
