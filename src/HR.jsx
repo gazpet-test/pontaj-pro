@@ -1,7 +1,7 @@
 // ===========================================================================
 // MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături · Coș
 // ===========================================================================
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
