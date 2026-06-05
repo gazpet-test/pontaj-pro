@@ -21,6 +21,7 @@ import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
+import { compressFileBeforeUpload } from './utils/compressFile'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -1237,12 +1238,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       const vehiculId = activ?.id || 'new'
       const dateStr = new Date().toISOString().slice(0, 10)
       const uuid = Math.random().toString(36).slice(2, 10)
-      const ext = file.name.split('.').pop() || 'pdf'
+      const compressed = await compressFileBeforeUpload(file)
+      const ext = compressed.name.split('.').pop() || 'pdf'
       const path = `${vehiculId}/${dateStr}_${uuid}.${ext}`
       
       const { error: uploadErr } = await supabase.storage
         .from('contracte-comodat')
-        .upload(path, file, { upsert: false, contentType: file.type })
+        .upload(path, compressed, { upsert: false, contentType: compressed.type })
       
       if (uploadErr) throw uploadErr
       
@@ -5772,7 +5774,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       // 5. Upload în Supabase Storage
       const numarAviz = `AVZ-${T.numar_transport.replace('TRP-', '')}`
       const fileName = `${T.data_transport?.substring(0,7) || '2026-01'}/${numarAviz}_${Date.now()}.pdf`
-      const { error: upErr } = await supabase.storage.from('avize').upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false })
+      const compressedAviz = await compressFileBeforeUpload(new File([pdfBlob], fileName, { type: 'application/pdf' }))
+      const { error: upErr } = await supabase.storage.from('avize').upload(fileName, compressedAviz, { contentType: 'application/pdf', upsert: false })
       if (upErr) throw upErr
       
       // 6. Insert în arhivă

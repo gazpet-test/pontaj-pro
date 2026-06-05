@@ -11,6 +11,7 @@ import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiChuckTab from './SugestiiChuckTab.jsx'
+import { compressFileBeforeUpload } from './utils/compressFile'
 
 // Theme
 const G = {
@@ -386,9 +387,10 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
     if (file.size > 10 * 1024 * 1024) { showToast('Fișier prea mare (max 10MB)', 'error'); return }
     setUploadingId(autId)
     try {
-      const ext = file.name.split('.').pop()
+      const compressed = await compressFileBeforeUpload(file)
+      const ext = compressed.name.split('.').pop()
       const path = `${employeeId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
-      const { error: upErr } = await supabase.storage.from('autorizatii').upload(path, file, { upsert: false })
+      const { error: upErr } = await supabase.storage.from('autorizatii').upload(path, compressed, { upsert: false })
       if (upErr) throw upErr
       const { error: dbErr } = await supabase.from('hr_autorizatii').update({
         fisier_path: path, fisier_nume: file.name,

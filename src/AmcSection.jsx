@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import ScannerAmcButton from './ScannerAmcButton.jsx'
+import { compressFileBeforeUpload } from './utils/compressFile'
 
 // ─── Theme (sincron cu DocumenteFlotaPage.jsx) ──────────────────────────────
 const G = {
@@ -181,8 +182,9 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast }) {
         const tipSlug = slugify(tipSelected?.nume || 'amc')
         const denSlug = slugify(form.denumire) || 'amc'
         const fileName = `${tipSlug}/${denSlug}-${Date.now()}.pdf`
+        const compressedPdf = await compressFileBeforeUpload(pdfFile)
         const { error: upErr } = await supabase.storage.from(BUCKET)
-          .upload(fileName, pdfFile, { contentType: 'application/pdf', upsert: false })
+          .upload(fileName, compressedPdf, { contentType: 'application/pdf', upsert: false })
         if (upErr) throw new Error('Upload PDF eșuat: ' + upErr.message)
         if (doc?.pdf_url) {
           await supabase.storage.from(BUCKET).remove([doc.pdf_url])

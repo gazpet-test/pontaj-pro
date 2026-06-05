@@ -16,6 +16,7 @@ import { supabase } from './lib/supabase.js'
 import AmcSection from './AmcSection.jsx'
 import PersonalSection from './PersonalSection.jsx'
 import DocumentScannerButton from './DocumentScannerButton.jsx'
+import { compressFileBeforeUpload } from './utils/compressFile'
 
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
@@ -338,8 +339,9 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
         const tipNume = tipuri.find(t => t.id === Number(form.tip_id))?.nume || 'doc'
         const nrSlug = slugify(form.numar_document) || 'nonr'
         const fileName = `activ-${form.entitate_id}/${slugify(tipNume)}-${nrSlug}-${Date.now()}.pdf`
+        const compressedPdf = await compressFileBeforeUpload(pdfFile)
         const { error: upErr } = await supabase.storage.from(BUCKET)
-          .upload(fileName, pdfFile, { contentType: 'application/pdf', upsert: false })
+          .upload(fileName, compressedPdf, { contentType: 'application/pdf', upsert: false })
         if (upErr) throw new Error('Upload PDF eșuat: ' + upErr.message)
         if (doc?.pdf_url) {
           await supabase.storage.from(BUCKET).remove([doc.pdf_url])

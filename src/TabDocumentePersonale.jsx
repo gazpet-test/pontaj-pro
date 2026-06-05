@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import DocumenteBulkImportModal from './DocumenteBulkImportModal.jsx'
+import { compressFileBeforeUpload } from './utils/compressFile'
 
 // Theme (consistent cu HR.jsx)
 const G = {
@@ -125,8 +126,9 @@ function ModalAddDocument({ employees, tipuri, defaultEmployeeId, onClose, onSav
     
     // 1. Upload fișier
     const storagePath = genStoragePath(employeeId, tipSelectat.cod, file.name)
-    const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, file, {
-      contentType: file.type,
+    const compressed = await compressFileBeforeUpload(file)
+    const { error: upErr } = await supabase.storage.from(BUCKET).upload(storagePath, compressed, {
+      contentType: compressed.type,
       upsert: false,
     })
     if (upErr) {
