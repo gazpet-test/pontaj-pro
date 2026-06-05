@@ -7902,6 +7902,14 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                         })()}
                       </td>
                       <td style={{padding: '8px 12px', textAlign: 'center', display: 'flex', gap: 4, justifyContent: 'center'}}>
+                        {a.qr_foto_path && (
+                          <button onClick={async () => {
+                            const { data } = await supabase.storage.from('qr-bonuri').createSignedUrl(a.qr_foto_path, 300)
+                            if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+                          }} style={{...S.btnS, padding: '4px 8px', fontSize: 11, color: G.green, borderColor: G.green + '55'}} title="📷 Vezi bon pozat">
+                            📷
+                          </button>
+                        )}
                         {isAdmin && (
                           <>
                             <button onClick={() => setEditAlim(a)} style={{...S.btnS, padding: '4px 8px', fontSize: 11, color: G.logistica, borderColor: G.logistica + '55'}} title="Editează">
