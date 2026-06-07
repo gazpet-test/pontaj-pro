@@ -173,17 +173,20 @@ export default function QrUtilajPage() {
         pos => setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }), () => {}
       )
       const res = await submitAlimentare({
-        utilaj_id: utilaj.id, pin, sursa,
+        active_id: utilaj.id,          // edge fn: active_id
+        pin,
+        qr_sursa: sursa,               // edge fn: qr_sursa
         cantitate_litri: parseFloat(cantitate),
         site_id: siteSelectat,
         bon_mode: bonMode,
-        bon_comun_id: bonVerificat?.id || null,
+        bon_comun_id: bonVerificat?.id || null,   // modul nou: ID direct
+        bon_cod: bonVerificat?.cod_bon || null,    // modul vechi: fallback cod
         total_litri_bon: bonMode === 'creeaza_bon' ? parseFloat(totalBon) : null,
-        foto_bon_base64: fotoBon || null,
+        foto_base64: fotoBon || null,              // edge fn: foto_base64
         foto_pompa_base64: fotoPompa || null,
-        lat: geo.lat, lng: geo.lng,
-        ore_bord: oreBord ? parseFloat(oreBord) : null,
-        km_bord: kmBord ? parseFloat(kmBord) : null,
+        geo_lat: geo.lat, geo_lng: geo.lng,        // edge fn: geo_lat/geo_lng
+        ore_la_alimentare: oreBord ? parseFloat(oreBord) : null,  // edge fn
+        km_la_alimentare:  kmBord  ? parseFloat(kmBord)  : null,  // edge fn
       })
       if (res.error) { setError(res.error); setStep('error'); return }
       setResult(res); setStep('success')
