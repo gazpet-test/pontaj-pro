@@ -32,13 +32,14 @@ const TIP_META = {
 const ROL_META = {
   lider:                   { label: 'Asociat Lider',          color: G.green },
   asociat_simplu:          { label: 'Asociat Simplu',         color: G.blue },
+  asociat_unic:            { label: 'Asociat Unic',           color: G.orange },
   subcontractor_declarat:  { label: 'Subctr. Declarat',       color: G.yellow },
   subcontractor_parcurs:   { label: 'Subctr. pe Parcurs',     color: G.orange },
   prestator:               { label: 'Prestator',              color: G.purple },
 }
 
 const ROLURI_PER_TIP = {
-  asociere:          ['lider', 'asociat_simplu'],
+  asociere:          ['lider', 'asociat_simplu', 'asociat_unic'],
   subcontractare:    ['subcontractor_declarat', 'subcontractor_parcurs'],
   prestari_servicii: ['prestator'],
 }
@@ -204,7 +205,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
   async function handleSave() {
     if (!form.denumire.trim()) { setErr('Denumirea contractului este obligatorie.'); return }
     if (!form.tip_contract)   { setErr('Selectează tipul contractului.'); return }
-    if (!form.rol_gazpet)     { setErr('Selectează rolul Gazpet.'); return }
+    if (form.sens === 'incasare' && !form.rol_gazpet) { setErr('Selectează rolul Gazpet.'); return }
     setSaving(true); setErr('')
     try {
       const payload = {
@@ -263,41 +264,53 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         <div style={{ marginBottom: 20 }}>
           <label style={S.label}>Tip Contract</label>
           <div style={{ display: 'flex', gap: 8 }}>
-            {Object.entries(TIP_META).map(([key, meta]) => (
-              <button key={key} onClick={() => handleTipChange(key)} style={{
-                flex: 1, padding: '12px 8px', border: `2px solid ${form.tip_contract === key ? meta.color : G.border}`,
-                borderRadius: 10, cursor: 'pointer', textAlign: 'center',
-                background: form.tip_contract === key ? meta.color + '22' : G.bg,
-                color: form.tip_contract === key ? meta.color : G.muted,
-                fontWeight: 700, fontSize: 12, transition: 'all 0.15s',
-              }}>
-                <div style={{ fontSize: 20, marginBottom: 4 }}>{meta.emoji}</div>
-                {meta.label}
-              </button>
-            ))}
+            {Object.entries(TIP_META)
+              // Downstream: asocierea nu se aplică (Gazpet e mereu constructor general față de prestator)
+              .filter(([key]) => form.sens === 'incasare' || key !== 'asociere')
+              .map(([key, meta]) => (
+                <button key={key} onClick={() => handleTipChange(key)} style={{
+                  flex: 1, padding: '12px 8px', border: `2px solid ${form.tip_contract === key ? meta.color : G.border}`,
+                  borderRadius: 10, cursor: 'pointer', textAlign: 'center',
+                  background: form.tip_contract === key ? meta.color + '22' : G.bg,
+                  color: form.tip_contract === key ? meta.color : G.muted,
+                  fontWeight: 700, fontSize: 12, transition: 'all 0.15s',
+                }}>
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>{meta.emoji}</div>
+                  {meta.label}
+                </button>
+              ))}
           </div>
         </div>
 
-        {/* ROL GAZPET */}
-        <div style={{ marginBottom: 20 }}>
-          <label style={S.label}>Rolul Gazpet</label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {rolDisponibile.map(rol => {
-              const meta = ROL_META[rol]
-              return (
-                <button key={rol} onClick={() => setForm(f => ({ ...f, rol_gazpet: rol }))} style={{
-                  padding: '8px 14px', border: `2px solid ${form.rol_gazpet === rol ? meta.color : G.border}`,
-                  borderRadius: 8, cursor: 'pointer',
-                  background: form.rol_gazpet === rol ? meta.color + '22' : G.bg,
-                  color: form.rol_gazpet === rol ? meta.color : G.muted,
-                  fontWeight: 700, fontSize: 12,
-                }}>
-                  {meta.label}
-                </button>
-              )
-            })}
+        {/* ROL GAZPET — doar la upstream (downstream = Gazpet e mereu constructor general) */}
+        {form.sens === 'incasare' && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={S.label}>Rolul Gazpet</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {rolDisponibile.map(rol => {
+                const meta = ROL_META[rol]
+                return (
+                  <button key={rol} onClick={() => setForm(f => ({ ...f, rol_gazpet: rol }))} style={{
+                    padding: '8px 14px', border: `2px solid ${form.rol_gazpet === rol ? meta.color : G.border}`,
+                    borderRadius: 8, cursor: 'pointer',
+                    background: form.rol_gazpet === rol ? meta.color + '22' : G.bg,
+                    color: form.rol_gazpet === rol ? meta.color : G.muted,
+                    fontWeight: 700, fontSize: 12,
+                  }}>
+                    {meta.label}
+                  </button>
+                )
+              })}
+            </div>
           </div>
-        </div>
+        )}
+        {form.sens === 'plata' && (
+          <div style={{ marginBottom: 20, padding: '8px 14px', background: G.green + '11', borderRadius: 8, border: `1px solid ${G.green}33` }}>
+            <span style={{ fontSize: 12, color: G.green, fontWeight: 700 }}>
+              🏗️ Rolul Gazpet: Constructor General (implicit pentru toate contractele cu prestatori)
+            </span>
+          </div>
+        )}
 
         {/* SENS */}
         <div style={{ marginBottom: 20 }}>
@@ -322,7 +335,16 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         {form.sens === 'plata' && (
           <div style={{ marginBottom: 20, padding: 14, background: G.purple + '11', borderRadius: 10, border: `1px solid ${G.purple}33` }}>
             <label style={{ ...S.label, color: G.purple }}>🔗 Contract Upstream (din care derivă)</label>
-            <select value={form.contract_parinte_id} onChange={e => setForm(f => ({ ...f, contract_parinte_id: e.target.value }))} style={S.select}>
+            <select value={form.contract_parinte_id} onChange={e => {
+              const pid = e.target.value
+              // Auto-populare șantier din contractul parinte
+              const parinte = contracteUpstream.find(c => String(c.id) === String(pid))
+              setForm(f => ({
+                ...f,
+                contract_parinte_id: pid,
+                site_id: parinte?.site_id ? String(parinte.site_id) : f.site_id,
+              }))
+            }} style={S.select}>
               <option value="">— Selectează contractul principal —</option>
               {contracteUpstream.map(c => (
                 <option key={c.id} value={c.id}>
@@ -330,6 +352,11 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
                 </option>
               ))}
             </select>
+            {form.contract_parinte_id && contracteUpstream.find(c => String(c.id) === String(form.contract_parinte_id))?.site_qr && (
+              <div style={{ marginTop: 6, fontSize: 11, color: G.purple }}>
+                📍 Șantier auto-completat: {contracteUpstream.find(c => String(c.id) === String(form.contract_parinte_id))?.site_qr}
+              </div>
+            )}
           </div>
         )}
 
