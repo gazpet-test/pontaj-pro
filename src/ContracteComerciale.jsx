@@ -103,6 +103,17 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
             <Badge label={st.label} color={st.color} />
             {tip && <Badge label={tip.label} color={tip.color} emoji={tip.emoji} />}
             {rol && <Badge label={rol.label} color={rol.color} />}
+            {/* Alerte critice */}
+            {isDownstream && !c.contract_parinte_id && (
+              <Badge label="⚠️ Fără contract mamă" color={G.red} />
+            )}
+            {c.data_termen && new Date(c.data_termen) < new Date() && (
+              <Badge label="❌ Expirat" color={G.red} />
+            )}
+            {c.data_termen && new Date(c.data_termen) > new Date() &&
+             new Date(c.data_termen) < new Date(Date.now() + 30*24*3600*1000) && (
+              <Badge label="⏳ Expiră în 30 zile" color={G.yellow} />
+            )}
             {c.nr_pret_depasit_neaprobat > 0 && (
               <Badge label={`⚠️ ${c.nr_pret_depasit_neaprobat} preț depășit`} color={G.red} />
             )}
@@ -193,6 +204,39 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
+  const [pdfFile, setPdfFile] = useState(null)
+  const [pdfUploading, setPdfUploading] = useState(false)
+  const [pdfPath, setPdfPath] = useState(contract?.pdf_path || '')
+
+  async function handlePdfSelect(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.includes('pdf')) { setErr('Doar fișiere PDF.'); return }
+    if (file.size > 20 * 1024 * 1024) { setErr('PDF prea mare (max 20MB).'); return }
+    setPdfFile(file)
+  }
+
+  async function uploadPdf(contractId) {
+    if (!pdfFile) return pdfPath || null
+    setPdfUploading(true)
+    try {
+      const ext = 'pdf'
+      const path = `contracte-comerciale/${contractId}_${Date.now()}.${ext}`
+      const { error } = await supabase.storage.from('contracte-terti').upload(path, pdfFile, { upsert: true, contentType: 'application/pdf' })
+      if (error) throw error
+      setPdfPath(path)
+      return path
+    } catch (e) {
+      setErr('Eroare upload PDF: ' + e.message)
+      return null
+    } finally { setPdfUploading(false) }
+  }
+
+  async function handleViewPdf() {
+    if (!pdfPath) return
+    const { data } = await supabase.storage.from('contracte-terti').createSignedUrl(pdfPath, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
 
   const rolDisponibile = ROLURI_PER_TIP[form.tip_contract] || []
 
@@ -208,6 +252,13 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
     if (form.sens === 'incasare' && !form.rol_gazpet) { setErr('Selectează rolul Gazpet.'); return }
     setSaving(true); setErr('')
     try {
+      // Upload PDF dacă e selectat
+      let finalPdfPath = pdfPath
+      if (pdfFile) {
+        const tempId = isEdit ? contract.id : Date.now()
+        finalPdfPath = await uploadPdf(tempId)
+        if (!finalPdfPath && pdfFile) { setSaving(false); return }
+      }
       const payload = {
         numar_contract: form.numar_contract || null,
         denumire: form.denumire.trim(),
@@ -226,6 +277,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         beneficiar_id: form.beneficiar_id ? Number(form.beneficiar_id) : null,
         partener_text: form.partener_text || null,
         observatii: form.observatii || null,
+        pdf_path: finalPdfPath || null,
         updated_at: new Date().toISOString(),
       }
       if (isEdit) {
@@ -441,6 +493,34 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
             placeholder="Note interne..." rows={2} style={{ ...S.input, resize: 'vertical', fontFamily: 'inherit' }} />
         </div>
 
+        {/* PDF UPLOAD */}
+        <div style={{ marginBottom: 20, padding: 14, background: G.bg, borderRadius: 10, border: `1px solid ${G.border}` }}>
+          <label style={S.label}>📎 PDF Contract</label>
+          {pdfPath && !pdfFile && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: G.green }}>✅ PDF atașat</span>
+              <button onClick={handleViewPdf} style={{
+                padding: '4px 10px', background: G.blue + '22', color: G.blue,
+                border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600,
+              }}>👁 Vezi PDF</button>
+            </div>
+          )}
+          {pdfFile && (
+            <div style={{ marginBottom: 8, fontSize: 12, color: G.yellow }}>
+              📄 {pdfFile.name} ({(pdfFile.size/1024/1024).toFixed(1)} MB) — se uploadează la salvare
+            </div>
+          )}
+          <label style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '8px 14px', background: G.surface, border: `1px dashed ${G.border}`,
+            borderRadius: 8, cursor: 'pointer', fontSize: 12, color: G.muted, fontWeight: 600,
+          }}>
+            {pdfUploading ? '⏳ Se uploadează...' : '📤 ' + (pdfPath ? 'Înlocuiește PDF' : 'Upload PDF')}
+            <input type="file" accept="application/pdf" onChange={handlePdfSelect}
+              style={{ display: 'none' }} disabled={pdfUploading} />
+          </label>
+        </div>
+
         {err && (
           <div style={{ padding: '10px 14px', background: G.red + '22', color: G.red, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
             ⚠️ {err}
@@ -622,6 +702,49 @@ function ModalLinii({ contract, profile, onClose }) {
   )
 }
 
+// ─── Dashboard alerte contracte ─────────────────────────────────────────────
+function AlerteDashboard({ contracte, onFilterSens, onFilterStatus }) {
+  const azi = new Date()
+  const in30z = new Date(Date.now() + 30 * 24 * 3600 * 1000)
+
+  const faraParinte  = contracte.filter(c => c.sens === 'plata' && !c.contract_parinte_id)
+  const expirate     = contracte.filter(c => c.data_termen && new Date(c.data_termen) < azi && c.status === 'activ')
+  const expiraCurand = contracte.filter(c => c.data_termen && new Date(c.data_termen) >= azi && new Date(c.data_termen) <= in30z && c.status === 'activ')
+  const inDraft      = contracte.filter(c => c.status === 'draft')
+
+  const alerte = [
+    expirate.length     && { icon: '❌', label: `${expirate.length} contract${expirate.length > 1 ? 'e' : ''} expirat${expirate.length > 1 ? 'e' : ''}`, color: G.red,    action: () => onFilterStatus('activ') },
+    expiraCurand.length && { icon: '⏳', label: `${expiraCurand.length} expiră în 30 zile`, color: G.yellow, action: () => onFilterStatus('activ') },
+    faraParinte.length  && { icon: '🔗', label: `${faraParinte.length} fără contract mamă`, color: G.orange, action: () => onFilterSens('plata') },
+    inDraft.length      && { icon: '📋', label: `${inDraft.length} draft${inDraft.length > 1 ? '-uri' : ''} nesemnate`, color: G.muted, action: () => onFilterStatus('draft') },
+  ].filter(Boolean)
+
+  if (!alerte.length) return null
+
+  return (
+    <div style={{
+      ...S.card, marginBottom: 16, padding: '12px 16px',
+      borderColor: G.red + '44', borderTopWidth: 3, borderTopColor: G.red,
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: G.red, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
+        🔔 Alerte Contracte
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        {alerte.map((a, i) => (
+          <button key={i} onClick={a.action} style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px', background: a.color + '15',
+            border: `1px solid ${a.color}44`, borderRadius: 8,
+            cursor: 'pointer', fontSize: 12, fontWeight: 700, color: a.color,
+          }}>
+            {a.icon} {a.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Componentă principală ──────────────────────────────────────────────────
 export default function ContracteComerciale({ profile }) {
   const [contracte, setContracte] = useState([])
@@ -682,6 +805,15 @@ export default function ContracteComerciale({ profile }) {
 
   return (
     <div>
+      {/* Dashboard alerte */}
+      {!loading && contracte.length > 0 && (
+        <AlerteDashboard
+          contracte={contracte}
+          onFilterSens={s => setFilterSens(s)}
+          onFilterStatus={s => setFilterStatus(s)}
+        />
+      )}
+
       {/* KPI */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
         {[
