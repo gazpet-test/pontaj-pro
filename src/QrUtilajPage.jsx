@@ -473,9 +473,9 @@ export default function QrUtilajPage() {
               textAlign: 'left', boxShadow: '0 4px 12px rgba(245, 158, 11, .3)',
             }}>
               <div style={{fontSize: 24, marginBottom: 4}}>⛽</div>
-              <div>Rompetrol (card)</div>
+              <div>Rompetrol (CARD GAZPET)</div>
               <div style={{fontSize: 12, opacity: 0.85, marginTop: 4, fontWeight: 500}}>
-                Stație Rompetrol cu card combustibil Gazpet
+                Stație Rompetrol cu cardul de combustibil Gazpet
               </div>
             </button>
             <button onClick={() => { setSursa('benzinarie'); setStep('bon_tip') }} style={{
@@ -484,9 +484,9 @@ export default function QrUtilajPage() {
               textAlign: 'left', boxShadow: '0 4px 12px rgba(139, 92, 246, .3)',
             }}>
               <div style={{fontSize: 24, marginBottom: 4}}>🏪</div>
-              <div>Benzinărie (alt card / cash)</div>
+              <div>Alte Stații</div>
               <div style={{fontSize: 12, opacity: 0.85, marginTop: 4, fontWeight: 500}}>
-                Altă stație (Petrom, MOL, OMV...) cu card sau bani
+                OMV, Petrom, MOL, Rompetrol — card sau cash
               </div>
             </button>
           </div>
@@ -936,7 +936,7 @@ export default function QrUtilajPage() {
                 {result.bon_comun_cod}
               </div>
               <div style={{fontSize: 11, color: '#93C5FD', marginTop: 6}}>
-                Ei scanează utilajul lor → Rompetrol/Benzinărie → „Continui un bon" → tastează {result.bon_comun_cod}
+                Ei scanează utilajul lor → Rompetrol (CARD GAZPET) / Alte Stații → „Continui un bon" → tastează {result.bon_comun_cod}
               </div>
             </div>
           )}
