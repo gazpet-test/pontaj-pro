@@ -12,6 +12,7 @@ import { supabase } from './lib/supabase.js'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import ContracteTertiTab from './ContracteTertiTab.jsx'
+import ContracteComerciale from './ContracteComerciale.jsx'
 import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 
 const G = {
@@ -512,11 +513,14 @@ export default function AdministrativPage() {
       {/* Etapa 15 Faza 1: Tab Contracte cu terți (cu listă beneficiari real) */}
       {tab === 'contracte_terti' && <ContracteTertiTab />}
 
+      {/* Etapa 15 Faza 2: Tab Contracte Comerciale — upstream/downstream + linii */}
+      {tab === 'contracte' && <ContracteComerciale profile={profile} />}
+
       {/* Etapa 16: Tab Documente firmă (funcțional cu AI parser + alerte expirare) */}
       {tab === 'documente' && <TabDocumenteFirma />}
 
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'documente' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'documente' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'furnizori' && '🏢'}
