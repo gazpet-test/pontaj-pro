@@ -130,7 +130,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
           </div>
 
           <div style={{ fontSize: 13, color: G.text, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
-            {c.denumire?.length > 100 ? c.denumire.slice(0, 100) + '…' : c.denumire}
+            {c.denumire}
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: G.muted }}>
@@ -179,7 +179,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
                               <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dSt.color + '22', color: dSt.color, fontWeight: 700 }}>{dSt.label}</span>
                               {dTip && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dTip.color + '22', color: dTip.color }}>{dTip.emoji} {dTip.label}</span>}
                             </div>
-                            <div style={{ fontSize: 12, color: G.text, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.denumire}</div>
+                            <div style={{ fontSize: 12, color: G.text, marginBottom: 2 }}>{d.denumire}</div>
                             <div style={{ fontSize: 11, color: G.muted }}>{d.partener_text || d.beneficiar_name || '—'}{d.site_qr && ` · 📍 ${d.site_qr}`}</div>
                           </div>
                           <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -453,7 +453,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
               <option value="">— Selectează contractul principal —</option>
               {contracteUpstream.map(c => (
                 <option key={c.id} value={c.id}>
-                  Nr. {c.numar_contract} — {c.denumire?.slice(0, 60)}...
+                  Nr. {c.numar_contract} — {c.denumire?.slice(0, 90)}{c.denumire?.length > 90 ? '…' : ''}
                 </option>
               ))}
             </select>
