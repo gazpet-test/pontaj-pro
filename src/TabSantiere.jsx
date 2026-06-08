@@ -458,6 +458,14 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         masiniLista={masiniLista}
       />
 
+      <SubcontractoriTura
+        proiectId={proiectId}
+        siteId={currentSiteId}
+        dataStart={dataStart}
+        dataEnd={dataEnd}
+        canWrite={canWrite}
+      />
+
       <Toast />
     </div>
   )
@@ -1720,6 +1728,290 @@ function UtilajeBulkModal({ siteId, dataStart, dataEnd, utilajeSantier, allUtila
             }}>
             {saving ? '⏳ Se salvează...' : nrSelectate > 0 ? `🚜 Adaugă ${nrSelectate} utilaj${nrSelectate===1?'':'e'} în tură` : '🚜 Adaugă în tură'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// SECȚIUNE SUBCONTRACTORI PE TURĂ
+// ══════════════════════════════════════════════════════════
+export function SubcontractoriTura({ proiectId, siteId, dataStart, dataEnd, canWrite }) {
+  const [subcont, setSubcont] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editSub, setEditSub] = useState(null)
+  const { show, Toast } = useToast()
+
+  const load = useCallback(async () => {
+    if (!proiectId) return
+    setLoading(true)
+    try {
+      const { data } = await supabase.from('executie_tura_subcontractori')
+        .select('*')
+        .eq('proiect_id', proiectId)
+        .gte('data_end', dataStart)
+        .lte('data_start', dataEnd)
+        .order('tip').order('firma_text')
+      setSubcont(data || [])
+    } finally { setLoading(false) }
+  }, [proiectId, dataStart, dataEnd])
+
+  useEffect(() => { load() }, [load])
+
+  const handleDelete = async s => {
+    if (!confirm(`Elimini ${s.firma_text} din tură?`)) return
+    await supabase.from('executie_tura_subcontractori').delete().eq('id', s.id)
+    show('✓ Eliminat'); load()
+  }
+
+  const prestari = subcont.filter(s => s.tip === 'prestari_servicii')
+  const inchiriate = subcont.filter(s => s.tip === 'inchiriat')
+  const totalPersoane = subcont.reduce((s, x) => s + (x.nr_persoane || 0), 0)
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      {/* Separator */}
+      <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:14 }}>
+        <div style={{ height:1, flex:1, background:G.border }} />
+        <div style={{ fontSize:14, fontWeight:800, color:G.text }}>
+          🤝 Subcontractori{totalPersoane > 0 && <span style={{ fontSize:12, color:G.muted, fontWeight:400, marginLeft:6 }}>· {totalPersoane} persoane externe</span>}
+        </div>
+        <div style={{ height:1, flex:1, background:G.border }} />
+        {canWrite && (
+          <button onClick={() => setEditSub({ proiect_id: proiectId, site_id: siteId, data_start: dataStart, data_end: dataEnd })}
+            style={{ ...S.btn, background:'#7C3AED', color:'#fff', padding:'7px 14px', fontSize:12 }}>
+            ＋ Adaugă firmă
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign:'center', color:G.muted, fontSize:12, padding:16 }}>⏳</div>
+      ) : subcont.length === 0 ? (
+        <div style={{ padding:16, textAlign:'center', color:G.dim, fontSize:12,
+          background:G.surface, border:`1px solid ${G.border}`, borderRadius:8 }}>
+          🤝 Nicio firmă subcontractată adăugată pe această tură.
+        </div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+
+          {/* ÎNCHIRIATE — evidență strictă */}
+          {inchiriate.length > 0 && (
+            <div>
+              <div style={{ fontSize:10, fontWeight:700, color:G.orange, textTransform:'uppercase', letterSpacing:'.5px', marginBottom:6 }}>
+                🔄 Închiriate ({inchiriate.length})
+              </div>
+              {inchiriate.map(s => (
+                <SubcontractorCard key={s.id} s={s} canWrite={canWrite}
+                  onEdit={() => setEditSub(s)} onDelete={() => handleDelete(s)} />
+              ))}
+            </div>
+          )}
+
+          {/* PRESTĂRI SERVICII — informativ */}
+          {prestari.length > 0 && (
+            <div>
+              <div style={{ fontSize:10, fontWeight:700, color:'#7C3AED', textTransform:'uppercase', letterSpacing:'.5px', marginBottom:6, marginTop: inchiriate.length > 0 ? 10 : 0 }}>
+                📋 Prestări servicii ({prestari.length})
+              </div>
+              {prestari.map(s => (
+                <SubcontractorCard key={s.id} s={s} canWrite={canWrite}
+                  onEdit={() => setEditSub(s)} onDelete={() => handleDelete(s)} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {editSub && (
+        <SubcontractorModal
+          item={editSub}
+          onClose={() => setEditSub(null)}
+          onSaved={() => { setEditSub(null); load(); show('✓ Salvat') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+      <Toast />
+    </div>
+  )
+}
+
+function SubcontractorCard({ s, canWrite, onEdit, onDelete }) {
+  const isInchiriat = s.tip === 'inchiriat'
+  const col = isInchiriat ? G.orange : '#7C3AED'
+  const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit' }) : '—'
+
+  return (
+    <div style={{
+      display:'flex', alignItems:'center', gap:12, padding:'10px 14px',
+      background:G.surface, border:`1px solid ${col}44`,
+      borderLeft:`3px solid ${col}`, borderRadius:8, marginBottom:4
+    }}>
+      <div style={{ fontSize:20 }}>{isInchiriat ? '🔄' : '📋'}</div>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+          <span style={{ fontSize:13, fontWeight:700, color:G.text }}>{s.firma_text}</span>
+          <span style={{ fontSize:10, padding:'1px 7px', borderRadius:10, fontWeight:700,
+            background:col+'22', color:col }}>
+            {isInchiriat ? '🔄 Închiriat' : '📋 Prestări servicii'}
+          </span>
+          {s.nr_persoane && (
+            <span style={{ fontSize:11, color:G.muted }}>👷 {s.nr_persoane} pers.</span>
+          )}
+          {s.meserie && (
+            <span style={{ fontSize:11, color:G.muted }}>· {s.meserie}</span>
+          )}
+          {!s.contract_id && (
+            <span style={{ fontSize:10, padding:'1px 6px', borderRadius:10,
+              background:G.yellow+'22', color:G.yellow, fontWeight:600 }}>
+              ⚠ Contract nelinkat
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize:10, color:G.dim, marginTop:2 }}>
+          📅 {fmtD(s.data_start)} → {fmtD(s.data_end)}
+          {s.observatii && <span style={{ marginLeft:8 }}>· {s.observatii}</span>}
+        </div>
+      </div>
+      {canWrite && (
+        <div style={{ display:'flex', gap:4 }}>
+          <button onClick={onEdit}
+            style={{ ...S.btn, padding:'3px 8px', fontSize:10, background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}44` }}>✏️</button>
+          <button onClick={onDelete}
+            style={{ ...S.btn, padding:'3px 8px', fontSize:10, background:G.red+'22', color:G.red, border:`1px solid ${G.red}44` }}>🗑</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SubcontractorModal({ item, onClose, onSaved, onError }) {
+  const isNew = !item.id
+  const [f, setF] = useState({
+    firma_text:  item.firma_text  || '',
+    tip:         item.tip         || 'prestari_servicii',
+    nr_persoane: item.nr_persoane || '',
+    meserie:     item.meserie     || '',
+    data_start:  item.data_start  || '',
+    data_end:    item.data_end    || '',
+    observatii:  item.observatii  || '',
+  })
+  const [saving, setSaving] = useState(false)
+
+  const FIRME_CUNOSCUTE = ['WELDMAG','ARA','ARANEW','EXPCORO','ELSUDMONT','APAZOL']
+
+  const handleSave = async () => {
+    if (!f.firma_text.trim()) return onError('Introdu numele firmei')
+    if (!f.data_start || !f.data_end) return onError('Completează perioadele')
+    setSaving(true)
+    const payload = {
+      proiect_id:  Number(item.proiect_id),
+      site_id:     item.site_id ? Number(item.site_id) : null,
+      firma_text:  f.firma_text.trim().toUpperCase(),
+      tip:         f.tip,
+      nr_persoane: f.nr_persoane ? Number(f.nr_persoane) : null,
+      meserie:     f.meserie.trim() || null,
+      data_start:  f.data_start,
+      data_end:    f.data_end,
+      observatii:  f.observatii.trim() || null,
+      updated_at:  new Date().toISOString(),
+    }
+    const res = isNew
+      ? await supabase.from('executie_tura_subcontractori').insert(payload)
+      : await supabase.from('executie_tura_subcontractori').update(payload).eq('id', item.id)
+    setSaving(false)
+    if (res.error) onError(res.error.message)
+    else onSaved()
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1010,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:460, padding:'22px 26px', boxShadow:'0 20px 60px rgba(0,0,0,.5)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
+          <div style={{ fontSize:16, fontWeight:800, color:G.text }}>
+            🤝 {isNew ? 'Adaugă firmă subcontractată' : `Editează: ${item.firma_text}`}
+          </div>
+          <button onClick={onClose} style={{ background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer' }}>×</button>
+        </div>
+
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          {/* Firma */}
+          <div>
+            <label style={S.lbl}>Firma *</label>
+            <input value={f.firma_text} onChange={e => setF({...f, firma_text:e.target.value})}
+              style={S.input} placeholder="ex: WELDMAG" list="firme-list" />
+            <datalist id="firme-list">
+              {FIRME_CUNOSCUTE.map(n => <option key={n} value={n} />)}
+            </datalist>
+          </div>
+
+          {/* Tip */}
+          <div>
+            <label style={S.lbl}>Tip colaborare</label>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              {[
+                { v:'prestari_servicii', l:'📋 Prestări servicii', col:'#7C3AED', sub:'WELDMAG / ARA / APAZOL' },
+                { v:'inchiriat',         l:'🔄 Închiriat',         col:G.orange,  sub:'ELSUDMONT / EXPCORO' },
+              ].map(t => (
+                <button key={t.v} onClick={() => setF({...f, tip:t.v})}
+                  style={{ padding:'10px 12px', border:`2px solid ${f.tip===t.v ? t.col : G.border}`,
+                    borderRadius:8, cursor:'pointer', textAlign:'left',
+                    background: f.tip===t.v ? t.col+'22' : G.bg,
+                    color: f.tip===t.v ? t.col : G.muted }}>
+                  <div style={{ fontSize:12, fontWeight:700 }}>{t.l}</div>
+                  <div style={{ fontSize:10, opacity:0.7, marginTop:2 }}>{t.sub}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <div>
+              <label style={S.lbl}>Nr. persoane</label>
+              <input type="number" value={f.nr_persoane} onChange={e => setF({...f, nr_persoane:e.target.value})}
+                style={S.input} placeholder="ex: 11" min="1" />
+            </div>
+            <div>
+              <label style={S.lbl}>Meserie / Activitate</label>
+              <input value={f.meserie} onChange={e => setF({...f, meserie:e.target.value})}
+                style={S.input} placeholder="ex: Sudori" />
+            </div>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <div>
+              <label style={S.lbl}>Start *</label>
+              <input type="date" value={f.data_start} onChange={e => setF({...f, data_start:e.target.value})} style={S.input} />
+            </div>
+            <div>
+              <label style={S.lbl}>End *</label>
+              <input type="date" value={f.data_end} onChange={e => setF({...f, data_end:e.target.value})} style={S.input} />
+            </div>
+          </div>
+
+          <div>
+            <label style={S.lbl}>Observații</label>
+            <input value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})}
+              style={S.input} placeholder="ex: Finalizeaza racord grup 57" />
+          </div>
+
+          {!item.contract_id && (
+            <div style={{ padding:'8px 12px', background:G.yellow+'11', border:`1px solid ${G.yellow}44`,
+              borderRadius:6, fontSize:11, color:G.yellow }}>
+              ⚠ Contract nelinkat — se poate lega ulterior din Contracte Comerciale când e adăugat.
+            </div>
+          )}
+
+          <div style={{ display:'flex', gap:10, marginTop:4 }}>
+            <button onClick={onClose} style={{ ...S.btn, flex:1, background:G.border2, color:G.text }}>Anulează</button>
+            <button onClick={handleSave} disabled={saving}
+              style={{ ...S.btn, flex:2, background:saving?G.muted:'#7C3AED', color:'#fff', opacity:saving?0.6:1 }}>
+              {saving ? '⏳...' : isNew ? '＋ Adaugă firmă' : '💾 Salvează'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
