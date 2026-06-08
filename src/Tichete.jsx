@@ -1335,6 +1335,22 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
         {!isLogistica && (t.status === 'confirmat' || t.status === 'respins') && isOwner && (
           <button onClick={()=>changeStatus('inchis')} style={btnPrimary(G.muted)}>🔒 Inchide</button>
         )}
+        {/* Tichet Logistica cu status GENERIC (atribuit/in_lucru) — ex: GPS, INEL, alte sarcini non-service */}
+        {isLogistica && (t.status === 'atribuit' || t.status === 'in_lucru') && (
+          <>
+            {t.status === 'atribuit' && <button onClick={()=>changeStatus('in_lucru')} style={btnPrimary(G.yellow)}>🔧 Incepe lucrul</button>}
+            <button onClick={()=>setShowRezolva(true)} style={btnPrimary(G.green)}>✅ Marcheaza rezolvat</button>
+          </>
+        )}
+        {isLogistica && t.status === 'rezolvat' && isMine && (
+          <>
+            <button onClick={()=>changeStatus('confirmat', { confirmat_de:profile.id, data_confirmare:new Date().toISOString() })} style={btnPrimary(G.purple)}>🎉 Confirm rezolvat</button>
+            <button onClick={()=>{ const m=prompt('Motiv respingere:'); if(m) changeStatus('respins', { confirmat_de:profile.id, data_confirmare:new Date().toISOString(), motiv_respingere:m }) }} style={btnSecondary(G.red)}>❌ Respinge</button>
+          </>
+        )}
+        {isLogistica && (t.status === 'confirmat' || t.status === 'respins') && isOwner && (
+          <button onClick={()=>changeStatus('inchis')} style={btnPrimary(G.muted)}>🔒 Inchide</button>
+        )}
 
         <div style={{flex:1}} />
         {isOwner && onDelete && (
