@@ -100,14 +100,15 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
       const [pRes, eRes, mRes] = await Promise.all([
         supabase.from('executie_proiecte').select('id,cod_intern,nume,activ,site_id').eq('activ',true).order('cod_intern'),
         supabase.from('employees').select('id,name,functie,department').eq('active',true).order('name'),
-        supabase.from('logistica_active').select('id,marca,model,nr_inmatriculare,cod_intern')
+        supabase.from('logistica_active')
+          .select('id,marca,model,nr_inmatriculare,cod_intern,logistica_categorii(tip)')
           .eq('vandut',false).eq('deep_sleep',false)
-          .in('logistica_categorii.tip', ['Autoturism','Autoutilitară','Camion'])
-          .order('nr_inmatriculare').limit(150),
+          .order('nr_inmatriculare').limit(200),
       ])
       setProiecte(pRes.data || [])
       setEmployees(eRes.data || [])
-      setMasiniLista(mRes.data || [])
+      const TIPURI_NAVETA = ['Autoturism','Autoutilitară','Autoutilitara','Camion']
+      setMasiniLista((mRes.data || []).filter(m => TIPURI_NAVETA.includes(m.logistica_categorii?.tip)))
       if (!proiectIdProp && !proiectId && pRes.data?.length > 0) setProiectId(String(pRes.data[0].id))
     } finally {
       setLoading(false)
