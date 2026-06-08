@@ -814,6 +814,9 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      {/* Input global upload autorizatii — singura instanta, NU in bucla map */}
+      {isAdmin && <input ref={uploadRef} type="file" accept=".pdf,image/*" style={{display:'none'}}
+        onChange={e => { const f=e.target.files?.[0]; if(f&&uploadTarget.current) handleUploadPdf(uploadTarget.current.id, uploadTarget.current.employee_id, f); e.target.value='' }} />}
       <div style={{...S.card, width:'100%', maxWidth:880, maxHeight:'92vh', overflow:'auto', padding:0}}>
         {/* Header */}
         <div style={{padding:'18px 24px', background:G.surface, borderBottom:`1px solid ${G.border}`, display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
@@ -913,8 +916,6 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                           {statusBadge(a.status, a.zile_pana_expirare)}
                           {isAdmin && (
                             <div style={{display:'flex', gap:4}}>
-                              <input ref={uploadRef} type="file" accept=".pdf,image/*" style={{display:'none'}}
-                                onChange={e => { const f=e.target.files?.[0]; if(f&&uploadTarget.current) handleUploadPdf(uploadTarget.current.id, uploadTarget.current.employee_id, f); e.target.value='' }} />
                               <button onClick={() => handleViewPdf(a.fisier_path)}
                                 style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
                                 title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
@@ -982,6 +983,9 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
   const [domenii, setDomenii] = useState([])
   const [observatii, setObservatii] = useState('')
   const [saving, setSaving] = useState(false)
+  const [pdfFile, setPdfFile] = useState(null)
+  const [uploadingPdf, setUploadingPdf] = useState(false)
+  const uploadRefAdd = useRef(null)
   
   const tipSelectat = tipuri.find(t => t.id === Number(tipId))
   
@@ -1008,10 +1012,29 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
       observatii: observatii.trim() || null,
     }
     
-    const { error } = await supabase.from('hr_autorizatii').insert(payload)
+    const { data: inserted, error } = await supabase.from('hr_autorizatii').insert(payload).select('id').single()
     setSaving(false)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
-    showToast('✓ Autorizație adăugată')
+    
+    // Upload PDF daca a fost selectat
+    if (pdfFile && inserted?.id) {
+      setUploadingPdf(true)
+      try {
+        const compressed = await compressFileBeforeUpload(pdfFile)
+        const ext = compressed.name.split('.').pop()
+        const path = `${employeeId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
+        const { error: upErr } = await supabase.storage.from('autorizatii').upload(path, compressed, { upsert: false })
+        if (!upErr) {
+          await supabase.from('hr_autorizatii').update({
+            fisier_path: path, fisier_nume: pdfFile.name,
+            fisier_size_bytes: pdfFile.size, fisier_mime: pdfFile.type
+          }).eq('id', inserted.id)
+        } else { showToast('Autorizatie salvata, dar PDF esuaa: ' + upErr.message, 'warning') }
+      } catch(e) { showToast('PDF esuaa: ' + e.message, 'warning') }
+      setUploadingPdf(false)
+    }
+    
+    showToast('Autorizatie adaugata' + (pdfFile ? ' cu PDF atasat!' : ''))
     onSaved()
   }
   
@@ -1105,9 +1128,27 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
         <Lbl>Observații</Lbl>
         <textarea value={observatii} onChange={e => setObservatii(e.target.value)} placeholder="Note suplimentare..." style={{...S.input, minHeight:60, resize:'vertical', marginBottom:14, fontFamily:'inherit'}}/>
         
+        {/* Upload PDF direct la adaugare */}
+        <input ref={uploadRefAdd} type="file" accept=".pdf,image/*" style={{display:'none'}}
+          onChange={e => { const f=e.target.files?.[0]; if(f) setPdfFile(f); e.target.value='' }} />
+        <Lbl>📎 PDF / Dovadă (opțional)</Lbl>
+        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:16, padding:'10px 12px', background:G.bg, border:`1px dashed ${pdfFile ? G.green+'88' : G.border}`, borderRadius:8}}>
+          <button type="button" onClick={() => uploadRefAdd.current?.click()}
+            style={{padding:'6px 14px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:6, fontSize:12, cursor:'pointer', fontWeight:600}}>
+            📎 {pdfFile ? 'Schimbă fișierul' : 'Adaugă PDF / poză'}
+          </button>
+          {pdfFile
+            ? <><span style={{fontSize:11, color:G.green, flex:1}}>✓ {pdfFile.name}</span>
+                <button type="button" onClick={() => setPdfFile(null)} style={{padding:'4px 8px', background:'transparent', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}>✕</button></>
+            : <span style={{fontSize:11, color:G.dim}}>Nu este obligatoriu — poți adăuga și ulterior</span>
+          }
+        </div>
+        
         <div style={{display:'flex', gap:10, justifyContent:'flex-end', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
           <button onClick={onClose} style={S.btnS}>Anulează</button>
-          <button onClick={save} disabled={saving || !tipId} style={{...S.btnP, opacity: (saving || !tipId) ? 0.5 : 1}}>{saving ? '...' : '✓ Salvează'}</button>
+          <button onClick={save} disabled={saving || uploadingPdf || !tipId} style={{...S.btnP, opacity: (saving || uploadingPdf || !tipId) ? 0.5 : 1}}>
+            {saving ? '⏳ Salvează...' : uploadingPdf ? '⏳ Upload PDF...' : '✓ Salvează'}
+          </button>
         </div>
       </div>
     </div>
