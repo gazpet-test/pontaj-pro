@@ -518,6 +518,12 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
         </select>
       </div>
       
+      {/* Input file global pentru upload autorizatii — o singura instanta, nu in bucla map */}
+      {isAdmin && (
+        <input ref={uploadRefGlobal} type="file" accept=".pdf,image/*" style={{display:'none'}}
+          onChange={e => { const f=e.target.files?.[0]; if(f&&uploadTargetRef.current) handleUploadPdf(uploadTargetRef.current.id, uploadTargetRef.current.employee_id, f); e.target.value='' }} />
+      )}
+
       <div style={{...S.card, overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
@@ -553,8 +559,6 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
                   {isAdmin && (
                     <td style={{...tdStyle, textAlign:'right'}}>
                       <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
-                        <input ref={uploadRefGlobal} type="file" accept=".pdf,image/*" style={{display:'none'}}
-                          onChange={e => { const f=e.target.files?.[0]; if(f&&uploadTargetRef.current) handleUploadPdf(uploadTargetRef.current.id, uploadTargetRef.current.employee_id, f); e.target.value='' }} />
                         <button onClick={() => handleViewPdf(a.fisier_path)}
                           style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
                           title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
