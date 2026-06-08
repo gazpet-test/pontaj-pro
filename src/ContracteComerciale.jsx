@@ -72,12 +72,21 @@ function Badge({ label, color, emoji }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], dsSearch='', onDsSearch }) {
+function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
   const isDownstream = c.sens === 'plata'
   const [localSearch, setLocalSearch] = useState('')
+  const [downstreamList, setDownstreamList] = useState([])
+
+  useEffect(() => {
+    if (isDownstream || !c.nr_downstream) return
+    supabase.from('v_contracte_cu_linii')
+      .select('*')
+      .eq('contract_parinte_id', c.id)
+      .then(({ data, error }) => { if(!error) setDownstreamList(data || []) })
+  }, [c.id])
 
   return (
     <div style={{
@@ -593,7 +602,6 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
 function ModalLinii({ contract, profile, onClose }) {
   const [linii, setLinii] = useState([])
   const [loading, setLoading] = useState(true)
-  const [dsSearchMap, setDsSearchMap] = useState({})
   const [newLinie, setNewLinie] = useState({ denumire: '', unitate_masura: '', cantitate: '', pret_unitar: '' })
   const [saving, setSaving] = useState(false)
   const isOwner = profile?.is_owner === true
@@ -942,14 +950,10 @@ export default function ContracteComerciale({ profile }) {
                 <div style={{ fontSize: 11, color: G.muted }}>({upstream.length} contracte · {fmtRON(upstream.reduce((s, c) => s + Number(c.valoare_lei || 0), 0))})</div>
               </div>
               {upstream.map(c => {
-                const childDs = contracte.filter(d => d.sens === 'plata' && Number(d.contract_parinte_id) === Number(c.id))
                 return (
                   <ContractCard key={c.id} c={c} isOwner={isOwner}
                     onEdit={c => { setEditContract(c); setModalOpen(true) }}
-                    onViewLinii={c => setLiniiContract(c)}
-                    downstreamList={childDs}
-                    dsSearch={dsSearchMap[c.id] || ''}
-                    onDsSearch={v => setDsSearchMap(prev => ({...prev, [c.id]: v}))} />
+                    onViewLinii={c => setLiniiContract(c)} />
                 )
               })}
             </div>
