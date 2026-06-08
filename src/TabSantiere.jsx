@@ -185,18 +185,20 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
           <div style={{color:G.muted, fontSize:13, marginTop:4}}>Plan tură · Meserii · Echipe · Plan vs Realizat</div>
         </div>
         {canWrite && (
-          <button
-            onClick={() => setEditEchipa({ proiect_id: proiectId, data_start: dataStart, data_end: dataEnd })}
-            style={{...S.btn, background:G.executie, color:'#0D1117', display:'flex', alignItems:'center', gap:8}}
-          >＋ Adaugă echipă</button>
-          <button onClick={() => exportTuraExcel({ proiectId, dataStart, dataEnd, alocari, proiecte, employees })}
-            style={{...S.btn, background:G.green, color:'#fff', padding:'7px 12px', fontSize:12, fontWeight:700}}>
-            📥 Excel
-          </button>
-          <button onClick={() => setShowArhiva(true)}
-            style={{...S.btn, background:G.border2, color:G.muted, padding:'7px 12px', fontSize:12}}>
-            📁 Arhivă
-          </button>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <button
+              onClick={() => setEditEchipa({ proiect_id: proiectId, data_start: dataStart, data_end: dataEnd })}
+              style={{...S.btn, background:G.executie, color:'#0D1117', display:'flex', alignItems:'center', gap:8}}
+            >＋ Adaugă echipă</button>
+            <button onClick={() => exportTuraExcel({ proiectId, dataStart, dataEnd, alocari, proiecte, employees })}
+              style={{...S.btn, background:G.green, color:'#fff', padding:'7px 12px', fontSize:12, fontWeight:700}}>
+              📥 Excel
+            </button>
+            <button onClick={() => setShowArhiva(true)}
+              style={{...S.btn, background:G.border2, color:G.muted, padding:'7px 12px', fontSize:12}}>
+              📁 Arhivă
+            </button>
+          </div>
         )}
       </div>
 
