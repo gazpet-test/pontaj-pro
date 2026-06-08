@@ -2425,102 +2425,182 @@ function ArhivaModal({ proiectId, proiecte, onClose, onSelectTura }) {
 // ══════════════════════════════════════════════════════════
 // EXPORT EXCEL — format similar cu Excel-urile Gazpet
 // ══════════════════════════════════════════════════════════
-async function exportTuraExcel({ proiectId, dataStart, dataEnd, alocari, proiecte, employees }) {
+async function exportTuraExcel({ proiectId, dataStart, dataEnd, alocari, proiecte }) {
   if (!proiectId || !dataStart) { alert('Selectează un proiect și o perioadă'); return }
 
   const proiect = proiecte.find(p => String(p.id) === String(proiectId))
   const titlu = proiect?.cod_intern || 'SANTIER'
 
-  // Fetch subcontractori + activitati + naveta + utilaje pentru aceasta tura
   const [subRes, actRes, navRes, utilRes] = await Promise.all([
     supabase.from('executie_tura_subcontractori').select('*')
-      .eq('proiect_id', proiectId).gte('data_end', dataStart).lte('data_start', dataEnd).order('tip'),
+      .eq('proiect_id', proiectId).lte('data_start', dataEnd).gte('data_end', dataStart).order('tip'),
     supabase.from('executie_tura_activitati').select('*')
-      .eq('proiect_id', proiectId).gte('data_end', dataStart).lte('data_start', dataEnd).order('nr_ordine'),
+      .eq('proiect_id', proiectId).lte('data_start', dataEnd).gte('data_end', dataStart).order('nr_ordine'),
     supabase.from('executie_tura_naveta').select('*, logistica_active(marca,model,nr_inmatriculare), employees(name)')
-      .eq('proiect_id', proiectId).gte('data_end', dataStart).lte('data_start', dataEnd),
+      .eq('proiect_id', proiectId).lte('data_start', dataEnd).gte('data_end', dataStart),
     supabase.from('logistica_alocari').select('*, logistica_active(marca,model,nr_inmatriculare,stare,logistica_categorii(tip))')
-      .eq('site_id', proiecte.find(p=>String(p.id)===String(proiectId))?.site_id||0)
-      .in('status',['aprobata','activa']).gte('data_end',dataStart).lte('data_start',dataEnd),
+      .eq('site_id', proiect?.site_id || 0)
+      .in('status',['aprobata','activa']).lte('data_start', dataEnd).gte('data_end', dataStart),
   ])
 
-  const subcont = subRes.data || []
-  const activitati = actRes.data || []
-  const naveta = navRes.data || []
-  const utilaje = utilRes.data || []
-
-  const wb = XLSX.utils.book_new()
-  const ws_data = []
+  const subcont   = subRes.data  || []
+  const activitati= actRes.data  || []
+  const naveta    = navRes.data  || []
+  const utilaje   = utilRes.data || []
 
   const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO') : ''
 
-  // Header
-  ws_data.push([titlu])
-  ws_data.push([`PROGRAM LUCRU TURĂ ${fmtD(dataStart)} – ${fmtD(dataEnd)}`])
-  ws_data.push([])
+  // ─── STILURI ───────────────────────────────────────────
+  const ALBASTRU  = '1F3C6E'
+  const ALB       = 'FFFFFF'
+  const GRI_DSCH  = 'F2F2F2'
+  const GRI_MED   = 'D9D9D9'
+  const PORTOCALIU= 'E8A020'
+  const VERDE     = '2E7D32'
 
-  // PERSONAL GAZPET
-  ws_data.push(['PERSONAL GAZPET INSTAL', '', '', 'ECHIPĂ', 'MESERIE', 'PERIOADĂ'])
-  const meserieLabel = { deservent_utilaje:'Deservent utilaje', sudor:'Sudor', lacatus_mecanic:'Lăcătuș mecanic', muncitor_izolator:'Muncitor/Izolator', tesa_paza:'TESA/Pază', sofer:'Șofer', alt:'Alt' }
-  alocari.forEach((a, i) => {
-    ws_data.push([i+1, a.employee_name || '', a.functie || '', a.echipa || '', meserieLabel[a.meserie] || a.meserie, `${fmtD(a.data_start)} → ${fmtD(a.data_end)}`])
-  })
-  ws_data.push([`TOTAL: ${alocari.length} persoane`])
-  ws_data.push([])
-
-  // SUBCONTRACTORI
-  if (subcont.length > 0) {
-    ws_data.push(['SUBCONTRACTORI / FIRME EXTERNE', '', '', 'TIP', 'PERSOANE', 'MESERIE'])
-    subcont.forEach((s, i) => {
-      ws_data.push([i+1, s.firma_text, '', s.tip === 'inchiriat' ? 'Închiriat' : 'Prestări servicii', s.nr_persoane || '', s.meserie || ''])
-    })
-    ws_data.push([`TOTAL EXTERN: ${subcont.reduce((acc,s) => acc+(s.nr_persoane||0),0)} persoane`])
-    ws_data.push([])
+  const border_thin = {
+    top:    { style:'thin', color:{ rgb:'CCCCCC' } },
+    bottom: { style:'thin', color:{ rgb:'CCCCCC' } },
+    left:   { style:'thin', color:{ rgb:'CCCCCC' } },
+    right:  { style:'thin', color:{ rgb:'CCCCCC' } },
   }
 
-  // UTILAJE
+  const S = {
+    titlu:   { font:{ bold:true, sz:16, color:{rgb:ALB} },     fill:{ fgColor:{rgb:ALBASTRU} }, alignment:{ horizontal:'center', vertical:'center' } },
+    subtitlu:{ font:{ bold:true, sz:11, color:{rgb:ALB} },     fill:{ fgColor:{rgb:ALBASTRU} }, alignment:{ horizontal:'center', vertical:'center' } },
+    sectiune:{ font:{ bold:true, sz:11, color:{rgb:ALB} },     fill:{ fgColor:{rgb:'2E4A7A'} }, alignment:{ vertical:'center' } },
+    col_hdr: { font:{ bold:true, sz:10, color:{rgb:'333333'} },fill:{ fgColor:{rgb:GRI_MED} },  border: border_thin, alignment:{ horizontal:'center' } },
+    data_row:{ font:{ sz:10 },                                  fill:{ fgColor:{rgb:ALB} },     border: border_thin },
+    data_alt:{ font:{ sz:10 },                                  fill:{ fgColor:{rgb:GRI_DSCH} },border: border_thin },
+    bold_row:{ font:{ bold:true, sz:10 },                       fill:{ fgColor:{rgb:'FFF8E1'} },border: border_thin },
+    total:   { font:{ bold:true, sz:10, color:{rgb:'1F3C6E'} },fill:{ fgColor:{rgb:GRI_MED} },  border: border_thin },
+    nr:      { font:{ bold:true, sz:10, color:{rgb:ALBASTRU} },fill:{ fgColor:{rgb:GRI_DSCH} }, border: border_thin, alignment:{ horizontal:'center' } },
+    inchiriat:{ font:{ bold:true, sz:10, color:{rgb:'FFFFFF'}}, fill:{ fgColor:{rgb:'D46B00'} }, border: border_thin },
+  }
+
+  const ws_data = []
+  const merges  = []  // {s:{r,c}, e:{r,c}}
+  const rowStyles = {} // { rowIndex: [col0_style, col1_style, ...] }
+
+  const addRow = (cells, styles) => {
+    ws_data.push(cells)
+    if (styles) rowStyles[ws_data.length - 1] = styles
+    return ws_data.length - 1
+  }
+  const addMerge = (r, c1, c2) => merges.push({ s:{r,c:c1}, e:{r,c:c2} })
+
+  const NCOLS = 6
+
+  // ─── TITLU ───────────────────────────────────────────
+  const r0 = addRow([titlu,'','','','',''], Array(NCOLS).fill(S.titlu))
+  addMerge(r0, 0, NCOLS-1)
+
+  const r1 = addRow([`PROGRAM LUCRU TURĂ  ${fmtD(dataStart)} – ${fmtD(dataEnd)}`,'','','','',''], Array(NCOLS).fill(S.subtitlu))
+  addMerge(r1, 0, NCOLS-1)
+
+  addRow([]) // spatiu
+
+  const meserieLabel = {
+    deservent_utilaje:'Deservent utilaje', sudor:'Sudor', lacatus_mecanic:'Lăcătuș mecanic',
+    muncitor_izolator:'Muncitor/Izolator', tesa_paza:'TESA/Pază', sofer:'Șofer', alt:'Alt'
+  }
+
+  // ─── PERSONAL GAZPET ─────────────────────────────────
+  const rPH = addRow(['PERSONAL GAZPET INSTAL','','','','',''], Array(NCOLS).fill(S.sectiune))
+  addMerge(rPH, 0, NCOLS-1)
+
+  addRow(['Nr.','NUME','FUNCȚIE','ECHIPĂ','MESERIE','PERIOADĂ'],
+    [S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr])
+
+  alocari.forEach((a, i) => {
+    const st = i % 2 === 0 ? S.data_row : S.data_alt
+    addRow([i+1, a.employee_name||'', a.functie||'', a.echipa||'', meserieLabel[a.meserie]||a.meserie||'', `${fmtD(a.data_start)} → ${fmtD(a.data_end)}`],
+      [S.nr, st, st, st, st, st])
+  })
+  const rT1 = addRow([`TOTAL: ${alocari.length} persoane`,'','','','',''], Array(NCOLS).fill(S.total))
+  addMerge(rT1, 0, NCOLS-1)
+  addRow([])
+
+  // ─── SUBCONTRACTORI ───────────────────────────────────
+  if (subcont.length > 0) {
+    const rSH = addRow(['SUBCONTRACTORI / FIRME EXTERNE','','','','',''], Array(NCOLS).fill(S.sectiune))
+    addMerge(rSH, 0, NCOLS-1)
+    addRow(['Nr.','FIRMĂ','','TIP','PERSOANE','MESERIE'],
+      [S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr])
+    subcont.forEach((s, i) => {
+      const isInch = s.tip === 'inchiriat'
+      const st = isInch ? S.inchiriat : (i%2===0 ? S.data_row : S.data_alt)
+      addRow([i+1, s.firma_text,'', isInch?'🔄 Închiriat':'📋 Prestări servicii', s.nr_persoane||'', s.meserie||''],
+        [S.nr, st, st, st, st, st])
+    })
+    const totalExt = subcont.reduce((acc,s) => acc+(s.nr_persoane||0), 0)
+    const rT2 = addRow([`TOTAL EXTERN: ${totalExt} persoane`,'','','','',''], Array(NCOLS).fill(S.total))
+    addMerge(rT2, 0, NCOLS-1)
+    addRow([])
+  }
+
+  // ─── UTILAJE ──────────────────────────────────────────
   if (utilaje.length > 0) {
-    ws_data.push(['UTILAJE PE TURĂ', '', '', 'CATEGORIE', 'STATUS', ''])
+    const rUH = addRow(['UTILAJE PE TURĂ','','','','',''], Array(NCOLS).fill(S.sectiune))
+    addMerge(rUH, 0, NCOLS-1)
+    addRow(['Nr.','UTILAJ','COD INTERN','CATEGORIE','STATUS',''],
+      [S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr])
     utilaje.forEach((u, i) => {
       const a = u.logistica_active || {}
-      ws_data.push([i+1, `${a.marca||''} ${a.model||''}`.trim(), a.nr_inmatriculare || '', a.logistica_categorii?.tip || '', a.stare || '', ''])
+      const st = i%2===0 ? S.data_row : S.data_alt
+      addRow([i+1, `${a.marca||''} ${a.model||''}`.trim(), a.nr_inmatriculare||'', a.logistica_categorii?.tip||'', a.stare||'', ''],
+        [S.nr, st, st, st, st, st])
     })
-    ws_data.push([])
+    addRow([])
   }
 
-  // MAȘINI NAVETA
+  // ─── MAȘINI NAVETA ────────────────────────────────────
   if (naveta.length > 0) {
-    ws_data.push(['MAȘINI NAVETA', '', 'ȘOFER', '', '', ''])
+    const rNH = addRow(['MAȘINI NAVETA','','ȘOFER','','',''], Array(NCOLS).fill(S.sectiune))
+    addMerge(rNH, 0, 1); addMerge(rNH, 2, NCOLS-1)
+    addRow(['Nr.','MAȘINĂ (plăcuță — marcă model)','ȘOFER','','',''],
+      [S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr])
     naveta.forEach((n, i) => {
       const m = n.logistica_active || {}
-      ws_data.push([i+1, `${m.nr_inmatriculare||''} — ${m.marca||''} ${m.model||''}`.trim(), n.employees?.name || '', '', '', ''])
+      const st = i%2===0 ? S.data_row : S.data_alt
+      addRow([i+1, `${m.nr_inmatriculare||''} — ${m.marca||''} ${m.model||''}`.trim(), n.employees?.name||'','','',''],
+        [S.nr, st, st, st, st, st])
     })
-    ws_data.push([])
+    addRow([])
   }
 
-  // ACTIVITĂȚI PROPUSE
+  // ─── ACTIVITĂȚI PROPUSE ───────────────────────────────
   if (activitati.length > 0) {
-    ws_data.push(['ACTIVITĂȚI PROPUSE PENTRU PERIOADĂ', '', '', 'DATA', '', 'RESPONSABIL'])
+    const rAH = addRow(['ACTIVITĂȚI PROPUSE PENTRU PERIOADĂ','','','','',''], Array(NCOLS).fill(S.sectiune))
+    addMerge(rAH, 0, NCOLS-1)
+    addRow(['Nr.','DESCRIERE ACTIVITATE','','DATA START → END','','RESPONSABIL'],
+      [S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr,S.col_hdr])
     activitati.forEach(a => {
-      const date = a.data_start_act ? `${fmtD(a.data_start_act)}${a.data_end_act !== a.data_start_act ? ` → ${fmtD(a.data_end_act)}` : ''}` : ''
-      ws_data.push([a.nr_ordine, a.descriere, '', date, '', a.responsabil || ''])
+      const date = a.data_start_act
+        ? `${fmtD(a.data_start_act)}${a.data_end_act !== a.data_start_act ? ` → ${fmtD(a.data_end_act)}` : ''}`
+        : ''
+      addRow([a.nr_ordine, a.descriere,'', date,'', a.responsabil||''],
+        [S.nr, S.bold_row, S.bold_row, S.bold_row, S.bold_row, S.bold_row])
     })
   }
 
-  // Stiluri
-  const H = { font:{bold:true, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'1F3C6E'}}, alignment:{horizontal:'center'} }
+  // ─── BUILD SHEET ──────────────────────────────────────
   const ws = XLSX.utils.aoa_to_sheet(ws_data)
+  ws['!cols'] = [{wch:5},{wch:38},{wch:22},{wch:22},{wch:16},{wch:22}]
+  ws['!rows'] = [ {hpt:24}, {hpt:18} ]  // titlu + subtitlu mai inalte
+  ws['!merges'] = merges
 
-  // Latime coloane
-  ws['!cols'] = [{wch:4},{wch:30},{wch:20},{wch:20},{wch:16},{wch:20}]
-
-  // Bold pe headere
-  const boldRows = [0,1,3, 3+alocari.length+2]
-  boldRows.forEach(r => {
-    const cell = ws[XLSX.utils.encode_cell({r,c:0})]
-    if (cell) { cell.s = H }
+  // Aplica stiluri celula cu celula
+  Object.entries(rowStyles).forEach(([rowIdx, styles]) => {
+    styles.forEach((s, colIdx) => {
+      if (!s) return
+      const addr = XLSX.utils.encode_cell({ r: Number(rowIdx), c: colIdx })
+      if (!ws[addr]) ws[addr] = { t:'s', v:'' }
+      ws[addr].s = s
+    })
   })
 
+  const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Program Tură')
-  XLSX.writeFile(wb, `Program_Tura_${titlu}_${dataStart}_${dataEnd}.xlsx`)
+  XLSX.writeFile(wb, `Program_Tura_${titlu}_${dataStart.replace(/-/g,'')}_${dataEnd.replace(/-/g,'')}.xlsx`)
 }
