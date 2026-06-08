@@ -65,6 +65,7 @@ function useToast() {
 export default function TabSantiere({ proiectId: proiectIdProp }) {
   const [proiecte, setProiecte] = useState([])
   const [employees, setEmployees] = useState([])
+  const [masiniLista, setMasiniLista] = useState([])
   const [alocari, setAlocari] = useState([])
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -96,12 +97,17 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         const { data: prof } = await supabase.from('profiles').select('id,is_owner,role').eq('id',user.id).single()
         setProfile(prof)
       }
-      const [pRes, eRes] = await Promise.all([
+      const [pRes, eRes, mRes] = await Promise.all([
         supabase.from('executie_proiecte').select('id,cod_intern,nume,activ,site_id').eq('activ',true).order('cod_intern'),
         supabase.from('employees').select('id,name,functie,department').eq('active',true).order('name'),
+        supabase.from('logistica_active').select('id,marca,model,nr_inmatriculare,cod_intern')
+          .eq('vandut',false).eq('deep_sleep',false)
+          .in('logistica_categorii.tip', ['Autoturism','Autoutilitară','Camion'])
+          .order('nr_inmatriculare').limit(150),
       ])
       setProiecte(pRes.data || [])
       setEmployees(eRes.data || [])
+      setMasiniLista(mRes.data || [])
       if (!proiectIdProp && !proiectId && pRes.data?.length > 0) setProiectId(String(pRes.data[0].id))
     } finally {
       setLoading(false)
@@ -424,6 +430,17 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         dataEnd={dataEnd}
         canWrite={canWrite}
         isOwner={isOwner}
+        employees={employees}
+      />
+
+      <NavetaTura
+        proiectId={proiectId}
+        siteId={currentSiteId}
+        dataStart={dataStart}
+        dataEnd={dataEnd}
+        canWrite={canWrite}
+        employees={employees}
+        masiniLista={masiniLista}
       />
 
       <Toast />
@@ -629,14 +646,11 @@ function AlocareModal({ item, proiecte, employees, masinaOpts, defaultProiectId,
           {/* Mașină navetă */}
           <div>
             <label style={S.lbl}>🚗 Mașină navetă personală (dacă conduce el)</label>
-            <select value={f.masina_naveta} onChange={e => setF({...f, masina_naveta:e.target.value})} style={S.input}>
-              <option value="">— Nu conduce / Nu știm —</option>
-              {(masinaOpts||[]).map(m => (
-                <option key={m.id} value={`${m.nr_inmatriculare||m.cod_intern} — ${m.marca} ${m.model}`}>
-                  {m.nr_inmatriculare || m.cod_intern} — {m.marca} {m.model}
-                </option>
-              ))}
-            </select>
+            <input value={f.masina_naveta} onChange={e => setF({...f, masina_naveta:e.target.value})}
+              style={S.input} placeholder="ex: PH 10 GZP — Dacia Duster" />
+            <div style={{fontSize:10, color:G.dim, marginTop:3}}>
+              💡 Mașinile de naveta ale turei (N mașini + șoferi) se adaugă în secțiunea „Mașini naveta" de mai jos.
+            </div>
           </div>
 
           {/* Observații */}
@@ -695,7 +709,7 @@ export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, c
                    logistica_active(id, marca, model, cod_intern, nr_inmatriculare, stare, 
                                     logistica_categorii(tip))`)
           .eq('site_id', siteId)
-          .in('status', ['aprobat','in_tranzit','livrat'])
+          .in('status', ['aprobata','activa','incheiata'])
           .gte('data_end', dataStart)
           .lte('data_start', dataEnd) : { data: [] },
         // Toate utilajele pentru modal
@@ -988,7 +1002,7 @@ function AlocareUtilajModal({ item, allUtilaje, employees, utilajeSantier, onClo
     const { error } = await supabase.from('logistica_alocari').insert({
       active_id:   Number(f.active_id),
       site_id:     Number(f.site_id),
-      status:      'aprobat',
+      status:      'aprobata',
       data_start:  f.data_start,
       data_end:    f.data_end,
       justificare: f.justificare.trim() || 'Alocare tură',
