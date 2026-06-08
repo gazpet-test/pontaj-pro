@@ -466,6 +466,14 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         canWrite={canWrite}
       />
 
+      <ActivitatiTura
+        proiectId={proiectId}
+        siteId={currentSiteId}
+        dataStart={dataStart}
+        dataEnd={dataEnd}
+        canWrite={canWrite}
+      />
+
       <Toast />
     </div>
   )
@@ -2010,6 +2018,232 @@ function SubcontractorModal({ item, onClose, onSaved, onError }) {
             <button onClick={handleSave} disabled={saving}
               style={{ ...S.btn, flex:2, background:saving?G.muted:'#7C3AED', color:'#fff', opacity:saving?0.6:1 }}>
               {saving ? '⏳...' : isNew ? '＋ Adaugă firmă' : '💾 Salvează'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// SECȚIUNE ACTIVITĂȚI PROPUSE PE TURĂ
+// ══════════════════════════════════════════════════════════
+export function ActivitatiTura({ proiectId, siteId, dataStart, dataEnd, canWrite }) {
+  const [activitati, setActivitati] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editAct, setEditAct] = useState(null)
+  const { show, Toast } = useToast()
+
+  const load = useCallback(async () => {
+    if (!proiectId) return
+    setLoading(true)
+    try {
+      const { data } = await supabase.from('executie_tura_activitati')
+        .select('*')
+        .eq('proiect_id', proiectId)
+        .gte('data_end', dataStart)
+        .lte('data_start', dataEnd)
+        .order('nr_ordine')
+      setActivitati(data || [])
+    } finally { setLoading(false) }
+  }, [proiectId, dataStart, dataEnd])
+
+  useEffect(() => { load() }, [load])
+
+  const handleDelete = async a => {
+    if (!confirm(`Ștergi activitatea: "${a.descriere}"?`)) return
+    await supabase.from('executie_tura_activitati').delete().eq('id', a.id)
+    show('✓ Șters'); load()
+  }
+
+  const STATUS_CFG = {
+    planificat: { col:'#58A6FF', icon:'📋' },
+    in_lucru:   { col:'#D29922', icon:'🔧' },
+    realizat:   { col:'#2EA043', icon:'✅' },
+    anulat:     { col:'#F85149', icon:'❌' },
+  }
+
+  const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO', { day:'2-digit', month:'short' }) : null
+
+  return (
+    <div style={{ marginTop:24 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:14 }}>
+        <div style={{ height:1, flex:1, background:G.border }} />
+        <div style={{ fontSize:14, fontWeight:800, color:G.text }}>
+          📋 Activități propuse
+          <span style={{ fontSize:11, color:G.muted, fontWeight:400, marginLeft:6 }}>
+            {activitati.length > 0 && `· ${activitati.filter(a=>a.status==='realizat').length}/${activitati.length} realizate`}
+          </span>
+        </div>
+        <div style={{ height:1, flex:1, background:G.border }} />
+        {canWrite && (
+          <button onClick={() => setEditAct({ proiect_id:proiectId, site_id:siteId, data_start:dataStart, data_end:dataEnd, nr_ordine: activitati.length + 1 })}
+            style={{ ...S.btn, background:G.blue, color:'#fff', padding:'7px 14px', fontSize:12 }}>
+            ＋ Adaugă activitate
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign:'center', color:G.muted, fontSize:12, padding:16 }}>⏳</div>
+      ) : activitati.length === 0 ? (
+        <div style={{ padding:16, textAlign:'center', color:G.dim, fontSize:12,
+          background:G.surface, border:`1px solid ${G.border}`, borderRadius:8 }}>
+          📋 Nicio activitate planificată.<br/>
+          <span style={{ fontSize:10 }}>Adaugă activitățile propuse pentru această tură.</span>
+        </div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+          {activitati.map((a, i) => {
+            const sc = STATUS_CFG[a.status] || STATUS_CFG.planificat
+            return (
+              <div key={a.id} style={{
+                display:'flex', alignItems:'center', gap:12, padding:'9px 14px',
+                background:G.surface, border:`1px solid ${G.border}`,
+                borderLeft:`3px solid ${sc.col}`, borderRadius:8
+              }}>
+                <div style={{ width:22, height:22, borderRadius:4, background:sc.col+'22',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  fontSize:11, fontWeight:800, color:sc.col, flexShrink:0 }}>
+                  {a.nr_ordine}
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <span style={{ fontSize:13, color:G.text, fontWeight:500 }}>{a.descriere}</span>
+                  <div style={{ fontSize:10, color:G.muted, marginTop:1, display:'flex', gap:8, flexWrap:'wrap' }}>
+                    {a.data_start_act && a.data_end_act && (
+                      <span>📅 {fmtD(a.data_start_act)}{a.data_start_act !== a.data_end_act ? ` → ${fmtD(a.data_end_act)}` : ''}</span>
+                    )}
+                    {a.responsabil && <span>👤 {a.responsabil}</span>}
+                    {a.observatii && <span>· {a.observatii}</span>}
+                  </div>
+                </div>
+                <span style={{ fontSize:10, padding:'2px 8px', borderRadius:10, fontWeight:700,
+                  background:sc.col+'22', color:sc.col, whiteSpace:'nowrap' }}>
+                  {sc.icon} {a.status.replace('_',' ')}
+                </span>
+                {canWrite && (
+                  <div style={{ display:'flex', gap:4 }}>
+                    <button onClick={() => setEditAct(a)}
+                      style={{ ...S.btn, padding:'3px 7px', fontSize:10, background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}44` }}>✏️</button>
+                    <button onClick={() => handleDelete(a)}
+                      style={{ ...S.btn, padding:'3px 7px', fontSize:10, background:G.red+'22', color:G.red, border:`1px solid ${G.red}44` }}>🗑</button>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {editAct && (
+        <ActivitateModal
+          item={editAct}
+          onClose={() => setEditAct(null)}
+          onSaved={() => { setEditAct(null); load(); show('✓ Salvat') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+      <Toast />
+    </div>
+  )
+}
+
+function ActivitateModal({ item, onClose, onSaved, onError }) {
+  const isNew = !item.id
+  const [f, setF] = useState({
+    descriere:     item.descriere     || '',
+    nr_ordine:     item.nr_ordine     || 1,
+    data_start_act:item.data_start_act|| item.data_start || '',
+    data_end_act:  item.data_end_act  || item.data_end   || '',
+    responsabil:   item.responsabil   || '',
+    status:        item.status        || 'planificat',
+    observatii:    item.observatii    || '',
+  })
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    if (!f.descriere.trim()) return onError('Completează descrierea')
+    setSaving(true)
+    const payload = {
+      proiect_id:    Number(item.proiect_id),
+      site_id:       item.site_id ? Number(item.site_id) : null,
+      data_start:    item.data_start,
+      data_end:      item.data_end,
+      nr_ordine:     Number(f.nr_ordine) || 1,
+      descriere:     f.descriere.trim(),
+      data_start_act:f.data_start_act || null,
+      data_end_act:  f.data_end_act   || null,
+      responsabil:   f.responsabil.trim() || null,
+      status:        f.status,
+      observatii:    f.observatii.trim() || null,
+    }
+    const res = isNew
+      ? await supabase.from('executie_tura_activitati').insert(payload)
+      : await supabase.from('executie_tura_activitati').update(payload).eq('id', item.id)
+    setSaving(false)
+    if (res.error) onError(res.error.message)
+    else onSaved()
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1010,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:480, padding:'22px 26px', boxShadow:'0 20px 60px rgba(0,0,0,.5)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+          <div style={{ fontSize:16, fontWeight:800, color:G.text }}>
+            📋 {isNew ? 'Adaugă activitate' : 'Editează activitate'}
+          </div>
+          <button onClick={onClose} style={{ background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer' }}>×</button>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'60px 1fr', gap:10 }}>
+            <div>
+              <label style={S.lbl}>Nr.</label>
+              <input type="number" value={f.nr_ordine} onChange={e=>setF({...f,nr_ordine:e.target.value})} style={S.input} min="1"/>
+            </div>
+            <div>
+              <label style={S.lbl}>Descriere *</label>
+              <input value={f.descriere} onChange={e=>setF({...f,descriere:e.target.value})} style={S.input} placeholder="ex: Suduri cuplari DN500"/>
+            </div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <div>
+              <label style={S.lbl}>Data start activitate</label>
+              <input type="date" value={f.data_start_act} onChange={e=>setF({...f,data_start_act:e.target.value})} style={S.input}/>
+            </div>
+            <div>
+              <label style={S.lbl}>Data end activitate</label>
+              <input type="date" value={f.data_end_act} onChange={e=>setF({...f,data_end_act:e.target.value})} style={S.input}/>
+            </div>
+          </div>
+          <div>
+            <label style={S.lbl}>Responsabil</label>
+            <input value={f.responsabil} onChange={e=>setF({...f,responsabil:e.target.value})} style={S.input} placeholder="ex: MITITELU P / WELDMAG"/>
+          </div>
+          <div>
+            <label style={S.lbl}>Status</label>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:6 }}>
+              {[{v:'planificat',l:'📋 Plan'},{v:'in_lucru',l:'🔧 Lucru'},{v:'realizat',l:'✅ Gata'},{v:'anulat',l:'❌ Anulat'}].map(s=>(
+                <button key={s.v} onClick={()=>setF({...f,status:s.v})}
+                  style={{ padding:'7px 4px', border:`2px solid ${f.status===s.v?G.blue:G.border}`,
+                    borderRadius:7, cursor:'pointer', fontSize:10, fontWeight:700,
+                    background:f.status===s.v?G.blue+'22':G.bg, color:f.status===s.v?G.blue:G.muted }}>
+                  {s.l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={S.lbl}>Observații</label>
+            <input value={f.observatii} onChange={e=>setF({...f,observatii:e.target.value})} style={S.input} placeholder="detalii suplimentare"/>
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={onClose} style={{ ...S.btn, flex:1, background:G.border2, color:G.text }}>Anulează</button>
+            <button onClick={handleSave} disabled={saving}
+              style={{ ...S.btn, flex:2, background:saving?G.muted:G.blue, color:'#fff', opacity:saving?0.6:1 }}>
+              {saving?'⏳...':isNew?'＋ Adaugă':'💾 Salvează'}
             </button>
           </div>
         </div>
