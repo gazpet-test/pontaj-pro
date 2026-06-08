@@ -72,7 +72,7 @@ function Badge({ label, color, emoji }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
+function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], expanded=false, onToggleExpand, dsSearch='', onDsSearch }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
@@ -136,15 +136,62 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
             )}
           </div>
 
-          {/* Downstream: contracte cu prestatori */}
+          {/* Downstream: sumar clickabil + expand lista */}
           {!isDownstream && c.nr_downstream > 0 && (
-            <div style={{
-              marginTop: 8, padding: '4px 10px', borderRadius: 6,
-              background: G.purple + '11', border: `1px solid ${G.purple}33`,
-              fontSize: 11, color: G.purple, fontWeight: 600,
-            }}>
-              📎 {c.nr_downstream} contract{c.nr_downstream > 1 ? 'e' : ''} cu prestatori
-              {c.valoare_downstream_total > 0 && ` · ${fmtRON(c.valoare_downstream_total)}`}
+            <div style={{ marginTop: 8 }}>
+              <div onClick={onToggleExpand} style={{
+                padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
+                background: expanded ? G.purple + '22' : G.purple + '11',
+                border: `1px solid ${G.purple}${expanded ? '66' : '33'}`,
+                fontSize: 11, color: G.purple, fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: 6, userSelect: 'none',
+              }}>
+                <span>{expanded ? '▾' : '▸'}</span>
+                📎 {c.nr_downstream} contract{c.nr_downstream > 1 ? 'e' : ''} cu prestatori
+                {c.valoare_downstream_total > 0 && ` · ${fmtRON(c.valoare_downstream_total)}`}
+                <span style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.7 }}>{expanded ? 'Ascunde' : 'Vezi lista'}</span>
+              </div>
+              {expanded && (
+                <div style={{ marginTop: 8, padding: '10px 12px', background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8 }}>
+                  {/* Search downstream */}
+                  {downstreamList.length > 3 && (
+                    <input value={dsSearch} onChange={e => onDsSearch?.(e.target.value)}
+                      placeholder="🔍 Caută în contractele cu prestatori..."
+                      style={{ width: '100%', padding: '6px 10px', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 6, color: G.text, fontSize: 12, marginBottom: 8, boxSizing: 'border-box' }} />
+                  )}
+                  {/* Lista downstream filtrata */}
+                  {downstreamList
+                    .filter(d => !dsSearch || (d.denumire || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(dsSearch.toLowerCase()))
+                    .map(d => {
+                      const dSt = STATUS_META[d.status] || STATUS_META.draft
+                      const dTip = TIP_META[d.tip_contract]
+                      return (
+                        <div key={d.id} style={{ padding: '8px 10px', marginBottom: 6, borderRadius: 6, background: G.surface, border: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: G.text, fontFamily: 'monospace' }}>Nr. {d.numar_contract || '—'}</span>
+                              <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dSt.color + '22', color: dSt.color, fontWeight: 700 }}>{dSt.label}</span>
+                              {dTip && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dTip.color + '22', color: dTip.color }}>{dTip.emoji} {dTip.label}</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: G.text, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.denumire}</div>
+                            <div style={{ fontSize: 11, color: G.muted }}>{d.partener_text || d.beneficiar_name || '—'}{d.site_qr && ` · 📍 ${d.site_qr}`}</div>
+                          </div>
+                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>↑ {fmtRON(d.valoare_lei)}</div>
+                            <div style={{ display: 'flex', gap: 4, marginTop: 4, justifyContent: 'flex-end' }}>
+                              <button onClick={() => onViewLinii(d)} style={{ padding: '3px 8px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📋 Linii ({d.nr_linii || 0})</button>
+                              {isOwner && <button onClick={() => onEdit(d)} style={{ padding: '3px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>✏️</button>}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })
+                  }
+                  {downstreamList.filter(d => !dsSearch || (d.denumire || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(dsSearch.toLowerCase())).length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '12px 0', color: G.muted, fontSize: 12 }}>Niciun contract găsit</div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -548,6 +595,8 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
 function ModalLinii({ contract, profile, onClose }) {
   const [linii, setLinii] = useState([])
   const [loading, setLoading] = useState(true)
+  const [expandedIds, setExpandedIds] = useState(new Set())
+  const [dsSearch, setDsSearch] = useState({})
   const [newLinie, setNewLinie] = useState({ denumire: '', unitate_masura: '', cantitate: '', pret_unitar: '' })
   const [saving, setSaving] = useState(false)
   const isOwner = profile?.is_owner === true
@@ -895,11 +944,19 @@ export default function ContracteComerciale({ profile }) {
                 </div>
                 <div style={{ fontSize: 11, color: G.muted }}>({upstream.length} contracte · {fmtRON(upstream.reduce((s, c) => s + Number(c.valoare_lei || 0), 0))})</div>
               </div>
-              {upstream.map(c => (
-                <ContractCard key={c.id} c={c} isOwner={isOwner}
-                  onEdit={c => { setEditContract(c); setModalOpen(true) }}
-                  onViewLinii={c => setLiniiContract(c)} />
-              ))}
+              {upstream.map(c => {
+                const childDs = contracte.filter(d => d.sens === 'plata' && d.contract_parinte_id === c.id)
+                return (
+                  <ContractCard key={c.id} c={c} isOwner={isOwner}
+                    onEdit={c => { setEditContract(c); setModalOpen(true) }}
+                    onViewLinii={c => setLiniiContract(c)}
+                    downstreamList={childDs}
+                    expanded={expandedIds.has(c.id)}
+                    onToggleExpand={() => setExpandedIds(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })}
+                    dsSearch={dsSearch[c.id] || ''}
+                    onDsSearch={v => setDsSearch(prev => ({...prev, [c.id]: v}))} />
+                )
+              })}
             </div>
           )}
 
