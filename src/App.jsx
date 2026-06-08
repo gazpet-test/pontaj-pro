@@ -28,12 +28,16 @@ const useAuth = () => useContext(AuthContext)
 function AuthProvider({ children }) {
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
+  // Anti N+1: previne multiple fetchProfile simultane (GoTrueClient poate emite onAuthStateChange de 5x)
+  const fetchingRef = useRef(null)
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id) })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { setSession(session); if (session) fetchProfile(session.user.id); else setProfile(null) })
     return () => subscription.unsubscribe()
   }, [])
   const fetchProfile = async (userId) => {
+    if (fetchingRef.current === userId) return
+    fetchingRef.current = userId
     try {
       const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
       if (data) {
@@ -59,6 +63,7 @@ function AuthProvider({ children }) {
         }, 1000)
       }
     } catch (e) { console.error(e) }
+    finally { if (fetchingRef.current === userId) fetchingRef.current = null }
   }
   const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password })
   const signOut = () => supabase.auth.signOut()
