@@ -1,3 +1,4 @@
+// v2 08.06.2026
 // ===========================================================================
 // CONTRACTE COMERCIALE — Tab Administrativ
 // 07.06.2026 v1 — Lista upstream/downstream + modal adăugare
