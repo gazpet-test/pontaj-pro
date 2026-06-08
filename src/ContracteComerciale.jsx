@@ -121,6 +121,9 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[] }) {
             )}
           </div>
 
+          <div style={{ fontSize: 11, background: 'yellow', color: 'black', padding: '2px 6px', marginBottom: 4, borderRadius: 4 }}>
+            id={c.id} sens={c.sens} ds=[{downstreamList.map(d=>d.id).join(',')}] nr_ds={c.nr_downstream}
+          </div>
           <div style={{ fontSize: 13, color: G.text, fontWeight: 600, marginBottom: 4, lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
             {c.denumire}
           </div>
