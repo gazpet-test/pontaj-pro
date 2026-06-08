@@ -1,4 +1,3 @@
-// v2 08.06.2026
 // ===========================================================================
 // CONTRACTE COMERCIALE — Tab Administrativ
 // 07.06.2026 v1 — Lista upstream/downstream + modal adăugare
@@ -73,21 +72,13 @@ function Badge({ label, color, emoji }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
+function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[] }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
   const isDownstream = c.sens === 'plata'
   const [localSearch, setLocalSearch] = useState('')
-  const [downstreamList, setDownstreamList] = useState([])
 
-  useEffect(() => {
-    if (isDownstream) return
-    supabase.from('v_contracte_cu_linii')
-      .select('*')
-      .eq('contract_parinte_id', c.id)
-      .then(({ data }) => setDownstreamList(data || []))
-  }, [c.id])
 
   return (
     <div style={{
@@ -818,6 +809,16 @@ export default function ContracteComerciale({ profile }) {
 
   useEffect(() => { loadAll() }, [])
 
+  // Map downstream per upstream - calculat din state, zero fetch async
+  const downstreamMap = useMemo(() => {
+    const map = {}
+    contracte.filter(d => d.sens === 'plata' && d.contract_parinte_id).forEach(d => {
+      if (!map[d.contract_parinte_id]) map[d.contract_parinte_id] = []
+      map[d.contract_parinte_id].push(d)
+    })
+    return map
+  }, [contracte])
+
   async function loadAll() {
     setLoading(true)
     const [{ data: contracteData }, { data: sitesData }, { data: benData }] = await Promise.all([
@@ -953,7 +954,8 @@ export default function ContracteComerciale({ profile }) {
                 return (
                   <ContractCard key={c.id} c={c} isOwner={isOwner}
                     onEdit={c => { setEditContract(c); setModalOpen(true) }}
-                    onViewLinii={c => setLiniiContract(c)} />
+                    onViewLinii={c => setLiniiContract(c)}
+                    downstreamList={downstreamMap[c.id] || []} />
                 )
               })}
             </div>
