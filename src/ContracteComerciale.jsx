@@ -105,7 +105,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
         </div>
 
         {/* Conținut */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, overflow: 'visible' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: G.text }}>
               {c.numar_contract ? `Nr. ${c.numar_contract}` : '—'}
@@ -129,7 +129,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
             )}
           </div>
 
-          <div style={{ fontSize: 13, color: G.text, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 13, color: G.text, fontWeight: 600, marginBottom: 4, lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
             {c.denumire}
           </div>
 
