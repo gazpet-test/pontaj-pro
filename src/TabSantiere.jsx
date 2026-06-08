@@ -529,7 +529,7 @@ function AlocareModal({ item, proiecte, employees, masinaOpts, defaultProiectId,
   const meserieActuala = getMeserie(f.meserie)
 
   return (
-    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+    <div  style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1000,
       display:'flex', alignItems:'center', justifyContent:'center', padding:24
     }}>
@@ -1047,7 +1047,7 @@ function AlocareUtilajModal({ item, allUtilaje, employees, utilajeSantier, onClo
   }
 
   return (
-    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+    <div  style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1000,
       display:'flex', alignItems:'center', justifyContent:'center', padding:24
     }}>
@@ -1308,7 +1308,7 @@ function NavetaModal({ item, employees, masiniLista, onClose, onSaved, onError }
   }
 
   return (
-    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+    <div  style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1010,
       display:'flex', alignItems:'center', justifyContent:'center', padding:24
     }}>
@@ -1431,7 +1431,7 @@ function EchipaModal({ proiecte, employees, defaultProiectId, defaultStart, defa
   }
 
   return (
-    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+    <div  style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,.80)', zIndex:1000,
       display:'flex', alignItems:'center', justifyContent:'center', padding:16
     }}>
@@ -1619,7 +1619,7 @@ function UtilajeBulkModal({ siteId, dataStart, dataEnd, utilajeSantier, allUtila
   }
 
   return (
-    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+    <div  style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,.80)', zIndex:1010,
       display:'flex', alignItems:'center', justifyContent:'center', padding:16
     }}>
