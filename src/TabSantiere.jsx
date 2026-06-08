@@ -1384,8 +1384,8 @@ function EchipaModal({ proiecte, employees, defaultProiectId, defaultStart, defa
   const [saving, setSaving] = useState(false)
 
   const ECHIPE = ['Echipa 1','Echipa 2','Echipa 3','Echipa 4 Izolat','Paza / Mecanic / Sofer','TESA']
-  const ROLURI = [{v:'sudura',l:'🔥 Sudură'},{v:'terasamente',l:'⛏️ Terasamente'},{v:'lansare',l:'🚜 Lansare'},{v:'izolare',l:'🧰 Izolare'},{v:'tesa',l:'💼 TESA'},{v:'paza',l:'🛡 Pază'},{v:'mecanic',l:'🔧 Mecanic'},{v:'alt',l:'Alt rol'}]
-  const MESERII = [{v:'deservent_utilaje',l:'🚜 Deserv. utilaje'},{v:'sudor',l:'🔥 Sudor'},{v:'lacatus_mecanic',l:'🔧 Lăcătuș'},{v:'muncitor_izolator',l:'👷 Muncitor'},{v:'tesa',l:'💼 TESA'},{v:'sofer',l:'🚗 Șofer'},{v:'alt',l:'Alt'}]
+  const ROLURI = [{v:'sudura',l:'🔥 Sudură'},{v:'terasamente',l:'⛏️ Terasamente'},{v:'lansare',l:'🚜 Lansare'},{v:'izolare',l:'🧰 Izolare'},{v:'tesa_paza',l:'💼 TESA / Pază'},{v:'paza',l:'🛡 Pază'},{v:'mecanic',l:'🔧 Mecanic'},{v:'alt',l:'Alt rol'}]
+  const MESERII = [{v:'deservent_utilaje',l:'🚜 Deserv. utilaje'},{v:'sudor',l:'🔥 Sudor'},{v:'lacatus_mecanic',l:'🔧 Lăcătuș'},{v:'muncitor_izolator',l:'👷 Muncitor'},{v:'tesa_paza',l:'💼 TESA / Pază'},{v:'sofer',l:'🚗 Șofer'},{v:'alt',l:'Alt'}]
 
   const empFiltrati = useMemo(() => {
     const s = search.toLowerCase()
