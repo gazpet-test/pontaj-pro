@@ -81,11 +81,11 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
   const [downstreamList, setDownstreamList] = useState([])
 
   useEffect(() => {
-    if (isDownstream || !c.nr_downstream) return
+    if (isDownstream) return
     supabase.from('v_contracte_cu_linii')
       .select('*')
       .eq('contract_parinte_id', c.id)
-      .then(({ data, error }) => { if(!error) setDownstreamList(data || []) })
+      .then(({ data }) => setDownstreamList(data || []))
   }, [c.id])
 
   return (
@@ -146,16 +146,15 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
             )}
           </div>
 
-          {/* Downstream: sumar clickabil + expand lista */}
-          {!isDownstream && c.nr_downstream > 0 && (
+          {/* Downstream: afisare directa */}
+          {!isDownstream && (
             <div style={{ marginTop: 8 }}>
               <div style={{
                 padding: '5px 10px', borderRadius: 6,
                 background: G.purple + '11', border: `1px solid ${G.purple}33`,
                 fontSize: 11, color: G.purple, fontWeight: 600,
-                display: 'flex', alignItems: 'center', gap: 6,
               }}>
-                📎 {c.nr_downstream} contract{c.nr_downstream > 1 ? 'e' : ''} cu prestatori
+                📎 {c.nr_downstream || downstreamList.length} contracte cu prestatori
                 {c.valoare_downstream_total > 0 && ` · ${fmtRON(c.valoare_downstream_total)}`}
               </div>
               {downstreamList.length > 0 && (
