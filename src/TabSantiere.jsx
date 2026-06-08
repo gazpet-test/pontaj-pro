@@ -11,6 +11,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import * as XLSX from 'xlsx-js-style'
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -83,6 +84,8 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
 
   const [editAlocare, setEditAlocare] = useState(null)
   const [editEchipa, setEditEchipa] = useState(null)
+  const [showArhiva, setShowArhiva] = useState(false)
+  const [turaId, setTuraId] = useState(null) // tura activa din executie_ture
   const { show, Toast } = useToast()
 
   // Sync cu prop când proiectul se schimbă din context
@@ -186,6 +189,14 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
             onClick={() => setEditEchipa({ proiect_id: proiectId, data_start: dataStart, data_end: dataEnd })}
             style={{...S.btn, background:G.executie, color:'#0D1117', display:'flex', alignItems:'center', gap:8}}
           >＋ Adaugă echipă</button>
+          <button onClick={() => exportTuraExcel({ proiectId, dataStart, dataEnd, alocari, proiecte, employees })}
+            style={{...S.btn, background:G.green, color:'#fff', padding:'7px 12px', fontSize:12, fontWeight:700}}>
+            📥 Excel
+          </button>
+          <button onClick={() => setShowArhiva(true)}
+            style={{...S.btn, background:G.border2, color:G.muted, padding:'7px 12px', fontSize:12}}>
+            📁 Arhivă
+          </button>
         )}
       </div>
 
@@ -486,6 +497,19 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         dataEnd={dataEnd}
         canWrite={canWrite}
       />
+
+      {showArhiva && (
+        <ArhivaModal
+          proiectId={proiectId}
+          proiecte={proiecte}
+          onClose={() => setShowArhiva(false)}
+          onSelectTura={(t) => {
+            setDataStart(t.data_start)
+            setDataEnd(t.data_end)
+            setShowArhiva(false)
+          }}
+        />
+      )}
 
       <Toast />
     </div>
@@ -2263,4 +2287,238 @@ function ActivitateModal({ item, onClose, onSaved, onError }) {
       </div>
     </div>
   )
+}
+
+// ══════════════════════════════════════════════════════════
+// ARHIVĂ TURE
+// ══════════════════════════════════════════════════════════
+function ArhivaModal({ proiectId, proiecte, onClose, onSelectTura }) {
+  const [ture, setTure] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [newTura, setNewTura] = useState({ titlu:'', data_start:'', data_end:'', status:'activa' })
+  const { show, Toast } = useToast()
+
+  const proiect = proiecte.find(p => String(p.id) === String(proiectId))
+
+  useEffect(() => {
+    if (!proiectId) return
+    setLoading(true)
+    supabase.from('executie_ture').select('*')
+      .eq('proiect_id', proiectId)
+      .order('data_start', { ascending: false })
+      .then(({ data }) => { setTure(data || []); setLoading(false) })
+  }, [proiectId])
+
+  const handleFinalizare = async (t) => {
+    const nextStatus = t.status === 'activa' ? 'finalizata' : t.status === 'finalizata' ? 'arhivata' : 'activa'
+    await supabase.from('executie_ture').update({ status: nextStatus, updated_at: new Date().toISOString() }).eq('id', t.id)
+    setTure(prev => prev.map(x => x.id === t.id ? { ...x, status: nextStatus } : x))
+    show(`✓ Tură → ${nextStatus}`)
+  }
+
+  const handleCreate = async () => {
+    if (!newTura.data_start || !newTura.data_end) return show('Completează datele', 'err')
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const titlu = newTura.titlu || `Tură ${new Date(newTura.data_start).toLocaleDateString('ro-RO',{day:'2-digit',month:'short'})} – ${new Date(newTura.data_end).toLocaleDateString('ro-RO',{day:'2-digit',month:'short',year:'numeric'})}`
+    const { data, error } = await supabase.from('executie_ture').upsert({
+      proiect_id: Number(proiectId),
+      data_start: newTura.data_start, data_end: newTura.data_end,
+      titlu, status: 'activa', creat_de: user?.id, updated_at: new Date().toISOString()
+    }, { onConflict: 'proiect_id,data_start,data_end' }).select().single()
+    setSaving(false)
+    if (error) show('Eroare: ' + error.message, 'err')
+    else { setTure(prev => [data, ...prev.filter(t => t.id !== data.id)]); setNewTura({ titlu:'', data_start:'', data_end:'', status:'activa' }); show('✓ Tură înregistrată') }
+  }
+
+  const STATUS = { activa: { col:'#58A6FF', icon:'🔵', l:'Activă' }, finalizata: { col:'#2EA043', icon:'✅', l:'Finalizată' }, arhivata: { col:'#6E7681', icon:'📦', l:'Arhivată' } }
+  const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO',{day:'2-digit',month:'short',year:'2-digit'}) : '—'
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.80)', zIndex:1020,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:620, maxHeight:'90vh', overflow:'hidden',
+        display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,.6)' }}>
+        {/* Header */}
+        <div style={{ padding:'18px 22px', borderBottom:`1px solid ${G.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+          <div>
+            <div style={{ fontSize:16, fontWeight:800, color:G.text }}>📁 Arhivă ture — {proiect?.cod_intern}</div>
+            <div style={{ fontSize:11, color:G.muted, marginTop:2 }}>Click pe o tură pentru a o deschide</div>
+          </div>
+          <button onClick={onClose} style={{ background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer' }}>×</button>
+        </div>
+
+        {/* Creare tură nouă */}
+        <div style={{ padding:'12px 22px', borderBottom:`1px solid ${G.border}`, flexShrink:0, background:G.bg }}>
+          <div style={{ fontSize:11, fontWeight:700, color:G.muted, marginBottom:8 }}>＋ ÎNREGISTREAZĂ TURĂ NOUĂ</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr auto', gap:8, alignItems:'end' }}>
+            <div>
+              <label style={{ fontSize:10, color:G.dim, display:'block', marginBottom:3 }}>Start</label>
+              <input type="date" value={newTura.data_start} onChange={e => setNewTura(n=>({...n,data_start:e.target.value}))} style={S.input} />
+            </div>
+            <div>
+              <label style={{ fontSize:10, color:G.dim, display:'block', marginBottom:3 }}>End</label>
+              <input type="date" value={newTura.data_end} onChange={e => setNewTura(n=>({...n,data_end:e.target.value}))} style={S.input} />
+            </div>
+            <div>
+              <label style={{ fontSize:10, color:G.dim, display:'block', marginBottom:3 }}>Titlu (opțional)</label>
+              <input value={newTura.titlu} onChange={e => setNewTura(n=>({...n,titlu:e.target.value}))} style={S.input} placeholder="ex: Tură specială" />
+            </div>
+            <button onClick={handleCreate} disabled={saving}
+              style={{ ...S.btn, background:G.executie, color:'#0D1117', fontWeight:700, padding:'8px 14px', whiteSpace:'nowrap' }}>
+              {saving ? '⏳' : '＋ Salvează'}
+            </button>
+          </div>
+        </div>
+
+        {/* Lista ture */}
+        <div style={{ flex:1, overflowY:'auto', padding:'14px 22px' }}>
+          {loading ? (
+            <div style={{ textAlign:'center', color:G.muted, padding:30 }}>⏳ Se încarcă...</div>
+          ) : ture.length === 0 ? (
+            <div style={{ textAlign:'center', color:G.dim, padding:30, fontSize:12 }}>
+              📁 Nicio tură înregistrată. Adaugă prima tură sus.
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              {ture.map(t => {
+                const sc = STATUS[t.status] || STATUS.activa
+                const zile = Math.round((new Date(t.data_end) - new Date(t.data_start))/(1000*60*60*24)) + 1
+                return (
+                  <div key={t.id} style={{
+                    display:'flex', alignItems:'center', gap:12, padding:'12px 14px',
+                    background:G.bg, border:`1px solid ${sc.col}44`,
+                    borderLeft:`3px solid ${sc.col}`, borderRadius:8, cursor:'pointer',
+                  }}
+                    onClick={() => onSelectTura(t)}>
+                    <div style={{ fontSize:18 }}>{sc.icon}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:G.text }}>{t.titlu || `Tură ${fmtD(t.data_start)} – ${fmtD(t.data_end)}`}</div>
+                      <div style={{ fontSize:10, color:G.muted, marginTop:1 }}>
+                        📅 {fmtD(t.data_start)} → {fmtD(t.data_end)} · {zile} zile
+                      </div>
+                    </div>
+                    <span style={{ fontSize:10, padding:'2px 8px', borderRadius:10, fontWeight:700,
+                      background:sc.col+'22', color:sc.col }}>{sc.l}</span>
+                    <button
+                      onClick={e => { e.stopPropagation(); handleFinalizare(t) }}
+                      style={{ ...S.btn, padding:'3px 8px', fontSize:9, background:G.border2, color:G.muted,
+                        border:`1px solid ${G.border}`, whiteSpace:'nowrap' }}>
+                      {t.status==='activa'?'✅ Finalizează':t.status==='finalizata'?'📦 Arhivează':'↺ Reactivează'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        <Toast />
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// EXPORT EXCEL — format similar cu Excel-urile Gazpet
+// ══════════════════════════════════════════════════════════
+async function exportTuraExcel({ proiectId, dataStart, dataEnd, alocari, proiecte, employees }) {
+  if (!proiectId || !dataStart) { alert('Selectează un proiect și o perioadă'); return }
+
+  const proiect = proiecte.find(p => String(p.id) === String(proiectId))
+  const titlu = proiect?.cod_intern || 'SANTIER'
+
+  // Fetch subcontractori + activitati + naveta + utilaje pentru aceasta tura
+  const [subRes, actRes, navRes, utilRes] = await Promise.all([
+    supabase.from('executie_tura_subcontractori').select('*')
+      .eq('proiect_id', proiectId).gte('data_end', dataStart).lte('data_start', dataEnd).order('tip'),
+    supabase.from('executie_tura_activitati').select('*')
+      .eq('proiect_id', proiectId).gte('data_end', dataStart).lte('data_start', dataEnd).order('nr_ordine'),
+    supabase.from('executie_tura_naveta').select('*, logistica_active(marca,model,nr_inmatriculare), employees(name)')
+      .eq('proiect_id', proiectId).gte('data_end', dataStart).lte('data_start', dataEnd),
+    supabase.from('logistica_alocari').select('*, logistica_active(marca,model,nr_inmatriculare,stare,logistica_categorii(tip))')
+      .eq('site_id', proiecte.find(p=>String(p.id)===String(proiectId))?.site_id||0)
+      .in('status',['aprobata','activa']).gte('data_end',dataStart).lte('data_start',dataEnd),
+  ])
+
+  const subcont = subRes.data || []
+  const activitati = actRes.data || []
+  const naveta = navRes.data || []
+  const utilaje = utilRes.data || []
+
+  const wb = XLSX.utils.book_new()
+  const ws_data = []
+
+  const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO') : ''
+
+  // Header
+  ws_data.push([titlu])
+  ws_data.push([`PROGRAM LUCRU TURĂ ${fmtD(dataStart)} – ${fmtD(dataEnd)}`])
+  ws_data.push([])
+
+  // PERSONAL GAZPET
+  ws_data.push(['PERSONAL GAZPET INSTAL', '', '', 'ECHIPĂ', 'MESERIE', 'PERIOADĂ'])
+  const meserieLabel = { deservent_utilaje:'Deservent utilaje', sudor:'Sudor', lacatus_mecanic:'Lăcătuș mecanic', muncitor_izolator:'Muncitor/Izolator', tesa_paza:'TESA/Pază', sofer:'Șofer', alt:'Alt' }
+  alocari.forEach((a, i) => {
+    ws_data.push([i+1, a.employee_name || '', a.functie || '', a.echipa || '', meserieLabel[a.meserie] || a.meserie, `${fmtD(a.data_start)} → ${fmtD(a.data_end)}`])
+  })
+  ws_data.push([`TOTAL: ${alocari.length} persoane`])
+  ws_data.push([])
+
+  // SUBCONTRACTORI
+  if (subcont.length > 0) {
+    ws_data.push(['SUBCONTRACTORI / FIRME EXTERNE', '', '', 'TIP', 'PERSOANE', 'MESERIE'])
+    subcont.forEach((s, i) => {
+      ws_data.push([i+1, s.firma_text, '', s.tip === 'inchiriat' ? 'Închiriat' : 'Prestări servicii', s.nr_persoane || '', s.meserie || ''])
+    })
+    ws_data.push([`TOTAL EXTERN: ${subcont.reduce((acc,s) => acc+(s.nr_persoane||0),0)} persoane`])
+    ws_data.push([])
+  }
+
+  // UTILAJE
+  if (utilaje.length > 0) {
+    ws_data.push(['UTILAJE PE TURĂ', '', '', 'CATEGORIE', 'STATUS', ''])
+    utilaje.forEach((u, i) => {
+      const a = u.logistica_active || {}
+      ws_data.push([i+1, `${a.marca||''} ${a.model||''}`.trim(), a.nr_inmatriculare || '', a.logistica_categorii?.tip || '', a.stare || '', ''])
+    })
+    ws_data.push([])
+  }
+
+  // MAȘINI NAVETA
+  if (naveta.length > 0) {
+    ws_data.push(['MAȘINI NAVETA', '', 'ȘOFER', '', '', ''])
+    naveta.forEach((n, i) => {
+      const m = n.logistica_active || {}
+      ws_data.push([i+1, `${m.nr_inmatriculare||''} — ${m.marca||''} ${m.model||''}`.trim(), n.employees?.name || '', '', '', ''])
+    })
+    ws_data.push([])
+  }
+
+  // ACTIVITĂȚI PROPUSE
+  if (activitati.length > 0) {
+    ws_data.push(['ACTIVITĂȚI PROPUSE PENTRU PERIOADĂ', '', '', 'DATA', '', 'RESPONSABIL'])
+    activitati.forEach(a => {
+      const date = a.data_start_act ? `${fmtD(a.data_start_act)}${a.data_end_act !== a.data_start_act ? ` → ${fmtD(a.data_end_act)}` : ''}` : ''
+      ws_data.push([a.nr_ordine, a.descriere, '', date, '', a.responsabil || ''])
+    })
+  }
+
+  // Stiluri
+  const H = { font:{bold:true, color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'1F3C6E'}}, alignment:{horizontal:'center'} }
+  const ws = XLSX.utils.aoa_to_sheet(ws_data)
+
+  // Latime coloane
+  ws['!cols'] = [{wch:4},{wch:30},{wch:20},{wch:20},{wch:16},{wch:20}]
+
+  // Bold pe headere
+  const boldRows = [0,1,3, 3+alocari.length+2]
+  boldRows.forEach(r => {
+    const cell = ws[XLSX.utils.encode_cell({r,c:0})]
+    if (cell) { cell.s = H }
+  })
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Program Tură')
+  XLSX.writeFile(wb, `Program_Tura_${titlu}_${dataStart}_${dataEnd}.xlsx`)
 }
