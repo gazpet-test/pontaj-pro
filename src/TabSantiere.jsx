@@ -434,13 +434,14 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
 // ══════════════════════════════════════════════════════════
 // MODAL ADD/EDIT ALOCARE
 // ══════════════════════════════════════════════════════════
-function AlocareModal({ item, proiecte, employees, defaultProiectId, defaultStart, defaultEnd, onClose, onSaved, onError }) {
+function AlocareModal({ item, proiecte, employees, masinaOpts, defaultProiectId, defaultStart, defaultEnd, onClose, onSaved, onError }) {
   const isNew = !item.id
   const [f, setF] = useState({
     proiect_id:  item.proiect_id  || defaultProiectId || '',
     employee_id: item.employee_id || '',
     meserie:     item.meserie     || 'muncitor_izolator',
     echipa:      item.echipa      || '',
+    echipa_rol:  item.echipa_rol  || '',
     data_start:  item.data_start  || defaultStart || '',
     data_end:    item.data_end    || defaultEnd   || '',
     masina_naveta: item.masina_naveta || '',
@@ -477,6 +478,7 @@ function AlocareModal({ item, proiecte, employees, defaultProiectId, defaultStar
       employee_id:   Number(f.employee_id),
       meserie:       f.meserie || null,
       echipa:        f.echipa.trim() || null,
+      echipa_rol:    f.echipa_rol || null,
       data_start:    f.data_start,
       data_end:      f.data_end,
       masina_naveta: f.masina_naveta.trim() || null,
@@ -577,12 +579,40 @@ function AlocareModal({ item, proiecte, employees, defaultProiectId, defaultStar
             </div>
           </div>
 
-          {/* Echipă */}
-          <div>
-            <label style={S.lbl}>Echipă</label>
-            <input value={f.echipa} onChange={e => setF({...f, echipa:e.target.value})}
-              style={S.input} placeholder="ex: Echipa 1 Cuplări, Echipa 4 Izolat, Pază" />
+          {/* Echipă + Rol */}
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+            <div>
+              <label style={S.lbl}>Echipă</label>
+              <select value={f.echipa} onChange={e => setF({...f, echipa:e.target.value})} style={S.input}>
+                <option value="">— Selectează —</option>
+                <option value="Echipa 1">Echipa 1</option>
+                <option value="Echipa 2">Echipa 2</option>
+                <option value="Echipa 3">Echipa 3</option>
+                <option value="Echipa 4 Izolat">Echipa 4 Izolat</option>
+                <option value="Paza / Mecanic / Sofer">Paza / Mecanic / Sofer</option>
+                <option value="TESA">TESA</option>
+              </select>
+            </div>
+            <div>
+              <label style={S.lbl}>Rol echipă</label>
+              <select value={f.echipa_rol} onChange={e => setF({...f, echipa_rol:e.target.value})} style={S.input}>
+                <option value="">— Rol —</option>
+                <option value="sudura">🔥 Sudură</option>
+                <option value="terasamente">⛏️ Terasamente</option>
+                <option value="lansare">🚜 Lansare conducta</option>
+                <option value="izolare">🧰 Izolare</option>
+                <option value="tesa">💼 TESA</option>
+                <option value="paza">🛡 Pază</option>
+                <option value="mecanic">🔧 Mecanic</option>
+                <option value="alt">Alt rol</option>
+              </select>
+            </div>
           </div>
+          {f.echipa && f.echipa_rol && (
+            <div style={{padding:'6px 12px', background:G.purple+'11', border:`1px solid ${G.purple}44`, borderRadius:6, fontSize:11, color:G.purple}}>
+              👥 {f.echipa} · {f.echipa_rol.charAt(0).toUpperCase()+f.echipa_rol.slice(1)}
+            </div>
+          )}
 
           {/* Fereastră tură */}
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
@@ -598,9 +628,15 @@ function AlocareModal({ item, proiecte, employees, defaultProiectId, defaultStar
 
           {/* Mașină navetă */}
           <div>
-            <label style={S.lbl}>🚗 Mașină navetă (dacă conduce)</label>
-            <input value={f.masina_naveta} onChange={e => setF({...f, masina_naveta:e.target.value})}
-              style={S.input} placeholder="ex: PH 10 GZP — Dacia Duster" />
+            <label style={S.lbl}>🚗 Mașină navetă personală (dacă conduce el)</label>
+            <select value={f.masina_naveta} onChange={e => setF({...f, masina_naveta:e.target.value})} style={S.input}>
+              <option value="">— Nu conduce / Nu știm —</option>
+              {(masinaOpts||[]).map(m => (
+                <option key={m.id} value={`${m.nr_inmatriculare||m.cod_intern} — ${m.marca} ${m.model}`}>
+                  {m.nr_inmatriculare || m.cod_intern} — {m.marca} {m.model}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Observații */}
@@ -630,7 +666,7 @@ function AlocareModal({ item, proiecte, employees, defaultProiectId, defaultStar
 // ══════════════════════════════════════════════════════════
 // SECȚIUNE UTILAJE PE TURĂ (adăugată în main component prin export separat)
 // ══════════════════════════════════════════════════════════
-export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, canWrite, isOwner }) {
+export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, canWrite, isOwner, employees }) {
   const [utilaje, setUtilaje] = useState([])       // toate utilajele active
   const [alocari, setAlocari] = useState([])        // alocari in fereastra
   const [allUtilaje, setAllUtilaje] = useState([]) // pentru autocomplete
@@ -900,6 +936,8 @@ export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, c
         <AlocareUtilajModal
           item={editAlocare}
           allUtilaje={allUtilaje}
+          employees={employees||[]}
+          utilajeSantier={utilaje}
           onClose={() => setEditAlocare(null)}
           onSaved={() => { setEditAlocare(null); loadUtilaje(); show('✓ Utilaj adăugat în tură') }}
           onError={e => show('Eroare: ' + e, 'err')}
@@ -914,7 +952,7 @@ export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, c
 // ══════════════════════════════════════════════════════════
 // MODAL ALOCARE UTILAJ
 // ══════════════════════════════════════════════════════════
-function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
+function AlocareUtilajModal({ item, allUtilaje, employees, utilajeSantier, onClose, onSaved, onError }) {
   const isNew = !item.id
   const [f, setF] = useState({
     active_id:   item.active_id || '',
@@ -922,6 +960,7 @@ function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
     data_start:  item.data_start || '',
     data_end:    item.data_end   || '',
     justificare: item.justificare || '',
+    mecanic_id:  item.mecanic_id || '',
   })
   const [saving, setSaving] = useState(false)
   const [utilajSearch, setUtilajSearch] = useState(item._utilaj_label || '')
@@ -953,6 +992,7 @@ function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
       data_start:  f.data_start,
       data_end:    f.data_end,
       justificare: f.justificare.trim() || 'Alocare tură',
+      mecanic_id:  f.mecanic_id ? Number(f.mecanic_id) : null,
       solicitata_de: user?.id,
       aprobata_de:   user?.id,
       data_cerere:   new Date().toISOString(),
@@ -981,9 +1021,30 @@ function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
         </div>
 
         <div style={{display:'flex', flexDirection:'column', gap:14}}>
-          {/* Utilaj autocomplete */}
+          {/* Grid utilaje rapide de pe santier */}
+          {(utilajeSantier||[]).length > 0 && (
+            <div>
+              <label style={S.lbl}>⚡ Utilaje deja pe șantier (click rapid)</label>
+              <div style={{display:'flex', flexWrap:'wrap', gap:6, marginTop:4}}>
+                {(utilajeSantier||[]).filter(u => !u.deep_sleep && u.stare !== 'Nefunctional').map(u => (
+                  <button key={u.id} onClick={() => { setF(p => ({...p, active_id:u.id})); setUtilajSearch(`${u.marca} ${u.model} ${u.nr_inmatriculare||u.cod_intern||''}`); setShowList(false) }}
+                    style={{
+                      padding:'5px 10px', border:`2px solid ${f.active_id===u.id ? G.green : G.border}`,
+                      borderRadius:6, cursor:'pointer', fontSize:11, fontWeight:600,
+                      background: f.active_id===u.id ? G.green+'22' : G.bg,
+                      color: f.active_id===u.id ? G.green : G.muted,
+                      transition:'all .1s'
+                    }}>
+                    {u.marca} {u.model}
+                    {u.nr_inmatriculare && <span style={{opacity:.6, marginLeft:4}}>{u.nr_inmatriculare}</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Utilaj autocomplete (pentru cele din afara santierului) */}
           <div style={{position:'relative'}}>
-            <label style={S.lbl}>Utilaj * {f.active_id && <span style={{color:G.green}}>✓</span>}</label>
+            <label style={S.lbl}>🔍 Sau caută alt utilaj {f.active_id && <span style={{color:G.green}}>✓</span>}</label>
             <input value={utilajSearch}
               onChange={e => { setUtilajSearch(e.target.value); setShowList(true); if(!e.target.value) setF({...f,active_id:''}) }}
               onFocus={() => setShowList(true)}
@@ -1031,6 +1092,21 @@ function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
               style={S.input} placeholder="ex: Excavație tronson 3" />
           </div>
 
+          {/* Mecanic */}
+          <div>
+            <label style={S.lbl}>🔧 Mecanic responsabil (opțional)</label>
+            <select value={f.mecanic_id} onChange={e => setF({...f,mecanic_id:e.target.value})} style={S.input}>
+              <option value="">— Fără mecanic alocat —</option>
+              {(employees||[]).filter(e => (e.functie||'').toLowerCase().includes('mecanic') || (e.department||'').toLowerCase().includes('logistic')).map(e => (
+                <option key={e.id} value={e.id}>{e.name} · {e.functie||e.department}</option>
+              ))}
+              <option disabled>──────────────</option>
+              {(employees||[]).filter(e => !(e.functie||'').toLowerCase().includes('mecanic') && !(e.department||'').toLowerCase().includes('logistic')).map(e => (
+                <option key={`all_${e.id}`} value={e.id}>{e.name}</option>
+              ))}
+            </select>
+          </div>
+
           <div style={{padding:'8px 12px', background:G.orange+'11', border:`1px solid ${G.orange}44`, borderRadius:6, fontSize:11, color:G.orange}}>
             ✅ Alocarea se aprobă automat — status „Aprobat" direct.
           </div>
@@ -1040,6 +1116,209 @@ function AlocareUtilajModal({ item, allUtilaje, onClose, onSaved, onError }) {
             <button onClick={handleSave} disabled={saving}
               style={{...S.btn, flex:2, background:saving?G.muted:G.orange, color:'#fff', opacity:saving?0.6:1}}>
               {saving ? '⏳...' : '🚜 Adaugă în tură'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ══════════════════════════════════════════════════════════
+// SECȚIUNE MAȘINI NAVETA PER TURĂ
+// ══════════════════════════════════════════════════════════
+export function NavetaTura({ proiectId, siteId, dataStart, dataEnd, canWrite, employees, masiniLista }) {
+  const [naveta, setNaveta] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editNaveta, setEditNaveta] = useState(null)
+  const { show, Toast } = useToast()
+
+  const loadNaveta = useCallback(async () => {
+    if (!proiectId) return
+    setLoading(true)
+    try {
+      const { data } = await supabase.from('executie_tura_naveta')
+        .select(`id, masina_id, sofer_id, observatii, data_start, data_end,
+                 logistica_active(id, marca, model, nr_inmatriculare, cod_intern),
+                 employees(id, name, functie)`)
+        .eq('proiect_id', proiectId)
+        .gte('data_end', dataStart)
+        .lte('data_start', dataEnd)
+        .order('created_at')
+      setNaveta(data || [])
+    } finally { setLoading(false) }
+  }, [proiectId, dataStart, dataEnd])
+
+  useEffect(() => { loadNaveta() }, [loadNaveta])
+
+  const handleDelete = async n => {
+    if (!confirm(`Elimini mașina ${n.logistica_active?.nr_inmatriculare} din naveta?`)) return
+    const { error } = await supabase.from('executie_tura_naveta').delete().eq('id', n.id)
+    if (error) show('Eroare: ' + error.message, 'err')
+    else { show('✓ Mașină eliminată'); loadNaveta() }
+  }
+
+  return (
+    <div style={{marginTop:24}}>
+      <div style={{display:'flex', alignItems:'center', gap:14, marginBottom:14}}>
+        <div style={{height:1, flex:1, background:G.border}} />
+        <div style={{fontSize:14, fontWeight:800, color:G.text}}>🚗 Mașini naveta</div>
+        <div style={{height:1, flex:1, background:G.border}} />
+        {canWrite && (
+          <button onClick={() => setEditNaveta({ proiect_id: proiectId, site_id: siteId, data_start: dataStart, data_end: dataEnd })}
+            style={{...S.btn, background:G.blue, color:'#fff', padding:'7px 14px', fontSize:12}}>
+            ＋ Adaugă mașină
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{textAlign:'center', color:G.muted, fontSize:12, padding:16}}>⏳ Se încarcă...</div>
+      ) : naveta.length === 0 ? (
+        <div style={{padding:'16px', textAlign:'center', color:G.dim, fontSize:12,
+          background:G.surface, border:`1px solid ${G.border}`, borderRadius:8}}>
+          🚗 Nicio mașină de naveta adăugată.<br />
+          <span style={{fontSize:10}}>Adaugă mașinile care fac naveta în această tură.</span>
+        </div>
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:6}}>
+          {naveta.map(n => {
+            const m = n.logistica_active || {}
+            const s = n.employees || {}
+            return (
+              <div key={n.id} style={{
+                display:'flex', alignItems:'center', gap:12,
+                padding:'10px 14px', background:G.surface,
+                border:`1px solid ${G.blue}44`, borderRadius:8, borderLeft:`3px solid ${G.blue}`
+              }}>
+                <span style={{fontSize:16}}>🚗</span>
+                <div style={{flex:1}}>
+                  <span style={{fontWeight:700, color:G.text, fontSize:13}}>
+                    {m.nr_inmatriculare || m.cod_intern} — {m.marca} {m.model}
+                  </span>
+                  {s.name && (
+                    <span style={{fontSize:11, color:G.blue, marginLeft:10}}>
+                      👤 {s.name}
+                    </span>
+                  )}
+                  {n.observatii && <span style={{fontSize:10, color:G.muted, marginLeft:8}}>{n.observatii}</span>}
+                </div>
+                {canWrite && (
+                  <button onClick={() => handleDelete(n)}
+                    style={{...S.btn, padding:'3px 8px', fontSize:10, background:G.red+'22', color:G.red, border:`1px solid ${G.red}44`}}>
+                    🗑
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {editNaveta && (
+        <NavetaModal
+          item={editNaveta}
+          employees={employees||[]}
+          masiniLista={masiniLista||[]}
+          onClose={() => setEditNaveta(null)}
+          onSaved={() => { setEditNaveta(null); loadNaveta(); show('✓ Mașină naveta adăugată') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+      <Toast />
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL ADAUGĂ MAȘINĂ NAVETA
+// ══════════════════════════════════════════════════════════
+function NavetaModal({ item, employees, masiniLista, onClose, onSaved, onError }) {
+  const [f, setF] = useState({
+    proiect_id: item.proiect_id || '',
+    site_id:    item.site_id    || '',
+    masina_id:  '',
+    sofer_id:   '',
+    data_start: item.data_start || '',
+    data_end:   item.data_end   || '',
+    observatii: '',
+  })
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    if (!f.masina_id) return onError('Selectează mașina')
+    if (!f.data_start || !f.data_end) return onError('Completează fereastra turei')
+    setSaving(true)
+    const { error } = await supabase.from('executie_tura_naveta').insert({
+      proiect_id: Number(f.proiect_id),
+      site_id:    f.site_id ? Number(f.site_id) : null,
+      masina_id:  Number(f.masina_id),
+      sofer_id:   f.sofer_id ? Number(f.sofer_id) : null,
+      data_start: f.data_start,
+      data_end:   f.data_end,
+      observatii: f.observatii.trim() || null,
+    })
+    setSaving(false)
+    if (error) onError(error.message)
+    else onSaved()
+  }
+
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1010,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:24
+    }}>
+      <div style={{
+        background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:440, padding:'22px 26px',
+        boxShadow:'0 20px 60px rgba(0,0,0,.5)'
+      }}>
+        <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18}}>
+          <div style={{fontSize:16, fontWeight:800, color:G.text}}>🚗 Adaugă mașină naveta</div>
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer'}}>×</button>
+        </div>
+        <div style={{display:'flex', flexDirection:'column', gap:14}}>
+          <div>
+            <label style={S.lbl}>Mașina *</label>
+            <select value={f.masina_id} onChange={e => setF({...f, masina_id:e.target.value})} style={S.input}>
+              <option value="">— Selectează mașina —</option>
+              {(masiniLista||[]).map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.nr_inmatriculare||m.cod_intern} — {m.marca} {m.model}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={S.lbl}>Șofer</label>
+            <select value={f.sofer_id} onChange={e => setF({...f, sofer_id:e.target.value})} style={S.input}>
+              <option value="">— Fără șofer specificat —</option>
+              {(employees||[]).map(e => (
+                <option key={e.id} value={e.id}>{e.name}{e.functie ? ` · ${e.functie}` : ''}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+            <div>
+              <label style={S.lbl}>Start tură *</label>
+              <input type="date" value={f.data_start} onChange={e => setF({...f,data_start:e.target.value})} style={S.input} />
+            </div>
+            <div>
+              <label style={S.lbl}>End tură *</label>
+              <input type="date" value={f.data_end} onChange={e => setF({...f,data_end:e.target.value})} style={S.input} />
+            </div>
+          </div>
+          <div>
+            <label style={S.lbl}>Observații</label>
+            <input value={f.observatii} onChange={e => setF({...f,observatii:e.target.value})}
+              style={S.input} placeholder="ex: Sediu → Orsova dus-întors" />
+          </div>
+          <div style={{display:'flex', gap:10}}>
+            <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.text}}>Anulează</button>
+            <button onClick={handleSave} disabled={saving}
+              style={{...S.btn, flex:2, background:saving?G.muted:G.blue, color:'#fff', opacity:saving?0.6:1}}>
+              {saving ? '⏳...' : '🚗 Adaugă naveta'}
             </button>
           </div>
         </div>
