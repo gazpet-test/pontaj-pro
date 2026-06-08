@@ -77,7 +77,6 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], dsSe
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
   const isDownstream = c.sens === 'plata'
-  const [expanded, setExpanded] = useState(false)
   const [localSearch, setLocalSearch] = useState('')
 
   return (
@@ -141,20 +140,17 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], dsSe
           {/* Downstream: sumar clickabil + expand lista */}
           {!isDownstream && c.nr_downstream > 0 && (
             <div style={{ marginTop: 8 }}>
-              <button onClick={e => { e.stopPropagation(); setExpanded(v => !v) }} style={{
-                width: '100%', textAlign: 'left', padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
-                background: expanded ? G.purple + '22' : G.purple + '11',
-                border: `1px solid ${G.purple}${expanded ? '66' : '33'}`,
+              <div style={{
+                padding: '5px 10px', borderRadius: 6,
+                background: G.purple + '11', border: `1px solid ${G.purple}33`,
                 fontSize: 11, color: G.purple, fontWeight: 600,
-                display: 'flex', alignItems: 'center', gap: 6, userSelect: 'none',
+                display: 'flex', alignItems: 'center', gap: 6,
               }}>
-                <span>{expanded ? '▾' : '▸'}</span>
                 📎 {c.nr_downstream} contract{c.nr_downstream > 1 ? 'e' : ''} cu prestatori
                 {c.valoare_downstream_total > 0 && ` · ${fmtRON(c.valoare_downstream_total)}`}
-                <span style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.7 }}>{expanded ? '▲ Ascunde' : '▼ Vezi lista'}</span>
-              </button>
-              {expanded && (
-                <div style={{ marginTop: 8, padding: '10px 12px', background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8 }}>
+              </div>
+              {downstreamList.length > 0 && (
+                <div style={{ marginTop: 8, padding: '10px 12px', background: G.bg, border: `1px solid ${G.purple}44`, borderRadius: 8 }}>
                   {/* Search downstream */}
                   {downstreamList.length > 3 && (
                     <input value={localSearch} onChange={e => setLocalSearch(e.target.value)}
