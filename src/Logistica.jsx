@@ -4889,13 +4889,24 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   }
   
   const handleSchimbaStatus = async (nou) => {
-    const labels = { programat: 'Programat', in_tranzit: 'În tranzit', livrat: 'Livrat' }
-    if (!confirm(`Schimbi status la "${labels[nou]}"?`)) return
+    const labels = { programat: 'Programat', in_tranzit: 'In tranzit', livrat: 'Livrat' }
+    if (!confirm('Schimbi status la "' + (labels[nou] || nou) + '"?')) return
+
+    // AUTO-GENERARE AVIZ la trecerea in tranzit (daca nu e deja generat)
+    if (nou === 'in_tranzit' && !T.aviz_generat) {
+      showToast('Se genereaza avizul automat...', 'info')
+      setShowAviz(true)
+      // Asteptam 2x rAF + 700ms pentru render complet HTML->canvas
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 700))))
+      await handleArhivare(true) // auto=true: fara download local
+      setShowAviz(false)
+    }
+
     setActionLoading(true)
     const { error } = await supabase.from('logistica_transporturi').update({ status: nou }).eq('id', T.id)
     setActionLoading(false)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
-    showToast(`✓ Status schimbat: ${labels[nou]}`)
+    showToast('Status schimbat: ' + (labels[nou] || nou) + (nou === 'in_tranzit' && !T.aviz_generat ? ' + aviz generat automat!' : ''))
     onChanged?.()
     onClose()
   }
