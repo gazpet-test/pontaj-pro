@@ -72,11 +72,13 @@ function Badge({ label, color, emoji }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], expanded=false, onToggleExpand, dsSearch='', onDsSearch }) {
+function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], dsSearch='', onDsSearch }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
   const isDownstream = c.sens === 'plata'
+  const [expanded, setExpanded] = useState(false)
+  const [localSearch, setLocalSearch] = useState('')
 
   return (
     <div style={{
@@ -139,7 +141,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], expa
           {/* Downstream: sumar clickabil + expand lista */}
           {!isDownstream && c.nr_downstream > 0 && (
             <div style={{ marginTop: 8 }}>
-              <button onClick={e => { e.stopPropagation(); onToggleExpand && onToggleExpand() }} style={{
+              <button onClick={e => { e.stopPropagation(); setExpanded(v => !v) }} style={{
                 width: '100%', textAlign: 'left', padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
                 background: expanded ? G.purple + '22' : G.purple + '11',
                 border: `1px solid ${G.purple}${expanded ? '66' : '33'}`,
@@ -155,13 +157,13 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], expa
                 <div style={{ marginTop: 8, padding: '10px 12px', background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8 }}>
                   {/* Search downstream */}
                   {downstreamList.length > 3 && (
-                    <input value={dsSearch} onChange={e => onDsSearch?.(e.target.value)}
+                    <input value={localSearch} onChange={e => setLocalSearch(e.target.value)}
                       placeholder="🔍 Caută în contractele cu prestatori..."
                       style={{ width: '100%', padding: '6px 10px', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 6, color: G.text, fontSize: 12, marginBottom: 8, boxSizing: 'border-box' }} />
                   )}
                   {/* Lista downstream filtrata */}
                   {downstreamList
-                    .filter(d => !dsSearch || (d.denumire || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(dsSearch.toLowerCase()))
+                    .filter(d => !localSearch || (d.denumire || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(localSearch.toLowerCase()))
                     .map(d => {
                       const dSt = STATUS_META[d.status] || STATUS_META.draft
                       const dTip = TIP_META[d.tip_contract]
@@ -187,7 +189,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[], expa
                       )
                     })
                   }
-                  {downstreamList.filter(d => !dsSearch || (d.denumire || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(dsSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(dsSearch.toLowerCase())).length === 0 && (
+                  {downstreamList.filter(d => !localSearch || (d.denumire || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(localSearch.toLowerCase())).length === 0 && (
                     <div style={{ textAlign: 'center', padding: '12px 0', color: G.muted, fontSize: 12 }}>Niciun contract găsit</div>
                   )}
                 </div>
@@ -595,8 +597,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
 function ModalLinii({ contract, profile, onClose }) {
   const [linii, setLinii] = useState([])
   const [loading, setLoading] = useState(true)
-  const [expandedIds, setExpandedIds] = useState({})
-  const [dsSearch, setDsSearch] = useState({})
+  const [dsSearchMap, setDsSearchMap] = useState({})
   const [newLinie, setNewLinie] = useState({ denumire: '', unitate_masura: '', cantitate: '', pret_unitar: '' })
   const [saving, setSaving] = useState(false)
   const isOwner = profile?.is_owner === true
@@ -951,10 +952,8 @@ export default function ContracteComerciale({ profile }) {
                     onEdit={c => { setEditContract(c); setModalOpen(true) }}
                     onViewLinii={c => setLiniiContract(c)}
                     downstreamList={childDs}
-                    expanded={!!expandedIds[c.id]}
-                    onToggleExpand={() => setExpandedIds(prev => ({...prev, [c.id]: !prev[c.id]}))}
-                    dsSearch={dsSearch[c.id] || ''}
-                    onDsSearch={v => setDsSearch(prev => ({...prev, [c.id]: v}))} />
+                    dsSearch={dsSearchMap[c.id] || ''}
+                    onDsSearch={v => setDsSearchMap(prev => ({...prev, [c.id]: v}))} />
                 )
               })}
             </div>
