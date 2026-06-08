@@ -82,6 +82,7 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
   const [searchEmp, setSearchEmp] = useState('')
 
   const [editAlocare, setEditAlocare] = useState(null)
+  const [editEchipa, setEditEchipa] = useState(null)
   const { show, Toast } = useToast()
 
   // Sync cu prop când proiectul se schimbă din context
@@ -182,9 +183,9 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         </div>
         {canWrite && (
           <button
-            onClick={() => setEditAlocare({ proiect_id: proiectId, data_start: dataStart, data_end: dataEnd })}
+            onClick={() => setEditEchipa({ proiect_id: proiectId, data_start: dataStart, data_end: dataEnd })}
             style={{...S.btn, background:G.executie, color:'#0D1117', display:'flex', alignItems:'center', gap:8}}
-          >＋ Adaugă persoană</button>
+          >＋ Adaugă echipă</button>
         )}
       </div>
 
@@ -288,7 +289,7 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
             {alocari.length === 0 ? 'Nicio persoană alocată în această tură' : 'Niciun rezultat pentru filtrele alese'}
           </div>
           {alocari.length === 0 && canWrite && (
-            <div style={{fontSize:13}}>Apasă „＋ Adaugă persoană" pentru a aloca primul angajat.</div>
+            <div style={{fontSize:13}}>Apasă „＋ Adaugă echipă" pentru a aloca primul angajat.</div>
           )}
         </div>
       ) : (
@@ -418,6 +419,19 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
           defaultEnd={dataEnd}
           onClose={() => setEditAlocare(null)}
           onSaved={() => { setEditAlocare(null); loadAlocari(); show('✓ Alocare salvată') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+
+      {editEchipa && (
+        <EchipaModal
+          proiecte={proiecte}
+          employees={employees}
+          defaultProiectId={proiectId}
+          defaultStart={dataStart}
+          defaultEnd={dataEnd}
+          onClose={() => setEditEchipa(null)}
+          onSaved={() => { setEditEchipa(null); loadAlocari(); show('✓ Echipă adăugată!') }}
           onError={e => show('Eroare: ' + e, 'err')}
         />
       )}
@@ -687,6 +701,7 @@ export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, c
   const [allUtilaje, setAllUtilaje] = useState([]) // pentru autocomplete
   const [loading, setLoading] = useState(true)
   const [editAlocare, setEditAlocare] = useState(null)
+  const [editBulk, setEditBulk] = useState(false)
   const [filterCat, setFilterCat] = useState('all')
   const { show, Toast } = useToast()
 
@@ -787,9 +802,9 @@ export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, c
         </div>
         <div style={{height:1, flex:1, background:G.border}} />
         {canWrite && (
-          <button onClick={() => setEditAlocare({ site_id: siteId, data_start: dataStart, data_end: dataEnd })}
+          <button onClick={() => setEditBulk(true)}
             style={{...S.btn, background:G.orange, color:'#fff', padding:'7px 14px', fontSize:12}}>
-            ＋ Adaugă utilaj
+            ＋ Adaugă utilaje
           </button>
         )}
       </div>
@@ -955,6 +970,19 @@ export function UtilajeTura({ proiectId, proiecte, siteId, dataStart, dataEnd, c
           utilajeSantier={utilaje}
           onClose={() => setEditAlocare(null)}
           onSaved={() => { setEditAlocare(null); loadUtilaje(); show('✓ Utilaj adăugat în tură') }}
+          onError={e => show('Eroare: ' + e, 'err')}
+        />
+      )}
+      {editBulk && (
+        <UtilajeBulkModal
+          siteId={siteId}
+          dataStart={dataStart}
+          dataEnd={dataEnd}
+          utilajeSantier={utilaje}
+          allUtilaje={allUtilaje}
+          employees={employees||[]}
+          onClose={() => setEditBulk(false)}
+          onSaved={() => { setEditBulk(false); loadUtilaje(); show('✓ Utilaje adăugate în tură!') }}
           onError={e => show('Eroare: ' + e, 'err')}
         />
       )}
@@ -1336,6 +1364,362 @@ function NavetaModal({ item, employees, masiniLista, onClose, onSaved, onError }
               {saving ? '⏳...' : '🚗 Adaugă naveta'}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL BULK ECHIPĂ — adaugi N oameni dintr-o dată
+// ══════════════════════════════════════════════════════════
+function EchipaModal({ proiecte, employees, defaultProiectId, defaultStart, defaultEnd, onClose, onSaved, onError }) {
+  const [proiectId, setProiectId] = useState(defaultProiectId || '')
+  const [echipa, setEchipa] = useState('Echipa 1')
+  const [echipaRol, setEchipaRol] = useState('')
+  const [dataStart, setDataStart] = useState(defaultStart || '')
+  const [dataEnd, setDataEnd] = useState(defaultEnd || '')
+  const [search, setSearch] = useState('')
+  const [selectati, setSelectati] = useState({}) // { emp_id: { meserie, masina_naveta } }
+  const [saving, setSaving] = useState(false)
+
+  const ECHIPE = ['Echipa 1','Echipa 2','Echipa 3','Echipa 4 Izolat','Paza / Mecanic / Sofer','TESA']
+  const ROLURI = [{v:'sudura',l:'🔥 Sudură'},{v:'terasamente',l:'⛏️ Terasamente'},{v:'lansare',l:'🚜 Lansare'},{v:'izolare',l:'🧰 Izolare'},{v:'tesa',l:'💼 TESA'},{v:'paza',l:'🛡 Pază'},{v:'mecanic',l:'🔧 Mecanic'},{v:'alt',l:'Alt rol'}]
+  const MESERII = [{v:'deservent_utilaje',l:'🚜 Deserv. utilaje'},{v:'sudor',l:'🔥 Sudor'},{v:'lacatus_mecanic',l:'🔧 Lăcătuș'},{v:'muncitor_izolator',l:'👷 Muncitor'},{v:'tesa',l:'💼 TESA'},{v:'sofer',l:'🚗 Șofer'},{v:'alt',l:'Alt'}]
+
+  const empFiltrati = useMemo(() => {
+    const s = search.toLowerCase()
+    const list = s.length > 1
+      ? employees.filter(e => e.name.toLowerCase().includes(s) || (e.functie||'').toLowerCase().includes(s))
+      : employees
+    return list.slice(0, 40)
+  }, [employees, search])
+
+  const toggleEmp = id => {
+    setSelectati(prev => {
+      if (prev[id]) { const n = {...prev}; delete n[id]; return n }
+      const emp = employees.find(e => e.id === id)
+      const mesAuto = MESERII.find(m => (emp?.functie||'').toLowerCase().includes(m.v.replace('_',' ')))?.v || 'muncitor_izolator'
+      return {...prev, [id]: { meserie: mesAuto, masina_naveta: '' }}
+    })
+  }
+
+  const nrSelectati = Object.keys(selectati).length
+
+  const handleSave = async () => {
+    if (!proiectId) return onError('Selectează proiectul')
+    if (nrSelectati === 0) return onError('Selectează cel puțin un angajat')
+    if (!dataStart || !dataEnd) return onError('Completează fereastra turei')
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const rows = Object.entries(selectati).map(([empId, cfg]) => ({
+      proiect_id:  Number(proiectId),
+      employee_id: Number(empId),
+      echipa:      echipa || null,
+      echipa_rol:  echipaRol || null,
+      meserie:     cfg.meserie || null,
+      masina_naveta: cfg.masina_naveta || null,
+      data_start:  dataStart,
+      data_end:    dataEnd,
+      alocat_de:   user?.id,
+      updated_at:  new Date().toISOString(),
+    }))
+    const { error } = await supabase.from('executie_alocari_personal').insert(rows)
+    setSaving(false)
+    if (error) onError(error.message)
+    else onSaved()
+  }
+
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.80)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:16
+    }}>
+      <div style={{
+        background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:680, maxHeight:'92vh', overflow:'hidden',
+        display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,.6)'
+      }}>
+        {/* Header */}
+        <div style={{padding:'18px 22px', borderBottom:`1px solid ${G.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0}}>
+          <div style={{fontSize:16, fontWeight:800, color:G.text}}>👥 Adaugă echipă în tură</div>
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer'}}>×</button>
+        </div>
+
+        {/* Config echipă */}
+        <div style={{padding:'14px 22px', borderBottom:`1px solid ${G.border}`, flexShrink:0}}>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:10}}>
+            <div>
+              <label style={S.lbl}>Proiect *</label>
+              <select value={proiectId} onChange={e => setProiectId(e.target.value)} style={S.input}>
+                <option value="">— Selectează —</option>
+                {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.lbl}>Echipă</label>
+              <select value={echipa} onChange={e => setEchipa(e.target.value)} style={S.input}>
+                {ECHIPE.map(e => <option key={e} value={e}>{e}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10}}>
+            <div>
+              <label style={S.lbl}>Rol echipă</label>
+              <select value={echipaRol} onChange={e => setEchipaRol(e.target.value)} style={S.input}>
+                <option value="">— Rol —</option>
+                {ROLURI.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.lbl}>Start tură *</label>
+              <input type="date" value={dataStart} onChange={e => setDataStart(e.target.value)} style={S.input} />
+            </div>
+            <div>
+              <label style={S.lbl}>End tură *</label>
+              <input type="date" value={dataEnd} onChange={e => setDataEnd(e.target.value)} style={S.input} />
+            </div>
+          </div>
+          {echipa && echipaRol && (
+            <div style={{marginTop:8, padding:'5px 10px', background:G.purple+'11', border:`1px solid ${G.purple}44`, borderRadius:6, fontSize:11, color:G.purple, display:'inline-block'}}>
+              👥 {echipa} · {ROLURI.find(r=>r.v===echipaRol)?.l}
+            </div>
+          )}
+        </div>
+
+        {/* Search + Lista angajati */}
+        <div style={{padding:'10px 22px 6px', flexShrink:0}}>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="🔍 Caută angajat după nume sau funcție..."
+            style={{...S.input, width:'100%'}} />
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:6}}>
+            <div style={{fontSize:11, color:G.muted}}>{employees.length} angajați · afișați {empFiltrati.length}</div>
+            {nrSelectati > 0 && (
+              <div style={{fontSize:11, color:G.green, fontWeight:700}}>✓ {nrSelectati} selectați</div>
+            )}
+          </div>
+        </div>
+
+        {/* Lista scrollabila */}
+        <div style={{flex:1, overflowY:'auto', padding:'0 22px'}}>
+          {empFiltrati.map(emp => {
+            const sel = selectati[emp.id]
+            return (
+              <div key={emp.id} style={{
+                display:'flex', alignItems:'center', gap:10, padding:'8px 10px',
+                marginBottom:4, borderRadius:8, cursor:'pointer',
+                background: sel ? G.green+'11' : G.bg,
+                border: `1px solid ${sel ? G.green+'44' : G.border}`,
+                transition:'all .1s'
+              }} onClick={() => toggleEmp(emp.id)}>
+                {/* Checkbox */}
+                <div style={{
+                  width:18, height:18, borderRadius:4, flexShrink:0,
+                  background: sel ? G.green : 'transparent',
+                  border: `2px solid ${sel ? G.green : G.border}`,
+                  display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, color:'#fff'
+                }}>{sel ? '✓' : ''}</div>
+
+                {/* Nume + functie */}
+                <div style={{flex:1, minWidth:0}}>
+                  <div style={{fontSize:13, fontWeight:600, color:G.text, lineHeight:1.2}}>{emp.name}</div>
+                  <div style={{fontSize:10, color:G.muted}}>{emp.functie || emp.department}</div>
+                </div>
+
+                {/* Meserie (doar daca selectat) */}
+                {sel && (
+                  <select value={sel.meserie} onClick={e => e.stopPropagation()}
+                    onChange={e => setSelectati(prev => ({...prev, [emp.id]: {...prev[emp.id], meserie: e.target.value}}))}
+                    style={{...S.input, width:140, fontSize:11, padding:'4px 6px'}}>
+                    {MESERII.map(m => <option key={m.v} value={m.v}>{m.l}</option>)}
+                  </select>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:'14px 22px', borderTop:`1px solid ${G.border}`, flexShrink:0, display:'flex', gap:10}}>
+          <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.text}}>
+            Anulează
+          </button>
+          <button onClick={handleSave} disabled={saving || nrSelectati === 0}
+            style={{...S.btn, flex:2,
+              background: nrSelectati > 0 ? G.executie : G.muted,
+              color: nrSelectati > 0 ? '#0D1117' : G.dim,
+              opacity: saving ? 0.6 : 1, cursor: nrSelectati === 0 ? 'not-allowed' : 'pointer',
+              fontWeight:700
+            }}>
+            {saving ? '⏳ Se salvează...' : nrSelectati > 0 ? `＋ Adaugă ${nrSelectati} ${nrSelectati === 1 ? 'persoană' : 'persoane'} în tură` : '＋ Adaugă echipă în tură'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL BULK UTILAJE — grid multi-select
+// ══════════════════════════════════════════════════════════
+function UtilajeBulkModal({ siteId, dataStart, dataEnd, utilajeSantier, allUtilaje, employees, onClose, onSaved, onError }) {
+  const [selectate, setSelectate] = useState({}) // { activ_id: { mecanic_id, justificare } }
+  const [search, setSearch] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [tab, setTab] = useState('santier') // 'santier' | 'altele'
+
+  const nrSelectate = Object.keys(selectate).length
+
+  const utilajeFiltrate = useMemo(() => {
+    const src = tab === 'santier' ? (utilajeSantier||[]) : (allUtilaje||[]).filter(u => !(utilajeSantier||[]).find(s => s.id===u.id))
+    if (!search.trim()) return src
+    const s = search.toLowerCase()
+    return src.filter(u => `${u.marca} ${u.model} ${u.nr_inmatriculare||''} ${u.cod_intern||''}`.toLowerCase().includes(s))
+  }, [tab, utilajeSantier, allUtilaje, search])
+
+  const toggleUtilaj = id => {
+    setSelectate(prev => {
+      if (prev[id]) { const n = {...prev}; delete n[id]; return n }
+      return {...prev, [id]: { mecanic_id: '', justificare: '' }}
+    })
+  }
+
+  const handleSave = async () => {
+    if (nrSelectate === 0) return onError('Selectează cel puțin un utilaj')
+    if (!dataStart || !dataEnd) return onError('Datele turei lipsesc')
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const results = await Promise.all(
+      Object.entries(selectate).map(([activId, cfg]) =>
+        supabase.from('logistica_alocari').insert({
+          active_id:   Number(activId),
+          site_id:     Number(siteId),
+          status:      'aprobata',
+          data_start:  dataStart,
+          data_end:    dataEnd,
+          justificare: cfg.justificare || 'Alocare tură',
+          mecanic_id:  cfg.mecanic_id ? Number(cfg.mecanic_id) : null,
+          solicitata_de: user?.id,
+          aprobata_de:   user?.id,
+          data_cerere:   new Date().toISOString(),
+          data_decizie:  new Date().toISOString(),
+        })
+      )
+    )
+    setSaving(false)
+    const eroare = results.find(r => r.error)
+    if (eroare) onError(eroare.error.message)
+    else onSaved()
+  }
+
+  const stareColor = u => {
+    if (u.deep_sleep) return G.purple
+    if (u.stare === 'Nefunctional') return G.red
+    return G.green
+  }
+
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.80)', zIndex:1010,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:16
+    }}>
+      <div style={{
+        background:G.surface, border:`1px solid ${G.border}`, borderRadius:14,
+        width:'100%', maxWidth:720, maxHeight:'92vh', overflow:'hidden',
+        display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,.6)'
+      }}>
+        {/* Header */}
+        <div style={{padding:'18px 22px', borderBottom:`1px solid ${G.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0}}>
+          <div style={{fontSize:16, fontWeight:800, color:G.text}}>🚜 Adaugă utilaje în tură</div>
+          <button onClick={onClose} style={{background:'transparent',border:'none',color:G.muted,fontSize:22,cursor:'pointer'}}>×</button>
+        </div>
+
+        {/* Tabs + Search */}
+        <div style={{padding:'10px 22px 6px', borderBottom:`1px solid ${G.border}`, flexShrink:0}}>
+          <div style={{display:'flex', gap:8, marginBottom:8}}>
+            {[{v:'santier',l:`🏗️ Pe șantier (${(utilajeSantier||[]).length})`},{v:'altele',l:'🔍 Alte utilaje'}].map(t => (
+              <button key={t.v} onClick={() => setTab(t.v)}
+                style={{...S.btn, padding:'5px 14px', fontSize:12,
+                  background: tab===t.v ? G.orange+'33' : G.border2,
+                  color: tab===t.v ? G.orange : G.muted,
+                  border:`1px solid ${tab===t.v ? G.orange : G.border}`}}>
+                {t.l}
+              </button>
+            ))}
+            {nrSelectate > 0 && (
+              <div style={{marginLeft:'auto', fontSize:12, color:G.green, fontWeight:700, display:'flex', alignItems:'center'}}>
+                ✓ {nrSelectate} selectate
+              </div>
+            )}
+          </div>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="🔍 Caută marcă, model, plăcuță, cod intern..."
+            style={{...S.input, width:'100%'}} />
+        </div>
+
+        {/* Grid utilaje */}
+        <div style={{flex:1, overflowY:'auto', padding:'14px 22px'}}>
+          {utilajeFiltrate.length === 0 ? (
+            <div style={{textAlign:'center', color:G.dim, padding:30, fontSize:12}}>
+              {tab === 'santier' ? '🏗️ Niciun utilaj înregistrat pe șantier' : '🔍 Niciun rezultat pentru căutare'}
+            </div>
+          ) : (
+            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))', gap:8}}>
+              {utilajeFiltrate.map(u => {
+                const sel = selectate[u.id]
+                const col = stareColor(u)
+                return (
+                  <div key={u.id}
+                    onClick={() => toggleUtilaj(u.id)}
+                    style={{
+                      padding:'10px 12px', borderRadius:9, cursor:'pointer',
+                      background: sel ? col+'22' : G.bg,
+                      border: `2px solid ${sel ? col : G.border}`,
+                      transition:'all .1s', position:'relative'
+                    }}>
+                    {sel && (
+                      <div style={{position:'absolute', top:6, right:8, width:18, height:18, borderRadius:9, background:col, display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, color:'#fff', fontWeight:700}}>✓</div>
+                    )}
+                    <div style={{fontSize:12, fontWeight:700, color:G.text, lineHeight:1.3, paddingRight:sel?20:0}}>
+                      {u.marca} {u.model}
+                    </div>
+                    <div style={{fontSize:10, color:G.muted, marginTop:2}}>
+                      {u.nr_inmatriculare || u.cod_intern || '—'}
+                    </div>
+                    <div style={{fontSize:9, color:col, marginTop:3, fontWeight:600}}>
+                      {u.deep_sleep ? '💤 Deep Sleep' : u.stare === 'Nefunctional' ? '🔴 Nefuncțional' : '✅ Funcțional'}
+                    </div>
+                    {sel && (
+                      <div onClick={e => e.stopPropagation()} style={{marginTop:6}}>
+                        <select value={sel.mecanic_id}
+                          onChange={e => setSelectate(prev => ({...prev, [u.id]: {...prev[u.id], mecanic_id: e.target.value}}))}
+                          style={{...S.input, fontSize:10, padding:'3px 5px', width:'100%'}}>
+                          <option value="">🔧 Fără mecanic</option>
+                          {(employees||[]).filter(e => (e.functie||'').toLowerCase().includes('mecanic')).map(e => (
+                            <option key={e.id} value={e.id}>{e.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:'14px 22px', borderTop:`1px solid ${G.border}`, flexShrink:0, display:'flex', gap:10}}>
+          <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.text}}>Anulează</button>
+          <button onClick={handleSave} disabled={saving || nrSelectate === 0}
+            style={{...S.btn, flex:2,
+              background: nrSelectate > 0 ? G.orange : G.muted,
+              color: nrSelectate > 0 ? '#fff' : G.dim,
+              opacity: saving ? 0.6 : 1, cursor: nrSelectate === 0 ? 'not-allowed' : 'pointer',
+              fontWeight:700
+            }}>
+            {saving ? '⏳ Se salvează...' : nrSelectate > 0 ? `🚜 Adaugă ${nrSelectate} utilaj${nrSelectate===1?'':'e'} în tură` : '🚜 Adaugă în tură'}
+          </button>
         </div>
       </div>
     </div>
