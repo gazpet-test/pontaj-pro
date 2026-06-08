@@ -263,7 +263,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         numar_contract: form.numar_contract || null,
         denumire: form.denumire.trim(),
         tip_contract: form.tip_contract,
-        rol_gazpet: form.rol_gazpet,
+        rol_gazpet: form.sens === 'plata' ? (form.rol_gazpet || 'prestator') : form.rol_gazpet,
         sens: form.sens,
         status: form.status,
         categorie: 'executie',
