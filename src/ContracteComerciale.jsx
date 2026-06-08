@@ -595,7 +595,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
 function ModalLinii({ contract, profile, onClose }) {
   const [linii, setLinii] = useState([])
   const [loading, setLoading] = useState(true)
-  const [expandedIds, setExpandedIds] = useState(new Set())
+  const [expandedIds, setExpandedIds] = useState({})
   const [dsSearch, setDsSearch] = useState({})
   const [newLinie, setNewLinie] = useState({ denumire: '', unitate_masura: '', cantitate: '', pret_unitar: '' })
   const [saving, setSaving] = useState(false)
@@ -951,8 +951,8 @@ export default function ContracteComerciale({ profile }) {
                     onEdit={c => { setEditContract(c); setModalOpen(true) }}
                     onViewLinii={c => setLiniiContract(c)}
                     downstreamList={childDs}
-                    expanded={expandedIds.has(c.id)}
-                    onToggleExpand={() => setExpandedIds(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })}
+                    expanded={!!expandedIds[c.id]}
+                    onToggleExpand={() => setExpandedIds(prev => ({...prev, [c.id]: !prev[c.id]}))}
                     dsSearch={dsSearch[c.id] || ''}
                     onDsSearch={v => setDsSearch(prev => ({...prev, [c.id]: v}))} />
                 )
