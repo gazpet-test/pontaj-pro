@@ -73,10 +73,10 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
   // Filtre
   const [proiectId, setProiectId] = useState(proiectIdProp ? String(proiectIdProp) : '')
   const [dataStart, setDataStart] = useState(() => {
-    const d = new Date(); d.setDate(1); return d.toISOString().slice(0,10)
+    const d = new Date(); return d.toISOString().slice(0,10)  // default: azi
   })
   const [dataEnd, setDataEnd] = useState(() => {
-    const d = new Date(); d.setDate(14); return d.toISOString().slice(0,10)
+    const d = new Date(); d.setDate(d.getDate() + 10); return d.toISOString().slice(0,10)  // default: azi + 10 zile
   })
   const [filterMeserie, setFilterMeserie] = useState('all')
   const [searchEmp, setSearchEmp] = useState('')
@@ -122,8 +122,8 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
       .from('v_executie_alocari')
       .select('*')
       .eq('proiect_id', proiectId)
-      .gte('data_start', dataStart)
-      .lte('data_end', dataEnd)
+      .lte('data_start', dataEnd)    // tura incepe inainte de end fereastra
+      .gte('data_end', dataStart)    // tura se termina dupa start fereastra
       .order('data_start')
     if (!error) setAlocari(data || [])
   }, [proiectId, dataStart, dataEnd])
@@ -215,6 +215,19 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         <div style={{paddingBottom:1}}>
           <div style={{fontSize:11, color:G.muted, marginBottom:4}}>
             {dataStart && dataEnd ? `${Math.max(0, Math.round((new Date(dataEnd)-new Date(dataStart))/(1000*60*60*24))+1)} zile` : ''}
+          <div style={{display:'flex', gap:4, marginTop:4}}>
+            {[
+              {l:'↺ Curentă', fn: () => { const s=new Date(); const e=new Date(); e.setDate(e.getDate()+10); setDataStart(s.toISOString().slice(0,10)); setDataEnd(e.toISOString().slice(0,10)) }},
+              {l:'08-17 Iun', fn: () => { setDataStart('2026-06-08'); setDataEnd('2026-06-17') }},
+              {l:'18-27 Iun', fn: () => { setDataStart('2026-06-18'); setDataEnd('2026-06-27') }},
+              {l:'Luna', fn: () => { const s=new Date(); s.setDate(1); const e=new Date(s.getFullYear(), s.getMonth()+1, 0); setDataStart(s.toISOString().slice(0,10)); setDataEnd(e.toISOString().slice(0,10)) }},
+            ].map(p => (
+              <button key={p.l} onClick={p.fn}
+                style={{padding:'2px 8px', fontSize:10, border:`1px solid ${G.border}`, borderRadius:4, cursor:'pointer', background:G.bg, color:G.muted, fontWeight:600}}>
+                {p.l}
+              </button>
+            ))}
+          </div>
           </div>
           <button onClick={loadAlocari} style={{...S.btn, background:G.executie, color:'#0D1117', padding:'9px 16px'}}>
             🔄 Actualizează
