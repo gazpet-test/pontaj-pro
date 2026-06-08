@@ -4,7 +4,7 @@
 // Fundație BD: contracte_terti extins + contracte_linii + v_contracte_cu_linii
 // ===========================================================================
 
-import { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 
 const G = {
@@ -72,12 +72,11 @@ function Badge({ label, color, emoji }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[] }) {
+function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
   const isDownstream = c.sens === 'plata'
-  const [localSearch, setLocalSearch] = useState('')
 
 
   return (
@@ -121,9 +120,6 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[] }) {
             )}
           </div>
 
-          <div style={{ fontSize: 11, background: 'yellow', color: 'black', padding: '2px 6px', marginBottom: 4, borderRadius: 4 }}>
-            id={c.id} sens={c.sens} ds=[{downstreamList.map(d=>d.id).join(',')}] nr_ds={c.nr_downstream}
-          </div>
           <div style={{ fontSize: 13, color: G.text, fontWeight: 600, marginBottom: 4, lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
             {c.denumire}
           </div>
@@ -141,60 +137,7 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii, downstreamList=[] }) {
             )}
           </div>
 
-          {/* Downstream: afisare directa */}
-          {!isDownstream && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{
-                padding: '5px 10px', borderRadius: 6,
-                background: G.purple + '11', border: `1px solid ${G.purple}33`,
-                fontSize: 11, color: G.purple, fontWeight: 600,
-              }}>
-                📎 {c.nr_downstream || downstreamList.length} contracte cu prestatori
-                {c.valoare_downstream_total > 0 && ` · ${fmtRON(c.valoare_downstream_total)}`}
-              </div>
-              {downstreamList.length > 0 && (
-                <div style={{ marginTop: 8, padding: '10px 12px', background: G.bg, border: `1px solid ${G.purple}44`, borderRadius: 8 }}>
-                  {/* Search downstream */}
-                  {downstreamList.length > 3 && (
-                    <input value={localSearch} onChange={e => setLocalSearch(e.target.value)}
-                      placeholder="🔍 Caută în contractele cu prestatori..."
-                      style={{ width: '100%', padding: '6px 10px', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 6, color: G.text, fontSize: 12, marginBottom: 8, boxSizing: 'border-box' }} />
-                  )}
-                  {/* Lista downstream filtrata */}
-                  {downstreamList
-                    .filter(d => !localSearch || (d.denumire || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(localSearch.toLowerCase()))
-                    .map(d => {
-                      const dSt = STATUS_META[d.status] || STATUS_META.draft
-                      const dTip = TIP_META[d.tip_contract]
-                      return (
-                        <div key={d.id} style={{ padding: '8px 10px', marginBottom: 6, borderRadius: 6, background: G.surface, border: `1px solid ${G.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: 11, fontWeight: 700, color: G.text, fontFamily: 'monospace' }}>Nr. {d.numar_contract || '—'}</span>
-                              <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dSt.color + '22', color: dSt.color, fontWeight: 700 }}>{dSt.label}</span>
-                              {dTip && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dTip.color + '22', color: dTip.color }}>{dTip.emoji} {dTip.label}</span>}
-                            </div>
-                            <div style={{ fontSize: 12, color: G.text, marginBottom: 2 }}>{d.denumire}</div>
-                            <div style={{ fontSize: 11, color: G.muted }}>{d.partener_text || d.beneficiar_name || '—'}{d.site_qr && ` · 📍 ${d.site_qr}`}</div>
-                          </div>
-                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>↑ {fmtRON(d.valoare_lei)}</div>
-                            <div style={{ display: 'flex', gap: 4, marginTop: 4, justifyContent: 'flex-end' }}>
-                              <button onClick={() => onViewLinii(d)} style={{ padding: '3px 8px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📋 Linii ({d.nr_linii || 0})</button>
-                              {isOwner && <button onClick={() => onEdit(d)} style={{ padding: '3px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>✏️</button>}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })
-                  }
-                  {downstreamList.filter(d => !localSearch || (d.denumire || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.numar_contract || '').toLowerCase().includes(localSearch.toLowerCase()) || (d.partener_text || '').toLowerCase().includes(localSearch.toLowerCase())).length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '12px 0', color: G.muted, fontSize: 12 }}>Niciun contract găsit</div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+
         </div>
 
         {/* Valoare + acțiuni */}
@@ -812,15 +755,6 @@ export default function ContracteComerciale({ profile }) {
 
   useEffect(() => { loadAll() }, [])
 
-  // Map downstream per upstream - calculat din state, zero fetch async
-  const downstreamMap = useMemo(() => {
-    const map = {}
-    contracte.filter(d => d.sens === 'plata' && d.contract_parinte_id).forEach(d => {
-      if (!map[d.contract_parinte_id]) map[d.contract_parinte_id] = []
-      map[d.contract_parinte_id].push(d)
-    })
-    return map
-  }, [contracte])
 
   async function loadAll() {
     setLoading(true)
@@ -952,16 +886,49 @@ export default function ContracteComerciale({ profile }) {
                   🔼 Upstream — Gazpet Execută
                 </div>
                 <div style={{ fontSize: 11, color: G.muted }}>({upstream.length} contracte · {fmtRON(upstream.reduce((s, c) => s + Number(c.valoare_lei || 0), 0))})</div>
-                <div style={{ fontSize: 11, color: 'red', fontWeight: 700 }}>
-                  DBG: {contracte.filter(d=>d.sens==='plata').length} downstream in state | map keys: {Object.keys(downstreamMap).join(',')} | upstream ids: {upstream.map(c=>c.id).join(',')}
-                </div>
+
               </div>
               {upstream.map(c => {
+                const childDs = contracte.filter(d => d.sens === 'plata' && String(d.contract_parinte_id) === String(c.id))
                 return (
-                  <ContractCard key={c.id} c={c} isOwner={isOwner}
-                    onEdit={c => { setEditContract(c); setModalOpen(true) }}
-                    onViewLinii={c => setLiniiContract(c)}
-                    downstreamList={downstreamMap[c.id] || []} />
+                  <React.Fragment key={c.id}>
+                    <ContractCard c={c} isOwner={isOwner}
+                      onEdit={c => { setEditContract(c); setModalOpen(true) }}
+                      onViewLinii={c => setLiniiContract(c)} />
+                    {childDs.length > 0 && (
+                      <div style={{ marginLeft: 24, marginBottom: 8 }}>
+                        {childDs.map(d => {
+                          const dSt = STATUS_META[d.status] || STATUS_META.draft
+                          const dTip = TIP_META[d.tip_contract]
+                          return (
+                            <div key={d.id} style={{
+                              padding: '10px 14px', marginBottom: 4, borderRadius: 8,
+                              background: G.surface, border: `1px solid ${G.purple}44`,
+                              borderLeft: `3px solid ${G.purple}`, display: 'flex', alignItems: 'center', gap: 12,
+                            }}>
+                              <span style={{ fontSize: 16, opacity: 0.6 }}>↳</span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: G.text, fontFamily: 'monospace' }}>Nr. {d.numar_contract || '—'}</span>
+                                  <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dSt.color + '22', color: dSt.color, fontWeight: 700 }}>{dSt.label}</span>
+                                  {dTip && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dTip.color + '22', color: dTip.color }}>{dTip.emoji} {dTip.label}</span>}
+                                </div>
+                                <div style={{ fontSize: 12, color: G.text, wordBreak: 'break-word' }}>{d.denumire}</div>
+                                <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{d.partener_text || d.beneficiar_name}{d.site_qr && ` · 📍 ${d.site_qr}`}</div>
+                              </div>
+                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>↑ {fmtRON(d.valoare_lei)}</div>
+                                <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                                  <button onClick={() => setLiniiContract(d)} style={{ padding: '3px 8px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📋 Linii</button>
+                                  {isOwner && <button onClick={() => { setEditContract(d); setModalOpen(true) }} style={{ padding: '3px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>✏️</button>}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </React.Fragment>
                 )
               })}
             </div>
