@@ -945,7 +945,7 @@ export default function ContracteComerciale({ profile }) {
                 <div style={{ fontSize: 11, color: G.muted }}>({upstream.length} contracte · {fmtRON(upstream.reduce((s, c) => s + Number(c.valoare_lei || 0), 0))})</div>
               </div>
               {upstream.map(c => {
-                const childDs = contracte.filter(d => d.sens === 'plata' && d.contract_parinte_id === c.id)
+                const childDs = contracte.filter(d => d.sens === 'plata' && Number(d.contract_parinte_id) === Number(c.id))
                 return (
                   <ContractCard key={c.id} c={c} isOwner={isOwner}
                     onEdit={c => { setEditContract(c); setModalOpen(true) }}
