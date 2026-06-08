@@ -949,6 +949,9 @@ export default function ContracteComerciale({ profile }) {
                   🔼 Upstream — Gazpet Execută
                 </div>
                 <div style={{ fontSize: 11, color: G.muted }}>({upstream.length} contracte · {fmtRON(upstream.reduce((s, c) => s + Number(c.valoare_lei || 0), 0))})</div>
+                <div style={{ fontSize: 11, color: 'red', fontWeight: 700 }}>
+                  DBG: {contracte.filter(d=>d.sens==='plata').length} downstream in state | map keys: {Object.keys(downstreamMap).join(',')} | upstream ids: {upstream.map(c=>c.id).join(',')}
+                </div>
               </div>
               {upstream.map(c => {
                 return (
