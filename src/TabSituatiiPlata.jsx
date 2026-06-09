@@ -396,7 +396,8 @@ function EmiteFacturaModal({ sl, proiectDate, onClose, onSuccess, showToast }) {
 
       // 3. INSERT factură
       const payload = {
-        serie, nr: parseInt(nrFinal), nr_complet,
+        // nr_complet + an sunt GENERATED ALWAYS in BD → nu se includ in payload
+        serie, nr: parseInt(nrFinal),
         data: dataFact,
         beneficiar_id: benef?.id ? parseInt(benef.id) : null,
         beneficiar_nume: benef?.nume || proiectDate?.beneficiar || '',
@@ -425,7 +426,7 @@ function EmiteFacturaModal({ sl, proiectDate, onClose, onSuccess, showToast }) {
       const { error: errSL } = await supabase.from('executie_situatii_plata')
         .update({
           status: 'facturata',
-          nr_factura: nr_complet,
+          nr_factura: `${serie}-${nrFinal}`,
           data_factura: dataFact,
           updated_at: new Date().toISOString(),
         }).eq('id', sl.id)
@@ -991,13 +992,13 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
 
             {/* XLS Upload */}
             <div style={{marginBottom:10}}>
-              <label style={S.label}>📊 XLS Borderou Ajustat</label>
+              <label style={S.label}>📊 XLS Centralizator / Borderou Ajustat</label>
               <div style={{display:'flex', gap:8, alignItems:'center'}}>
                 <button onClick={()=>xlsRef.current?.click()} style={{
                   padding:'8px 14px', background:G.border2, border:`1px dashed ${G.border}`,
                   borderRadius:7, color:G.muted, cursor:'pointer', fontSize:12, flexShrink:0,
                 }}>
-                  {xlsFile ? `✅ ${xlsFile.name}` : '📂 Alege XLS...'}
+                  {xlsFile ? `✅ ${xlsFile.name}` : '📂 Centralizator sau Borderou (.xlsx/.xls)...'}
                 </button>
                 {xlsFile && !xlsResult && !xlsParsing && (
                   <button onClick={()=>handleXlsParse(xlsFile)} style={{
