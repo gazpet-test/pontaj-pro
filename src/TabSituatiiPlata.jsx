@@ -701,7 +701,7 @@ function AAModal({ sl, onClose, onSaved, showToast }) {
 // ══════════════════════════════════════════════════════════
 // MODAL ADAUGARE / EDITARE SL (extins cu upload XLS + PDF)
 // ══════════════════════════════════════════════════════════
-function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
+function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) {
   const isNew = !item?.id
   const [form, setForm] = useState({
     nr_situatie:        item?.nr_situatie || '',
@@ -1567,6 +1567,7 @@ export default function TabSituatiiPlata({ proiectId: proiectIdProp }) {
         <SLModal
           item={editItem?.id ? editItem : null}
           proiectId={parseInt(proiectId)}
+          proiectDate={proiectDate}
           onClose={()=>setEditItem(null)}
           onSaved={()=>{ setEditItem(null); loadLista() }}
           showToast={showToast}
