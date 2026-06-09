@@ -771,7 +771,7 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
         valoare_baza_lei:        valBaza,
         coeficient_ajustare:     parseFloat(form.coeficient_ajustare) || 1,
         valoare_ajustare_lei:    valAj,
-        valoare_ajustata_lei:    valBaza ? valBaza + valAj : null,
+        // valoare_ajustata_lei e GENERATED ALWAYS in BD — nu se include in payload
         status:                  statusAuto,
         nr_factura:              form.nr_factura.trim() || null,
         data_factura:            form.data_factura || null,
