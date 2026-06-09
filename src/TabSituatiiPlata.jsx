@@ -798,16 +798,16 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
     if (!form.nr_situatie.trim()) { showToast('Numărul situației este obligatoriu', 'err'); return }
     setSaving(true)
     try {
-      const xlsPath = xlsFile ? `sl_${proiectId}/${form.nr_situatie.toLowerCase()}_borderou.xls` : item?.centralizator_xls_path
-      const pdfPath = pdfFile ? `sl_${proiectId}/${form.nr_situatie.toLowerCase()}_certificat.pdf` : item?.certificat_pdf_path
+      const slNrClean = form.nr_situatie.toLowerCase().replace(/[^a-z0-9]/g, '_')
+      const xlsPath = xlsFile ? `sl_${proiectId}/${slNrClean}_borderou.xls` : item?.centralizator_xls_path
+      const pdfPath = pdfFile ? `sl_${proiectId}/${slNrClean}_certificat.pdf` : item?.certificat_pdf_path
 
-      // Upload XLS dacă există
+      // Upload XLS/PDF (silentios la eroare — parsarea e client-side, storage e doar arhivare)
       if (xlsFile && xlsPath) {
-        await supabase.storage.from('executie-borderouri').upload(xlsPath, xlsFile, { upsert: true })
+        try { await supabase.storage.from('executie-borderouri').upload(xlsPath, xlsFile, { upsert: true, contentType: xlsFile.type || 'application/vnd.ms-excel' }) } catch(e) { console.warn('Upload XLS skip:', e.message) }
       }
-      // Upload PDF dacă există
       if (pdfFile && pdfPath) {
-        await supabase.storage.from('executie-borderouri').upload(pdfPath, pdfFile, { upsert: true })
+        try { await supabase.storage.from('executie-borderouri').upload(pdfPath, pdfFile, { upsert: true, contentType: pdfFile.type || 'application/pdf' }) } catch(e) { console.warn('Upload PDF skip:', e.message) }
       }
 
       const valBaza = xlsResult?.totalBaza || (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null)
@@ -854,20 +854,23 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
         updated_at:              new Date().toISOString(),
       }
 
-      let error
+      let slIdSaved = item?.id
       if (isNew) {
-        ;({ error } = await supabase.from('executie_situatii_plata').insert(payload))
+        const { data: insertData, error } = await supabase
+          .from('executie_situatii_plata').insert(payload).select('id').single()
+        if (error) throw error
+        slIdSaved = insertData?.id
       } else {
-        ;({ error } = await supabase.from('executie_situatii_plata').update(payload).eq('id', item.id))
+        const { error } = await supabase.from('executie_situatii_plata').update(payload).eq('id', item.id)
+        if (error) throw error
       }
-      if (error) throw error
 
       // Salvează linii din XLS în BD — suportă centralizator multi-linii (Prunisor) + borderou simplu (Caldararu)
-      if (xlsResult && isNew) {
-        const slData = await supabase.from('executie_situatii_plata')
-          .select('id').eq('proiect_id', proiectId).eq('nr_situatie', payload.nr_situatie).single()
-        if (slData.data) {
-          const slId = slData.data.id
+      if (xlsResult && slIdSaved) {
+        // Ștergem linii existente la update (re-parsare XLS)
+        await supabase.from('executie_situatii_plata_linii').delete().eq('sl_id', slIdSaved)
+        {
+          const slId = slIdSaved
           const nr = proiectDate?.nr_contract ? ` conf. contract nr. ${proiectDate.nr_contract}` : ''
           const lunaStr = xlsResult.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
           const bdLinii = []
