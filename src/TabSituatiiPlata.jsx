@@ -224,7 +224,7 @@ function parseBorderouAjustatXLS(file) {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target.result)
-        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:false, raw:false })
+        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:true, raw:true })
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
 
