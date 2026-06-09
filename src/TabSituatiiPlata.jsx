@@ -13,7 +13,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useNavigate } from 'react-router-dom'
-import * as XLSX from 'xlsx'
+import * as XLSX from 'xlsx-js-style'
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
