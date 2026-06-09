@@ -228,18 +228,16 @@ function parseBorderouAjustatXLS(file) {
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
 
-        // Detectare tip: centralizator (>5 coloane cu valori) vs borderou simplu
-        // parseRoNum prinde și celulele formatate ca text în format românesc (1.234.567,89)
-        const colsWithValues = new Set()
-        for (const row of rows) {
-          row.forEach((c,j) => {
-            const v = parseRoNum(c)
-            if (v > 100) colsWithValues.add(j)
-          })
-        }
-        const isCentralizator = colsWithValues.size > 4
-
-        const result = isCentralizator ? _parseCentralizator(rows) : _parseBorderouSimple(rows)
+        // Detectare tip: încerc ambele parsere și aleg cel cu mai multe linii
+        // _parseCentralizator returnează linii[] dacă găsește rândul TOTAL cu 2+ coloane
+        // _parseBorderouSimple returnează 1-2 linii din totaluri jos
+        const resultCentralizator = _parseCentralizator(rows)
+        const resultBorderoou = _parseBorderouSimple(rows)
+        
+        // Alegem centralizatorul dacă a găsit ≥ 2 linii de date separate
+        const isCentralizator = resultCentralizator.linii && resultCentralizator.linii.length >= 2
+        const result = isCentralizator ? resultCentralizator : resultBorderoou
+        console.log('[XLS Parser] tip:', isCentralizator ? 'CENTRALIZATOR' : 'BORDEROU', '| linii:', result.linii?.length || 0, '| totalBaza:', result.totalBaza)
         resolve(result)
       } catch(e) {
         reject(e)
