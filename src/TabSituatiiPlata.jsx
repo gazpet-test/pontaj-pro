@@ -194,7 +194,7 @@ function _parseCentralizator(rows) {
   const linii = []
 
   for (const row of rows) {
-    const denumire = String(row[0]||'').replace(/\n/g,' ').replace(/\s+/g,' ').trim()
+    const denumire = String(row[0]||row[1]||'').replace(/\n/g,' ').replace(/\s+/g,' ').trim()
     if (denumire.length < 15 || SKIP.test(denumire)) continue
     if (valBazaCol < 0) continue
 
