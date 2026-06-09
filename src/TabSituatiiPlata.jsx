@@ -158,35 +158,41 @@ function _parseCentralizator(rows) {
     if (!contractNr) { const m=txt.match(/contract\s+nr\.?\s*([\d\/\.]+)/i); if(m) contractNr=m[1] }
   }
 
-  // Pas 2: detectare coloane din rândul TOTAL
-  for (let i=rows.length-1; i>=0; i--) {
-    const row = rows[i]
-    const firstCell = String(row[0]||row[1]||'').trim().toLowerCase()
-    if (firstCell==='total' || firstCell==='total:') {
-      const numCols = []
-      for (let j=0; j<row.length; j++) {
-        const v = parseRoNum(row[j])
-        if (v > 1000) numCols.push({j, v})
-      }
-      if (numCols.length >= 1) { valBazaCol=numCols[0].j; totalBaza=numCols[0].v }
-      if (numCols.length >= 2) { ajustCol=numCols[1].j; totalAjustare=numCols[1].v }
+  // Pas 2: detectare coloane din rândul header TGZ (conține etichetele 'a','b','g')
+  // Structura standard TGZ: col 'a'=val.estimata (baza), col 'b'=ajustare ICC, col 'g'=total plata
+  for (const row of rows) {
+    const cells = row.map(c => String(c||'').trim().toLowerCase())
+    if (cells.includes('a') && cells.includes('b') && cells.includes('g')) {
+      valBazaCol = cells.indexOf('a')   // col 'a' = valoare baza de facturat
+      ajustCol   = cells.indexOf('b')   // col 'b' = ajustare ICC
       break
     }
   }
-
-  // Fallback dacă nu am găsit rândul TOTAL explicit
+  // Fallback: rândul TOTAL pentru totaluri (dacă nu există header cu etichete)
   if (valBazaCol < 0) {
-    // Caut coloana cu valorile cele mai mari (> 10000)
-    const colSums = {}
-    for (const row of rows) {
-      for (let j=0; j<row.length; j++) {
-        const v = parseRoNum(row[j])
-        if (v > 1000) colSums[j] = (colSums[j]||0) + v
+    for (let i=rows.length-1; i>=0; i--) {
+      const row = rows[i]
+      const fc = String(row[0]||row[1]||'').trim().toLowerCase()
+      if (fc==='total' || fc==='total:') {
+        const nums = row.map((c,j)=>({j, v:parseRoNum(c)})).filter(x=>x.v>1000)
+        if (nums.length>=1) valBazaCol=nums[0].j
+        if (nums.length>=2) ajustCol=nums[1].j
+        break
       }
     }
-    const sorted = Object.entries(colSums).sort((a,b)=>b[1]-a[1])
-    if (sorted.length >= 1) valBazaCol = parseInt(sorted[0][0])
-    if (sorted.length >= 2) ajustCol = parseInt(sorted[1][0])
+  }
+  // Fallback final: structura standard TGZ col 2=baza, col 3=ajustare
+  if (valBazaCol < 0) { valBazaCol = 2; ajustCol = 3 }
+  
+  // Calculează totaluri din rândul TOTAL
+  for (let i=rows.length-1; i>=0; i--) {
+    const row = rows[i]
+    const fc = String(row[0]||row[1]||'').trim().toLowerCase()
+    if (fc.startsWith('total')) {
+      totalBaza = parseRoNum(row[valBazaCol]) || 0
+      if (ajustCol >= 0) totalAjustare = parseRoNum(row[ajustCol]) || 0
+      break
+    }
   }
 
   // Pas 3: extrag rânduri de date
@@ -224,7 +230,7 @@ function parseBorderouAjustatXLS(file) {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target.result)
-        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:true, raw:true })
+        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:true, raw:true, cellFormula:false })
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
 
