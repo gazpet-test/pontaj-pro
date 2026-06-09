@@ -93,88 +93,143 @@ function fileToBase64(file) {
 }
 
 // ══════════════════════════════════════════════════════════
-// HELPER: Parsare XLS borderou ajustat (client-side, SheetJS)
-// Extrage: totalBaza, totalAjustare, coeficient, nrSL, lunaAn, contractNr
+// HELPER: Parsare XLS borderou/centralizator (client-side, SheetJS)
+// Detectează automat:
+//   - BORDEROU simplu (3-4 cols, Caldararu): total + ajustare ICC → 1-2 articole
+//   - CENTRALIZATOR multi-linii (Prunisor): rânduri C+M+DS+ajustări → N articole
 // ══════════════════════════════════════════════════════════
+
+// Borderou simplu Caldararu: COD DEVIZ | DENUMIRE DEVIZ | VALOARE DEVIZ + totaluri jos
+function _parseBorderouSimple(rows) {
+  let nrSL = null, lunaAn = null, contractNr = null
+  let totalBaza = null, totalAjustare = null, coeficient = null
+
+  for (const row of rows) {
+    const rowText = row.map(c => String(c||'')).join(' ').toLowerCase()
+    if (!nrSL) { const m = rowText.match(/situati[ae]\s+de\s+plat[aă]\s+nr\.?\s*(\d+)/i); if(m) nrSL=m[1] }
+    if (!lunaAn) { const m = rowText.match(/luna\s+([a-zăâîșț]+\s+\d{4})/i); if(m) lunaAn=m[1].toUpperCase() }
+    if (!contractNr) { const m = rowText.match(/contract\s+nr\.?\s*([\d\/\.]+)/i); if(m) contractNr=m[1] }
+    if (!totalBaza && (rowText.includes('total general') || rowText.includes('total valoare conform'))) {
+      const nums = row.filter(c => typeof c==='number' && c > 1000)
+      if (nums.length) totalBaza = nums[nums.length-1]
+    }
+    if (!totalAjustare && rowText.includes('total') && rowText.includes('ajustar')) {
+      const nums = row.filter(c => typeof c==='number' && c > 0)
+      if (nums.length) totalAjustare = nums[nums.length-1]
+    }
+    if (!coeficient) {
+      const m = rowText.match(/=\s*1\.(0\d{3,})\b/)
+      if (m) { const c=parseFloat('1.'+m[1]); if(c>1&&c<1.5) coeficient=c }
+    }
+  }
+  if (!totalBaza) {
+    const allNums = rows.flat().filter(c=>typeof c==='number'&&c>10000)
+    if (allNums.length) totalBaza = Math.max(...allNums)
+  }
+  // Borderou simplu → 1 linie baza + 1 linie ajustare (dacă există)
+  const linii = []
+  if (totalBaza) linii.push({ denumire:'', valoare:totalBaza, ajustare:0, tip:'lucr_cm' })
+  if (totalAjustare) linii.push({ denumire:'', valoare:totalAjustare, ajustare:0, tip:'ajustare', coeficient })
+  return { nrSL, lunaAn, contractNr, totalBaza, totalAjustare, coeficient, linii, tip:'borderou' }
+}
+
+// Centralizator Prunisor: rânduri cu denumire + col_baza + col_ajustare
+function _parseCentralizator(rows) {
+  let nrSL=null, lunaAn=null, contractNr=null
+  let valBazaCol=-1, ajustCol=-1
+  let totalBaza=0, totalAjustare=0
+
+  // Pas 1: metadate din header
+  for (const row of rows) {
+    const txt = row.map(c=>String(c||'')).join(' ').toLowerCase()
+    if (!nrSL) { const m=txt.match(/sit(?:uatie)?\s*(?:de\s+lucrar[i]?)?\s*nr\.?\s*(\d+)/i); if(m) nrSL=m[1] }
+    if (!lunaAn) { const m=txt.match(/luna\s+([a-z\u0100-\u017F]+\s+\d{4})/i); if(m) lunaAn=m[1].toUpperCase() }
+    if (!contractNr) { const m=txt.match(/contract\s+nr\.?\s*([\d\/\.]+)/i); if(m) contractNr=m[1] }
+  }
+
+  // Pas 2: detectare coloane din rândul TOTAL
+  for (let i=rows.length-1; i>=0; i--) {
+    const row = rows[i]
+    const firstCell = String(row[0]||row[1]||'').trim().toLowerCase()
+    if (firstCell==='total' || firstCell==='total:') {
+      const numCols = []
+      for (let j=0; j<row.length; j++) {
+        const v = typeof row[j]==='number' ? row[j] : parseFloat(String(row[j]).replace(/[.,\s]/g,'').replace(',','.'))
+        if (!isNaN(v) && v > 1000) numCols.push({j, v})
+      }
+      if (numCols.length >= 1) { valBazaCol=numCols[0].j; totalBaza=numCols[0].v }
+      if (numCols.length >= 2) { ajustCol=numCols[1].j; totalAjustare=numCols[1].v }
+      break
+    }
+  }
+
+  // Fallback dacă nu am găsit rândul TOTAL explicit
+  if (valBazaCol < 0) {
+    // Caut coloana cu valorile cele mai mari (> 10000)
+    const colSums = {}
+    for (const row of rows) {
+      for (let j=0; j<row.length; j++) {
+        const v = typeof row[j]==='number' ? row[j] : 0
+        if (v > 1000) colSums[j] = (colSums[j]||0) + v
+      }
+    }
+    const sorted = Object.entries(colSums).sort((a,b)=>b[1]-a[1])
+    if (sorted.length >= 1) valBazaCol = parseInt(sorted[0][0])
+    if (sorted.length >= 2) ajustCol = parseInt(sorted[1][0])
+  }
+
+  // Pas 3: extrag rânduri de date
+  const SKIP = /^(total|recapitu|obiect|organizare|situa|nr\.|cod\s|val|sume|rest|realizari|plati|orice|a\.|b\.|1\.|2\.|luna|beneficiar|investitia|antreprenor|executant|constructor)/i
+  const linii = []
+
+  for (const row of rows) {
+    const denumire = String(row[0]||'').replace(/\n/g,' ').replace(/\s+/g,' ').trim()
+    if (denumire.length < 15 || SKIP.test(denumire)) continue
+    if (valBazaCol < 0) continue
+
+    const valBaza = typeof row[valBazaCol]==='number' ? row[valBazaCol]
+      : parseFloat(String(row[valBazaCol]||'').replace(/\s/g,'').replace(',','.')) || 0
+    const ajust = ajustCol >= 0
+      ? (typeof row[ajustCol]==='number' ? row[ajustCol]
+         : parseFloat(String(row[ajustCol]||'').replace(/\s/g,'').replace(',','.')) || 0)
+      : 0
+
+    if (valBaza > 100) {
+      linii.push({
+        denumire: denumire.slice(0, 200),
+        valoare: Math.round(valBaza * 100) / 100,
+        ajustare: Math.round(ajust * 100) / 100,
+        tip: 'lucr_cm',
+      })
+    }
+  }
+
+  // Fallback total dacă nu am prins rândul TOTAL
+  if (totalBaza === 0) totalBaza = linii.reduce((s,l)=>s+l.valoare,0)
+  if (totalAjustare === 0) totalAjustare = linii.reduce((s,l)=>s+l.ajustare,0)
+
+  return { nrSL, lunaAn, contractNr, totalBaza, totalAjustare, coeficient:null, linii, tip:'centralizator' }
+}
+
 function parseBorderouAjustatXLS(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target.result)
-        const wb = XLSX.read(data, { type:'array', cellText:true, cellNF:true })
+        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:true, raw:true })
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
 
-        let nrSL = null, lunaAn = null, contractNr = null
-        let totalBaza = null, totalAjustare = null, coeficient = null
-        let titluProiect = null
-
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i]
-          // Concatenare text din toate celulele pentru căutare
-          const rowText = row.map(c => String(c||'')).join(' ').toLowerCase()
-          const rowTextOrig = row.map(c => String(c||'')).join(' ')
-
-          // Nr SL
-          if (!nrSL) {
-            const m = rowText.match(/situati[ae]\s+de\s+plat[aă]\s+nr\.?\s*(\d+)/i)
-            if (m) nrSL = m[1]
-          }
-
-          // Luna și an
-          if (!lunaAn) {
-            const m = rowText.match(/(?:luna\s+)?([a-zăâîșț]+\s+\d{4})/i)
-            if (m) lunaAn = m[1].toUpperCase()
-          }
-
-          // Contract
-          if (!contractNr) {
-            const m = rowText.match(/contract\s+nr\.?\s*([\d\/\.]+)/i)
-            if (m) contractNr = m[1]
-          }
-
-          // Titlu proiect (prima linie cu text lung)
-          if (!titluProiect && rowTextOrig.length > 30 && !rowText.includes('borderou') && !rowText.includes('contract')) {
-            const textCelule = row.filter(c => String(c||'').length > 20).map(c => String(c))
-            if (textCelule.length > 0) titluProiect = textCelule[0]
-          }
-
-          // Total general lei fara TVA (valoarea baza)
-          if (!totalBaza && (rowText.includes('total general') || rowText.includes('total valoare conform contract'))) {
-            const nums = row.filter(c => typeof c === 'number' && c > 1000)
-            if (nums.length > 0) totalBaza = nums[nums.length - 1]
-          }
-
-          // Total valoarea ajustare
-          if (!totalAjustare && rowText.includes('total') && rowText.includes('ajustar')) {
-            const nums = row.filter(c => typeof c === 'number' && c > 0)
-            if (nums.length > 0) totalAjustare = nums[nums.length - 1]
-          }
-
-          // Coeficient: linie cu formula "= X.XXXX" sau număr între 1.001 și 1.500
-          if (!coeficient) {
-            const m = rowText.match(/=\s*1\.(0[0-9]{3,})\b/)
-            if (m) {
-              const c = parseFloat('1.' + m[1])
-              if (c > 1 && c < 1.5) coeficient = c
-            } else {
-              // Caută număr izolat între 1.001 și 1.500 în rândul cu "coeficient" sau formula
-              if (rowText.includes('coeficient') || rowText.includes('formula') || rowText.includes('ajustare')) {
-                const nums = row.filter(c => typeof c === 'number' && c > 1.001 && c < 1.500)
-                if (nums.length > 0) coeficient = nums[0]
-              }
-            }
-          }
+        // Detectare tip: centralizator (>5 coloane cu valori) vs borderou simplu
+        const colsWithValues = new Set()
+        for (const row of rows) {
+          row.forEach((c,j) => { if (typeof c==='number' && c>100) colsWithValues.add(j) })
         }
+        const isCentralizator = colsWithValues.size > 4
 
-        // Fallback: dacă totalBaza nu s-a găsit, ia cel mai mare număr din fișier
-        if (!totalBaza) {
-          const allNums = rows.flat().filter(c => typeof c === 'number' && c > 10000)
-          if (allNums.length > 0) totalBaza = Math.max(...allNums)
-        }
-
-        resolve({ nrSL, lunaAn, contractNr, titluProiect, totalBaza, totalAjustare, coeficient })
+        const result = isCentralizator ? _parseCentralizator(rows) : _parseBorderouSimple(rows)
+        resolve(result)
       } catch(e) {
         reject(e)
       }
@@ -243,20 +298,22 @@ function EmiteFacturaModal({ sl, proiectDate, onClose, onSuccess, showToast }) {
           const valBaza = parseFloat(sl.valoare_baza_lei || 0)
           const valAj = parseFloat(sl.valoare_ajustare_lei || 0)
           const certVal = parseFloat(sl.certificat_plata_valoare || 0)
+          const nr = proiectDate?.nr_contract ? ` nr. ${proiectDate.nr_contract}` : ''
+          const lunaSuffix = luna ? ` — ${luna} ${an}` : ''
 
-          // Valoare de baza (din certificat dacă există, altfel din XLS)
+          // 1 articol baza + 1 articol ajustare (fallback când nu există linii detaliate în BD)
           const valoareBazaFact = certVal > 0 ? certVal - valAj : valBaza
           if (valoareBazaFact > 0) {
             autoLinii.push({
               ord: 1, tip: 'lucr_cm',
-              denumire: `${proiectDate?.beneficiar || 'Lucrări construcții'} — ${sl.nr_situatie}${luna ? ` / ${luna} ${an}` : ''} — conf. contract${proiectDate?.nr_contract ? ` nr. ${proiectDate.nr_contract}` : ''}`,
+              denumire: `${proiectDate?.beneficiar || 'Lucrări construcții'} — ${sl.nr_situatie}${lunaSuffix} — conf. contract${nr}`,
               valoare: valoareBazaFact, um: 'buc', cantitate: 1, tva_pct: 21,
             })
           }
           if (valAj > 0) {
             autoLinii.push({
               ord: 2, tip: 'ajustare',
-              denumire: `Valoare ajustare conf. contract${proiectDate?.nr_contract ? ` nr. ${proiectDate.nr_contract}` : ''} la ${sl.nr_situatie}${luna ? ` — ${luna} ${an}` : ''}`,
+              denumire: `Valoare ajustare conf. contract${nr} la ${sl.nr_situatie}${lunaSuffix}`,
               valoare: valAj, um: 'buc', cantitate: 1, tva_pct: 21,
             })
           }
@@ -794,28 +851,59 @@ function SLModal({ item, proiectId, onClose, onSaved, showToast }) {
       }
       if (error) throw error
 
-      // Salvează linii din XLS în BD dacă sunt noi
+      // Salvează linii din XLS în BD — suportă centralizator multi-linii (Prunisor) + borderou simplu (Caldararu)
       if (xlsResult && isNew) {
         const slData = await supabase.from('executie_situatii_plata')
           .select('id').eq('proiect_id', proiectId).eq('nr_situatie', payload.nr_situatie).single()
         if (slData.data) {
-          const linii = []
-          if (xlsResult.totalBaza) {
-            linii.push({
-              sl_id: slData.data.id, ord: 1, tip: 'lucr_cm',
-              denumire: `Lucrări C+M — ${payload.nr_situatie}${xlsResult.lunaAn ? ' / ' + xlsResult.lunaAn : ''}`,
-              valoare: xlsResult.totalBaza, tva_pct: 21, sursa: 'xls',
-            })
+          const slId = slData.data.id
+          const nr = proiectDate?.nr_contract ? ` conf. contract nr. ${proiectDate.nr_contract}` : ''
+          const lunaStr = xlsResult.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
+          const bdLinii = []
+
+          if (xlsResult.tip === 'centralizator' && xlsResult.linii?.length > 0) {
+            // CENTRALIZATOR (Prunisor): rânduri separate + ajustări per linie
+            let ord = 1
+            for (const linie of xlsResult.linii) {
+              if (linie.valoare > 0) {
+                bdLinii.push({
+                  sl_id: slId, ord: ord++, tip: 'lucr_cm',
+                  denumire: linie.denumire || `Lucrări${nr}`,
+                  valoare: linie.valoare, tva_pct: 21, sursa: 'xls',
+                })
+              }
+            }
+            for (const linie of xlsResult.linii) {
+              if (linie.ajustare > 0) {
+                bdLinii.push({
+                  sl_id: slId, ord: ord++, tip: 'ajustare',
+                  denumire: `Ajustare ICC — ${linie.denumire.slice(0, 80) || payload.nr_situatie}`,
+                  valoare: linie.ajustare, tva_pct: 21, sursa: 'xls',
+                })
+              }
+            }
+          } else {
+            // BORDEROU simplu (Caldararu): 1 total + 1 ajustare
+            if (xlsResult.totalBaza) {
+              bdLinii.push({
+                sl_id: slId, ord: 1, tip: 'lucr_cm',
+                denumire: `Lucrări C+M — ${payload.nr_situatie}${lunaStr}${nr}`,
+                valoare: xlsResult.totalBaza, tva_pct: 21, sursa: 'xls',
+              })
+            }
+            if (xlsResult.totalAjustare) {
+              bdLinii.push({
+                sl_id: slId, ord: 2, tip: 'ajustare',
+                denumire: `Ajustare ICC${xlsResult.coeficient ? ' ×' + xlsResult.coeficient : ''} — ${payload.nr_situatie}`,
+                valoare: xlsResult.totalAjustare, tva_pct: 21,
+                coeficient_ajustare: xlsResult.coeficient, sursa: 'xls',
+              })
+            }
           }
-          if (xlsResult.totalAjustare) {
-            linii.push({
-              sl_id: slData.data.id, ord: 2, tip: 'ajustare',
-              denumire: `Ajustare ICC${xlsResult.coeficient ? ' ×' + xlsResult.coeficient : ''} — ${payload.nr_situatie}`,
-              valoare: xlsResult.totalAjustare, tva_pct: 21,
-              coeficient_ajustare: xlsResult.coeficient, sursa: 'xls',
-            })
+
+          if (bdLinii.length > 0) {
+            await supabase.from('executie_situatii_plata_linii').insert(bdLinii)
           }
-          if (linii.length > 0) await supabase.from('executie_situatii_plata_linii').insert(linii)
         }
       }
 
