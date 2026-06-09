@@ -93,6 +93,17 @@ function fileToBase64(file) {
 }
 
 // ══════════════════════════════════════════════════════════
+// HELPER: Parsare număr din format românesc (1.234.567,89) sau standard (1234567.89)
+// ══════════════════════════════════════════════════════════
+function parseRoNum(c) {
+  if (typeof c === 'number') return c
+  const s = String(c||'').trim().replace(/\s/g,'')
+  if (!s || s==='-') return 0
+  if (s.includes(',')) return parseFloat(s.replace(/\./g,'').replace(',','.')) || 0
+  return parseFloat(s) || 0
+}
+
+// ══════════════════════════════════════════════════════════
 // HELPER: Parsare XLS borderou/centralizator (client-side, SheetJS)
 // Detectează automat:
 //   - BORDEROU simplu (3-4 cols, Caldararu): total + ajustare ICC → 1-2 articole
@@ -154,8 +165,8 @@ function _parseCentralizator(rows) {
     if (firstCell==='total' || firstCell==='total:') {
       const numCols = []
       for (let j=0; j<row.length; j++) {
-        const v = typeof row[j]==='number' ? row[j] : parseFloat(String(row[j]).replace(/[.,\s]/g,'').replace(',','.'))
-        if (!isNaN(v) && v > 1000) numCols.push({j, v})
+        const v = parseRoNum(row[j])
+        if (v > 1000) numCols.push({j, v})
       }
       if (numCols.length >= 1) { valBazaCol=numCols[0].j; totalBaza=numCols[0].v }
       if (numCols.length >= 2) { ajustCol=numCols[1].j; totalAjustare=numCols[1].v }
@@ -169,7 +180,7 @@ function _parseCentralizator(rows) {
     const colSums = {}
     for (const row of rows) {
       for (let j=0; j<row.length; j++) {
-        const v = typeof row[j]==='number' ? row[j] : 0
+        const v = parseRoNum(row[j])
         if (v > 1000) colSums[j] = (colSums[j]||0) + v
       }
     }
@@ -187,12 +198,8 @@ function _parseCentralizator(rows) {
     if (denumire.length < 15 || SKIP.test(denumire)) continue
     if (valBazaCol < 0) continue
 
-    const valBaza = typeof row[valBazaCol]==='number' ? row[valBazaCol]
-      : parseFloat(String(row[valBazaCol]||'').replace(/\s/g,'').replace(',','.')) || 0
-    const ajust = ajustCol >= 0
-      ? (typeof row[ajustCol]==='number' ? row[ajustCol]
-         : parseFloat(String(row[ajustCol]||'').replace(/\s/g,'').replace(',','.')) || 0)
-      : 0
+    const valBaza = parseRoNum(row[valBazaCol])
+    const ajust = ajustCol >= 0 ? parseRoNum(row[ajustCol]) : 0
 
     if (valBaza > 100) {
       linii.push({
@@ -217,14 +224,18 @@ function parseBorderouAjustatXLS(file) {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target.result)
-        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:true, raw:true })
+        const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:false, raw:false })
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
 
         // Detectare tip: centralizator (>5 coloane cu valori) vs borderou simplu
+        // parseRoNum prinde și celulele formatate ca text în format românesc (1.234.567,89)
         const colsWithValues = new Set()
         for (const row of rows) {
-          row.forEach((c,j) => { if (typeof c==='number' && c>100) colsWithValues.add(j) })
+          row.forEach((c,j) => {
+            const v = parseRoNum(c)
+            if (v > 100) colsWithValues.add(j)
+          })
         }
         const isCentralizator = colsWithValues.size > 4
 
