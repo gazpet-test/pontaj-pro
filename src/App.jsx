@@ -653,19 +653,23 @@ function Layout({ children }) {
   const isContabilitate = profile?.role==='contabilitate'
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
-  // Badge tichete asignate mie
-  const [myTicheteCount, setMyTicheteCount] = useState(0)
+  // Tichete ale mele — split deschise de mine vs asignate mie
+  const [ticheteMele, setTicheteMele] = useState({ deschise: 0, asignate: 0 })
+  const [showTicheteMele, setShowTicheteMele] = useState(false)
   useEffect(() => {
     if (!profile?.id) return
-    const loadMyTichete = async () => {
-      const { count } = await supabase.from('tichete')
-        .select('id', { count:'exact', head:true })
-        .eq('persoana_responsabila', profile.id)
-        .in('status', ['deschis','in_analiza','programat_service','in_service','in_lucru','atribuit'])
-      setMyTicheteCount(count || 0)
+    const ACTIVE = ['deschis','in_analiza','programat_service','in_service','in_lucru','atribuit','reparat']
+    const load = async () => {
+      const [r1, r2] = await Promise.all([
+        supabase.from('tichete').select('id', { count:'exact', head:true })
+          .eq('deschis_de', profile.id).in('status', ACTIVE),
+        supabase.from('tichete').select('id', { count:'exact', head:true })
+          .eq('persoana_responsabila', profile.id).in('status', ACTIVE),
+      ])
+      setTicheteMele({ deschise: r1.count || 0, asignate: r2.count || 0 })
     }
-    loadMyTichete()
-    const t = setInterval(loadMyTichete, 60000)
+    load()
+    const t = setInterval(load, 60000)
     return () => clearInterval(t)
   }, [profile?.id])
   const navItems = [
@@ -737,36 +741,87 @@ function Layout({ children }) {
           >
             🎫 Tichete
           </button>
-          {/* Buton Ale mele — cu badge count */}
-          <button
-            onClick={() => nav('/tichete?mine=true')}
-            title="Tichete asignate mie"
-            style={{
-              display:'flex', alignItems:'center', gap:5,
-              padding:'5px 10px',
-              background: myTicheteCount > 0 ? G.purple + '33' : G.bg,
-              color: myTicheteCount > 0 ? G.purple : G.dim,
-              border: `1px solid ${myTicheteCount > 0 ? G.purple : G.border}`,
-              borderRadius: 8,
-              fontSize: 11,
-              fontWeight: 700,
-              cursor: 'pointer',
-              transition: 'all .15s',
-              fontFamily: 'inherit',
-              marginLeft: -8,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.color = G.purple }}
-            onMouseLeave={e => { e.currentTarget.style.background = myTicheteCount > 0 ? G.purple + '33' : G.bg; e.currentTarget.style.color = myTicheteCount > 0 ? G.purple : G.dim }}
-          >
-            Ale mele
-            {myTicheteCount > 0 && (
-              <span style={{
-                background: G.purple, color:'#fff',
-                borderRadius: 10, padding:'1px 6px',
-                fontSize: 10, fontWeight: 800, lineHeight: 1.4,
-              }}>{myTicheteCount}</span>
+          {/* Ale mele — popover split */}
+          <div style={{ position:'relative' }}>
+            <button
+              onClick={() => setShowTicheteMele(v => !v)}
+              title="Tichete ale mele — deschise de mine + asignate mie"
+              style={{
+                display:'flex', alignItems:'center', gap:6,
+                padding:'6px 12px',
+                background: (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple+'33' : G.bg,
+                color: (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple : G.dim,
+                border:`1px solid ${(ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple : G.border}`,
+                borderRadius:8, fontSize:11, fontWeight:700, cursor:'pointer',
+                fontFamily:'inherit', marginLeft:-8, transition:'all .15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = G.purple+'33'; e.currentTarget.style.color = G.purple; e.currentTarget.style.borderColor = G.purple }}
+              onMouseLeave={e => { const tot = ticheteMele.deschise+ticheteMele.asignate; e.currentTarget.style.background = tot>0?G.purple+'33':G.bg; e.currentTarget.style.color = tot>0?G.purple:G.dim; e.currentTarget.style.borderColor = tot>0?G.purple:G.border }}
+            >
+              Ale mele
+              {(ticheteMele.deschise + ticheteMele.asignate) > 0 && (
+                <span style={{ background:G.purple, color:'#fff', borderRadius:10, padding:'1px 6px', fontSize:10, fontWeight:800 }}>
+                  {ticheteMele.deschise + ticheteMele.asignate}
+                </span>
+              )}
+              <span style={{ fontSize:9, opacity:.6 }}>{showTicheteMele ? '▲' : '▼'}</span>
+            </button>
+
+            {showTicheteMele && (
+              <>
+                {/* Overlay transparent ca sa inchida la click afara */}
+                <div onClick={() => setShowTicheteMele(false)}
+                  style={{ position:'fixed', inset:0, zIndex:199 }} />
+                {/* Popover */}
+                <div style={{
+                  position:'absolute', top:'calc(100% + 8px)', right:0,
+                  zIndex:200, background:G.surface, border:`1px solid ${G.border}`,
+                  borderRadius:12, boxShadow:'0 8px 32px rgba(0,0,0,.4)',
+                  overflow:'hidden', minWidth:220,
+                }}>
+                  {/* Header */}
+                  <div style={{ padding:'10px 14px', borderBottom:`1px solid ${G.border}`, fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'.5px' }}>
+                    🎫 Tichete active ale mele
+                  </div>
+                  {/* Deschise de mine */}
+                  <button onClick={() => { nav('/tichete?mine=true&filter=deschise'); setShowTicheteMele(false) }}
+                    style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'12px 14px', background:'transparent', border:'none', cursor:'pointer', borderBottom:`1px solid ${G.border}`, transition:'background .1s' }}
+                    onMouseEnter={e => e.currentTarget.style.background=G.bg}
+                    onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                    <div style={{ width:36, height:36, borderRadius:8, background:G.blue+'22', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>📝</div>
+                    <div style={{ textAlign:'left' }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:G.text }}>Deschise de mine</div>
+                      <div style={{ fontSize:11, color:G.muted }}>Tichete create de tine</div>
+                    </div>
+                    <div style={{ marginLeft:'auto', fontSize:22, fontWeight:800, color: ticheteMele.deschise > 0 ? G.blue : G.dim }}>
+                      {ticheteMele.deschise}
+                    </div>
+                  </button>
+                  {/* Asignate mie */}
+                  <button onClick={() => { nav('/tichete?mine=true&filter=asignate'); setShowTicheteMele(false) }}
+                    style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'12px 14px', background:'transparent', border:'none', cursor:'pointer', borderBottom:`1px solid ${G.border}`, transition:'background .1s' }}
+                    onMouseEnter={e => e.currentTarget.style.background=G.bg}
+                    onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                    <div style={{ width:36, height:36, borderRadius:8, background:G.orange+'22', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>👤</div>
+                    <div style={{ textAlign:'left' }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:G.text }}>Asignate mie</div>
+                      <div style={{ fontSize:11, color:G.muted }}>Tichete de rezolvat</div>
+                    </div>
+                    <div style={{ marginLeft:'auto', fontSize:22, fontWeight:800, color: ticheteMele.asignate > 0 ? G.orange : G.dim }}>
+                      {ticheteMele.asignate}
+                    </div>
+                  </button>
+                  {/* Total + link */}
+                  <button onClick={() => { nav('/tichete?mine=true'); setShowTicheteMele(false) }}
+                    style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, width:'100%', padding:'10px 14px', background:G.purple+'11', border:'none', cursor:'pointer', fontSize:12, fontWeight:700, color:G.purple, transition:'background .1s' }}
+                    onMouseEnter={e => e.currentTarget.style.background=G.purple+'22'}
+                    onMouseLeave={e => e.currentTarget.style.background=G.purple+'11'}>
+                    📋 Vezi toate ale mele ({ticheteMele.deschise + ticheteMele.asignate})
+                  </button>
+                </div>
+              </>
             )}
-          </button>
+          </div>
           <button
             onClick={() => nav('/tichete?action=new')}
             title="Deschide tichet nou rapid (avarie / defecțiune / reclamație)"

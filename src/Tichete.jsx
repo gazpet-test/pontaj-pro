@@ -115,6 +115,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [filtruStatus,setFiltruStatus]=useState('active')   // 'active' | 'toate' | status specific
   const [filtruUrgenta,setFiltruUrgenta]=useState(null)
   const [filterMine,setFilterMine]=useState(false) // filtru "Ale mele"
+  const [filterMineType,setFilterMineType]=useState('toate') // 'toate' | 'deschise' | 'asignate'
   const [searchText,setSearchText]=useState('')
   const [openNew,setOpenNew]=useState(false)
   const [openDetail,setOpenDetail]=useState(null)
@@ -164,7 +165,12 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
     if(params.get('mine') === 'true') {
       setFilterMine(true)
       setView('list')
-      params.delete('mine')
+      // Filtru granular: deschise de mine vs asignate mie
+      const filter = params.get('filter')
+      if(filter === 'asignate') setFilterMineType('asignate')
+      else if(filter === 'deschise') setFilterMineType('deschise')
+      else setFilterMineType('toate')
+      params.delete('mine'); params.delete('filter')
       const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '')
       window.history.replaceState({}, '', newUrl)
     }
@@ -213,7 +219,11 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   // Tichete filtrate
   const tichetFilt = useMemo(()=>{
     let t = tichete
-    if(filterMine && profile?.id) t = t.filter(x => x.persoana_responsabila === profile.id || x.deschis_de === profile.id)
+    if(filterMine && profile?.id) {
+      if(filterMineType === 'deschise') t = t.filter(x => x.deschis_de === profile.id)
+      else if(filterMineType === 'asignate') t = t.filter(x => x.persoana_responsabila === profile.id)
+      else t = t.filter(x => x.persoana_responsabila === profile.id || x.deschis_de === profile.id)
+    }
     if(activeDep) t = t.filter(x=>x.departament===activeDep)
     if(filtruStatus === 'active') t = t.filter(x=>!['inchis','confirmat','respins'].includes(x.status))
     else if(filtruStatus !== 'toate') t = t.filter(x=>x.status===filtruStatus)
@@ -351,7 +361,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         <div style={{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
           {/* Buton "Ale mele" */}
           <button
-            onClick={()=>setFilterMine(m=>!m)}
+            onClick={()=>{ setFilterMine(m=>!m); setFilterMineType('toate') }}
             style={{
               padding:'8px 14px', fontSize:13, fontWeight:700, cursor:'pointer', borderRadius:8,
               background: filterMine ? G.purple+'33' : 'transparent',
@@ -362,6 +372,27 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
             👤 Ale mele
             {filterMine && <span style={{fontSize:11,fontWeight:800,background:G.purple,color:'#fff',borderRadius:8,padding:'1px 6px'}}>{tichetFilt.length}</span>}
           </button>
+          {/* Sub-filtre deschise/asignate — vizibile doar cand filterMine e activ */}
+          {filterMine && (
+            <>
+              {[
+                { v:'toate',  l:'📋 Toate', col: G.purple },
+                { v:'deschise', l:'📝 Deschise de mine', col: G.blue },
+                { v:'asignate', l:'👤 Asignate mie', col: G.orange },
+              ].map(f => (
+                <button key={f.v} onClick={()=>setFilterMineType(f.v)}
+                  style={{
+                    padding:'6px 12px', fontSize:12, fontWeight: filterMineType===f.v ? 700 : 400,
+                    cursor:'pointer', borderRadius:8,
+                    background: filterMineType===f.v ? f.col+'22' : 'transparent',
+                    color: filterMineType===f.v ? f.col : G.muted,
+                    border:`1px solid ${filterMineType===f.v ? f.col : G.border2}`,
+                  }}>
+                  {f.l}
+                </button>
+              ))}
+            </>
+          )}
           <input type="text" placeholder="🔍 Cauta (numar, titlu, descriere)..." value={searchText} onChange={e=>setSearchText(e.target.value)}
                  style={{flex:'1 1 240px',padding:'10px 14px',background:G.surface,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13,outline:'none'}} />
           <select value={filtruStatus} onChange={e=>setFiltruStatus(e.target.value)} style={{padding:'10px 12px',background:G.surface,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13}}>
