@@ -653,6 +653,21 @@ function Layout({ children }) {
   const isContabilitate = profile?.role==='contabilitate'
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
+  // Badge tichete asignate mie
+  const [myTicheteCount, setMyTicheteCount] = useState(0)
+  useEffect(() => {
+    if (!profile?.id) return
+    const loadMyTichete = async () => {
+      const { count } = await supabase.from('tichete')
+        .select('id', { count:'exact', head:true })
+        .eq('persoana_responsabila', profile.id)
+        .in('status', ['deschis','in_analiza','programat_service','in_service','in_lucru','atribuit'])
+      setMyTicheteCount(count || 0)
+    }
+    loadMyTichete()
+    const t = setInterval(loadMyTichete, 60000)
+    return () => clearInterval(t)
+  }, [profile?.id])
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
     ...(hasModuleAccess(profile, 'pontajpro') ? [
@@ -715,11 +730,42 @@ function Layout({ children }) {
               cursor: 'pointer',
               transition: 'all .15s',
               fontFamily: 'inherit',
+              position: 'relative',
             }}
             onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.transform = 'translateY(-1px)' }}
             onMouseLeave={e => { e.currentTarget.style.background = G.purple + '22'; e.currentTarget.style.transform = 'translateY(0)' }}
           >
             🎫 Tichete
+          </button>
+          {/* Buton Ale mele — cu badge count */}
+          <button
+            onClick={() => nav('/tichete?mine=true')}
+            title="Tichete asignate mie"
+            style={{
+              display:'flex', alignItems:'center', gap:5,
+              padding:'5px 10px',
+              background: myTicheteCount > 0 ? G.purple + '33' : G.bg,
+              color: myTicheteCount > 0 ? G.purple : G.dim,
+              border: `1px solid ${myTicheteCount > 0 ? G.purple : G.border}`,
+              borderRadius: 8,
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: 'pointer',
+              transition: 'all .15s',
+              fontFamily: 'inherit',
+              marginLeft: -8,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = G.purple + '33'; e.currentTarget.style.color = G.purple }}
+            onMouseLeave={e => { e.currentTarget.style.background = myTicheteCount > 0 ? G.purple + '33' : G.bg; e.currentTarget.style.color = myTicheteCount > 0 ? G.purple : G.dim }}
+          >
+            Ale mele
+            {myTicheteCount > 0 && (
+              <span style={{
+                background: G.purple, color:'#fff',
+                borderRadius: 10, padding:'1px 6px',
+                fontSize: 10, fontWeight: 800, lineHeight: 1.4,
+              }}>{myTicheteCount}</span>
+            )}
           </button>
           <button
             onClick={() => nav('/tichete?action=new')}
