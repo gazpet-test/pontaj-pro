@@ -3965,7 +3965,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   
   // Load employees
   const loadEmployees = async () => {
-    const { data } = await supabase.from('employees').select('id, name, position, department, functii_extra')
+    const { data } = await supabase.from('employees').select('id, name, position, department, functii_extra, functie')
       .eq('active', true).order('name')
     setEmployees(data || [])
   }
@@ -4510,8 +4510,30 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
             {/* Manager destinație — IMPORTANT pentru confirmare primire */}
             <select value={managerDestinatieId} onChange={e => setManagerDestinatieId(e.target.value)} style={{...S.input, fontSize:12, borderColor: managerDestinatieId ? G.green + '88' : G.border2}}>
               <option value="">⚠️ Manager destinație (cel care va confirma primirea)</option>
-              {(destinatieTip === 'sediu' ? profilesLogistica : profilesList).map(p => 
-                <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>
+              <optgroup label="── Useri ERP ──">
+                {(destinatieTip === 'sediu' ? profilesLogistica : profilesList).map(p => 
+                  <option key={p.id} value={p.id}>{p.name} {p.role ? `(${p.role})` : ''}</option>
+                )}
+              </optgroup>
+              {/* Șoferi angajați — pentru prestări servicii externe unde șoferul semnează avizul */}
+              {employees.filter(e => e.active !== false && (
+                (e.functie||'').toLowerCase().includes('sofer') ||
+                (e.functie||'').toLowerCase().includes('șofer') ||
+                (e.position||'').toLowerCase().includes('sofer') ||
+                (e.functie||'').toLowerCase().includes('conducator auto') ||
+                (e.functie||'').toLowerCase().includes('conducător')
+              )).length > 0 && (
+                <optgroup label="── Șoferi angajați ──">
+                  {employees.filter(e => e.active !== false && (
+                    (e.functie||'').toLowerCase().includes('sofer') ||
+                    (e.functie||'').toLowerCase().includes('șofer') ||
+                    (e.position||'').toLowerCase().includes('sofer') ||
+                    (e.functie||'').toLowerCase().includes('conducator auto') ||
+                    (e.functie||'').toLowerCase().includes('conducător')
+                  )).map(e =>
+                    <option key={`emp-${e.id}`} value={`emp-${e.id}`}>{e.name} 🚗 {e.functie || ''}</option>
+                  )}
+                </optgroup>
               )}
             </select>
             {managerDestinatieId && destinatieTip === 'site' && siteManagers[destinatieSiteId] === managerDestinatieId && (
@@ -6731,19 +6753,26 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
                     <td style={tdStyle}>
                       <StatusBadge status={t.status} />
                     </td>
-                    <td style={tdStyle}>
-                      {/* Buton Edit doar pentru status='cerut' (înainte de aprobare) */}
-                      {t.status === 'cerut' ? (
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); setEditTransport(t) }}
-                          style={{...S.btnS, padding:'5px 10px', fontSize:11, color:G.logistica, borderColor:G.logistica + '88'}}
-                          title="Editează cererea (doar înainte de aprobare)"
-                        >
-                          ✏️ Edit
-                        </button>
-                      ) : (
-                        <span style={{fontSize:10, color:G.muted}}>—</span>
-                      )}
+                    <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e => e.stopPropagation()}>
+                      <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
+                        {/* Edit — activ pe toate statusurile, nu doar 'cerut' */}
+                        <button
+                          onClick={() => setEditTransport(t)}
+                          title="Editează transportul"
+                          style={{...S.btnS, padding:'4px 8px', fontSize:11, color:G.logistica, borderColor:G.logistica+'88'}}
+                        >✏️</button>
+                        {/* Ștergere — cu confirmare */}
+                        <button
+                          onClick={async () => {
+                            if (!window.confirm(`Ștergi transportul ${t.numar_transport}?\n"${t.tip}" · status: ${t.status}\n\nAcțiune IREVERSIBILĂ!`)) return
+                            const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id)
+                            if (error) showToast('Eroare: ' + error.message, 'err')
+                            else { showToast('✓ Transport șters'); fetchAll() }
+                          }}
+                          title="Șterge transportul"
+                          style={{...S.btnS, padding:'4px 8px', fontSize:11, color:G.red, borderColor:G.red+'88'}}
+                        >🗑️</button>
+                      </div>
                     </td>
                   </tr>
                   )
