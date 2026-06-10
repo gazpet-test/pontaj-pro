@@ -312,8 +312,8 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
       <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, width: '100%', maxWidth: 820, maxHeight: '90vh', overflowY: 'auto', padding: 28 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>📥 Import facturi din WinMentor</div>
-            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Fișă cont 401 (furnizor) export XLSX · doar facturile intră în calcul</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>📥 Import facturi furnizor (Cont 401) din WinMentor</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Fișa contului 401 — facturile primite de la subcontractor. Plățile (OP) sunt ignorate.</div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
         </div>
@@ -1284,7 +1284,7 @@ export default function ContracteComerciale({ profile }) {
         {canManage && (
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
             <button onClick={() => setImportOpen(true)} style={{ ...S.btnP, background: G.green }}>
-              📥 Import facturi
+              📥 Import facturi furnizor (Cont 401)
             </button>
             <button onClick={() => { setEditContract(null); setModalOpen(true) }} style={{ ...S.btnP }}>
               + Contract nou
