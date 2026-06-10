@@ -1,7 +1,12 @@
 // ===========================================================================
 // CONTRACTE COMERCIALE — Tab Administrativ
 // 07.06.2026 v1 — Lista upstream/downstream + modal adăugare
-// Fundație BD: contracte_terti extins + contracte_linii + v_contracte_cu_linii
+// 10.06.2026 v2 — FacturiModal: card „Rest de plată" + mod EUR (contracte valutare)
+//                 Parser 401: skip Reg (regularizări curs), storno negativ păstrat,
+//                 PV recunoscut ca plată, capturare moneda/valoare_moneda/curs
+//                 Alocare automată după șantierul din Observații (multi-contract)
+//                 Upsert cu ignoreDuplicates — re-importul NU mai suprascrie alocările
+// Fundație BD: contracte_terti extins + contracte_linii + v_contracte_cu_linii (+ EUR)
 // ===========================================================================
 
 import React, { useState, useEffect, useMemo } from 'react'
@@ -58,6 +63,10 @@ function fmtRON(v) {
   if (!v) return '—'
   return Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' RON'
 }
+function fmtEUR(v) {
+  if (!v) return '—'
+  return Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €'
+}
 
 // ─── Badge helper ───────────────────────────────────────────────────────────
 function Badge({ label, color, emoji }) {
@@ -96,7 +105,8 @@ function ProgresBar({ procent, compact }) {
 }
 
 // ─── Parser fișă cont 401 WinMentor (XLSX) ───────────────────────────────────
-// Întoarce DOAR facturile (credit, tip ≠ plată). Plățile (OP/debit) le ignoră.
+// Întoarce facturile (credit) ȘI plățile (debit, este_plata=true), cu semn păstrat
+// (storno/corecții = negativ). Regularizările de curs (Reg/EchivLei) se exclud.
 function parseNum(v) {
   if (v == null || v === '') return 0
   if (typeof v === 'number') return isNaN(v) ? 0 : v
@@ -130,6 +140,21 @@ function numeMatch(furnizor, partener) {
   const tb = new Set(b.split(' ').filter(sig))
   return a.split(' ').filter(sig).some(t => tb.has(t))
 }
+// Match șantier din Observații WinMentor (ex. „ORSOVA LOT 1") contra numelui site-ului
+// de pe contract. TOATE token-urile din observație trebuie să existe în numele site-ului
+// — dezambiguizează „Lot 1" vs „Lot 2" și evită false-positives pe observații libere.
+function siteMatch(obs, siteName) {
+  const norm = s => (s || '').toString().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim()
+  const o = norm(obs), t = norm(siteName)
+  if (!o || !t) return false
+  const stop = new Set(['gazpet', 'transgaz', 'depogaz', 'habau', 'santier', 'lucrare', 'scadenta'])
+  const tokens = o.split(' ').filter(w => w && !stop.has(w))
+  if (tokens.length === 0) return false
+  const tt = new Set(t.split(' '))
+  return tokens.every(w => tt.has(w))
+}
 function parseFisaWinMentor(rows) {
   const facturi = []
   const reCtr = /(?:ctr|contract|anexa)\.?\s*(?:nr\.?)?\s*(\d{2,5})/i
@@ -153,16 +178,29 @@ function parseFisaWinMentor(rows) {
     const credit = parseNum(r[10])
     const debit = parseNum(r[9])
     const valoareE = parseNum(r[4])
+    const monedaRaw = (r[7] ?? '').toString().trim()
     const obs = (r[14] ?? '').toString().trim()
     const tipUp = tip.toUpperCase()
-    const ePlata = /^(OP|CH|CHIT|PLAT|ORDIN|EXTRAS)/.test(tipUp) || (debit > 0 && credit === 0)
-    // Factură = credit (datorie); Plată (OP) = debit (bani ieșiți)
-    const val = ePlata ? (debit > 0 ? debit : valoareE) : (credit > 0 ? credit : valoareE)
-    if (!(val > 0)) continue
+    // Regularizări de curs valutar (tip „Reg" / moneda „EchivLei") = ajustări FX lunare,
+    // NU facturi/plăți reale — ar polua facturat/plătit cu sume false → skip
+    if (/^REG/.test(tipUp) || /^echivlei$/i.test(monedaRaw)) continue
+    const ePlata = /^(OP|CH|CHIT|PLAT|ORDIN|EXTRAS|PV)/.test(tipUp) || (debit > 0 && credit === 0)
+    // Factură = credit (datoria crește); Plată (OP/PV) = debit (bani ieșiți).
+    // Semnul se PĂSTREAZĂ: storno facturi (credit negativ) și corecții de plată
+    // (PV trecut pe credit) intră cu minus — altfel totalurile ies umflate.
+    let val = ePlata ? (debit - credit) : (credit - debit)
+    if (val === 0) val = valoareE   // fallback pentru fișe fără coloane Debit/Credit
+    if (val === 0) continue
+    val = Math.round(val * 100) / 100
+    // Fișe în valută: col. E = valoarea originală (EUR etc.), col. I = cursul
+    const eValuta = monedaRaw !== '' && !/^(ron|lei)$/i.test(monedaRaw)
+    const moneda = eValuta ? monedaRaw.toUpperCase() : 'RON'
+    const valMoneda = eValuta ? Math.round((val < 0 ? -Math.abs(valoareE) : Math.abs(valoareE)) * 100) / 100 : null
+    const curs = eValuta ? (parseNum(r[8]) || null) : null
     let refNr = null, refText = null
     const mc = obs.match(reCtr)
     if (mc) { refNr = mc[1]; refText = obs.slice(0, 80) }
-    facturi.push({ tip_document: tip, numar_document: numar, data_document: dataISO, valoare_lei: val, observatii: obs, ref_nr: refNr, ref_text: refText, este_plata: ePlata })
+    facturi.push({ tip_document: tip, numar_document: numar, data_document: dataISO, valoare_lei: val, moneda, valoare_moneda: valMoneda, curs, observatii: obs, ref_nr: refNr, ref_text: refText, este_plata: ePlata })
   }
   return facturi
 }
@@ -189,9 +227,16 @@ function FacturiModal({ contract, profile, onClose, onChanged }) {
 
   const total = facturi.filter(f => !f.este_plata).reduce((s, f) => s + Number(f.valoare_lei || 0), 0)
   const totalPlatit = facturi.filter(f => f.este_plata).reduce((s, f) => s + Number(f.valoare_lei || 0), 0)
+  const restDePlata = total - totalPlatit
   const nrFacturi = facturi.filter(f => !f.este_plata).length
   const valContract = Number(contract.valoare_lei || 0)
-  const procent = valContract > 0 ? (total / valContract) * 100 : null
+  // Mod EUR: la contractele valutare, RON-ul contractului e la cursul SEMNĂRII iar
+  // facturile la cursul emiterii → procentul în RON distorsionează. Calculăm în EUR.
+  const valContractEur = Number(contract.valoare_eur || 0)
+  const totalEur = facturi.filter(f => !f.este_plata && f.moneda && f.moneda !== 'RON').reduce((s, f) => s + Number(f.valoare_moneda || 0), 0)
+  const platitEur = facturi.filter(f => f.este_plata && f.moneda && f.moneda !== 'RON').reduce((s, f) => s + Number(f.valoare_moneda || 0), 0)
+  const modEur = valContractEur > 0 && totalEur !== 0
+  const procent = modEur ? (totalEur / valContractEur) * 100 : (valContract > 0 ? (total / valContract) * 100 : null)
   const depasire = procent != null && procent > 100
 
   return (
@@ -208,18 +253,29 @@ function FacturiModal({ contract, profile, onClose, onChanged }) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
         </div>
 
-        {/* Sumar */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 18 }}>
+        {/* Sumar — la contracte valutare cifra mare e în EUR, RON-ul e secundar */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 18 }}>
           {[
-            { label: 'Contractat', val: fmtRON(valContract), color: G.text },
-            { label: 'Facturat', val: fmtRON(total), color: G.green, sub: `${nrFacturi} facturi` },
-            { label: 'Plătit', val: fmtRON(totalPlatit), color: G.blue, sub: 'OP-uri' },
-            { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtRON(Math.abs(valContract - total)), color: depasire ? G.red : G.text },
+            modEur
+              ? { label: 'Contractat', val: fmtEUR(valContractEur), color: G.text, sub: fmtRON(valContract) }
+              : { label: 'Contractat', val: fmtRON(valContract), color: G.text },
+            modEur
+              ? { label: 'Facturat', val: fmtEUR(totalEur), color: G.green, sub: `${nrFacturi} facturi · ${fmtRON(total)}` }
+              : { label: 'Facturat', val: fmtRON(total), color: G.green, sub: `${nrFacturi} facturi` },
+            modEur
+              ? { label: 'Plătit', val: fmtEUR(platitEur), color: G.blue, sub: fmtRON(totalPlatit) }
+              : { label: 'Plătit', val: fmtRON(totalPlatit), color: G.blue, sub: 'OP-uri' },
+            modEur
+              ? { label: 'Rest de plată', val: Math.abs(totalEur - platitEur) < 0.005 ? '0 €' : fmtEUR(totalEur - platitEur), color: (totalEur - platitEur) > 0.005 ? G.orange : G.green, sub: fmtRON(restDePlata) }
+              : { label: 'Rest de plată', val: Math.abs(restDePlata) < 0.005 ? '0 RON' : fmtRON(restDePlata), color: restDePlata > 0.005 ? G.orange : G.green, sub: 'facturat − plătit' },
+            modEur
+              ? { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtEUR(Math.abs(valContractEur - totalEur)), color: depasire ? G.red : G.text, sub: 'în valuta contractului' }
+              : { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtRON(Math.abs(valContract - total)), color: depasire ? G.red : G.text },
           ].map(k => (
-            <div key={k.label} style={{ ...S.card, padding: '10px 14px' }}>
-              <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4 }}>{k.label}</div>
-              <div style={{ fontSize: 17, fontWeight: 800, color: k.color }}>{k.val}</div>
-              {k.sub && <div style={{ fontSize: 10, color: G.dim, marginTop: 2 }}>{k.sub}</div>}
+            <div key={k.label} style={{ ...S.card, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.label}</div>
+              <div style={{ fontSize: 15.5, fontWeight: 800, color: k.color, whiteSpace: 'nowrap' }}>{k.val}</div>
+              {k.sub && <div style={{ fontSize: 9.5, color: G.dim, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.sub}</div>}
             </div>
           ))}
         </div>
@@ -250,7 +306,14 @@ function FacturiModal({ contract, profile, onClose, onChanged }) {
                     {f.este_plata && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44` }}>💸 PLATĂ</span>}
                   </td>
                   <td style={{ padding: '7px 4px', color: G.muted }}>{f.data_document}</td>
-                  <td style={{ padding: '7px 4px', textAlign: 'right', fontWeight: 600, color: f.este_plata ? G.blue : G.green }}>{fmtRON(f.valoare_lei)}</td>
+                  <td style={{ padding: '7px 4px', textAlign: 'right', fontWeight: 600, color: f.este_plata ? G.blue : G.green }}>
+                    {fmtRON(f.valoare_lei)}
+                    {f.moneda && f.moneda !== 'RON' && f.valoare_moneda != null && (
+                      <div style={{ fontSize: 10, fontWeight: 500, color: G.dim }}>
+                        {Number(f.valoare_moneda).toLocaleString('ro-RO', { maximumFractionDigits: 2 })} {f.moneda}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ padding: '7px 4px', color: G.dim, fontSize: 11 }}>{f.referinta_detectata || '—'}</td>
                   {canManage && (
                     <td style={{ padding: '7px 4px', textAlign: 'right' }}>
@@ -282,6 +345,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
     () => (contracte || []).filter(c => c.numar_contract && c.sens === 'plata').map(c => ({
       id: c.id, numar: c.numar_contract,
       partener: c.partener_text || c.beneficiar_name || c.denumire || '',
+      site: c.site_name || '',
       label: `Nr. ${c.numar_contract} · ${(c.partener_text || c.beneficiar_name || c.denumire || '').slice(0, 40)}`,
     })),
     [contracte]
@@ -305,11 +369,19 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
     // contractele acestui furnizor — dacă are unul singur, alocăm automat tot (inclusiv OP-urile fără referință)
     const aleFurnizorului = furnizor.trim() ? contractePlata.filter(c => numeMatch(furnizor, c.partener)) : []
     const singurContract = aleFurnizorului.length === 1 ? aleFurnizorului[0].id : null
+    // furnizor cu MAI MULTE contracte: încercăm alocarea după șantierul din Observații
+    const candidati = aleFurnizorului.length > 0 ? aleFurnizorului : contractePlata
     const enriched = facturi.map((f, i) => {
       let contractId = null
       if (f.ref_nr) {
         const hit = contractePlata.find(o => String(o.numar) === String(f.ref_nr))
         if (hit) contractId = hit.id
+      }
+      // Observațiile din fișa 401 conțin adesea șantierul (ex. „BILCIURESTI", „ORSOVA LOT 1")
+      // → match unic contra site-ului contractelor candidate
+      if (!contractId && f.observatii) {
+        const peSite = candidati.filter(o => siteMatch(f.observatii, o.site))
+        if (peSite.length === 1) contractId = peSite[0].id
       }
       if (!contractId && singurContract) contractId = singurContract
       return { ...f, _idx: i, contract_id: contractId, alocat: !!contractId }
@@ -342,17 +414,19 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
       suma_facturi_lei: sumaFacturi, imported_by: user?.id || null,
     }).select().single()
 
-    // 2. facturi + plăți (upsert pe cheia unică ca să nu dubleze la re-import)
+    // 2. facturi + plăți — ignoreDuplicates: rândurile deja existente (după cheia unică)
+    //    NU se ating la re-import, ca să nu suprascriem alocările făcute manual/anterior
     const rows = parsed.map(f => ({
       contract_id: f.contract_id, furnizor_text: furnizor || null,
       tip_document: f.tip_document, numar_document: f.numar_document,
       data_document: f.data_document, valoare_lei: f.valoare_lei,
+      moneda: f.moneda || 'RON', valoare_moneda: f.valoare_moneda ?? null, curs: f.curs ?? null,
       observatii_winmentor: f.observatii, referinta_detectata: f.ref_text,
       alocat: f.alocat, este_plata: !!f.este_plata, sursa: 'winmentor_xls', import_id: imp?.id || null,
       created_by: user?.id || null,
     }))
-    const { error, count } = await supabase.from('contracte_subcontract_facturi')
-      .upsert(rows, { onConflict: 'furnizor_text,tip_document,numar_document,data_document,valoare_lei', count: 'exact' })
+    const { error } = await supabase.from('contracte_subcontract_facturi')
+      .upsert(rows, { onConflict: 'furnizor_text,tip_document,numar_document,data_document,valoare_lei', ignoreDuplicates: true })
     setSaving(false)
     if (error) { alert('Eroare la salvare: ' + error.message); return }
     setRezultat({ total: parsed.length, alocate: cuRef.length, nealocate: faraRef.length })
@@ -366,7 +440,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>📥 Import facturi furnizor (Cont 401) din WinMentor</div>
-            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Fișa contului 401 — facturile primite de la subcontractor. Plățile (OP) sunt ignorate.</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Fișa contului 401 — facturi + plăți (OP/PV). Regularizările de curs se exclud automat; la re-import rândurile existente nu se ating.</div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
         </div>
@@ -440,7 +514,14 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
                           {f.este_plata && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: G.purple + '22', color: G.purple, border: `1px solid ${G.purple}44` }}>💸 PLATĂ</span>}
                         </td>
                         <td style={{ padding: '7px 6px', color: G.muted, whiteSpace: 'nowrap' }}>{f.data_document}</td>
-                        <td style={{ padding: '7px 6px', textAlign: 'right', fontWeight: 600 }}>{fmtRON(f.valoare_lei)}</td>
+                        <td style={{ padding: '7px 6px', textAlign: 'right', fontWeight: 600 }}>
+                          {fmtRON(f.valoare_lei)}
+                          {f.moneda && f.moneda !== 'RON' && f.valoare_moneda != null && (
+                            <div style={{ fontSize: 10, fontWeight: 500, color: G.dim }}>
+                              {Number(f.valoare_moneda).toLocaleString('ro-RO', { maximumFractionDigits: 2 })} {f.moneda}
+                            </div>
+                          )}
+                        </td>
                         <td style={{ padding: '7px 6px', color: G.dim, fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.observatii}>
                           {f.observatii || <span style={{ color: G.yellow }}>(fără observație)</span>}
                         </td>
