@@ -19,9 +19,9 @@ const G = {
 const S = {
   card: { background: G.card, borderRadius: 12, border: `1px solid ${G.border}` },
   btnP: { padding: '9px 16px', background: G.orange, color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  input: { width: '100%', padding: '9px 12px', background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box' },
+  input: { width: '100%', padding: '9px 12px', background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box', colorScheme: 'dark' },
   label: { fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4, display: 'block' },
-  select: { width: '100%', padding: '9px 12px', background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box', cursor: 'pointer' },
+  select: { width: '100%', padding: '9px 12px', background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box', cursor: 'pointer', colorScheme: 'dark' },
 }
 
 // ─── Meta date tipuri + roluri ─────────────────────────────────────────────
@@ -99,8 +99,19 @@ function ProgresBar({ procent, compact }) {
 // Întoarce DOAR facturile (credit, tip ≠ plată). Plățile (OP/debit) le ignoră.
 function parseNum(v) {
   if (v == null || v === '') return 0
-  if (typeof v === 'number') return v
-  const n = parseFloat(String(v).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
+  if (typeof v === 'number') return isNaN(v) ? 0 : v
+  let s = String(v).trim().replace(/[^\d.,-]/g, '')
+  if (!s) return 0
+  const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.')
+  if (lc > -1 && ld > -1) {
+    if (lc > ld) s = s.replace(/\./g, '').replace(',', '.')   // RO: 99.027,32
+    else s = s.replace(/,/g, '')                               // US: 99,027.32
+  } else if (lc > -1) {
+    const dec = s.length - lc - 1
+    if (dec === 3) s = s.replace(/,/g, '')                     // 99,027 = mii
+    else s = s.replace(',', '.')                               // 99,02 = zecimal
+  }
+  const n = parseFloat(s)
   return isNaN(n) ? 0 : n
 }
 function parseFisaWinMentor(rows) {
@@ -111,9 +122,16 @@ function parseFisaWinMentor(rows) {
     if (!Array.isArray(r)) continue
     const colA = (r[0] ?? '').toString().trim().toLowerCase()
     if (colA.startsWith('total') || colA.replace(/\s/g, '').startsWith('total')) continue
-    const dataRaw = (r[1] ?? '').toString().trim()
-    const md = dataRaw.match(reData)
-    if (!md) continue
+    // Data: poate fi Date (cellDates) sau string DD.MM.YYYY
+    let dataISO = null
+    const dataCell = r[1]
+    if (dataCell instanceof Date && !isNaN(dataCell)) {
+      dataISO = `${dataCell.getFullYear()}-${String(dataCell.getMonth() + 1).padStart(2, '0')}-${String(dataCell.getDate()).padStart(2, '0')}`
+    } else {
+      const md = (dataCell ?? '').toString().trim().match(reData)
+      if (!md) continue
+      dataISO = `${md[3]}-${md[2]}-${md[1]}`
+    }
     const tip = (r[2] ?? '').toString().trim()
     const numar = (r[3] ?? '').toString().trim()
     const credit = parseNum(r[10])
@@ -125,7 +143,6 @@ function parseFisaWinMentor(rows) {
     if (ePlata) continue
     const val = credit > 0 ? credit : valoareE
     if (!(val > 0)) continue
-    const dataISO = `${md[3]}-${md[2]}-${md[1]}`
     let refNr = null, refText = null
     const mc = obs.match(reCtr)
     if (mc) { refNr = mc[1]; refText = obs.slice(0, 80) }
@@ -251,9 +268,9 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
     if (!file) return
     setFileName(file.name)
     const buf = await file.arrayBuffer()
-    const wb = XLSX.read(buf, { type: 'array' })
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true })
     const ws = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' })
     const facturi = parseFisaWinMentor(rows)
     // matching pe numar_contract
     const enriched = facturi.map((f, i) => {
@@ -384,9 +401,13 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
                         </td>
                         <td style={{ padding: '7px 6px' }}>
                           <select value={f.contract_id || ''} onChange={e => setContractFor(f._idx, e.target.value)}
-                            style={{ ...S.select, width: 200, padding: '5px 8px', fontSize: 11, background: f.contract_id ? G.bg : G.yellow + '22' }}>
-                            <option value="">⚠️ Nealocată</option>
-                            {optiuniContracte.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                            style={{
+                              ...S.select, width: 200, padding: '5px 8px', fontSize: 11,
+                              background: G.bg, color: f.contract_id ? G.text : G.yellow,
+                              border: `1px solid ${f.contract_id ? G.border : G.yellow}`,
+                            }}>
+                            <option value="" style={{ background: G.surface, color: G.yellow }}>⚠️ Nealocată</option>
+                            {optiuniContracte.map(o => <option key={o.id} value={o.id} style={{ background: G.surface, color: G.text }}>{o.label}</option>)}
                           </select>
                         </td>
                       </tr>
@@ -548,13 +569,13 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
               style={{
                 padding: '3px 6px', fontSize: 11, fontWeight: 700, borderRadius: 5,
                 background: (st.color) + '22', color: st.color, border: `1px solid ${st.color}44`,
-                cursor: 'pointer', outline: 'none',
+                cursor: 'pointer', outline: 'none', colorScheme: 'dark',
               }}>
-              <option value="activ">Activ</option>
-              <option value="suspendat">Suspendat</option>
-              <option value="finalizat">Închis</option>
-              <option value="draft">Draft</option>
-              <option value="reziliat">Reziliat</option>
+              <option value="activ" style={{ background: G.surface, color: G.text }}>Activ</option>
+              <option value="suspendat" style={{ background: G.surface, color: G.text }}>Suspendat</option>
+              <option value="finalizat" style={{ background: G.surface, color: G.text }}>Închis</option>
+              <option value="draft" style={{ background: G.surface, color: G.text }}>Draft</option>
+              <option value="reziliat" style={{ background: G.surface, color: G.text }}>Reziliat</option>
             </select>
           )}
 
@@ -1358,12 +1379,12 @@ export default function ContracteComerciale({ profile }) {
                                 {canManage && (
                                   <select value={d.status} onChange={e => handleChangeStatus(d, e.target.value)}
                                     title="Schimbă status"
-                                    style={{ padding: '2px 5px', fontSize: 10, fontWeight: 700, borderRadius: 4, background: dSt.color + '22', color: dSt.color, border: `1px solid ${dSt.color}44`, cursor: 'pointer', outline: 'none' }}>
-                                    <option value="activ">Activ</option>
-                                    <option value="suspendat">Suspendat</option>
-                                    <option value="finalizat">Închis</option>
-                                    <option value="draft">Draft</option>
-                                    <option value="reziliat">Reziliat</option>
+                                    style={{ padding: '2px 5px', fontSize: 10, fontWeight: 700, borderRadius: 4, background: dSt.color + '22', color: dSt.color, border: `1px solid ${dSt.color}44`, cursor: 'pointer', outline: 'none', colorScheme: 'dark' }}>
+                                    <option value="activ" style={{ background: G.surface, color: G.text }}>Activ</option>
+                                    <option value="suspendat" style={{ background: G.surface, color: G.text }}>Suspendat</option>
+                                    <option value="finalizat" style={{ background: G.surface, color: G.text }}>Închis</option>
+                                    <option value="draft" style={{ background: G.surface, color: G.text }}>Draft</option>
+                                    <option value="reziliat" style={{ background: G.surface, color: G.text }}>Reziliat</option>
                                   </select>
                                 )}
                                 <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
