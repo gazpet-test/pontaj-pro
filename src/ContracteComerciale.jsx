@@ -433,7 +433,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onChangeStatus }) {
+function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onChangeStatus, isMama, nrCopii, totalCopii, collapsed, onToggleCollapse }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
@@ -443,9 +443,29 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
   return (
     <div style={{
       ...S.card, padding: '14px 18px', marginBottom: 8,
-      borderLeft: `3px solid ${isDownstream ? G.purple : G.blue}`,
+      borderLeft: `3px solid ${isMama ? G.blue : (isDownstream ? G.purple : G.blue)}`,
+      ...(isMama ? {
+        background: 'linear-gradient(180deg, #15233D 0%, #131A2A 100%)',
+        border: `1px solid ${G.blue}66`,
+        borderLeft: `4px solid ${G.blue}`,
+        boxShadow: `0 0 0 1px ${G.blue}22`,
+      } : {}),
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        {/* Buton roll-up/down pentru contractul mamă */}
+        {isMama && (
+          <button onClick={() => onToggleCollapse(c.id)}
+            title={collapsed ? 'Arată subcontractele' : 'Ascunde subcontractele'}
+            style={{
+              width: 28, height: 28, borderRadius: 7, flexShrink: 0, marginTop: 4,
+              background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}55`,
+              cursor: 'pointer', fontSize: 14, fontWeight: 800, lineHeight: 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+            {collapsed ? '▸' : '▾'}
+          </button>
+        )}
+
         {/* Icon sens */}
         <div style={{
           width: 36, height: 36, borderRadius: 8, flexShrink: 0,
@@ -462,6 +482,13 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
             <span style={{ fontSize: 13, fontWeight: 700, color: G.text }}>
               {c.numar_contract ? `Nr. ${c.numar_contract}` : '—'}
             </span>
+            {isMama && (
+              <Badge
+                label={collapsed
+                  ? `🔗 ${nrCopii} ${nrCopii === 1 ? 'subcontract' : 'subcontracte'} · ${fmtRON(totalCopii)} (ascunse)`
+                  : `🔗 ${nrCopii} ${nrCopii === 1 ? 'subcontract' : 'subcontracte'}`}
+                color={G.blue} />
+            )}
             <Badge label={st.label} color={st.color} />
             {tip && <Badge label={tip.label} color={tip.color} emoji={tip.emoji} />}
             {rol && <Badge label={rol.label} color={rol.color} />}
@@ -1138,6 +1165,9 @@ export default function ContracteComerciale({ profile }) {
   const [liniiContract, setLiniiContract] = useState(null)
   const [facturiContract, setFacturiContract] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState({})  // { [contractMamaId]: true=ascuns }
+
+  const toggleCollapse = (id) => setCollapsed(prev => ({ ...prev, [id]: !prev[id] }))
 
   const isOwner = profile?.is_owner === true
   const canManage = isOwner || profile?.can_manage_contracts === true
@@ -1294,11 +1324,16 @@ export default function ContracteComerciale({ profile }) {
                 return (
                   <React.Fragment key={c.id}>
                     <ContractCard c={c} isOwner={isOwner} canManage={canManage}
+                      isMama={childDs.length > 0}
+                      nrCopii={childDs.length}
+                      totalCopii={childDs.reduce((s, d) => s + Number(d.valoare_lei || 0), 0)}
+                      collapsed={!!collapsed[c.id]}
+                      onToggleCollapse={toggleCollapse}
                       onEdit={c => { setEditContract(c); setModalOpen(true) }}
                       onViewLinii={c => setLiniiContract(c)}
                       onViewFacturi={c => setFacturiContract(c)}
                       onChangeStatus={handleChangeStatus} />
-                    {childDs.length > 0 && (
+                    {childDs.length > 0 && !collapsed[c.id] && (
                       <div style={{ marginLeft: 24, marginBottom: 8 }}>
                         {childDs.map(d => {
                           const dSt = STATUS_META[d.status] || STATUS_META.draft
