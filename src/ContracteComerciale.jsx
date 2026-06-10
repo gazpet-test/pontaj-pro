@@ -6,7 +6,10 @@
 //                 PV recunoscut ca plată, capturare moneda/valoare_moneda/curs
 //                 Alocare automată după șantierul din Observații (multi-contract)
 //                 Upsert cu ignoreDuplicates — re-importul NU mai suprascrie alocările
-// Fundație BD: contracte_terti extins + contracte_linii + v_contracte_cu_linii (+ EUR)
+// 10.06.2026 v3 — TVA: fișa 401 e CU TVA, contractele FĂRĂ TVA. cota_tva per document
+//                 (auto 19/21 după dată, override la import). Realizat % + Rămas de
+//                 facturat = pe NET; Plătit + Rest de plată = CU TVA (cash real).
+// Fundație BD: contracte_terti extins + contracte_linii + v_contracte_cu_linii (+ EUR + net TVA)
 // ===========================================================================
 
 import React, { useState, useEffect, useMemo } from 'react'
@@ -66,6 +69,10 @@ function fmtRON(v) {
 function fmtEUR(v) {
   if (!v) return '—'
   return Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €'
+}
+// Cota standard TVA RO după data documentului: 19% până la 31.07.2025, 21% de la 01.08.2025
+function cotaTvaLaData(dataISO) {
+  return dataISO && dataISO < '2025-08-01' ? 19 : 21
 }
 
 // ─── Badge helper ───────────────────────────────────────────────────────────
@@ -230,13 +237,19 @@ function FacturiModal({ contract, profile, onClose, onChanged }) {
   const restDePlata = total - totalPlatit
   const nrFacturi = facturi.filter(f => !f.este_plata).length
   const valContract = Number(contract.valoare_lei || 0)
+  // TVA: fișa 401 e CU TVA, contractul e FĂRĂ TVA → pentru % realizat și rămas de
+  // facturat comparăm NET vs NET. Plătit/Rest de plată rămân CU TVA (cash-ul real).
+  const netOf = f => Number(f.valoare_lei || 0) / (1 + Number(f.cota_tva ?? 21) / 100)
+  const netEurOf = f => Number(f.valoare_moneda || 0) / (1 + Number(f.cota_tva ?? 21) / 100)
+  const totalNet = facturi.filter(f => !f.este_plata).reduce((s, f) => s + netOf(f), 0)
   // Mod EUR: la contractele valutare, RON-ul contractului e la cursul SEMNĂRII iar
   // facturile la cursul emiterii → procentul în RON distorsionează. Calculăm în EUR.
   const valContractEur = Number(contract.valoare_eur || 0)
   const totalEur = facturi.filter(f => !f.este_plata && f.moneda && f.moneda !== 'RON').reduce((s, f) => s + Number(f.valoare_moneda || 0), 0)
   const platitEur = facturi.filter(f => f.este_plata && f.moneda && f.moneda !== 'RON').reduce((s, f) => s + Number(f.valoare_moneda || 0), 0)
+  const totalNetEur = facturi.filter(f => !f.este_plata && f.moneda && f.moneda !== 'RON').reduce((s, f) => s + netEurOf(f), 0)
   const modEur = valContractEur > 0 && totalEur !== 0
-  const procent = modEur ? (totalEur / valContractEur) * 100 : (valContract > 0 ? (total / valContract) * 100 : null)
+  const procent = modEur ? (totalNetEur / valContractEur) * 100 : (valContract > 0 ? (totalNet / valContract) * 100 : null)
   const depasire = procent != null && procent > 100
 
   return (
@@ -253,24 +266,25 @@ function FacturiModal({ contract, profile, onClose, onChanged }) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
         </div>
 
-        {/* Sumar — la contracte valutare cifra mare e în EUR, RON-ul e secundar */}
+        {/* Sumar — Facturat/Rămas de facturat pe NET (comparabil cu contractul fără TVA);
+            Plătit/Rest de plată CU TVA (cash real). La contracte valutare cifra mare e EUR. */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 18 }}>
           {[
             modEur
-              ? { label: 'Contractat', val: fmtEUR(valContractEur), color: G.text, sub: fmtRON(valContract) }
-              : { label: 'Contractat', val: fmtRON(valContract), color: G.text },
+              ? { label: 'Contractat', val: fmtEUR(valContractEur), color: G.text, sub: `fără TVA · ${fmtRON(valContract)}` }
+              : { label: 'Contractat', val: fmtRON(valContract), color: G.text, sub: 'fără TVA' },
             modEur
-              ? { label: 'Facturat', val: fmtEUR(totalEur), color: G.green, sub: `${nrFacturi} facturi · ${fmtRON(total)}` }
-              : { label: 'Facturat', val: fmtRON(total), color: G.green, sub: `${nrFacturi} facturi` },
+              ? { label: 'Facturat (net)', val: fmtEUR(totalNetEur), color: G.green, sub: `${nrFacturi} facturi · cu TVA: ${fmtEUR(totalEur)}` }
+              : { label: 'Facturat (net)', val: fmtRON(totalNet), color: G.green, sub: `${nrFacturi} facturi · cu TVA: ${fmtRON(total)}` },
             modEur
-              ? { label: 'Plătit', val: fmtEUR(platitEur), color: G.blue, sub: fmtRON(totalPlatit) }
-              : { label: 'Plătit', val: fmtRON(totalPlatit), color: G.blue, sub: 'OP-uri' },
+              ? { label: 'Plătit', val: fmtEUR(platitEur), color: G.blue, sub: `cu TVA · ${fmtRON(totalPlatit)}` }
+              : { label: 'Plătit', val: fmtRON(totalPlatit), color: G.blue, sub: 'cu TVA' },
             modEur
-              ? { label: 'Rest de plată', val: Math.abs(totalEur - platitEur) < 0.005 ? '0 €' : fmtEUR(totalEur - platitEur), color: (totalEur - platitEur) > 0.005 ? G.orange : G.green, sub: fmtRON(restDePlata) }
-              : { label: 'Rest de plată', val: Math.abs(restDePlata) < 0.005 ? '0 RON' : fmtRON(restDePlata), color: restDePlata > 0.005 ? G.orange : G.green, sub: 'facturat − plătit' },
+              ? { label: 'Rest de plată', val: Math.abs(totalEur - platitEur) < 0.005 ? '0 €' : fmtEUR(totalEur - platitEur), color: (totalEur - platitEur) > 0.005 ? G.orange : G.green, sub: `cu TVA · ${fmtRON(restDePlata)}` }
+              : { label: 'Rest de plată', val: Math.abs(restDePlata) < 0.005 ? '0 RON' : fmtRON(restDePlata), color: restDePlata > 0.005 ? G.orange : G.green, sub: 'cu TVA · facturat − plătit' },
             modEur
-              ? { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtEUR(Math.abs(valContractEur - totalEur)), color: depasire ? G.red : G.text, sub: 'în valuta contractului' }
-              : { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtRON(Math.abs(valContract - total)), color: depasire ? G.red : G.text },
+              ? { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtEUR(Math.abs(valContractEur - totalNetEur)), color: depasire ? G.red : G.text, sub: 'fără TVA' }
+              : { label: depasire ? '⚠️ Depășire' : 'Rămas de facturat', val: fmtRON(Math.abs(valContract - totalNet)), color: depasire ? G.red : G.text, sub: 'fără TVA' },
           ].map(k => (
             <div key={k.label} style={{ ...S.card, padding: '10px 12px' }}>
               <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.label}</div>
@@ -336,6 +350,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
   const [step, setStep] = useState(1)        // 1=upload, 2=review, 3=done
   const [fileName, setFileName] = useState('')
   const [furnizor, setFurnizor] = useState('')
+  const [cotaSel, setCotaSel] = useState('auto')  // 'auto' (19/21 după dată) | '21' | '19' | '0'
   const [parsed, setParsed] = useState([])   // facturi parsate + matching
   const [saving, setSaving] = useState(false)
   const [rezultat, setRezultat] = useState(null)
@@ -421,6 +436,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
       tip_document: f.tip_document, numar_document: f.numar_document,
       data_document: f.data_document, valoare_lei: f.valoare_lei,
       moneda: f.moneda || 'RON', valoare_moneda: f.valoare_moneda ?? null, curs: f.curs ?? null,
+      cota_tva: cotaSel === 'auto' ? cotaTvaLaData(f.data_document) : Number(cotaSel),
       observatii_winmentor: f.observatii, referinta_detectata: f.ref_text,
       alocat: f.alocat, este_plata: !!f.este_plata, sursa: 'winmentor_xls', import_id: imp?.id || null,
       created_by: user?.id || null,
@@ -454,6 +470,18 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
                 placeholder="ex: NDT TECHNICAL EXAMINATION" style={S.input} />
               <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
                 Numele furnizorului din fișa WinMentor. Folosit la dedup (aceeași factură nu se dublează la re-import).
+              </div>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Cota TVA inclusă în fișă</label>
+              <select value={cotaSel} onChange={e => setCotaSel(e.target.value)} style={S.select}>
+                <option value="auto" style={{ background: G.surface }}>Automat după dată (19% până la 31.07.2025, 21% după)</option>
+                <option value="21" style={{ background: G.surface }}>21% (standard actual)</option>
+                <option value="19" style={{ background: G.surface }}>19% (standard vechi)</option>
+                <option value="0" style={{ background: G.surface }}>0% — fără TVA / taxare inversă / neplătitor</option>
+              </select>
+              <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
+                Fișa 401 e cu TVA inclus, contractele sunt fără TVA — cota e folosită la calculul net pentru % realizat și rămas de facturat.
               </div>
             </div>
             <DropZone
