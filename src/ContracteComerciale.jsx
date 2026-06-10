@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
+import DropZone from './DropZone.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3',
@@ -246,8 +247,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
     [contracte]
   )
 
-  async function handleFile(e) {
-    const file = e.target.files?.[0]
+  async function handleFile(file) {
     if (!file) return
     setFileName(file.name)
     const buf = await file.arrayBuffer()
@@ -329,15 +329,14 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
                 Numele furnizorului din fișa WinMentor. Folosit la dedup (aceeași factură nu se dublează la re-import).
               </div>
             </div>
-            <label style={{
-              display: 'block', padding: 30, border: `2px dashed ${G.border}`, borderRadius: 10,
-              textAlign: 'center', cursor: 'pointer', background: G.bg,
-            }}>
-              <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ display: 'none' }} />
-              <div style={{ fontSize: 32, marginBottom: 8 }}>📊</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>Alege fișa XLSX</div>
-              <div style={{ fontSize: 12, color: G.muted, marginTop: 4 }}>Export „Fișă cont 401" din WinMentor</div>
-            </label>
+            <DropZone
+              onFile={handleFile}
+              accept=".xlsx,.xls"
+              icon="📊"
+              color={G.green}
+              label="Trage fișa XLSX aici sau click"
+              hint={'Export „Fișă cont 401" din WinMentor'}
+            />
           </div>
         )}
 
@@ -613,8 +612,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
   const [pdfUploading, setPdfUploading] = useState(false)
   const [pdfPath, setPdfPath] = useState(contract?.pdf_path || '')
 
-  async function handlePdfSelect(e) {
-    const file = e.target.files?.[0]
+  async function handlePdfSelect(file) {
     if (!file) return
     if (!file.type.includes('pdf')) { setErr('Doar fișiere PDF.'); return }
     if (file.size > 20 * 1024 * 1024) { setErr('PDF prea mare (max 20MB).'); return }
@@ -915,15 +913,15 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
               📄 {pdfFile.name} ({(pdfFile.size/1024/1024).toFixed(1)} MB) — se uploadează la salvare
             </div>
           )}
-          <label style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8,
-            padding: '8px 14px', background: G.surface, border: `1px dashed ${G.border}`,
-            borderRadius: 8, cursor: 'pointer', fontSize: 12, color: G.muted, fontWeight: 600,
-          }}>
-            {pdfUploading ? '⏳ Se uploadează...' : '📤 ' + (pdfPath ? 'Înlocuiește PDF' : 'Upload PDF')}
-            <input type="file" accept="application/pdf" onChange={handlePdfSelect}
-              style={{ display: 'none' }} disabled={pdfUploading} />
-          </label>
+          <DropZone
+            onFile={handlePdfSelect}
+            accept="application/pdf"
+            icon="📤"
+            compact
+            disabled={pdfUploading}
+            label={pdfUploading ? 'Se uploadează...' : (pdfPath ? 'Înlocuiește PDF — trage sau click' : 'Trage PDF aici sau click')}
+            hint="PDF, max 20MB"
+          />
         </div>
 
         {err && (
