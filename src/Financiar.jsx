@@ -337,10 +337,14 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       const titlu = (fData.titlu_scurt || form.titlu_scurt || '')
         .trim().replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_.\-]/g,'')
 
+      // Proiect cod intern (ex: PRUNISOR_JUPA)
+      const proiectCod = proiecte.find(p => String(p.id) === String(fData.proiect_id || form.proiect_id))?.cod_intern || ''
+      const proiectClean = proiectCod.trim().replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'')
+
       const nrComplet = `${fData.serie||'GAZ'}-${fData.nr}`
       const fileName = titlu
-        ? `Factura_GAZPET_${nrComplet}_${benef}_${titlu}_${dataFmt}.pdf`
-        : `Factura_GAZPET_${nrComplet}_${benef}_${dataFmt}.pdf`
+        ? `Factura_GAZPET_${nrComplet}_${proiectClean ? proiectClean + '_' : ''}${benef}_${titlu}_${dataFmt}.pdf`
+        : `Factura_GAZPET_${nrComplet}_${proiectClean ? proiectClean + '_' : ''}${benef}_${dataFmt}.pdf`
       const path = `${fData.an || new Date().getFullYear()}/${fileName}`
       const { error: upErr } = await supabase.storage.from('facturi-emise').upload(path, pdfBlob, { contentType:'application/pdf', upsert:true })
       if (!upErr) {
