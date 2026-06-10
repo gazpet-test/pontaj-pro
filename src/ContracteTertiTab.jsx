@@ -322,7 +322,7 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterCat, setFilterCat] = useState('all')
-  const [filterSens, setFilterSens] = useState('all')
+  const [filterSens, setFilterSens] = useState('incasare')
   const [expandedId, setExpandedId] = useState(null)
 
   const benefMap = useMemo(() => Object.fromEntries(beneficiari.map(b => [b.id, b.nume])), [beneficiari])

@@ -532,11 +532,13 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
               {c.numar_contract ? `Nr. ${c.numar_contract}` : '—'}
             </span>
             {isMama && (
-              <Badge
-                label={collapsed
-                  ? `🔗 ${nrCopii} ${nrCopii === 1 ? 'subcontract' : 'subcontracte'} · ${fmtRON(totalCopii)} (ascunse)`
-                  : `🔗 ${nrCopii} ${nrCopii === 1 ? 'subcontract' : 'subcontracte'}`}
-                color={G.blue} />
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '3px 10px', borderRadius: 6, fontSize: 12.5, fontWeight: 800,
+                background: G.orange + '26', color: G.orange, border: `1px solid ${G.orange}66`,
+              }}>
+                🔗 {nrCopii} {nrCopii === 1 ? 'subcontract' : 'subcontracte'}{collapsed ? ` · ${fmtRON(totalCopii)}` : ''}
+              </span>
             )}
             <Badge label={st.label} color={st.color} />
             {tip && <Badge label={tip.label} color={tip.color} emoji={tip.emoji} />}
@@ -583,7 +585,7 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
             {isDownstream ? '↑' : '↓'} {fmtRON(c.valoare_lei)}
           </div>
           {c.nr_acte_aditionale > 0 && (
-            <div style={{ fontSize: 11, color: G.muted }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>
               +{c.nr_acte_aditionale} acte adiționale
             </div>
           )}
@@ -1213,9 +1215,9 @@ export default function ContracteComerciale({ profile }) {
   const [liniiContract, setLiniiContract] = useState(null)
   const [facturiContract, setFacturiContract] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
-  const [collapsed, setCollapsed] = useState({})  // { [contractMamaId]: true=ascuns }
+  const [expanded, setExpanded] = useState({})  // { [contractMamaId]: true=deschis }; gol = toate închise
 
-  const toggleCollapse = (id) => setCollapsed(prev => ({ ...prev, [id]: !prev[id] }))
+  const toggleCollapse = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }))
 
   const isOwner = profile?.is_owner === true
   const canManage = isOwner || profile?.can_manage_contracts === true
@@ -1375,13 +1377,13 @@ export default function ContracteComerciale({ profile }) {
                       isMama={childDs.length > 0}
                       nrCopii={childDs.length}
                       totalCopii={childDs.reduce((s, d) => s + Number(d.valoare_lei || 0), 0)}
-                      collapsed={!!collapsed[c.id]}
+                      collapsed={!expanded[c.id]}
                       onToggleCollapse={toggleCollapse}
                       onEdit={c => { setEditContract(c); setModalOpen(true) }}
                       onViewLinii={c => setLiniiContract(c)}
                       onViewFacturi={c => setFacturiContract(c)}
                       onChangeStatus={handleChangeStatus} />
-                    {childDs.length > 0 && !collapsed[c.id] && (
+                    {childDs.length > 0 && expanded[c.id] && (
                       <div style={{ marginLeft: 24, marginBottom: 8 }}>
                         {childDs.map(d => {
                           const dSt = STATUS_META[d.status] || STATUS_META.draft
