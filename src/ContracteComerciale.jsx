@@ -114,6 +114,22 @@ function parseNum(v) {
   const n = parseFloat(s)
   return isNaN(n) ? 0 : n
 }
+function normNume(s) {
+  return (s || '').toString().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b(srl-d|srl|s\.r\.l|sa|s\.a|pfa|snc|scs|sca|ii)\b/g, '')
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ').trim()
+}
+function numeMatch(furnizor, partener) {
+  const a = normNume(furnizor), b = normNume(partener)
+  if (!a || !b) return false
+  if (a.includes(b) || b.includes(a)) return true
+  const stop = new Set(['trans', 'design', 'instal', 'solutions', 'group', 'grup', 'construct', 'constructii', 'prod', 'com', 'impex', 'serv', 'service', 'services', 'romania', 'company', 'expert', 'tech'])
+  const sig = t => t.length >= 3 && !stop.has(t)
+  const tb = new Set(b.split(' ').filter(sig))
+  return a.split(' ').filter(sig).some(t => tb.has(t))
+}
 function parseFisaWinMentor(rows) {
   const facturi = []
   const reCtr = /(?:ctr|contract|anexa)\.?\s*(?:nr\.?)?\s*(\d{2,5})/i
@@ -255,14 +271,22 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
   const [saving, setSaving] = useState(false)
   const [rezultat, setRezultat] = useState(null)
 
-  // contracte candidate pentru alocare (numar → contract)
-  const optiuniContracte = useMemo(
-    () => (contracte || []).filter(c => c.numar_contract).map(c => ({
+  // contracte de PLATĂ (prestatori/subcontractori) — acolo se alocă facturi cont 401
+  const contractePlata = useMemo(
+    () => (contracte || []).filter(c => c.numar_contract && c.sens === 'plata').map(c => ({
       id: c.id, numar: c.numar_contract,
+      partener: c.partener_text || c.beneficiar_name || c.denumire || '',
       label: `Nr. ${c.numar_contract} · ${(c.partener_text || c.beneficiar_name || c.denumire || '').slice(0, 40)}`,
     })),
     [contracte]
   )
+  // dropdown: doar contractele prestatorului curent (după furnizor), fallback la toate de plată
+  const optiuniContracte = useMemo(() => {
+    if (!furnizor.trim()) return contractePlata
+    const ale = contractePlata.filter(c => numeMatch(furnizor, c.partener))
+    return ale.length > 0 ? ale : contractePlata
+  }, [contractePlata, furnizor])
+  const furnizorFaraMatch = furnizor.trim() && contractePlata.some(c => numeMatch(furnizor, c.partener)) === false
 
   async function handleFile(file) {
     if (!file) return
@@ -276,7 +300,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
     const enriched = facturi.map((f, i) => {
       let contractId = null
       if (f.ref_nr) {
-        const hit = optiuniContracte.find(o => String(o.numar) === String(f.ref_nr))
+        const hit = contractePlata.find(o => String(o.numar) === String(f.ref_nr))
         if (hit) contractId = hit.id
       }
       return { ...f, _idx: i, contract_id: contractId, alocat: !!contractId }
@@ -374,6 +398,11 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
               ))}
             </div>
 
+            {furnizorFaraMatch && (
+              <div style={{ padding: '8px 12px', background: G.blue + '15', border: `1px solid ${G.blue}44`, borderRadius: 8, fontSize: 12, color: G.blue, marginBottom: 12 }}>
+                ℹ️ „{furnizor}" nu se potrivește cu niciun contract de plată — în dropdown apar toate contractele de prestare. Verifică numele furnizorului dacă te aștepți la potrivire automată.
+              </div>
+            )}
             {parsed.length === 0 ? (
               <div style={{ ...S.card, padding: 24, textAlign: 'center', color: G.muted, fontSize: 13 }}>
                 Nicio factură detectată în fișă. Verifică formatul (export „Fișă cont 401").
