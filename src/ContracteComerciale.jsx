@@ -1512,7 +1512,7 @@ export default function ContracteComerciale({ profile }) {
                       isMama={childDs.length > 0}
                       nrCopii={childDs.length}
                       totalCopii={childDs.reduce((s, d) => s + Number(d.valoare_lei || 0), 0)}
-                      totalFacturatCopii={childDs.reduce((s, d) => s + Number(d.total_facturat || 0), 0)}
+                      totalFacturatCopii={childDs.reduce((s, d) => s + Number(d.total_facturat_net ?? d.total_facturat ?? 0), 0)}
                       collapsed={!expanded[c.id]}
                       onToggleCollapse={toggleCollapse}
                       onEdit={c => { setEditContract(c); setModalOpen(true) }}
@@ -1544,10 +1544,13 @@ export default function ContracteComerciale({ profile }) {
                                 <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>↑ {fmtRON(d.valoare_lei)}</div>
                                 <ProgresBar procent={d.procent_realizat} compact />
                                 {(Number(d.total_facturat) > 0 || Number(d.total_platit) > 0) && (
-                                  <div style={{ fontSize: 10.5, textAlign: 'right', lineHeight: 1.5 }} title="Facturat = cont 401 (datorie). Plătit = OP-uri (bani ieșiți).">
+                                  <div style={{ fontSize: 10.5, textAlign: 'right', lineHeight: 1.5 }} title="Facturat/Plătit = cu TVA (cont 401). Rămas de facturat = NET, comparabil cu valoarea contractului (fără TVA).">
                                     <div style={{ color: G.green, fontWeight: 700 }}>📄 Facturat {fmtRON(d.total_facturat)}</div>
                                     <div style={{ color: G.blue, fontWeight: 700 }}>💸 Plătit {fmtRON(d.total_platit)}</div>
-                                    <div style={{ color: G.muted }}>Rămas de facturat {fmtRON(Number(d.valoare_lei || 0) - Number(d.total_facturat || 0))}</div>
+                                    {Number(d.total_facturat || 0) - Number(d.total_platit || 0) > 0.005 && (
+                                      <div style={{ color: G.orange, fontWeight: 700 }}>⏳ Rest de plată {fmtRON(Number(d.total_facturat || 0) - Number(d.total_platit || 0))}</div>
+                                    )}
+                                    <div style={{ color: G.muted }}>Rămas de facturat {fmtRON(Number(d.valoare_lei || 0) - Number(d.total_facturat_net ?? d.total_facturat ?? 0))} <span style={{ color: G.dim }}>net</span></div>
                                   </div>
                                 )}
                                 {canManage && (
