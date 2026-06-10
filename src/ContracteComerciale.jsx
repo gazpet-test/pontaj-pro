@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import * as XLSX from 'xlsx-js-style'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3',
@@ -71,8 +72,368 @@ function Badge({ label, color, emoji }) {
   )
 }
 
+// ─── Bară progres % realizat ─────────────────────────────────────────────────
+function ProgresBar({ procent, compact }) {
+  const p = procent == null ? 0 : Number(procent)
+  const depasire = p > 100
+  const fill = Math.min(p, 100)
+  const culoare = depasire ? G.red : p >= 90 ? G.yellow : G.green
+  return (
+    <div style={{ minWidth: compact ? 90 : 130 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+        <span style={{ fontSize: compact ? 9 : 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.3 }}>Realizat</span>
+        <span style={{ fontSize: compact ? 11 : 12, fontWeight: 800, color: culoare }}>
+          {procent == null ? '—' : `${p.toLocaleString('ro-RO', { maximumFractionDigits: 1 })}%`}
+          {depasire && ' ⚠️'}
+        </span>
+      </div>
+      <div style={{ height: compact ? 5 : 6, borderRadius: 4, background: G.border2, overflow: 'hidden' }}>
+        <div style={{ width: `${fill}%`, height: '100%', background: culoare, borderRadius: 4, transition: 'width .3s' }} />
+      </div>
+    </div>
+  )
+}
+
+// ─── Parser fișă cont 401 WinMentor (XLSX) ───────────────────────────────────
+// Întoarce DOAR facturile (credit, tip ≠ plată). Plățile (OP/debit) le ignoră.
+function parseNum(v) {
+  if (v == null || v === '') return 0
+  if (typeof v === 'number') return v
+  const n = parseFloat(String(v).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
+  return isNaN(n) ? 0 : n
+}
+function parseFisaWinMentor(rows) {
+  const facturi = []
+  const reCtr = /(?:ctr|contract|anexa)\.?\s*(?:nr\.?)?\s*(\d{2,5})/i
+  const reData = /^(\d{2})\.(\d{2})\.(\d{4})$/
+  for (const r of (rows || [])) {
+    if (!Array.isArray(r)) continue
+    const colA = (r[0] ?? '').toString().trim().toLowerCase()
+    if (colA.startsWith('total') || colA.replace(/\s/g, '').startsWith('total')) continue
+    const dataRaw = (r[1] ?? '').toString().trim()
+    const md = dataRaw.match(reData)
+    if (!md) continue
+    const tip = (r[2] ?? '').toString().trim()
+    const numar = (r[3] ?? '').toString().trim()
+    const credit = parseNum(r[10])
+    const debit = parseNum(r[9])
+    const valoareE = parseNum(r[4])
+    const obs = (r[14] ?? '').toString().trim()
+    const tipUp = tip.toUpperCase()
+    const ePlata = /^(OP|CH|CHIT|PLAT|ORDIN|EXTRAS)/.test(tipUp) || (debit > 0 && credit === 0)
+    if (ePlata) continue
+    const val = credit > 0 ? credit : valoareE
+    if (!(val > 0)) continue
+    const dataISO = `${md[3]}-${md[2]}-${md[1]}`
+    let refNr = null, refText = null
+    const mc = obs.match(reCtr)
+    if (mc) { refNr = mc[1]; refText = obs.slice(0, 80) }
+    facturi.push({ tip_document: tip, numar_document: numar, data_document: dataISO, valoare_lei: val, observatii: obs, ref_nr: refNr, ref_text: refText })
+  }
+  return facturi
+}
+
+// ─── Modal: vizualizare facturi alocate la un contract ───────────────────────
+function FacturiModal({ contract, profile, onClose, onChanged }) {
+  const [facturi, setFacturi] = useState([])
+  const [loading, setLoading] = useState(true)
+  const canManage = profile?.is_owner === true || profile?.can_manage_contracts === true
+
+  useEffect(() => { load() }, [])
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('contracte_subcontract_facturi')
+      .select('*').eq('contract_id', contract.id).eq('alocat', true).order('data_document')
+    setFacturi(data || [])
+    setLoading(false)
+  }
+  async function dezaloca(id) {
+    if (!confirm('Scoți factura de pe acest contract? Va reveni la „de confirmat".')) return
+    await supabase.from('contracte_subcontract_facturi').update({ contract_id: null, alocat: false }).eq('id', id)
+    load(); onChanged && onChanged()
+  }
+
+  const total = facturi.reduce((s, f) => s + Number(f.valoare_lei || 0), 0)
+  const valContract = Number(contract.valoare_lei || 0)
+  const procent = valContract > 0 ? (total / valContract) * 100 : null
+  const depasire = procent != null && procent > 100
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9001, padding: 16 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, width: '100%', maxWidth: 720, maxHeight: '88vh', overflowY: 'auto', padding: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>📄 Facturi subcontractor</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
+              Nr. {contract.numar_contract} — {(contract.denumire || '').slice(0, 55)}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
+        </div>
+
+        {/* Sumar */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 18 }}>
+          {[
+            { label: 'Contractat', val: fmtRON(valContract), color: G.text },
+            { label: 'Facturat', val: fmtRON(total), color: G.green, sub: `${facturi.length} facturi` },
+            { label: depasire ? '⚠️ Depășire' : 'Rămas', val: fmtRON(Math.abs(valContract - total)), color: depasire ? G.red : G.text },
+          ].map(k => (
+            <div key={k.label} style={{ ...S.card, padding: '10px 14px' }}>
+              <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4 }}>{k.label}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: k.color }}>{k.val}</div>
+              {k.sub && <div style={{ fontSize: 10, color: G.dim, marginTop: 2 }}>{k.sub}</div>}
+            </div>
+          ))}
+        </div>
+        <div style={{ marginBottom: 18 }}><ProgresBar procent={procent} /></div>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 30, color: G.muted }}>⏳ Se încarcă...</div>
+        ) : facturi.length === 0 ? (
+          <div style={{ ...S.card, padding: 30, textAlign: 'center', color: G.muted, fontSize: 13 }}>
+            Nicio factură alocată. Folosește <b style={{ color: G.text }}>„📥 Import facturi"</b> din pagina principală.
+          </div>
+        ) : (
+          <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ color: G.muted, textAlign: 'left' }}>
+                <th style={{ padding: '6px 4px', fontWeight: 600 }}>Document</th>
+                <th style={{ padding: '6px 4px', fontWeight: 600 }}>Data</th>
+                <th style={{ padding: '6px 4px', fontWeight: 600, textAlign: 'right' }}>Valoare</th>
+                <th style={{ padding: '6px 4px', fontWeight: 600 }}>Referință</th>
+                {canManage && <th />}
+              </tr>
+            </thead>
+            <tbody>
+              {facturi.map(f => (
+                <tr key={f.id} style={{ borderTop: `1px solid ${G.border}`, color: G.text }}>
+                  <td style={{ padding: '7px 4px' }}>{f.tip_document} {f.numar_document}</td>
+                  <td style={{ padding: '7px 4px', color: G.muted }}>{f.data_document}</td>
+                  <td style={{ padding: '7px 4px', textAlign: 'right', fontWeight: 600 }}>{fmtRON(f.valoare_lei)}</td>
+                  <td style={{ padding: '7px 4px', color: G.dim, fontSize: 11 }}>{f.referinta_detectata || '—'}</td>
+                  {canManage && (
+                    <td style={{ padding: '7px 4px', textAlign: 'right' }}>
+                      <button onClick={() => dezaloca(f.id)} title="Scoate de pe contract"
+                        style={{ padding: '3px 8px', background: G.red + '22', color: G.red, border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>✕</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal: import fișă WinMentor (.xlsx) ────────────────────────────────────
+function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
+  const [step, setStep] = useState(1)        // 1=upload, 2=review, 3=done
+  const [fileName, setFileName] = useState('')
+  const [furnizor, setFurnizor] = useState('')
+  const [parsed, setParsed] = useState([])   // facturi parsate + matching
+  const [saving, setSaving] = useState(false)
+  const [rezultat, setRezultat] = useState(null)
+
+  // contracte candidate pentru alocare (numar → contract)
+  const optiuniContracte = useMemo(
+    () => (contracte || []).filter(c => c.numar_contract).map(c => ({
+      id: c.id, numar: c.numar_contract,
+      label: `Nr. ${c.numar_contract} · ${(c.partener_text || c.beneficiar_name || c.denumire || '').slice(0, 40)}`,
+    })),
+    [contracte]
+  )
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    const buf = await file.arrayBuffer()
+    const wb = XLSX.read(buf, { type: 'array' })
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' })
+    const facturi = parseFisaWinMentor(rows)
+    // matching pe numar_contract
+    const enriched = facturi.map((f, i) => {
+      let contractId = null
+      if (f.ref_nr) {
+        const hit = optiuniContracte.find(o => String(o.numar) === String(f.ref_nr))
+        if (hit) contractId = hit.id
+      }
+      return { ...f, _idx: i, contract_id: contractId, alocat: !!contractId }
+    })
+    setParsed(enriched)
+    setStep(2)
+  }
+
+  function setContractFor(idx, contractId) {
+    setParsed(prev => prev.map(f => f._idx === idx
+      ? { ...f, contract_id: contractId ? Number(contractId) : null, alocat: !!contractId }
+      : f))
+  }
+
+  const cuRef = parsed.filter(f => f.contract_id)
+  const faraRef = parsed.filter(f => !f.contract_id)
+  const sumaTotal = parsed.reduce((s, f) => s + Number(f.valoare_lei || 0), 0)
+
+  async function salveaza() {
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    // 1. audit import
+    const { data: imp } = await supabase.from('contracte_subcontract_import').insert({
+      fisier_nume: fileName, furnizor_text: furnizor || null,
+      total_randuri: parsed.length, facturi_total: parsed.length,
+      facturi_alocate: cuRef.length, facturi_nealocate: faraRef.length,
+      suma_facturi_lei: sumaTotal, imported_by: user?.id || null,
+    }).select().single()
+
+    // 2. facturi (upsert pe cheia unică ca să nu dubleze la re-import)
+    const rows = parsed.map(f => ({
+      contract_id: f.contract_id, furnizor_text: furnizor || null,
+      tip_document: f.tip_document, numar_document: f.numar_document,
+      data_document: f.data_document, valoare_lei: f.valoare_lei,
+      observatii_winmentor: f.observatii, referinta_detectata: f.ref_text,
+      alocat: f.alocat, sursa: 'winmentor_xls', import_id: imp?.id || null,
+      created_by: user?.id || null,
+    }))
+    const { error, count } = await supabase.from('contracte_subcontract_facturi')
+      .upsert(rows, { onConflict: 'furnizor_text,tip_document,numar_document', count: 'exact' })
+    setSaving(false)
+    if (error) { alert('Eroare la salvare: ' + error.message); return }
+    setRezultat({ total: parsed.length, alocate: cuRef.length, nealocate: faraRef.length })
+    setStep(3)
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9001, padding: 16 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, width: '100%', maxWidth: 820, maxHeight: '90vh', overflowY: 'auto', padding: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>📥 Import facturi din WinMentor</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>Fișă cont 401 (furnizor) export XLSX · doar facturile intră în calcul</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
+        </div>
+
+        {/* STEP 1 — upload */}
+        {step === 1 && (
+          <div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Furnizor (subcontractor)</label>
+              <input value={furnizor} onChange={e => setFurnizor(e.target.value)}
+                placeholder="ex: NDT TECHNICAL EXAMINATION" style={S.input} />
+              <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
+                Numele furnizorului din fișa WinMentor. Folosit la dedup (aceeași factură nu se dublează la re-import).
+              </div>
+            </div>
+            <label style={{
+              display: 'block', padding: 30, border: `2px dashed ${G.border}`, borderRadius: 10,
+              textAlign: 'center', cursor: 'pointer', background: G.bg,
+            }}>
+              <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ display: 'none' }} />
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📊</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>Alege fișa XLSX</div>
+              <div style={{ fontSize: 12, color: G.muted, marginTop: 4 }}>Export „Fișă cont 401" din WinMentor</div>
+            </label>
+          </div>
+        )}
+
+        {/* STEP 2 — review */}
+        {step === 2 && (
+          <div>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+              {[
+                { label: 'Facturi găsite', val: parsed.length, color: G.blue },
+                { label: 'Matchate automat', val: cuRef.length, color: G.green },
+                { label: 'De confirmat', val: faraRef.length, color: faraRef.length > 0 ? G.yellow : G.muted },
+                { label: 'Sumă totală', val: fmtRON(sumaTotal), color: G.text },
+              ].map(k => (
+                <div key={k.label} style={{ ...S.card, padding: '8px 14px', flex: 1, minWidth: 120 }}>
+                  <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.3 }}>{k.label}</div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: k.color }}>{k.val}</div>
+                </div>
+              ))}
+            </div>
+
+            {parsed.length === 0 ? (
+              <div style={{ ...S.card, padding: 24, textAlign: 'center', color: G.muted, fontSize: 13 }}>
+                Nicio factură detectată în fișă. Verifică formatul (export „Fișă cont 401").
+              </div>
+            ) : (
+              <div style={{ maxHeight: '46vh', overflowY: 'auto', border: `1px solid ${G.border}`, borderRadius: 8 }}>
+                <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: G.bg, color: G.muted, textAlign: 'left', position: 'sticky', top: 0 }}>
+                      <th style={{ padding: '8px 6px', fontWeight: 600 }}>Document</th>
+                      <th style={{ padding: '8px 6px', fontWeight: 600 }}>Data</th>
+                      <th style={{ padding: '8px 6px', fontWeight: 600, textAlign: 'right' }}>Valoare</th>
+                      <th style={{ padding: '8px 6px', fontWeight: 600 }}>Observații WinMentor</th>
+                      <th style={{ padding: '8px 6px', fontWeight: 600 }}>Alocare contract</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsed.map(f => (
+                      <tr key={f._idx} style={{ borderTop: `1px solid ${G.border}`, color: G.text, background: f.contract_id ? 'transparent' : G.yellow + '11' }}>
+                        <td style={{ padding: '7px 6px', whiteSpace: 'nowrap' }}>{f.tip_document} {f.numar_document}</td>
+                        <td style={{ padding: '7px 6px', color: G.muted, whiteSpace: 'nowrap' }}>{f.data_document}</td>
+                        <td style={{ padding: '7px 6px', textAlign: 'right', fontWeight: 600 }}>{fmtRON(f.valoare_lei)}</td>
+                        <td style={{ padding: '7px 6px', color: G.dim, fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.observatii}>
+                          {f.observatii || <span style={{ color: G.yellow }}>(fără observație)</span>}
+                        </td>
+                        <td style={{ padding: '7px 6px' }}>
+                          <select value={f.contract_id || ''} onChange={e => setContractFor(f._idx, e.target.value)}
+                            style={{ ...S.select, width: 200, padding: '5px 8px', fontSize: 11, background: f.contract_id ? G.bg : G.yellow + '22' }}>
+                            <option value="">⚠️ Nealocată</option>
+                            {optiuniContracte.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {faraRef.length > 0 && (
+              <div style={{ marginTop: 12, padding: '10px 14px', background: G.yellow + '15', border: `1px solid ${G.yellow}44`, borderRadius: 8, fontSize: 12, color: G.yellow }}>
+                ⚠️ {faraRef.length} {faraRef.length === 1 ? 'factură rămâne nealocată' : 'facturi rămân nealocate'}. Alege contractul din dropdown sau lasă-le nealocate (le confirmi mai târziu — nu intră în % până le aloci).
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 18 }}>
+              <button onClick={() => { setStep(1); setParsed([]) }} style={{ ...S.btnP, background: G.surface, border: `1px solid ${G.border}`, color: G.muted }}>← Înapoi</button>
+              <button onClick={salveaza} disabled={saving || parsed.length === 0}
+                style={{ ...S.btnP, opacity: (saving || parsed.length === 0) ? 0.5 : 1, cursor: (saving || parsed.length === 0) ? 'not-allowed' : 'pointer' }}>
+                {saving ? '⏳ Se salvează...' : `💾 Salvează ${parsed.length} facturi`}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3 — done */}
+        {step === 3 && rezultat && (
+          <div style={{ textAlign: 'center', padding: 20 }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: G.text, marginBottom: 8 }}>Import finalizat</div>
+            <div style={{ fontSize: 13, color: G.muted, marginBottom: 6 }}>
+              {rezultat.total} facturi procesate · {rezultat.alocate} alocate · {rezultat.nealocate} de confirmat
+            </div>
+            <div style={{ fontSize: 11, color: G.dim, marginBottom: 18 }}>
+              (Re-importul aceleiași fișe nu dublează — facturile existente se actualizează.)
+            </div>
+            <button onClick={onDone} style={{ ...S.btnP }}>Gata</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
+function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onChangeStatus }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
@@ -141,16 +502,42 @@ function ContractCard({ c, isOwner, onEdit, onViewLinii }) {
         </div>
 
         {/* Valoare + acțiuni */}
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 800, color: isDownstream ? G.red : G.green, marginBottom: 4 }}>
+        <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: isDownstream ? G.red : G.green }}>
             {isDownstream ? '↑' : '↓'} {fmtRON(c.valoare_lei)}
           </div>
           {c.nr_acte_aditionale > 0 && (
-            <div style={{ fontSize: 11, color: G.muted, marginBottom: 6 }}>
+            <div style={{ fontSize: 11, color: G.muted }}>
               +{c.nr_acte_aditionale} acte adiționale
             </div>
           )}
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 4 }}>
+
+          {/* Bară % realizat */}
+          <ProgresBar procent={c.procent_realizat} />
+
+          {/* Quick status (owner/manager) */}
+          {canManage && (
+            <select value={c.status} onChange={e => onChangeStatus(c, e.target.value)}
+              title="Schimbă status contract"
+              style={{
+                padding: '3px 6px', fontSize: 11, fontWeight: 700, borderRadius: 5,
+                background: (st.color) + '22', color: st.color, border: `1px solid ${st.color}44`,
+                cursor: 'pointer', outline: 'none',
+              }}>
+              <option value="activ">Activ</option>
+              <option value="suspendat">Suspendat</option>
+              <option value="finalizat">Închis</option>
+              <option value="draft">Draft</option>
+              <option value="reziliat">Reziliat</option>
+            </select>
+          )}
+
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 2 }}>
+            <button onClick={() => onViewFacturi(c)} style={{
+              padding: '5px 10px', background: G.green + '22', color: G.green,
+              border: `1px solid ${G.green}44`, borderRadius: 6, cursor: 'pointer',
+              fontSize: 11, fontWeight: 600,
+            }}>📄 Facturi ({c.nr_facturi_subc || 0})</button>
             <button onClick={() => onViewLinii(c)} style={{
               padding: '5px 10px', background: G.blue + '22', color: G.blue,
               border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer',
@@ -749,11 +1136,20 @@ export default function ContracteComerciale({ profile }) {
   const [modalOpen, setModalOpen] = useState(false)
   const [editContract, setEditContract] = useState(null)
   const [liniiContract, setLiniiContract] = useState(null)
+  const [facturiContract, setFacturiContract] = useState(null)
+  const [importOpen, setImportOpen] = useState(false)
 
   const isOwner = profile?.is_owner === true
   const canManage = isOwner || profile?.can_manage_contracts === true
 
   useEffect(() => { loadAll() }, [])
+
+  async function handleChangeStatus(c, nouStatus) {
+    if (nouStatus === c.status) return
+    const { error } = await supabase.from('contracte_terti').update({ status: nouStatus, updated_at: new Date().toISOString() }).eq('id', c.id)
+    if (error) { alert('Eroare la schimbare status: ' + error.message); return }
+    loadAll()
+  }
 
 
   async function loadAll() {
@@ -858,9 +1254,14 @@ export default function ContracteComerciale({ profile }) {
         </select>
 
         {canManage && (
-          <button onClick={() => { setEditContract(null); setModalOpen(true) }} style={{ ...S.btnP, marginLeft: 'auto' }}>
-            + Contract nou
-          </button>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+            <button onClick={() => setImportOpen(true)} style={{ ...S.btnP, background: G.green }}>
+              📥 Import facturi
+            </button>
+            <button onClick={() => { setEditContract(null); setModalOpen(true) }} style={{ ...S.btnP }}>
+              + Contract nou
+            </button>
+          </div>
         )}
       </div>
 
@@ -892,9 +1293,11 @@ export default function ContracteComerciale({ profile }) {
                 const childDs = contracte.filter(d => d.sens === 'plata' && String(d.contract_parinte_id) === String(c.id))
                 return (
                   <React.Fragment key={c.id}>
-                    <ContractCard c={c} isOwner={isOwner}
+                    <ContractCard c={c} isOwner={isOwner} canManage={canManage}
                       onEdit={c => { setEditContract(c); setModalOpen(true) }}
-                      onViewLinii={c => setLiniiContract(c)} />
+                      onViewLinii={c => setLiniiContract(c)}
+                      onViewFacturi={c => setFacturiContract(c)}
+                      onChangeStatus={handleChangeStatus} />
                     {childDs.length > 0 && (
                       <div style={{ marginLeft: 24, marginBottom: 8 }}>
                         {childDs.map(d => {
@@ -916,9 +1319,22 @@ export default function ContracteComerciale({ profile }) {
                                 <div style={{ fontSize: 12, color: G.text, wordBreak: 'break-word' }}>{d.denumire}</div>
                                 <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{d.partener_text || d.beneficiar_name}{d.site_qr && ` · 📍 ${d.site_qr}`}</div>
                               </div>
-                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                              <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>↑ {fmtRON(d.valoare_lei)}</div>
-                                <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                                <ProgresBar procent={d.procent_realizat} compact />
+                                {canManage && (
+                                  <select value={d.status} onChange={e => handleChangeStatus(d, e.target.value)}
+                                    title="Schimbă status"
+                                    style={{ padding: '2px 5px', fontSize: 10, fontWeight: 700, borderRadius: 4, background: dSt.color + '22', color: dSt.color, border: `1px solid ${dSt.color}44`, cursor: 'pointer', outline: 'none' }}>
+                                    <option value="activ">Activ</option>
+                                    <option value="suspendat">Suspendat</option>
+                                    <option value="finalizat">Închis</option>
+                                    <option value="draft">Draft</option>
+                                    <option value="reziliat">Reziliat</option>
+                                  </select>
+                                )}
+                                <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                                  <button onClick={() => setFacturiContract(d)} style={{ padding: '3px 8px', background: G.green + '22', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📄 Facturi ({d.nr_facturi_subc || 0})</button>
                                   <button onClick={() => setLiniiContract(d)} style={{ padding: '3px 8px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📋 Linii</button>
                                   {isOwner && <button onClick={() => { setEditContract(d); setModalOpen(true) }} style={{ padding: '3px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>✏️</button>}
                                 </div>
@@ -944,9 +1360,11 @@ export default function ContracteComerciale({ profile }) {
                 <div style={{ fontSize: 11, color: G.muted }}>({downstream.length} contracte · {fmtRON(downstream.reduce((s, c) => s + Number(c.valoare_lei || 0), 0))})</div>
               </div>
               {downstream.map(c => (
-                <ContractCard key={c.id} c={c} isOwner={isOwner}
+                <ContractCard key={c.id} c={c} isOwner={isOwner} canManage={canManage}
                   onEdit={c => { setEditContract(c); setModalOpen(true) }}
-                  onViewLinii={c => setLiniiContract(c)} />
+                  onViewLinii={c => setLiniiContract(c)}
+                  onViewFacturi={c => setFacturiContract(c)}
+                  onChangeStatus={handleChangeStatus} />
               ))}
             </div>
           )}
@@ -972,6 +1390,26 @@ export default function ContracteComerciale({ profile }) {
           contract={liniiContract}
           profile={profile}
           onClose={() => setLiniiContract(null)}
+        />
+      )}
+
+      {/* Modal facturi subcontractor (vizualizare per contract) */}
+      {facturiContract && (
+        <FacturiModal
+          contract={facturiContract}
+          profile={profile}
+          onClose={() => setFacturiContract(null)}
+          onChanged={loadAll}
+        />
+      )}
+
+      {/* Modal import facturi WinMentor (global) */}
+      {importOpen && (
+        <ImportFacturiModal
+          contracte={contracte}
+          profile={profile}
+          onClose={() => setImportOpen(false)}
+          onDone={() => { setImportOpen(false); loadAll() }}
         />
       )}
     </div>
