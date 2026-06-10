@@ -105,8 +105,31 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
   const [actionZileSilentiere, setActionZileSilentiere] = useState(7) // pentru silentiere
   const [processing, setProcessing] = useState(false)
 
+  // ─── ON/OFF Scorilos (suspendare temporară) ──────────────────────────────────
+  // Flag în settings: key='scorilos_enabled', value='true'|'false'
+  const [scorilosEnabled, setScorilosEnabled] = useState(true)
+  const [scorilosToggling, setScorilosToggling] = useState(false)
+
   const loadSugestii = useCallback(async () => {
     setLoad(true)
+
+    // 1. Verific dacă Scorilos e activ
+    const { data: setting } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', 'scorilos_enabled')
+      .maybeSingle()
+    const enabled = setting?.value !== 'false'
+    setScorilosEnabled(enabled)
+
+    // 2. Dacă e dezactivat, nu mai încărcăm sugestiile — listă goală
+    if (!enabled) {
+      setSugestii([])
+      setLoad(false)
+      return
+    }
+
+    // 3. Încărcare normală
     const { data, error } = await supabase
       .from('claude_bot_sugestii')
       .select('id, bot_run_id, tip_sugestie, tinta_tip, tinta_id, tinta_descriere, camp_propus, valoare_veche, valoare_noua, motivare, source_url, confidence, severity, status, created_at')
@@ -123,6 +146,28 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
     }
     setSugestii(data || [])
   }, [showToast])
+
+  // ─── Toggle ON/OFF (doar owner) ──────────────────────────────────────────────
+  const toggleScorilos = useCallback(async () => {
+    if (!profile?.is_owner) return
+    setScorilosToggling(true)
+    const newVal = !scorilosEnabled
+    const { error } = await supabase
+      .from('settings')
+      .upsert(
+        { key: 'scorilos_enabled', value: String(newVal), updated_at: new Date().toISOString() },
+        { onConflict: 'key' }
+      )
+    setScorilosToggling(false)
+    if (error) {
+      showToast('Eroare la schimbarea stării Scorilos: ' + error.message, 'error')
+      return
+    }
+    setScorilosEnabled(newVal)
+    showToast(newVal ? '⚔️ Scorilos REACTIVAT' : '🛡️ Scorilos SUSPENDAT', newVal ? 'success' : 'info')
+    if (newVal) loadSugestii()
+    else setSugestii([])
+  }, [profile, scorilosEnabled, showToast, loadSugestii])
 
   useEffect(() => { loadSugestii() }, [loadSugestii])
 
@@ -1058,9 +1103,34 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
           <div style={{ flex: 1 }}>
             <h2 style={{ margin: 0, fontSize: 18, color: G.text }}>Sugestii Scorilos</h2>
             <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
-              Patrula nocturnă propune. Tu validezi. {stats._total > 0 ? `${stats._total} sugestii pentru review.` : 'Nimic nou momentan.'}
+              {!scorilosEnabled
+                ? 'Sistem suspendat temporar — nu generează alerte noi.'
+                : <>Patrula nocturnă propune. Tu validezi. {stats._total > 0 ? `${stats._total} sugestii pentru review.` : 'Nimic nou momentan.'}</>}
             </div>
           </div>
+
+          {/* Toggle ON/OFF — doar owner */}
+          {profile?.is_owner && (
+            <button
+              onClick={toggleScorilos}
+              disabled={scorilosToggling}
+              title={scorilosEnabled ? 'Suspendă Scorilos temporar' : 'Reactivează Scorilos'}
+              style={{
+                padding: '8px 14px',
+                background: scorilosEnabled ? G.red + '22' : G.green + '22',
+                color: scorilosEnabled ? G.red : G.green,
+                border: `1px solid ${scorilosEnabled ? G.red + '55' : G.green + '55'}`,
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: scorilosToggling ? 'wait' : 'pointer',
+                fontFamily: 'inherit',
+                whiteSpace: 'nowrap',
+              }}>
+              {scorilosToggling ? '⏳' : (scorilosEnabled ? '🔴 Suspendă' : '🟢 Activează')}
+            </button>
+          )}
+
           <button 
             onClick={loadSugestii}
             disabled={load}
@@ -1078,6 +1148,27 @@ export default function SugestiiScorilosTab({ profile, showToast, onApplied, set
             {load ? '⟳ Se încarcă…' : '🔄 Reîncarcă'}
           </button>
         </div>
+
+        {/* Banner suspendat */}
+        {!scorilosEnabled && (
+          <div style={{
+            marginTop: 4,
+            padding: '12px 16px',
+            background: G.red + '15',
+            border: `1px solid ${G.red}55`,
+            borderRadius: 8,
+            display: 'flex', alignItems: 'center', gap: 12,
+          }}>
+            <span style={{ fontSize: 22 }}>🛡️</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: G.red }}>Scorilos suspendat</div>
+              <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
+                Monitorizarea AI e oprită — nu se generează alerte noi pe alimentări, km sau ore.
+                {profile?.is_owner ? ' Apasă „Activează" pentru a relua.' : ' Doar proprietarul poate reactiva.'}
+              </div>
+            </div>
+          </div>
+        )}
         
         {stats._total > 0 && (
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
