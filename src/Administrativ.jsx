@@ -33,7 +33,7 @@ const PRICING = {
   scanner_sonnet: { input: 3.0, output: 15.0 },
 }
 const USD_TO_RON = 5.0
-const BUGET_LUNAR_RON = 50.0
+const BUGET_LUNAR_RON = 250.0   // 11.06.2026: buget stabilit de Razvan
 
 // ===========================================================================
 // SUBCOMPONENTE
@@ -66,6 +66,7 @@ function TabCosturiAI() {
   const [period, setPeriod] = useState(30)  // 7 / 30 / 0 (all-time)
   const [chatbotStats, setChatbotStats] = useState({ users: [], totalQueries: 0, totalIn: 0, totalOut: 0, costUsd: 0 })
   const [scannerStats, setScannerStats] = useState({ logs: [], byUser: [], totalScans: 0, totalCost: 0, totalSaved: 0 })
+  const [edgeStats, setEdgeStats] = useState({ rows: [], totalUsd: 0 })   // 11.06: parsere PDF (ai_usage_log)
   const [loading, setLoading] = useState(true)
   const [showRawLogs, setShowRawLogs] = useState(false)
 
@@ -153,15 +154,23 @@ function TabCosturiAI() {
 
       setChatbotStats({ users: enrichedChatbot, totalQueries, totalIn, totalOut, costUsd: totalCostCb })
       setScannerStats({ logs: scannerLogs || [], byUser: scannerByUser, totalScans, totalCost: totalScanCost, totalSaved })
+
+      // 11.06.2026: costuri REALE edge functions (parsere PDF) — luna curentă
+      const { data: edgeRows } = await supabase.from('v_ai_cost_luna_curenta').select('*')
+      if (cancelled) return
+      const eRows = edgeRows || []
+      setEdgeStats({ rows: eRows, totalUsd: eRows.reduce((s, r) => s + Number(r.cost_usd || 0), 0) })
       setLoading(false)
     })()
     return () => { cancelled = true }
   }, [period])
 
-  // KPI grand total
-  const grandTotalUsd = chatbotStats.costUsd + scannerStats.totalCost
+  // KPI grand total (chatbot + scanner + parsere PDF edge)
+  const grandTotalUsd = chatbotStats.costUsd + scannerStats.totalCost + edgeStats.totalUsd
   const grandTotalRon = grandTotalUsd * USD_TO_RON
   const restantBuget = BUGET_LUNAR_RON - grandTotalRon
+  const pctBuget = Math.min(100, (grandTotalRon / BUGET_LUNAR_RON) * 100)
+  const alertaBuget = pctBuget >= 80
 
   // Total useri unici (combinat)
   const uniqueUsers = useMemo(() => {
@@ -231,11 +240,26 @@ function TabCosturiAI() {
                   <span>📷 Scanner AI ({period > 0 ? `${period}z` : 'all-time'}):</span>
                   <b style={{color:G.text}}>${scannerStats.totalCost.toFixed(4)} · {(scannerStats.totalCost * USD_TO_RON).toFixed(2)} RON</b>
                 </div>
-                <div style={{marginTop:10, padding:'8px 12px', background: restantBuget >= 0 ? G.green+'15' : G.red+'15',
-                  border:`1px solid ${restantBuget >= 0 ? G.green : G.red}55`, borderRadius:6,
-                  color: restantBuget >= 0 ? G.green : G.red, fontWeight:700}}>
-                  Buget lunar: {BUGET_LUNAR_RON} RON · Restant: <b>{restantBuget.toFixed(2)} RON</b>
-                  {restantBuget < 0 && ' ⚠ depășit'}
+                <div style={{display:'flex', justifyContent:'space-between'}}>
+                  <span>📄 Parsere PDF — contracte/anexe/ITP (luna curentă):</span>
+                  <b style={{color:G.text}}>${edgeStats.totalUsd.toFixed(4)} · {(edgeStats.totalUsd * USD_TO_RON).toFixed(2)} RON</b>
+                </div>
+                {edgeStats.rows.length > 0 && (
+                  <div style={{fontSize:10.5, color:G.dim, paddingLeft:18}}>
+                    {edgeStats.rows.map(r => `${r.function_name}: ${r.apeluri} apeluri · ${Number(r.cost_ron_estimat).toFixed(2)} RON`).join(' · ')}
+                  </div>
+                )}
+                <div style={{marginTop:10, padding:'10px 12px', background: restantBuget >= 0 ? (alertaBuget ? G.orange+'15' : G.green+'15') : G.red+'15',
+                  border:`1px solid ${restantBuget >= 0 ? (alertaBuget ? G.orange : G.green) : G.red}55`, borderRadius:6}}>
+                  <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6,
+                    color: restantBuget >= 0 ? (alertaBuget ? G.orange : G.green) : G.red, fontWeight:700, fontSize:12}}>
+                    <span>Buget lunar: {BUGET_LUNAR_RON} RON · Restant: <b>{restantBuget.toFixed(2)} RON</b></span>
+                    <span>{pctBuget.toFixed(1)}%{restantBuget < 0 ? ' ⚠ DEPĂȘIT' : alertaBuget ? ' ⚠ peste 80%!' : ''}</span>
+                  </div>
+                  <div style={{height:10, background:G.bg, borderRadius:6, overflow:'hidden'}}>
+                    <div style={{height:'100%', width:`${pctBuget}%`, borderRadius:6, transition:'width .4s',
+                      background: restantBuget < 0 ? G.red : alertaBuget ? G.orange : G.green}} />
+                  </div>
                 </div>
               </div>
             </div>
