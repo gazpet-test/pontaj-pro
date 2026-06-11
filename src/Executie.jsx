@@ -2102,6 +2102,8 @@ function FazeDeterminanteISC({ proiect }) {
   const [faze, setFaze] = useState([])
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)   // 11.06: roll up/down — implicit pliat
+  const [catFilter, setCatFilter] = useState('')      // filtru pe sistem ([CONDUCTĂ] etc.)
   const [msg, setMsg] = useState(null)
   const flash = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 4000) }
 
@@ -2171,13 +2173,20 @@ function FazeDeterminanteISC({ proiect }) {
     anulata:       { c: '#8B949E', l: 'ANULATĂ' },
   }
   const restante = faze.filter(f => f.status === 'neplanificata' || f.status === 'planificata').length
+  const catOf = d => { const m = /^\[([^\]]+)\]/.exec(d || ''); return m ? m[1] : 'ALTE' }
+  const categorii = [...new Set(faze.map(f => catOf(f.denumire)))]
+    .sort((a, b) => (a === 'CONDUCTĂ' ? -1 : b === 'CONDUCTĂ' ? 1 : a.localeCompare(b, 'ro')))
+  const fazeVizibile = catFilter ? faze.filter(f => catOf(f.denumire) === catFilter) : faze
+  const restanteCat = cat => faze.filter(f => catOf(f.denumire) === cat && (f.status === 'neplanificata' || f.status === 'planificata')).length
 
   return (
     <div style={{ marginTop: 10, padding: '12px 14px', background: '#EF444410', borderRadius: 8, border: '1px solid #EF444433' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: faze.length > 0 ? 10 : 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: (!collapsed && faze.length > 0) ? 10 : 0 }}>
         <span style={{ fontSize: 18 }}>🏛️</span>
-        <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444' }}>
-          Faze determinante ISC {faze.length > 0 && `(${faze.length})`}
+        <div onClick={() => setCollapsed(c => !c)}
+          style={{ fontSize: 12, fontWeight: 800, color: '#EF4444', cursor: 'pointer', userSelect: 'none' }}
+          title={collapsed ? 'Click pentru a desfășura lista' : 'Click pentru a plia lista'}>
+          {collapsed ? '▸' : '▾'} Faze determinante ISC {faze.length > 0 && `(${faze.length})`}
         </div>
         {restante > 0 && (
           <span style={{ fontSize: 10, fontWeight: 800, color: '#F0883E', padding: '2px 8px', background: '#F0883E22', borderRadius: 8 }}>
@@ -2196,7 +2205,25 @@ function FazeDeterminanteISC({ proiect }) {
         </div>
       </div>
       {msg && <div style={{ fontSize: 11, fontWeight: 700, color: msg.err ? '#EF4444' : '#3FB950', marginBottom: 8 }}>{msg.m}</div>}
-      {loading ? (
+      {!collapsed && faze.length > 0 && categorii.length > 1 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          <button onClick={() => setCatFilter('')}
+            style={{ padding: '7px 12px', fontSize: 11.5, fontWeight: 800, borderRadius: 16, cursor: 'pointer',
+              background: !catFilter ? '#EF444422' : 'transparent', color: !catFilter ? '#EF4444' : G.muted,
+              border: `1px solid ${!catFilter ? '#EF4444' : G.border}` }}>
+            Toate ({faze.length})
+          </button>
+          {categorii.map(cat => (
+            <button key={cat} onClick={() => setCatFilter(catFilter === cat ? '' : cat)}
+              style={{ padding: '7px 12px', fontSize: 11.5, fontWeight: 800, borderRadius: 16, cursor: 'pointer',
+                background: catFilter === cat ? '#EF444422' : 'transparent', color: catFilter === cat ? '#EF4444' : G.muted,
+                border: `1px solid ${catFilter === cat ? '#EF4444' : G.border}` }}>
+              {cat === 'CONDUCTĂ' ? '🔥 ' : ''}{cat} ({faze.filter(f => catOf(f.denumire) === cat).length}{restanteCat(cat) > 0 ? ` · ⚠${restanteCat(cat)}` : ''})
+            </button>
+          ))}
+        </div>
+      )}
+      {collapsed ? null : loading ? (
         <div style={{ fontSize: 11, color: G.muted }}>⏳ ...</div>
       ) : faze.length === 0 ? (
         <div style={{ fontSize: 11, color: G.muted, marginTop: 6 }}>
@@ -2204,7 +2231,7 @@ function FazeDeterminanteISC({ proiect }) {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {faze.map(f => {
+          {fazeVizibile.map(f => {
             const st = ST[f.status] || ST.neplanificata
             const next = NEXT[f.status]
             return (
