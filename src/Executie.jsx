@@ -526,6 +526,8 @@ function DashboardProiectePage({ onSelectProiect }) {
               onOpen={(tab) => onSelectProiect(p.id, tab)}
               onDetail={() => setSelectedProiect(p)}
               onEdit={() => setEditProiect(p)}
+              onRefresh={loadAll}
+              showToast={showToast}
             />
           ))}
         </div>
@@ -557,7 +559,7 @@ function DashboardProiectePage({ onSelectProiect }) {
 // ===========================================================================
 // PROIECT CARD — click pe titlu sau "→ Deschide" navighează la context
 // ===========================================================================
-function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit }) {
+function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, onRefresh, showToast }) {
   const terminStatus = (() => {
     if (!p.data_termen) return null
     const zile = p.zile_pana_termen
@@ -782,7 +784,17 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit })
             borderRadius: 6, fontSize: 11, color: G.yellow,
             display: 'flex', alignItems: 'center', gap: 6,
           }}>
-            ⚠️ Lipsește: {[!p.data_start && 'ordinul de începere', !p.data_termen && 'termenul de finalizare'].filter(Boolean).join(' și ')} — {!p.data_start ? 'se setează din contract, la „Ordine — proiect Execuție"' : 'apasă ✏️ Editează'}.
+            <span onClick={async () => {
+              if (p.data_start) return
+              const d = window.prompt('Data ordinului de începere (AAAA-LL-ZZ):', new Date().toISOString().slice(0, 10))
+              if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d.trim())) { if (d) showToast('Format invalid — folosește AAAA-LL-ZZ', 'error'); return }
+              const { error } = await supabase.from('executie_proiecte').update({ data_start: d.trim() }).eq('id', p.id)
+              if (error) showToast('Eroare: ' + error.message, 'error')
+              else { showToast('📅 Ordin de începere setat: ' + d.trim(), 'success'); onRefresh && onRefresh() }
+            }} style={{ cursor: !p.data_start ? 'pointer' : 'default', textDecoration: !p.data_start ? 'underline' : 'none' }}
+              title={!p.data_start ? 'Click — setează data ordinului de începere aici' : ''}>
+            ⚠️ Lipsește: {[!p.data_start && 'ordinul de începere', !p.data_termen && 'termenul de finalizare'].filter(Boolean).join(' și ')} — {!p.data_start ? 'click aici pentru a-l seta' : 'apasă ✏️ Editează'}.
+            </span>
           </div>
         )}
       </div>
