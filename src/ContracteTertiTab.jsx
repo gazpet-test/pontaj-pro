@@ -418,7 +418,7 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
                   </div>
 
                   {/* AI icon */}
-                  <div style={{marginRight:8, fontSize:16}} title={c.ai_extracted_at ? 'AI extras' : c.pdf_path ? 'PDF fără AI' : 'Fără PDF'}>
+                  <div style={{marginRight:8, fontSize:20}} title={c.ai_extracted_at ? 'AI extras' : c.pdf_path ? 'PDF fără AI' : 'Fără PDF'}>
                     {c.ai_extracted_at ? '🤖' : c.pdf_path ? '📄' : <span style={{color:G.dim}}>—</span>}
                   </div>
 
@@ -427,11 +427,11 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
                     <button
                       onClick={() => setExpandedId(isExpanded ? null : c.id)}
                       title="Acte adiționale"
-                      style={{...S.btnS, padding:'4px 8px', fontSize:11, color: isExpanded ? G.orange : G.muted}}
+                      style={{...S.btnS, padding:'8px 13px', fontSize:16, color: isExpanded ? G.orange : G.muted}}
                     >📎 {isExpanded ? '▲' : '▼'}</button>
-                    <button onClick={() => onView(c)} style={{...S.btnS, padding:'4px 8px', fontSize:11}}>👁</button>
-                    {canWrite && <button onClick={() => onEdit(c)} style={{...S.btnS, padding:'4px 8px', fontSize:11}}>✏️</button>}
-                    {isOwner  && <button onClick={() => onDelete(c)} style={{...S.btnD, padding:'4px 8px', fontSize:11}}>🗑</button>}
+                    <button onClick={() => onView(c)} title="Detalii" style={{...S.btnS, padding:'8px 13px', fontSize:16}}>👁</button>
+                    {canWrite && <button onClick={() => onEdit(c)} title="Editează" style={{...S.btnS, padding:'8px 13px', fontSize:16}}>✏️</button>}
+                    {isOwner  && <button onClick={() => onDelete(c)} title="Șterge" style={{...S.btnD, padding:'8px 13px', fontSize:16}}>🗑</button>}
                   </div>
                 </div>
 
