@@ -2247,6 +2247,10 @@ function TabProiectDashboard({ proiectId }) {
   const [p, setP] = useState(null)
   const [extra, setExtra] = useState(null)
   const [personnel, setPersonnel] = useState({})
+  const [editEchipa, setEditEchipa] = useState(false)
+  const [angajati, setAngajati] = useState([])
+  const [echipaForm, setEchipaForm] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     if (!proiectId) return
@@ -2255,7 +2259,7 @@ function TabProiectDashboard({ proiectId }) {
       const [{ data: v }, { data: e }] = await Promise.all([
         supabase.from('v_executie_dashboard').select('*').eq('id', proiectId).maybeSingle(),
         supabase.from('executie_proiecte')
-          .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta')
+          .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta, lungime_proiect_m')
           .eq('id', proiectId).maybeSingle(),
       ])
       if (!live) return
@@ -2268,7 +2272,40 @@ function TabProiectDashboard({ proiectId }) {
       }
     })()
     return () => { live = false }
-  }, [proiectId])
+  }, [proiectId, reloadKey])
+
+  // Editor echipă cheie (11.06): shortcut direct din dashboard, fără modalul mare
+  const openEchipaEdit = async () => {
+    if (!angajati.length) {
+      const { data } = await supabase.from('employees').select('id, name, functie').eq('activ', true).order('name')
+      setAngajati(data || [])
+    }
+    setEchipaForm({
+      mp_employee_id: extra.mp_employee_id || '',
+      rte_employee_id: extra.rte_employee_id || '',
+      rts_employee_id: extra.rts_employee_id || '',
+      coordonator_transgaz: extra.coordonator_transgaz || '',
+    })
+    setEditEchipa(true)
+  }
+  const saveEchipa = async () => {
+    const { error } = await supabase.from('executie_proiecte').update({
+      mp_employee_id: echipaForm.mp_employee_id ? Number(echipaForm.mp_employee_id) : null,
+      rte_employee_id: echipaForm.rte_employee_id ? Number(echipaForm.rte_employee_id) : null,
+      rts_employee_id: echipaForm.rts_employee_id ? Number(echipaForm.rts_employee_id) : null,
+      coordonator_transgaz: echipaForm.coordonator_transgaz || null,
+    }).eq('id', proiectId)
+    if (error) { alert('Eroare: ' + error.message); return }
+    setEditEchipa(false); setReloadKey(k => k + 1)
+  }
+  const editLungimeProiect = async () => {
+    const v = window.prompt('Lungimea conductei conform CONTRACT/proiect (metri):', extra.lungime_proiect_m || '')
+    if (v === null) return
+    const n = parseFloat(String(v).replace(',', '.'))
+    const { error } = await supabase.from('executie_proiecte')
+      .update({ lungime_proiect_m: isFinite(n) && n > 0 ? n : null }).eq('id', proiectId)
+    if (error) alert('Eroare: ' + error.message); else setReloadKey(k => k + 1)
+  }
 
   if (!p || !extra) return <div style={{ padding: 40, textAlign: 'center', color: G.muted, fontSize: 13 }}>⏳ Se încarcă proiectul...</div>
 
@@ -2292,10 +2329,14 @@ function TabProiectDashboard({ proiectId }) {
     { label: 'Acte adiționale', value: p.nr_acte_aditionale > 0 ? `${p.nr_acte_aditionale} acte` : '—' },
   ]
 
+  const lungProiect = Number(extra.lungime_proiect_m) || 0
+  const lungExecutat = Number(p.lungime_totala_m) || 0
+  const pctLung = lungProiect > 0 ? Math.min(100, (lungExecutat / lungProiect) * 100) : null
   const stadiu = [
     { label: 'Tronsoane', value: p.nr_tronsoane ?? 0 },
     { label: 'Pachete lansare', value: p.nr_pachete ?? 0 },
-    { label: 'Lungime totală', value: p.lungime_totala_m ? `${Number(p.lungime_totala_m).toLocaleString('ro-RO')} m` : '—' },
+    { label: 'Lungime proiect (contract)', value: lungProiect > 0 ? `${lungProiect.toLocaleString('ro-RO')} m` : '✏️ setează', onClick: editLungimeProiect },
+    { label: 'Executat (izometrie)', value: lungExecutat > 0 ? `${lungExecutat.toLocaleString('ro-RO')} m${pctLung !== null ? ` · ${pctLung.toFixed(1)}%` : ''}` : '—' },
     { label: 'Zile-om pontaj', value: p.pontaj_zile_om ?? 0 },
     { label: 'Angajați distincți', value: p.pontaj_angajati ?? 0 },
     { label: 'Ultima zi pontată', value: p.pontaj_ultima_zi ? fmtDate(p.pontaj_ultima_zi) : '—' },
@@ -2320,11 +2361,42 @@ function TabProiectDashboard({ proiectId }) {
 
       {/* Echipă proiect */}
       <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10 }}>
-          👥 Echipă proiect — responsabili execuție
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px' }}>
+            👥 Echipă proiect — responsabili execuție
+          </div>
+          <button onClick={editEchipa ? () => setEditEchipa(false) : openEchipaEdit}
+            style={{ marginLeft: 'auto', padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: editEchipa ? G.muted : '#58A6FF', border: `1px solid ${editEchipa ? G.border : '#58A6FF66'}`, borderRadius: 8, cursor: 'pointer' }}>
+            {editEchipa ? '✕ Renunță' : '✏️ Editează echipa'}
+          </button>
         </div>
-        {echipa.length === 0 ? (
-          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă ✏️ Editează pe proiect și completează MP / RTE / RTS / coordonator Transgaz.</div>
+        {editEchipa && echipaForm ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+            {[
+              { k: 'mp_employee_id', label: 'Manager Proiect (MP)' },
+              { k: 'rte_employee_id', label: 'Resp. Tehnic Execuție (RTE)' },
+              { k: 'rts_employee_id', label: 'Resp. Tehnic Sudură (RTS)' },
+            ].map(f => (
+              <div key={f.k}>
+                <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 3 }}>{f.label}</div>
+                <select value={echipaForm[f.k]} onChange={e => setEchipaForm(pr => ({ ...pr, [f.k]: e.target.value }))}
+                  style={{ width: '100%', padding: '9px 10px', fontSize: 13, background: G.card2 || G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 7 }}>
+                  <option value="">— fără —</option>
+                  {angajati.map(a => <option key={a.id} value={a.id}>{a.name}{a.functie ? ` (${a.functie})` : ''}</option>)}
+                </select>
+              </div>
+            ))}
+            <div>
+              <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 3 }}>Coordonator Transgaz</div>
+              <input value={echipaForm.coordonator_transgaz} onChange={e => setEchipaForm(pr => ({ ...pr, coordonator_transgaz: e.target.value }))}
+                placeholder="nume coordonator" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', fontSize: 13, background: G.card2 || G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 7 }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <button onClick={saveEchipa} style={{ padding: '9px 16px', fontSize: 13, fontWeight: 800, background: '#3FB950', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>✓ Salvează echipa</button>
+            </div>
+          </div>
+        ) : echipa.length === 0 ? (
+          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă „✏️ Editează echipa" și completează MP / RTE / RTS / coordonator Transgaz.</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
             {echipa.map((r, i) => (
@@ -2348,7 +2420,8 @@ function TabProiectDashboard({ proiectId }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
           {stadiu.map((s, i) => (
-            <div key={i} style={{ background: G.card2 || G.surface, borderRadius: 8, padding: '10px 14px' }}>
+            <div key={i} onClick={s.onClick} title={s.onClick ? 'Click pentru editare' : undefined}
+              style={{ background: G.card2 || G.surface, borderRadius: 8, padding: '10px 14px', cursor: s.onClick ? 'pointer' : 'default', border: s.onClick ? `1px dashed ${G.border}` : 'none' }}>
               <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>{s.label}</div>
               <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>{s.value}</div>
             </div>
