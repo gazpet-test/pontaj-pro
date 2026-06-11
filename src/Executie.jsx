@@ -606,7 +606,7 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit })
                     ⚠️ Lipsă contract
                   </span>
                 )}
-                {!p.are_date && (
+                {!(p.data_termen) && (
                   <span style={{ fontSize: 9, padding: '2px 8px', background: G.yellow + '18', color: G.yellow, borderRadius: 8, fontWeight: 700, border: `1px solid ${G.yellow}44` }}>
                     📅 Lipsă termene
                   </span>
@@ -1161,6 +1161,33 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const [uploadingTehnic, setUploadingTehnic] = useState(null)
   const [extractingAI, setExtractingAI]       = useState(false)
   const [extractingITP, setExtractingITP]     = useState(false)
+
+  // 11.06 FIX STALE: prop-ul „proiect" vine din lista încărcată la deschiderea paginii —
+  // editările din dashboard (echipă, PCCVI) nu apar și salvarea ar SUPRASCRIE cu valori vechi.
+  // Re-fetch live la deschiderea modalului:
+  useEffect(() => {
+    if (!proiect?.id) return
+    supabase.from('executie_proiecte')
+      .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, isc_faza_determinanta, doc_caiet_sarcini_path, doc_propunere_tehnica_path, doc_propunere_financiara_path, doc_itp_pccvi_path, doc_itp_ai_faze_det, doc_itp_ai_confidence')
+      .eq('id', proiect.id).single()
+      .then(({ data }) => {
+        if (!data) return
+        setForm(f => ({ ...f,
+          mp_employee_id:       data.mp_employee_id       || '',
+          rts_employee_id:      data.rts_employee_id      || '',
+          rte_employee_id:      data.rte_employee_id      || '',
+          coordonator_transgaz: data.coordonator_transgaz || '',
+          isc_faza_determinanta: data.isc_faza_determinanta === true,
+        }))
+        setDocPaths({
+          caiet_sarcini:        data.doc_caiet_sarcini_path        || null,
+          propunere_tehnica:    data.doc_propunere_tehnica_path    || null,
+          propunere_financiara: data.doc_propunere_financiara_path || null,
+          itp_pccvi:            data.doc_itp_pccvi_path            || null,
+        })
+        setItpAI(prev => ({ ...prev, faze_det: data.doc_itp_ai_faze_det || 0, confidence: data.doc_itp_ai_confidence || 0 }))
+      })
+  }, [proiect?.id])  // eslint-disable-line react-hooks/exhaustive-deps
   const [itpAI, setItpAI] = useState({
     participants: [],
     faze_det: proiect.doc_itp_ai_faze_det    || 0,
@@ -1257,7 +1284,11 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           body: JSON.stringify({ proiect_id: proiect.id, pdf_path: docPaths.itp_pccvi }),
         })
         const res2 = await resp2.json()
-        if (resp2.ok && res2.extrase > 0) showToast(`📋 ${res2.extrase} faze determinante populate în checklist`, 'success')
+        if (resp2.ok && (res2.extrase > 0 || res2.total_faze > 0)) {
+          // 11.06: dacă s-au populat faze, bifăm AUTOMAT „ISC – Faza Determinantă" în formular
+          set('isc_faza_determinanta', true)
+          showToast(`📋 ${res2.extrase} faze determinante populate în checklist · ISC bifat automat`, 'success')
+        }
       } catch { /* chain best-effort: contorul e setat oricum */ }
     } catch(e) { showToast('Eroare AI ITP: ' + e.message, 'error') }
     finally { setExtractingITP(false) }
@@ -2104,6 +2135,8 @@ function FazeDeterminanteISC({ proiect }) {
   const [extracting, setExtracting] = useState(false)
   const [collapsed, setCollapsed] = useState(true)   // 11.06: roll up/down — implicit pliat
   const [catFilter, setCatFilter] = useState('')      // filtru pe sistem ([CONDUCTĂ] etc.)
+  const [pdfPath, setPdfPath] = useState(proiect.doc_itp_pccvi_path || null)
+  const [uploading, setUploading] = useState(false)
   const [msg, setMsg] = useState(null)
   const flash = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 4000) }
 
@@ -2115,15 +2148,16 @@ function FazeDeterminanteISC({ proiect }) {
   }, [proiect.id])
   useEffect(() => { load() }, [load])
 
-  const handleExtract = async () => {
-    if (!proiect.doc_itp_pccvi_path) { flash('Încarcă întâi PCCVI-ul la Documentație tehnică', true); return }
+  const handleExtract = async (overridePath) => {
+    const path = overridePath || pdfPath
+    if (!path) { flash('Încarcă întâi PCCVI-ul (butonul 📎 de aici)', true); return }
     setExtracting(true)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-pccvi-faze`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ proiect_id: proiect.id, pdf_path: proiect.doc_itp_pccvi_path }),
+        body: JSON.stringify({ proiect_id: proiect.id, pdf_path: path }),
       })
       const result = await resp.json()
       if (!resp.ok) throw new Error(result.error || `HTTP ${resp.status}`)
@@ -2131,6 +2165,32 @@ function FazeDeterminanteISC({ proiect }) {
       load()
     } catch (e) { flash('Extracție eșuată: ' + e.message, true) }
     setExtracting(false)
+  }
+
+  // 11.06: shortcut PCCVI direct din dashboard — upload + extracție într-un pas
+  const handleUploadPccvi = async (file) => {
+    if (!file) return
+    if (file.type !== 'application/pdf') { flash('Doar fișiere PDF', true); return }
+    if (file.size > 10 * 1024 * 1024) { flash('PDF prea mare (max 10MB)', true); return }
+    setUploading(true)
+    try {
+      const path = `pccvi/${proiect.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const { error: upErr } = await supabase.storage.from('executie-contracte').upload(path, file, { upsert: false })
+      if (upErr) throw new Error('Upload: ' + upErr.message)
+      const { error: dbErr } = await supabase.from('executie_proiecte').update({ doc_itp_pccvi_path: path }).eq('id', proiect.id)
+      if (dbErr) throw new Error(dbErr.message)
+      setPdfPath(path)
+      flash('📎 PCCVI încărcat — pornesc extracția AI...')
+      setUploading(false)
+      await handleExtract(path)
+      return
+    } catch (e) { flash('Eroare PCCVI: ' + e.message, true) }
+    setUploading(false)
+  }
+  const handleOpenPccvi = async () => {
+    if (!pdfPath) return
+    const { data } = await supabase.storage.from('executie-contracte').createSignedUrl(pdfPath, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
   const azi = () => new Date().toISOString().slice(0, 10)
@@ -2193,10 +2253,22 @@ function FazeDeterminanteISC({ proiect }) {
             ⚠️ {restante} de convocat
           </span>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <button onClick={handleExtract} disabled={extracting}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <label style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: '#58A6FF', border: '1px solid #58A6FF66', borderRadius: 8, cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? .6 : 1 }}
+            title={pdfPath ? 'Înlocuiește PCCVI-ul și re-extrage' : 'Încarcă PCCVI-ul și extrage fazele automat'}>
+            {uploading ? '⏳ Se încarcă...' : pdfPath ? '↻ Înlocuiește PCCVI' : '📎 Încarcă PCCVI + extrage'}
+            <input type="file" accept="application/pdf" style={{ display: 'none' }} disabled={uploading || extracting}
+              onChange={e => { handleUploadPccvi(e.target.files?.[0]); e.target.value = '' }} />
+          </label>
+          {pdfPath && (
+            <button onClick={handleOpenPccvi}
+              style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer' }}>
+              📂 Deschide
+            </button>
+          )}
+          <button onClick={() => handleExtract()} disabled={extracting || uploading}
             style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: '#BC8CFF', border: '1px solid #BC8CFF66', borderRadius: 8, cursor: extracting ? 'wait' : 'pointer', opacity: extracting ? .6 : 1 }}>
-            {extracting ? '🤖 AI citește PCCVI...' : '🤖 Extrage din PCCVI'}
+            {extracting ? '🤖 AI citește PCCVI...' : '🤖 Re-extrage'}
           </button>
           <button onClick={addManual}
             style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer' }}>
@@ -2227,7 +2299,7 @@ function FazeDeterminanteISC({ proiect }) {
         <div style={{ fontSize: 11, color: G.muted }}>⏳ ...</div>
       ) : faze.length === 0 ? (
         <div style={{ fontSize: 11, color: G.muted, marginTop: 6 }}>
-          Nicio fază în listă. {proiect.doc_itp_pccvi_path ? 'Apasă „Extrage din PCCVI".' : 'Încarcă PCCVI-ul la Documentație tehnică, apoi extrage.'}
+          Nicio fază în listă. {pdfPath ? 'Apasă „🤖 Re-extrage" sau adaugă manual.' : 'Apasă „📎 Încarcă PCCVI + extrage" — totul dintr-un pas.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
