@@ -437,7 +437,10 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
 
                 {/* Acte adiționale expandable */}
                 {isExpanded && (
-                  <ActeAditionaleSection contractId={c.id} canWrite={canWrite} />
+                  <>
+                    <ActeAditionaleSection contractId={c.id} canWrite={canWrite} />
+                    <AnexaContractSection contractId={c.id} canWrite={canWrite} />
+                  </>
                 )}
               </div>
             )
@@ -613,6 +616,233 @@ function ActeAditionaleSection({ contractId, canWrite }) {
           onSaved={() => { setEditAct(null); load(); show('✓ Act adițional salvat') }}
           onError={e => show('Eroare: ' + e, 'err')}
         />
+      )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// ANEXA LA CONTRACT — cantități & prețuri, cu VERSIONARE prin acte adiționale
+// (11.06.2026) Linia modificată de un act rămâne în istoric (activa=false),
+// iar versiunea nouă poartă act_aditional_id + linie_inlocuita_id.
+// ══════════════════════════════════════════════════════════
+function AnexaContractSection({ contractId, canWrite }) {
+  const [linii, setLinii] = useState([])
+  const [acte, setActe] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [showIstoric, setShowIstoric] = useState(false)
+  const [editLinie, setEditLinie] = useState(null)   // {linie sau {} nou, _modificaPrinAct}
+  const [form, setForm] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState(null)
+  const show = (msg, kind='ok') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 3500) }
+
+  const load = async () => {
+    setLoading(true)
+    const [{ data: l }, { data: a }] = await Promise.all([
+      supabase.from('contracte_linii').select('*').eq('contract_id', contractId).order('pozitie', { ascending: true, nullsFirst: false }).order('id'),
+      supabase.from('contracte_acte_aditionale').select('id, numar_act, data_semnare').eq('contract_id', contractId).order('data_semnare'),
+    ])
+    setLinii(l || []); setActe(a || []); setLoading(false)
+  }
+  useEffect(() => { load() }, [contractId])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const active = linii.filter(l => l.activa !== false)
+  const istoric = linii.filter(l => l.activa === false)
+  const totalAnexa = active.reduce((s, l) => s + (Number(l.valoare_totala) || Number(l.cantitate || 0) * Number(l.pret_unitar || 0)), 0)
+
+  const openEdit = (linie) => {
+    setEditLinie(linie)
+    setForm({
+      denumire: linie?.denumire || '', unitate_masura: linie?.unitate_masura || '',
+      cantitate: linie?.cantitate ?? '', pret_unitar: linie?.pret_unitar ?? '',
+      pozitie: linie?.pozitie ?? (active.length + 1), observatii: linie?.observatii || '',
+      act_aditional_id: '',   // dacă e selectat la editare → versionare
+    })
+  }
+  const setF = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  const handleSave = async () => {
+    if (!form.denumire.trim()) { show('Denumirea articolului e obligatorie', 'err'); return }
+    const cant = Number(form.cantitate) || 0
+    const pret = Number(form.pret_unitar) || 0
+    setSaving(true)
+    const payload = {
+      contract_id: contractId, denumire: form.denumire.trim(),
+      unitate_masura: form.unitate_masura || null,
+      cantitate: cant, pret_unitar: pret,
+      valoare_totala: Math.round(cant * pret * 100) / 100,
+      pozitie: form.pozitie !== '' ? Number(form.pozitie) : null,
+      observatii: form.observatii || null,
+    }
+    let error
+    if (editLinie?.id && form.act_aditional_id) {
+      // VERSIONARE: linia veche → istoric; inserăm versiunea nouă legată de act
+      const r1 = await supabase.from('contracte_linii').update({ activa: false }).eq('id', editLinie.id)
+      error = r1.error
+      if (!error) {
+        const r2 = await supabase.from('contracte_linii').insert({
+          ...payload, activa: true,
+          act_aditional_id: Number(form.act_aditional_id),
+          linie_inlocuita_id: editLinie.id,
+        })
+        error = r2.error
+      }
+    } else if (editLinie?.id) {
+      // corecție simplă (typo etc.) — fără versionare
+      const r = await supabase.from('contracte_linii').update(payload).eq('id', editLinie.id)
+      error = r.error
+    } else {
+      const r = await supabase.from('contracte_linii').insert({ ...payload, activa: true })
+      error = r.error
+    }
+    setSaving(false)
+    if (error) { show('Eroare: ' + error.message, 'err'); return }
+    show(editLinie?.id && form.act_aditional_id ? '✓ Linie actualizată prin act adițional (versiunea veche în istoric)' : '✓ Linie salvată')
+    setEditLinie(null); setForm(null); load()
+  }
+
+  const handleDelete = async (l) => {
+    if (!confirm(`Șterge linia „${l.denumire}"?`)) return
+    const { error } = await supabase.from('contracte_linii').delete().eq('id', l.id)
+    if (error) show('Eroare: ' + error.message, 'err')
+    else { show('✓ Linie ștearsă'); load() }
+  }
+
+  const actLabel = id => { const a = acte.find(x => x.id === id); return a ? a.numar_act : `act #${id}` }
+
+  return (
+    <div style={{borderTop:`1px solid ${G.border}`, background:G.bg, padding:'12px 16px'}}>
+      {toast && (
+        <div style={{position:'fixed', bottom:24, left:24, padding:'10px 16px', background: toast.kind==='err' ? G.red : G.green, color:'#fff', borderRadius:8, fontSize:12, fontWeight:600, zIndex:10001}}>{toast.msg}</div>
+      )}
+      <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap'}}>
+        <span style={{fontSize:12, fontWeight:700, color:G.teal}}>📋 Anexă la contract — cantități & prețuri</span>
+        <span style={{fontSize:11, color:G.dim}}>({active.length} articole)</span>
+        {totalAnexa > 0 && <span style={{fontSize:11, fontWeight:700, color:G.green}}>Total anexă: {fmtLei(totalAnexa)}</span>}
+        {istoric.length > 0 && (
+          <button onClick={() => setShowIstoric(v => !v)} style={{...S.btnS, padding:'3px 10px', fontSize:10, color:G.muted}}>
+            {showIstoric ? 'Ascunde istoricul' : `Istoric (${istoric.length})`}
+          </button>
+        )}
+        {canWrite && (
+          <button onClick={() => openEdit(null)} style={{...S.btnP, padding:'4px 12px', fontSize:11, marginLeft:'auto', background:G.teal}}>
+            + Adaugă linie
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{fontSize:11, color:G.dim}}>⏳ Se încarcă...</div>
+      ) : active.length === 0 ? (
+        <div style={{fontSize:11, color:G.dim, fontStyle:'italic'}}>Nicio linie în anexă. {canWrite ? 'Apasă „+ Adaugă linie".' : ''}</div>
+      ) : (
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+            <thead>
+              <tr style={{color:G.dim, textAlign:'left'}}>
+                <th style={{padding:'4px 6px'}}>#</th>
+                <th style={{padding:'4px 6px'}}>Articol</th>
+                <th style={{padding:'4px 6px'}}>UM</th>
+                <th style={{padding:'4px 6px', textAlign:'right'}}>Cantitate</th>
+                <th style={{padding:'4px 6px', textAlign:'right'}}>Preț unitar</th>
+                <th style={{padding:'4px 6px', textAlign:'right'}}>Valoare</th>
+                <th style={{padding:'4px 6px'}}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {active.map(l => (
+                <tr key={l.id} style={{borderTop:`1px solid ${G.border}`}}>
+                  <td style={{padding:'5px 6px', color:G.dim}}>{l.pozitie ?? '—'}</td>
+                  <td style={{padding:'5px 6px', color:G.text, fontWeight:600}}>
+                    {l.denumire}
+                    {l.act_aditional_id && <span title={`Modificat prin ${actLabel(l.act_aditional_id)}`} style={{fontSize:9, color:G.orange, fontWeight:700, marginLeft:6, padding:'1px 5px', border:`1px solid ${G.orange}66`, borderRadius:5}}>AA {actLabel(l.act_aditional_id)}</span>}
+                  </td>
+                  <td style={{padding:'5px 6px', color:G.muted}}>{l.unitate_masura || '—'}</td>
+                  <td style={{padding:'5px 6px', textAlign:'right', color:G.text}}>{Number(l.cantitate || 0).toLocaleString('ro-RO')}</td>
+                  <td style={{padding:'5px 6px', textAlign:'right', color:G.text}}>{Number(l.pret_unitar || 0).toLocaleString('ro-RO', {maximumFractionDigits:2})}</td>
+                  <td style={{padding:'5px 6px', textAlign:'right', color:G.green, fontWeight:700}}>{fmtLei(l.valoare_totala ?? (Number(l.cantitate||0) * Number(l.pret_unitar||0)))}</td>
+                  <td style={{padding:'5px 6px', whiteSpace:'nowrap'}}>
+                    {canWrite && (
+                      <>
+                        <button onClick={() => openEdit(l)} style={{...S.btnS, padding:'2px 7px', fontSize:10}}>✏️</button>{' '}
+                        <button onClick={() => handleDelete(l)} style={{...S.btnD, padding:'2px 7px', fontSize:10}}>🗑</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showIstoric && istoric.length > 0 && (
+        <div style={{marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:7, border:`1px dashed ${G.border}`}}>
+          <div style={{fontSize:10, fontWeight:700, color:G.muted, marginBottom:6}}>🕓 ISTORIC (versiuni înlocuite)</div>
+          {istoric.map(l => (
+            <div key={l.id} style={{fontSize:10.5, color:G.dim, padding:'3px 0', textDecoration:'line-through'}}>
+              {l.denumire} · {Number(l.cantitate||0).toLocaleString('ro-RO')} {l.unitate_masura || ''} × {Number(l.pret_unitar||0).toLocaleString('ro-RO')} = {fmtLei(l.valoare_totala)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {form && (
+        <div onClick={() => { setEditLinie(null); setForm(null) }} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:10000, display:'flex', alignItems:'center', justifyContent:'center', padding:16}}>
+          <div onClick={e => e.stopPropagation()} style={{...S.card, borderRadius:12, padding:20, width:'100%', maxWidth:520}}>
+            <div style={{fontSize:14, fontWeight:800, color:G.text, marginBottom:14}}>
+              {editLinie?.id ? '✏️ Editare linie anexă' : '➕ Linie nouă în anexă'}
+            </div>
+            <div style={{display:'grid', gridTemplateColumns:'2fr 1fr', gap:10, marginBottom:10}}>
+              <div>
+                <label style={{fontSize:10, color:G.muted, display:'block', marginBottom:3}}>ARTICOL *</label>
+                <input value={form.denumire} onChange={e => setF('denumire', e.target.value)} style={S.input} />
+              </div>
+              <div>
+                <label style={{fontSize:10, color:G.muted, display:'block', marginBottom:3}}>UM</label>
+                <input value={form.unitate_masura} onChange={e => setF('unitate_masura', e.target.value)} placeholder="ml / buc / mp" style={S.input} />
+              </div>
+            </div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:10}}>
+              <div>
+                <label style={{fontSize:10, color:G.muted, display:'block', marginBottom:3}}>CANTITATE</label>
+                <input type="number" value={form.cantitate} onChange={e => setF('cantitate', e.target.value)} style={S.input} />
+              </div>
+              <div>
+                <label style={{fontSize:10, color:G.muted, display:'block', marginBottom:3}}>PREȚ UNITAR</label>
+                <input type="number" value={form.pret_unitar} onChange={e => setF('pret_unitar', e.target.value)} style={S.input} />
+              </div>
+              <div>
+                <label style={{fontSize:10, color:G.muted, display:'block', marginBottom:3}}>POZIȚIE</label>
+                <input type="number" value={form.pozitie} onChange={e => setF('pozitie', e.target.value)} style={S.input} />
+              </div>
+            </div>
+            <div style={{fontSize:11, color:G.green, fontWeight:700, marginBottom:10}}>
+              Valoare: {fmtLei((Number(form.cantitate)||0) * (Number(form.pret_unitar)||0))}
+            </div>
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:10, color:G.muted, display:'block', marginBottom:3}}>OBSERVAȚII</label>
+              <input value={form.observatii} onChange={e => setF('observatii', e.target.value)} style={S.input} />
+            </div>
+            {editLinie?.id && (
+              <div style={{marginBottom:14, padding:10, background:G.bg, borderRadius:8, border:`1px dashed ${G.orange}66`}}>
+                <label style={{fontSize:10, color:G.orange, fontWeight:700, display:'block', marginBottom:4}}>📎 MODIFICARE PRIN ACT ADIȚIONAL (opțional)</label>
+                <select value={form.act_aditional_id} onChange={e => setF('act_aditional_id', e.target.value)} style={S.input}>
+                  <option value="">— corecție simplă, fără versionare —</option>
+                  {acte.map(a => <option key={a.id} value={a.id}>{a.numar_act} ({fmtDate(a.data_semnare)})</option>)}
+                </select>
+                <div style={{fontSize:10, color:G.dim, marginTop:4}}>
+                  Dacă selectezi un act: versiunea veche a liniei rămâne în istoric, iar cea nouă apare marcată cu actul.
+                </div>
+              </div>
+            )}
+            <div style={{display:'flex', justifyContent:'flex-end', gap:8}}>
+              <button onClick={() => { setEditLinie(null); setForm(null) }} style={{...S.btnS, fontSize:12}} disabled={saving}>Anulează</button>
+              <button onClick={handleSave} disabled={saving} style={{...S.btnP, fontSize:12, background:G.teal, opacity:saving?.6:1}}>{saving ? '⏳' : '✓ Salvează'}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -1435,6 +1665,7 @@ function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose
 
         {/* Acte adiționale în detail modal */}
         <ActeAditionaleSection contractId={contract.id} canWrite={canWrite} />
+        <AnexaContractSection contractId={contract.id} canWrite={canWrite} />
 
         {/* Polițe GBE / CAR / GPL */}
         <PoliteSection contractId={contract.id} canWrite={canWrite} />
