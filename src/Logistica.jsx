@@ -2529,6 +2529,126 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
   const isPretSuspect = form.pret_per_litru && (pretLNum < 1 || pretLNum > 20)
   
   const activMeta = alim.logistica_active || {}
+
+  // ── 11.06.2026: BON COMUN — split manual pe utilaje fără QR ──────────────
+  // Un bon fizic (ex. Rompetrol 63 L) poate alimenta mai multe vehicule. Cele cu QR
+  // intră prin fluxul QR (bon comun cu cod); cele FĂRĂ QR alocat încă se adaugă
+  // manual de aici, legate de același bon, ca totalul bonului să se reconcilieze.
+  const [bonId, setBonId] = useState(alim.bon_comun_id || null)
+  const [bonInfo, setBonInfo] = useState(null)        // rând din v_bonuri_comune_status
+  const [bonAlims, setBonAlims] = useState([])        // alimentările legate de bon
+  const [bonLoading, setBonLoading] = useState(false)
+  const [bonDirty, setBonDirty] = useState(false)     // s-au creat rânduri noi → refresh listă la închidere
+  const [showLeagaBon, setShowLeagaBon] = useState(false)
+  const [totalBonInput, setTotalBonInput] = useState('')
+  const [showAddSplit, setShowAddSplit] = useState(false)
+  const [activeList, setActiveList] = useState(null)  // lazy load utilaje pt dropdown
+  const [splitForm, setSplitForm] = useState({ active_id: '', cantitate_litri: '', ore: '', km: '', search: '' })
+  const [splitSaving, setSplitSaving] = useState(false)
+  const setSplitField = (k, v) => setSplitForm(p => ({ ...p, [k]: v }))
+
+  useEffect(() => { if (bonId) loadBon(bonId) }, [bonId])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadBon(id) {
+    setBonLoading(true)
+    const [{ data: b }, { data: als }] = await Promise.all([
+      supabase.from('v_bonuri_comune_status').select('*').eq('id', id).maybeSingle(),
+      supabase.from('logistica_alimentari')
+        .select('id, cantitate_litri, active_id, logistica_active(cod_intern, marca, model, nr_inmatriculare)')
+        .eq('bon_comun_id', id).order('id'),
+    ])
+    setBonInfo(b || null); setBonAlims(als || []); setBonLoading(false)
+  }
+
+  async function loadActiveList() {
+    if (activeList) return
+    const { data } = await supabase.from('logistica_active')
+      .select('id, cod_intern, marca, model, nr_inmatriculare')
+      .eq('vandut', false).order('marca')
+    setActiveList(data || [])
+  }
+
+  const activeOptions = useMemo(() => {
+    if (!activeList) return []
+    const q = (splitForm.search || '').toLowerCase().trim()
+    const list = q
+      ? activeList.filter(a => `${a.marca || ''} ${a.model || ''} ${a.cod_intern || ''} ${a.nr_inmatriculare || ''}`.toLowerCase().includes(q))
+      : activeList
+    return list.slice(0, 80).map(a => ({ label: `${a.marca || ''} ${a.model || ''} · ${a.cod_intern || a.nr_inmatriculare || ''}`.replace(/\s+/g, ' ').trim(), value: String(a.id) }))
+  }, [activeList, splitForm.search])
+
+  const openAddSplit = () => {
+    loadActiveList()
+    setSplitForm(p => ({ ...p, cantitate_litri: bonInfo && Number(bonInfo.litri_ramasi) > 0 ? String(bonInfo.litri_ramasi) : '' }))
+    setShowAddSplit(true)
+  }
+
+  const handleLeagaBon = async () => {
+    const tot = Number(totalBonInput)
+    if (!(tot > 0)) { showToast('Introdu totalul de litri de pe bonul fizic', 'error'); return }
+    if (tot < Number(alim.cantitate_litri || 0)) {
+      if (!window.confirm(`Total bon (${tot} L) e mai mic decât alimentarea curentă (${alim.cantitate_litri} L). Continui?`)) return
+    }
+    const cod = String(Math.floor(1000 + Math.random() * 9000))
+    const { data: bon, error } = await supabase.from('logistica_bonuri_comune').insert({
+      cod_bon: cod, data_bon: alim.data_alimentare, qr_sursa: alim.qr_sursa || 'rompetrol',
+      total_litri_bon: tot, card_combustibil: alim.card_combustibil || form.card_combustibil || null,
+      site_id: alim.site_id || null, status: 'deschis',
+      observatii: `Creat manual din Editare alimentare #${alim.id} (split bon — utilaj fără QR)`,
+    }).select().single()
+    if (error) { showToast(`Eroare creare bon: ${error.message}`, 'error'); return }
+    const { error: e2 } = await supabase.from('logistica_alimentari').update({ bon_comun_id: bon.id }).eq('id', alim.id)
+    if (e2) { showToast(`Eroare legare: ${e2.message}`, 'error'); return }
+    showToast(`✓ Bon comun ${cod} creat — alimentarea curentă e legată`, 'success')
+    setBonDirty(true); setShowLeagaBon(false); setBonId(bon.id)
+    loadActiveList()
+    setSplitForm(p => ({ ...p, cantitate_litri: tot - Number(alim.cantitate_litri || 0) > 0 ? String(Math.round((tot - Number(alim.cantitate_litri || 0)) * 100) / 100) : '' }))
+    setShowAddSplit(true)
+  }
+
+  const handleAddSplit = async () => {
+    const litri = Number(splitForm.cantitate_litri)
+    if (!splitForm.active_id) { showToast('Alege utilajul', 'error'); return }
+    if (!(litri > 0)) { showToast('Introdu litrii', 'error'); return }
+    const ramasi = bonInfo != null ? Number(bonInfo.litri_ramasi) : null
+    if (ramasi != null && litri > ramasi + 0.01) {
+      if (!window.confirm(`⚠️ Pe bon mai sunt ${ramasi} L nedistribuiți, tu adaugi ${litri} L (s-ar depăși totalul bonului). Continui?`)) return
+    }
+    setSplitSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const pretL = Number(alim.pret_per_litru || form.pret_per_litru) || null
+    const { error } = await supabase.from('logistica_alimentari').insert({
+      active_id: Number(splitForm.active_id),
+      data_alimentare: alim.data_alimentare,
+      cantitate_litri: litri,
+      ore_la_alimentare: splitForm.ore !== '' ? Number(splitForm.ore) : null,
+      km_la_alimentare: splitForm.km !== '' ? Number(splitForm.km) : null,
+      statie_combustibil: alim.statie_combustibil || form.statie_combustibil || null,
+      card_combustibil: alim.card_combustibil || form.card_combustibil || null,
+      site_id: alim.site_id || (form.site_id ? Number(form.site_id) : null),
+      sursa_alocare_santier: (alim.site_id || form.site_id) ? 'manual' : null,
+      pret_per_litru: pretL,
+      pret_total: pretL ? Math.round(pretL * litri * 100) / 100 : null,
+      bon_comun_id: bonId,
+      created_by: user?.id || null,
+      observatii: `[SPLIT BON ${bonInfo?.cod_bon || ''}] adăugat manual din alimentarea #${alim.id} (utilaj fără QR)`,
+    })
+    if (error) { setSplitSaving(false); showToast(`Eroare: ${error.message}`, 'error'); return }
+    // bon complet după adăugare → îl închidem
+    const distribNou = Number(bonInfo?.litri_distribuiti || 0) + litri
+    if (bonInfo && distribNou >= Number(bonInfo.total_litri_bon || 0) && bonInfo.status !== 'inchis') {
+      await supabase.from('logistica_bonuri_comune').update({ status: 'inchis', inchis_la: new Date().toISOString() }).eq('id', bonId)
+    }
+    setSplitSaving(false)
+    setBonDirty(true)
+    showToast(`✓ Alimentare adăugată pe bonul ${bonInfo?.cod_bon || ''}`, 'success')
+    setSplitForm({ active_id: '', cantitate_litri: '', ore: '', km: '', search: '' })
+    setShowAddSplit(false)
+    loadBon(bonId)
+  }
+
+  // la închidere după split-uri noi → refresh lista părintelui (onSaved închide + refetch)
+  const handleClose = () => { if (bonDirty) { onSaved() } else { onClose() } }
   
   const handleSave = async () => {
     if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) { showToast('Cantitatea trebuie > 0', 'error'); return }
@@ -2572,7 +2692,7 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
   }
   
   return (
-    <div onClick={onClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto'}}>
+    <div onClick={handleClose} style={{position:'fixed', inset:0, background:'#000000cc', zIndex:300, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto'}}>
       <div onClick={e => e.stopPropagation()} style={{...S.card, padding: 22, width: '100%', maxWidth: 620, boxShadow: '0 20px 80px rgba(0,0,0,.6)', borderTop: `3px solid ${G.logistica}`}} className="fi">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${G.border}`}}>
           <div>
@@ -2583,7 +2703,7 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
               {activMeta.marca} {activMeta.model} · {activMeta.cod_intern || activMeta.nr_inmatriculare}
             </div>
           </div>
-          <button onClick={onClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
+          <button onClick={handleClose} style={{background:'transparent', border:'none', color:G.muted, fontSize: 22, cursor:'pointer', padding: 4}}>×</button>
         </div>
         
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 12}}>
@@ -2621,13 +2741,90 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
         <div style={{marginBottom: 14}}>
           <FieldTextarea label="Observații" value={form.observatii} onChange={v => setField('observatii', v)} rows={2} />
         </div>
-        
+
+        {/* 11.06.2026: BON COMUN — split manual pe utilaje fără QR */}
+        <div style={{marginBottom: 14, padding: 12, background: G.bg, border: `1px dashed ${G.purple}66`, borderRadius: 10}}>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap: 8, marginBottom: (bonId || showLeagaBon) ? 10 : 0}}>
+            <div style={{fontSize: 12, fontWeight: 800, color: G.purple}}>🔗 Bon comun — mai multe utilaje pe același bon</div>
+            {!bonId && !showLeagaBon && (
+              <button onClick={() => { setShowLeagaBon(true); setTotalBonInput('') }} style={{...S.btnS, fontSize: 11, color: G.purple, borderColor: G.purple + '66'}}>
+                ➕ Leagă bon + adaugă utilaj fără QR
+              </button>
+            )}
+          </div>
+
+          {/* Pas 1: creare bon comun pornind de la alimentarea curentă */}
+          {!bonId && showLeagaBon && (
+            <div>
+              <div style={{fontSize: 11, color: G.muted, marginBottom: 8, lineHeight: 1.5}}>
+                Introdu totalul de litri de pe <strong style={{color: G.text}}>bonul fizic</strong>. Alimentarea curentă ({alim.cantitate_litri} L) se leagă automat, apoi adaugi restul pe alte utilaje (ex. mașini fără cod QR alocat încă).
+              </div>
+              <div style={{display:'flex', gap: 8, alignItems:'flex-end', flexWrap:'wrap'}}>
+                <div style={{flex: 1, minWidth: 140}}>
+                  <FieldText label="Total litri pe bon" value={totalBonInput} onChange={setTotalBonInput} type="number" />
+                </div>
+                <button onClick={handleLeagaBon} style={{...S.btnP, background: G.purple, color: '#fff', fontSize: 12, padding: '9px 14px'}}>✓ Creează bon</button>
+                <button onClick={() => setShowLeagaBon(false)} style={{...S.btnS, fontSize: 12, color: G.muted}}>Anulează</button>
+              </div>
+            </div>
+          )}
+
+          {/* Bon existent: status distribuție + alimentările legate + adăugare */}
+          {bonId && (bonLoading ? (
+            <div style={{fontSize: 12, color: G.muted}}>⏳ Se încarcă bonul...</div>
+          ) : bonInfo && (
+            <div>
+              <div style={{display:'flex', gap: 14, flexWrap:'wrap', fontSize: 12, color: G.text, marginBottom: 8}}>
+                <span>Cod: <strong style={{color: G.purple}}>{bonInfo.cod_bon}</strong></span>
+                <span>Total bon: <strong>{Number(bonInfo.total_litri_bon || 0)} L</strong></span>
+                <span>Distribuiți: <strong style={{color: G.green}}>{Number(bonInfo.litri_distribuiti || 0)} L</strong></span>
+                <span>Rămași: <strong style={{color: Number(bonInfo.litri_ramasi) > 0 ? G.orange : (Number(bonInfo.litri_ramasi) < 0 ? G.red : G.green)}}>{Number(bonInfo.litri_ramasi || 0)} L</strong></span>
+              </div>
+              {bonAlims.length > 0 && (
+                <div style={{fontSize: 11, color: G.muted, marginBottom: 10, lineHeight: 1.7}}>
+                  {bonAlims.map(a => {
+                    const m = a.logistica_active || {}
+                    return (
+                      <div key={a.id}>
+                        • {m.marca} {m.model} ({m.cod_intern || m.nr_inmatriculare}) — <strong style={{color: G.text}}>{Number(a.cantitate_litri)} L</strong>{a.id === alim.id ? <span style={{color: G.purple}}> ← aceasta</span> : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {!showAddSplit ? (
+                <button onClick={openAddSplit} style={{...S.btnS, fontSize: 12, color: G.purple, borderColor: G.purple + '66'}}>
+                  ➕ Adaugă alimentare pe acest bon (utilaj fără QR)
+                </button>
+              ) : (
+                <div style={{padding: 10, background: G.surface, borderRadius: 8, border: `1px solid ${G.border}`}}>
+                  <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10, marginBottom: 10}}>
+                    <FieldText label="Caută utilaj (marcă / nr / cod)" value={splitForm.search} onChange={v => setSplitField('search', v)} />
+                    <FieldSelect label="Utilaj" value={splitForm.active_id} onChange={v => setSplitField('active_id', v)} options={activeOptions} placeholder={activeList ? '— alege —' : '⏳ se încarcă...'} />
+                  </div>
+                  <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap: 10, marginBottom: 10}}>
+                    <FieldText label="Litri" value={splitForm.cantitate_litri} onChange={v => setSplitField('cantitate_litri', v)} type="number" />
+                    <FieldText label="Ore bord (opț.)" value={splitForm.ore} onChange={v => setSplitField('ore', v)} type="number" />
+                    <FieldText label="KM (opț.)" value={splitForm.km} onChange={v => setSplitField('km', v)} type="number" />
+                  </div>
+                  <div style={{display:'flex', gap: 8, justifyContent:'flex-end'}}>
+                    <button onClick={() => setShowAddSplit(false)} style={{...S.btnS, fontSize: 12, color: G.muted}} disabled={splitSaving}>Anulează</button>
+                    <button onClick={handleAddSplit} disabled={splitSaving} style={{...S.btnP, background: G.purple, color: '#fff', fontSize: 12, opacity: splitSaving ? .6 : 1}}>
+                      {splitSaving ? '⏳' : '✓ Adaugă pe bon'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
         <div style={{display:'flex', justifyContent:'space-between', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
           <button onClick={handleDelete} disabled={deleting || saving} style={{...S.btnS, fontSize: 12, color: G.red, borderColor: G.red + '55', opacity: (deleting || saving) ? .5 : 1}}>
             {deleting ? '⏳' : '🗑️ Șterge'}
           </button>
           <div style={{display:'flex', gap: 8}}>
-            <button onClick={onClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving || deleting}>Anulează</button>
+            <button onClick={handleClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving || deleting}>Anulează</button>
             <button onClick={handleSave} disabled={saving || deleting} style={{...S.btnP, background: G.logistica, color: '#000', opacity: (saving || deleting) ? .6 : 1}}>
               {saving ? '⏳' : '✓ Salvează modificările'}
             </button>
