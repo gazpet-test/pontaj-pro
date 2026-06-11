@@ -6,6 +6,12 @@
 //   • Zona PDF: drag & drop + highlight vizual
 //   • Câmp „Proiect Execuție asociat" (vizibil când categorie=executie)
 //   • La salvare: UPDATE executie_proiecte.contract_id + sync date
+// v5 11.06.2026 — Vizibilitate unificată cross-module:
+//   • Acte adiționale din AMBELE module (v_acte_aditionale_toate): cele din
+//     Execuție apar cu badge, read-only aici (se editează în Execuție)
+//   • Valoare actuală cu acte + termen actual (v_contract_efecte_acte)
+//   • Ordin de începere (data_start, editabil, sync executie_proiecte)
+//     + Ordine de sistare (read-only din Execuție)
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
@@ -447,6 +453,10 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
 // ══════════════════════════════════════════════════════════
 function ActeAditionaleSection({ contractId, canWrite }) {
   const [acte, setActe] = useState([])
+  const [efecte, setEfecte] = useState(null)        // v_contract_efecte_acte: valoare/termen actual
+  const [proiect, setProiect] = useState(null)      // executie_proiecte legat (ordin începere)
+  const [ordineSistare, setOrdineSistare] = useState([])
+  const [dataStartEdit, setDataStartEdit] = useState('')
   const [loading, setLoading] = useState(true)
   const [editAct, setEditAct] = useState(null)
   const [toast, setToast] = useState(null)
@@ -454,29 +464,60 @@ function ActeAditionaleSection({ contractId, canWrite }) {
 
   const load = async () => {
     setLoading(true)
-    const { data } = await supabase.from('contracte_acte_aditionale')
-      .select('*').eq('contract_id', contractId).order('data_semnare', { ascending: true })
-    setActe(data || [])
+    // 11.06.2026: lista UNIFICATĂ — actele introduse în Contracte ȘI cele din Execuție
+    const [{ data: acteData }, { data: ef }, { data: pr }] = await Promise.all([
+      supabase.from('v_acte_aditionale_toate').select('*').eq('contract_id', contractId).order('data_semnare', { ascending: true }),
+      supabase.from('v_contract_efecte_acte').select('*').eq('contract_id', contractId).maybeSingle(),
+      supabase.from('executie_proiecte').select('id, cod_intern, data_start').eq('contract_id', contractId).limit(1).maybeSingle(),
+    ])
+    setActe(acteData || [])
+    setEfecte(ef || null)
+    setProiect(pr || null)
+    setDataStartEdit(pr?.data_start || '')
+    if (pr?.id) {
+      const { data: os } = await supabase.from('executie_ordine_sistare')
+        .select('*').eq('proiect_id', pr.id).eq('activ', true).order('data_sistare', { ascending: true })
+      setOrdineSistare(os || [])
+    } else setOrdineSistare([])
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [contractId])
+  useEffect(() => { load() }, [contractId])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDelete = async act => {
+    if (act.sursa !== 'contracte') { show('Actele din Execuție se șterg din modulul Execuție', 'err'); return }
     if (!confirm(`Șterge actul adițional „${act.numar_act}"?`)) return
     const { error } = await supabase.from('contracte_acte_aditionale').delete().eq('id', act.id)
     if (error) show('Eroare: ' + error.message, 'err')
     else { show('✓ Act șters'); load() }
   }
 
+  const handleSaveDataStart = async () => {
+    if (!proiect?.id) return
+    const { error } = await supabase.from('executie_proiecte')
+      .update({ data_start: dataStartEdit || null }).eq('id', proiect.id)
+    if (error) show('Eroare: ' + error.message, 'err')
+    else { show('✓ Ordin de începere salvat (sincronizat în Execuție)'); load() }
+  }
+
+  const valoareInitiala = Number(efecte?.valoare_initiala || 0)
+  const valoareActuala = Number(efecte?.valoare_actuala_calc || 0)
+  const areModificari = efecte && valoareActuala !== valoareInitiala
+
   return (
     <div style={{borderTop:`1px solid ${G.border}`, background:G.bg, padding:'12px 16px'}}>
       {toast && (
         <div style={{position:'fixed', bottom:24, left:24, padding:'10px 16px', background: toast.kind==='err' ? G.red : G.green, color:'#fff', borderRadius:8, fontSize:12, fontWeight:600, zIndex:10001}}>{toast.msg}</div>
       )}
-      <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10}}>
+      <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap'}}>
         <span style={{fontSize:12, fontWeight:700, color:G.orange}}>📎 Acte adiționale</span>
         <span style={{fontSize:11, color:G.dim}}>({acte.length})</span>
+        {areModificari && (
+          <span style={{fontSize:11, color:G.purple, fontWeight:700}}>
+            Valoare actuală cu acte: {fmtLei(valoareActuala)}
+            {efecte?.termen_nou_din_acte ? ` · termen actual: ${fmtDate(efecte.termen_nou_din_acte)}` : ''}
+          </span>
+        )}
         {canWrite && (
           <button onClick={() => setEditAct({ contract_id: contractId })}
             style={{...S.btnP, padding:'4px 12px', fontSize:11, marginLeft:'auto', background:G.orange}}>
@@ -489,26 +530,32 @@ function ActeAditionaleSection({ contractId, canWrite }) {
         <div style={{fontSize:11, color:G.dim}}>⏳ Se încarcă...</div>
       ) : acte.length === 0 ? (
         <div style={{fontSize:11, color:G.dim, fontStyle:'italic'}}>
-          Niciun act adițional. {canWrite ? 'Apasă „+ Adaugă act" pentru a adăuga.' : ''}
+          Niciun act adițional (în niciun modul). {canWrite ? 'Apasă „+ Adaugă act" pentru a adăuga.' : ''}
         </div>
       ) : (
         <div style={{display:'flex', flexDirection:'column', gap:6}}>
           {acte.map(act => {
-            const ti = TIP_ACT_INFO[act.tip] || { label:'—', icon:'📄', color:G.muted }
+            const dinExecutie = act.sursa === 'executie'
+            const ti = dinExecutie ? { label:'Act din Execuție', icon:'🏗️', color:G.blue } : (TIP_ACT_INFO[act.tip] || { label:'—', icon:'📄', color:G.muted })
             return (
-              <div key={act.id} style={{
+              <div key={`${act.sursa}-${act.id}`} style={{
                 display:'flex', alignItems:'center', gap:10,
                 padding:'8px 12px', background:G.surface, borderRadius:7,
-                border:`1px solid ${G.border}`
+                border:`1px solid ${dinExecutie ? G.blue + '44' : G.border}`
               }}>
                 <span title={ti.label} style={{fontSize:16, color:ti.color}}>{ti.icon}</span>
                 <div style={{flex:1, minWidth:0}}>
-                  <div style={{fontSize:12, fontWeight:700, color:G.text}}>{act.numar_act}</div>
+                  <div style={{fontSize:12, fontWeight:700, color:G.text}}>
+                    {act.numar_act}
+                    {dinExecutie && <span style={{fontSize:9, color:G.blue, fontWeight:700, marginLeft:8, padding:'1px 6px', border:`1px solid ${G.blue}66`, borderRadius:6}}>EXECUȚIE</span>}
+                  </div>
                   <div style={{fontSize:10, color:G.muted}}>
                     {fmtDate(act.data_semnare)}
-                    {act.valoare_noua_lei ? ` · ${fmtLei(act.valoare_noua_lei)}` : ''}
+                    {act.valoare_noua_lei ? ` · valoare nouă: ${fmtLei(act.valoare_noua_lei)}` : ''}
+                    {act.modificare_valoare_lei ? ` · ${Number(act.modificare_valoare_lei) >= 0 ? '+' : ''}${fmtLei(act.modificare_valoare_lei)}` : ''}
+                    {act.prelungire_luni ? ` · +${act.prelungire_luni} luni` : ''}
                     {act.data_termen_noua ? ` · termen: ${fmtDate(act.data_termen_noua)}` : ''}
-                    {act.observatii ? ` · ${act.observatii}` : ''}
+                    {act.descriere ? ` · ${act.descriere}` : ''}
                   </div>
                 </div>
                 {act.pdf_path && (
@@ -517,7 +564,7 @@ function ActeAditionaleSection({ contractId, canWrite }) {
                     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
                   }} style={{...S.btnS, padding:'3px 8px', fontSize:10}}>📄 PDF</button>
                 )}
-                {canWrite && (
+                {canWrite && !dinExecutie && (
                   <>
                     <button onClick={() => setEditAct(act)} style={{...S.btnS, padding:'3px 8px', fontSize:10}}>✏️</button>
                     <button onClick={() => handleDelete(act)} style={{...S.btnD, padding:'3px 8px', fontSize:10}}>🗑</button>
@@ -526,6 +573,36 @@ function ActeAditionaleSection({ contractId, canWrite }) {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* 11.06.2026: Ordin de începere + Ordine de sistare (din Execuție, prin proiectul legat) */}
+      {proiect && (
+        <div style={{marginTop:12, paddingTop:10, borderTop:`1px dashed ${G.border}`}}>
+          <div style={{fontSize:12, fontWeight:700, color:G.teal, marginBottom:8}}>
+            🚦 Ordine — proiect Execuție: {proiect.cod_intern}
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom: ordineSistare.length > 0 ? 8 : 0}}>
+            <span style={{fontSize:11, color:G.muted}}>Ordin de începere:</span>
+            <input type="date" value={dataStartEdit} onChange={e => setDataStartEdit(e.target.value)}
+              disabled={!canWrite}
+              style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:6, color:G.text, padding:'4px 8px', fontSize:11}} />
+            {canWrite && dataStartEdit !== (proiect.data_start || '') && (
+              <button onClick={handleSaveDataStart} style={{...S.btnP, padding:'4px 10px', fontSize:10, background:G.teal}}>✓ Salvează</button>
+            )}
+            {!proiect.data_start && !dataStartEdit && <span style={{fontSize:10, color:G.orange}}>⚠️ nesetat — termenul de execuție curge de aici</span>}
+          </div>
+          {ordineSistare.length > 0 && (
+            <div style={{display:'flex', flexDirection:'column', gap:4}}>
+              {ordineSistare.map(os => (
+                <div key={os.id} style={{fontSize:10.5, color:G.muted, padding:'5px 10px', background:G.surface, borderRadius:6, border:`1px solid ${G.red}33`}}>
+                  ⛔ Sistare {os.numar_ordin ? `nr. ${os.numar_ordin}` : ''} · {fmtDate(os.data_sistare)}
+                  {os.data_reluare ? ` → reluat ${fmtDate(os.data_reluare)}` : ' · ÎN VIGOARE'}
+                  {os.motiv ? ` · ${os.motiv}` : ''}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

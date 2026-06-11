@@ -709,6 +709,11 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
           <div style={{ fontSize: 16, fontWeight: 800, color: isDownstream ? G.red : G.green }}>
             {isDownstream ? '↑' : '↓'} {fmtRON(c.valoare_lei)}
           </div>
+          {c.valoare_cu_acte != null && Number(c.valoare_cu_acte) !== Number(c.valoare_lei || 0) && (
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: G.purple }} title="Valoarea actuală cu actele adiționale aplicate (din ambele module)">
+              ⚡ cu acte: {fmtRON(c.valoare_cu_acte)}
+            </div>
+          )}
           {c.nr_acte_aditionale > 0 && (
             <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>
               +{c.nr_acte_aditionale} acte adiționale
