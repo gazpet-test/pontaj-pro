@@ -997,9 +997,12 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
     if (!tipId) { showToast('Alege tipul autorizației', 'warn'); return }
     setSaving(true)
     
+    // 11.06.2026 FIX: atribuim autorul (Natalia introducea 62 autorizații fără nume)
+    const { data: { user: _uplUser } } = await supabase.auth.getUser()
     const payload = {
       employee_id: employeeId,
       tip_id: Number(tipId),
+      uploadat_de: _uplUser?.id || null,
       numar_autorizatie: numar.trim() || null,
       emitent: emitent.trim() || null,
       data_emitere: dataEmitere || null,
