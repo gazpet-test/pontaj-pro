@@ -440,6 +440,8 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
                   <>
                     <ActeAditionaleSection contractId={c.id} canWrite={canWrite} />
                     <AnexaContractSection contractId={c.id} canWrite={canWrite} />
+                    {/* 11.06.2026: polițele vizibile direct din listă (nu doar din View) */}
+                    <PoliteSection contractId={c.id} canWrite={canWrite} />
                   </>
                 )}
               </div>
