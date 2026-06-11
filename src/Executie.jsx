@@ -899,18 +899,8 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
                   </div>
                 ))}
               </div>
-              {p.isc_faza_determinanta && (
-                <div style={{ marginTop: 10, display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'#EF444418', borderRadius:7, border:'1px solid #EF444444' }}>
-                  <span style={{ fontSize: 18 }}>🏛️</span>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444' }}>ISC – Faza Determinantă ACTIVĂ</div>
-                    {p.doc_itp_ai_faze_det > 0 && (
-                      <div style={{ fontSize: 10, color: G.muted }}>
-                        {p.doc_itp_ai_faze_det} faze determinate detectate · {p.doc_itp_ai_confidence}% confidence AI
-                      </div>
-                    )}
-                  </div>
-                </div>
+              {(p.isc_faza_determinanta || p.doc_itp_pccvi_path) && (
+                <FazeDeterminanteISC proiect={p} />
               )}
             </div>
           )}
@@ -2086,6 +2076,152 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           }}>{saving ? 'Se salvează...' : isNew ? '＋ Crează proiect' : '💾 Salvează'}</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// FAZE DETERMINANTE ISC (11.06.2026) — checklist convocări per proiect
+// Lista extrasă cu AI din PCCVI (edge: parse-pccvi-faze) sau adăugată manual.
+// Flux status: neplanificată → planificată → convocată → efectuată (PV).
+// ══════════════════════════════════════════════════════════════════════════
+function FazeDeterminanteISC({ proiect }) {
+  const [faze, setFaze] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [extracting, setExtracting] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const flash = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 4000) }
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('executie_faze_determinante')
+      .select('*').eq('proiect_id', proiect.id)
+      .order('nr_faza', { ascending: true, nullsFirst: false }).order('id')
+    setFaze(data || []); setLoading(false)
+  }, [proiect.id])
+  useEffect(() => { load() }, [load])
+
+  const handleExtract = async () => {
+    if (!proiect.doc_itp_pccvi_path) { flash('Încarcă întâi PCCVI-ul la Documentație tehnică', true); return }
+    setExtracting(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-pccvi-faze`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proiect_id: proiect.id, pdf_path: proiect.doc_itp_pccvi_path }),
+      })
+      const result = await resp.json()
+      if (!resp.ok) throw new Error(result.error || `HTTP ${resp.status}`)
+      flash(`🤖 ${result.extrase} faze extrase din PCCVI (confidence ${result.confidence}%)`)
+      load()
+    } catch (e) { flash('Extracție eșuată: ' + e.message, true) }
+    setExtracting(false)
+  }
+
+  const azi = () => new Date().toISOString().slice(0, 10)
+  const NEXT = {
+    neplanificata: { label: '📅 Planifică', to: 'planificata', set: { data_planificata: null } },
+    planificata:   { label: '📣 Convoacă ISC', to: 'convocata', set: { data_convocata: null } },
+    convocata:     { label: '✅ PV efectuat', to: 'efectuata', set: { data_efectuata: null } },
+  }
+  const advance = async (f) => {
+    const n = NEXT[f.status]; if (!n) return
+    const patch = { status: n.to, updated_at: new Date().toISOString() }
+    for (const k of Object.keys(n.set)) patch[k] = azi()
+    const { error } = await supabase.from('executie_faze_determinante').update(patch).eq('id', f.id)
+    if (error) flash('Eroare: ' + error.message, true); else load()
+  }
+  const addManual = async () => {
+    const den = window.prompt('Denumirea fazei determinante:')
+    if (!den || !den.trim()) return
+    const { error } = await supabase.from('executie_faze_determinante').insert({
+      proiect_id: proiect.id, denumire: den.trim().slice(0, 250),
+      nr_faza: faze.length + 1, status: 'neplanificata', sursa: 'manual',
+    })
+    if (error) flash('Eroare: ' + error.message, true)
+    else {
+      await supabase.from('executie_proiecte').update({ isc_faza_determinanta: true, doc_itp_ai_faze_det: faze.length + 1 }).eq('id', proiect.id)
+      load()
+    }
+  }
+  const remove = async (f) => {
+    if (!window.confirm(`Șterge faza „${f.denumire}"?`)) return
+    const { error } = await supabase.from('executie_faze_determinante').delete().eq('id', f.id)
+    if (error) flash('Eroare: ' + error.message, true); else load()
+  }
+
+  const ST = {
+    neplanificata: { c: '#EF4444', l: 'NEPLANIFICATĂ' },
+    planificata:   { c: '#F0883E', l: 'PLANIFICATĂ' },
+    convocata:     { c: '#58A6FF', l: 'CONVOCATĂ' },
+    efectuata:     { c: '#3FB950', l: 'EFECTUATĂ ✓' },
+    anulata:       { c: '#8B949E', l: 'ANULATĂ' },
+  }
+  const restante = faze.filter(f => f.status === 'neplanificata' || f.status === 'planificata').length
+
+  return (
+    <div style={{ marginTop: 10, padding: '12px 14px', background: '#EF444410', borderRadius: 8, border: '1px solid #EF444433' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: faze.length > 0 ? 10 : 0 }}>
+        <span style={{ fontSize: 18 }}>🏛️</span>
+        <div style={{ fontSize: 12, fontWeight: 800, color: '#EF4444' }}>
+          Faze determinante ISC {faze.length > 0 && `(${faze.length})`}
+        </div>
+        {restante > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#F0883E', padding: '2px 8px', background: '#F0883E22', borderRadius: 8 }}>
+            ⚠️ {restante} de convocat
+          </span>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button onClick={handleExtract} disabled={extracting}
+            style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: '#BC8CFF', border: '1px solid #BC8CFF66', borderRadius: 8, cursor: extracting ? 'wait' : 'pointer', opacity: extracting ? .6 : 1 }}>
+            {extracting ? '🤖 AI citește PCCVI...' : '🤖 Extrage din PCCVI'}
+          </button>
+          <button onClick={addManual}
+            style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer' }}>
+            + Manual
+          </button>
+        </div>
+      </div>
+      {msg && <div style={{ fontSize: 11, fontWeight: 700, color: msg.err ? '#EF4444' : '#3FB950', marginBottom: 8 }}>{msg.m}</div>}
+      {loading ? (
+        <div style={{ fontSize: 11, color: G.muted }}>⏳ ...</div>
+      ) : faze.length === 0 ? (
+        <div style={{ fontSize: 11, color: G.muted, marginTop: 6 }}>
+          Nicio fază în listă. {proiect.doc_itp_pccvi_path ? 'Apasă „Extrage din PCCVI".' : 'Încarcă PCCVI-ul la Documentație tehnică, apoi extrage.'}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {faze.map(f => {
+            const st = ST[f.status] || ST.neplanificata
+            const next = NEXT[f.status]
+            return (
+              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: G.bg, borderRadius: 7, border: `1px solid ${st.c}33`, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: st.c, padding: '3px 8px', background: st.c + '22', borderRadius: 8, whiteSpace: 'nowrap' }}>{st.l}</span>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: G.text }}>
+                    {f.nr_faza ? `${f.nr_faza}. ` : ''}{f.denumire}
+                    {f.sursa === 'ai_pccvi' && <span style={{ fontSize: 9, color: '#BC8CFF', marginLeft: 6 }}>🤖</span>}
+                  </div>
+                  <div style={{ fontSize: 10, color: G.muted }}>
+                    {f.stadiu_fizic ? `${f.stadiu_fizic} · ` : ''}
+                    {f.participanti ? `${f.participanti} · ` : ''}
+                    {f.data_convocata ? `convocat ${f.data_convocata} · ` : ''}
+                    {f.data_efectuata ? `PV ${f.data_efectuata}` : ''}
+                  </div>
+                </div>
+                {next && (
+                  <button onClick={() => advance(f)}
+                    style={{ padding: '8px 13px', fontSize: 12, fontWeight: 700, background: st.c + '22', color: st.c, border: `1px solid ${st.c}55`, borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {next.label}
+                  </button>
+                )}
+                <button onClick={() => remove(f)} title="Șterge"
+                  style={{ padding: '8px 11px', fontSize: 14, background: 'transparent', color: '#EF4444', border: '1px solid #EF444444', borderRadius: 8, cursor: 'pointer' }}>🗑</button>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
