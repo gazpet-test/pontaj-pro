@@ -52,6 +52,7 @@ const fmtDate = v => {
 // Tab-uri contextuale (apar doar când e selectat un proiect)
 // ---------------------------------------------------------------------------
 const CONTEXT_TABS = [
+  { key: 'proiect',        label: 'Proiect',        icon: '📊', color: G.green,  desc: 'Dashboard · Echipă · ISC · Stadiu' },
   { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,   desc: 'Personal tură · Utilaje' },
   { key: 'situatii_plata', label: 'Situații plată', icon: '💰', color: G.orange, desc: 'SL1–SL6 · NCS · Facturare' },
   { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Tronsoane · Cumulat' },
@@ -64,10 +65,10 @@ const CONTEXT_TABS = [
 export default function ExecutiePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const proiectIdStr = searchParams.get('proiect') // null sau '1','2',...
-  const tabStr = searchParams.get('tab') || 'santiere'
+  const tabStr = searchParams.get('tab') || 'proiect'
 
   // Navighează la contextul unui proiect
-  const goToProiect = (id, tab = 'santiere') => {
+  const goToProiect = (id, tab = 'proiect') => {
     setSearchParams({ proiect: String(id), tab }, { replace: false })
   }
   // Revine la dashboard
@@ -248,6 +249,7 @@ function ProiectContextView({ proiectId, tab, onBack }) {
       </div>
 
       {/* Tab content cu proiectId prop */}
+      {tab === 'proiect'        && <TabProiectDashboard proiectId={proiectId} />}
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'documente'      && <TabDocumenteNAS  proiectId={proiectId} />}
@@ -588,7 +590,7 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit })
               {p.cod_intern}
             </div>
             <div style={{ fontSize: 14, fontWeight: 700, color: G.text, lineHeight: 1.35, cursor: 'pointer' }}
-              onClick={() => onOpen('santiere')}>
+              onClick={() => onOpen('proiect')}>
               {p.nume}
             </div>
             {/* Badge-uri sănătate: apar doar când lipsesc legăturile */}
@@ -793,7 +795,7 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit })
       }}>
         <div style={{ display: 'flex', gap: 8 }}>
           {/* Buton principal: deschide contextul proiectului */}
-          <button onClick={() => onOpen('santiere')} style={{
+          <button onClick={() => onOpen('proiect')} style={{
             padding: '6px 14px', background: G.executie, border: 'none',
             borderRadius: 6, color: '#0D1117', fontSize: 12, cursor: 'pointer', fontWeight: 700,
           }}>→ Deschide</button>
@@ -1079,7 +1081,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
             padding: '8px 16px', background: G.purple + '22', border: `1px solid ${G.purple}55`,
             borderRadius: 7, color: G.purple, fontSize: 13, cursor: 'pointer', fontWeight: 600,
           }}>📐 Izometrie</button>
-          <button onClick={() => onOpen('santiere')} style={{
+          <button onClick={() => onOpen('proiect')} style={{
             padding: '8px 16px', background: G.executie, border: 'none',
             borderRadius: 7, color: '#0D1117', fontSize: 13, cursor: 'pointer', fontWeight: 700,
           }}>→ Deschide proiect</button>
@@ -1246,6 +1248,17 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
       // Auto-completează ISC dacă detectat
       if (r.isc_faza_determinanta !== undefined) set('isc_faza_determinanta', r.isc_faza_determinanta)
       showToast(`ITP analizat: ${r.faze_determinate_isc_count || 0} FD-uri ISC, ${r.confidence}% confidence`, 'success')
+      // 11.06.2026: populează AUTOMAT și lista fazelor determinante (tabel + checklist),
+      // nu doar contorul — fără pas manual suplimentar
+      try {
+        const resp2 = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-pccvi-faze`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ proiect_id: proiect.id, pdf_path: docPaths.itp_pccvi }),
+        })
+        const res2 = await resp2.json()
+        if (resp2.ok && res2.extrase > 0) showToast(`📋 ${res2.extrase} faze determinante populate în checklist`, 'success')
+      } catch { /* chain best-effort: contorul e setat oricum */ }
     } catch(e) { showToast('Eroare AI ITP: ' + e.message, 'error') }
     finally { setExtractingITP(false) }
   }
@@ -2222,6 +2235,126 @@ function FazeDeterminanteISC({ proiect }) {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// TAB PROIECT — DASHBOARD (11.06.2026): pagina de aterizare la deschiderea
+// unui proiect: date contract, echipă (MP/RTE/RTS/Transgaz), faze ISC, stadiu.
+// ══════════════════════════════════════════════════════════════════════════
+function TabProiectDashboard({ proiectId }) {
+  const [p, setP] = useState(null)
+  const [extra, setExtra] = useState(null)
+  const [personnel, setPersonnel] = useState({})
+
+  useEffect(() => {
+    if (!proiectId) return
+    let live = true
+    ;(async () => {
+      const [{ data: v }, { data: e }] = await Promise.all([
+        supabase.from('v_executie_dashboard').select('*').eq('id', proiectId).maybeSingle(),
+        supabase.from('executie_proiecte')
+          .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta')
+          .eq('id', proiectId).maybeSingle(),
+      ])
+      if (!live) return
+      setP(v || null); setExtra(e || null)
+      const ids = [e?.mp_employee_id, e?.rts_employee_id, e?.rte_employee_id].filter(Boolean)
+      if (ids.length) {
+        const { data } = await supabase.from('employees').select('id, name, functie').in('id', ids)
+        if (!live) return
+        const m = {}; (data || []).forEach(x => { m[x.id] = x }); setPersonnel(m)
+      }
+    })()
+    return () => { live = false }
+  }, [proiectId])
+
+  if (!p || !extra) return <div style={{ padding: 40, textAlign: 'center', color: G.muted, fontSize: 13 }}>⏳ Se încarcă proiectul...</div>
+
+  const pz = { ...p, ...extra }
+  const echipa = [
+    { label: 'Manager Proiect (MP)',        id: extra.mp_employee_id },
+    { label: 'Resp. Tehnic Execuție (RTE)', id: extra.rte_employee_id },
+    { label: 'Resp. Tehnic Sudură (RTS)',   id: extra.rts_employee_id },
+    { label: 'Coordonator Transgaz',        val: extra.coordonator_transgaz },
+  ].filter(r => r.id || r.val)
+
+  const infoRows = [
+    { label: 'Ordin de începere', value: p.data_start ? fmtDate(p.data_start) : '⚠️ nesetat', warn: !p.data_start },
+    { label: 'Termen finalizare', value: p.este_sistat
+        ? `⏸ Sistat (${p.data_ultima_sistare ? fmtDate(p.data_ultima_sistare) : 'manual'})`
+        : (p.data_termen ? fmtDate(p.data_termen) + (p.prelungire_totala_luni > 0 ? ` +${p.prelungire_totala_luni}l AA` : '') : '—'),
+      warn: p.zile_pana_termen != null && p.zile_pana_termen < 30 && !p.este_sistat },
+    { label: 'Zile până la termen', value: p.zile_pana_termen != null ? `${p.zile_pana_termen} zile` : '—', warn: p.zile_pana_termen != null && p.zile_pana_termen < 30 },
+    { label: 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
+    { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
+    { label: 'Acte adiționale', value: p.nr_acte_aditionale > 0 ? `${p.nr_acte_aditionale} acte` : '—' },
+  ]
+
+  const stadiu = [
+    { label: 'Tronsoane', value: p.nr_tronsoane ?? 0 },
+    { label: 'Pachete lansare', value: p.nr_pachete ?? 0 },
+    { label: 'Lungime totală', value: p.lungime_totala_m ? `${Number(p.lungime_totala_m).toLocaleString('ro-RO')} m` : '—' },
+    { label: 'Zile-om pontaj', value: p.pontaj_zile_om ?? 0 },
+    { label: 'Angajați distincți', value: p.pontaj_angajati ?? 0 },
+    { label: 'Ultima zi pontată', value: p.pontaj_ultima_zi ? fmtDate(p.pontaj_ultima_zi) : '—' },
+  ]
+
+  return (
+    <div className="fi">
+      {/* Info contract */}
+      <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 12 }}>
+          📋 Date contract & termene
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
+          {infoRows.map((row, i) => (
+            <div key={i} style={{ background: G.card2 || G.surface, borderRadius: 8, padding: '10px 14px', border: row.warn ? '1px solid #F0883E66' : 'none' }}>
+              <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>{row.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: row.warn ? '#F0883E' : G.text }}>{row.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Echipă proiect */}
+      <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10 }}>
+          👥 Echipă proiect — responsabili execuție
+        </div>
+        {echipa.length === 0 ? (
+          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă ✏️ Editează pe proiect și completează MP / RTE / RTS / coordonator Transgaz.</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+            {echipa.map((r, i) => (
+              <div key={i} style={{ background: G.card2 || G.surface, borderRadius: 7, padding: '10px 14px' }}>
+                <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 2 }}>{r.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{r.val || personnel[r.id]?.name || '⏳'}</div>
+                {r.id && personnel[r.id]?.functie && <div style={{ fontSize: 10, color: G.muted }}>{personnel[r.id].functie}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Faze determinante ISC — checklist complet (extract AI din PCCVI) */}
+      <FazeDeterminanteISC proiect={pz} />
+
+      {/* Stadiu execuție + pontaj */}
+      <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginTop: 14 }}>
+        <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 12 }}>
+          📊 Stadiu execuție & pontaj
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+          {stadiu.map((s, i) => (
+            <div key={i} style={{ background: G.card2 || G.surface, borderRadius: 8, padding: '10px 14px' }}>
+              <div style={{ fontSize: 10, color: G.muted, textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 3 }}>{s.label}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

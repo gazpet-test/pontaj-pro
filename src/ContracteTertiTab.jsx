@@ -135,23 +135,6 @@ export default function ContracteTertiTab() {
   useEffect(() => { loadAll() }, [])
 
   const canWrite = profile?.is_owner === true || profile?.can_manage_contracts === true
-
-  // 11.06.2026: alerte polițe pe rând (contracte de încasare active): lipsă GBE / expiră curând
-  const politeAlerte = (c) => {
-    if (c.sens !== 'incasare' || c.status !== 'activ') return []
-    const ps = politeMap[c.id] || []
-    const out = []
-    const azi = new Date()
-    if (!ps.some(p => p.tip === 'GBE' && p.status === 'activa')) out.push({ txt: 'fără GBE', sev: 'red' })
-    if (!ps.some(p => p.tip === 'CAR' && p.status === 'activa')) out.push({ txt: 'fără CAR', sev: 'orange' })
-    for (const p of ps) {
-      if (p.status !== 'activa' || !p.data_expirare) continue
-      const zile = Math.ceil((new Date(p.data_expirare) - azi) / 86400000)
-      if (zile < 0) out.push({ txt: `${p.tip} EXPIRATĂ`, sev: 'red' })
-      else if (zile <= 30) out.push({ txt: `${p.tip} expiră în ${zile}z`, sev: 'orange' })
-    }
-    return out.slice(0, 3)
-  }
   const isOwner  = profile?.is_owner === true
 
   if (loading) {
@@ -239,7 +222,7 @@ export default function ContracteTertiTab() {
             if (error) show('Eroare: ' + error.message, 'err')
             else { show('✓ Contract șters'); loadAll() }
           }}
-        />
+         politeMap={politeMap} />
       )}
 
       {editBen && (
@@ -346,7 +329,23 @@ function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onT
 // ══════════════════════════════════════════════════════════
 // CONTRACTE SUB-TAB — cu filtre categorie + sens
 // ══════════════════════════════════════════════════════════
-function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onView, onEdit, onDelete }) {
+function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onView, onEdit, onDelete, politeMap = {} }) {
+  // 11.06.2026: alerte polițe pe rând (contracte de încasare active): lipsă GBE / expiră curând
+  const politeAlerte = (c) => {
+    if (c.sens !== 'incasare' || c.status !== 'activ') return []
+    const ps = politeMap[c.id] || []
+    const out = []
+    const azi = new Date()
+    if (!ps.some(p => p.tip === 'GBE' && p.status === 'activa')) out.push({ txt: 'fără GBE', sev: 'red' })
+    if (!ps.some(p => p.tip === 'CAR' && p.status === 'activa')) out.push({ txt: 'fără CAR', sev: 'orange' })
+    for (const p of ps) {
+      if (p.status !== 'activa' || !p.data_expirare) continue
+      const zile = Math.ceil((new Date(p.data_expirare) - azi) / 86400000)
+      if (zile < 0) out.push({ txt: `${p.tip} EXPIRATĂ`, sev: 'red' })
+      else if (zile <= 30) out.push({ txt: `${p.tip} expiră în ${zile}z`, sev: 'orange' })
+    }
+    return out.slice(0, 3)
+  }
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterCat, setFilterCat] = useState('all')
