@@ -102,6 +102,7 @@ export default function ContracteTertiTab() {
   const [profile, setProfile] = useState(null)
   const [beneficiari, setBeneficiari] = useState([])
   const [contracte, setContracte] = useState([])
+  const [politeMap, setPoliteMap] = useState({})   // contract_id -> [polite] (pt badge-uri alertă)
   const [loading, setLoading] = useState(true)
   const { show, Toast } = useToast()
 
@@ -116,20 +117,41 @@ export default function ContracteTertiTab() {
         .select('id, name, is_owner, can_manage_contracts').eq('id', user.id).single()
       setProfile(data)
     }
-    const [bRes, cRes] = await Promise.all([
+    const [bRes, cRes, pRes] = await Promise.all([
       supabase.from('beneficiari').select('*').order('nume'),
       supabase.from('contracte_terti').select('*')
         .order('data_semnare', { ascending: false, nullsFirst: false })
-        .order('id', { ascending: false })
+        .order('id', { ascending: false }),
+      supabase.from('contracte_polite').select('id, contract_id, tip, status, data_expirare'),
     ])
     setBeneficiari(bRes.data || [])
     setContracte(cRes.data || [])
+    const pm = {}
+    for (const p of (pRes.data || [])) { (pm[p.contract_id] = pm[p.contract_id] || []).push(p) }
+    setPoliteMap(pm)
     setLoading(false)
   }
 
   useEffect(() => { loadAll() }, [])
 
   const canWrite = profile?.is_owner === true || profile?.can_manage_contracts === true
+
+  // 11.06.2026: alerte polițe pe rând (contracte de încasare active): lipsă GBE / expiră curând
+  const politeAlerte = (c) => {
+    if (c.sens !== 'incasare' || c.status !== 'activ') return []
+    const ps = politeMap[c.id] || []
+    const out = []
+    const azi = new Date()
+    if (!ps.some(p => p.tip === 'GBE' && p.status === 'activa')) out.push({ txt: 'fără GBE', sev: 'red' })
+    if (!ps.some(p => p.tip === 'CAR' && p.status === 'activa')) out.push({ txt: 'fără CAR', sev: 'orange' })
+    for (const p of ps) {
+      if (p.status !== 'activa' || !p.data_expirare) continue
+      const zile = Math.ceil((new Date(p.data_expirare) - azi) / 86400000)
+      if (zile < 0) out.push({ txt: `${p.tip} EXPIRATĂ`, sev: 'red' })
+      else if (zile <= 30) out.push({ txt: `${p.tip} expiră în ${zile}z`, sev: 'orange' })
+    }
+    return out.slice(0, 3)
+  }
   const isOwner  = profile?.is_owner === true
 
   if (loading) {
@@ -417,6 +439,19 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
                     </span>
                   </div>
 
+                  {/* Alerte polițe (GBE/CAR lipsă sau expiră) */}
+                  {politeAlerte(c).length > 0 && (
+                    <div style={{display:'flex', gap:4, marginRight:8, flexWrap:'wrap'}}>
+                      {politeAlerte(c).map((a, i) => (
+                        <span key={i} style={{padding:'3px 8px', borderRadius:10, fontSize:10, fontWeight:800, whiteSpace:'nowrap',
+                          background: (a.sev === 'red' ? G.red : G.orange) + '22', color: a.sev === 'red' ? G.red : G.orange,
+                          border: `1px solid ${(a.sev === 'red' ? G.red : G.orange)}55`}}>
+                          ⚠️ {a.txt}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   {/* AI icon */}
                   <div style={{marginRight:8, fontSize:20}} title={c.ai_extracted_at ? 'AI extras' : c.pdf_path ? 'PDF fără AI' : 'Fără PDF'}>
                     {c.ai_extracted_at ? '🤖' : c.pdf_path ? '📄' : <span style={{color:G.dim}}>—</span>}
@@ -636,6 +671,7 @@ function AnexaContractSection({ contractId, canWrite }) {
   const [editLinie, setEditLinie] = useState(null)   // {linie sau {} nou, _modificaPrinAct}
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [aiImporting, setAiImporting] = useState(false)
   const [toast, setToast] = useState(null)
   const show = (msg, kind='ok') => { setToast({ msg, kind }); setTimeout(() => setToast(null), 3500) }
 
@@ -713,6 +749,32 @@ function AnexaContractSection({ contractId, canWrite }) {
 
   const actLabel = id => { const a = acte.find(x => x.id === id); return a ? a.numar_act : `act #${id}` }
 
+  // 11.06.2026: import anexa din PDF cu extracție AI (edge function parse-anexa-pdf)
+  const handleImportPdf = async (file) => {
+    if (!file) return
+    if (file.type !== 'application/pdf') { show('Doar fișiere PDF', 'err'); return }
+    if (file.size > 10 * 1024 * 1024) { show('PDF prea mare (max 10MB)', 'err'); return }
+    setAiImporting(true)
+    try {
+      const path = `anexe/${contractId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const { error: upErr } = await supabase.storage.from('contracte-terti').upload(path, file, { upsert: false })
+      if (upErr) throw new Error('Upload: ' + upErr.message)
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`${supabase.supabaseUrl}/functions/v1/parse-anexa-pdf`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contract_id: contractId, pdf_path: path }),
+      })
+      const result = await resp.json()
+      if (!resp.ok) throw new Error(result.error || `HTTP ${resp.status}`)
+      show(`🤖 ${result.inserted} linii importate din anexă (confidence ${result.confidence}%${result.moneda_detectata ? ' · ' + result.moneda_detectata : ''}) — verifică-le!`)
+      load()
+    } catch (e) {
+      show('Import AI eșuat: ' + e.message, 'err')
+    }
+    setAiImporting(false)
+  }
+
   return (
     <div style={{borderTop:`1px solid ${G.border}`, background:G.bg, padding:'12px 16px'}}>
       {toast && (
@@ -728,9 +790,16 @@ function AnexaContractSection({ contractId, canWrite }) {
           </button>
         )}
         {canWrite && (
-          <button onClick={() => openEdit(null)} style={{...S.btnP, padding:'4px 12px', fontSize:11, marginLeft:'auto', background:G.teal}}>
-            + Adaugă linie
-          </button>
+          <div style={{marginLeft:'auto', display:'flex', gap:6}}>
+            <label style={{...S.btnS, padding:'6px 12px', fontSize:11, color:G.purple, borderColor:G.purple+'66', cursor: aiImporting ? 'wait' : 'pointer', opacity: aiImporting ? .6 : 1}}>
+              {aiImporting ? '🤖 AI extrage...' : '🤖 Import anexă PDF'}
+              <input type="file" accept="application/pdf" style={{display:'none'}} disabled={aiImporting}
+                onChange={e => { handleImportPdf(e.target.files?.[0]); e.target.value = '' }} />
+            </label>
+            <button onClick={() => openEdit(null)} style={{...S.btnP, padding:'6px 12px', fontSize:11, background:G.teal}}>
+              + Adaugă linie
+            </button>
+          </div>
         )}
       </div>
 
