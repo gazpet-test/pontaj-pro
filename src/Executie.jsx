@@ -782,7 +782,7 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit })
             borderRadius: 6, fontSize: 11, color: G.yellow,
             display: 'flex', alignItems: 'center', gap: 6,
           }}>
-            ⚠️ Datele contractuale nu sunt completate — apasă ✏️ Editează pentru a adăuga termene.
+            ⚠️ Lipsește: {[!p.data_start && 'ordinul de începere', !p.data_termen && 'termenul de finalizare'].filter(Boolean).join(' și ')} — {!p.data_start ? 'se setează din contract, la „Ordine — proiect Execuție"' : 'apasă ✏️ Editează'}.
           </div>
         )}
       </div>
