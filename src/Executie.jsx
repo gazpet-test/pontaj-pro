@@ -56,7 +56,7 @@ const CONTEXT_TABS = [
   { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,   desc: 'Personal tură · Utilaje' },
   { key: 'situatii_plata', label: 'Situații plată', icon: '💰', color: G.orange, desc: 'SL1–SL6 · NCS · Facturare' },
   { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Tronsoane · Cumulat' },
-  { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Arhivă NAS' },
+  { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Calitate materiale · Arhivă NAS' },
 ]
 
 // ===========================================================================
@@ -252,7 +252,7 @@ function ProiectContextView({ proiectId, tab, onBack }) {
       {tab === 'proiect'        && <TabProiectDashboard proiectId={proiectId} />}
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
-      {tab === 'documente'      && <TabDocumenteNAS  proiectId={proiectId} />}
+      {tab === 'documente'      && (<><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
       {(tab === 'izometrie' || tab === 'tronsoane') && (
@@ -2542,3 +2542,68 @@ function TabProiectDashboard({ proiectId }) {
     </div>
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENTE CALITATE MATERIALE (12.06.2026) — certificatele/declarațiile de
+// conformitate încărcate pe comenzile furnizor în Achiziții, filtrate pe
+// proiectul curent. Sursa: comenzi_furnizor_documente (tip=calitate).
+// ════════════════════════════════════════════════════════════════════════════
+function DocCalitateMaterialeSection({ proiectId }) {
+  const [docs, setDocs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      try {
+        // Query-uri separate (fără FK implicit joins): comenzile proiectului → documentele lor
+        const { data: cmds } = await supabase.from('comenzi_furnizor')
+          .select('id, numar_comanda, furnizor_id').eq('proiect_id', proiectId)
+        const ids = (cmds || []).map(c => c.id)
+        if (!ids.length) { setDocs([]); return }
+        const [rDocs, rFz] = await Promise.all([
+          supabase.from('comenzi_furnizor_documente').select('*').eq('tip', 'calitate').in('comanda_id', ids).order('uploadat_la', { ascending: false }),
+          supabase.from('logistica_furnizori').select('id, nume'),
+        ])
+        const cmdMap = Object.fromEntries((cmds || []).map(c => [c.id, c]))
+        const fzMap = Object.fromEntries((rFz.data || []).map(f => [f.id, f.nume]))
+        setDocs((rDocs.data || []).map(d => ({
+          ...d,
+          _cmd: cmdMap[d.comanda_id]?.numar_comanda || `#${d.comanda_id}`,
+          _furnizor: fzMap[cmdMap[d.comanda_id]?.furnizor_id] || '—',
+        })))
+      } finally { setLoading(false) }
+    })()
+  }, [proiectId])
+
+  const openDoc = async (path) => {
+    const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  if (loading) return null
+  return (
+    <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: docs.length ? 10 : 0 }}>
+        <span style={{ fontSize: 17 }}>🏅</span>
+        <span style={{ fontSize: 14, fontWeight: 800 }}>Documente calitate materiale</span>
+        <span style={{ fontSize: 11, color: G.muted }}>· din comenzile furnizor (Achiziții)</span>
+        {docs.length > 0 && <span style={{ background: G.green + '22', color: G.green, border: `1px solid ${G.green}55`, borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 800 }}>{docs.length}</span>}
+        {!docs.length && <span style={{ fontSize: 11.5, color: G.dim, fontStyle: 'italic', marginLeft: 'auto' }}>Niciun document încă — se încarcă pe comandă în Achiziții.</span>}
+      </div>
+      {docs.map(d => (
+        <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 160px 110px 80px', gap: 10, alignItems: 'center', padding: '8px 4px', borderTop: `1px solid ${G.border}`, fontSize: 12.5 }}>
+          <button onClick={() => openDoc(d.fisier_path)} title={d.fisier_nume}
+            style={{ background: 'none', border: 'none', color: G.green, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            🏅 {d.fisier_nume || d.fisier_path.split('/').pop()}
+          </button>
+          <a href={`/achizitii?id=${d.comanda_id}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda">🛒 {d._cmd}</a>
+          <span style={{ color: G.muted, fontSize: 11.5 }}>🏭 {d._furnizor}</span>
+          <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
+          <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: G.green + '22', border: `1px solid ${G.green}44`, borderRadius: 6, color: G.green, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
