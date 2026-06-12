@@ -937,7 +937,24 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
                 <div style={{ fontSize:13, fontWeight:700, color: a.status === 'aprobat' ? G.green : a.status === 'respins' ? G.red : G.yellow }}>
                   {a.status === 'aprobat' ? '✅ Aprobat' : a.status === 'respins' ? '❌ Respins' : '⏳ În așteptare'}
                   {a.decis_la && <span style={{ color:G.dim, fontWeight:400, fontSize:11 }}> · {fmtDataOra(a.decis_la)}</span>}
+                  {a.semnat_de && a.semnat_de !== a.profile_id && (
+                    <span style={{ color:G.purple, fontWeight:600, fontSize:11 }}> · ✍️ semnat de {profilesMap[a.semnat_de] || 'coleg'} în numele titularului</span>
+                  )}
                 </div>
+                {/* Aprobare ÎN NUMELE — owner sau coleg din pachetul de aprobatori al comenzii (12.06.2026) */}
+                {c.status === 'in_aprobare' && a.status === 'in_asteptare' && a.profile_id !== profile?.id &&
+                  (profile?.is_owner === true || aprobari.some(x => x.profile_id === profile?.id)) && (
+                  <button disabled={busy} onClick={() => {
+                    const cine = profilesMap[a.profile_id] || 'titular'
+                    if (window.confirm(`Aprobi comanda ${c.numar_comanda} ÎN NUMELE lui ${cine}?\n\n${cine} va primi notificare că ai semnat pentru el/ea. Acțiunea rămâne înregistrată cu numele tău.`)) {
+                      actions.decideAprobare(c, a, 'aprobat', null)
+                    }
+                  }} style={{ marginLeft:'auto', padding:'5px 12px', background:G.purple + '22', color:G.purple,
+                    border:`1px solid ${G.purple}55`, borderRadius:7, cursor:'pointer', fontSize:11.5, fontWeight:700,
+                    opacity: busy ? .55 : 1 }}>
+                    ✍️ Aprobă în numele
+                  </button>
+                )}
                 {a.comentariu && <div style={{ fontSize:12, color:G.muted, fontStyle:'italic' }}>„{a.comentariu}"</div>}
               </div>
             ))}
@@ -1271,10 +1288,15 @@ export default function AchizitiiPage() {
     decideAprobare: async (c, aprobare, decizie, comentariu) => {
       setBusy(true)
       try {
+        // Proxy „în numele" (12.06.2026): dacă decid pe rândul ALTUI aprobator (concediu etc.),
+        // se înregistrează semnat_de = eu, iar titularul primește notificare (trigger BD).
+        const isProxy = aprobare.profile_id !== profile?.id
         const { error } = await supabase.from('comenzi_furnizor_aprobari')
-          .update({ status: decizie, decis_la: new Date().toISOString(), comentariu: comentariu?.trim() || null })
+          .update({ status: decizie, decis_la: new Date().toISOString(), comentariu: comentariu?.trim() || null,
+                    ...(isProxy ? { semnat_de: profile?.id } : {}) })
           .eq('id', aprobare.id)
         if (error) throw error
+        if (isProxy) showToast(`✍️ Ai semnat în numele titularului — va primi notificare.`)
         if (decizie === 'respins') {
           await supabase.from('comenzi_furnizor').update({ status: 'respinsa', updated_at: new Date().toISOString() }).eq('id', c.id)
           showToast(`❌ Ai respins ${c.numar_comanda}.`, 'warn')
