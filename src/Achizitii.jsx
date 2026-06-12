@@ -341,15 +341,64 @@ function FluxTimeline({ status }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// FURNIZOR COMBOBOX — select din logistica_furnizori + „＋ Furnizor nou" inline
+// (pattern PartenerCombobox din Tichete; decizie Razvan 12.06: lista de
+// FURNIZORI de materiale, NU contractele/subcontractorii din contracte_terti)
+// ════════════════════════════════════════════════════════════════════════════
+function FurnizorCombobox({ value, onChange, furnizoriList, onFurnizorNou, showToast }) {
+  const [adding, setAdding] = useState(false)
+  const [nume, setNume] = useState('')
+  const [cui, setCui] = useState('')
+  const [contact, setContact] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const salveaza = async () => {
+    if (!nume.trim()) { showToast('Numele furnizorului e obligatoriu.', 'error'); return }
+    setSaving(true)
+    try {
+      const created = await onFurnizorNou({ nume: nume.trim(), cui: cui.trim() || null, contact: contact.trim() || null })
+      if (created?.id) {
+        onChange(String(created.id))
+        setAdding(false); setNume(''); setCui(''); setContact('')
+        showToast(`Furnizor „${created.nume}" adăugat și selectat.`)
+      }
+    } catch (e) { showToast('Eroare la adăugare furnizor: ' + (e.message || e), 'error') } finally { setSaving(false) }
+  }
+
+  if (adding) return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:6, padding:10, background:G.bg, borderRadius:8, border:`1px solid ${G.achizitii}66` }}>
+      <input style={S.input} placeholder="Nume furnizor * (ex: SINTAX)" value={nume} onChange={e => setNume(e.target.value)} autoFocus />
+      <div style={{ display:'flex', gap:6 }}>
+        <input style={S.input} placeholder="CUI (opțional)" value={cui} onChange={e => setCui(e.target.value)} />
+        <input style={S.input} placeholder="Contact (nume · telefon)" value={contact} onChange={e => setContact(e.target.value)} />
+      </div>
+      <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
+        <button onClick={() => setAdding(false)} disabled={saving} style={{ ...S.btnS, padding:'7px 12px', fontSize:13 }}>Anulează</button>
+        <button onClick={salveaza} disabled={saving} style={{ ...S.btnP, padding:'7px 14px', fontSize:13, background:G.achizitii, color:'#0D1117' }}>{saving ? '...' : '✓ Salvează furnizor'}</button>
+      </div>
+    </div>
+  )
+  return (
+    <div style={{ display:'flex', gap:6 }}>
+      <select style={S.input} value={value} onChange={e => onChange(e.target.value)}>
+        <option value="">— Alege furnizor —</option>
+        {furnizoriList.map(f => <option key={f.id} value={f.id}>{f.nume}{f.cui ? ` (${f.cui})` : ''}</option>)}
+      </select>
+      <button onClick={() => setAdding(true)} title="Adaugă furnizor nou" style={{ ...S.btnS, padding:'9px 12px', fontSize:13, whiteSpace:'nowrap', color:G.achizitii, borderColor:G.achizitii + '66', fontWeight:700 }}>＋ Nou</button>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MODAL: COMANDĂ NOUĂ / EDITARE DRAFT
 // ════════════════════════════════════════════════════════════════════════════
 const LINIE_GOALA = () => ({ _k: uniq8(), denumire:'', um:'buc', cantitate:'', pret_unitar:'', termen_livrare:'', observatii:'' })
 
-function ComandaFormModal({ comanda, proiecte, furnizori, beneficiariMap, sites, profile, onClose, onSaved, showToast }) {
+function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sites, profile, onClose, onSaved, showToast }) {
   const editMode = !!comanda
   const [form, setForm] = useState(() => editMode ? {
     proiect_id: comanda.proiect_id || '',
-    furnizor_contract_id: comanda.furnizor_contract_id || '',
+    furnizor_id: comanda.furnizor_id || '',
     persoana_contact: comanda.persoana_contact || '',
     telefon_contact: comanda.telefon_contact || '',
     livrare_tip: comanda.livrare_tip || 'santier',
@@ -358,7 +407,7 @@ function ComandaFormModal({ comanda, proiecte, furnizori, beneficiariMap, sites,
     confirmare_juridica: !!comanda.confirmare_juridica,
     observatii: comanda.observatii || '',
   } : {
-    proiect_id:'', furnizor_contract_id:'', persoana_contact:'', telefon_contact:'',
+    proiect_id:'', furnizor_id:'', persoana_contact:'', telefon_contact:'',
     livrare_tip:'santier', livrare_site_id:'', moneda:'EUR', confirmare_juridica:false, observatii:'',
   })
   const [linii, setLinii] = useState(() => editMode && comanda.linii?.length
@@ -377,12 +426,18 @@ function ComandaFormModal({ comanda, proiecte, furnizori, beneficiariMap, sites,
     const p = proiecte.find(x => String(x.id) === String(pid))
     if (p?.site_id && form.livrare_tip === 'santier' && !form.livrare_site_id) set('livrare_site_id', p.site_id)
   }
-  // Autofill contact din beneficiar la selectare furnizor
-  const onFurnizor = (cid) => {
-    set('furnizor_contract_id', cid)
-    const ctr = furnizori.find(x => String(x.id) === String(cid))
-    const ben = ctr?.beneficiar_id ? beneficiariMap[ctr.beneficiar_id] : null
-    if (ben?.telefon && !form.telefon_contact) set('telefon_contact', ben.telefon)
+  // Autofill contact din fișa furnizorului (logistica_furnizori.contact = „nume · telefon")
+  const onFurnizor = (fid) => {
+    set('furnizor_id', fid)
+    const fz = furnizoriList.find(x => String(x.id) === String(fid))
+    if (fz?.contact && !form.persoana_contact && !form.telefon_contact) {
+      const tel = (fz.contact.match(/0\d[\d\s.-]{7,}/) || [])[0]
+      if (tel) {
+        set('telefon_contact', tel.trim())
+        const nume = fz.contact.replace(tel, '').replace(/[·,;|-]\s*$|^\s*[·,;|-]/g, '').trim()
+        if (nume) set('persoana_contact', nume)
+      } else set('persoana_contact', fz.contact)
+    }
   }
 
   const liniiValide = linii.filter(l => l.denumire.trim() && Number(l.cantitate) > 0)
@@ -391,7 +446,7 @@ function ComandaFormModal({ comanda, proiecte, furnizori, beneficiariMap, sites,
   const vaSariAprobarea = total > 0 && totalLei < PRAG_APROBARE_LEI
 
   const valid = () => {
-    if (!form.furnizor_contract_id) { showToast('Alege furnizorul (contract sens=plată).', 'error'); return false }
+    if (!form.furnizor_id) { showToast('Alege furnizorul (sau adaugă-l cu „＋ Nou").', 'error'); return false }
     if (!liniiValide.length) { showToast('Adaugă cel puțin o linie cu denumire + cantitate.', 'error'); return false }
     if (form.livrare_tip === 'santier' && !form.livrare_site_id) { showToast('Alege șantierul de livrare.', 'error'); return false }
     return true
@@ -404,7 +459,7 @@ function ComandaFormModal({ comanda, proiecte, furnizori, beneficiariMap, sites,
       let comandaId = comanda?.id
       const header = {
         proiect_id: form.proiect_id || null,
-        furnizor_contract_id: form.furnizor_contract_id || null,
+        furnizor_id: form.furnizor_id || null,
         persoana_contact: form.persoana_contact.trim() || null,
         telefon_contact: form.telefon_contact.trim() || null,
         livrare_tip: form.livrare_tip,
@@ -468,15 +523,8 @@ function ComandaFormModal({ comanda, proiecte, furnizori, beneficiariMap, sites,
             </select>
           </div>
           <div>
-            <label style={lbl}>Furnizor (contracte sens = plată) *</label>
-            <select style={S.input} value={form.furnizor_contract_id} onChange={e => onFurnizor(e.target.value)}>
-              <option value="">— Alege furnizor —</option>
-              {furnizori.map(f => {
-                const ben = f.beneficiar_id ? beneficiariMap[f.beneficiar_id] : null
-                const nume = ben?.nume || f.partener_text || f.denumire
-                return <option key={f.id} value={f.id}>{nume} — ctr. {f.numar_contract || 'fără nr.'}</option>
-              })}
-            </select>
+            <label style={lbl}>Furnizor materiale *</label>
+            <FurnizorCombobox value={form.furnizor_id} onChange={onFurnizor} furnizoriList={furnizoriList} onFurnizorNou={onFurnizorNou} showToast={showToast} />
           </div>
           <div>
             <label style={lbl}>Persoană contact furnizor</label>
@@ -882,8 +930,8 @@ export default function AchizitiiPage() {
   // Date
   const [comenzi, setComenzi] = useState([])
   const [proiecte, setProiecte] = useState([])
-  const [furnizori, setFurnizori] = useState([])
-  const [beneficiariMap, setBeneficiariMap] = useState({})
+  const [furnizoriList, setFurnizoriList] = useState([])
+  const [contracteFallback, setContracteFallback] = useState([])
   const [sites, setSites] = useState([])
   const [profilesList, setProfilesList] = useState([])
   const [employees, setEmployees] = useState([])
@@ -923,11 +971,12 @@ export default function AchizitiiPage() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [rCom, rProj, rFurn, rBen, rSites, rProf, rEmp, rApr] = await Promise.all([
+      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr] = await Promise.all([
         supabase.from('comenzi_furnizor').select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').order('created_at', { ascending: false }),
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id').eq('activ', true).order('nume'),
-        supabase.from('contracte_terti').select('id, numar_contract, denumire, beneficiar_id, partener_text').eq('sens', 'plata').order('denumire'),
-        supabase.from('beneficiari').select('id, nume, cif, cod_fiscal, telefon'),
+        supabase.from('logistica_furnizori').select('id, nume, cui, contact, activ').eq('activ', true).order('nume'),
+        // Fallback DOAR pentru comenzile vechi legate de contract (înainte de furnizor_id)
+        supabase.from('contracte_terti').select('id, numar_contract, denumire, partener_text').eq('sens', 'plata'),
         supabase.from('sites').select('id, name').eq('active', true).order('name'),
         supabase.from('profiles').select('id, name').order('name'),
         supabase.from('employees').select('id, name'),
@@ -935,8 +984,8 @@ export default function AchizitiiPage() {
       ])
       setComenzi(rCom.data || [])
       setProiecte(rProj.data || [])
-      setFurnizori(rFurn.data || [])
-      setBeneficiariMap(Object.fromEntries((rBen.data || []).map(b => [b.id, b])))
+      setFurnizoriList(rFz.data || [])
+      setContracteFallback(rCtr.data || [])
       setSites(rSites.data || [])
       setProfilesList(rProf.data || [])
       setEmployees(rEmp.data || [])
@@ -949,25 +998,35 @@ export default function AchizitiiPage() {
 
   useEffect(() => { loadAll() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Deep-link din notificări: /achizitii?id=N → deschide direct comanda ──
+  useEffect(() => {
+    const idParam = new URLSearchParams(window.location.search).get('id')
+    if (idParam && !isNaN(Number(idParam))) {
+      setSelectedId(Number(idParam))
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
   // ── Maps + ctx helpers ───────────────────────────────────────────────────
   const profilesMap = useMemo(() => Object.fromEntries(profilesList.map(p => [p.id, p.name])), [profilesList])
   const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
-  const furnizoriMap = useMemo(() => Object.fromEntries(furnizori.map(f => [f.id, f])), [furnizori])
+  const furnizoriMap = useMemo(() => Object.fromEntries(furnizoriList.map(f => [f.id, f])), [furnizoriList])
+  const contracteMap = useMemo(() => Object.fromEntries(contracteFallback.map(f => [f.id, f])), [contracteFallback])
   const sitesMap = useMemo(() => Object.fromEntries(sites.map(s => [s.id, s.name])), [sites])
 
   const ctxFor = useCallback((c) => {
-    const ctr = c.furnizor_contract_id ? furnizoriMap[c.furnizor_contract_id] : null
-    const ben = ctr?.beneficiar_id ? beneficiariMap[ctr.beneficiar_id] : null
+    const fz = c.furnizor_id ? furnizoriMap[c.furnizor_id] : null
+    const ctr = !fz && c.furnizor_contract_id ? contracteMap[c.furnizor_contract_id] : null
     const proiect = c.proiect_id ? proiecteMap[c.proiect_id] : null
     return {
-      furnizorNume: ben?.nume || ctr?.partener_text || ctr?.denumire || '—',
-      furnizorCui: ben?.cif || ben?.cod_fiscal || '',
+      furnizorNume: fz?.nume || ctr?.partener_text || ctr?.denumire || '—',
+      furnizorCui: fz?.cui || '',
       contractNr: ctr?.numar_contract || '',
       proiectNume: proiect ? `${proiect.cod_intern ? `[${proiect.cod_intern}] ` : ''}${proiect.nume}` : '',
       livrareTxt: c.livrare_tip === 'sediu' ? 'Sediu Gazpet Instal (Ploiești)' : `Șantier ${sitesMap[c.livrare_site_id] || '—'}`,
       canCreate,
     }
-  }, [furnizoriMap, beneficiariMap, proiecteMap, sitesMap, canCreate])
+  }, [furnizoriMap, contracteMap, proiecteMap, sitesMap, canCreate])
 
   const selected = useMemo(() => comenzi.find(c => c.id === selectedId) || null, [comenzi, selectedId])
   const receptieComanda = useMemo(() => comenzi.find(c => c.id === receptieId) || null, [comenzi, receptieId])
@@ -1307,7 +1366,14 @@ export default function AchizitiiPage() {
       {showForm && (
         <ComandaFormModal
           comanda={editComanda}
-          proiecte={proiecte} furnizori={furnizori} beneficiariMap={beneficiariMap} sites={sites}
+          proiecte={proiecte} furnizoriList={furnizoriList} sites={sites}
+          onFurnizorNou={async ({ nume, cui, contact }) => {
+            const { data, error } = await supabase.from('logistica_furnizori')
+              .insert({ nume, cui, contact, activ: true }).select('id, nume, cui, contact, activ').single()
+            if (error) throw error
+            setFurnizoriList(ls => [...ls, data].sort((a, b) => a.nume.localeCompare(b.nume)))
+            return data
+          }}
           profile={profile} showToast={showToast}
           onClose={() => { setShowForm(false); setEditComanda(null) }}
           onSaved={async (comandaId, apoiTrimite) => {
