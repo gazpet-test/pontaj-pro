@@ -61,7 +61,7 @@ const ARHIVA_ST = ['in_stoc','anulata','respinsa']
 // Responsabili PE ROL pentru PV-uri (decizie Razvan 12.06): pe documente apar
 // responsabilii reali, NU cine a apăsat click (click-ul rămâne audit cine+când).
 // Semnătura electronică se caută automat în HR după nume; dacă lipsește → linie olografă.
-const RESPONSABIL_ACHIZITII = 'Kostas T'         // Departament Achiziții (recepție + predare)
+const RESPONSABIL_ACHIZITII = 'TSIATSIOS KONSTANTINOS'  // Kostas — Dep. Achiziții (emp 122; semnătura apare automat când o adaugă în HR)
 const RESPONSABIL_MAGAZIONER = 'NICOLAE MARIAN'  // Magazioner — primește în gestiune
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
