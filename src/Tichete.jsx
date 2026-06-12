@@ -2,6 +2,7 @@
    Dashboard cu departamente + listă tichete + flow deschidere + detalii + comentarii */
 
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 
 const G = { bg:'#0D1117',surface:'#161B22',border:'#21262D',border2:'#30363D',text:'#E6EDF3',muted:'#8B949E',dim:'#6E7681',blue:'#58A6FF',green:'#3FB950',red:'#F85149',yellow:'#D29922',purple:'#BC8CFF',orange:'#F0883E',pink:'#F778BA',greenDim:'#1A3A1A',redDim:'#3A1A1A',yellowDim:'#3A2A0A',purpleDim:'#2A1F3A',blueDim:'#1A2A3A' }
@@ -91,6 +92,7 @@ function Avatar({name,userId,size=32}){
 // MAIN COMPONENT
 // ════════════════════════════════════════════════════════════════
 export default function Tichete({ profile: propProfile, filterDepartament = null, noLayout = false }){
+  const loc = useLocation(); const nav = useNavigate()
   const {show,ToastContainer}=useToast()
   const [profile, setProfile] = useState(propProfile || null)
   
@@ -152,27 +154,28 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
 
   useEffect(()=>{ loadAll() },[loadAll])
 
-  // Auto-open modal creare când URL conține ?action=new
+  // URL params (?action=new / ?mine=true&filter=... / ?id=N) — FIX 12.06.2026:
+  // effect pe loc.key (NU mount-only []) ca să reacționeze și când suntem DEJA pe pagină
+  // (click "Ale mele" din navbar de pe dashboard Tichete nu făcea nimic înainte).
+  // Cleanup cu nav(replace:true) păstrează ceilalți parametri (ex. ?tab=tichete embedded).
   useEffect(()=>{
-    const params = new URLSearchParams(window.location.search)
+    const params = new URLSearchParams(loc.search)
+    let consumed = false
     if(params.get('action') === 'new') {
       setOpenNew(true)
-      params.delete('action')
-      const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '')
-      window.history.replaceState({}, '', newUrl)
+      params.delete('action'); consumed = true
     }
     // Activez filtrul "Ale mele" dacă vine din navbar cu ?mine=true
     if(params.get('mine') === 'true') {
       setFilterMine(true)
       setView('list')
+      setActiveDep(filterDepartament || null)  // "ale mele" = peste toate departamentele
       // Filtru granular: deschise de mine vs asignate mie
       const filter = params.get('filter')
       if(filter === 'asignate') setFilterMineType('asignate')
       else if(filter === 'deschise') setFilterMineType('deschise')
       else setFilterMineType('toate')
-      params.delete('mine'); params.delete('filter')
-      const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '')
-      window.history.replaceState({}, '', newUrl)
+      params.delete('mine'); params.delete('filter'); consumed = true
     }
     // Deschid tichet specific dacă vine cu ?id=N
     if(params.get('id')) {
@@ -182,7 +185,8 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         setView('list')
       }, 800)
     }
-  }, [])
+    if(consumed) nav(loc.pathname + (params.toString() ? '?' + params.toString() : ''), { replace: true })
+  }, [loc.key])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ștergere tichet — DOAR pentru is_owner. Cleanup: comentarii/istoric prin CASCADE,
   // notificări prin trigger BEFORE DELETE, poze/documente storage manual aici.
@@ -238,7 +242,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       )
     }
     return t
-  },[tichete, filterMine, profile?.id, activeDep, filtruStatus, filtruUrgenta, searchText])
+  },[tichete, filterMine, filterMineType, profile?.id, activeDep, filtruStatus, filtruUrgenta, searchText])
 
   const totalUrgenteActive = useMemo(()=>tichete.filter(t=>t.urgenta==='urgent' && !['inchis','confirmat','respins'].includes(t.status)).length,[tichete])
 
