@@ -809,6 +809,17 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
                 </div>
               </div>
             )}
+            {/* RECOVERY: toate aprobările complete dar emiterea automată n-a rulat
+                (ex: aprobatorul a închis pagina în timpul generării PDF) */}
+            {c.status === 'in_aprobare' && aprobari.length > 0 && aprobari.every(a => a.status === 'aprobat') && (
+              <div style={{ marginTop:12, padding:12, borderRadius:10, border:`1px solid ${G.green}66`, background:G.green + '0E' }}>
+                <div style={{ fontSize:13, fontWeight:800, color:G.green, marginBottom:6 }}>✅ Toate aprobările sunt complete!</div>
+                <div style={{ fontSize:12, color:G.muted, marginBottom:10 }}>
+                  Emiterea automată nu s-a finalizat (probabil pagina s-a închis în timpul generării PDF-ului). Apasă mai jos pentru a genera PDF-ul cu semnături și a emite comanda.
+                </div>
+                <Btn color={G.green} onClick={() => actions.emiteRetry(c)}>{busy ? '⏳ Se generează PDF-ul — nu închide pagina...' : '📨 Emite comanda acum'}</Btn>
+              </div>
+            )}
           </div>
         )}
 
@@ -1112,6 +1123,7 @@ export default function AchizitiiPage() {
             .select('id, status').eq('comanda_furnizor_id', c.id)
           const toateOk = (rest || []).every(r => r.status === 'aprobat')
           if (toateOk) {
+            showToast('⏳ Toate aprobările complete — se generează PDF-ul comenzii. NU închide pagina...', 'warn')
             const { data: cFresh } = await supabase.from('comenzi_furnizor')
               .select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').eq('id', c.id).single()
             await emiteComanda(cFresh)
@@ -1122,6 +1134,23 @@ export default function AchizitiiPage() {
         }
         await loadAll()
       } catch (e) { console.error(e); showToast('Eroare la decizie: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
+
+    // RECOVERY: re-emitere manuală când aprobările-s complete dar emiterea automată a picat
+    // (ex: aprobatorul a închis pagina înainte să se termine generarea PDF + upload)
+    emiteRetry: async (c) => {
+      setBusy(true)
+      try {
+        showToast('⏳ Se generează PDF-ul comenzii cu semnături. NU închide pagina...', 'warn')
+        const { data: cFresh } = await supabase.from('comenzi_furnizor')
+          .select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').eq('id', c.id).single()
+        if (!cFresh) throw new Error('Comanda nu a putut fi recitită din BD.')
+        const toateOk = (cFresh.aprobari || []).length > 0 && cFresh.aprobari.every(a => a.status === 'aprobat')
+        if (!toateOk) { showToast('Nu toate aprobările sunt complete — reîncarcă pagina.', 'error'); return }
+        await emiteComanda(cFresh)
+        showToast(`📨 ${c.numar_comanda} EMISĂ — PDF cu semnături generat și salvat.`)
+        await loadAll()
+      } catch (e) { console.error(e); showToast('Eroare la emitere: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
 
     markStatus: async (c, status) => {
