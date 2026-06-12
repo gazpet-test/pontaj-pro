@@ -4992,6 +4992,7 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [actionLoading, setActionLoading] = useState(false)
   const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
   const [showAviz, setShowAviz] = useState(false)  // PAS 5F: deschide modal aviz
+  const [autoAviz, setAutoAviz] = useState(false)   // 12.06 FIX Sentry: auto-arhivare aviz la trecerea in tranzit
   // 27.05.2026: Iterația 2 - load lista conținut multiplu (dacă există)
   const [continutItems, setContinutItems] = useState([])
   
@@ -5112,13 +5113,12 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
     if (!confirm('Schimbi status la "' + (labels[nou] || nou) + '"?')) return
 
     // AUTO-GENERARE AVIZ la trecerea in tranzit (daca nu e deja generat)
+    // 12.06 FIX Sentry (ReferenceError handleArhivare): functia traieste in AvizInsotireMarfaModal,
+    // nu aici — deschidem modalul cu autoArhiveaza=true si el isi ruleaza singur arhivarea.
     if (nou === 'in_tranzit' && !T.aviz_generat) {
       showToast('Se genereaza avizul automat...', 'info')
+      setAutoAviz(true)
       setShowAviz(true)
-      // Asteptam 2x rAF + 700ms pentru render complet HTML->canvas
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 700))))
-      await handleArhivare(true) // auto=true: fara download local
-      setShowAviz(false)
     }
 
     setActionLoading(true)
@@ -5557,9 +5557,11 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
         <AvizInsotireMarfaModal 
           transport={T} 
           profile={profile} 
-          onClose={() => setShowAviz(false)} 
+          onClose={() => { setShowAviz(false); setAutoAviz(false) }} 
           showToast={showToast}
           onTrimisEmail={() => { onChanged?.() }}
+          autoArhiveaza={autoAviz}
+          onAutoArhivat={() => { setAutoAviz(false); setShowAviz(false); onChanged?.() }}
         />
       )}
     </div>
@@ -5799,7 +5801,7 @@ function SemnaturaCanvasModal({ rol, numeImplicit, onClose, onSave, showToast })
 }
 
 // --- Modal AVIZ ÎNSOȚIRE MARFĂ (HTML printabil A4) ---
-function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onTrimisEmail }) {
+function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onTrimisEmail, autoArhiveaza = false, onAutoArhivat }) {
   const [setariFirma, setSetariFirma] = useState({})
   const [destinatari, setDestinatari] = useState([])
   const [showSetariEmail, setShowSetariEmail] = useState(false)
@@ -5932,7 +5934,18 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         }
       })
   }, [T.id])
-  
+
+  // 12.06 FIX Sentry: auto-arhivare cand modalul e deschis din "Schimba status -> In tranzit"
+  useEffect(() => {
+    if (!autoArhiveaza) return
+    // Asteptam randarea completa a avizului (HTML -> canvas) inainte de captura
+    const t = setTimeout(async () => {
+      try { await handleArhivare(true) } catch (e) { showToast('Eroare arhivare automata: ' + (e?.message || e), 'error') }
+      onAutoArhivat && onAutoArhivat()
+    }, 1000)
+    return () => clearTimeout(t)
+  }, [autoArhiveaza])  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Print A4
   const handlePrint = () => {
     window.print()
