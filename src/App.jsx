@@ -21,6 +21,8 @@ import ExecutiePage from './Executie.jsx'
 import FinanciarPage from './Financiar.jsx'
 // ════════════ QR Utilaje (27.05.2026) ════════════
 import QrUtilajPage from './QrUtilajPage.jsx'
+// ════════════ Buton global „De aprobat" în navbar (12.06.2026) ════════════
+import DeAprobatButton from './DeAprobatButton.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -695,6 +697,8 @@ function Layout({ children }) {
         </div>
         {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
+          {/* Buton global De aprobat — comenzi furnizor + transporturi care așteaptă decizia user-ului (12.06.2026) */}
+          <DeAprobatButton profile={profile} />
           {/* Buton global Cere Transport — vizibil pentru oricine cu acces la modulul comanda_transport */}
           {hasModuleAccess(profile, 'comanda_transport') && (
             <button

@@ -53,6 +53,8 @@ const STATUS_INFO = {
   respinsa:     { label:'Respinsă',       emoji:'❌', color:G.red    },
 }
 const FLOW_STEPS = ['draft','in_aprobare','emisa','in_tranzit','ajunsa','receptionata','in_stoc']
+// Statusurile care merg în tab-ul 📁 Arhivă (lista activă rămâne curată)
+const ARHIVA_ST = ['in_stoc','anulata','respinsa']
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const fmtNr = (n) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -761,11 +763,11 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
 
         {/* Linii */}
         <div style={{ marginTop:14, ...S.card, background:G.bg, overflow:'hidden' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'40px 1fr 64px 90px 110px 120px 100px', gap:0, padding:'8px 12px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+          <div style={{ display:'grid', gridTemplateColumns:'40px 1fr 64px 90px 110px 120px 100px', gap:10, padding:'8px 12px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
             <div>Nr.</div><div>Denumire</div><div>UM</div><div style={{ textAlign:'right' }}>Cant.</div><div style={{ textAlign:'right' }}>Preț unit.</div><div style={{ textAlign:'right' }}>Valoare</div><div>Termen</div>
           </div>
           {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map((l, i) => (
-            <div key={l.id || i} style={{ display:'grid', gridTemplateColumns:'40px 1fr 64px 90px 110px 120px 100px', padding:'8px 12px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+            <div key={l.id || i} style={{ display:'grid', gridTemplateColumns:'40px 1fr 64px 90px 110px 120px 100px', gap:10, padding:'8px 12px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
               <div style={{ color:G.dim }}>{i + 1}</div>
               <div>{l.denumire}{l.observatii && <div style={{ fontSize:11, color:G.muted }}>{l.observatii}</div>}</div>
               <div style={{ color:G.muted }}>{l.um || '—'}</div>
@@ -822,6 +824,9 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
 
         {/* Acțiuni flux */}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
+          {profile?.is_owner && (
+            <Btn color={G.red} onClick={() => actions.stergeComanda(c)}>🗑 Șterge definitiv</Btn>
+          )}
           {c.status === 'draft' && ctx.canCreate && (<>
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează</Btn>
             <Btn color={G.border2} onClick={() => actions.editeaza(c)}><span style={{ color:G.text }}>✏️ Editează</span></Btn>
@@ -1135,6 +1140,23 @@ export default function AchizitiiPage() {
       setSelectedId(null)
     },
 
+    // Ștergere DEFINITIVĂ — doar owner (Razvan + Marilena), confirm dublu, cleanup storage
+    stergeComanda: async (c) => {
+      if (!isOwner) return
+      if (!window.confirm(`ȘTERGI DEFINITIV comanda ${c.numar_comanda}?\nSe șterg liniile, aprobările și toate PDF-urile generate. IREVERSIBIL.`)) return
+      if (!window.confirm(`Confirmare finală: ștergere definitivă ${c.numar_comanda}?`)) return
+      setBusy(true)
+      try {
+        const paths = [c.pdf_comanda_path, c.pv_receptie_path, c.pv_predare_path, c.poza_depozitare_path].filter(Boolean)
+        if (paths.length) await supabase.storage.from(BUCKET).remove(paths)
+        const { error } = await supabase.from('comenzi_furnizor').delete().eq('id', c.id)
+        if (error) throw error
+        showToast(`🗑 ${c.numar_comanda} ștearsă definitiv.`, 'warn')
+        setSelectedId(null)
+        await loadAll()
+      } catch (e) { console.error(e); showToast('Eroare la ștergere: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
+
     deschideReceptie: (c) => { setSelectedId(null); setReceptieId(c.id) },
     deschidePredare: (c) => { setSelectedId(null); setPredareId(c.id) },
   }
@@ -1234,9 +1256,19 @@ export default function AchizitiiPage() {
   }
 
   // ── Filtre + KPI ─────────────────────────────────────────────────────────
-  const comenziFilt = useMemo(() => comenzi.filter(c => {
+  // ── Filtrare pe proiect (chips) → tab activ/arhivă → status + search ─────
+  const comenziProiect = useMemo(() => comenzi.filter(c => {
+    if (!fProiect) return true
+    if (fProiect === 'general') return c.proiect_id == null
+    return String(c.proiect_id) === String(fProiect)
+  }), [comenzi, fProiect])
+
+  const comenziTab = useMemo(() => comenziProiect.filter(c =>
+    tab === 'arhiva' ? ARHIVA_ST.includes(c.status) : !ARHIVA_ST.includes(c.status)
+  ), [comenziProiect, tab])
+
+  const comenziFilt = useMemo(() => comenziTab.filter(c => {
     if (fStatus && c.status !== fStatus) return false
-    if (fProiect && String(c.proiect_id) !== String(fProiect)) return false
     if (fSearch) {
       const t = normalize(fSearch)
       const ctx = ctxFor(c)
@@ -1244,16 +1276,49 @@ export default function AchizitiiPage() {
       if (!hay.includes(t)) return false
     }
     return true
-  }), [comenzi, fStatus, fProiect, fSearch, ctxFor])
+  }), [comenziTab, fStatus, fSearch, ctxFor])
 
   const kpi = useMemo(() => ({
-    draft: comenzi.filter(c => c.status === 'draft').length,
-    aprobare: comenzi.filter(c => c.status === 'in_aprobare').length,
-    emise: comenzi.filter(c => c.status === 'emisa').length,
-    livrare: comenzi.filter(c => c.status === 'in_tranzit' || c.status === 'ajunsa').length,
-    receptionate: comenzi.filter(c => c.status === 'receptionata').length,
-    stoc: comenzi.filter(c => c.status === 'in_stoc').length,
-  }), [comenzi])
+    draft: comenziProiect.filter(c => c.status === 'draft').length,
+    aprobare: comenziProiect.filter(c => c.status === 'in_aprobare').length,
+    emise: comenziProiect.filter(c => c.status === 'emisa').length,
+    livrare: comenziProiect.filter(c => c.status === 'in_tranzit' || c.status === 'ajunsa').length,
+    receptionate: comenziProiect.filter(c => c.status === 'receptionata').length,
+    stoc: comenziProiect.filter(c => c.status === 'in_stoc').length,
+  }), [comenziProiect])
+
+  const arhivaCount = useMemo(() => comenziProiect.filter(c => ARHIVA_ST.includes(c.status)).length, [comenziProiect])
+
+  // Chips proiecte — doar proiectele care AU comenzi + „General" pentru cele fără proiect
+  const proiecteChips = useMemo(() => {
+    const counts = {}
+    let general = 0
+    for (const c of comenzi) {
+      if (c.proiect_id == null) general++
+      else counts[c.proiect_id] = (counts[c.proiect_id] || 0) + 1
+    }
+    const chips = Object.keys(counts).map(pid => {
+      const p = proiecteMap[pid]
+      return { id: pid, label: p ? `${p.cod_intern ? `[${p.cod_intern}] ` : ''}${p.nume}` : `Proiect #${pid}`, count: counts[pid] }
+    }).sort((a, b) => b.count - a.count)
+    if (general > 0) chips.push({ id: 'general', label: '📂 General (fără proiect)', count: general })
+    return chips
+  }, [comenzi, proiecteMap])
+
+  // Alerte termen livrare — comenzile emise/în tranzit cu linii aproape de termen
+  const alerteLivrare = useMemo(() => {
+    const out = []
+    const azi = new Date(); azi.setHours(0, 0, 0, 0)
+    for (const c of comenziProiect) {
+      if (c.status !== 'emisa' && c.status !== 'in_tranzit') continue
+      for (const l of (c.linii || [])) {
+        if (!l.termen_livrare) continue
+        const zile = Math.round((new Date(l.termen_livrare).setHours(0, 0, 0, 0) - azi.getTime()) / 86400000)
+        if (zile <= 30) out.push({ c, l, zile, nivel: zile < 0 ? 'depasit' : zile <= 15 ? 'critic' : 'aproape' })
+      }
+    }
+    return out.sort((a, b) => a.zile - b.zile)
+  }, [comenziProiect])
 
   const aprobariMele = useMemo(() => {
     if (!profile) return []
@@ -1264,11 +1329,18 @@ export default function AchizitiiPage() {
   if (loadingProfile) return <div style={{ ...S.page, display:'flex', alignItems:'center', justifyContent:'center' }}><div style={{ color:G.muted }}>Se încarcă...</div></div>
 
   const KpiCard = ({ emoji, label, val, color, onClick }) => (
-    <div onClick={onClick} style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:130, cursor: onClick ? 'pointer' : 'default', borderColor: onClick && fStatus && STATUS_INFO[fStatus] ? G.border : G.border }}>
+    <div onClick={onClick} style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:130, cursor: onClick ? 'pointer' : 'default' }}>
       <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>{emoji} {label}</div>
       <div style={{ fontSize:24, fontWeight:800, color }}>{val}</div>
     </div>
   )
+
+  const NIVEL_ALERTA = {
+    depasit: { color: G.red,    label: 'DEPĂȘIT' },
+    critic:  { color: G.orange, label: '≤ 15 zile' },
+    aproape: { color: G.yellow, label: '≤ 30 zile' },
+  }
+  const GRID_LISTA = '230px 1.1fr 1fr 140px 150px 140px'
 
   return (
     <div style={{ ...S.page, padding:'24px 0' }}>
@@ -1280,7 +1352,7 @@ export default function AchizitiiPage() {
           <div style={{ fontSize:22, fontWeight:800 }}>Achiziții</div>
           <div style={{ fontSize:12.5, color:G.muted }}>Comenzi furnizor · Aprobare · Recepție · Intrare în stoc</div>
         </div>
-        {canCreate && tab === 'comenzi' && (
+        {canCreate && tab !== 'aprobatori' && (
           <button onClick={() => { setEditComanda(null); setShowForm(true) }} style={{ ...S.btnP, background:G.achizitii, color:'#0D1117', fontSize:15 }}>＋ Comandă furnizor nouă</button>
         )}
       </div>
@@ -1295,62 +1367,106 @@ export default function AchizitiiPage() {
         </div>
       )}
 
+      {/* Chips proiecte — dashboard-ul + lista se filtrează împreună */}
+      {proiecteChips.length > 0 && (
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14 }}>
+          {[{ id: '', label: '📂 Toate proiectele', count: comenzi.length }, ...proiecteChips].map(ch => {
+            const active = String(fProiect) === String(ch.id)
+            return (
+              <button key={ch.id || 'all'} onClick={() => setFProiect(active && ch.id !== '' ? '' : ch.id)}
+                style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 20px', fontSize:14, fontWeight:700, borderRadius:24, cursor:'pointer', fontFamily:'inherit',
+                  background: active ? G.achizitii + '22' : G.surface,
+                  color: active ? G.achizitii : G.text,
+                  border: `2px solid ${active ? G.achizitii : G.border2}` }}>
+                {ch.label}
+                <span style={{ background: active ? G.achizitii : G.border2, color: active ? '#0D1117' : G.text, borderRadius:12, padding:'2px 9px', fontSize:13, fontWeight:800 }}>{ch.count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* Tab bar */}
       <div style={{ display:'flex', gap:8, marginBottom:14, borderBottom:`1px solid ${G.border}`, paddingBottom:0 }}>
-        {[['comenzi', '🛒 Comenzi Furnizor'], ...(isOwner ? [['aprobatori', '👥 Aprobatori']] : [])].map(([k, t]) => (
-          <button key={k} onClick={() => setTab(k)} style={{ background:'transparent', border:'none', borderBottom:`3px solid ${tab === k ? G.achizitii : 'transparent'}`, color: tab === k ? G.text : G.muted, padding:'10px 16px', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>{t}</button>
+        {[['comenzi', '🛒 Comenzi active'], ['arhiva', `📁 Arhivă${arhivaCount ? ` (${arhivaCount})` : ''}`], ...(isOwner ? [['aprobatori', '👥 Aprobatori']] : [])].map(([k, t]) => (
+          <button key={k} onClick={() => { setTab(k); setFStatus('') }} style={{ background:'transparent', border:'none', borderBottom:`3px solid ${tab === k ? G.achizitii : 'transparent'}`, color: tab === k ? G.text : G.muted, padding:'10px 16px', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>{t}</button>
         ))}
         <div style={{ flex:1 }} />
         <div style={{ fontSize:11, color:G.dim, alignSelf:'center', paddingRight:4 }}>Cereri interne MP → în curând (Faza 4)</div>
       </div>
 
-      {tab === 'comenzi' && (<>
-        {/* KPI */}
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14 }}>
-          <KpiCard emoji="📝" label="Draft" val={kpi.draft} color={G.muted} onClick={() => setFStatus(fStatus === 'draft' ? '' : 'draft')} />
-          <KpiCard emoji="⏳" label="În aprobare" val={kpi.aprobare} color={G.yellow} onClick={() => setFStatus(fStatus === 'in_aprobare' ? '' : 'in_aprobare')} />
-          <KpiCard emoji="📨" label="Emise" val={kpi.emise} color={G.blue} onClick={() => setFStatus(fStatus === 'emisa' ? '' : 'emisa')} />
-          <KpiCard emoji="🚚" label="În livrare" val={kpi.livrare} color={G.purple} onClick={() => setFStatus(fStatus === 'in_tranzit' ? '' : 'in_tranzit')} />
-          <KpiCard emoji="✅" label="Recepționate" val={kpi.receptionate} color={G.green} onClick={() => setFStatus(fStatus === 'receptionata' ? '' : 'receptionata')} />
-          <KpiCard emoji="🏬" label="În stoc" val={kpi.stoc} color={G.achizitii} onClick={() => setFStatus(fStatus === 'in_stoc' ? '' : 'in_stoc')} />
-        </div>
+      {tab !== 'aprobatori' && (<>
+        {/* KPI — pe proiectul selectat */}
+        {tab === 'comenzi' && (
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14 }}>
+            <KpiCard emoji="📝" label="Draft" val={kpi.draft} color={G.muted} onClick={() => setFStatus(fStatus === 'draft' ? '' : 'draft')} />
+            <KpiCard emoji="⏳" label="În aprobare" val={kpi.aprobare} color={G.yellow} onClick={() => setFStatus(fStatus === 'in_aprobare' ? '' : 'in_aprobare')} />
+            <KpiCard emoji="📨" label="Emise" val={kpi.emise} color={G.blue} onClick={() => setFStatus(fStatus === 'emisa' ? '' : 'emisa')} />
+            <KpiCard emoji="🚚" label="În livrare" val={kpi.livrare} color={G.purple} onClick={() => setFStatus(fStatus === 'in_tranzit' ? '' : 'in_tranzit')} />
+            <KpiCard emoji="✅" label="Recepționate" val={kpi.receptionate} color={G.green} onClick={() => setFStatus(fStatus === 'receptionata' ? '' : 'receptionata')} />
+            <KpiCard emoji="🏬" label="În stoc" val={kpi.stoc} color={G.achizitii} onClick={() => { setTab('arhiva'); setFStatus('in_stoc') }} />
+          </div>
+        )}
+
+        {/* Alerte termen livrare — depășit / ≤15 zile / ≤30 zile */}
+        {tab === 'comenzi' && alerteLivrare.length > 0 && (
+          <div style={{ ...S.card, borderColor: NIVEL_ALERTA[alerteLivrare[0].nivel].color + '88', padding:'12px 16px', marginBottom:14 }}>
+            <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>🔔 Alerte termen livrare ({alerteLivrare.length})</div>
+            {alerteLivrare.map((a, i) => {
+              const nv = NIVEL_ALERTA[a.nivel]
+              return (
+                <div key={i} onClick={() => setSelectedId(a.c.id)} style={{ display:'flex', alignItems:'center', gap:12, padding:'7px 0', borderBottom: i < alerteLivrare.length - 1 ? `1px solid ${G.border}` : 'none', cursor:'pointer', flexWrap:'wrap' }}>
+                  <span style={{ background: nv.color + '22', color: nv.color, border:`1px solid ${nv.color}66`, borderRadius:14, padding:'2px 10px', fontSize:11.5, fontWeight:800, whiteSpace:'nowrap' }}>
+                    {a.zile < 0 ? `${nv.label} cu ${Math.abs(a.zile)} ${Math.abs(a.zile) === 1 ? 'zi' : 'zile'}` : `${a.zile} ${a.zile === 1 ? 'zi' : 'zile'} rămase`}
+                  </span>
+                  <span style={{ fontSize:13, fontWeight:700 }}>{a.c.numar_comanda}</span>
+                  <span style={{ fontSize:12.5, color:G.muted, flex:1, minWidth:160 }}>{a.l.denumire}</span>
+                  <span style={{ fontSize:12, color:G.dim }}>termen: {fmtData(a.l.termen_livrare)}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
 
         {/* Filtre */}
         <div style={{ display:'flex', gap:10, marginBottom:14, flexWrap:'wrap' }}>
-          <input style={{ ...S.input, maxWidth:300 }} placeholder="🔍 Caută (nr, furnizor, material...)" value={fSearch} onChange={e => setFSearch(e.target.value)} />
+          <input style={{ ...S.input, maxWidth:320 }} placeholder="🔍 Caută (nr, furnizor, material...)" value={fSearch} onChange={e => setFSearch(e.target.value)} />
           <select style={{ ...S.input, maxWidth:200 }} value={fStatus} onChange={e => setFStatus(e.target.value)}>
             <option value="">Toate statusurile</option>
-            {Object.entries(STATUS_INFO).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
-          </select>
-          <select style={{ ...S.input, maxWidth:260 }} value={fProiect} onChange={e => setFProiect(e.target.value)}>
-            <option value="">Toate proiectele</option>
-            {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? `[${p.cod_intern}] ` : ''}{p.nume}</option>)}
+            {Object.entries(STATUS_INFO).filter(([k]) => tab === 'arhiva' ? ARHIVA_ST.includes(k) : !ARHIVA_ST.includes(k)).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
           </select>
         </div>
 
         {/* Lista comenzi */}
         <div style={{ ...S.card, overflow:'hidden' }}>
-          <div style={{ display:'grid', gridTemplateColumns:'190px 1fr 1fr 130px 150px 90px', gap:0, padding:'10px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
-            <div>Nr. comandă</div><div>Furnizor</div><div>Proiect</div><div style={{ textAlign:'right' }}>Total</div><div>Status</div><div></div>
+          <div style={{ display:'grid', gridTemplateColumns:GRID_LISTA, gap:10, padding:'10px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Nr. comandă</div><div>Furnizor</div><div>Proiect</div><div style={{ textAlign:'right' }}>Total</div><div>Status</div><div style={{ textAlign:'right' }}>Acțiuni</div>
           </div>
           {loading && <div style={{ padding:30, textAlign:'center', color:G.muted }}>Se încarcă comenzile...</div>}
           {!loading && !comenziFilt.length && (
             <div style={{ padding:36, textAlign:'center', color:G.dim, fontSize:14 }}>
-              {comenzi.length ? 'Nicio comandă pe filtrele curente.' : <>Nicio comandă încă. {canCreate && 'Apasă „＋ Comandă furnizor nouă" pentru prima.'}</>}
+              {tab === 'arhiva' ? 'Arhiva e goală — aici ajung comenzile intrate în stoc, anulate sau respinse.'
+                : comenzi.length ? 'Nicio comandă pe filtrele curente.' : <>Nicio comandă încă. {canCreate && 'Apasă „＋ Comandă furnizor nouă" pentru prima.'}</>}
             </div>
           )}
           {!loading && comenziFilt.map(c => {
             const ctx = ctxFor(c)
             return (
-              <div key={c.id} onClick={() => setSelectedId(c.id)} style={{ display:'grid', gridTemplateColumns:'190px 1fr 1fr 130px 150px 90px', alignItems:'center', padding:'11px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}`, cursor:'pointer' }}
+              <div key={c.id} onClick={() => setSelectedId(c.id)} style={{ display:'grid', gridTemplateColumns:GRID_LISTA, gap:10, alignItems:'center', padding:'11px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}`, cursor:'pointer' }}
                 onMouseEnter={e => e.currentTarget.style.background = G.bg} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                <div style={{ fontWeight:800 }}>{c.numar_comanda}<div style={{ fontSize:10.5, color:G.dim, fontWeight:400 }}>{fmtData(c.created_at)}</div></div>
-                <div>{ctx.furnizorNume}<div style={{ fontSize:11, color:G.muted }}>{(c.linii || []).length} {((c.linii || []).length === 1) ? 'linie' : 'linii'}</div></div>
-                <div style={{ color:G.muted, fontSize:12.5 }}>{ctx.proiectNume || '—'}</div>
-                <div style={{ textAlign:'right', fontWeight:700 }}>{fmtNr(totalComanda(c))} {c.moneda}</div>
+                <div style={{ fontWeight:800, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.numar_comanda}<div style={{ fontSize:10.5, color:G.dim, fontWeight:400 }}>{fmtData(c.created_at)}</div></div>
+                <div style={{ overflow:'hidden' }}>{ctx.furnizorNume}<div style={{ fontSize:11, color:G.muted }}>{(c.linii || []).length} {((c.linii || []).length === 1) ? 'linie' : 'linii'}</div></div>
+                <div style={{ color:G.muted, fontSize:12.5, overflow:'hidden', textOverflow:'ellipsis' }}>{ctx.proiectNume || '—'}</div>
+                <div style={{ textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtNr(totalComanda(c))} {c.moneda}</div>
                 <div><StatusBadge status={c.status} /></div>
-                <div style={{ textAlign:'right' }}>
-                  <button onClick={(e) => { e.stopPropagation(); setSelectedId(c.id) }} title="Detalii" style={{ ...S.btnIcon }}>👁</button>
+                <div style={{ textAlign:'right', display:'flex', gap:6, justifyContent:'flex-end' }} onClick={e => e.stopPropagation()}>
+                  <button onClick={() => setSelectedId(c.id)} title="Detalii" style={{ ...S.btnIcon, padding:'7px 11px' }}>👁</button>
+                  {c.status === 'draft' && canCreate && (
+                    <button onClick={() => actions.editeaza(c)} title="Editează draft" style={{ ...S.btnIcon, padding:'7px 11px', color:G.blue }}>✏️</button>
+                  )}
+                  {isOwner && (
+                    <button onClick={() => actions.stergeComanda(c)} title="Șterge definitiv (doar owner)" style={{ ...S.btnIcon, padding:'7px 11px', color:G.red }}>🗑</button>
+                  )}
                 </div>
               </div>
             )
