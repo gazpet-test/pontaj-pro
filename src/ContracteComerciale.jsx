@@ -1349,6 +1349,7 @@ export default function ContracteComerciale({ profile }) {
   const [filterSens, setFilterSens] = useState('toate')  // toate | incasare | plata
   const [filterTip, setFilterTip] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  const [sortBy, setSortBy] = useState('recent')  // recent | nume | valoare_desc | valoare_asc | termen
   const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [editContract, setEditContract] = useState(null)
@@ -1402,8 +1403,20 @@ export default function ContracteComerciale({ profile }) {
     })
   }, [contracte, filterSens, filterTip, filterStatus, search])
 
-  const upstream   = filtered.filter(c => c.sens === 'incasare')
-  const downstream = filtered.filter(c => c.sens === 'plata')
+  // Sortare (12.06.2026) — la valoare folosim valoarea ACTUALĂ (cu acte adiționale) dacă există
+  const sorted = useMemo(() => {
+    if (sortBy === 'recent') return filtered
+    const val = c => Number(c.valoare_cu_acte ?? c.valoare_lei ?? 0)
+    const list = [...filtered]
+    if (sortBy === 'nume') list.sort((a,b) => (a.denumire||'').localeCompare(b.denumire||'', 'ro', { sensitivity:'base' }))
+    else if (sortBy === 'valoare_desc') list.sort((a,b) => val(b) - val(a))
+    else if (sortBy === 'valoare_asc') list.sort((a,b) => val(a) - val(b))
+    else if (sortBy === 'termen') list.sort((a,b) => (a.data_termen||'9999-12-31').localeCompare(b.data_termen||'9999-12-31'))
+    return list
+  }, [filtered, sortBy])
+
+  const upstream   = sorted.filter(c => c.sens === 'incasare')
+  const downstream = sorted.filter(c => c.sens === 'plata')
   const contracteUpstream = contracte.filter(c => c.sens === 'incasare')
 
   // KPIs
@@ -1471,6 +1484,14 @@ export default function ContracteComerciale({ profile }) {
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...S.select, width: 140 }}>
           <option value="">Toate statusurile</option>
           {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...S.select, width: 160 }} title="Sortare listă">
+          <option value="recent">🕐 Recente</option>
+          <option value="nume">🔤 Nume A→Z</option>
+          <option value="valoare_desc">💰 Valoare ↓</option>
+          <option value="valoare_asc">💰 Valoare ↑</option>
+          <option value="termen">⏳ Termen apropiat</option>
         </select>
 
         {canManage && (

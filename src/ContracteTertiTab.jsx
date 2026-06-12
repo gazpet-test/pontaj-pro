@@ -350,6 +350,7 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterCat, setFilterCat] = useState('all')
   const [filterSens, setFilterSens] = useState('incasare')
+  const [sortBy, setSortBy] = useState('recent')  // recent | nume | valoare_desc | valoare_asc | termen
   const [expandedId, setExpandedId] = useState(null)
 
   const benefMap = useMemo(() => Object.fromEntries(beneficiari.map(b => [b.id, b.nume])), [beneficiari])
@@ -368,8 +369,16 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
         (benefMap[c.beneficiar_id]||'').toLowerCase().includes(s)
       )
     }
+    // Sortare (12.06.2026): copie ca să nu mutez array-ul original
+    if (sortBy !== 'recent') {
+      list = [...list]
+      if (sortBy === 'nume') list.sort((a,b) => (a.denumire||'').localeCompare(b.denumire||'', 'ro', { sensitivity:'base' }))
+      else if (sortBy === 'valoare_desc') list.sort((a,b) => Number(b.valoare_lei||0) - Number(a.valoare_lei||0))
+      else if (sortBy === 'valoare_asc') list.sort((a,b) => Number(a.valoare_lei||0) - Number(b.valoare_lei||0))
+      else if (sortBy === 'termen') list.sort((a,b) => (a.data_termen||'9999-12-31').localeCompare(b.data_termen||'9999-12-31'))
+    }
     return list
-  }, [contracte, search, filterStatus, filterCat, filterSens, benefMap])
+  }, [contracte, search, filterStatus, filterCat, filterSens, sortBy, benefMap])
 
   return (
     <div style={{display:'flex', flexDirection:'column', gap:14}}>
@@ -388,6 +397,13 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{...S.input, width:'auto', minWidth:140, boxSizing:'border-box'}}>
           <option value="all">📊 Toate statusurile</option>
           {Object.entries(STATUS_INFO).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{...S.input, width:'auto', minWidth:150, boxSizing:'border-box'}} title="Sortare listă">
+          <option value="recent">🕐 Recente</option>
+          <option value="nume">🔤 Nume A→Z</option>
+          <option value="valoare_desc">💰 Valoare ↓</option>
+          <option value="valoare_asc">💰 Valoare ↑</option>
+          <option value="termen">⏳ Termen apropiat</option>
         </select>
         {canWrite && <button onClick={onAdd} style={{...S.btnP, marginLeft:'auto', whiteSpace:'nowrap'}}>+ Contract nou</button>}
       </div>
