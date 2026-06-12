@@ -37,6 +37,7 @@ const TIP_META = {
   asociere:         { label: 'Asociere',         emoji: '🤝', color: G.blue },
   subcontractare:   { label: 'Subcontractare',   emoji: '📋', color: G.yellow },
   prestari_servicii:{ label: 'Prestări Servicii',emoji: '🔧', color: G.purple },
+  furnizare_materiale:{ label: 'Furnizare Materiale', emoji: '📦', color: G.orange },
 }
 
 const ROL_META = {
@@ -52,6 +53,7 @@ const ROLURI_PER_TIP = {
   asociere:          ['lider', 'asociat_simplu', 'asociat_unic'],
   subcontractare:    ['subcontractor_declarat', 'subcontractor_parcurs'],
   prestari_servicii: ['prestator'],
+  furnizare_materiale: ['prestator'],
 }
 
 const STATUS_META = {
@@ -692,7 +694,7 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
             {(c.beneficiar_name || c.partener_text) && (
               <span>👤 {c.beneficiar_name || c.partener_text}</span>
             )}
-            {c.site_qr && <span>📍 {c.site_qr}</span>}
+            {c.site_qr && <span title={(c.santiere_nume || []).join(' · ')}>📍 {c.site_qr}{(c.santiere_ids?.length > 1) ? ` +${c.santiere_ids.length - 1}` : ''}</span>}
             {c.data_semnare && <span>📅 {c.data_semnare}</span>}
             {c.termen_plata_zile && <span>⏱️ {c.termen_plata_zile}z plată</span>}
             {c.garantie_buna_executie_pct && <span>🔐 GBE {c.garantie_buna_executie_pct}%</span>}
@@ -761,7 +763,7 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
               border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer',
               fontSize: 11, fontWeight: 600,
             }}>📋 Linii ({c.nr_linii})</button>
-            {(isOwner) && (
+            {(isOwner || canManage) && (
               <button onClick={() => onEdit(c)} style={{
                 padding: '5px 10px', background: G.orange + '22', color: G.orange,
                 border: `1px solid ${G.orange}44`, borderRadius: 6, cursor: 'pointer',
@@ -794,6 +796,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
     garantie_buna_executie_pct: contract?.garantie_buna_executie_pct || '',
     contract_parinte_id: contract?.contract_parinte_id || '',
     site_id: contract?.site_id || '',
+    santiere_ids: contract?.santiere_ids?.map(Number) || (contract?.site_id ? [Number(contract.site_id)] : []),
     beneficiar_id: contract?.beneficiar_id || '',
     partener_text: contract?.partener_text || '',
     observatii: contract?.observatii || '',
@@ -868,7 +871,8 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         termen_plata_zile: form.termen_plata_zile ? Number(form.termen_plata_zile) : null,
         garantie_buna_executie_pct: form.garantie_buna_executie_pct ? Number(form.garantie_buna_executie_pct) : null,
         contract_parinte_id: form.contract_parinte_id ? Number(form.contract_parinte_id) : null,
-        site_id: form.site_id ? Number(form.site_id) : null,
+        site_id: form.santiere_ids[0] || (form.site_id ? Number(form.site_id) : null),
+        santiere_ids: form.santiere_ids.length ? form.santiere_ids : null,
         beneficiar_id: form.beneficiar_id ? Number(form.beneficiar_id) : null,
         partener_text: form.partener_text || null,
         observatii: form.observatii || null,
@@ -912,8 +916,8 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
           <label style={S.label}>Tip Contract</label>
           <div style={{ display: 'flex', gap: 8 }}>
             {Object.entries(TIP_META)
-              // Downstream: asocierea nu se aplică (Gazpet e mereu constructor general față de prestator)
-              .filter(([key]) => form.sens === 'incasare' || key !== 'asociere')
+              // Downstream: asocierea nu se aplică; Upstream: furnizarea de materiale nu se aplică (Gazpet nu vinde materiale)
+              .filter(([key]) => form.sens === 'incasare' ? key !== 'furnizare_materiale' : key !== 'asociere')
               .map(([key, meta]) => (
                 <button key={key} onClick={() => handleTipChange(key)} style={{
                   flex: 1, padding: '12px 8px', border: `2px solid ${form.tip_contract === key ? meta.color : G.border}`,
@@ -986,11 +990,11 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
               const pid = e.target.value
               // Auto-populare șantier din contractul parinte
               const parinte = contracteUpstream.find(c => String(c.id) === String(pid))
-              setForm(f => ({
-                ...f,
-                contract_parinte_id: pid,
-                site_id: parinte?.site_id ? String(parinte.site_id) : f.site_id,
-              }))
+              setForm(f => {
+                const pSite = parinte?.site_id ? Number(parinte.site_id) : null
+                const arr = pSite && !f.santiere_ids.includes(pSite) ? [...f.santiere_ids, pSite] : f.santiere_ids
+                return { ...f, contract_parinte_id: pid, santiere_ids: arr, site_id: arr[0] ? String(arr[0]) : f.site_id }
+              })
             }} style={S.select}>
               <option value="">— Selectează contractul principal —</option>
               {contracteUpstream.map(c => (
@@ -1045,11 +1049,27 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
             )}
           </div>
           <div>
-            <label style={S.label}>Șantier / Proiect</label>
-            <select value={form.site_id} onChange={e => setForm(f => ({ ...f, site_id: e.target.value }))} style={S.select}>
-              <option value="">— Fără șantier specific —</option>
-              {sites.map(s => <option key={s.id} value={s.id}>{s.denumire_qr || s.name}</option>)}
-            </select>
+            <label style={S.label}>Șantiere deservite (click pentru selectare multiplă)</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 8, background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, maxHeight: 130, overflowY: 'auto' }}>
+              {sites.map(s => {
+                const on = form.santiere_ids.includes(Number(s.id))
+                return (
+                  <button key={s.id} type="button" onClick={() => setForm(f => {
+                    const arr = f.santiere_ids.includes(Number(s.id))
+                      ? f.santiere_ids.filter(x => x !== Number(s.id))
+                      : [...f.santiere_ids, Number(s.id)]
+                    return { ...f, santiere_ids: arr, site_id: arr[0] ? String(arr[0]) : '' }
+                  })} style={{
+                    padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                    background: on ? G.blue + '33' : 'transparent', color: on ? G.blue : G.muted,
+                    border: `1px solid ${on ? G.blue : G.border}`,
+                  }}>{on ? '✓ ' : ''}{s.denumire_qr || s.name}</button>
+                )
+              })}
+            </div>
+            {form.santiere_ids.length > 1 && (
+              <div style={{ fontSize: 10, color: G.blue, marginTop: 4 }}>📍 Contract multi-șantier: {form.santiere_ids.length} șantiere — se descarcă pe lucrări prin comenzi furnizor</div>
+            )}
           </div>
         </div>
 

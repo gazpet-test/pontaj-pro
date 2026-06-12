@@ -43,6 +43,7 @@ const STATUS_INFO = {
 const CAT_INFO = {
   executie:        { label:'Execuție',         icon:'🏗️', color:G.orange },
   prestari_servicii: { label:'Prestări servicii', icon:'🔧', color:G.blue   },
+  furnizare_materiale: { label:'Furnizare materiale', icon:'📦', color:G.orange },
   paza:            { label:'Pază',              icon:'🛡️', color:G.purple },
   altele:          { label:'Altele',            icon:'📄', color:G.muted  },
 }
@@ -951,9 +952,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     data_semnare: item.data_semnare || '',
     termen_executie_zile: item.termen_executie_zile || '',
     data_termen: item.data_termen || '',
-    status: item.status || 'draft',
-    observatii: item.observatii || '',
     pdf_path: item.pdf_path || '',
+    santiere_ids: (item.santiere_ids || []).map(Number),
   })
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -1052,6 +1052,10 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       status: f.status,
       observatii: f.observatii.trim() || null,
       pdf_path: f.pdf_path || null,
+      // Multi-șantier (12.06.2026): contractele de furnizare/prestări deservesc mai multe lucrări
+      santiere_ids: f.santiere_ids.length ? f.santiere_ids : null,
+      site_id: f.santiere_ids[0] || null,
+      ...(f.categorie === 'furnizare_materiale' ? { tip_contract: 'furnizare_materiale' } : {}),
     }
     let contractId = item.id
     if (isNew) {
@@ -1224,6 +1228,36 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         </div>
 
           {/* ── 📍 Șantier asociat → sincronizare automată cu Proiect Execuție ── */}
+        {/* ── 📦 Șantiere deservite — multi-select pentru furnizare materiale / prestări servicii (12.06.2026) ── */}
+        {['furnizare_materiale','prestari_servicii'].includes(f.categorie) && (
+          <div style={{padding:12, background:G.surface, border:`1px solid ${G.orange}33`, borderRadius:8}}>
+            <label style={{...S.lbl, color:G.orange}}>📍 Șantiere deservite (selectare multiplă)</label>
+            <div style={{fontSize:10, color:G.dim, marginBottom:6}}>
+              Contractul se descarcă pe lucrări prin comenzile furnizor — selectează toate șantierele pe care le deservește.
+            </div>
+            <div style={{display:'flex', flexWrap:'wrap', gap:6, maxHeight:120, overflowY:'auto'}}>
+              {siteLista.map(s => {
+                const on = f.santiere_ids.includes(Number(s.id))
+                return (
+                  <button key={s.id} type="button" onClick={() => setF(prev => ({
+                    ...prev,
+                    santiere_ids: prev.santiere_ids.includes(Number(s.id))
+                      ? prev.santiere_ids.filter(x => x !== Number(s.id))
+                      : [...prev.santiere_ids, Number(s.id)]
+                  }))} style={{
+                    padding:'4px 10px', borderRadius:12, fontSize:11, fontWeight:700, cursor:'pointer',
+                    background: on ? G.orange+'33' : 'transparent', color: on ? G.orange : G.muted,
+                    border:`1px solid ${on ? G.orange : G.border}`,
+                  }}>{on ? '✓ ' : ''}{s.name}</button>
+                )
+              })}
+            </div>
+            {f.santiere_ids.length > 0 && (
+              <div style={{fontSize:11, marginTop:6, color:G.teal}}>✓ {f.santiere_ids.length} {f.santiere_ids.length === 1 ? 'șantier selectat' : 'șantiere selectate'}</div>
+            )}
+          </div>
+        )}
+
         {f.categorie === 'executie' && (
           <div style={{padding:12, background:G.surface, border:`1px solid ${G.blue}33`, borderRadius:8}}>
             <label style={{...S.lbl, color:G.blue}}>📍 Șantier asociat</label>

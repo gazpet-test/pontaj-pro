@@ -573,6 +573,109 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
 // ===========================================================================
 // PAGINA PRINCIPALĂ FINANCIAR
 // ===========================================================================
+// ===========================================================================
+// TAB FACTURI FURNIZORI (12.06.2026) — facturile încărcate pe comenzile
+// furnizor în modulul Achiziții migrează automat aici, grupate per furnizor.
+// ===========================================================================
+function FacturiFurnizoriTab() {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      try {
+        // Query-uri separate + merge manual (FK implicit joins evitate — lecție nas_documente)
+        const [rDocs, rCmd, rFz, rProj] = await Promise.all([
+          supabase.from('comenzi_furnizor_documente').select('*').eq('tip', 'factura').order('uploadat_la', { ascending: false }),
+          supabase.from('comenzi_furnizor').select('id, numar_comanda, furnizor_id, proiect_id, status'),
+          supabase.from('logistica_furnizori').select('id, nume'),
+          supabase.from('executie_proiecte').select('id, nume, cod_intern'),
+        ])
+        const cmdMap = Object.fromEntries((rCmd.data || []).map(c => [c.id, c]))
+        const fzMap  = Object.fromEntries((rFz.data || []).map(f => [f.id, f]))
+        const pjMap  = Object.fromEntries((rProj.data || []).map(p => [p.id, p]))
+        setRows((rDocs.data || []).map(d => {
+          const cmd = cmdMap[d.comanda_id]
+          const fz = cmd?.furnizor_id ? fzMap[cmd.furnizor_id] : null
+          const pj = cmd?.proiect_id ? pjMap[cmd.proiect_id] : null
+          return { ...d, _cmd: cmd, _furnizor: fz?.nume || 'Furnizor necunoscut', _proiect: pj ? (pj.cod_intern || pj.nume) : null }
+        }))
+      } finally { setLoading(false) }
+    })()
+  }, [])
+
+  const openDoc = async (path) => {
+    const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  const filtered = useMemo(() => {
+    if (!search) return rows
+    const s = search.toLowerCase()
+    return rows.filter(r => (r._furnizor || '').toLowerCase().includes(s)
+      || (r.fisier_nume || '').toLowerCase().includes(s)
+      || (r._cmd?.numar_comanda || '').toLowerCase().includes(s)
+      || (r._proiect || '').toLowerCase().includes(s))
+  }, [rows, search])
+
+  // Grupare per furnizor
+  const grupe = useMemo(() => {
+    const m = new Map()
+    for (const r of filtered) {
+      if (!m.has(r._furnizor)) m.set(r._furnizor, [])
+      m.get(r._furnizor).push(r)
+    }
+    return [...m.entries()].sort((a, b) => b[1].length - a[1].length)
+  }, [filtered])
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:18,flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:800}}>🧾 Facturi furnizori</div>
+          <div style={{fontSize:12,color:G.muted,marginTop:2}}>Încărcate pe comenzile din Achiziții · {rows.length} {rows.length === 1 ? 'factură' : 'facturi'} · {grupe.length} furnizori</div>
+        </div>
+        <div style={{flex:1}} />
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Caută furnizor / comandă / proiect..."
+          style={{padding:'9px 13px',background:G.surface,border:`1px solid ${G.border}`,borderRadius:8,color:G.text,fontSize:13,outline:'none',minWidth:260}} />
+      </div>
+
+      {loading && <div style={{padding:40,textAlign:'center',color:G.muted}}>Se încarcă...</div>}
+
+      {!loading && !grupe.length && (
+        <div style={{padding:50,textAlign:'center',background:G.surface,borderRadius:12,border:`1px dashed ${G.border}`}}>
+          <div style={{fontSize:36,marginBottom:10}}>🧾</div>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>{search ? 'Nicio factură pe căutarea curentă.' : 'Nicio factură de furnizor încă.'}</div>
+          {!search && <div style={{fontSize:12,color:G.muted}}>Facturile se încarcă pe comandă în modulul Achiziții (secțiunea 📎 Factură & Documente calitate) și apar automat aici.</div>}
+        </div>
+      )}
+
+      {!loading && grupe.map(([furnizor, docs]) => (
+        <div key={furnizor} style={{background:G.surface,border:`1px solid ${G.border}`,borderRadius:12,overflow:'hidden',marginBottom:14}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'11px 16px',borderBottom:`1px solid ${G.border}`,background:G.card2 || G.bg}}>
+            <span style={{fontSize:16}}>🏭</span>
+            <span style={{fontSize:14,fontWeight:800,flex:1}}>{furnizor}</span>
+            <span style={{background:G.financiar+'22',color:G.financiar,border:`1px solid ${G.financiar}55`,borderRadius:12,padding:'2px 10px',fontSize:11,fontWeight:800}}>{docs.length} {docs.length === 1 ? 'factură' : 'facturi'}</span>
+          </div>
+          {docs.map(d => (
+            <div key={d.id} style={{display:'grid',gridTemplateColumns:'1fr 150px 140px 130px 90px',gap:10,alignItems:'center',padding:'9px 16px',borderBottom:`1px solid ${G.border}`,fontSize:12.5}}>
+              <button onClick={()=>openDoc(d.fisier_path)} style={{background:'none',border:'none',color:G.financiar,cursor:'pointer',fontFamily:'inherit',fontSize:12.5,fontWeight:600,textAlign:'left',padding:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={d.fisier_nume}>
+                🧾 {d.fisier_nume || d.fisier_path.split('/').pop()}
+              </button>
+              <a href={`/achizitii?id=${d.comanda_id}`} style={{color:G.muted,fontSize:11.5,fontFamily:'monospace',textDecoration:'none'}} title="Deschide comanda în Achiziții">🛒 {d._cmd?.numar_comanda || `#${d.comanda_id}`}</a>
+              <span style={{color:G.muted,fontSize:11.5}}>{d._proiect ? `📂 ${d._proiect}` : '—'}</span>
+              <span style={{color:G.dim,fontSize:11}}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
+              <button onClick={()=>openDoc(d.fisier_path)} style={{padding:'4px 10px',background:G.financiar+'22',border:`1px solid ${G.financiar}44`,borderRadius:6,color:G.financiar,cursor:'pointer',fontSize:11,fontWeight:700}}>👁 Vezi</button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function FinanciarPage() {
   const [facturi, setFacturi]       = useState([])
   const [loading, setLoading]       = useState(true)
@@ -584,6 +687,7 @@ export default function FinanciarPage() {
   const [filterAn, setFilterAn]     = useState(String(new Date().getFullYear()))
   const [deleteConf, setDeleteConf] = useState(null)
   const [slAlert, setSlAlert]       = useState([]) // SL fără factură
+  const [tab, setTab]               = useState('emise')  // 'emise' | 'furnizori' (12.06.2026)
   const { show: showToast, Toast }  = useToast()
 
   const loadAll = useCallback(async () => {
@@ -662,7 +766,16 @@ export default function FinanciarPage() {
         <div style={{display:'flex', alignItems:'center', gap:10, height:52}}>
           <div style={{width:30,height:30,background:`linear-gradient(135deg,${G.financiar},#2DD4BF)`,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>💰</div>
           <div style={{fontSize:14,fontWeight:700}}>Financiar</div>
-          <div style={{marginLeft:8,fontSize:13,color:G.muted}}>Facturi emise</div>
+          <div style={{marginLeft:10,display:'flex',gap:6}}>
+            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori']].map(([k,l]) => (
+              <button key={k} onClick={()=>setTab(k)} style={{
+                padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:8,
+                background: tab===k ? G.financiar+'22' : 'transparent',
+                color: tab===k ? G.financiar : G.muted,
+                border:`1px solid ${tab===k ? G.financiar+'66' : G.border}`,
+              }}>{l}</button>
+            ))}
+          </div>
           {slAlert.length > 0 && (
             <div style={{marginLeft:'auto',background:G.orange+'22',border:`1px solid ${G.orange}55`,borderRadius:20,padding:'4px 12px',fontSize:12,color:G.orange,fontWeight:700,display:'flex',alignItems:'center',gap:6}}>
               ⚡ {slAlert.length} SL fără factură
@@ -673,6 +786,9 @@ export default function FinanciarPage() {
 
       <div style={{padding:'24px 28px',maxWidth:1400,margin:'0 auto'}}>
 
+        {tab === 'furnizori' && <FacturiFurnizoriTab />}
+
+        {tab === 'emise' && (<>
         {/* ── ALERTĂ SL fără factură ── */}
         {slAlert.length > 0 && (
           <div style={{background:G.orange+'0E',border:`1px solid ${G.orange}44`,borderRadius:10,padding:'14px 18px',marginBottom:20}}>
@@ -826,6 +942,7 @@ export default function FinanciarPage() {
           <span>📁</span>
           <span>Sincronizare NAS: PDF-urile se salvează automat în Supabase Storage. Pentru sync pe <code>\\gazpet-tnas\Facturi_Emise\Facturi 2026</code>, schimbați volumul Docker la <code>:rw</code> și activați scriptul NAS sync.</span>
         </div>
+        </>)}
       </div>
 
       {/* Modal factură */}

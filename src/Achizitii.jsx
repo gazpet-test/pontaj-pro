@@ -735,6 +735,95 @@ function PredareModal({ comanda, profile, profilesMap, onClose, onConfirm, onFin
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL: DETALII COMANDĂ (aprobare + acțiuni flux + PDF-uri)
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENTE COMANDĂ — Factură furnizor + Documente calitate (12.06.2026)
+// Factura devine vizibilă automat în Financiar → Facturi furnizori.
+// Documentele de calitate sunt legate de comandă → proiect (vor apărea în
+// Execuție / CTC / Ofertare pe măsură ce acele module se construiesc).
+// ════════════════════════════════════════════════════════════════════════════
+function DocumenteComandaSection({ comanda, profile }) {
+  const [docs, setDocs] = useState([])
+  const [uploading, setUploading] = useState(null)  // 'factura' | 'calitate' | null
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('comenzi_furnizor_documente').select('*').eq('comanda_id', comanda.id).order('uploadat_la')
+    setDocs(data || [])
+  }, [comanda.id])
+  useEffect(() => { load() }, [load])
+
+  const uploadDoc = async (tip, file) => {
+    if (!file) return
+    if (file.size > 20 * 1024 * 1024) { alert('Fișier prea mare (max 20MB)'); return }
+    setUploading(tip)
+    try {
+      const path = `documente/${comanda.id}/${tip}_${Date.now()}_${uniq8()}.${(file.name.split('.').pop() || 'pdf').toLowerCase()}`
+      const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file, { contentType: file.type || 'application/pdf' })
+      if (upErr) throw upErr
+      const { error: insErr } = await supabase.from('comenzi_furnizor_documente').insert({
+        comanda_id: comanda.id, tip, fisier_path: path, fisier_nume: file.name, uploadat_de: profile?.id || null,
+      })
+      if (insErr) throw insErr
+      await load()
+    } catch (e) { alert('Eroare upload: ' + e.message) } finally { setUploading(null) }
+  }
+
+  const stergeDoc = async (d) => {
+    if (!window.confirm(`Ștergi documentul "${d.fisier_nume || d.fisier_path}"?`)) return
+    try {
+      await supabase.storage.from(BUCKET).remove([d.fisier_path])
+      const { error } = await supabase.from('comenzi_furnizor_documente').delete().eq('id', d.id)
+      if (error) throw error
+      await load()
+    } catch (e) { alert('Eroare ștergere: ' + e.message) }
+  }
+
+  const facturi = docs.filter(d => d.tip === 'factura')
+  const calitate = docs.filter(d => d.tip === 'calitate')
+  const UpBtn = ({ tip, label, color }) => (
+    <label style={{ ...S.btnS, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, color, borderColor: color + '66', fontWeight: 700, opacity: uploading ? .6 : 1 }}>
+      {uploading === tip ? '⏳ Se încarcă...' : label}
+      <input type="file" accept="application/pdf,image/*" disabled={!!uploading} onChange={e => { uploadDoc(tip, e.target.files?.[0]); e.target.value = '' }} style={{ display: 'none' }} />
+    </label>
+  )
+  const DocRow = ({ d }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 12.5 }}>
+      <span style={{ fontSize: 16 }}>{d.tip === 'factura' ? '🧾' : '🏅'}</span>
+      <button onClick={() => openStorageFile(d.fisier_path)} style={{ background: 'none', border: 'none', color: G.blue, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {d.fisier_nume || d.fisier_path.split('/').pop()}
+      </button>
+      <span style={{ color: G.dim, fontSize: 11, flexShrink: 0 }}>{fmtData(d.uploadat_la)}</span>
+      {(profile?.is_owner || d.uploadat_de === profile?.id) && (
+        <button onClick={() => stergeDoc(d)} title="Șterge" style={{ background: 'none', border: 'none', color: G.red + '99', cursor: 'pointer', fontSize: 13, padding: '0 2px' }}>🗑</button>
+      )}
+    </div>
+  )
+
+  return (
+    <div style={{ marginTop: 14, padding: 14, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}>📎 Factură & Documente calitate</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, marginBottom: 6 }}>🧾 FACTURĂ FURNIZOR {facturi.length > 0 && `(${facturi.length})`}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+            {facturi.map(d => <DocRow key={d.id} d={d} />)}
+            {!facturi.length && <div style={{ fontSize: 11.5, color: G.dim, fontStyle: 'italic' }}>Nicio factură încărcată încă.</div>}
+          </div>
+          <UpBtn tip="factura" label="🧾 Încarcă factura" color={G.green} />
+          <div style={{ fontSize: 10.5, color: G.dim, marginTop: 6 }}>Apare automat în Financiar → Facturi furnizori.</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, marginBottom: 6 }}>🏅 DOCUMENTE CALITATE {calitate.length > 0 && `(${calitate.length})`}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+            {calitate.map(d => <DocRow key={d.id} d={d} />)}
+            {!calitate.length && <div style={{ fontSize: 11.5, color: G.dim, fontStyle: 'italic' }}>Certificate, declarații de conformitate, rapoarte încercări...</div>}
+          </div>
+          <UpBtn tip="calitate" label="🏅 Încarcă document calitate" color={G.achizitii} />
+          <div style={{ fontSize: 10.5, color: G.dim, marginTop: 6 }}>Legate de proiect — vizibile în Execuție/CTC/Ofertare.</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actions, busy }) {
   const c = comanda
   const total = totalComanda(c)
@@ -849,6 +938,11 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
             {c.pv_predare_path && <button onClick={() => openStorageFile(c.pv_predare_path)} style={{ ...S.btnS, fontSize:14 }}>📄 PV Predare</button>}
             {c.poza_depozitare_path && <button onClick={() => openStorageFile(c.poza_depozitare_path)} style={{ ...S.btnS, fontSize:14 }}>📸 Poză depozitare</button>}
           </div>
+        )}
+
+        {/* Factură + documente calitate — de la emitere încolo (12.06.2026) */}
+        {['emisa','in_tranzit','ajunsa','receptionata','in_stoc'].includes(c.status) && (
+          <DocumenteComandaSection comanda={c} profile={profile} />
         )}
 
         {/* Acțiuni flux */}
