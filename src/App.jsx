@@ -655,20 +655,25 @@ function Layout({ children }) {
   const isContabilitate = profile?.role==='contabilitate'
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
-  // Tichete ale mele — split deschise de mine vs asignate mie
-  const [ticheteMele, setTicheteMele] = useState({ deschise: 0, asignate: 0 })
+  // Tichete ale mele — split deschise de mine vs asignate mie + de confirmat (12.06.2026)
+  const [ticheteMele, setTicheteMele] = useState({ deschise: 0, asignate: 0, deConfirmat: 0 })
   const [showTicheteMele, setShowTicheteMele] = useState(false)
   useEffect(() => {
     if (!profile?.id) return
-    const ACTIVE = ['deschis','in_analiza','programat_service','in_service','in_lucru','atribuit','reparat']
+    // FIX 12.06.2026: + 'rezolvat' (workflow generic) — lipsea, tichetele care așteptau
+    // "Confirm rezolvat" de la creator nu se numărau și se uitau neconfirmate
+    const ACTIVE = ['deschis','in_analiza','programat_service','in_service','in_lucru','atribuit','reparat','rezolvat']
+    const DE_CONFIRMAT = ['rezolvat','reparat']  // așteaptă confirmarea creatorului
     const load = async () => {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, r3] = await Promise.all([
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('deschis_de', profile.id).in('status', ACTIVE),
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('persoana_responsabila', profile.id).in('status', ACTIVE),
+        supabase.from('tichete').select('id', { count:'exact', head:true })
+          .eq('deschis_de', profile.id).in('status', DE_CONFIRMAT),
       ])
-      setTicheteMele({ deschise: r1.count || 0, asignate: r2.count || 0 })
+      setTicheteMele({ deschise: r1.count || 0, asignate: r2.count || 0, deConfirmat: r3.count || 0 })
     }
     load()
     const t = setInterval(load, 60000)
@@ -749,22 +754,27 @@ function Layout({ children }) {
           <div style={{ position:'relative' }}>
             <button
               onClick={() => setShowTicheteMele(v => !v)}
-              title="Tichete ale mele — deschise de mine + asignate mie"
+              title={ticheteMele.deConfirmat > 0 ? `Ai ${ticheteMele.deConfirmat} tichet(e) rezolvate care așteaptă confirmarea ta!` : "Tichete ale mele — deschise de mine + asignate mie"}
               style={{
                 display:'flex', alignItems:'center', gap:6,
                 padding:'6px 12px',
-                background: (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple+'33' : G.bg,
-                color: (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple : G.dim,
-                border:`1px solid ${(ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple : G.border}`,
+                background: ticheteMele.deConfirmat > 0 ? G.green+'33' : (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple+'33' : G.bg,
+                color: ticheteMele.deConfirmat > 0 ? G.green : (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple : G.dim,
+                border:`1px solid ${ticheteMele.deConfirmat > 0 ? G.green : (ticheteMele.deschise + ticheteMele.asignate) > 0 ? G.purple : G.border}`,
                 borderRadius:8, fontSize:11, fontWeight:700, cursor:'pointer',
                 fontFamily:'inherit', marginLeft:-8, transition:'all .15s',
               }}
-              onMouseEnter={e => { e.currentTarget.style.background = G.purple+'33'; e.currentTarget.style.color = G.purple; e.currentTarget.style.borderColor = G.purple }}
-              onMouseLeave={e => { const tot = ticheteMele.deschise+ticheteMele.asignate; e.currentTarget.style.background = tot>0?G.purple+'33':G.bg; e.currentTarget.style.color = tot>0?G.purple:G.dim; e.currentTarget.style.borderColor = tot>0?G.purple:G.border }}
+              onMouseEnter={e => { e.currentTarget.style.background = (ticheteMele.deConfirmat>0?G.green:G.purple)+'33'; e.currentTarget.style.color = ticheteMele.deConfirmat>0?G.green:G.purple; e.currentTarget.style.borderColor = ticheteMele.deConfirmat>0?G.green:G.purple }}
+              onMouseLeave={e => { const tot = ticheteMele.deschise+ticheteMele.asignate; const c = ticheteMele.deConfirmat>0?G.green:G.purple; e.currentTarget.style.background = ticheteMele.deConfirmat>0?c+'33':tot>0?c+'33':G.bg; e.currentTarget.style.color = (ticheteMele.deConfirmat>0||tot>0)?c:G.dim; e.currentTarget.style.borderColor = (ticheteMele.deConfirmat>0||tot>0)?c:G.border }}
             >
               Ale mele
+              {ticheteMele.deConfirmat > 0 && (
+                <span style={{ background:G.green, color:'#fff', borderRadius:10, padding:'1px 6px', fontSize:10, fontWeight:800, animation:'nb-pulse 1.5s infinite' }}>
+                  🎉 {ticheteMele.deConfirmat}
+                </span>
+              )}
               {(ticheteMele.deschise + ticheteMele.asignate) > 0 && (
-                <span style={{ background:G.purple, color:'#fff', borderRadius:10, padding:'1px 6px', fontSize:10, fontWeight:800 }}>
+                <span style={{ background:ticheteMele.deConfirmat > 0 ? G.purple+'88' : G.purple, color:'#fff', borderRadius:10, padding:'1px 6px', fontSize:10, fontWeight:800 }}>
                   {ticheteMele.deschise + ticheteMele.asignate}
                 </span>
               )}
@@ -787,6 +797,22 @@ function Layout({ children }) {
                   <div style={{ padding:'10px 14px', borderBottom:`1px solid ${G.border}`, fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'.5px' }}>
                     🎫 Tichete active ale mele
                   </div>
+                  {/* De confirmat — tichete rezolvate/reparate create de mine, așteaptă confirmarea mea (12.06.2026) */}
+                  {ticheteMele.deConfirmat > 0 && (
+                    <button onClick={() => { nav('/tichete?mine=true&filter=de_confirmat'); setShowTicheteMele(false) }}
+                      style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'12px 14px', background:G.green+'11', border:'none', cursor:'pointer', borderBottom:`1px solid ${G.border}`, transition:'background .1s' }}
+                      onMouseEnter={e => e.currentTarget.style.background=G.green+'22'}
+                      onMouseLeave={e => e.currentTarget.style.background=G.green+'11'}>
+                      <div style={{ width:36, height:36, borderRadius:8, background:G.green+'22', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>🎉</div>
+                      <div style={{ textAlign:'left' }}>
+                        <div style={{ fontSize:12, fontWeight:700, color:G.green }}>De confirmat rezolvate</div>
+                        <div style={{ fontSize:11, color:G.muted }}>Așteaptă confirmarea ta!</div>
+                      </div>
+                      <div style={{ marginLeft:'auto', fontSize:22, fontWeight:800, color:G.green }}>
+                        {ticheteMele.deConfirmat}
+                      </div>
+                    </button>
+                  )}
                   {/* Deschise de mine */}
                   <button onClick={() => { nav('/tichete?mine=true&filter=deschise'); setShowTicheteMele(false) }}
                     style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'12px 14px', background:'transparent', border:'none', cursor:'pointer', borderBottom:`1px solid ${G.border}`, transition:'background .1s' }}

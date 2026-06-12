@@ -174,6 +174,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       const filter = params.get('filter')
       if(filter === 'asignate') setFilterMineType('asignate')
       else if(filter === 'deschise') setFilterMineType('deschise')
+      else if(filter === 'de_confirmat') { setFilterMineType('de_confirmat'); setFiltruStatus('active') }
       else setFilterMineType('toate')
       params.delete('mine'); params.delete('filter'); consumed = true
     }
@@ -226,6 +227,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
     if(filterMine && profile?.id) {
       if(filterMineType === 'deschise') t = t.filter(x => x.deschis_de === profile.id)
       else if(filterMineType === 'asignate') t = t.filter(x => x.persoana_responsabila === profile.id)
+      else if(filterMineType === 'de_confirmat') t = t.filter(x => x.deschis_de === profile.id && ['rezolvat','reparat'].includes(x.status))
       else t = t.filter(x => x.persoana_responsabila === profile.id || x.deschis_de === profile.id)
     }
     if(activeDep) t = t.filter(x=>x.departament===activeDep)
@@ -383,6 +385,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
                 { v:'toate',  l:'📋 Toate', col: G.purple },
                 { v:'deschise', l:'📝 Deschise de mine', col: G.blue },
                 { v:'asignate', l:'👤 Asignate mie', col: G.orange },
+                { v:'de_confirmat', l:'🎉 De confirmat', col: G.green },
               ].map(f => (
                 <button key={f.v} onClick={()=>setFilterMineType(f.v)}
                   style={{
