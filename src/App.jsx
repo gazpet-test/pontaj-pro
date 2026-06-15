@@ -9,6 +9,7 @@ import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
+import BugReportButton from './BugReportButton.jsx'
 import InternalChat from './InternalChat.jsx'
 // ════════════ Etapa 15 Faza 1: Module Comercial (placeholder) ════════════
 import ComercialPage from './Comercial.jsx'
@@ -8199,6 +8200,15 @@ function InternalChatGate() {
   return <InternalChat profile={profile} />
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// BUG REPORT GATE - buton flotant 🐛 DOAR pentru useri logați
+// ════════════════════════════════════════════════════════════════════════════
+function BugReportGate() {
+  const { session, profile } = useAuth()
+  if (!session || !profile) return null
+  return <BugReportButton profile={profile} />
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -8228,6 +8238,7 @@ export default function App() {
       </Routes>
       <ChatbotWidgetGate />
       <InternalChatGate />
+      <BugReportGate />
     </AuthProvider>
   )
 }
