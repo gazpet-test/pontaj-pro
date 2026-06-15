@@ -609,7 +609,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onChangeStatus, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
+function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onViewActe, onViewPdf, onChangeStatus, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
@@ -711,15 +711,21 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
           <div style={{ fontSize: 16, fontWeight: 800, color: isDownstream ? G.red : G.green }}>
             {isDownstream ? '↑' : '↓'} {fmtRON(c.valoare_lei)}
           </div>
+          {Number(c.valoare_eur || 0) > 0 && (
+            <div style={{ fontSize: 12, fontWeight: 700, color: G.muted }} title="Valoare contract în valută">
+              💶 {fmtEUR(c.valoare_eur)}
+            </div>
+          )}
           {c.valoare_cu_acte != null && Number(c.valoare_cu_acte) !== Number(c.valoare_lei || 0) && (
             <div style={{ fontSize: 11.5, fontWeight: 700, color: G.purple }} title="Valoarea actuală cu actele adiționale aplicate (din ambele module)">
               ⚡ cu acte: {fmtRON(c.valoare_cu_acte)}
             </div>
           )}
           {c.nr_acte_aditionale > 0 && (
-            <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>
+            <button onClick={() => onViewActe(c)} title="Vezi / gestionează actele adiționale"
+              style={{ fontSize: 13, fontWeight: 700, color: G.purple, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
               +{c.nr_acte_aditionale} acte adiționale
-            </div>
+            </button>
           )}
 
           {isMama && (
@@ -752,7 +758,7 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
             </select>
           )}
 
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 2 }}>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 2, flexWrap: 'wrap' }}>
             <button onClick={() => onViewFacturi(c)} style={{
               padding: '5px 10px', background: G.green + '22', color: G.green,
               border: `1px solid ${G.green}44`, borderRadius: 6, cursor: 'pointer',
@@ -763,6 +769,18 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
               border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer',
               fontSize: 11, fontWeight: 600,
             }}>📋 Linii ({c.nr_linii})</button>
+            <button onClick={() => onViewActe(c)} title="Acte adiționale" style={{
+              padding: '5px 10px', background: G.purple + '22', color: G.purple,
+              border: `1px solid ${G.purple}44`, borderRadius: 6, cursor: 'pointer',
+              fontSize: 11, fontWeight: 600,
+            }}>⚡ Acte ({c.nr_acte_aditionale || 0})</button>
+            {c.pdf_path && (
+              <button onClick={() => onViewPdf(c)} title="Vezi PDF contract" style={{
+                padding: '5px 10px', background: G.text + '18', color: G.text,
+                border: `1px solid ${G.border}`, borderRadius: 6, cursor: 'pointer',
+                fontSize: 11, fontWeight: 600,
+              }}>📎 PDF</button>
+            )}
             {(isOwner || canManage) && (
               <button onClick={() => onEdit(c)} style={{
                 padding: '5px 10px', background: G.orange + '22', color: G.orange,
@@ -790,6 +808,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
     sens: contract?.sens || 'incasare',
     status: contract?.status || 'draft',
     valoare_lei: contract?.valoare_lei || '',
+    valoare_eur: contract?.valoare_eur || '',
     data_semnare: contract?.data_semnare || '',
     data_termen: contract?.data_termen || '',
     termen_plata_zile: contract?.termen_plata_zile || '',
@@ -866,6 +885,7 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         status: form.status,
         categorie: 'executie',
         valoare_lei: form.valoare_lei ? Number(form.valoare_lei) : null,
+        valoare_eur: form.valoare_eur ? Number(form.valoare_eur) : null,
         data_semnare: form.data_semnare || null,
         data_termen: form.data_termen || null,
         termen_plata_zile: form.termen_plata_zile ? Number(form.termen_plata_zile) : null,
@@ -1073,12 +1093,21 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
           <div>
             <label style={S.label}>Valoare Contract (RON)</label>
             <input type="number" value={form.valoare_lei} onChange={e => setForm(f => ({ ...f, valoare_lei: e.target.value }))}
               placeholder="0" style={S.input} />
           </div>
+          <div>
+            <label style={S.label}>💶 Valoare Contract (EUR)</label>
+            <input type="number" value={form.valoare_eur} onChange={e => setForm(f => ({ ...f, valoare_eur: e.target.value }))}
+              placeholder="0" style={S.input} />
+            <div style={{ fontSize: 10, color: G.dim, marginTop: 3 }}>Doar la contracte în valută — activează modul EUR în facturi / % realizat.</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
           <div>
             <label style={S.label}>Termen Plată (zile)</label>
             <input type="number" value={form.termen_plata_zile} onChange={e => setForm(f => ({ ...f, termen_plata_zile: e.target.value }))}
@@ -1361,6 +1390,264 @@ function AlerteDashboard({ contracte, onFilterSens, onFilterStatus }) {
 }
 
 // ─── Componentă principală ──────────────────────────────────────────────────
+// ─── Modal Acte Adiționale ───────────────────────────────────────────────────
+const TIP_ACT_OPTS = ['Valoare', 'Termen', 'Valoare + Termen', 'Alte clauze']
+
+function ActForm({ contract, act, onCancel, onSaved }) {
+  const isEdit = !!act?.id
+  const [form, setForm] = useState({
+    numar_act: act?.numar_act || '',
+    data_semnare: act?.data_semnare || '',
+    tip: act?.tip || 'Valoare',
+    valoare_noua_lei: act?.valoare_noua_lei ?? '',
+    valoare_noua_eur: act?.valoare_noua_eur ?? '',
+    durata_noua_zile: act?.durata_noua_zile ?? '',
+    data_termen_noua: act?.data_termen_noua || '',
+    observatii: act?.observatii || '',
+  })
+  const [pdfFile, setPdfFile] = useState(null)
+  const [pdfPath, setPdfPath] = useState(act?.pdf_path || '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  function handlePdfSelect(file) {
+    if (!file) return
+    if (!file.type.includes('pdf')) { setErr('Doar fișiere PDF.'); return }
+    if (file.size > 20 * 1024 * 1024) { setErr('PDF prea mare (max 20MB).'); return }
+    setPdfFile(file); setErr('')
+  }
+
+  async function handleViewPdf() {
+    if (!pdfPath) return
+    const { data } = await supabase.storage.from('contracte-terti').createSignedUrl(pdfPath, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  async function handleSave() {
+    if (!form.numar_act.trim()) { setErr('Numărul actului e obligatoriu.'); return }
+    setSaving(true); setErr('')
+    try {
+      let finalPdfPath = pdfPath
+      if (pdfFile) {
+        const path = `acte-aditionale/${contract.id}_${Date.now()}.pdf`
+        const { error: upErr } = await supabase.storage.from('contracte-terti').upload(path, pdfFile, { upsert: true, contentType: 'application/pdf' })
+        if (upErr) throw new Error('Upload PDF: ' + upErr.message)
+        finalPdfPath = path
+      }
+      const payload = {
+        contract_id: contract.id,
+        numar_act: form.numar_act.trim(),
+        data_semnare: form.data_semnare || null,
+        tip: form.tip || null,
+        valoare_noua_lei: form.valoare_noua_lei !== '' ? Number(form.valoare_noua_lei) : null,
+        valoare_noua_eur: form.valoare_noua_eur !== '' ? Number(form.valoare_noua_eur) : null,
+        durata_noua_zile: form.durata_noua_zile !== '' ? Number(form.durata_noua_zile) : null,
+        data_termen_noua: form.data_termen_noua || null,
+        observatii: form.observatii || null,
+        pdf_path: finalPdfPath || null,
+        updated_at: new Date().toISOString(),
+      }
+      if (isEdit) {
+        const { error } = await supabase.from('contracte_acte_aditionale').update(payload).eq('id', act.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('contracte_acte_aditionale').insert(payload)
+        if (error) throw error
+      }
+      onSaved()
+    } catch (e) {
+      setErr(e.message || 'Eroare salvare.')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{ background: G.bg, border: `1px solid ${G.purple}55`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: G.purple, marginBottom: 12 }}>{isEdit ? '✏️ Editează act adițional' : '➕ Act adițional nou'}</div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Număr act *</label>
+          <input value={form.numar_act} onChange={e => setForm(f => ({ ...f, numar_act: e.target.value }))} placeholder="ex: AA1/2025" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Data semnare</label>
+          <input type="date" value={form.data_semnare} onChange={e => setForm(f => ({ ...f, data_semnare: e.target.value }))} style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Tip</label>
+          <select value={form.tip} onChange={e => setForm(f => ({ ...f, tip: e.target.value }))} style={S.select}>
+            {TIP_ACT_OPTS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Valoare nouă totală (RON)</label>
+          <input type="number" value={form.valoare_noua_lei} onChange={e => setForm(f => ({ ...f, valoare_noua_lei: e.target.value }))} placeholder="gol dacă nu modifică" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>💶 Valoare nouă totală (EUR)</label>
+          <input type="number" value={form.valoare_noua_eur} onChange={e => setForm(f => ({ ...f, valoare_noua_eur: e.target.value }))} placeholder="doar la contracte în valută" style={S.input} />
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Termen nou execuție</label>
+          <input type="date" value={form.data_termen_noua} onChange={e => setForm(f => ({ ...f, data_termen_noua: e.target.value }))} style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Durată nouă (zile)</label>
+          <input type="number" value={form.durata_noua_zile} onChange={e => setForm(f => ({ ...f, durata_noua_zile: e.target.value }))} placeholder="opțional" style={S.input} />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Observații</label>
+        <textarea value={form.observatii} onChange={e => setForm(f => ({ ...f, observatii: e.target.value }))} rows={2} placeholder="Ce modifică actul..." style={{ ...S.input, resize: 'vertical', fontFamily: 'inherit' }} />
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>📎 PDF act adițional</label>
+        {pdfPath && !pdfFile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: G.green }}>✅ PDF atașat</span>
+            <button onClick={handleViewPdf} style={{ padding: '4px 10px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>👁 Vezi</button>
+          </div>
+        )}
+        {pdfFile && <div style={{ marginBottom: 6, fontSize: 12, color: G.yellow }}>📄 {pdfFile.name} — se uploadează la salvare</div>}
+        <DropZone onFile={handlePdfSelect} accept="application/pdf" icon="📤" compact
+          label={pdfPath ? 'Înlocuiește PDF — trage sau click' : 'Trage PDF aici sau click'} hint="PDF, max 20MB" />
+      </div>
+
+      {err && <div style={{ padding: '8px 12px', background: G.red + '22', color: G.red, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>⚠️ {err}</div>}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button onClick={onCancel} style={{ padding: '8px 16px', background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer', fontSize: 13 }}>Anulează</button>
+        <button onClick={handleSave} disabled={saving} style={{ ...S.btnP, background: G.purple, opacity: saving ? 0.6 : 1, cursor: saving ? 'wait' : 'pointer' }}>{saving ? '⏳...' : (isEdit ? '✅ Salvează' : '✅ Adaugă')}</button>
+      </div>
+    </div>
+  )
+}
+
+function ModalActeAditionale({ contract, profile, canManage, onClose, onChanged }) {
+  const isOwner = profile?.is_owner === true
+  const [acte, setActe] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editAct, setEditAct] = useState(null)
+  const [adding, setAdding] = useState(false)
+
+  useEffect(() => { load() }, [])
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase
+      .from('contracte_acte_aditionale')
+      .select('*')
+      .eq('contract_id', contract.id)
+      .order('data_semnare', { ascending: false, nullsFirst: false })
+      .order('id', { ascending: false })
+    setActe(data || [])
+    setLoading(false)
+  }
+
+  // Actul „în vigoare" pe valoare = cel mai recent cu valoare_noua_lei setată (logica view-ului)
+  const actInVigoareId = useMemo(() => (acte.find(x => x.valoare_noua_lei != null)?.id || null), [acte])
+
+  async function handleViewActPdf(path) {
+    if (!path) return
+    const { data, error } = await supabase.storage.from('contracte-terti').createSignedUrl(path, 120)
+    if (error || !data?.signedUrl) { alert('Nu am putut deschide PDF-ul.'); return }
+    window.open(data.signedUrl, '_blank')
+  }
+
+  async function handleDelete(act) {
+    if (!window.confirm(`Ștergi „${act.numar_act}"? Acțiunea e ireversibilă.`)) return
+    const { error } = await supabase.from('contracte_acte_aditionale').delete().eq('id', act.id)
+    if (error) { alert('Eroare ștergere: ' + error.message); return }
+    if (act.pdf_path) await supabase.storage.from('contracte-terti').remove([act.pdf_path])
+    await load(); onChanged && onChanged()
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9100, padding: 16 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, width: '100%', maxWidth: 760, maxHeight: '90vh', overflowY: 'auto', padding: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>⚡ Acte adiționale</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>
+              {contract.numar_contract ? `Nr. ${contract.numar_contract} · ` : ''}{(contract.denumire || '').slice(0, 70)}{(contract.denumire || '').length > 70 ? '…' : ''}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ fontSize: 11.5, color: G.dim, marginBottom: 16, padding: '8px 12px', background: G.bg, borderRadius: 8, border: `1px solid ${G.border}` }}>
+          ℹ️ „Valoarea nouă totală" e valoarea contractului DUPĂ act (nu diferența). Ultimul act semnat cu valoare setată determină valoarea actuală a contractului.
+        </div>
+
+        {canManage && !adding && !editAct && (
+          <button onClick={() => setAdding(true)} style={{ ...S.btnP, background: G.purple, marginBottom: 16 }}>
+            + Act adițional nou
+          </button>
+        )}
+
+        {(adding || editAct) && canManage && (
+          <ActForm
+            contract={contract}
+            act={editAct}
+            onCancel={() => { setAdding(false); setEditAct(null) }}
+            onSaved={async () => { setAdding(false); setEditAct(null); await load(); onChanged && onChanged() }}
+          />
+        )}
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 30, color: G.muted }}>⏳ Se încarcă...</div>
+        ) : acte.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 24, color: G.muted, fontSize: 13 }}>Niciun act adițional încă.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {acte.map(a => (
+              <div key={a.id} style={{ ...S.card, padding: '12px 14px', borderLeft: `3px solid ${a.id === actInVigoareId ? G.green : G.purple}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{a.numar_act}</span>
+                      {a.tip && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 5, background: G.purple + '22', color: G.purple, fontWeight: 700 }}>{a.tip}</span>}
+                      {a.id === actInVigoareId && <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 5, background: G.green + '22', color: G.green, fontWeight: 700 }}>✓ în vigoare</span>}
+                      {a.data_semnare && <span style={{ fontSize: 11, color: G.muted }}>📅 {a.data_semnare}</span>}
+                    </div>
+                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: G.muted }}>
+                      {a.valoare_noua_lei != null && <span style={{ color: G.green, fontWeight: 700 }}>💰 Val. nouă: {fmtRON(a.valoare_noua_lei)}</span>}
+                      {Number(a.valoare_noua_eur || 0) > 0 && <span style={{ color: G.muted, fontWeight: 700 }}>💶 {fmtEUR(a.valoare_noua_eur)}</span>}
+                      {a.data_termen_noua && <span>⏳ Termen nou: {a.data_termen_noua}</span>}
+                      {a.durata_noua_zile != null && <span>📆 Durată: {a.durata_noua_zile} zile</span>}
+                    </div>
+                    {a.observatii && <div style={{ fontSize: 11.5, color: G.dim, marginTop: 4 }}>{a.observatii}</div>}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {a.pdf_path && (
+                      <button onClick={() => handleViewActPdf(a.pdf_path)} title="Vezi PDF act" style={{ padding: '4px 9px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>📎 PDF</button>
+                    )}
+                    {canManage && (
+                      <button onClick={() => { setEditAct(a); setAdding(false) }} style={{ padding: '4px 9px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>✏️</button>
+                    )}
+                    {isOwner && (
+                      <button onClick={() => handleDelete(a)} title="Șterge act (doar owner)" style={{ padding: '4px 9px', background: G.red + '22', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>🗑</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ContracteComerciale({ profile }) {
   const [contracte, setContracte] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1375,6 +1662,7 @@ export default function ContracteComerciale({ profile }) {
   const [editContract, setEditContract] = useState(null)
   const [liniiContract, setLiniiContract] = useState(null)
   const [facturiContract, setFacturiContract] = useState(null)
+  const [acteContract, setActeContract] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
   const [expanded, setExpanded] = useState({})  // { [contractMamaId]: true=deschis }; gol = toate închise
 
@@ -1392,15 +1680,25 @@ export default function ContracteComerciale({ profile }) {
     loadAll()
   }
 
+  async function handleViewPdf(c) {
+    if (!c?.pdf_path) return
+    const { data, error } = await supabase.storage.from('contracte-terti').createSignedUrl(c.pdf_path, 120)
+    if (error || !data?.signedUrl) { alert('Nu am putut deschide PDF-ul: ' + (error?.message || 'lipsă fișier')); return }
+    window.open(data.signedUrl, '_blank')
+  }
+
 
   async function loadAll() {
     setLoading(true)
-    const [{ data: contracteData }, { data: sitesData }, { data: benData }] = await Promise.all([
+    const [{ data: contracteData }, { data: sitesData }, { data: benData }, { data: pdfData }] = await Promise.all([
       supabase.from('v_contracte_cu_linii').select('*').order('sens').order('created_at', { ascending: false }),
       supabase.from('sites').select('id, name, denumire_qr').order('name'),
       supabase.from('beneficiari').select('id, nume').eq('activ', true).order('nume'),
+      supabase.from('contracte_terti').select('id, pdf_path'),
     ])
-    setContracte(contracteData || [])
+    // v_contracte_cu_linii nu expune pdf_path → îl alipim din tabela de bază
+    const pdfMap = new Map((pdfData || []).map(r => [r.id, r.pdf_path]))
+    setContracte((contracteData || []).map(c => ({ ...c, pdf_path: pdfMap.get(c.id) || null })))
     setSites(sitesData || [])
     setBeneficiari(benData || [])
     setLoading(false)
@@ -1564,6 +1862,8 @@ export default function ContracteComerciale({ profile }) {
                       onEdit={c => { setEditContract(c); setModalOpen(true) }}
                       onViewLinii={c => setLiniiContract(c)}
                       onViewFacturi={c => setFacturiContract(c)}
+                      onViewActe={c => setActeContract(c)}
+                      onViewPdf={handleViewPdf}
                       onChangeStatus={handleChangeStatus} />
                     {childDs.length > 0 && expanded[c.id] && (
                       <div style={{ marginLeft: 24, marginBottom: 8 }}>
@@ -1588,6 +1888,7 @@ export default function ContracteComerciale({ profile }) {
                               </div>
                               <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                                 <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>↑ {fmtRON(d.valoare_lei)}</div>
+                                {Number(d.valoare_eur || 0) > 0 && <div style={{ fontSize: 11, fontWeight: 700, color: G.muted }}>💶 {fmtEUR(d.valoare_eur)}</div>}
                                 <ProgresBar procent={d.procent_realizat} compact />
                                 {(Number(d.total_facturat) > 0 || Number(d.total_platit) > 0) && (
                                   <div style={{ fontSize: 10.5, textAlign: 'right', lineHeight: 1.5 }} title="Facturat/Plătit = cu TVA (cont 401). Rămas de facturat = NET, comparabil cu valoarea contractului (fără TVA).">
@@ -1610,9 +1911,11 @@ export default function ContracteComerciale({ profile }) {
                                     <option value="reziliat" style={{ background: G.surface, color: G.text }}>Reziliat</option>
                                   </select>
                                 )}
-                                <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                                <div style={{ display: 'flex', gap: 4, marginTop: 2, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                                   <button onClick={() => setFacturiContract(d)} style={{ padding: '3px 8px', background: G.green + '22', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📄 Facturi ({d.nr_facturi_subc || 0})</button>
                                   <button onClick={() => setLiniiContract(d)} style={{ padding: '3px 8px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📋 Linii</button>
+                                  <button onClick={() => setActeContract(d)} style={{ padding: '3px 8px', background: G.purple + '22', color: G.purple, border: `1px solid ${G.purple}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>⚡ Acte ({d.nr_acte_aditionale || 0})</button>
+                                  {d.pdf_path && <button onClick={() => handleViewPdf(d)} style={{ padding: '3px 8px', background: G.text + '18', color: G.text, border: `1px solid ${G.border}`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📎 PDF</button>}
                                   {isOwner && <button onClick={() => { setEditContract(d); setModalOpen(true) }} style={{ padding: '3px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>✏️</button>}
                                 </div>
                               </div>
@@ -1641,6 +1944,8 @@ export default function ContracteComerciale({ profile }) {
                   onEdit={c => { setEditContract(c); setModalOpen(true) }}
                   onViewLinii={c => setLiniiContract(c)}
                   onViewFacturi={c => setFacturiContract(c)}
+                  onViewActe={c => setActeContract(c)}
+                  onViewPdf={handleViewPdf}
                   onChangeStatus={handleChangeStatus} />
               ))}
             </div>
@@ -1676,6 +1981,17 @@ export default function ContracteComerciale({ profile }) {
           contract={facturiContract}
           profile={profile}
           onClose={() => setFacturiContract(null)}
+          onChanged={loadAll}
+        />
+      )}
+
+      {/* Modal acte adiționale */}
+      {acteContract && (
+        <ModalActeAditionale
+          contract={acteContract}
+          profile={profile}
+          canManage={canManage}
+          onClose={() => setActeContract(null)}
           onChanged={loadAll}
         />
       )}
