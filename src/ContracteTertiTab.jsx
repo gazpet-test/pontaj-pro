@@ -953,6 +953,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     termen_executie_zile: item.termen_executie_zile || '',
     data_termen: item.data_termen || '',
     pdf_path: item.pdf_path || '',
+    status: item.status || 'draft',
+    observatii: item.observatii || '',
     santiere_ids: (item.santiere_ids || []).map(Number),
   })
   const [saving, setSaving] = useState(false)
@@ -1049,8 +1051,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       data_semnare: f.data_semnare || null,
       termen_executie_zile: f.termen_executie_zile ? Number(f.termen_executie_zile) : null,
       data_termen: f.data_termen || null,
-      status: f.status,
-      observatii: f.observatii.trim() || null,
+      status: f.status || 'draft',
+      observatii: (f.observatii || '').trim() || null,
       pdf_path: f.pdf_path || null,
       // Multi-șantier (12.06.2026): contractele de furnizare/prestări deservesc mai multe lucrări
       santiere_ids: f.santiere_ids.length ? f.santiere_ids : null,
