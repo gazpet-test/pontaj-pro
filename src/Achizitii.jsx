@@ -11,7 +11,6 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
-import CereriInterneProiect from './CereriInterneProiect.jsx'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 // Logo PDF: variantă CROP din logo.js — FĂRĂ blocul cu datele firmei (decizie Razvan 12.06,
@@ -416,10 +415,11 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
     livrare_site_id: comanda.livrare_site_id || '',
     moneda: comanda.moneda || 'EUR',
     confirmare_juridica: !!comanda.confirmare_juridica,
+    fara_formular: !!comanda.fara_formular,
     observatii: comanda.observatii || '',
   } : {
     proiect_id:'', furnizor_id:'', persoana_contact:'', telefon_contact:'',
-    livrare_tip:'santier', livrare_site_id:'', moneda:'EUR', confirmare_juridica:false, observatii:'',
+    livrare_tip:'santier', livrare_site_id:'', moneda:'EUR', confirmare_juridica:false, fara_formular:false, observatii:'',
   })
   const [linii, setLinii] = useState(() => editMode && comanda.linii?.length
     ? comanda.linii.slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => ({ _k: uniq8(), denumire: l.denumire || '', um: l.um || '', cantitate: l.cantitate ?? '', pret_unitar: l.pret_unitar ?? '', termen_livrare: l.termen_livrare || '', observatii: l.observatii || '' }))
@@ -479,6 +479,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         confirmare_juridica: form.confirmare_juridica,
         confirmare_juridica_de: form.confirmare_juridica ? profile.id : null,
         confirmare_juridica_la: form.confirmare_juridica ? new Date().toISOString() : null,
+        fara_formular: form.fara_formular,
         observatii: form.observatii.trim() || null,
         updated_at: new Date().toISOString(),
       }
@@ -486,8 +487,12 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         // Numerotare atomică CMD_{COD_PROIECT}_{NNN}
         const { data: nr, error: eNr } = await supabase.rpc('fn_next_numar_comanda_furnizor', { p_proiect_id: form.proiect_id ? Number(form.proiect_id) : null })
         if (eNr) throw eNr
+        // „Fără formular" (telefonic) → emitere directă, fără draft/aprobare/PDF
+        const extra = form.fara_formular
+          ? { status: 'emisa', data_emitere: new Date().toISOString().slice(0,10), emisa_de: profile.id, emisa_la: new Date().toISOString() }
+          : { status: 'draft' }
         const { data: ins, error: eIns } = await supabase.from('comenzi_furnizor')
-          .insert({ ...header, numar_comanda: nr, status: 'draft' }).select('id').single()
+          .insert({ ...header, numar_comanda: nr, ...extra }).select('id').single()
         if (eIns) throw eIns
         comandaId = ins.id
       } else {
@@ -508,7 +513,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
       }))
       const { error: eLin } = await supabase.from('comenzi_furnizor_linii').insert(rows)
       if (eLin) throw eLin
-      showToast(editMode ? 'Comandă actualizată.' : 'Comandă salvată ca draft.')
+      showToast(editMode ? 'Comandă actualizată.' : (form.fara_formular ? 'Comandă telefonică emisă direct.' : 'Comandă salvată ca draft.'))
       onSaved(comandaId, apoiTrimite)
     } catch (e) {
       console.error(e)
@@ -591,7 +596,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
             <div style={{ fontSize:13, color:G.muted }}>TOTAL comandă:</div>
             <div style={{ fontSize:18, fontWeight:800, color:G.achizitii }}>{fmtNr(total)} {form.moneda}</div>
           </div>
-          {total > 0 && (
+          {total > 0 && !form.fara_formular && (
             <div style={{ marginTop:8, padding:'9px 13px', borderRadius:8, fontSize:12.5, fontWeight:600,
               background: vaSariAprobarea ? G.green + '15' : G.yellow + '15',
               border: `1px solid ${vaSariAprobarea ? G.green + '55' : G.yellow + '55'}`,
@@ -608,6 +613,12 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
           <textarea style={{ ...S.input, minHeight:60, resize:'vertical' }} value={form.observatii} onChange={e => set('observatii', e.target.value)} />
         </div>
 
+        {/* Comandă telefonică — emitere directă, fără PDF/aprobare */}
+        <label style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, cursor:'pointer', padding:'10px 13px', background:G.bg, borderRadius:8, border:`1px solid ${form.fara_formular ? G.orange : G.border2}` }}>
+          <input type="checkbox" checked={form.fara_formular} onChange={e => set('fara_formular', e.target.checked)} style={{ width:18, height:18, accentColor:G.orange }} />
+          <span style={{ fontSize:13, fontWeight:600, color: form.fara_formular ? G.orange : G.text }}>📞 Fără formular (comandă telefonică) — se emite direct, fără PDF de aprobat</span>
+        </label>
+
         <label style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, cursor:'pointer', padding:'10px 13px', background:G.bg, borderRadius:8, border:`1px solid ${form.confirmare_juridica ? G.achizitii : G.border2}` }}>
           <input type="checkbox" checked={form.confirmare_juridica} onChange={e => set('confirmare_juridica', e.target.checked)} style={{ width:18, height:18, accentColor:G.achizitii }} />
           <span style={{ fontSize:13, fontWeight:600 }}>⚖️ Confirm verificarea juridică a furnizorului (date firmă, bonitate, contract valid)</span>
@@ -615,8 +626,12 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
 
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:20 }}>
           <button onClick={onClose} disabled={saving} style={S.btnS}>Anulează</button>
-          <button onClick={() => save(false)} disabled={saving} style={{ ...S.btnS, fontWeight:700 }}>{saving ? '...' : '💾 Salvează draft'}</button>
-          <button onClick={() => save(true)} disabled={saving} style={{ ...S.btnP, background:G.achizitii, color:'#0D1117' }}>{saving ? '...' : vaSariAprobarea ? '🚀 Trimite (emitere directă)' : '🚀 Trimite în aprobare'}</button>
+          {form.fara_formular ? (
+            <button onClick={() => save(false)} disabled={saving} style={{ ...S.btnP, background:G.orange, color:'#0D1117' }}>{saving ? '...' : '📞 Emite comanda telefonică'}</button>
+          ) : (<>
+            <button onClick={() => save(false)} disabled={saving} style={{ ...S.btnS, fontWeight:700 }}>{saving ? '...' : '💾 Salvează draft'}</button>
+            <button onClick={() => save(true)} disabled={saving} style={{ ...S.btnP, background:G.achizitii, color:'#0D1117' }}>{saving ? '...' : vaSariAprobarea ? '🚀 Trimite (emitere directă)' : '🚀 Trimite în aprobare'}</button>
+          </>)}
         </div>
       </div>
     </div>
@@ -845,7 +860,7 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
         {/* Documente generate */}
         {(c.pdf_comanda_path || c.pv_receptie_path || c.pv_predare_path || c.poza_depozitare_path) && (
           <div style={{ marginTop:14, display:'flex', gap:10, flexWrap:'wrap' }}>
-            {c.pdf_comanda_path && <button onClick={() => openStorageFile(c.pdf_comanda_path)} style={{ ...S.btnS, fontSize:14 }}>📄 PDF Comandă</button>}
+            {c.pdf_comanda_path && !c.fara_formular && <button onClick={() => openStorageFile(c.pdf_comanda_path)} style={{ ...S.btnS, fontSize:14 }}>📄 PDF Comandă</button>}
             {c.pv_receptie_path && <button onClick={() => openStorageFile(c.pv_receptie_path)} style={{ ...S.btnS, fontSize:14 }}>📄 PV Recepție</button>}
             {c.pv_predare_path && <button onClick={() => openStorageFile(c.pv_predare_path)} style={{ ...S.btnS, fontSize:14 }}>📄 PV Predare</button>}
             {c.poza_depozitare_path && <button onClick={() => openStorageFile(c.poza_depozitare_path)} style={{ ...S.btnS, fontSize:14 }}>📸 Poză depozitare</button>}
@@ -981,7 +996,6 @@ export default function AchizitiiPage() {
   const [fStatus, setFStatus] = useState('')
   const [fProiect, setFProiect] = useState('')
   const [fSearch, setFSearch] = useState('')
-  const [cereriDeschise, setCereriDeschise] = useState(0)
 
   // ── Profil propriu (pattern Administrativ) ──────────────────────────────
   useEffect(() => {
@@ -1007,7 +1021,7 @@ export default function AchizitiiPage() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr, rCnt] = await Promise.all([
+      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr] = await Promise.all([
         supabase.from('comenzi_furnizor').select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').order('created_at', { ascending: false }),
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id, mp_employee_id').eq('activ', true).order('nume'),
         supabase.from('logistica_furnizori').select('id, nume, cui, contact, activ').eq('activ', true).order('nume'),
@@ -1017,7 +1031,6 @@ export default function AchizitiiPage() {
         supabase.from('profiles').select('id, name').order('name'),
         supabase.from('employees').select('id, name'),
         supabase.from('comenzi_aprobatori').select('*').order('ordine'),
-        supabase.from('comenzi').select('id', { count: 'exact', head: true }).eq('tip', 'executie').eq('status', 'deschis'),
       ])
       setComenzi(rCom.data || [])
       setProiecte(rProj.data || [])
@@ -1027,7 +1040,6 @@ export default function AchizitiiPage() {
       setProfilesList(rProf.data || [])
       setEmployees(rEmp.data || [])
       setAprobatori(rApr.data || [])
-      setCereriDeschise(rCnt.count || 0)
     } catch (e) {
       console.error(e)
       showToast('Eroare la încărcare date: ' + (e.message || e), 'error')
@@ -1417,7 +1429,7 @@ export default function AchizitiiPage() {
           <div style={{ fontSize:22, fontWeight:800 }}>Achiziții</div>
           <div style={{ fontSize:12.5, color:G.muted }}>Comenzi furnizor · Aprobare · Recepție · Intrare în stoc</div>
         </div>
-        {canCreate && tab !== 'aprobatori' && tab !== 'cereri_interne' && (
+        {canCreate && tab !== 'aprobatori' && (
           <button onClick={() => { setEditComanda(null); setShowForm(true) }} style={{ ...S.btnP, background:G.achizitii, color:'#0D1117', fontSize:15 }}>＋ Comandă furnizor nouă</button>
         )}
       </div>
@@ -1453,13 +1465,14 @@ export default function AchizitiiPage() {
 
       {/* Tab bar */}
       <div style={{ display:'flex', gap:8, marginBottom:14, borderBottom:`1px solid ${G.border}`, paddingBottom:0 }}>
-        {[['comenzi', '🛒 Comenzi active'], ['arhiva', `📁 Arhivă${arhivaCount ? ` (${arhivaCount})` : ''}`], ['cereri_interne', `📋 Cereri interne${cereriDeschise ? ` 🔴 ${cereriDeschise}` : ''}`], ...(isOwner ? [['aprobatori', '👥 Aprobatori']] : [])].map(([k, t]) => (
+        {[['comenzi', '🛒 Comenzi active'], ['arhiva', `📁 Arhivă${arhivaCount ? ` (${arhivaCount})` : ''}`], ...(isOwner ? [['aprobatori', '👥 Aprobatori']] : [])].map(([k, t]) => (
           <button key={k} onClick={() => { setTab(k); setFStatus('') }} style={{ background:'transparent', border:'none', borderBottom:`3px solid ${tab === k ? G.achizitii : 'transparent'}`, color: tab === k ? G.text : G.muted, padding:'10px 16px', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>{t}</button>
         ))}
         <div style={{ flex:1 }} />
+        <div style={{ fontSize:11, color:G.dim, alignSelf:'center', paddingRight:4 }}>Cereri interne MP → în curând (Faza 4)</div>
       </div>
 
-      {(tab === 'comenzi' || tab === 'arhiva') && (<>
+      {tab !== 'aprobatori' && (<>
         {/* KPI — pe proiectul selectat */}
         {tab === 'comenzi' && (
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14 }}>
@@ -1537,10 +1550,6 @@ export default function AchizitiiPage() {
           })}
         </div>
       </>)}
-
-      {tab === 'cereri_interne' && (
-        <CereriInterneProiect inbox />
-      )}
 
       {tab === 'aprobatori' && isOwner && (
         <AprobatoriTab aprobatori={aprobatori} profilesList={profilesList} employees={employees} onReload={loadAll} showToast={showToast} />

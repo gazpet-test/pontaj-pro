@@ -58,6 +58,18 @@ const STATUS_INFO = {
   respinsa:   { label:'Respinsă',     emoji:'❌', color:G.red    },
 }
 const FLOW_STEPS = ['deschis','in_lucru','comandata','in_tranzit','ajunsa','finalizata']
+// Statusuri comenzi_furnizor (PO) — pentru chip-urile de repartizare pe linii
+const PO_STATUS_INFO = {
+  draft:        { label:'draft',        color:G.muted   },
+  in_aprobare:  { label:'în aprobare',  color:G.yellow  },
+  emisa:        { label:'emisă',        color:G.purple  },
+  in_tranzit:   { label:'în tranzit',   color:G.orange  },
+  ajunsa:       { label:'ajunsă',       color:G.orange  },
+  receptionata: { label:'recepționată', color:G.green   },
+  in_stoc:      { label:'în stoc',      color:G.green   },
+  anulata:      { label:'anulată',      color:G.dim     },
+  respinsa:     { label:'respinsă',     color:G.red     },
+}
 const ARHIVA_ST = ['finalizata','anulata','respinsa']
 const PRIO_INFO = {
   urgenta: { label:'Urgentă', color:G.red },
@@ -280,11 +292,25 @@ function CerereFormModal({ initial, proiect, defaultDepart, onClose, onSaved, sh
 }
 
 // ─── Modal detaliu + acțiuni ─────────────────────────────────────────────────
-function CerereDetailModal({ cerere, proiect, profilesMap, canProcess, isOwner, onClose, onAction, onEdit, onPdf, busy }) {
+function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriMap, linkMap, canProcess, isOwner, onClose, onAction, onEdit, onPdf, onGenereaza, busy }) {
   const [livrare, setLivrare] = useState(cerere.data_livrare_estimata || '')
   const si = STATUS_INFO[cerere.status] || {}
   const solicitant = profilesMap[cerere.deschis_de] || '—'
   const linii = (cerere.linii || []).slice().sort((a,b)=>(a.display_order||0)-(b.display_order||0))
+
+  // Repartizare pe furnizori (panel Achiziții)
+  const canRepartiza = canProcess && ['in_lucru','comandata','in_tranzit','ajunsa'].includes(cerere.status)
+  const liniiNereparizate = linii.filter(l => !(linkMap[l.id]?.length))
+  const [selLinii, setSelLinii] = useState([])
+  const [repFurnizor, setRepFurnizor] = useState('')
+  const [repFaraForm, setRepFaraForm] = useState(false)
+  const [repTermen, setRepTermen] = useState('')
+  const [repLivrare, setRepLivrare] = useState('sediu')
+  const toggleLinie = (id) => setSelLinii(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id])
+  const doGenereaza = () => {
+    onGenereaza(cerere, selLinii, Number(repFurnizor)||null, repFaraForm, repTermen||null, repLivrare)
+    setSelLinii([]); setRepFurnizor(''); setRepFaraForm(false); setRepTermen('')
+  }
 
   const Btn = ({ children, color=G.blue, onClick }) => (
     <button onClick={onClick} disabled={busy} style={{ ...S.btnS, borderColor:color+'66', color }}>{children}</button>
@@ -319,20 +345,47 @@ function CerereDetailModal({ cerere, proiect, profilesMap, canProcess, isOwner, 
               <thead><tr style={{ background:G.bg }}>
                 <th style={{ padding:'8px 10px', textAlign:'left', color:G.muted, width:34 }}>#</th>
                 <th style={{ padding:'8px 10px', textAlign:'left', color:G.muted }}>Denumire</th>
-                <th style={{ padding:'8px 10px', textAlign:'right', color:G.muted, width:80 }}>Cant.</th>
-                <th style={{ padding:'8px 10px', textAlign:'left', color:G.muted, width:70 }}>UM</th>
-                <th style={{ padding:'8px 10px', textAlign:'left', color:G.muted }}>Specificații</th>
+                <th style={{ padding:'8px 10px', textAlign:'right', color:G.muted, width:70 }}>Cant.</th>
+                <th style={{ padding:'8px 10px', textAlign:'left', color:G.muted, width:56 }}>UM</th>
+                <th style={{ padding:'8px 10px', textAlign:'left', color:G.muted, width:240 }}>Repartizare</th>
               </tr></thead>
               <tbody>
-                {linii.map((l,i) => (
-                  <tr key={l.id||i} style={{ borderTop:`1px solid ${G.border}` }}>
-                    <td style={{ padding:'8px 10px', color:G.dim }}>{i+1}</td>
-                    <td style={{ padding:'8px 10px' }}>{l.denumire}</td>
-                    <td style={{ padding:'8px 10px', textAlign:'right' }}>{l.cantitate}</td>
-                    <td style={{ padding:'8px 10px' }}>{l.um || '—'}</td>
-                    <td style={{ padding:'8px 10px', color:G.muted }}>{l.observatii || '—'}</td>
-                  </tr>
-                ))}
+                {linii.map((l,i) => {
+                  const pos = linkMap[l.id] || []
+                  return (
+                    <tr key={l.id||i} style={{ borderTop:`1px solid ${G.border}`, verticalAlign:'top' }}>
+                      <td style={{ padding:'8px 10px', color:G.dim }}>{i+1}</td>
+                      <td style={{ padding:'8px 10px' }}>
+                        {l.denumire}
+                        {l.observatii && <div style={{ fontSize:11, color:G.dim, marginTop:2 }}>{l.observatii}</div>}
+                      </td>
+                      <td style={{ padding:'8px 10px', textAlign:'right' }}>{l.cantitate}</td>
+                      <td style={{ padding:'8px 10px' }}>{l.um || '—'}</td>
+                      <td style={{ padding:'8px 10px' }}>
+                        {pos.length === 0 ? (
+                          <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:11, fontWeight:700,
+                            padding:'3px 9px', borderRadius:14, background:G.yellow+'22', color:G.yellow }}>
+                            ⚠ Nerepartizat
+                          </span>
+                        ) : (
+                          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                            {pos.map(p => {
+                              const psi = PO_STATUS_INFO[p.status] || { label:p.status, color:G.muted }
+                              return (
+                                <span key={p.id} style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, fontWeight:600,
+                                  padding:'3px 9px', borderRadius:14, background:psi.color+'1A', color:psi.color, border:`1px solid ${psi.color}44` }}>
+                                  → {p.numar} ({psi.label})
+                                  {p.furnizor_id && <span style={{ color:G.muted }}>· {furnizoriMap[p.furnizor_id] || '?'}</span>}
+                                  {p.fara_formular && <span title="Comandă telefonică">📞</span>}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -347,6 +400,64 @@ function CerereDetailModal({ cerere, proiect, profilesMap, canProcess, isOwner, 
               <button style={S.btnS} disabled={busy} onClick={()=>onAction('set_livrare', { data_livrare_estimata: livrare || null })}>Salvează termen</button>
             </div>
           )}
+
+          {/* Panel repartizare pe furnizori (Achiziții) — statusul cererii îl sincronizează motorul BD */}
+          {canRepartiza && (
+            <div style={{ ...S.card, padding:16, borderColor:G.purple+'44', background:G.purple+'0D' }}>
+              <div style={{ fontSize:13, fontWeight:800, color:G.purple, marginBottom:10 }}>📦 Repartizare pe furnizori</div>
+              {liniiNereparizate.length === 0 ? (
+                <div style={{ fontSize:13, color:G.muted }}>Toate liniile au fost repartizate către furnizori. ✅</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                    {liniiNereparizate.map(l => (
+                      <label key={l.id} style={{ display:'flex', alignItems:'center', gap:9, fontSize:13, cursor:'pointer' }}>
+                        <input type="checkbox" checked={selLinii.includes(l.id)} onChange={()=>toggleLinie(l.id)}
+                          style={{ width:16, height:16, accentColor:G.purple, cursor:'pointer' }} />
+                        <span>{l.denumire} <span style={{ color:G.muted }}>· {l.cantitate} {l.um||''}</span></span>
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 170px', gap:10 }}>
+                    <div>
+                      <label style={{ fontSize:12, color:G.muted }}>Furnizor</label>
+                      <select style={S.input} value={repFurnizor} onChange={e=>setRepFurnizor(e.target.value)}>
+                        <option value="">— alege furnizor —</option>
+                        {furnizori.map(f => <option key={f.id} value={f.id}>{f.nume}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize:12, color:G.muted }}>Termen livrare</label>
+                      <input style={S.input} type="date" value={repTermen||''} onChange={e=>setRepTermen(e.target.value)} />
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:16, flexWrap:'wrap' }}>
+                    <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer' }}>
+                      <input type="checkbox" checked={repFaraForm} onChange={e=>setRepFaraForm(e.target.checked)}
+                        style={{ width:16, height:16, accentColor:G.orange, cursor:'pointer' }} />
+                      <span style={{ color:repFaraForm?G.orange:G.text }}>📞 Fără formular (telefonic)</span>
+                    </label>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <label style={{ fontSize:12, color:G.muted }}>Livrare:</label>
+                      <select style={{ ...S.input, width:130 }} value={repLivrare} onChange={e=>setRepLivrare(e.target.value)}>
+                        <option value="sediu">Sediu</option>
+                        <option value="santier">Șantier</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ fontSize:11, color:G.dim }}>
+                    {repFaraForm
+                      ? 'Comanda se emite direct (status „emisă", fără PDF de aprobat).'
+                      : 'Comanda se creează ca „draft" în Achiziții pentru emitere/PDF.'}
+                  </div>
+                  <button onClick={doGenereaza} disabled={busy || !selLinii.length || !repFurnizor}
+                    style={{ ...S.btnP, background: (selLinii.length && repFurnizor) ? G.purple : G.border2, alignSelf:'flex-start' }}>
+                    🛒 Generează comandă furnizor{selLinii.length ? ` (${selLinii.length})` : ''}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Acțiuni */}
@@ -356,15 +467,11 @@ function CerereDetailModal({ cerere, proiect, profilesMap, canProcess, isOwner, 
             {cerere.status==='deschis' && <Btn color={G.yellow} onClick={()=>onEdit(cerere)}>✏️ Editează</Btn>}
           </div>
           <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-            {/* Acțiuni Achiziții (flux) */}
+            {/* Preluare / respingere (motorul sincronizează restul stărilor din comenzile furnizor) */}
             {canProcess && cerere.status==='deschis' && <>
               <Btn color={G.yellow} onClick={()=>onAction('preia')}>🔧 Preia (în lucru)</Btn>
               <Btn color={G.red} onClick={()=>onAction('status', { status:'respinsa' })}>❌ Respinge</Btn>
             </>}
-            {canProcess && cerere.status==='in_lucru' && <Btn color={G.purple} onClick={()=>onAction('status', { status:'comandata' })}>🛒 Marchează comandată</Btn>}
-            {canProcess && cerere.status==='comandata' && <Btn color={G.orange} onClick={()=>onAction('status', { status:'in_tranzit' })}>🚚 În tranzit</Btn>}
-            {canProcess && cerere.status==='in_tranzit' && <Btn color={G.orange} onClick={()=>onAction('status', { status:'ajunsa' })}>📦 Ajunsă</Btn>}
-            {canProcess && cerere.status==='ajunsa' && <Btn color={G.green} onClick={()=>onAction('status', { status:'finalizata' })}>✅ Finalizează</Btn>}
             {/* Anulare: creator pe deschis, sau owner oricând (non-final) */}
             {(isOwner || cerere.status==='deschis') && !['finalizata','anulata','respinsa'].includes(cerere.status) &&
               <Btn color={G.dim} onClick={()=>onAction('status', { status:'anulata' })}>⛔ Anulează</Btn>}
@@ -386,6 +493,8 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
   const [cereri, setCereri] = useState([])
   const [employees, setEmployees] = useState([])
   const [profilesList, setProfilesList] = useState([])
+  const [furnizori, setFurnizori] = useState([])
+  const [liniiLegate, setLiniiLegate] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -420,18 +529,31 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
     try {
       let qCer = supabase.from('comenzi').select('*, linii:comanda_linii(*)').eq('tip','executie').order('created_at', { ascending:false })
       if (!inbox) qCer = qCer.eq('proiect_id', proiectId)
-      const [rProiList, rCer, rEmp, rProf] = await Promise.all([
+      const [rProiList, rCer, rEmp, rProf, rFurn] = await Promise.all([
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id, mp_employee_id').order('nume'),
         qCer,
         supabase.from('employees').select('id, name, department, departament_hr'),
         supabase.from('profiles').select('id, name'),
+        supabase.from('logistica_furnizori').select('id, nume, contact, activ').eq('activ', true).order('nume'),
       ])
       const list = rProiList.data || []
       setProiecteList(list)
       setProiect(proiectId ? (list.find(p => p.id === Number(proiectId)) || null) : null)
-      setCereri(rCer.data || [])
+      const cer = rCer.data || []
+      setCereri(cer)
       setEmployees(rEmp.data || [])
       setProfilesList(rProf.data || [])
+      setFurnizori(rFurn.data || [])
+      // Comenzi-furnizor legate de liniile acestor cereri (pentru chip-uri repartizare)
+      const lineIds = cer.flatMap(c => (c.linii || []).map(l => l.id)).filter(Boolean)
+      if (lineIds.length) {
+        const { data: rLeg } = await supabase.from('comenzi_furnizor_linii')
+          .select('comanda_linie_id, comanda_furnizor:comenzi_furnizor(id, numar_comanda, status, furnizor_id, fara_formular)')
+          .in('comanda_linie_id', lineIds)
+        setLiniiLegate(rLeg || [])
+      } else {
+        setLiniiLegate([])
+      }
     } catch (e) {
       console.error(e); showToast('Eroare la încărcare: ' + (e.message || e), 'error')
     } finally { setLoading(false) }
@@ -441,6 +563,19 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
 
   const profilesMap = useMemo(() => Object.fromEntries(profilesList.map(p => [p.id, p.name])), [profilesList])
   const proiecteMap = useMemo(() => Object.fromEntries(proiecteList.map(p => [p.id, p])), [proiecteList])
+  const furnizoriMap = useMemo(() => Object.fromEntries(furnizori.map(f => [f.id, f.nume])), [furnizori])
+  // lineId → [{ id, numar, status, furnizor_id, fara_formular }]
+  const linkMap = useMemo(() => {
+    const m = {}
+    for (const row of liniiLegate) {
+      const cf = row.comanda_furnizor
+      if (!cf) continue
+      const lid = row.comanda_linie_id
+      if (!m[lid]) m[lid] = []
+      m[lid].push({ id:cf.id, numar:cf.numar_comanda, status:cf.status, furnizor_id:cf.furnizor_id, fara_formular:cf.fara_formular })
+    }
+    return m
+  }, [liniiLegate])
   const defaultDepart = useMemo(() => {
     if (!proiect?.mp_employee_id) return 'Execuție'
     const e = employees.find(x => x.id === proiect.mp_employee_id)
@@ -491,7 +626,48 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
     } finally { setBusy(false) }
   }, [cereri, detailId, loadAll, showToast])
 
-  // ── PDF cerere (identic Excel + semnături auto) ──────────────────────────
+  // ── Generează comandă furnizor din liniile selectate ale cererii ──────────
+  // Motorul BD (trigger trg_cfl_sync_cereri) face rollup-ul de status automat.
+  const generateComandaFurnizor = useCallback(async (cerere, lineIds, furnizorId, faraFormular, termen, livrareTip) => {
+    if (!lineIds?.length) { showToast('Selectează cel puțin o linie', 'error'); return }
+    if (!furnizorId) { showToast('Alege furnizorul', 'error'); return }
+    setBusy(true)
+    try {
+      // 1) număr comandă
+      const { data: numar, error: eN } = await supabase.rpc('fn_next_numar_comanda_furnizor', { p_proiect_id: cerere.proiect_id })
+      if (eN) throw eN
+      // 2) header comandă furnizor
+      const today = new Date().toISOString().slice(0,10)
+      const { data: cf, error: eH } = await supabase.from('comenzi_furnizor').insert({
+        numar_comanda: numar,
+        status: faraFormular ? 'emisa' : 'draft',
+        livrare_tip: livrareTip || 'sediu',
+        moneda: 'RON',
+        proiect_id: cerere.proiect_id,
+        furnizor_id: furnizorId,
+        fara_formular: !!faraFormular,
+        data_emitere: faraFormular ? today : null,
+        data_livrare_estimata: termen || null,
+      }).select('id').single()
+      if (eH) throw eH
+      // 3) liniile selectate (snapshot denumire/cantitate/um din cerere)
+      const cerLinii = (cerere.linii || []).filter(l => lineIds.includes(l.id))
+      const rows = cerLinii.map((l, i) => ({
+        comanda_furnizor_id: cf.id,
+        comanda_linie_id: l.id,
+        denumire: l.denumire,
+        cantitate: Number(l.cantitate) || 1,
+        um: l.um || null,
+        display_order: i,
+      }))
+      const { error: eL } = await supabase.from('comenzi_furnizor_linii').insert(rows)
+      if (eL) throw eL
+      showToast(`Comandă ${numar} generată (${rows.length} ${rows.length===1?'linie':'linii'}) ✅`)
+      await loadAll()
+    } catch (e) {
+      console.error(e); showToast('Eroare la generare: ' + (e.message || e), 'error')
+    } finally { setBusy(false) }
+  }, [loadAll, showToast])
   const getSemnaturaDataURL = useCallback(async (name) => {
     const emp = findEmployeeByName(name, employees)
     if (!emp) return null
@@ -737,6 +913,9 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
           cerere={detailCerere}
           proiect={proiecteMap[detailCerere.proiect_id] || proiect}
           profilesMap={profilesMap}
+          furnizori={furnizori}
+          furnizoriMap={furnizoriMap}
+          linkMap={linkMap}
           canProcess={canProcess}
           isOwner={isOwner}
           busy={busy}
@@ -744,6 +923,7 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
           onAction={doAction}
           onEdit={(c)=>{ setDetailId(null); setEditCerere(c); setShowForm(true) }}
           onPdf={generatePdf}
+          onGenereaza={generateComandaFurnizor}
         />
       )}
     </div>
