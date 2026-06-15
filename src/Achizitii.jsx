@@ -981,7 +981,7 @@ export default function AchizitiiPage() {
   const [fStatus, setFStatus] = useState('')
   const [fProiect, setFProiect] = useState('')
   const [fSearch, setFSearch] = useState('')
-  const [cereriProiectId, setCereriProiectId] = useState('')
+  const [cereriDeschise, setCereriDeschise] = useState(0)
 
   // ── Profil propriu (pattern Administrativ) ──────────────────────────────
   useEffect(() => {
@@ -1007,7 +1007,7 @@ export default function AchizitiiPage() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr] = await Promise.all([
+      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr, rCnt] = await Promise.all([
         supabase.from('comenzi_furnizor').select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').order('created_at', { ascending: false }),
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id, mp_employee_id').eq('activ', true).order('nume'),
         supabase.from('logistica_furnizori').select('id, nume, cui, contact, activ').eq('activ', true).order('nume'),
@@ -1017,6 +1017,7 @@ export default function AchizitiiPage() {
         supabase.from('profiles').select('id, name').order('name'),
         supabase.from('employees').select('id, name'),
         supabase.from('comenzi_aprobatori').select('*').order('ordine'),
+        supabase.from('comenzi').select('id', { count: 'exact', head: true }).eq('tip', 'executie').eq('status', 'deschis'),
       ])
       setComenzi(rCom.data || [])
       setProiecte(rProj.data || [])
@@ -1026,6 +1027,7 @@ export default function AchizitiiPage() {
       setProfilesList(rProf.data || [])
       setEmployees(rEmp.data || [])
       setAprobatori(rApr.data || [])
+      setCereriDeschise(rCnt.count || 0)
     } catch (e) {
       console.error(e)
       showToast('Eroare la încărcare date: ' + (e.message || e), 'error')
@@ -1451,7 +1453,7 @@ export default function AchizitiiPage() {
 
       {/* Tab bar */}
       <div style={{ display:'flex', gap:8, marginBottom:14, borderBottom:`1px solid ${G.border}`, paddingBottom:0 }}>
-        {[['comenzi', '🛒 Comenzi active'], ['arhiva', `📁 Arhivă${arhivaCount ? ` (${arhivaCount})` : ''}`], ['cereri_interne', '📋 Cereri interne'], ...(isOwner ? [['aprobatori', '👥 Aprobatori']] : [])].map(([k, t]) => (
+        {[['comenzi', '🛒 Comenzi active'], ['arhiva', `📁 Arhivă${arhivaCount ? ` (${arhivaCount})` : ''}`], ['cereri_interne', `📋 Cereri interne${cereriDeschise ? ` 🔴 ${cereriDeschise}` : ''}`], ...(isOwner ? [['aprobatori', '👥 Aprobatori']] : [])].map(([k, t]) => (
           <button key={k} onClick={() => { setTab(k); setFStatus('') }} style={{ background:'transparent', border:'none', borderBottom:`3px solid ${tab === k ? G.achizitii : 'transparent'}`, color: tab === k ? G.text : G.muted, padding:'10px 16px', fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>{t}</button>
         ))}
         <div style={{ flex:1 }} />
@@ -1537,18 +1539,7 @@ export default function AchizitiiPage() {
       </>)}
 
       {tab === 'cereri_interne' && (
-        <div>
-          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
-            <label style={{ fontSize:13, color:G.muted, fontWeight:600 }}>Proiect:</label>
-            <select value={cereriProiectId} onChange={e => setCereriProiectId(e.target.value)} style={{ ...S.input, width:'auto', minWidth:300 }}>
-              <option value="">— Alege proiectul —</option>
-              {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? `[${p.cod_intern}] ` : ''}{p.nume}</option>)}
-            </select>
-          </div>
-          {cereriProiectId
-            ? <CereriInterneProiect proiectId={Number(cereriProiectId)} />
-            : <div style={{ ...S.card, padding:40, textAlign:'center', color:G.muted }}>Alege un proiect ca să vezi cererile lui interne de achiziții.</div>}
-        </div>
+        <CereriInterneProiect inbox />
       )}
 
       {tab === 'aprobatori' && isOwner && (
