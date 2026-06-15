@@ -13,6 +13,7 @@ import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import ContracteTertiTab from './ContracteTertiTab.jsx'
 import ContracteComerciale from './ContracteComerciale.jsx'
+import DashboardSubcontractori from './DashboardSubcontractori.jsx'
 import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 
 const G = {
@@ -495,6 +496,7 @@ export default function AdministrativPage() {
     { key: 'ticketing',  icon: '🎫', label: 'Ticketing' },
     { key: 'contracte_terti', icon: '📃', label: 'Contracte cu terți' },
     { key: 'contracte',  icon: '📜', label: 'Contracte comerciale' },
+    { key: 'subcontractori', icon: '🔗', label: 'Dashboard subcontractori' },
     { key: 'costuri_ai', icon: '💰', label: 'Costuri AI', ownerOnly: true },
   ].filter(t => !t.ownerOnly || isOwner)
 
@@ -540,11 +542,14 @@ export default function AdministrativPage() {
       {/* Etapa 15 Faza 2: Tab Contracte Comerciale — upstream/downstream + linii */}
       {tab === 'contracte' && <ContracteComerciale profile={profile} />}
 
+      {/* 15.06.2026: Dashboard Subcontractori ↔ Contracte (consolidare mamă / firmă) */}
+      {tab === 'subcontractori' && <DashboardSubcontractori profile={profile} />}
+
       {/* Etapa 16: Tab Documente firmă (funcțional cu AI parser + alerte expirare) */}
       {tab === 'documente' && <TabDocumenteFirma />}
 
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'documente' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'furnizori' && '🏢'}
