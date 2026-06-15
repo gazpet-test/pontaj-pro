@@ -1,6 +1,8 @@
 // ===========================================================================
 // BUG REPORT BUTTON 🐛 — buton flotant global (stânga-jos)
 // 15.06.2026 v1 — Raportare bug-uri APP de către useri → tichet în departament IT
+// 15.06.2026 v2 — Etichetă „Buuuuuuuug :(" deasupra butonului + comutator
+//   🐛 Nu merge ceva (eroare_erp) / 💡 Vreau o îmbunătățire (cerere_functie)
 //   Descriere obligatorie (min 30 car.) + poză obligatorie (captură viewport
 //   cu html2canvas SAU upload/„fă poză" pe mobil). Auto: pagina + userAgent +
 //   rezoluție în metadata. Notificare la owners prin trigger fn_tichete_notif_on_insert
@@ -21,6 +23,7 @@ const MIN_DESC = 30
 
 export default function BugReportButton({ profile }) {
   const [open, setOpen] = useState(false)
+  const [tip, setTip] = useState('bug')          // 'bug' | 'feature'
   const [hidden, setHidden] = useState(false)   // ascunde widgetul în timpul capturii
   const [desc, setDesc] = useState('')
   const [pozaFile, setPozaFile] = useState(null)
@@ -33,7 +36,7 @@ export default function BugReportButton({ profile }) {
   if (!profile) return null
 
   function reset() {
-    setDesc(''); setPozaFile(null); setPozaPreview(''); setErr(''); setDoneNr('')
+    setDesc(''); setPozaFile(null); setPozaPreview(''); setErr(''); setDoneNr(''); setTip('bug')
   }
   function close() { setOpen(false); reset() }
 
@@ -84,18 +87,20 @@ export default function BugReportButton({ profile }) {
     setSaving(true); setErr('')
     try {
       const pagina = window.location.pathname + (window.location.search || '')
+      const eFeature = tip === 'feature'
       const payload = {
         departament: 'it',
-        subcategorie: 'eroare_erp',
-        titlu: ('🐛 ' + d.split('\n')[0]).slice(0, 90),
-        descriere: d + `\n\n— Raportat automat din pagina: ${pagina}`,
+        subcategorie: eFeature ? 'cerere_functie' : 'eroare_erp',
+        titlu: ((eFeature ? '💡 ' : '🐛 ') + d.split('\n')[0]).slice(0, 90),
+        descriere: d + `\n\n— ${eFeature ? 'Cerere îmbunătățire' : 'Bug'} raportat(ă) automat din pagina: ${pagina}`,
         urgenta: 'normal',
         status: 'deschis',
         deschis_de: profile?.id,
         entitate_tip: 'pagina_app',
         entitate_descriere: pagina,
         metadata: {
-          sursa: 'bug_report',
+          sursa: eFeature ? 'feature_request' : 'bug_report',
+          tip,
           pagina,
           url: window.location.href,
           user_agent: navigator.userAgent,
@@ -129,21 +134,30 @@ export default function BugReportButton({ profile }) {
 
   return (
     <>
-      {/* Buton flotant 🐛 — stânga-jos (Nenicu e dreapta-jos) */}
-      {!hidden && (
-        <button
-          onClick={() => setOpen(true)}
-          title="Raportează un bug"
-          style={{
-            position: 'fixed', bottom: 24, left: 24, width: 52, height: 52, borderRadius: '50%',
-            background: G.surface, color: '#fff', border: `2px solid ${G.orange}`,
-            boxShadow: '0 6px 20px rgba(0,0,0,.45)', cursor: 'pointer', fontSize: 24,
-            display: open ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 9996, transition: 'transform .15s',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)' }}
-          onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
-        >🐛</button>
+      {/* Buton flotant 🐛 + etichetă — stânga-jos (Nenicu e dreapta-jos) */}
+      {!hidden && !open && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: 24, zIndex: 9996,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+        }}>
+          <div style={{
+            background: G.surface, color: G.orange, border: `1px solid ${G.orange}66`,
+            borderRadius: 8, padding: '3px 10px', fontSize: 12, fontWeight: 800,
+            whiteSpace: 'nowrap', boxShadow: '0 3px 10px rgba(0,0,0,.4)',
+          }}>Buuuuuuuug :(</div>
+          <button
+            onClick={() => setOpen(true)}
+            title="Raportează un bug sau o cerere"
+            style={{
+              width: 52, height: 52, borderRadius: '50%',
+              background: G.surface, color: '#fff', border: `2px solid ${G.orange}`,
+              boxShadow: '0 6px 20px rgba(0,0,0,.45)', cursor: 'pointer', fontSize: 24,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform .15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)' }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
+          >🐛</button>
+        </div>
       )}
 
       {/* Modal */}
@@ -157,27 +171,44 @@ export default function BugReportButton({ profile }) {
             width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', padding: 22,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>🐛 Raportează un bug</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>🐛 Raportează un bug / o cerere</div>
               <button onClick={close} disabled={saving} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1 }}>×</button>
             </div>
 
             {doneNr ? (
               <div style={{ textAlign: 'center', padding: '20px 8px' }}>
                 <div style={{ fontSize: 40, marginBottom: 10 }}>✅</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: G.text, marginBottom: 6 }}>Mulțumim! Bug-ul a fost trimis.</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: G.text, marginBottom: 6 }}>Mulțumim! {tip === 'feature' ? 'Cererea a fost trimisă' : 'Bug-ul a fost trimis'}.</div>
                 <div style={{ fontSize: 13, color: G.muted, marginBottom: 18 }}>Tichet <b style={{ color: G.text }}>{doneNr}</b> creat în departamentul IT. Se rezolvă cât de repede.</div>
                 <button onClick={close} style={{ padding: '9px 20px', background: G.orange, color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>Închide</button>
               </div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: G.muted, marginBottom: 12, lineHeight: 1.5 }}>
-                  Pagina curentă se atașează automat. Scrie clar ce ai făcut, ce te așteptai și ce s-a întâmplat de fapt.
+                  Pagina curentă se atașează automat. Spune clar despre ce e vorba.
+                </div>
+
+                {/* Comutator: bug vs cerere îmbunătățire */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                  {[
+                    { val: 'bug', label: '🐛 Nu merge ceva', color: G.red },
+                    { val: 'feature', label: '💡 Vreau o îmbunătățire', color: G.yellow },
+                  ].map(o => (
+                    <button key={o.val} type="button" onClick={() => setTip(o.val)} style={{
+                      flex: 1, padding: '10px 8px', borderRadius: 8, cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
+                      background: tip === o.val ? o.color + '22' : G.bg,
+                      color: tip === o.val ? o.color : G.muted,
+                      border: `2px solid ${tip === o.val ? o.color : G.border}`,
+                    }}>{o.label}</button>
+                  ))}
                 </div>
 
                 <label style={{ fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, display: 'block', marginBottom: 4 }}>Descriere *</label>
                 <textarea
                   value={desc} onChange={e => setDesc(e.target.value)} rows={4}
-                  placeholder="Ex: pe pagina Logistică, când apăs pe Import EvoGPS, modalul nu se deschide și apare ecran alb..."
+                  placeholder={tip === 'feature'
+                    ? 'Ex: pe pagina Contracte aș vrea un buton de export în Excel și o coloană cu data scadenței...'
+                    : 'Ex: pe pagina Logistică, când apăs pe Import EvoGPS, modalul nu se deschide și apare ecran alb...'}
                   style={{ width: '100%', padding: '10px 12px', background: G.bg, color: G.text, border: `1px solid ${descLen > 0 && descLen < MIN_DESC ? G.yellow : G.border}`, borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', colorScheme: 'dark' }} />
                 <div style={{ fontSize: 11, color: descLen < MIN_DESC ? G.yellow : G.green, marginTop: 3, marginBottom: 14 }}>
                   {descLen < MIN_DESC ? `Încă ${MIN_DESC - descLen} caractere` : `✓ ${descLen} caractere`}
@@ -206,7 +237,7 @@ export default function BugReportButton({ profile }) {
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                   <button onClick={close} disabled={saving} style={{ padding: '9px 16px', background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer', fontSize: 13 }}>Anulează</button>
                   <button onClick={handleSubmit} disabled={!canSubmit} style={{ padding: '9px 18px', background: canSubmit ? G.orange : G.border, color: '#fff', border: 'none', borderRadius: 8, cursor: canSubmit ? 'pointer' : 'not-allowed', fontSize: 13, fontWeight: 700, opacity: saving ? 0.7 : 1 }}>
-                    {saving ? '⏳ Se trimite...' : '🐛 Trimite bug-ul'}
+                    {saving ? '⏳ Se trimite...' : (tip === 'feature' ? '💡 Trimite cererea' : '🐛 Trimite bug-ul')}
                   </button>
                 </div>
               </>
