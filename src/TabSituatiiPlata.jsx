@@ -120,7 +120,10 @@ function _parseBorderouSimple(rows) {
     if (!nrSL) { const m = rowText.match(/situati[ae]\s+de\s+plat[aă]\s+nr\.?\s*(\d+)/i); if(m) nrSL=m[1] }
     if (!lunaAn) { const m = rowText.match(/luna\s+([a-zăâîșț]+\s+\d{4})/i); if(m) lunaAn=m[1].toUpperCase() }
     if (!contractNr) { const m = rowText.match(/contract\s+nr\.?\s*([\d\/\.]+)/i); if(m) contractNr=m[1] }
-    if (!totalBaza && (rowText.includes('total general') || rowText.includes('total valoare conform'))) {
+    // Ultimul "TOTAL GENERAL" / "Total valoare conform" câștigă: în borderourile
+    // ajustate pot exista mai multe TOTAL GENERAL (subtotaluri obiect + total general),
+    // iar ajustarea se aplică pe totalul general FINAL (ultimul), nu pe primul.
+    if (rowText.includes('total general') || rowText.includes('total valoare conform')) {
       const nums = row.filter(c => typeof c==='number' && c > 1000)
       if (nums.length) totalBaza = nums[nums.length-1]
     }
