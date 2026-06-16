@@ -187,7 +187,14 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
   useEffect(() => {
     if (!(slDefault && isNew)) return
     ;(async () => {
-      const val = parseFloat(slDefault.valoare_ajustata_lei || slDefault.valoare_baza_lei || 0)
+      // Valoarea facturii = valoarea ajustată (bază cu OS + ajustare). Obiectul din lista SL
+      // poate să nu conțină valoare_ajustata_lei → o luăm PROASPĂT din BD ca să nu cădem pe bază.
+      let val = parseFloat(slDefault.valoare_ajustata_lei || slDefault.valoare_baza_lei || 0)
+      try {
+        const { data: slF } = await supabase.from('executie_situatii_plata')
+          .select('valoare_baza_lei, valoare_ajustata_lei').eq('id', slDefault.id).single()
+        if (slF) val = parseFloat(slF.valoare_ajustata_lei || slF.valoare_baza_lei || 0)
+      } catch(e) { /* fallback la valorile din obiectul listei */ }
       const luna = LUNI[(slDefault.luna||1)-1]
       // Referință contract = numar_contract + data semnare (ex. "228/14.04.2025").
       // OS-ul NU apare ca linie — valoarea (valoare_ajustata_lei) include deja bază (cu OS) + ajustare.
