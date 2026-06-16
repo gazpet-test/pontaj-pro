@@ -195,10 +195,13 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           .select('valoare_baza_lei, valoare_ajustata_lei').eq('id', slDefault.id).single()
         if (slF) val = parseFloat(slF.valoare_ajustata_lei || slF.valoare_baza_lei || 0)
       } catch(e) { /* fallback la valorile din obiectul listei */ }
-      const luna = LUNI[(slDefault.luna||1)-1]
-      // Referință contract = numar_contract + data semnare (ex. "228/14.04.2025").
+      // Contract terț (Administrativ → Contracte cu Terți): nume + nr + dată + beneficiar.
       // OS-ul NU apare ca linie — valoarea (valoare_ajustata_lei) include deja bază (cu OS) + ajustare.
+      // Luna NU se mai pune pe linie: data înregistrării SL ≠ luna aferentă lucrărilor.
       let contractRef = slDefault.nr_contract || ''
+      let contractDenumire = ''
+      let benef = null
+      let termenPlata = null
       try {
         let cid = slDefault.contract_id
         if (slDefault.proiect_id) {
@@ -206,20 +209,39 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           if (pr) { cid = cid || pr.contract_id; if (!contractRef) contractRef = pr.nr_contract || '' }
         }
         if (cid) {
-          const { data: ct } = await supabase.from('contracte_terti').select('numar_contract, data_semnare').eq('id', cid).single()
-          if (ct?.numar_contract) {
-            const dS = ct.data_semnare ? new Date(ct.data_semnare).toLocaleDateString('ro-RO') : ''
-            contractRef = dS ? `${ct.numar_contract}/${dS}` : ct.numar_contract
+          const { data: ct } = await supabase.from('contracte_terti')
+            .select('numar_contract, data_semnare, denumire, termen_plata_zile, beneficiar_id').eq('id', cid).single()
+          if (ct) {
+            if (ct.numar_contract) {
+              const dS = ct.data_semnare ? new Date(ct.data_semnare).toLocaleDateString('ro-RO') : ''
+              contractRef = dS ? `${ct.numar_contract}/${dS}` : ct.numar_contract
+            }
+            contractDenumire = ct.denumire || ''
+            termenPlata = ct.termen_plata_zile
+            if (ct.beneficiar_id) {
+              const { data: b } = await supabase.from('beneficiari')
+                .select('id,nume,cif,iban_principal,banca,sediu').eq('id', ct.beneficiar_id).single()
+              if (b) benef = b
+            }
           }
         }
-      } catch(e) { /* fallback: rămâne nr_contract simplu */ }
-      const lunaPart = luna ? ` (${luna} ${slDefault.an})` : ''
-      const den = `Contravaloare lucrări conf. situație de lucrări nr.${slDefault.nr_situatie}${lunaPart} — contract ${contractRef||'—'}`
+      } catch(e) { /* fallback: rămâne nr_contract simplu, fără denumire/beneficiar */ }
+      const denPart = contractDenumire ? ` — ${contractDenumire}` : ''
+      const den = `Contravaloare lucrări conf. situație de lucrări nr.${slDefault.nr_situatie}${denPart} — contract ${contractRef||'—'}`
       setForm(f => ({
         ...f,
         articole: [{ nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:val.toFixed(2), valoare:val.toFixed(2), tva_pct:TVA_DEFAULT }],
         proiect_id: String(slDefault.proiect_id||''),
         situatie_plata_ids: [slDefault.id],
+        ...(termenPlata ? { termen_plata_zile: termenPlata } : {}),
+        ...(benef ? {
+          beneficiar_id:    benef.id,
+          beneficiar_nume:  benef.nume || '',
+          beneficiar_cif:   benef.cif || '',
+          beneficiar_iban:  benef.iban_principal || '',
+          beneficiar_banca: benef.banca || '',
+          beneficiar_sediu: benef.sediu || '',
+        } : {}),
       }))
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
