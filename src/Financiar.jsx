@@ -81,7 +81,7 @@ function buildInvoiceHTML(f) {
       <td style="width:38%;vertical-align:top;padding-right:12px">
         <div style="font-size:15px;font-weight:800;color:#1F6FEB">Gazpet-Instal</div>
         <div style="font-size:9px;color:#555;margin-top:2px">S.C. GAZPET INSTAL SRL</div>
-        <div style="font-size:9px;margin-top:4px">Reg.Com: J2007001650296</div>
+        <div style="font-size:12px;font-weight:700;margin-top:4px">Reg.Com: J2007001650296</div>
         <div>C.I.F.: RO22029920</div>
         <div>Sediul: Ploiești, Str. Fluturilor nr. 34, Prahova</div>
         <div>Cont: RO25 BTRL RONC RT0T 1801 7E01</div>
@@ -99,7 +99,7 @@ function buildInvoiceHTML(f) {
       <td style="width:38%;vertical-align:top;padding-left:12px;text-align:right">
         <div style="font-size:10px;color:#888;margin-bottom:2px">Beneficiar:</div>
         <div style="font-size:13px;font-weight:700">${f.beneficiar_nume||''}</div>
-        <div style="font-size:9px;color:#555;margin-top:4px">C.I.F.: ${f.beneficiar_cif||''}</div>
+        <div style="font-size:12px;font-weight:700;color:#222;margin-top:4px">C.I.F.: ${f.beneficiar_cif||''}</div>
         <div>Sediul: ${f.beneficiar_sediu||''}</div>
         <div>Cont IBAN: ${f.beneficiar_iban||''}</div>
         <div>Banca: ${f.beneficiar_banca||''}</div>
@@ -157,6 +157,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     serie:       item?.serie || 'GAZ',
     nr:          item?.nr || '',
     data:        item?.data || new Date().toISOString().slice(0,10),
+    an:          item?.an || Number(String(item?.data || new Date().toISOString()).slice(0,4)) || new Date().getFullYear(),
     beneficiar_id:    item?.beneficiar_id || '',
     beneficiar_nume:  item?.beneficiar_nume || '',
     beneficiar_cif:   item?.beneficiar_cif  || '',
@@ -344,7 +345,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       }
       if (err) throw err
       showToast(isNew ? 'Factură creată!' : 'Factură salvată!', 'ok')
-      if (andPDF && savedId) await handleGenPDF(savedId, { ...payload, id: savedId, nr: nrFinal })
+      if (andPDF && savedId) await handleGenPDF(savedId, { ...payload, id: savedId, nr: nrFinal, an: parseInt(form.an) || new Date().getFullYear() })
       onSaved()
     } catch(e) { showToast('Eroare: ' + e.message, 'err') }
     finally { setSaving(false) }
@@ -393,7 +394,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       const fileName = titlu
         ? `Factura_GAZPET_${nrComplet}_${proiectClean ? proiectClean + '_' : ''}${benef}_${titlu}_${dataFmt}.pdf`
         : `Factura_GAZPET_${nrComplet}_${proiectClean ? proiectClean + '_' : ''}${benef}_${dataFmt}.pdf`
-      const path = `${fData.an || new Date().getFullYear()}/${fileName}`
+      const anFolder = parseInt(fData.an || form.an) || new Date().getFullYear()
+      const path = `${anFolder}/${fileName}`
       const { error: upErr } = await supabase.storage.from('facturi-emise').upload(path, pdfBlob, { contentType:'application/pdf', upsert:true })
       if (!upErr) {
         await supabase.from('facturi_emise').update({ pdf_path: path, status:'emisa' }).eq('id', facturaId || item?.id)
@@ -441,8 +443,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
 
         <div style={{padding:'18px 22px',display:'flex',flexDirection:'column',gap:14}}>
 
-          {/* Serie + Nr + Data */}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+          {/* Serie + Nr + Data + An */}
+          <div style={{display:'grid',gridTemplateColumns:'1.2fr 1.2fr 1.4fr 0.8fr',gap:12}}>
             <div>
               <label style={S.lbl}>Serie</label>
               <select value={form.serie} onChange={e=>set('serie',e.target.value)} style={fieldStyle}>
@@ -455,7 +457,14 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             </div>
             <div>
               <label style={S.lbl}>Data</label>
-              <input type="date" value={form.data} onChange={e=>set('data',e.target.value)} style={fieldStyle} />
+              <input type="date" value={form.data}
+                onChange={e=>{ const v=e.target.value; setForm(f=>({...f, data:v, an: v ? Number(v.slice(0,4)) : f.an})) }}
+                style={fieldStyle} />
+            </div>
+            <div>
+              <label style={S.lbl}>An <span style={{color:G.dim,fontSize:10}}>(folder PDF)</span></label>
+              <input value={form.an} onChange={e=>set('an', e.target.value.replace(/\D/g,'').slice(0,4))}
+                style={fieldStyle} type="number" placeholder={String(new Date().getFullYear())} />
             </div>
           </div>
 
