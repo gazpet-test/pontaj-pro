@@ -521,7 +521,10 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
 
   const isOwner = profile?.is_owner === true
   const canCreate = isOwner || profile?.can_create_comenzi === true || profile?.can_process_achizitii === true
-  const canProcess = isOwner || profile?.can_process_achizitii === true
+  // Repartizarea/procesarea pe furnizori se face DOAR din Achiziții (mod inbox).
+  // În Execuție (vederea managerului de proiect, inbox=false) cererea e read-only pe
+  // partea de sourcing — MP-ul vede cererea + statusul comenzilor, dar nu repartizează.
+  const canProcess = inbox && (isOwner || profile?.can_process_achizitii === true)
 
   const loadAll = useCallback(async () => {
     if (!inbox && !proiectId) return
