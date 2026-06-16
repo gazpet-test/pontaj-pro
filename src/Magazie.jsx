@@ -643,6 +643,260 @@ function PredaModal({ echip, employees, busy, onPreda, onClose }) {
 // ════════════════════════════════════════════════════════════════
 // SHELL cu tab-uri
 // ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// TAB: Transfer sediu ↔ proiect (creare + istoric) — Faza 6.2a
+// ════════════════════════════════════════════════════════════════
+const LOC_LABEL = (tip, id, proiecteMap) =>
+  tip === 'sediu' ? '🏢 Sediu (Magazie centrală)'
+  : `🏗️ ${proiecteMap[id]?.cod_intern ? proiecteMap[id].cod_intern + ' · ' : ''}${proiecteMap[id]?.nume || 'Proiect #' + id}`
+
+function TransferTab() {
+  const [loading, setLoading] = useState(true)
+  const [transferuri, setTransferuri] = useState([])
+  const [linii, setLinii] = useState({})        // transfer_id -> [linii]
+  const [proiecte, setProiecte] = useState([])
+  const [profiles, setProfiles] = useState({})
+  const [showForm, setShowForm] = useState(false)
+  const [expanded, setExpanded] = useState(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [rT, rL, rP] = await Promise.all([
+        supabase.from('transferuri_interne').select('*').order('created_at', { ascending:false }),
+        supabase.from('transferuri_linii').select('*'),
+        supabase.from('executie_proiecte').select('id, nume, cod_intern'),
+      ])
+      const tList = rT.data || []
+      const lMap = {}
+      ;(rL.data || []).forEach(l => { (lMap[l.transfer_id] ||= []).push(l) })
+      const uids = [...new Set(tList.map(t => t.created_by).filter(Boolean))]
+      let pmap = {}
+      if (uids.length) {
+        const { data: ps } = await supabase.from('profiles').select('id, name').in('id', uids)
+        ;(ps || []).forEach(p => { pmap[p.id] = p.name })
+      }
+      setTransferuri(tList); setLinii(lMap); setProiecte(rP.data || []); setProfiles(pmap)
+    } catch (e) { console.error(e) } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
+
+  const STATUS_META = {
+    livrat:     { label:'Livrat',     color:G.green },
+    in_tranzit: { label:'În tranzit', color:G.yellow },
+    pregatit:   { label:'Pregătit',   color:G.blue },
+    anulat:     { label:'Anulat',     color:G.dim },
+  }
+
+  return (
+    <>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, color:G.muted }}>Mutări de materiale între sediu și proiecte. Stocul se actualizează automat la confirmare (audit complet în istoricul fiecărui material).</div>
+        <button onClick={() => setShowForm(true)} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a' }}>+ Transfer nou</button>
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă transferurile...</div>}
+      {!loading && !transferuri.length && (
+        <div style={{ ...S.card, padding:40, textAlign:'center', color:G.muted }}>
+          Niciun transfer încă. Apasă „+ Transfer nou" pentru a muta materiale între locații.
+        </div>
+      )}
+
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {transferuri.map(t => {
+          const sm = STATUS_META[t.status] || { label:t.status, color:G.muted }
+          const tLinii = linii[t.id] || []
+          const isOpen = expanded === t.id
+          return (
+            <div key={t.id} style={{ ...S.card, padding:0, overflow:'hidden' }}>
+              <div onClick={() => setExpanded(isOpen ? null : t.id)} style={{ padding:'14px 16px', cursor:'pointer', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+                <div style={{ fontSize:12, fontWeight:800, color:G.dim }}>#{t.id}</div>
+                <div style={{ flex:1, minWidth:200, display:'flex', alignItems:'center', gap:8, fontSize:13.5, fontWeight:600 }}>
+                  <span>{LOC_LABEL(t.de_la_locatie_tip, t.de_la_locatie_id, proiecteMap)}</span>
+                  <span style={{ color:G.magazie, fontWeight:800 }}>→</span>
+                  <span>{LOC_LABEL(t.la_locatie_tip, t.la_locatie_id, proiecteMap)}</span>
+                </div>
+                <div style={{ fontSize:12, color:G.muted }}>{tLinii.length} {tLinii.length === 1 ? 'material' : 'materiale'}</div>
+                <span style={{ fontSize:11.5, fontWeight:700, color:sm.color, background:sm.color + '1c', padding:'3px 10px', borderRadius:20 }}>{sm.label}</span>
+                <div style={{ fontSize:12, color:G.dim, minWidth:90, textAlign:'right' }}>{fmtData(t.data_sosire || t.created_at)}</div>
+                <div style={{ color:G.dim, fontSize:12 }}>{isOpen ? '▲' : '▼'}</div>
+              </div>
+              {isOpen && (
+                <div style={{ borderTop:`1px solid ${G.border}`, padding:'12px 16px', background:G.bg }}>
+                  {tLinii.map(l => (
+                    <div key={l.id} style={{ display:'flex', justifyContent:'space-between', padding:'6px 0', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+                      <span>{l.material_denumire}</span>
+                      <span style={{ fontWeight:700 }}>{fmtNr(l.cantitate)} {l.um || ''}</span>
+                    </div>
+                  ))}
+                  {t.observatii && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>📝 {t.observatii}</div>}
+                  <div style={{ fontSize:11.5, color:G.dim, marginTop:8 }}>
+                    {t.created_by && profiles[t.created_by] ? `Creat de ${profiles[t.created_by]} · ` : ''}{fmtDataOra(t.created_at)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {showForm && (
+        <TransferFormModal
+          proiecte={proiecte}
+          proiecteMap={proiecteMap}
+          onClose={() => setShowForm(false)}
+          onDone={() => { setShowForm(false); load() }}
+        />
+      )}
+    </>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// MODAL: Creare + execuție transfer → fn_transfer_executa
+// ════════════════════════════════════════════════════════════════
+function TransferFormModal({ proiecte, proiecteMap, onClose, onDone }) {
+  const [deLaTip, setDeLaTip] = useState('sediu')
+  const [deLaId, setDeLaId] = useState(null)
+  const [laTip, setLaTip] = useState('proiect')
+  const [laId, setLaId] = useState(null)
+  const [obs, setObs] = useState('')
+  const [stocSursa, setStocSursa] = useState([])
+  const [loadingStoc, setLoadingStoc] = useState(false)
+  const [linii, setLinii] = useState([])     // [{material_denumire, um, cantitate, disponibil}]
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  // încarcă stocul sursei când se schimbă sursa
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLoadingStoc(true); setLinii([])
+      try {
+        let q = supabase.from('stocuri').select('*')
+          .eq('locatie_tip', deLaTip).gt('cantitate', 0).order('material_denumire')
+        q = deLaId == null ? q.is('locatie_id', null) : q.eq('locatie_id', deLaId)
+        const { data } = await q
+        if (!cancelled) setStocSursa(data || [])
+      } catch (e) { console.error(e) } finally { if (!cancelled) setLoadingStoc(false) }
+    })()
+    return () => { cancelled = true }
+  }, [deLaTip, deLaId])
+
+  const sameLoc = deLaTip === laTip && (deLaTip === 'sediu' || deLaId === laId)
+  const destOk = laTip === 'sediu' || laId != null
+  const srcOk = deLaTip === 'sediu' || deLaId != null
+
+  const adaugaLinie = (s) => {
+    if (linii.some(l => l.material_denumire === s.material_denumire)) return
+    setLinii(prev => [...prev, { material_denumire: s.material_denumire, um: s.um, cantitate: '', disponibil: Number(s.cantitate) }])
+  }
+  const setCant = (i, v) => setLinii(prev => prev.map((l, idx) => idx === i ? { ...l, cantitate: v } : l))
+  const removeLinie = (i) => setLinii(prev => prev.filter((_, idx) => idx !== i))
+
+  const liniiValide = linii.length > 0 && linii.every(l => Number(l.cantitate) > 0 && Number(l.cantitate) <= l.disponibil)
+  const valid = srcOk && destOk && !sameLoc && liniiValide
+
+  const executa = async () => {
+    if (!valid) { setErr('Verifică sursa, destinația și cantitățile (≤ disponibil).'); return }
+    setBusy(true); setErr('')
+    try {
+      const payload = linii.map(l => ({ material_denumire: l.material_denumire, um: l.um || null, cantitate: Number(l.cantitate) }))
+      const { data, error } = await supabase.rpc('fn_transfer_executa', {
+        p_de_la_tip: deLaTip,
+        p_de_la_id: deLaTip === 'sediu' ? null : deLaId,
+        p_la_tip: laTip,
+        p_la_id: laTip === 'sediu' ? null : laId,
+        p_obs: obs.trim() || null,
+        p_linii: payload,
+      })
+      if (error) throw error
+      onDone(data)
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  const LocPicker = ({ tip, id, setTip, setId, label }) => (
+    <div style={{ flex:1, minWidth:200 }}>
+      <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>{label}</label>
+      <div style={{ display:'flex', gap:6 }}>
+        <select value={tip} onChange={e => { setTip(e.target.value); setId(null) }} style={{ ...S.input, flex:'0 0 110px' }}>
+          <option value="sediu">🏢 Sediu</option>
+          <option value="proiect">🏗️ Proiect</option>
+        </select>
+        {tip === 'proiect' && (
+          <select value={id ?? ''} onChange={e => setId(e.target.value ? Number(e.target.value) : null)} style={{ ...S.input, flex:1 }}>
+            <option value="">— alege proiect —</option>
+            {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? p.cod_intern + ' · ' : ''}{p.nume}</option>)}
+          </select>
+        )}
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }} onClick={onClose}>
+      <div style={{ ...S.card, width:'min(680px,100%)', maxHeight:'90vh', overflowY:'auto', padding:22 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:16 }}>🔄 Transfer nou</div>
+
+        <div style={{ display:'flex', gap:12, marginBottom:6, flexWrap:'wrap', alignItems:'flex-end' }}>
+          <LocPicker tip={deLaTip} id={deLaId} setTip={setDeLaTip} setId={setDeLaId} label="De la (sursă)" />
+          <div style={{ fontSize:20, color:G.magazie, fontWeight:800, paddingBottom:8 }}>→</div>
+          <LocPicker tip={laTip} id={laId} setTip={setLaTip} setId={setLaId} label="Către (destinație)" />
+        </div>
+        {sameLoc && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>⚠️ Sursa și destinația sunt identice.</div>}
+
+        <div style={{ marginTop:12, marginBottom:8, fontSize:13, fontWeight:700, color:G.text }}>Materiale din stocul sursei</div>
+        {loadingStoc && <div style={{ padding:16, textAlign:'center', color:G.muted, fontSize:13 }}>Se încarcă stocul...</div>}
+        {!loadingStoc && !stocSursa.length && <div style={{ padding:16, textAlign:'center', color:G.muted, fontSize:13, background:G.bg, borderRadius:8 }}>Sursa nu are stoc disponibil.</div>}
+        {!loadingStoc && stocSursa.length > 0 && (
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:12 }}>
+            {stocSursa.map(s => {
+              const added = linii.some(l => l.material_denumire === s.material_denumire)
+              return (
+                <button key={s.id} onClick={() => adaugaLinie(s)} disabled={added} style={{
+                  ...S.btnS, fontSize:12, padding:'5px 10px', opacity: added ? .4 : 1,
+                  borderColor: added ? G.border2 : G.magazie + '66', color: added ? G.dim : G.text,
+                }}>+ {s.material_denumire} <span style={{ color:G.dim }}>({fmtNr(s.cantitate)} {s.um})</span></button>
+              )
+            })}
+          </div>
+        )}
+
+        {linii.length > 0 && (
+          <div style={{ ...S.card, background:G.bg, padding:12, marginBottom:12 }}>
+            {linii.map((l, i) => {
+              const over = Number(l.cantitate) > l.disponibil
+              return (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 0', borderBottom: i < linii.length-1 ? `1px solid ${G.border}` : 'none' }}>
+                  <div style={{ flex:1, fontSize:13, fontWeight:600 }}>{l.material_denumire}</div>
+                  <div style={{ fontSize:11, color:G.dim }}>disp: {fmtNr(l.disponibil)} {l.um}</div>
+                  <input type="number" min="0" step="any" value={l.cantitate} onChange={e => setCant(i, e.target.value)}
+                    placeholder="cant." style={{ ...S.input, width:90, padding:'6px 8px', borderColor: over ? G.red : G.border2 }} />
+                  <button onClick={() => removeLinie(i)} style={{ ...S.btnS, padding:'5px 9px', color:G.red }}>✕</button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Observații (opțional)</label>
+          <input style={S.input} value={obs} onChange={e => setObs(e.target.value)} placeholder="ex: aprovizionare șantier, retur material neutilizat…" />
+        </div>
+
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:10 }}>{err}</div>}
+
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={executa} disabled={busy || !valid} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', opacity: (busy || !valid) ? .6 : 1 }}>{busy ? '...' : '✓ Execută transfer'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function MagaziePage() {
   const [tab, setTab] = useState('materiale')
   return (
@@ -656,7 +910,7 @@ export default function MagaziePage() {
       </div>
 
       <div style={{ display:'flex', gap:8, marginBottom:18 }}>
-        {[['materiale', '📋 Materiale'], ['echipamente', '🧰 Echipamente']].map(([k, l]) => (
+        {[['materiale', '📋 Materiale'], ['echipamente', '🧰 Echipamente'], ['transfer', '🔄 Transfer']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding:'9px 18px', fontSize:14, fontWeight:700, cursor:'pointer', borderRadius:8,
             background: tab === k ? G.magazie + '22' : 'transparent',
@@ -668,6 +922,7 @@ export default function MagaziePage() {
 
       {tab === 'materiale' && <MaterialeTab />}
       {tab === 'echipamente' && <EchipamenteTab />}
+      {tab === 'transfer' && <TransferTab />}
     </div>
   )
 }
