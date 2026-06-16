@@ -487,12 +487,12 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         // Numerotare atomică CMD_{COD_PROIECT}_{NNN}
         const { data: nr, error: eNr } = await supabase.rpc('fn_next_numar_comanda_furnizor', { p_proiect_id: form.proiect_id ? Number(form.proiect_id) : null })
         if (eNr) throw eNr
-        // „Fără formular" (telefonic) → emitere directă, fără draft/aprobare/PDF
-        const extra = form.fara_formular
-          ? { status: 'emisa', data_emitere: new Date().toISOString().slice(0,10), emisa_de: profile.id, emisa_la: new Date().toISOString() }
+        // „Fără formular" (telefonic) → emitere DIRECTĂ, skip draft/aprobare + zero PDF
+        const insExtra = form.fara_formular
+          ? { status: 'emisa', data_emitere: new Date().toISOString().slice(0, 10), emisa_de: profile.id }
           : { status: 'draft' }
         const { data: ins, error: eIns } = await supabase.from('comenzi_furnizor')
-          .insert({ ...header, numar_comanda: nr, ...extra }).select('id').single()
+          .insert({ ...header, numar_comanda: nr, ...insExtra }).select('id').single()
         if (eIns) throw eIns
         comandaId = ins.id
       } else {
@@ -513,7 +513,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
       }))
       const { error: eLin } = await supabase.from('comenzi_furnizor_linii').insert(rows)
       if (eLin) throw eLin
-      showToast(editMode ? 'Comandă actualizată.' : (form.fara_formular ? 'Comandă telefonică emisă direct.' : 'Comandă salvată ca draft.'))
+      showToast(editMode ? 'Comandă actualizată.' : (form.fara_formular ? '📞 Comandă telefonică emisă direct.' : 'Comandă salvată ca draft.'))
       onSaved(comandaId, apoiTrimite)
     } catch (e) {
       console.error(e)
@@ -613,21 +613,25 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
           <textarea style={{ ...S.input, minHeight:60, resize:'vertical' }} value={form.observatii} onChange={e => set('observatii', e.target.value)} />
         </div>
 
-        {/* Comandă telefonică — emitere directă, fără PDF/aprobare */}
-        <label style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, cursor:'pointer', padding:'10px 13px', background:G.bg, borderRadius:8, border:`1px solid ${form.fara_formular ? G.orange : G.border2}` }}>
-          <input type="checkbox" checked={form.fara_formular} onChange={e => set('fara_formular', e.target.checked)} style={{ width:18, height:18, accentColor:G.orange }} />
-          <span style={{ fontSize:13, fontWeight:600, color: form.fara_formular ? G.orange : G.text }}>📞 Fără formular (comandă telefonică) — se emite direct, fără PDF de aprobat</span>
-        </label>
-
         <label style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, cursor:'pointer', padding:'10px 13px', background:G.bg, borderRadius:8, border:`1px solid ${form.confirmare_juridica ? G.achizitii : G.border2}` }}>
           <input type="checkbox" checked={form.confirmare_juridica} onChange={e => set('confirmare_juridica', e.target.checked)} style={{ width:18, height:18, accentColor:G.achizitii }} />
           <span style={{ fontSize:13, fontWeight:600 }}>⚖️ Confirm verificarea juridică a furnizorului (date firmă, bonitate, contract valid)</span>
         </label>
 
+        {!editMode && (
+          <label style={{ display:'flex', alignItems:'flex-start', gap:10, marginTop:10, cursor:'pointer', padding:'10px 13px', background:G.bg, borderRadius:8, border:`1px solid ${form.fara_formular ? G.orange : G.border2}` }}>
+            <input type="checkbox" checked={form.fara_formular} onChange={e => set('fara_formular', e.target.checked)} style={{ width:18, height:18, marginTop:1, accentColor:G.orange }} />
+            <span>
+              <span style={{ fontSize:13, fontWeight:700, color: form.fara_formular ? G.orange : G.text }}>📞 Fără formular (comandă telefonică)</span>
+              <div style={{ fontSize:11.5, color:G.muted, marginTop:2 }}>Comanda se EMITE DIRECT, fără draft / aprobare / PDF. Folosește pentru comenzi date la telefon care intră direct în flux (tranzit → ajunsă → recepție).</div>
+            </span>
+          </label>
+        )}
+
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:20 }}>
           <button onClick={onClose} disabled={saving} style={S.btnS}>Anulează</button>
-          {form.fara_formular ? (
-            <button onClick={() => save(false)} disabled={saving} style={{ ...S.btnP, background:G.orange, color:'#0D1117' }}>{saving ? '...' : '📞 Emite comanda telefonică'}</button>
+          {!editMode && form.fara_formular ? (
+            <button onClick={() => save(false)} disabled={saving} style={{ ...S.btnP, background:G.orange, color:'#0D1117' }}>{saving ? '...' : '📞 Emite direct (telefonic)'}</button>
           ) : (<>
             <button onClick={() => save(false)} disabled={saving} style={{ ...S.btnS, fontWeight:700 }}>{saving ? '...' : '💾 Salvează draft'}</button>
             <button onClick={() => save(true)} disabled={saving} style={{ ...S.btnP, background:G.achizitii, color:'#0D1117' }}>{saving ? '...' : vaSariAprobarea ? '🚀 Trimite (emitere directă)' : '🚀 Trimite în aprobare'}</button>
@@ -791,6 +795,7 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
             <Info k="Livrare către" v={ctx.livrareTxt} bold />
             <Info k="Total" v={`${fmtNr(total)} ${c.moneda}`} bold />
             <Info k="Emisă" v={c.data_emitere ? `${fmtData(c.data_emitere)} · ${profilesMap[c.emisa_de] || ''}` : '—'} />
+            {c.fara_formular && <Info k="Tip" v="📞 Comandă telefonică (fără formular/PDF)" bold />}
             <Info k="Verif. juridică" v={c.confirmare_juridica ? `✅ ${profilesMap[c.confirmare_juridica_de] || 'DA'}` : '—'} />
           </div>
         </div>
