@@ -7596,10 +7596,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
   // în loc să mă bazez pe ore_lucrate_efectiv (introdus manual, lipsă la majoritate)
   const aggUtilaj = useMemo(() => {
     const map = new Map()
-    // Pentru consumul real, filtrez DIN NOU pe ultimele 7 zile (independent de perioadaFilter)
-    const sevenDaysAgo = new Date()
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-    const sevenDaysStr = sevenDaysAgo.toISOString().split('T')[0]
+    // Consumul real se calculează pe perioada selectată (vezi selectorul de perioadă de sus)
     
     // PAS 1: Sortez alimentari per utilaj cronologic pentru a putea calcula diff ore corect
     const perUtilajSorted = new Map() // activId -> [alim ordonate cronologic]
@@ -7644,8 +7641,9 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
       x.totalCost += Number(a.pret_total || 0)
       x.rows.push(a)
       
-      // Pentru ultimele 7 zile - calculez ore din diff bord cu alimentarea PRECEDENTĂ
-      if (a.data_alimentare >= sevenDaysStr) {
+      // FIX 16.06.2026: consumul se calculează pe TOATĂ perioada selectată (selectorul de perioadă),
+      // nu pe 7 zile fixe — utilajele se alimentează rar, fereastra de 7z lăsa majoritatea "fără date".
+      { // (păstrez numele litri7z/oreLucrate7z/etc. pentru compatibilitate cu restul codului)
         x.nrAlim7z += 1
         x.litri7z += Number(a.cantitate_litri || 0)
         
@@ -7697,7 +7695,16 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
         else if (abaterePct > x.pragAlerta) stareConsum = 'warning'
         else stareConsum = 'ok'
       }
-      return { ...x, consumReal, abaterePct, stareConsum }
+      let motivInsuf = null
+      if (stareConsum === null) {
+        if (!x.norma) motivInsuf = 'fără normă setată'
+        else if (consumReal === null) {
+          if (x.nrAlim7z < 2) motivInsuf = 'o singură alimentare în perioadă'
+          else if (x.unitateNorma === 'l/100km') motivInsuf = 'fără km bord completat'
+          else motivInsuf = 'fără ore bord completate'
+        }
+      }
+      return { ...x, consumReal, abaterePct, stareConsum, motivInsuf }
     }).sort((a, b) => {
       // Sortare: critic > warning > ok > fără date, apoi descrescător după consum
       const order = { critic: 0, warning: 1, ok: 2, null: 3 }
@@ -7801,8 +7808,8 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
         'Nr alimentări (perioadă)': u.nrAlim,
         'Total litri (perioadă)': u.totalLitri.toFixed(2),
         'Total cost RON (perioadă)': u.totalCost.toFixed(2),
-        'Litri ult. 7 zile': u.litri7z.toFixed(2),
-        'Ore lucrate ult. 7 zile': u.oreLucrate7z.toFixed(2),
+        'Litri (perioadă)': u.litri7z.toFixed(2),
+        'Ore lucrate (perioadă)': u.oreLucrate7z.toFixed(2),
         'Consum real (l/h)': u.consumReal !== null ? u.consumReal.toFixed(2) : '—',
         'Normă (l/h)': u.norma !== null ? u.norma : '—',
         'Abatere %': u.abaterePct !== null ? u.abaterePct.toFixed(1) + '%' : '—',
@@ -8019,7 +8026,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
           {/* Buton export utilaje + notă consum */}
           <div style={{marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
             <div style={{fontSize: 12, color: G.muted}}>
-              <strong style={{color: G.text}}>{aggUtilaj.length}</strong> utilaje · consumul real e calculat pe <strong style={{color: G.text}}>ultimele 7 zile</strong> din perioada selectată. Sortat: critic → warning → ok → date insuficiente.
+              <strong style={{color: G.text}}>{aggUtilaj.length}</strong> utilaje · consumul real e calculat pe <strong style={{color: G.text}}>perioada selectată</strong> (vezi filtrul de perioadă de sus). Sortat: critic → warning → ok → date insuficiente. La „date insuf." apare motivul (fără normă / fără ore bord / o singură alimentare).
             </div>
             <button onClick={handleExportUtilaje} disabled={exportingExcel || aggUtilaj.length === 0} style={{...S.btnP, background: G.green, padding: '7px 16px', fontSize: 12, opacity: (exportingExcel || aggUtilaj.length === 0) ? .5 : 1}}>
               {exportingExcel ? '⏳ Export...' : `📊 Export Excel`}
@@ -8075,6 +8082,11 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                           {u.abaterePct !== null && u.stareConsum !== 'ok' && (
                             <div style={{fontSize: 10, color: stareColor, marginTop: 3, fontWeight: 700, fontVariantNumeric: 'tabular-nums'}}>
                               {u.abaterePct > 0 ? '+' : ''}{u.abaterePct.toFixed(1)}%
+                            </div>
+                          )}
+                          {u.motivInsuf && (
+                            <div style={{fontSize: 9, color: G.muted, marginTop: 3, fontStyle: 'italic', lineHeight: 1.2, maxWidth: 130, marginLeft: 'auto', marginRight: 'auto'}}>
+                              {u.motivInsuf}
                             </div>
                           )}
                         </td>
