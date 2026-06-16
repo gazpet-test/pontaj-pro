@@ -111,6 +111,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [view,setView]=useState(filterDepartament ? 'list' : 'dashboard')  // 'dashboard' | 'list'
   const [activeDep,setActiveDep]=useState(filterDepartament)
   const [tichete,setTichete]=useState([])
+  const [asignatiMap,setAsignatiMap]=useState({}) // { tichet_id: [profile_id,...] } — echipă ad-hoc
   const [summary,setSummary]=useState({})
   const [subcategorii,setSubcategorii]=useState([])
   const [profiles,setProfiles]=useState([])
@@ -138,6 +139,17 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         supabase.from('logistica_service_parteneri').select('id, nume, telefon, email, adresa, specializare').eq('activ',true).order('nume')
       ])
       setTichete(tk.data || [])
+      // Echipă ad-hoc per tichet (tichete_asignati) — grupez pe tichet_id pentru chips + filtru „asignate mie"
+      const tIds = (tk.data || []).map(x => x.id)
+      let aMap = {}
+      if (tIds.length) {
+        const { data: asg } = await supabase
+          .from('tichete_asignati')
+          .select('tichet_id, profile_id, asignat_la')
+          .in('tichet_id', tIds)
+        ;(asg || []).forEach(a => { (aMap[a.tichet_id] = aMap[a.tichet_id] || []).push(a.profile_id) })
+      }
+      setAsignatiMap(aMap)
       const sMap = {}; (sm.data || []).forEach(s=>{ sMap[s.departament] = s })
       setSummary(sMap)
       setSubcategorii(sc.data || [])
@@ -224,11 +236,12 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   // Tichete filtrate
   const tichetFilt = useMemo(()=>{
     let t = tichete
+    const amMembru = (x) => (asignatiMap[x.id] || []).includes(profile?.id)
     if(filterMine && profile?.id) {
       if(filterMineType === 'deschise') t = t.filter(x => x.deschis_de === profile.id)
-      else if(filterMineType === 'asignate') t = t.filter(x => x.persoana_responsabila === profile.id)
+      else if(filterMineType === 'asignate') t = t.filter(x => x.persoana_responsabila === profile.id || amMembru(x))
       else if(filterMineType === 'de_confirmat') t = t.filter(x => x.deschis_de === profile.id && ['rezolvat','reparat'].includes(x.status))
-      else t = t.filter(x => x.persoana_responsabila === profile.id || x.deschis_de === profile.id)
+      else t = t.filter(x => x.persoana_responsabila === profile.id || x.deschis_de === profile.id || amMembru(x))
     }
     if(activeDep) t = t.filter(x=>x.departament===activeDep)
     if(filtruStatus === 'active') t = t.filter(x=>!['inchis','confirmat','respins'].includes(x.status))
@@ -244,7 +257,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       )
     }
     return t
-  },[tichete, filterMine, filterMineType, profile?.id, activeDep, filtruStatus, filtruUrgenta, searchText])
+  },[tichete, filterMine, filterMineType, profile?.id, activeDep, filtruStatus, filtruUrgenta, searchText, asignatiMap])
 
   const totalUrgenteActive = useMemo(()=>tichete.filter(t=>t.urgenta==='urgent' && !['inchis','confirmat','respins'].includes(t.status)).length,[tichete])
 
@@ -332,7 +345,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           </div>
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tichete.slice(0,10).map(t=>(
-              <TichetRow key={t.id} t={t} profiles={profiles} onClick={()=>setOpenDetail(t)}
+              <TichetRow key={t.id} t={t} profiles={profiles} echipaCount={(asignatiMap[t.id]||[]).length} onClick={()=>setOpenDetail(t)}
                          canDelete={profile?.is_owner} onDelete={handleDelete} />
             ))}
           </div>
@@ -439,7 +452,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         ) : (
           <div style={{display:'flex',flexDirection:'column',gap:8}}>
             {tichetFilt.map(t=>(
-              <TichetRow key={t.id} t={t} profiles={profiles} onClick={()=>setOpenDetail(t)}
+              <TichetRow key={t.id} t={t} profiles={profiles} echipaCount={(asignatiMap[t.id]||[]).length} onClick={()=>setOpenDetail(t)}
                          showDep={!filterDepartament && !activeDep}
                          canDelete={profile?.is_owner} onDelete={handleDelete} />
             ))}
@@ -460,6 +473,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
         <TichetFormModal
           subcategorii={subcategorii}
           profile={profile}
+          profiles={profiles}
           forcedDep={filterDepartament}
           activeLogistica={activeLogistica}
           employeesList={employeesList}
@@ -492,7 +506,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
 // ════════════════════════════════════════════════════════════════
 // TICHET ROW (lista)
 // ════════════════════════════════════════════════════════════════
-function TichetRow({ t, profiles, onClick, showDep = false, canDelete = false, onDelete }){
+function TichetRow({ t, profiles, echipaCount = 0, onClick, showDep = false, canDelete = false, onDelete }){
   const dep = getDep(t.departament)
   const urg = getUrg(t.urgenta)
   const st = getSt(t.status)
@@ -510,6 +524,7 @@ function TichetRow({ t, profiles, onClick, showDep = false, canDelete = false, o
           <span style={{fontSize:11,fontFamily:'monospace',color:G.muted}}>#{t.numar_tichet}</span>
           {showDep && <span style={{fontSize:11,padding:'2px 8px',background:dep.color+'22',color:dep.color,borderRadius:4,fontWeight:600}}>{dep.emoji} {dep.nume}</span>}
           <span style={{fontSize:11,padding:'2px 8px',background:st.color+'22',color:st.color,borderRadius:4,fontWeight:600}}>{st.emoji} {st.label}</span>
+          {echipaCount > 0 && <span style={{fontSize:11,padding:'2px 8px',background:G.blue+'1A',color:G.blue,borderRadius:4,fontWeight:600}}>👥 {echipaCount}</span>}
         </div>
         <div style={{fontSize:14,fontWeight:600,color:G.text,marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.titlu}</div>
         {t.entitate_descriere && (
@@ -550,13 +565,14 @@ function TichetRow({ t, profiles, onClick, showDep = false, canDelete = false, o
 // ════════════════════════════════════════════════════════════════
 // MODAL: TICHET NOU
 // ════════════════════════════════════════════════════════════════
-function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, employeesList, onClose, onSaved, show }){
+function TichetFormModal({ subcategorii, profile, profiles = [], forcedDep, activeLogistica, employeesList, onClose, onSaved, show }){
   const [step, setStep] = useState(forcedDep ? 2 : 0)  // 0: AI quick, 1: dep manual, 2: detalii
   const [dep, setDep] = useState(forcedDep || null)
   const [form, setForm] = useState({
     subcategorie:'', titlu:'', descriere:'', urgenta:'normal',
     entitate_tip:null, entitate_id:null, entitate_descriere:''
   })
+  const [echipa, setEchipa] = useState([])  // profile_id[] membri adiționali (echipă ad-hoc)
   const [saving, setSaving] = useState(false)
   const [poze, setPoze] = useState([])  // File[] pentru upload
   const fileRef = useRef(null)
@@ -636,10 +652,12 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
     return 'echipament'
   }
 
-  // Label inteligent — skip „NU ARE..." din nr_inmatriculare
+  // Label inteligent — skip „NU ARE..." din nr_inmatriculare; cod_intern mereu prezent când nu e plăcuță
   const buildActivLabel = (a)=>{
     const parts = []
-    if(a.nr_inmatriculare && !a.nr_inmatriculare.toUpperCase().trim().startsWith('NU ')) parts.push(a.nr_inmatriculare)
+    const hasPlaca = a.nr_inmatriculare && !a.nr_inmatriculare.toUpperCase().trim().startsWith('NU ')
+    if(hasPlaca) parts.push(a.nr_inmatriculare)
+    else if(a.cod_intern) parts.push(a.cod_intern)  // utilaje fără plăcuță → caută după cod (ex: TST038)
     if(a.marca) parts.push(a.marca)
     if(a.model) parts.push(a.model)
     return parts.filter(Boolean).join(' · ') || a.cod_intern || `Activ #${a.id}`
@@ -739,6 +757,15 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
       // 1. Insert tichet
       const { data: tk, error } = await supabase.from('tichete').insert(payload).select().single()
       if(error) throw error
+
+      // 1b. Echipă ad-hoc: lead (selectedResponsabil) + membri adiționali (echipa) → tichete_asignati
+      //     UNIQUE(tichet_id, profile_id) protejează vs duplicate; trigger-ul notifică fiecare membru.
+      const membri = Array.from(new Set([selectedResponsabil, ...echipa].filter(Boolean)))
+      if (membri.length) {
+        const rows = membri.map(pid => ({ tichet_id: tk.id, profile_id: pid, asignat_de: profile?.id }))
+        const { error: eAsg } = await supabase.from('tichete_asignati').insert(rows)
+        if (eAsg) console.warn('tichete_asignati insert:', eAsg.message)
+      }
 
       // 2. Upload poze daca exista
       // FIX 27.05.2026: schimbat bucket 'tichete' (no RLS) -> 'tichete-atasamente' + error vizibil
@@ -927,7 +954,7 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
           {/* Etapa 14: Atribuie la — opțional, presetat la default per departament */}
           <div>
             <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>
-              👤 Atribuie la <span style={{color:G.dim,fontWeight:400}}>(opt - poate prelua altcineva din widget)</span>
+              👤 Responsabil principal <span style={{color:G.dim,fontWeight:400}}>(lead — opt, poate prelua altcineva din widget)</span>
               {selectedResponsabil && defaultsMap[dep] === selectedResponsabil && (
                 <span style={{marginLeft:8, padding:'2px 8px', background:G.green+'22', color:G.green, borderRadius:10, fontSize:10, fontWeight:800, letterSpacing:0.5}}>
                   🎯 DEFAULT
@@ -944,6 +971,35 @@ function TichetFormModal({ subcategorii, profile, forcedDep, activeLogistica, em
                 <option key={p.id} value={p.id}>
                   {p.name || p.email}{p.is_owner ? ' · owner' : ''}{p.id === defaultsMap[dep] ? ' · default' : ''}
                 </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Echipă ad-hoc — mai mulți oameni văd + pot închide tichetul */}
+          <div>
+            <label style={{fontSize:13,color:G.muted,marginBottom:6,display:'block',fontWeight:600}}>
+              👥 Echipă <span style={{color:G.dim,fontWeight:400}}>(opt — membri adiționali; toți văd tichetul și pot închide)</span>
+            </label>
+            {echipa.length > 0 && (
+              <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+                {echipa.map(pid => {
+                  const p = profiles.find(x=>x.id===pid)
+                  const eLead = pid === selectedResponsabil
+                  return (
+                    <span key={pid} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',background:G.blue+'1A',border:`1px solid ${G.blue}55`,borderRadius:20,fontSize:12,color:G.text,fontWeight:600}}>
+                      {p?.name || '?'}{eLead && <span style={{fontSize:10,color:G.green,fontWeight:800}}>LEAD</span>}
+                      <button type="button" onClick={()=>setEchipa(arr=>arr.filter(x=>x!==pid))}
+                              style={{background:'transparent',border:0,color:G.muted,cursor:'pointer',fontSize:14,lineHeight:1,padding:0}}>×</button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+            <select value="" onChange={e=>{ const v=e.target.value; if(v) setEchipa(arr=>arr.includes(v)?arr:[...arr,v]) }}
+                    style={{width:'100%',padding:'11px 14px',background:G.bg,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:14}}>
+              <option value="">＋ Adaugă membru în echipă…</option>
+              {profiles.filter(p => p.id !== selectedResponsabil && !echipa.includes(p.id)).map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           </div>
@@ -1055,6 +1111,8 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const [t, setT] = useState(initialT)
   const [comentarii, setComentarii] = useState([])
   const [istoric, setIstoric] = useState([])
+  const [echipaIds, setEchipaIds] = useState([]) // profile_id[] din tichete_asignati
+  const [addingMembru, setAddingMembru] = useState(false)
   const [pozeUrls, setPozeUrls] = useState([])
   const [brokenPoze, setBrokenPoze] = useState({})  // index -> true cand <img> onError
   const [comText, setComText] = useState('')
@@ -1081,14 +1139,16 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
   const rezolvatDe = profiles.find(p=>p.id===t.rezolvat_de)
 
   const reload = useCallback(async()=>{
-    const [tkRes, comRes, istRes] = await Promise.all([
+    const [tkRes, comRes, istRes, asgRes] = await Promise.all([
       supabase.from('tichete').select('*').eq('id', t.id).maybeSingle(),
       supabase.from('tichete_comentarii').select('*').eq('tichet_id', t.id).order('created_at'),
-      supabase.from('tichete_istoric').select('*').eq('tichet_id', t.id).order('created_at')
+      supabase.from('tichete_istoric').select('*').eq('tichet_id', t.id).order('created_at'),
+      supabase.from('tichete_asignati').select('profile_id').eq('tichet_id', t.id)
     ])
     if(tkRes.data) setT(tkRes.data)
     setComentarii(comRes.data || [])
     setIstoric(istRes.data || [])
+    setEchipaIds((asgRes.data || []).map(a => a.profile_id))
 
     // Signed URLs poze
     // FIX 27.05.2026: bucket 'tichete' -> 'tichete-atasamente' (singurul cu RLS policies)
@@ -1139,6 +1199,26 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
       await reload()
       onChanged()
       show(`Status: ${getSt(newStatus).label}`, 'success')
+    } catch(e){ show('Eroare: ' + e.message, 'error') } finally { setSaving(false) }
+  }
+
+  // Echipă ad-hoc: add/remove membri
+  const addMembru = async(pid)=>{
+    if(!pid) return
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('tichete_asignati').insert({ tichet_id:t.id, profile_id:pid, asignat_de:profile?.id })
+      if(error && !/duplicate|unique/i.test(error.message)) throw error
+      await reload(); onChanged(); setAddingMembru(false)
+      show('Membru adăugat în echipă', 'success')
+    } catch(e){ show('Eroare: ' + e.message, 'error') } finally { setSaving(false) }
+  }
+  const removeMembru = async(pid)=>{
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('tichete_asignati').delete().eq('tichet_id', t.id).eq('profile_id', pid)
+      if(error) throw error
+      await reload(); onChanged()
     } catch(e){ show('Eroare: ' + e.message, 'error') } finally { setSaving(false) }
   }
 
@@ -1273,6 +1353,40 @@ function TichetDetailModal({ tichet: initialT, profiles, subcategorii, profile, 
             </div>
           </div>
         ) : null}
+      </div>
+
+      {/* Echipă ad-hoc — chips cu add/remove. Toți membrii văd tichetul + pot închide. */}
+      <div style={{padding:14,background:G.bg,border:`1px solid ${G.border}`,borderRadius:8,marginBottom:14}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:echipaIds.length||addingMembru?10:0}}>
+          <div style={{fontSize:11,color:G.muted,fontWeight:600,textTransform:'uppercase',letterSpacing:0.5}}>👥 Echipă ({echipaIds.length})</div>
+          {!addingMembru && <button onClick={()=>setAddingMembru(true)} style={{padding:'4px 12px',background:'transparent',color:G.blue,border:`1px solid ${G.blue}55`,borderRadius:16,fontSize:12,fontWeight:600,cursor:'pointer'}}>＋ Adaugă membru</button>}
+        </div>
+        {echipaIds.length > 0 && (
+          <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+            {echipaIds.map(pid=>{
+              const p = profiles.find(x=>x.id===pid)
+              const eLead = pid === t.persoana_responsabila
+              return (
+                <span key={pid} style={{display:'inline-flex',alignItems:'center',gap:6,padding:'4px 10px',background:G.blue+'1A',border:`1px solid ${G.blue}55`,borderRadius:20,fontSize:12,color:G.text,fontWeight:600}}>
+                  {p?.name || '?'}{eLead && <span style={{fontSize:10,color:G.green,fontWeight:800}}>LEAD</span>}
+                  <button onClick={()=>removeMembru(pid)} disabled={saving} title="Scoate din echipă"
+                          style={{background:'transparent',border:0,color:G.muted,cursor:'pointer',fontSize:14,lineHeight:1,padding:0}}>×</button>
+                </span>
+              )
+            })}
+          </div>
+        )}
+        {echipaIds.length === 0 && !addingMembru && <div style={{fontSize:12,color:G.dim}}>Niciun membru asignat. Adaugă oameni ca să vadă și să poată închide tichetul.</div>}
+        {addingMembru && (
+          <div style={{display:'flex',gap:8,marginTop:8}}>
+            <select defaultValue="" onChange={e=>addMembru(e.target.value)} disabled={saving}
+                    style={{flex:1,padding:'9px 12px',background:G.surface,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13}}>
+              <option value="">— Alege utilizator —</option>
+              {profiles.filter(p=>!echipaIds.includes(p.id)).map(p=>(<option key={p.id} value={p.id}>{p.name}</option>))}
+            </select>
+            <button onClick={()=>setAddingMembru(false)} style={btnSecondary(G.muted)}>Anulează</button>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
