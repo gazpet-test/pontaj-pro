@@ -1292,16 +1292,25 @@ export default function AchizitiiPage() {
   const intraInStoc = async (c) => {
     const locatie_tip = c.livrare_tip === 'sediu' ? 'sediu' : 'proiect'
     const locatie_id = c.livrare_tip === 'sediu' ? null : (c.proiect_id || null)
-    for (const l of (c.linii || [])) {
-      let q = supabase.from('stocuri').select('id, cantitate').eq('locatie_tip', locatie_tip).eq('material_denumire', l.denumire)
-      q = locatie_id == null ? q.is('locatie_id', null) : q.eq('locatie_id', locatie_id)
-      if (l.um) q = q.eq('um', l.um)
-      const { data: existing } = await q.limit(1)
-      if (existing && existing.length) {
-        await supabase.from('stocuri').update({ cantitate: Number(existing[0].cantitate || 0) + Number(l.cantitate || 0), updated_at: new Date().toISOString() }).eq('id', existing[0].id)
-      } else {
-        await supabase.from('stocuri').insert({ locatie_tip, locatie_id, material_denumire: l.denumire, um: l.um || null, cantitate: Number(l.cantitate || 0), observatii: `Intrare automată din ${c.numar_comanda}` })
-      }
+    // Faza 6.1: scriem o MIȘCARE în registru (stocuri_miscari) per linie; trigger-ul
+    // fn_stocuri_aplica_miscare actualizează automat tabelul `stocuri` (upsert pe poziție).
+    // NU mai scriem direct în `stocuri` ca să nu dublăm + avem audit complet.
+    const rows = (c.linii || [])
+      .filter(l => Number(l.cantitate) > 0)
+      .map(l => ({
+        locatie_tip, locatie_id,
+        material_denumire: l.denumire,
+        um: l.um || null,
+        delta: Number(l.cantitate || 0),
+        tip: 'intrare_achizitie',
+        motiv: `Recepție ${c.numar_comanda}`,
+        ref_tip: 'comanda_furnizor',
+        ref_id: c.id,
+        created_by: profile?.id || null,
+      }))
+    if (rows.length) {
+      const { error } = await supabase.from('stocuri_miscari').insert(rows)
+      if (error) throw error
     }
   }
   const finalizeazaPredare = async (pozaFile) => {

@@ -45,19 +45,33 @@ function MaterialeTab() {
   const [stocuri, setStocuri] = useState([])
   const [proiecte, setProiecte] = useState([])
   const [search, setSearch] = useState('')
+  const [profile, setProfile] = useState(null)
+  const [ajustModal, setAjustModal] = useState(null)   // poziția de stoc (rând)
+  const [istoricFor, setIstoricFor] = useState(null)    // poziția de stoc pt istoric
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let prof = null
+      if (user) {
+        const { data } = await supabase.from('profiles')
+          .select('id, role, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle()
+        prof = data || null
+      }
       const [rStoc, rProj] = await Promise.all([
         supabase.from('stocuri').select('*').order('material_denumire'),
         supabase.from('executie_proiecte').select('id, nume, cod_intern'),
       ])
+      setProfile(prof)
       setStocuri(rStoc.data || [])
       setProiecte(rProj.data || [])
     } catch (e) { console.error(e) } finally { setLoading(false) }
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
+
+  // Gate ajustare: owner SAU can_manage_stoc (flag setat din Admin)
+  const canManage = !!(profile?.is_owner || profile?.can_manage_stoc)
 
   const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
 
@@ -123,26 +137,200 @@ function MaterialeTab() {
             <div style={{ fontSize:15, fontWeight:800, flex:1 }}>{gr.titlu}</div>
             <span style={{ background:G.magazie + '22', color:G.magazie, border:`1px solid ${G.magazie}55`, borderRadius:14, padding:'3px 12px', fontSize:12, fontWeight:800 }}>{gr.items.length} {gr.items.length === 1 ? 'poziție' : 'poziții'}</span>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 170px', gap:10, padding:'8px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
-            <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div><div>Actualizat</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 150px 150px', gap:10, padding:'8px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div><div>Actualizat</div><div></div>
           </div>
           {gr.items.map(s => (
-            <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 170px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
+            <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 150px 150px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
               <div style={{ fontWeight:600 }}>{s.material_denumire}{s.observatii && <div style={{ fontSize:11, color:G.muted }}>{s.observatii}</div>}</div>
               <div style={{ color:G.muted }}>{s.um || '—'}</div>
               <div style={{ textAlign:'right', fontWeight:800, fontSize:15, color: Number(s.cantitate) > 0 ? G.green : G.red }}>{fmtNr(s.cantitate)}</div>
               <div style={{ fontSize:12, color:G.dim }}>{fmtDataOra(s.updated_at)}</div>
+              <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
+                <button onClick={() => setIstoricFor(s)} title="Istoric mișcări"
+                  style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>📜</button>
+                {canManage && (
+                  <button onClick={() => setAjustModal(s)} title="Ajustează stoc (+/-)"
+                    style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.magazie, borderColor:G.magazie + '66' }}>± Ajustează</button>
+                )}
+              </div>
             </div>
           ))}
         </div>
       ))}
 
       <div style={{ padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:12, color:G.muted, lineHeight:1.7, marginTop:6 }}>
-        <b style={{ color:G.text }}>📋 În Faza 6 (gestiune completă):</b> ajustări manuale +/- cu motiv, scădere stoc către proiect cu PV auto-generat,
-        transferuri sediu ↔ șantier cu istoric, praguri minime cu notificări, valori pe stoc, audit log complet.
-        Momentan e viewer — intrările vin automat din Achiziții.
+        <b style={{ color:G.text }}>📋 Faza 6.1 activă:</b> ajustări manuale +/- cu motiv obligatoriu + registru de mișcări (audit complet per material).
+        Intrările vin automat din Achiziții (recepție → PV predare). Următor: transfer sediu↔proiect, consum pe proiect cu PV, praguri minime + valori stoc.
       </div>
+
+      {ajustModal && (
+        <AjustareModal
+          poz={ajustModal}
+          onClose={() => setAjustModal(null)}
+          onDone={() => { setAjustModal(null); loadAll() }}
+        />
+      )}
+      {istoricFor && (
+        <IstoricDrawer poz={istoricFor} onClose={() => setIstoricFor(null)} />
+      )}
     </>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// MODAL: Ajustare stoc +/- (motiv obligatoriu) → fn_stoc_ajustare
+// ════════════════════════════════════════════════════════════════
+function AjustareModal({ poz, onClose, onDone }) {
+  const [sens, setSens] = useState('plus')          // 'plus' | 'minus'
+  const [cant, setCant] = useState('')
+  const [motiv, setMotiv] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const stocCurent = Number(poz.cantitate || 0)
+  const delta = sens === 'plus' ? Math.abs(Number(cant) || 0) : -Math.abs(Number(cant) || 0)
+  const stocNou = stocCurent + delta
+  const subZero = stocNou < 0
+  const valid = Number(cant) > 0 && motiv.trim().length > 0
+
+  const aplica = async () => {
+    if (!valid) { setErr('Completează cantitatea (>0) și motivul.'); return }
+    if (subZero && !window.confirm(`Atenție: stocul devine NEGATIV (${fmtNr(stocNou)} ${poz.um || ''}). Continui?`)) return
+    setBusy(true); setErr('')
+    try {
+      const { data, error } = await supabase.rpc('fn_stoc_ajustare', {
+        p_locatie_tip: poz.locatie_tip,
+        p_locatie_id: poz.locatie_id ?? null,
+        p_material: poz.material_denumire,
+        p_um: poz.um || null,
+        p_delta: delta,
+        p_motiv: motiv.trim(),
+      })
+      if (error) throw error
+      onDone(data)
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }} onClick={onClose}>
+      <div style={{ ...S.card, width:'min(460px,100%)', padding:22 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:4 }}>± Ajustează stoc</div>
+        <div style={{ fontSize:13, color:G.muted, marginBottom:16 }}>{poz.material_denumire}</div>
+
+        <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+          {[['plus', '➕ Adaugă', G.green], ['minus', '➖ Scade', G.red]].map(([v, t, c]) => (
+            <button key={v} onClick={() => setSens(v)} style={{
+              flex:1, padding:'10px', borderRadius:8, fontWeight:700, fontSize:14, cursor:'pointer',
+              background: sens === v ? c + '22' : G.bg, color: sens === v ? c : G.muted,
+              border:`1px solid ${sens === v ? c : G.border2}`,
+            }}>{t}</button>
+          ))}
+        </div>
+
+        <div style={{ display:'flex', gap:10, marginBottom:14 }}>
+          <div style={{ flex:1 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Cantitate ({poz.um || 'buc'})</label>
+            <input type="number" min="0" step="any" autoFocus style={S.input} value={cant} onChange={e => setCant(e.target.value)} placeholder="0" />
+          </div>
+          <div style={{ width:140 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Stoc nou</label>
+            <div style={{ ...S.input, display:'flex', alignItems:'center', fontWeight:800, color: subZero ? G.red : stocNou > stocCurent ? G.green : G.text }}>{fmtNr(stocNou)}</div>
+          </div>
+        </div>
+
+        <div style={{ marginBottom:8 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Motiv <span style={{ color:G.red }}>*</span></label>
+          <textarea style={{ ...S.input, minHeight:60, resize:'vertical' }} value={motiv} onChange={e => setMotiv(e.target.value)} placeholder="ex: inventar fizic, deteriorare, corecție eroare recepție…" />
+        </div>
+
+        {subZero && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12, color:G.red, marginBottom:8 }}>⚠️ Stocul rezultat e negativ — vei fi întrebat de confirmare.</div>}
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>{err}</div>}
+
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={aplica} disabled={busy || !valid} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', opacity: (busy || !valid) ? .6 : 1 }}>{busy ? '...' : 'Aplică ajustarea'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// DRAWER: Istoric mișcări per material (stocuri_miscari)
+// ════════════════════════════════════════════════════════════════
+const MISCARE_META = {
+  intrare_achizitie: { label:'Intrare achiziție', emoji:'📥', color:'#3FB950' },
+  ajustare_plus:     { label:'Ajustare +',        emoji:'➕', color:'#3FB950' },
+  ajustare_minus:    { label:'Ajustare −',        emoji:'➖', color:'#F85149' },
+  transfer_out:      { label:'Transfer ieșire',   emoji:'📤', color:'#F0883E' },
+  transfer_in:       { label:'Transfer intrare',  emoji:'📥', color:'#58A6FF' },
+  consum_proiect:    { label:'Consum proiect',    emoji:'🔧', color:'#F85149' },
+  corectie_initiala: { label:'Sold deschidere',   emoji:'🏁', color:'#8B949E' },
+}
+function IstoricDrawer({ poz, onClose }) {
+  const [loading, setLoading] = useState(true)
+  const [miscari, setMiscari] = useState([])
+  const [profiles, setProfiles] = useState({})
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      try {
+        let q = supabase.from('stocuri_miscari').select('*')
+          .eq('locatie_tip', poz.locatie_tip)
+          .eq('material_denumire', poz.material_denumire)
+          .order('created_at', { ascending: false })
+        q = poz.locatie_id == null ? q.is('locatie_id', null) : q.eq('locatie_id', poz.locatie_id)
+        const { data } = await q
+        const rows = data || []
+        const uids = [...new Set(rows.map(r => r.created_by).filter(Boolean))]
+        let pmap = {}
+        if (uids.length) {
+          const { data: ps } = await supabase.from('profiles').select('id, name').in('id', uids)
+          ;(ps || []).forEach(p => { pmap[p.id] = p.name })
+        }
+        if (!cancelled) { setMiscari(rows); setProfiles(pmap) }
+      } catch (e) { console.error(e) } finally { if (!cancelled) setLoading(false) }
+    })()
+    return () => { cancelled = true }
+  }, [poz])
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', zIndex:1000, display:'flex', justifyContent:'flex-end' }} onClick={onClose}>
+      <div style={{ width:'min(520px,100%)', height:'100%', background:G.surface, borderLeft:`1px solid ${G.border}`, padding:22, overflowY:'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, marginBottom:6 }}>
+          <div>
+            <div style={{ fontSize:17, fontWeight:800 }}>📜 Istoric mișcări</div>
+            <div style={{ fontSize:13, color:G.muted, marginTop:2 }}>{poz.material_denumire}</div>
+          </div>
+          <button onClick={onClose} style={{ ...S.btnS, padding:'6px 10px', fontSize:18, lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ fontSize:13, color:G.muted, marginBottom:16 }}>Stoc curent: <b style={{ color: Number(poz.cantitate) > 0 ? G.green : G.red }}>{fmtNr(poz.cantitate)} {poz.um || ''}</b></div>
+
+        {loading && <div style={{ padding:30, textAlign:'center', color:G.muted }}>Se încarcă...</div>}
+        {!loading && !miscari.length && <div style={{ padding:30, textAlign:'center', color:G.muted }}>Nicio mișcare înregistrată.</div>}
+
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {miscari.map(m => {
+            const meta = MISCARE_META[m.tip] || { label:m.tip, emoji:'•', color:G.muted }
+            const poz = Number(m.delta) >= 0
+            return (
+              <div key={m.id} style={{ ...S.card, background:G.bg, padding:'10px 14px', display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ fontSize:20 }}>{meta.emoji}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:meta.color }}>{meta.label}</div>
+                  {m.motiv && <div style={{ fontSize:12, color:G.muted }}>{m.motiv}</div>}
+                  <div style={{ fontSize:11, color:G.dim, marginTop:2 }}>{fmtDataOra(m.created_at)}{m.created_by && profiles[m.created_by] ? ` · ${profiles[m.created_by]}` : ''}</div>
+                </div>
+                <div style={{ fontWeight:800, fontSize:15, color: poz ? G.green : G.red, whiteSpace:'nowrap' }}>{poz ? '+' : ''}{fmtNr(m.delta)}</div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
   )
 }
 
