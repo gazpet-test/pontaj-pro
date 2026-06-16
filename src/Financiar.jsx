@@ -185,17 +185,36 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
 
   // Pre-fill din SL dacă e furnizat
   useEffect(() => {
-    if (slDefault && isNew) {
+    if (!(slDefault && isNew)) return
+    ;(async () => {
       const val = parseFloat(slDefault.valoare_ajustata_lei || slDefault.valoare_baza_lei || 0)
       const luna = LUNI[(slDefault.luna||1)-1]
-      const den = `Contravaloare lucrări conf. situație de lucrări nr.${slDefault.nr_situatie} (${luna} ${slDefault.an}) — contract ${slDefault.nr_contract||'—'}`
+      // Referință contract = numar_contract + data semnare (ex. "228/14.04.2025").
+      // OS-ul NU apare ca linie — valoarea (valoare_ajustata_lei) include deja bază (cu OS) + ajustare.
+      let contractRef = slDefault.nr_contract || ''
+      try {
+        let cid = slDefault.contract_id
+        if (slDefault.proiect_id) {
+          const { data: pr } = await supabase.from('executie_proiecte').select('contract_id, nr_contract').eq('id', slDefault.proiect_id).single()
+          if (pr) { cid = cid || pr.contract_id; if (!contractRef) contractRef = pr.nr_contract || '' }
+        }
+        if (cid) {
+          const { data: ct } = await supabase.from('contracte_terti').select('numar_contract, data_semnare').eq('id', cid).single()
+          if (ct?.numar_contract) {
+            const dS = ct.data_semnare ? new Date(ct.data_semnare).toLocaleDateString('ro-RO') : ''
+            contractRef = dS ? `${ct.numar_contract}/${dS}` : ct.numar_contract
+          }
+        }
+      } catch(e) { /* fallback: rămâne nr_contract simplu */ }
+      const lunaPart = luna ? ` (${luna} ${slDefault.an})` : ''
+      const den = `Contravaloare lucrări conf. situație de lucrări nr.${slDefault.nr_situatie}${lunaPart} — contract ${contractRef||'—'}`
       setForm(f => ({
         ...f,
         articole: [{ nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:val.toFixed(2), valoare:val.toFixed(2), tva_pct:TVA_DEFAULT }],
         proiect_id: String(slDefault.proiect_id||''),
         situatie_plata_ids: [slDefault.id],
       }))
-    }
+    })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load proiecte + SL când proiect_id se schimbă
