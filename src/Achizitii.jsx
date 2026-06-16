@@ -992,6 +992,7 @@ export default function AchizitiiPage() {
   const [profilesList, setProfilesList] = useState([])
   const [employees, setEmployees] = useState([])
   const [aprobatori, setAprobatori] = useState([])
+  const [cereriInterne, setCereriInterne] = useState([])  // cereri interne (comenzi tip=executie) pt panou status în dashboard
 
   // UI state
   const [showForm, setShowForm] = useState(false)
@@ -1027,7 +1028,7 @@ export default function AchizitiiPage() {
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr] = await Promise.all([
+      const [rCom, rProj, rFz, rCtr, rSites, rProf, rEmp, rApr, rCer] = await Promise.all([
         supabase.from('comenzi_furnizor').select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').order('created_at', { ascending: false }),
         supabase.from('executie_proiecte').select('id, nume, cod_intern, site_id, mp_employee_id').eq('activ', true).order('nume'),
         supabase.from('logistica_furnizori').select('id, nume, cui, contact, activ').eq('activ', true).order('nume'),
@@ -1037,6 +1038,7 @@ export default function AchizitiiPage() {
         supabase.from('profiles').select('id, name').order('name'),
         supabase.from('employees').select('id, name'),
         supabase.from('comenzi_aprobatori').select('*').order('ordine'),
+        supabase.from('comenzi').select('status').eq('tip', 'executie'),
       ])
       setComenzi(rCom.data || [])
       setProiecte(rProj.data || [])
@@ -1046,6 +1048,7 @@ export default function AchizitiiPage() {
       setProfilesList(rProf.data || [])
       setEmployees(rEmp.data || [])
       setAprobatori(rApr.data || [])
+      setCereriInterne(rCer.data || [])
     } catch (e) {
       console.error(e)
       showToast('Eroare la încărcare date: ' + (e.message || e), 'error')
@@ -1417,6 +1420,21 @@ export default function AchizitiiPage() {
     return comenzi.filter(c => c.status === 'in_aprobare' && (c.aprobari || []).some(a => a.profile_id === profile.id && a.status === 'in_asteptare'))
   }, [comenzi, profile])
 
+  // Pipeline cereri interne (comenzi tip=executie) — contoare pe status pentru dashboard
+  const cereriStats = useMemo(() => {
+    const c = { nepreluate: 0, in_lucru: 0, comandate: 0, in_tranzit: 0, ajunse: 0, finalizate: 0 }
+    for (const x of cereriInterne) {
+      if (x.status === 'deschis') c.nepreluate++
+      else if (x.status === 'in_analiza' || x.status === 'in_lucru') c.in_lucru++
+      else if (x.status === 'comandata') c.comandate++
+      else if (x.status === 'in_tranzit') c.in_tranzit++
+      else if (x.status === 'ajunsa') c.ajunse++
+      else if (x.status === 'finalizata') c.finalizate++
+      // anulata / respinsa = excluse din pipeline activ
+    }
+    return c
+  }, [cereriInterne])
+
   // ── Render ───────────────────────────────────────────────────────────────
   if (loadingProfile) return <div style={{ ...S.page, display:'flex', alignItems:'center', justifyContent:'center' }}><div style={{ color:G.muted }}>Se încarcă...</div></div>
 
@@ -1496,6 +1514,42 @@ export default function AchizitiiPage() {
             <KpiCard emoji="🚚" label="În livrare" val={kpi.livrare} color={G.purple} onClick={() => setFStatus(fStatus === 'in_tranzit' ? '' : 'in_tranzit')} />
             <KpiCard emoji="✅" label="Recepționate" val={kpi.receptionate} color={G.green} onClick={() => setFStatus(fStatus === 'receptionata' ? '' : 'receptionata')} />
             <KpiCard emoji="🏬" label="În stoc" val={kpi.stoc} color={G.achizitii} onClick={() => { setTab('arhiva'); setFStatus('in_stoc') }} />
+          </div>
+        )}
+
+        {/* Cereri interne — pipeline pe status (nepreluate = roșu, ca să nu fie uitate) */}
+        {tab === 'comenzi' && cereriInterne.length > 0 && (
+          <div style={{ ...S.card, padding:'12px 16px', marginBottom:14 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, flexWrap:'wrap', gap:8 }}>
+              <div style={{ fontSize:14, fontWeight:800 }}>📋 Cereri interne</div>
+              <button onClick={() => setTab('cereri')} style={{ ...S.btnS, fontSize:12, fontWeight:700, color:G.achizitii, borderColor:G.achizitii + '55' }}>Vezi toate →</button>
+            </div>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+              {[
+                { k:'nepreluate', emoji:'🔴', label:'Nepreluate', color:G.red, danger:true },
+                { k:'in_lucru',   emoji:'🔧', label:'În lucru',   color:G.yellow },
+                { k:'comandate',  emoji:'🛒', label:'Comandate',  color:G.blue },
+                { k:'in_tranzit', emoji:'🚚', label:'În tranzit', color:G.purple },
+                { k:'ajunse',     emoji:'📦', label:'Ajunse',     color:G.achizitii },
+                { k:'finalizate', emoji:'✅', label:'Finalizate', color:G.green },
+              ].map(s => {
+                const val = cereriStats[s.k]
+                const hot = s.danger && val > 0
+                return (
+                  <div key={s.k} onClick={() => setTab('cereri')} title="Deschide Cereri interne"
+                    style={{ ...S.card, padding:'10px 14px', flex:1, minWidth:110, cursor:'pointer',
+                      borderColor: hot ? G.red : G.border, background: hot ? G.red + '18' : undefined }}>
+                    <div style={{ fontSize:11, marginBottom:3, fontWeight: hot ? 800 : 600, color: hot ? G.red : G.muted }}>{s.emoji} {s.label}</div>
+                    <div style={{ fontSize:20, fontWeight:800, color: hot ? G.red : (val > 0 ? s.color : G.muted) }}>{val}</div>
+                  </div>
+                )
+              })}
+            </div>
+            {cereriStats.nepreluate > 0 && (
+              <div style={{ fontSize:12, color:G.red, marginTop:8, fontWeight:700 }}>
+                ⚠️ {cereriStats.nepreluate} {cereriStats.nepreluate === 1 ? 'cerere nepreluată' : 'cereri nepreluate'} — de preluat/repartizat ca să nu rămână blocate.
+              </div>
+            )}
           </div>
         )}
 
