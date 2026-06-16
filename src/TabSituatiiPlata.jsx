@@ -114,19 +114,34 @@ function parseRoNum(c) {
 function _parseBorderouSimple(rows) {
   let nrSL = null, lunaAn = null, contractNr = null
   let totalBaza = null, totalAjustare = null, coeficient = null
+  let totalOS = null, bazaDinFormula = null
 
   for (const row of rows) {
     const rowText = row.map(c => String(c||'')).join(' ').toLowerCase()
     if (!nrSL) { const m = rowText.match(/situati[ae]\s+de\s+plat[aă]\s+nr\.?\s*(\d+)/i); if(m) nrSL=m[1] }
     if (!lunaAn) { const m = rowText.match(/luna\s+([a-zăâîșț]+\s+\d{4})/i); if(m) lunaAn=m[1].toUpperCase() }
     if (!contractNr) { const m = rowText.match(/contract\s+nr\.?\s*([\d\/\.]+)/i); if(m) contractNr=m[1] }
-    // Ultimul "TOTAL GENERAL" / "Total valoare conform" câștigă: în borderourile
-    // ajustate pot exista mai multe TOTAL GENERAL (subtotaluri obiect + total general),
-    // iar ajustarea se aplică pe totalul general FINAL (ultimul), nu pe primul.
-    if (rowText.includes('total general') || rowText.includes('total valoare conform')) {
+
+    // BAZĂ BULLETPROOF: dacă există linia de ajustare cu formula "= <baza> lei x <coef>",
+    // baza e exact numărul pe care se aplică coeficientul — nu ghicim ce total general luăm.
+    if (!bazaDinFormula) {
+      const mf = rowText.match(/=\s*([\d.,]+)\s*lei\s*[x×]\s*1[.,]\d+/i)
+      if (mf) { const v = parseRoNum(mf[1]); if (v > 1000) bazaDinFormula = v }
+    }
+
+    // Fallback bază: ultimul "TOTAL GENERAL" / "Total valoare conform" fără TVA inclusiv
+    // (în borderourile ajustate pot exista subtotaluri obiect + total general final cu OS).
+    if ((rowText.includes('total general') || rowText.includes('total valoare conform')) && !rowText.includes('inclusiv')) {
       const nums = row.filter(c => typeof c==='number' && c > 1000)
       if (nums.length) totalBaza = nums[nums.length-1]
     }
+
+    // OS — Organizare de șantier (linie explicită în borderou)
+    if (totalOS === null && rowText.includes('organizare') && rowText.includes('santier')) {
+      const nums = row.filter(c => typeof c==='number' && c > 0)
+      if (nums.length) totalOS = nums[nums.length-1]
+    }
+
     if (!totalAjustare && rowText.includes('total') && rowText.includes('ajustar')) {
       const nums = row.filter(c => typeof c==='number' && c > 0)
       if (nums.length) totalAjustare = nums[nums.length-1]
@@ -136,6 +151,9 @@ function _parseBorderouSimple(rows) {
       if (m) { const c=parseFloat('1.'+m[1]); if(c>1&&c<1.5) coeficient=c }
     }
   }
+
+  // Prioritate bază: formula de ajustare > ultimul total general fără TVA > max numeric
+  if (bazaDinFormula) totalBaza = bazaDinFormula
   if (!totalBaza) {
     const allNums = rows.flat().filter(c=>typeof c==='number'&&c>10000)
     if (allNums.length) totalBaza = Math.max(...allNums)
@@ -144,7 +162,7 @@ function _parseBorderouSimple(rows) {
   const linii = []
   if (totalBaza) linii.push({ denumire:'', valoare:totalBaza, ajustare:0, tip:'lucr_cm' })
   if (totalAjustare) linii.push({ denumire:'', valoare:totalAjustare, ajustare:0, tip:'ajustare', coeficient })
-  return { nrSL, lunaAn, contractNr, totalBaza, totalAjustare, coeficient, linii, tip:'borderou' }
+  return { nrSL, lunaAn, contractNr, totalBaza, totalAjustare, coeficient, totalOS, linii, tip:'borderou' }
 }
 
 // Centralizator Prunisor: rânduri cu denumire + col_baza + col_ajustare
@@ -1017,7 +1035,8 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 <div style={{marginTop:8, background:G.blue+'0D', border:`1px solid ${G.blue}33`,
                   borderRadius:7, padding:'8px 12px', fontSize:12}}>
                   <div style={{color:G.blue, fontWeight:700, marginBottom:4}}>✅ XLS parsat</div>
-                  {xlsResult.totalBaza && <div style={{color:G.muted}}>Total devize: <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalBaza)}</span></div>}
+                  {xlsResult.totalBaza && <div style={{color:G.muted}}>Total devize (bază): <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalBaza)}</span></div>}
+                  {xlsResult.totalOS != null && xlsResult.totalOS > 0 && <div style={{color:G.muted}}>din care OS (organizare șantier): <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalOS)}</span></div>}
                   {xlsResult.totalAjustare && <div style={{color:G.muted}}>Ajustare ICC: <span style={{color:G.yellow, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalAjustare)}</span>{xlsResult.coeficient && ` (×${xlsResult.coeficient})`}</div>}
                   {(xlsResult.totalBaza || 0) + (xlsResult.totalAjustare || 0) > 0 && (
                     <div style={{color:G.muted}}>Total ajustat: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>
