@@ -13,6 +13,7 @@
 import React, { useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import html2canvas from 'html2canvas'
+import { compressFileBeforeUpload } from './compressFile.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -113,13 +114,19 @@ export default function BugReportButton({ profile }) {
       if (error) throw error
 
       // upload poza → bucket tichete-atasamente (același ca în Tichete.jsx)
-      const ext = (pozaFile.name.split('.').pop() || 'png').toLowerCase()
+      // FIX 16.06.2026: comprimă/normalizează ca JPEG ≤2048px ÎNAINTE de upload.
+      //   Bucket-ul acceptă doar jpeg/png/webp/heic/pdf + limită 10MB; pozele mari
+      //   de pe telefon sau mime-uri neacceptate erau respinse silent → tichet fără poză.
+      let toUpload = pozaFile
+      try { toUpload = await compressFileBeforeUpload(pozaFile) } catch (_) { toUpload = pozaFile }
+      const ext = (toUpload.name.split('.').pop() || 'jpg').toLowerCase()
       const path = `${tk.id}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
-      const { error: upErr } = await supabase.storage.from('tichete-atasamente').upload(path, pozaFile, { contentType: pozaFile.type || 'image/png' })
+      const { error: upErr } = await supabase.storage.from('tichete-atasamente').upload(path, toUpload, { contentType: toUpload.type || 'image/jpeg' })
       if (upErr) {
-        // tichetul s-a creat, dar poza nu — anunțăm, nu blocăm
+        // tichetul s-a creat, dar poza nu — eroare VIZIBILĂ ca să poată reîncerca
         console.error('Upload poză bug:', upErr)
-        setDoneNr((tk.numar_tichet || '#' + tk.id) + ' (fără poză — eroare upload)')
+        setErr(`Tichetul ${tk.numar_tichet || '#' + tk.id} a fost creat, DAR poza nu s-a încărcat: ${upErr.message || 'eroare necunoscută'}. Deschide tichetul și reîncarcă poza, sau încearcă din nou cu altă imagine.`)
+        setDoneNr((tk.numar_tichet || '#' + tk.id) + ' (⚠️ fără poză — vezi eroarea de sus)')
       } else {
         await supabase.from('tichete').update({ poze_paths: [path] }).eq('id', tk.id)
         setDoneNr(tk.numar_tichet || '#' + tk.id)
@@ -177,9 +184,10 @@ export default function BugReportButton({ profile }) {
 
             {doneNr ? (
               <div style={{ textAlign: 'center', padding: '20px 8px' }}>
-                <div style={{ fontSize: 40, marginBottom: 10 }}>✅</div>
+                <div style={{ fontSize: 40, marginBottom: 10 }}>{err ? '⚠️' : '✅'}</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: G.text, marginBottom: 6 }}>Mulțumim! {tip === 'feature' ? 'Cererea a fost trimisă' : 'Bug-ul a fost trimis'}.</div>
-                <div style={{ fontSize: 13, color: G.muted, marginBottom: 18 }}>Tichet <b style={{ color: G.text }}>{doneNr}</b> creat în departamentul IT. Se rezolvă cât de repede.</div>
+                <div style={{ fontSize: 13, color: G.muted, marginBottom: err ? 12 : 18 }}>Tichet <b style={{ color: G.text }}>{doneNr}</b> creat în departamentul IT. Se rezolvă cât de repede.</div>
+                {err && <div style={{ padding: '9px 12px', background: G.red + '22', color: G.red, borderRadius: 8, fontSize: 12.5, marginBottom: 16, textAlign: 'left' }}>{err}</div>}
                 <button onClick={close} style={{ padding: '9px 20px', background: G.orange, color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>Închide</button>
               </div>
             ) : (
