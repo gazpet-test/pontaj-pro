@@ -418,10 +418,10 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       const [yy, mm, dd] = String(dataRaw).split('-')
       const dataFmt = `${dd}.${mm}.${yy}`
 
-      // Beneficiar scurt (ex: TRANSGAZ din SNTGN TRANSGAZ S.A.)
+      // Beneficiar scurt (primele 2 cuvinte semnificative: Atlas_Copco, SNTGN_TRANSGAZ)
       const benef = (fData.beneficiar_nume || form.beneficiar_nume || '')
         .replace(/S\.?R\.?L\.?|S\.?A\.?/gi,'').trim()
-        .split(/\s+/).filter(w=>w.length>2).slice(-2).join('_')
+        .split(/\s+/).filter(w=>w.length>2).slice(0,2).join('_')
         .replace(/[^a-zA-Z0-9_]/g,'')
 
       // Titlu scurt opțional — sanitizat
@@ -609,12 +609,16 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           </div>
 
           {/* Detalii expeditie + link Proiect */}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:12}}>
             <div>
               <label style={S.lbl}>Mod plată</label>
               <select value={form.mod_plata} onChange={e=>set('mod_plata',e.target.value)} style={fieldStyle}>
                 {['OP','Numerar','CEC','Card'].map(m=><option key={m} value={m}>{m}</option>)}
               </select>
+            </div>
+            <div>
+              <label style={S.lbl}>Termen plată (zile)</label>
+              <input type="number" value={form.termen_plata_zile} onChange={e=>set('termen_plata_zile',e.target.value)} style={fieldStyle} placeholder="30" />
             </div>
             <div>
               <label style={S.lbl}>Delegat</label>
