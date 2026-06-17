@@ -190,11 +190,20 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     ;(async () => {
       // Valoarea facturii = valoarea ajustată (bază cu OS + ajustare). Obiectul din lista SL
       // poate să nu conțină valoare_ajustata_lei → o luăm PROASPĂT din BD ca să nu cădem pe bază.
-      let val = parseFloat(slDefault.valoare_ajustata_lei || slDefault.valoare_baza_lei || 0)
+      // Valori SL: bază + ajustare ICC separate (factura le listează ca 2 linii distincte).
+      let valBaza = parseFloat(slDefault.valoare_baza_lei || 0)
+      let valAjust = parseFloat(slDefault.valoare_ajustare_lei || 0)
+      let valTotal = parseFloat(slDefault.valoare_ajustata_lei || slDefault.valoare_baza_lei || 0)
+      let coefAjust = parseFloat(slDefault.coeficient_ajustare || 0)
       try {
         const { data: slF } = await supabase.from('executie_situatii_plata')
-          .select('valoare_baza_lei, valoare_ajustata_lei').eq('id', slDefault.id).single()
-        if (slF) val = parseFloat(slF.valoare_ajustata_lei || slF.valoare_baza_lei || 0)
+          .select('valoare_baza_lei, valoare_ajustare_lei, valoare_ajustata_lei, coeficient_ajustare').eq('id', slDefault.id).single()
+        if (slF) {
+          valBaza   = parseFloat(slF.valoare_baza_lei || 0)
+          valAjust  = parseFloat(slF.valoare_ajustare_lei || 0)
+          valTotal  = parseFloat(slF.valoare_ajustata_lei || slF.valoare_baza_lei || 0)
+          coefAjust = parseFloat(slF.coeficient_ajustare || 0)
+        }
       } catch(e) { /* fallback la valorile din obiectul listei */ }
       // Contract terț (Administrativ → Contracte cu Terți): nume + nr + dată + beneficiar.
       // OS-ul NU apare ca linie — valoarea (valoare_ajustata_lei) include deja bază (cu OS) + ajustare.
@@ -229,9 +238,17 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       } catch(e) { /* fallback: rămâne nr_contract simplu, fără denumire/beneficiar */ }
       const denPart = contractDenumire ? ` — ${contractDenumire}` : ''
       const den = `Contravaloare lucrări conf. situație de lucrări nr.${slDefault.nr_situatie}${denPart} — contract ${contractRef||'—'}`
+      // Dacă SL are ajustare ICC → 2 linii separate (bază + ajustare). Altfel o singură linie.
+      const hasAjust = Math.abs(valAjust) > 0.005
+      const articoleSL = hasAjust ? [
+        { nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT },
+        { nr:2, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT },
+      ] : [
+        { nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:valTotal.toFixed(2), valoare:valTotal.toFixed(2), tva_pct:TVA_DEFAULT },
+      ]
       setForm(f => ({
         ...f,
-        articole: [{ nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:val.toFixed(2), valoare:val.toFixed(2), tva_pct:TVA_DEFAULT }],
+        articole: articoleSL,
         proiect_id: String(slDefault.proiect_id||''),
         situatie_plata_ids: [slDefault.id],
         ...(termenPlata ? { termen_plata_zile: termenPlata } : {}),
