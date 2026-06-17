@@ -103,6 +103,11 @@ function buildInvoiceHTML(f) {
         <div>Sediul: ${f.beneficiar_sediu||''}</div>
         <div>Cont IBAN: ${f.beneficiar_iban||''}</div>
         <div>Banca: ${f.beneficiar_banca||''}</div>
+        ${(f.contact_nume||f.contact_email||f.contact_telefon) ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #ddd;font-size:10px;color:#333">
+          ${f.contact_nume?`<div>Persoană contact: <strong>${f.contact_nume}</strong></div>`:''}
+          ${f.contact_email?`<div>Adresă email: ${f.contact_email}</div>`:''}
+          ${f.contact_telefon?`<div>Telefon: ${f.contact_telefon}</div>`:''}
+        </div>` : ''}
       </td>
     </tr>
   </table>
@@ -164,6 +169,9 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     beneficiar_iban:  item?.beneficiar_iban || '',
     beneficiar_banca: item?.beneficiar_banca || '',
     beneficiar_sediu: item?.beneficiar_sediu || '',
+    contact_nume:    item?.contact_nume || '',
+    contact_email:   item?.contact_email || '',
+    contact_telefon: item?.contact_telefon || '',
     articole:    item?.articole || [{ nr:1, denumire:'', um:'buc', cantitate:1, pret_unitar:'', valoare:'', tva_pct:TVA_DEFAULT }],
     tva_pct:     item?.tva_pct || TVA_DEFAULT,
     mod_plata:   item?.mod_plata || 'OP',
@@ -230,7 +238,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             termenPlata = ct.termen_plata_zile
             if (ct.beneficiar_id) {
               const { data: b } = await supabase.from('beneficiari')
-                .select('id,nume,cif,iban_principal,banca,sediu').eq('id', ct.beneficiar_id).single()
+                .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon').eq('id', ct.beneficiar_id).single()
               if (b) benef = b
             }
           }
@@ -259,6 +267,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           beneficiar_iban:  benef.iban_principal || '',
           beneficiar_banca: benef.banca || '',
           beneficiar_sediu: benef.sediu || '',
+          contact_email:    benef.contact_email || '',
+          contact_telefon:  benef.telefon || '',
         } : {}),
       }))
     })()
@@ -312,6 +322,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       beneficiar_iban:  b.iban_principal || '',
       beneficiar_banca: b.banca || '',
       beneficiar_sediu: b.sediu || '',
+      contact_email:   b.contact_email || f.contact_email || '',
+      contact_telefon: b.telefon || f.contact_telefon || '',
     }))
     else set('beneficiar_id', bId)
   }
@@ -335,6 +347,9 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         beneficiar_iban:  form.beneficiar_iban.trim()  || null,
         beneficiar_banca: form.beneficiar_banca.trim() || null,
         beneficiar_sediu: form.beneficiar_sediu.trim() || null,
+        contact_nume:    form.contact_nume.trim() || null,
+        contact_email:   form.contact_email.trim() || null,
+        contact_telefon: form.contact_telefon.trim() || null,
         articole: form.articole,
         tva_pct: parseFloat(form.tva_pct) || TVA_DEFAULT,
         valoare_neta: totals.neta,
@@ -361,6 +376,13 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         ({ error: err } = await supabase.from('facturi_emise').update(payload).eq('id', item.id))
       }
       if (err) throw err
+      // SL-urile legate trec automat în „facturata" la emiterea facturii
+      if (form.situatie_plata_ids.length) {
+        await supabase.from('executie_situatii_plata')
+          .update({ status: 'facturata' })
+          .in('id', form.situatie_plata_ids.map(Number))
+          .neq('status', 'facturata')
+      }
       showToast(isNew ? 'Factură creată!' : 'Factură salvată!', 'ok')
       if (andPDF && savedId) await handleGenPDF(savedId, { ...payload, id: savedId, nr: nrFinal, an: parseInt(form.an) || new Date().getFullYear() })
       onSaved()
@@ -518,6 +540,23 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             <div style={{marginTop:8}}>
               <label style={S.lbl}>Sediu</label>
               <input value={form.beneficiar_sediu} onChange={e=>set('beneficiar_sediu',e.target.value)} style={fieldStyle} placeholder="Piata C.I. Motas nr.1, Sibiu - Medias" />
+            </div>
+            <div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${G.border}`}}>
+              <div style={{fontSize:11,color:G.muted,marginBottom:8,fontWeight:600}}>📇 Persoană de contact <span style={{color:G.dim,fontWeight:400}}>(apare pe factură, colț dreapta)</span></div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
+                <div>
+                  <label style={S.lbl}>Persoană contact</label>
+                  <input value={form.contact_nume} onChange={e=>set('contact_nume',e.target.value)} style={fieldStyle} placeholder="ex: Ion Popescu" />
+                </div>
+                <div>
+                  <label style={S.lbl}>Adresă email</label>
+                  <input value={form.contact_email} onChange={e=>set('contact_email',e.target.value)} style={fieldStyle} placeholder="ex: contact@firma.ro" />
+                </div>
+                <div>
+                  <label style={S.lbl}>Telefon</label>
+                  <input value={form.contact_telefon} onChange={e=>set('contact_telefon',e.target.value)} style={fieldStyle} placeholder="ex: 07xx xxx xxx" />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -779,7 +818,7 @@ export default function FinanciarPage() {
       const { data: alertData } = await supabase.from('v_sl_fara_factura').select('*').order('an').order('luna')
       setSlAlert(alertData || [])
       // Beneficiari
-      const { data: bens } = await supabase.from('beneficiari').select('id,nume,cif,iban_principal,banca,sediu').eq('activ',true).order('nume')
+      const { data: bens } = await supabase.from('beneficiari').select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon').eq('activ',true).order('nume')
       setBeneficiari(bens || [])
     } finally { setLoading(false) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
