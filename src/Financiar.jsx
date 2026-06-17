@@ -220,6 +220,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       let contractDenumire = ''
       let benef = null
       let termenPlata = null
+      let contactContract = null
       try {
         let cid = slDefault.contract_id
         if (slDefault.proiect_id) {
@@ -228,7 +229,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         }
         if (cid) {
           const { data: ct } = await supabase.from('contracte_terti')
-            .select('numar_contract, data_semnare, denumire, termen_plata_zile, beneficiar_id').eq('id', cid).single()
+            .select('numar_contract, data_semnare, denumire, termen_plata_zile, beneficiar_id, contact_factura_nume, contact_factura_email, contact_factura_telefon').eq('id', cid).single()
           if (ct) {
             if (ct.numar_contract) {
               const dS = ct.data_semnare ? new Date(ct.data_semnare).toLocaleDateString('ro-RO') : ''
@@ -236,6 +237,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             }
             contractDenumire = ct.denumire || ''
             termenPlata = ct.termen_plata_zile
+            contactContract = { nume: ct.contact_factura_nume || '', email: ct.contact_factura_email || '', telefon: ct.contact_factura_telefon || '' }
             if (ct.beneficiar_id) {
               const { data: b } = await supabase.from('beneficiari')
                 .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon').eq('id', ct.beneficiar_id).single()
@@ -267,8 +269,9 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           beneficiar_iban:  benef.iban_principal || '',
           beneficiar_banca: benef.banca || '',
           beneficiar_sediu: benef.sediu || '',
-          contact_email:    benef.contact_email || '',
-          contact_telefon:  benef.telefon || '',
+          contact_nume:     (contactContract && contactContract.nume) || '',
+          contact_email:    (contactContract && contactContract.email) || benef.contact_email || '',
+          contact_telefon:  (contactContract && contactContract.telefon) || benef.telefon || '',
         } : {}),
       }))
     })()

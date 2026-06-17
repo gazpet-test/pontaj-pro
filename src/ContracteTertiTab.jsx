@@ -955,6 +955,15 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     pdf_path: item.pdf_path || '',
     status: item.status || 'draft',
     observatii: item.observatii || '',
+    contact_factura_nume: item.contact_factura_nume || '',
+    contact_factura_email: item.contact_factura_email || '',
+    contact_factura_telefon: item.contact_factura_telefon || '',
+    contact_mng_nume: item.contact_mng_nume || '',
+    contact_mng_email: item.contact_mng_email || '',
+    contact_mng_telefon: item.contact_mng_telefon || '',
+    contact_resp_exec_nume: item.contact_resp_exec_nume || '',
+    contact_resp_exec_email: item.contact_resp_exec_email || '',
+    contact_resp_exec_telefon: item.contact_resp_exec_telefon || '',
     santiere_ids: (item.santiere_ids || []).map(Number),
   })
   const [saving, setSaving] = useState(false)
@@ -1053,6 +1062,15 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       data_termen: f.data_termen || null,
       status: f.status || 'draft',
       observatii: (f.observatii || '').trim() || null,
+      contact_factura_nume: f.contact_factura_nume.trim() || null,
+      contact_factura_email: f.contact_factura_email.trim() || null,
+      contact_factura_telefon: f.contact_factura_telefon.trim() || null,
+      contact_mng_nume: f.contact_mng_nume.trim() || null,
+      contact_mng_email: f.contact_mng_email.trim() || null,
+      contact_mng_telefon: f.contact_mng_telefon.trim() || null,
+      contact_resp_exec_nume: f.contact_resp_exec_nume.trim() || null,
+      contact_resp_exec_email: f.contact_resp_exec_email.trim() || null,
+      contact_resp_exec_telefon: f.contact_resp_exec_telefon.trim() || null,
       pdf_path: f.pdf_path || null,
       // Multi-șantier (12.06.2026): contractele de furnizare/prestări deservesc mai multe lucrări
       santiere_ids: f.santiere_ids.length ? f.santiere_ids : null,
@@ -1227,6 +1245,38 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         <div>
           <label style={S.lbl}>Observații</label>
           <textarea style={{...S.input, minHeight:50, fontFamily:'inherit', resize:'vertical'}} value={f.observatii} onChange={e => setF({...f, observatii:e.target.value})} />
+        </div>
+
+        {/* ── 📇 Persoane de contact beneficiar (pe contract, pot diferi per lucrare) ── */}
+        <div style={{padding:12, background:G.surface, border:`1px solid ${G.blue}33`, borderRadius:8}}>
+          <label style={{...S.lbl, color:G.blue}}>📇 Persoane de contact (beneficiar)</label>
+          <div style={{fontSize:10, color:G.dim, marginBottom:8}}>
+            Se completează pe contract (pot diferi per lucrare). „Responsabil primire factură" pre-completează automat factura emisă pe acest contract.
+          </div>
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:11, fontWeight:700, color:G.text, marginBottom:4}}>📄 Responsabil primire factură</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8}}>
+              <input style={S.input} value={f.contact_factura_nume} onChange={e=>setF({...f, contact_factura_nume:e.target.value})} placeholder="Nume" />
+              <input style={S.input} value={f.contact_factura_email} onChange={e=>setF({...f, contact_factura_email:e.target.value})} placeholder="Email" />
+              <input style={S.input} value={f.contact_factura_telefon} onChange={e=>setF({...f, contact_factura_telefon:e.target.value})} placeholder="Telefon" />
+            </div>
+          </div>
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:11, fontWeight:700, color:G.text, marginBottom:4}}>👤 Manager de proiect</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8}}>
+              <input style={S.input} value={f.contact_mng_nume} onChange={e=>setF({...f, contact_mng_nume:e.target.value})} placeholder="Nume" />
+              <input style={S.input} value={f.contact_mng_email} onChange={e=>setF({...f, contact_mng_email:e.target.value})} placeholder="Email" />
+              <input style={S.input} value={f.contact_mng_telefon} onChange={e=>setF({...f, contact_mng_telefon:e.target.value})} placeholder="Telefon" />
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:11, fontWeight:700, color:G.text, marginBottom:4}}>🛠️ Responsabil din execuție</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8}}>
+              <input style={S.input} value={f.contact_resp_exec_nume} onChange={e=>setF({...f, contact_resp_exec_nume:e.target.value})} placeholder="Nume" />
+              <input style={S.input} value={f.contact_resp_exec_email} onChange={e=>setF({...f, contact_resp_exec_email:e.target.value})} placeholder="Email" />
+              <input style={S.input} value={f.contact_resp_exec_telefon} onChange={e=>setF({...f, contact_resp_exec_telefon:e.target.value})} placeholder="Telefon" />
+            </div>
+          </div>
         </div>
 
           {/* ── 📍 Șantier asociat → sincronizare automată cu Proiect Execuție ── */}
