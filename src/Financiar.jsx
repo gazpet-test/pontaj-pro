@@ -185,6 +185,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     titlu_scurt: item?.titlu_scurt || '',
   })
   const [saving, setSaving]       = useState(false)
+  const [salveazaClient, setSalveazaClient] = useState(true)  // salvează clientul nou în listă pt refolosire
   const [genPDF, setGenPDF]       = useState(false)
   const [sendingEmail, setSendingEmail] = useState(false)
   const [pdfUrl, setPdfUrl]       = useState(item?.pdf_path ? `PDF existent: ${item.pdf_path}` : null)
@@ -240,7 +241,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             contactContract = { nume: ct.contact_factura_nume || '', email: ct.contact_factura_email || '', telefon: ct.contact_factura_telefon || '' }
             if (ct.beneficiar_id) {
               const { data: b } = await supabase.from('beneficiari')
-                .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon').eq('id', ct.beneficiar_id).single()
+                .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume').eq('id', ct.beneficiar_id).single()
               if (b) benef = b
             }
           }
@@ -269,7 +270,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           beneficiar_iban:  benef.iban_principal || '',
           beneficiar_banca: benef.banca || '',
           beneficiar_sediu: benef.sediu || '',
-          contact_nume:     (contactContract && contactContract.nume) || '',
+          contact_nume:     (contactContract && contactContract.nume) || benef.contact_nume || '',
           contact_email:    (contactContract && contactContract.email) || benef.contact_email || '',
           contact_telefon:  (contactContract && contactContract.telefon) || benef.telefon || '',
         } : {}),
@@ -325,6 +326,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       beneficiar_iban:  b.iban_principal || '',
       beneficiar_banca: b.banca || '',
       beneficiar_sediu: b.sediu || '',
+      contact_nume:    b.contact_nume || f.contact_nume || '',
       contact_email:   b.contact_email || f.contact_email || '',
       contact_telefon: b.telefon || f.contact_telefon || '',
     }))
@@ -341,10 +343,33 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         const { data: nextNr } = await supabase.rpc('fn_get_next_nr_factura', { p_serie: form.serie })
         nrFinal = nextNr
       }
+      // Client fără contract: salvează-l în listă la prima factură → auto-fill data viitoare
+      let benefId = form.beneficiar_id ? parseInt(form.beneficiar_id) : null
+      if (!benefId && salveazaClient && form.beneficiar_nume.trim()) {
+        const cifNou = form.beneficiar_cif.trim()
+        if (cifNou) {
+          const { data: ex } = await supabase.from('beneficiari').select('id').ilike('cif', cifNou).limit(1)
+          if (ex && ex.length) benefId = ex[0].id
+        }
+        if (!benefId) {
+          const { data: nb } = await supabase.from('beneficiari').insert({
+            nume: form.beneficiar_nume.trim(),
+            cif: cifNou || null,
+            iban_principal: form.beneficiar_iban.trim() || null,
+            banca: form.beneficiar_banca.trim() || null,
+            sediu: form.beneficiar_sediu.trim() || null,
+            contact_nume: form.contact_nume.trim() || null,
+            contact_email: form.contact_email.trim() || null,
+            telefon: form.contact_telefon.trim() || null,
+            activ: true,
+          }).select('id').single()
+          if (nb) benefId = nb.id
+        }
+      }
       const payload = {
         serie: form.serie, nr: parseInt(nrFinal),
         data: form.data,
-        beneficiar_id: form.beneficiar_id ? parseInt(form.beneficiar_id) : null,
+        beneficiar_id: benefId,
         beneficiar_nume: form.beneficiar_nume.trim(),
         beneficiar_cif:   form.beneficiar_cif.trim()   || null,
         beneficiar_iban:  form.beneficiar_iban.trim()  || null,
@@ -519,6 +544,12 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
                 <option value="">— Selectează sau completează manual —</option>
                 {beneficiariLista.map(b=><option key={b.id} value={b.id}>{b.nume}</option>)}
               </select>
+              {!form.beneficiar_id && (
+                <label style={{display:'flex',alignItems:'center',gap:8,marginTop:8,fontSize:12,color:G.muted,cursor:'pointer'}}>
+                  <input type="checkbox" checked={salveazaClient} onChange={e=>setSalveazaClient(e.target.checked)} />
+                  💾 Salvează clientul în listă pentru refolosire (auto-fill data viitoare)
+                </label>
+              )}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:10,marginBottom:8}}>
               <div>
@@ -825,7 +856,7 @@ export default function FinanciarPage() {
       const { data: alertData } = await supabase.from('v_sl_fara_factura').select('*').order('an').order('luna')
       setSlAlert(alertData || [])
       // Beneficiari
-      const { data: bens } = await supabase.from('beneficiari').select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon').eq('activ',true).order('nume')
+      const { data: bens } = await supabase.from('beneficiari').select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume').eq('activ',true).order('nume')
       setBeneficiari(bens || [])
     } finally { setLoading(false) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
