@@ -4000,8 +4000,13 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
   const [activTransportatId, setActivTransportatId] = useState(T?.activ_transportat_id ? String(T.activ_transportat_id) : '')
   const [continutDescriere, setContinutDescriere] = useState(T?.continut_descriere || '')
   // 26.05.2026: Conținut multiplu - utilaje + marfă în aceeași listă
-  const [continutItems, setContinutItems] = useState([])  // [{ tempId, tip:'utilaj'|'marfa', active_id?, denumire?, cantitate?, unitate_masura?, observatii?, ordine }]
+  const [continutItems, setContinutItems] = useState([])  // [{ tempId, tip:'utilaj'|'marfa', active_id?, denumire?, cantitate?, unitate_masura?, observatii?, ordine, din_stoc?, _maxDisp? }]
   const [continutLoading, setContinutLoading] = useState(false)
+  // 17.06.2026 (Magazie 6.2): selecție materiale din stocul locației de plecare
+  const [stocSursa, setStocSursa] = useState([])        // [{ material_denumire, um, cantitate }]
+  const [stocLoading, setStocLoading] = useState(false)
+  const [proiecteSursa, setProiecteSursa] = useState([]) // proiectele de pe șantierul de plecare (pt mapare stoc)
+  const [proiectSursaId, setProiectSursaId] = useState('') // proiectul ales când șantierul are mai multe
   const [plecareTip, setPlecareTip] = useState(T?.plecare_tip || 'sediu')
   const [plecareSiteId, setPlecareSiteId] = useState(T?.plecare_site_id ? String(T.plecare_site_id) : '')
   const [plecareLocText, setPlecareLocText] = useState(T?.plecare_locatie_text || '')
@@ -4042,7 +4047,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     setContinutLoading(true)
     supabase
       .from('logistica_transporturi_continut')
-      .select('id, tip, active_id, denumire, cantitate, unitate_masura, observatii, ordine')
+      .select('id, tip, active_id, denumire, cantitate, unitate_masura, observatii, ordine, din_stoc')
       .eq('transport_id', T.id)
       .order('ordine', { ascending: true })
       .then(({ data, error }) => {
@@ -4060,6 +4065,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
             unitate_masura: it.unitate_masura || '',
             observatii: it.observatii || '',
             ordine: it.ordine ?? idx,
+            din_stoc: it.din_stoc || false,
           })))
         }
         setContinutLoading(false)
@@ -4109,6 +4115,47 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     })
   }
   
+  // ─── 17.06.2026 (Magazie 6.2): stoc materiale din locația de plecare ───
+  // Locația de stoc derivată din plecare: sediu → {sediu,null}; site → {proiect, proiectSursaId}
+  const locatieSursaStoc = useMemo(() => {
+    if (plecareTip === 'sediu') return { tip: 'sediu', id: null }
+    if (plecareTip === 'site' && proiectSursaId) return { tip: 'proiect', id: Number(proiectSursaId) }
+    return null  // 'alta' sau site fără proiect selectat → fără stoc
+  }, [plecareTip, proiectSursaId])
+
+  // La schimbarea șantierului de plecare → găsește proiectele lui (pt mapare stoc)
+  useEffect(() => {
+    if (plecareTip !== 'site' || !plecareSiteId) { setProiecteSursa([]); setProiectSursaId(''); return }
+    supabase.from('executie_proiecte').select('id, nume, site_id').eq('site_id', Number(plecareSiteId)).then(({ data }) => {
+      const list = data || []
+      setProiecteSursa(list)
+      setProiectSursaId(list.length === 1 ? String(list[0].id) : '')  // auto dacă 1 singur proiect
+    })
+  }, [plecareTip, plecareSiteId])
+
+  // La schimbarea locației sursă → încarcă stocul disponibil
+  useEffect(() => {
+    if (!locatieSursaStoc) { setStocSursa([]); return }
+    setStocLoading(true)
+    let q = supabase.from('stocuri').select('material_denumire, um, cantitate').eq('locatie_tip', locatieSursaStoc.tip).gt('cantitate', 0)
+    q = locatieSursaStoc.id == null ? q.is('locatie_id', null) : q.eq('locatie_id', locatieSursaStoc.id)
+    q.order('material_denumire').then(({ data }) => { setStocSursa(data || []); setStocLoading(false) })
+  }, [locatieSursaStoc])
+
+  // Adaugă o poziție de stoc în lista de conținut (ca marfă din_stoc)
+  const addFromStoc = (pos) => {
+    setContinutItems(items => {
+      // dacă materialul există deja ca linie din_stoc, nu dubla
+      if (items.some(it => it.din_stoc && (it.denumire || '').toLowerCase() === (pos.material_denumire || '').toLowerCase())) return items
+      return [...items, {
+        tempId: 'stoc_' + Date.now() + '_' + items.length,
+        tip: 'marfa', active_id: null,
+        denumire: pos.material_denumire, cantitate: '', unitate_masura: pos.um || '',
+        observatii: '', ordine: items.length, din_stoc: true, _maxDisp: Number(pos.cantitate),
+      }]
+    })
+  }
+
   // Load alocări site → manager (din profile_sites)
   useEffect(() => {
     supabase.from('profile_sites').select('site_id, profile_id').then(({ data }) => {
@@ -4257,6 +4304,10 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
       showToast('Descrie ce se transportă (sau adaugă în lista de conținut)', 'warn')
       return
     }
+    if (tip === 'materiale' && continutItems.length === 0) {
+      showToast('Adaugă cel puțin un material (din stoc sau marfă liberă)', 'warn')
+      return
+    }
     if (plecareTip === 'site' && !plecareSiteId) {
       showToast('Selectează șantierul de plecare', 'warn')
       return
@@ -4386,6 +4437,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
         unitate_masura: it.unitate_masura || null,
         observatii: it.observatii?.trim() || null,
         ordine: idx,
+        din_stoc: it.din_stoc || false,
         created_by: profile?.id || null,
       }))
       const { error: insErr } = await supabase
@@ -4438,22 +4490,70 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
           ))}
         </div>
         
-        {/* TIP MATERIALE - Placeholder pentru viitor modul Magazie */}
+        {/* TIP MATERIALE - Selecție din stocul locației de plecare (Magazie 6.2) */}
         {tip === 'materiale' && (
           <div style={{marginBottom:14}}>
-            <div style={{padding:18, background:G.purple+'11', border:`2px dashed ${G.purple}77`, borderRadius:12, textAlign:'center'}}>
-              <div style={{fontSize:32, marginBottom:8}}>📦</div>
-              <div style={{fontSize:15, fontWeight:700, color:G.purple, marginBottom:6}}>Transport Materiale — În curs de dezvoltare</div>
-              <div style={{fontSize:12, color:G.muted, lineHeight:1.6, maxWidth:480, margin:'0 auto'}}>
-                Această funcționalitate va fi disponibilă odată cu <strong>Modulul Magazie</strong>. 
-                Vei putea selecta materiale din stoc (magazie centrală sau alt șantier) și genera transfer cu aviz automat.
-                <br/><br/>
-                <strong>Pentru moment</strong>, descrie materialele transportate în câmpul "Conținut transport" de mai jos.
-              </div>
-              <div style={{marginTop:12, padding:'8px 14px', background:G.purple+'22', color:G.purple, borderRadius:6, display:'inline-block', fontSize:11, fontWeight:700, letterSpacing:.5}}>
-                🚧 ÎN CURÂND
-              </div>
+            <div style={{fontSize:11, color:G.purple, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:6}}>
+              📦 Materiale din stoc
             </div>
+            {plecareTip === 'alta' ? (
+              <div style={{padding:12, background:G.bg, border:`1px dashed ${G.border}`, borderRadius:8, fontSize:12, color:G.muted, lineHeight:1.5}}>
+                Selectează o locație de plecare <strong>Sediu</strong> sau <strong>Șantier</strong> (mai jos) pentru a alege din stocul ei.
+                Pentru livrare la o locație externă, folosește butonul <strong>📦 + Adaugă marfă</strong> (text liber) din lista de conținut.
+              </div>
+            ) : plecareTip === 'site' && !plecareSiteId ? (
+              <div style={{padding:12, background:G.bg, border:`1px dashed ${G.border}`, borderRadius:8, fontSize:12, color:G.muted}}>
+                Alege întâi <strong>șantierul de plecare</strong> mai jos.
+              </div>
+            ) : plecareTip === 'site' && proiecteSursa.length === 0 ? (
+              <div style={{padding:12, background:G.orange+'11', border:`1px dashed ${G.orange}55`, borderRadius:8, fontSize:12, color:G.muted}}>
+                Acest șantier nu are un proiect cu stoc asociat. Adaugă întâi stoc în modulul <strong>Magazie</strong>.
+              </div>
+            ) : (
+              <div>
+                {/* Alege proiectul dacă șantierul are mai multe */}
+                {plecareTip === 'site' && proiecteSursa.length > 1 && (
+                  <div style={{marginBottom:8}}>
+                    <div style={{fontSize:11, color:G.muted, marginBottom:4}}>Stoc din proiectul:</div>
+                    <select value={proiectSursaId} onChange={e => setProiectSursaId(e.target.value)} style={{...S.input, fontSize:12}}>
+                      <option value="">— alege proiectul —</option>
+                      {proiecteSursa.map(p => <option key={p.id} value={p.id}>{p.nume}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div style={{fontSize:11, color:G.muted, marginBottom:8, lineHeight:1.4}}>
+                  Sursă: <strong style={{color:G.text}}>{plecareTip === 'sediu' ? 'Sediu — Magazie centrală' : (proiecteSursa.find(p => String(p.id) === String(proiectSursaId))?.nume || 'Șantier')}</strong>.
+                  Stocul se mută efectiv la <strong>confirmarea primirii</strong> la destinație.
+                </div>
+                {stocLoading ? (
+                  <div style={{padding:12, textAlign:'center', color:G.muted, fontSize:12}}>⏳ Încărcare stoc...</div>
+                ) : (plecareTip === 'site' && !proiectSursaId) ? (
+                  <div style={{padding:12, background:G.bg, border:`1px dashed ${G.border}`, borderRadius:8, fontSize:12, color:G.muted}}>Alege proiectul mai sus.</div>
+                ) : stocSursa.length === 0 ? (
+                  <div style={{padding:12, background:G.bg, border:`1px dashed ${G.border}`, borderRadius:8, fontSize:12, color:G.muted}}>
+                    Nicio poziție de stoc disponibilă (cantitate &gt; 0) în această locație.
+                  </div>
+                ) : (
+                  <div style={{display:'flex', flexDirection:'column', gap:5, maxHeight:220, overflow:'auto'}}>
+                    {stocSursa.map((pos, i) => {
+                      const added = continutItems.some(it => it.din_stoc && (it.denumire || '').toLowerCase() === (pos.material_denumire || '').toLowerCase())
+                      return (
+                        <div key={i} style={{display:'flex', alignItems:'center', gap:8, padding:'7px 10px', background:G.bg, border:`1px solid ${added ? G.green+'55' : G.border}`, borderRadius:7}}>
+                          <div style={{flex:1, minWidth:0}}>
+                            <div style={{fontSize:12, color:G.text, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{pos.material_denumire}</div>
+                            <div style={{fontSize:10, color:G.muted}}>Disponibil: <strong style={{color:G.green}}>{Number(pos.cantitate)}</strong> {pos.um || ''}</div>
+                          </div>
+                          <button type="button" onClick={() => addFromStoc(pos)} disabled={added}
+                            style={{padding:'6px 12px', background: added ? G.green+'22' : G.purple+'22', color: added ? G.green : G.purple, border:`1px solid ${added ? G.green+'55' : G.purple+'55'}`, borderRadius:6, cursor: added ? 'default' : 'pointer', fontSize:11, fontWeight:700, flexShrink:0}}>
+                            {added ? '✓ Adăugat' : '+ Adaugă'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
         
@@ -4477,7 +4577,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
               {continutItems.map((it, idx) => {
                 const isUtilaj = it.tip === 'utilaj'
                 const activeOpt = isUtilaj && it.active_id ? active.find(a => a.id === it.active_id) : null
-                const rowColor = isUtilaj ? G.blue : G.green
+                const rowColor = isUtilaj ? G.blue : (it.din_stoc ? G.purple : G.green)
                 return (
                   <div key={it.tempId} style={{
                     display:'flex', gap:6, padding:8,
@@ -4498,7 +4598,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                       background:rowColor + '22', color:rowColor, minWidth:60, textAlign:'center',
                       letterSpacing:.5, textTransform:'uppercase', flexShrink:0, alignSelf:'center',
                     }}>
-                      {isUtilaj ? '🚛 Utilaj' : '📦 Marfă'}
+                      {isUtilaj ? '🚛 Utilaj' : (it.din_stoc ? '📦 Stoc' : '📦 Marfă')}
                     </div>
                     
                     {/* Conținut rând */}
@@ -4519,6 +4619,14 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                             ))
                           }
                         </select>
+                      ) : it.din_stoc ? (
+                        <input
+                          type="text"
+                          value={it.denumire || ''}
+                          readOnly
+                          title="Material din stoc — denumire fixă"
+                          style={{...S.input, fontSize:12, opacity:.85, cursor:'default'}}
+                        />
                       ) : (
                         <input
                           type="text"
@@ -4534,8 +4642,13 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                         <input
                           type="number" step="0.01"
                           value={it.cantitate || ''}
-                          onChange={e => updateContinutItem(it.tempId, 'cantitate', e.target.value)}
-                          placeholder={isUtilaj ? 'Buc' : 'Cant'}
+                          max={it.din_stoc ? it._maxDisp : undefined}
+                          onChange={e => {
+                            let v = e.target.value
+                            if (it.din_stoc && v !== '' && Number(v) > it._maxDisp) v = String(it._maxDisp)
+                            updateContinutItem(it.tempId, 'cantitate', v)
+                          }}
+                          placeholder={isUtilaj ? 'Buc' : (it.din_stoc ? `max ${it._maxDisp}` : 'Cant')}
                           style={{...S.input, fontSize:12}}
                         />
                         <input
@@ -5131,6 +5244,16 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   }
   
   // Confirmare primire — acțiune specială când transportul ajunge la destinație
+  // Magazie 6.2: mapare locație transport → locație stoc (null dacă externă/fără proiect)
+  const locTransportToStoc = async (locTip, siteId) => {
+    if (locTip === 'sediu') return { tip: 'sediu', id: null }
+    if (locTip === 'site' && siteId) {
+      const { data } = await supabase.from('executie_proiecte').select('id').eq('site_id', siteId).order('id').limit(1)
+      if (data && data.length) return { tip: 'proiect', id: data[0].id }
+    }
+    return null  // 'alta' sau șantier fără proiect cu stoc
+  }
+
   const handleConfirmPrimire = async () => {
     setActionLoading(true)
     const { error } = await supabase.from('logistica_transporturi').update({
@@ -5139,9 +5262,34 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
       confirmat_primire_de: profile.id,
       confirmare_observatii: confirmareObs.trim() || null
     }).eq('id', T.id)
+    if (error) { setActionLoading(false); showToast('Eroare: ' + error.message, 'error'); return }
+
+    // Magazie 6.2: dacă transportul cară materiale din stoc → execută transferul ACUM (la primire)
+    let transferMsg = ''
+    const liniiStoc = (continutItems || []).filter(it => it.din_stoc && it.denumire && Number(it.cantitate) > 0)
+    if (liniiStoc.length > 0 && !T.transfer_id) {
+      const sursa = await locTransportToStoc(T.plecare_tip, T.plecare_site_id)
+      const dest  = await locTransportToStoc(T.destinatie_tip, T.destinatie_site_id)
+      if (!sursa || !dest) {
+        transferMsg = ' ⚠️ Materialele din stoc NU au fost transferate automat (sursă/destinație externă, fără stoc intern).'
+      } else {
+        const linii = liniiStoc.map(it => ({ material_denumire: it.denumire, um: it.unitate_masura || null, cantitate: Number(it.cantitate) }))
+        const { data: trId, error: trErr } = await supabase.rpc('fn_transfer_executa', {
+          p_de_la_tip: sursa.tip, p_de_la_id: sursa.id,
+          p_la_tip: dest.tip, p_la_id: dest.id,
+          p_obs: 'Transport ' + (T.numar_transport || '#' + T.id), p_linii: linii,
+        })
+        if (trErr) {
+          transferMsg = ' ⚠️ Transfer stoc eșuat: ' + trErr.message
+        } else {
+          await supabase.from('logistica_transporturi').update({ transfer_id: trId }).eq('id', T.id)
+          transferMsg = ' 📦 Stoc transferat (' + liniiStoc.length + (liniiStoc.length === 1 ? ' poziție).' : ' poziții).')
+        }
+      }
+    }
+
     setActionLoading(false)
-    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
-    showToast('✅ Primire confirmată — transport finalizat!')
+    showToast('✅ Primire confirmată — transport finalizat!' + transferMsg, transferMsg.includes('⚠️') ? 'warn' : 'success')
     onChanged?.()
     onClose()
   }
