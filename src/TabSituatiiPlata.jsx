@@ -756,6 +756,84 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
   const pdfRef = useRef()
   const set = (k,v) => setForm(f=>({...f,[k]:v}))
 
+  // ── Ajustări retroactive: SL anterioare recuperate în ACEASTĂ situație ──
+  const [slAnterioare, setSlAnterioare] = useState([]) // SL-urile proiectului (pentru dropdown)
+  const [ajustari, setAjustari] = useState([])         // [{ sl_ajustata_id, sl_ajustata_nr, valoare_ajustare_lei, coeficient, observatii, xlsFile, xlsPath, parsing }]
+
+  // Încarcă SL-urile proiectului + (la edit) ajustările deja salvate
+  useEffect(() => {
+    let cancel = false
+    const load = async () => {
+      // SL-urile aceluiași proiect, fără cea curentă (candidate pentru recuperare)
+      const { data: sls } = await supabase
+        .from('executie_situatii_plata')
+        .select('id, nr_situatie, luna, an, valoare_ajustare_lei, ajustare_recuperata, ajustare_recuperata_in_sl')
+        .eq('proiect_id', proiectId)
+        .order('an', { ascending: true }).order('luna', { ascending: true })
+      if (cancel) return
+      setSlAnterioare((sls || []).filter(s => s.id !== item?.id))
+
+      // La editare: trag ajustările existente
+      if (item?.id) {
+        const { data: ajs } = await supabase
+          .from('executie_sl_ajustari')
+          .select('*').eq('sl_id', item.id).order('id', { ascending: true })
+        if (cancel) return
+        setAjustari((ajs || []).map(a => ({
+          sl_ajustata_id: a.sl_ajustata_id ? String(a.sl_ajustata_id) : '',
+          sl_ajustata_nr: a.sl_ajustata_nr || '',
+          valoare_ajustare_lei: a.valoare_ajustare_lei != null ? String(a.valoare_ajustare_lei) : '',
+          coeficient: a.coeficient != null ? String(a.coeficient) : '',
+          observatii: a.observatii || '',
+          centralizator_xls_path: a.centralizator_xls_path || null,
+          xlsFile: null, xlsPath: a.centralizator_xls_path || null, parsing: false,
+        })))
+      }
+    }
+    load()
+    return () => { cancel = true }
+  }, [proiectId, item?.id])
+
+  const addAjustare = () => setAjustari(a => [...a, {
+    sl_ajustata_id:'', sl_ajustata_nr:'', valoare_ajustare_lei:'', coeficient:'',
+    observatii:'', xlsFile:null, xlsPath:null, parsing:false,
+  }])
+  const removeAjustare = (idx) => setAjustari(a => a.filter((_,i) => i !== idx))
+  const updateAjustare = (idx, key, val) => setAjustari(a => a.map((row,i) => {
+    if (i !== idx) return row
+    const next = { ...row, [key]: val }
+    // Când selectezi SL anterioară, auto-completează nr_situatie (editabil)
+    if (key === 'sl_ajustata_id') {
+      const sel = slAnterioare.find(s => String(s.id) === String(val))
+      if (sel) next.sl_ajustata_nr = sel.nr_situatie
+    }
+    return next
+  }))
+
+  // Parsare XLS borderou de ajustare → completează valoare + coeficient (editabile)
+  const parseAjustareXls = async (idx, file) => {
+    if (!file) return
+    setAjustari(a => a.map((r,i) => i===idx ? {...r, xlsFile:file, parsing:true} : r))
+    try {
+      const result = await parseBorderouAjustatXLS(file)
+      const val = (result.totalAjustare && result.totalAjustare > 0) ? result.totalAjustare : result.totalBaza
+      setAjustari(a => a.map((r,i) => i===idx ? {
+        ...r,
+        valoare_ajustare_lei: val ? String(val) : r.valoare_ajustare_lei,
+        coeficient: result.coeficient ? String(result.coeficient) : r.coeficient,
+        parsing:false,
+      } : r))
+    } catch(e) {
+      showToast('Eroare parsare XLS ajustare: ' + e.message, 'err')
+      setAjustari(a => a.map((r,i) => i===idx ? {...r, parsing:false} : r))
+    }
+  }
+
+  const totalAjustariRetro = useMemo(
+    () => ajustari.reduce((s,a) => s + (parseFloat(a.valoare_ajustare_lei) || 0), 0),
+    [ajustari]
+  )
+
   const valAjustata = useMemo(() => {
     const b = parseFloat(form.valoare_baza_lei)
     const c = parseFloat(form.coeficient_ajustare)
@@ -943,6 +1021,52 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
 
           if (bdLinii.length > 0) {
             await supabase.from('executie_situatii_plata_linii').insert(bdLinii)
+          }
+        }
+      }
+
+      // ── Ajustări retroactive: salvare one-to-many + marcaj SL recuperate ──
+      if (slIdSaved) {
+        // 1) Reset: dez-marchează SL-urile care erau recuperate de ACEASTĂ SL (curat la re-editare)
+        await supabase.from('executie_situatii_plata')
+          .update({ ajustare_recuperata:false, ajustare_recuperata_in_sl:null })
+          .eq('ajustare_recuperata_in_sl', slIdSaved)
+        // 2) Șterge ajustările vechi ale acestei SL (re-inserăm starea curentă)
+        await supabase.from('executie_sl_ajustari').delete().eq('sl_id', slIdSaved)
+
+        // 3) Upload XLS borderou per ajustare (silent la eroare — arhivare) + construiește rândurile
+        const slNrClean2 = form.nr_situatie.toLowerCase().replace(/[^a-z0-9]/g, '_')
+        const ajRows = []
+        for (let i = 0; i < ajustari.length; i++) {
+          const a = ajustari[i]
+          const val = parseFloat(a.valoare_ajustare_lei)
+          if (isNaN(val) || val <= 0) continue
+          let ajPath = a.xlsPath || null
+          if (a.xlsFile) {
+            ajPath = `sl_${proiectId}/${slNrClean2}_ajustare_${i + 1}.xls`
+            try { await supabase.storage.from('executie-borderouri').upload(ajPath, a.xlsFile, { upsert:true, contentType:a.xlsFile.type || 'application/vnd.ms-excel' }) } catch(e) { console.warn('Upload XLS ajustare skip:', e.message) }
+          }
+          ajRows.push({
+            sl_id: slIdSaved,
+            sl_ajustata_id: a.sl_ajustata_id ? parseInt(a.sl_ajustata_id) : null,
+            sl_ajustata_nr: a.sl_ajustata_nr?.trim() || null,
+            valoare_ajustare_lei: Math.round(val * 100) / 100,
+            coeficient: (a.coeficient !== '' && a.coeficient != null && !isNaN(parseFloat(a.coeficient))) ? parseFloat(a.coeficient) : null,
+            centralizator_xls_path: ajPath,
+            observatii: a.observatii?.trim() || null,
+          })
+        }
+
+        // 4) Inserează ajustările noi
+        if (ajRows.length > 0) {
+          const { error: ajErr } = await supabase.from('executie_sl_ajustari').insert(ajRows)
+          if (ajErr) throw ajErr
+          // 5) Marchează SL-urile anterioare ca recuperate în SL curentă
+          const recIds = [...new Set(ajRows.filter(r => r.sl_ajustata_id).map(r => r.sl_ajustata_id))]
+          if (recIds.length > 0) {
+            await supabase.from('executie_situatii_plata')
+              .update({ ajustare_recuperata:true, ajustare_recuperata_in_sl: slIdSaved })
+              .in('id', recIds)
           }
         }
       }
@@ -1138,6 +1262,90 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
               </div>
             </div>
           )}
+
+          {/* ── Ajustări retroactive SL anterioare ── */}
+          <div style={{borderTop:`1px solid ${G.border}`, paddingTop:14}}>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4}}>
+              <div style={{fontSize:13, fontWeight:700, color:G.orange}}>🔄 Ajustări retroactive SL anterioare</div>
+              {totalAjustariRetro > 0 && (
+                <span style={{fontSize:12, color:G.orange, fontFamily:'monospace', fontWeight:700}}>+{fmtLei(totalAjustariRetro)}</span>
+              )}
+            </div>
+            <div style={{fontSize:11, color:G.muted, marginBottom:10}}>
+              Recuperări de indice publicat ulterior, facturate odată cu această SL. Fiecare SL anterioară recuperată se marchează automat „ajustare recuperată".
+            </div>
+
+            {ajustari.map((a, idx) => {
+              const slSel = slAnterioare.find(s => String(s.id) === String(a.sl_ajustata_id))
+              const dejaRecAltundeva = slSel && slSel.ajustare_recuperata && String(slSel.ajustare_recuperata_in_sl) !== String(item?.id)
+              return (
+                <div key={idx} style={{
+                  border:`1px solid ${G.orange}33`, background:G.orange+'08', borderRadius:9,
+                  padding:'10px 12px', marginBottom:8,
+                }}>
+                  <div style={{display:'grid', gridTemplateColumns:'1.4fr 1fr 32px', gap:8, alignItems:'end'}}>
+                    <div>
+                      <label style={{...S.label, fontSize:11}}>SL anterioară recuperată</label>
+                      <select value={a.sl_ajustata_id} onChange={e=>updateAjustare(idx,'sl_ajustata_id',e.target.value)} style={{...S.input, padding:'7px 9px', fontSize:12}}>
+                        <option value="">— alege SL —</option>
+                        {slAnterioare.map(s => (
+                          <option key={s.id} value={s.id}>
+                            {s.nr_situatie}{s.luna&&s.an?` · ${LUNI[s.luna-1]} ${s.an}`:''}{s.ajustare_recuperata && String(s.ajustare_recuperata_in_sl)!==String(item?.id) ? ' ⚠ deja recuperată' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{...S.label, fontSize:11}}>Valoare ajustare (RON)</label>
+                      <input type="number" value={a.valoare_ajustare_lei} onChange={e=>updateAjustare(idx,'valoare_ajustare_lei',e.target.value)}
+                        style={{...S.input, padding:'7px 9px', fontSize:12}} placeholder="0.00" step="0.01" min="0" />
+                    </div>
+                    <button onClick={()=>removeAjustare(idx)} title="Șterge ajustarea" style={{
+                      padding:'7px 0', background:G.red+'18', border:`1px solid ${G.red}44`, borderRadius:7,
+                      color:G.red, cursor:'pointer', fontSize:14, height:34,
+                    }}>🗑</button>
+                  </div>
+
+                  <div style={{display:'grid', gridTemplateColumns:'1fr 1.4fr', gap:8, marginTop:8, alignItems:'end'}}>
+                    <div>
+                      <label style={{...S.label, fontSize:11}}>Coeficient (opțional)</label>
+                      <input type="number" value={a.coeficient} onChange={e=>updateAjustare(idx,'coeficient',e.target.value)}
+                        style={{...S.input, padding:'7px 9px', fontSize:12}} placeholder="ex: 1.063390" step="0.000001" />
+                    </div>
+                    <div>
+                      <label style={{...S.label, fontSize:11}}>Borderou ajustare (XLS, opțional)</label>
+                      <div style={{display:'flex', gap:6, alignItems:'center'}}>
+                        <label style={{
+                          padding:'7px 10px', background:G.border2, border:`1px dashed ${G.border}`, borderRadius:7,
+                          color:G.muted, cursor:'pointer', fontSize:11, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                        }}>
+                          {a.parsing ? '⏳ parsez...' : (a.xlsFile ? `✅ ${a.xlsFile.name}` : (a.xlsPath ? '✅ borderou salvat' : '📂 alege XLS...'))}
+                          <input type="file" accept=".xls,.xlsx" style={{display:'none'}}
+                            onChange={e=>{const f=e.target.files?.[0]; if(f) parseAjustareXls(idx,f)}} />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{marginTop:8}}>
+                    <input value={a.observatii} onChange={e=>updateAjustare(idx,'observatii',e.target.value)}
+                      style={{...S.input, padding:'7px 9px', fontSize:12}} placeholder="Observații (ex: I0=aug2024=140,4; In=mai2025=149,3)" />
+                  </div>
+
+                  {dejaRecAltundeva && (
+                    <div style={{marginTop:6, fontSize:11, color:G.yellow}}>
+                      ⚠️ {slSel.nr_situatie} e deja marcată ca recuperată în altă SL — verifică să nu dublezi facturarea.
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            <button onClick={addAjustare} style={{
+              padding:'8px 14px', background:G.orange+'14', border:`1px dashed ${G.orange}55`,
+              borderRadius:7, color:G.orange, cursor:'pointer', fontSize:12, fontWeight:600,
+            }}>＋ Adaugă ajustare SL anterioară</button>
+          </div>
 
           {/* Status + Factura */}
           <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
