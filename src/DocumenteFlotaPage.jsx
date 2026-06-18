@@ -290,6 +290,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
     numar_document: doc?.numar_document || '',
     data_emitere: doc?.data_emitere || todayISO(),
     data_expirare: doc?.data_expirare || '',
+    fara_expirare: doc?.fara_expirare || false,
     emitent: doc?.emitent || '',
     cost: doc?.cost ?? '',
     observatii: doc?.observatii || '',
@@ -328,7 +329,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
   const handleSave = async () => {
     if (!form.entitate_id) { showToast('Selectează utilajul', 'error'); return }
     if (!form.tip_id)      { showToast('Selectează tipul documentului', 'error'); return }
-    if (!form.data_expirare) { showToast('Completează data expirării', 'error'); return }
+    if (!form.fara_expirare && !form.data_expirare) { showToast('Completează data expirării (sau bifează „Fără expirare")', 'error'); return }
 
     setSaving(true)
     try {
@@ -359,7 +360,8 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
         tip_id: Number(form.tip_id),
         numar_document: form.numar_document.trim() || null,
         data_emitere: form.data_emitere || null,
-        data_expirare: form.data_expirare,
+        data_expirare: form.fara_expirare ? null : form.data_expirare,
+        fara_expirare: form.fara_expirare,
         emitent: form.emitent.trim() || null,
         cost: form.cost !== '' ? Number(form.cost) : null,
         observatii: form.observatii.trim() || null,
@@ -467,12 +469,16 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
 
           <div>
             <div style={{fontSize:11, color:G.muted, fontWeight:600, marginBottom:5}}>
-              Data expirare <span style={{color:G.red}}>*</span>
-              {autoExpirare && tipSelected?.perioada_default_zile && (
+              Data expirare {!form.fara_expirare && <span style={{color:G.red}}>*</span>}
+              {autoExpirare && !form.fara_expirare && tipSelected?.perioada_default_zile && (
                 <span style={{color:G.green, fontSize:10, marginLeft:6, fontWeight:500}}>(auto-calc)</span>
               )}
             </div>
-            <input type="date" value={form.data_expirare} onChange={e => onChangeExpirare(e.target.value)} style={{...S.input}} />
+            <input type="date" value={form.fara_expirare ? '' : form.data_expirare} onChange={e => onChangeExpirare(e.target.value)} disabled={form.fara_expirare} style={{...S.input, opacity: form.fara_expirare ? 0.5 : 1, cursor: form.fara_expirare ? 'not-allowed' : 'auto'}} />
+            <label style={{display:'flex', alignItems:'center', gap:7, marginTop:7, fontSize:12, color:G.muted, cursor:'pointer'}}>
+              <input type="checkbox" checked={form.fara_expirare} onChange={e => { setField('fara_expirare', e.target.checked); if (e.target.checked) { setAutoExpirare(false); setField('data_expirare', '') } }} />
+              📌 Fără expirare (ex: carte de identitate vehicul)
+            </label>
           </div>
 
           <div>
