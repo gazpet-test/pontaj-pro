@@ -214,6 +214,14 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           coefAjust = parseFloat(slF.coeficient_ajustare || 0)
         }
       } catch(e) { /* fallback la valorile din obiectul listei */ }
+      // Ajustări retroactive ale SL anterioare, recuperate în ACEASTĂ SL (one-to-many)
+      let ajustariRetro = []
+      try {
+        const { data: ajs } = await supabase.from('executie_sl_ajustari')
+          .select('sl_ajustata_nr, valoare_ajustare_lei, coeficient')
+          .eq('sl_id', slDefault.id).order('id', { ascending: true })
+        ajustariRetro = ajs || []
+      } catch(e) { /* tabela goală sau lipsă → ignor */ }
       // Contract terț (Administrativ → Contracte cu Terți): nume + nr + dată + beneficiar.
       // OS-ul NU apare ca linie — valoarea (valoare_ajustata_lei) include deja bază (cu OS) + ajustare.
       // Luna NU se mai pune pe linie: data înregistrării SL ≠ luna aferentă lucrărilor.
@@ -250,13 +258,23 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       const denPart = contractDenumire ? ` — ${contractDenumire}` : ''
       const den = `Contravaloare lucrări conf. situație de lucrări nr.${slDefault.nr_situatie}${denPart} — contract ${contractRef||'—'}`
       // Dacă SL are ajustare ICC → 2 linii separate (bază + ajustare). Altfel o singură linie.
+      // Plus: câte o linie per ajustare retroactivă a unei SL anterioare recuperate aici.
       const hasAjust = Math.abs(valAjust) > 0.005
-      const articoleSL = hasAjust ? [
-        { nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT },
-        { nr:2, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT },
-      ] : [
-        { nr:1, denumire:den, um:'buc', cantitate:1, pret_unitar:valTotal.toFixed(2), valoare:valTotal.toFixed(2), tva_pct:TVA_DEFAULT },
-      ]
+      const articoleSL = []
+      let _nr = 1
+      if (hasAjust) {
+        articoleSL.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT })
+        articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
+      } else {
+        articoleSL.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valTotal.toFixed(2), valoare:valTotal.toFixed(2), tva_pct:TVA_DEFAULT })
+      }
+      for (const aj of ajustariRetro) {
+        const v = parseFloat(aj.valoare_ajustare_lei || 0)
+        if (Math.abs(v) < 0.005) continue
+        const coefStr = (aj.coeficient != null && !isNaN(parseFloat(aj.coeficient))) ? ' ' + parseFloat(aj.coeficient).toFixed(5).replace('.', ',') : ''
+        const refStr = aj.sl_ajustata_nr ? ` nr.${aj.sl_ajustata_nr}` : ''
+        articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefStr} — situație de lucrări${refStr}`, um:'buc', cantitate:1, pret_unitar:v.toFixed(2), valoare:v.toFixed(2), tva_pct:TVA_DEFAULT })
+      }
       setForm(f => ({
         ...f,
         articole: articoleSL,
