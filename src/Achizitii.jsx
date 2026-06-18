@@ -810,6 +810,20 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
       setRfqErr('Eroare la generare PDF: ' + (e.message || e))
     } finally { setRfqBusy(false) }
   }
+  const [editTermene, setEditTermene] = useState(false)
+  const [termeneLocal, setTermeneLocal] = useState({})
+  const [termenGlobalLocal, setTermenGlobalLocal] = useState('')
+  const deschideEditTermene = () => {
+    const init = {}
+    ;(c.linii || []).forEach(l => { init[l.id] = l.termen_livrare ? String(l.termen_livrare).slice(0, 10) : '' })
+    setTermeneLocal(init)
+    setTermenGlobalLocal(c.data_livrare_estimata ? String(c.data_livrare_estimata).slice(0, 10) : '')
+    setEditTermene(true)
+  }
+  const salveazaTermeneLocal = async () => {
+    await actions.salveazaTermene(c, termeneLocal, termenGlobalLocal)
+    setEditTermene(false)
+  }
   const Info = ({ k, v, bold }) => (
     <div style={{ display:'flex', gap:8, fontSize:13, padding:'3px 0' }}>
       <div style={{ width:150, color:G.muted, flexShrink:0 }}>{k}</div>
@@ -929,6 +943,27 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           </div>
         )}
 
+        {/* Panel modificare termene livrare (emisă / în tranzit) */}
+        {editTermene && (
+          <div style={{ marginTop:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.orange}55` }}>
+            <div style={{ fontSize:13, fontWeight:800, color:G.orange, marginBottom:10 }}>📅 Modifică termene de livrare</div>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+              <span style={{ fontSize:13, color:G.muted, minWidth:200 }}>Termen general (comandă)</span>
+              <input type="date" value={termenGlobalLocal} onChange={e => setTermenGlobalLocal(e.target.value)} style={{ ...S.input, maxWidth:200 }} />
+            </div>
+            {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => (
+              <div key={l.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderTop:`1px solid ${G.border}`, flexWrap:'wrap' }}>
+                <div style={{ flex:1, minWidth:200, fontSize:13 }}>{l.denumire}<span style={{ color:G.muted }}> · {fmtNr(l.cantitate)} {l.um || ''}</span></div>
+                <input type="date" value={termeneLocal[l.id] || ''} onChange={e => setTermeneLocal(t => ({ ...t, [l.id]: e.target.value }))} style={{ ...S.input, maxWidth:200 }} />
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:12 }}>
+              <button onClick={() => setEditTermene(false)} disabled={busy} style={{ ...S.btnS, fontSize:14 }}>Anulează</button>
+              <button onClick={salveazaTermeneLocal} disabled={busy} style={{ ...S.btnP, background:G.orange, color:'#0D1117', fontSize:14, opacity: busy ? .6 : 1 }}>{busy ? '⏳ Se salvează...' : '💾 Salvează termene'}</button>
+            </div>
+          </div>
+        )}
+
         {/* Acțiuni flux */}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
           {profile?.is_owner && (
@@ -942,6 +977,7 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {c.status === 'in_aprobare' && (profile?.is_owner || ctx.canCreate) && (
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează comanda</Btn>
           )}
+          {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && !editTermene && <Btn color={G.orange} onClick={deschideEditTermene}>📅 Modifică termene</Btn>}
           {c.status === 'emisa' && ctx.canCreate && <Btn color={G.purple} onClick={() => actions.markStatus(c, 'in_tranzit')}>🚚 Marchează ÎN TRANZIT</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && <Btn color={G.orange} onClick={() => actions.markStatus(c, 'ajunsa')}>📦 Marchează AJUNSĂ</Btn>}
           {c.status === 'ajunsa' && <Btn color={G.green} onClick={() => actions.deschideReceptie(c)}>✅ Recepție (PV 1)</Btn>}
@@ -1269,6 +1305,24 @@ export default function AchizitiiPage() {
         const { error } = await supabase.from('comenzi_furnizor').update({ status, updated_at: new Date().toISOString() }).eq('id', c.id)
         if (error) throw error
         showToast(`${STATUS_INFO[status].emoji} ${c.numar_comanda} → ${STATUS_INFO[status].label}.`)
+        await loadAll()
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
+
+    // Actualizare termene de livrare (comandă emisă / în tranzit) — global + per reper
+    salveazaTermene: async (c, liniiTermene, termenGlobal) => {
+      setBusy(true)
+      try {
+        const { error: eC } = await supabase.from('comenzi_furnizor')
+          .update({ data_livrare_estimata: termenGlobal || null, updated_at: new Date().toISOString() })
+          .eq('id', c.id)
+        if (eC) throw eC
+        for (const [lineId, termen] of Object.entries(liniiTermene || {})) {
+          const { error: eL } = await supabase.from('comenzi_furnizor_linii')
+            .update({ termen_livrare: termen || null }).eq('id', lineId)
+          if (eL) throw eL
+        }
+        showToast(`📅 Termene de livrare actualizate pentru ${c.numar_comanda}.`)
         await loadAll()
       } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
