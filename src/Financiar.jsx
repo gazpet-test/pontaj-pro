@@ -857,7 +857,12 @@ export default function FinanciarPage() {
   const [filterAn, setFilterAn]     = useState(String(new Date().getFullYear()))
   const [deleteConf, setDeleteConf] = useState(null)
   const [slAlert, setSlAlert]       = useState([]) // SL fără factură
-  const [tab, setTab]               = useState('emise')  // 'emise' | 'furnizori' (12.06.2026)
+  const [tab, setTab]               = useState('emise')  // 'emise' | 'furnizori' | 'consumuri'
+  // Deep-link din notificări: /financiar?tab=consumuri deschide direct tab-ul
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab')
+    if (t && ['emise','furnizori','consumuri'].includes(t)) setTab(t)
+  }, [])
   const { show: showToast, Toast }  = useToast()
 
   const loadAll = useCallback(async () => {
