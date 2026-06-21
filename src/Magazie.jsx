@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
+import jsPDF from 'jspdf'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -843,6 +844,365 @@ function StocTrasabilTab() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// TRANSFERURI — Faza 6.2a: transfer sediu↔proiect (denumire liberă) + PV
+// Backend gata: rpc fn_transfer_executa (validează stoc, scrie mișcările)
+// ════════════════════════════════════════════════════════════════
+const TRANSFER_STATUS = {
+  livrat:    { label:'Livrat',    color:'#3FB950' },
+  in_tranzit:{ label:'În tranzit', color:'#D29922' },
+  anulat:    { label:'Anulat',    color:'#F85149' },
+}
+// "sediu" | "proiect:ID" → [tip, id]
+const parseLoc = (v) => v === 'sediu' ? ['sediu', null] : ['proiect', Number(String(v).split(':')[1])]
+const locLabel = (tip, id, pMap) => {
+  if (tip === 'sediu') return '🏢 Sediu Ploiești'
+  const p = pMap[id]
+  return `🏗️ ${p ? `${p.cod_intern ? `[${p.cod_intern}] ` : ''}${p.nume}` : `Proiect #${id}`}`
+}
+const locLabelPlain = (tip, id, pMap) => {
+  if (tip === 'sediu') return 'Sediu Ploiești'
+  const p = pMap[id]
+  return p ? `${p.cod_intern ? `[${p.cod_intern}] ` : ''}${p.nume}` : `Proiect #${id}`
+}
+
+// PV PDF transfer intern (jsPDF direct — robust, fără html2canvas)
+function genereazaPVTransfer(t, linii, sursaText, destText) {
+  const doc = new jsPDF({ unit:'mm', format:'a4' })
+  const W = 210, M = 18
+  let y = 20
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+  doc.text('GAZPET INSTAL SRL', M, y)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
+  doc.text('Ploiești, jud. Prahova', M, y + 5)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(15)
+  doc.text('PROCES-VERBAL DE TRANSFER INTERN', W / 2, y + 18, { align:'center' })
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10)
+  doc.text(`Nr. transfer: ${t.id}`, M, y + 28)
+  doc.text(`Data: ${fmtData(t.data_plecare || t.created_at)}`, W - M, y + 28, { align:'right' })
+
+  y += 38
+  doc.setFont('helvetica', 'bold'); doc.text('De la:', M, y)
+  doc.setFont('helvetica', 'normal'); doc.text(sursaText, M + 16, y)
+  doc.setFont('helvetica', 'bold'); doc.text('Către:', M, y + 7)
+  doc.setFont('helvetica', 'normal'); doc.text(destText, M + 16, y + 7)
+  if (t.observatii) { doc.setFont('helvetica', 'italic'); doc.text(`Observații: ${t.observatii}`, M, y + 14); doc.setFont('helvetica', 'normal') }
+
+  // tabel
+  y += 22
+  const cols = [M, M + 12, W - M - 60, W - M - 32]   // Nr | Material | UM | Cantitate
+  doc.setFillColor(230, 230, 230); doc.rect(M, y - 5, W - 2 * M, 8, 'F')
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9)
+  doc.text('Nr.', cols[0] + 1, y); doc.text('Material', cols[1], y)
+  doc.text('UM', cols[2], y); doc.text('Cantitate', cols[3], y)
+  doc.setFont('helvetica', 'normal'); y += 7
+  ;(linii || []).forEach((l, i) => {
+    if (y > 260) { doc.addPage(); y = 20 }
+    doc.text(String(i + 1), cols[0] + 1, y)
+    const den = doc.splitTextToSize(l.material_denumire || '', cols[2] - cols[1] - 4)
+    doc.text(den, cols[1], y)
+    doc.text(l.um || '—', cols[2], y)
+    doc.text(fmtNr(l.cantitate), cols[3], y)
+    y += Math.max(6, den.length * 5)
+    doc.setDrawColor(220, 220, 220); doc.line(M, y - 3, W - M, y - 3)
+  })
+
+  // semnături
+  y = Math.max(y + 16, 245)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10)
+  doc.text('Predat (gestionar)', M + 10, y)
+  doc.text('Primit (responsabil)', W - M - 50, y)
+  doc.setDrawColor(120, 120, 120)
+  doc.line(M, y + 14, M + 60, y + 14)
+  doc.line(W - M - 60, y + 14, W - M, y + 14)
+  doc.setFontSize(7); doc.setTextColor(120)
+  doc.text(`Generat din Gazpet ERP · ${fmtDataOra(new Date())}`, W / 2, 290, { align:'center' })
+
+  doc.save(`PV_Transfer_${t.id}_${fmtData(t.data_plecare || t.created_at).replace(/\./g, '-')}.pdf`)
+}
+
+// ── Modal: Transfer nou ────────────────────────────────────────
+function TransferNouModal({ stocuri, proiecteMap, onClose, onDone }) {
+  const [deLa, setDeLa] = useState('')
+  const [la, setLa] = useState('')
+  const [cantMap, setCantMap] = useState({})   // material_denumire → string
+  const [obs, setObs] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  // opțiuni locații: sediu + toate proiectele cu stoc SAU toate proiectele
+  const locOptions = useMemo(() => {
+    const opts = [{ v:'sediu', label:'🏢 Sediu Ploiești' }]
+    const pids = [...new Set(Object.keys(proiecteMap).map(Number))]
+    pids.forEach(id => opts.push({ v:`proiect:${id}`, label: locLabel('proiect', id, proiecteMap) }))
+    return opts
+  }, [proiecteMap])
+
+  const stocSursa = useMemo(() => {
+    if (!deLa) return []
+    const [tip, id] = parseLoc(deLa)
+    return stocuri
+      .filter(s => s.locatie_tip === tip && (s.locatie_id ?? null) === (id ?? null) && Number(s.cantitate) > 0)
+      .sort((a, b) => a.material_denumire.localeCompare(b.material_denumire))
+  }, [deLa, stocuri])
+
+  const liniiSel = useMemo(() => stocSursa
+    .map(s => ({ s, q: Math.abs(Number(cantMap[s.material_denumire]) || 0) }))
+    .filter(x => x.q > 0), [stocSursa, cantMap])
+
+  const overflow = liniiSel.some(x => x.q > Number(x.s.cantitate))
+  const sameLoc = deLa && la && deLa === la
+  const valid = deLa && la && !sameLoc && liniiSel.length > 0 && !overflow
+
+  const transfera = async () => {
+    if (!valid) { setErr(sameLoc ? 'Sursa și destinația trebuie să fie diferite.' : overflow ? 'O cantitate depășește disponibilul.' : 'Alege sursă, destinație și cel puțin un material.'); return }
+    setBusy(true); setErr('')
+    try {
+      const [dTip, dId] = parseLoc(deLa)
+      const [lTip, lId] = parseLoc(la)
+      const p_linii = liniiSel.map(x => ({ material_denumire: x.s.material_denumire, um: x.s.um || null, cantitate: x.q }))
+      const { error } = await supabase.rpc('fn_transfer_executa', {
+        p_de_la_tip: dTip, p_de_la_id: dId, p_la_tip: lTip, p_la_id: lId,
+        p_obs: obs.trim() || null, p_linii,
+      })
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(620px,100%)', maxHeight:'92vh', overflowY:'auto', padding:22 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:16 }}>🔁 Transfer intern nou</div>
+
+        <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
+          <div style={{ flex:1, minWidth:220 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>De la (sursă) <span style={{ color:G.red }}>*</span></label>
+            <select style={S.input} value={deLa} onChange={e => { setDeLa(e.target.value); setCantMap({}) }}>
+              <option value="">— alege sursa —</option>
+              {locOptions.map(o => <option key={o.v} value={o.v} disabled={o.v === la}>{o.label}</option>)}
+            </select>
+          </div>
+          <div style={{ alignSelf:'flex-end', paddingBottom:9, fontSize:18, color:G.muted }}>→</div>
+          <div style={{ flex:1, minWidth:220 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Către (destinație) <span style={{ color:G.red }}>*</span></label>
+            <select style={S.input} value={la} onChange={e => setLa(e.target.value)}>
+              <option value="">— alege destinația —</option>
+              {locOptions.map(o => <option key={o.v} value={o.v} disabled={o.v === deLa}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {!deLa && <div style={{ padding:'14px 16px', background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:13, color:G.muted }}>Alege o sursă ca să vezi materialele disponibile pentru transfer.</div>}
+
+        {deLa && !stocSursa.length && (
+          <div style={{ padding:'14px 16px', background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:13, color:G.muted }}>📭 Nu există stoc disponibil la această locație.</div>
+        )}
+
+        {deLa && stocSursa.length > 0 && (
+          <div style={{ ...S.card, background:G.bg, overflow:'hidden', marginBottom:14 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 110px 130px', gap:10, padding:'8px 14px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+              <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Disponibil</div><div style={{ textAlign:'right' }}>Transferă</div>
+            </div>
+            {stocSursa.map(s => {
+              const q = Number(cantMap[s.material_denumire]) || 0
+              const over = q > Number(s.cantitate)
+              return (
+                <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 80px 110px 130px', gap:10, alignItems:'center', padding:'8px 14px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+                  <div style={{ fontWeight:600 }}>{s.material_denumire}</div>
+                  <div style={{ color:G.muted }}>{s.um || '—'}</div>
+                  <div style={{ textAlign:'right', fontWeight:700, color:G.green }}>{fmtNr(s.cantitate)}</div>
+                  <div style={{ textAlign:'right' }}>
+                    <input type="number" min="0" step="any" style={{ ...S.input, padding:'6px 8px', textAlign:'right', width:110, borderColor: over ? G.red : G.border2 }}
+                      value={cantMap[s.material_denumire] ?? ''} placeholder="0"
+                      onChange={e => setCantMap(m => ({ ...m, [s.material_denumire]: e.target.value }))} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div style={{ marginBottom:10 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Observații</label>
+          <textarea style={{ ...S.input, minHeight:48, resize:'vertical' }} value={obs} onChange={e => setObs(e.target.value)} placeholder="opțional — motiv, nr. comandă transport, etc." />
+        </div>
+
+        {overflow && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>⚠️ O cantitate depășește disponibilul la sursă.</div>}
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>{err}</div>}
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginTop:8 }}>
+          <div style={{ fontSize:12.5, color:G.muted }}>{liniiSel.length} {liniiSel.length === 1 ? 'material selectat' : 'materiale selectate'}</div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+            <button onClick={transfera} disabled={busy || !valid} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', opacity:(busy || !valid) ? .6 : 1 }}>{busy ? '...' : '🔁 Execută transferul'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Drawer: detalii transfer + liniile + PV ────────────────────
+function TransferDetaliiDrawer({ transfer, linii, sursaText, destText, onClose }) {
+  const st = TRANSFER_STATUS[transfer.status] || { label: transfer.status, color:G.muted }
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', zIndex:1000, display:'flex', justifyContent:'flex-end' }}>
+      <div style={{ width:'min(520px,100%)', height:'100%', background:G.surface, borderLeft:`1px solid ${G.border}`, padding:22, overflowY:'auto' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, marginBottom:14 }}>
+          <div>
+            <div style={{ fontSize:17, fontWeight:800 }}>🔁 Transfer #{transfer.id}</div>
+            <div style={{ fontSize:13, color:G.muted, marginTop:2 }}>{fmtData(transfer.data_plecare || transfer.created_at)}</div>
+          </div>
+          <button onClick={onClose} style={{ ...S.btnS, padding:'6px 10px', fontSize:18, lineHeight:1 }}>✕</button>
+        </div>
+
+        <div style={{ ...S.card, background:G.bg, padding:'12px 14px', marginBottom:14, fontSize:13.5 }}>
+          <div style={{ marginBottom:6 }}><span style={{ color:G.muted }}>De la: </span><b>{sursaText}</b></div>
+          <div style={{ marginBottom:6 }}><span style={{ color:G.muted }}>Către: </span><b>{destText}</b></div>
+          <div><span style={{ color:G.muted }}>Status: </span><span style={{ color:st.color, fontWeight:700 }}>{st.label}</span></div>
+          {transfer.observatii && <div style={{ marginTop:6, color:G.muted, fontSize:12.5 }}>{transfer.observatii}</div>}
+        </div>
+
+        <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>Materiale ({(linii || []).length})</div>
+        <div style={{ ...S.card, overflow:'hidden', marginBottom:16 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 110px', gap:10, padding:'8px 14px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div>
+          </div>
+          {(linii || []).map(l => (
+            <div key={l.id} style={{ display:'grid', gridTemplateColumns:'1fr 70px 110px', gap:10, padding:'8px 14px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+              <div style={{ fontWeight:600 }}>{l.material_denumire}</div>
+              <div style={{ color:G.muted }}>{l.um || '—'}</div>
+              <div style={{ textAlign:'right', fontWeight:700 }}>{fmtNr(l.cantitate)}</div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={() => genereazaPVTransfer(transfer, linii, sursaText, destText)} style={{ ...S.btnP, width:'100%' }}>📄 Descarcă PV transfer (PDF)</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Tab Transferuri ────────────────────────────────────────────
+function TransferuriTab() {
+  const [loading, setLoading] = useState(true)
+  const [transferuri, setTransferuri] = useState([])
+  const [liniiMap, setLiniiMap] = useState({})
+  const [proiecte, setProiecte] = useState([])
+  const [stocuri, setStocuri] = useState([])
+  const [profile, setProfile] = useState(null)
+  const [openNou, setOpenNou] = useState(false)
+  const [detaliiFor, setDetaliiFor] = useState(null)
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let prof = null
+      if (user) {
+        const { data } = await supabase.from('profiles').select('id, role, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle()
+        prof = data || null
+      }
+      const [rT, rL, rP, rS] = await Promise.all([
+        supabase.from('transferuri_interne').select('*').order('created_at', { ascending: false }),
+        supabase.from('transferuri_linii').select('*'),
+        supabase.from('executie_proiecte').select('id, nume, cod_intern'),
+        supabase.from('stocuri').select('*'),
+      ])
+      const lm = {}
+      ;(rL.data || []).forEach(l => { (lm[l.transfer_id] = lm[l.transfer_id] || []).push(l) })
+      setProfile(prof)
+      setTransferuri(rT.data || [])
+      setLiniiMap(lm)
+      setProiecte(rP.data || [])
+      setStocuri(rS.data || [])
+    } catch (e) { console.error(e) } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { loadAll() }, [loadAll])
+
+  const canManage = !!(profile?.is_owner || profile?.can_manage_stoc)
+  const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
+
+  return (
+    <>
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14, alignItems:'center' }}>
+        <div style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:160 }}>
+          <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>🔁 Transferuri</div>
+          <div style={{ fontSize:24, fontWeight:800, color:G.magazie }}>{transferuri.length}</div>
+        </div>
+        <div style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:160 }}>
+          <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>🕐 Ultimul transfer</div>
+          <div style={{ fontSize:15, fontWeight:800, color:G.green }}>{transferuri[0] ? fmtData(transferuri[0].data_plecare || transferuri[0].created_at) : '—'}</div>
+        </div>
+        <button onClick={loadAll} style={{ ...S.btnS, alignSelf:'center' }}>🔄 Reîncarcă</button>
+        {canManage && <button onClick={() => setOpenNou(true)} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', alignSelf:'center' }}>🔁 Transfer nou</button>}
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă transferurile...</div>}
+
+      {!loading && !transferuri.length && (
+        <div style={{ ...S.card, padding:40, textAlign:'center' }}>
+          <div style={{ fontSize:40, marginBottom:10 }}>🔁</div>
+          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>Niciun transfer înregistrat.</div>
+          <div style={{ fontSize:13, color:G.muted }}>Mută materiale între sediu și proiecte. Stocul se actualizează automat la ambele capete + poți descărca PV-ul.</div>
+        </div>
+      )}
+
+      {!loading && transferuri.length > 0 && (
+        <div style={{ ...S.card, overflow:'hidden' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 1fr 80px 140px', gap:10, padding:'9px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Data</div><div>De la</div><div>Către</div><div style={{ textAlign:'center' }}>Materiale</div><div></div>
+          </div>
+          {transferuri.map(t => {
+            const linii = liniiMap[t.id] || []
+            const sursaText = locLabelPlain(t.de_la_locatie_tip, t.de_la_locatie_id, proiecteMap)
+            const destText = locLabelPlain(t.la_locatie_tip, t.la_locatie_id, proiecteMap)
+            const st = TRANSFER_STATUS[t.status] || { label:t.status, color:G.muted }
+            return (
+              <div key={t.id} style={{ display:'grid', gridTemplateColumns:'90px 1fr 1fr 80px 140px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+                <div style={{ fontSize:12, color:G.dim }}>{fmtData(t.data_plecare || t.created_at)}</div>
+                <div style={{ fontWeight:600 }}>{locLabel(t.de_la_locatie_tip, t.de_la_locatie_id, proiecteMap)}</div>
+                <div style={{ fontWeight:600 }}>{locLabel(t.la_locatie_tip, t.la_locatie_id, proiecteMap)}</div>
+                <div style={{ textAlign:'center' }}>
+                  <span style={{ background:G.magazie + '22', color:G.magazie, borderRadius:12, padding:'2px 10px', fontSize:12, fontWeight:800 }}>{linii.length}</span>
+                </div>
+                <div style={{ display:'flex', gap:6, justifyContent:'flex-end', alignItems:'center' }}>
+                  <span style={{ color:st.color, fontSize:11, fontWeight:700 }}>{st.label}</span>
+                  <button onClick={() => setDetaliiFor({ t, linii, sursaText, destText })} title="Detalii" style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>📜</button>
+                  <button onClick={() => genereazaPVTransfer(t, linii, sursaText, destText)} title="Descarcă PV" style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue, borderColor:G.blue + '66' }}>📄</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div style={{ padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:12, color:G.muted, lineHeight:1.7, marginTop:14 }}>
+        <b style={{ color:G.text }}>📦 Faza 6.2a — Transfer sediu↔proiect:</b> mută materiale între locații pe denumire liberă; stocul scade la sursă și crește la destinație automat (mișcări <i>transfer ieșire/intrare</i> în registru). PV de transfer descărcabil. Următor: catalog materiale + transport legat de comandă (6.2b).
+      </div>
+
+      {openNou && (
+        <TransferNouModal
+          stocuri={stocuri}
+          proiecteMap={proiecteMap}
+          onClose={() => setOpenNou(false)}
+          onDone={() => { setOpenNou(false); loadAll() }}
+        />
+      )}
+      {detaliiFor && (
+        <TransferDetaliiDrawer
+          transfer={detaliiFor.t}
+          linii={detaliiFor.linii}
+          sursaText={detaliiFor.sursaText}
+          destText={detaliiFor.destText}
+          onClose={() => setDetaliiFor(null)}
+        />
+      )}
+    </>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
 // SHELL cu tab-uri
 // ════════════════════════════════════════════════════════════════
 export default function MagaziePage() {
@@ -858,7 +1218,7 @@ export default function MagaziePage() {
       </div>
 
       <div style={{ display:'flex', gap:8, marginBottom:18 }}>
-        {[['materiale', '📋 Materiale'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil']].map(([k, l]) => (
+        {[['materiale', '📋 Materiale'], ['transferuri', '🔁 Transferuri'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding:'9px 18px', fontSize:14, fontWeight:700, cursor:'pointer', borderRadius:8,
             background: tab === k ? G.magazie + '22' : 'transparent',
@@ -869,6 +1229,7 @@ export default function MagaziePage() {
       </div>
 
       {tab === 'materiale' && <MaterialeTab />}
+      {tab === 'transferuri' && <TransferuriTab />}
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
     </div>
