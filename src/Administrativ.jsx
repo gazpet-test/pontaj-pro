@@ -461,6 +461,294 @@ function TabCosturiAI() {
 }
 
 // ===========================================================================
+// TAB FURNIZORI — Faza 2 (bază de date + istoric comenzi + cheltuieli)
+// ===========================================================================
+
+const fLei = (n) => (n == null ? '—' : Number(n).toLocaleString('ro-RO', { maximumFractionDigits: 0 }) + ' lei')
+const fData = (d) => { if (!d) return '—'; const x = new Date(d); return isNaN(x) ? '—' : x.toLocaleDateString('ro-RO') }
+const fInput = { width:'100%', padding:'9px 11px', background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, fontSize:13, boxSizing:'border-box' }
+const fLabel = { fontSize:12, color:G.muted, marginBottom:4, display:'block' }
+const STATUS_COMANDA = {
+  draft:{ t:'Draft', c:G.dim }, emisa:{ t:'Emisă', c:G.blue }, confirmata:{ t:'Confirmată', c:G.purple },
+  receptionata:{ t:'Recepționată', c:G.yellow }, finalizata:{ t:'Finalizată', c:G.green }, anulata:{ t:'Anulată', c:G.red },
+}
+
+function FurnizorModal({ item, onClose, onDone }) {
+  const edit = !!item?.id
+  const [f, setF] = useState({
+    nume: item?.nume || '', cui: item?.cui || '', persoana_contact: item?.persoana_contact || '',
+    telefon: item?.telefon || '', email: item?.email || '', adresa: item?.adresa || '',
+    iban: item?.iban || '', termen_plata_zile: item?.termen_plata_zile ?? '', observatii: item?.observatii || '',
+    activ: item?.activ ?? true,
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  const salveaza = async () => {
+    if (!f.nume.trim()) { setErr('Numele e obligatoriu.'); return }
+    setBusy(true); setErr('')
+    try {
+      const payload = {
+        nume: f.nume.trim(), cui: f.cui.trim() || null, persoana_contact: f.persoana_contact.trim() || null,
+        telefon: f.telefon.trim() || null, email: f.email.trim() || null, adresa: f.adresa.trim() || null,
+        iban: f.iban.trim() || null, termen_plata_zile: f.termen_plata_zile !== '' ? Number(f.termen_plata_zile) : null,
+        observatii: f.observatii.trim() || null, activ: f.activ,
+      }
+      const { error } = edit
+        ? await supabase.from('logistica_furnizori').update(payload).eq('id', item.id)
+        : await supabase.from('logistica_furnizori').insert(payload)
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(560px,100%)', padding:24, maxHeight:'90vh', overflowY:'auto' }}>
+        <div style={{ fontSize:18, fontWeight:800, marginBottom:18 }}>{edit ? '✏️ Editează furnizor' : '➕ Furnizor nou'}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 160px', gap:12, marginBottom:12 }}>
+          <div><label style={fLabel}>Denumire <span style={{ color:G.red }}>*</span></label><input style={fInput} autoFocus value={f.nume} onChange={e => set('nume', e.target.value)} /></div>
+          <div><label style={fLabel}>CUI</label><input style={fInput} value={f.cui} onChange={e => set('cui', e.target.value)} placeholder="RO..." /></div>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+          <div><label style={fLabel}>Persoană contact</label><input style={fInput} value={f.persoana_contact} onChange={e => set('persoana_contact', e.target.value)} /></div>
+          <div><label style={fLabel}>Telefon</label><input style={fInput} value={f.telefon} onChange={e => set('telefon', e.target.value)} /></div>
+        </div>
+        <div style={{ marginBottom:12 }}><label style={fLabel}>Email</label><input style={fInput} value={f.email} onChange={e => set('email', e.target.value)} /></div>
+        <div style={{ marginBottom:12 }}><label style={fLabel}>Adresă</label><input style={fInput} value={f.adresa} onChange={e => set('adresa', e.target.value)} /></div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 150px', gap:12, marginBottom:12 }}>
+          <div><label style={fLabel}>IBAN</label><input style={fInput} value={f.iban} onChange={e => set('iban', e.target.value)} /></div>
+          <div><label style={fLabel}>Termen plată (zile)</label><input type="number" min="0" style={fInput} value={f.termen_plata_zile} onChange={e => set('termen_plata_zile', e.target.value)} placeholder="30" /></div>
+        </div>
+        <div style={{ marginBottom:12 }}><label style={fLabel}>Observații</label><input style={fInput} value={f.observatii} onChange={e => set('observatii', e.target.value)} /></div>
+        <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', marginBottom:8 }}>
+          <input type="checkbox" checked={f.activ} onChange={e => set('activ', e.target.checked)} /> Furnizor activ
+        </label>
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>{err}</div>}
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+          <button onClick={onClose} disabled={busy} style={{ padding:'9px 16px', background:'transparent', color:G.muted, border:`1px solid ${G.border}`, borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:600 }}>Anulează</button>
+          <button onClick={salveaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FurnizorDrawer({ furnizor, onClose, onEdit }) {
+  const [loading, setLoading] = useState(true)
+  const [comenzi, setComenzi] = useState([])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      const { data } = await supabase
+        .from('comenzi_furnizor')
+        .select('id, numar_comanda, data_emitere, status, furnizor_contract_id, contract:furnizor_contract_id(id, partener_text, tip_contract), comenzi_furnizor_linii(cantitate, pret_unitar)')
+        .eq('furnizor_id', furnizor.id)
+        .order('data_emitere', { ascending: false })
+      if (cancelled) return
+      setComenzi(data || []); setLoading(false)
+    })()
+    return () => { cancelled = true }
+  }, [furnizor.id])
+
+  const valoareComanda = (c) => (c.comenzi_furnizor_linii || []).reduce((a, l) => a + (Number(l.cantitate) || 0) * (Number(l.pret_unitar) || 0), 0)
+  const total = comenzi.reduce((a, c) => a + valoareComanda(c), 0)
+  const contracte = useMemo(() => {
+    const map = new Map()
+    for (const c of comenzi) if (c.contract && !map.has(c.contract.id)) map.set(c.contract.id, c.contract)
+    return [...map.values()]
+  }, [comenzi])
+
+  const Row = ({ label, value }) => value ? (
+    <div style={{ display:'flex', gap:10, padding:'6px 0', fontSize:13, borderBottom:`1px solid ${G.border2}` }}>
+      <div style={{ width:130, color:G.muted, flexShrink:0 }}>{label}</div>
+      <div style={{ color:G.text }}>{value}</div>
+    </div>
+  ) : null
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', zIndex:999, display:'flex', justifyContent:'flex-end' }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width:'min(560px,100%)', height:'100%', background:G.surface, borderLeft:`1px solid ${G.border}`, padding:24, overflowY:'auto' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:16 }}>
+          <div>
+            <div style={{ fontSize:20, fontWeight:800, display:'flex', alignItems:'center', gap:9 }}>🏢 {furnizor.nume}
+              {!furnizor.activ && <span style={{ fontSize:11, fontWeight:700, color:G.muted, background:G.muted + '22', padding:'2px 8px', borderRadius:10 }}>inactiv</span>}
+            </div>
+            {furnizor.cui && <div style={{ fontSize:12.5, color:G.dim, marginTop:3 }}>CUI {furnizor.cui}</div>}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => onEdit(furnizor)} style={{ padding:'7px 12px', background:'transparent', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:8, cursor:'pointer', fontSize:12.5, fontWeight:600 }}>✏️ Editează</button>
+            <button onClick={onClose} style={{ padding:'7px 12px', background:'transparent', color:G.muted, border:`1px solid ${G.border}`, borderRadius:8, cursor:'pointer', fontSize:12.5 }}>✕</button>
+          </div>
+        </div>
+
+        <div style={{ display:'flex', gap:10, marginBottom:18 }}>
+          <div style={{ flex:1, ...S.card, padding:'12px 14px' }}>
+            <div style={{ fontSize:11, color:G.muted, marginBottom:4 }}>📦 Comenzi</div>
+            <div style={{ fontSize:22, fontWeight:800, color:G.orange }}>{comenzi.length}</div>
+          </div>
+          <div style={{ flex:1, ...S.card, padding:'12px 14px' }}>
+            <div style={{ fontSize:11, color:G.muted, marginBottom:4 }}>💰 Total cheltuit</div>
+            <div style={{ fontSize:22, fontWeight:800, color:G.green }}>{fLei(total)}</div>
+          </div>
+        </div>
+
+        <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>📇 Date contact</div>
+        <div style={{ ...S.card, padding:'8px 16px', marginBottom:18 }}>
+          <Row label="Persoană contact" value={furnizor.persoana_contact} />
+          <Row label="Telefon" value={furnizor.telefon} />
+          <Row label="Email" value={furnizor.email} />
+          <Row label="Adresă" value={furnizor.adresa} />
+          <Row label="IBAN" value={furnizor.iban} />
+          <Row label="Termen plată" value={furnizor.termen_plata_zile != null ? `${furnizor.termen_plata_zile} zile` : null} />
+          <Row label="Observații" value={furnizor.observatii} />
+          {!furnizor.persoana_contact && !furnizor.telefon && !furnizor.email && !furnizor.adresa && !furnizor.iban && furnizor.termen_plata_zile == null && (
+            <div style={{ padding:'10px 0', fontSize:12.5, color:G.dim }}>Niciun detaliu de contact completat. Apasă ✏️ Editează ca să-l adaugi.</div>
+          )}
+        </div>
+
+        <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>📋 Istoric comenzi</div>
+        {loading && <div style={{ padding:20, textAlign:'center', color:G.muted }}>Se încarcă...</div>}
+        {!loading && !comenzi.length && <div style={{ ...S.card, padding:20, textAlign:'center', fontSize:13, color:G.dim, marginBottom:18 }}>Nicio comandă încă.</div>}
+        {!loading && comenzi.length > 0 && (
+          <div style={{ ...S.card, overflow:'hidden', marginBottom:18 }}>
+            {comenzi.map(c => {
+              const st = STATUS_COMANDA[c.status] || { t: c.status || '—', c: G.muted }
+              return (
+                <div key={c.id} style={{ display:'grid', gridTemplateColumns:'1fr 90px 110px', gap:8, alignItems:'center', padding:'10px 14px', borderBottom:`1px solid ${G.border}`, fontSize:13 }}>
+                  <div>
+                    <div style={{ fontWeight:700 }}>{c.numar_comanda || `#${c.id}`}</div>
+                    <div style={{ fontSize:11, color:G.dim }}>{fData(c.data_emitere)}</div>
+                  </div>
+                  <div><span style={{ fontSize:11, fontWeight:700, color:st.c, background:st.c + '1e', padding:'3px 8px', borderRadius:10 }}>{st.t}</span></div>
+                  <div style={{ textAlign:'right', fontWeight:700, color:G.green }}>{fLei(valoareComanda(c))}</div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>📃 Contracte legate</div>
+        {!contracte.length && <div style={{ ...S.card, padding:16, fontSize:12.5, color:G.dim }}>Niciun contract legat de comenzile acestui furnizor. (Se leagă din comanda furnizor → câmpul Contract.)</div>}
+        {contracte.length > 0 && (
+          <div style={{ ...S.card, overflow:'hidden' }}>
+            {contracte.map(ct => (
+              <div key={ct.id} style={{ padding:'10px 14px', borderBottom:`1px solid ${G.border}`, fontSize:13 }}>
+                <span style={{ fontWeight:700 }}>{ct.partener_text || `Contract #${ct.id}`}</span>
+                {ct.tip_contract && <span style={{ marginLeft:8, fontSize:11, color:G.dim }}>{ct.tip_contract}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FurnizoriTab() {
+  const [loading, setLoading] = useState(true)
+  const [furnizori, setFurnizori] = useState([])
+  const [statsMap, setStatsMap] = useState({})
+  const [search, setSearch] = useState('')
+  const [doarActivi, setDoarActivi] = useState(true)
+  const [modal, setModal] = useState(null)     // {} nou | {...} editează
+  const [drawer, setDrawer] = useState(null)   // furnizor selectat
+
+  const loadAll = async () => {
+    setLoading(true)
+    try {
+      const [rF, rS] = await Promise.all([
+        supabase.from('logistica_furnizori').select('*').order('nume'),
+        supabase.from('v_furnizori_stats').select('*'),
+      ])
+      const sm = {}
+      for (const s of (rS.data || [])) sm[s.furnizor_id] = s
+      setFurnizori(rF.data || []); setStatsMap(sm)
+    } catch (e) { console.error(e) } finally { setLoading(false) }
+  }
+  useEffect(() => { loadAll() }, [])
+
+  const filtered = useMemo(() => {
+    let arr = furnizori
+    if (doarActivi) arr = arr.filter(f => f.activ)
+    if (search) {
+      const q = search.toLowerCase()
+      arr = arr.filter(f => (f.nume || '').toLowerCase().includes(q) || (f.cui || '').toLowerCase().includes(q))
+    }
+    return arr.slice().sort((a, b) => (statsMap[b.id]?.total_cheltuit || 0) - (statsMap[a.id]?.total_cheltuit || 0))
+  }, [furnizori, statsMap, search, doarActivi])
+
+  const totalCheltuit = Object.values(statsMap).reduce((a, s) => a + Number(s.total_cheltuit || 0), 0)
+  const totalComenzi = Object.values(statsMap).reduce((a, s) => a + Number(s.nr_comenzi || 0), 0)
+
+  return (
+    <>
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16, alignItems:'stretch' }}>
+        <KPICard icon="🏢" label="Furnizori activi" value={furnizori.filter(f => f.activ).length} color={G.orange} />
+        <KPICard icon="📦" label="Comenzi total" value={totalComenzi} color={G.blue} />
+        <KPICard icon="💰" label="Total cheltuit" value={fLei(totalCheltuit)} color={G.green} />
+        <div style={{ flex:1, minWidth:200, display:'flex', alignItems:'center', justifyContent:'flex-end', gap:10 }}>
+          <button onClick={loadAll} style={{ padding:'9px 14px', background:'transparent', color:G.muted, border:`1px solid ${G.border}`, borderRadius:8, cursor:'pointer', fontSize:13 }}>🔄</button>
+          <button onClick={() => setModal({})} style={{ ...S.btnP }}>➕ Furnizor nou</button>
+        </div>
+      </div>
+
+      <div style={{ display:'flex', gap:12, marginBottom:14, alignItems:'center', flexWrap:'wrap' }}>
+        <input style={{ ...fInput, maxWidth:340 }} placeholder="🔍 Caută după nume sau CUI..." value={search} onChange={e => setSearch(e.target.value)} />
+        <label style={{ display:'flex', alignItems:'center', gap:7, fontSize:13, color:G.muted, cursor:'pointer' }}>
+          <input type="checkbox" checked={doarActivi} onChange={e => setDoarActivi(e.target.checked)} /> Doar activi
+        </label>
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă furnizorii...</div>}
+      {!loading && !filtered.length && (
+        <div style={{ ...S.card, padding:40, textAlign:'center' }}>
+          <div style={{ fontSize:40, marginBottom:10 }}>🏢</div>
+          <div style={{ fontSize:15, fontWeight:700 }}>{search ? 'Niciun furnizor găsit.' : 'Niciun furnizor încă.'}</div>
+        </div>
+      )}
+
+      {!loading && filtered.length > 0 && (
+        <div style={{ ...S.card, overflow:'hidden' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 130px 90px 130px 110px 70px', gap:10, padding:'10px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Furnizor</div><div>CUI</div><div style={{ textAlign:'center' }}>Comenzi</div><div style={{ textAlign:'right' }}>Total cheltuit</div><div>Ultima cmd.</div><div></div>
+          </div>
+          {filtered.map(f => {
+            const st = statsMap[f.id] || {}
+            return (
+              <div key={f.id} onClick={() => setDrawer(f)}
+                style={{ display:'grid', gridTemplateColumns:'1fr 130px 90px 130px 110px 70px', gap:10, alignItems:'center', padding:'12px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}`, cursor:'pointer', opacity: f.activ ? 1 : .55 }}>
+                <div style={{ fontWeight:700 }}>{f.nume}
+                  {(f.persoana_contact || f.telefon) && <div style={{ fontSize:11, color:G.dim, fontWeight:400 }}>{[f.persoana_contact, f.telefon].filter(Boolean).join(' · ')}</div>}
+                </div>
+                <div style={{ color:G.muted, fontSize:12 }}>{f.cui || '—'}</div>
+                <div style={{ textAlign:'center', fontWeight:700 }}>{st.nr_comenzi || 0}</div>
+                <div style={{ textAlign:'right', fontWeight:800, color: Number(st.total_cheltuit) > 0 ? G.green : G.dim }}>{fLei(st.total_cheltuit || 0)}</div>
+                <div style={{ fontSize:12, color:G.dim }}>{fData(st.ultima_comanda)}</div>
+                <div style={{ textAlign:'right' }}>
+                  <button onClick={e => { e.stopPropagation(); setModal(f) }} style={{ padding:'5px 9px', background:'transparent', color:G.orange, border:`1px solid ${G.orange}44`, borderRadius:6, cursor:'pointer', fontSize:12 }}>✏️</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop:14, padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:12, color:G.muted, lineHeight:1.7 }}>
+        <b style={{ color:G.text }}>💡 Cheltuielile</b> se calculează automat din comenzile emise în Achiziții (cantitate × preț pe linii). Click pe un furnizor pentru istoric comenzi + contracte legate.
+        <b style={{ color:G.text }}> Plăți / sold furnizor</b> urmează după integrarea bancară.
+      </div>
+
+      {modal && <FurnizorModal item={modal} onClose={() => setModal(null)} onDone={() => { setModal(null); loadAll() }} />}
+      {drawer && <FurnizorDrawer furnizor={drawer} onClose={() => setDrawer(null)} onEdit={(f) => { setDrawer(null); setModal(f) }} />}
+    </>
+  )
+}
+
+// ===========================================================================
 // COMPONENTĂ PRINCIPALĂ
 // ===========================================================================
 
@@ -548,22 +836,19 @@ export default function AdministrativPage() {
       {/* Etapa 16: Tab Documente firmă (funcțional cu AI parser + alerte expirare) */}
       {tab === 'documente' && <TabDocumenteFirma />}
 
+      {/* Faza 2: Tab Furnizori (bază de date + istoric comenzi + cheltuieli) */}
+      {tab === 'furnizori' && <FurnizoriTab />}
+
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
-            {tab === 'furnizori' && '🏢'}
             {tab === 'contracte' && '📜'}
           </div>
           <div style={{fontSize:18, fontWeight:700, color:G.text, marginBottom:8}}>
-            {tab === 'furnizori' && 'Furnizori'}
             {tab === 'contracte' && 'Contracte Comerciale'}
           </div>
           <div style={{fontSize:13, color:G.muted, maxWidth:520, margin:'0 auto 16px', lineHeight:1.6}}>
-            {tab === 'furnizori' && (
-              <>Bază de date <strong>furnizori</strong> cu:<br/>
-              Date contact · Contracte · Plăți · Istoric comenzi · Termenele de plată</>
-            )}
             {tab === 'contracte' && (
               <>Contracte <strong>cu clienți și parteneri</strong>:<br/>
               Generare automată · Date firmă · Templates · Semnare digitală</>
