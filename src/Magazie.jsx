@@ -51,6 +51,9 @@ function MaterialeTab() {
   const [ajustModal, setAjustModal] = useState(null)   // poziția de stoc (rând)
   const [istoricFor, setIstoricFor] = useState(null)    // poziția de stoc pt istoric
   const [pragFor, setPragFor] = useState(null)          // poziția de stoc pt setare prag minim
+  const [costFor, setCostFor] = useState(null)          // poziția de stoc pt setare cost mediu manual
+  const [adaugaPoz, setAdaugaPoz] = useState(false)     // modal adăugare poziție nouă
+  const [catalog, setCatalog] = useState([])            // materiale din catalog (autocomplete)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -62,13 +65,15 @@ function MaterialeTab() {
           .select('id, role, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle()
         prof = data || null
       }
-      const [rStoc, rProj] = await Promise.all([
+      const [rStoc, rProj, rCat] = await Promise.all([
         supabase.from('stocuri').select('*').order('material_denumire'),
         supabase.from('executie_proiecte').select('id, nume, cod_intern'),
+        supabase.from('materiale').select('id, cod, denumire, um, activ').eq('activ', true).order('denumire'),
       ])
       setProfile(prof)
       setStocuri(rStoc.data || [])
       setProiecte(rProj.data || [])
+      setCatalog(rCat.data || [])
     } catch (e) { console.error(e) } finally { setLoading(false) }
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
@@ -103,6 +108,8 @@ function MaterialeTab() {
   const totalPozitii = stocuri.length
   const totalLocatii = new Set(stocuri.map(s => s.locatie_tip === 'sediu' ? 'sediu' : `p${s.locatie_id}`)).size
   const ultimaMiscar = stocuri.reduce((acc, s) => (!acc || new Date(s.updated_at) > new Date(acc)) ? s.updated_at : acc, null)
+  const valoareTotala = stocuri.reduce((acc, s) => acc + (s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : 0), 0)
+  const fmtLei = (n) => fmtNr(Math.round(n)) + ' lei'
 
   return (
     <>
@@ -110,14 +117,18 @@ function MaterialeTab() {
         {[
           ['📋', 'Poziții în stoc', totalPozitii, G.magazie],
           ['📍', 'Locații cu stoc', totalLocatii, G.blue],
-          ['🕐', 'Ultima mișcare', ultimaMiscar ? fmtDataOra(ultimaMiscar) : '—', G.green],
+          ['💰', 'Valoare stoc', valoareTotala > 0 ? fmtLei(valoareTotala) : '—', G.green],
+          ['🕐', 'Ultima mișcare', ultimaMiscar ? fmtDataOra(ultimaMiscar) : '—', G.dim],
         ].map(([e, l, v, c], i) => (
-          <div key={i} style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:160 }}>
+          <div key={i} style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:150 }}>
             <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>{e} {l}</div>
             <div style={{ fontSize: typeof v === 'number' ? 24 : 15, fontWeight:800, color:c }}>{v}</div>
           </div>
         ))}
-        <button onClick={loadAll} style={{ ...S.btnS, fontSize:14, alignSelf:'center' }}>🔄 Reîncarcă</button>
+        <div style={{ display:'flex', flexDirection:'column', gap:8, justifyContent:'center' }}>
+          {canManage && <button onClick={() => setAdaugaPoz(true)} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', fontSize:13, whiteSpace:'nowrap' }}>➕ Adaugă poziție</button>}
+          <button onClick={loadAll} style={{ ...S.btnS, fontSize:14 }}>🔄 Reîncarcă</button>
+        </div>
       </div>
 
       <div style={{ marginBottom:14 }}>
@@ -134,17 +145,23 @@ function MaterialeTab() {
         </div>
       )}
 
-      {!loading && grupe.map(gr => (
+      {!loading && grupe.map(gr => {
+        const valGrup = gr.items.reduce((acc, s) => acc + (s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : 0), 0)
+        const partial = gr.items.some(s => s.cost_mediu == null) && valGrup > 0
+        return (
         <div key={gr.key} style={{ ...S.card, overflow:'hidden', marginBottom:16 }}>
           <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', borderBottom:`1px solid ${G.border}`, background:G.bg }}>
             <div style={{ fontSize:15, fontWeight:800, flex:1 }}>{gr.titlu}</div>
+            {valGrup > 0 && <span style={{ color:G.green, fontSize:13, fontWeight:800 }}>{fmtLei(valGrup)}{partial && <span style={{ color:G.dim, fontWeight:600 }}> *</span>}</span>}
             <span style={{ background:G.magazie + '22', color:G.magazie, border:`1px solid ${G.magazie}55`, borderRadius:14, padding:'3px 12px', fontSize:12, fontWeight:800 }}>{gr.items.length} {gr.items.length === 1 ? 'poziție' : 'poziții'}</span>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 150px 150px', gap:10, padding:'8px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
-            <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div><div>Actualizat</div><div></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 200px', gap:10, padding:'8px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div><div style={{ textAlign:'right' }}>Valoare</div><div>Actualizat</div><div></div>
           </div>
-          {gr.items.map(s => (
-            <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 150px 150px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
+          {gr.items.map(s => {
+            const val = s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : null
+            return (
+            <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 200px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
               <div style={{ fontWeight:600 }}>{s.material_denumire}{s.observatii && <div style={{ fontSize:11, color:G.muted }}>{s.observatii}</div>}</div>
               <div style={{ color:G.muted }}>{s.um || '—'}</div>
               <div style={{ textAlign:'right' }}>
@@ -156,29 +173,46 @@ function MaterialeTab() {
                   <div style={{ fontSize:10, color:G.dim }}>prag {fmtNr(s.prag_minim)}</div>
                 )}
               </div>
+              <div style={{ textAlign:'right' }}>
+                {val != null ? (
+                  <>
+                    <div style={{ fontWeight:700, fontSize:13.5, color:G.green }}>{fmtLei(val)}</div>
+                    <div style={{ fontSize:10, color:G.dim }}>{fmtNr(s.cost_mediu)}/{s.um || 'buc'}</div>
+                  </>
+                ) : <span style={{ fontSize:11, color:G.dim }}>fără cost</span>}
+              </div>
               <div style={{ fontSize:12, color:G.dim }}>{fmtDataOra(s.updated_at)}</div>
               <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
                 <button onClick={() => setIstoricFor(s)} title="Istoric mișcări"
-                  style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>📜</button>
+                  style={{ ...S.btnS, padding:'5px 9px', fontSize:12 }}>📜</button>
+                {canManage && (
+                  <button onClick={() => setCostFor(s)} title="Cost mediu"
+                    style={{ ...S.btnS, padding:'5px 9px', fontSize:12, color:G.green, borderColor:G.green + '66' }}>💰</button>
+                )}
                 {canManage && (
                   <button onClick={() => setPragFor(s)} title="Setează prag minim"
-                    style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.yellow, borderColor:G.yellow + '66' }}>🎯</button>
+                    style={{ ...S.btnS, padding:'5px 9px', fontSize:12, color:G.yellow, borderColor:G.yellow + '66' }}>🎯</button>
                 )}
                 {canManage && (
                   <button onClick={() => setAjustModal(s)} title="Ajustează stoc (+/-)"
-                    style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.magazie, borderColor:G.magazie + '66' }}>± Ajustează</button>
+                    style={{ ...S.btnS, padding:'5px 9px', fontSize:12, color:G.magazie, borderColor:G.magazie + '66' }}>±</button>
                 )}
               </div>
             </div>
-          ))}
+          )})}
         </div>
-      ))}
+      )})}
 
       <div style={{ padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:12, color:G.muted, lineHeight:1.7, marginTop:6 }}>
-        <b style={{ color:G.text }}>📋 Faza 6.1 activă:</b> ajustări manuale +/- cu motiv obligatoriu + registru de mișcări (audit complet per material).
-        Intrările vin automat din Achiziții (recepție → PV predare). Următor: transfer sediu↔proiect, consum pe proiect cu PV, praguri minime + valori stoc.
+        <b style={{ color:G.text }}>💰 Valoare stoc:</b> cost mediu ponderat (WAC) — se recalculează automat la fiecare recepție cu preț din Achiziții.
+        Pentru stocul deja existent fără preț, folosește 💰 ca să setezi costul; de acolo intrările viitoare îl ajustează singure.
+        Poziții fără cost nu intră în total (marcate cu <b>*</b> la nivel de locație).
       </div>
 
+      {adaugaPoz && (
+        <AdaugaPozitieModal proiecteMap={proiecteMap} catalog={catalog}
+          onClose={() => setAdaugaPoz(false)} onDone={() => { setAdaugaPoz(false); loadAll() }} />
+      )}
       {ajustModal && (
         <AjustareModal
           poz={ajustModal}
@@ -191,6 +225,9 @@ function MaterialeTab() {
       )}
       {pragFor && (
         <PragModal poz={pragFor} onClose={() => setPragFor(null)} onDone={() => { setPragFor(null); loadAll() }} />
+      )}
+      {costFor && (
+        <CostModal poz={costFor} onClose={() => setCostFor(null)} onDone={() => { setCostFor(null); loadAll() }} />
       )}
     </>
   )
@@ -1606,7 +1643,8 @@ function MagaziiTab() {
     const items = stocuri.filter(s => s.locatie_tip === tip && (s.locatie_id ?? null) === (id ?? null))
     const pozitii = items.length
     const subPrag = items.filter(s => s.prag_minim != null && Number(s.cantitate) < Number(s.prag_minim)).length
-    return { pozitii, subPrag }
+    const valoare = items.reduce((acc, s) => acc + (s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : 0), 0)
+    return { pozitii, subPrag, valoare }
   }, [stocuri])
 
   const toggleStatus = async (m) => {
@@ -1653,6 +1691,12 @@ function MagaziiTab() {
             <div style={{ fontSize:18, fontWeight:800, color: st.subPrag ? G.red : G.dim }}>{st.subPrag}</div>
           </div>
         </div>
+        {st.valoare > 0 && (
+          <div style={{ marginTop:8, background:G.green + '12', border:`1px solid ${G.green}33`, borderRadius:8, padding:'7px 10px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:10.5, color:G.muted }}>💰 Valoare stoc</span>
+            <span style={{ fontSize:14, fontWeight:800, color:G.green }}>{fmtNr(Math.round(st.valoare))} lei</span>
+          </div>
+        )}
         {canManage && (
           <button onClick={() => toggleStatus(m)} style={{ ...S.btnS, width:'100%', marginTop:10, fontSize:12.5, padding:'7px', color: inchisa ? G.green : G.muted }}>
             {inchisa ? '↺ Redeschide' : '⏸ Închide magazia'}
@@ -1700,6 +1744,270 @@ function MagaziiTab() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// CATALOG MATERIALE — Faza 6.2b: listă de referință + autocomplete
+// ════════════════════════════════════════════════════════════════
+function MaterialAutocomplete({ value, onChange, onPick, catalog, placeholder, autoFocus }) {
+  const [open, setOpen] = useState(false)
+  const sug = useMemo(() => {
+    const q = normalize(value)
+    if (!q) return catalog.slice(0, 8)
+    return catalog.filter(m => normalize(m.denumire).includes(q) || normalize(m.cod || '').includes(q)).slice(0, 8)
+  }, [value, catalog])
+  return (
+    <div style={{ position:'relative' }}>
+      <input style={S.input} value={value} placeholder={placeholder} autoFocus={autoFocus}
+        onChange={e => { onChange(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 160)} />
+      {open && sug.length > 0 && (
+        <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:50, background:G.surface, border:`1px solid ${G.border2}`, borderRadius:8, marginTop:2, maxHeight:220, overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,.4)' }}>
+          {sug.map(m => (
+            <div key={m.id} onMouseDown={() => { onPick(m); setOpen(false) }}
+              style={{ padding:'8px 12px', fontSize:13, cursor:'pointer', borderBottom:`1px solid ${G.border}` }}>
+              <span style={{ fontWeight:600 }}>{m.denumire}</span>
+              {m.cod && <span style={{ color:G.dim, marginLeft:6, fontSize:11 }}>{m.cod}</span>}
+              {m.um && <span style={{ color:G.muted, marginLeft:6, fontSize:11 }}>({m.um})</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CatalogModal({ item, onClose, onDone }) {
+  const edit = !!item?.id
+  const [cod, setCod] = useState(item?.cod || '')
+  const [denumire, setDenumire] = useState(item?.denumire || '')
+  const [um, setUm] = useState(item?.um || 'buc')
+  const [activ, setActiv] = useState(item?.activ ?? true)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const salveaza = async () => {
+    if (!denumire.trim()) { setErr('Denumirea e obligatorie.'); return }
+    setBusy(true); setErr('')
+    try {
+      const payload = { cod: cod.trim() || null, denumire: denumire.trim(), um: um.trim() || null, activ }
+      const { error } = edit
+        ? await supabase.from('materiale').update(payload).eq('id', item.id)
+        : await supabase.from('materiale').insert(payload)
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(480px,100%)', padding:22 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:16 }}>{edit ? '✏️ Editează material' : '➕ Material nou în catalog'}</div>
+        <div style={{ display:'flex', gap:10, marginBottom:12 }}>
+          <div style={{ width:130 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Cod</label>
+            <input style={S.input} value={cod} onChange={e => setCod(e.target.value)} placeholder="opțional" />
+          </div>
+          <div style={{ width:90 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>UM</label>
+            <input style={S.input} value={um} onChange={e => setUm(e.target.value)} placeholder="buc" />
+          </div>
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Denumire <span style={{ color:G.red }}>*</span></label>
+          <input style={S.input} autoFocus value={denumire} onChange={e => setDenumire(e.target.value)} placeholder="ex: Electrozi bazici E7018 3.25mm" />
+        </div>
+        <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', marginBottom:8 }}>
+          <input type="checkbox" checked={activ} onChange={e => setActiv(e.target.checked)} /> Activ (apare în autocomplete)
+        </label>
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>{err}</div>}
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={salveaza} disabled={busy} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CatalogTab() {
+  const [loading, setLoading] = useState(true)
+  const [items, setItems] = useState([])
+  const [profile, setProfile] = useState(null)
+  const [search, setSearch] = useState('')
+  const [modal, setModal] = useState(null)   // {} nou | {id...} editează
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let prof = null
+      if (user) { const { data } = await supabase.from('profiles').select('id, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle(); prof = data || null }
+      const { data } = await supabase.from('materiale').select('*').order('denumire')
+      setProfile(prof); setItems(data || [])
+    } catch (e) { console.error(e) } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { loadAll() }, [loadAll])
+
+  const canManage = !!(profile?.is_owner || profile?.can_manage_stoc)
+  const filtered = useMemo(() => search ? items.filter(m => normalize(m.denumire).includes(normalize(search)) || normalize(m.cod || '').includes(normalize(search))) : items, [items, search])
+
+  return (
+    <>
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14, alignItems:'center' }}>
+        <div style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:160 }}>
+          <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>📒 Materiale în catalog</div>
+          <div style={{ fontSize:24, fontWeight:800, color:G.magazie }}>{items.filter(m => m.activ).length}<span style={{ fontSize:13, color:G.dim, fontWeight:600 }}> active</span></div>
+        </div>
+        <input style={{ ...S.input, maxWidth:320, alignSelf:'center' }} placeholder="🔍 Caută în catalog..." value={search} onChange={e => setSearch(e.target.value)} />
+        <button onClick={loadAll} style={{ ...S.btnS, alignSelf:'center' }}>🔄</button>
+        {canManage && <button onClick={() => setModal({})} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', alignSelf:'center' }}>➕ Material nou</button>}
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă catalogul...</div>}
+      {!loading && !filtered.length && (
+        <div style={{ ...S.card, padding:40, textAlign:'center' }}>
+          <div style={{ fontSize:40, marginBottom:10 }}>📒</div>
+          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>{search ? 'Niciun material găsit.' : 'Catalogul e gol.'}</div>
+          <div style={{ fontSize:13, color:G.muted }}>Adaugă materialele standard folosite des — vor apărea ca sugestii (autocomplete) la adăugarea de stoc.</div>
+        </div>
+      )}
+
+      {!loading && filtered.length > 0 && (
+        <div style={{ ...S.card, overflow:'hidden' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'130px 1fr 80px 80px 90px', gap:10, padding:'9px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Cod</div><div>Denumire</div><div>UM</div><div style={{ textAlign:'center' }}>Stare</div><div></div>
+          </div>
+          {filtered.map(m => (
+            <div key={m.id} style={{ display:'grid', gridTemplateColumns:'130px 1fr 80px 80px 90px', gap:10, alignItems:'center', padding:'9px 16px', fontSize:13, borderBottom:`1px solid ${G.border}`, opacity: m.activ ? 1 : .5 }}>
+              <div style={{ color:G.dim, fontSize:12 }}>{m.cod || '—'}</div>
+              <div style={{ fontWeight:600 }}>{m.denumire}</div>
+              <div style={{ color:G.muted }}>{m.um || '—'}</div>
+              <div style={{ textAlign:'center' }}><span style={{ fontSize:11, fontWeight:700, color: m.activ ? G.green : G.muted }}>{m.activ ? 'activ' : 'inactiv'}</span></div>
+              <div style={{ textAlign:'right' }}>
+                {canManage && <button onClick={() => setModal(m)} style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>✏️</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modal && <CatalogModal item={modal} onClose={() => setModal(null)} onDone={() => { setModal(null); loadAll() }} />}
+    </>
+  )
+}
+
+// ── Modal: adaugă poziție de stoc (material din catalog + cant + preț) ──
+function AdaugaPozitieModal({ proiecteMap, catalog, onClose, onDone }) {
+  const [loc, setLoc] = useState('')
+  const [den, setDen] = useState('')
+  const [um, setUm] = useState('')
+  const [cant, setCant] = useState('')
+  const [pret, setPret] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const locOptions = useMemo(() => {
+    const opts = [{ v:'sediu', label:'🏢 Sediu Ploiești' }]
+    ;[...new Set(Object.keys(proiecteMap).map(Number))].forEach(id => opts.push({ v:`proiect:${id}`, label: locLabel('proiect', id, proiecteMap) }))
+    return opts
+  }, [proiecteMap])
+
+  const valid = loc && den.trim() && Number(cant) > 0
+  const adauga = async () => {
+    if (!valid) { setErr('Completează locație, material și cantitate (>0).'); return }
+    setBusy(true); setErr('')
+    try {
+      const [tip, id] = parseLoc(loc)
+      const { error } = await supabase.from('stocuri_miscari').insert({
+        locatie_tip: tip, locatie_id: id, material_denumire: den.trim(), um: um.trim() || null,
+        delta: Math.abs(Number(cant)), tip: 'corectie_initiala', motiv: 'Adăugare manuală stoc',
+        pret_unitar: pret.trim() !== '' ? Math.abs(Number(pret)) : null,
+      })
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(520px,100%)', padding:22 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:16 }}>➕ Adaugă poziție de stoc</div>
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Locație <span style={{ color:G.red }}>*</span></label>
+          <select style={S.input} value={loc} onChange={e => setLoc(e.target.value)}>
+            <option value="">— alege locația —</option>
+            {locOptions.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+          </select>
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Material <span style={{ color:G.red }}>*</span> <span style={{ color:G.dim }}>(scrie sau alege din catalog)</span></label>
+          <MaterialAutocomplete value={den} catalog={catalog} placeholder="ex: Electrozi bazici E7018..."
+            onChange={setDen} onPick={(m) => { setDen(m.denumire); if (m.um) setUm(m.um) }} />
+        </div>
+        <div style={{ display:'flex', gap:10, marginBottom:12 }}>
+          <div style={{ width:90 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>UM</label>
+            <input style={S.input} value={um} onChange={e => setUm(e.target.value)} placeholder="buc" />
+          </div>
+          <div style={{ flex:1 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Cantitate <span style={{ color:G.red }}>*</span></label>
+            <input type="number" min="0" step="any" style={S.input} value={cant} onChange={e => setCant(e.target.value)} placeholder="0" />
+          </div>
+          <div style={{ flex:1 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Preț unitar</label>
+            <input type="number" min="0" step="any" style={S.input} value={pret} onChange={e => setPret(e.target.value)} placeholder="opțional" />
+          </div>
+        </div>
+        <div style={{ fontSize:11.5, color:G.dim, marginBottom:8 }}>Prețul unitar (dacă-l completezi) devine cost mediu inițial al poziției.</div>
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>{err}</div>}
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={adauga} disabled={busy || !valid} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', opacity:(busy || !valid) ? .6 : 1 }}>{busy ? '...' : 'Adaugă în stoc'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Modal: cost mediu manual per poziție ───────────────────────
+function CostModal({ poz, onClose, onDone }) {
+  const [cost, setCost] = useState(poz.cost_mediu != null ? String(poz.cost_mediu) : '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const salveaza = async (clear) => {
+    setBusy(true); setErr('')
+    try {
+      const val = clear ? null : (cost.trim() === '' ? null : Math.abs(Number(cost)))
+      if (!clear && val != null && (isNaN(val) || val < 0)) { setErr('Cost invalid.'); setBusy(false); return }
+      const { error } = await supabase.from('stocuri').update({ cost_mediu: val }).eq('id', poz.id)
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+  const val = cost.trim() !== '' ? Number(cost) * Number(poz.cantitate) : null
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(440px,100%)', padding:22 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:4 }}>💰 Cost mediu</div>
+        <div style={{ fontSize:13, color:G.muted, marginBottom:16 }}>{poz.material_denumire} · {fmtNr(poz.cantitate)} {poz.um || ''}</div>
+        <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Cost mediu unitar ({poz.um || 'buc'})</label>
+        <input type="number" min="0" step="any" autoFocus style={S.input} value={cost} onChange={e => setCost(e.target.value)} placeholder="ex: 12.50" />
+        {val != null && <div style={{ marginTop:10, fontSize:13, color:G.muted }}>Valoare poziție: <b style={{ color:G.green }}>{fmtNr(val)} lei</b></div>}
+        <div style={{ fontSize:11.5, color:G.dim, marginTop:8 }}>După setare, intrările viitoare cu preț recalculează automat media ponderată (WAC).</div>
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginTop:8 }}>{err}</div>}
+        <div style={{ display:'flex', justifyContent:'space-between', gap:10, marginTop:16 }}>
+          <button onClick={() => salveaza(true)} disabled={busy || poz.cost_mediu == null} style={{ ...S.btnS, color:G.red, opacity:(busy || poz.cost_mediu == null) ? .5 : 1 }}>Șterge cost</button>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+            <button onClick={() => salveaza(false)} disabled={busy} style={{ ...S.btnP, background:G.green, color:'#06210F', opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează cost'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
 // SHELL cu tab-uri
 // ════════════════════════════════════════════════════════════════
 export default function MagaziePage() {
@@ -1715,7 +2023,7 @@ export default function MagaziePage() {
       </div>
 
       <div style={{ display:'flex', gap:8, marginBottom:18 }}>
-        {[['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil']].map(([k, l]) => (
+        {[['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding:'9px 18px', fontSize:14, fontWeight:700, cursor:'pointer', borderRadius:8,
             background: tab === k ? G.magazie + '22' : 'transparent',
@@ -1729,6 +2037,7 @@ export default function MagaziePage() {
       {tab === 'magazii' && <MagaziiTab />}
       {tab === 'transferuri' && <TransferuriTab />}
       {tab === 'consum' && <ConsumuriTab />}
+      {tab === 'catalog' && <CatalogTab />}
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
     </div>
