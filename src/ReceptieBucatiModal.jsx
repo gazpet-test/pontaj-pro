@@ -251,6 +251,17 @@ export default function ReceptieBucatiModal({
 
       const { error } = await supabase.from('magazie_bucati').insert(rows)
       if (error) throw error
+
+      // Dacă recepția vine dintr-o comandă furnizor și am un packing list uploadat,
+      // îl atașăm și pe comandă (câmp comenzi_furnizor.packing_list_path).
+      if (comandaFurnizorId && mtcPath) {
+        try {
+          await supabase.from('comenzi_furnizor')
+            .update({ packing_list_path: mtcPath, updated_at: new Date().toISOString() })
+            .eq('id', comandaFurnizorId)
+        } catch (e2) { console.error('packing_list_path update:', e2) /* nu blochează recepția */ }
+      }
+
       flash('ok', `${rows.length} bucăți recepționate (stare „sosit"). Urmează PV recepție cantitativă/calitativă (MP).`)
       onSuccess?.(rows.length)
       setTimeout(() => onClose?.(), 900)
