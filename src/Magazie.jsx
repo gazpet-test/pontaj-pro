@@ -50,6 +50,7 @@ function MaterialeTab() {
   const [profile, setProfile] = useState(null)
   const [ajustModal, setAjustModal] = useState(null)   // poziția de stoc (rând)
   const [istoricFor, setIstoricFor] = useState(null)    // poziția de stoc pt istoric
+  const [pragFor, setPragFor] = useState(null)          // poziția de stoc pt setare prag minim
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -146,11 +147,23 @@ function MaterialeTab() {
             <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 90px 140px 150px 150px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
               <div style={{ fontWeight:600 }}>{s.material_denumire}{s.observatii && <div style={{ fontSize:11, color:G.muted }}>{s.observatii}</div>}</div>
               <div style={{ color:G.muted }}>{s.um || '—'}</div>
-              <div style={{ textAlign:'right', fontWeight:800, fontSize:15, color: Number(s.cantitate) > 0 ? G.green : G.red }}>{fmtNr(s.cantitate)}</div>
+              <div style={{ textAlign:'right' }}>
+                <div style={{ fontWeight:800, fontSize:15, color: Number(s.cantitate) > 0 ? G.green : G.red }}>{fmtNr(s.cantitate)}</div>
+                {s.prag_minim != null && Number(s.cantitate) < Number(s.prag_minim) && (
+                  <div style={{ fontSize:10, fontWeight:800, color:G.red }}>⚠ sub prag ({fmtNr(s.prag_minim)})</div>
+                )}
+                {s.prag_minim != null && Number(s.cantitate) >= Number(s.prag_minim) && (
+                  <div style={{ fontSize:10, color:G.dim }}>prag {fmtNr(s.prag_minim)}</div>
+                )}
+              </div>
               <div style={{ fontSize:12, color:G.dim }}>{fmtDataOra(s.updated_at)}</div>
               <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
                 <button onClick={() => setIstoricFor(s)} title="Istoric mișcări"
                   style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>📜</button>
+                {canManage && (
+                  <button onClick={() => setPragFor(s)} title="Setează prag minim"
+                    style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.yellow, borderColor:G.yellow + '66' }}>🎯</button>
+                )}
                 {canManage && (
                   <button onClick={() => setAjustModal(s)} title="Ajustează stoc (+/-)"
                     style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.magazie, borderColor:G.magazie + '66' }}>± Ajustează</button>
@@ -175,6 +188,9 @@ function MaterialeTab() {
       )}
       {istoricFor && (
         <IstoricDrawer poz={istoricFor} onClose={() => setIstoricFor(null)} />
+      )}
+      {pragFor && (
+        <PragModal poz={pragFor} onClose={() => setPragFor(null)} onDone={() => { setPragFor(null); loadAll() }} />
       )}
     </>
   )
@@ -252,6 +268,51 @@ function AjustareModal({ poz, onClose, onDone }) {
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
           <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
           <button onClick={aplica} disabled={busy || !valid} style={{ ...S.btnP, background:G.magazie, color:'#3a0d0a', opacity: (busy || !valid) ? .6 : 1 }}>{busy ? '...' : 'Aplică ajustarea'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// MODAL: Prag minim per poziție de stoc (alertă când scade sub)
+// ════════════════════════════════════════════════════════════════
+function PragModal({ poz, onClose, onDone }) {
+  const [prag, setPrag] = useState(poz.prag_minim != null ? String(poz.prag_minim) : '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const salveaza = async (clear) => {
+    setBusy(true); setErr('')
+    try {
+      const val = clear ? null : (prag.trim() === '' ? null : Math.abs(Number(prag)))
+      if (!clear && val != null && (isNaN(val) || val < 0)) { setErr('Prag invalid.'); setBusy(false); return }
+      const { error } = await supabase.from('stocuri').update({ prag_minim: val }).eq('id', poz.id)
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  const subPrag = prag.trim() !== '' && Number(poz.cantitate) < Number(prag)
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(440px,100%)', padding:22 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:4 }}>🎯 Prag minim</div>
+        <div style={{ fontSize:13, color:G.muted, marginBottom:16 }}>{poz.material_denumire} · stoc curent <b style={{ color:G.text }}>{fmtNr(poz.cantitate)} {poz.um || ''}</b></div>
+
+        <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Prag minim ({poz.um || 'buc'}) — gol = fără alertă</label>
+        <input type="number" min="0" step="any" autoFocus style={S.input} value={prag} onChange={e => setPrag(e.target.value)} placeholder="ex: 50" />
+
+        {subPrag && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginTop:10 }}>⚠️ Cu acest prag, poziția e deja sub minim.</div>}
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginTop:10 }}>{err}</div>}
+
+        <div style={{ display:'flex', justifyContent:'space-between', gap:10, marginTop:16 }}>
+          <button onClick={() => salveaza(true)} disabled={busy || poz.prag_minim == null} style={{ ...S.btnS, color:G.red, opacity:(busy || poz.prag_minim == null) ? .5 : 1 }}>Șterge prag</button>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+            <button onClick={() => salveaza(false)} disabled={busy} style={{ ...S.btnP, background:G.yellow, color:'#3a2e05', opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează prag'}</button>
+          </div>
         </div>
       </div>
     </div>
@@ -972,7 +1033,11 @@ function TransferNouModal({ stocuri, proiecteMap, onClose, onDone }) {
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
       <div style={{ ...S.card, width:'min(620px,100%)', maxHeight:'92vh', overflowY:'auto', padding:22 }}>
-        <div style={{ fontSize:17, fontWeight:800, marginBottom:16 }}>🔁 Transfer intern nou</div>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:10 }}>🔁 Transfer intern nou</div>
+
+        <div style={{ padding:'9px 12px', background:G.yellow + '14', border:`1px solid ${G.yellow}44`, borderRadius:8, fontSize:12, color:G.yellow, marginBottom:14, lineHeight:1.5 }}>
+          ⚠️ Pentru marfă care pleacă cu <b>camion / aviz</b>, folosește <b>Comanda de transport din Logistică</b> — aceea creează transferul automat. Aici faci transfer direct pe stoc (fără aviz), ca să nu se miște stocul de două ori.
+        </div>
 
         <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
           <div style={{ flex:1, minWidth:220 }}>
@@ -1203,6 +1268,438 @@ function TransferuriTab() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// CONSUM PE PROIECT — Faza 6.3: scoate din stoc + PV (bon consum)
+// Backend: rpc fn_consum_executa (validează disponibil, mișcare consum_proiect)
+// ════════════════════════════════════════════════════════════════
+function genereazaPVConsum(c, linii, locText) {
+  const doc = new jsPDF({ unit:'mm', format:'a4' })
+  const W = 210, M = 18
+  let y = 20
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11)
+  doc.text('GAZPET INSTAL SRL', M, y)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
+  doc.text('Ploiești, jud. Prahova', M, y + 5)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(15)
+  doc.text('BON DE CONSUM', W / 2, y + 18, { align:'center' })
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10)
+  doc.text(`Nr. bon: ${c.id}`, M, y + 28)
+  doc.text(`Data: ${fmtData(c.data_consum || c.created_at)}`, W - M, y + 28, { align:'right' })
+
+  y += 38
+  doc.setFont('helvetica', 'bold'); doc.text('Locație consum:', M, y)
+  doc.setFont('helvetica', 'normal'); doc.text(locText, M + 36, y)
+  if (c.predat_de) { doc.setFont('helvetica', 'bold'); doc.text('Predat de:', M, y + 7); doc.setFont('helvetica', 'normal'); doc.text(c.predat_de, M + 24, y + 7) }
+  if (c.primit_de) { doc.setFont('helvetica', 'bold'); doc.text('Primit de:', M + 95, y + 7); doc.setFont('helvetica', 'normal'); doc.text(c.primit_de, M + 119, y + 7) }
+  if (c.observatii) { doc.setFont('helvetica', 'italic'); doc.text(`Observații: ${c.observatii}`, M, y + 14); doc.setFont('helvetica', 'normal') }
+
+  y += 22
+  const cols = [M, M + 12, W - M - 60, W - M - 32]
+  doc.setFillColor(230, 230, 230); doc.rect(M, y - 5, W - 2 * M, 8, 'F')
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9)
+  doc.text('Nr.', cols[0] + 1, y); doc.text('Material', cols[1], y)
+  doc.text('UM', cols[2], y); doc.text('Cantitate', cols[3], y)
+  doc.setFont('helvetica', 'normal'); y += 7
+  ;(linii || []).forEach((l, i) => {
+    if (y > 260) { doc.addPage(); y = 20 }
+    doc.text(String(i + 1), cols[0] + 1, y)
+    const den = doc.splitTextToSize(l.material_denumire || '', cols[2] - cols[1] - 4)
+    doc.text(den, cols[1], y)
+    doc.text(l.um || '—', cols[2], y)
+    doc.text(fmtNr(l.cantitate), cols[3], y)
+    y += Math.max(6, den.length * 5)
+    doc.setDrawColor(220, 220, 220); doc.line(M, y - 3, W - M, y - 3)
+  })
+
+  y = Math.max(y + 16, 245)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10)
+  doc.text('Predat (gestionar)', M + 10, y)
+  doc.text('Primit (executant)', W - M - 50, y)
+  doc.setDrawColor(120, 120, 120)
+  doc.line(M, y + 14, M + 60, y + 14)
+  doc.line(W - M - 60, y + 14, W - M, y + 14)
+  doc.setFontSize(7); doc.setTextColor(120)
+  doc.text(`Generat din Gazpet ERP · ${fmtDataOra(new Date())}`, W / 2, 290, { align:'center' })
+  doc.save(`BonConsum_${c.id}_${fmtData(c.data_consum || c.created_at).replace(/\./g, '-')}.pdf`)
+}
+
+// ── Modal: Consum nou ──────────────────────────────────────────
+function ConsumNouModal({ stocuri, proiecteMap, onClose, onDone }) {
+  const [loc, setLoc] = useState('')
+  const [cantMap, setCantMap] = useState({})
+  const [predat, setPredat] = useState('')
+  const [primit, setPrimit] = useState('')
+  const [obs, setObs] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const locOptions = useMemo(() => {
+    const opts = [{ v:'sediu', label:'🏢 Sediu Ploiești' }]
+    ;[...new Set(Object.keys(proiecteMap).map(Number))].forEach(id => opts.push({ v:`proiect:${id}`, label: locLabel('proiect', id, proiecteMap) }))
+    return opts
+  }, [proiecteMap])
+
+  const stocLoc = useMemo(() => {
+    if (!loc) return []
+    const [tip, id] = parseLoc(loc)
+    return stocuri
+      .filter(s => s.locatie_tip === tip && (s.locatie_id ?? null) === (id ?? null) && Number(s.cantitate) > 0)
+      .sort((a, b) => a.material_denumire.localeCompare(b.material_denumire))
+  }, [loc, stocuri])
+
+  const liniiSel = useMemo(() => stocLoc
+    .map(s => ({ s, q: Math.abs(Number(cantMap[s.material_denumire]) || 0) }))
+    .filter(x => x.q > 0), [stocLoc, cantMap])
+
+  const overflow = liniiSel.some(x => x.q > Number(x.s.cantitate))
+  const valid = loc && liniiSel.length > 0 && !overflow
+
+  const consuma = async () => {
+    if (!valid) { setErr(overflow ? 'O cantitate depășește disponibilul.' : 'Alege locația și cel puțin un material.'); return }
+    setBusy(true); setErr('')
+    try {
+      const [tip, id] = parseLoc(loc)
+      const p_linii = liniiSel.map(x => ({ material_denumire: x.s.material_denumire, um: x.s.um || null, cantitate: x.q }))
+      const { error } = await supabase.rpc('fn_consum_executa', {
+        p_locatie_tip: tip, p_locatie_id: id, p_predat: predat.trim() || null, p_primit: primit.trim() || null, p_obs: obs.trim() || null, p_linii,
+      })
+      if (error) throw error
+      onDone()
+    } catch (e) { setErr(e.message || String(e)); setBusy(false) }
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, width:'min(620px,100%)', maxHeight:'92vh', overflowY:'auto', padding:22 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:14 }}>🔧 Consum nou pe proiect</div>
+
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Locație (din ce magazie se consumă) <span style={{ color:G.red }}>*</span></label>
+          <select style={S.input} value={loc} onChange={e => { setLoc(e.target.value); setCantMap({}) }}>
+            <option value="">— alege locația —</option>
+            {locOptions.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+          </select>
+        </div>
+
+        {!loc && <div style={{ padding:'14px 16px', background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:13, color:G.muted }}>Alege o locație ca să vezi materialele disponibile.</div>}
+        {loc && !stocLoc.length && <div style={{ padding:'14px 16px', background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:13, color:G.muted }}>📭 Nu există stoc disponibil aici.</div>}
+
+        {loc && stocLoc.length > 0 && (
+          <div style={{ ...S.card, background:G.bg, overflow:'hidden', marginBottom:14 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 110px 130px', gap:10, padding:'8px 14px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+              <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Disponibil</div><div style={{ textAlign:'right' }}>Consumă</div>
+            </div>
+            {stocLoc.map(s => {
+              const q = Number(cantMap[s.material_denumire]) || 0
+              const over = q > Number(s.cantitate)
+              return (
+                <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 80px 110px 130px', gap:10, alignItems:'center', padding:'8px 14px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+                  <div style={{ fontWeight:600 }}>{s.material_denumire}</div>
+                  <div style={{ color:G.muted }}>{s.um || '—'}</div>
+                  <div style={{ textAlign:'right', fontWeight:700, color:G.green }}>{fmtNr(s.cantitate)}</div>
+                  <div style={{ textAlign:'right' }}>
+                    <input type="number" min="0" step="any" style={{ ...S.input, padding:'6px 8px', textAlign:'right', width:110, borderColor: over ? G.red : G.border2 }}
+                      value={cantMap[s.material_denumire] ?? ''} placeholder="0"
+                      onChange={e => setCantMap(m => ({ ...m, [s.material_denumire]: e.target.value }))} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div style={{ display:'flex', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+          <div style={{ flex:1, minWidth:200 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Predat de (gestionar)</label>
+            <input style={S.input} value={predat} onChange={e => setPredat(e.target.value)} placeholder="opțional" />
+          </div>
+          <div style={{ flex:1, minWidth:200 }}>
+            <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Primit de (executant)</label>
+            <input style={S.input} value={primit} onChange={e => setPrimit(e.target.value)} placeholder="opțional" />
+          </div>
+        </div>
+        <div style={{ marginBottom:10 }}>
+          <label style={{ fontSize:12, color:G.muted, marginBottom:4, display:'block' }}>Observații</label>
+          <textarea style={{ ...S.input, minHeight:44, resize:'vertical' }} value={obs} onChange={e => setObs(e.target.value)} placeholder="opțional — lucrare, tronson, etc." />
+        </div>
+
+        {overflow && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>⚠️ O cantitate depășește disponibilul.</div>}
+        {err && <div style={{ padding:'8px 12px', background:G.red + '18', border:`1px solid ${G.red}55`, borderRadius:8, fontSize:12.5, color:G.red, marginBottom:8 }}>{err}</div>}
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginTop:8 }}>
+          <div style={{ fontSize:12.5, color:G.muted }}>{liniiSel.length} {liniiSel.length === 1 ? 'material' : 'materiale'}</div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+            <button onClick={consuma} disabled={busy || !valid} style={{ ...S.btnP, background:G.red, color:'#fff', opacity:(busy || !valid) ? .6 : 1 }}>{busy ? '...' : '🔧 Înregistrează consumul'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Drawer: detalii consum + PV ────────────────────────────────
+function ConsumDetaliiDrawer({ consum, linii, locText, onClose }) {
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', zIndex:1000, display:'flex', justifyContent:'flex-end' }}>
+      <div style={{ width:'min(520px,100%)', height:'100%', background:G.surface, borderLeft:`1px solid ${G.border}`, padding:22, overflowY:'auto' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, marginBottom:14 }}>
+          <div>
+            <div style={{ fontSize:17, fontWeight:800 }}>🔧 Consum #{consum.id}</div>
+            <div style={{ fontSize:13, color:G.muted, marginTop:2 }}>{fmtData(consum.data_consum || consum.created_at)}</div>
+          </div>
+          <button onClick={onClose} style={{ ...S.btnS, padding:'6px 10px', fontSize:18, lineHeight:1 }}>✕</button>
+        </div>
+
+        <div style={{ ...S.card, background:G.bg, padding:'12px 14px', marginBottom:14, fontSize:13.5 }}>
+          <div style={{ marginBottom:6 }}><span style={{ color:G.muted }}>Locație: </span><b>{locText}</b></div>
+          {consum.predat_de && <div style={{ marginBottom:6 }}><span style={{ color:G.muted }}>Predat: </span><b>{consum.predat_de}</b></div>}
+          {consum.primit_de && <div style={{ marginBottom:6 }}><span style={{ color:G.muted }}>Primit: </span><b>{consum.primit_de}</b></div>}
+          {consum.observatii && <div style={{ marginTop:6, color:G.muted, fontSize:12.5 }}>{consum.observatii}</div>}
+        </div>
+
+        <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>Materiale ({(linii || []).length})</div>
+        <div style={{ ...S.card, overflow:'hidden', marginBottom:16 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 110px', gap:10, padding:'8px 14px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div>
+          </div>
+          {(linii || []).map(l => (
+            <div key={l.id} style={{ display:'grid', gridTemplateColumns:'1fr 70px 110px', gap:10, padding:'8px 14px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+              <div style={{ fontWeight:600 }}>{l.material_denumire}</div>
+              <div style={{ color:G.muted }}>{l.um || '—'}</div>
+              <div style={{ textAlign:'right', fontWeight:700, color:G.red }}>−{fmtNr(l.cantitate)}</div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={() => genereazaPVConsum(consum, linii, locText)} style={{ ...S.btnP, width:'100%' }}>📄 Descarcă bon de consum (PDF)</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Tab Consum ─────────────────────────────────────────────────
+function ConsumuriTab() {
+  const [loading, setLoading] = useState(true)
+  const [consumuri, setConsumuri] = useState([])
+  const [liniiMap, setLiniiMap] = useState({})
+  const [proiecte, setProiecte] = useState([])
+  const [stocuri, setStocuri] = useState([])
+  const [profile, setProfile] = useState(null)
+  const [openNou, setOpenNou] = useState(false)
+  const [detaliiFor, setDetaliiFor] = useState(null)
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let prof = null
+      if (user) {
+        const { data } = await supabase.from('profiles').select('id, role, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle()
+        prof = data || null
+      }
+      const [rC, rL, rP, rS] = await Promise.all([
+        supabase.from('consumuri_proiect').select('*').order('created_at', { ascending: false }),
+        supabase.from('consumuri_proiect_linii').select('*'),
+        supabase.from('executie_proiecte').select('id, nume, cod_intern'),
+        supabase.from('stocuri').select('*'),
+      ])
+      const lm = {}
+      ;(rL.data || []).forEach(l => { (lm[l.consum_id] = lm[l.consum_id] || []).push(l) })
+      setProfile(prof); setConsumuri(rC.data || []); setLiniiMap(lm); setProiecte(rP.data || []); setStocuri(rS.data || [])
+    } catch (e) { console.error(e) } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { loadAll() }, [loadAll])
+
+  const canManage = !!(profile?.is_owner || profile?.can_manage_stoc)
+  const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
+
+  return (
+    <>
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14, alignItems:'center' }}>
+        <div style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:160 }}>
+          <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>🔧 Bonuri consum</div>
+          <div style={{ fontSize:24, fontWeight:800, color:G.red }}>{consumuri.length}</div>
+        </div>
+        <div style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:160 }}>
+          <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>🕐 Ultimul consum</div>
+          <div style={{ fontSize:15, fontWeight:800, color:G.green }}>{consumuri[0] ? fmtData(consumuri[0].data_consum || consumuri[0].created_at) : '—'}</div>
+        </div>
+        <button onClick={loadAll} style={{ ...S.btnS, alignSelf:'center' }}>🔄 Reîncarcă</button>
+        {canManage && <button onClick={() => setOpenNou(true)} style={{ ...S.btnP, background:G.red, color:'#fff', alignSelf:'center' }}>🔧 Consum nou</button>}
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă consumurile...</div>}
+
+      {!loading && !consumuri.length && (
+        <div style={{ ...S.card, padding:40, textAlign:'center' }}>
+          <div style={{ fontSize:40, marginBottom:10 }}>🔧</div>
+          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>Niciun consum înregistrat.</div>
+          <div style={{ fontSize:13, color:G.muted }}>Înregistrează materialele consumate pe un proiect — stocul scade automat și obții bon de consum.</div>
+        </div>
+      )}
+
+      {!loading && consumuri.length > 0 && (
+        <div style={{ ...S.card, overflow:'hidden' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'90px 1fr 1fr 80px 120px', gap:10, padding:'9px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+            <div>Data</div><div>Locație</div><div>Predat / Primit</div><div style={{ textAlign:'center' }}>Materiale</div><div></div>
+          </div>
+          {consumuri.map(c => {
+            const linii = liniiMap[c.id] || []
+            const locText = locLabelPlain(c.locatie_tip, c.locatie_id, proiecteMap)
+            return (
+              <div key={c.id} style={{ display:'grid', gridTemplateColumns:'90px 1fr 1fr 80px 120px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+                <div style={{ fontSize:12, color:G.dim }}>{fmtData(c.data_consum || c.created_at)}</div>
+                <div style={{ fontWeight:600 }}>{locLabel(c.locatie_tip, c.locatie_id, proiecteMap)}</div>
+                <div style={{ fontSize:12, color:G.muted }}>{[c.predat_de, c.primit_de].filter(Boolean).join(' → ') || '—'}</div>
+                <div style={{ textAlign:'center' }}>
+                  <span style={{ background:G.red + '22', color:G.red, borderRadius:12, padding:'2px 10px', fontSize:12, fontWeight:800 }}>{linii.length}</span>
+                </div>
+                <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
+                  <button onClick={() => setDetaliiFor({ c, linii, locText })} title="Detalii" style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }}>📜</button>
+                  <button onClick={() => genereazaPVConsum(c, linii, locText)} title="Bon consum PDF" style={{ ...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue, borderColor:G.blue + '66' }}>📄</button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {openNou && <ConsumNouModal stocuri={stocuri} proiecteMap={proiecteMap} onClose={() => setOpenNou(false)} onDone={() => { setOpenNou(false); loadAll() }} />}
+      {detaliiFor && <ConsumDetaliiDrawer consum={detaliiFor.c} linii={detaliiFor.linii} locText={detaliiFor.locText} onClose={() => setDetaliiFor(null)} />}
+    </>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// TAB MAGAZII — Faza 6.3: overview gestiuni (status + poziții + sub prag)
+// ════════════════════════════════════════════════════════════════
+function MagaziiTab() {
+  const [loading, setLoading] = useState(true)
+  const [magazii, setMagazii] = useState([])
+  const [stocuri, setStocuri] = useState([])
+  const [profile, setProfile] = useState(null)
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let prof = null
+      if (user) {
+        const { data } = await supabase.from('profiles').select('id, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle()
+        prof = data || null
+      }
+      const [rM, rS] = await Promise.all([
+        supabase.from('magazii').select('*').order('tip').order('denumire'),
+        supabase.from('stocuri').select('*'),
+      ])
+      setProfile(prof); setMagazii(rM.data || []); setStocuri(rS.data || [])
+    } catch (e) { console.error(e) } finally { setLoading(false) }
+  }, [])
+  useEffect(() => { loadAll() }, [loadAll])
+
+  const canManage = !!(profile?.is_owner || profile?.can_manage_stoc)
+
+  // stoc per locație
+  const statPerMag = useCallback((m) => {
+    const tip = m.tip === 'sediu' ? 'sediu' : 'proiect'
+    const id = m.tip === 'sediu' ? null : m.executie_proiect_id
+    const items = stocuri.filter(s => s.locatie_tip === tip && (s.locatie_id ?? null) === (id ?? null))
+    const pozitii = items.length
+    const subPrag = items.filter(s => s.prag_minim != null && Number(s.cantitate) < Number(s.prag_minim)).length
+    return { pozitii, subPrag }
+  }, [stocuri])
+
+  const toggleStatus = async (m) => {
+    const nou = m.status === 'activa' ? 'inchisa' : 'activa'
+    if (!window.confirm(`${nou === 'inchisa' ? 'Închizi' : 'Redeschizi'} magazia „${m.denumire}"? (stocul rămâne neatins)`)) return
+    try {
+      const { error } = await supabase.from('magazii').update({ status: nou, data_inchidere: nou === 'inchisa' ? new Date().toISOString().slice(0,10) : null }).eq('id', m.id)
+      if (error) throw error
+      loadAll()
+    } catch (e) { alert(e.message || String(e)) }
+  }
+
+  const active = magazii.filter(m => m.status === 'activa')
+  const inchise = magazii.filter(m => m.status === 'inchisa')
+  const totalSubPrag = magazii.reduce((acc, m) => acc + statPerMag(m).subPrag, 0)
+
+  const Card = ({ m }) => {
+    const st = statPerMag(m)
+    const inchisa = m.status === 'inchisa'
+    return (
+      <div style={{ ...S.card, padding:'14px 16px', opacity: inchisa ? .6 : 1 }}>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:10 }}>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:14.5, fontWeight:800, display:'flex', alignItems:'center', gap:7 }}>
+              <span>{m.tip === 'sediu' ? '🏢' : '🏗️'}</span>
+              <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.denumire}</span>
+            </div>
+            <div style={{ fontSize:11.5, color:G.dim, marginTop:3 }}>
+              {inchisa ? `Închisă ${fmtData(m.data_inchidere)}` : `Activă din ${fmtData(m.data_deschidere)}`}
+            </div>
+          </div>
+          <span style={{ fontSize:10.5, fontWeight:800, padding:'3px 9px', borderRadius:12, whiteSpace:'nowrap',
+            background:(inchisa ? G.muted : G.green) + '22', color: inchisa ? G.muted : G.green }}>
+            {inchisa ? 'închisă' : 'activă'}
+          </span>
+        </div>
+        <div style={{ display:'flex', gap:8, marginTop:12 }}>
+          <div style={{ flex:1, background:G.bg, borderRadius:8, padding:'8px 10px' }}>
+            <div style={{ fontSize:10.5, color:G.muted }}>Poziții stoc</div>
+            <div style={{ fontSize:18, fontWeight:800, color: st.pozitii ? G.text : G.dim }}>{st.pozitii}</div>
+          </div>
+          <div style={{ flex:1, background:G.bg, borderRadius:8, padding:'8px 10px' }}>
+            <div style={{ fontSize:10.5, color:G.muted }}>Sub prag</div>
+            <div style={{ fontSize:18, fontWeight:800, color: st.subPrag ? G.red : G.dim }}>{st.subPrag}</div>
+          </div>
+        </div>
+        {canManage && (
+          <button onClick={() => toggleStatus(m)} style={{ ...S.btnS, width:'100%', marginTop:10, fontSize:12.5, padding:'7px', color: inchisa ? G.green : G.muted }}>
+            {inchisa ? '↺ Redeschide' : '⏸ Închide magazia'}
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14, alignItems:'center' }}>
+        {[['🏬', 'Magazii active', active.length, G.magazie], ['📦', 'Sub prag minim', totalSubPrag, totalSubPrag ? G.red : G.green], ['🗄️', 'Închise', inchise.length, G.muted]].map(([e, l, v, c], i) => (
+          <div key={i} style={{ ...S.card, padding:'14px 16px', flex:1, minWidth:150 }}>
+            <div style={{ fontSize:12, color:G.muted, marginBottom:4 }}>{e} {l}</div>
+            <div style={{ fontSize:24, fontWeight:800, color:c }}>{v}</div>
+          </div>
+        ))}
+        <button onClick={loadAll} style={{ ...S.btnS, alignSelf:'center' }}>🔄 Reîncarcă</button>
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă magaziile...</div>}
+
+      {!loading && (
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:12, marginBottom:16 }}>
+            {active.map(m => <Card key={m.id} m={m} />)}
+          </div>
+          {inchise.length > 0 && (
+            <>
+              <div style={{ fontSize:12.5, color:G.muted, fontWeight:700, margin:'4px 0 10px' }}>🗄️ Magazii închise</div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:12 }}>
+                {inchise.map(m => <Card key={m.id} m={m} />)}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      <div style={{ padding:14, background:G.bg, border:`1px dashed ${G.border2}`, borderRadius:10, fontSize:12, color:G.muted, lineHeight:1.7, marginTop:14 }}>
+        <b style={{ color:G.text }}>🏬 Magazii pe șantiere:</b> fiecare proiect activ are automat o magazie (se deschide singură când se înregistrează un proiect/contract nou). Stocul, transferurile și consumul se leagă de ea. Pragurile minime se setează per material în tab-ul Materiale.
+      </div>
+    </>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
 // SHELL cu tab-uri
 // ════════════════════════════════════════════════════════════════
 export default function MagaziePage() {
@@ -1218,7 +1715,7 @@ export default function MagaziePage() {
       </div>
 
       <div style={{ display:'flex', gap:8, marginBottom:18 }}>
-        {[['materiale', '📋 Materiale'], ['transferuri', '🔁 Transferuri'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil']].map(([k, l]) => (
+        {[['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding:'9px 18px', fontSize:14, fontWeight:700, cursor:'pointer', borderRadius:8,
             background: tab === k ? G.magazie + '22' : 'transparent',
@@ -1229,7 +1726,9 @@ export default function MagaziePage() {
       </div>
 
       {tab === 'materiale' && <MaterialeTab />}
+      {tab === 'magazii' && <MagaziiTab />}
       {tab === 'transferuri' && <TransferuriTab />}
+      {tab === 'consum' && <ConsumuriTab />}
       {tab === 'echipamente' && <EchipamenteTab />}
       {tab === 'stoc_trasabil' && <StocTrasabilTab />}
     </div>
