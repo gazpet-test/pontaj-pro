@@ -11,6 +11,7 @@
 // ===========================================================================
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
@@ -936,7 +937,7 @@ export default function FinanciarPage() {
           <div style={{width:30,height:30,background:`linear-gradient(135deg,${G.financiar},#2DD4BF)`,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>💰</div>
           <div style={{fontSize:14,fontWeight:700}}>Financiar</div>
           <div style={{marginLeft:10,display:'flex',gap:6}}>
-            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori']].map(([k,l]) => (
+            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri']].map(([k,l]) => (
               <button key={k} onClick={()=>setTab(k)} style={{
                 padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:8,
                 background: tab===k ? G.financiar+'22' : 'transparent',
@@ -956,6 +957,8 @@ export default function FinanciarPage() {
       <div style={{padding:'24px 28px',maxWidth:1400,margin:'0 auto'}}>
 
         {tab === 'furnizori' && <FacturiFurnizoriTab />}
+
+        {tab === 'consumuri' && <ConsumuriBonuriTab mode="financiar" />}
 
         {tab === 'emise' && (<>
         {/* ── ALERTĂ SL fără factură ── */}

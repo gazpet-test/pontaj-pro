@@ -20,6 +20,7 @@ import TabTronsoane from './TabTronsoane.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
 import CereriInterneProiect from './CereriInterneProiect.jsx'
+import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -57,6 +58,7 @@ const CONTEXT_TABS = [
   { key: 'santiere',       label: 'Șantiere',       icon: '🏗️', color: G.blue,   desc: 'Personal tură · Utilaje' },
   { key: 'situatii_plata', label: 'Situații plată', icon: '💰', color: G.orange, desc: 'SL1–SL6 · NCS · Facturare' },
   { key: 'cereri',         label: 'Cereri interne', icon: '📋', color: G.pink,   desc: 'Materiale · Achiziții · PDF' },
+  { key: 'consumuri',      label: 'Consumuri',      icon: '🧾', color: G.orange, desc: 'Bonuri consum materiale · SL' },
   { key: 'izometrie',      label: 'Izometrie',      icon: '📐', color: G.purple, desc: 'Pachete lansare · Tronsoane · Cumulat' },
   { key: 'documente',      label: 'Documente',      icon: '📂', color: G.muted,  desc: 'Calitate materiale · Arhivă NAS' },
 ]
@@ -255,6 +257,7 @@ function ProiectContextView({ proiectId, tab, onBack }) {
       {tab === 'santiere'       && <TabSantiere      proiectId={proiectId} />}
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
+      {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
       {tab === 'documente'      && (<><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
