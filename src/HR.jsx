@@ -626,6 +626,7 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
 // ===========================================================================
 function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
   const [tipFilter, setTipFilter] = useState(null)  // null = toate, string = nume categorie
+  const [vizaOnly, setVizaOnly] = useState(false)   // mod „doar vize RTS scadente”
 
   const expirateAll = autorizatii.filter(a => a.status === 'expirat')
   const expira7All = autorizatii.filter(a => a.status === 'expira_7z')
@@ -674,15 +675,26 @@ function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
           <div style={{fontSize:11, color:G.muted, fontWeight:600}}>🚨 EXPIRATE</div>
           <div style={{fontSize:24, fontWeight:800, color:G.red, marginTop:4}}>{stats.expirat}</div>
         </div>
-        <div style={{...S.card, padding:14, borderLeft:`3px solid ${G.purple}`}}>
+        <div onClick={() => setVizaOnly(v => !v)} style={{...S.card, padding:14, borderLeft:`3px solid ${G.purple}`, cursor:'pointer', position:'relative', outline: vizaOnly ? `2px solid ${G.purple}` : 'none', transition:'transform 0.15s'}}
+          onMouseEnter={e => e.currentTarget.style.transform='translateY(-2px)'}
+          onMouseLeave={e => e.currentTarget.style.transform='translateY(0)'}>
+          <div style={{position:'absolute', top:8, right:10, fontSize:9, color:G.purple, fontWeight:800}}>{vizaOnly ? '● activ' : '↗ filtru'}</div>
           <div style={{fontSize:11, color:G.muted, fontWeight:600}}>🔖 Vize RTS scadente</div>
           <div style={{fontSize:24, fontWeight:800, color:G.purple, marginTop:4}}>{stats.viza_expirat + stats.viza_expira_30z}</div>
           <div style={{fontSize:10, color:G.dim, marginTop:2}}>{stats.viza_expirat} restante · {stats.viza_expira_30z} curând</div>
         </div>
       </div>
 
+      {/* Banner mod „doar vize RTS” */}
+      {vizaOnly && (
+        <div style={{marginBottom:18, padding:'12px 16px', background:G.purple+'15', border:`1px solid ${G.purple}55`, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap'}}>
+          <div style={{fontSize:13, color:G.purple, fontWeight:700}}>🔖 Afișez doar vizele RTS scadente — click pe oricare → mergi direct la reînnoire</div>
+          <button onClick={() => setVizaOnly(false)} style={{padding:'6px 14px', background:G.surface, color:G.text, border:`1px solid ${G.border2}`, borderRadius:8, fontSize:12, fontWeight:600, cursor:'pointer'}}>× Arată toate alertele</button>
+        </div>
+      )}
+
       {/* === FILTRE pe TIP DOCUMENT (chip-uri clickabile) === */}
-      {tipuriArr.length > 0 && (
+      {!vizaOnly && tipuriArr.length > 0 && (
         <div style={{marginBottom:18, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.border}`}}>
           <div style={{fontSize:11, color:G.muted, fontWeight:700, marginBottom:12, letterSpacing:.5}}>🏷 FILTREAZĂ PE TIP DOCUMENT</div>
           <div style={{display:'flex', flexWrap:'wrap', gap:10}}>
@@ -727,23 +739,35 @@ function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
         </div>
       )}
       
-      <SectiuneAlerte titlu="🚨 EXPIRATE — necesită reînnoire URGENT" lista={expirate} color={G.red} onClick={onClickAut} />
-      <SectiuneAlerte titlu="⚠⚠ Expiră în mai puțin de 7 zile" lista={expira7} color={G.orange} onClick={onClickAut} />
-      <SectiuneAlerte titlu="⚠ Expiră în mai puțin de 30 zile" lista={expira30} color={G.yellow} onClick={onClickAut} />
+      {!vizaOnly && <>
+        <SectiuneAlerte titlu="🚨 EXPIRATE — necesită reînnoire URGENT" lista={expirate} color={G.red} onClick={onClickAut} />
+        <SectiuneAlerte titlu="⚠⚠ Expiră în mai puțin de 7 zile" lista={expira7} color={G.orange} onClick={onClickAut} />
+        <SectiuneAlerte titlu="⚠ Expiră în mai puțin de 30 zile" lista={expira30} color={G.yellow} onClick={onClickAut} />
+      </>}
 
-      {(!tipFilter || tipFilter === 'sudura') && <>
+      {(vizaOnly || !tipFilter || tipFilter === 'sudura') && <>
         <SectiuneAlerte titlu="🔖🚨 Viză RTS RESTANTĂ — sudor neautorizat până la vizare" lista={vizaExpirate} color={G.red} onClick={onEditViza} viza />
         <SectiuneAlerte titlu="🔖⚠ Viză RTS — scade în mai puțin de 30 zile" lista={vizaExpira30} color={G.yellow} onClick={onEditViza} viza />
-        <SectiuneAlerte titlu="🔖 Viză RTS neconfirmată — sudori fără nicio viză înregistrată" lista={vizaFaraData} color={G.purple} onClick={onEditViza} viza />
+        {!vizaOnly && <SectiuneAlerte titlu="🔖 Viză RTS neconfirmată — sudori fără nicio viză înregistrată" lista={vizaFaraData} color={G.purple} onClick={onEditViza} viza />}
       </>}
       
-      {expirate.length === 0 && expira7.length === 0 && expira30.length === 0 &&
-       vizaExpirate.length === 0 && vizaExpira30.length === 0 && vizaFaraData.length === 0 && (
+      {vizaOnly ? (
+        vizaExpirate.length === 0 && vizaExpira30.length === 0 && (
+          <div style={{...S.card, padding:60, textAlign:'center'}}>
+            <div style={{fontSize:48, marginBottom:12}}>🔖✅</div>
+            <div style={{fontSize:18, fontWeight:700, color:G.green, marginBottom:8}}>Nicio viză RTS scadentă!</div>
+            <div style={{fontSize:13, color:G.muted}}>Toți sudorii au viza la zi.</div>
+          </div>
+        )
+      ) : (
+        expirate.length === 0 && expira7.length === 0 && expira30.length === 0 &&
+        vizaExpirate.length === 0 && vizaExpira30.length === 0 && vizaFaraData.length === 0 && (
         <div style={{...S.card, padding:60, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:12}}>✅</div>
           <div style={{fontSize:18, fontWeight:700, color:G.green, marginBottom:8}}>Totul e în regulă!</div>
           <div style={{fontSize:13, color:G.muted}}>Nicio autorizație nu necesită atenție în următoarele 30 zile.</div>
         </div>
+        )
       )}
     </div>
   )
