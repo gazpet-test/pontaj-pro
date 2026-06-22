@@ -257,6 +257,61 @@ function buildComandaPdfHtml(c, ctx) {
   </div>`
 }
 
+// CERERE DE OFERTĂ (RFQ): tabel FĂRĂ prețuri — furnizorul completează preț + termen
+function buildCerereOfertaHtml(c, ctx, solicitant) {
+  const linii = (c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0))
+  const rows = linii.map((l, i) => `
+    <tr>
+      <td style="border:1px solid #999;padding:6px;text-align:center;font-size:10px;">${i + 1}</td>
+      <td style="border:1px solid #999;padding:6px;font-size:10px;">${l.denumire || ''}${l.observatii ? `<div style="font-size:9px;color:#666;">${l.observatii}</div>` : ''}</td>
+      <td style="border:1px solid #999;padding:6px;text-align:center;font-size:10px;">${l.um || ''}</td>
+      <td style="border:1px solid #999;padding:6px;text-align:right;font-size:10px;">${fmtNr(l.cantitate)}</td>
+      <td style="border:1px solid #999;padding:6px;height:20px;"></td>
+      <td style="border:1px solid #999;padding:6px;height:20px;"></td>
+    </tr>`).join('')
+  const tabel = `
+    <table style="width:100%;border-collapse:collapse;margin-top:8px;">
+      <colgroup>
+        <col style="width:6%"/><col style="width:42%"/><col style="width:8%"/>
+        <col style="width:12%"/><col style="width:17%"/><col style="width:15%"/>
+      </colgroup>
+      <thead>
+        <tr style="background:#E8F0FE;">
+          ${['Nr.', 'Denumire produs / material', 'UM', 'Cantitate', `Preț unitar ofertat (${c.moneda || 'RON'})`, 'Termen livrare']
+            .map(h => `<th style="border:1px solid #999;padding:6px;font-size:10px;">${h}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`
+  return `<div style="${PDF_BASE}">
+    ${pdfHeader('CERERE DE OFERTĂ', `Ref. ${c.numar_comanda || ''} · ${fmtData(new Date())}`)}
+    <div style="display:flex;gap:14px;">
+      <div style="flex:1;border:1px solid #ccc;border-radius:6px;padding:8px;">
+        <div style="font-size:11px;font-weight:bold;color:#1F6FEB;margin-bottom:4px;">CĂTRE FURNIZOR</div>
+        ${infoRowsHtml([
+          ['Furnizor:', ctx.furnizorNume, true],
+          ['CUI / CIF:', ctx.furnizorCui],
+          ['Persoană contact:', c.persoana_contact],
+          ['Telefon:', c.telefon_contact],
+        ])}
+      </div>
+      <div style="flex:1;border:1px solid #ccc;border-radius:6px;padding:8px;">
+        <div style="font-size:11px;font-weight:bold;color:#1F6FEB;margin-bottom:4px;">SOLICITANT</div>
+        ${infoRowsHtml([
+          ['Proiect / lucrare:', ctx.proiectNume],
+          ['Livrare către:', ctx.livrareTxt],
+          ['Solicitat de:', solicitant],
+          ['Data:', fmtData(new Date())],
+        ])}
+      </div>
+    </div>
+    <div style="margin:12px 0 0;font-size:11px;">Vă rugăm să ne transmiteți oferta de preț (fără TVA) și termenul de livrare pentru produsele / materialele de mai jos:</div>
+    ${tabel}
+    <div style="margin-top:14px;font-size:10px;color:#555;">Vă rugăm să precizați validitatea ofertei și condițiile de plată. Vă mulțumim.</div>
+    ${pdfFooterAudit()}
+  </div>`
+}
+
 function buildPvReceptieHtml(c, ctx) {
   // ctx: { furnizorNume, proiectNume, livrareTxt, semnaturi:[{rol,nume,dataUrl,decisLa}] }
   return `<div style="${PDF_BASE}">
@@ -743,6 +798,60 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
   const aprobari = (c.aprobari || []).slice().sort((a, b) => (a.id || 0) - (b.id || 0))
   const myAprobare = aprobari.find(a => a.profile_id === profile?.id && a.status === 'in_asteptare')
   const [comentariu, setComentariu] = useState('')
+  const [rfqBusy, setRfqBusy] = useState(false)
+  const [rfqErr, setRfqErr] = useState('')
+  const genCerereOferta = async () => {
+    setRfqBusy(true); setRfqErr('')
+    try {
+      const html = buildCerereOfertaHtml(c, ctx, profilesMap[profile?.id] || '')
+      const blob = await renderHtmlToPdfBlob(html)
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } catch (e) {
+      setRfqErr('Eroare la generare PDF: ' + (e.message || e))
+    } finally { setRfqBusy(false) }
+  }
+  const [editTermene, setEditTermene] = useState(false)
+  const [termeneLocal, setTermeneLocal] = useState({})
+  const [termenGlobalLocal, setTermenGlobalLocal] = useState('')
+  const deschideEditTermene = () => {
+    const init = {}
+    ;(c.linii || []).forEach(l => { init[l.id] = l.termen_livrare ? String(l.termen_livrare).slice(0, 10) : '' })
+    setTermeneLocal(init)
+    setTermenGlobalLocal(c.data_livrare_estimata ? String(c.data_livrare_estimata).slice(0, 10) : '')
+    setEditTermene(true)
+  }
+  const salveazaTermeneLocal = async () => {
+    await actions.salveazaTermene(c, termeneLocal, termenGlobalLocal)
+    setEditTermene(false)
+  }
+  const [editPrimite, setEditPrimite] = useState(false)
+  const [primiteLocal, setPrimiteLocal] = useState({})
+  const deschideEditPrimite = () => {
+    const init = {}
+    ;(c.linii || []).forEach(l => { init[l.id] = l.cantitate_primita != null ? String(l.cantitate_primita) : '' })
+    setPrimiteLocal(init)
+    setEditPrimite(true)
+  }
+  const salveazaPrimiteLocal = async () => {
+    await actions.salveazaCantitatiPrimite(c, primiteLocal)
+    setEditPrimite(false)
+  }
+  const recapPrimite = (() => {
+    const ls = c.linii || []
+    let complet = 0, partial = 0, neinceput = 0
+    ls.forEach(l => {
+      const q = Number(l.cantitate) || 0
+      const cp = l.cantitate_primita
+      if (cp == null) { neinceput++; return }
+      const n = Number(cp)
+      if (q > 0 && n >= q) complet++
+      else if (n > 0) partial++
+      else neinceput++
+    })
+    return { total: ls.length, complet, partial, neinceput }
+  })()
   const Info = ({ k, v, bold }) => (
     <div style={{ display:'flex', gap:8, fontSize:13, padding:'3px 0' }}>
       <div style={{ width:150, color:G.muted, flexShrink:0 }}>{k}</div>
@@ -758,6 +867,13 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
         <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:8, flexWrap:'wrap' }}>
           <div style={{ fontSize:19, fontWeight:800 }}>🛒 {c.numar_comanda}</div>
           <StatusBadge status={c.status} big />
+          {(recapPrimite.complet + recapPrimite.partial) > 0 && (
+            <span style={{ fontSize:12, fontWeight:700, padding:'4px 10px', borderRadius:20,
+              background: recapPrimite.complet === recapPrimite.total ? G.green + '22' : G.orange + '22',
+              color: recapPrimite.complet === recapPrimite.total ? G.green : G.orange }}>
+              📦 {recapPrimite.complet === recapPrimite.total ? 'Recepționat complet' : `Recepție parțială ${recapPrimite.complet}/${recapPrimite.total}`}
+            </span>
+          )}
           <div style={{ flex:1 }} />
           <button onClick={onClose} style={{ ...S.btnIcon, border:'none', fontSize:20 }}>✕</button>
         </div>
@@ -789,7 +905,13 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map((l, i) => (
             <div key={l.id || i} style={{ display:'grid', gridTemplateColumns:'40px 1fr 64px 90px 110px 120px 100px', gap:10, padding:'8px 12px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
               <div style={{ color:G.dim }}>{i + 1}</div>
-              <div>{l.denumire}{l.observatii && <div style={{ fontSize:11, color:G.muted }}>{l.observatii}</div>}</div>
+              <div>{l.denumire}{l.observatii && <div style={{ fontSize:11, color:G.muted }}>{l.observatii}</div>}
+                {l.cantitate_primita != null && (
+                  <div style={{ fontSize:11, fontWeight:700, color: (Number(l.cantitate_primita) >= (Number(l.cantitate) || 0) && Number(l.cantitate) > 0) ? G.green : G.orange }}>
+                    📦 primit {fmtNr(l.cantitate_primita)} / {fmtNr(l.cantitate)} {l.um || ''}
+                  </div>
+                )}
+              </div>
               <div style={{ color:G.muted }}>{l.um || '—'}</div>
               <div style={{ textAlign:'right' }}>{fmtNr(l.cantitate)}</div>
               <div style={{ textAlign:'right' }}>{l.pret_unitar != null ? fmtNr(l.pret_unitar) : '—'}</div>
@@ -843,6 +965,16 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           </div>
         )}
 
+        {/* Cerere de ofertă (RFQ) — document de trimis furnizorului, fără prețuri */}
+        <div style={{ marginTop:14, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+          <button onClick={genCerereOferta} disabled={rfqBusy} style={{ ...S.btnS, fontSize:14, opacity: rfqBusy ? .6 : 1 }}>
+            {rfqBusy ? '⏳ Se generează...' : '📄 PDF Cerere de ofertă'}
+          </button>
+          <span style={{ fontSize:11, color:G.muted }}>document pentru furnizor — fără prețuri, le completează el</span>
+          {rfqErr && <span style={{ fontSize:12, color:G.red }}>{rfqErr}</span>}
+        </div>
+
+
         {/* Documente generate */}
         {(c.pdf_comanda_path || c.pv_receptie_path || c.pv_predare_path || c.poza_depozitare_path) && (
           <div style={{ marginTop:14, display:'flex', gap:10, flexWrap:'wrap' }}>
@@ -852,6 +984,50 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
             {c.poza_depozitare_path && <button onClick={() => openStorageFile(c.poza_depozitare_path)} style={{ ...S.btnS, fontSize:14 }}>📸 Poză depozitare</button>}
           </div>
         )}
+
+        {/* Panel recepție pe repere (cantitate primită) */}
+        {editPrimite && (
+          <div style={{ marginTop:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.green}55` }}>
+            <div style={{ fontSize:13, fontWeight:800, color:G.green, marginBottom:4 }}>📦 Recepție pe repere</div>
+            <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>Completează cât s-a primit din fiecare reper. Gol = nereceptionat. „Tot" = primit integral.</div>
+            {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => {
+              const q = Number(l.cantitate) || 0
+              return (
+                <div key={l.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderTop:`1px solid ${G.border}`, flexWrap:'wrap' }}>
+                  <div style={{ flex:1, minWidth:200, fontSize:13 }}>{l.denumire}<span style={{ color:G.muted }}> · comandat {fmtNr(l.cantitate)} {l.um || ''}</span></div>
+                  <input type="number" min="0" step="any" value={primiteLocal[l.id] || ''} onChange={e => setPrimiteLocal(p => ({ ...p, [l.id]: e.target.value }))} placeholder="primit" style={{ ...S.input, maxWidth:120 }} />
+                  <button onClick={() => setPrimiteLocal(p => ({ ...p, [l.id]: String(q) }))} style={{ ...S.btnS, fontSize:12, padding:'6px 10px' }}>Tot</button>
+                </div>
+              )
+            })}
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:12 }}>
+              <button onClick={() => setEditPrimite(false)} disabled={busy} style={{ ...S.btnS, fontSize:14 }}>Anulează</button>
+              <button onClick={salveazaPrimiteLocal} disabled={busy} style={{ ...S.btnP, background:G.green, color:'#0D1117', fontSize:14, opacity: busy ? .6 : 1 }}>{busy ? '⏳ Se salvează...' : '💾 Salvează recepția'}</button>
+            </div>
+          </div>
+        )}
+
+        {/* Panel modificare termene livrare (emisă / în tranzit) */}
+        {editTermene && (
+          <div style={{ marginTop:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.orange}55` }}>
+            <div style={{ fontSize:13, fontWeight:800, color:G.orange, marginBottom:10 }}>📅 Modifică termene de livrare</div>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+              <span style={{ fontSize:13, color:G.muted, minWidth:200 }}>Termen general (comandă)</span>
+              <input type="date" value={termenGlobalLocal} onChange={e => setTermenGlobalLocal(e.target.value)} style={{ ...S.input, maxWidth:200 }} />
+            </div>
+            {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => (
+              <div key={l.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderTop:`1px solid ${G.border}`, flexWrap:'wrap' }}>
+                <div style={{ flex:1, minWidth:200, fontSize:13 }}>{l.denumire}<span style={{ color:G.muted }}> · {fmtNr(l.cantitate)} {l.um || ''}</span></div>
+                <input type="date" value={termeneLocal[l.id] || ''} onChange={e => setTermeneLocal(t => ({ ...t, [l.id]: e.target.value }))} style={{ ...S.input, maxWidth:200 }} />
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:12 }}>
+              <button onClick={() => setEditTermene(false)} disabled={busy} style={{ ...S.btnS, fontSize:14 }}>Anulează</button>
+              <button onClick={salveazaTermeneLocal} disabled={busy} style={{ ...S.btnP, background:G.orange, color:'#0D1117', fontSize:14, opacity: busy ? .6 : 1 }}>{busy ? '⏳ Se salvează...' : '💾 Salvează termene'}</button>
+            </div>
+          </div>
+        )}
+
 
         {/* Acțiuni flux */}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
@@ -869,6 +1045,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {c.status === 'in_aprobare' && (profile?.is_owner || ctx.canCreate) && (
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează comanda</Btn>
           )}
+          {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa') && ctx.canCreate && !editPrimite && <Btn color={G.green} onClick={deschideEditPrimite}>📦 Recepție pe repere</Btn>}
+          {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && !editTermene && <Btn color={G.orange} onClick={deschideEditTermene}>📅 Modifică termene</Btn>}
           {c.status === 'emisa' && ctx.canCreate && <Btn color={G.purple} onClick={() => actions.markStatus(c, 'in_tranzit')}>🚚 Marchează ÎN TRANZIT</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && <Btn color={G.orange} onClick={() => actions.markStatus(c, 'ajunsa')}>📦 Marchează AJUNSĂ</Btn>}
           {c.status === 'ajunsa' && <Btn color={G.green} onClick={() => actions.deschideReceptie(c)}>✅ Recepție (PV 1)</Btn>}
@@ -1231,6 +1409,38 @@ export default function AchizitiiPage() {
       } catch (e) { console.error(e); showToast('Eroare la ștergere: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
 
+    // Actualizare termene de livrare (comandă emisă / în tranzit) — global + per reper
+    salveazaTermene: async (c, liniiTermene, termenGlobal) => {
+      setBusy(true)
+      try {
+        const { error: eC } = await supabase.from('comenzi_furnizor')
+          .update({ data_livrare_estimata: termenGlobal || null, updated_at: new Date().toISOString() })
+          .eq('id', c.id)
+        if (eC) throw eC
+        for (const [lineId, termen] of Object.entries(liniiTermene || {})) {
+          const { error: eL } = await supabase.from('comenzi_furnizor_linii')
+            .update({ termen_livrare: termen || null }).eq('id', lineId)
+          if (eL) throw eL
+        }
+        showToast(`📅 Termene de livrare actualizate pentru ${c.numar_comanda}.`)
+        await loadAll()
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
+
+    // Recepție parțială — cantitate primită per reper
+    salveazaCantitatiPrimite: async (c, cantitatiMap) => {
+      setBusy(true)
+      try {
+        for (const [lineId, val] of Object.entries(cantitatiMap || {})) {
+          const cp = (val === '' || val == null) ? null : Number(val)
+          const { error } = await supabase.from('comenzi_furnizor_linii')
+            .update({ cantitate_primita: cp }).eq('id', lineId)
+          if (error) throw error
+        }
+        showToast(`📦 Recepție pe repere actualizată pentru ${c.numar_comanda}.`)
+        await loadAll()
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
     deschideReceptie: (c) => { setSelectedId(null); setReceptieId(c.id) },
     deschidePredare: (c) => { setSelectedId(null); setPredareId(c.id) },
     deschideReceptieBucati: (c) => { setSelectedId(null); setReceptieBucatiId(c.id) },
