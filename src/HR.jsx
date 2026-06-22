@@ -78,6 +78,26 @@ function statusBadge(status, zile) {
   )
 }
 
+// ── Badge viză RTS (Responsabil Tehnic cu Sudura) — viză la 6 luni pe autorizațiile de sudori ──
+// Notă: în BD coloanele/statusul se numesc intern "rsvti_*"; în UI le afișăm ca "RTS" (rolul corect pentru sudură).
+function rtsBadge(status, zile) {
+  const config = {
+    rsvti_valid:      { bg: G.greenDim,  fg: G.green,  label: '✓ Viză OK' },
+    rsvti_expira_60z: { bg: G.greenDim,  fg: G.green,  label: `Viză în ${zile}z` },
+    rsvti_expira_30z: { bg: G.yellowDim, fg: G.yellow, label: `⚠ Viză în ${zile}z` },
+    rsvti_expirat:    { bg: G.redDim,    fg: G.red,    label: zile != null ? `🚨 VIZĂ EXPIRATĂ (${Math.abs(zile)}z)` : '🚨 VIZĂ EXPIRATĂ' },
+    rsvti_fara_data:  { bg: G.yellowDim, fg: G.yellow, label: '🔖 Viză neconfirmată' },
+  }[status] || null
+  if (!config) return null
+  return (
+    <span style={{padding:'3px 8px', fontSize:11, borderRadius:4, background: config.bg, color: config.fg, fontWeight:600, whiteSpace:'nowrap'}}>
+      {config.label}
+    </span>
+  )
+}
+
+const fmtDataRo = (d) => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
+
 export default function HRPage() {
   const nav = useNavigate()
   const [profile, setProfile] = useState(null)
@@ -148,13 +168,18 @@ export default function HRPage() {
   
   // Stats per status
   const stats = useMemo(() => {
-    const s = { total: autorizatii.length, valid: 0, expira_30z: 0, expira_7z: 0, expirat: 0, fara_exp: 0 }
+    const s = { total: autorizatii.length, valid: 0, expira_30z: 0, expira_7z: 0, expirat: 0, fara_exp: 0,
+                viza_expirat: 0, viza_expira_30z: 0, viza_fara_data: 0 }
     autorizatii.forEach(a => {
       if (a.status === 'valid' || a.status === 'expira_60z') s.valid += 1
       if (a.status === 'expira_30z') s.expira_30z += 1
       if (a.status === 'expira_7z') s.expira_7z += 1
       if (a.status === 'expirat') s.expirat += 1
       if (a.status === 'fara_exp') s.fara_exp += 1
+      // Viză RTS (doar pe autorizațiile care necesită — sudori)
+      if (a.rsvti_status === 'rsvti_expirat') s.viza_expirat += 1
+      if (a.rsvti_status === 'rsvti_expira_30z') s.viza_expira_30z += 1
+      if (a.rsvti_status === 'rsvti_fara_data') s.viza_fara_data += 1
     })
     return s
   }, [autorizatii])
@@ -162,7 +187,7 @@ export default function HRPage() {
   const tabs = [
     { key: 'personal',    icon: '👥', label: 'Angajați' },
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
-    { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z },
+    { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z + stats.viza_expirat },
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
@@ -555,7 +580,12 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
                   <td style={{...tdStyle, fontFamily:'monospace', fontSize:11}}>{a.numar_autorizatie || <span style={{color:G.dim}}>—</span>}</td>
                   <td style={tdStyle}>{a.emitent || <span style={{color:G.dim}}>—</span>}</td>
                   <td style={tdStyle}>{a.fara_expirare ? '∞' : a.data_expirare ? new Date(a.data_expirare).toLocaleDateString('ro-RO') : '—'}</td>
-                  <td style={tdStyle}>{statusBadge(a.status, a.zile_pana_expirare)}</td>
+                  <td style={tdStyle}>
+                    {statusBadge(a.status, a.zile_pana_expirare)}
+                    {a.necesita_confirmare_rsvti && rtsBadge(a.rsvti_status, a.rsvti_zile_pana_confirmare) && (
+                      <div style={{marginTop:4}}>{rtsBadge(a.rsvti_status, a.rsvti_zile_pana_confirmare)}</div>
+                    )}
+                  </td>
                   {isAdmin && (
                     <td style={{...tdStyle, textAlign:'right'}}>
                       <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
@@ -610,6 +640,11 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
   const expirate = tipFilter ? expirateAll.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expirateAll
   const expira7  = tipFilter ? expira7All.filter(a => (a.tip_categorie || 'altele') === tipFilter)  : expira7All
   const expira30 = tipFilter ? expira30All.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expira30All
+
+  // Vize RTS (la 6 luni, sudori) — categorie separată, nu intră sub filtrul pe tip
+  const vizaExpirate = autorizatii.filter(a => a.rsvti_status === 'rsvti_expirat')
+  const vizaExpira30 = autorizatii.filter(a => a.rsvti_status === 'rsvti_expira_30z')
+  const vizaFaraData = autorizatii.filter(a => a.rsvti_status === 'rsvti_fara_data')
   
   return (
     <div>
@@ -634,6 +669,11 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
         <div style={{...S.card, padding:14, borderLeft:`3px solid ${G.red}`}}>
           <div style={{fontSize:11, color:G.muted, fontWeight:600}}>🚨 EXPIRATE</div>
           <div style={{fontSize:24, fontWeight:800, color:G.red, marginTop:4}}>{stats.expirat}</div>
+        </div>
+        <div style={{...S.card, padding:14, borderLeft:`3px solid ${G.purple}`}}>
+          <div style={{fontSize:11, color:G.muted, fontWeight:600}}>🔖 Vize RTS scadente</div>
+          <div style={{fontSize:24, fontWeight:800, color:G.purple, marginTop:4}}>{stats.viza_expirat + stats.viza_expira_30z}</div>
+          <div style={{fontSize:10, color:G.dim, marginTop:2}}>{stats.viza_expirat} restante · {stats.viza_expira_30z} curând</div>
         </div>
       </div>
 
@@ -686,8 +726,15 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
       <SectiuneAlerte titlu="🚨 EXPIRATE — necesită reînnoire URGENT" lista={expirate} color={G.red} onClick={onClickAut} />
       <SectiuneAlerte titlu="⚠⚠ Expiră în mai puțin de 7 zile" lista={expira7} color={G.orange} onClick={onClickAut} />
       <SectiuneAlerte titlu="⚠ Expiră în mai puțin de 30 zile" lista={expira30} color={G.yellow} onClick={onClickAut} />
+
+      {(!tipFilter || tipFilter === 'sudura') && <>
+        <SectiuneAlerte titlu="🔖🚨 Viză RTS RESTANTĂ — sudor neautorizat până la vizare" lista={vizaExpirate} color={G.red} onClick={onClickAut} viza />
+        <SectiuneAlerte titlu="🔖⚠ Viză RTS — scade în mai puțin de 30 zile" lista={vizaExpira30} color={G.yellow} onClick={onClickAut} viza />
+        <SectiuneAlerte titlu="🔖 Viză RTS neconfirmată — sudori fără nicio viză înregistrată" lista={vizaFaraData} color={G.purple} onClick={onClickAut} viza />
+      </>}
       
-      {expirate.length === 0 && expira7.length === 0 && expira30.length === 0 && (
+      {expirate.length === 0 && expira7.length === 0 && expira30.length === 0 &&
+       vizaExpirate.length === 0 && vizaExpira30.length === 0 && vizaFaraData.length === 0 && (
         <div style={{...S.card, padding:60, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:12}}>✅</div>
           <div style={{fontSize:18, fontWeight:700, color:G.green, marginBottom:8}}>Totul e în regulă!</div>
@@ -698,7 +745,7 @@ function TabAlerte({ autorizatii, stats, onClickAut }) {
   )
 }
 
-function SectiuneAlerte({ titlu, lista, color, onClick }) {
+function SectiuneAlerte({ titlu, lista, color, onClick, viza }) {
   if (lista.length === 0) return null
   return (
     <div style={{marginBottom:18}}>
@@ -716,12 +763,21 @@ function SectiuneAlerte({ titlu, lista, color, onClick }) {
             <div style={{fontSize:12, color:G.muted, marginTop:2}}>{a.tip_denumire}</div>
             {a.procedeu_sudura && <div style={{fontSize:11, color:G.dim, marginTop:2}}>🔥 {a.procedeu_sudura}{a.diametru_teava_mm && ` · Ø${a.diametru_teava_mm}mm`}</div>}
             {a.domenii?.length > 0 && <div style={{fontSize:11, color:G.dim, marginTop:2}}>🏷 {a.domenii.join(', ')}</div>}
-            <div style={{fontSize:11, color, marginTop:6, fontWeight:700}}>
-              {a.fara_expirare ? '∞ Fără expirare' : a.data_expirare ? `📅 ${new Date(a.data_expirare).toLocaleDateString('ro-RO')}` : '—'}
-              {a.zile_pana_expirare !== null && a.zile_pana_expirare !== undefined && (
-                <span style={{marginLeft:8}}>{a.zile_pana_expirare > 0 ? `(${a.zile_pana_expirare}z rămase)` : `(EXPIRAT cu ${Math.abs(a.zile_pana_expirare)}z)`}</span>
-              )}
-            </div>
+            {viza ? (
+              <div style={{fontSize:11, color, marginTop:6, fontWeight:700}}>
+                🔖 Viză RTS: {a.rsvti_urmatoarea_confirmare ? new Date(a.rsvti_urmatoarea_confirmare).toLocaleDateString('ro-RO') : 'neînregistrată'}
+                {a.rsvti_zile_pana_confirmare !== null && a.rsvti_zile_pana_confirmare !== undefined && (
+                  <span style={{marginLeft:8}}>{a.rsvti_zile_pana_confirmare >= 0 ? `(${a.rsvti_zile_pana_confirmare}z rămase)` : `(RESTANTĂ cu ${Math.abs(a.rsvti_zile_pana_confirmare)}z)`}</span>
+                )}
+              </div>
+            ) : (
+              <div style={{fontSize:11, color, marginTop:6, fontWeight:700}}>
+                {a.fara_expirare ? '∞ Fără expirare' : a.data_expirare ? `📅 ${new Date(a.data_expirare).toLocaleDateString('ro-RO')}` : '—'}
+                {a.zile_pana_expirare !== null && a.zile_pana_expirare !== undefined && (
+                  <span style={{marginLeft:8}}>{a.zile_pana_expirare > 0 ? `(${a.zile_pana_expirare}z rămase)` : `(EXPIRAT cu ${Math.abs(a.zile_pana_expirare)}z)`}</span>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -986,8 +1042,14 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
   const [pdfFile, setPdfFile] = useState(null)
   const [uploadingPdf, setUploadingPdf] = useState(false)
   const uploadRefAdd = useRef(null)
+  const [vizaInitiala, setVizaInitiala] = useState('')  // data ultimei vize RTS (opțional, la sudori)
   
   const tipSelectat = tipuri.find(t => t.id === Number(tipId))
+  const necesitaViza = !!tipSelectat?.necesita_confirmare_rsvti
+  const intervalViza = tipSelectat?.interval_confirmare_rsvti_luni || 6
+  const urmatoareaPreview = (vizaInitiala && intervalViza)
+    ? (() => { const d = new Date(vizaInitiala); d.setMonth(d.getMonth() + intervalViza); return d.toLocaleDateString('ro-RO') })()
+    : null
   
   useEffect(() => {
     if (tipSelectat?.emitent_default && !emitent) setEmitent(tipSelectat.emitent_default)
@@ -1035,6 +1097,16 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
         } else { showToast('Autorizatie salvata, dar PDF esuaa: ' + upErr.message, 'warning') }
       } catch(e) { showToast('PDF esuaa: ' + e.message, 'warning') }
       setUploadingPdf(false)
+    }
+    
+    // Viză RTS inițială (opțional, la sudori): înregistrăm prima viză prin RPC (calculează automat următoarea +interval)
+    if (necesitaViza && vizaInitiala && inserted?.id) {
+      const { error: eViza } = await supabase.rpc('confirm_hr_autorizatie_rsvti', {
+        p_autorizatie_id: inserted.id,
+        p_data_confirmare: vizaInitiala,
+        p_observatii: null,
+      })
+      if (eViza) showToast('Autorizație salvată, dar viza RTS a eșuat: ' + eViza.message, 'warning')
     }
     
     showToast('Autorizatie adaugata' + (pdfFile ? ' cu PDF atasat!' : ''))
@@ -1128,6 +1200,23 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
           ∞ Fără expirare (curs permanent — "NU E CAZUL")
         </label>
         
+        {necesitaViza && (
+          <div style={{marginBottom:14, padding:12, background:G.green+'11', border:`1px solid ${G.green}33`, borderRadius:8}}>
+            <div style={{fontSize:11, color:G.green, fontWeight:700, marginBottom:8}}>🔖 Viză RTS — la fiecare {intervalViza} luni (sudori)</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, alignItems:'end'}}>
+              <div>
+                <Lbl>Data ultimei vize (opțional)</Lbl>
+                <input type="date" value={vizaInitiala} onChange={e => setVizaInitiala(e.target.value)} style={S.input}/>
+              </div>
+              <div style={{fontSize:11, color:G.muted, paddingBottom:8}}>
+                {urmatoareaPreview
+                  ? <>Următoarea viză: <strong style={{color:G.green}}>{urmatoareaPreview}</strong></>
+                  : <span style={{color:G.dim}}>Completează data ca să calculez următoarea viză. Poți și mai târziu, din Editează.</span>}
+              </div>
+            </div>
+          </div>
+        )}
+        
         <Lbl>Observații</Lbl>
         <textarea value={observatii} onChange={e => setObservatii(e.target.value)} placeholder="Note suplimentare..." style={{...S.input, minHeight:60, resize:'vertical', marginBottom:14, fontFamily:'inherit'}}/>
         
@@ -1178,8 +1267,28 @@ function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast
   const [domenii, setDomenii] = useState(autorizatie.domenii || [])
   const [observatii, setObservatii] = useState(autorizatie.observatii || '')
   const [saving, setSaving] = useState(false)
+  // Viză RTS (intern „rsvti”) — confirmare la 6 luni pentru autorizațiile de sudori
+  const [vizaBusy, setVizaBusy] = useState(false)
+  const [vizaData, setVizaData] = useState(() => new Date().toISOString().split('T')[0])
+  const [vizaObs, setVizaObs] = useState('')
   
   const tipSelectat = tipuri.find(t => t.id === Number(tipId))
+  const necesitaViza = !!tipSelectat?.necesita_confirmare_rsvti
+  const intervalViza = tipSelectat?.interval_confirmare_rsvti_luni || autorizatie.interval_confirmare_rsvti_luni || 6
+
+  const handleConfirmaViza = async () => {
+    if (!vizaData) { showToast('Alege data confirmării vizei', 'warn'); return }
+    setVizaBusy(true)
+    const { error } = await supabase.rpc('confirm_hr_autorizatie_rsvti', {
+      p_autorizatie_id: autorizatie.id,
+      p_data_confirmare: vizaData,
+      p_observatii: vizaObs.trim() || null,
+    })
+    setVizaBusy(false)
+    if (error) { showToast('Eroare confirmare viză: ' + error.message, 'error'); return }
+    showToast(`✓ Viză RTS confirmată — următoarea peste ${intervalViza} luni`)
+    onSaved()
+  }
   
   const save = async () => {
     if (!tipId) { showToast('Alege tipul autorizației', 'warn'); return }
@@ -1296,6 +1405,51 @@ function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast
           <input type="checkbox" checked={faraExpirare} onChange={e => setFaraExpirare(e.target.checked)} style={{accentColor:G.green}}/>
           ∞ Fără expirare (curs permanent — "NU E CAZUL")
         </label>
+        
+        {necesitaViza && (() => {
+          const st = autorizatie.rsvti_status
+          const z = autorizatie.rsvti_zile_pana_confirmare
+          const culoare = st === 'rsvti_expirat' ? G.red : st === 'rsvti_expira_30z' ? G.yellow : st === 'rsvti_fara_data' ? G.yellow : G.green
+          return (
+            <div style={{marginBottom:14, padding:14, background:culoare+'11', border:`1px solid ${culoare}44`, borderRadius:8}}>
+              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, flexWrap:'wrap', gap:6}}>
+                <div style={{fontSize:12, color:culoare, fontWeight:800}}>🔖 Viză RTS — obligatorie la fiecare {intervalViza} luni</div>
+                {rtsBadge(st, z)}
+              </div>
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12, fontSize:12}}>
+                <div style={{padding:'8px 10px', background:G.bg, borderRadius:6}}>
+                  <div style={{color:G.muted, fontSize:10, fontWeight:700, marginBottom:2}}>ULTIMA VIZĂ</div>
+                  <div style={{color:G.text, fontWeight:600}}>{fmtDataRo(autorizatie.rsvti_ultima_confirmare)}</div>
+                </div>
+                <div style={{padding:'8px 10px', background:G.bg, borderRadius:6}}>
+                  <div style={{color:G.muted, fontSize:10, fontWeight:700, marginBottom:2}}>URMĂTOAREA VIZĂ</div>
+                  <div style={{color:culoare, fontWeight:700}}>
+                    {fmtDataRo(autorizatie.rsvti_urmatoarea_confirmare)}
+                    {z != null && <span style={{marginLeft:6, fontSize:11}}>{z >= 0 ? `(${z}z)` : `(restantă ${Math.abs(z)}z)`}</span>}
+                  </div>
+                </div>
+              </div>
+              <div style={{fontSize:11, color:G.muted, fontWeight:700, marginBottom:6}}>✍️ Înregistrează o nouă viză RTS</div>
+              <div style={{display:'grid', gridTemplateColumns:'auto 1fr', gap:8, marginBottom:10, alignItems:'end'}}>
+                <div>
+                  <Lbl>Data vizei</Lbl>
+                  <input type="date" value={vizaData} onChange={e => setVizaData(e.target.value)} style={{...S.input, width:'auto'}}/>
+                </div>
+                <div>
+                  <Lbl>Observații viză (opțional)</Lbl>
+                  <input value={vizaObs} onChange={e => setVizaObs(e.target.value)} placeholder="ex: vizat de ing. RTS..." style={S.input}/>
+                </div>
+              </div>
+              <button onClick={handleConfirmaViza} disabled={vizaBusy}
+                style={{width:'100%', padding:'10px 14px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}66`, borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: vizaBusy ? 0.5 : 1}}>
+                {vizaBusy ? '⏳ Se confirmă...' : `✓ Confirmă viza RTS (următoarea +${intervalViza} luni)`}
+              </button>
+              <div style={{fontSize:10, color:G.dim, marginTop:6, textAlign:'center'}}>
+                Următoarea viză se calculează automat la {intervalViza} luni după data aleasă.
+              </div>
+            </div>
+          )
+        })()}
         
         <Lbl>Observații</Lbl>
         <textarea value={observatii} onChange={e => setObservatii(e.target.value)} style={{...S.input, minHeight:60, resize:'vertical', marginBottom:14, fontFamily:'inherit'}}/>
