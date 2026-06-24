@@ -104,6 +104,7 @@ export default function ContracteTertiTab() {
   const [beneficiari, setBeneficiari] = useState([])
   const [contracte, setContracte] = useState([])
   const [politeMap, setPoliteMap] = useState({})   // contract_id -> [polite] (pt badge-uri alertă)
+  const [gbeRetinutMap, setGbeRetinutMap] = useState({})  // contract_id -> gbe_retinut (din v_gbe_per_contract)
   const [loading, setLoading] = useState(true)
   const { show, Toast } = useToast()
 
@@ -118,18 +119,22 @@ export default function ContracteTertiTab() {
         .select('id, name, is_owner, can_manage_contracts').eq('id', user.id).single()
       setProfile(data)
     }
-    const [bRes, cRes, pRes] = await Promise.all([
+    const [bRes, cRes, pRes, gRes] = await Promise.all([
       supabase.from('beneficiari').select('*').order('nume'),
       supabase.from('contracte_terti').select('*')
         .order('data_semnare', { ascending: false, nullsFirst: false })
         .order('id', { ascending: false }),
       supabase.from('contracte_polite').select('id, contract_id, tip, status, data_expirare'),
+      supabase.from('v_gbe_per_contract').select('contract_id, gbe_retinut'),
     ])
     setBeneficiari(bRes.data || [])
     setContracte(cRes.data || [])
     const pm = {}
     for (const p of (pRes.data || [])) { (pm[p.contract_id] = pm[p.contract_id] || []).push(p) }
     setPoliteMap(pm)
+    const gm = {}
+    for (const g of (gRes.data || [])) { gm[g.contract_id] = Number(g.gbe_retinut || 0) }
+    setGbeRetinutMap(gm)
     setLoading(false)
   }
 
@@ -223,7 +228,7 @@ export default function ContracteTertiTab() {
             if (error) show('Eroare: ' + error.message, 'err')
             else { show('✓ Contract șters'); loadAll() }
           }}
-         politeMap={politeMap} />
+         politeMap={politeMap} gbeRetinutMap={gbeRetinutMap} />
       )}
 
       {editBen && (
@@ -330,14 +335,19 @@ function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onT
 // ══════════════════════════════════════════════════════════
 // CONTRACTE SUB-TAB — cu filtre categorie + sens
 // ══════════════════════════════════════════════════════════
-function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onView, onEdit, onDelete, politeMap = {} }) {
+function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onView, onEdit, onDelete, politeMap = {}, gbeRetinutMap = {} }) {
   // 11.06.2026: alerte polițe pe rând (contracte de încasare active): lipsă GBE / expiră curând
+  // 24.06.2026: GBE poate fi acoperit și prin REȚINERE (din IPC), nu doar prin poliță. Dacă
+  //             contractul are gbe_tip='retinere' SAU reținut>0 → nu mai e „fără GBE", ci „GBE prin reținere".
   const politeAlerte = (c) => {
     if (c.sens !== 'incasare' || c.status !== 'activ') return []
     const ps = politeMap[c.id] || []
     const out = []
     const azi = new Date()
-    if (!ps.some(p => p.tip === 'GBE' && p.status === 'activa')) out.push({ txt: 'fără GBE', sev: 'red' })
+    const areGbePolita   = ps.some(p => p.tip === 'GBE' && p.status === 'activa')
+    const areGbeRetinere = c.gbe_tip === 'retinere' || Number(gbeRetinutMap[c.id] || 0) > 0
+    if (areGbeRetinere && !areGbePolita) out.push({ txt: 'GBE prin reținere', sev: 'green' })
+    else if (!areGbePolita)              out.push({ txt: 'fără GBE', sev: 'red' })
     if (!ps.some(p => p.tip === 'CAR' && p.status === 'activa')) out.push({ txt: 'fără CAR', sev: 'orange' })
     for (const p of ps) {
       if (p.status !== 'activa' || !p.data_expirare) continue
@@ -455,16 +465,18 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
                     </span>
                   </div>
 
-                  {/* Alerte polițe (GBE/CAR lipsă sau expiră) */}
+                  {/* Alerte polițe (GBE/CAR lipsă sau expiră) + GBE prin reținere (verde) */}
                   {politeAlerte(c).length > 0 && (
                     <div style={{display:'flex', gap:4, marginRight:8, flexWrap:'wrap'}}>
-                      {politeAlerte(c).map((a, i) => (
-                        <span key={i} style={{padding:'3px 8px', borderRadius:10, fontSize:10, fontWeight:800, whiteSpace:'nowrap',
-                          background: (a.sev === 'red' ? G.red : G.orange) + '22', color: a.sev === 'red' ? G.red : G.orange,
-                          border: `1px solid ${(a.sev === 'red' ? G.red : G.orange)}55`}}>
-                          ⚠️ {a.txt}
-                        </span>
-                      ))}
+                      {politeAlerte(c).map((a, i) => {
+                        const col = a.sev === 'red' ? G.red : a.sev === 'green' ? G.green : G.orange
+                        return (
+                          <span key={i} style={{padding:'3px 8px', borderRadius:10, fontSize:10, fontWeight:800, whiteSpace:'nowrap',
+                            background: col + '22', color: col, border: `1px solid ${col}55`}}>
+                            {a.sev === 'green' ? '🛡️' : '⚠️'} {a.txt}
+                          </span>
+                        )
+                      })}
                     </div>
                   )}
 
