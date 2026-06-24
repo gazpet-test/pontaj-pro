@@ -6165,6 +6165,7 @@ function ReportsPage() {
           <button onClick={()=>requireUnlockThen('diurne')} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Export Diurne (necesită parolă)">{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
           <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
           <button onClick={exportBancaDiurne} disabled={expBT} style={{...S.btnP,background:'#0A3A6A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expBT?<><div className="sp"/>...</>:'🏦 Export Bancă'}</button>
+          <button onClick={()=>setShowIstoric(true)} style={{...S.btnP,background:G.orange,fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Generează ordine de deplasare (xlsx + PDF cu semnături) — deschide Istoric Plăți Diurne, alegi luna, apoi generezi">📄 Ordine Deplasare</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>
           <button onClick={()=>setShowIstoricOrd(true)} style={{...S.btnS,fontSize:12,background:G.orange+'22',color:G.orange,border:`1px solid ${G.orange}66`}} title="Arhivă PDF-uri ordine deplasare generate">📚 Istoric Ordine</button>
         </div>
