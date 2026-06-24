@@ -245,6 +245,77 @@ function _parseCentralizator(rows) {
   return { nrSL, lunaAn, contractNr, totalBaza, totalAjustare, coeficient:null, linii, tip:'centralizator' }
 }
 
+// Habau IPC (Interim Payment Certificate): foaie "IPC Form", format cumulativ cu rețineri.
+// Valoarea lunii = "Total month / Total luna"; rețineri = Retention Money 10% + CAR Insurance 0.3%.
+// Returnează linii: 1 brut (TVA 21) + rețineri negative (TVA 0) → factura iese ca GAZ-359.
+function _parseHabauIPC(wb) {
+  // 1) Foaia IPC Form (sau prima care conține "total month / luna")
+  let sheetName = wb.SheetNames.find(n => /ipc\s*form/i.test(n))
+  if (!sheetName) {
+    sheetName = wb.SheetNames.find(n => {
+      const r = XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, defval:'', raw:true })
+      return r.some(row => row.some(c => /total\s*(month|luna)/i.test(String(c||''))))
+    })
+  }
+  if (!sheetName) return null
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'', raw:true })
+
+  // 2) Detectare coloane din rândurile de header (cu fallback la pozițiile standard E/G/I)
+  let colBaza = -1, colCAR = -1, colRetention = -1
+  for (const row of rows) {
+    row.forEach((c, ci) => {
+      const t = String(c || '').toLowerCase()
+      if (colBaza < 0 && /total\s*(month|luna)/i.test(t)) colBaza = ci
+      if (colCAR < 0 && /car\s*insurance/i.test(t)) colCAR = ci
+      if (colRetention < 0 && /retention\s*money/i.test(t)) colRetention = ci
+    })
+  }
+  if (colBaza < 0) colBaza = 4
+  if (colCAR < 0) colCAR = 6
+  if (colRetention < 0) colRetention = 8
+
+  // 3) Rândul de date: "Subtotal" > "Total" > primul rând cu Nr.crt=1
+  let dataRow = rows.find(r => String(r[1] || '').trim().toLowerCase() === 'subtotal')
+    || rows.find(r => String(r[1] || '').trim().toLowerCase() === 'total')
+    || rows.find(r => parseRoNum(r[0]) === 1 && parseRoNum(r[colBaza]) !== 0)
+  if (!dataRow) return null
+
+  const baza = Math.round(parseRoNum(dataRow[colBaza]) * 100) / 100
+  let car = Math.round(parseRoNum(dataRow[colCAR]) * 100) / 100
+  let retention = Math.round(parseRoNum(dataRow[colRetention]) * 100) / 100
+  if (car > 0) car = -car            // reținerile sunt mereu negative pe factură
+  if (retention > 0) retention = -retention
+  if (!baza) return null
+
+  // 4) Metadate: nr IPC, perioadă (→ lună/an), nr contract
+  let ipcNr = '', perioada = '', contractNr = '', luna = null, an = null
+  for (const row of rows) {
+    const txt = row.map(c => String(c || '')).join(' ')
+    if (!ipcNr) { const m = txt.match(/IPC\s*0*(\d+)/i); if (m) ipcNr = m[1] }
+    if (!perioada) { const m = txt.match(/(\d{2}\.\d{2}\.\d{4})\s*[-–]\s*(\d{2}\.\d{2}\.\d{4})/); if (m) { perioada = `${m[1]} - ${m[2]}`; luna = parseInt(m[1].split('.')[1]); an = parseInt(m[1].split('.')[2]) } }
+    if (!contractNr) { const m = txt.match(/(\d{3}\.\d{2}\.\d{3}-\d{3})/); if (m) contractNr = m[1] }
+  }
+
+  // 5) Linii: brut (TVA 21) + rețineri negative (TVA 0)
+  const ipcLabel = ipcNr ? `IPC ${String(ipcNr).padStart(2, '0')}` : 'IPC'
+  const ctrPart = contractNr ? ` CTR ${contractNr}` : ''
+  const perPart = perioada ? ` PERIOADA ${perioada}` : ''
+  const linii = [{
+    denumire: `PRESTĂRI SERVICII CONFORM ${ipcLabel}${ctrPart}${perPart}`,
+    valoare: baza, tva_pct: 21, tip: 'lucr_cm',
+  }]
+  if (retention) linii.push({ denumire: `Reținere GBE (garanție bună execuție) ${ipcLabel}`, valoare: retention, tva_pct: 0, tip: 'retinere' })
+  if (car) linii.push({ denumire: `Reținere CAR 0.3% ${ipcLabel}`, valoare: car, tva_pct: 0, tip: 'retinere' })
+
+  const net = Math.round((baza + retention + car) * 100) / 100
+  return {
+    nrSL: ipcLabel, lunaAn: perioada, luna, an, contractNr,
+    totalBaza: baza, totalAjustare: 0, coeficient: null,
+    retinereGBE: retention, retinereCAR: car, net,
+    linii, tip: 'habau_ipc',
+  }
+}
+
 function parseBorderouAjustatXLS(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -252,6 +323,21 @@ function parseBorderouAjustatXLS(file) {
       try {
         const data = new Uint8Array(e.target.result)
         const wb = XLSX.read(data, { type:'array', cellText:false, cellNF:true, raw:true, cellFormula:false })
+
+        // Detectare format Habau IPC (foaie "IPC Form" / text "Payment Certificate" / "Total month")
+        const isHabau = wb.SheetNames.some(n => /ipc\s*form/i.test(n)) ||
+          wb.SheetNames.some(n => {
+            const r = XLSX.utils.sheet_to_json(wb.Sheets[n], { header:1, defval:'', raw:true })
+            return r.slice(0, 16).some(row => row.some(c => /payment\s*certificate|total\s*month/i.test(String(c||''))))
+          })
+        if (isHabau) {
+          const habau = _parseHabauIPC(wb)
+          if (habau && habau.totalBaza) {
+            console.log('[XLS Parser] tip: HABAU IPC | baza:', habau.totalBaza, '| rețineri GBE/CAR:', habau.retinereGBE, habau.retinereCAR, '| net:', habau.net)
+            return resolve(habau)
+          }
+        }
+
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
 
@@ -851,7 +937,12 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       // Auto-completare câmpuri formular
       if (result.totalBaza) set('valoare_baza_lei', String(result.totalBaza))
       if (result.coeficient) set('coeficient_ajustare', String(result.coeficient))
-      if (result.nrSL && !form.nr_situatie) set('nr_situatie', `SL${result.nrSL}`)
+      if (result.nrSL && !form.nr_situatie) set('nr_situatie', result.tip === 'habau_ipc' ? result.nrSL : `SL${result.nrSL}`)
+      // Habau IPC: pre-completează luna/an din perioada certificatului
+      if (result.tip === 'habau_ipc') {
+        if (result.luna && form.luna === '') set('luna', String(result.luna))
+        if (result.an) set('an', String(result.an))
+      }
       // Recalculează discrepanță dacă există deja PDF
       if (pdfResult?.valoare_totala_fara_tva && result.totalBaza) {
         const ajust = result.totalAjustare || 0
@@ -979,7 +1070,19 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
           const lunaStr = xlsResult.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
           const bdLinii = []
 
-          if (xlsResult.tip === 'centralizator' && xlsResult.linii?.length > 0) {
+          if (xlsResult.tip === 'habau_ipc' && xlsResult.linii?.length > 0) {
+            // HABAU IPC: linie brută (TVA 21) + rețineri negative (TVA 0), exact ca pe factura GAZ-359
+            let ord = 1
+            for (const linie of xlsResult.linii) {
+              bdLinii.push({
+                sl_id: slId, ord: ord++, tip: linie.tip || 'lucr_cm',
+                denumire: linie.denumire,
+                valoare: linie.valoare,
+                tva_pct: linie.tva_pct != null ? linie.tva_pct : 21,
+                sursa: 'xls',
+              })
+            }
+          } else if (xlsResult.tip === 'centralizator' && xlsResult.linii?.length > 0) {
             // CENTRALIZATOR (Prunisor): rânduri separate + ajustări per linie
             let ord = 1
             for (const linie of xlsResult.linii) {
@@ -1162,6 +1265,13 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                   {xlsResult.totalBaza && <div style={{color:G.muted}}>Total devize (bază): <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalBaza)}</span></div>}
                   {xlsResult.totalOS != null && xlsResult.totalOS > 0 && <div style={{color:G.muted}}>din care OS (organizare șantier): <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalOS)}</span></div>}
                   {xlsResult.totalAjustare && <div style={{color:G.muted}}>Ajustare ICC: <span style={{color:G.yellow, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalAjustare)}</span>{xlsResult.coeficient && ` (×${xlsResult.coeficient})`}</div>}
+                  {xlsResult.tip === 'habau_ipc' && (xlsResult.retinereGBE || xlsResult.retinereCAR) && (
+                    <>
+                      {xlsResult.retinereGBE ? <div style={{color:G.muted}}>Reținere GBE (10%): <span style={{color:G.red, fontFamily:'monospace'}}>{fmtLei(xlsResult.retinereGBE)}</span></div> : null}
+                      {xlsResult.retinereCAR ? <div style={{color:G.muted}}>Reținere CAR (0.3%): <span style={{color:G.red, fontFamily:'monospace'}}>{fmtLei(xlsResult.retinereCAR)}</span></div> : null}
+                      <div style={{color:G.muted}}>Net de plată: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>{fmtLei(xlsResult.net)}</span></div>
+                    </>
+                  )}
                   {(xlsResult.totalBaza || 0) + (xlsResult.totalAjustare || 0) > 0 && (
                     <div style={{color:G.muted}}>Total ajustat: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>
                       {fmtLei((xlsResult.totalBaza||0) + (xlsResult.totalAjustare||0))}
