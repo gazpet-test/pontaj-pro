@@ -10,6 +10,11 @@
 //                 (auto 19/21 după dată, override la import). Realizat % + Rămas de
 //                 facturat = pe NET; Plătit + Rest de plată = CU TVA (cash real).
 // Fundație BD: contracte_terti extins + contracte_linii + v_contracte_cu_linii (+ EUR + net TVA)
+// 24.06.2026 v4 — Evidență GBE (Garanție Bună Execuție): rubrică tip (reținere/poliță) +
+//                 % deblocare recepție/final + perioadă valabilitate + termen recuperare în
+//                 formular; ModalGBE (reținut/restituit/rămas din v_gbe_per_contract,
+//                 deblocări estimate, restituiri gbe_restituiri, polițe gbe_polite cu alertă
+//                 expirare); alerte GBE în AlerteDashboard + badge pe card.
 // ===========================================================================
 
 import React, { useState, useEffect, useMemo } from 'react'
@@ -76,6 +81,32 @@ function fmtEUR(v) {
 function cotaTvaLaData(dataISO) {
   return dataISO && dataISO < '2025-08-01' ? 19 : 21
 }
+
+// ─── GBE helpers ─────────────────────────────────────────────────────────────
+// Zile rămase până la o dată (negativ = depășit). null dacă nu există dată.
+function zileRamase(dataISO) {
+  if (!dataISO) return null
+  const d = new Date(dataISO); d.setHours(0, 0, 0, 0)
+  const azi = new Date(); azi.setHours(0, 0, 0, 0)
+  return Math.round((d - azi) / 86400000)
+}
+// Nivel alertă pe baza zilelor rămase: critic (≤30z sau depășit) / warning (≤60z) / null
+function nivelAlertaZile(zile) {
+  if (zile == null) return null
+  if (zile <= 30) return 'critic'
+  if (zile <= 60) return 'warning'
+  return null
+}
+const GBE_TIP_META = {
+  retinere: { label: 'Reținere', emoji: '✂️', color: '#D29922' },
+  polita:   { label: 'Poliță',   emoji: '🏦', color: '#1F6FEB' },
+}
+const GBE_RESTITUIRE_TIP = [
+  { val: 'partiala',            label: 'Restituire parțială' },
+  { val: 'receptie_terminare',  label: 'Deblocare la recepție' },
+  { val: 'finala',              label: 'Restituire finală' },
+  { val: 'scrisoare_garantie',  label: 'Înlocuit cu scrisoare garanție' },
+]
 
 // ─── Badge helper ───────────────────────────────────────────────────────────
 function Badge({ label, color, emoji }) {
@@ -609,7 +640,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onViewActe, onViewPdf, onChangeStatus, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
+function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onViewActe, onViewGBE, onViewPdf, onChangeStatus, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
   const tip = TIP_META[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
@@ -684,6 +715,22 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
             {c.nr_pret_depasit_neaprobat > 0 && (
               <Badge label={`⚠️ ${c.nr_pret_depasit_neaprobat} preț depășit`} color={G.red} />
             )}
+            {/* Alerte GBE */}
+            {(() => {
+              const ramas = Number(c._gbe?.gbe_ramas || 0)
+              const zRec = ramas > 0.5 ? zileRamase(c.gbe_data_estimata_recuperare) : null
+              const zPol = c._politaExpZile
+              return (
+                <>
+                  {zRec != null && zRec <= 60 && (
+                    <Badge label={zRec < 0 ? '🔐 GBE recuperare depășită' : `🔐 GBE recuperabil ${zRec}z`} color={zRec <= 30 ? G.red : G.yellow} />
+                  )}
+                  {zPol != null && zPol <= 60 && (
+                    <Badge label={zPol < 0 ? '🏦 Poliță expirată' : `🏦 Poliță expiră ${zPol}z`} color={zPol <= 30 ? G.red : G.yellow} />
+                  )}
+                </>
+              )
+            })()}
           </div>
 
           <div style={{ fontSize: 13, color: G.text, fontWeight: 600, marginBottom: 4, lineHeight: 1.4, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
@@ -774,6 +821,13 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
               border: `1px solid ${G.purple}44`, borderRadius: 6, cursor: 'pointer',
               fontSize: 11, fontWeight: 600,
             }}>⚡ Acte ({c.nr_acte_aditionale || 0})</button>
+            {(Number(c.garantie_buna_executie_pct) > 0 || c.gbe_tip || c._gbe || c._nrPolite > 0) && (
+              <button onClick={() => onViewGBE(c)} title="Evidență GBE (garanție bună execuție)" style={{
+                padding: '5px 10px', background: G.yellow + '22', color: G.yellow,
+                border: `1px solid ${G.yellow}44`, borderRadius: 6, cursor: 'pointer',
+                fontSize: 11, fontWeight: 600,
+              }}>🔐 GBE{c._gbe?.gbe_ramas > 0 ? ` (${fmtRON(c._gbe.gbe_ramas)})` : ''}</button>
+            )}
             {c.pdf_path && (
               <button onClick={() => onViewPdf(c)} title="Vezi PDF contract" style={{
                 padding: '5px 10px', background: G.text + '18', color: G.text,
@@ -813,6 +867,12 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
     data_termen: contract?.data_termen || '',
     termen_plata_zile: contract?.termen_plata_zile || '',
     garantie_buna_executie_pct: contract?.garantie_buna_executie_pct || '',
+    gbe_tip: contract?.gbe_tip || 'retinere',
+    gbe_pct_deblocare_receptie: contract?.gbe_pct_deblocare_receptie ?? 70,
+    gbe_pct_deblocare_final: contract?.gbe_pct_deblocare_final ?? 30,
+    garantie_perioada_luni: contract?.garantie_perioada_luni || '',
+    gbe_data_estimata_recuperare: contract?.gbe_data_estimata_recuperare || '',
+    gbe_observatii: contract?.gbe_observatii || '',
     contract_parinte_id: contract?.contract_parinte_id || '',
     site_id: contract?.site_id || '',
     santiere_ids: contract?.santiere_ids?.map(Number) || (contract?.site_id ? [Number(contract.site_id)] : []),
@@ -890,6 +950,12 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
         data_termen: form.data_termen || null,
         termen_plata_zile: form.termen_plata_zile ? Number(form.termen_plata_zile) : null,
         garantie_buna_executie_pct: form.garantie_buna_executie_pct ? Number(form.garantie_buna_executie_pct) : null,
+        gbe_tip: form.gbe_tip || null,
+        gbe_pct_deblocare_receptie: form.gbe_pct_deblocare_receptie !== '' ? Number(form.gbe_pct_deblocare_receptie) : null,
+        gbe_pct_deblocare_final: form.gbe_pct_deblocare_final !== '' ? Number(form.gbe_pct_deblocare_final) : null,
+        garantie_perioada_luni: form.garantie_perioada_luni ? Number(form.garantie_perioada_luni) : null,
+        gbe_data_estimata_recuperare: form.gbe_data_estimata_recuperare || null,
+        gbe_observatii: form.gbe_observatii || null,
         contract_parinte_id: form.contract_parinte_id ? Number(form.contract_parinte_id) : null,
         site_id: form.santiere_ids[0] || (form.site_id ? Number(form.site_id) : null),
         santiere_ids: form.santiere_ids.length ? form.santiere_ids : null,
@@ -1114,11 +1180,95 @@ function ModalContract({ contract, contracteUpstream, sites, beneficiari, profil
               placeholder="30" style={S.input} />
           </div>
           <div>
-            <label style={S.label}>GBE % din Valoare</label>
-            <input type="number" value={form.garantie_buna_executie_pct} onChange={e => setForm(f => ({ ...f, garantie_buna_executie_pct: e.target.value }))}
-              placeholder="10" style={S.input} />
+            <label style={S.label}>Termen recuperare GBE (estimat)</label>
+            <input type="date" value={form.gbe_data_estimata_recuperare} onChange={e => setForm(f => ({ ...f, gbe_data_estimata_recuperare: e.target.value }))} style={S.input} />
           </div>
         </div>
+
+        {/* ─── RUBRICĂ GBE ─────────────────────────────────────────────── */}
+        {(() => {
+          const sumaPct = Number(form.gbe_pct_deblocare_receptie || 0) + Number(form.gbe_pct_deblocare_final || 0)
+          const sumaOk = !form.gbe_pct_deblocare_receptie && !form.gbe_pct_deblocare_final ? true : Math.abs(sumaPct - 100) < 0.01
+          return (
+            <div style={{ marginBottom: 20, padding: 16, background: G.bg, borderRadius: 10, border: `1px solid ${G.border}` }}>
+              <label style={{ ...S.label, marginBottom: 10 }}>🔐 Garanție Bună Execuție (GBE)</label>
+
+              {/* Tip GBE */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                {Object.entries(GBE_TIP_META).map(([key, meta]) => (
+                  <button key={key} type="button" onClick={() => setForm(f => ({ ...f, gbe_tip: key }))} style={{
+                    flex: 1, padding: '10px 8px', border: `2px solid ${form.gbe_tip === key ? meta.color : G.border}`,
+                    borderRadius: 8, cursor: 'pointer', textAlign: 'center',
+                    background: form.gbe_tip === key ? meta.color + '22' : G.surface,
+                    color: form.gbe_tip === key ? meta.color : G.muted,
+                    fontWeight: 700, fontSize: 12,
+                  }}>
+                    <span style={{ marginRight: 6 }}>{meta.emoji}</span>{meta.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* REȚINERE: procente */}
+              {form.gbe_tip === 'retinere' && (
+                <>
+                  <div style={{ fontSize: 11, color: G.dim, marginBottom: 10, lineHeight: 1.5 }}>
+                    Reținerile se constituie automat din liniile de tip „reținere" ale situațiilor de lucrări (IPC). Aici definești doar parametrii pentru evidență și deblocări.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
+                    <div>
+                      <label style={S.label}>GBE % din Valoare</label>
+                      <input type="number" value={form.garantie_buna_executie_pct} onChange={e => setForm(f => ({ ...f, garantie_buna_executie_pct: e.target.value }))}
+                        placeholder="10" style={S.input} />
+                    </div>
+                    <div>
+                      <label style={S.label}>Perioadă valabilitate (luni)</label>
+                      <input type="number" value={form.garantie_perioada_luni} onChange={e => setForm(f => ({ ...f, garantie_perioada_luni: e.target.value }))}
+                        placeholder="24" style={S.input} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 8 }}>
+                    <div>
+                      <label style={S.label}>% deblocare la recepție</label>
+                      <input type="number" value={form.gbe_pct_deblocare_receptie} onChange={e => setForm(f => ({ ...f, gbe_pct_deblocare_receptie: e.target.value }))}
+                        placeholder="70" style={S.input} />
+                    </div>
+                    <div>
+                      <label style={S.label}>% deblocare final valabilitate</label>
+                      <input type="number" value={form.gbe_pct_deblocare_final} onChange={e => setForm(f => ({ ...f, gbe_pct_deblocare_final: e.target.value }))}
+                        placeholder="30" style={S.input} />
+                    </div>
+                  </div>
+                  {!sumaOk && (
+                    <div style={{ fontSize: 11, color: G.yellow, fontWeight: 600 }}>
+                      ⚠️ Procentele de deblocare însumează {sumaPct}% (recomandat 100%).
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* POLIȚĂ: hint */}
+              {form.gbe_tip === 'polita' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 6 }}>
+                  <div>
+                    <label style={S.label}>Perioadă valabilitate (luni)</label>
+                    <input type="number" value={form.garantie_perioada_luni} onChange={e => setForm(f => ({ ...f, garantie_perioada_luni: e.target.value }))}
+                      placeholder="24" style={S.input} />
+                  </div>
+                  <div style={{ gridColumn: '1 / -1', fontSize: 11, color: G.blue, background: G.blue + '11', border: `1px solid ${G.blue}33`, borderRadius: 8, padding: '8px 12px', lineHeight: 1.5 }}>
+                    🏦 Polițele (scrisori de garanție) se adaugă din <b>🔐 Evidență GBE</b> pe card, după salvarea contractului — pot fi mai multe (inițială + reînnoiri), cu alertă de expirare.
+                  </div>
+                </div>
+              )}
+
+              {/* Observații GBE — comun */}
+              <div style={{ marginTop: 12 }}>
+                <label style={S.label}>Observații GBE</label>
+                <input value={form.gbe_observatii} onChange={e => setForm(f => ({ ...f, gbe_observatii: e.target.value }))}
+                  placeholder="ex: deblocare 70% la PV recepție, 30% după 24 luni" style={S.input} />
+              </div>
+            </div>
+          )
+        })()}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
           <div>
@@ -1347,7 +1497,7 @@ function ModalLinii({ contract, profile, onClose }) {
 }
 
 // ─── Dashboard alerte contracte ─────────────────────────────────────────────
-function AlerteDashboard({ contracte, onFilterSens, onFilterStatus }) {
+function AlerteDashboard({ contracte, onFilterSens, onFilterStatus, onOpenGbe }) {
   const azi = new Date()
   const in30z = new Date(Date.now() + 30 * 24 * 3600 * 1000)
 
@@ -1356,11 +1506,23 @@ function AlerteDashboard({ contracte, onFilterSens, onFilterStatus }) {
   const expiraCurand = contracte.filter(c => c.data_termen && new Date(c.data_termen) >= azi && new Date(c.data_termen) <= in30z && c.status === 'activ')
   const inDraft      = contracte.filter(c => c.status === 'draft')
 
+  // GBE: polițe care expiră ≤60z + GBE de recuperat ≤60z (sortate după urgență)
+  const politeExp = contracte
+    .filter(c => c._politaExpZile != null && c._politaExpZile <= 60)
+    .sort((a, b) => a._politaExpZile - b._politaExpZile)
+  const gbeRecup = contracte
+    .filter(c => Number(c._gbe?.gbe_ramas || 0) > 0.5)
+    .map(c => ({ c, z: zileRamase(c.gbe_data_estimata_recuperare) }))
+    .filter(x => x.z != null && x.z <= 60)
+    .sort((a, b) => a.z - b.z)
+
   const alerte = [
     expirate.length     && { icon: '❌', label: `${expirate.length} contract${expirate.length > 1 ? 'e' : ''} expirat${expirate.length > 1 ? 'e' : ''}`, color: G.red,    action: () => onFilterStatus('activ') },
     expiraCurand.length && { icon: '⏳', label: `${expiraCurand.length} expiră în 30 zile`, color: G.yellow, action: () => onFilterStatus('activ') },
     faraParinte.length  && { icon: '🔗', label: `${faraParinte.length} fără contract mamă`, color: G.orange, action: () => onFilterSens('plata') },
     inDraft.length      && { icon: '📋', label: `${inDraft.length} draft${inDraft.length > 1 ? '-uri' : ''} nesemnate`, color: G.muted, action: () => onFilterStatus('draft') },
+    politeExp.length    && { icon: '🏦', label: `${politeExp.length} poliță GBE expiră curând`, color: politeExp[0]._politaExpZile <= 30 ? G.red : G.yellow, action: () => onOpenGbe && onOpenGbe(politeExp[0]) },
+    gbeRecup.length     && { icon: '🔐', label: `${gbeRecup.length} GBE de recuperat (${fmtRON(gbeRecup.reduce((s, x) => s + Number(x.c._gbe.gbe_ramas || 0), 0))})`, color: gbeRecup[0].z <= 30 ? G.red : G.yellow, action: () => onOpenGbe && onOpenGbe(gbeRecup[0].c) },
   ].filter(Boolean)
 
   if (!alerte.length) return null
@@ -1648,6 +1810,492 @@ function ModalActeAditionale({ contract, profile, canManage, onClose, onChanged 
   )
 }
 
+// ═══ GBE — Formular restituire (inline) ════════════════════════════════════
+function RestituireFormGBE({ contract, restituire, onCancel, onSaved }) {
+  const isEdit = !!restituire?.id
+  const [form, setForm] = useState({
+    data_restituire: restituire?.data_restituire || new Date().toISOString().slice(0, 10),
+    valoare_lei: restituire?.valoare_lei ?? '',
+    tip: restituire?.tip || 'partiala',
+    observatii: restituire?.observatii || '',
+  })
+  const [docFile, setDocFile] = useState(null)
+  const [docPath, setDocPath] = useState(restituire?.document_path || '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  function handleDocSelect(file) {
+    if (!file) return
+    if (file.size > 20 * 1024 * 1024) { setErr('Fișier prea mare (max 20MB).'); return }
+    setDocFile(file); setErr('')
+  }
+  async function handleViewDoc() {
+    if (!docPath) return
+    const { data } = await supabase.storage.from('contracte-terti').createSignedUrl(docPath, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  async function handleSave() {
+    if (!form.data_restituire) { setErr('Data restituirii e obligatorie.'); return }
+    if (!(Number(form.valoare_lei) > 0)) { setErr('Valoarea trebuie să fie > 0.'); return }
+    setSaving(true); setErr('')
+    try {
+      let finalDoc = docPath
+      if (docFile) {
+        const ext = (docFile.name.split('.').pop() || 'pdf').toLowerCase()
+        const path = `gbe/${contract.id}/restituire_${Date.now()}.${ext}`
+        const { error: upErr } = await supabase.storage.from('contracte-terti').upload(path, docFile, { upsert: true })
+        if (upErr) throw new Error('Upload document: ' + upErr.message)
+        finalDoc = path
+      }
+      const { data: { user } } = await supabase.auth.getUser()
+      const payload = {
+        contract_id: contract.id,
+        data_restituire: form.data_restituire,
+        valoare_lei: Number(form.valoare_lei),
+        tip: form.tip,
+        observatii: form.observatii || null,
+        document_path: finalDoc || null,
+      }
+      if (isEdit) {
+        const { error } = await supabase.from('gbe_restituiri').update(payload).eq('id', restituire.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('gbe_restituiri').insert({ ...payload, created_by: user?.id || null })
+        if (error) throw error
+      }
+      onSaved()
+    } catch (e) {
+      setErr(e.message || 'Eroare salvare.')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{ background: G.bg, border: `1px solid ${G.green}55`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: G.green, marginBottom: 12 }}>{isEdit ? '✏️ Editează restituire' : '➕ Înregistrează restituire GBE'}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Data restituire *</label>
+          <input type="date" value={form.data_restituire} onChange={e => setForm(f => ({ ...f, data_restituire: e.target.value }))} style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Valoare (RON) *</label>
+          <input type="number" value={form.valoare_lei} onChange={e => setForm(f => ({ ...f, valoare_lei: e.target.value }))} placeholder="0" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Tip</label>
+          <select value={form.tip} onChange={e => setForm(f => ({ ...f, tip: e.target.value }))} style={S.select}>
+            {GBE_RESTITUIRE_TIP.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Observații</label>
+        <input value={form.observatii} onChange={e => setForm(f => ({ ...f, observatii: e.target.value }))} placeholder="ex: deblocare la PV recepție nr. ..." style={S.input} />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>📎 Document (PV / ordin de plată)</label>
+        {docPath && !docFile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: G.green }}>✅ Document atașat</span>
+            <button onClick={handleViewDoc} style={{ padding: '4px 10px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>👁 Vezi</button>
+          </div>
+        )}
+        {docFile && <div style={{ marginBottom: 6, fontSize: 12, color: G.yellow }}>📄 {docFile.name} — se uploadează la salvare</div>}
+        <DropZone onFile={handleDocSelect} accept="application/pdf,image/*" icon="📤" compact
+          label={docPath ? 'Înlocuiește document — trage sau click' : 'Trage document aici sau click'} hint="PDF / imagine, max 20MB" />
+      </div>
+      {err && <div style={{ padding: '8px 12px', background: G.red + '22', color: G.red, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>⚠️ {err}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button onClick={onCancel} style={{ padding: '8px 16px', background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer', fontSize: 13 }}>Anulează</button>
+        <button onClick={handleSave} disabled={saving} style={{ ...S.btnP, background: G.green, opacity: saving ? 0.6 : 1, cursor: saving ? 'wait' : 'pointer' }}>{saving ? '⏳...' : (isEdit ? '✅ Salvează' : '✅ Înregistrează')}</button>
+      </div>
+    </div>
+  )
+}
+
+// ═══ GBE — Formular poliță (inline) ═════════════════════════════════════════
+function PolitaFormGBE({ contract, polita, onCancel, onSaved }) {
+  const isEdit = !!polita?.id
+  const [form, setForm] = useState({
+    numar_polita: polita?.numar_polita || '',
+    emitent: polita?.emitent || '',
+    valoare_lei: polita?.valoare_lei ?? '',
+    data_emitere: polita?.data_emitere || '',
+    data_expirare: polita?.data_expirare || '',
+    observatii: polita?.observatii || '',
+    activ: polita?.activ ?? true,
+  })
+  const [docFile, setDocFile] = useState(null)
+  const [docPath, setDocPath] = useState(polita?.document_path || '')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  function handleDocSelect(file) {
+    if (!file) return
+    if (file.size > 20 * 1024 * 1024) { setErr('Fișier prea mare (max 20MB).'); return }
+    setDocFile(file); setErr('')
+  }
+  async function handleViewDoc() {
+    if (!docPath) return
+    const { data } = await supabase.storage.from('contracte-terti').createSignedUrl(docPath, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  async function handleSave() {
+    if (!form.numar_polita.trim() && !form.emitent.trim()) { setErr('Completează cel puțin numărul poliței sau emitentul.'); return }
+    setSaving(true); setErr('')
+    try {
+      let finalDoc = docPath
+      if (docFile) {
+        const ext = (docFile.name.split('.').pop() || 'pdf').toLowerCase()
+        const path = `gbe/${contract.id}/polita_${Date.now()}.${ext}`
+        const { error: upErr } = await supabase.storage.from('contracte-terti').upload(path, docFile, { upsert: true })
+        if (upErr) throw new Error('Upload document: ' + upErr.message)
+        finalDoc = path
+      }
+      const { data: { user } } = await supabase.auth.getUser()
+      const payload = {
+        contract_id: contract.id,
+        numar_polita: form.numar_polita.trim() || null,
+        emitent: form.emitent.trim() || null,
+        valoare_lei: form.valoare_lei !== '' ? Number(form.valoare_lei) : null,
+        data_emitere: form.data_emitere || null,
+        data_expirare: form.data_expirare || null,
+        observatii: form.observatii || null,
+        activ: !!form.activ,
+        document_path: finalDoc || null,
+      }
+      if (isEdit) {
+        const { error } = await supabase.from('gbe_polite').update(payload).eq('id', polita.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('gbe_polite').insert({ ...payload, created_by: user?.id || null })
+        if (error) throw error
+      }
+      onSaved()
+    } catch (e) {
+      setErr(e.message || 'Eroare salvare.')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div style={{ background: G.bg, border: `1px solid ${G.blue}55`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: G.blue, marginBottom: 12 }}>{isEdit ? '✏️ Editează poliță' : '➕ Poliță / scrisoare de garanție'}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Număr poliță</label>
+          <input value={form.numar_polita} onChange={e => setForm(f => ({ ...f, numar_polita: e.target.value }))} placeholder="ex: SG-12345/2025" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Emitent (bancă / asigurător)</label>
+          <input value={form.emitent} onChange={e => setForm(f => ({ ...f, emitent: e.target.value }))} placeholder="ex: BCR / Allianz" style={S.input} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <label style={S.label}>Valoare (RON)</label>
+          <input type="number" value={form.valoare_lei} onChange={e => setForm(f => ({ ...f, valoare_lei: e.target.value }))} placeholder="0" style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Data emitere</label>
+          <input type="date" value={form.data_emitere} onChange={e => setForm(f => ({ ...f, data_emitere: e.target.value }))} style={S.input} />
+        </div>
+        <div>
+          <label style={S.label}>Data expirare</label>
+          <input type="date" value={form.data_expirare} onChange={e => setForm(f => ({ ...f, data_expirare: e.target.value }))} style={S.input} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>Observații</label>
+        <input value={form.observatii} onChange={e => setForm(f => ({ ...f, observatii: e.target.value }))} placeholder="ex: reînnoire poliță inițială ..." style={S.input} />
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 12, color: G.text, cursor: 'pointer' }}>
+        <input type="checkbox" checked={form.activ} onChange={e => setForm(f => ({ ...f, activ: e.target.checked }))} />
+        Poliță activă (debifează când e expirată / înlocuită de reînnoire)
+      </label>
+      <div style={{ marginBottom: 12 }}>
+        <label style={S.label}>📎 Document poliță</label>
+        {docPath && !docFile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: G.green }}>✅ Document atașat</span>
+            <button onClick={handleViewDoc} style={{ padding: '4px 10px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>👁 Vezi</button>
+          </div>
+        )}
+        {docFile && <div style={{ marginBottom: 6, fontSize: 12, color: G.yellow }}>📄 {docFile.name} — se uploadează la salvare</div>}
+        <DropZone onFile={handleDocSelect} accept="application/pdf,image/*" icon="📤" compact
+          label={docPath ? 'Înlocuiește document — trage sau click' : 'Trage document aici sau click'} hint="PDF / imagine, max 20MB" />
+      </div>
+      {err && <div style={{ padding: '8px 12px', background: G.red + '22', color: G.red, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>⚠️ {err}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <button onClick={onCancel} style={{ padding: '8px 16px', background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer', fontSize: 13 }}>Anulează</button>
+        <button onClick={handleSave} disabled={saving} style={{ ...S.btnP, background: G.blue, opacity: saving ? 0.6 : 1, cursor: saving ? 'wait' : 'pointer' }}>{saving ? '⏳...' : (isEdit ? '✅ Salvează' : '✅ Adaugă poliță')}</button>
+      </div>
+    </div>
+  )
+}
+
+// ═══ GBE — Modal evidență per contract ══════════════════════════════════════
+function ModalGBE({ contract, profile, canManage, onClose, onChanged }) {
+  const [gbe, setGbe] = useState(null)
+  const [restituiri, setRestituiri] = useState([])
+  const [polite, setPolite] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [mode, setMode] = useState(null)        // null | 'restituire' | 'polita'
+  const [editItem, setEditItem] = useState(null)
+
+  const tipMeta = GBE_TIP_META[contract.gbe_tip] || GBE_TIP_META.retinere
+  const isPolita = contract.gbe_tip === 'polita'
+
+  useEffect(() => { loadData() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadData() {
+    setLoading(true)
+    const [{ data: gbeRow }, { data: rest }, { data: pol }] = await Promise.all([
+      supabase.from('v_gbe_per_contract').select('*').eq('contract_id', contract.id).maybeSingle(),
+      supabase.from('gbe_restituiri').select('*').eq('contract_id', contract.id).order('data_restituire', { ascending: false }),
+      supabase.from('gbe_polite').select('*').eq('contract_id', contract.id).order('data_emitere', { ascending: false, nullsFirst: false }),
+    ])
+    setGbe(gbeRow || null)
+    setRestituiri(rest || [])
+    setPolite(pol || [])
+    setLoading(false)
+  }
+
+  async function handleViewDoc(path) {
+    if (!path) return
+    const { data } = await supabase.storage.from('contracte-terti').createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  async function handleDeleteRestituire(id) {
+    if (!window.confirm('Ștergi această restituire? Acțiune ireversibilă.')) return
+    const { error } = await supabase.from('gbe_restituiri').delete().eq('id', id)
+    if (error) { alert('Eroare ștergere: ' + error.message); return }
+    await loadData(); onChanged && onChanged()
+  }
+  async function handleDeletePolita(id) {
+    if (!window.confirm('Ștergi această poliță? Acțiune ireversibilă.')) return
+    const { error } = await supabase.from('gbe_polite').delete().eq('id', id)
+    if (error) { alert('Eroare ștergere: ' + error.message); return }
+    await loadData(); onChanged && onChanged()
+  }
+
+  const retinut    = Number(gbe?.gbe_retinut || 0)
+  const restituit  = Number(gbe?.gbe_restituit || 0)
+  const ramas      = gbe?.gbe_ramas != null ? Number(gbe.gbe_ramas) : (retinut - restituit)
+  const pctRestit  = retinut > 0 ? Math.min(100, (restituit / retinut) * 100) : 0
+  const pctRec     = Number(contract.gbe_pct_deblocare_receptie ?? 70)
+  const pctFin     = Number(contract.gbe_pct_deblocare_final ?? 30)
+  const deblocRec  = ramas > 0 ? ramas * (pctRec / 100) : 0
+  const deblocFin  = ramas > 0 ? ramas * (pctFin / 100) : 0
+  const politeActive = polite.filter(p => p.activ)
+  const politaTotal  = politeActive.reduce((s, p) => s + Number(p.valoare_lei || 0), 0)
+
+  // Alerte
+  const zRecup = zileRamase(contract.gbe_data_estimata_recuperare)
+  const nivelRecup = ramas > 0.5 ? nivelAlertaZile(zRecup) : null
+  const politaExp = politeActive
+    .map(p => ({ ...p, _z: zileRamase(p.data_expirare) }))
+    .filter(p => p._z != null && p._z <= 60)
+    .sort((a, b) => a._z - b._z)
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000, padding: 16 }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, width: '100%', maxWidth: 720, maxHeight: '90vh', overflowY: 'auto', padding: 28 }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>🔐 Evidență GBE</div>
+            <div style={{ fontSize: 12, color: G.muted, marginTop: 4 }}>
+              {contract.numar_contract ? `Nr. ${contract.numar_contract} · ` : ''}{contract.denumire?.slice(0, 80)}{contract.denumire?.length > 80 ? '…' : ''}
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <Badge label={tipMeta.label} color={tipMeta.color} emoji={tipMeta.emoji} />
+              {contract.garantie_buna_executie_pct ? <span style={{ marginLeft: 8, fontSize: 11, color: G.muted }}>GBE {contract.garantie_buna_executie_pct}%</span> : null}
+              {contract.garantie_perioada_luni ? <span style={{ marginLeft: 8, fontSize: 11, color: G.muted }}>· valabilitate {contract.garantie_perioada_luni} luni</span> : null}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 20 }}>×</button>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: 40, color: G.muted }}>⏳ Se încarcă evidența GBE...</div>
+        ) : (
+          <>
+            {/* Alerte */}
+            {(nivelRecup || politaExp.length > 0) && (
+              <div style={{ marginBottom: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {nivelRecup && (
+                  <div style={{ padding: '10px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 600,
+                    background: (nivelRecup === 'critic' ? G.red : G.yellow) + '18',
+                    color: nivelRecup === 'critic' ? G.red : G.yellow,
+                    border: `1px solid ${(nivelRecup === 'critic' ? G.red : G.yellow)}44` }}>
+                    {zRecup < 0
+                      ? `⏰ GBE de recuperat de la beneficiar — termen depășit cu ${Math.abs(zRecup)} zile (${fmtRON(ramas)})`
+                      : `⏰ GBE de recuperat în ${zRecup} zile (${fmtRON(ramas)})`}
+                  </div>
+                )}
+                {politaExp.map(p => (
+                  <div key={p.id} style={{ padding: '10px 14px', borderRadius: 8, fontSize: 12.5, fontWeight: 600,
+                    background: (p._z <= 30 ? G.red : G.yellow) + '18',
+                    color: p._z <= 30 ? G.red : G.yellow,
+                    border: `1px solid ${(p._z <= 30 ? G.red : G.yellow)}44` }}>
+                    {p._z < 0
+                      ? `🏦 Poliță ${p.numar_polita || p.emitent || ''} EXPIRATĂ de ${Math.abs(p._z)} zile — reînnoiește, ești descoperit pe garanție`
+                      : `🏦 Poliță ${p.numar_polita || p.emitent || ''} expiră în ${p._z} zile — reînnoiește, altfel rămâi descoperit`}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Card sume */}
+            <div style={{ ...S.card, padding: 18, marginBottom: 18, background: G.bg }}>
+              {isPolita ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>🏦 Garanție prin poliță (activă)</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: G.blue }}>{fmtRON(politaTotal)}</div>
+                    <div style={{ fontSize: 11, color: G.dim, marginTop: 2 }}>{politeActive.length} poliță{politeActive.length === 1 ? '' : 'e'} activă{politeActive.length === 1 ? '' : 'e'}</div>
+                  </div>
+                  {retinut > 0 && (
+                    <div>
+                      <div style={{ fontSize: 11, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>✂️ Reținut din IPC (rămas)</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: ramas > 0 ? G.orange : G.green }}>{fmtRON(ramas)}</div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 14 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>Reținut total</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: G.text }}>{fmtRON(retinut)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>Restituit</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: G.green }}>{fmtRON(restituit)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>Rămas de recuperat</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: ramas > 0 ? G.orange : G.green }}>{fmtRON(ramas)}</div>
+                    </div>
+                  </div>
+                  {/* Bară restituit */}
+                  <div style={{ height: 8, borderRadius: 5, background: G.border2, overflow: 'hidden', marginBottom: 4 }}>
+                    <div style={{ width: `${pctRestit}%`, height: '100%', background: G.green, borderRadius: 5, transition: 'width .3s' }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: G.muted }}>{pctRestit.toLocaleString('ro-RO', { maximumFractionDigits: 1 })}% restituit</div>
+
+                  {/* Deblocări estimate */}
+                  {ramas > 0.5 && (
+                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${G.border}`, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                      <div style={{ padding: '8px 12px', background: G.surface, borderRadius: 8, border: `1px solid ${G.border}` }}>
+                        <div style={{ fontSize: 11, color: G.muted }}>📋 Deblocare la recepție ({pctRec}%)</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: G.blue }}>{fmtRON(deblocRec)}</div>
+                      </div>
+                      <div style={{ padding: '8px 12px', background: G.surface, borderRadius: 8, border: `1px solid ${G.border}` }}>
+                        <div style={{ fontSize: 11, color: G.muted }}>🏁 Deblocare final valabilitate ({pctFin}%)</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: G.purple }}>{fmtRON(deblocFin)}</div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+              {contract.gbe_data_estimata_recuperare && (
+                <div style={{ marginTop: 12, fontSize: 12, color: G.muted }}>
+                  🗓️ Termen estimat recuperare: <b style={{ color: G.text }}>{contract.gbe_data_estimata_recuperare}</b>
+                  {zRecup != null && <span style={{ marginLeft: 6, color: zRecup < 0 ? G.red : (zRecup <= 60 ? G.yellow : G.muted) }}>({zRecup < 0 ? `depășit ${Math.abs(zRecup)}z` : `${zRecup}z rămase`})</span>}
+                </div>
+              )}
+              {contract.gbe_observatii && (
+                <div style={{ marginTop: 8, fontSize: 12, color: G.dim, fontStyle: 'italic' }}>📝 {contract.gbe_observatii}</div>
+              )}
+            </div>
+
+            {/* ── POLIȚE ── */}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: G.blue }}>🏦 Polițe / scrisori de garanție ({polite.length})</div>
+                {canManage && mode !== 'polita' && (
+                  <button onClick={() => { setEditItem(null); setMode('polita') }} style={{ padding: '6px 12px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>+ Poliță</button>
+                )}
+              </div>
+              {mode === 'polita' && (
+                <PolitaFormGBE contract={contract} polita={editItem}
+                  onCancel={() => { setMode(null); setEditItem(null) }}
+                  onSaved={() => { setMode(null); setEditItem(null); loadData(); onChanged && onChanged() }} />
+              )}
+              {polite.length === 0 && mode !== 'polita' && (
+                <div style={{ fontSize: 12, color: G.dim, padding: '8px 0' }}>Nicio poliță înregistrată.</div>
+              )}
+              {polite.map(p => {
+                const z = zileRamase(p.data_expirare)
+                const expColor = z == null ? G.muted : z < 0 ? G.red : z <= 30 ? G.red : z <= 60 ? G.yellow : G.green
+                return (
+                  <div key={p.id} style={{ padding: '10px 14px', marginBottom: 6, borderRadius: 8, background: G.bg, border: `1px solid ${G.border}`, opacity: p.activ ? 1 : 0.55, display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>
+                        {p.numar_polita || '(fără număr)'} {p.emitent ? <span style={{ color: G.muted, fontWeight: 500 }}>· {p.emitent}</span> : null}
+                        {!p.activ && <span style={{ marginLeft: 8, fontSize: 10, color: G.muted }}>(inactivă)</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>
+                        {p.data_emitere && `emisă ${p.data_emitere}`}
+                        {p.data_expirare && <span style={{ color: expColor, fontWeight: 600 }}> · expiră {p.data_expirare}{z != null ? ` (${z < 0 ? `depășit ${Math.abs(z)}z` : `${z}z`})` : ''}</span>}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: G.blue, whiteSpace: 'nowrap' }}>{fmtRON(p.valoare_lei)}</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {p.document_path && <button onClick={() => handleViewDoc(p.document_path)} title="Vezi document" style={{ padding: '4px 8px', background: G.text + '18', color: G.text, border: `1px solid ${G.border}`, borderRadius: 5, cursor: 'pointer', fontSize: 11 }}>📎</button>}
+                      {canManage && <button onClick={() => { setEditItem(p); setMode('polita') }} title="Editează" style={{ padding: '4px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 5, cursor: 'pointer', fontSize: 11 }}>✏️</button>}
+                      {canManage && <button onClick={() => handleDeletePolita(p.id)} title="Șterge" style={{ padding: '4px 8px', background: G.red + '18', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 5, cursor: 'pointer', fontSize: 11 }}>🗑</button>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* ── RESTITUIRI ── */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: G.green }}>💸 Restituiri / deblocări ({restituiri.length})</div>
+                {canManage && mode !== 'restituire' && (
+                  <button onClick={() => { setEditItem(null); setMode('restituire') }} style={{ padding: '6px 12px', background: G.green + '22', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 700 }}>+ Înregistrează restituire</button>
+                )}
+              </div>
+              {mode === 'restituire' && (
+                <RestituireFormGBE contract={contract} restituire={editItem}
+                  onCancel={() => { setMode(null); setEditItem(null) }}
+                  onSaved={() => { setMode(null); setEditItem(null); loadData(); onChanged && onChanged() }} />
+              )}
+              {restituiri.length === 0 && mode !== 'restituire' && (
+                <div style={{ fontSize: 12, color: G.dim, padding: '8px 0' }}>Nicio restituire înregistrată.</div>
+              )}
+              {restituiri.map(r => {
+                const tipLabel = (GBE_RESTITUIRE_TIP.find(t => t.val === r.tip) || {}).label || r.tip
+                return (
+                  <div key={r.id} style={{ padding: '10px 14px', marginBottom: 6, borderRadius: 8, background: G.bg, border: `1px solid ${G.border}`, borderLeft: `3px solid ${G.green}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{r.data_restituire} · {tipLabel}</div>
+                      {r.observatii && <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{r.observatii}</div>}
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: G.green, whiteSpace: 'nowrap' }}>{fmtRON(r.valoare_lei)}</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {r.document_path && <button onClick={() => handleViewDoc(r.document_path)} title="Vezi document" style={{ padding: '4px 8px', background: G.text + '18', color: G.text, border: `1px solid ${G.border}`, borderRadius: 5, cursor: 'pointer', fontSize: 11 }}>📎</button>}
+                      {canManage && <button onClick={() => { setEditItem(r); setMode('restituire') }} title="Editează" style={{ padding: '4px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 5, cursor: 'pointer', fontSize: 11 }}>✏️</button>}
+                      {canManage && <button onClick={() => handleDeleteRestituire(r.id)} title="Șterge" style={{ padding: '4px 8px', background: G.red + '18', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 5, cursor: 'pointer', fontSize: 11 }}>🗑</button>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ContracteComerciale({ profile }) {
   const [contracte, setContracte] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1663,6 +2311,7 @@ export default function ContracteComerciale({ profile }) {
   const [liniiContract, setLiniiContract] = useState(null)
   const [facturiContract, setFacturiContract] = useState(null)
   const [acteContract, setActeContract] = useState(null)
+  const [gbeContract, setGbeContract] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
   const [expanded, setExpanded] = useState({})  // { [contractMamaId]: true=deschis }; gol = toate închise
 
@@ -1690,15 +2339,41 @@ export default function ContracteComerciale({ profile }) {
 
   async function loadAll() {
     setLoading(true)
-    const [{ data: contracteData }, { data: sitesData }, { data: benData }, { data: pdfData }] = await Promise.all([
+    const [{ data: contracteData }, { data: sitesData }, { data: benData }, { data: pdfData }, { data: gbeRows }, { data: politeRows }] = await Promise.all([
       supabase.from('v_contracte_cu_linii').select('*').order('sens').order('created_at', { ascending: false }),
       supabase.from('sites').select('id, name, denumire_qr').order('name'),
       supabase.from('beneficiari').select('id, nume').eq('activ', true).order('nume'),
-      supabase.from('contracte_terti').select('id, pdf_path'),
+      supabase.from('contracte_terti').select('id, pdf_path, gbe_tip, gbe_pct_deblocare_receptie, gbe_pct_deblocare_final, garantie_perioada_luni, gbe_data_estimata_recuperare, gbe_observatii'),
+      supabase.from('v_gbe_per_contract').select('contract_id, gbe_retinut, gbe_restituit, gbe_ramas'),
+      supabase.from('gbe_polite').select('contract_id, data_expirare, valoare_lei').eq('activ', true),
     ])
-    // v_contracte_cu_linii nu expune pdf_path → îl alipim din tabela de bază
-    const pdfMap = new Map((pdfData || []).map(r => [r.id, r.pdf_path]))
-    setContracte((contracteData || []).map(c => ({ ...c, pdf_path: pdfMap.get(c.id) || null })))
+    // v_contracte_cu_linii nu expune pdf_path / câmpuri GBE → le alipim din tabela de bază + view GBE
+    const baseMap  = new Map((pdfData || []).map(r => [r.id, r]))
+    const gbeMap   = new Map((gbeRows || []).map(r => [r.contract_id, r]))
+    const politeMap = new Map()
+    ;(politeRows || []).forEach(p => {
+      const arr = politeMap.get(p.contract_id) || []
+      arr.push(p); politeMap.set(p.contract_id, arr)
+    })
+    setContracte((contracteData || []).map(c => {
+      const base = baseMap.get(c.id) || {}
+      const pol = politeMap.get(c.id) || []
+      // cea mai apropiată expirare de poliță activă (zile)
+      const polZile = pol.map(p => zileRamase(p.data_expirare)).filter(z => z != null)
+      return {
+        ...c,
+        pdf_path: base.pdf_path || null,
+        gbe_tip: base.gbe_tip || null,
+        gbe_pct_deblocare_receptie: base.gbe_pct_deblocare_receptie,
+        gbe_pct_deblocare_final: base.gbe_pct_deblocare_final,
+        garantie_perioada_luni: base.garantie_perioada_luni,
+        gbe_data_estimata_recuperare: base.gbe_data_estimata_recuperare || null,
+        gbe_observatii: base.gbe_observatii || null,
+        _gbe: gbeMap.get(c.id) || null,
+        _politaExpZile: polZile.length ? Math.min(...polZile) : null,
+        _nrPolite: pol.length,
+      }
+    }))
     setSites(sitesData || [])
     setBeneficiari(benData || [])
     setLoading(false)
@@ -1750,6 +2425,7 @@ export default function ContracteComerciale({ profile }) {
           contracte={contracte}
           onFilterSens={s => setFilterSens(s)}
           onFilterStatus={s => setFilterStatus(s)}
+          onOpenGbe={c => setGbeContract(c)}
         />
       )}
 
@@ -1863,6 +2539,7 @@ export default function ContracteComerciale({ profile }) {
                       onViewLinii={c => setLiniiContract(c)}
                       onViewFacturi={c => setFacturiContract(c)}
                       onViewActe={c => setActeContract(c)}
+                      onViewGBE={c => setGbeContract(c)}
                       onViewPdf={handleViewPdf}
                       onChangeStatus={handleChangeStatus} />
                     {childDs.length > 0 && expanded[c.id] && (
@@ -1915,6 +2592,9 @@ export default function ContracteComerciale({ profile }) {
                                   <button onClick={() => setFacturiContract(d)} style={{ padding: '3px 8px', background: G.green + '22', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📄 Facturi ({d.nr_facturi_subc || 0})</button>
                                   <button onClick={() => setLiniiContract(d)} style={{ padding: '3px 8px', background: G.blue + '22', color: G.blue, border: `1px solid ${G.blue}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📋 Linii</button>
                                   <button onClick={() => setActeContract(d)} style={{ padding: '3px 8px', background: G.purple + '22', color: G.purple, border: `1px solid ${G.purple}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>⚡ Acte ({d.nr_acte_aditionale || 0})</button>
+                                  {(Number(d.garantie_buna_executie_pct) > 0 || d.gbe_tip || d._gbe || d._nrPolite > 0) && (
+                                    <button onClick={() => setGbeContract(d)} style={{ padding: '3px 8px', background: G.yellow + '22', color: G.yellow, border: `1px solid ${G.yellow}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>🔐 GBE</button>
+                                  )}
                                   {d.pdf_path && <button onClick={() => handleViewPdf(d)} style={{ padding: '3px 8px', background: G.text + '18', color: G.text, border: `1px solid ${G.border}`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>📎 PDF</button>}
                                   {isOwner && <button onClick={() => { setEditContract(d); setModalOpen(true) }} style={{ padding: '3px 8px', background: G.orange + '22', color: G.orange, border: `1px solid ${G.orange}44`, borderRadius: 4, cursor: 'pointer', fontSize: 10 }}>✏️</button>}
                                 </div>
@@ -1945,6 +2625,7 @@ export default function ContracteComerciale({ profile }) {
                   onViewLinii={c => setLiniiContract(c)}
                   onViewFacturi={c => setFacturiContract(c)}
                   onViewActe={c => setActeContract(c)}
+                  onViewGBE={c => setGbeContract(c)}
                   onViewPdf={handleViewPdf}
                   onChangeStatus={handleChangeStatus} />
               ))}
@@ -1992,6 +2673,17 @@ export default function ContracteComerciale({ profile }) {
           profile={profile}
           canManage={canManage}
           onClose={() => setActeContract(null)}
+          onChanged={loadAll}
+        />
+      )}
+
+      {/* Modal evidență GBE */}
+      {gbeContract && (
+        <ModalGBE
+          contract={gbeContract}
+          profile={profile}
+          canManage={canManage}
+          onClose={() => setGbeContract(null)}
           onChanged={loadAll}
         />
       )}
