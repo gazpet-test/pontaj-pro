@@ -1262,7 +1262,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 <div style={{marginTop:8, background:G.blue+'0D', border:`1px solid ${G.blue}33`,
                   borderRadius:7, padding:'8px 12px', fontSize:12}}>
                   <div style={{color:G.blue, fontWeight:700, marginBottom:4}}>✅ XLS parsat</div>
-                  {xlsResult.totalBaza && <div style={{color:G.muted}}>Total devize (bază): <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalBaza)}</span></div>}
+                  {xlsResult.totalBaza && <div style={{color:G.muted}}>{xlsResult.tip === 'habau_ipc' ? 'Valoare lună (brut)' : 'Total devize (bază)'}: <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalBaza)}</span></div>}
                   {xlsResult.totalOS != null && xlsResult.totalOS > 0 && <div style={{color:G.muted}}>din care OS (organizare șantier): <span style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalOS)}</span></div>}
                   {xlsResult.totalAjustare && <div style={{color:G.muted}}>Ajustare ICC: <span style={{color:G.yellow, fontFamily:'monospace'}}>{fmtLei(xlsResult.totalAjustare)}</span>{xlsResult.coeficient && ` (×${xlsResult.coeficient})`}</div>}
                   {xlsResult.tip === 'habau_ipc' && (xlsResult.retinereGBE || xlsResult.retinereCAR) && (
@@ -1272,7 +1272,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                       <div style={{color:G.muted}}>Net de plată: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>{fmtLei(xlsResult.net)}</span></div>
                     </>
                   )}
-                  {(xlsResult.totalBaza || 0) + (xlsResult.totalAjustare || 0) > 0 && (
+                  {xlsResult.tip !== 'habau_ipc' && (xlsResult.totalBaza || 0) + (xlsResult.totalAjustare || 0) > 0 && (
                     <div style={{color:G.muted}}>Total ajustat: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>
                       {fmtLei((xlsResult.totalBaza||0) + (xlsResult.totalAjustare||0))}
                     </span></div>
