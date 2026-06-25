@@ -1157,6 +1157,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     tip_carburant: a?.tip_carburant || '',
     norma_consum: a?.norma_consum || '',
     unitate_norma: a?.unitate_norma || 'l/h',
+    tarif_proba_lei_h: a?.tarif_proba_lei_h ?? '',
     prag_alerta_consum: a?.prag_alerta_consum || '10',
     link_fisa_nas: a?.link_fisa_nas || '',
     observatii: a?.observatii || '',
@@ -1427,6 +1428,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       tip_carburant: form.tip_carburant || null,
       norma_consum: form.norma_consum ? Number(form.norma_consum) : null,
       unitate_norma: form.unitate_norma || null,
+      tarif_proba_lei_h: form.tarif_proba_lei_h ? Number(form.tarif_proba_lei_h) : null,
       prag_alerta_consum: form.prag_alerta_consum ? Number(form.prag_alerta_consum) : 10,
       link_fisa_nas: form.link_fisa_nas.trim() || null,
       observatii: form.observatii.trim() || null,
@@ -2042,6 +2044,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="Normă consum" value={form.norma_consum} onChange={v => setField('norma_consum', v)} type="number" placeholder="ex: 12.5" readonly={isReadOnly} />
             <FieldSelect label="Unitate" value={form.unitate_norma} onChange={v => setField('unitate_norma', v)} options={UNITATI_NORMA} readonly={isReadOnly} />
             <FieldText label="Prag alertă consum (%)" value={form.prag_alerta_consum} onChange={v => setField('prag_alerta_consum', v)} type="number" placeholder="10" readonly={isReadOnly} />
+            <FieldText label="Tarif probe presiune (lei/h)" value={form.tarif_proba_lei_h} onChange={v => setField('tarif_proba_lei_h', v)} type="number" placeholder="ex: 2000" readonly={isReadOnly} />
             <FieldText label="Serie șasiu (VIN)" value={form.serie_sasiu} onChange={v => setField('serie_sasiu', v)} placeholder="ex: WDB9061..." readonly={isReadOnly} />
             <FieldSelect label="Firmă proprietară" value={form.firma_proprietara} onChange={v => setField('firma_proprietara', v)} options={FIRME} readonly={isReadOnly} />
           </div>

@@ -579,7 +579,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
       supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
       supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
       supabase.from('logistica_active')
-        .select('id, cod_intern, marca, model, norma_consum, unitate_norma, stare, vandut')
+        .select('id, cod_intern, marca, model, norma_consum, unitate_norma, tarif_proba_lei_h, stare, vandut')
         .or('model.ilike.%compres%,model.ilike.%booster%,model.ilike.%pompa%,model.ilike.%pompă%,model.ilike.%LMF%,model.ilike.%motocompres%,model.ilike.%electrocompres%,model.ilike.%motopompa%,marca.ilike.%LMF%')
         .order('marca'),
     ])
@@ -874,6 +874,7 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
     tarif_lei_mc: item.tarif_lei_mc ?? '',
     consum_motorina_l_h: item.consum_motorina_l_h ?? '',
     consum_auto: item.consum_auto ?? true,
+    tarif_auto: item.tarif_auto ?? false,
     categorie_transport: item.categorie_transport || 'V1',
     activ_ids: Array.isArray(item.activ_ids) ? item.activ_ids.map(Number) : [],
     observatii: item.observatii || '',
@@ -885,6 +886,11 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
   const sumaConsumUtilaje = f.activ_ids.reduce((s,id) => {
     const u = utilaje.find(x => x.id === id)
     return s + (u && u.unitate_norma === 'l/h' ? (Number(u.norma_consum)||0) : 0)
+  }, 0)
+  // Sumă tarife lei/h din utilajele selectate (pentru tariful pe ansamblu)
+  const sumaTarifUtilaje = f.activ_ids.reduce((s,id) => {
+    const u = utilaje.find(x => x.id === id)
+    return s + (Number(u?.tarif_proba_lei_h)||0)
   }, 0)
   // Consumul efectiv: auto = suma; manual = valoarea din câmp
   const consumEfectiv = f.consum_auto ? sumaConsumUtilaje : (Number(f.consum_motorina_l_h)||0)
@@ -901,11 +907,12 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
       presiune_max_bar: f.presiune_max_bar ? Number(f.presiune_max_bar) : null,
       consum_motorina_l_h: f.consum_auto ? (sumaConsumUtilaje || null) : (f.consum_motorina_l_h ? Number(f.consum_motorina_l_h) : null),
       consum_auto: f.consum_auto,
+      tarif_auto: f.tarif_auto,
       activ_ids: f.activ_ids,
       categorie_transport: f.categorie_transport,
       observatii: f.observatii.trim() || null,
       ...(isAer
-        ? { debit_mc_min: f.debit_mc_min ? Number(f.debit_mc_min) : null, tarif_lei_h: f.tarif_lei_h ? Number(f.tarif_lei_h) : null }
+        ? { debit_mc_min: f.debit_mc_min ? Number(f.debit_mc_min) : null, tarif_lei_h: f.tarif_auto ? (sumaTarifUtilaje || null) : (f.tarif_lei_h ? Number(f.tarif_lei_h) : null) }
         : { debit_l_min: f.debit_l_min ? Number(f.debit_l_min) : null, tarif_lei_mc: f.tarif_lei_mc ? Number(f.tarif_lei_mc) : null }),
       updated_at: new Date().toISOString(),
     }
@@ -924,7 +931,9 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
           {isAer ? (
             <>
               <div><label style={S.lbl}>Debit (mc/min)</label><input type="number" value={f.debit_mc_min} onChange={e=>setK('debit_mc_min',e.target.value)} style={S.input} /></div>
-              <div><label style={S.lbl}>Tarif (lei/h)</label><input type="number" value={f.tarif_lei_h} onChange={e=>setK('tarif_lei_h',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 4000" /></div>
+              <div><label style={S.lbl}>Tarif (lei/h){f.tarif_auto && <span style={{color:G.green, fontWeight:400, textTransform:'none'}}> · auto din utilaje</span>}</label>
+                <input type="number" value={f.tarif_auto ? sumaTarifUtilaje : f.tarif_lei_h} onChange={e=>setK('tarif_lei_h',e.target.value)} disabled={f.tarif_auto}
+                  style={{...S.input, color: f.tarif_auto?G.green:G.blue, opacity: f.tarif_auto?0.7:1}} placeholder="ex: 4000" /></div>
             </>
           ) : (
             <>
@@ -955,6 +964,9 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
                     <span style={{fontSize:11, color: u.unitate_norma==='l/h'?G.orange:G.dim, fontWeight:600, whiteSpace:'nowrap'}}>
                       {u.norma_consum||0} {u.unitate_norma||''}
                     </span>
+                    <span style={{fontSize:11, color: Number(u.tarif_proba_lei_h)>0?G.green:G.dim, fontWeight:600, whiteSpace:'nowrap', minWidth:64, textAlign:'right'}}>
+                      {Number(u.tarif_proba_lei_h)>0 ? `${fmtNr(u.tarif_proba_lei_h,0)} lei/h` : '— lei/h'}
+                    </span>
                   </label>
                 )
               })}
@@ -977,6 +989,24 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
             </div>
             {f.consum_auto && sumaConsumUtilaje===0 && f.activ_ids.length>0 && (
               <div style={{fontSize:10, color:G.yellow, marginTop:6}}>⚠ Utilajele selectate au normă în altă unitate (kWh/h) — suma motorină e 0.</div>
+            )}
+            {/* Tarif: auto (sumă) vs manual — DOAR pneumatic */}
+            {isAer && (
+              <div style={{display:'flex', alignItems:'center', gap:10, paddingTop:8, marginTop:8, borderTop:`1px solid ${G.border}`}}>
+                <label style={{display:'flex', alignItems:'center', gap:6, fontSize:11.5, color:G.muted, cursor:'pointer'}}>
+                  <input type="checkbox" checked={f.tarif_auto} onChange={e=>setK('tarif_auto',e.target.checked)} />
+                  Tarif automat din utilaje
+                </label>
+                <div style={{flex:1}} />
+                {f.tarif_auto ? (
+                  <span style={{fontSize:13, fontWeight:800, color:G.green}}>Σ {fmtNr(sumaTarifUtilaje,0)} lei/h</span>
+                ) : (
+                  <span style={{fontSize:10, color:G.dim}}>tarif manual mai jos ↓</span>
+                )}
+              </div>
+            )}
+            {isAer && f.tarif_auto && sumaTarifUtilaje===0 && f.activ_ids.length>0 && (
+              <div style={{fontSize:10, color:G.yellow, marginTop:6}}>⚠ Utilajele selectate nu au tarif lei/h setat (din Logistică) — suma e 0.</div>
             )}
           </div>
 

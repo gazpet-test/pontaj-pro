@@ -26,7 +26,7 @@ const S = {
   btnS: { padding:'9px 18px', background:G.surface, color:G.text, border:`1px solid ${G.border2}`, borderRadius:7, cursor:'pointer', fontSize:13 },
 }
 
-const TVA_OFERTA = 19
+const TVA_OFERTA = 21
 const fmtLei = v => (v||v===0) ? new Intl.NumberFormat('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(v) : '—'
 const fmtH = h => { const n=Number(h)||0; if(n===0)return'0 h'; if(n<1)return`${Math.round(n*60)} min`; return`${n.toFixed(2)} h` }
 
@@ -331,6 +331,10 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     proba_lei: oferta.proba_lei ?? 0,
     stat_dispozitie_lei: oferta.stat_dispozitie_lei ?? 0,
     extra_lei: oferta.extra_lei ?? 0,
+    discount_pct: oferta.discount_pct ?? 0,
+    inc_pistonare: oferta.inc_pistonare ?? true,
+    inc_uscare: oferta.inc_uscare ?? true,
+    inc_calibrare: oferta.inc_calibrare ?? true,
     status: oferta.status || 'draft',
     observatii: oferta.observatii || '',
   })
@@ -419,7 +423,18 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     }
   }
 
-  const totalFaraTva = useMemo(() => ['transport_lei','pistonare_lei','uscare_lei','calibrare_lei','proba_lei','stat_dispozitie_lei','extra_lei'].reduce((s,k)=>s+(parseFloat(f[k])||0),0), [f])
+  const discountProba = useMemo(() => (parseFloat(f.proba_lei)||0) * (parseFloat(f.discount_pct)||0) / 100, [f.proba_lei, f.discount_pct])
+  const totalFaraTva = useMemo(() => {
+    let t = 0
+    t += parseFloat(f.transport_lei)||0
+    if (f.inc_pistonare) t += parseFloat(f.pistonare_lei)||0
+    if (f.inc_uscare)    t += parseFloat(f.uscare_lei)||0
+    if (f.inc_calibrare) t += parseFloat(f.calibrare_lei)||0
+    t += (parseFloat(f.proba_lei)||0) - discountProba
+    t += parseFloat(f.stat_dispozitie_lei)||0
+    t += parseFloat(f.extra_lei)||0
+    return t
+  }, [f, discountProba])
   const tva = totalFaraTva * TVA_OFERTA / 100
   const totalCuTva = totalFaraTva + tva
 
@@ -474,7 +489,10 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
         transport_lei: Number(f.transport_lei)||0, pistonare_lei: Number(f.pistonare_lei)||0,
         uscare_lei: Number(f.uscare_lei)||0, calibrare_lei: Number(f.calibrare_lei)||0,
         proba_lei: Number(f.proba_lei)||0, stat_dispozitie_lei: Number(f.stat_dispozitie_lei)||0,
-        extra_lei: Number(f.extra_lei)||0, status: f.status, observatii: f.observatii.trim()||null,
+        extra_lei: Number(f.extra_lei)||0,
+        discount_pct: Number(f.discount_pct)||0,
+        inc_pistonare: !!f.inc_pistonare, inc_uscare: !!f.inc_uscare, inc_calibrare: !!f.inc_calibrare,
+        status: f.status, observatii: f.observatii.trim()||null,
         created_by: profile?.id||null,
       }
       let error
@@ -492,7 +510,7 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     } catch(e) { setBusy(false); onError('Eroare: ' + e.message) }
   }
 
-  const exportData = () => ({ ...f, calc, totalFaraTva, tva, totalCuTva, nr_oferta: f.nr_oferta||'PP-DRAFT', intocmit: profile?.name||'' })
+  const exportData = () => ({ ...f, calc, totalFaraTva, tva, totalCuTva, discountProba, nr_oferta: f.nr_oferta||'PP-DRAFT', intocmit: profile?.name||'' })
 
   const handleExcel = async () => { setExporting(true); try { await generateOfertaExcel(exportData()) } catch(e){ onError('Eroare Excel: '+e.message) } setExporting(false) }
   const handlePDF = async () => { setExporting(true); try { await generateOfertaPDF(exportData()) } catch(e){ onError('Eroare PDF: '+e.message) } setExporting(false) }
@@ -599,16 +617,45 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
           <button onClick={()=>setShowTarife(true)} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>⚙️ Tarife</button>
         </div>
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14}}>
-          {[
-            ['transport_lei','🚚 Transport'],['pistonare_lei','🔧 Pistonare'],['uscare_lei','💨 Uscare'],
-            ['calibrare_lei','🎯 Calibrare'],['proba_lei','🧪 Probă presiune'],['stat_dispozitie_lei','⏸️ Stat dispoziție'],['extra_lei','➕ Extra'],
-          ].map(([k,lbl])=>(
-            <div key={k}><label style={S.lbl}>{lbl}</label>
-              <input type="number" value={f[k]} onChange={e=>setK(k,e.target.value)} style={{...S.input, color:G.blue}} /></div>
-          ))}
+          {/* Transport (fără checkbox) */}
+          <div><label style={S.lbl}>🚚 Transport</label>
+            <input type="number" value={f.transport_lei} onChange={e=>setK('transport_lei',e.target.value)} style={{...S.input, color:G.blue}} /></div>
+          {/* Stat dispoziție */}
+          <div><label style={S.lbl}>⏸️ Stat dispoziție</label>
+            <input type="number" value={f.stat_dispozitie_lei} onChange={e=>setK('stat_dispozitie_lei',e.target.value)} style={{...S.input, color:G.blue}} /></div>
+
+          {/* Pistonare / Uscare / Calibrare — cu checkbox include/exclude */}
+          {[['pistonare','🔧 Pistonare'],['uscare','💨 Uscare'],['calibrare','🎯 Calibrare']].map(([base,lbl])=>{
+            const incK = 'inc_'+base, valK = base+'_lei', on = f[incK]
+            return (
+              <div key={base}>
+                <label style={{...S.lbl, display:'flex', alignItems:'center', gap:6, cursor:'pointer'}}>
+                  <input type="checkbox" checked={on} onChange={e=>setK(incK, e.target.checked)} style={{margin:0}} />
+                  {lbl} {!on && <span style={{color:G.dim, fontWeight:400, textTransform:'none'}}>(exclus)</span>}
+                </label>
+                <input type="number" value={f[valK]} onChange={e=>setK(valK,e.target.value)} disabled={!on}
+                  style={{...S.input, color: on?G.blue:G.dim, opacity: on?1:0.45}} />
+              </div>
+            )
+          })}
+
+          {/* Probă presiune + discount */}
+          <div><label style={S.lbl}>🧪 Probă presiune</label>
+            <input type="number" value={f.proba_lei} onChange={e=>setK('proba_lei',e.target.value)} style={{...S.input, color:G.blue}} /></div>
+          <div><label style={S.lbl}>🏷️ Discount probă (%)</label>
+            <input type="number" value={f.discount_pct} onChange={e=>setK('discount_pct',e.target.value)} style={{...S.input, color:G.orange}} placeholder="0" />
+            {discountProba>0 && <div style={{fontSize:10, color:G.orange, marginTop:3}}>−{fmtLei(discountProba)} lei din probă</div>}
+          </div>
+
+          {/* Extra */}
+          <div><label style={S.lbl}>➕ Extra</label>
+            <input type="number" value={f.extra_lei} onChange={e=>setK('extra_lei',e.target.value)} style={{...S.input, color:G.blue}} /></div>
         </div>
 
         <div style={{background:G.bg, borderRadius:8, padding:'12px 16px', marginBottom:14, display:'flex', flexDirection:'column', gap:6}}>
+          {discountProba>0 && (
+            <div style={{display:'flex', justifyContent:'space-between', fontSize:12}}><span style={{color:G.orange}}>🏷️ Discount probă {fmtLei(f.discount_pct)}%</span><strong style={{color:G.orange, fontFamily:'monospace'}}>−{fmtLei(discountProba)} lei</strong></div>
+          )}
           <div style={{display:'flex', justifyContent:'space-between', fontSize:13}}><span style={{color:G.muted}}>Total fără TVA</span><strong style={{color:G.text, fontFamily:'monospace'}}>{fmtLei(totalFaraTva)} lei</strong></div>
           <div style={{display:'flex', justifyContent:'space-between', fontSize:13}}><span style={{color:G.muted}}>TVA {TVA_OFERTA}%</span><strong style={{color:G.yellow, fontFamily:'monospace'}}>{fmtLei(tva)} lei</strong></div>
           <div style={{height:1, background:G.border, margin:'2px 0'}} />
@@ -727,10 +774,11 @@ async function generateOfertaExcel(d) {
     [],
     [{v:'DETALIERE COSTURI', s:bHdr}, {v:'Valoare (lei)', s:bHdr}],
     [{v:'Transport'}, {v:Number(d.transport_lei)||0, s:bEdit}],
-    [{v:'Pistonare'}, {v:Number(d.pistonare_lei)||0, s:bNum}],
-    [{v:'Uscare'}, {v:Number(d.uscare_lei)||0, s:bNum}],
-    [{v:'Calibrare'}, {v:Number(d.calibrare_lei)||0, s:bNum}],
+    ...(d.inc_pistonare ? [[{v:'Pistonare'}, {v:Number(d.pistonare_lei)||0, s:bNum}]] : []),
+    ...(d.inc_uscare    ? [[{v:'Uscare'}, {v:Number(d.uscare_lei)||0, s:bNum}]] : []),
+    ...(d.inc_calibrare ? [[{v:'Calibrare'}, {v:Number(d.calibrare_lei)||0, s:bNum}]] : []),
     [{v:'Probă presiune'}, {v:Number(d.proba_lei)||0, s:bNum}],
+    ...(d.discountProba>0 ? [[{v:`Discount probă ${Number(d.discount_pct)||0}%`, s:{font:{color:{rgb:'C2410C'}}}}, {v:-d.discountProba, s:{...bNum,font:{color:{rgb:'C2410C'}}}}]] : []),
     [{v:'Stat dispoziție'}, {v:Number(d.stat_dispozitie_lei)||0, s:bEdit}],
     [{v:'Extra'}, {v:Number(d.extra_lei)||0, s:bEdit}],
     [{v:'Total fără TVA', s:bBold}, {v:d.totalFaraTva, s:{...bNum,font:{bold:true}}}],
@@ -780,8 +828,11 @@ async function generateOfertaPDF(d) {
     </tbody></table>
     <div style="font-size:13px;font-weight:bold;color:#3B6D11;margin:6px 0 6px">Detaliere costuri</div>
     <table style="width:100%;font-size:12px;border:1px solid #eee;margin-bottom:6px"><tbody>
-      ${costRow('Transport', d.transport_lei)}${costRow('Pistonare', d.pistonare_lei)}${costRow('Uscare', d.uscare_lei)}
-      ${costRow('Calibrare', d.calibrare_lei)}${costRow('Probă presiune', d.proba_lei)}${costRow('Stat dispoziție', d.stat_dispozitie_lei)}
+      ${costRow('Transport', d.transport_lei)}
+      ${d.inc_pistonare?costRow('Pistonare', d.pistonare_lei):''}${d.inc_uscare?costRow('Uscare', d.uscare_lei):''}${d.inc_calibrare?costRow('Calibrare', d.calibrare_lei):''}
+      ${costRow('Probă presiune', d.proba_lei)}
+      ${d.discountProba>0?`<tr><td style="padding:6px 12px;border-bottom:1px solid #eee;color:#c2410c">Discount probă ${Number(d.discount_pct)||0}%</td><td style="padding:6px 12px;text-align:right;font-family:monospace;border-bottom:1px solid #eee;color:#c2410c">−${fmtLei(d.discountProba)} lei</td></tr>`:''}
+      ${costRow('Stat dispoziție', d.stat_dispozitie_lei)}
       ${Number(d.extra_lei)>0?costRow('Extra', d.extra_lei):''}
     </tbody></table>
     <table style="width:100%;font-size:12px;margin-bottom:18px"><tbody>
