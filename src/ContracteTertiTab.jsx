@@ -1775,7 +1775,7 @@ function PolitaActModal({ item, onClose, onSaved, onError }) {
 // CONTRACT DETAIL MODAL — cu categorie + sens + acte aditionale
 // ══════════════════════════════════════════════════════════
 function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose, onEdit }) {
-  const [pdfUrl, setPdfUrl] = useState(null)
+  const [toast, setToast] = useState(null)
   const benefMap = Object.fromEntries(beneficiari.map(b => [b.id, b.nume]))
   const si = STATUS_INFO[contract.status] || STATUS_INFO.draft
   const ci = CAT_INFO[contract.categorie] || CAT_INFO.altele
@@ -1783,15 +1783,11 @@ function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose
   const clauze = contract.ai_clauze_jsonb || {}
   const subClauze = clauze.clauze || {}
 
-  useEffect(() => {
-    if (contract.pdf_path) {
-      supabase.storage.from('contracte-terti').createSignedUrl(contract.pdf_path, 600)
-        .then(({ data }) => setPdfUrl(data?.signedUrl))
-    }
-  }, [contract.pdf_path])
-
   return (
     <ModalShell title={contract.denumire} onClose={onClose} wide>
+      {toast && (
+        <div style={{position:'fixed', bottom:24, left:24, padding:'10px 16px', background: toast.kind==='err' ? G.red : G.green, color:'#fff', borderRadius:8, fontSize:12, fontWeight:600, zIndex:10001}}>{toast.msg}</div>
+      )}
       <div style={{display:'flex', flexDirection:'column', gap:16}}>
         {/* Badges */}
         <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
@@ -1800,6 +1796,20 @@ function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose
           <span style={{padding:'4px 10px', borderRadius:14, background:si.color+'22', color:si.color, fontSize:11, fontWeight:700}}>{si.icon} {si.label}</span>
           {contract.numar_contract && <span style={{fontSize:11, color:G.muted, fontFamily:'monospace'}}>📄 {contract.numar_contract}</span>}
           <div style={{flex:1}} />
+          <button
+            disabled={!contract.pdf_path}
+            title={contract.pdf_path ? 'Deschide PDF-ul contractului în tab nou' : 'Contractul nu are PDF încărcat'}
+            onClick={async () => {
+              if (!contract.pdf_path) return
+              try {
+                const { data, error } = await supabase.storage.from('contracte-terti').createSignedUrl(contract.pdf_path, 600)
+                if (error || !data?.signedUrl) { setToast({ msg: 'Nu am putut deschide PDF-ul', kind: 'err' }); setTimeout(() => setToast(null), 4000); return }
+                window.open(data.signedUrl, '_blank')
+              } catch { setToast({ msg: 'Eroare la deschiderea PDF-ului', kind: 'err' }); setTimeout(() => setToast(null), 4000) }
+            }}
+            style={{...S.btnP, padding:'6px 12px', fontSize:12, background:G.blue, opacity: contract.pdf_path ? 1 : 0.45, cursor: contract.pdf_path ? 'pointer' : 'not-allowed'}}>
+            📄 Vezi PDF contract
+          </button>
           {canWrite && <button onClick={onEdit} style={{...S.btnS, padding:'6px 12px', fontSize:12}}>✏️ Editează</button>}
         </div>
 
@@ -1853,14 +1863,6 @@ function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose
 
         {/* Polițe GBE / CAR / GPL */}
         <PoliteSection contractId={contract.id} canWrite={canWrite} />
-
-        {pdfUrl && (
-          <a href={pdfUrl} target="_blank" rel="noopener noreferrer" style={{
-            display:'inline-flex', alignItems:'center', gap:8, padding:'10px 14px',
-            background:G.blue+'22', color:G.blue, textDecoration:'none',
-            borderRadius:8, fontSize:13, fontWeight:600, border:`1px solid ${G.blue}44`, justifyContent:'center'
-          }}>📄 Deschide PDF în tab nou</a>
-        )}
 
         <button onClick={onClose} style={{...S.btnS, marginTop:4}}>Închide</button>
       </div>
