@@ -559,6 +559,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
   const [diametre, setDiametre] = useState([])
   const [configs, setConfigs] = useState([])
   const [tronsoane, setTronsoane] = useState([])
+  const [utilajeProbe, setUtilajeProbe] = useState([])  // compresoare/boostere/pompe din Logistică
   const [loading, setLoading] = useState(true)
   const [salvari, setSalvari] = useState([])
 
@@ -574,12 +575,17 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
   // ─── Load cataloage ───
   const loadCat = useCallback(async () => {
     setLoading(true)
-    const [dRes, cRes] = await Promise.all([
+    const [dRes, cRes, uRes] = await Promise.all([
       supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
       supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
+      supabase.from('logistica_active')
+        .select('id, cod_intern, marca, model, norma_consum, unitate_norma, stare, vandut')
+        .or('model.ilike.%compres%,model.ilike.%booster%,model.ilike.%pompa%,model.ilike.%pompă%,model.ilike.%LMF%,model.ilike.%motocompres%,model.ilike.%electrocompres%,model.ilike.%motopompa%,marca.ilike.%LMF%')
+        .order('marca'),
     ])
     setDiametre(dRes.data || [])
     setConfigs(cRes.data || [])
+    setUtilajeProbe(uRes.data || [])
     setLoading(false)
   }, [])
   useEffect(() => { loadCat() }, [loadCat])
@@ -825,7 +831,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
       )}
 
       {editConfig && (
-        <ConfigProbaModal item={editConfig} onClose={() => setEditConfig(null)}
+        <ConfigProbaModal item={editConfig} utilaje={utilajeProbe} onClose={() => setEditConfig(null)}
           onSaved={() => { setEditConfig(null); loadCat(); onToast('✓ Configurație actualizată') }}
           onError={e => onToast('Eroare: ' + e, 'err')} />
       )}
@@ -857,7 +863,7 @@ function ProbaRow({ label, val, bold }) {
 // ══════════════════════════════════════════════════════════
 // MODAL EDITARE CONFIGURAȚIE PROBĂ (tarife + consum editabile)
 // ══════════════════════════════════════════════════════════
-function ConfigProbaModal({ item, onClose, onSaved, onError }) {
+function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
   const isAer = item.tip_fluid === 'aer'
   const [f, setF] = useState({
     denumire: item.denumire || '',
@@ -867,11 +873,25 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
     tarif_lei_h: item.tarif_lei_h ?? '',
     tarif_lei_mc: item.tarif_lei_mc ?? '',
     consum_motorina_l_h: item.consum_motorina_l_h ?? '',
+    consum_auto: item.consum_auto ?? true,
     categorie_transport: item.categorie_transport || 'V1',
+    activ_ids: Array.isArray(item.activ_ids) ? item.activ_ids.map(Number) : [],
     observatii: item.observatii || '',
   })
   const [saving, setSaving] = useState(false)
   const setK = (k,v) => setF(p => ({...p,[k]:v}))
+
+  // Sumă norme consum din utilajele selectate (l/h)
+  const sumaConsumUtilaje = f.activ_ids.reduce((s,id) => {
+    const u = utilaje.find(x => x.id === id)
+    return s + (u && u.unitate_norma === 'l/h' ? (Number(u.norma_consum)||0) : 0)
+  }, 0)
+  // Consumul efectiv: auto = suma; manual = valoarea din câmp
+  const consumEfectiv = f.consum_auto ? sumaConsumUtilaje : (Number(f.consum_motorina_l_h)||0)
+
+  const toggleUtilaj = (id) => setF(p => ({
+    ...p, activ_ids: p.activ_ids.includes(id) ? p.activ_ids.filter(x=>x!==id) : [...p.activ_ids, id]
+  }))
 
   const save = async () => {
     if (!f.denumire.trim()) return onError('Denumirea e obligatorie')
@@ -879,7 +899,9 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
     const payload = {
       denumire: f.denumire.trim(),
       presiune_max_bar: f.presiune_max_bar ? Number(f.presiune_max_bar) : null,
-      consum_motorina_l_h: f.consum_motorina_l_h ? Number(f.consum_motorina_l_h) : null,
+      consum_motorina_l_h: f.consum_auto ? (sumaConsumUtilaje || null) : (f.consum_motorina_l_h ? Number(f.consum_motorina_l_h) : null),
+      consum_auto: f.consum_auto,
+      activ_ids: f.activ_ids,
       categorie_transport: f.categorie_transport,
       observatii: f.observatii.trim() || null,
       ...(isAer
@@ -895,7 +917,7 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
 
   return (
     <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10000, padding:20}}>
-      <div onClick={e => e.stopPropagation()} style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:12, padding:24, width:'100%', maxWidth:440, maxHeight:'90vh', overflowY:'auto'}}>
+      <div onClick={e => e.stopPropagation()} style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:12, padding:24, width:'100%', maxWidth:540, maxHeight:'90vh', overflowY:'auto'}}>
         <h3 style={{margin:'0 0 16px', fontSize:16, color:G.text}}>✏️ Editează configurație ({isAer ? 'pneumatic' : 'hidraulic'})</h3>
         <div style={{display:'flex', flexDirection:'column', gap:12}}>
           <div><label style={S.lbl}>Denumire</label><input value={f.denumire} onChange={e=>setK('denumire',e.target.value)} style={S.input} /></div>
@@ -911,7 +933,53 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
             </>
           )}
           <div><label style={S.lbl}>Presiune max (bar)</label><input type="number" value={f.presiune_max_bar} onChange={e=>setK('presiune_max_bar',e.target.value)} style={S.input} /></div>
-          <div><label style={S.lbl}>Consum motorină (L/h)</label><input type="number" value={f.consum_motorina_l_h} onChange={e=>setK('consum_motorina_l_h',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 145" /></div>
+
+          {/* Utilaje din Logistică — single source of truth pentru consum */}
+          <div style={{background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, padding:'12px 14px'}}>
+            <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:10}}>
+              <span style={{fontSize:12, fontWeight:800, color:G.text}}>🚜 Utilaje din Logistică</span>
+              <span style={{fontSize:10, color:G.dim}}>({f.activ_ids.length} selectate)</span>
+            </div>
+            <div style={{maxHeight:170, overflowY:'auto', display:'flex', flexDirection:'column', gap:4, marginBottom:10}}>
+              {utilaje.length === 0 && <div style={{fontSize:11, color:G.dim}}>Niciun utilaj găsit.</div>}
+              {utilaje.map(u => {
+                const sel = f.activ_ids.includes(u.id)
+                const indispon = u.vandut || u.stare === 'Nefunctional'
+                return (
+                  <label key={u.id} style={{display:'flex', alignItems:'center', gap:8, padding:'5px 8px', borderRadius:6, cursor:'pointer', background: sel?G.greenBg+'22':'transparent', border:`1px solid ${sel?G.greenBg+'55':'transparent'}`}}>
+                    <input type="checkbox" checked={sel} onChange={()=>toggleUtilaj(u.id)} />
+                    <span style={{flex:1, fontSize:11.5, color: indispon?G.red:G.text}}>
+                      {u.marca} {u.model}{u.cod_intern?` · ${u.cod_intern}`:''}
+                      {indispon && <span style={{color:G.red, fontWeight:700}}> ⚠ {u.vandut?'VÂNDUT':'NEFUNCȚIONAL'}</span>}
+                    </span>
+                    <span style={{fontSize:11, color: u.unitate_norma==='l/h'?G.orange:G.dim, fontWeight:600, whiteSpace:'nowrap'}}>
+                      {u.norma_consum||0} {u.unitate_norma||''}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+            {/* Consum: auto (sumă) vs manual */}
+            <div style={{display:'flex', alignItems:'center', gap:10, paddingTop:8, borderTop:`1px solid ${G.border}`}}>
+              <label style={{display:'flex', alignItems:'center', gap:6, fontSize:11.5, color:G.muted, cursor:'pointer'}}>
+                <input type="checkbox" checked={f.consum_auto} onChange={e=>setK('consum_auto',e.target.checked)} />
+                Consum automat din utilaje
+              </label>
+              <div style={{flex:1}} />
+              {f.consum_auto ? (
+                <span style={{fontSize:13, fontWeight:800, color:G.orange}}>Σ {sumaConsumUtilaje} L/h</span>
+              ) : (
+                <div style={{display:'flex', alignItems:'center', gap:6}}>
+                  <span style={{fontSize:10, color:G.dim}}>manual:</span>
+                  <input type="number" value={f.consum_motorina_l_h} onChange={e=>setK('consum_motorina_l_h',e.target.value)} style={{...S.input, color:G.blue, width:90, padding:'5px 8px'}} placeholder="L/h" />
+                </div>
+              )}
+            </div>
+            {f.consum_auto && sumaConsumUtilaje===0 && f.activ_ids.length>0 && (
+              <div style={{fontSize:10, color:G.yellow, marginTop:6}}>⚠ Utilajele selectate au normă în altă unitate (kWh/h) — suma motorină e 0.</div>
+            )}
+          </div>
+
           <div><label style={S.lbl}>Categorie transport</label>
             <select value={f.categorie_transport} onChange={e=>setK('categorie_transport',e.target.value)} style={S.input}>
               <option value="V1">V1 — utilaj mare</option>
