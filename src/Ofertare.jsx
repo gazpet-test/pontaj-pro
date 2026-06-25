@@ -27,6 +27,8 @@ const S = {
 }
 
 const TVA_OFERTA = 21
+// Marker deploy — confirmă în consolă (F12) că versiunea nouă e live
+if (typeof window !== 'undefined') console.log('%c[Ofertare] build probe v2 — TVA 21% · checkbox include · discount · tarif/utilaj', 'color:#3FB6E2;font-weight:bold')
 const fmtLei = v => (v||v===0) ? new Intl.NumberFormat('ro-RO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(v) : '—'
 const fmtH = h => { const n=Number(h)||0; if(n===0)return'0 h'; if(n<1)return`${Math.round(n*60)} min`; return`${n.toFixed(2)} h` }
 
