@@ -625,6 +625,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
   const [presiune, setPresiune] = useState('')
   const [configId, setConfigId] = useState('')
   const [editConfig, setEditConfig] = useState(null)
+  const [logCalc, setLogCalc] = useState(null)   // calcul pentru care deschidem log-ul de citiri teren
 
   // ─── Load cataloage ───
   const loadCat = useCallback(async () => {
@@ -857,7 +858,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
           </div>
           {salvari.map((s, i) => (
             <div key={s.id} style={{
-              display:'grid', gridTemplateColumns:'auto 1fr auto auto auto', gap:14, alignItems:'center',
+              display:'grid', gridTemplateColumns:'auto 1fr auto auto auto auto', gap:14, alignItems:'center',
               padding:'10px 18px', fontSize:12, color:G.text,
               borderBottom: i < salvari.length-1 ? `1px solid ${G.border}` : 'none',
               background: i%2 ? G.bg+'44' : 'transparent',
@@ -870,6 +871,10 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
               <span style={{color:G.blue}}>{fmtNr(s.v_conducta_mc)} mc</span>
               <span style={{color:G.executie}}>{fmtH(s.durata_total_h)}</span>
               <span style={{color:G.orange}}>{fmtNr(s.consum_motorina_l,0)} L</span>
+              <button onClick={() => setLogCalc(s)}
+                style={{padding:'5px 10px', background:G.purple+'22', border:`1px solid ${G.purple}55`, borderRadius:6, color:G.purple, cursor:'pointer', fontSize:11, fontWeight:700, whiteSpace:'nowrap'}}>
+                📋 Citiri teren
+              </button>
             </div>
           ))}
         </div>
@@ -879,6 +884,10 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
         <ConfigProbaModal item={editConfig} onClose={() => setEditConfig(null)}
           onSaved={() => { setEditConfig(null); loadCat(); onToast('✓ Configurație actualizată') }}
           onError={e => onToast('Eroare: ' + e, 'err')} />
+      )}
+
+      {logCalc && (
+        <LogProbeModal calc={logCalc} profile={profile} onClose={() => setLogCalc(null)} onToast={onToast} />
       )}
     </div>
   )
@@ -963,6 +972,164 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
           <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.muted}}>Anulează</button>
           <button onClick={save} disabled={saving} style={{...S.btn, flex:1, background:G.greenBg, color:'#fff', opacity:saving?0.6:1}}>{saving ? 'Se salvează...' : '💾 Salvează'}</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL LOG PROBE EXECUȚIE (citiri din teren — mobil)
+// Timestamp server-side (ora_citire DEFAULT now() în BD = conformitate ANRE)
+// ══════════════════════════════════════════════════════════
+function LogProbeModal({ calc, profile, onClose, onToast }) {
+  const [citiri, setCitiri] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [presiune, setPresiune] = useState('')
+  const [oreCompresor, setOreCompresor] = useState('')
+  const [obs, setObs] = useState('')
+  const [poza, setPoza] = useState(null)
+  const [pozaPreview, setPozaPreview] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const { data } = await supabase.from('probe_log_executie')
+      .select('*').eq('calc_id', calc.id).order('ora_citire', { ascending: true })
+    setCitiri(data || [])
+    setLoading(false)
+  }, [calc.id])
+  useEffect(() => { load() }, [load])
+
+  const onPoza = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPoza(file)
+    setPozaPreview(URL.createObjectURL(file))
+  }
+
+  const adauga = async () => {
+    if (!presiune) return onToast('Completează presiunea citită', 'err')
+    setSaving(true)
+    let poza_path = null
+    if (poza) {
+      const ext = (poza.name.split('.').pop() || 'jpg').toLowerCase()
+      const path = `${calc.id}/${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('probe-citiri').upload(path, poza, { upsert: false })
+      if (upErr) { setSaving(false); return onToast('Eroare upload poză: ' + upErr.message, 'err') }
+      poza_path = path
+    }
+    // NU trimitem ora_citire — o pune serverul (DEFAULT now()) pentru conformitate ANRE
+    const { error } = await supabase.from('probe_log_executie').insert({
+      calc_id: calc.id,
+      presiune_citita_bar: Number(presiune),
+      ore_compresor: oreCompresor ? Number(oreCompresor) : null,
+      poza_path,
+      operator_id: profile?.id || null,
+      observatii: obs.trim() || null,
+    })
+    setSaving(false)
+    if (error) return onToast('Eroare salvare citire: ' + error.message, 'err')
+    setPresiune(''); setOreCompresor(''); setObs(''); setPoza(null); setPozaPreview(null)
+    onToast('✓ Citire înregistrată (oră server)')
+    load()
+  }
+
+  const vedePoza = async (path) => {
+    const { data } = await supabase.storage.from('probe-citiri').createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  // Grafic simplu presiune/timp (SVG inline)
+  const grafic = (() => {
+    if (citiri.length < 2) return null
+    const pts = citiri.map(c => ({ t: new Date(c.ora_citire).getTime(), p: Number(c.presiune_citita_bar) || 0 }))
+    const t0 = pts[0].t, tMax = pts[pts.length-1].t
+    const pMax = Math.max(...pts.map(p => p.p)) * 1.1 || 1
+    const W = 560, H = 160, padL = 36, padB = 22
+    const x = t => padL + ((t - t0) / Math.max(1, tMax - t0)) * (W - padL - 10)
+    const y = p => H - padB - (p / pMax) * (H - padB - 10)
+    const path = pts.map((p,i) => `${i===0?'M':'L'}${x(p.t).toFixed(1)},${y(p.p).toFixed(1)}`).join(' ')
+    return { W, H, padL, padB, pMax, pts, x, y, path }
+  })()
+
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10000, padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:12, padding:24, width:'100%', maxWidth:640, maxHeight:'92vh', overflowY:'auto'}}>
+        <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:6}}>
+          <h3 style={{margin:0, fontSize:16, color:G.text}}>📋 Citiri teren — Probă #{calc.id}</h3>
+          <div style={{flex:1}} />
+          <button onClick={onClose} style={{background:'none', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
+        </div>
+        <div style={{fontSize:12, color:G.muted, marginBottom:16}}>
+          {calc.tip_fluid==='apa'?'💧':'💨'} {calc.probe_diametre?.dn_label || '—'} · {fmtNr(calc.lungime_m,0)}m · {fmtNr(calc.presiune_bar,0)} bar țintă
+        </div>
+
+        {/* Formular adăugare citire */}
+        <div style={{background:G.bg, borderRadius:10, padding:'16px 18px', marginBottom:18}}>
+          <div style={{fontSize:12, fontWeight:800, color:G.text, marginBottom:12}}>➕ Citire nouă</div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12}}>
+            <div>
+              <label style={S.lbl}>Presiune citită (bar)</label>
+              <input type="number" inputMode="decimal" value={presiune} onChange={e=>setPresiune(e.target.value)} style={S.input} placeholder="ex: 9.8" />
+            </div>
+            <div>
+              <label style={S.lbl}>Ore compresor</label>
+              <input type="number" inputMode="decimal" value={oreCompresor} onChange={e=>setOreCompresor(e.target.value)} style={S.input} placeholder="opțional" />
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <label style={S.lbl}>Observații</label>
+            <input value={obs} onChange={e=>setObs(e.target.value)} style={S.input} placeholder="opțional" />
+          </div>
+          <div style={{marginBottom:12}}>
+            <label style={S.lbl}>📸 Poză (manometru + ceas compresor)</label>
+            <input type="file" accept="image/*" capture="environment" onChange={onPoza} style={{...S.input, padding:'7px 10px'}} />
+            {pozaPreview && <img src={pozaPreview} alt="preview" style={{marginTop:8, maxHeight:120, borderRadius:6, border:`1px solid ${G.border}`}} />}
+          </div>
+          <button onClick={adauga} disabled={saving} style={{...S.btn, width:'100%', background:G.greenBg, color:'#fff', opacity:saving?0.6:1}}>
+            {saving ? 'Se salvează...' : '💾 Înregistrează citire (oră server)'}
+          </button>
+          <div style={{fontSize:10, color:G.dim, marginTop:6, textAlign:'center'}}>
+            ⏱️ Ora se stabilește pe server (nu ceasul telefonului) — conformitate ANRE
+          </div>
+        </div>
+
+        {/* Grafic presiune/timp */}
+        {grafic && (
+          <div style={{marginBottom:18}}>
+            <div style={{fontSize:12, fontWeight:800, color:G.text, marginBottom:8}}>📈 Evoluție presiune</div>
+            <svg viewBox={`0 0 ${grafic.W} ${grafic.H}`} style={{width:'100%', background:G.bg, borderRadius:8}}>
+              <line x1={grafic.padL} y1={grafic.H-grafic.padB} x2={grafic.W-6} y2={grafic.H-grafic.padB} stroke={G.border} />
+              <line x1={grafic.padL} y1={6} x2={grafic.padL} y2={grafic.H-grafic.padB} stroke={G.border} />
+              <text x={4} y={14} fill={G.muted} fontSize={9}>{grafic.pMax.toFixed(0)} bar</text>
+              <path d={grafic.path} fill="none" stroke={G.purple} strokeWidth={2} />
+              {grafic.pts.map((p,i)=><circle key={i} cx={grafic.x(p.t)} cy={grafic.y(p.p)} r={3} fill={G.purple} />)}
+            </svg>
+          </div>
+        )}
+
+        {/* Lista citiri */}
+        <div style={{fontSize:12, fontWeight:800, color:G.text, marginBottom:8}}>
+          🗒️ Istoric citiri ({citiri.length})
+        </div>
+        {loading ? (
+          <div style={{padding:20, textAlign:'center', color:G.muted}}>Se încarcă...</div>
+        ) : citiri.length === 0 ? (
+          <div style={{padding:24, textAlign:'center', color:G.dim, fontSize:12, background:G.bg, borderRadius:8}}>Nicio citire încă.</div>
+        ) : (
+          <div style={{background:G.bg, borderRadius:8, overflow:'hidden'}}>
+            {citiri.map((c,i)=>(
+              <div key={c.id} style={{display:'grid', gridTemplateColumns:'130px 1fr auto auto', gap:10, alignItems:'center', padding:'9px 14px', fontSize:12, color:G.text, borderBottom: i<citiri.length-1?`1px solid ${G.border}`:'none'}}>
+                <span style={{color:G.muted, fontSize:11}}>{new Date(c.ora_citire).toLocaleString('ro-RO', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})}</span>
+                <span><strong style={{color:G.purple}}>{fmtNr(c.presiune_citita_bar,1)} bar</strong>{c.ore_compresor!=null?<span style={{color:G.muted}}> · {fmtNr(c.ore_compresor,1)}h compresor</span>:''}{c.observatii?<span style={{color:G.dim}}> · {c.observatii}</span>:''}</span>
+                {c.poza_path ? <button onClick={()=>vedePoza(c.poza_path)} style={{padding:'3px 8px', background:G.blue+'22', border:`1px solid ${G.blue}44`, borderRadius:5, color:G.blue, cursor:'pointer', fontSize:10, fontWeight:700}}>📸 Poză</button> : <span style={{color:G.dim, fontSize:10}}>fără poză</span>}
+                <span></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button onClick={onClose} style={{...S.btn, width:'100%', marginTop:16, background:G.border2, color:G.muted}}>Închide</button>
       </div>
     </div>
   )
