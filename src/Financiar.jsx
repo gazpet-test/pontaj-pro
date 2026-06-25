@@ -250,7 +250,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             contactContract = { nume: ct.contact_factura_nume || '', email: ct.contact_factura_email || '', telefon: ct.contact_factura_telefon || '' }
             if (ct.beneficiar_id) {
               const { data: b } = await supabase.from('beneficiari')
-                .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume').eq('id', ct.beneficiar_id).single()
+                .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume,retine_gbe_pct,retine_car_pct').eq('id', ct.beneficiar_id).single()
               if (b) benef = b
             }
           }
@@ -275,6 +275,18 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         const coefStr = (aj.coeficient != null && !isNaN(parseFloat(aj.coeficient))) ? ' ' + parseFloat(aj.coeficient).toFixed(5).replace('.', ',') : ''
         const refStr = aj.sl_ajustata_nr ? ` nr.${aj.sl_ajustata_nr}` : ''
         articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefStr} — situație de lucrări${refStr}`, um:'buc', cantitate:1, pret_unitar:v.toFixed(2), valoare:v.toFixed(2), tva_pct:TVA_DEFAULT })
+      }
+      // Rețineri GBE / CAR (per beneficiar) — linii negative.
+      // Se aplică pe valoarea brută a lucrărilor (valBaza) și reduc baza de TVA (TVA pe net).
+      const gbePct = parseFloat(benef?.retine_gbe_pct || 0)
+      const carPct = parseFloat(benef?.retine_car_pct || 0)
+      if (gbePct > 0) {
+        const gbe = -(valBaza * gbePct / 100)
+        articoleSL.push({ nr:_nr++, denumire:`Reținere GBE (garanție bună execuție) ${gbePct.toString().replace('.', ',')}% — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:gbe.toFixed(2), valoare:gbe.toFixed(2), tva_pct:TVA_DEFAULT })
+      }
+      if (carPct > 0) {
+        const car = -(valBaza * carPct / 100)
+        articoleSL.push({ nr:_nr++, denumire:`Reținere CAR ${carPct.toString().replace('.', ',')}% — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:car.toFixed(2), valoare:car.toFixed(2), tva_pct:TVA_DEFAULT })
       }
       setForm(f => ({
         ...f,
