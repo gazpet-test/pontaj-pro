@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { calcProbe } from './utils/probeCalc.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -303,8 +304,16 @@ function OferteProbeTab() {
 function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
   const isNew = !oferta.id
   const [calcule, setCalcule] = useState([])
+  const [diametre, setDiametre] = useState([])
+  const [configs, setConfigs] = useState([])
   const [busy, setBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
+  // Sursa calculului: 'nou' = calcul inline (fără proiect, pentru ofertare) | 'salvat' = dintr-un calcul existent
+  const [sursaCalc, setSursaCalc] = useState(isNew ? 'nou' : 'salvat')
+
+  // Calcul inline (fără proiect — fază comercială)
+  const [ci, setCi] = useState({ tipFluid:'aer', dnId:'', lungime:'', presiune:'', configId:'' })
+  const setCiK = (k,v) => setCi(p => ({...p,[k]:v}))
 
   const [f, setF] = useState({
     calc_id: oferta.calc_id || '',
@@ -327,16 +336,40 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from('probe_calcule')
-        .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii(denumire, tarif_lei_h, tarif_lei_mc), executie_proiecte(cod_intern, nume)')
-        .order('created_at', { ascending: false }).limit(100)
-      setCalcule(data || [])
+      const [cRes, dRes, cfgRes] = await Promise.all([
+        supabase.from('probe_calcule')
+          .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii(denumire, tarif_lei_h, tarif_lei_mc), executie_proiecte(cod_intern, nume)')
+          .order('created_at', { ascending: false }).limit(100),
+        supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
+        supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
+      ])
+      setCalcule(cRes.data || [])
+      setDiametre(dRes.data || [])
+      setConfigs(cfgRes.data || [])
     })()
   }, [])
 
-  const calc = calcule.find(c => String(c.id) === String(f.calc_id))
+  // ─── Calcul inline live ───
+  const ciDn = diametre.find(d => String(d.id) === String(ci.dnId))
+  const ciCfg = configs.find(c => String(c.id) === String(ci.configId))
+  const ciConfigFiltrate = useMemo(() => {
+    const P = Number(ci.presiune)||0
+    return configs.filter(c => c.tip_fluid === ci.tipFluid && (P===0 || Number(c.presiune_max_bar) >= P))
+  }, [configs, ci.tipFluid, ci.presiune])
+  const ciRez = useMemo(() => {
+    if (!ciDn || !ci.lungime || !ci.presiune || !ciCfg) return null
+    return calcProbe({ dn: ciDn, lungime_m: ci.lungime, presiune_bar: ci.presiune, cfg: ciCfg })
+  }, [ciDn, ci.lungime, ci.presiune, ciCfg])
 
-  // Pre-completare costuri din calcul (durată × tarif config)
+  // calc folosit (din salvat SAU obiect virtual din inline pentru afișaj/export)
+  const calcSalvat = calcule.find(c => String(c.id) === String(f.calc_id))
+  const calc = sursaCalc === 'salvat' ? calcSalvat : (ciRez ? {
+    tip_fluid: ci.tipFluid, lungime_m: Number(ci.lungime), presiune_bar: Number(ci.presiune),
+    v_conducta_mc: ciRez.v_conducta_mc, durata_total_h: ciRez.durata_total_h, consum_motorina_l: ciRez.consum_motorina_l,
+    probe_diametre: { dn_label: ciDn?.dn_label }, probe_configuratii: { denumire: ciCfg?.denumire },
+  } : null)
+
+  // Pre-completare costuri din calcul salvat
   const prefillFromCalc = (c) => {
     if (!c) return
     if (c.tip_fluid === 'aer') {
@@ -350,11 +383,24 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
       setF(p => ({ ...p, proba_lei:+(vMc*pu).toFixed(2), pistonare_lei:0, uscare_lei:0, calibrare_lei:0 }))
     }
   }
-
   const onSelectCalc = (id) => {
     setK('calc_id', id)
     const c = calcule.find(x => String(x.id) === String(id))
     if (c && isNew) prefillFromCalc(c)
+  }
+
+  // Pre-completare costuri din calcul INLINE (durată × tarif config)
+  const prefillFromInline = () => {
+    if (!ciRez || !ciCfg) return
+    if (ci.tipFluid === 'aer') {
+      const tarif = parseFloat(ciCfg.tarif_lei_h || 0)
+      const pist = (ciRez.durata_pistonare_h||0) * tarif
+      const proba = (ciRez.durata_proba_h||0) * tarif
+      setF(p => ({ ...p, pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
+    } else {
+      const pu = parseFloat(ciCfg.tarif_lei_mc || 0)
+      setF(p => ({ ...p, proba_lei:+((ciRez.v_conducta_mc||0)*pu).toFixed(2), pistonare_lei:0, uscare_lei:0, calibrare_lei:0 }))
+    }
   }
 
   const totalFaraTva = useMemo(() => ['transport_lei','pistonare_lei','uscare_lei','calibrare_lei','proba_lei','stat_dispozitie_lei','extra_lei'].reduce((s,k)=>s+(parseFloat(f[k])||0),0), [f])
@@ -368,27 +414,66 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     return `PP-${an}-${String(maxN+1).padStart(3,'0')}`
   }
 
+  // Notifică departamentul Achiziții să întocmească contractul (ofertă câștigată/acceptată)
+  const notificaAchizitii = async (nrOferta, client) => {
+    const { data: useri } = await supabase.from('profiles').select('id').eq('can_process_achizitii', true)
+    if (!useri?.length) return
+    const rows = useri.map(u => ({
+      profile_id: u.id, type: 'oferta_castigata', modul: 'Comercial',
+      title: '🏆 Ofertă câștigată — întocmește contract',
+      message: `Oferta ${nrOferta}${client?` (${client})`:''} a fost marcată câștigată. Te rog întocmește contractul.`,
+      link_to: '/ofertare?tab=probe',
+    }))
+    await supabase.from('notifications').insert(rows)
+  }
+
   const save = async () => {
-    if (!f.calc_id) return onError('Selectează un calcul de probă')
     setBusy(true)
-    let nr = f.nr_oferta
-    if (!nr) nr = await genNrOferta()
-    const payload = {
-      calc_id: Number(f.calc_id), nr_oferta: nr, data_oferta: f.data_oferta,
-      client: f.client.trim()||null, localitate: f.localitate.trim()||null,
-      distanta_km: f.distanta_km?Number(f.distanta_km):null,
-      transport_lei: Number(f.transport_lei)||0, pistonare_lei: Number(f.pistonare_lei)||0,
-      uscare_lei: Number(f.uscare_lei)||0, calibrare_lei: Number(f.calibrare_lei)||0,
-      proba_lei: Number(f.proba_lei)||0, stat_dispozitie_lei: Number(f.stat_dispozitie_lei)||0,
-      extra_lei: Number(f.extra_lei)||0, status: f.status, observatii: f.observatii.trim()||null,
-      created_by: profile?.id||null,
-    }
-    let error
-    if (isNew) { ({ error } = await supabase.from('probe_oferte').insert(payload)) }
-    else { ({ error } = await supabase.from('probe_oferte').update(payload).eq('id', oferta.id)) }
-    setBusy(false)
-    if (error) return onError('Eroare: ' + error.message)
-    onSaved()
+    try {
+      // 1. Determinăm calc_id: salvat existent SAU salvăm calculul inline (proiect_id NULL = calcul de ofertă)
+      let calcId = f.calc_id
+      if (sursaCalc === 'nou') {
+        if (!ciRez) { setBusy(false); return onError('Completează calculul (diametru, lungime, presiune, configurație)') }
+        const { data: cNew, error: cErr } = await supabase.from('probe_calcule').insert({
+          proiect_id: null, tronson_id: null, tip_fluid: ci.tipFluid,
+          dn_id: Number(ci.dnId), lungime_m: Number(ci.lungime), presiune_bar: Number(ci.presiune),
+          config_id: Number(ci.configId),
+          v_conducta_mc: ciRez.v_conducta_mc, v_la_presiune_mc: ciRez.v_la_presiune_mc,
+          durata_proba_h: ciRez.durata_proba_h, durata_pistonare_h: ciRez.durata_pistonare_h,
+          durata_total_h: ciRez.durata_total_h, consum_motorina_l: ciRez.consum_motorina_l,
+          timp_umplere_h: ciRez.timp_umplere_h||null, timp_presurizare_h: ciRez.timp_presurizare_h||null,
+          valoare_lei: ciRez.valoare_lei||null, status: 'planificata', created_by: profile?.id||null,
+        }).select('id').single()
+        if (cErr) { setBusy(false); return onError('Eroare calcul: ' + cErr.message) }
+        calcId = cNew.id
+      }
+      if (!calcId) { setBusy(false); return onError('Selectează sau creează un calcul de probă') }
+
+      let nr = f.nr_oferta
+      if (!nr) nr = await genNrOferta()
+      const payload = {
+        calc_id: Number(calcId), nr_oferta: nr, data_oferta: f.data_oferta,
+        client: f.client.trim()||null, localitate: f.localitate.trim()||null,
+        distanta_km: f.distanta_km?Number(f.distanta_km):null,
+        transport_lei: Number(f.transport_lei)||0, pistonare_lei: Number(f.pistonare_lei)||0,
+        uscare_lei: Number(f.uscare_lei)||0, calibrare_lei: Number(f.calibrare_lei)||0,
+        proba_lei: Number(f.proba_lei)||0, stat_dispozitie_lei: Number(f.stat_dispozitie_lei)||0,
+        extra_lei: Number(f.extra_lei)||0, status: f.status, observatii: f.observatii.trim()||null,
+        created_by: profile?.id||null,
+      }
+      let error
+      if (isNew) { ({ error } = await supabase.from('probe_oferte').insert(payload)) }
+      else { ({ error } = await supabase.from('probe_oferte').update(payload).eq('id', oferta.id)) }
+      if (error) { setBusy(false); return onError('Eroare: ' + error.message) }
+
+      // 2. Dacă oferta tocmai a devenit câștigată/acceptată → notifică Achiziții
+      const eraCastigata = ['castigata','acceptata'].includes(oferta.status)
+      const esteCastigata = ['castigata','acceptata'].includes(f.status)
+      if (esteCastigata && !eraCastigata) await notificaAchizitii(nr, f.client.trim())
+
+      setBusy(false)
+      onSaved()
+    } catch(e) { setBusy(false); onError('Eroare: ' + e.message) }
   }
 
   const exportData = () => ({ ...f, calc, totalFaraTva, tva, totalCuTva, nr_oferta: f.nr_oferta||'PP-DRAFT', intocmit: profile?.name||'' })
@@ -405,19 +490,68 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
           <button onClick={onClose} style={{background:'none', border:'none', color:G.muted, fontSize:22, cursor:'pointer'}}>×</button>
         </div>
 
-        <div style={{marginBottom:14}}>
-          <label style={S.lbl}>Calcul de probă (din Execuție)</label>
-          <select value={f.calc_id} onChange={e=>onSelectCalc(e.target.value)} style={S.input} disabled={!isNew}>
-            <option value="">— alege calculul —</option>
-            {calcule.map(c => (
-              <option key={c.id} value={c.id}>
-                #{c.id} · {c.tip_fluid==='apa'?'💧':'💨'} {c.probe_diametre?.dn_label||'?'} · {fmtLei(c.lungime_m)}m · {fmtLei(c.presiune_bar)}bar · {c.executie_proiecte?.cod_intern||c.executie_proiecte?.nume||'—'}
-              </option>
+        {/* Sursă calcul: Calcul nou (inline, fără proiect) vs Din calcul salvat */}
+        {isNew && (
+          <div style={{display:'inline-flex', background:G.bg, borderRadius:8, padding:3, gap:3, marginBottom:14, border:`1px solid ${G.border}`}}>
+            {[{k:'nou',l:'🧮 Calcul nou'},{k:'salvat',l:'📋 Din calcul salvat'}].map(t=>(
+              <button key={t.k} onClick={()=>setSursaCalc(t.k)} style={{padding:'7px 16px', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:700, background: sursaCalc===t.k?G.ofertare:'transparent', color: sursaCalc===t.k?'#0D1117':G.muted}}>{t.l}</button>
             ))}
-          </select>
-        </div>
+          </div>
+        )}
 
-        {calc && (
+        {/* CALCUL NOU INLINE (fără proiect — fază comercială) */}
+        {sursaCalc === 'nou' && (
+          <div style={{background:G.bg, borderRadius:10, padding:'16px 18px', marginBottom:14}}>
+            <div style={{display:'inline-flex', background:G.surface, borderRadius:8, padding:3, gap:3, marginBottom:12, border:`1px solid ${G.border}`}}>
+              {[{k:'aer',l:'💨 Pneumatic'},{k:'apa',l:'💧 Hidraulic'}].map(t=>(
+                <button key={t.k} onClick={()=>{setCiK('tipFluid',t.k); setCiK('configId','')}} style={{padding:'6px 14px', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:700, background: ci.tipFluid===t.k?G.ofertare:'transparent', color: ci.tipFluid===t.k?'#0D1117':G.muted}}>{t.l}</button>
+              ))}
+            </div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:10}}>
+              <div><label style={S.lbl}>Diametru (DN)</label>
+                <select value={ci.dnId} onChange={e=>setCiK('dnId',e.target.value)} style={S.input}>
+                  <option value="">— DN —</option>
+                  {diametre.map(d=><option key={d.id} value={d.id}>{d.dn_label} ({fmtLei(d.diametru_extern_mm)} mm)</option>)}
+                </select></div>
+              <div><label style={S.lbl}>Configurație (≥ presiune)</label>
+                <select value={ci.configId} onChange={e=>setCiK('configId',e.target.value)} style={S.input}>
+                  <option value="">— config —</option>
+                  {ciConfigFiltrate.map(c=><option key={c.id} value={c.id}>{c.denumire} · {fmtLei(c.presiune_max_bar)} bar max</option>)}
+                </select></div>
+              <div><label style={S.lbl}>Lungime (m)</label><input type="number" value={ci.lungime} onChange={e=>setCiK('lungime',e.target.value)} style={S.input} placeholder="ex: 1000" /></div>
+              <div><label style={S.lbl}>Presiune probă (bar)</label><input type="number" value={ci.presiune} onChange={e=>{setCiK('presiune',e.target.value); setCiK('configId','')}} style={S.input} placeholder="ex: 10" /></div>
+            </div>
+            {ciRez ? (
+              <div style={{display:'flex', gap:16, flexWrap:'wrap', alignItems:'center', fontSize:12, color:G.muted, paddingTop:6, borderTop:`1px solid ${G.border}`}}>
+                <span>Volum: <strong style={{color:G.blue}}>{fmtLei(ciRez.v_conducta_mc)} mc</strong></span>
+                <span>Durată: <strong style={{color:G.text}}>{fmtH(ciRez.durata_total_h)}</strong></span>
+                <span>Consum: <strong style={{color:G.orange}}>{fmtLei(ciRez.consum_motorina_l)} L</strong></span>
+                <div style={{flex:1}} />
+                <button onClick={prefillFromInline} style={{...S.btnS, padding:'5px 12px', fontSize:11}}>↓ Pre-completează costuri</button>
+              </div>
+            ) : (
+              <div style={{fontSize:11, color:G.dim, paddingTop:6}}>Completează DN, lungime, presiune și configurație pentru calcul instant.</div>
+            )}
+            <div style={{fontSize:10, color:G.dim, marginTop:8}}>💡 Calcul pentru ofertă — nu necesită proiect. Se salvează automat la salvarea ofertei.</div>
+          </div>
+        )}
+
+        {/* DIN CALCUL SALVAT */}
+        {sursaCalc === 'salvat' && (
+          <div style={{marginBottom:14}}>
+            <label style={S.lbl}>Calcul de probă existent</label>
+            <select value={f.calc_id} onChange={e=>onSelectCalc(e.target.value)} style={S.input} disabled={!isNew}>
+              <option value="">— alege calculul —</option>
+              {calcule.map(c => (
+                <option key={c.id} value={c.id}>
+                  #{c.id} · {c.tip_fluid==='apa'?'💧':'💨'} {c.probe_diametre?.dn_label||'?'} · {fmtLei(c.lungime_m)}m · {fmtLei(c.presiune_bar)}bar · {c.executie_proiecte?.cod_intern||c.executie_proiecte?.nume||'fără proiect'}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {sursaCalc === 'salvat' && calc && (
           <div style={{background:G.bg, borderRadius:8, padding:'10px 14px', marginBottom:14, fontSize:12, color:G.muted, display:'flex', gap:18, flexWrap:'wrap'}}>
             <span>Durată totală: <strong style={{color:G.text}}>{fmtH(calc.durata_total_h)}</strong></span>
             <span>Consum: <strong style={{color:G.orange}}>{fmtLei(calc.consum_motorina_l)} L</strong></span>
