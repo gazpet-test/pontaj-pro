@@ -74,7 +74,7 @@ function buildInvoiceHTML(f) {
       <td style="padding:7px 8px;text-align:right">${a.cantitate||1}</td>
       <td style="padding:7px 8px;text-align:right;font-family:monospace">${fmt2(a.pret_unitar)}</td>
       <td style="padding:7px 8px;text-align:right;font-family:monospace;font-weight:600">${fmt2(a.valoare)}</td>
-      <td style="padding:7px 8px;text-align:right">${fmt2(a.tva_pct||TVA_DEFAULT)}%</td>
+      <td style="padding:7px 8px;text-align:right">${fmt2(a.tva_pct!==undefined&&a.tva_pct!==''&&a.tva_pct!==null?a.tva_pct:TVA_DEFAULT)}%</td>
     </tr>`).join('')
   return `<div style="width:794px;background:#fff;color:#000;font-family:Arial,sans-serif;font-size:11px;padding:28px">
   <table style="width:100%;border-collapse:collapse;margin-bottom:10px">
@@ -276,11 +276,11 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     const carPct = parseFloat(benef?.retine_car_pct || 0)
     if (gbePct > 0) {
       const gbe = -(valBaza * gbePct / 100)
-      linii.push({ nr:_nr++, denumire:`Reținere GBE (garanție bună execuție) ${gbePct.toString().replace('.', ',')}% — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:gbe.toFixed(2), valoare:gbe.toFixed(2), tva_pct:TVA_DEFAULT })
+      linii.push({ nr:_nr++, denumire:`Reținere GBE (garanție bună execuție) ${gbePct.toString().replace('.', ',')}% — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:gbe.toFixed(2), valoare:gbe.toFixed(2), tva_pct:0 })
     }
     if (carPct > 0) {
       const car = -(valBaza * carPct / 100)
-      linii.push({ nr:_nr++, denumire:`Reținere CAR ${carPct.toString().replace('.', ',')}% — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:car.toFixed(2), valoare:car.toFixed(2), tva_pct:TVA_DEFAULT })
+      linii.push({ nr:_nr++, denumire:`Reținere CAR ${carPct.toString().replace('.', ',')}% — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:car.toFixed(2), valoare:car.toFixed(2), tva_pct:0 })
     }
     return { linii, nextNr: _nr }
   }
@@ -406,16 +406,16 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefStr} — situație de lucrări${refStr}`, um:'buc', cantitate:1, pret_unitar:v.toFixed(2), valoare:v.toFixed(2), tva_pct:TVA_DEFAULT })
       }
       // Rețineri GBE / CAR (per beneficiar) — linii negative.
-      // Se aplică pe valoarea brută a lucrărilor (valBaza) și reduc baza de TVA (TVA pe net).
+      // Se aplică pe valoarea brută a lucrărilor (valBaza). NU reduc baza de TVA → tva_pct:0 (TVA se calculează pe brut).
       const gbePct = parseFloat(benef?.retine_gbe_pct || 0)
       const carPct = parseFloat(benef?.retine_car_pct || 0)
       if (gbePct > 0) {
         const gbe = -(valBaza * gbePct / 100)
-        articoleSL.push({ nr:_nr++, denumire:`Reținere GBE (garanție bună execuție) ${gbePct.toString().replace('.', ',')}% — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:gbe.toFixed(2), valoare:gbe.toFixed(2), tva_pct:TVA_DEFAULT })
+        articoleSL.push({ nr:_nr++, denumire:`Reținere GBE (garanție bună execuție) ${gbePct.toString().replace('.', ',')}% — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:gbe.toFixed(2), valoare:gbe.toFixed(2), tva_pct:0 })
       }
       if (carPct > 0) {
         const car = -(valBaza * carPct / 100)
-        articoleSL.push({ nr:_nr++, denumire:`Reținere CAR ${carPct.toString().replace('.', ',')}% — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:car.toFixed(2), valoare:car.toFixed(2), tva_pct:TVA_DEFAULT })
+        articoleSL.push({ nr:_nr++, denumire:`Reținere CAR ${carPct.toString().replace('.', ',')}% — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:car.toFixed(2), valoare:car.toFixed(2), tva_pct:0 })
       }
       setForm(f => ({
         ...f,
@@ -457,7 +457,11 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
   // Calculele valorilor
   const totals = useMemo(() => {
     const neta = form.articole.reduce((s,a) => s + (parseFloat(a.valoare)||0), 0)
-    const tvaV = neta * (parseFloat(form.tva_pct)||21) / 100
+    // TVA pe BRUT: se calculează PER LINIE. Reținerile GBE/CAR au tva_pct:0 → NU reduc baza de TVA.
+    const tvaV = form.articole.reduce((s,a) => {
+      const cota = (a.tva_pct !== undefined && a.tva_pct !== '' && a.tva_pct !== null) ? parseFloat(a.tva_pct) : (parseFloat(form.tva_pct)||21)
+      return s + (parseFloat(a.valoare)||0) * (cota||0) / 100
+    }, 0)
     return { neta, tva: tvaV, total: neta + tvaV }
   }, [form.articole, form.tva_pct])
 
