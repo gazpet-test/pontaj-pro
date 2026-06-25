@@ -193,6 +193,135 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
   const [proiecte, setProiecte]   = useState([])
   const [slLista, setSlLista]     = useState([])
   const previewRef                = useRef(null)
+  const lastGenRef                = useRef(null)   // snapshot articole auto-generate (detectare modificări manuale)
+
+  // ─── HELPER: încarcă valorile unei SL (bază/ajustare/total + ajustări retro) ───
+  const loadSLValues = async (slId) => {
+    let valBaza = 0, valAjust = 0, valTotal = 0, coefAjust = 0, ajustariRetro = []
+    try {
+      const { data: slF } = await supabase.from('executie_situatii_plata')
+        .select('valoare_baza_lei, valoare_ajustare_lei, valoare_ajustata_lei, coeficient_ajustare').eq('id', slId).single()
+      if (slF) {
+        valBaza   = parseFloat(slF.valoare_baza_lei || 0)
+        valAjust  = parseFloat(slF.valoare_ajustare_lei || 0)
+        valTotal  = parseFloat(slF.valoare_ajustata_lei || slF.valoare_baza_lei || 0)
+        coefAjust = parseFloat(slF.coeficient_ajustare || 0)
+      }
+    } catch(e) { /* fallback 0 */ }
+    try {
+      const { data: ajs } = await supabase.from('executie_sl_ajustari')
+        .select('sl_ajustata_nr, valoare_ajustare_lei, coeficient')
+        .eq('sl_id', slId).order('id', { ascending: true })
+      ajustariRetro = ajs || []
+    } catch(e) { /* ignor */ }
+    return { valBaza, valAjust, valTotal, coefAjust, ajustariRetro }
+  }
+
+  // ─── HELPER: încarcă contract + beneficiar (o dată per proiect — toate SL = același proiect) ───
+  const loadContractBenef = async (proiect_id, contract_id_hint, nr_contract_hint) => {
+    let contractRef = nr_contract_hint || '', contractDenumire = '', benef = null, termenPlata = null, contactContract = null
+    try {
+      let cid = contract_id_hint
+      if (proiect_id) {
+        const { data: pr } = await supabase.from('executie_proiecte').select('contract_id, nr_contract').eq('id', proiect_id).single()
+        if (pr) { cid = cid || pr.contract_id; if (!contractRef) contractRef = pr.nr_contract || '' }
+      }
+      if (cid) {
+        const { data: ct } = await supabase.from('contracte_terti')
+          .select('numar_contract, data_semnare, denumire, termen_plata_zile, beneficiar_id, contact_factura_nume, contact_factura_email, contact_factura_telefon').eq('id', cid).single()
+        if (ct) {
+          if (ct.numar_contract) {
+            const dS = ct.data_semnare ? new Date(ct.data_semnare).toLocaleDateString('ro-RO') : ''
+            contractRef = dS ? `${ct.numar_contract}/${dS}` : ct.numar_contract
+          }
+          contractDenumire = ct.denumire || ''
+          termenPlata = ct.termen_plata_zile
+          contactContract = { nume: ct.contact_factura_nume || '', email: ct.contact_factura_email || '', telefon: ct.contact_factura_telefon || '' }
+          if (ct.beneficiar_id) {
+            const { data: b } = await supabase.from('beneficiari')
+              .select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume,retine_gbe_pct,retine_car_pct').eq('id', ct.beneficiar_id).single()
+            if (b) benef = b
+          }
+        }
+      }
+    } catch(e) { /* fallback */ }
+    return { contractRef, contractDenumire, benef, termenPlata, contactContract }
+  }
+
+  // ─── HELPER: construiește liniile pentru O situație de lucrări (pură, sincronă) ───
+  // Returnează { linii, nextNr }. Reținerile GBE/CAR vin din benef (per beneficiar).
+  const buildLinesForSL = ({ nr_situatie, slVals, contractInfo, startNr }) => {
+    const { valBaza, valAjust, valTotal, coefAjust, ajustariRetro } = slVals
+    const { contractRef, contractDenumire, benef } = contractInfo
+    const denPart = contractDenumire ? ` — ${contractDenumire}` : ''
+    const den = `Contravaloare lucrări conf. situație de lucrări nr.${nr_situatie}${denPart} — contract ${contractRef||'—'}`
+    const hasAjust = Math.abs(valAjust) > 0.005
+    const linii = []
+    let _nr = startNr
+    if (hasAjust) {
+      linii.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT })
+      linii.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
+    } else {
+      linii.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valTotal.toFixed(2), valoare:valTotal.toFixed(2), tva_pct:TVA_DEFAULT })
+    }
+    for (const aj of ajustariRetro) {
+      const v = parseFloat(aj.valoare_ajustare_lei || 0)
+      if (Math.abs(v) < 0.005) continue
+      const coefStr = (aj.coeficient != null && !isNaN(parseFloat(aj.coeficient))) ? ' ' + parseFloat(aj.coeficient).toFixed(5).replace('.', ',') : ''
+      const refStr = aj.sl_ajustata_nr ? ` nr.${aj.sl_ajustata_nr}` : ''
+      linii.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefStr} — situație de lucrări${refStr}`, um:'buc', cantitate:1, pret_unitar:v.toFixed(2), valoare:v.toFixed(2), tva_pct:TVA_DEFAULT })
+    }
+    // Rețineri GBE / CAR per beneficiar (pe valoarea brută a SL-ului)
+    const gbePct = parseFloat(benef?.retine_gbe_pct || 0)
+    const carPct = parseFloat(benef?.retine_car_pct || 0)
+    if (gbePct > 0) {
+      const gbe = -(valBaza * gbePct / 100)
+      linii.push({ nr:_nr++, denumire:`Reținere GBE (garanție bună execuție) ${gbePct.toString().replace('.', ',')}% — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:gbe.toFixed(2), valoare:gbe.toFixed(2), tva_pct:TVA_DEFAULT })
+    }
+    if (carPct > 0) {
+      const car = -(valBaza * carPct / 100)
+      linii.push({ nr:_nr++, denumire:`Reținere CAR ${carPct.toString().replace('.', ',')}% — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:car.toFixed(2), valoare:car.toFixed(2), tva_pct:TVA_DEFAULT })
+    }
+    return { linii, nextNr: _nr }
+  }
+
+  // ─── Regenerează liniile din TOATE SL-urile selectate în multi-select ───
+  const regenerateFromSelectedSLs = async () => {
+    const ids = (form.situatie_plata_ids || []).filter(Boolean)
+    if (ids.length === 0) { showToast('Selectează cel puțin o situație de lucrări', 'err'); return }
+    // Detectare modificări manuale: comparăm articolele curente cu ultima generare automată
+    const curJSON = JSON.stringify(form.articole)
+    if (lastGenRef.current && curJSON !== lastGenRef.current) {
+      if (!window.confirm('Ai modificat manual liniile facturii. Le suprascrii cu liniile generate din SL-urile selectate?')) return
+    }
+    // Contract + beneficiar: o singură dată (toate SL din același proiect)
+    const proiectId = form.proiect_id ? Number(form.proiect_id) : null
+    const contractInfo = await loadContractBenef(proiectId, null, '')
+    // Ordonăm SL-urile cronologic după lista încărcată (slLista e deja sortată an/luna)
+    const ordered = slLista.filter(sl => ids.includes(sl.id))
+    let articole = [], nr = 1
+    for (const sl of ordered) {
+      const slVals = await loadSLValues(sl.id)
+      const { linii, nextNr } = buildLinesForSL({ nr_situatie: sl.nr_situatie, slVals, contractInfo, startNr: nr })
+      articole = articole.concat(linii)
+      nr = nextNr
+    }
+    const benef = contractInfo.benef
+    setForm(f => ({
+      ...f,
+      articole,
+      ...(contractInfo.termenPlata ? { termen_plata_zile: contractInfo.termenPlata } : {}),
+      ...(benef ? {
+        beneficiar_id: benef.id, beneficiar_nume: benef.nume || '', beneficiar_cif: benef.cif || '',
+        beneficiar_iban: benef.iban_principal || '', beneficiar_banca: benef.banca || '', beneficiar_sediu: benef.sediu || '',
+        contact_nume: (contractInfo.contactContract && contractInfo.contactContract.nume) || benef.contact_nume || '',
+        contact_email: (contractInfo.contactContract && contractInfo.contactContract.email) || benef.contact_email || '',
+        contact_telefon: (contractInfo.contactContract && contractInfo.contactContract.telefon) || benef.telefon || '',
+      } : {}),
+    }))
+    lastGenRef.current = JSON.stringify(articole)
+    showToast(`✓ ${ordered.length} situații → ${articole.length} linii generate`)
+  }
 
   // Pre-fill din SL dacă e furnizat
   useEffect(() => {
@@ -306,6 +435,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           contact_telefon:  (contactContract && contactContract.telefon) || benef.telefon || '',
         } : {}),
       }))
+      lastGenRef.current = JSON.stringify(articoleSL)
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -708,6 +838,18 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
                 style={{...fieldStyle,height:72}}>
                 {slLista.map(sl=><option key={sl.id} value={sl.id}>{sl.nr_situatie} — {LUNI[(sl.luna||1)-1]} {sl.an} — {fmtLei(sl.valoare_ajustata_lei||sl.valoare_baza_lei)}</option>)}
               </select>
+              <button type="button" onClick={regenerateFromSelectedSLs}
+                disabled={(form.situatie_plata_ids||[]).length === 0}
+                style={{...S.btnP, marginTop:6, width:'100%', boxSizing:'border-box', fontSize:12,
+                  opacity:(form.situatie_plata_ids||[]).length === 0 ? 0.45 : 1,
+                  cursor:(form.situatie_plata_ids||[]).length === 0 ? 'not-allowed' : 'pointer'}}>
+                🔄 Regenerează linii din {(form.situatie_plata_ids||[]).length || 0} SL selectate
+              </button>
+              {(form.situatie_plata_ids||[]).length > 1 && (
+                <div style={{fontSize:10, color:G.muted, marginTop:4}}>
+                  Ține Ctrl/Cmd pentru selecție multiplă. Toate SL trebuie să fie din același proiect.
+                </div>
+              )}
             </div>
           </div>
 
