@@ -50,6 +50,40 @@ export function calcProbe({ dn, lungime_m, presiune_bar, cfg }) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// PREȚ PROPUS SPRE OFERTARE — referință LMF (calibrare la etalon)
+// ────────────────────────────────────────────────────────────────
+// Filozofie: prețul probei = prețul "ferm" dat de motocompresorul LMF 100
+// pentru volumul + presiunea respectivă, INDEPENDENT de ansamblul fizic ales.
+//   proba = V_conductă × P × (tarif_ref / debit_ref) / 60
+// La paritate, orice ansamblu dă același preț ca LMF; fiecare ansamblu poate
+// avea un spor % propriu peste referință (ex: 2comp+B15 = +10%, „mai mult fier").
+// Valabil DOAR ≤ presiunea max a LMF (peste, LMF nu poate lucra → referința nu se aplică).
+// ════════════════════════════════════════════════════════════════
+export const PRAG_MINIM_PROBA_LEI = 7000   // sub această valoare (brut, înainte de discount) ridicăm proba la prag
+
+// ref      = configul LMF (referință): { debit_mc_min, tarif_lei_h, presiune_max_bar }
+// spor_pct = sporul % al ansamblului ales, peste prețul de referință (0 = exact LMF)
+// prag_min = podea pe valoarea brută a probei (default PRAG_MINIM_PROBA_LEI)
+export function pretPropusProba({ v_conducta_mc, presiune_bar, ref, spor_pct = 0, prag_min = PRAG_MINIM_PROBA_LEI }) {
+  const V = Number(v_conducta_mc) || 0
+  const P = Number(presiune_bar) || 0
+  const debitRef = Number(ref?.debit_mc_min) || 0
+  const tarifRef = Number(ref?.tarif_lei_h) || 0
+  const pmaxRef  = Number(ref?.presiune_max_bar) || 0
+  const aplicabil = debitRef > 0 && tarifRef > 0 && V > 0 && P > 0 && P <= pmaxRef
+  if (!aplicabil) {
+    return { aplicabil: false, raport_ref: 0, pret_referinta: 0, pret_cu_spor: 0, pret_final: 0, sub_prag: false }
+  }
+  const R = tarifRef / debitRef                        // raport referință lei·min/mc (LMF: 750/7 = 107,1)
+  const pret_referinta = V * P * R / 60
+  const pret_cu_spor = pret_referinta * (1 + (Number(spor_pct) || 0) / 100)
+  const prag = Number(prag_min) || 0
+  const sub_prag = pret_cu_spor < prag
+  const pret_final = sub_prag ? prag : pret_cu_spor
+  return { aplicabil: true, raport_ref: R, pret_referinta, pret_cu_spor, pret_final, sub_prag }
+}
+
 export const fmtH = h => {
   const n = Number(h) || 0
   if (n === 0) return '0 h'
