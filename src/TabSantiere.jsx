@@ -922,6 +922,9 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
                 {s.pv_path && (
                   <button onClick={() => openPv(s.pv_path)} style={btnMini(G.green)}>📄 PV</button>
                 )}
+                {s.aep_diagrama_path && (
+                  <button onClick={() => openPv(s.aep_diagrama_path)} style={btnMini(G.yellow)}>📈 Diagramă AEP</button>
+                )}
               </div>
             </div>
           )})}
@@ -1200,7 +1203,7 @@ function drawDiagramaCanvas(readings, presiuneTinta) {
   return cv.toDataURL('image/png')
 }
 
-function buildPvHtml(calc, readings, f, cfgReal) {
+function buildPvHtml(calc, readings, f, cfgReal, hasAep = false) {
   const diag = drawDiagramaCanvas(readings, calc.presiune_bar)
   const dn = calc.probe_diametre?.dn_label || '—'
   const tip = calc.tip_fluid === 'apa' ? 'Hidraulică (apă)' : 'Pneumatică (aer)'
@@ -1229,7 +1232,9 @@ function buildPvHtml(calc, readings, f, cfgReal) {
     <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 4px;padding:0 4px">${F('Presiune țintă', fmt(calc.presiune_bar) + ' bar')}${F('Presiune inițială', fmt(f.presiune_initiala_bar, 2) + ' bar')}${F('Presiune finală', fmt(f.presiune_finala_bar, 2) + ' bar')}${F('Durată reală', f.durata_reala_h ? fmt(f.durata_reala_h, 1) + ' h' : '—')}${F('Temperatură', f.temperatura_c !== '' ? fmt(f.temperatura_c, 1) + ' °C' : '—')}${F('Echipament real', cfgReal ? esc(cfgReal.denumire) : '—')}</div>
 
     <div style="margin-top:12px;font-size:12px;font-weight:800;color:#374151;border-left:3px solid #2563eb;padding-left:8px">3 · DIAGRAMA PRESIUNE–TIMP</div>
-    ${diag ? `<div style="margin:8px 0;text-align:center"><img src="${diag}" style="width:100%;max-width:680px;border:1px solid #e5e7eb"/></div>` : `<div style="margin:8px 4px;font-size:12px;color:#9ca3af">Fără citiri înregistrate.</div>`}
+    ${hasAep
+      ? `<div style="margin:8px 4px;font-size:12px;color:#111827;padding:10px 12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">📈 <b>Diagrama oficială</b> (presiune + temperatură) este înregistrată de recorderul calibrat <b>AEP</b> și se anexează separat la prezentul proces-verbal.</div>`
+      : (diag ? `<div style="margin:8px 0;text-align:center"><img src="${diag}" style="width:100%;max-width:680px;border:1px solid #e5e7eb"/></div><div style="font-size:9px;color:#9ca3af;text-align:center">Reprezentare orientativă din citirile de teren (nu înlocuiește diagrama recorderului calibrat).</div>` : `<div style="margin:8px 4px;font-size:12px;color:#9ca3af">Fără diagramă / citiri înregistrate.</div>`)}
 
     <div style="margin-top:8px;font-size:12px;font-weight:800;color:#374151;border-left:3px solid #2563eb;padding-left:8px">4 · CITIRI ÎNREGISTRATE (${(readings || []).length})</div>
     ${(readings || []).length ? `<table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:11px"><thead><tr style="background:#f3f4f6"><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:left">Data / ora (server)</th><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:right">Presiune (bar)</th><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:right">Ore compresor</th><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:left">Observații</th></tr></thead><tbody>${citiriRows}</tbody></table>` : ''}
@@ -1246,11 +1251,11 @@ function buildPvHtml(calc, readings, f, cfgReal) {
   </div>`
 }
 
-async function generatePvProbaPDF(calc, readings, f, configs) {
+async function generatePvProbaPDF(calc, readings, f, configs, hasAep = false) {
   const cfgReal = configs.find(c => String(c.id) === String(f.config_real_id))
   const wrap = document.createElement('div')
   wrap.style.position = 'fixed'; wrap.style.left = '-10000px'; wrap.style.top = '0'
-  wrap.innerHTML = buildPvHtml(calc, readings, f, cfgReal)
+  wrap.innerHTML = buildPvHtml(calc, readings, f, cfgReal, hasAep)
   document.body.appendChild(wrap)
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
   try {
@@ -1290,6 +1295,7 @@ function ExecutieProbaModal({ calc, configs, profile, onClose, onSaved, onToast 
     observatii: calc.observatii || '',
   })
   const [busy, setBusy] = useState(false)
+  const [aepFile, setAepFile] = useState(null)   // PDF diagramă oficială recorder AEP
   const setK = (k, v) => setF(p => ({ ...p, [k]: v }))
 
   useEffect(() => {
@@ -1304,7 +1310,16 @@ function ExecutieProbaModal({ calc, configs, profile, onClose, onSaved, onToast 
     setBusy(true)
     try {
       const status = f.rezultat === 'respins' ? 'respinsa' : 'finalizata'
-      const blob = await generatePvProbaPDF(calc, readings, f, configs)
+      // 1. Upload diagramă oficială AEP (dacă a fost atașată acum)
+      let aepPath = calc.aep_diagrama_path || null
+      if (aepFile) {
+        const aPath = `aep/AEP_diagrama_${calc.id}_${Date.now()}.pdf`
+        const { error: aErr } = await supabase.storage.from('probe-citiri').upload(aPath, aepFile, { contentType: 'application/pdf', upsert: false })
+        if (aErr) { setBusy(false); return onToast('Eroare upload diagramă AEP: ' + aErr.message, 'err') }
+        aepPath = aPath
+      }
+      // 2. Generează PV (coperta noastră)
+      const blob = await generatePvProbaPDF(calc, readings, f, configs, !!aepPath)
       const path = `pv/PV_proba_${calc.id}_${Date.now()}.pdf`
       const { error: upErr } = await supabase.storage.from('probe-citiri').upload(path, blob, { contentType: 'application/pdf', upsert: false })
       if (upErr) { setBusy(false); return onToast('Eroare upload PV: ' + upErr.message, 'err') }
@@ -1320,6 +1335,7 @@ function ExecutieProbaModal({ calc, configs, profile, onClose, onSaved, onToast 
         responsabil_nume: f.responsabil_nume.trim() || null,
         observatii: f.observatii.trim() || null,
         pv_path: path,
+        aep_diagrama_path: aepPath,
         pv_generat_la: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }).eq('id', calc.id)
@@ -1375,6 +1391,19 @@ function ExecutieProbaModal({ calc, configs, profile, onClose, onSaved, onToast 
             </div>
           </div>
           <div><label style={S.lbl}>Observații</label><textarea value={f.observatii} onChange={e => setK('observatii', e.target.value)} rows={2} style={{ ...S.input, resize: 'vertical' }} /></div>
+
+          {/* Diagramă oficială AEP (recorder calibrat) */}
+          <div style={{ background: G.bg, border: `1px dashed ${G.border2}`, borderRadius: 8, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: G.text, marginBottom: 4 }}>📈 Diagramă oficială (recorder AEP)</div>
+            <div style={{ fontSize: 11, color: G.dim, marginBottom: 8 }}>PDF-ul cu diagrama presiune-temperatură de la aparatul calibrat. Se atașează ca anexă la PV (conformitate ANRE/Transgaz).</div>
+            {calc.aep_diagrama_path && !aepFile && (
+              <div style={{ fontSize: 11, color: G.green, marginBottom: 6 }}>✓ Diagramă deja atașată — încarcă alt PDF doar dacă vrei s-o înlocuiești.</div>
+            )}
+            <input type="file" accept="application/pdf"
+              onChange={e => { const file = e.target.files?.[0]; if (file && file.type === 'application/pdf') setAepFile(file); else if (file) onToast('Doar PDF acceptat', 'err') }}
+              style={{ fontSize: 12, color: G.muted }} />
+            {aepFile && <div style={{ fontSize: 11, color: G.blue, marginTop: 6 }}>📎 {aepFile.name} ({(aepFile.size / 1024 / 1024).toFixed(2)} MB)</div>}
+          </div>
 
           {readings.length === 0 && (
             <div style={{ background: G.yellow + '18', border: `1px solid ${G.yellow}44`, borderRadius: 7, padding: '8px 12px', fontSize: 11, color: G.yellow }}>
