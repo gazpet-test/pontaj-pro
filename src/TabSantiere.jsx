@@ -86,6 +86,7 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
   const [editEchipa, setEditEchipa] = useState(null)
   const [showArhiva, setShowArhiva] = useState(false)
   const [turaId, setTuraId] = useState(null) // tura activa din executie_ture
+  const [vista, setVista] = useState('personal') // 'personal' | 'probe'
   const { show, Toast } = useToast()
 
   // Sync cu prop când proiectul se schimbă din context
@@ -179,12 +180,16 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
   return (
     <div style={{padding:'24px 28px', maxWidth:1400, margin:'0 auto'}}>
       {/* ─── HEADER ─── */}
-      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:20, flexWrap:'wrap', gap:12}}>
+      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:16, flexWrap:'wrap', gap:12}}>
         <div>
-          <h2 style={{margin:0, fontSize:22, fontWeight:800, color:G.text}}>🏗️ Alocare personal pe tură</h2>
-          <div style={{color:G.muted, fontSize:13, marginTop:4}}>Plan tură · Meserii · Echipe · Plan vs Realizat</div>
+          <h2 style={{margin:0, fontSize:22, fontWeight:800, color:G.text}}>
+            {vista==='probe' ? '🔬 Calculator probe de presiune' : '🏗️ Alocare personal pe tură'}
+          </h2>
+          <div style={{color:G.muted, fontSize:13, marginTop:4}}>
+            {vista==='probe' ? 'Pneumatic / Hidraulic · volum · durată · consum motorină' : 'Plan tură · Meserii · Echipe · Plan vs Realizat'}
+          </div>
         </div>
-        {canWrite && (
+        {vista==='personal' && canWrite && (
           <div style={{display:'flex', gap:8, alignItems:'center'}}>
             <button
               onClick={() => setEditEchipa({ proiect_id: proiectId, data_start: dataStart, data_end: dataEnd })}
@@ -202,6 +207,32 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         )}
       </div>
 
+      {/* ─── TAB-URI INTERNE ─── */}
+      <div style={{display:'flex', gap:8, marginBottom:20, borderBottom:`1px solid ${G.border}`}}>
+        {[
+          { key:'personal', label:'🏗️ Personal' },
+          { key:'probe',    label:'🔬 Probe presiune' },
+        ].map(t => (
+          <button key={t.key} onClick={() => setVista(t.key)}
+            style={{
+              padding:'10px 18px', border:'none', background:'transparent', cursor:'pointer',
+              fontSize:13, fontWeight:700,
+              color: vista===t.key ? G.executie : G.muted,
+              borderBottom: vista===t.key ? `2px solid ${G.executie}` : '2px solid transparent',
+              marginBottom:-1,
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ═══ VISTA PROBE ═══ */}
+      {vista==='probe' && (
+        <CalculatorProbe proiectId={proiectId} proiecte={proiecte} canWrite={canWrite} profile={profile} onToast={show} />
+      )}
+
+      {/* ═══ VISTA PERSONAL ═══ */}
+      {vista==='personal' && (<>
       {/* ─── FILTRE TURĂ ─── */}
       <div style={{
         background:G.surface, border:`1px solid ${G.border}`, borderRadius:10,
@@ -499,6 +530,7 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
         dataEnd={dataEnd}
         canWrite={canWrite}
       />
+      </>)}
 
       {showArhiva && (
         <ArhivaModal
@@ -514,6 +546,424 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
       )}
 
       <Toast />
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MOTOR DE CALCUL PROBE (shared — folosit și de modulul Comercial)
+// ══════════════════════════════════════════════════════════
+// Returnează toate rezultatele pentru un set de inputuri.
+// dn = { diametru_extern_mm }, cfg = { tip_fluid, debit_mc_min, debit_l_min, consum_motorina_l_h, tarif_lei_mc }
+function calcProbe({ dn, lungime_m, presiune_bar, cfg }) {
+  const L = Number(lungime_m) || 0
+  const P = Number(presiune_bar) || 0
+  const dExtM = (Number(dn?.diametru_extern_mm) || 0) / 1000
+  const v1m = Math.PI * Math.pow(dExtM / 2, 2)   // mc per 1m la 1 bar
+  const v_conducta = v1m * L                      // mc
+
+  if (cfg?.tip_fluid === 'apa') {
+    // ─── HIDRAULIC ───
+    const dP = Math.max(0, P - 10)                 // ΔP (presiune utilă peste 10 bar)
+    const beta = 0.00005                           // compresibilitate apă 1/bar
+    const v_compr = v_conducta * dP * beta         // mc
+    const debitL = Number(cfg?.debit_l_min) || 0   // L/min pompă principală
+    const timp_umplere_h = v_conducta / (1000 * 60 / 1000)      // pompă umplere 1000 L/min → mc/h = 60
+    const timp_presurizare_h = debitL > 0 ? (v_compr * 1000) / (debitL * 60) : 0
+    const durata_total_h = timp_umplere_h + timp_presurizare_h
+    const consum = (Number(cfg?.consum_motorina_l_h) || 0) * durata_total_h
+    const valoare = v_conducta * (Number(cfg?.tarif_lei_mc) || 0)
+    return {
+      v_conducta_mc: v_conducta, v_la_presiune_mc: v_compr,
+      timp_umplere_h, timp_presurizare_h,
+      durata_proba_h: timp_presurizare_h, durata_pistonare_h: 0,
+      durata_total_h, consum_motorina_l: consum, valoare_lei: valoare,
+    }
+  }
+
+  // ─── PNEUMATIC ───
+  const debit = Number(cfg?.debit_mc_min) || 0     // mc/min
+  const v_la_presiune = v_conducta * P             // mc aer echivalent la 1 bar
+  const durata_proba_h = debit > 0 ? v_la_presiune / (debit * 60) : 0
+  // Pistonare la P=3 bar fix. Uscare + Calibrare = identice ca durată.
+  const durata_pistonare_h = debit > 0 ? (v_conducta * 3) / (debit * 60) : 0
+  const uscare_h = durata_pistonare_h
+  const calibrare_h = durata_pistonare_h
+  const durata_total_h = durata_proba_h + durata_pistonare_h + uscare_h + calibrare_h
+  const consum = (Number(cfg?.consum_motorina_l_h) || 0) * durata_total_h
+  return {
+    v_conducta_mc: v_conducta, v_la_presiune_mc: v_la_presiune,
+    durata_proba_h, durata_pistonare_h, uscare_h, calibrare_h,
+    timp_umplere_h: 0, timp_presurizare_h: 0,
+    durata_total_h, consum_motorina_l: consum, valoare_lei: 0,
+  }
+}
+
+const fmtH = h => {
+  const n = Number(h) || 0
+  if (n === 0) return '0 h'
+  if (n < 1) return `${Math.round(n*60)} min`
+  return `${n.toFixed(2)} h`
+}
+const fmtNr = (n, d=2) => (Number(n)||0).toLocaleString('ro-RO', { minimumFractionDigits:d, maximumFractionDigits:d })
+
+// ══════════════════════════════════════════════════════════
+// CALCULATOR PROBE DE PRESIUNE (vista din TabSantiere)
+// ══════════════════════════════════════════════════════════
+function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
+  const [tipFluid, setTipFluid] = useState('aer')   // 'aer' | 'apa'
+  const [diametre, setDiametre] = useState([])
+  const [configs, setConfigs] = useState([])
+  const [tronsoane, setTronsoane] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [salvari, setSalvari] = useState([])
+
+  // Inputuri
+  const [dnId, setDnId] = useState('')
+  const [tronsonId, setTronsonId] = useState('')
+  const [lungime, setLungime] = useState('')
+  const [presiune, setPresiune] = useState('')
+  const [configId, setConfigId] = useState('')
+  const [editConfig, setEditConfig] = useState(null)
+
+  // ─── Load cataloage ───
+  const loadCat = useCallback(async () => {
+    setLoading(true)
+    const [dRes, cRes] = await Promise.all([
+      supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
+      supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
+    ])
+    setDiametre(dRes.data || [])
+    setConfigs(cRes.data || [])
+    setLoading(false)
+  }, [])
+  useEffect(() => { loadCat() }, [loadCat])
+
+  // ─── Load tronsoane proiect (pentru lungime auto) ───
+  useEffect(() => {
+    if (!proiectId) { setTronsoane([]); return }
+    supabase.from('executie_tronsoane')
+      .select('id, cod, denumire, lungime_planificata_km')
+      .eq('proiect_id', proiectId).order('ordine')
+      .then(({ data }) => setTronsoane(data || []))
+  }, [proiectId])
+
+  // ─── Load calcule salvate ───
+  const loadSalvari = useCallback(async () => {
+    if (!proiectId) { setSalvari([]); return }
+    const { data } = await supabase.from('probe_calcule')
+      .select('*, probe_diametre(dn_label), probe_configuratii(denumire)')
+      .eq('proiect_id', proiectId).order('created_at', { ascending:false }).limit(20)
+    setSalvari(data || [])
+  }, [proiectId])
+  useEffect(() => { loadSalvari() }, [loadSalvari])
+
+  // Config-uri filtrate: tip fluid + presiune_max >= P_probă
+  const configFiltrate = useMemo(() => {
+    const P = Number(presiune) || 0
+    return configs.filter(c => c.tip_fluid === tipFluid && (P === 0 || Number(c.presiune_max_bar) >= P))
+  }, [configs, tipFluid, presiune])
+
+  // Auto-completare lungime din tronson selectat (km → m)
+  const handleTronson = (tid) => {
+    setTronsonId(tid)
+    if (tid) {
+      const tr = tronsoane.find(t => String(t.id) === String(tid))
+      if (tr?.lungime_planificata_km) setLungime(String(Math.round(Number(tr.lungime_planificata_km) * 1000)))
+    }
+  }
+
+  const dn = diametre.find(d => String(d.id) === String(dnId))
+  const cfg = configs.find(c => String(c.id) === String(configId))
+  const rez = useMemo(() => {
+    if (!dn || !lungime || !presiune || !cfg) return null
+    return calcProbe({ dn, lungime_m: lungime, presiune_bar: presiune, cfg })
+  }, [dn, lungime, presiune, cfg])
+
+  const handleSalveaza = async () => {
+    if (!rez) return onToast('Completează toate câmpurile pentru calcul', 'err')
+    if (!proiectId) return onToast('Selectează un proiect mai întâi', 'err')
+    const payload = {
+      proiect_id: Number(proiectId),
+      tronson_id: tronsonId ? Number(tronsonId) : null,
+      tip_fluid: tipFluid,
+      dn_id: Number(dnId),
+      lungime_m: Number(lungime),
+      presiune_bar: Number(presiune),
+      config_id: Number(configId),
+      v_conducta_mc: rez.v_conducta_mc,
+      v_la_presiune_mc: rez.v_la_presiune_mc,
+      durata_proba_h: rez.durata_proba_h,
+      durata_pistonare_h: rez.durata_pistonare_h,
+      durata_total_h: rez.durata_total_h,
+      consum_motorina_l: rez.consum_motorina_l,
+      timp_umplere_h: rez.timp_umplere_h || null,
+      timp_presurizare_h: rez.timp_presurizare_h || null,
+      valoare_lei: rez.valoare_lei || null,
+      created_by: profile?.id || null,
+    }
+    const { error } = await supabase.from('probe_calcule').insert(payload)
+    if (error) return onToast('Eroare salvare: ' + error.message, 'err')
+    onToast('✓ Calcul salvat')
+    loadSalvari()
+  }
+
+  if (loading) return <div style={{padding:40, textAlign:'center', color:G.muted}}>⏳ Se încarcă cataloagele...</div>
+
+  const isAer = tipFluid === 'aer'
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:18}}>
+      {/* Toggle Pneumatic / Hidraulic */}
+      <div style={{display:'inline-flex', background:G.bg, borderRadius:9, padding:4, gap:4, alignSelf:'flex-start', border:`1px solid ${G.border}`}}>
+        {[
+          { k:'aer', l:'💨 Pneumatic (aer)' },
+          { k:'apa', l:'💧 Hidraulic (apă)' },
+        ].map(t => (
+          <button key={t.k} onClick={() => { setTipFluid(t.k); setConfigId('') }}
+            style={{
+              padding:'8px 18px', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:700,
+              background: tipFluid===t.k ? G.executie : 'transparent',
+              color: tipFluid===t.k ? '#0D1117' : G.muted,
+            }}>{t.l}</button>
+        ))}
+      </div>
+
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:18, alignItems:'start'}}>
+        {/* ─── INPUTURI ─── */}
+        <div style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:10, padding:'18px 20px', display:'flex', flexDirection:'column', gap:14}}>
+          <div style={{fontSize:13, fontWeight:800, color:G.text, marginBottom:2}}>📐 Parametri conductă</div>
+
+          <div>
+            <label style={S.lbl}>Diametru (DN)</label>
+            <select value={dnId} onChange={e => setDnId(e.target.value)} style={S.input}>
+              <option value="">— alege diametrul —</option>
+              {diametre.map(d => <option key={d.id} value={d.id}>{d.dn_label} ({fmtNr(d.diametru_extern_mm,1)} mm)</option>)}
+            </select>
+          </div>
+
+          {tronsoane.length > 0 && (
+            <div>
+              <label style={S.lbl}>Tronson (lungime auto)</label>
+              <select value={tronsonId} onChange={e => handleTronson(e.target.value)} style={S.input}>
+                <option value="">— manual —</option>
+                {tronsoane.map(t => <option key={t.id} value={t.id}>{t.cod}{t.denumire ? ' · '+t.denumire : ''} ({fmtNr(t.lungime_planificata_km,2)} km)</option>)}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label style={S.lbl}>
+              Lungime (m) {tronsonId && <span style={{color:G.green, fontWeight:700}}>· auto din tronson</span>}
+            </label>
+            <input type="number" value={lungime} onChange={e => { setLungime(e.target.value); setTronsonId('') }}
+              placeholder="ex: 1000" style={S.input} />
+          </div>
+
+          <div>
+            <label style={S.lbl}>Presiune probă (bar)</label>
+            <input type="number" value={presiune} onChange={e => { setPresiune(e.target.value); setConfigId('') }}
+              placeholder="ex: 10" style={S.input} />
+          </div>
+
+          <div>
+            <label style={S.lbl}>
+              Configurație echipament
+              {presiune && <span style={{color:G.muted, fontWeight:500}}> · filtrat ≥ {presiune} bar</span>}
+            </label>
+            <select value={configId} onChange={e => setConfigId(e.target.value)} style={S.input}>
+              <option value="">— alege configurația —</option>
+              {configFiltrate.map(c => (
+                <option key={c.id} value={c.id}>
+                  {c.denumire} · {isAer ? `${fmtNr(c.debit_mc_min,0)} mc/min` : `${fmtNr(c.debit_l_min,0)} L/min`} · {fmtNr(c.presiune_max_bar,0)} bar max
+                </option>
+              ))}
+            </select>
+            {presiune && configFiltrate.length === 0 && (
+              <div style={{fontSize:11, color:G.red, marginTop:6}}>⚠️ Nicio configurație nu suportă {presiune} bar pentru acest tip de fluid.</div>
+            )}
+          </div>
+
+          {/* Editor config rapid */}
+          <div style={{display:'flex', gap:8, flexWrap:'wrap', marginTop:2}}>
+            {canWrite && cfg && (
+              <button onClick={() => setEditConfig(cfg)}
+                style={{...S.btn, background:G.border2, color:G.muted, padding:'6px 12px', fontSize:11}}>
+                ✏️ Editează „{cfg.denumire}"
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* ─── REZULTATE ─── */}
+        <div style={{background:G.surface, border:`1px solid ${rez ? G.executie+'66' : G.border}`, borderRadius:10, padding:'18px 20px', display:'flex', flexDirection:'column', gap:12}}>
+          <div style={{fontSize:13, fontWeight:800, color:G.text}}>📊 Rezultat estimare</div>
+
+          {!rez ? (
+            <div style={{padding:'30px 10px', textAlign:'center', color:G.dim, fontSize:13}}>
+              Completează diametru, lungime, presiune și configurație pentru calcul instant.
+            </div>
+          ) : (<>
+            {/* Volum */}
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+              <ProbaStat label="Volum conductă" val={`${fmtNr(rez.v_conducta_mc)} mc`} color={G.blue} />
+              <ProbaStat label={isAer ? 'Volum aer (la presiune)' : 'Volum compresie'} val={`${fmtNr(rez.v_la_presiune_mc)} mc`} color={G.purple} />
+            </div>
+
+            {/* Durate per operație */}
+            <div style={{background:G.bg, borderRadius:8, padding:'12px 14px', display:'flex', flexDirection:'column', gap:7}}>
+              {isAer ? (<>
+                <ProbaRow label="🔧 Pistonare (3 bar)" val={fmtH(rez.durata_pistonare_h)} />
+                <ProbaRow label="💨 Uscare" val={fmtH(rez.uscare_h)} />
+                <ProbaRow label="🎯 Calibrare" val={fmtH(rez.calibrare_h)} />
+                <ProbaRow label="🧪 Probă presiune" val={fmtH(rez.durata_proba_h)} />
+              </>) : (<>
+                <ProbaRow label="🚰 Umplere" val={fmtH(rez.timp_umplere_h)} />
+                <ProbaRow label="⬆️ Presurizare" val={fmtH(rez.timp_presurizare_h)} />
+              </>)}
+              <div style={{height:1, background:G.border, margin:'3px 0'}} />
+              <ProbaRow label="⏱️ TOTAL" val={`${fmtH(rez.durata_total_h)} · ${fmtNr(rez.durata_total_h/24,1)} zile`} bold />
+            </div>
+
+            {/* Consum + valoare */}
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
+              <ProbaStat label="⛽ Consum motorină" val={`${fmtNr(rez.consum_motorina_l,0)} L`} color={G.orange} />
+              {!isAer && rez.valoare_lei > 0 && (
+                <ProbaStat label="💰 Valoare" val={`${fmtNr(rez.valoare_lei,0)} lei`} color={G.green} />
+              )}
+            </div>
+
+            {/* Disclaimer OBLIGATORIU */}
+            <div style={{background:G.yellow+'18', border:`1px solid ${G.yellow}44`, borderRadius:7, padding:'8px 12px', fontSize:11, color:G.yellow, fontWeight:600}}>
+              ⚠️ Estimare fără pauze de odihnă oameni/utilaje
+            </div>
+
+            {/* Acțiuni */}
+            {canWrite && (
+              <div style={{display:'flex', gap:8, marginTop:2}}>
+                <button onClick={handleSalveaza}
+                  style={{...S.btn, flex:1, background:G.greenBg, color:'#fff'}}>💾 Salvează calcul</button>
+              </div>
+            )}
+          </>)}
+        </div>
+      </div>
+
+      {/* ─── CALCULE SALVATE ─── */}
+      {salvari.length > 0 && (
+        <div style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:10, overflow:'hidden'}}>
+          <div style={{padding:'12px 18px', borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800, color:G.text}}>
+            📋 Calcule salvate ({salvari.length})
+          </div>
+          {salvari.map((s, i) => (
+            <div key={s.id} style={{
+              display:'grid', gridTemplateColumns:'auto 1fr auto auto auto', gap:14, alignItems:'center',
+              padding:'10px 18px', fontSize:12, color:G.text,
+              borderBottom: i < salvari.length-1 ? `1px solid ${G.border}` : 'none',
+              background: i%2 ? G.bg+'44' : 'transparent',
+            }}>
+              <span style={{fontSize:15}}>{s.tip_fluid==='apa' ? '💧' : '💨'}</span>
+              <span>
+                <strong>{s.probe_diametre?.dn_label || '—'}</strong> · {fmtNr(s.lungime_m,0)}m · {fmtNr(s.presiune_bar,0)} bar
+                <span style={{color:G.muted}}> · {s.probe_configuratii?.denumire || ''}</span>
+              </span>
+              <span style={{color:G.blue}}>{fmtNr(s.v_conducta_mc)} mc</span>
+              <span style={{color:G.executie}}>{fmtH(s.durata_total_h)}</span>
+              <span style={{color:G.orange}}>{fmtNr(s.consum_motorina_l,0)} L</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editConfig && (
+        <ConfigProbaModal item={editConfig} onClose={() => setEditConfig(null)}
+          onSaved={() => { setEditConfig(null); loadCat(); onToast('✓ Configurație actualizată') }}
+          onError={e => onToast('Eroare: ' + e, 'err')} />
+      )}
+    </div>
+  )
+}
+
+function ProbaStat({ label, val, color }) {
+  return (
+    <div style={{background:G.bg, borderRadius:8, padding:'10px 12px'}}>
+      <div style={{fontSize:10, color:G.muted, textTransform:'uppercase', letterSpacing:'.4px', marginBottom:3}}>{label}</div>
+      <div style={{fontSize:18, fontWeight:800, color}}>{val}</div>
+    </div>
+  )
+}
+function ProbaRow({ label, val, bold }) {
+  return (
+    <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize: bold?13:12, fontWeight: bold?800:600, color: bold?G.text:G.muted}}>
+      <span>{label}</span>
+      <span style={{color: bold?G.executie:G.text}}>{val}</span>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// MODAL EDITARE CONFIGURAȚIE PROBĂ (tarife + consum editabile)
+// ══════════════════════════════════════════════════════════
+function ConfigProbaModal({ item, onClose, onSaved, onError }) {
+  const isAer = item.tip_fluid === 'aer'
+  const [f, setF] = useState({
+    denumire: item.denumire || '',
+    debit_mc_min: item.debit_mc_min ?? '',
+    debit_l_min: item.debit_l_min ?? '',
+    presiune_max_bar: item.presiune_max_bar ?? '',
+    tarif_lei_h: item.tarif_lei_h ?? '',
+    tarif_lei_mc: item.tarif_lei_mc ?? '',
+    consum_motorina_l_h: item.consum_motorina_l_h ?? '',
+    observatii: item.observatii || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const setK = (k,v) => setF(p => ({...p,[k]:v}))
+
+  const save = async () => {
+    if (!f.denumire.trim()) return onError('Denumirea e obligatorie')
+    setSaving(true)
+    const payload = {
+      denumire: f.denumire.trim(),
+      presiune_max_bar: f.presiune_max_bar ? Number(f.presiune_max_bar) : null,
+      consum_motorina_l_h: f.consum_motorina_l_h ? Number(f.consum_motorina_l_h) : null,
+      observatii: f.observatii.trim() || null,
+      ...(isAer
+        ? { debit_mc_min: f.debit_mc_min ? Number(f.debit_mc_min) : null, tarif_lei_h: f.tarif_lei_h ? Number(f.tarif_lei_h) : null }
+        : { debit_l_min: f.debit_l_min ? Number(f.debit_l_min) : null, tarif_lei_mc: f.tarif_lei_mc ? Number(f.tarif_lei_mc) : null }),
+      updated_at: new Date().toISOString(),
+    }
+    const { error } = await supabase.from('probe_configuratii').update(payload).eq('id', item.id)
+    setSaving(false)
+    if (error) return onError(error.message)
+    onSaved()
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10000, padding:20}}>
+      <div onClick={e => e.stopPropagation()} style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:12, padding:24, width:'100%', maxWidth:440, maxHeight:'90vh', overflowY:'auto'}}>
+        <h3 style={{margin:'0 0 16px', fontSize:16, color:G.text}}>✏️ Editează configurație ({isAer ? 'pneumatic' : 'hidraulic'})</h3>
+        <div style={{display:'flex', flexDirection:'column', gap:12}}>
+          <div><label style={S.lbl}>Denumire</label><input value={f.denumire} onChange={e=>setK('denumire',e.target.value)} style={S.input} /></div>
+          {isAer ? (
+            <>
+              <div><label style={S.lbl}>Debit (mc/min)</label><input type="number" value={f.debit_mc_min} onChange={e=>setK('debit_mc_min',e.target.value)} style={S.input} /></div>
+              <div><label style={S.lbl}>Tarif (lei/h)</label><input type="number" value={f.tarif_lei_h} onChange={e=>setK('tarif_lei_h',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 4000" /></div>
+            </>
+          ) : (
+            <>
+              <div><label style={S.lbl}>Debit pompă (L/min)</label><input type="number" value={f.debit_l_min} onChange={e=>setK('debit_l_min',e.target.value)} style={S.input} /></div>
+              <div><label style={S.lbl}>Tarif (lei/mc)</label><input type="number" value={f.tarif_lei_mc} onChange={e=>setK('tarif_lei_mc',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 200" /></div>
+            </>
+          )}
+          <div><label style={S.lbl}>Presiune max (bar)</label><input type="number" value={f.presiune_max_bar} onChange={e=>setK('presiune_max_bar',e.target.value)} style={S.input} /></div>
+          <div><label style={S.lbl}>Consum motorină (L/h)</label><input type="number" value={f.consum_motorina_l_h} onChange={e=>setK('consum_motorina_l_h',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 145" /></div>
+          <div><label style={S.lbl}>Observații</label><input value={f.observatii} onChange={e=>setK('observatii',e.target.value)} style={S.input} /></div>
+        </div>
+        <div style={{display:'flex', gap:10, marginTop:20}}>
+          <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.muted}}>Anulează</button>
+          <button onClick={save} disabled={saving} style={{...S.btn, flex:1, background:G.greenBg, color:'#fff', opacity:saving?0.6:1}}>{saving ? 'Se salvează...' : '💾 Salvează'}</button>
+        </div>
+      </div>
     </div>
   )
 }
