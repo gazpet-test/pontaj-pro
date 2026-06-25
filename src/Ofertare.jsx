@@ -10,7 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
-import { calcProbe } from './utils/probeCalc.js'
+import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI } from './utils/probeCalc.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -380,6 +380,9 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     return calcProbe({ dn: ciDn, lungime_m: ci.lungime, presiune_bar: ci.presiune, cfg: ciCfg })
   }, [ciDn, ci.lungime, ci.presiune, ciCfg])
 
+  // Referința LMF (etalon de preț) pentru prețul propus spre ofertare
+  const refLMF = useMemo(() => configs.find(c => c.cod === 'LMF100') || configs.find(c => String(c.id) === '1') || null, [configs])
+
   // calc folosit (din salvat SAU obiect virtual din inline pentru afișaj/export)
   const calcSalvat = calcule.find(c => String(c.id) === String(f.calc_id))
   const calc = sursaCalc === 'salvat' ? calcSalvat : (ciRez ? {
@@ -394,9 +397,11 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     const cat = c.probe_configuratii?.categorie_transport
     const transp = calcTransport(cat, f.distanta_km)
     if (c.tip_fluid === 'aer') {
+      const cfgFull = configs.find(x => String(x.id) === String(c.config_id))
       const tarif = parseFloat(c.probe_configuratii?.tarif_lei_h || 0)
       const pist = parseFloat(c.durata_pistonare_h||0) * tarif
-      const proba = parseFloat(c.durata_proba_h||0) * tarif
+      const pp = pretPropusProba({ v_conducta_mc: c.v_conducta_mc, presiune_bar: c.presiune_bar, ref: refLMF, spor_pct: cfgFull?.spor_pct })
+      const proba = pp.aplicabil ? pp.pret_final : parseFloat(c.durata_proba_h||0) * tarif
       setF(p => ({ ...p, transport_lei:+transp.toFixed(2), pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
     } else {
       const pu = parseFloat(c.probe_configuratii?.tarif_lei_mc || 0)
@@ -417,7 +422,8 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     if (ci.tipFluid === 'aer') {
       const tarif = parseFloat(ciCfg.tarif_lei_h || 0)
       const pist = (ciRez.durata_pistonare_h||0) * tarif
-      const proba = (ciRez.durata_proba_h||0) * tarif
+      const pp = pretPropusProba({ v_conducta_mc: ciRez.v_conducta_mc, presiune_bar: ci.presiune, ref: refLMF, spor_pct: ciCfg.spor_pct })
+      const proba = pp.aplicabil ? pp.pret_final : (ciRez.durata_proba_h||0) * tarif
       setF(p => ({ ...p, transport_lei:+transp.toFixed(2), pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
     } else {
       const pu = parseFloat(ciCfg.tarif_lei_mc || 0)
@@ -426,6 +432,26 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
   }
 
   const discountProba = useMemo(() => (parseFloat(f.proba_lei)||0) * (parseFloat(f.discount_pct)||0) / 100, [f.proba_lei, f.discount_pct])
+
+  // Preț propus spre ofertare — unificat (calcul nou SAU salvat), pentru badge + buton „folosește"
+  const pretPropusActiv = useMemo(() => {
+    let v_mc, P, cfgFull
+    if (sursaCalc === 'nou') {
+      if (!ciRez || ci.tipFluid !== 'aer') return null
+      v_mc = ciRez.v_conducta_mc; P = Number(ci.presiune)||0; cfgFull = ciCfg
+    } else {
+      const c = calcSalvat
+      if (!c || c.tip_fluid !== 'aer') return null
+      v_mc = c.v_conducta_mc; P = Number(c.presiune_bar)||0
+      cfgFull = configs.find(x => String(x.id) === String(c.config_id))
+    }
+    if (!refLMF) return null
+    const pp = pretPropusProba({ v_conducta_mc: v_mc, presiune_bar: P, ref: refLMF, spor_pct: cfgFull?.spor_pct })
+    return { ...pp, spor: Number(cfgFull?.spor_pct)||0 }
+  }, [sursaCalc, ciRez, ci.tipFluid, ci.presiune, ciCfg, calcSalvat, refLMF, configs])
+  const folosestePretPropus = () => {
+    if (pretPropusActiv?.aplicabil) setK('proba_lei', +pretPropusActiv.pret_final.toFixed(2))
+  }
   const totalFaraTva = useMemo(() => {
     let t = 0
     t += parseFloat(f.transport_lei)||0
@@ -642,11 +668,35 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
           })}
 
           {/* Probă presiune + discount */}
-          <div><label style={S.lbl}>🧪 Probă presiune</label>
-            <input type="number" value={f.proba_lei} onChange={e=>setK('proba_lei',e.target.value)} style={{...S.input, color:G.blue}} /></div>
-          <div><label style={S.lbl}>🏷️ Discount probă (%)</label>
-            <input type="number" value={f.discount_pct} onChange={e=>setK('discount_pct',e.target.value)} style={{...S.input, color:G.orange}} placeholder="0" />
-            {discountProba>0 && <div style={{fontSize:10, color:G.orange, marginTop:3}}>−{fmtLei(discountProba)} lei din probă</div>}
+          <div style={{gridColumn:'1 / -1'}}>
+            {pretPropusActiv?.aplicabil && (
+              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap',
+                background: pretPropusActiv.sub_prag ? G.orange+'18' : G.green+'14',
+                border:`1px solid ${pretPropusActiv.sub_prag ? G.orange : G.green}55`, borderRadius:8, padding:'8px 12px', marginBottom:8}}>
+                <div style={{display:'flex', flexDirection:'column', gap:2}}>
+                  <span style={{fontSize:12, fontWeight:700, color: pretPropusActiv.sub_prag ? G.orange : G.green}}>
+                    💡 Preț propus spre ofertare: {fmtLei(pretPropusActiv.pret_final)} lei
+                  </span>
+                  <span style={{fontSize:10, color:G.dim}}>
+                    referință LMF {fmtLei(pretPropusActiv.pret_referinta)} lei
+                    {pretPropusActiv.spor>0 && ` · spor +${pretPropusActiv.spor}% → ${fmtLei(pretPropusActiv.pret_cu_spor)} lei`}
+                    {pretPropusActiv.sub_prag && ` · ⚠️ sub prag, ridicat la ${fmtLei(PRAG_MINIM_PROBA_LEI)} lei`}
+                  </span>
+                </div>
+                <button onClick={folosestePretPropus} style={{padding:'6px 14px', borderRadius:6, border:'none', cursor:'pointer',
+                  background: pretPropusActiv.sub_prag ? G.orange : G.green, color:'#fff', fontWeight:700, fontSize:12, whiteSpace:'nowrap'}}>
+                  ↧ folosește
+                </button>
+              </div>
+            )}
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+              <div><label style={S.lbl}>🧪 Probă presiune</label>
+                <input type="number" value={f.proba_lei} onChange={e=>setK('proba_lei',e.target.value)} style={{...S.input, color:G.blue}} /></div>
+              <div><label style={S.lbl}>🏷️ Discount probă (%)</label>
+                <input type="number" value={f.discount_pct} onChange={e=>setK('discount_pct',e.target.value)} style={{...S.input, color:G.orange}} placeholder="0" />
+                {discountProba>0 && <div style={{fontSize:10, color:G.orange, marginTop:3}}>−{fmtLei(discountProba)} lei din probă</div>}
+              </div>
+            </div>
           </div>
 
           {/* Extra */}
