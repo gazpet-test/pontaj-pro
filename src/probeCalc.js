@@ -36,8 +36,9 @@ export function calcProbe({ dn, lungime_m, presiune_bar, cfg }) {
   const debit = Number(cfg?.debit_mc_min) || 0     // mc/min
   const v_la_presiune = v_conducta * P             // mc aer echivalent la 1 bar
   const durata_proba_h = debit > 0 ? v_la_presiune / (debit * 60) : 0
-  // Pistonare la P=3 bar fix. Uscare + Calibrare = identice ca durată.
-  const durata_pistonare_h = debit > 0 ? (v_conducta * 3) / (debit * 60) : 0
+  // Pistonare la P_echiv = 2 bar (Asumptii!B12). Uscare + Calibrare = identice ca durată.
+  const P_ECHIV = 2
+  const durata_pistonare_h = debit > 0 ? (v_conducta * P_ECHIV) / (debit * 60) : 0
   const uscare_h = durata_pistonare_h
   const calibrare_h = durata_pistonare_h
   const durata_total_h = durata_proba_h + durata_pistonare_h + uscare_h + calibrare_h

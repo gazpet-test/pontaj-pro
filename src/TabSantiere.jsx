@@ -867,6 +867,7 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
     tarif_lei_h: item.tarif_lei_h ?? '',
     tarif_lei_mc: item.tarif_lei_mc ?? '',
     consum_motorina_l_h: item.consum_motorina_l_h ?? '',
+    categorie_transport: item.categorie_transport || 'V1',
     observatii: item.observatii || '',
   })
   const [saving, setSaving] = useState(false)
@@ -879,6 +880,7 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
       denumire: f.denumire.trim(),
       presiune_max_bar: f.presiune_max_bar ? Number(f.presiune_max_bar) : null,
       consum_motorina_l_h: f.consum_motorina_l_h ? Number(f.consum_motorina_l_h) : null,
+      categorie_transport: f.categorie_transport,
       observatii: f.observatii.trim() || null,
       ...(isAer
         ? { debit_mc_min: f.debit_mc_min ? Number(f.debit_mc_min) : null, tarif_lei_h: f.tarif_lei_h ? Number(f.tarif_lei_h) : null }
@@ -910,6 +912,11 @@ function ConfigProbaModal({ item, onClose, onSaved, onError }) {
           )}
           <div><label style={S.lbl}>Presiune max (bar)</label><input type="number" value={f.presiune_max_bar} onChange={e=>setK('presiune_max_bar',e.target.value)} style={S.input} /></div>
           <div><label style={S.lbl}>Consum motorină (L/h)</label><input type="number" value={f.consum_motorina_l_h} onChange={e=>setK('consum_motorina_l_h',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 145" /></div>
+          <div><label style={S.lbl}>Categorie transport</label>
+            <select value={f.categorie_transport} onChange={e=>setK('categorie_transport',e.target.value)} style={S.input}>
+              <option value="V1">V1 — utilaj mare</option>
+              <option value="V2">V2 — utilaj mic</option>
+            </select></div>
           <div><label style={S.lbl}>Observații</label><input value={f.observatii} onChange={e=>setK('observatii',e.target.value)} style={S.input} /></div>
         </div>
         <div style={{display:'flex', gap:10, marginTop:20}}>

@@ -306,8 +306,10 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
   const [calcule, setCalcule] = useState([])
   const [diametre, setDiametre] = useState([])
   const [configs, setConfigs] = useState([])
+  const [transportTarife, setTransportTarife] = useState([])
   const [busy, setBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [showTarife, setShowTarife] = useState(false)
   // Sursa calculului: 'nou' = calcul inline (fără proiect, pentru ofertare) | 'salvat' = dintr-un calcul existent
   const [sursaCalc, setSursaCalc] = useState(isNew ? 'nou' : 'salvat')
 
@@ -336,18 +338,29 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
 
   useEffect(() => {
     (async () => {
-      const [cRes, dRes, cfgRes] = await Promise.all([
+      const [cRes, dRes, cfgRes, ttRes] = await Promise.all([
         supabase.from('probe_calcule')
-          .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii(denumire, tarif_lei_h, tarif_lei_mc), executie_proiecte(cod_intern, nume)')
+          .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii(denumire, tarif_lei_h, tarif_lei_mc, categorie_transport), executie_proiecte(cod_intern, nume)')
           .order('created_at', { ascending: false }).limit(100),
         supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
         supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
+        supabase.from('probe_transport_tarife').select('*'),
       ])
       setCalcule(cRes.data || [])
       setDiametre(dRes.data || [])
       setConfigs(cfgRes.data || [])
+      setTransportTarife(ttRes.data || [])
     })()
   }, [])
+
+  // Tarif transport pentru o categorie (V1/V2)
+  const tarifTransport = (categorie) => transportTarife.find(t => t.categorie === categorie)
+  // Calcul transport: distanță × tarif × (2 dacă dus-întors)
+  const calcTransport = (categorie, km) => {
+    const t = tarifTransport(categorie)
+    if (!t || !km) return 0
+    return Number(km) * Number(t.tarif_lei_km) * (t.dus_intors ? 2 : 1)
+  }
 
   // ─── Calcul inline live ───
   const ciDn = diametre.find(d => String(d.id) === String(ci.dnId))
@@ -372,15 +385,17 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
   // Pre-completare costuri din calcul salvat
   const prefillFromCalc = (c) => {
     if (!c) return
+    const cat = c.probe_configuratii?.categorie_transport
+    const transp = calcTransport(cat, f.distanta_km)
     if (c.tip_fluid === 'aer') {
       const tarif = parseFloat(c.probe_configuratii?.tarif_lei_h || 0)
       const pist = parseFloat(c.durata_pistonare_h||0) * tarif
       const proba = parseFloat(c.durata_proba_h||0) * tarif
-      setF(p => ({ ...p, pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
+      setF(p => ({ ...p, transport_lei:+transp.toFixed(2), pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
     } else {
       const pu = parseFloat(c.probe_configuratii?.tarif_lei_mc || 0)
       const vMc = parseFloat(c.v_conducta_mc||0)
-      setF(p => ({ ...p, proba_lei:+(vMc*pu).toFixed(2), pistonare_lei:0, uscare_lei:0, calibrare_lei:0 }))
+      setF(p => ({ ...p, transport_lei:+transp.toFixed(2), proba_lei:+(vMc*pu).toFixed(2), pistonare_lei:0, uscare_lei:0, calibrare_lei:0 }))
     }
   }
   const onSelectCalc = (id) => {
@@ -389,17 +404,18 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     if (c && isNew) prefillFromCalc(c)
   }
 
-  // Pre-completare costuri din calcul INLINE (durată × tarif config)
+  // Pre-completare costuri din calcul INLINE (durată × tarif config + transport categorie)
   const prefillFromInline = () => {
     if (!ciRez || !ciCfg) return
+    const transp = calcTransport(ciCfg.categorie_transport, f.distanta_km)
     if (ci.tipFluid === 'aer') {
       const tarif = parseFloat(ciCfg.tarif_lei_h || 0)
       const pist = (ciRez.durata_pistonare_h||0) * tarif
       const proba = (ciRez.durata_proba_h||0) * tarif
-      setF(p => ({ ...p, pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
+      setF(p => ({ ...p, transport_lei:+transp.toFixed(2), pistonare_lei:+pist.toFixed(2), uscare_lei:+pist.toFixed(2), calibrare_lei:+pist.toFixed(2), proba_lei:+proba.toFixed(2) }))
     } else {
       const pu = parseFloat(ciCfg.tarif_lei_mc || 0)
-      setF(p => ({ ...p, proba_lei:+((ciRez.v_conducta_mc||0)*pu).toFixed(2), pistonare_lei:0, uscare_lei:0, calibrare_lei:0 }))
+      setF(p => ({ ...p, transport_lei:+transp.toFixed(2), proba_lei:+((ciRez.v_conducta_mc||0)*pu).toFixed(2), pistonare_lei:0, uscare_lei:0, calibrare_lei:0 }))
     }
   }
 
@@ -566,7 +582,22 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
           <div><label style={S.lbl}>Data ofertei</label><input type="date" value={f.data_oferta} onChange={e=>setK('data_oferta',e.target.value)} style={S.input} /></div>
         </div>
 
-        <div style={{fontSize:12, fontWeight:800, color:G.text, marginBottom:8}}>💰 Costuri (lei, fără TVA)</div>
+        <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:8}}>
+          <div style={{fontSize:12, fontWeight:800, color:G.text}}>💰 Costuri (lei, fără TVA)</div>
+          <div style={{flex:1}} />
+          {(() => {
+            const cat = sursaCalc==='nou' ? ciCfg?.categorie_transport : calcSalvat?.probe_configuratii?.categorie_transport
+            const t = cat ? tarifTransport(cat) : null
+            if (!t) return null
+            return (
+              <span style={{fontSize:11, color:G.muted}}>
+                🚚 {cat} ({t.denumire}): <strong style={{color:G.ofertare}}>{fmtLei(t.tarif_lei_km)} lei/km</strong>{t.dus_intors?' ×2 dus-întors':''}
+                {f.distanta_km ? <span> → <strong style={{color:G.green}}>{fmtLei(calcTransport(cat, f.distanta_km))} lei</strong></span> : ''}
+              </span>
+            )
+          })()}
+          <button onClick={()=>setShowTarife(true)} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>⚙️ Tarife</button>
+        </div>
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14}}>
           {[
             ['transport_lei','🚚 Transport'],['pistonare_lei','🔧 Pistonare'],['uscare_lei','💨 Uscare'],
@@ -600,6 +631,62 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
         <div style={{display:'flex', gap:10}}>
           <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
           <button onClick={save} disabled={busy} style={{...S.btnP, flex:2, opacity:busy?0.6:1}}>{busy?'Se salvează...':'💾 Salvează ofertă'}</button>
+        </div>
+
+        {showTarife && (
+          <TarifeTransportModal tarife={transportTarife}
+            onClose={()=>setShowTarife(false)}
+            onSaved={(noi)=>{ setTransportTarife(noi); setShowTarife(false) }} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// MODAL TARIFE TRANSPORT (editabil din UI)
+// ════════════════════════════════════════════════════════════════
+function TarifeTransportModal({ tarife, onClose, onSaved }) {
+  const [rows, setRows] = useState(tarife.map(t => ({...t})))
+  const [saving, setSaving] = useState(false)
+  const setVal = (cat, k, v) => setRows(rs => rs.map(r => r.categorie===cat ? {...r,[k]:v} : r))
+
+  const save = async () => {
+    setSaving(true)
+    for (const r of rows) {
+      await supabase.from('probe_transport_tarife').update({
+        tarif_lei_km: Number(r.tarif_lei_km)||0, dus_intors: !!r.dus_intors, denumire: r.denumire, updated_at: new Date().toISOString(),
+      }).eq('categorie', r.categorie)
+    }
+    setSaving(false)
+    onSaved(rows)
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.7)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10002, padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:12, padding:24, width:'100%', maxWidth:460}}>
+        <h3 style={{margin:'0 0 4px', fontSize:16, color:G.text}}>⚙️ Tarife transport</h3>
+        <div style={{fontSize:11, color:G.muted, marginBottom:16}}>lei/km · categoria se setează pe fiecare configurație de utilaj</div>
+        <div style={{display:'flex', flexDirection:'column', gap:14}}>
+          {rows.map(r => (
+            <div key={r.categorie} style={{background:G.bg, borderRadius:8, padding:'12px 14px'}}>
+              <div style={{display:'flex', alignItems:'center', gap:10, marginBottom:10}}>
+                <span style={{background:G.ofertare+'22', color:G.ofertare, borderRadius:6, padding:'3px 10px', fontSize:13, fontWeight:800}}>{r.categorie}</span>
+                <input value={r.denumire} onChange={e=>setVal(r.categorie,'denumire',e.target.value)} style={{...S.input, flex:1}} />
+              </div>
+              <div style={{display:'grid', gridTemplateColumns:'1fr auto', gap:12, alignItems:'end'}}>
+                <div><label style={S.lbl}>Tarif (lei/km)</label>
+                  <input type="number" value={r.tarif_lei_km} onChange={e=>setVal(r.categorie,'tarif_lei_km',e.target.value)} style={{...S.input, color:G.blue}} /></div>
+                <label style={{display:'flex', alignItems:'center', gap:6, fontSize:12, color:G.muted, paddingBottom:9, cursor:'pointer'}}>
+                  <input type="checkbox" checked={!!r.dus_intors} onChange={e=>setVal(r.categorie,'dus_intors',e.target.checked)} /> dus-întors (×2)
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:'flex', gap:10, marginTop:18}}>
+          <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
+          <button onClick={save} disabled={saving} style={{...S.btnP, flex:1, opacity:saving?0.6:1}}>{saving?'...':'💾 Salvează tarife'}</button>
         </div>
       </div>
     </div>
