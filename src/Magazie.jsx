@@ -54,6 +54,7 @@ function MaterialeTab() {
   const [costFor, setCostFor] = useState(null)          // poziția de stoc pt setare cost mediu manual
   const [adaugaPoz, setAdaugaPoz] = useState(false)     // modal adăugare poziție nouă
   const [catalog, setCatalog] = useState([])            // materiale din catalog (autocomplete)
+  const [furnMap, setFurnMap] = useState({})            // {locatie_tip|locatie_id|material: {ultim, nr, lista}}
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -65,15 +66,21 @@ function MaterialeTab() {
           .select('id, role, is_owner, can_manage_stoc').eq('id', user.id).maybeSingle()
         prof = data || null
       }
-      const [rStoc, rProj, rCat] = await Promise.all([
+      const [rStoc, rProj, rCat, rFurn] = await Promise.all([
         supabase.from('stocuri').select('*').order('material_denumire'),
         supabase.from('executie_proiecte').select('id, nume, cod_intern'),
         supabase.from('materiale').select('id, cod, denumire, um, activ').eq('activ', true).order('denumire'),
+        supabase.from('v_stoc_furnizori').select('*'),
       ])
       setProfile(prof)
       setStocuri(rStoc.data || [])
       setProiecte(rProj.data || [])
       setCatalog(rCat.data || [])
+      const fm = {}
+      for (const r of (rFurn.data || [])) {
+        fm[`${r.locatie_tip}|${r.locatie_id}|${r.material_denumire}`] = { ultim: r.furnizor_ultim, nr: r.nr_furnizori, lista: r.furnizori_lista }
+      }
+      setFurnMap(fm)
     } catch (e) { console.error(e) } finally { setLoading(false) }
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
@@ -162,7 +169,11 @@ function MaterialeTab() {
             const val = s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : null
             return (
             <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 200px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
-              <div style={{ fontWeight:600 }}>{s.material_denumire}{s.observatii && <div style={{ fontSize:11, color:G.muted }}>{s.observatii}</div>}</div>
+              <div style={{ fontWeight:600 }}>{s.material_denumire}{s.observatii && <div style={{ fontSize:11, color:G.muted }}>{s.observatii}</div>}{(() => {
+                const fz = furnMap[`${s.locatie_tip}|${s.locatie_id}|${s.material_denumire}`]
+                if (!fz || !fz.ultim) return null
+                return <div style={{ fontSize:11, color:G.dim }} title={fz.lista || fz.ultim}>🏭 {fz.ultim}{fz.nr > 1 && <span style={{ color:G.muted }}> +{fz.nr - 1}</span>}</div>
+              })()}</div>
               <div style={{ color:G.muted }}>{s.um || '—'}</div>
               <div style={{ textAlign:'right' }}>
                 <div style={{ fontWeight:800, fontSize:15, color: Number(s.cantitate) > 0 ? G.green : G.red }}>{fmtNr(s.cantitate)}</div>
@@ -449,20 +460,25 @@ function EchipamenteTab() {
   const [editModal, setEditModal] = useState(null)   // obiect echipament sau {} pt nou
   const [predaModal, setPredaModal] = useState(null)  // echipamentul către care predăm
   const [busy, setBusy] = useState(false)
+  const [furnMap, setFurnMap] = useState({})          // {echipament_id: furnizor}
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [rEch, rAsig, rEmp, rUser] = await Promise.all([
+      const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
         supabase.from('v_magazie_echipamente').select('*').order('denumire'),
         supabase.from('v_magazie_inventar_activ').select('*').is('data_retur', null),
         supabase.from('employees').select('id, name, functie').order('name'),
         supabase.auth.getUser(),
+        supabase.from('v_echipament_furnizor').select('*'),
       ])
       setEchipamente(rEch.data || [])
       setAsignari(rAsig.data || [])
       setEmployees(rEmp.data || [])
       setUid(rUser.data?.user?.id || null)
+      const fm = {}
+      for (const r of (rFurn.data || [])) fm[r.echipament_id] = r.furnizor
+      setFurnMap(fm)
     } catch (e) { console.error(e) } finally { setLoading(false) }
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
@@ -608,6 +624,7 @@ function EchipamenteTab() {
                       {e.stare !== 'functional' && <span style={{ background:G.red + '22', color:G.red, borderRadius:6, padding:'1px 7px', fontSize:10, fontWeight:800 }}>{e.stare}</span>}
                     </div>
                     {e.serie && <div style={{ fontSize:11, color:G.dim }}>serie/inv: {e.serie}</div>}
+                    {furnMap[e.id] && <div style={{ fontSize:11, color:G.dim }}>🏭 {furnMap[e.id]}</div>}
                   </div>
                   <div><span style={{ background:cat.color + '22', color:cat.color, borderRadius:6, padding:'2px 9px', fontSize:11, fontWeight:700 }}>{cat.emoji} {cat.label}</span></div>
                   <div style={{ textAlign:'center', fontWeight:700 }}>{fmtNr(e.cantitate_total)} <span style={{ fontSize:10, color:G.dim }}>{e.um}</span></div>
