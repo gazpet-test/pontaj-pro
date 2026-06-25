@@ -12,6 +12,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx-js-style'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import { calcProbe, fmtH, fmtNr } from './utils/probeCalc.js'
 
 const supabase = createClient(
@@ -552,6 +554,16 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
 }
 
 // ══════════════════════════════════════════════════════════
+// ── Status probă (workflow execuție) ──
+const PROBA_STATUS = {
+  planificata: { icon:'📐', label:'Planificată', color:G.blue },
+  in_executie: { icon:'⏳', label:'În execuție', color:G.orange },
+  finalizata:  { icon:'✅', label:'Admisă',      color:G.green },
+  respinsa:    { icon:'❌', label:'Respinsă',     color:G.red },
+}
+const probaBadge = (color) => ({ fontSize:11, fontWeight:800, padding:'3px 10px', borderRadius:20, whiteSpace:'nowrap', background:color+'22', color, border:`1px solid ${color}55` })
+const btnMini = (c) => ({ padding:'5px 10px', background:c+'22', border:`1px solid ${c}55`, borderRadius:6, color:c, cursor:'pointer', fontSize:11, fontWeight:700, whiteSpace:'nowrap' })
+
 // CALCULATOR PROBE DE PRESIUNE (vista din TabSantiere)
 // ══════════════════════════════════════════════════════════
 function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
@@ -571,13 +583,14 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
   const [configId, setConfigId] = useState('')
   const [editConfig, setEditConfig] = useState(null)
   const [logCalc, setLogCalc] = useState(null)   // calcul pentru care deschidem log-ul de citiri teren
+  const [executieCalc, setExecutieCalc] = useState(null)   // calcul pentru care deschidem modalul de execuție/închidere
 
   // ─── Load cataloage ───
   const loadCat = useCallback(async () => {
     setLoading(true)
     const [dRes, cRes, uRes] = await Promise.all([
       supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
-      supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
+      supabase.from('v_probe_config_consum').select('*').eq('activ', true).order('id'),
       supabase.from('logistica_active')
         .select('id, cod_intern, marca, model, norma_consum, unitate_norma, tarif_proba_lei_h, stare, vandut')
         .or('model.ilike.%compres%,model.ilike.%booster%,model.ilike.%pompa%,model.ilike.%pompă%,model.ilike.%LMF%,model.ilike.%motocompres%,model.ilike.%electrocompres%,model.ilike.%motopompa%,marca.ilike.%LMF%')
@@ -603,7 +616,7 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
   const loadSalvari = useCallback(async () => {
     if (!proiectId) { setSalvari([]); return }
     const { data } = await supabase.from('probe_calcule')
-      .select('*, probe_diametre(dn_label), probe_configuratii(denumire)')
+      .select('*, probe_diametre(dn_label, diametru_extern_mm), config_est:probe_configuratii!config_id(denumire), config_real:probe_configuratii!config_real_id(denumire)')
       .eq('proiect_id', proiectId).order('created_at', { ascending:false }).limit(20)
     setSalvari(data || [])
   }, [proiectId])
@@ -672,12 +685,33 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
       timp_umplere_h: rez.timp_umplere_h || null,
       timp_presurizare_h: rez.timp_presurizare_h || null,
       valoare_lei: rez.valoare_lei || null,
+      status: 'planificata',
       created_by: profile?.id || null,
     }
     const { error } = await supabase.from('probe_calcule').insert(payload)
     if (error) return onToast('Eroare salvare: ' + error.message, 'err')
     onToast('✓ Calcul salvat')
     loadSalvari()
+  }
+
+  // Pornește execuția: planificata → in_executie (setează data + ora start)
+  const startExecutie = async (s) => {
+    const now = new Date()
+    const { error } = await supabase.from('probe_calcule').update({
+      status: 'in_executie',
+      data_executie: s.data_executie || now.toISOString().slice(0,10),
+      ora_start: s.ora_start || now.toISOString(),
+      updated_at: now.toISOString(),
+    }).eq('id', s.id)
+    if (error) return onToast('Eroare: ' + error.message, 'err')
+    onToast('▶ Probă pornită — poți înregistra citiri din teren')
+    loadSalvari()
+  }
+
+  const openPv = async (path) => {
+    const { data, error } = await supabase.storage.from('probe-citiri').createSignedUrl(path, 120)
+    if (error || !data) return onToast('Nu pot deschide PV-ul', 'err')
+    window.open(data.signedUrl, '_blank')
   }
 
   if (loading) return <div style={{padding:40, textAlign:'center', color:G.muted}}>⏳ Se încarcă cataloagele...</div>
@@ -854,27 +888,43 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
           <div style={{padding:'12px 18px', borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800, color:G.text}}>
             📋 Calcule salvate ({salvari.length})
           </div>
-          {salvari.map((s, i) => (
+          {salvari.map((s, i) => {
+            const st = PROBA_STATUS[s.status] || PROBA_STATUS.planificata
+            const real = s.config_real?.denumire && String(s.config_real_id) !== String(s.config_id)
+            return (
             <div key={s.id} style={{
-              display:'grid', gridTemplateColumns:'auto 1fr auto auto auto auto', gap:14, alignItems:'center',
+              display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',
               padding:'10px 18px', fontSize:12, color:G.text,
               borderBottom: i < salvari.length-1 ? `1px solid ${G.border}` : 'none',
               background: i%2 ? G.bg+'44' : 'transparent',
             }}>
               <span style={{fontSize:15}}>{s.tip_fluid==='apa' ? '💧' : '💨'}</span>
-              <span>
+              <span style={{flex:'1 1 220px', minWidth:180}}>
                 <strong>{s.probe_diametre?.dn_label || '—'}</strong> · {fmtNr(s.lungime_m,0)}m · {fmtNr(s.presiune_bar,0)} bar
-                <span style={{color:G.muted}}> · {s.probe_configuratii?.denumire || ''}</span>
+                <span style={{color:G.muted}}> · {s.config_est?.denumire || ''}</span>
+                {real && <span style={{color:G.green}}> · real: {s.config_real.denumire}</span>}
               </span>
-              <span style={{color:G.blue}}>{fmtNr(s.v_conducta_mc)} mc</span>
-              <span style={{color:G.executie}}>{fmtH(s.durata_total_h)}</span>
-              <span style={{color:G.orange}}>{fmtNr(s.consum_motorina_l,0)} L</span>
-              <button onClick={() => setLogCalc(s)}
-                style={{padding:'5px 10px', background:G.purple+'22', border:`1px solid ${G.purple}55`, borderRadius:6, color:G.purple, cursor:'pointer', fontSize:11, fontWeight:700, whiteSpace:'nowrap'}}>
-                📋 Citiri teren
-              </button>
+              <span style={probaBadge(st.color)}>{st.icon} {st.label}</span>
+              <span style={{color:G.executie, whiteSpace:'nowrap'}}>{fmtH(s.durata_total_h)}</span>
+              <span style={{color:G.orange, whiteSpace:'nowrap'}}>{fmtNr(s.consum_motorina_l,0)} L</span>
+              <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+                {canWrite && s.status==='planificata' && (
+                  <button onClick={() => startExecutie(s)} style={btnMini(G.blue)}>▶ Pornește</button>
+                )}
+                {(s.status==='planificata' || s.status==='in_executie') && (
+                  <button onClick={() => setLogCalc(s)} style={btnMini(G.purple)}>📋 Citiri</button>
+                )}
+                {canWrite && (s.status==='in_executie' || s.status==='finalizata' || s.status==='respinsa') && (
+                  <button onClick={() => setExecutieCalc(s)} style={btnMini(G.executie)}>
+                    🏁 {s.status==='in_executie' ? 'Închide' : 'Editează'}
+                  </button>
+                )}
+                {s.pv_path && (
+                  <button onClick={() => openPv(s.pv_path)} style={btnMini(G.green)}>📄 PV</button>
+                )}
+              </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
 
@@ -886,6 +936,13 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
 
       {logCalc && (
         <LogProbeModal calc={logCalc} profile={profile} onClose={() => setLogCalc(null)} onToast={onToast} />
+      )}
+
+      {executieCalc && (
+        <ExecutieProbaModal calc={executieCalc} configs={configs} profile={profile}
+          onClose={() => setExecutieCalc(null)}
+          onSaved={() => { setExecutieCalc(null); loadSalvari() }}
+          onToast={onToast} />
       )}
     </div>
   )
@@ -982,7 +1039,11 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
           <div><label style={S.lbl}>Denumire</label><input value={f.denumire} onChange={e=>setK('denumire',e.target.value)} style={S.input} /></div>
           {isAer ? (
             <>
-              <div><label style={S.lbl}>Debit (mc/min)</label><input type="number" value={f.debit_mc_min} onChange={e=>setK('debit_mc_min',e.target.value)} style={S.input} /></div>
+              <div>
+                <label style={S.lbl}>Debit (mc/min)</label>
+                <input type="number" value={f.debit_mc_min} onChange={e=>setK('debit_mc_min',e.target.value)} style={S.input} disabled={f.activ_ids.length>0} />
+                {f.activ_ids.length>0 && <div style={{fontSize:10, color:G.green, marginTop:4}}>↻ Auto din utilaje la calcul: min(Σ compresoare, debit booster). Câmpul manual e ignorat.</div>}
+              </div>
               <div><label style={S.lbl}>Tarif (lei/h){f.tarif_auto && <span style={{color:G.green, fontWeight:400, textTransform:'none'}}> · auto din utilaje</span>}</label>
                 <input type="number" value={f.tarif_auto ? sumaTarifUtilaje : f.tarif_lei_h} onChange={e=>setK('tarif_lei_h',e.target.value)} disabled={f.tarif_auto}
                   style={{...S.input, color: f.tarif_auto?G.green:G.blue, opacity: f.tarif_auto?0.7:1}} placeholder="ex: 4000" /></div>
@@ -1076,6 +1137,256 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
         <div style={{display:'flex', gap:10, marginTop:20}}>
           <button onClick={onClose} style={{...S.btn, flex:1, background:G.border2, color:G.muted}}>Anulează</button>
           <button onClick={save} disabled={saving} style={{...S.btn, flex:1, background:G.greenBg, color:'#fff', opacity:saving?0.6:1}}>{saving ? 'Se salvează...' : '💾 Salvează'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════
+// EXECUȚIE PROBĂ — închidere + PV + diagramă (Faza 1)
+// ══════════════════════════════════════════════════════════
+// Diagrama presiune-timp din citirile de teren (probe_log_executie) → dataURL PNG
+function drawDiagramaCanvas(readings, presiuneTinta) {
+  const pts = (readings || [])
+    .filter(r => r.presiune_citita_bar != null)
+    .map(r => ({ t: new Date(r.ora_citire).getTime(), p: Number(r.presiune_citita_bar) }))
+    .sort((a, b) => a.t - b.t)
+  if (pts.length === 0) return null
+  const W = 800, H = 360, padL = 56, padR = 24, padT = 24, padB = 48
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H
+  const ctx = cv.getContext('2d')
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H)
+  const t0 = pts[0].t
+  const tMax = Math.max(pts[pts.length - 1].t - t0, 60000) // min 1 min span
+  const pMaxData = Math.max(...pts.map(p => p.p), Number(presiuneTinta) || 0)
+  const pMax = Math.max(Math.ceil((pMaxData * 1.15) / 5) * 5, 5)
+  const X = t => padL + ((t - t0) / tMax) * (W - padL - padR)
+  const Y = p => H - padB - (p / pMax) * (H - padT - padB)
+  const minMax = tMax / 60000
+  ctx.font = '12px Arial'
+  // grid Y + labels
+  for (let i = 0; i <= 5; i++) {
+    const p = pMax * i / 5, yy = Y(p)
+    ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(W - padR, yy); ctx.stroke()
+    ctx.fillStyle = '#6b7280'; ctx.fillText(p.toFixed(0), 12, yy + 4)
+  }
+  // grid X + labels
+  for (let i = 0; i <= 6; i++) {
+    const tt = t0 + tMax * i / 6, xx = X(tt)
+    ctx.strokeStyle = '#f3f4f6'; ctx.beginPath(); ctx.moveTo(xx, padT); ctx.lineTo(xx, H - padB); ctx.stroke()
+    ctx.fillStyle = '#6b7280'; ctx.fillText((minMax * i / 6).toFixed(0) + 'm', xx - 10, H - padB + 18)
+  }
+  // linie țintă (dashed)
+  if (Number(presiuneTinta) > 0) {
+    ctx.save(); ctx.setLineDash([6, 5]); ctx.strokeStyle = '#dc2626'; ctx.lineWidth = 1.5
+    const ty = Y(Number(presiuneTinta))
+    ctx.beginPath(); ctx.moveTo(padL, ty); ctx.lineTo(W - padR, ty); ctx.stroke()
+    ctx.fillStyle = '#dc2626'; ctx.font = 'bold 11px Arial'
+    ctx.fillText('tinta ' + presiuneTinta + ' bar', W - padR - 95, ty - 5); ctx.restore()
+  }
+  // axe
+  ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1.5
+  ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB); ctx.lineTo(W - padR, H - padB); ctx.stroke()
+  ctx.fillStyle = '#374151'; ctx.font = 'bold 12px Arial'
+  ctx.fillText('Presiune (bar)', 8, 16); ctx.fillText('Timp (min)', W - padR - 70, H - 12)
+  // serie date
+  ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 2; ctx.beginPath()
+  pts.forEach((p, idx) => { const xx = X(p.t), yy = Y(p.p); idx === 0 ? ctx.moveTo(xx, yy) : ctx.lineTo(xx, yy) })
+  ctx.stroke()
+  ctx.fillStyle = '#2563eb'
+  pts.forEach(p => { ctx.beginPath(); ctx.arc(X(p.t), Y(p.p), 3, 0, Math.PI * 2); ctx.fill() })
+  return cv.toDataURL('image/png')
+}
+
+function buildPvHtml(calc, readings, f, cfgReal) {
+  const diag = drawDiagramaCanvas(readings, calc.presiune_bar)
+  const dn = calc.probe_diametre?.dn_label || '—'
+  const tip = calc.tip_fluid === 'apa' ? 'Hidraulică (apă)' : 'Pneumatică (aer)'
+  const rez = f.rezultat === 'respins' ? 'RESPINSĂ' : 'ADMISĂ'
+  const rezColor = f.rezultat === 'respins' ? '#dc2626' : '#16a34a'
+  const fmt = (v, d = 0) => (v === '' || v == null) ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: d })
+  const esc = s => String(s || '').replace(/</g, '&lt;')
+  const citiriRows = (readings || []).map(r => `<tr>
+    <td style="border:1px solid #d1d5db;padding:4px 8px">${new Date(r.ora_citire).toLocaleString('ro-RO')}</td>
+    <td style="border:1px solid #d1d5db;padding:4px 8px;text-align:right">${r.presiune_citita_bar != null ? Number(r.presiune_citita_bar).toFixed(2) : '—'}</td>
+    <td style="border:1px solid #d1d5db;padding:4px 8px;text-align:right">${r.ore_compresor != null ? Number(r.ore_compresor).toFixed(1) : '—'}</td>
+    <td style="border:1px solid #d1d5db;padding:4px 8px">${esc(r.observatii)}</td>
+  </tr>`).join('')
+  const F = (label, val) => `<div style="flex:1;min-width:110px"><div style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">${label}</div><div style="font-size:13px;font-weight:700;color:#111827">${val}</div></div>`
+  return `<div style="width:794px;padding:34px 38px;background:#fff;color:#111827;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111827;padding-bottom:8px">
+      <div><div style="font-size:18px;font-weight:800">GAZPET INSTAL SRL</div><div style="font-size:11px;color:#6b7280">Ploiești · Construcții conducte gaze</div></div>
+      <div style="text-align:right;font-size:11px;color:#374151">Nr. PV: ______ / ${f.data_executie || ''}<br/>Proiect #${calc.proiect_id || '—'}</div>
+    </div>
+    <div style="text-align:center;margin:16px 0 4px"><div style="font-size:17px;font-weight:800;letter-spacing:.5px">PROCES-VERBAL DE PROBĂ DE PRESIUNE</div><div style="font-size:11px;color:#6b7280">${tip}</div></div>
+
+    <div style="margin-top:14px;font-size:12px;font-weight:800;color:#374151;border-left:3px solid #2563eb;padding-left:8px">1 · IDENTIFICARE</div>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 4px;padding:0 4px">${F('Diametru', dn)}${F('Lungime', fmt(calc.lungime_m) + ' m')}${F('Tip fluid', tip)}${F('Data execuție', f.data_executie || '—')}</div>
+
+    <div style="margin-top:12px;font-size:12px;font-weight:800;color:#374151;border-left:3px solid #2563eb;padding-left:8px">2 · PARAMETRI PROBĂ</div>
+    <div style="display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 4px;padding:0 4px">${F('Presiune țintă', fmt(calc.presiune_bar) + ' bar')}${F('Presiune inițială', fmt(f.presiune_initiala_bar, 2) + ' bar')}${F('Presiune finală', fmt(f.presiune_finala_bar, 2) + ' bar')}${F('Durată reală', f.durata_reala_h ? fmt(f.durata_reala_h, 1) + ' h' : '—')}${F('Temperatură', f.temperatura_c !== '' ? fmt(f.temperatura_c, 1) + ' °C' : '—')}${F('Echipament real', cfgReal ? esc(cfgReal.denumire) : '—')}</div>
+
+    <div style="margin-top:12px;font-size:12px;font-weight:800;color:#374151;border-left:3px solid #2563eb;padding-left:8px">3 · DIAGRAMA PRESIUNE–TIMP</div>
+    ${diag ? `<div style="margin:8px 0;text-align:center"><img src="${diag}" style="width:100%;max-width:680px;border:1px solid #e5e7eb"/></div>` : `<div style="margin:8px 4px;font-size:12px;color:#9ca3af">Fără citiri înregistrate.</div>`}
+
+    <div style="margin-top:8px;font-size:12px;font-weight:800;color:#374151;border-left:3px solid #2563eb;padding-left:8px">4 · CITIRI ÎNREGISTRATE (${(readings || []).length})</div>
+    ${(readings || []).length ? `<table style="width:100%;border-collapse:collapse;margin:8px 0;font-size:11px"><thead><tr style="background:#f3f4f6"><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:left">Data / ora (server)</th><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:right">Presiune (bar)</th><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:right">Ore compresor</th><th style="border:1px solid #d1d5db;padding:5px 8px;text-align:left">Observații</th></tr></thead><tbody>${citiriRows}</tbody></table>` : ''}
+
+    <div style="margin-top:12px;display:flex;align-items:center;gap:12px"><div style="font-size:13px;font-weight:800;color:#374151">5 · REZULTAT:</div><div style="font-size:16px;font-weight:900;color:${rezColor}">${rez}</div></div>
+    ${f.observatii ? `<div style="margin-top:6px;font-size:12px;color:#374151"><b>Observații:</b> ${esc(f.observatii)}</div>` : ''}
+
+    <div style="display:flex;justify-content:space-between;margin-top:40px;gap:24px">
+      <div style="flex:1;text-align:center"><div style="border-top:1px solid #111827;padding-top:6px;font-size:11px">Operator probă${f.operator_nume ? `<br/><b>${esc(f.operator_nume)}</b>` : ''}</div></div>
+      <div style="flex:1;text-align:center"><div style="border-top:1px solid #111827;padding-top:6px;font-size:11px">Responsabil execuție${f.responsabil_nume ? `<br/><b>${esc(f.responsabil_nume)}</b>` : ''}</div></div>
+      <div style="flex:1;text-align:center"><div style="border-top:1px solid #111827;padding-top:6px;font-size:11px">Beneficiar / Diriginte șantier</div></div>
+    </div>
+    <div style="margin-top:24px;font-size:9px;color:#9ca3af;text-align:right">Generat ${new Date().toLocaleString('ro-RO')} · PontajPRO · timestamp citiri = server-side (conformitate ANRE)</div>
+  </div>`
+}
+
+async function generatePvProbaPDF(calc, readings, f, configs) {
+  const cfgReal = configs.find(c => String(c.id) === String(f.config_real_id))
+  const wrap = document.createElement('div')
+  wrap.style.position = 'fixed'; wrap.style.left = '-10000px'; wrap.style.top = '0'
+  wrap.innerHTML = buildPvHtml(calc, readings, f, cfgReal)
+  document.body.appendChild(wrap)
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+  try {
+    const node = wrap.firstElementChild
+    const canvas = await html2canvas(node, { scale: 2, useCORS: true, backgroundColor: '#ffffff', logging: false })
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const pw = 210, ph = 297
+    const imgW = pw, imgH = canvas.height * pw / canvas.width
+    const img = canvas.toDataURL('image/png', 0.95)
+    let heightLeft = imgH, pos = 0
+    pdf.addImage(img, 'PNG', 0, pos, imgW, imgH, undefined, 'FAST')
+    heightLeft -= ph
+    while (heightLeft > 0) {
+      pos = heightLeft - imgH
+      pdf.addPage()
+      pdf.addImage(img, 'PNG', 0, pos, imgW, imgH, undefined, 'FAST')
+      heightLeft -= ph
+    }
+    return pdf.output('blob')
+  } finally {
+    document.body.removeChild(wrap)
+  }
+}
+
+function ExecutieProbaModal({ calc, configs, profile, onClose, onSaved, onToast }) {
+  const [readings, setReadings] = useState([])
+  const [f, setF] = useState({
+    data_executie: calc.data_executie || new Date().toISOString().slice(0, 10),
+    config_real_id: calc.config_real_id || calc.config_id || '',
+    presiune_initiala_bar: calc.presiune_initiala_bar ?? '',
+    presiune_finala_bar: calc.presiune_finala_bar ?? '',
+    durata_reala_h: calc.durata_reala_h ?? '',
+    temperatura_c: calc.temperatura_c ?? '',
+    operator_nume: calc.operator_nume || '',
+    responsabil_nume: calc.responsabil_nume || '',
+    rezultat: calc.status === 'respinsa' ? 'respins' : 'admis',
+    observatii: calc.observatii || '',
+  })
+  const [busy, setBusy] = useState(false)
+  const setK = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  useEffect(() => {
+    supabase.from('probe_log_executie').select('*').eq('calc_id', calc.id).order('ora_citire')
+      .then(({ data }) => setReadings(data || []))
+  }, [calc.id])
+
+  const configFiltrate = configs.filter(c => c.tip_fluid === calc.tip_fluid)
+
+  const finalizeaza = async () => {
+    if (!f.config_real_id) return onToast('Alege echipamentul folosit real', 'err')
+    setBusy(true)
+    try {
+      const status = f.rezultat === 'respins' ? 'respinsa' : 'finalizata'
+      const blob = await generatePvProbaPDF(calc, readings, f, configs)
+      const path = `pv/PV_proba_${calc.id}_${Date.now()}.pdf`
+      const { error: upErr } = await supabase.storage.from('probe-citiri').upload(path, blob, { contentType: 'application/pdf', upsert: false })
+      if (upErr) { setBusy(false); return onToast('Eroare upload PV: ' + upErr.message, 'err') }
+      const { error } = await supabase.from('probe_calcule').update({
+        status,
+        data_executie: f.data_executie || null,
+        config_real_id: f.config_real_id ? Number(f.config_real_id) : null,
+        presiune_initiala_bar: f.presiune_initiala_bar !== '' ? Number(f.presiune_initiala_bar) : null,
+        presiune_finala_bar: f.presiune_finala_bar !== '' ? Number(f.presiune_finala_bar) : null,
+        durata_reala_h: f.durata_reala_h !== '' ? Number(f.durata_reala_h) : null,
+        temperatura_c: f.temperatura_c !== '' ? Number(f.temperatura_c) : null,
+        operator_nume: f.operator_nume.trim() || null,
+        responsabil_nume: f.responsabil_nume.trim() || null,
+        observatii: f.observatii.trim() || null,
+        pv_path: path,
+        pv_generat_la: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq('id', calc.id)
+      if (error) { setBusy(false); return onToast('Eroare salvare: ' + error.message, 'err') }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `PV_proba_${calc.id}.pdf`; a.click(); URL.revokeObjectURL(url)
+      setBusy(false)
+      onToast('✓ Probă finalizată + PV generat')
+      onSaved()
+    } catch (e) {
+      setBusy(false)
+      onToast('Eroare generare PV: ' + (e?.message || e), 'err')
+    }
+  }
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: 24, width: '100%', maxWidth: 560, maxHeight: '92vh', overflowY: 'auto' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 16, color: G.text }}>🏁 Închidere probă #{calc.id}</h3>
+        <div style={{ fontSize: 12, color: G.muted, marginBottom: 14 }}>
+          {calc.tip_fluid === 'apa' ? '💧' : '💨'} {calc.probe_diametre?.dn_label || '—'} · {fmtNr(calc.lungime_m, 0)}m · {fmtNr(calc.presiune_bar, 0)} bar țintă · {readings.length} citiri
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><label style={S.lbl}>Data execuție</label><input type="date" value={f.data_executie} onChange={e => setK('data_executie', e.target.value)} style={S.input} /></div>
+            <div><label style={S.lbl}>Echipament folosit REAL</label>
+              <select value={f.config_real_id} onChange={e => setK('config_real_id', e.target.value)} style={S.input}>
+                <option value="">— alege —</option>
+                {configFiltrate.map(c => <option key={c.id} value={c.id}>{c.denumire}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <div><label style={S.lbl}>Presiune inițială (bar)</label><input type="number" value={f.presiune_initiala_bar} onChange={e => setK('presiune_initiala_bar', e.target.value)} style={S.input} /></div>
+            <div><label style={S.lbl}>Presiune finală (bar)</label><input type="number" value={f.presiune_finala_bar} onChange={e => setK('presiune_finala_bar', e.target.value)} style={S.input} /></div>
+            <div><label style={S.lbl}>Temperatură (°C)</label><input type="number" value={f.temperatura_c} onChange={e => setK('temperatura_c', e.target.value)} style={S.input} /></div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div><label style={S.lbl}>Durată reală (h)</label><input type="number" value={f.durata_reala_h} onChange={e => setK('durata_reala_h', e.target.value)} style={S.input} placeholder={`estimat ${fmtNr(calc.durata_total_h, 1)}`} /></div>
+            <div><label style={S.lbl}>Operator probă</label><input value={f.operator_nume} onChange={e => setK('operator_nume', e.target.value)} style={S.input} placeholder="Nume operator" /></div>
+          </div>
+          <div><label style={S.lbl}>Responsabil execuție</label><input value={f.responsabil_nume} onChange={e => setK('responsabil_nume', e.target.value)} style={S.input} placeholder="Nume responsabil" /></div>
+
+          <div>
+            <label style={S.lbl}>Rezultat probă</label>
+            <div style={{ display: 'flex', gap: 10 }}>
+              {[{ v: 'admis', l: '✅ ADMISĂ', c: G.green }, { v: 'respins', l: '❌ RESPINSĂ', c: G.red }].map(o => (
+                <button key={o.v} onClick={() => setK('rezultat', o.v)}
+                  style={{ flex: 1, padding: '10px', borderRadius: 8, cursor: 'pointer', fontWeight: 800, fontSize: 13, border: `2px solid ${f.rezultat === o.v ? o.c : G.border}`, background: f.rezultat === o.v ? o.c + '22' : 'transparent', color: f.rezultat === o.v ? o.c : G.muted }}>
+                  {o.l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div><label style={S.lbl}>Observații</label><textarea value={f.observatii} onChange={e => setK('observatii', e.target.value)} rows={2} style={{ ...S.input, resize: 'vertical' }} /></div>
+
+          {readings.length === 0 && (
+            <div style={{ background: G.yellow + '18', border: `1px solid ${G.yellow}44`, borderRadius: 7, padding: '8px 12px', fontSize: 11, color: G.yellow }}>
+              ⚠️ Nu există citiri din teren — diagrama presiune-timp din PV va fi goală. Le poți adăuga din butonul „📋 Citiri".
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} style={{ ...S.btn, flex: 1, background: G.border2, color: G.muted }}>Anulează</button>
+          <button onClick={finalizeaza} disabled={busy} style={{ ...S.btn, flex: 2, background: G.greenBg, color: '#fff', opacity: busy ? 0.6 : 1 }}>
+            {busy ? '⏳ Generez PV...' : '💾 Finalizează + 📄 Generează PV'}
+          </button>
         </div>
       </div>
     </div>
