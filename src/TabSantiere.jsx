@@ -631,6 +631,27 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
     return calcProbe({ dn, lungime_m: lungime, presiune_bar: presiune, cfg })
   }, [dn, lungime, presiune, cfg])
 
+  // Comparativ ansambluri eligibile (durată + consum, FĂRĂ preț) — pt alegerea optimului la execuție
+  const comparativ = useMemo(() => {
+    if (!dn || !lungime || !presiune) return []
+    const aer = tipFluid === 'aer'
+    return configFiltrate
+      .map(c => {
+        const r = calcProbe({ dn, lungime_m: lungime, presiune_bar: presiune, cfg: c })
+        if (!r) return null
+        return {
+          id: c.id, denumire: c.denumire,
+          debit: aer ? c.debit_mc_min : c.debit_l_min,
+          unit: aer ? 'mc/min' : 'L/min',
+          pmax: c.presiune_max_bar,
+          durata_total_h: r.durata_total_h,
+          consum_motorina_l: r.consum_motorina_l,
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.durata_total_h - b.durata_total_h)
+  }, [dn, lungime, presiune, configFiltrate, tipFluid])
+
   const handleSalveaza = async () => {
     if (!rez) return onToast('Completează toate câmpurile pentru calcul', 'err')
     if (!proiectId) return onToast('Selectează un proiect mai întâi', 'err')
@@ -662,6 +683,8 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
   if (loading) return <div style={{padding:40, textAlign:'center', color:G.muted}}>⏳ Se încarcă cataloagele...</div>
 
   const isAer = tipFluid === 'aer'
+  const minDurata = comparativ.length ? comparativ[0].durata_total_h : 0
+  const minConsum = comparativ.length ? Math.min(...comparativ.map(x => x.consum_motorina_l)) : 0
 
   return (
     <div style={{display:'flex', flexDirection:'column', gap:18}}>
@@ -776,13 +799,8 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
               <ProbaRow label="⏱️ TOTAL" val={`${fmtH(rez.durata_total_h)} · ${fmtNr(rez.durata_total_h/24,1)} zile`} bold />
             </div>
 
-            {/* Consum + valoare */}
-            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:10}}>
-              <ProbaStat label="⛽ Consum motorină" val={`${fmtNr(rez.consum_motorina_l,0)} L`} color={G.orange} />
-              {!isAer && rez.valoare_lei > 0 && (
-                <ProbaStat label="💰 Valoare" val={`${fmtNr(rez.valoare_lei,0)} lei`} color={G.green} />
-              )}
-            </div>
+            {/* Consum motorină — fără preț (vizualizare execuție: doar timp + motorină) */}
+            <ProbaStat label="⛽ Consum motorină estimat" val={`${fmtNr(rez.consum_motorina_l,0)} L`} color={G.orange} />
 
             {/* Disclaimer OBLIGATORIU */}
             <div style={{background:G.yellow+'18', border:`1px solid ${G.yellow}44`, borderRadius:7, padding:'8px 12px', fontSize:11, color:G.yellow, fontWeight:600}}>
@@ -799,6 +817,36 @@ function CalculatorProbe({ proiectId, proiecte, canWrite, profile, onToast }) {
           </>)}
         </div>
       </div>
+
+      {/* ─── COMPARATIV ANSAMBLURI (durată + motorină, fără preț) ─── */}
+      {comparativ.length > 1 && (
+        <div style={{background:G.surface, border:`1px solid ${G.border}`, borderRadius:10, overflow:'hidden'}}>
+          <div style={{padding:'12px 18px', borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800, color:G.text}}>
+            ⚖️ Comparativ ansambluri{dn ? ` · ${dn.dn_label}` : ''} · {fmtNr(lungime,0)}m · {fmtNr(presiune,0)} bar
+            <span style={{fontSize:11, fontWeight:500, color:G.dim, marginLeft:8}}>— alege optimul după timp / motorină</span>
+          </div>
+          {comparativ.map((cv, i) => {
+            const eFast = cv.durata_total_h === minDurata
+            const eEco = cv.consum_motorina_l === minConsum
+            const sel = String(cv.id) === String(configId)
+            return (
+              <div key={cv.id} onClick={() => setConfigId(String(cv.id))}
+                style={{display:'grid', gridTemplateColumns:'1fr auto auto auto', gap:14, alignItems:'center',
+                  padding:'10px 18px', fontSize:12, color:G.text, cursor:'pointer',
+                  borderBottom: i < comparativ.length-1 ? `1px solid ${G.border}` : 'none',
+                  background: sel ? G.executie+'18' : (i%2 ? G.bg+'44' : 'transparent')}}>
+                <span>
+                  <strong>{cv.denumire}</strong>
+                  <span style={{color:G.muted}}> · {fmtNr(cv.debit,0)} {cv.unit} · {fmtNr(cv.pmax,0)} bar max</span>
+                </span>
+                <span style={{color:G.executie, fontWeight:eFast?800:500, whiteSpace:'nowrap'}}>{fmtH(cv.durata_total_h)}{eFast ? ' ⚡' : ''}</span>
+                <span style={{color:G.orange, fontWeight:eEco?800:500, whiteSpace:'nowrap'}}>{fmtNr(cv.consum_motorina_l,0)} L{eEco ? ' 🌿' : ''}</span>
+                <span style={{fontSize:10, color: sel?G.executie:G.dim, fontWeight:700, whiteSpace:'nowrap'}}>{sel ? '✓ ales' : 'alege'}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* ─── CALCULE SALVATE ─── */}
       {salvari.length > 0 && (
@@ -869,7 +917,9 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
     denumire: item.denumire || '',
     debit_mc_min: item.debit_mc_min ?? '',
     debit_l_min: item.debit_l_min ?? '',
+    presiune_min_bar: item.presiune_min_bar ?? '',
     presiune_max_bar: item.presiune_max_bar ?? '',
+    spor_pct: item.spor_pct ?? '',
     tarif_lei_h: item.tarif_lei_h ?? '',
     tarif_lei_mc: item.tarif_lei_mc ?? '',
     consum_motorina_l_h: item.consum_motorina_l_h ?? '',
@@ -904,7 +954,9 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
     setSaving(true)
     const payload = {
       denumire: f.denumire.trim(),
+      presiune_min_bar: f.presiune_min_bar !== '' ? Number(f.presiune_min_bar) : 0,
       presiune_max_bar: f.presiune_max_bar ? Number(f.presiune_max_bar) : null,
+      spor_pct: f.spor_pct !== '' ? Number(f.spor_pct) : 0,
       consum_motorina_l_h: f.consum_auto ? (sumaConsumUtilaje || null) : (f.consum_motorina_l_h ? Number(f.consum_motorina_l_h) : null),
       consum_auto: f.consum_auto,
       tarif_auto: f.tarif_auto,
@@ -941,7 +993,11 @@ function ConfigProbaModal({ item, utilaje = [], onClose, onSaved, onError }) {
               <div><label style={S.lbl}>Tarif (lei/mc)</label><input type="number" value={f.tarif_lei_mc} onChange={e=>setK('tarif_lei_mc',e.target.value)} style={{...S.input, color:G.blue}} placeholder="ex: 200" /></div>
             </>
           )}
-          <div><label style={S.lbl}>Presiune max (bar)</label><input type="number" value={f.presiune_max_bar} onChange={e=>setK('presiune_max_bar',e.target.value)} style={S.input} /></div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+            <div><label style={S.lbl}>Presiune min (bar){isAer && <span style={{color:G.dim, fontWeight:400, textTransform:'none'}}> · booster ≥25</span>}</label><input type="number" value={f.presiune_min_bar} onChange={e=>setK('presiune_min_bar',e.target.value)} style={S.input} placeholder="ex: 25" /></div>
+            <div><label style={S.lbl}>Presiune max (bar)</label><input type="number" value={f.presiune_max_bar} onChange={e=>setK('presiune_max_bar',e.target.value)} style={S.input} /></div>
+          </div>
+          <div><label style={S.lbl}>Spor / ajustare preț (%)<span style={{color:G.dim, fontWeight:400, textTransform:'none'}}> · pe valoarea probei, per ansamblu</span></label><input type="number" value={f.spor_pct} onChange={e=>setK('spor_pct',e.target.value)} style={{...S.input, color:G.purple}} placeholder="0" /></div>
 
           {/* Utilaje din Logistică — single source of truth pentru consum */}
           <div style={{background:G.bg, border:`1px solid ${G.border}`, borderRadius:8, padding:'12px 14px'}}>

@@ -1158,6 +1158,10 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     norma_consum: a?.norma_consum || '',
     unitate_norma: a?.unitate_norma || 'l/h',
     tarif_proba_lei_h: a?.tarif_proba_lei_h ?? '',
+    pentru_proba_presiune: a?.pentru_proba_presiune ?? false,
+    debit_proba_mc_min: a?.debit_proba_mc_min ?? '',
+    presiune_max_proba_bar: a?.presiune_max_proba_bar ?? '',
+    chirie_proba_lei_h: a?.chirie_proba_lei_h ?? '',
     prag_alerta_consum: a?.prag_alerta_consum || '10',
     link_fisa_nas: a?.link_fisa_nas || '',
     observatii: a?.observatii || '',
@@ -1429,6 +1433,10 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       norma_consum: form.norma_consum ? Number(form.norma_consum) : null,
       unitate_norma: form.unitate_norma || null,
       tarif_proba_lei_h: form.tarif_proba_lei_h ? Number(form.tarif_proba_lei_h) : null,
+      pentru_proba_presiune: !!form.pentru_proba_presiune,
+      debit_proba_mc_min: form.pentru_proba_presiune && form.debit_proba_mc_min !== '' ? Number(form.debit_proba_mc_min) : null,
+      presiune_max_proba_bar: form.pentru_proba_presiune && form.presiune_max_proba_bar !== '' ? Number(form.presiune_max_proba_bar) : null,
+      chirie_proba_lei_h: form.pentru_proba_presiune && form.chirie_proba_lei_h !== '' ? Number(form.chirie_proba_lei_h) : null,
       prag_alerta_consum: form.prag_alerta_consum ? Number(form.prag_alerta_consum) : 10,
       link_fisa_nas: form.link_fisa_nas.trim() || null,
       observatii: form.observatii.trim() || null,
@@ -2044,10 +2052,33 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="Normă consum" value={form.norma_consum} onChange={v => setField('norma_consum', v)} type="number" placeholder="ex: 12.5" readonly={isReadOnly} />
             <FieldSelect label="Unitate" value={form.unitate_norma} onChange={v => setField('unitate_norma', v)} options={UNITATI_NORMA} readonly={isReadOnly} />
             <FieldText label="Prag alertă consum (%)" value={form.prag_alerta_consum} onChange={v => setField('prag_alerta_consum', v)} type="number" placeholder="10" readonly={isReadOnly} />
-            <FieldText label="Tarif probe presiune (lei/h)" value={form.tarif_proba_lei_h} onChange={v => setField('tarif_proba_lei_h', v)} type="number" placeholder="ex: 2000" readonly={isReadOnly} />
             <FieldText label="Serie șasiu (VIN)" value={form.serie_sasiu} onChange={v => setField('serie_sasiu', v)} placeholder="ex: WDB9061..." readonly={isReadOnly} />
             <FieldSelect label="Firmă proprietară" value={form.firma_proprietara} onChange={v => setField('firma_proprietara', v)} options={FIRME} readonly={isReadOnly} />
           </div>
+        </div>
+        
+        {/* 🔬 PROBE PRESIUNE */}
+        <div style={{marginBottom: 14}}>
+          <div style={{fontSize: 11, color: G.purple, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>🔬 Probe presiune</div>
+          <div style={{marginBottom: form.pentru_proba_presiune ? 10 : 0}}>
+            <label style={{display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer', userSelect: 'none'}}>
+              <input type="checkbox" checked={!!form.pentru_proba_presiune} onChange={e => setField('pentru_proba_presiune', e.target.checked)} disabled={isReadOnly} style={{width: 16, height: 16, accentColor: G.purple, cursor: isReadOnly ? 'default' : 'pointer'}} />
+              <span style={{fontSize: 13, color: G.text, fontWeight: 600}}>Utilaj folosit la probe de presiune (compresor / booster / pompă)</span>
+            </label>
+          </div>
+          {form.pentru_proba_presiune && (
+            <div style={{padding: 12, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, borderLeft: `3px solid ${G.purple}`}}>
+              <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12}}>
+                <FieldText label="Debit probă (mc/min)" value={form.debit_proba_mc_min} onChange={v => setField('debit_proba_mc_min', v)} type="number" placeholder="ex: 33" readonly={isReadOnly} />
+                <FieldText label="Presiune max probă (bar)" value={form.presiune_max_proba_bar} onChange={v => setField('presiune_max_proba_bar', v)} type="number" placeholder="ex: 90" readonly={isReadOnly} />
+                <FieldText label="Tarif probă (lei/h)" value={form.tarif_proba_lei_h} onChange={v => setField('tarif_proba_lei_h', v)} type="number" placeholder="ex: 2000" readonly={isReadOnly} />
+                <FieldText label="Chirie probă (lei/h)" value={form.chirie_proba_lei_h} onChange={v => setField('chirie_proba_lei_h', v)} type="number" placeholder="ex: 400" readonly={isReadOnly} />
+              </div>
+              <div style={{fontSize: 11, color: G.dim, marginTop: 8}}>
+                Debitul/presiunea reală a utilajului · folosite la calculul probelor (Execuție) și la prețul propus (Ofertare). La boostere: debit = pass-through, presiune = max booster.
+              </div>
+            </div>
+          )}
         </div>
         
         {/* DIMENSIUNI & TRANSPORT */}
