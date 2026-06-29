@@ -21,6 +21,7 @@ import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
+import SupapeDeclaratiiSection from './SupapeDeclaratiiSection.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
@@ -2152,6 +2153,14 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             </div>
           )}
         </div>
+
+        {activ?.id && (
+          <SupapeDeclaratiiSection
+            activ={activ}
+            canEdit={accessLevel === 'admin' || accessLevel === 'editor'}
+            showToast={showToast}
+          />
+        )}
 
         <div style={{marginBottom: 14}}>
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>📝 Note interne</div>
