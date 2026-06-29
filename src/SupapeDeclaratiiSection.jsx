@@ -19,6 +19,7 @@ import { supabase } from './lib/supabase.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import LOGO_B64 from './logo.js'
+import DropZone from './DropZone.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
 const G = {
@@ -370,7 +371,10 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
   const [file, setFile] = useState(null)
   const [parsing, setParsing] = useState(false)
   const [parseMsg, setParseMsg] = useState(null)
-  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+  const [autoFilled, setAutoFilled] = useState({})  // câmpuri completate din PDF, de confirmat
+  const set = (k, v) => { setF(p => ({ ...p, [k]: v })); if (autoFilled[k]) setAutoFilled(p => { const n = { ...p }; delete n[k]; return n }) }
+  const hasAuto = Object.keys(autoFilled).length > 0
+  const inp = (k) => autoFilled[k] ? { ...S.input, borderColor: G.logistica, background: G.logistica + '14' } : S.input
 
   const citesteDinPDF = async () => {
     if (!file) return
@@ -391,7 +395,11 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
         pr_bari: d.pr_bari ?? p.pr_bari,
         diametru_curgere_mm: d.diametru_curgere_mm ?? p.diametru_curgere_mm,
       }))
-      setParseMsg({ ok: true, text: '✅ Date completate din buletin — verifică-le și salvează' })
+      const filled = {}
+      ;['serie', 'nr_buletin', 'emitent', 'data_verificare', 'data_valabilitate', 'rezultat', 'pr_bari', 'diametru_curgere_mm'].forEach(k => { if (d[k] !== null && d[k] !== undefined && d[k] !== '') filled[k] = true })
+      setAutoFilled(filled)
+      const n = Object.keys(filled).length
+      setParseMsg({ ok: n > 0, text: n > 0 ? `✅ ${n} câmpuri completate din PDF — verifică-le și confirmă` : '⚠️ Nu am găsit date în PDF — completează manual' })
     } catch (e) {
       setParseMsg({ ok: false, text: '⚠️ Nu am putut citi buletinul: ' + (e.message || e) })
     } finally { setParsing(false) }
@@ -401,9 +409,14 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 20 }} onClick={onClose}>
       <div style={{ ...S.card, padding: 22, maxWidth: 540, width: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 17, fontWeight: 800, color: G.text, marginBottom: 16 }}>{f.id ? '✏️ Editează supapă' : '➕ Supapă nouă'}</div>
+        {hasAuto && (
+          <div style={{ marginBottom: 14, padding: '10px 12px', background: G.logistica + '18', border: `1px solid ${G.logistica}55`, borderRadius: 8, fontSize: 12, color: G.text }}>
+            🔎 <strong>Confirmare informații PDF</strong> — câmpurile evidențiate au fost citite automat din buletin. Verifică-le și corectează ce nu e bine; se înregistrează doar când apeși <strong>✓ Salvează</strong>.
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Serie supapă *</label><input style={S.input} value={f.serie || ''} onChange={e => set('serie', e.target.value)} placeholder="ex: 10293284" /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Serie supapă *</label><input style={inp('serie')} value={f.serie || ''} onChange={e => set('serie', e.target.value)} placeholder="ex: 10293284" /></div>
             <div style={{ flex: 1 }}><label style={lbl}>Producător</label><input style={S.input} value={f.producator || ''} onChange={e => set('producator', e.target.value)} placeholder="ex: LESER / technical" /></div>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: G.text, cursor: 'pointer' }}>
@@ -416,27 +429,35 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
 
           <div style={{ display: 'flex', gap: 10 }}>
             <div style={{ flex: 1 }}><label style={lbl}>Rezultat</label>
-              <select style={S.input} value={f.rezultat || 'conform'} onChange={e => set('rezultat', e.target.value)}>
+              <select style={inp('rezultat')} value={f.rezultat || 'conform'} onChange={e => set('rezultat', e.target.value)}>
                 <option value="conform">✅ Conform</option>
                 <option value="neconform">❌ Neconform</option>
                 <option value="in_asteptare">⏳ În așteptare</option>
               </select>
             </div>
-            <div style={{ flex: 1 }}><label style={lbl}>Nr. buletin</label><input style={S.input} value={f.nr_buletin || ''} onChange={e => set('nr_buletin', e.target.value)} placeholder="ex: 3467/19.06.2026" /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Nr. buletin</label><input style={inp('nr_buletin')} value={f.nr_buletin || ''} onChange={e => set('nr_buletin', e.target.value)} placeholder="ex: 3467/19.06.2026" /></div>
           </div>
-          <div><label style={lbl}>Emitent (unitate autorizată ISCIR)</label><input style={S.input} value={f.emitent || ''} onChange={e => set('emitent', e.target.value)} placeholder="ex: TERMOKLIMA S.R.L." /></div>
+          <div><label style={lbl}>Emitent (unitate autorizată ISCIR)</label><input style={inp('emitent')} value={f.emitent || ''} onChange={e => set('emitent', e.target.value)} placeholder="ex: TERMOKLIMA S.R.L." /></div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Data verificare</label><input type="date" style={S.input} value={f.data_verificare || ''} onChange={e => set('data_verificare', e.target.value)} /></div>
-            <div style={{ flex: 1 }}><label style={lbl}>Valabil până la</label><input type="date" style={S.input} value={f.data_valabilitate || ''} onChange={e => set('data_valabilitate', e.target.value)} /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Data verificare</label><input type="date" style={inp('data_verificare')} value={f.data_verificare || ''} onChange={e => set('data_verificare', e.target.value)} /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Valabil până la</label><input type="date" style={inp('data_valabilitate')} value={f.data_valabilitate || ''} onChange={e => set('data_valabilitate', e.target.value)} /></div>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 1 }}><label style={lbl}>Presiune reglare (bari)</label><input type="number" step="0.1" style={S.input} value={f.pr_bari ?? ''} onChange={e => set('pr_bari', e.target.value)} placeholder="ex: 74.0" /></div>
-            <div style={{ flex: 1 }}><label style={lbl}>Diametru curgere (mm)</label><input type="number" step="0.1" style={S.input} value={f.diametru_curgere_mm ?? ''} onChange={e => set('diametru_curgere_mm', e.target.value)} placeholder="ex: 13.0" /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Presiune reglare (bari)</label><input type="number" step="0.1" style={inp('pr_bari')} value={f.pr_bari ?? ''} onChange={e => set('pr_bari', e.target.value)} placeholder="ex: 74.0" /></div>
+            <div style={{ flex: 1 }}><label style={lbl}>Diametru curgere (mm)</label><input type="number" step="0.1" style={inp('diametru_curgere_mm')} value={f.diametru_curgere_mm ?? ''} onChange={e => set('diametru_curgere_mm', e.target.value)} placeholder="ex: 13.0" /></div>
           </div>
           <div><label style={lbl}>Observații</label><input style={S.input} value={f.observatii || ''} onChange={e => set('observatii', e.target.value)} /></div>
           <div>
             <label style={lbl}>Buletin PDF {f.pdf_nume && <span style={{ color: G.green }}>· atașat: {f.pdf_nume}</span>}</label>
-            <input type="file" accept="application/pdf,image/*" onChange={e => { setFile(e.target.files?.[0] || null); setParseMsg(null) }} style={{ fontSize: 12, color: G.muted }} />
+            <DropZone
+              onFile={f2 => { setFile(f2); setParseMsg(null) }}
+              accept="application/pdf,image/*"
+              icon="📄"
+              label={file ? file.name : 'Trage buletinul aici sau click'}
+              hint={file ? 'Fișier selectat' : 'PDF (autofill) sau imagine'}
+              color={G.logistica}
+              compact
+            />
             {file && file.type === 'application/pdf' && (
               <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <button type="button" onClick={citesteDinPDF} disabled={parsing}
