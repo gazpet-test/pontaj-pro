@@ -205,6 +205,14 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
       const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, blob, { contentType: 'application/pdf', upsert: false })
       if (upErr) throw upErr
 
+      // Lipește buletinele PDF ale supapelor conforme în spatele declarației (Edge Function pdf-lib)
+      const anexePaths = supapeOk.map(s => s.pdf_path).filter(Boolean)
+      if (anexePaths.length) {
+        try {
+          await supabase.functions.invoke('merge-declaratie-anexe', { body: { bucket: BUCKET, decl_path: path, anexe_paths: anexePaths } })
+        } catch { /* dacă merge-ul eșuează, declarația rămâne fără anexe — nu blocăm */ }
+      }
+
       const { data: { user } } = await supabase.auth.getUser()
       const { error: insErr } = await supabase.from('logistica_declaratii').insert({
         activ_id: activ.id, numar, data_emitere: dataEmitere, data_valabilitate: dataValab,
@@ -215,8 +223,10 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
       })
       if (insErr) throw insErr
 
-      // download imediat
-      const url = URL.createObjectURL(blob)
+      // download imediat versiunea finală din storage (cu anexe lipite)
+      let finalBlob = blob
+      try { const { data: fb } = await supabase.storage.from(BUCKET).download(path); if (fb) finalBlob = fb } catch {}
+      const url = URL.createObjectURL(finalBlob)
       const a = document.createElement('a'); a.href = url; a.download = `Declaratie_conformitate_${numar.replace(/\//g, '-')}.pdf`; a.click()
       URL.revokeObjectURL(url)
       showToast?.(`Declarație ${numar} generată și arhivată`, 'success')
@@ -358,7 +368,34 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
 function SupapaModal({ initial, busy, onSave, onClose }) {
   const [f, setF] = useState(initial)
   const [file, setFile] = useState(null)
+  const [parsing, setParsing] = useState(false)
+  const [parseMsg, setParseMsg] = useState(null)
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  const citesteDinPDF = async () => {
+    if (!file) return
+    setParsing(true); setParseMsg(null)
+    try {
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onloadend = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(file) })
+      const { data, error } = await supabase.functions.invoke('parse-buletin-supapa', { body: { pdf_base64: b64 } })
+      if (error || !data?.ok) throw new Error(data?.error || error?.message || 'eroare necunoscută')
+      const d = data.date || {}
+      setF(p => ({
+        ...p,
+        serie: d.serie || p.serie,
+        nr_buletin: d.nr_buletin || p.nr_buletin,
+        emitent: d.emitent || p.emitent,
+        data_verificare: d.data_verificare || p.data_verificare,
+        data_valabilitate: d.data_valabilitate || p.data_valabilitate,
+        rezultat: d.rezultat || p.rezultat,
+        pr_bari: d.pr_bari ?? p.pr_bari,
+        diametru_curgere_mm: d.diametru_curgere_mm ?? p.diametru_curgere_mm,
+      }))
+      setParseMsg({ ok: true, text: '✅ Date completate din buletin — verifică-le și salvează' })
+    } catch (e) {
+      setParseMsg({ ok: false, text: '⚠️ Nu am putut citi buletinul: ' + (e.message || e) })
+    } finally { setParsing(false) }
+  }
   const lbl = { fontSize: 12, color: G.muted, marginBottom: 4, display: 'block' }
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 20 }} onClick={onClose}>
@@ -399,7 +436,16 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
           <div><label style={lbl}>Observații</label><input style={S.input} value={f.observatii || ''} onChange={e => set('observatii', e.target.value)} /></div>
           <div>
             <label style={lbl}>Buletin PDF {f.pdf_nume && <span style={{ color: G.green }}>· atașat: {f.pdf_nume}</span>}</label>
-            <input type="file" accept="application/pdf,image/*" onChange={e => setFile(e.target.files?.[0] || null)} style={{ fontSize: 12, color: G.muted }} />
+            <input type="file" accept="application/pdf,image/*" onChange={e => { setFile(e.target.files?.[0] || null); setParseMsg(null) }} style={{ fontSize: 12, color: G.muted }} />
+            {file && file.type === 'application/pdf' && (
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <button type="button" onClick={citesteDinPDF} disabled={parsing}
+                  style={{ ...S.btnS, padding: '6px 14px', fontSize: 12.5, color: G.purple, borderColor: G.purple + '55', cursor: parsing ? 'wait' : 'pointer', opacity: parsing ? .6 : 1 }}>
+                  {parsing ? '🔍 Se citește…' : '🔍 Citește datele din PDF'}
+                </button>
+                {parseMsg && <span style={{ fontSize: 11.5, color: parseMsg.ok ? G.green : G.orange }}>{parseMsg.text}</span>}
+              </div>
+            )}
           </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
