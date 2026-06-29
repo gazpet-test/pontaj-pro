@@ -22,6 +22,7 @@ import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
 import SupapeDeclaratiiSection from './SupapeDeclaratiiSection.jsx'
+import DeclaratieTehnicaSection from './DeclaratieTehnicaSection.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
@@ -2156,6 +2157,14 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
 
         {activ?.id && (
           <SupapeDeclaratiiSection
+            activ={activ}
+            canEdit={accessLevel === 'admin' || accessLevel === 'editor'}
+            showToast={showToast}
+          />
+        )}
+
+        {activ?.id && (
+          <DeclaratieTehnicaSection
             activ={activ}
             canEdit={accessLevel === 'admin' || accessLevel === 'editor'}
             showToast={showToast}
