@@ -76,6 +76,72 @@ async function fetchSignatureDataURL(employeeId) {
   } catch { return null }
 }
 
+// ── OCR client-side pentru buletine scanate (Tesseract + pdf.js din CDN, fără librării în bundle) ──
+const CDN_PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
+const CDN_PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+const CDN_TESSERACT = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[data-src="${src}"]`)) return resolve()
+    const s = document.createElement('script')
+    s.src = src; s.async = true; s.dataset.src = src
+    s.onload = () => resolve()
+    s.onerror = () => reject(new Error('Nu am putut încărca componenta OCR'))
+    document.head.appendChild(s)
+  })
+}
+
+async function pdfPrimaPaginaCanvas(file) {
+  await loadScriptOnce(CDN_PDFJS)
+  const pdfjsLib = window.pdfjsLib
+  pdfjsLib.GlobalWorkerOptions.workerSrc = CDN_PDFJS_WORKER
+  const buf = await file.arrayBuffer()
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise
+  const page = await pdf.getPage(1)
+  const viewport = page.getViewport({ scale: 2.5 })
+  const canvas = document.createElement('canvas')
+  canvas.width = viewport.width; canvas.height = viewport.height
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise
+  return canvas
+}
+
+async function ocrText(file, onProgress) {
+  await loadScriptOnce(CDN_TESSERACT)
+  const Tesseract = window.Tesseract
+  let source = null, objUrl = null
+  if (file.type === 'application/pdf') source = await pdfPrimaPaginaCanvas(file)
+  else { objUrl = URL.createObjectURL(file); source = objUrl }
+  try {
+    const res = await Tesseract.recognize(source, 'ron', { logger: m => { if (m.status === 'recognizing text' && onProgress) onProgress(m.progress) } })
+    return res?.data?.text || ''
+  } finally { if (objUrl) URL.revokeObjectURL(objUrl) }
+}
+
+function toISODate(d) {
+  if (!d) return null
+  const m = d.match(/([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})/)
+  return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null
+}
+
+// Parser buletin ISCIR/TERMOKLIMA — regex pe text OCR (toleranț la d0→do, diacritice lipsă)
+function parseBuletinText(raw) {
+  const t = (raw || '').replace(/\s+/g, ' ')
+  const out = { serie: null, nr_buletin: null, emitent: null, data_verificare: null, data_valabilitate: null, rezultat: null, pr_bari: null, diametru_curgere_mm: null }
+  let m
+  m = t.match(/num[ăa]r de fabrica[țt]ie\s+([A-Z0-9.\-]+)/i); if (m) out.serie = m[1].replace(/[.,]+$/, '')
+  if (!out.serie) { m = t.match(/serie de fabrica[țt]ie\s+([A-Z0-9.\-]+)/i); if (m) out.serie = m[1].replace(/[.,]+$/, '') }
+  m = t.match(/NR\.?\s*([0-9]+)\s*\/\s*([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4})/i); if (m) { out.nr_buletin = `${m[1]}/${m[2]}`; out.data_verificare = toISODate(m[2]) }
+  m = t.match(/poate func[țt]iona p[âa]n[ăa] la data de\s+([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4})/i); if (m) out.data_valabilitate = toISODate(m[1])
+  if (/DECLARA[țT]IE DE NECONFORMITATE/i.test(t)) out.rezultat = 'neconform'
+  else if (/DECLARA[țT]IE DE CONFORMITATE/i.test(t)) out.rezultat = 'conform'
+  m = t.match(/presiune[a]?\s*de\s*reglare\s*\)\s*=\s*([0-9]+(?:\.[0-9]+)?)/i); if (m) out.pr_bari = parseFloat(m[1])
+  m = t.match(/diametru\s*curgere\s*\)\s*=\s*([0-9]+(?:\.[0-9]+)?)/i); if (m) out.diametru_curgere_mm = parseFloat(m[1])
+  m = t.match(/(TERMOKLIMA)\s+S\.?\s*R\.?\s*L\.?/i); if (m) out.emitent = 'TERMOKLIMA S.R.L.'
+  else { m = t.match(/S\.?\s*C\.?\s+([A-ZĂÂÎȘȚ][A-ZĂÂÎȘȚ ]+?)\s+S\.?\s*R\.?\s*L\.?/i); if (m) out.emitent = m[1].trim() + ' S.R.L.' }
+  return out
+}
+
 export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
   const [nrSupape, setNrSupape] = useState(activ?.nr_supape ?? 1)
   const [supape, setSupape] = useState([])
@@ -378,12 +444,10 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
 
   const citesteDinPDF = async () => {
     if (!file) return
-    setParsing(true); setParseMsg(null)
+    setParsing(true); setParseMsg({ ok: true, text: '🔍 Se citește buletinul (OCR)… prima dată durează ~10-15s' })
     try {
-      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onloadend = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(file) })
-      const { data, error } = await supabase.functions.invoke('parse-buletin-supapa', { body: { pdf_base64: b64 } })
-      if (error || !data?.ok) throw new Error(data?.error || error?.message || 'eroare necunoscută')
-      const d = data.date || {}
+      const text = await ocrText(file, (p) => { if (p < 1) setParseMsg({ ok: true, text: `🔍 Recunoaștere text… ${Math.round(p * 100)}%` }) })
+      const d = parseBuletinText(text)
       setF(p => ({
         ...p,
         serie: d.serie || p.serie,
@@ -399,7 +463,7 @@ function SupapaModal({ initial, busy, onSave, onClose }) {
       ;['serie', 'nr_buletin', 'emitent', 'data_verificare', 'data_valabilitate', 'rezultat', 'pr_bari', 'diametru_curgere_mm'].forEach(k => { if (d[k] !== null && d[k] !== undefined && d[k] !== '') filled[k] = true })
       setAutoFilled(filled)
       const n = Object.keys(filled).length
-      setParseMsg({ ok: n > 0, text: n > 0 ? `✅ ${n} câmpuri completate din PDF — verifică-le și confirmă` : '⚠️ Nu am găsit date în PDF — completează manual' })
+      setParseMsg({ ok: n > 0, text: n > 0 ? `✅ ${n} câmpuri citite din buletin — verifică-le și confirmă` : '⚠️ Nu am găsit datele în buletin — completează manual' })
     } catch (e) {
       setParseMsg({ ok: false, text: '⚠️ Nu am putut citi buletinul: ' + (e.message || e) })
     } finally { setParsing(false) }
