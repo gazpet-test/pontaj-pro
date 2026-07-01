@@ -51,6 +51,7 @@ const MODUL_META = {
 }
 
 const fmtDate = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
+const fmtD = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' }) : '—'
 const randId = () => Math.random().toString(36).slice(2, 10)
 
 // ═══════════════════════════════════════════════════════════════
@@ -147,6 +148,23 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
         descriere: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id,
       }).select('id').single()
       if (insErr) throw new Error('Insert document: ' + insErr.message)
+
+      // Auto-completare date proiect din ce a extras AI — DOAR câmpurile goale (nu suprascrie)
+      if (row._scrieDate !== false && row.payload_ai?.date_proiect) {
+        const dp = row.payload_ai.date_proiect
+        try {
+          const { data: proj } = await supabase.from('executie_proiecte')
+            .select('data_start,data_termen,durata_contract_luni').eq('id', proiectId).single()
+          const upd = {}
+          if (dp.data_start && proj && !proj.data_start) upd.data_start = dp.data_start
+          if (dp.data_termen && proj && !proj.data_termen) upd.data_termen = dp.data_termen
+          if (dp.durata_luni && proj && !proj.durata_contract_luni) upd.durata_contract_luni = dp.durata_luni
+          if (Object.keys(upd).length) {
+            upd.updated_at = new Date().toISOString()
+            await supabase.from('executie_proiecte').update(upd).eq('id', proiectId)
+          }
+        } catch (_) { /* completarea datelor nu blochează confirmarea documentului */ }
+      }
 
       await supabase.from('ai_documente_inbox').update({
         status: 'confirmat', modul_tinta: 'executie', tip_document: tip,
@@ -300,6 +318,26 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
                                 </select>
                               </label>
                             </div>
+
+                            {/* Date extrase pentru proiect */}
+                            {(() => {
+                              const dp = row.payload_ai?.date_proiect
+                              if (!dp || (!dp.data_start && !dp.data_termen && !dp.durata_luni)) return null
+                              return (
+                                <div style={{ marginBottom:12, padding:'10px 12px', background:G.teal + '12', border:`1px solid ${G.teal}44`, borderRadius:8 }}>
+                                  <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', marginBottom:6 }}>
+                                    <input type="checkbox" checked={row._scrieDate !== false} onChange={e => patch(row.id, '_scrieDate', e.target.checked)} />
+                                    <span style={{ fontSize:12.5, fontWeight:700, color:G.teal }}>📋 Completează datele proiectului</span>
+                                  </label>
+                                  <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px', fontSize:11.5, color:G.text, paddingLeft:24 }}>
+                                    {dp.data_start && <span>Start: <b>{fmtD(dp.data_start)}</b></span>}
+                                    {dp.data_termen && <span>Termen: <b>{fmtD(dp.data_termen)}</b></span>}
+                                    {dp.durata_luni && <span>Durată: <b>{dp.durata_luni} luni</b></span>}
+                                  </div>
+                                  <div style={{ fontSize:10.5, color:G.dim, marginTop:5, paddingLeft:24 }}>Se completează doar câmpurile goale — nu suprascrie ce ai pus deja.</div>
+                                </div>
+                              )
+                            })()}
 
                             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                               <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Respinge</button>
