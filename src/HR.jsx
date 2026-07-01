@@ -277,6 +277,7 @@ export default function HRPage() {
       {editAut && (
         <ModalEditAutorizatie 
           autorizatie={editAut}
+          autorizatii={autorizatii}
           tipuri={tipuri}
           onClose={() => setEditAut(null)}
           onSaved={() => { loadAll(); setEditAut(null) }}
@@ -1282,7 +1283,7 @@ function Lbl({ children }) {
 // ===========================================================================
 // MODAL EDIT AUTORIZAȚIE — pre-fill cu datele existente
 // ===========================================================================
-function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast }) {
+function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, onSaved, showToast }) {
   const [tipId, setTipId] = useState(autorizatie.tip_id || '')
   const [numar, setNumar] = useState(autorizatie.numar_autorizatie || '')
   const [emitent, setEmitent] = useState(autorizatie.emitent || '')
@@ -1305,6 +1306,10 @@ function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast
   const tipSelectat = tipuri.find(t => t.id === Number(tipId))
   const necesitaViza = !!tipSelectat?.necesita_confirmare_rsvti
   const intervalViza = tipSelectat?.interval_confirmare_rsvti_luni || autorizatie.interval_confirmare_rsvti_luni || 6
+
+  // Celelalte autorizații ale aceluiași sudor care au viză RTS separată (evită confuzia „am confirmat dar tot restant")
+  const alteAutorizatiiViza = (autorizatii || []).filter(a =>
+    a.employee_id === autorizatie.employee_id && a.id !== autorizatie.id && a.necesita_confirmare_rsvti === true)
 
   // Shortcut: la deschidere din badge „Viză expirată” → scroll + highlight pe secțiunea vizei
   useEffect(() => {
@@ -1488,6 +1493,33 @@ function ModalEditAutorizatie({ autorizatie, tipuri, onClose, onSaved, showToast
               <div style={{fontSize:10, color:G.dim, marginTop:6, textAlign:'center'}}>
                 Următoarea viză se calculează automat la {intervalViza} luni după data aleasă.
               </div>
+
+              {alteAutorizatiiViza.length > 0 && (
+                <div style={{marginTop:12, padding:'10px 12px', background:G.yellow+'11', border:`1px solid ${G.yellow}44`, borderRadius:8}}>
+                  <div style={{fontSize:11, color:G.yellow, fontWeight:700, marginBottom:6}}>
+                    ⚠️ Acest sudor mai are {alteAutorizatiiViza.length} {alteAutorizatiiViza.length === 1 ? 'autorizație' : 'autorizații'} cu viză separată — fiecare se vizează individual:
+                  </div>
+                  {alteAutorizatiiViza.map(a => {
+                    const stCol = a.rsvti_status === 'rsvti_expirat' ? G.red
+                      : a.rsvti_status === 'rsvti_expira_30z' ? G.yellow
+                      : a.rsvti_status === 'rsvti_fara_data' ? G.muted : G.green
+                    const z = a.rsvti_zile_pana_confirmare
+                    const stTxt = a.rsvti_status === 'rsvti_expirat' ? `restantă ${Math.abs(z || 0)}z`
+                      : a.rsvti_status === 'rsvti_expira_30z' ? `expiră în ${z}z`
+                      : a.rsvti_status === 'rsvti_fara_data' ? 'neînregistrată' : 'OK'
+                    const eticheta = [a.procedeu_sudura, a.diametru_teava_mm ? `Ø${a.diametru_teava_mm}mm` : null].filter(Boolean).join(' · ') || `Autorizația #${a.id}`
+                    return (
+                      <div key={a.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, fontSize:11, color:G.text, padding:'3px 0'}}>
+                        <span>{eticheta}</span>
+                        <span style={{color:stCol, fontWeight:700, whiteSpace:'nowrap'}}>🔖 {stTxt}</span>
+                      </div>
+                    )
+                  })}
+                  <div style={{fontSize:10, color:G.dim, marginTop:5}}>
+                    Închide și deschide-le pe rând din listă ca să confirmi viza pentru fiecare.
+                  </div>
+                </div>
+              )}
             </div>
           )
         })()}
