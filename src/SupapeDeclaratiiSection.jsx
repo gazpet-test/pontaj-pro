@@ -151,24 +151,37 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
   const [editSupapa, setEditSupapa] = useState(null)  // {} nou sau obiect existent
   const [busy, setBusy] = useState(false)
   const [genBusy, setGenBusy] = useState(false)
+  const [faraSupapa, setFaraSupapa] = useState(!!activ?.fara_supapa)
+  const [categorieAreSupape, setCategorieAreSupape] = useState(false)
 
   const load = useCallback(async () => {
     if (!activ?.id) return
     setLoading(true)
-    const [rSup, rDecl, rSt] = await Promise.all([
+    const [rSup, rDecl, rSt, rCat] = await Promise.all([
       supabase.from('logistica_supape').select('*').eq('activ_id', activ.id).order('activa', { ascending: false }).order('serie'),
       supabase.from('logistica_declaratii').select('*').eq('activ_id', activ.id).order('generat_la', { ascending: false }),
       supabase.from('v_supape_status').select('*').eq('activ_id', activ.id).maybeSingle(),
+      activ?.categorie_id ? supabase.from('logistica_categorii').select('are_supape').eq('id', activ.categorie_id).maybeSingle() : Promise.resolve({ data: null }),
     ])
     setSupape(rSup.data || [])
     setDeclaratii(rDecl.data || [])
     setStatus(rSt.data || null)
+    setCategorieAreSupape(rCat?.data?.are_supape === true)
     if (rSt.data) setNrSupape(rSt.data.nr_supape_asteptat)
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activ?.id])
 
   useEffect(() => { load() }, [load])
+
+  // Override „fără supapă" pe activ (ascunde secțiunea, scoate condiția din declarația tehnică)
+  const toggleFaraSupapa = async (val) => {
+    if (!canEdit) return
+    const { error } = await supabase.from('logistica_active').update({ fara_supapa: val }).eq('id', activ.id)
+    if (error) { showToast?.('Eroare la salvare', 'error'); return }
+    setFaraSupapa(val)
+    showToast?.(val ? '⊘ Marcat fără supapă de siguranță' : '✓ Secțiune supape reactivată', 'success')
+  }
 
   // ── Salvare nr. supape (update direct pe utilaj) ──
   const saveNrSupape = async (n) => {
@@ -305,6 +318,26 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
 
   if (!activ?.id) return null
 
+  // Decide dacă utilajul poate avea supape: categoria marcată SAU deja are supape setate/înregistrate
+  const arataSupape = categorieAreSupape || (activ?.nr_supape > 0) || supape.length > 0
+
+  // Marcat explicit „fără supapă" → linie discretă cu opțiune de revenire
+  if (faraSupapa) {
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ ...S.card, padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', opacity: .9 }}>
+          <span style={{ fontSize: 12.5, color: G.muted }}>⊘ Marcat <strong style={{ color: G.text }}>fără supapă de siguranță</strong> — secțiunea nu se aplică acestui utilaj.</span>
+          {canEdit && <button onClick={() => toggleFaraSupapa(false)} style={{ ...S.btnS, fontSize: 11, padding: '5px 12px' }}>Are totuși supapă</button>}
+        </div>
+      </div>
+    )
+  }
+
+  // Încă se încarcă → nu afișăm nimic (evită flash pe utilajele fără supape)
+  if (loading) return null
+  // Categorie fără supape + nicio supapă înregistrată → secțiunea nu apare (camioane, autoturisme, excavatoare etc.)
+  if (!arataSupape) return null
+
   const motivBlocat = (() => {
     if (!status) return null
     if (status.nr_supape_asteptat === 0) return 'Setează nr. supape > 0'
@@ -359,6 +392,15 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
               }}>
               {genBusy ? 'Se generează…' : '📄 Generează declarație'}
             </button>
+          </div>
+        )}
+
+        {canEdit && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${G.border}` }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12, color: G.muted }}>
+              <input type="checkbox" checked={false} onChange={() => toggleFaraSupapa(true)} style={{ width: 15, height: 15, accentColor: G.orange }} />
+              <span>⊘ Acest utilaj <strong style={{ color: G.text }}>nu are supapă</strong> de siguranță (ascunde secțiunea)</span>
+            </label>
           </div>
         )}
       </div>
