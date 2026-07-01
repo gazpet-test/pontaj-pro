@@ -10,6 +10,7 @@ import TabSemnaturi from './TabSemnaturi.jsx'
 import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
+import CitesteOricePanel from './CitesteOricePanel.jsx'
 import SugestiiChuckTab from './SugestiiChuckTab.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
@@ -113,6 +114,7 @@ export default function HRPage() {
   const [editEmp, setEditEmp] = useState(null)
   const [showAddAut, setShowAddAut] = useState(null)  // employee_id
   const [editAut, setEditAut] = useState(null)  // autorizatie object
+  const [citesteOpen, setCitesteOpen] = useState(false)  // 01.07.2026: panel „Citește Orice" HR
   
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type })
@@ -217,6 +219,13 @@ export default function HRPage() {
             {employees.length} angajați activi · {autorizatii.length} autorizații în evidență · {stats.expirat} expirate
           </div>
         </div>
+        {canAccessPersonal && (
+          <button onClick={() => setCitesteOpen(true)} style={{
+            padding:'10px 18px', background:G.hr + '22', color:G.hr, border:`1px solid ${G.hr}66`,
+            borderRadius:10, cursor:'pointer', fontWeight:700, fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
+            📥 Citește Orice
+          </button>
+        )}
       </div>
       
       {/* Etapa 14: Widget Tichete HR */}
@@ -250,6 +259,16 @@ export default function HRPage() {
       {!load && tab === 'cos' && canAccessPersonal && <TabCos profile={profile} showToast={showToast} />}
       {!load && tab === 'scanner' && canUseScanner && <TabScannerDocumenteHR profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'salarii' && isSuperAdmin && <TabSalarii showToast={showToast} />}
+      
+      {profile && (
+        <CitesteOricePanel
+          open={citesteOpen}
+          onClose={() => setCitesteOpen(false)}
+          profile={profile}
+          modul="hr"
+          onConfirmed={loadAll}
+        />
+      )}
       
       {editEmp && (
         <ModalProfilAngajat 

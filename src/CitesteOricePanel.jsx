@@ -1,15 +1,17 @@
 // ===========================================================================
-// CITEȘTE ORICE — Panel (Faza 1: modul Execuție)
+// CITEȘTE ORICE — Panel universal (config-driven per modul)
 // ===========================================================================
 // 01.07.2026 — AI Document Router
 //   • Dropzone universal → upload în bucket ai-documente-inbox + INSERT în coadă
-//   • Apel Edge Function „citeste-orice" (Claude Vision) → clasifică modul+tip,
-//     extrage câmpuri, fuzzy-match proiect pentru Execuție
-//   • Tab „De confirmat": card per document cu preview + corecție proiect/tip +
-//     buton Confirmă → INSERT în executie_documente_contract (ZERO auto-insert)
-//   • Upload contextual: dacă primește proiectContextId, documentul e pre-legat
-// Faza 1 acoperă confirmarea DOAR pentru Execuție. Documentele clasificate ca
-// hr/logistică/financiar rămân în coadă pentru modulele lor (Faza 2).
+//   • Clasificarea o declanșează AUTOMAT un trigger pe BD (server-side, robust);
+//     UI-ul doar face polling pe status până documentul e clasificat.
+//   • Tab „De confirmat": card per document cu preview + corecție entitate/tip +
+//     buton Confirmă → INSERT în tabelul modulului (ZERO auto-insert).
+//   • Panelul primește prop `modul` și se configurează din MODUL_CFG:
+//       - executie  → executie_documente_contract  (entitate = proiect)   [Faza 1, live]
+//       - hr        → hr_documente_personale        (entitate = angajat)   [Faza 2]
+//       - logistica → logistica_documente           (entitate = vehicul)   [Faza 2 — în curând]
+//       - financiar → contracte_subcontract_facturi (entitate = furnizor)  [Faza 2 — în curând]
 // ===========================================================================
 
 import { useEffect, useState, useCallback } from 'react'
@@ -28,20 +30,20 @@ const G = {
 }
 
 const BUCKET_INBOX = 'ai-documente-inbox'
-const BUCKET_EXEC = 'executie-contracte'
 
 // cod tip document → etichetă RO (pt afișaj)
 const TIP_LABEL = {
   ordin_incepere:'Ordin de începere', ordin_reincepere:'Ordin de reîncepere', act_aditional:'Act adițional', aviz:'Aviz',
   autorizatie:'Autorizație de construire', contract:'Contract', garantie_exec:'Garanție bună execuție',
-  grafic:'Grafic de execuție', autorizatie_iscir:'Autorizație ISCIR', autorizatie_transport:'Autorizație transport',
-  autorizatie_sudura:'Autorizație sudură', buletin:'Buletin / CI', permis_sedere:'Permis de ședere',
-  permis_munca:'Permis de muncă', aviz_medical:'Aviz medical', aviz_psihologic:'Aviz psihologic',
+  grafic:'Grafic de execuție', buletin:'Buletin / CI', pasaport:'Pașaport', permis_conducere:'Permis de conducere',
+  cert_nastere_angajat:'Certificat naștere', cert_casatorie:'Certificat căsătorie', cert_nastere_copil:'Certificat naștere copil',
+  diploma_liceu:'Diplomă liceu', diploma_studii_sup:'Diplomă studii superioare', diploma_scoala_prof:'Diplomă școală prof.',
+  cert_calificare:'Certificat calificare', cazier_judiciar:'Cazier judiciar', contract_munca:'Contract de muncă (CIM)',
+  fisa_post:'Fișa postului', acord_gdpr:'Acord GDPR', adeverinta_medic_familie:'Adeverință medic familie',
+  extras_cont_bancar:'Extras cont bancar', decizie_handicap:'Decizie handicap', autorizatie_hr:'Autorizație (ISCIR/sudură/transport)',
   itp:'ITP', rca:'RCA', casco:'CASCO', tahograf:'Tahograf', copie_conforma:'Copie conformă',
   factura:'Factură', ipc:'IPC', certificat_plata:'Certificat de plată', altul:'Altul',
 }
-// tipuri valide pentru destinația Execuție (dropdown corecție)
-const TIPURI_EXEC = ['ordin_incepere','ordin_reincepere','act_aditional','aviz','autorizatie','contract','garantie_exec','grafic','altul']
 
 const MODUL_META = {
   executie:{ label:'Execuție', color:G.executie, emoji:'🏗️' },
@@ -50,44 +52,83 @@ const MODUL_META = {
   financiar:{ label:'Financiar', color:G.green, emoji:'💰' },
 }
 
+// ── Config per modul ────────────────────────────────────────────
+// activ:true → confirmare completă implementată. activ:false → placeholder „în curând".
+const MODUL_CFG = {
+  executie: {
+    activ:true, entitateLabel:'Proiect', entitateTip:'proiect', color:G.executie,
+    tipuriText:['ordin_incepere','ordin_reincepere','act_aditional','aviz','autorizatie','contract','garantie_exec','grafic','altul'],
+  },
+  hr: {
+    activ:true, entitateLabel:'Angajat', entitateTip:'angajat', color:G.pink,
+    bucket:'documente-personal',
+  },
+  logistica: {
+    activ:false, entitateLabel:'Vehicul', entitateTip:'activ', color:G.orange,
+    bucket:'documente-flota',
+  },
+  financiar: {
+    activ:false, entitateLabel:'Furnizor', entitateTip:'furnizor', color:G.green,
+    bucket:null,
+  },
+}
+
 const fmtDate = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
 const fmtD = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' }) : '—'
 const randId = () => Math.random().toString(36).slice(2, 10)
 
 // ═══════════════════════════════════════════════════════════════
-export default function CitesteOricePanel({ open, onClose, profile, proiectContextId = null, proiectContextNume = null, onConfirmed }) {
+export default function CitesteOricePanel({ open, onClose, profile, modul = 'executie', proiectContextId = null, proiectContextNume = null, onConfirmed }) {
+  const cfg = MODUL_CFG[modul] || MODUL_CFG.executie
+  const meta = MODUL_META[modul] || MODUL_META.executie
+
   const [view, setView] = useState('upload')            // 'upload' | 'confirm'
   const [queue, setQueue] = useState([])
-  const [proiecte, setProiecte] = useState([])
-  const [uploading, setUploading] = useState([])         // [{nume, stare}]
+  const [entitati, setEntitati] = useState([])          // proiecte / angajați / vehicule
+  const [tipuriFK, setTipuriFK] = useState([])          // pt hr/logistica: [{id,cod,denumire}]
+  const [uploading, setUploading] = useState([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [toast, setToast] = useState(null)
 
   const flash = (tip, msg) => { setToast({ tip, msg }); setTimeout(() => setToast(null), 3500) }
 
+  // ─── Încărcare coadă (doar documentele modulului curent + nedecis la executie) ──
   const loadQueue = useCallback(async () => {
     setLoading(true)
-    // Faza 1: arăt ce e pentru Execuție sau nedecis (RLS filtrează accesul real)
-    const { data } = await supabase.from('ai_documente_inbox')
-      .select('*')
-      .in('status', ['clasificat','eroare'])
-      .or('modul_tinta.eq.executie,modul_tinta.is.null')
-      .order('uploadat_la', { ascending: false })
+    let q = supabase.from('ai_documente_inbox').select('*').in('status', ['clasificat','eroare'])
+    if (modul === 'executie') q = q.or('modul_tinta.eq.executie,modul_tinta.is.null')
+    else q = q.eq('modul_tinta', modul)
+    const { data } = await q.order('uploadat_la', { ascending: false })
     setQueue(data || [])
     setLoading(false)
-  }, [])
+  }, [modul])
 
-  const loadProiecte = useCallback(async () => {
-    const { data } = await supabase.from('executie_proiecte').select('id,nume,cod_intern').eq('activ', true).order('nume')
-    setProiecte(data || [])
-  }, [])
+  // ─── Încărcare entități + tipuri FK per modul ──────────────────
+  const loadEntitati = useCallback(async () => {
+    if (modul === 'executie') {
+      const { data } = await supabase.from('executie_proiecte').select('id,nume,cod_intern').eq('activ', true).order('nume')
+      setEntitati((data || []).map(p => ({ id:p.id, label:(p.cod_intern ? p.cod_intern + ' · ' : '') + p.nume })))
+    } else if (modul === 'hr') {
+      const today = new Date().toISOString().split('T')[0]
+      const { data } = await supabase.from('employees').select('id,name')
+        .or(`termination_date.is.null,termination_date.gt.${today}`).order('name')
+      setEntitati((data || []).map(e => ({ id:e.id, label:e.name })))
+      const { data: tp } = await supabase.from('hr_documente_personale_tipuri').select('id,cod,denumire,are_expirare').eq('activ', true).order('ordine')
+      setTipuriFK(tp || [])
+    } else if (modul === 'logistica') {
+      const { data } = await supabase.from('logistica_active').select('id,cod_intern,nr_inmatriculare,marca').order('cod_intern')
+      setEntitati((data || []).map(a => ({ id:a.id, label:[a.nr_inmatriculare, a.marca, a.cod_intern].filter(Boolean).join(' · ') })))
+      const { data: tp } = await supabase.from('logistica_tipuri_documente').select('id,nume').eq('activ', true).order('nume')
+      setTipuriFK((tp || []).map(t => ({ id:t.id, cod:t.nume, denumire:t.nume })))
+    }
+  }, [modul])
 
   useEffect(() => {
     if (!open) return
-    loadQueue(); loadProiecte()
-    setView(proiectContextId ? 'upload' : 'upload')
-  }, [open, loadQueue, loadProiecte, proiectContextId])
+    loadQueue(); loadEntitati()
+    setView('upload')
+  }, [open, loadQueue, loadEntitati])
 
   // ─── UPLOAD ───────────────────────────────────────────────────
   async function handleFiles(fileList) {
@@ -106,14 +147,11 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
           fisier_path: path, fisier_nume: file.name, fisier_size_bytes: file.size,
           fisier_mime: file.type || null, status: 'in_asteptare', uploadat_de: profile.id,
         }
-        // upload contextual → entitate deja cunoscută
-        if (proiectContextId) { ins.entitate_tip = 'proiect'; ins.entitate_id = proiectContextId; ins.entitate_match_confidence = 100; ins.modul_tinta = 'executie' }
+        if (proiectContextId && modul === 'executie') { ins.entitate_tip = 'proiect'; ins.entitate_id = proiectContextId; ins.entitate_match_confidence = 100; ins.modul_tinta = 'executie' }
         const { data: row, error: insErr } = await supabase.from('ai_documente_inbox').insert(ins).select('id').single()
         if (insErr) throw new Error(insErr.message)
 
         setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'ai' } : x))
-        // Clasificarea o declanșează automat un trigger pe BD (server-side).
-        // Aici doar așteptăm (polling) până documentul e clasificat sau apare eroare.
         const st = await pollStatus(row.id)
         if (st === 'eroare') throw new Error('AI nu a putut citi documentul')
         if (st === 'timeout') throw new Error('Clasificarea durează prea mult — reîncearcă')
@@ -128,7 +166,6 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
     flash('ok', 'Document(e) citit(e). Verifică și confirmă mai jos.')
   }
 
-  // Așteaptă ca documentul să fie clasificat de trigger (server-side)
   async function pollStatus(id, tries = 24) {
     for (let i = 0; i < tries; i++) {
       await new Promise(r => setTimeout(r, 2000))
@@ -140,21 +177,32 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
     return 'timeout'
   }
 
-  // ─── CONFIRM (Execuție) ───────────────────────────────────────
+  // ─── CONFIRMARE — dispecer per modul ──────────────────────────
   async function handleConfirm(row) {
-    const proiectId = row._editProiect ?? row.entitate_id
+    if (modul === 'executie') return confirmExecutie(row)
+    if (modul === 'hr') return confirmHR(row)
+    flash('err', 'Confirmarea pentru acest modul nu e încă activă.')
+  }
+
+  // Descarcă fișierul din staging și îl urcă în bucketul destinație. Întoarce destPath.
+  async function mutaFisier(row, bucketDest, prefix) {
+    const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET_INBOX).download(row.fisier_path)
+    if (dlErr || !blob) throw new Error('Nu pot descărca fișierul: ' + (dlErr?.message || ''))
+    const ext = (row.fisier_nume.split('.').pop() || 'pdf').toLowerCase()
+    const destPath = `${prefix}/aidoc_${Date.now()}_${randId()}.${ext}`
+    const { error: upErr } = await supabase.storage.from(bucketDest).upload(destPath, blob, { upsert: false, contentType: row.fisier_mime || undefined })
+    if (upErr) throw new Error('Upload destinație: ' + upErr.message)
+    return destPath
+  }
+
+  // ── Execuție (Faza 1, neschimbat) ─────────────────────────────
+  async function confirmExecutie(row) {
+    const proiectId = row._editEntitate ?? row.entitate_id
     const tip = row._editTip ?? row.tip_document
     if (!proiectId) { flash('err', 'Alege proiectul înainte de a confirma.'); return }
     setBusyId(row.id)
     try {
-      // mut fișierul din staging în bucketul definitiv de execuție
-      const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET_INBOX).download(row.fisier_path)
-      if (dlErr || !blob) throw new Error('Nu pot descărca fișierul: ' + (dlErr?.message || ''))
-      const ext = (row.fisier_nume.split('.').pop() || 'pdf').toLowerCase()
-      const destPath = `${proiectId}/aidoc_${Date.now()}_${randId()}.${ext}`
-      const { error: upErr } = await supabase.storage.from(BUCKET_EXEC).upload(destPath, blob, { upsert: false, contentType: row.fisier_mime || undefined })
-      if (upErr) throw new Error('Upload destinație: ' + upErr.message)
-
+      const destPath = await mutaFisier(row, 'executie-contracte', String(proiectId))
       const { data: created, error: insErr } = await supabase.from('executie_documente_contract').insert({
         proiect_id: proiectId, tip_document: tip,
         fisier_path: destPath, fisier_nume: row.fisier_nume,
@@ -163,44 +211,67 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
       }).select('id').single()
       if (insErr) throw new Error('Insert document: ' + insErr.message)
 
-      // Auto-completare date proiect din ce a extras AI — DOAR câmpurile goale (nu suprascrie)
       if (row._scrieDate !== false && row.payload_ai?.date_proiect) {
         const dp = row.payload_ai.date_proiect
         try {
-          const { data: proj } = await supabase.from('executie_proiecte')
-            .select('data_start,data_termen,durata_contract_luni').eq('id', proiectId).single()
+          const { data: proj } = await supabase.from('executie_proiecte').select('data_start,data_termen,durata_contract_luni').eq('id', proiectId).single()
           const upd = {}
           if (dp.data_start && proj && !proj.data_start) upd.data_start = dp.data_start
           if (dp.data_termen && proj && !proj.data_termen) upd.data_termen = dp.data_termen
           if (dp.durata_luni && proj && !proj.durata_contract_luni) upd.durata_contract_luni = dp.durata_luni
-          if (Object.keys(upd).length) {
-            upd.updated_at = new Date().toISOString()
-            await supabase.from('executie_proiecte').update(upd).eq('id', proiectId)
-          }
-        } catch (_) { /* completarea datelor nu blochează confirmarea documentului */ }
+          if (Object.keys(upd).length) { upd.updated_at = new Date().toISOString(); await supabase.from('executie_proiecte').update(upd).eq('id', proiectId) }
+        } catch (_) { /* nu blochează */ }
       }
 
-      await supabase.from('ai_documente_inbox').update({
-        status: 'confirmat', modul_tinta: 'executie', tip_document: tip,
-        entitate_tip: 'proiect', entitate_id: proiectId,
-        confirmat_de: profile.id, confirmat_la: new Date().toISOString(), confirmat_ref_id: created.id,
-      }).eq('id', row.id)
-
-      // curăț fișierul din staging (rândul inbox rămâne ca istoric)
-      await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
-
+      await finalizeInbox(row, 'executie', tip, 'proiect', proiectId, created.id)
       flash('ok', 'Document trimis în Execuție ✓')
-      await loadQueue()
-      onConfirmed && onConfirmed()
-    } catch (e) {
-      flash('err', String(e.message || e))
-    } finally { setBusyId(null) }
+      await loadQueue(); onConfirmed && onConfirmed()
+    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+  }
+
+  // ── HR (Faza 2) ───────────────────────────────────────────────
+  async function confirmHR(row) {
+    const angajatId = row._editEntitate ?? row.entitate_id
+    const tipCod = row._editTip ?? row.tip_document
+    if (!angajatId) { flash('err', 'Alege angajatul înainte de a confirma.'); return }
+    const tipRow = tipuriFK.find(t => t.cod === tipCod) || tipuriFK.find(t => t.cod === row.tip_document)
+    if (!tipRow) { flash('err', 'Alege tipul documentului (autorizațiile ISCIR/sudură se adaugă din secțiunea Autorizații).'); return }
+    setBusyId(row.id)
+    try {
+      const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
+      const dd = row.payload_ai?.date_document || {}
+      const dataExp = dd.data_expirare || null
+      const { data: created, error: insErr } = await supabase.from('hr_documente_personale').insert({
+        employee_id: angajatId, tip_id: tipRow.id,
+        numar_document: dd.numar || null, emitent: dd.emitent || null,
+        data_emitere: dd.data_emitere || null, data_expirare: dataExp,
+        fara_expirare: !dataExp,
+        fisier_path: destPath, fisier_nume: row.fisier_nume,
+        fisier_size_bytes: row.fisier_size_bytes, fisier_mime: row.fisier_mime || 'application/pdf',
+        activ: true, observatii: row.payload_ai?.titlu_scurt || null, uploadat_de: profile.id,
+      }).select('id').single()
+      if (insErr) throw new Error('Insert document HR: ' + insErr.message)
+
+      await finalizeInbox(row, 'hr', tipCod, 'angajat', angajatId, created.id)
+      flash('ok', 'Document trimis în dosarul angajatului ✓')
+      await loadQueue(); onConfirmed && onConfirmed()
+    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+  }
+
+  // Marchează rândul inbox confirmat + curăță staging
+  async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
+    await supabase.from('ai_documente_inbox').update({
+      status:'confirmat', modul_tinta:modulTinta, tip_document:tip,
+      entitate_tip:entTip, entitate_id:entId,
+      confirmat_de:profile.id, confirmat_la:new Date().toISOString(), confirmat_ref_id:refId,
+    }).eq('id', row.id)
+    await supabase.storage.from(BUCKET_INBOX).remove([row.fisier_path]).catch(() => {})
   }
 
   async function handleReject(row) {
     if (!confirm('Respingi documentul „' + row.fisier_nume + '"? Fișierul rămâne pentru audit, dar nu intră în sistem.')) return
     setBusyId(row.id)
-    await supabase.from('ai_documente_inbox').update({ status: 'respins', respins_motiv: 'respins manual', confirmat_de: profile.id, confirmat_la: new Date().toISOString() }).eq('id', row.id)
+    await supabase.from('ai_documente_inbox').update({ status:'respins', respins_motiv:'respins manual', confirmat_de:profile.id, confirmat_la:new Date().toISOString() }).eq('id', row.id)
     setBusyId(null); flash('ok', 'Respins.'); loadQueue()
   }
 
@@ -213,6 +284,8 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
 
   if (!open) return null
 
+  const accent = cfg.color
+
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'40px 16px', overflowY:'auto' }}
       onClick={onClose}>
@@ -223,9 +296,9 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
         <div style={{ padding:'16px 20px', borderBottom:`1px solid ${G.border}`, display:'flex', alignItems:'center', gap:12 }}>
           <div style={{ fontSize:22 }}>📥</div>
           <div style={{ flex:1 }}>
-            <div style={{ fontSize:16, fontWeight:800, color:G.text }}>Citește Orice</div>
+            <div style={{ fontSize:16, fontWeight:800, color:G.text }}>Citește Orice · <span style={{ color:accent }}>{meta.emoji} {meta.label}</span></div>
             <div style={{ fontSize:12, color:G.muted }}>
-              {proiectContextNume ? <>Atașezi la proiect: <b style={{ color:G.executie }}>{proiectContextNume}</b></> : 'Aruncă orice document — AI îl citește și îl pregătește pentru confirmare'}
+              {proiectContextNume ? <>Atașezi la proiect: <b style={{ color:accent }}>{proiectContextNume}</b></> : 'Aruncă orice document — AI îl citește și îl pregătește pentru confirmare'}
             </div>
           </div>
           <button onClick={onClose} style={{ background:'transparent', border:`1px solid ${G.border}`, color:G.muted, borderRadius:8, width:32, height:32, cursor:'pointer', fontSize:16 }}>✕</button>
@@ -235,8 +308,8 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
         <div style={{ display:'flex', gap:4, padding:'10px 16px 0' }}>
           {[['upload','📤 Încarcă'], ['confirm', `🤖 De confirmat${queue.length ? ` (${queue.length})` : ''}`]].map(([k, l]) => (
             <button key={k} onClick={() => setView(k)} style={{
-              padding:'8px 16px', background: view === k ? G.executie + '22' : 'transparent',
-              color: view === k ? G.executie : G.muted, border:`1px solid ${view === k ? G.executie + '66' : G.border2}`,
+              padding:'8px 16px', background: view === k ? accent + '22' : 'transparent',
+              color: view === k ? accent : G.muted, border:`1px solid ${view === k ? accent + '66' : G.border2}`,
               borderRadius:'8px 8px 0 0', cursor:'pointer', fontSize:13, fontWeight:700 }}>{l}</button>
           ))}
         </div>
@@ -244,7 +317,7 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
         <div style={{ padding:20, maxHeight:'62vh', overflowY:'auto' }}>
           {view === 'upload' && (
             <div>
-              <DropInline color={G.executie} onFiles={handleFiles} />
+              <DropInline color={accent} onFiles={handleFiles} />
               {uploading.length > 0 && (
                 <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:6 }}>
                   {uploading.map((u, i) => (
@@ -258,7 +331,7 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
                 </div>
               )}
               <div style={{ marginTop:14, fontSize:11.5, color:G.dim, lineHeight:1.6 }}>
-                Accept PDF sau imagini. AI-ul detectează tipul documentului și, pentru documente de proiect, încearcă să găsească proiectul potrivit. Nimic nu intră în sistem fără confirmarea ta.
+                Accept PDF sau imagini. AI-ul detectează tipul documentului și încearcă să găsească {cfg.entitateLabel.toLowerCase()}-ul potrivit. Nimic nu intră în sistem fără confirmarea ta.
               </div>
             </div>
           )}
@@ -274,9 +347,10 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
               )}
               {queue.map(row => {
                 const mm = MODUL_META[row.modul_tinta] || { label:'Nedecis', color:G.dim, emoji:'❓' }
-                const esteExec = row.modul_tinta === 'executie' || row.modul_tinta == null
                 const eroare = row.status === 'eroare'
-                const proiectMatch = proiecte.find(p => p.id === (row._editProiect ?? row.entitate_id))
+                const potConfirma = cfg.activ && (row.modul_tinta === modul || (modul === 'executie' && row.modul_tinta == null))
+                const entMatch = entitati.find(e => e.id === (row._editEntitate ?? row.entitate_id))
+                const dd = row.payload_ai?.date_document
                 return (
                   <div key={row.id} style={{ background:G.card, border:`1px solid ${eroare ? G.red + '66' : G.border}`, borderRadius:12, padding:14 }}>
                     <div style={{ display:'flex', alignItems:'flex-start', gap:10, marginBottom:10 }}>
@@ -291,7 +365,7 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
 
                     {eroare ? (
                       <div style={{ fontSize:12.5, color:G.red, background:G.red + '11', padding:'8px 12px', borderRadius:8 }}>
-                        ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual din pagina proiectului.
+                        ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual.
                       </div>
                     ) : (
                       <>
@@ -306,35 +380,41 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
                               🎯 {row.clasificare_confidence}%
                             </span>
                           )}
-                          {row.entitate_id && proiectMatch && row.entitate_match_confidence != null && (
+                          {row.entitate_id && entMatch && row.entitate_match_confidence != null && (
                             <span style={{ ...chip, background:G.green + '18', color:G.green, border:`1px solid ${G.green}55` }}>
-                              🔗 proiect găsit ({row.entitate_match_confidence}%)
+                              🔗 {cfg.entitateLabel.toLowerCase()} găsit ({row.entitate_match_confidence}%)
                             </span>
                           )}
                         </div>
 
-                        {esteExec ? (
+                        {potConfirma ? (
                           <>
-                            {/* Corecție proiect + tip */}
+                            {/* Corecție entitate + tip */}
                             <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
                               <label style={{ flex:'1 1 260px', fontSize:12 }}>
-                                <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Proiect</span>
-                                <select value={row._editProiect ?? row.entitate_id ?? ''} onChange={e => patch(row.id, '_editProiect', e.target.value ? Number(e.target.value) : null)}
-                                  style={sel}>
-                                  <option value="">— alege proiectul —</option>
-                                  {proiecte.map(p => <option key={p.id} value={p.id}>{p.cod_intern ? p.cod_intern + ' · ' : ''}{p.nume}</option>)}
+                                <span style={{ color:G.muted, display:'block', marginBottom:4 }}>{cfg.entitateLabel}</span>
+                                <select value={row._editEntitate ?? row.entitate_id ?? ''} onChange={e => patch(row.id, '_editEntitate', e.target.value ? Number(e.target.value) : null)} style={sel}>
+                                  <option value="">— alege {cfg.entitateLabel.toLowerCase()} —</option>
+                                  {entitati.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
                                 </select>
                               </label>
                               <label style={{ flex:'1 1 180px', fontSize:12 }}>
                                 <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Tip document</span>
-                                <select value={row._editTip ?? row.tip_document ?? 'altul'} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
-                                  {TIPURI_EXEC.map(t => <option key={t} value={t}>{TIP_LABEL[t]}</option>)}
-                                </select>
+                                {modul === 'executie' ? (
+                                  <select value={row._editTip ?? row.tip_document ?? 'altul'} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
+                                    {cfg.tipuriText.map(t => <option key={t} value={t}>{TIP_LABEL[t] || t}</option>)}
+                                  </select>
+                                ) : (
+                                  <select value={row._editTip ?? row.tip_document ?? ''} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
+                                    <option value="">— alege tipul —</option>
+                                    {tipuriFK.map(t => <option key={t.id} value={t.cod}>{t.denumire}</option>)}
+                                  </select>
+                                )}
                               </label>
                             </div>
 
-                            {/* Date extrase pentru proiect */}
-                            {(() => {
+                            {/* Date extrase — proiect (executie) */}
+                            {modul === 'executie' && (() => {
                               const dp = row.payload_ai?.date_proiect
                               if (!dp || (!dp.data_start && !dp.data_termen && !dp.durata_luni)) return null
                               return (
@@ -353,17 +433,33 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
                               )
                             })()}
 
+                            {/* Date extrase — document (hr/logistica) */}
+                            {modul !== 'executie' && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:accent + '10', border:`1px solid ${accent}33`, borderRadius:8, fontSize:11.5, color:G.text }}>
+                                <div style={{ fontSize:12, fontWeight:700, color:accent, marginBottom:5 }}>📄 Date extrase din document</div>
+                                <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px' }}>
+                                  {dd.numar && <span>Nr: <b>{dd.numar}</b></span>}
+                                  {dd.data_emitere && <span>Emis: <b>{fmtD(dd.data_emitere)}</b></span>}
+                                  {dd.data_expirare && <span>Expiră: <b>{fmtD(dd.data_expirare)}</b></span>}
+                                  {dd.emitent && <span>Emitent: <b>{dd.emitent}</b></span>}
+                                </div>
+                                <div style={{ fontSize:10.5, color:G.dim, marginTop:5 }}>Aceste date se salvează odată cu documentul.</div>
+                              </div>
+                            )}
+
                             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
                               <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Respinge</button>
                               <button onClick={() => handleConfirm(row)} disabled={busyId === row.id}
                                 style={{ padding:'8px 18px', background:G.greenBg, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', opacity: busyId === row.id ? 0.5 : 1 }}>
-                                {busyId === row.id ? '⏳…' : '✓ Confirmă → Execuție'}
+                                {busyId === row.id ? '⏳…' : `✓ Confirmă → ${meta.label}`}
                               </button>
                             </div>
                           </>
                         ) : (
                           <div style={{ fontSize:12.5, color:G.muted, background:G.card2, padding:'10px 12px', borderRadius:8 }}>
-                            Documentul aparține modulului <b style={{ color:mm.color }}>{mm.emoji} {mm.label}</b>. Confirmarea pentru acest modul se activează în Faza 2 — momentan rămâne în coadă.
+                            {cfg.activ
+                              ? <>Documentul aparține modulului <b style={{ color:mm.color }}>{mm.emoji} {mm.label}</b>. Deschide-l din acel modul pentru a-l confirma.</>
+                              : <>Confirmarea pentru modulul <b style={{ color:mm.color }}>{mm.emoji} {mm.label}</b> se activează în curând — momentan rămâne în coadă.</>}
                           </div>
                         )}
                       </>
