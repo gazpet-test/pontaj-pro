@@ -21,6 +21,7 @@ import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
 import CereriInterneProiect from './CereriInterneProiect.jsx'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
+import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -70,6 +71,19 @@ export default function ExecutiePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const proiectIdStr = searchParams.get('proiect') // null sau '1','2',...
   const tabStr = searchParams.get('tab') || 'proiect'
+
+  // Profil curent + panel „Citește Orice"
+  const [profile, setProfile] = useState(null)
+  const [citesteOpen, setCitesteOpen] = useState(false)
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_manage_contracts').eq('id', user.id).single()
+        setProfile(prof)
+      }
+    })()
+  }, [])
 
   // Navighează la contextul unui proiect
   const goToProiect = (id, tab = 'proiect') => {
@@ -159,6 +173,25 @@ export default function ExecutiePage() {
               )
             })}
           </>}
+
+          {/* Citește Orice — AI Document Router (dreapta) */}
+          {profile && (
+            <button
+              onClick={() => setCitesteOpen(true)}
+              title="Încarcă orice document — AI îl citește și îl pregătește pentru confirmare"
+              style={{
+                marginLeft: 'auto', flexShrink: 0,
+                padding: '8px 14px', background: G.executie + '18',
+                border: `1px solid ${G.executie}55`, borderRadius: 8,
+                color: G.executie, cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
+                display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = G.executie + '2A' }}
+              onMouseLeave={e => { e.currentTarget.style.background = G.executie + '18' }}
+            >
+              <span style={{ fontSize: 15 }}>📥</span> Citește Orice
+            </button>
+          )}
         </div>
       </div>
 
@@ -172,6 +205,13 @@ export default function ExecutiePage() {
           onBack={goBack}
         />
       )}
+
+      {/* ─── Citește Orice (AI Document Router) ─── */}
+      <CitesteOricePanel
+        open={citesteOpen}
+        onClose={() => setCitesteOpen(false)}
+        profile={profile}
+      />
     </div>
   )
 }
