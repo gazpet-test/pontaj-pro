@@ -32,7 +32,7 @@ const BUCKET_EXEC = 'executie-contracte'
 
 // cod tip document → etichetă RO (pt afișaj)
 const TIP_LABEL = {
-  ordin_incepere:'Ordin de începere', act_aditional:'Act adițional', aviz:'Aviz',
+  ordin_incepere:'Ordin de începere', ordin_reincepere:'Ordin de reîncepere', act_aditional:'Act adițional', aviz:'Aviz',
   autorizatie:'Autorizație de construire', contract:'Contract', garantie_exec:'Garanție bună execuție',
   grafic:'Grafic de execuție', autorizatie_iscir:'Autorizație ISCIR', autorizatie_transport:'Autorizație transport',
   autorizatie_sudura:'Autorizație sudură', buletin:'Buletin / CI', permis_sedere:'Permis de ședere',
@@ -41,7 +41,7 @@ const TIP_LABEL = {
   factura:'Factură', ipc:'IPC', certificat_plata:'Certificat de plată', altul:'Altul',
 }
 // tipuri valide pentru destinația Execuție (dropdown corecție)
-const TIPURI_EXEC = ['ordin_incepere','act_aditional','aviz','autorizatie','contract','garantie_exec','grafic','altul']
+const TIPURI_EXEC = ['ordin_incepere','ordin_reincepere','act_aditional','aviz','autorizatie','contract','garantie_exec','grafic','altul']
 
 const MODUL_META = {
   executie:{ label:'Execuție', color:G.executie, emoji:'🏗️' },
