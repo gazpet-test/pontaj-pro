@@ -112,9 +112,11 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
         if (insErr) throw new Error(insErr.message)
 
         setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'ai' } : x))
-        // clasificare AI
-        const { error: fnErr } = await supabase.functions.invoke('citeste-orice', { body: { inbox_id: row.id } })
-        if (fnErr) throw new Error('AI: ' + fnErr.message)
+        // Clasificarea o declanșează automat un trigger pe BD (server-side).
+        // Aici doar așteptăm (polling) până documentul e clasificat sau apare eroare.
+        const st = await pollStatus(row.id)
+        if (st === 'eroare') throw new Error('AI nu a putut citi documentul')
+        if (st === 'timeout') throw new Error('Clasificarea durează prea mult — reîncearcă')
 
         setUploading(u => u.filter(x => x !== rowState))
       } catch (e) {
@@ -124,6 +126,18 @@ export default function CitesteOricePanel({ open, onClose, profile, proiectConte
     await loadQueue()
     setView('confirm')
     flash('ok', 'Document(e) citit(e). Verifică și confirmă mai jos.')
+  }
+
+  // Așteaptă ca documentul să fie clasificat de trigger (server-side)
+  async function pollStatus(id, tries = 24) {
+    for (let i = 0; i < tries; i++) {
+      await new Promise(r => setTimeout(r, 2000))
+      try {
+        const { data } = await supabase.from('ai_documente_inbox').select('status').eq('id', id).single()
+        if (data && data.status !== 'in_asteptare') return data.status
+      } catch (_) { /* reîncearcă */ }
+    }
+    return 'timeout'
   }
 
   // ─── CONFIRM (Execuție) ───────────────────────────────────────
