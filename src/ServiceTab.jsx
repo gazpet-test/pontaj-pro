@@ -1529,12 +1529,58 @@ async function generateServicePDF(fisa, intrari, activ, showToast) {
       semDirector ? fetchSignatureAsDataURL(semDirector.fisier_path) : Promise.resolve(null),
       semJunior ? fetchSignatureAsDataURL(semJunior.fisier_path) : Promise.resolve(null),
     ])
-    
+
+    // Documente vehicul cu scadență (ITP, RCA, Copie conformă, Rovinietă, Tahograf etc.)
+    let docsVehicul = []
+    try {
+      const [{ data: docs }, { data: tipuri }] = await Promise.all([
+        supabase.from('logistica_documente').select('tip_id, data_expirare')
+          .eq('entitate_id', activ.id).eq('entitate_tip', 'activ')
+          .not('data_expirare', 'is', null).order('data_expirare', { ascending: true }),
+        supabase.from('logistica_tipuri_documente').select('id, nume'),
+      ])
+      const tipMap = Object.fromEntries((tipuri || []).map(t => [t.id, t.nume]))
+      docsVehicul = (docs || []).map(d => ({ tip: tipMap[d.tip_id] || 'Document', data_expirare: d.data_expirare }))
+    } catch { docsVehicul = [] }
+
     // Build HTML offscreen
     const html = document.createElement('div')
     html.style.cssText = 'position:fixed;top:-99999px;left:0;width:794px;background:#fff;color:#000;font-family:Arial,sans-serif;padding:28px;box-sizing:border-box;'
     
     const escapeHtml = (str) => String(str ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
+
+    // Status scadență document (verde/portocaliu/roșu)
+    const _aziDoc = new Date(); _aziDoc.setHours(0,0,0,0)
+    const docStatus = (exp) => {
+      const d = new Date(exp); d.setHours(0,0,0,0)
+      const zile = Math.round((d - _aziDoc) / 86400000)
+      if (zile < 0) return { txt: 'EXPIRAT', col: '#dc2626' }
+      if (zile <= 30) return { txt: `expiră în ${zile} zile`, col: '#d97706' }
+      return { txt: 'valabil', col: '#16a34a' }
+    }
+    const docsHtml = docsVehicul.length > 0 ? `
+      <div style="margin-bottom:12px;">
+        <div style="font-size:9px;color:#666;text-transform:uppercase;margin-bottom:4px;letter-spacing:.5px;">DOCUMENTE VEHICUL</div>
+        <table style="width:100%;border-collapse:collapse;font-size:10px;">
+          <thead>
+            <tr style="background:#1f2937;color:#fff;">
+              <th style="padding:6px 8px;text-align:left;">Document</th>
+              <th style="padding:6px 8px;text-align:left;width:150px;">Valabil până la</th>
+              <th style="padding:6px 8px;text-align:left;width:130px;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${docsVehicul.map((d, idx) => { const st = docStatus(d.data_expirare); return `
+              <tr style="${idx % 2 === 0 ? 'background:#fff' : 'background:#f9fafb'}">
+                <td style="padding:5px 8px;border-bottom:1px solid #ddd;font-weight:bold;">${escapeHtml(d.tip)}</td>
+                <td style="padding:5px 8px;border-bottom:1px solid #ddd;">${new Date(d.data_expirare).toLocaleDateString('ro-RO')}</td>
+                <td style="padding:5px 8px;border-bottom:1px solid #ddd;color:${st.col};font-weight:bold;">${st.txt}</td>
+              </tr>`}).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : ''
+
     
     html.innerHTML = `
       <div style="border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:14px;">
@@ -1637,6 +1683,8 @@ async function generateServicePDF(fisa, intrari, activ, showToast) {
           ${fisa.urmatoarea_data ? `${(fisa.urmatoarea_km || fisa.urmatoarea_ore) ? ' sau' : ''} pe <strong>${new Date(fisa.urmatoarea_data).toLocaleDateString('ro-RO')}</strong>` : ''}
         </div>
       ` : ''}
+
+      ${docsHtml}
       
       ${fisa.observatii ? `
         <div style="margin-bottom:12px;">
