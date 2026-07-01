@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
+import AppMobilManageri from './AppMobilManageri.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
@@ -6274,6 +6275,7 @@ function AdminPage() {
   const { profile } = useAuth()
   const isSuperAdmin = profile?.is_owner === true
   const isAdmin = isSuperAdmin
+  const canEditIban = isSuperAdmin || profile?.can_modify_employees === true
   const [tab,setTab]=useState('sites')
   const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
   const [depozite,setDepozite]=useState([]); const [savingDep,setSavingDep]=useState(false)
@@ -6386,6 +6388,10 @@ function AdminPage() {
     // Acces Pontaj Brut (FCP cu Ore Suplimentare + Istoric): doar OWNER (trigger BD verifică la fel)
     if (profile?.is_owner === true && editMgr.can_access_pontaj_brut !== undefined) {
       updates.can_access_pontaj_brut = !!editMgr.can_access_pontaj_brut
+    }
+    // Acces Diurne (istoric plăți diurne + ordine deplasare, FĂRĂ salarii): doar OWNER
+    if (profile?.is_owner === true && editMgr.can_access_diurne !== undefined) {
+      updates.can_access_diurne = !!editMgr.can_access_diurne
     }
     // Modifică Angajați (HR write): doar OWNER (trigger BD verifică la fel). Separat de can_access_personal_data care e DOAR vizualizare GDPR.
     if (profile?.is_owner === true && editMgr.can_modify_employees !== undefined) {
@@ -6669,7 +6675,7 @@ function AdminPage() {
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
-            {isAdmin&&<div style={{marginBottom:12}}><Lbl>IBAN (plăți bancă) {isSuperAdmin&&<span style={{fontSize:10,color:G.yellow}}>· editabil Super Admin & Admin</span>}</Lbl><input style={S.input} placeholder="RO49AAAA1B31007593840000" value={editEmp.iban||''} onChange={e=>setEditEmp({...editEmp,iban:e.target.value.toUpperCase().replace(/\s/g,'')})} maxLength={34}/></div>}
+            {canEditIban&&<div style={{marginBottom:12}}><Lbl>IBAN (plăți bancă) <span style={{fontSize:10,color:G.yellow}}>· editabil Super Admin & HR</span></Lbl><input style={S.input} placeholder="RO49AAAA1B31007593840000" value={editEmp.iban||''} onChange={e=>setEditEmp({...editEmp,iban:e.target.value.toUpperCase().replace(/\s/g,'')})} maxLength={34}/></div>}
             <div style={{marginBottom:12}}><Lbl>Departament</Lbl>
               <select value={editEmp.department} onChange={e=>setEditEmp({...editEmp,department:e.target.value})} style={{width:'100%'}}>
                 {DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
@@ -6873,6 +6879,25 @@ function AdminPage() {
                     </div>
                     <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
                       Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite Export Pontaj Brut (FCP cu Ore Suplimentare) + Istoric exporturi (parolat). Bifează doar pentru utilizatorii responsabili cu salariile.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
+            {profile?.is_owner === true && editMgr.id !== profile?.id && (
+              <div style={{marginBottom:14,padding:12,background:editMgr.can_access_diurne?'#1F1A2A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_access_diurne?G.purple:G.border}66`}}>
+                <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
+                  <input type="checkbox"
+                    checked={!!editMgr.can_access_diurne}
+                    onChange={e=>setEditMgr({...editMgr,can_access_diurne:e.target.checked})}
+                    style={{accentColor:G.purple,width:16,height:16,marginTop:2}}
+                  />
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:editMgr.can_access_diurne?G.purple:G.text}}>
+                      💶 Acces Diurne & Ordine Deplasare
+                    </div>
+                    <div style={{fontSize:10,color:G.muted,marginTop:3,lineHeight:1.5}}>
+                      Doar <strong style={{color:G.yellow}}>OWNER</strong> poate modifica. Permite vizualizarea istoricului plăților diurne + generarea ordinelor de deplasare. <strong>NU</strong> dă acces la salarii. Potrivit pentru HR.
                     </div>
                   </div>
                 </label>
@@ -8235,6 +8260,7 @@ export default function App() {
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
+        <Route path="/m" element={<ProtectedRoute><AppMobilManageri/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
       <ChatbotWidgetGate />

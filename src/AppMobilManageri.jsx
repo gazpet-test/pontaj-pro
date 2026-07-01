@@ -1,0 +1,336 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// AppMobilManageri.jsx — v1 (30.06.2026)
+// Pagină mobile-first pentru managerii de proiect (rută /m, PWA add-to-home).
+// Launcher cu 4 butoane mari + Raport zilnic de lucrare (hibrid):
+//   - Personal: automat din pontaj (v_pontaj_personal_santier), editabil
+//   - Utilaje: pre-populate din alimentări ieri+azi (v_utilaje_santier_recent), stare bifabilă
+//   - Activități/probleme/plan: text (paste din WhatsApp)
+//   - Poze: din galerie/cameră → bucket rapoarte-zilnice
+// Acces: fiecare manager vede DOAR șantierele lui (profile_sites); owner vede tot.
+// ═══════════════════════════════════════════════════════════════════════════
+
+import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { supabase } from './lib/supabase.js'
+
+const G = {
+  bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
+  text: '#E6EDF3', muted: '#8B949E', dim: '#6E7681',
+  blue: '#58A6FF', green: '#3FB950', red: '#F85149', yellow: '#D29922', purple: '#BC8CFF', orange: '#F0883E',
+  logistica: '#E3B341',
+}
+const BUCKET = 'rapoarte-zilnice'
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
+const azi = () => new Date().toISOString().slice(0, 10)
+
+const inputStyle = { background: G.bg, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 10, padding: '12px 14px', fontFamily: 'inherit', fontSize: 16, outline: 'none', width: '100%', boxSizing: 'border-box' }
+const labelStyle = { fontSize: 13, color: G.muted, marginBottom: 6, display: 'block', fontWeight: 600 }
+
+const PERSONAL_CAT = [
+  { key: 'sudori', label: '🔥 Sudori' },
+  { key: 'lacatusi', label: '🔧 Lăcătuși' },
+  { key: 'operatori', label: '🚜 Operatori utilaje' },
+  { key: 'soferi', label: '🚛 Șoferi' },
+  { key: 'necalificati', label: '👷 Necalificați' },
+  { key: 'altii', label: '👤 Alții' },
+]
+
+export default function AppMobilManageri() {
+  const nav = useNavigate()
+  const [view, setView] = useState('launcher')   // launcher | raport
+  const [profile, setProfile] = useState(null)
+  const [sites, setSites] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { setLoading(false); return }
+      const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
+      setProfile(prof || null)
+      let siteList = []
+      if (prof?.is_owner) {
+        const { data } = await supabase.from('sites').select('id, name').eq('active', true).order('name')
+        siteList = data || []
+      } else {
+        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name)').eq('profile_id', user.id)
+        siteList = (ps || []).map(r => r.sites).filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      }
+      setSites(siteList)
+      setLoading(false)
+    })()
+  }, [])
+
+  if (loading) return <Shell><div style={{ color: G.dim, textAlign: 'center', padding: 60 }}>Se încarcă…</div></Shell>
+
+  if (view === 'raport') return <RaportZilnic profile={profile} sites={sites} onBack={() => setView('launcher')} />
+
+  // ── Launcher ──
+  const butoane = [
+    { icon: '📋', label: 'Raport\nlucrare', color: G.logistica, onClick: () => setView('raport') },
+    { icon: '⏱️', label: 'Pontaj\nechipă', color: G.blue, onClick: () => nav('/pontaj') },
+    { icon: '🎫', label: 'Raportare\nproblemă', color: G.orange, onClick: () => nav('/tichete?action=new') },
+    { icon: '🚛', label: 'Cerere\ntransport', color: G.green, onClick: () => nav('/logistica') },
+  ]
+  return (
+    <Shell>
+      <div style={{ textAlign: 'center', marginBottom: 28, marginTop: 12 }}>
+        <div style={{ fontSize: 26, fontWeight: 800, color: G.text }}>Salut{profile?.name ? `, ${profile.name.split(' ')[0]}` : ''}! 👋</div>
+        <div style={{ fontSize: 14, color: G.muted, marginTop: 4 }}>{fmtDate(azi())} · {sites.length} {sites.length === 1 ? 'lucrare' : 'lucrări'}</div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        {butoane.map((b, i) => (
+          <button key={i} onClick={b.onClick} style={{
+            background: G.surface, border: `1px solid ${G.border}`, borderLeft: `4px solid ${b.color}`,
+            borderRadius: 16, padding: '26px 14px', cursor: 'pointer', minHeight: 130,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
+            color: G.text, fontFamily: 'inherit', transition: 'transform .1s',
+          }}
+            onTouchStart={e => e.currentTarget.style.transform = 'scale(.96)'}
+            onTouchEnd={e => e.currentTarget.style.transform = 'scale(1)'}>
+            <span style={{ fontSize: 42 }}>{b.icon}</span>
+            <span style={{ fontSize: 15, fontWeight: 700, textAlign: 'center', whiteSpace: 'pre-line', lineHeight: 1.25 }}>{b.label}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ textAlign: 'center', marginTop: 30 }}>
+        <button onClick={() => nav('/')} style={{ background: 'transparent', border: 'none', color: G.dim, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }}>
+          ← Înapoi la aplicația completă
+        </button>
+      </div>
+    </Shell>
+  )
+}
+
+// ── Ecran Raport zilnic ──
+function RaportZilnic({ profile, sites, onBack }) {
+  const [siteId, setSiteId] = useState(sites.length === 1 ? sites[0].id : null)
+  const [personal, setPersonal] = useState(null)
+  const [utilaje, setUtilaje] = useState([])
+  const [lucrari, setLucrari] = useState('')
+  const [masini, setMasini] = useState('')
+  const [probleme, setProbleme] = useState('')
+  const [planMaine, setPlanMaine] = useState('')
+  const [poze, setPoze] = useState([])           // File[]
+  const [loadingData, setLoadingData] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const siteName = sites.find(s => s.id === siteId)?.name || ''
+
+  const loadSiteData = useCallback(async (sid) => {
+    if (!sid) return
+    setLoadingData(true)
+    // Personal azi; fallback ieri dacă azi gol
+    let { data: per } = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
+    if (!per) {
+      const ieri = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+      const r = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', ieri).maybeSingle()
+      per = r.data
+    }
+    setPersonal(per ? { sudori: per.sudori, lacatusi: per.lacatusi, operatori: per.operatori, soferi: per.soferi, necalificati: per.necalificati, altii: per.altii, total: per.total } : { sudori: 0, lacatusi: 0, operatori: 0, soferi: 0, necalificati: 0, altii: 0, total: 0 })
+    // Utilaje alimentate ieri+azi
+    const { data: ut } = await supabase.from('v_utilaje_santier_recent').select('*').eq('site_id', sid)
+    setUtilaje((ut || []).map(u => ({
+      active_id: u.active_id,
+      cod: u.cod_intern,
+      nume: [u.marca, u.model].filter(Boolean).join(' ') || u.cod_intern || u.nr_inmatriculare,
+      ultima_alimentare: u.ultima_alimentare,
+      stare: 'functional', motiv: '',
+    })))
+    setLoadingData(false)
+  }, [])
+
+  useEffect(() => { if (siteId) loadSiteData(siteId) }, [siteId, loadSiteData])
+
+  const setPers = (k, v) => setPersonal(p => ({ ...p, [k]: Math.max(0, parseInt(v) || 0) }))
+  const setUtil = (idx, patch) => setUtilaje(list => list.map((u, i) => i === idx ? { ...u, ...patch } : u))
+  const adaugaUtilajManual = () => setUtilaje(list => [...list, { active_id: null, cod: '', nume: '', ultima_alimentare: null, stare: 'functional', motiv: '', manual: true }])
+
+  const onPoze = (e) => {
+    const files = Array.from(e.target.files || [])
+    setPoze(p => [...p, ...files].slice(0, 12))
+  }
+  const stergePoza = (i) => setPoze(p => p.filter((_, idx) => idx !== i))
+
+  const trimite = async () => {
+    if (!siteId) { setMsg({ ok: false, text: 'Alege lucrarea' }); return }
+    setSaving(true); setMsg(null)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      // upload poze
+      const pozePaths = []
+      for (const f of poze) {
+        const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
+        const path = `${siteId}/${azi()}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
+        const { error } = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || 'image/jpeg', upsert: false })
+        if (!error) pozePaths.push(path)
+      }
+      const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
+      const { error: insErr } = await supabase.from('rapoarte_zilnice').insert({
+        site_id: siteId, data: azi(),
+        sef_santier: profile?.name || null,
+        lucrari_efectuate: lucrari.trim() || null,
+        utilaje_snapshot: utilaje.map(u => ({ cod: u.cod, nume: u.nume, stare: u.stare, motiv: u.motiv || null })),
+        personal_snapshot: { ...personal, total: totalPers },
+        masini: masini.trim() || null,
+        probleme: probleme.trim() || null,
+        plan_maine: planMaine.trim() || null,
+        poze: pozePaths,
+        created_by: user?.id || null,
+      })
+      if (insErr) throw insErr
+      setMsg({ ok: true, text: '✅ Raport trimis cu succes!' })
+      setTimeout(onBack, 1200)
+    } catch (e) {
+      setMsg({ ok: false, text: 'Eroare: ' + (e.message || e) })
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Shell>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+        <button onClick={onBack} style={{ background: G.surface, border: `1px solid ${G.border}`, color: G.text, borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: 'pointer' }}>←</button>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: G.text }}>📋 Raport zilnic</div>
+          <div style={{ fontSize: 13, color: G.muted }}>{fmtDate(azi())}</div>
+        </div>
+      </div>
+
+      {/* Alege lucrarea */}
+      <div style={{ marginBottom: 18 }}>
+        <label style={labelStyle}>Lucrarea</label>
+        <select value={siteId || ''} onChange={e => setSiteId(Number(e.target.value) || null)} style={{ ...inputStyle, appearance: 'none' }}>
+          <option value="">— alege lucrarea —</option>
+          {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+
+      {siteId && (loadingData ? (
+        <div style={{ color: G.dim, textAlign: 'center', padding: 30 }}>Se încarcă datele lucrării…</div>
+      ) : (
+        <>
+          {/* Personal auto din pontaj */}
+          <Section title="👷 Personal (din pontaj)" hint="completat automat — ajustează dacă e cazul">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {PERSONAL_CAT.map(c => (
+                <div key={c.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: '8px 12px' }}>
+                  <span style={{ fontSize: 13, color: G.text }}>{c.label}</span>
+                  <input type="number" min="0" value={personal?.[c.key] ?? 0} onChange={e => setPers(c.key, e.target.value)}
+                    style={{ width: 48, textAlign: 'center', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '6px', fontSize: 16, fontWeight: 700 }} />
+                </div>
+              ))}
+            </div>
+            <div style={{ textAlign: 'right', marginTop: 8, fontSize: 13, color: G.muted }}>
+              Total: <strong style={{ color: G.green }}>{PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)}</strong> persoane
+            </div>
+          </Section>
+
+          {/* Utilaje din alimentări */}
+          <Section title="🚜 Utilaje pe șantier" hint="din alimentări (ieri+azi) — bifează starea">
+            {utilaje.length === 0 ? (
+              <div style={{ color: G.dim, fontSize: 13, fontStyle: 'italic', padding: '6px 0' }}>Niciun utilaj alimentat recent pe lucrare. Adaugă manual ↓</div>
+            ) : utilaje.map((u, i) => (
+              <div key={i} style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {u.manual ? (
+                      <input placeholder="Nume utilaj" value={u.nume} onChange={e => setUtil(i, { nume: e.target.value })} style={{ ...inputStyle, padding: '6px 10px', fontSize: 14 }} />
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: G.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.nume}</div>
+                        <div style={{ fontSize: 11, color: G.dim }}>{u.cod}{u.ultima_alimentare ? ` · alimentat ${fmtDate(u.ultima_alimentare)}` : ''}</div>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button onClick={() => setUtil(i, { stare: 'functional', motiv: '' })} style={stareBtn(u.stare === 'functional', G.green)}>✓</button>
+                    <button onClick={() => setUtil(i, { stare: 'nefunctional' })} style={stareBtn(u.stare === 'nefunctional', G.red)}>✕</button>
+                  </div>
+                </div>
+                {u.stare === 'nefunctional' && (
+                  <input placeholder="Ce problemă are?" value={u.motiv} onChange={e => setUtil(i, { motiv: e.target.value })}
+                    style={{ ...inputStyle, padding: '8px 10px', fontSize: 14, marginTop: 8 }} />
+                )}
+              </div>
+            ))}
+            <button onClick={adaugaUtilajManual} style={{ background: 'transparent', border: `1px dashed ${G.border2}`, color: G.muted, borderRadius: 10, padding: '10px', width: '100%', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', marginTop: 4 }}>
+              + Adaugă utilaj manual
+            </button>
+          </Section>
+
+          {/* Activități + text */}
+          <Section title="🔧 Lucrări efectuate" hint="scrie sau lipește din WhatsApp">
+            <textarea value={lucrari} onChange={e => setLucrari(e.target.value)} rows={5} placeholder="Ce s-a lucrat azi…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
+          </Section>
+
+          <Section title="🚗 Mașini (probleme)">
+            <textarea value={masini} onChange={e => setMasini(e.target.value)} rows={2} placeholder="Probleme la mașini (opțional)…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
+          </Section>
+
+          <Section title="⚠️ Probleme / Observații">
+            <textarea value={probleme} onChange={e => setProbleme(e.target.value)} rows={3} placeholder="Probleme întâmpinate (opțional)…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
+          </Section>
+
+          <Section title="📅 Plan pentru mâine">
+            <textarea value={planMaine} onChange={e => setPlanMaine(e.target.value)} rows={3} placeholder="Ce se face mâine…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
+          </Section>
+
+          {/* Poze */}
+          <Section title="📷 Poze" hint={`${poze.length}/12`}>
+            <label style={{ display: 'block', background: G.surface2, border: `1px dashed ${G.border2}`, borderRadius: 12, padding: '18px', textAlign: 'center', cursor: 'pointer', color: G.muted, fontSize: 14 }}>
+              📷 Apasă pentru a adăuga poze
+              <input type="file" accept="image/*" multiple capture="environment" onChange={onPoze} style={{ display: 'none' }} />
+            </label>
+            {poze.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 10 }}>
+                {poze.map((f, i) => (
+                  <div key={i} style={{ position: 'relative', aspectRatio: '1', borderRadius: 10, overflow: 'hidden', border: `1px solid ${G.border2}` }}>
+                    <img src={URL.createObjectURL(f)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button onClick={() => stergePoza(i)} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,.7)', color: 'white', border: 'none', borderRadius: '50%', width: 24, height: 24, fontSize: 14, cursor: 'pointer', lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+
+          {msg && <div style={{ padding: '12px 14px', borderRadius: 10, marginBottom: 12, background: (msg.ok ? G.green : G.red) + '22', color: msg.ok ? G.green : G.red, fontSize: 14, fontWeight: 600, textAlign: 'center' }}>{msg.text}</div>}
+
+          <button onClick={trimite} disabled={saving} style={{
+            background: G.green, color: '#0D1117', border: 'none', borderRadius: 14, padding: '16px', width: '100%',
+            fontSize: 17, fontWeight: 800, cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', marginBottom: 30, opacity: saving ? .6 : 1,
+          }}>
+            {saving ? 'Se trimite…' : '✓ Trimite raportul'}
+          </button>
+        </>
+      ))}
+    </Shell>
+  )
+}
+
+// ── Helpers UI ──
+function Shell({ children }) {
+  return (
+    <div style={{ minHeight: '100vh', background: G.bg, padding: '20px 16px', maxWidth: 520, margin: '0 auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
+      {children}
+    </div>
+  )
+}
+function Section({ title, hint, children }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: G.text }}>{title}</span>
+        {hint && <span style={{ fontSize: 11, color: G.dim }}>{hint}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+function stareBtn(active, color) {
+  return {
+    width: 38, height: 38, borderRadius: 9, fontSize: 16, cursor: 'pointer', fontWeight: 800,
+    background: active ? color : 'transparent', color: active ? '#0D1117' : G.dim,
+    border: `1px solid ${active ? color : G.border2}`,
+  }
+}
