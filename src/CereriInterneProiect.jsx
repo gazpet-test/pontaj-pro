@@ -71,6 +71,25 @@ const PO_STATUS_INFO = {
   respinsa:     { label:'respinsă',     color:G.red     },
 }
 const ARHIVA_ST = ['finalizata','anulata','respinsa']
+// Stage numeric per status PO (pentru rezumatul de acoperire pe card) — oglinda
+// motorului BD fn_cerere_rollup_status: draft/în aprobare=1, emisă=2, tranzit=3,
+// ajunsă=4, recepționată/în stoc=5. Anulate/respinse NU contează (linia rămâne neacoperită).
+const PO_STAGE = { draft:1, in_aprobare:1, emisa:2, in_tranzit:3, ajunsa:4, receptionata:5, in_stoc:5 }
+// Rezumat acoperire linii pentru o cerere: { total, nerep, draft, emise, drum, stoc }
+function coverageSummary(cerere, linkMap) {
+  const linii = cerere.linii || []
+  const sum = { total: linii.length, nerep:0, draft:0, emise:0, drum:0, stoc:0 }
+  for (const l of linii) {
+    const posActive = (linkMap[l.id] || []).filter(p => !['anulata','respinsa'].includes(p.status))
+    const stg = posActive.length ? Math.max(...posActive.map(p => PO_STAGE[p.status] || 0)) : 0
+    if (stg === 0) sum.nerep++
+    else if (stg === 1) sum.draft++
+    else if (stg === 2) sum.emise++
+    else if (stg <= 4) sum.drum++
+    else sum.stoc++
+  }
+  return sum
+}
 const PRIO_INFO = {
   urgenta: { label:'Urgentă', color:G.red },
   normala: { label:'Normală', color:G.muted },
@@ -629,6 +648,30 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
     } finally { setBusy(false) }
   }, [cereri, detailId, loadAll, showToast])
 
+  // ── Ștergere cerere (doar owner) ──────────────────────────────────────────
+  // Blocată dacă cererea are PO-uri ACTIVE legate (non-anulate/respinse) — altfel
+  // FK-ul SET NULL le-ar lăsa orfane. Liniile + documentele cererii pleacă prin CASCADE.
+  const deleteCerere = useCallback(async (c) => {
+    const posActive = (c.linii || []).flatMap(l => linkMap[l.id] || [])
+      .filter(p => !['anulata','respinsa'].includes(p.status))
+    if (posActive.length) {
+      const nrs = [...new Set(posActive.map(p => p.numar))].join(', ')
+      showToast(`Nu se poate șterge: are comenzi furnizor active (${nrs}). Anulează-le întâi.`, 'error')
+      return
+    }
+    if (!window.confirm(`Ștergi definitiv cererea ${c.numar_comanda || ''}?\n\nSe șterg și liniile + documentele atașate. Acțiunea e IREVERSIBILĂ.`)) return
+    setBusy(true)
+    try {
+      const { error } = await supabase.from('comenzi').delete().eq('id', c.id)
+      if (error) throw error
+      showToast(`Cererea ${c.numar_comanda || ''} a fost ștearsă 🗑`)
+      if (detailId === c.id) setDetailId(null)
+      await loadAll()
+    } catch (e) {
+      console.error(e); showToast('Eroare la ștergere: ' + (e.message || e), 'error')
+    } finally { setBusy(false) }
+  }, [linkMap, detailId, loadAll, showToast])
+
   // ── Generează comandă furnizor din liniile selectate ale cererii ──────────
   // Motorul BD (trigger trg_cfl_sync_cereri) face rollup-ul de status automat.
   const generateComandaFurnizor = useCallback(async (cerere, lineIds, furnizorId, faraFormular, termen, livrareTip) => {
@@ -805,6 +848,18 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
   const renderCerereCard = (c) => {
     const nrLinii = (c.linii || []).length
     const prio = PRIO_INFO[c.prioritate] || {}
+    // Rezumat acoperire linii — răspuns la TKT-2026-0053: badge-ul „În lucru" ascundea
+    // progresul real (ex: 8/9 linii deja în stoc). Afișăm chips doar pe ciclul activ,
+    // după preluare (pe „deschis" totul e nerepartizat — ar fi zgomot).
+    const cov = coverageSummary(c, linkMap)
+    const showCov = !ARHIVA_ST.includes(c.status) && c.status !== 'deschis' && cov.total > 0
+    const covChips = showCov ? [
+      cov.stoc  > 0 && { txt:`📦 ${cov.stoc}/${cov.total} în stoc`,    color:G.green  },
+      cov.drum  > 0 && { txt:`🚚 ${cov.drum} pe drum`,                 color:G.orange },
+      cov.emise > 0 && { txt:`🛒 ${cov.emise} emise`,                  color:G.purple },
+      cov.draft > 0 && { txt:`🕐 ${cov.draft} PO draft — de emis`,     color:G.yellow },
+      cov.nerep > 0 && { txt:`⚠ ${cov.nerep} de repartizat`,           color:G.red    },
+    ].filter(Boolean) : []
     return (
       <div key={c.id} onClick={()=>setDetailId(c.id)} style={{
         ...S.card, padding:'14px 18px', cursor:'pointer',
@@ -822,8 +877,23 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
             {nrLinii} {nrLinii===1?'articol':'articole'} · {profilesMap[c.deschis_de] || '—'} · {fmtData(c.created_at)}
             {c.data_termen_estimat && <> · 🎯 {fmtData(c.data_termen_estimat)}</>}
           </div>
+          {covChips.length > 0 && (
+            <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap', marginTop:2 }}>
+              {covChips.map((ch,i) => (
+                <span key={i} style={{ fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:12,
+                  background:ch.color+'1A', color:ch.color, border:`1px solid ${ch.color}44` }}>{ch.txt}</span>
+              ))}
+            </div>
+          )}
         </div>
-        <StatusBadge status={c.status} />
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <StatusBadge status={c.status} />
+          {isOwner && (
+            <button title="Șterge cererea (doar owner)" disabled={busy}
+              onClick={(e)=>{ e.stopPropagation(); deleteCerere(c) }}
+              style={{ ...S.btnIcon, padding:'6px 10px', fontSize:13, borderColor:G.red+'44', color:G.red }}>🗑</button>
+          )}
+        </div>
       </div>
     )
   }
