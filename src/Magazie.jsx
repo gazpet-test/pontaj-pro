@@ -91,8 +91,13 @@ function MaterialeTab() {
   const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
 
   const grupe = useMemo(() => {
+    // Căutare pe denumire material + furnizori (ultim + lista completă din v_stoc_furnizori)
     const filtered = search
-      ? stocuri.filter(s => normalize(s.material_denumire).includes(normalize(search)))
+      ? stocuri.filter(s => {
+          const f = furnMap[`${s.locatie_tip}|${s.locatie_id}|${s.material_denumire}`]
+          const hay = normalize([s.material_denumire, f?.ultim, f?.lista].filter(Boolean).join(' '))
+          return hay.includes(normalize(search))
+        })
       : stocuri
     const map = new Map()
     for (const s of filtered) {
@@ -110,7 +115,7 @@ function MaterialeTab() {
       out.push({ key:k, titlu:`🏗️ ${p ? `${p.cod_intern ? `[${p.cod_intern}] ` : ''}${p.nume}` : `Proiect #${pid}`}`, items: map.get(k) })
     }
     return out
-  }, [stocuri, search, proiecteMap])
+  }, [stocuri, search, proiecteMap, furnMap])
 
   const totalPozitii = stocuri.length
   const totalLocatii = new Set(stocuri.map(s => s.locatie_tip === 'sediu' ? 'sediu' : `p${s.locatie_id}`)).size
@@ -139,7 +144,7 @@ function MaterialeTab() {
       </div>
 
       <div style={{ marginBottom:14 }}>
-        <input style={{ ...S.input, maxWidth:380 }} placeholder="🔍 Caută material în toate locațiile..." value={search} onChange={e => setSearch(e.target.value)} />
+        <input style={{ ...S.input, maxWidth:380 }} placeholder="🔍 Caută material sau furnizor în toate locațiile..." value={search} onChange={e => setSearch(e.target.value)} />
       </div>
 
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă stocurile...</div>}
