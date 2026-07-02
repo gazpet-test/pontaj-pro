@@ -23,6 +23,7 @@ import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
 import SupapeDeclaratiiSection from './SupapeDeclaratiiSection.jsx'
 import DeclaratieTehnicaSection from './DeclaratieTehnicaSection.jsx'
+import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
@@ -10964,6 +10965,7 @@ export default function LogisticaPage() {
   }, [])
   const [alerteGlobale, setAlerteGlobale] = useState([])
   const [showAlerte, setShowAlerte] = useState(false)
+  const [citesteOpen, setCitesteOpen] = useState(false)  // 02.07.2026: panel „Citește Orice" (AI Document Router)
   
   useEffect(() => {
     const init = async () => {
@@ -11747,6 +11749,13 @@ export default function LogisticaPage() {
       {/* Bara de tab-uri */}
       {/* Etapa 8.5: Header buton Alerte Globale */}
       <div style={{display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 12, gap: 8}}>
+        {(profile?.is_owner || ['superadmin','admin_logistica'].includes(profile?.role) || accessLevel === 'admin' || accessLevel === 'editor') && (
+          <button onClick={() => setCitesteOpen(true)}
+            style={{ display:'inline-flex', alignItems:'center', gap:6, padding:'8px 14px', background:'#F0883E18', color:'#F0883E', border:'1px solid #F0883E55', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer' }}
+            title="Trage un document (ITP, RCA, CASCO…) — AI îl citește și îl atașează la vehicul">
+            📥 Citește Orice
+          </button>
+        )}
         <AlerteGlobalButton alerte={alerteGlobale} onClick={() => setShowAlerte(true)} />
       </div>
       {/* Etapa 14: Widget Tichete Logistica */}
@@ -12686,6 +12695,16 @@ export default function LogisticaPage() {
             loadAll()
             setShowImportWhatsApp(false)
           }}
+        />
+      )}
+
+      {citesteOpen && profile && (
+        <CitesteOricePanel
+          open={citesteOpen}
+          modul="logistica"
+          profile={profile}
+          onClose={() => setCitesteOpen(false)}
+          onConfirmed={() => loadAll()}
         />
       )}
     </>

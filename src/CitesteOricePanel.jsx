@@ -16,6 +16,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { jsPDF } from 'jspdf'
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -64,7 +65,7 @@ const MODUL_CFG = {
     bucket:'documente-personal',
   },
   logistica: {
-    activ:false, entitateLabel:'Vehicul', entitateTip:'activ', color:G.orange,
+    activ:true, entitateLabel:'Vehicul', entitateTip:'activ', color:G.orange,
     bucket:'documente-flota',
   },
   financiar: {
@@ -76,6 +77,47 @@ const MODUL_CFG = {
 const fmtDate = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
 const fmtD = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' }) : '—'
 const randId = () => Math.random().toString(36).slice(2, 10)
+
+// Match cod tip AI (ex 'itp', 'copie_conforma') → cod real din tipuriFK (ex 'ITP',
+// 'Copie conformă'). HR are coduri identice (match exact); logistică are nume RO cu
+// majuscule/diacritice → normalizare (fără diacritice, fără spații/underscore).
+const normTip = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+function resolveTipCod(rawTip, tipuriFK) {
+  if (!rawTip) return ''
+  const exact = (tipuriFK || []).find(t => t.cod === rawTip)
+  if (exact) return exact.cod
+  const n = normTip(rawTip)
+  const fuzzy = (tipuriFK || []).find(t => normTip(t.cod) === n)
+  return fuzzy ? fuzzy.cod : ''
+}
+
+// ─── Conversie imagine → PDF comprimat, în browser (jsPDF) ───────
+// Orice poză (JPG/PNG/WEBP/HEIC-render) e redimensionată la max 1600px pe latura
+// lungă + re-encodată JPEG 82% și pusă într-un PDF cu pagina = dimensiunea imaginii.
+// Rezultat: din 5-8MB (poze telefon) → ~200-400KB. Edge-ul primește mereu PDF,
+// deci scapă de limita de 5MB/imagine a AI-ului și de orice transform pe server.
+const IMG_MAX_DIM = 1600
+async function imageToPdf(file) {
+  const dataUrl = await new Promise((res, rej) => {
+    const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('citire fișier')); r.readAsDataURL(file)
+  })
+  const img = await new Promise((res, rej) => {
+    const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('decodare imagine')); im.src = dataUrl
+  })
+  let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height
+  if (!w || !h) throw new Error('dimensiuni imagine necunoscute')
+  if (w > IMG_MAX_DIM || h > IMG_MAX_DIM) { const s = IMG_MAX_DIM / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s) }
+  const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h)   // fundal alb (PNG transparent → alb, nu negru)
+  ctx.drawImage(img, 0, 0, w, h)
+  const jpeg = canvas.toDataURL('image/jpeg', 0.82)
+  const pdf = new jsPDF({ orientation: w >= h ? 'landscape' : 'portrait', unit: 'px', format: [w, h], compress: true })
+  pdf.addImage(jpeg, 'JPEG', 0, 0, w, h, undefined, 'FAST')
+  const blob = pdf.output('blob')
+  const nume = file.name.replace(/\.[^.]+$/, '') + '.pdf'
+  return new File([blob], nume, { type: 'application/pdf' })
+}
 
 // ═══════════════════════════════════════════════════════════════
 export default function CitesteOricePanel({ open, onClose, profile, modul = 'executie', proiectContextId = null, proiectContextNume = null, onConfirmed }) {
@@ -134,10 +176,19 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   async function handleFiles(fileList) {
     const files = Array.from(fileList || [])
     if (!files.length) return
-    for (const file of files) {
-      const rowState = { nume: file.name, stare: 'upload' }
+    for (const original of files) {
+      const rowState = { nume: original.name, stare: 'upload' }
       setUploading(u => [...u, rowState])
       try {
+        // Orice imagine → PDF comprimat în browser, înainte de upload.
+        // Așa fișierul ajunge mereu PDF (mic) în coadă, iar AI-ul îl citește garantat.
+        let file = original
+        if ((original.type || '').startsWith('image/')) {
+          setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'convert' } : x))
+          try { file = await imageToPdf(original) }
+          catch (_) { file = original }   // dacă din orice motiv conversia pică, urcăm originalul
+          setUploading(u => u.map(x => x === rowState ? { ...x, nume: file.name, stare: 'upload' } : x))
+        }
         const ext = (file.name.split('.').pop() || 'pdf').toLowerCase()
         const path = `${profile.id}/${Date.now()}_${randId()}.${ext}`
         const { error: upErr } = await supabase.storage.from(BUCKET_INBOX).upload(path, file, { upsert: false, contentType: file.type || undefined })
@@ -181,6 +232,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   async function handleConfirm(row) {
     if (modul === 'executie') return confirmExecutie(row)
     if (modul === 'hr') return confirmHR(row)
+    if (modul === 'logistica') return confirmLogistica(row)
     flash('err', 'Confirmarea pentru acest modul nu e încă activă.')
   }
 
@@ -258,6 +310,37 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
 
+  // ── Logistică (Faza 2) ────────────────────────────────────────
+  async function confirmLogistica(row) {
+    const vehiculId = row._editEntitate ?? row.entitate_id
+    const tipCod = row._editTip ?? resolveTipCod(row.tip_document, tipuriFK)
+    if (!vehiculId) { flash('err', 'Alege vehiculul înainte de a confirma.'); return }
+    const tipRow = tipuriFK.find(t => t.cod === tipCod)
+    if (!tipRow) { flash('err', 'Alege tipul documentului.'); return }
+    setBusyId(row.id)
+    try {
+      const destPath = await mutaFisier(row, cfg.bucket, String(vehiculId))
+      const dd = row.payload_ai?.date_document || {}
+      const dataExp = dd.data_expirare || null
+      // logistica_documente: active_id + entitate_id ambele = vehiculul, entitate_tip='activ';
+      // fișierul se salvează în pdf_url (nu fisier_path), created_by pentru autor.
+      const { data: created, error: insErr } = await supabase.from('logistica_documente').insert({
+        active_id: vehiculId, entitate_tip: 'activ', entitate_id: vehiculId,
+        tip_id: tipRow.id,
+        numar_document: dd.numar || null, emitent: dd.emitent || null,
+        data_emitere: dd.data_emitere || null, data_expirare: dataExp,
+        fara_expirare: !dataExp,
+        pdf_url: destPath, pdf_locatie: 'supabase',
+        observatii: row.payload_ai?.titlu_scurt || null, created_by: profile.id,
+      }).select('id').single()
+      if (insErr) throw new Error('Insert document flotă: ' + insErr.message)
+
+      await finalizeInbox(row, 'logistica', tipCod, 'activ', vehiculId, created.id)
+      flash('ok', 'Document trimis la vehicul ✓')
+      await loadQueue(); onConfirmed && onConfirmed()
+    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+  }
+
   // Marchează rândul inbox confirmat + curăță staging
   async function finalizeInbox(row, modulTinta, tip, entTip, entId, refId) {
     await supabase.from('ai_documente_inbox').update({
@@ -323,8 +406,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                   {uploading.map((u, i) => (
                     <div key={i} style={{ display:'flex', alignItems:'center', gap:8, fontSize:12.5, padding:'8px 12px', background:G.card, border:`1px solid ${G.border}`, borderRadius:8 }}>
                       <span style={{ flex:1, color:G.text }}>{u.nume}</span>
-                      <span style={{ color: u.stare === 'eroare' ? G.red : u.stare === 'ai' ? G.purple : G.muted, fontWeight:700 }}>
-                        {u.stare === 'upload' ? '⏳ urc…' : u.stare === 'ai' ? '🤖 AI citește…' : `⚠ ${u.err || 'eroare'}`}
+                      <span style={{ color: u.stare === 'eroare' ? G.red : u.stare === 'ai' ? G.purple : u.stare === 'convert' ? G.teal : G.muted, fontWeight:700 }}>
+                        {u.stare === 'convert' ? '🖼️ pregătesc…' : u.stare === 'upload' ? '⏳ urc…' : u.stare === 'ai' ? '🤖 AI citește…' : `⚠ ${u.err || 'eroare'}`}
                       </span>
                     </div>
                   ))}
@@ -405,7 +488,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                     {cfg.tipuriText.map(t => <option key={t} value={t}>{TIP_LABEL[t] || t}</option>)}
                                   </select>
                                 ) : (
-                                  <select value={row._editTip ?? row.tip_document ?? ''} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
+                                  <select value={row._editTip ?? resolveTipCod(row.tip_document, tipuriFK)} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
                                     <option value="">— alege tipul —</option>
                                     {tipuriFK.map(t => <option key={t.id} value={t.cod}>{t.denumire}</option>)}
                                   </select>
