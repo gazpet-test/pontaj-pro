@@ -88,6 +88,23 @@ function MaterialeTab() {
   // Gate ajustare: owner SAU can_manage_stoc (flag setat din Admin)
   const canManage = !!(profile?.is_owner || profile?.can_manage_stoc)
 
+  // Ștergere poziție de stoc (canManage) — pentru teste / poziții greșite.
+  // stocuri_miscari nu are FK spre stocuri (legătură pe triplet locatie_tip +
+  // locatie_id + material_denumire) → curățăm și istoricul, altfel rămâne orfan.
+  const deleteStoc = useCallback(async (s) => {
+    if (!window.confirm(`Ștergi definitiv poziția „${s.material_denumire}" (${fmtNr(s.cantitate)} ${s.um || ''})?\n\nSe șterge și istoricul de mișcări al poziției. Acțiunea e IREVERSIBILĂ.`)) return
+    try {
+      let qM = supabase.from('stocuri_miscari').delete()
+        .eq('locatie_tip', s.locatie_tip).eq('material_denumire', s.material_denumire)
+      qM = s.locatie_id == null ? qM.is('locatie_id', null) : qM.eq('locatie_id', s.locatie_id)
+      const { error: eM } = await qM
+      if (eM) throw eM
+      const { error } = await supabase.from('stocuri').delete().eq('id', s.id)
+      if (error) throw error
+      await loadAll()
+    } catch (e) { console.error(e); alert('Eroare la ștergere: ' + (e.message || e)) }
+  }, [loadAll])
+
   const proiecteMap = useMemo(() => Object.fromEntries(proiecte.map(p => [p.id, p])), [proiecte])
 
   const grupe = useMemo(() => {
@@ -167,13 +184,13 @@ function MaterialeTab() {
             {valGrup > 0 && <span style={{ color:G.green, fontSize:13, fontWeight:800 }}>{fmtLei(valGrup)}{partial && <span style={{ color:G.dim, fontWeight:600 }}> *</span>}</span>}
             <span style={{ background:G.magazie + '22', color:G.magazie, border:`1px solid ${G.magazie}55`, borderRadius:14, padding:'3px 12px', fontSize:12, fontWeight:800 }}>{gr.items.length} {gr.items.length === 1 ? 'poziție' : 'poziții'}</span>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 200px', gap:10, padding:'8px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 230px', gap:10, padding:'8px 16px', fontSize:11, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
             <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div><div style={{ textAlign:'right' }}>Valoare</div><div>Actualizat</div><div></div>
           </div>
           {gr.items.map(s => {
             const val = s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : null
             return (
-            <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 200px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
+            <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 70px 120px 130px 110px 230px', gap:10, alignItems:'center', padding:'10px 16px', fontSize:13.5, borderBottom:`1px solid ${G.border}` }}>
               <div style={{ fontWeight:600 }}>{s.material_denumire}{s.observatii && <div style={{ fontSize:11, color:G.muted }}>{s.observatii}</div>}{(() => {
                 const fz = furnMap[`${s.locatie_tip}|${s.locatie_id}|${s.material_denumire}`]
                 if (!fz || !fz.ultim) return null
@@ -212,6 +229,10 @@ function MaterialeTab() {
                 {canManage && (
                   <button onClick={() => setAjustModal(s)} title="Ajustează stoc (+/-)"
                     style={{ ...S.btnS, padding:'5px 9px', fontSize:12, color:G.magazie, borderColor:G.magazie + '66' }}>±</button>
+                )}
+                {profile?.is_owner && (
+                  <button onClick={() => deleteStoc(s)} title="Șterge poziția (ireversibil, doar owner)"
+                    style={{ ...S.btnS, padding:'5px 9px', fontSize:12, color:G.red, borderColor:G.red + '55' }}>🗑</button>
                 )}
               </div>
             </div>
@@ -1683,46 +1704,85 @@ function MagaziiTab() {
   const inchise = magazii.filter(m => m.status === 'inchisa')
   const totalSubPrag = magazii.reduce((acc, m) => acc + statPerMag(m).subPrag, 0)
 
+  // Rând full-width per magazie (decizie Razvan 03.07: listă verticală, nu grid).
+  // Click pe rând → expand inline cu inventarul magaziei (stocurile-s deja în
+  // state, filtrare locală — zero fetch nou, pattern „refolosește array-ul părinte").
+  const [expandedId, setExpandedId] = useState(null)
   const Card = ({ m }) => {
     const st = statPerMag(m)
     const inchisa = m.status === 'inchisa'
+    const expanded = expandedId === m.id
+    const tip = m.tip === 'sediu' ? 'sediu' : 'proiect'
+    const locId = m.tip === 'sediu' ? null : m.executie_proiect_id
+    const items = expanded
+      ? stocuri.filter(s => s.locatie_tip === tip && (s.locatie_id ?? null) === (locId ?? null))
+          .slice().sort((a, b) => (a.material_denumire || '').localeCompare(b.material_denumire || ''))
+      : []
     return (
-      <div style={{ ...S.card, padding:'14px 16px', opacity: inchisa ? .6 : 1 }}>
-        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:10 }}>
-          <div style={{ minWidth:0 }}>
-            <div style={{ fontSize:14.5, fontWeight:800, display:'flex', alignItems:'center', gap:7 }}>
-              <span>{m.tip === 'sediu' ? '🏢' : '🏗️'}</span>
-              <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.denumire}</span>
-            </div>
-            <div style={{ fontSize:11.5, color:G.dim, marginTop:3 }}>
+      <div style={{ ...S.card, opacity: inchisa ? .6 : 1, overflow:'hidden' }}>
+        <div onClick={() => setExpandedId(expanded ? null : m.id)}
+          style={{ display:'flex', alignItems:'center', gap:14, padding:'13px 16px', cursor:'pointer', flexWrap:'wrap' }}
+          onMouseEnter={e => e.currentTarget.style.background = G.bg}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+          <span style={{ fontSize:18 }}>{m.tip === 'sediu' ? '🏢' : '🏗️'}</span>
+          <div style={{ flex:1, minWidth:220 }}>
+            <div style={{ fontSize:14.5, fontWeight:800 }}>{m.denumire}</div>
+            <div style={{ fontSize:11.5, color:G.dim, marginTop:2 }}>
               {inchisa ? `Închisă ${fmtData(m.data_inchidere)}` : `Activă din ${fmtData(m.data_deschidere)}`}
             </div>
           </div>
-          <span style={{ fontSize:10.5, fontWeight:800, padding:'3px 9px', borderRadius:12, whiteSpace:'nowrap',
-            background:(inchisa ? G.muted : G.green) + '22', color: inchisa ? G.muted : G.green }}>
-            {inchisa ? 'închisă' : 'activă'}
-          </span>
+          <div style={{ display:'flex', alignItems:'center', gap:16, flexWrap:'wrap' }}>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:10.5, color:G.muted }}>Poziții stoc</div>
+              <div style={{ fontSize:16, fontWeight:800, color: st.pozitii ? G.text : G.dim }}>{st.pozitii}</div>
+            </div>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:10.5, color:G.muted }}>Sub prag</div>
+              <div style={{ fontSize:16, fontWeight:800, color: st.subPrag ? G.red : G.dim }}>{st.subPrag}</div>
+            </div>
+            <div style={{ textAlign:'right', minWidth:90 }}>
+              <div style={{ fontSize:10.5, color:G.muted }}>💰 Valoare</div>
+              <div style={{ fontSize:14, fontWeight:800, color: st.valoare > 0 ? G.green : G.dim }}>{st.valoare > 0 ? fmtNr(Math.round(st.valoare)) + ' lei' : '—'}</div>
+            </div>
+            <span style={{ fontSize:10.5, fontWeight:800, padding:'3px 9px', borderRadius:12, whiteSpace:'nowrap',
+              background:(inchisa ? G.muted : G.green) + '22', color: inchisa ? G.muted : G.green }}>
+              {inchisa ? 'închisă' : 'activă'}
+            </span>
+            {canManage && (
+              <button onClick={(e) => { e.stopPropagation(); toggleStatus(m) }}
+                style={{ ...S.btnS, fontSize:12, padding:'6px 12px', color: inchisa ? G.green : G.muted, whiteSpace:'nowrap' }}>
+                {inchisa ? '↺ Redeschide' : '⏸ Închide magazia'}
+              </button>
+            )}
+            <span style={{ fontSize:12, color:G.dim, transform: expanded ? 'rotate(180deg)' : 'none', transition:'transform .15s' }}>▼</span>
+          </div>
         </div>
-        <div style={{ display:'flex', gap:8, marginTop:12 }}>
-          <div style={{ flex:1, background:G.bg, borderRadius:8, padding:'8px 10px' }}>
-            <div style={{ fontSize:10.5, color:G.muted }}>Poziții stoc</div>
-            <div style={{ fontSize:18, fontWeight:800, color: st.pozitii ? G.text : G.dim }}>{st.pozitii}</div>
+        {expanded && (
+          <div style={{ borderTop:`1px solid ${G.border}`, background:G.bg }}>
+            {items.length === 0 ? (
+              <div style={{ padding:'16px', fontSize:12.5, color:G.muted, textAlign:'center' }}>📭 Magazia e goală — niciun material în stoc.</div>
+            ) : (
+              <>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 60px 110px 120px', gap:10, padding:'8px 16px', fontSize:10.5, color:G.dim, fontWeight:700, borderBottom:`1px solid ${G.border}` }}>
+                  <div>Material</div><div>UM</div><div style={{ textAlign:'right' }}>Cantitate</div><div style={{ textAlign:'right' }}>Valoare</div>
+                </div>
+                {items.map(s => {
+                  const val = s.cost_mediu != null ? Number(s.cantitate) * Number(s.cost_mediu) : null
+                  return (
+                    <div key={s.id} style={{ display:'grid', gridTemplateColumns:'1fr 60px 110px 120px', gap:10, alignItems:'center', padding:'8px 16px', fontSize:13, borderBottom:`1px solid ${G.border}` }}>
+                      <div style={{ fontWeight:600 }}>{s.material_denumire}
+                        {s.prag_minim != null && Number(s.cantitate) < Number(s.prag_minim) &&
+                          <span style={{ fontSize:10, fontWeight:800, color:G.red, marginLeft:8 }}>⚠ sub prag</span>}
+                      </div>
+                      <div style={{ color:G.muted }}>{s.um || '—'}</div>
+                      <div style={{ textAlign:'right', fontWeight:800, color: Number(s.cantitate) > 0 ? G.green : G.red }}>{fmtNr(s.cantitate)}</div>
+                      <div style={{ textAlign:'right', fontSize:12.5, color: val != null ? G.green : G.dim }}>{val != null ? fmtNr(Math.round(val)) + ' lei' : 'fără cost'}</div>
+                    </div>
+                  )
+                })}
+              </>
+            )}
           </div>
-          <div style={{ flex:1, background:G.bg, borderRadius:8, padding:'8px 10px' }}>
-            <div style={{ fontSize:10.5, color:G.muted }}>Sub prag</div>
-            <div style={{ fontSize:18, fontWeight:800, color: st.subPrag ? G.red : G.dim }}>{st.subPrag}</div>
-          </div>
-        </div>
-        {st.valoare > 0 && (
-          <div style={{ marginTop:8, background:G.green + '12', border:`1px solid ${G.green}33`, borderRadius:8, padding:'7px 10px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span style={{ fontSize:10.5, color:G.muted }}>💰 Valoare stoc</span>
-            <span style={{ fontSize:14, fontWeight:800, color:G.green }}>{fmtNr(Math.round(st.valoare))} lei</span>
-          </div>
-        )}
-        {canManage && (
-          <button onClick={() => toggleStatus(m)} style={{ ...S.btnS, width:'100%', marginTop:10, fontSize:12.5, padding:'7px', color: inchisa ? G.green : G.muted }}>
-            {inchisa ? '↺ Redeschide' : '⏸ Închide magazia'}
-          </button>
         )}
       </div>
     )
@@ -1744,13 +1804,13 @@ function MagaziiTab() {
 
       {!loading && (
         <>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:12, marginBottom:16 }}>
+          <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:16 }}>
             {active.map(m => <Card key={m.id} m={m} />)}
           </div>
           {inchise.length > 0 && (
             <>
               <div style={{ fontSize:12.5, color:G.muted, fontWeight:700, margin:'4px 0 10px' }}>🗄️ Magazii închise</div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:12 }}>
+              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
                 {inchise.map(m => <Card key={m.id} m={m} />)}
               </div>
             </>
