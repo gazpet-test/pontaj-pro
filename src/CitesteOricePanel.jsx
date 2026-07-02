@@ -69,8 +69,10 @@ const MODUL_CFG = {
     bucket:'documente-flota',
   },
   financiar: {
-    activ:false, entitateLabel:'Furnizor', entitateTip:'furnizor', color:G.green,
-    bucket:null,
+    activ:true, entitateLabel:'Situație de plată', entitateTip:'situatie_plata', color:G.green,
+    bucket:'executie-borderouri',
+    // Financiar acceptă la confirmare DOAR certificatele de plată (se atașează la SL).
+    // Facturile intră prin importul WinMentor, IPC-urile prin parserul Habau — nu se dublează aici.
   },
 }
 
@@ -163,6 +165,16 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       setEntitati((data || []).map(a => ({ id:a.id, label:[a.nr_inmatriculare, a.marca, a.cod_intern].filter(Boolean).join(' · ') })))
       const { data: tp } = await supabase.from('logistica_tipuri_documente').select('id,nume').eq('activ', true).order('nume')
       setTipuriFK((tp || []).map(t => ({ id:t.id, cod:t.nume, denumire:t.nume })))
+    } else if (modul === 'financiar') {
+      // Entitatea = situația de plată. Păstrez proiect_id + nr_situatie pentru path-ul PDF.
+      const { data } = await supabase.from('executie_situatii_plata')
+        .select('id,proiect_id,nr_situatie,luna,an,certificat_pdf_path,proiect:executie_proiecte!proiect_id(nume,cod_intern)')
+        .order('id', { ascending: false }).limit(300)
+      setEntitati((data || []).map(s => ({
+        id:s.id, proiect_id:s.proiect_id, nr_situatie:s.nr_situatie,
+        label:`${s.proiect?.cod_intern || s.proiect?.nume || 'Proiect ' + s.proiect_id} · SL ${s.nr_situatie}${s.luna ? ` (${s.luna}/${s.an})` : ''}${s.certificat_pdf_path ? ' · are certificat' : ''}`,
+      })))
+      setTipuriFK([{ id:'certificat_plata', cod:'certificat_plata', denumire:'Certificat de plată' }])
     }
   }, [modul])
 
@@ -233,6 +245,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     if (modul === 'executie') return confirmExecutie(row)
     if (modul === 'hr') return confirmHR(row)
     if (modul === 'logistica') return confirmLogistica(row)
+    if (modul === 'financiar') return confirmFinanciar(row)
     flash('err', 'Confirmarea pentru acest modul nu e încă activă.')
   }
 
@@ -337,6 +350,46 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
       await finalizeInbox(row, 'logistica', tipCod, 'activ', vehiculId, created.id)
       flash('ok', 'Document trimis la vehicul ✓')
+      await loadQueue(); onConfirmed && onConfirmed()
+    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+  }
+
+  // ── Financiar (Faza 2 — DOAR certificate de plată) ────────────
+  // Certificatul se ATAȘEAZĂ la situația de plată existentă (UPDATE, nu INSERT):
+  // PDF în executie-borderouri la sl_{proiect_id}/{nr}_certificat.pdf (același
+  // pattern ca TabSituatiiPlata, ca butonul „Vezi PDF" existent să-l găsească),
+  // + fill-only-empty pe certificat_plata_nr/data din datele extrase de AI.
+  // Facturile/IPC NU se confirmă aici — au fluxurile lor (WinMentor / parser Habau).
+  async function confirmFinanciar(row) {
+    const tipCod = row._editTip ?? row.tip_document
+    if (tipCod !== 'certificat_plata') {
+      flash('err', 'Aici se confirmă doar certificatele de plată. Facturile intră prin importul WinMentor, IPC-urile prin parserul dedicat.')
+      return
+    }
+    const slId = row._editEntitate ?? row.entitate_id
+    const sl = entitati.find(e => e.id === slId)
+    if (!sl) { flash('err', 'Alege situația de plată înainte de a confirma.'); return }
+    setBusyId(row.id)
+    try {
+      const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET_INBOX).download(row.fisier_path)
+      if (dlErr || !blob) throw new Error('Nu pot descărca fișierul: ' + (dlErr?.message || ''))
+      const slNrClean = String(sl.nr_situatie || slId).toLowerCase().replace(/[^a-z0-9]/g, '_')
+      const destPath = `sl_${sl.proiect_id}/${slNrClean}_certificat.pdf`
+      const { error: upErr } = await supabase.storage.from(cfg.bucket).upload(destPath, blob, { upsert: true, contentType: 'application/pdf' })
+      if (upErr) throw new Error('Upload certificat: ' + upErr.message)
+
+      const dd = row.payload_ai?.date_document || {}
+      const { data: cur, error: curErr } = await supabase.from('executie_situatii_plata')
+        .select('certificat_plata_nr,certificat_plata_data').eq('id', slId).single()
+      if (curErr) throw new Error('Citire situație: ' + curErr.message)
+      const upd = { certificat_pdf_path: destPath, updated_at: new Date().toISOString() }
+      if (dd.numar && !cur.certificat_plata_nr) upd.certificat_plata_nr = dd.numar
+      if (dd.data_emitere && !cur.certificat_plata_data) upd.certificat_plata_data = dd.data_emitere
+      const { error: updErr } = await supabase.from('executie_situatii_plata').update(upd).eq('id', slId)
+      if (updErr) throw new Error('Update situație: ' + updErr.message)
+
+      await finalizeInbox(row, 'financiar', 'certificat_plata', 'situatie_plata', slId, slId)
+      flash('ok', 'Certificat atașat la situația de plată ✓')
       await loadQueue(); onConfirmed && onConfirmed()
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
@@ -515,6 +568,13 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                 </div>
                               )
                             })()}
+
+                            {/* Financiar: doar certificatele se confirmă aici */}
+                            {modul === 'financiar' && (row._editTip ?? row.tip_document) !== 'certificat_plata' && (
+                              <div style={{ marginBottom:12, padding:'10px 12px', background:G.yellow + '12', border:`1px solid ${G.yellow}44`, borderRadius:8, fontSize:12, color:G.text }}>
+                                ⚠️ Aici se confirmă doar <b>certificatele de plată</b>. Facturile intră prin importul WinMentor, IPC-urile prin parserul dedicat — poți respinge documentul din coadă.
+                              </div>
+                            )}
 
                             {/* Date extrase — document (hr/logistica) */}
                             {modul !== 'executie' && dd && (dd.numar || dd.data_emitere || dd.data_expirare || dd.emitent) && (

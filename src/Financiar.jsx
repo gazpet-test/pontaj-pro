@@ -12,6 +12,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
+import CitesteOricePanel from './CitesteOricePanel.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
@@ -1015,6 +1016,7 @@ export default function FinanciarPage() {
   const [filterAn, setFilterAn]     = useState(String(new Date().getFullYear()))
   const [deleteConf, setDeleteConf] = useState(null)
   const [slAlert, setSlAlert]       = useState([]) // SL fără factură
+  const [citesteOpen, setCitesteOpen] = useState(false)  // 02.07.2026: panel „Citește Orice" (certificate de plată)
   const [tab, setTab]               = useState('emise')  // 'emise' | 'furnizori' | 'consumuri'
   // Deep-link din notificări: /financiar?tab=consumuri deschide direct tab-ul
   useEffect(() => {
@@ -1109,8 +1111,15 @@ export default function FinanciarPage() {
               }}>{l}</button>
             ))}
           </div>
+          {canWrite && (
+            <button onClick={() => setCitesteOpen(true)}
+              style={{marginLeft:'auto',display:'inline-flex',alignItems:'center',gap:6,padding:'6px 14px',background:G.green+'18',color:G.green,border:`1px solid ${G.green}55`,borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer'}}
+              title="Trage un certificat de plată — AI îl citește și îl atașează la situația de plată">
+              📥 Citește Orice
+            </button>
+          )}
           {slAlert.length > 0 && (
-            <div style={{marginLeft:'auto',background:G.orange+'22',border:`1px solid ${G.orange}55`,borderRadius:20,padding:'4px 12px',fontSize:12,color:G.orange,fontWeight:700,display:'flex',alignItems:'center',gap:6}}>
+            <div style={{marginLeft: canWrite ? 8 : 'auto',background:G.orange+'22',border:`1px solid ${G.orange}55`,borderRadius:20,padding:'4px 12px',fontSize:12,color:G.orange,fontWeight:700,display:'flex',alignItems:'center',gap:6}}>
               ⚡ {slAlert.length} SL fără factură
             </div>
           )}
@@ -1307,6 +1316,16 @@ export default function FinanciarPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {citesteOpen && profile && (
+        <CitesteOricePanel
+          open={citesteOpen}
+          modul="financiar"
+          profile={profile}
+          onClose={() => setCitesteOpen(false)}
+          onConfirmed={() => loadAll()}
+        />
       )}
     </div>
   )
