@@ -888,8 +888,8 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           <StatusBadge status={c.status} />
-          {isOwner && (
-            <button title="Șterge cererea (doar owner)" disabled={busy}
+          {(isOwner || canProcess) && (
+            <button title="Șterge cererea" disabled={busy}
               onClick={(e)=>{ e.stopPropagation(); deleteCerere(c) }}
               style={{ ...S.btnIcon, padding:'6px 10px', fontSize:13, borderColor:G.red+'44', color:G.red }}>🗑</button>
           )}
