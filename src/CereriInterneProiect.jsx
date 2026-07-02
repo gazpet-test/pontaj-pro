@@ -648,23 +648,50 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
     } finally { setBusy(false) }
   }, [cereri, detailId, loadAll, showToast])
 
-  // ── Ștergere cerere (doar owner) ──────────────────────────────────────────
-  // Blocată dacă cererea are PO-uri ACTIVE legate (non-anulate/respinse) — altfel
-  // FK-ul SET NULL le-ar lăsa orfane. Liniile + documentele cererii pleacă prin CASCADE.
+  // ── Ștergere cerere (owner + achiziții) ───────────────────────────────────
+  // Decizie Razvan 03.07.2026 (Opțiunea B): cascadă — se șterg și PO-urile legate.
+  // Excepții: (1) PO cu linii și din ALTE cereri → rămâne, se desprind doar liniile
+  // (FK SET NULL); (2) PO cu marfă recepționată în Magazie → FK strict magazie_bucati
+  // blochează DELETE-ul în BD (23503) → mesaj clar, trasabilitatea stocului e protejată.
+  // Liniile + documentele cererii și liniile/aprobările/documentele PO-urilor pleacă prin CASCADE.
   const deleteCerere = useCallback(async (c) => {
-    const posActive = (c.linii || []).flatMap(l => linkMap[l.id] || [])
-      .filter(p => !['anulata','respinsa'].includes(p.status))
-    if (posActive.length) {
-      const nrs = [...new Set(posActive.map(p => p.numar))].join(', ')
-      showToast(`Nu se poate șterge: are comenzi furnizor active (${nrs}). Anulează-le întâi.`, 'error')
-      return
-    }
-    if (!window.confirm(`Ștergi definitiv cererea ${c.numar_comanda || ''}?\n\nSe șterg și liniile + documentele atașate. Acțiunea e IREVERSIBILĂ.`)) return
     setBusy(true)
     try {
+      const lineIdsCerere = new Set((c.linii || []).map(l => l.id))
+      // PO-uri legate (toate, inclusiv anulate — să nu rămână orfane), dedup pe id
+      const poLegate = [...new Map(
+        (c.linii || []).flatMap(l => linkMap[l.id] || []).map(p => [p.id, p])
+      ).values()]
+      let poDeSters = [], poPartajate = []
+      if (poLegate.length) {
+        const { data: allLinks, error: eLk } = await supabase.from('comenzi_furnizor_linii')
+          .select('comanda_furnizor_id, comanda_linie_id')
+          .in('comanda_furnizor_id', poLegate.map(p => p.id))
+        if (eLk) throw eLk
+        const shared = new Set((allLinks || [])
+          .filter(r => r.comanda_linie_id && !lineIdsCerere.has(r.comanda_linie_id))
+          .map(r => r.comanda_furnizor_id))
+        poDeSters = poLegate.filter(p => !shared.has(p.id))
+        poPartajate = poLegate.filter(p => shared.has(p.id))
+      }
+      const msg = `Ștergi definitiv cererea ${c.numar_comanda || ''}?`
+        + (poDeSters.length ? `\n\n🗑 Se șterg și ${poDeSters.length} comenzi furnizor legate:\n${poDeSters.map(p => `• ${p.numar} (${p.status})`).join('\n')}` : '')
+        + (poPartajate.length ? `\n\nℹ️ ${poPartajate.map(p => p.numar).join(', ')} au linii și din alte cereri — rămân, se desprind doar liniile.` : '')
+        + `\n\nSe șterg și liniile + documentele atașate. Acțiunea e IREVERSIBILĂ.`
+      if (!window.confirm(msg)) return
+      if (poDeSters.length) {
+        const { error: ePo } = await supabase.from('comenzi_furnizor').delete().in('id', poDeSters.map(p => p.id))
+        if (ePo) {
+          if (ePo.code === '23503') {
+            showToast('Un PO legat are marfă recepționată în Magazie — nu se poate șterge (trasabilitate stoc). Anulează cererea în loc.', 'error')
+            return
+          }
+          throw ePo
+        }
+      }
       const { error } = await supabase.from('comenzi').delete().eq('id', c.id)
       if (error) throw error
-      showToast(`Cererea ${c.numar_comanda || ''} a fost ștearsă 🗑`)
+      showToast(`Cererea ${c.numar_comanda || ''} ștearsă${poDeSters.length ? ` + ${poDeSters.length} PO` : ''} 🗑`)
       if (detailId === c.id) setDetailId(null)
       await loadAll()
     } catch (e) {
