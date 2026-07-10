@@ -263,7 +263,8 @@ function buildCerereOfertaHtml(c, ctx, solicitant) {
   const rows = linii.map((l, i) => `
     <tr>
       <td style="border:1px solid #999;padding:6px;text-align:center;font-size:10px;">${i + 1}</td>
-      <td style="border:1px solid #999;padding:6px;font-size:10px;">${l.denumire || ''}${l.observatii ? `<div style="font-size:9px;color:#666;">${l.observatii}</div>` : ''}</td>
+      <td style="border:1px solid #999;padding:6px;font-size:10px;">${l.denumire || ''}</td>
+      <td style="border:1px solid #999;padding:6px;font-size:9px;color:#444;">${l.observatii || ''}</td>
       <td style="border:1px solid #999;padding:6px;text-align:center;font-size:10px;">${l.um || ''}</td>
       <td style="border:1px solid #999;padding:6px;text-align:right;font-size:10px;">${fmtNr(l.cantitate)}</td>
       <td style="border:1px solid #999;padding:6px;height:20px;"></td>
@@ -272,12 +273,12 @@ function buildCerereOfertaHtml(c, ctx, solicitant) {
   const tabel = `
     <table style="width:100%;border-collapse:collapse;margin-top:8px;">
       <colgroup>
-        <col style="width:6%"/><col style="width:42%"/><col style="width:8%"/>
-        <col style="width:12%"/><col style="width:17%"/><col style="width:15%"/>
+        <col style="width:5%"/><col style="width:30%"/><col style="width:20%"/><col style="width:7%"/>
+        <col style="width:10%"/><col style="width:15%"/><col style="width:13%"/>
       </colgroup>
       <thead>
         <tr style="background:#E8F0FE;">
-          ${['Nr.', 'Denumire produs / material', 'UM', 'Cantitate', `Preț unitar ofertat (${c.moneda || 'RON'})`, 'Termen livrare']
+          ${['Nr.', 'Denumire produs / material', 'Specificații', 'UM', 'Cantitate', `Preț unitar ofertat (${c.moneda || 'RON'})`, 'Termen livrare']
             .map(h => `<th style="border:1px solid #999;padding:6px;font-size:10px;">${h}</th>`).join('')}
         </tr>
       </thead>
