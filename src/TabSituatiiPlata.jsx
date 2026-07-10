@@ -1054,18 +1054,22 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       }
 
       const certVal = pdfResult?.valoare_totala_fara_tva || null
-      const valAj   = (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0)
-        ? xlsResult.totalAjustare
+      // PRIORITATE sume: defalcarea VALIDATĂ din CP (linii_ok) > xls > formulă coeficient.
+      const cpOk = !!(pdfResult?.linii_ok && pdfResult?.linii?.length)
+      const cpBaza = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.valoare_baza)||0),0)*100)/100 : null
+      const cpAj   = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.ajustare)||0),0)*100)/100 : null
+      const valAj = cpAj != null ? cpAj
+        : (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0) ? xlsResult.totalAjustare
         : (() => {
             const b = parseFloat(form.valoare_baza_lei)
             const c = parseFloat(form.coeficient_ajustare)
             if (isNaN(b) || isNaN(c) || c === 1) return 0
             return Math.round((b * c - b) * 100) / 100
           })()
-      // BAZĂ = lucrări FĂRĂ ajustare. Când avem totalul din CP: baza = total − ajustare
+      // BAZĂ = lucrări FĂRĂ ajustare. Când avem doar totalul din CP: baza = total − ajustare
       // (altfel baza=total + linia de ajustare = dublare).
-      const valBaza = (xlsResult?.totalBaza != null)
-        ? xlsResult.totalBaza
+      const valBaza = cpBaza != null ? cpBaza
+        : (xlsResult?.totalBaza != null) ? xlsResult.totalBaza
         : (certVal != null ? Math.round((certVal - (valAj || 0)) * 100) / 100
            : (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null))
 
@@ -1188,7 +1192,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
           }
 
           if (bdLinii.length > 0) {
-            await supabase.from('executie_situatii_plata_linii').insert(bdLinii)
+            const { error: errLinii } = await supabase.from('executie_situatii_plata_linii').insert(bdLinii)
+            if (errLinii) {
+              console.error('Insert linii SL:', errLinii)
+              showToast('Liniile pe obiect NU s-au salvat: ' + errLinii.message, 'err')
+            }
           }
         }
       }
