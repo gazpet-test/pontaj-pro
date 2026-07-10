@@ -1053,23 +1053,27 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
         try { await supabase.storage.from('executie-borderouri').upload(pdfPath, pdfFile, { upsert: true, contentType: pdfFile.type || 'application/pdf' }) } catch(e) { console.warn('Upload PDF skip:', e.message) }
       }
 
-      const valBaza = xlsResult?.totalBaza || (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null)
-      const valAj   = xlsResult?.totalAjustare || (() => {
-        const b = parseFloat(form.valoare_baza_lei)
-        const c = parseFloat(form.coeficient_ajustare)
-        if (isNaN(b) || isNaN(c) || c === 1) return 0
-        return Math.round((b * c - b) * 100) / 100
-      })()
       const certVal = pdfResult?.valoare_totala_fara_tva || null
+      const valAj   = (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0)
+        ? xlsResult.totalAjustare
+        : (() => {
+            const b = parseFloat(form.valoare_baza_lei)
+            const c = parseFloat(form.coeficient_ajustare)
+            if (isNaN(b) || isNaN(c) || c === 1) return 0
+            return Math.round((b * c - b) * 100) / 100
+          })()
+      // BAZĂ = lucrări FĂRĂ ajustare. Când avem totalul din CP: baza = total − ajustare
+      // (altfel baza=total + linia de ajustare = dublare).
+      const valBaza = (xlsResult?.totalBaza != null)
+        ? xlsResult.totalBaza
+        : (certVal != null ? Math.round((certVal - (valAj || 0)) * 100) / 100
+           : (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null))
 
       // Determină status automat
       let statusAuto = form.status
       if (pdfResult && certVal) {
-        const disc = certVal - ((valBaza||0) + (valAj||0))
-        if (Math.abs(disc) <= 1 || disc > -50000) {
-          // Certificat primit și valoare OK sau discrepanță acceptabilă
-          statusAuto = 'aprobata'
-        }
+        // Odată ce Certificatul de Plată e încărcat, situația e aprobată de beneficiar.
+        statusAuto = 'aprobata'
       }
 
       const payload = {
