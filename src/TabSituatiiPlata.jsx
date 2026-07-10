@@ -217,7 +217,9 @@ function _parseCentralizator(rows) {
   }
 
   // Pas 3: extrag rânduri de date
-  const SKIP = /^(total|recapitu|obiect|organizare|situa|nr\.|cod\s|val|sume|rest|realizari|plati|orice|a\.|b\.|1\.|2\.|luna|beneficiar|investitia|antreprenor|executant|constructor)/i
+  // Exclude rânduri care NU-s obiecte de facturat — inclusiv inputurile de calcul coeficient
+  // (V0/Io/In din Buletinul statistic) ajunse din greșeală când se urcă fișierul de calcul în slotul de centralizator.
+  const SKIP = /^(total|recapitu|obiect|organizare|situa|nr\.|cod\s|val|sume|rest|realizari|plati|orice|a\.|b\.|1\.|2\.|luna|beneficiar|investitia|antreprenor|executant|constructor|buletin|v0|indice|coeficient|moneda|constanta|avans|av\s)/i
   const linii = []
 
   for (const row of rows) {
