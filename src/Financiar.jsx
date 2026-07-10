@@ -62,6 +62,32 @@ function useToast() {
 }
 
 // ===========================================================================
+// Linii-obiect (executie_situatii_plata_linii) → articole factură
+// ===========================================================================
+// Filtru de siguranță: exclude linii care NU-s de facturat — ex. inputurile de calcul
+// coeficient (V0/Io/In din Buletinul statistic) ajunse din greșeală în tabelul de linii.
+function _esteLinieFactura(l) {
+  const d = String(l?.denumire || '').toLowerCase()
+  if (/buletin statistic|indice|coeficient de ajustare|^\s*v0\b|moneda indicelui/.test(d)) return false
+  const v = Math.abs(Number(l?.valoare) || 0)
+  if (l?.tip === 'lucr_cm' && v < 1000) return false  // valori de indice (~150 lei), nu lucrări
+  return true
+}
+// Mapează liniile-obiect stocate → articole factură (1:1), stil manual (per obiect).
+function objLinesToArticole(objLinii, startNr) {
+  let _nr = startNr
+  const linii = []
+  for (const o of (objLinii || [])) {
+    if (!_esteLinieFactura(o)) continue
+    const val = Number(o.valoare) || 0
+    linii.push({ nr:_nr++, denumire:o.denumire, um:o.um || 'buc', cantitate:Number(o.cantitate) || 1,
+      pret_unitar:val.toFixed(2), valoare:val.toFixed(2),
+      tva_pct:(o.tva_pct != null && o.tva_pct !== '' ? Number(o.tva_pct) : TVA_DEFAULT) })
+  }
+  return { linii, nextNr:_nr }
+}
+
+// ===========================================================================
 // INVOICE PDF TEMPLATE — HTML offscreen pentru html2canvas
 // ===========================================================================
 function buildInvoiceHTML(f) {
@@ -251,7 +277,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
 
   // ─── HELPER: construiește liniile pentru O situație de lucrări (pură, sincronă) ───
   // Returnează { linii, nextNr }. Reținerile GBE/CAR vin din benef (per beneficiar).
-  const buildLinesForSL = ({ nr_situatie, slVals, contractInfo, startNr }) => {
+  const buildLinesForSL = ({ nr_situatie, slVals, contractInfo, startNr, objLinii }) => {
     const { valBaza, valAjust, valTotal, coefAjust, ajustariRetro } = slVals
     const { contractRef, contractDenumire, benef } = contractInfo
     const denPart = contractDenumire ? ` — ${contractDenumire}` : ''
@@ -259,7 +285,11 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     const hasAjust = Math.abs(valAjust) > 0.005
     const linii = []
     let _nr = startNr
-    if (hasAjust) {
+    const _obj = objLinesToArticole(objLinii, _nr)
+    if (_obj.linii.length) {
+      // Linii pe obiect din centralizator (stil manual: lucrări + ajustări separate)
+      linii.push(..._obj.linii); _nr = _obj.nextNr
+    } else if (hasAjust) {
       linii.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT })
       linii.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
     } else {
@@ -303,7 +333,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     let articole = [], nr = 1
     for (const sl of ordered) {
       const slVals = await loadSLValues(sl.id)
-      const { linii, nextNr } = buildLinesForSL({ nr_situatie: sl.nr_situatie, slVals, contractInfo, startNr: nr })
+      const { data: objLinii } = await supabase.from('executie_situatii_plata_linii').select('*').eq('sl_id', sl.id).order('ord')
+      const { linii, nextNr } = buildLinesForSL({ nr_situatie: sl.nr_situatie, slVals, contractInfo, startNr: nr, objLinii: objLinii || [] })
       articole = articole.concat(linii)
       nr = nextNr
     }
@@ -353,6 +384,12 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
           .eq('sl_id', slDefault.id).order('id', { ascending: true })
         ajustariRetro = ajs || []
       } catch(e) { /* tabela goală sau lipsă → ignor */ }
+      // Linii-obiect detaliate (din centralizator) — preferate față de generarea lump
+      let objLiniiSL = []
+      try {
+        const { data: ol } = await supabase.from('executie_situatii_plata_linii').select('*').eq('sl_id', slDefault.id).order('ord')
+        objLiniiSL = ol || []
+      } catch(e) { /* ignor */ }
       // Contract terț (Administrativ → Contracte cu Terți): nume + nr + dată + beneficiar.
       // OS-ul NU apare ca linie — valoarea (valoare_ajustata_lei) include deja bază (cu OS) + ajustare.
       // Luna NU se mai pune pe linie: data înregistrării SL ≠ luna aferentă lucrărilor.
@@ -393,7 +430,11 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       const hasAjust = Math.abs(valAjust) > 0.005
       const articoleSL = []
       let _nr = 1
-      if (hasAjust) {
+      const _objArt = objLinesToArticole(objLiniiSL, _nr)
+      if (_objArt.linii.length) {
+        // Linii pe obiect din centralizator (stil manual: lucrări + ajustări separate)
+        articoleSL.push(..._objArt.linii); _nr = _objArt.nextNr
+      } else if (hasAjust) {
         articoleSL.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT })
         articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
       } else {
