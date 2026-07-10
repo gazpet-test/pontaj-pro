@@ -121,6 +121,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [filterMineType,setFilterMineType]=useState('toate') // 'toate' | 'deschise' | 'asignate'
   const [searchText,setSearchText]=useState('')
   const [openNew,setOpenNew]=useState(false)
+  const [nouDep,setNouDep]=useState(null)   // departament presetat la deschiderea unui tichet nou (din card / listă)
   const [openDetail,setOpenDetail]=useState(null)
   const [activeLogistica,setActiveLogistica]=useState([])  // pentru autocomplete entitate dep=logistica
   const [employeesList,setEmployeesList]=useState([])      // pentru autocomplete entitate dep=hr
@@ -310,6 +311,11 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
                   <div style={{fontSize:17,fontWeight:800,color:G.text}}>{d.nume}</div>
                   <div style={{fontSize:11,color:G.muted,marginTop:2}}>{d.descriere}</div>
                 </div>
+                <button onClick={(e)=>{ e.stopPropagation(); setNouDep(d.cod); setOpenNew(true) }}
+                        title={`Deschide tichet nou — ${d.nume}`}
+                        style={{padding:'6px 10px',background:d.color+'22',color:d.color,border:`1px solid ${d.color}66`,borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap',display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
+                  ➕ Tichet
+                </button>
               </div>
               <div style={{display:'flex',gap:14,marginTop:14,paddingTop:14,borderTop:`1px solid ${G.border}`}}>
                 <div style={{flex:1}}>
@@ -371,7 +377,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
             <span style={{fontSize:13,color:G.muted,fontWeight:400}}>({tichetFilt.length})</span>
           </h2>
           <div style={{flex:1}} />
-          <button onClick={()=>setOpenNew(true)} style={{padding:'10px 18px',background:G.blue,color:'#fff',border:0,borderRadius:8,fontWeight:700,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',gap:6}}>
+          <button onClick={()=>{ setNouDep(activeDep); setOpenNew(true) }} style={{padding:'10px 18px',background:G.blue,color:'#fff',border:0,borderRadius:8,fontWeight:700,fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',gap:6}}>
             ➕ Nou
           </button>
         </div>
@@ -474,11 +480,11 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           subcategorii={subcategorii}
           profile={profile}
           profiles={profiles}
-          forcedDep={filterDepartament}
+          forcedDep={nouDep || filterDepartament}
           activeLogistica={activeLogistica}
           employeesList={employeesList}
-          onClose={()=>setOpenNew(false)}
-          onSaved={()=>{ setOpenNew(false); loadAll(); show('Tichet creat!', 'success') }}
+          onClose={()=>{ setOpenNew(false); setNouDep(null) }}
+          onSaved={()=>{ setOpenNew(false); setNouDep(null); loadAll(); show('Tichet creat!', 'success') }}
           show={show}
         />
       )}
