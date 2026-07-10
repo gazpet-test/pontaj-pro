@@ -1063,16 +1063,29 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       }
 
       // Salvează linii din XLS în BD — suportă centralizator multi-linii (Prunisor) + borderou simplu (Caldararu)
-      if (xlsResult && slIdSaved) {
-        // Ștergem linii existente la update (re-parsare XLS)
+      if (slIdSaved && ((pdfResult?.linii_ok && pdfResult?.linii?.length > 0) || xlsResult)) {
+        // Ștergem linii existente la update (re-parsare)
         await supabase.from('executie_situatii_plata_linii').delete().eq('sl_id', slIdSaved)
         {
           const slId = slIdSaved
           const nr = proiectDate?.nr_contract ? ` conf. contract nr. ${proiectDate.nr_contract}` : ''
-          const lunaStr = xlsResult.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
+          const lunaStr = xlsResult?.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
           const bdLinii = []
 
-          if (xlsResult.tip === 'habau_ipc' && xlsResult.linii?.length > 0) {
+          // PRIORITATE: defalcarea pe obiecte extrasă din Certificatul de Plată (PDF, AI) — folosită DOAR dacă suma liniilor = totalul CP (linii_ok)
+          const cpLinii = (pdfResult?.linii_ok ? (pdfResult.linii || []) : [])
+            .map(l => ({ denumire: String(l.denumire||'').trim(), baza: Number(l.valoare_baza)||0, ajust: Number(l.ajustare)||0 }))
+            .filter(l => l.denumire && (l.baza > 0 || l.ajust > 0))
+
+          if (cpLinii.length > 0) {
+            let ord = 1
+            for (const o of cpLinii) {
+              if (o.baza > 0) bdLinii.push({ sl_id: slId, ord: ord++, tip: 'lucr_cm', denumire: o.denumire, valoare: o.baza, tva_pct: 21, sursa: 'cp_pdf' })
+            }
+            for (const o of cpLinii) {
+              if (o.ajust > 0) bdLinii.push({ sl_id: slId, ord: ord++, tip: 'ajustare', denumire: `Ajustare situație lucrări ${payload.nr_situatie} — ${o.denumire.slice(0,80)}`, valoare: o.ajust, tva_pct: 21, sursa: 'cp_pdf' })
+            }
+          } else if (xlsResult?.tip === 'habau_ipc' && xlsResult.linii?.length > 0) {
             // HABAU IPC: linie brută (TVA 21) + rețineri negative (TVA 0), exact ca pe factura GAZ-359
             let ord = 1
             for (const linie of xlsResult.linii) {
@@ -1084,7 +1097,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 sursa: 'xls',
               })
             }
-          } else if (xlsResult.tip === 'centralizator' && xlsResult.linii?.length > 0) {
+          } else if (xlsResult?.tip === 'centralizator' && xlsResult.linii?.length > 0) {
             // CENTRALIZATOR (Prunisor): rânduri separate + ajustări per linie
             let ord = 1
             for (const linie of xlsResult.linii) {
@@ -1105,7 +1118,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 })
               }
             }
-          } else {
+          } else if (xlsResult) {
             // BORDEROU simplu (Caldararu): 1 total + 1 ajustare
             if (xlsResult.totalBaza) {
               bdLinii.push({
