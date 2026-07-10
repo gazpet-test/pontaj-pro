@@ -7,6 +7,7 @@ import { supabase } from './lib/supabase.js'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
 import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
+import TabConcedii from './TabConcedii.jsx'
 import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
@@ -193,6 +194,7 @@ export default function HRPage() {
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
+    { key: 'concedii',    icon: '🌴', label: 'Concedii' },
     { key: 'arhiva',      icon: '📦', label: 'Arhivă', badge: arhiva.length, personalOnly: true },
     { key: 'cos',         icon: '🗑', label: 'Coș', badge: cosCount, personalOnly: true },
     { key: 'scanner',     icon: '📷', label: 'Scanner AI', scannerOnly: true },
@@ -255,6 +257,7 @@ export default function HRPage() {
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
+      {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'arhiva' && canAccessPersonal && <TabArhivaAutorizatii arhiva={arhiva} showToast={showToast} />}
       {!load && tab === 'cos' && canAccessPersonal && <TabCos profile={profile} showToast={showToast} />}
       {!load && tab === 'scanner' && canUseScanner && <TabScannerDocumenteHR profile={profile} employees={employees} showToast={showToast} />}
