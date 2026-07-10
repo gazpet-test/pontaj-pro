@@ -247,6 +247,15 @@ export default function TabConcedii({ profile, employees = [], showToast }) {
           <option value="toate">Toate</option>
           {Object.entries(STATUS_INFO).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
         </select>
+        {fltEmp && <button onClick={async () => {
+          try {
+            const { data } = await supabase.from('hr_concediu_tokens').select('token').eq('employee_id', parseInt(fltEmp)).eq('activ', true).maybeSingle()
+            if (!data?.token) { showToast('Angajatul nu are token activ', 'error'); return }
+            const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/concediu-mobil?t=${data.token}`
+            await navigator.clipboard.writeText(url)
+            showToast('🔗 Link mobil copiat — trimite-l angajatului pe WhatsApp')
+          } catch (e) { showToast('Eroare: ' + e.message, 'error') }
+        }} style={{ ...S.btnS, color:G.blue, borderColor:G.blue + '66' }}>🔗 Link mobil</button>}
         <button onClick={() => exportZip(fltEmp ? parseInt(fltEmp) : null)} style={S.btnS}>📦 Export ZIP</button>
         <button onClick={() => setShowNew(true)} style={S.btnP}>➕ Cerere nouă</button>
       </div>
