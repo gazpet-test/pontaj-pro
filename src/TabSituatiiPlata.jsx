@@ -318,6 +318,40 @@ function _parseHabauIPC(wb) {
   }
 }
 
+// Detectează fișierul de CALCUL COEFICIENT (V0/Io/In/INDICE AJUSTARE) — NU e borderou.
+// Nu trebuie parsat ca borderou (altfel prinde valoarea contractului ca „bază").
+function _looksLikeCalculCoef(rows) {
+  const txt = rows.slice(0, 40).map(r => r.map(c => String(c||'')).join(' ')).join(' \n ').toLowerCase()
+  let hits = 0
+  if (/indice ajustare/.test(txt)) hits++
+  if (/calcul ajustare/.test(txt)) hits++
+  if (/v0[\s-]*val|solicitare plat/.test(txt)) hits++
+  if (/buletin statistic/.test(txt)) hits++
+  if (/moneda indicelui|constanta/.test(txt)) hits++
+  return hits >= 2
+}
+// Extrage DOAR coeficientul + V0 din fișierul de calcul. Baza/obiectele vin din CP (PDF).
+function _parseCalculCoef(rows) {
+  let coeficient = null, v0 = null, nrSL = null, lunaAn = null, contractNr = null
+  for (const row of rows) {
+    const low = row.map(c => String(c||'')).join(' ').toLowerCase()
+    if (!nrSL) { const m = low.match(/sit(?:uatie|\.)?\s*(?:de\s+lucrar[i]?)?\s*(?:nr\.?)?\s*(\d+)/i); if (m) nrSL = m[1] }
+    if (!lunaAn) { const m = low.match(/luna\s+([a-zăâîșț]+\s+\d{4})/i); if (m) lunaAn = m[1].toUpperCase() }
+    if (!contractNr) { const m = low.match(/ctr\.?\s*(\d+)/i); if (m) contractNr = m[1] }
+    if (v0 == null && /(v0|solicitare plat)/i.test(low)) {
+      const nums = row.filter(c => typeof c === 'number' && c > 1000)
+      if (nums.length) v0 = nums[0]
+    }
+    if (coeficient == null && /indice ajustare/i.test(low)) {
+      const nums = row.filter(c => typeof c === 'number' && c > 1 && c < 1.5)
+      if (nums.length) coeficient = nums[0]
+    }
+  }
+  const totalAjustare = (v0 != null && coeficient != null) ? Math.round(v0 * (coeficient - 1) * 100) / 100 : null
+  // totalBaza NULL intenționat: baza reală vine din Certificatul de Plată, nu de aici.
+  return { tip: 'calc_coef', nrSL, lunaAn, contractNr, coeficient, v0, totalBaza: null, totalAjustare, linii: [] }
+}
+
 function parseBorderouAjustatXLS(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -342,6 +376,13 @@ function parseBorderouAjustatXLS(file) {
 
         const ws = wb.Sheets[wb.SheetNames[0]]
         const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:true })
+
+        // Fișier de CALCUL COEFICIENT (nu borderou) → doar coeficient, fără total bază fals
+        if (_looksLikeCalculCoef(rows)) {
+          const cc = _parseCalculCoef(rows)
+          console.log('[XLS Parser] tip: CALCUL COEFICIENT | coef:', cc.coeficient, '| v0:', cc.v0)
+          return resolve(cc)
+        }
 
         // Detectare tip: încerc ambele parsere și aleg cel cu mai multe linii
         // _parseCentralizator returnează linii[] dacă găsește rândul TOTAL cu 2+ coloane
@@ -977,6 +1018,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       const result = await res.json()
       if (!res.ok) throw new Error(result.error || 'Eroare edge function')
       setPdfResult(result)
+      // Baza reală vine din CP (defalcare validată linii_ok), NU din xls-ul de calcul coeficient
+      if (result.linii_ok && Array.isArray(result.linii) && result.linii.length) {
+        const sumBaza = Math.round(result.linii.reduce((s,l)=>s+(Number(l.valoare_baza)||0),0)*100)/100
+        if (sumBaza > 0) set('valoare_baza_lei', String(sumBaza))
+      }
       // Auto-completare certificat
       if (result.nr_certificat) set('certificat_plata_nr', result.nr_certificat)
       if (result.data_certificat) set('certificat_plata_data', result.data_certificat)
@@ -1063,16 +1109,29 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       }
 
       // Salvează linii din XLS în BD — suportă centralizator multi-linii (Prunisor) + borderou simplu (Caldararu)
-      if (xlsResult && slIdSaved) {
-        // Ștergem linii existente la update (re-parsare XLS)
+      if (slIdSaved && ((pdfResult?.linii_ok && pdfResult?.linii?.length > 0) || xlsResult)) {
+        // Ștergem linii existente la update (re-parsare)
         await supabase.from('executie_situatii_plata_linii').delete().eq('sl_id', slIdSaved)
         {
           const slId = slIdSaved
           const nr = proiectDate?.nr_contract ? ` conf. contract nr. ${proiectDate.nr_contract}` : ''
-          const lunaStr = xlsResult.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
+          const lunaStr = xlsResult?.lunaAn ? ` / ${xlsResult.lunaAn}` : ''
           const bdLinii = []
 
-          if (xlsResult.tip === 'habau_ipc' && xlsResult.linii?.length > 0) {
+          // PRIORITATE: defalcarea pe obiecte extrasă din Certificatul de Plată (PDF, AI) — folosită DOAR dacă suma liniilor = totalul CP (linii_ok)
+          const cpLinii = (pdfResult?.linii_ok ? (pdfResult.linii || []) : [])
+            .map(l => ({ denumire: String(l.denumire||'').trim(), baza: Number(l.valoare_baza)||0, ajust: Number(l.ajustare)||0 }))
+            .filter(l => l.denumire && (l.baza > 0 || l.ajust > 0))
+
+          if (cpLinii.length > 0) {
+            let ord = 1
+            for (const o of cpLinii) {
+              if (o.baza > 0) bdLinii.push({ sl_id: slId, ord: ord++, tip: 'lucr_cm', denumire: o.denumire, valoare: o.baza, tva_pct: 21, sursa: 'cp_pdf' })
+            }
+            for (const o of cpLinii) {
+              if (o.ajust > 0) bdLinii.push({ sl_id: slId, ord: ord++, tip: 'ajustare', denumire: `Ajustare situație lucrări ${payload.nr_situatie} — ${o.denumire.slice(0,80)}`, valoare: o.ajust, tva_pct: 21, sursa: 'cp_pdf' })
+            }
+          } else if (xlsResult?.tip === 'habau_ipc' && xlsResult.linii?.length > 0) {
             // HABAU IPC: linie brută (TVA 21) + rețineri negative (TVA 0), exact ca pe factura GAZ-359
             let ord = 1
             for (const linie of xlsResult.linii) {
@@ -1084,7 +1143,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 sursa: 'xls',
               })
             }
-          } else if (xlsResult.tip === 'centralizator' && xlsResult.linii?.length > 0) {
+          } else if (xlsResult?.tip === 'centralizator' && xlsResult.linii?.length > 0) {
             // CENTRALIZATOR (Prunisor): rânduri separate + ajustări per linie
             let ord = 1
             for (const linie of xlsResult.linii) {
@@ -1105,7 +1164,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 })
               }
             }
-          } else {
+          } else if (xlsResult) {
             // BORDEROU simplu (Caldararu): 1 total + 1 ajustare
             if (xlsResult.totalBaza) {
               bdLinii.push({
