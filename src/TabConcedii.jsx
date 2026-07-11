@@ -251,7 +251,8 @@ export default function TabConcedii({ profile, employees = [], showToast }) {
           try {
             const { data } = await supabase.from('hr_concediu_tokens').select('token').eq('employee_id', parseInt(fltEmp)).eq('activ', true).maybeSingle()
             if (!data?.token) { showToast('Angajatul nu are token activ', 'error'); return }
-            const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/concediu-mobil?t=${data.token}`
+            // Ruta publică /co din app (edge-urile Supabase nu pot servi HTML — gateway forțează text/plain)
+            const url = `${window.location.origin}/co?t=${data.token}`
             await navigator.clipboard.writeText(url)
             showToast('🔗 Link mobil copiat — trimite-l angajatului pe WhatsApp')
           } catch (e) { showToast('Eroare: ' + e.message, 'error') }
