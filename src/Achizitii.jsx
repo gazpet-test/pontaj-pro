@@ -1051,6 +1051,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {c.status === 'emisa' && ctx.canCreate && <Btn color={G.purple} onClick={() => actions.markStatus(c, 'in_tranzit')}>🚚 Marchează ÎN TRANZIT</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && <Btn color={G.orange} onClick={() => actions.markStatus(c, 'ajunsa')}>📦 Marchează AJUNSĂ</Btn>}
           {c.status === 'ajunsa' && <Btn color={G.green} onClick={() => actions.deschideReceptie(c)}>✅ Recepție (PV 1)</Btn>}
+          {/* TKT-2026-0040: undo „ajunsă" apăsat din greșeală → revine ÎN TRANZIT (înainte de recepție) */}
+          {c.status === 'ajunsa' && ctx.canCreate && <Btn color={G.dim} onClick={() => actions.markStatus(c, 'in_tranzit')}>↩️ Anulează „ajunsă"</Btn>}
           {c.status === 'receptionata' && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
         </div>
       </div>
