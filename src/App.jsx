@@ -2173,6 +2173,16 @@ function ReportsPage() {
         return 'LUCR'
       }
 
+      // Normă/zi per angajat (name → work_hours_per_day) pentru plafonarea NET la 8h.
+      // TKT-2026-0044: în NET, orele > 8/zi se aduc la 8 DOAR pentru full-time (normă ≥ 8h);
+      // part-time (normă < 8h) rămâne cu orele reale. Brutul NU se modifică.
+      const [{ data: whRows }, { data: empRows }] = await Promise.all([
+        supabase.from('v_employee_work_hours').select('employee_id, work_hours_per_day'),
+        supabase.from('employees').select('id, name'),
+      ])
+      const whById = new Map((whRows || []).map(w => [w.employee_id, Number(w.work_hours_per_day) || 8]))
+      const normaByName = new Map((empRows || []).map(e => [String(e.name || '').trim().toUpperCase(), whById.get(e.id) || 8]))
+
       // 4. Aplicăm algoritmul de procesare per salariat
       // Format identic cu brut: rândurile 1-7 antet, salariați de la r=8 cu pas 5 (r, r+1, r+2, r+3, r+4=separator)
       // Coloane: A=Nume, B=Functia, C=Program; D..(D+days-1) = zile; +TotalZile, +TotalOre
@@ -2193,6 +2203,9 @@ function ReportsPage() {
         const name = cellVal(row0, 0)
         if (!name) continue
         const position = cellVal(row0, 1) || ''
+        // full-time dacă norma ≥ 8h; doar atunci plafonăm orele NET la 8/zi
+        const normaAng = normaByName.get(String(name).trim().toUpperCase()) || 8
+        const eFullTime = normaAng >= 8
         
         // Citește valorile din cele 4 rânduri (Intrare, Ieșire, Pauză, Ore) pentru toate zilele
         // Plus metadata WE/LEG/LUCR per coloană
@@ -2242,7 +2255,16 @@ function ReportsPage() {
           srcInfo.bgRole = 'LL_YELLOW'
         }
         // Destinații orfane rămân ca atare (LL galben, neschimbat)
-        
+
+        // TKT-2026-0044: plafonare NET la 8h/zi pentru full-time (part-time neatins)
+        if (eFullTime) {
+          for (const di of dayInfo) {
+            const v = di.vals[3]
+            const n = typeof v === 'number' ? v : (v !== '' && v != null && !isNaN(Number(v)) ? Number(v) : null)
+            if (n != null && n > 8) di.vals[3] = 8
+          }
+        }
+
         totalMoves += nMoves
         totalOrphansSrc += Math.max(0, surse.length - nMoves)
         totalOrphansDst += Math.max(0, dest.length - nMoves)
