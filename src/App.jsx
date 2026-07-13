@@ -11,6 +11,7 @@ import Tichete from './Tichete.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import BugReportButton from './BugReportButton.jsx'
+import TichetModulButton from './TichetModulButton.jsx'
 import InternalChat from './InternalChat.jsx'
 // ════════════ Etapa 15 Faza 1: Module Comercial (placeholder) ════════════
 import ComercialPage from './Comercial.jsx'
@@ -1164,7 +1165,7 @@ function DashboardPage() {
   const { profile } = useAuth()
   const [stats,setStats]=useState({present:0,checkedOut:0,total:0,avgMins:0,diurna:0})
   const [deptStats,setDeptStats]=useState([])
-  const [recent,setRecent]=useState([])
+  const [siteStats,setSiteStats]=useState([])  // prezență pe fiecare șantier (nr persoane prezente azi)
   const [unalloc,setUnalloc]=useState([])
   const [load,setLoad]=useState(true)
   const [weekStats,setWeekStats]=useState(null)
@@ -1172,8 +1173,6 @@ function DashboardPage() {
   const [absent3,setAbsent3]=useState([])
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   const [expiringContracts,setExpiringContracts]=useState([])
-  const [nrTransportCerute, setNrTransportCerute] = useState(0)
-  const [transportSamples, setTransportSamples] = useState([])  // primele 3 transporturi pentru preview
   const [avizeNesemnate, setAvizeNesemnate] = useState([])  // avize cu 2/3 semnături > 3 zile (pentru manageri destinație)
   const navigate = useNavigate()
   useEffect(()=>{ if(profile!==null) loadData() },[profile])
@@ -1198,7 +1197,13 @@ function DashboardPage() {
     const normeStats={}
     NORME.forEach(n=>{ const cnt=(recs||[]).filter(r=>r.norma===n).length; if(cnt>0) normeStats[n]=cnt })
     setStats({present,checkedOut,total:emps.length,avgMins:present>0?Math.round(totalMins/present):0,diurna,normeStats})
-    setRecent((recs||[]).slice(0,8))
+    // Prezență pe fiecare șantier: grupez prezenții de azi (check_in fără normă) după șantierul angajatului
+    const siteMap = {}
+    ;(recs||[]).filter(x=>x.check_in&&!x.norma).forEach(r=>{
+      const s = r.employees?.sites?.name || 'Fără șantier'
+      siteMap[s] = (siteMap[s]||0) + 1
+    })
+    setSiteStats(Object.entries(siteMap).map(([name,present])=>({name,present})).sort((a,b)=>b.present-a.present))
     // All departments, even those with 0 present
     setDeptStats(DEPARTMENTS.map(dept=>({dept,total:emps.filter(e=>e.department===dept).length,present:(recs||[]).filter(r=>r.employees?.department===dept&&r.check_in&&!r.norma).length})))
     setLoad(false)
@@ -1241,21 +1246,9 @@ function DashboardPage() {
       setAbsent3(absentEmps)
     }
     
-    // Transporturi pendinte aprobare (vizibile pentru superadmin + admin_logistica)
-    const isAprobatorTransport = profile?.is_owner === true || profile?.role === 'admin_logistica'
-    if (isAprobatorTransport) {
-      const { count, data: samples } = await supabase
-        .from('logistica_transporturi')
-        .select('id, numar_transport, tip, data_solicitarii, solicitant:profiles!logistica_transporturi_solicitant_id_fkey(name)', { count: 'exact' })
-        .eq('status', 'cerut')
-        .order('data_solicitarii', { ascending: true })
-        .limit(3)
-      setNrTransportCerute(count || 0)
-      setTransportSamples(samples || [])
-    }
-    
     // Avize cu 2/3 semnături > 3 zile fără confirmare destinatar
     // Vizibile pentru: managerul destinatie + aprobatori + admin
+    const isAprobatorTransport = profile?.is_owner === true || profile?.role === 'admin_logistica'
     {
       const treshold = new Date(); treshold.setDate(treshold.getDate() - 3)
       const tresholdStr = treshold.toISOString()
@@ -1300,44 +1293,9 @@ function DashboardPage() {
         <div style={{fontSize:11,color:G.purple+'99'}}>{expiringContracts.slice(0,3).map(e=>`${e.employees?.name} (${new Date(e.contract_expiry).toLocaleDateString('ro-RO')})`).join(', ')}{expiringContracts.length>3?` +${expiringContracts.length-3}`:''}</div></div>
       </div>}
       
-      {/* === ALERTĂ TRANSPORTURI PENDINTE (pentru superadmin + admin_logistica) === */}
-      {nrTransportCerute > 0 && (
-        <div 
-          onClick={() => navigate('/logistica?tab=transporturi')}
-          style={{
-            background: 'linear-gradient(135deg, #7C2D12 0%, #9A3412 100%)',
-            border: `2px solid #FB923C`,
-            borderRadius: 12,
-            padding: '12px 18px',
-            marginBottom: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 14,
-            cursor: 'pointer',
-            transition: 'transform 0.15s'
-          }}
-          onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
-          onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
-        >
-          <div style={{fontSize: 28, lineHeight: 1}}>🚚</div>
-          <div style={{flex: 1}}>
-            <div style={{fontSize: 14, fontWeight: 800, color: '#FFF', marginBottom: 4}}>
-              {nrTransportCerute} {nrTransportCerute === 1 ? 'cerere transport așteaptă' : 'cereri transport așteaptă'} aprobare!
-            </div>
-            <div style={{fontSize: 11, color: '#FED7AA', lineHeight: 1.5}}>
-              {transportSamples.map(t => {
-                const dataS = t.data_solicitarii ? new Date(t.data_solicitarii).toLocaleDateString('ro-RO', {day:'2-digit', month:'2-digit'}) : '?'
-                return `${t.numar_transport || '#'+t.id} (${t.tip || '?'}) · ${t.solicitant?.name || '?'} · ${dataS}`
-              }).join(' · ')}
-              {nrTransportCerute > 3 && ` · +${nrTransportCerute - 3} alte`}
-            </div>
-          </div>
-          <div style={{fontSize: 13, color: '#FFF', fontWeight: 700, padding: '6px 12px', background: 'rgba(255,255,255,0.15)', borderRadius: 8, whiteSpace: 'nowrap'}}>
-            Aprobă →
-          </div>
-        </div>
-      )}
-      
+      {/* Alerta transporturi pendinte a fost mutată exclusiv în modulul Logistică
+         (widget „Transporturi cerute — așteaptă aprobare"), ca să nu apară în Pontaj/Panou. */}
+
       {/* === ALERTĂ AVIZE NESEMNATE DE DESTINATAR > 3 ZILE === */}
       {avizeNesemnate.length > 0 && (
         <div 
@@ -1506,21 +1464,26 @@ function DashboardPage() {
           </div>
         </div>}
 
-        {/* Activitate recenta */}
+        {/* Prezență pe fiecare șantier — nr persoane prezente azi */}
         <div style={{...S.card,padding:20}}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:13}}>Activitate Recentă</div>
-          <div style={{display:'flex',flexDirection:'column',gap:7}}>
-            {recent.length===0?<div style={{textAlign:'center',color:G.muted,padding:'18px 0',fontSize:12}}>Nicio activitate azi</div>
-            :recent.map(r=>(
-              <div key={r.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',background:'#1C2128',borderRadius:8}}>
-                <Avatar name={r.employees?.name} size={26}/>
-                <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{r.employees?.name}</div><div style={{fontSize:10,color:G.muted}}>{r.employees?.sites?.name||r.employees?.department}</div></div>
-                <div style={{textAlign:'right',fontSize:11}}>
-                  {r.norma?<span style={{color:G.yellow,fontWeight:700}}>{r.norma}</span>:<>{r.check_in&&<div style={{color:G.green}}>⬇ {fmt24(r.check_in)}</div>}{r.check_out&&<div style={{color:G.red}}>⬆ {fmt24(r.check_out)}</div>}</>}
-                  {r.diurna&&<span style={{color:G.orange}}> 💰</span>}
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:13}}>
+            <div style={{fontSize:13,fontWeight:700}}>🏗️ Prezență pe fiecare șantier</div>
+            <span style={{fontSize:11,color:G.muted}}>{siteStats.reduce((s,x)=>s+x.present,0)} pers. · {siteStats.length} șantiere</span>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:7,maxHeight:360,overflowY:'auto'}}>
+            {siteStats.length===0?<div style={{textAlign:'center',color:G.muted,padding:'18px 0',fontSize:12}}>Nicio prezență azi</div>
+            :siteStats.map(s=>{
+              const maxP = siteStats[0]?.present || 1
+              return (
+                <div key={s.name} style={{padding:'8px 11px',background:'#1C2128',borderRadius:8}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:5}}>
+                    <span style={{fontSize:12,fontWeight:600,color:G.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name}</span>
+                    <span style={{fontSize:14,fontWeight:800,color:G.green,fontVariantNumeric:'tabular-nums',flexShrink:0}}>{s.present}<span style={{fontSize:10,color:G.muted,fontWeight:600,marginLeft:3}}>pers.</span></span>
+                  </div>
+                  <div style={{height:4,background:'#21262D',borderRadius:2}}><div style={{height:'100%',width:`${(s.present/maxP)*100}%`,background:G.green,borderRadius:2,transition:'width .5s'}}/></div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>
@@ -8236,6 +8199,15 @@ function BugReportGate() {
   return <BugReportButton profile={profile} />
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// TICHET MODUL GATE - buton flotant contextual 🎫 per modul (doar useri logați)
+// ════════════════════════════════════════════════════════════════════════════
+function TichetModulGate() {
+  const { session, profile } = useAuth()
+  if (!session || !profile) return null
+  return <TichetModulButton profile={profile} />
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -8269,6 +8241,7 @@ export default function App() {
       <ChatbotWidgetGate />
       <InternalChatGate />
       <BugReportGate />
+      <TichetModulGate />
     </AuthProvider>
   )
 }
