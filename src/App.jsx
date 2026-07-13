@@ -1165,7 +1165,7 @@ function DashboardPage() {
   const { profile } = useAuth()
   const [stats,setStats]=useState({present:0,checkedOut:0,total:0,avgMins:0,diurna:0})
   const [deptStats,setDeptStats]=useState([])
-  const [recent,setRecent]=useState([])
+  const [siteStats,setSiteStats]=useState([])  // prezență pe fiecare șantier (nr persoane prezente azi)
   const [unalloc,setUnalloc]=useState([])
   const [load,setLoad]=useState(true)
   const [weekStats,setWeekStats]=useState(null)
@@ -1197,7 +1197,13 @@ function DashboardPage() {
     const normeStats={}
     NORME.forEach(n=>{ const cnt=(recs||[]).filter(r=>r.norma===n).length; if(cnt>0) normeStats[n]=cnt })
     setStats({present,checkedOut,total:emps.length,avgMins:present>0?Math.round(totalMins/present):0,diurna,normeStats})
-    setRecent((recs||[]).slice(0,8))
+    // Prezență pe fiecare șantier: grupez prezenții de azi (check_in fără normă) după șantierul angajatului
+    const siteMap = {}
+    ;(recs||[]).filter(x=>x.check_in&&!x.norma).forEach(r=>{
+      const s = r.employees?.sites?.name || 'Fără șantier'
+      siteMap[s] = (siteMap[s]||0) + 1
+    })
+    setSiteStats(Object.entries(siteMap).map(([name,present])=>({name,present})).sort((a,b)=>b.present-a.present))
     // All departments, even those with 0 present
     setDeptStats(DEPARTMENTS.map(dept=>({dept,total:emps.filter(e=>e.department===dept).length,present:(recs||[]).filter(r=>r.employees?.department===dept&&r.check_in&&!r.norma).length})))
     setLoad(false)
@@ -1458,21 +1464,26 @@ function DashboardPage() {
           </div>
         </div>}
 
-        {/* Activitate recenta */}
+        {/* Prezență pe fiecare șantier — nr persoane prezente azi */}
         <div style={{...S.card,padding:20}}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:13}}>Activitate Recentă</div>
-          <div style={{display:'flex',flexDirection:'column',gap:7}}>
-            {recent.length===0?<div style={{textAlign:'center',color:G.muted,padding:'18px 0',fontSize:12}}>Nicio activitate azi</div>
-            :recent.map(r=>(
-              <div key={r.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',background:'#1C2128',borderRadius:8}}>
-                <Avatar name={r.employees?.name} size={26}/>
-                <div style={{flex:1}}><div style={{fontSize:12,fontWeight:600}}>{r.employees?.name}</div><div style={{fontSize:10,color:G.muted}}>{r.employees?.sites?.name||r.employees?.department}</div></div>
-                <div style={{textAlign:'right',fontSize:11}}>
-                  {r.norma?<span style={{color:G.yellow,fontWeight:700}}>{r.norma}</span>:<>{r.check_in&&<div style={{color:G.green}}>⬇ {fmt24(r.check_in)}</div>}{r.check_out&&<div style={{color:G.red}}>⬆ {fmt24(r.check_out)}</div>}</>}
-                  {r.diurna&&<span style={{color:G.orange}}> 💰</span>}
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:13}}>
+            <div style={{fontSize:13,fontWeight:700}}>🏗️ Prezență pe fiecare șantier</div>
+            <span style={{fontSize:11,color:G.muted}}>{siteStats.reduce((s,x)=>s+x.present,0)} pers. · {siteStats.length} șantiere</span>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:7,maxHeight:360,overflowY:'auto'}}>
+            {siteStats.length===0?<div style={{textAlign:'center',color:G.muted,padding:'18px 0',fontSize:12}}>Nicio prezență azi</div>
+            :siteStats.map(s=>{
+              const maxP = siteStats[0]?.present || 1
+              return (
+                <div key={s.name} style={{padding:'8px 11px',background:'#1C2128',borderRadius:8}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,marginBottom:5}}>
+                    <span style={{fontSize:12,fontWeight:600,color:G.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name}</span>
+                    <span style={{fontSize:14,fontWeight:800,color:G.green,fontVariantNumeric:'tabular-nums',flexShrink:0}}>{s.present}<span style={{fontSize:10,color:G.muted,fontWeight:600,marginLeft:3}}>pers.</span></span>
+                  </div>
+                  <div style={{height:4,background:'#21262D',borderRadius:2}}><div style={{height:'100%',width:`${(s.present/maxP)*100}%`,background:G.green,borderRadius:2,transition:'width .5s'}}/></div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>
