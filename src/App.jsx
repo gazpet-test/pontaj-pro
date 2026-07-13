@@ -1689,6 +1689,19 @@ function PontajPage() {
   useEffect(()=>{ loadSites(); loadSettings() },[])
   useEffect(()=>{ loadEmps() },[profile,sites,date.slice(0,7)])
   useEffect(()=>{ if(emps.length>0) loadRecs() },[emps,date])
+  // TKT-2026-0054: sincronizare pontaj între utilizatori — modificarea unui user
+  // nu apărea în plansa altuia până la refresh. Reîncarc înregistrările la revenirea
+  // în tab (focus/visibilitychange) + poll ușor la 35s cât ești pe pagină, dar NU în
+  // timpul unei salvări (ca să nu suprascriu editarea în curs).
+  useEffect(()=>{
+    if(emps.length===0) return
+    const refresh=()=>{ if(document.visibilityState==='visible' && !saving && !load) loadRecs() }
+    window.addEventListener('focus',refresh)
+    document.addEventListener('visibilitychange',refresh)
+    const iv=setInterval(refresh,35000)
+    return ()=>{ window.removeEventListener('focus',refresh); document.removeEventListener('visibilitychange',refresh); clearInterval(iv) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[emps,date,saving,load])
   // Verific dacă data afișată e în interiorul unei perioade exportate ca plată
   // Folosesc RPC SECURITY DEFINER ca să funcționeze pentru orice user authenticated (RLS bypass controlat)
   useEffect(() => {
