@@ -859,6 +859,9 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   const [showAddAut, setShowAddAut] = useState(false)
   const [editingAreAut, setEditingAreAut] = useState(false)
   const [areAut, setAreAut] = useState(employee.are_autorizatii || false)
+  // TKT-2026-0042: funcția editabilă din HR (pt. angajați noi fără funcție setată)
+  const [editingFunctie, setEditingFunctie] = useState(false)
+  const [functieVal, setFunctieVal] = useState(employee.functie || '')
   const [uploadingId, setUploadingId] = useState(null)
   const uploadRef = useRef(null)
   const uploadTarget = useRef(null)
@@ -918,6 +921,16 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
     showToast('✓ Actualizat')
     onReload()
   }
+
+  // TKT-2026-0042: salvează funcția angajatului din HR
+  const saveFunctie = async () => {
+    const val = functieVal.trim()
+    const { error } = await supabase.from('employees').update({ functie: val || null }).eq('id', employee.id)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    setEditingFunctie(false)
+    showToast('✓ Funcție actualizată')
+    onReload()
+  }
   
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
@@ -954,7 +967,29 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
           {tabM === 'date' && (
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, fontSize:13}}>
               <Field label="Nume" value={employee.name} />
-              <Field label="Funcție" value={employee.functie} />
+              {/* Funcție — editabilă din HR (TKT-2026-0042) */}
+              <div>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>Funcție</div>
+                {editingFunctie && isAdmin ? (
+                  <div style={{display:'flex', gap:6}}>
+                    <input autoFocus value={functieVal} onChange={e => setFunctieVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveFunctie(); if (e.key === 'Escape') { setEditingFunctie(false); setFunctieVal(employee.functie || '') } }}
+                      placeholder="ex: Instalator gaze" style={{...S.input, flex:1}} />
+                    <button onClick={saveFunctie} style={{padding:'8px 10px', background:G.green, color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:600}}>✓</button>
+                    <button onClick={() => { setEditingFunctie(false); setFunctieVal(employee.functie || '') }} style={{...S.btnS, padding:'8px 10px'}}>×</button>
+                  </div>
+                ) : (
+                  <div onClick={() => isAdmin && setEditingFunctie(true)} style={{
+                    fontSize:13, color: employee.functie ? G.text : G.muted, padding:'8px 10px', background:G.bg,
+                    border:`1px solid ${employee.functie ? G.border : G.orange+'55'}`, borderRadius:6, minHeight:32,
+                    cursor: isAdmin ? 'pointer' : 'default', fontWeight:600,
+                    display:'flex', justifyContent:'space-between', alignItems:'center'
+                  }}>
+                    <span>{employee.functie || 'Fără funcție'}</span>
+                    {isAdmin && <span style={{fontSize:10, color:G.muted, fontWeight:400}}>✏️ click pentru editare</span>}
+                  </div>
+                )}
+              </div>
               <Field label="Departament HR" value={employee.departament_hr} />
               <Field label="Rol în firmă" value={employee.rol_in_firma} />
               <Field label="Telefon" value={employee.telefon} />
