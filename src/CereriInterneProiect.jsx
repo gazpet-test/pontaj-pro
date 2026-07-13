@@ -311,7 +311,7 @@ function CerereFormModal({ initial, proiect, defaultDepart, onClose, onSaved, sh
 }
 
 // ─── Modal detaliu + acțiuni ─────────────────────────────────────────────────
-function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriMap, linkMap, canProcess, isOwner, onClose, onAction, onEdit, onPdf, onGenereaza, busy }) {
+function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriMap, linkMap, canProcess, isOwner, onClose, onAction, onEdit, onPdf, onGenereaza, onFurnizorNou, busy }) {
   const [livrare, setLivrare] = useState(cerere.data_livrare_estimata || '')
   const si = STATUS_INFO[cerere.status] || {}
   const solicitant = profilesMap[cerere.deschis_de] || '—'
@@ -325,6 +325,18 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
   const [repFaraForm, setRepFaraForm] = useState(false)
   const [repTermen, setRepTermen] = useState('')
   const [repLivrare, setRepLivrare] = useState('sediu')
+  // TKT-2026-0039: adăugare furnizor nou inline
+  const [fzAdding, setFzAdding] = useState(false)
+  const [fzNume, setFzNume] = useState('')
+  const [fzContact, setFzContact] = useState('')
+  const [fzSaving, setFzSaving] = useState(false)
+  const salveazaFurnizor = async () => {
+    if (!fzNume.trim()) return
+    setFzSaving(true)
+    const created = await onFurnizorNou({ nume: fzNume.trim(), contact: fzContact.trim() || null })
+    if (created?.id) { setRepFurnizor(String(created.id)); setFzAdding(false); setFzNume(''); setFzContact('') }
+    setFzSaving(false)
+  }
   const toggleLinie = (id) => setSelLinii(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id])
   const doGenereaza = () => {
     onGenereaza(cerere, selLinii, Number(repFurnizor)||null, repFaraForm, repTermen||null, repLivrare)
@@ -440,10 +452,24 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 170px', gap:10 }}>
                     <div>
                       <label style={{ fontSize:12, color:G.muted }}>Furnizor</label>
-                      <select style={S.input} value={repFurnizor} onChange={e=>setRepFurnizor(e.target.value)}>
-                        <option value="">— alege furnizor —</option>
-                        {furnizori.map(f => <option key={f.id} value={f.id}>{f.nume}</option>)}
-                      </select>
+                      {fzAdding ? (
+                        <div style={{ display:'flex', flexDirection:'column', gap:6, padding:8, border:`1px solid ${G.purple}44`, borderRadius:8, background:G.purple+'0D' }}>
+                          <input style={S.input} placeholder="Nume furnizor nou * (ex: SINTAX)" value={fzNume} autoFocus onChange={e=>setFzNume(e.target.value)} />
+                          <input style={S.input} placeholder="Contact (nume · telefon) — opțional" value={fzContact} onChange={e=>setFzContact(e.target.value)} />
+                          <div style={{ display:'flex', gap:8 }}>
+                            <button onClick={salveazaFurnizor} disabled={fzSaving || !fzNume.trim()} style={{ ...S.btnP, padding:'7px 14px', fontSize:13, background:(fzNume.trim()?G.purple:G.border2) }}>{fzSaving ? '...' : '✓ Salvează furnizor'}</button>
+                            <button onClick={()=>{ setFzAdding(false); setFzNume(''); setFzContact('') }} disabled={fzSaving} style={{ ...S.btnS, padding:'7px 12px', fontSize:13 }}>Anulează</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display:'flex', gap:8 }}>
+                          <select style={S.input} value={repFurnizor} onChange={e=>setRepFurnizor(e.target.value)}>
+                            <option value="">— alege furnizor —</option>
+                            {furnizori.map(f => <option key={f.id} value={f.id}>{f.nume}</option>)}
+                          </select>
+                          <button onClick={()=>setFzAdding(true)} title="Adaugă furnizor nou" style={{ ...S.btnS, padding:'9px 12px', fontSize:13, whiteSpace:'nowrap', color:G.purple, borderColor:G.purple+'66', fontWeight:700 }}>＋ Nou</button>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label style={{ fontSize:12, color:G.muted }}>Termen livrare</label>
@@ -647,6 +673,18 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
       console.error(e); showToast('Eroare: ' + (e.message || e), 'error')
     } finally { setBusy(false) }
   }, [cereri, detailId, loadAll, showToast])
+
+  // TKT-2026-0039: adăugare furnizor nou pe loc, din panelul de repartizare
+  const addFurnizorNou = useCallback(async ({ nume, contact }) => {
+    try {
+      const { data, error } = await supabase.from('logistica_furnizori')
+        .insert({ nume, contact: contact || null, activ: true }).select('id, nume, contact, activ').single()
+      if (error) throw error
+      setFurnizori(prev => [...prev, data].sort((a, b) => (a.nume || '').localeCompare(b.nume || '')))
+      showToast(`Furnizor „${data.nume}" adăugat ✅`)
+      return data
+    } catch (e) { showToast('Eroare adăugare furnizor: ' + (e.message || e), 'error'); return null }
+  }, [showToast])
 
   // ── Ștergere cerere (owner + achiziții) ───────────────────────────────────
   // Decizie Razvan 03.07.2026 (Opțiunea B): cascadă — se șterg și PO-urile legate.
@@ -1024,6 +1062,7 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
           onEdit={(c)=>{ setDetailId(null); setEditCerere(c); setShowForm(true) }}
           onPdf={generatePdf}
           onGenereaza={generateComandaFurnizor}
+          onFurnizorNou={addFurnizorNou}
         />
       )}
     </div>

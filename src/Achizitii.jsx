@@ -791,6 +791,70 @@ function PredareModal({ comanda, profile, profilesMap, onClose, onConfirm, onFin
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MODAL: RECEPȚIE + TRANSPORT DIRECT LA ȘANTIER (TKT-2026-0051)
+// „Ridicăm noi și pleacă direct spre șantier" — recepție (PV1) + intrare magazie
+// centrală + transfer pe stocul șantierului + transport cu aviz (flux normal Logistică).
+// ════════════════════════════════════════════════════════════════════════════
+function ReceptieTransportModal({ comanda, ctx, sites, onClose, onConfirm, busy }) {
+  const c = comanda
+  const [destinatieSiteId, setDestinatieSiteId] = useState(comanda.livrare_site_id || '')
+  const [dataTransport, setDataTransport] = useState(todayISO())
+  const [observatii, setObservatii] = useState('')
+  const linii = (c.linii || []).filter(l => l.denumire && Number(l.cantitate) > 0)
+  const canConfirm = !!destinatieSiteId && !!dataTransport && linii.length > 0 && !busy
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:14, overflowY:'auto' }} onClick={onClose}>
+      <div style={{ ...S.card, width:'min(640px,100%)', padding:22 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>🚚 Recepție + transport direct la șantier</div>
+        <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>
+          Comanda <b style={{ color:G.text }}>{c.numar_comanda}</b>{ctx.proiectNume ? <> · {ctx.proiectNume}</> : null}. Materialele se recepționează (PV), intră în magazia centrală și ies imediat pe stocul șantierului, iar transportul se creează pentru <b>aviz</b> (semnat în Logistică).
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 160px', gap:12, marginBottom:12 }}>
+          <div>
+            <label style={{ fontSize:12, color:G.muted, fontWeight:700 }}>Șantier destinație *</label>
+            <select style={S.input} value={destinatieSiteId} onChange={e => setDestinatieSiteId(e.target.value)}>
+              <option value="">— alege șantierul —</option>
+              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:G.muted, fontWeight:700 }}>Data transport *</label>
+            <input style={S.input} type="date" value={dataTransport} onChange={e => setDataTransport(e.target.value)} />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:G.muted, fontWeight:700 }}>Observații (opțional)</label>
+          <input style={S.input} value={observatii} onChange={e => setObservatii(e.target.value)} placeholder="ex: ridicat de Kostas, dus la fața locului" />
+        </div>
+
+        <div style={{ padding:12, borderRadius:10, border:`1px solid ${G.border2}`, background:G.bg, marginBottom:6 }}>
+          <div style={{ fontSize:12.5, fontWeight:800, marginBottom:6 }}>📦 Materiale ({linii.length})</div>
+          {linii.length === 0 ? <div style={{ fontSize:12, color:G.red }}>Comanda nu are linii cu cantitate.</div> :
+            <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:180, overflowY:'auto' }}>
+              {linii.map((l, i) => (
+                <div key={i} style={{ display:'flex', justifyContent:'space-between', fontSize:12.5 }}>
+                  <span>{l.denumire}</span><span style={{ color:G.muted }}>{Number(l.cantitate)} {l.um || ''}</span>
+                </div>
+              ))}
+            </div>}
+        </div>
+        <div style={{ fontSize:11, color:G.dim, marginBottom:14 }}>Șoferul/mașina și avizul semnat se completează în Logistică → Transporturi. Aici doar creezi transportul și muți stocul.</div>
+
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={() => onConfirm({ destinatieSiteId, dataTransport, observatii })} disabled={!canConfirm}
+            style={{ ...S.btnP, background: canConfirm ? G.green : G.border2, color:'#0D1117', opacity: busy ? .6 : 1 }}>
+            {busy ? 'Procesez...' : '✅ Recepție + creează transport'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MODAL: DETALII COMANDĂ (aprobare + acțiuni flux + PDF-uri)
 // ════════════════════════════════════════════════════════════════════════════
 function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actions, busy }) {
@@ -1051,6 +1115,10 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {c.status === 'emisa' && ctx.canCreate && <Btn color={G.purple} onClick={() => actions.markStatus(c, 'in_tranzit')}>🚚 Marchează ÎN TRANZIT</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && <Btn color={G.orange} onClick={() => actions.markStatus(c, 'ajunsa')}>📦 Marchează AJUNSĂ</Btn>}
           {c.status === 'ajunsa' && <Btn color={G.green} onClick={() => actions.deschideReceptie(c)}>✅ Recepție (PV 1)</Btn>}
+          {/* TKT-2026-0051: recepție + transport direct la șantier (ridicăm noi, pleacă direct) */}
+          {c.status === 'ajunsa' && ctx.canCreate && c.proiect_id && <Btn color={G.blue} onClick={() => actions.deschideReceptieTransport(c)}>🚚 Recepție + transport la șantier</Btn>}
+          {/* TKT-2026-0040: undo „ajunsă" apăsat din greșeală → revine ÎN TRANZIT (înainte de recepție) */}
+          {c.status === 'ajunsa' && ctx.canCreate && <Btn color={G.dim} onClick={() => actions.markStatus(c, 'in_tranzit')}>↩️ Anulează „ajunsă"</Btn>}
           {c.status === 'receptionata' && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
         </div>
       </div>
@@ -1161,6 +1229,7 @@ export default function AchizitiiPage() {
   const [editComanda, setEditComanda] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   const [receptieId, setReceptieId] = useState(null)
+  const [receptieTransportId, setReceptieTransportId] = useState(null)  // TKT-2026-0051: recepție + transport direct la șantier
   const [predareId, setPredareId] = useState(null)
   const [receptieBucatiId, setReceptieBucatiId] = useState(null)
   const [fStatus, setFStatus] = useState('')
@@ -1255,6 +1324,7 @@ export default function AchizitiiPage() {
 
   const selected = useMemo(() => comenzi.find(c => c.id === selectedId) || null, [comenzi, selectedId])
   const receptieComanda = useMemo(() => comenzi.find(c => c.id === receptieId) || null, [comenzi, receptieId])
+  const receptieTransportComanda = useMemo(() => comenzi.find(c => c.id === receptieTransportId) || null, [comenzi, receptieTransportId])
   const predareComanda = useMemo(() => comenzi.find(c => c.id === predareId) || null, [comenzi, predareId])
   const receptieBucatiComanda = useMemo(() => comenzi.find(c => c.id === receptieBucatiId) || null, [comenzi, receptieBucatiId])
 
@@ -1443,6 +1513,7 @@ export default function AchizitiiPage() {
       } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
     deschideReceptie: (c) => { setSelectedId(null); setReceptieId(c.id) },
+    deschideReceptieTransport: (c) => { setSelectedId(null); setReceptieTransportId(c.id) },
     deschidePredare: (c) => { setSelectedId(null); setPredareId(c.id) },
     deschideReceptieBucati: (c) => { setSelectedId(null); setReceptieBucatiId(c.id) },
   }
@@ -1478,6 +1549,83 @@ export default function AchizitiiPage() {
       setReceptieId(null)
       await loadAll()
     } catch (e) { console.error(e); showToast('Eroare la PV recepție: ' + (e.message || e), 'error') } finally { setBusy(false) }
+  }
+
+  // ── TKT-2026-0051: RECEPȚIE + TRANSPORT DIRECT LA ȘANTIER ────────────────
+  // Lanț: PV1 recepție → intrare magazie centrală (sediu) → transfer central→proiect
+  // (3A, fn_transfer_executa) → transport (aviz prin fluxul normal Logistică) → comandă în stoc.
+  const finalizeazaReceptieTransport = async ({ destinatieSiteId, dataTransport, observatii }) => {
+    const c = receptieTransportComanda; if (!c) return
+    if (!c.proiect_id) { showToast('Comanda nu are proiect — necesar pentru transferul pe stocul șantierului.', 'error'); return }
+    if (!destinatieSiteId) { showToast('Alege șantierul destinație.', 'error'); return }
+    const linii = (c.linii || []).filter(l => l.denumire && Number(l.cantitate) > 0)
+    if (!linii.length) { showToast('Comanda nu are linii cu cantitate.', 'error'); return }
+    setBusy(true)
+    try {
+      // 1. PV1 recepție calitativă (semnături: MP proiect + Achiziții)
+      const semnaturi = [
+        { ...(await semnMPProiect(c)), decisLa: c.receptie_mp_la || new Date().toISOString() },
+        { ...(await semnDinNume('Achiziții', RESPONSABIL_ACHIZITII)), decisLa: c.receptie_achizitii_la || new Date().toISOString() },
+      ]
+      const pvBlob = await renderHtmlToPdfBlob(buildPvReceptieHtml(c, { ...ctxFor(c), semnaturi }))
+      const pvPath = `${c.id}/${todayISO()}_${uniq8()}_pv_receptie.pdf`
+      await uploadPdf(pvBlob, pvPath)
+
+      // Idempotență: dacă intrarea acestei comenzi a fost deja înregistrată (retry după
+      // o eroare mai jos în lanț), NU repet mișcările de stoc — evit dublarea.
+      const { count: dejaIntrat } = await supabase.from('stocuri_miscari')
+        .select('id', { count: 'exact', head: true })
+        .eq('ref_tip', 'comanda_furnizor').eq('ref_id', c.id).eq('tip', 'intrare_achizitie')
+      if (!dejaIntrat) {
+        // 2. Intrare în magazia CENTRALĂ (sediu) — cost mediu din preț
+        const intrari = linii.map(l => ({
+          locatie_tip: 'sediu', locatie_id: null,
+          material_denumire: l.denumire, um: l.um || null,
+          delta: Number(l.cantitate), tip: 'intrare_achizitie',
+          motiv: `Recepție ${c.numar_comanda}`, ref_tip: 'comanda_furnizor', ref_id: c.id,
+          pret_unitar: (l.pret_unitar != null && l.pret_unitar !== '') ? Number(l.pret_unitar) : null,
+        }))
+        const { error: eIn } = await supabase.from('stocuri_miscari').insert(intrari)
+        if (eIn) throw eIn
+
+        // 3. Transfer central → proiect (3A) — atomic, cu validare stoc + cost propagat
+        const { error: eTr } = await supabase.rpc('fn_transfer_executa', {
+          p_de_la_tip: 'sediu', p_de_la_id: null, p_la_tip: 'proiect', p_la_id: c.proiect_id,
+          p_obs: `Transport direct la șantier — comanda ${c.numar_comanda}`,
+          p_linii: linii.map(l => ({ material_denumire: l.denumire, um: l.um || null, cantitate: Number(l.cantitate) })),
+        })
+        if (eTr) throw eTr
+      }
+
+      // 4. Transport (plecare = magazia centrală, destinație = șantier) → aviz prin flux normal
+      const { data: tr, error: eT } = await supabase.from('logistica_transporturi').insert({
+        tip: 'materiale', continut_multiplu: true,
+        plecare_tip: 'alta', plecare_locatie_text: 'Magazie centrală (sediu Ploiești)',
+        destinatie_tip: 'site', destinatie_site_id: Number(destinatieSiteId),
+        data_transport: dataTransport || todayISO(),
+        sofer_gazpet: true, transport_intern_santier: false, transport_teava: false,
+        status: 'cerut', solicitant_id: profile?.id, data_solicitarii: new Date().toISOString(),
+        observatii: (observatii?.trim() ? observatii.trim() + ' · ' : '') + `Recepție + transport direct din comanda ${c.numar_comanda}`,
+      }).select('id, numar_transport').single()
+      if (eT) throw eT
+      const cont = linii.map((l, idx) => ({
+        transport_id: tr.id, tip: 'marfa', active_id: null,
+        denumire: l.denumire, cantitate: Number(l.cantitate), unitate_masura: l.um || null,
+        observatii: null, ordine: idx, din_stoc: false, created_by: profile?.id || null,
+      }))
+      const { error: eC } = await supabase.from('logistica_transporturi_continut').insert(cont)
+      if (eC) throw eC
+
+      // 5. Comandă → recepționată + în stoc, cu PV atașat (terminal)
+      const { error: eU } = await supabase.from('comenzi_furnizor').update({
+        pv_receptie_path: pvPath, status: 'in_stoc', updated_at: new Date().toISOString(),
+      }).eq('id', c.id)
+      if (eU) throw eU
+
+      showToast(`✅ ${c.numar_comanda}: recepționată, prin magazia centrală → transport ${tr.numar_transport || '#' + tr.id} spre șantier. Avizul se generează în Logistică.`)
+      setReceptieTransportId(null)
+      await loadAll()
+    } catch (e) { console.error(e); showToast('Eroare recepție+transport: ' + (e.message || e), 'error') } finally { setBusy(false) }
   }
 
   // ── PREDARE MAGAZIE (PV 2) + intrare STOC automată ───────────────────────
@@ -1837,6 +1985,10 @@ export default function AchizitiiPage() {
       {predareComanda && (
         <PredareModal comanda={predareComanda} profile={profile} profilesMap={profilesMap}
           onClose={() => setPredareId(null)} onConfirm={confirmPredare} onFinalizeaza={finalizeazaPredare} busy={busy} />
+      )}
+      {receptieTransportComanda && (
+        <ReceptieTransportModal comanda={receptieTransportComanda} ctx={ctxFor(receptieTransportComanda)} sites={sites}
+          onClose={() => setReceptieTransportId(null)} onConfirm={finalizeazaReceptieTransport} busy={busy} />
       )}
       {receptieBucatiComanda && (
         <ReceptieBucatiModal
