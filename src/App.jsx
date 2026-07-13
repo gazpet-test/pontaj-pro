@@ -6062,8 +6062,11 @@ function ReportsPage() {
         </div>
       )}
 
-      {/* Notificare Ordine Lipsă/Overdue (Etapa 7.5 Faza 3.2) */}
-      {!ordineLipsaDismissed && ordineLipsa.length > 0 && (() => {
+      {/* Notificare Ordine Lipsă/Overdue (Etapa 7.5 Faza 3.2)
+         TKT-2026-0045: ascunsă la cererea Marilenei („nu folosește la nimic").
+         Generarea ordinelor rămâne disponibilă din butonul „📄 Ordine Deplasare" de mai jos.
+         Reactivare: șterge `false &&` din condiția de mai jos. */}
+      {false && !ordineLipsaDismissed && ordineLipsa.length > 0 && (() => {
         const overdueList = ordineLipsa.filter(x => x.status === 'overdue')
         const pendingList = ordineLipsa.filter(x => x.status === 'pending')
         const hasOverdue = overdueList.length > 0

@@ -4858,7 +4858,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
               <select value={destinatieTip} onChange={e => setDestinatieTip(e.target.value)} style={{...S.input, width:200}}>
                 <option value="sediu">🏢 Sediu Gazpet</option>
                 <option value="site">📍 Șantier</option>
-                <option value="alta">✏️ Altă locație</option>
+                <option value="alta">🏭 Firmă externă / altă locație</option>
               </select>
               {destinatieTip === 'site' && (
                 <select value={destinatieSiteId} onChange={e => setDestinatieSiteId(e.target.value)} style={{...S.input, flex:1}}>
@@ -4867,7 +4867,7 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                 </select>
               )}
               {destinatieTip === 'alta' && (
-                <input type="text" value={destinatieLocText} onChange={e => setDestinatieLocText(e.target.value)} placeholder="ex: ANRE Sediu central, Str. Constantin Nacu 3, București" style={{...S.input, flex:1}} />
+                <input type="text" value={destinatieLocText} onChange={e => setDestinatieLocText(e.target.value)} placeholder="ex: Atlas Copco SRL, Str. ... / ANRE București" style={{...S.input, flex:1}} />
               )}
             </div>
             {/* Manager destinație — IMPORTANT pentru confirmare primire */}
@@ -6497,7 +6497,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
               </div>
               <div style={{flex:1, padding:10, border:'2px solid #FCA5A5', borderRadius:6, background:'#FEF2F2'}}>
                 <div style={{fontSize:10, fontWeight:'bold', color:'#DC2626', textTransform:'uppercase', marginBottom:6, letterSpacing:.5}}>📥 DESTINATAR</div>
-                <div style={{fontSize:12, fontWeight:'bold', color:'#111'}}>{T.destinatie_tip === 'site' && T.destinatie_site ? T.destinatie_site.name : (T.destinatie_tip === 'sediu' ? (setariFirma.firma_nume || 'GAZPET INSTAL SRL') : 'Destinație externă')}</div>
+                {/* TKT-2026-0036: destinație externă → numele/locația introdusă (ex. Atlas Copco), nu generic */}
+                <div style={{fontSize:12, fontWeight:'bold', color:'#111'}}>{T.destinatie_tip === 'site' && T.destinatie_site ? T.destinatie_site.name : (T.destinatie_tip === 'sediu' ? (setariFirma.firma_nume || 'GAZPET INSTAL SRL') : (T.destinatie_locatie_text || 'Destinație externă'))}</div>
                 <div style={{fontSize:10, color:'#374151', marginTop:3}}>La: {formatLocatie(T.destinatie_tip, T.destinatie_site, T.destinatie_locatie_text)}</div>
                 {T.manager_destinatie && <div style={{fontSize:10, color:'#374151', marginTop:3}}>Manager destinație: <strong>{T.manager_destinatie.name}</strong></div>}
               </div>
