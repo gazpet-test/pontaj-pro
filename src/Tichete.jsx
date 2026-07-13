@@ -16,6 +16,25 @@ const DEPARTAMENTE = [
   { cod:'financiar',     nume:'Financiar',     emoji:'💰', color:G.yellow, descriere:'Plati, facturi, deconturi' }
 ]
 
+// Modulele ERP din care se poate deschide tichet contextual (buton flotant per modul).
+// Cheia = metadata.modul salvat pe tichet; folosit doar pt. afișare (chip label + emoji).
+const MODUL_INFO = {
+  pontaj:        { label:'Pontaj',        emoji:'📊' },
+  rapoarte:      { label:'Rapoarte',      emoji:'📈' },
+  logistica:     { label:'Logistică',     emoji:'🚛' },
+  hr:            { label:'HR',            emoji:'👥' },
+  administrativ: { label:'Administrativ', emoji:'🏢' },
+  executie:      { label:'Execuție',      emoji:'🏗️' },
+  financiar:     { label:'Financiar',     emoji:'💰' },
+  comercial:     { label:'Comercial',     emoji:'🛒' },
+  achizitii:     { label:'Achiziții',     emoji:'🛍️' },
+  ofertare:      { label:'Ofertare',      emoji:'📄' },
+  ctc:           { label:'CTC',           emoji:'✅' },
+  magazie:       { label:'Magazie',       emoji:'📦' },
+  salarii:       { label:'Salarii',       emoji:'💵' },
+}
+const getModul = (cod) => (cod ? (MODUL_INFO[cod] || { label:cod, emoji:'📦' }) : null)
+
 const URGENTE = [
   { cod:'urgent',  emoji:'🚨', label:'Urgent',  color:G.red,    sla:'< 4 ore'  },
   { cod:'normal',  emoji:'📝', label:'Normal',  color:G.yellow, sla:'< 24 ore' },
@@ -122,6 +141,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [searchText,setSearchText]=useState('')
   const [openNew,setOpenNew]=useState(false)
   const [nouDep,setNouDep]=useState(null)   // departament presetat la deschiderea unui tichet nou (din card / listă)
+  const [nouModul,setNouModul]=useState(null) // modul presetat (din butonul contextual per modul) — tag pe tichet
   const [openDetail,setOpenDetail]=useState(null)
   const [activeLogistica,setActiveLogistica]=useState([])  // pentru autocomplete entitate dep=logistica
   const [employeesList,setEmployeesList]=useState([])      // pentru autocomplete entitate dep=hr
@@ -176,6 +196,11 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
     let consumed = false
     if(params.get('action') === 'new') {
       setOpenNew(true)
+      // Preselecție din butonul contextual per modul: dep (default) + modul (tag)
+      const qDep = params.get('dep')
+      const qModul = params.get('modul')
+      if(qDep) { setNouDep(qDep); params.delete('dep') }
+      if(qModul) { setNouModul(qModul); params.delete('modul') }
       params.delete('action'); consumed = true
     }
     // Activez filtrul "Ale mele" dacă vine din navbar cu ?mine=true
@@ -481,10 +506,11 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           profile={profile}
           profiles={profiles}
           forcedDep={nouDep || filterDepartament}
+          forcedModul={nouModul}
           activeLogistica={activeLogistica}
           employeesList={employeesList}
-          onClose={()=>{ setOpenNew(false); setNouDep(null) }}
-          onSaved={()=>{ setOpenNew(false); setNouDep(null); loadAll(); show('Tichet creat!', 'success') }}
+          onClose={()=>{ setOpenNew(false); setNouDep(null); setNouModul(null) }}
+          onSaved={()=>{ setOpenNew(false); setNouDep(null); setNouModul(null); loadAll(); show('Tichet creat!', 'success') }}
           show={show}
         />
       )}
@@ -529,6 +555,9 @@ function TichetRow({ t, profiles, echipaCount = 0, onClick, showDep = false, can
         <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:4}}>
           <span style={{fontSize:11,fontFamily:'monospace',color:G.muted}}>#{t.numar_tichet}</span>
           {showDep && <span style={{fontSize:11,padding:'2px 8px',background:dep.color+'22',color:dep.color,borderRadius:4,fontWeight:600}}>{dep.emoji} {dep.nume}</span>}
+          {t.metadata?.modul && getModul(t.metadata.modul) && (
+            <span style={{fontSize:11,padding:'2px 8px',background:G.purple+'22',color:G.purple,borderRadius:4,fontWeight:600}} title={`Modul: ${getModul(t.metadata.modul).label}`}>{getModul(t.metadata.modul).emoji} {getModul(t.metadata.modul).label}</span>
+          )}
           <span style={{fontSize:11,padding:'2px 8px',background:st.color+'22',color:st.color,borderRadius:4,fontWeight:600}}>{st.emoji} {st.label}</span>
           {echipaCount > 0 && <span style={{fontSize:11,padding:'2px 8px',background:G.blue+'1A',color:G.blue,borderRadius:4,fontWeight:600}}>👥 {echipaCount}</span>}
         </div>
@@ -571,7 +600,7 @@ function TichetRow({ t, profiles, echipaCount = 0, onClick, showDep = false, can
 // ════════════════════════════════════════════════════════════════
 // MODAL: TICHET NOU
 // ════════════════════════════════════════════════════════════════
-function TichetFormModal({ subcategorii, profile, profiles = [], forcedDep, activeLogistica, employeesList, onClose, onSaved, show }){
+function TichetFormModal({ subcategorii, profile, profiles = [], forcedDep, forcedModul = null, activeLogistica, employeesList, onClose, onSaved, show }){
   const [step, setStep] = useState(forcedDep ? 2 : 0)  // 0: AI quick, 1: dep manual, 2: detalii
   const [dep, setDep] = useState(forcedDep || null)
   const [form, setForm] = useState({
@@ -742,17 +771,25 @@ function TichetFormModal({ subcategorii, profile, profiles = [], forcedDep, acti
     setSaving(true)
     try {
       // Etapa 14: dacă responsabil setat → atribuire directă la creare (status='atribuit')
+      // Modul contextual (din butonul flotant per modul): tag în metadata + entitate
+      // implicită „pagina_app" dacă userul n-a asociat manual altă entitate.
+      const modulInfo = getModul(forcedModul)
+      const eTip = form.entitate_tip || (forcedModul ? 'pagina_app' : null)
+      const eDesc = form.entitate_descriere || (modulInfo ? `Modul ${modulInfo.label}` : null)
       const payload = {
         departament: dep,
         subcategorie: form.subcategorie,
         titlu: form.titlu.trim(),
         descriere: form.descriere.trim(),
         urgenta: form.urgenta,
-        entitate_tip: form.entitate_tip || null,
+        entitate_tip: eTip,
         entitate_id: form.entitate_id || null,
-        entitate_descriere: form.entitate_descriere || null,
+        entitate_descriere: eDesc,
         deschis_de: profile?.id,
         status: selectedResponsabil ? 'atribuit' : 'deschis'
+      }
+      if (forcedModul) {
+        payload.metadata = { modul: forcedModul, modul_label: modulInfo?.label || forcedModul }
       }
       if (selectedResponsabil) {
         payload.persoana_responsabila = selectedResponsabil
@@ -924,6 +961,25 @@ function TichetFormModal({ subcategorii, profile, profiles = [], forcedDep, acti
             <button onClick={()=>setStep(0)} style={{alignSelf:'flex-start',padding:'7px 14px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:6,fontSize:13,cursor:'pointer'}}>
               ← Inapoi (AI sau manual)
             </button>
+          )}
+
+          {/* Context modul — vine din butonul flotant per modul. Departamentul e default (rezolvitor), se poate schimba. */}
+          {forcedModul && getModul(forcedModul) && (
+            <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',padding:'10px 14px',background:G.purpleDim,border:`1px solid ${G.purple}55`,borderRadius:10}}>
+              <span style={{fontSize:20}}>{getModul(forcedModul).emoji}</span>
+              <div style={{flex:1,minWidth:140}}>
+                <div style={{fontSize:11,color:G.muted,textTransform:'uppercase',letterSpacing:0.5,fontWeight:700}}>Tichet pentru modul</div>
+                <div style={{fontSize:15,fontWeight:800,color:G.text}}>{getModul(forcedModul).label}</div>
+              </div>
+              <span style={{fontSize:13,color:G.muted}}>→ rezolvă:</span>
+              <span style={{padding:'5px 12px',background:getDep(dep).color+'22',color:getDep(dep).color,borderRadius:16,fontSize:13,fontWeight:700,whiteSpace:'nowrap'}}>
+                {getDep(dep).emoji} {getDep(dep).nume}
+              </span>
+              <button onClick={()=>setStep(1)} title="Schimbă departamentul care rezolvă"
+                      style={{padding:'5px 10px',background:'transparent',color:G.muted,border:`1px solid ${G.border2}`,borderRadius:8,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>
+                Schimbă
+              </button>
+            </div>
           )}
 
           {/* Subcategorie */}

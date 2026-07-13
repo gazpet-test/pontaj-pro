@@ -11,6 +11,7 @@ import Tichete from './Tichete.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import BugReportButton from './BugReportButton.jsx'
+import TichetModulButton from './TichetModulButton.jsx'
 import InternalChat from './InternalChat.jsx'
 // ════════════ Etapa 15 Faza 1: Module Comercial (placeholder) ════════════
 import ComercialPage from './Comercial.jsx'
@@ -8236,6 +8237,15 @@ function BugReportGate() {
   return <BugReportButton profile={profile} />
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// TICHET MODUL GATE - buton flotant contextual 🎫 per modul (doar useri logați)
+// ════════════════════════════════════════════════════════════════════════════
+function TichetModulGate() {
+  const { session, profile } = useAuth()
+  if (!session || !profile) return null
+  return <TichetModulButton profile={profile} />
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -8269,6 +8279,7 @@ export default function App() {
       <ChatbotWidgetGate />
       <InternalChatGate />
       <BugReportGate />
+      <TichetModulGate />
     </AuthProvider>
   )
 }
