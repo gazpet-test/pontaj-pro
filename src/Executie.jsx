@@ -20,6 +20,7 @@ import TabTronsoane from './TabTronsoane.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
 import CereriInterneProiect from './CereriInterneProiect.jsx'
+import { norm } from './lib/diacritice.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { createClient } from '@supabase/supabase-js'
@@ -374,6 +375,7 @@ function DashboardProiectePage({ onSelectProiect }) {
   const isOwner = profile?.is_owner === true
   const canEdit = isOwner || profile?.can_manage_contracts === true
   const [alertFilter, setAlertFilter] = useState(null)
+  const [cautaProiect, setCautaProiect] = useState('')
 
   const kpiAlerte = useMemo(() => {
     const cuTermen = proiecte.filter(p => p.activ && p.data_termen && p.zile_pana_termen !== null)
@@ -389,14 +391,22 @@ function DashboardProiectePage({ onSelectProiect }) {
   }, [proiecte])
 
   const proiecteVizibile = useMemo(() => {
-    if (!alertFilter) return proiecte
-    if (alertFilter === 'depasit')         return kpiAlerte.depasit
-    if (alertFilter === 'critic')          return kpiAlerte.critic
-    if (alertFilter === 'atentie')         return kpiAlerte.atentie
-    if (alertFilter === 'fara_contract')   return kpiAlerte.fara_contract
-    if (alertFilter === 'fara_date')       return kpiAlerte.fara_date
-    return proiecte
-  }, [proiecte, alertFilter, kpiAlerte])
+    let list = proiecte
+    if (alertFilter === 'depasit')            list = kpiAlerte.depasit
+    else if (alertFilter === 'critic')        list = kpiAlerte.critic
+    else if (alertFilter === 'atentie')       list = kpiAlerte.atentie
+    else if (alertFilter === 'fara_contract') list = kpiAlerte.fara_contract
+    else if (alertFilter === 'fara_date')     list = kpiAlerte.fara_date
+    if (cautaProiect.trim()) {
+      const s = norm(cautaProiect)   // căutare fără diacritice
+      list = list.filter(p =>
+        norm(p.nume).includes(s) || norm(p.beneficiar).includes(s) ||
+        norm(p.cod_intern).includes(s) || norm(p.beneficiar_final).includes(s) ||
+        norm(p.nr_contract).includes(s)
+      )
+    }
+    return list
+  }, [proiecte, alertFilter, kpiAlerte, cautaProiect])
 
   // Proiecte cu probleme de configurare (pentru banner)
   const proiecteIncomplete = useMemo(
@@ -461,6 +471,10 @@ function DashboardProiectePage({ onSelectProiect }) {
             Monitorizare termene · Click pe proiect pentru a intra în context
           </div>
         </div>
+        <input placeholder="🔍 Caută proiect / beneficiar / contract..." value={cautaProiect}
+          onChange={e => setCautaProiect(e.target.value)}
+          style={{ padding: '9px 14px', background: G.surface, border: `1px solid ${cautaProiect ? G.executie : G.border}`,
+                   borderRadius: 8, color: G.text, fontSize: 13, width: 280, boxSizing: 'border-box' }} />
         {isOwner && (
           <button onClick={() => setEditProiect({ _isNew: true, activ: true })} style={{
             padding: '9px 18px', background: G.executie, border: 'none',

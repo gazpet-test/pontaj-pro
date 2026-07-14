@@ -13,6 +13,8 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
+import { norm } from './lib/diacritice.js'
+import * as XLSX from 'xlsx-js-style'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
@@ -1055,6 +1057,10 @@ export default function FinanciarPage() {
   const [filterSerie, setFilterSerie] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterAn, setFilterAn]     = useState(String(new Date().getFullYear()))
+  const [searchF, setSearchF]       = useState('')    // 14.07: căutare facturi (nr/beneficiar/lucrare)
+  const [selIds, setSelIds]         = useState([])    // 14.07: selecție pentru export
+  const [proiecteMap, setProiecteMap] = useState({})  // proiect_id → nume lucrare
+  const [contracteMap, setContracteMap] = useState({}) // contract_id → „nr — denumire"
   const [deleteConf, setDeleteConf] = useState(null)
   const [slAlert, setSlAlert]       = useState([]) // SL fără factură
   const [citesteOpen, setCitesteOpen] = useState(false)  // 02.07.2026: panel „Citește Orice" (certificate de plată)
@@ -1083,6 +1089,11 @@ export default function FinanciarPage() {
       // Beneficiari
       const { data: bens } = await supabase.from('beneficiari').select('id,nume,cif,iban_principal,banca,sediu,contact_email,telefon,contact_nume').eq('activ',true).order('nume')
       setBeneficiari(bens || [])
+      // Lucrări + contracte (coloana „Lucrare / Contract" din listă)
+      const { data: prj } = await supabase.from('executie_proiecte').select('id,nume')
+      setProiecteMap(Object.fromEntries((prj||[]).map(p => [p.id, p.nume])))
+      const { data: cts } = await supabase.from('contracte_terti').select('id,numar_contract,denumire')
+      setContracteMap(Object.fromEntries((cts||[]).map(c => [c.id, `${c.numar_contract || ''} — ${c.denumire || ''}`.replace(/^ — /,'')])))
     } finally { setLoading(false) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1091,11 +1102,42 @@ export default function FinanciarPage() {
   const isOwner = profile?.is_owner === true
   const canWrite = isOwner || ['superadmin','contabilitate'].includes(profile?.role)
 
-  const facturiFiltrate = useMemo(() => facturi.filter(f =>
-    (!filterSerie  || f.serie  === filterSerie) &&
-    (!filterStatus || f.status === filterStatus) &&
-    (!filterAn     || String(f.an) === filterAn)
-  ), [facturi, filterSerie, filterStatus, filterAn])
+  // Lucrarea/contractul facturii: proiectul de execuție are prioritate, apoi contractul
+  const lucrareTxt = useCallback(f =>
+    proiecteMap[f.proiect_id] || contracteMap[f.contract_id] || '', [proiecteMap, contracteMap])
+
+  const facturiFiltrate = useMemo(() => facturi.filter(f => {
+    if (filterSerie  && f.serie  !== filterSerie) return false
+    if (filterStatus && f.status !== filterStatus) return false
+    if (filterAn     && String(f.an) !== filterAn) return false
+    if (searchF.trim()) {
+      const s = norm(searchF)   // fără diacritice
+      return norm(f.nr_complet).includes(s) || norm(f.beneficiar_nume).includes(s) ||
+             norm(lucrareTxt(f)).includes(s) || norm(f.titlu_scurt).includes(s)
+    }
+    return true
+  }), [facturi, filterSerie, filterStatus, filterAn, searchF, lucrareTxt])
+
+  // Export Excel al facturilor selectate (14.07)
+  const exportSelectate = () => {
+    const rows = facturi.filter(f => selIds.includes(f.id))
+    if (!rows.length) return
+    const data = rows.map(f => ({
+      'Factură': f.nr_complet, 'Data': f.data, 'Beneficiar': f.beneficiar_nume,
+      'Lucrare / Contract': lucrareTxt(f),
+      'Valoare netă (RON)': parseFloat(f.valoare_neta)||0, 'TVA (RON)': parseFloat(f.tva)||0,
+      'Total (RON)': parseFloat(f.total)||0, 'Status': (STATUS_FACTURA[f.status]||{}).label || f.status,
+    }))
+    const ws = XLSX.utils.json_to_sheet(data)
+    ws['!cols'] = [{wch:12},{wch:11},{wch:32},{wch:46},{wch:16},{wch:14},{wch:16},{wch:14}]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Facturi')
+    XLSX.writeFile(wb, `Facturi_selectate_${new Date().toISOString().slice(0,10)}.xlsx`)
+    showToast(`${rows.length} facturi exportate`, 'ok')
+  }
+  const toggleSel = id => setSelIds(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id])
+  const toateSelectate = facturiFiltrate.length > 0 && facturiFiltrate.every(f => selIds.includes(f.id))
+  const toggleToate = () => setSelIds(toateSelectate ? [] : facturiFiltrate.map(f => f.id))
 
   const kpi = useMemo(() => {
     const f = facturiFiltrate
@@ -1240,7 +1282,14 @@ export default function FinanciarPage() {
             <option value="">Toate statusurile</option>
             {Object.entries(STATUS_FACTURA).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
           </select>
+          <input placeholder="🔍 Caută nr / beneficiar / lucrare..." value={searchF} onChange={e=>setSearchF(e.target.value)}
+            style={{...S.input,width:'auto',minWidth:240,padding:'7px 10px',fontSize:12,borderColor:searchF?G.financiar:G.border2}} />
           <span style={{fontSize:12,color:G.dim}}>{facturiFiltrate.length} facturi</span>
+          {selIds.length > 0 && (
+            <button onClick={exportSelectate} style={{marginLeft:'auto',padding:'7px 14px',background:G.teal+'22',border:`1px solid ${G.teal}55`,borderRadius:7,color:G.teal,fontSize:12,fontWeight:700,cursor:'pointer'}}>
+              📊 Exportă selectate ({selIds.length})
+            </button>
+          )}
         </div>
 
         {/* Tabel facturi */}
@@ -1257,7 +1306,11 @@ export default function FinanciarPage() {
             <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
               <thead>
                 <tr style={{background:G.surface,borderBottom:`1px solid ${G.border}`}}>
-                  {['Factură','Data','Beneficiar','Valoare netă','TVA','Total','Status','PDF','NAS',''].map((h,i)=>(
+                  <th style={{padding:'10px 8px',width:30}}>
+                    <input type="checkbox" checked={toateSelectate} onChange={toggleToate} title="Selectează tot (pe filtrele curente)"
+                      style={{width:15,height:15,accentColor:G.financiar,cursor:'pointer'}} />
+                  </th>
+                  {['Factură','Data','Beneficiar','Lucrare / Contract','Valoare netă','TVA','Total','Status','PDF','NAS',''].map((h,i)=>(
                     <th key={i} style={{padding:'10px 12px',textAlign:'left',fontWeight:600,color:G.muted,fontSize:11,textTransform:'uppercase',letterSpacing:'.3px',whiteSpace:'nowrap'}}>{h}</th>
                   ))}
                 </tr>
@@ -1269,11 +1322,18 @@ export default function FinanciarPage() {
                     <tr key={f.id} style={{borderBottom:`1px solid ${G.border2}`,background:idx%2===0?'transparent':G.bg+'88'}}
                       onMouseEnter={e=>e.currentTarget.style.background=G.surface}
                       onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?'transparent':G.bg+'88'}>
+                      <td style={{padding:'10px 8px'}}>
+                        <input type="checkbox" checked={selIds.includes(f.id)} onChange={()=>toggleSel(f.id)}
+                          style={{width:15,height:15,accentColor:G.financiar,cursor:'pointer'}} />
+                      </td>
                       <td style={{padding:'10px 12px',fontWeight:800,color:G.financiar,whiteSpace:'nowrap'}}>
                         <span style={{background:G.financiar+'22',padding:'2px 8px',borderRadius:6}}>{f.nr_complet}</span>
                       </td>
                       <td style={{padding:'10px 12px',color:G.muted,fontSize:12,whiteSpace:'nowrap'}}>{fmtDate(f.data)}</td>
                       <td style={{padding:'10px 12px',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={f.beneficiar_nume}>{f.beneficiar_nume}</td>
+                      <td style={{padding:'10px 12px',maxWidth:260,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:G.muted,fontSize:12}} title={lucrareTxt(f)}>
+                        {lucrareTxt(f) || <span style={{color:G.dim}}>—</span>}
+                      </td>
                       <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',color:G.text}}>{fmtLei(f.valoare_neta)}</td>
                       <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',color:G.yellow,fontSize:12}}>{fmtLei(f.tva)}</td>
                       <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'monospace',fontWeight:700,color:G.green}}>{fmtLei(f.total)}</td>
@@ -1311,7 +1371,7 @@ export default function FinanciarPage() {
               </tbody>
               <tfoot>
                 <tr style={{borderTop:`2px solid ${G.border}`,background:G.surface}}>
-                  <td colSpan={3} style={{padding:'10px 12px',fontWeight:700,color:G.muted,fontSize:12}}>TOTAL {filterAn ? `(${filterAn})` : '(toți anii)'}</td>
+                  <td colSpan={5} style={{padding:'10px 12px',fontWeight:700,color:G.muted,fontSize:12}}>TOTAL {filterAn ? `(${filterAn})` : '(toți anii)'}</td>
                   <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontFamily:'monospace',color:G.text}}>{fmtLei(kpi.totalNeta)}</td>
                   <td style={{padding:'10px 12px',textAlign:'right',fontWeight:700,fontFamily:'monospace',color:G.yellow}}>{fmtLei(kpi.totalTva)}</td>
                   <td style={{padding:'10px 12px',textAlign:'right',fontWeight:800,fontFamily:'monospace',color:G.financiar}}>{fmtLei(kpi.totalVal)}</td>

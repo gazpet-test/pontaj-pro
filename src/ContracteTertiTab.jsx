@@ -15,6 +15,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { norm } from './lib/diacritice.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -273,8 +274,8 @@ function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onT
     let list = beneficiari
     if (!showInactive) list = list.filter(b => b.activ)
     if (search.trim()) {
-      const s = search.toLowerCase()
-      list = list.filter(b => (b.nume||'').toLowerCase().includes(s) || (b.cod_fiscal||'').toLowerCase().includes(s))
+      const s = norm(search)
+      list = list.filter(b => norm(b.nume).includes(s) || norm(b.cod_fiscal).includes(s))
     }
     return list
   }, [beneficiari, search, showInactive])
@@ -372,12 +373,12 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
     if (filterCat   !== 'all') list = list.filter(c => c.categorie === filterCat)
     if (filterSens  !== 'all') list = list.filter(c => c.sens === filterSens)
     if (search.trim()) {
-      const s = search.toLowerCase()
+      const s = norm(search)   // normalizat pe diacritice: „Onești" găsește și „Oneşti"/„Onesti"
       list = list.filter(c =>
-        (c.denumire||'').toLowerCase().includes(s) ||
-        (c.numar_contract||'').toLowerCase().includes(s) ||
-        (c.partener_text||'').toLowerCase().includes(s) ||
-        (benefMap[c.beneficiar_id]||'').toLowerCase().includes(s)
+        norm(c.denumire).includes(s) ||
+        norm(c.numar_contract).includes(s) ||
+        norm(c.partener_text).includes(s) ||
+        norm(benefMap[c.beneficiar_id]).includes(s)
       )
     }
     // Sortare (12.06.2026): copie ca să nu mutez array-ul original
