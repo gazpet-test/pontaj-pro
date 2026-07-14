@@ -104,7 +104,7 @@ export default function ConcediuMobilPage() {
                   <option value="">— alege —</option>
                   {ctx.mpList.map(m => <option key={m.id} value={m.id}>{m.nume}</option>)}
                 </select></>}
-          <div style={{ color:G.muted, fontSize:12, marginTop:10 }}>+ HR (Natalia Udrea) semnează întotdeauna al doilea.</div>
+          <div style={{ color:G.muted, fontSize:12, marginTop:10 }}>Cererea ajunge direct la HR — vei fi anunțat la aprobare.</div>
           <button onClick={submit} disabled={!canGo}
                   style={{ width:'100%', padding:14, background:G.pink, color:G.bg, border:0, borderRadius:10, fontWeight:800, fontSize:16, marginTop:16, opacity: canGo ? 1 : .5 }}>
             {busy ? '⏳ Se trimite...' : '📨 Depune cererea'}
