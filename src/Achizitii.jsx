@@ -118,7 +118,7 @@ async function getSemnaturaDataURL(employeeId) {
 }
 
 // HTML offscreen 794px → html2canvas scale 2 → jsPDF A4 portrait → Blob
-async function renderHtmlToPdfBlob(html) {
+export async function renderHtmlToPdfBlob(html) {
   const holder = document.createElement('div')
   holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#ffffff;z-index:-1;'
   holder.innerHTML = html
@@ -258,7 +258,7 @@ function buildComandaPdfHtml(c, ctx) {
 }
 
 // CERERE DE OFERTĂ (RFQ): tabel FĂRĂ prețuri — furnizorul completează preț + termen
-function buildCerereOfertaHtml(c, ctx, solicitant) {
+export function buildCerereOfertaHtml(c, ctx, solicitant) {
   const linii = (c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0))
   const rows = linii.map((l, i) => `
     <tr>
