@@ -287,6 +287,16 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
           if (Object.keys(upd).length) { upd.updated_at = new Date().toISOString(); await supabase.from('executie_proiecte').update(upd).eq('id', proiectId) }
         } catch (_) { /* nu blochează */ }
       }
+      // Ordin de începere → leagă PDF-ul și de câmpul dedicat de pe proiect (15.07),
+      // ca butonul „📄 Vezi PDF" de lângă data ordinului (ProiectEditModal) să-l găsească.
+      if (tip === 'ordin_incepere') {
+        try {
+          const { data: proj } = await supabase.from('executie_proiecte').select('doc_ordin_incepere_path').eq('id', proiectId).single()
+          if (proj && !proj.doc_ordin_incepere_path) {
+            await supabase.from('executie_proiecte').update({ doc_ordin_incepere_path: destPath, updated_at: new Date().toISOString() }).eq('id', proiectId)
+          }
+        } catch (_) { /* nu blochează */ }
+      }
 
       await finalizeInbox(row, 'executie', tip, 'proiect', proiectId, created.id)
       flash('ok', 'Document trimis în Execuție ✓')
