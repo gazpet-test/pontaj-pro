@@ -1222,6 +1222,30 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   const [employees, setEmployees] = useState([]) // pentru dropdownuri persoane cheie
   const [sites, setSites]   = useState([])
   const [saving, setSaving] = useState(false)
+  // ─── PDF Ordin de începere (15.07): upload direct pe proiect, pattern PCCVI ──
+  const [oiPath, setOiPath] = useState(proiect.doc_ordin_incepere_path || '')
+  const [oiBusy, setOiBusy] = useState(false)
+  const uploadOrdinIncepere = async (file) => {
+    if (!file || isNew) return
+    if (file.type !== 'application/pdf') { showToast('Doar fișiere PDF', 'error'); return }
+    if (file.size > 10 * 1024 * 1024) { showToast('PDF prea mare (max 10MB)', 'error'); return }
+    setOiBusy(true)
+    try {
+      const path = `ordin-incepere/${proiect.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const { error: upErr } = await supabase.storage.from(BUCKET_CONTRACTE).upload(path, file, { upsert: false })
+      if (upErr) throw new Error('Upload: ' + upErr.message)
+      const { error: dbErr } = await supabase.from('executie_proiecte').update({ doc_ordin_incepere_path: path }).eq('id', proiect.id)
+      if (dbErr) throw new Error(dbErr.message)
+      setOiPath(path)
+      showToast('📎 Ordin de începere atașat', 'success')
+    } catch (e) { showToast('Eroare atașare ordin: ' + e.message, 'error') }
+    setOiBusy(false)
+  }
+  const openOrdinIncepere = async () => {
+    if (!oiPath) return
+    const { data } = await supabase.storage.from(BUCKET_CONTRACTE).createSignedUrl(oiPath, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
 
   // ─── Documente tehnice contractuale ─────────────────────────────────────
   const [docPaths, setDocPaths] = useState({
@@ -1869,6 +1893,25 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               <div>
                 <label style={labelStyle}>Ordin de începere</label>
                 <input type="date" value={form.data_start} onChange={e => set('data_start', e.target.value)} style={fieldStyle} />
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {!isNew ? (
+                    <>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: G.executie + '18', color: G.executie, border: `1px solid ${G.executie}55`, borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: oiBusy ? 'wait' : 'pointer' }}>
+                        {oiBusy ? '⏳ Se încarcă...' : (oiPath ? '📎 Înlocuiește PDF' : '📎 Atașează PDF ordin')}
+                        <input type="file" accept="application/pdf" style={{ display: 'none' }} disabled={oiBusy}
+                               onChange={e => { uploadOrdinIncepere(e.target.files?.[0]); e.target.value = '' }} />
+                      </label>
+                      {oiPath && (
+                        <button type="button" onClick={openOrdinIncepere}
+                                style={{ padding: '6px 12px', background: G.blue + '18', color: G.blue, border: `1px solid ${G.blue}55`, borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                          📄 Vezi PDF
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 11, color: G.dim }}>PDF-ul ordinului se atașează după prima salvare a proiectului.</span>
+                  )}
+                </div>
               </div>
               <div>
                 <label style={labelStyle}>Termen finalizare</label>
