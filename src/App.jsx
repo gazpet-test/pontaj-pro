@@ -1465,7 +1465,7 @@ function defaultOreFromNorma(h) {
 }
 
 // ─── Pontaj Row ───────────────────────────────────────────────────────────────
-function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast }) {
+function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, isAdmin, diurnaAmt, suplAmt, isTerminated, isFuture, showToast, onDirty }) {
   // Norma angajatului (pentru auto-fill ore) — vine din v_employee_work_hours
   const normaH = emp.work_hours_per_day || 8
   const oreDefault = defaultOreFromNorma(normaH)
@@ -1493,6 +1493,16 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
     setCo(rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire))
     setNorma(rec?.norma||''); setDiurna(rec?.diurna||false); setSupl(rec?.meal_supplement||false); setMode(rec?.norma?'norma':'ore')
   },[rec])
+  // TKT-2026-0064: anunț planșa când rândul are modificări nesalvate, ca refresh-ul
+  // automat (poll/focus) să nu-mi șteargă ce am tastat. Baza de comparație e exact
+  // ce ar pune sync-ul de mai sus din rec (inclusiv auto-fill-ul pe rând gol).
+  const baseCi=rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare)
+  const baseCo=rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire)
+  const isDirty=ci!==baseCi||co!==baseCo||norma!==(rec?.norma||'')||diurna!==(rec?.diurna||false)||supl!==(rec?.meal_supplement||false)
+  useEffect(()=>{
+    onDirty?.(emp.id,isDirty)
+    return ()=>onDirty?.(emp.id,false)
+  },[isDirty,emp.id,onDirty])
   const previewNet = () => { if(!ci) return null; const a=dateToISO(selectedDate,ci),b=co?dateToISO(selectedDate,co):null; return b?netMins(a,b,true):null }
   const pNet=previewNet()
   const recNet=netMins(rec?.check_in,rec?.check_out,rec?.lunch_break!==false)
@@ -1648,9 +1658,14 @@ function PontajPage() {
   // nu apărea în plansa altuia până la refresh. Reîncarc înregistrările la revenirea
   // în tab (focus/visibilitychange) + poll ușor la 35s cât ești pe pagină, dar NU în
   // timpul unei salvări (ca să nu suprascriu editarea în curs).
+  // TKT-2026-0064: refresh-ul e SILENT (fără spinner) — altfel lista se demontează la
+  // fiecare focus/poll și pierzi orele tastate. Sar și peste refresh cât un rând e în
+  // curs de editare (dirtyRef), ca să nu-i sufle valorile de sub degete.
+  const dirtyRef=useRef(new Set())
+  const markDirty=useCallback((empId,isDirty)=>{ if(isDirty) dirtyRef.current.add(empId); else dirtyRef.current.delete(empId) },[])
   useEffect(()=>{
     if(emps.length===0) return
-    const refresh=()=>{ if(document.visibilityState==='visible' && !saving && !load) loadRecs() }
+    const refresh=()=>{ if(document.visibilityState==='visible' && !saving && !load && dirtyRef.current.size===0) loadRecs(true) }
     window.addEventListener('focus',refresh)
     document.addEventListener('visibilitychange',refresh)
     const iv=setInterval(refresh,35000)
@@ -1691,7 +1706,10 @@ function PontajPage() {
     const enriched = (empsRes.data||[]).map(e => ({...e, work_hours_per_day: whMap.get(e.id) || null}))
     setEmps(enriched)
   }
-  const loadRecs=async()=>{ setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); const m={}; (data||[]).forEach(r=>{m[r.employee_id]=r}); setRecs(m); setLoad(false) }
+  // silent=true → refresh în fundal (poll/focus): NU aprind spinnerul, altfel lista se
+  // demontează și pierzi ce ai tastat. Păstrez și identitatea obiectelor nemodificate,
+  // ca PontajRow să nu-și reseteze state-ul local pe rândurile neatinse de alții.
+  const loadRecs=async(silent=false)=>{ if(!silent) setLoad(true); const ids=emps.map(e=>e.id); if(!ids.length){setLoad(false);return}; const {data}=await supabase.from('pontaj_records').select('*').eq('date',date).in('employee_id',ids); setRecs(prev=>{ const m={}; (data||[]).forEach(r=>{ const old=prev[r.employee_id]; m[r.employee_id]=(old&&JSON.stringify(old)===JSON.stringify(r))?old:r }); return m }); setLoad(false) }
 
   // Helper: cere parolă pentru zile exportate (Razvan 22.05.2026 - parolă per modificare)
   // Gate de permisiune: doar Razvan + Marilena (is_owner) + Natalia Udrea (can_modify_employees)
@@ -1830,7 +1848,7 @@ function PontajPage() {
       </div>}
       {load?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:28,height:28}}/></div>
       :<div style={{display:'flex',flexDirection:'column',gap:5}}>
-        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported}/>)}
+        {filtered.map(emp=><PontajRow key={emp.id} emp={emp} rec={recs[emp.id]} sites={sites} selectedDate={date} onSave={saveRecord} onAllocate={allocate} saving={saving===emp.id} isAdmin={isAdmin} diurnaAmt={diurnaAmt} suplAmt={suplAmt} isTerminated={!!(emp.termination_date&&emp.termination_date<date)} isFuture={!!(emp.hire_date&&emp.hire_date>date)} showToast={showToast} isDateExported={isDateExported} onDirty={markDirty}/>)}
         {!filtered.length&&<div style={{textAlign:'center',color:G.muted,padding:'50px 0',fontSize:12}}>Niciun angajat găsit</div>}
       </div>}
       {passwordPrompt && (

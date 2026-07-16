@@ -560,7 +560,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         cantitate: Number(l.cantitate),
         pret_unitar: l.pret_unitar !== '' && l.pret_unitar != null ? Number(l.pret_unitar) : null,
         termen_livrare: l.termen_livrare || null,
-        observatii: l.observatii.trim() || null,
+        observatii: (l.observatii || '').trim() || null,
         display_order: i,
       }))
       const { error: eLin } = await supabase.from('comenzi_furnizor_linii').insert(rows)
@@ -631,12 +631,15 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
             <div style={{ fontSize:14, fontWeight:800 }}>📋 Linii comandă</div>
             <button onClick={addLinie} style={{ ...S.btnS, padding:'8px 14px', fontSize:14, color:G.achizitii, borderColor:G.achizitii + '66', fontWeight:700 }}>＋ Adaugă linie</button>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 70px 90px 110px 130px 44px', gap:6, fontSize:11, color:G.dim, padding:'0 2px', marginBottom:4 }}>
-            <div>Denumire material / produs</div><div>UM</div><div>Cantitate</div><div>Preț unitar</div><div>Termen livrare</div><div></div>
+          {/* TKT-2026-0062: „Specificații" per linie — se salva deja în comanda_linii.observatii
+              și se tipărea în PDF-ul de cerere ofertă, dar nu exista input în formular. */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 0.85fr 62px 84px 100px 122px 40px', gap:6, fontSize:11, color:G.dim, padding:'0 2px', marginBottom:4 }}>
+            <div>Denumire material / produs</div><div>Specificații</div><div>UM</div><div>Cantitate</div><div>Preț unitar</div><div>Termen livrare</div><div></div>
           </div>
           {linii.map(l => (
-            <div key={l._k} style={{ display:'grid', gridTemplateColumns:'1fr 70px 90px 110px 130px 44px', gap:6, marginBottom:6 }}>
+            <div key={l._k} style={{ display:'grid', gridTemplateColumns:'1fr 0.85fr 62px 84px 100px 122px 40px', gap:6, marginBottom:6 }}>
               <input style={S.input} value={l.denumire} onChange={e => setLinie(l._k, 'denumire', e.target.value)} placeholder="ex: Țeavă OL 219x6.3 SRL 360" />
+              <input style={S.input} value={l.observatii} onChange={e => setLinie(l._k, 'observatii', e.target.value)} placeholder="ex: STAS, clasă, marcaj" />
               <input style={S.input} value={l.um} onChange={e => setLinie(l._k, 'um', e.target.value)} placeholder="buc" />
               <input style={S.input} type="number" min="0" step="any" value={l.cantitate} onChange={e => setLinie(l._k, 'cantitate', e.target.value)} placeholder="0" />
               <input style={S.input} type="number" min="0" step="any" value={l.pret_unitar} onChange={e => setLinie(l._k, 'pret_unitar', e.target.value)} placeholder="0.00" />
