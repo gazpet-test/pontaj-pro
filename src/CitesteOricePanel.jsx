@@ -493,6 +493,20 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
               )}
               {queue.map(row => {
                 const mm = MODUL_META[row.modul_tinta] || { label:'Nedecis', color:G.dim, emoji:'❓' }
+                // Re-rutare modul (15.07): AI-ul mai greșește modulul (ex. decizie încetare
+                // HR clasificată „ordin de începere" în Execuție cu 35%) — de aici se mută.
+                const mutaModul = async (target) => {
+                  if (!target || target === row.modul_tinta) return
+                  const tm = MODUL_META[target]
+                  const { error } = await supabase.from('ai_documente_inbox').update({
+                    modul_tinta: target,
+                    entitate_tip: (MODUL_CFG[target] || {}).entitateTip || null,
+                    entitate_id: null, entitate_match_confidence: null,
+                  }).eq('id', row.id)
+                  if (error) { flash('err', 'Mutare eșuată: ' + error.message); return }
+                  flash('ok', `📦 Mutat în ${tm.label} — confirmă-l din „Citește Orice" deschis în ${tm.label}.`)
+                  await loadQueue()
+                }
                 const eroare = row.status === 'eroare'
                 const potConfirma = cfg.activ && (row.modul_tinta === modul || (modul === 'executie' && row.modul_tinta == null))
                 const entMatch = entitati.find(e => e.id === (row._editEntitate ?? row.entitate_id))
@@ -516,8 +530,14 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                     ) : (
                       <>
                         {/* Ce a detectat AI */}
-                        <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12 }}>
-                          <span style={{ ...chip, background:mm.color + '22', color:mm.color, border:`1px solid ${mm.color}55` }}>{mm.emoji} {mm.label}</span>
+                        <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12, alignItems:'center' }}>
+                          <select value={row.modul_tinta || 'executie'} onChange={e => mutaModul(e.target.value)}
+                                  title="Modulul țintă — schimbă-l dacă AI-ul a greșit (documentul se mută în coada modulului ales)"
+                                  style={{ ...chip, background:mm.color + '22', color:mm.color, border:`1px solid ${mm.color}55`, cursor:'pointer', appearance:'auto' }}>
+                            {Object.entries(MODUL_META).map(([k, v]) => (
+                              <option key={k} value={k} style={{ background:G.card, color:G.text }}>{v.emoji} {v.label}</option>
+                            ))}
+                          </select>
                           <span style={{ ...chip, background:G.card2, color:G.muted, border:`1px solid ${G.border}` }}>
                             {TIP_LABEL[row.tip_document] || row.tip_document}
                           </span>
