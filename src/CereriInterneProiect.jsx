@@ -322,14 +322,21 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
 
   // Repartizare pe furnizori (panel Achiziții)
   const canRepartiza = canProcess && ['in_lucru','comandata','in_tranzit','ajunsa'].includes(cerere.status)
-  const liniiNereparizate = linii.filter(l => !(linkMap[l.id]?.length))
-  const [selLinii, setSelLinii] = useState([])
-  const [repFurnizor, setRepFurnizor] = useState('')
+  // TKT-2026-0063: o linie e „repartizată" doar dacă are un PO ACTIV (nu anulat/respins) —
+  // altfel un reper cu comanda anulată dispărea din panel și nu-l mai puteai re-repartiza.
+  // (Aliniat cu coverageSummary, care deja filtra anulate/respinse.)
+  const linieAreRepartizareActiva = (l) => (linkMap[l.id] || []).some(p => !['anulata','respinsa'].includes(p.status))
+  const liniiNereparizate = linii.filter(l => !linieAreRepartizareActiva(l))
+  // TKT-2026-0063: furnizor SEPARAT per reper (Kostas: „pentru fiecare reper a fost un
+  // select box"). furnizorPerLinie = { [lineId]: furnizorIdString }. La generare grupez
+  // liniile pe furnizor → câte o comandă per furnizor distinct, dintr-o singură trecere.
+  const [furnizorPerLinie, setFurnizorPerLinie] = useState({})
   const [repFaraForm, setRepFaraForm] = useState(false)
   const [repTermen, setRepTermen] = useState('')
   const [repLivrare, setRepLivrare] = useState('sediu')
-  // TKT-2026-0039: adăugare furnizor nou inline
-  const [fzAdding, setFzAdding] = useState(false)
+  const setFurnizorLinie = (lineId, fzId) => setFurnizorPerLinie(m => ({ ...m, [lineId]: fzId }))
+  // TKT-2026-0039: adăugare furnizor nou inline — se aplică pe reperul de la care s-a deschis
+  const [fzAddingFor, setFzAddingFor] = useState(null) // lineId sau null
   const [fzNume, setFzNume] = useState('')
   const [fzContact, setFzContact] = useState('')
   const [fzSaving, setFzSaving] = useState(false)
@@ -337,22 +344,45 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
     if (!fzNume.trim()) return
     setFzSaving(true)
     const created = await onFurnizorNou({ nume: fzNume.trim(), contact: fzContact.trim() || null })
-    if (created?.id) { setRepFurnizor(String(created.id)); setFzAdding(false); setFzNume(''); setFzContact('') }
+    if (created?.id) { if (fzAddingFor != null) setFurnizorLinie(fzAddingFor, String(created.id)); setFzAddingFor(null); setFzNume(''); setFzContact('') }
     setFzSaving(false)
   }
-  const toggleLinie = (id) => setSelLinii(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id])
-  const doGenereaza = () => {
-    onGenereaza(cerere, selLinii, Number(repFurnizor)||null, repFaraForm, repTermen||null, repLivrare)
-    setSelLinii([]); setRepFurnizor(''); setRepFaraForm(false); setRepTermen('')
+  // Grupez reperele nerepartizate care au furnizor ales → [{ furnizorId, linii:[...] }]
+  const grupuriRepartizare = () => {
+    const g = new Map()
+    for (const l of liniiNereparizate) {
+      const fz = furnizorPerLinie[l.id]
+      if (!fz) continue
+      if (!g.has(fz)) g.set(fz, [])
+      g.get(fz).push(l)
+    }
+    return [...g.entries()].map(([furnizorId, ls]) => ({ furnizorId, linii: ls }))
   }
-  // PDF Cerere de ofertă direct din cerere (cerere Kostas 14.07): liniile selectate +
-  // furnizorul ales → RFQ fără să fie nevoie de comandă furnizor creată în prealabil.
+  const grupuri = grupuriRepartizare()
+  const nrLiniiAlese = grupuri.reduce((s, gr) => s + gr.linii.length, 0)
+  const doGenereaza = async () => {
+    if (!grupuri.length) return
+    // Câte o comandă per furnizor; onGenereaza reîncarcă lista, așa că o apelez secvențial.
+    for (const gr of grupuri) {
+      await onGenereaza(cerere, gr.linii.map(l => l.id), Number(gr.furnizorId) || null, repFaraForm, repTermen || null, repLivrare)
+    }
+    setFurnizorPerLinie({}); setRepFaraForm(false); setRepTermen('')
+  }
+  // PDF Cerere de ofertă direct din cerere (cerere Kostas 14.07): un RFQ per furnizor din
+  // grupurile formate (reperele care au același furnizor ales intră în același document).
   const [rfqBusy, setRfqBusy] = useState(false)
   const doCerereOferta = async () => {
-    const f = furnizori.find(x => String(x.id) === String(repFurnizor))
-    const sel = linii.filter(l => selLinii.includes(l.id))
-    if (!f || !sel.length) return
+    if (!grupuri.length) return
     setRfqBusy(true)
+    try {
+      for (const gr of grupuri) {
+        const f = furnizori.find(x => String(x.id) === String(gr.furnizorId))
+        if (!f) continue
+        await genereazaRfqPtFurnizor(f, gr.linii)
+      }
+    } finally { setRfqBusy(false) }
+  }
+  const genereazaRfqPtFurnizor = async (f, sel) => {
     try {
       const pseudoComanda = {
         numar_comanda: cerere.numar_comanda || `CR-${cerere.id}`, moneda: 'RON',
@@ -369,7 +399,7 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
     } catch (e) {
       console.error('RFQ din cerere:', e)
       alert('Eroare generare cerere de ofertă: ' + e.message)
-    } finally { setRfqBusy(false) }
+    }
   }
 
   const Btn = ({ children, color=G.blue, onClick }) => (
@@ -469,43 +499,41 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
                 <div style={{ fontSize:13, color:G.muted }}>Toate liniile au fost repartizate către furnizori. ✅</div>
               ) : (
                 <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  <div style={{ fontSize:11.5, color:G.dim }}>Alege furnizorul pentru fiecare reper. Reperele cu același furnizor intră într-o singură comandă.</div>
+                  {/* TKT-2026-0063: un select de furnizor pe FIECARE reper nerepartizat */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
                     {liniiNereparizate.map(l => (
-                      <label key={l.id} style={{ display:'flex', alignItems:'center', gap:9, fontSize:13, cursor:'pointer' }}>
-                        <input type="checkbox" checked={selLinii.includes(l.id)} onChange={()=>toggleLinie(l.id)}
-                          style={{ width:16, height:16, accentColor:G.purple, cursor:'pointer' }} />
-                        <span>{l.denumire} <span style={{ color:G.muted }}>· {l.cantitate} {l.um||''}</span></span>
-                      </label>
+                      <div key={l.id} style={{ display:'grid', gridTemplateColumns:'1fr 230px', gap:10, alignItems:'center' }}>
+                        <div style={{ fontSize:13 }}>
+                          {l.denumire} <span style={{ color:G.muted }}>· {l.cantitate} {l.um||''}</span>
+                          {l.observatii && <span style={{ color:G.dim, fontSize:11 }}> — {l.observatii}</span>}
+                        </div>
+                        {fzAddingFor === l.id ? (
+                          <div style={{ display:'flex', flexDirection:'column', gap:6, padding:8, border:`1px solid ${G.purple}44`, borderRadius:8, background:G.purple+'0D' }}>
+                            <input style={S.input} placeholder="Nume furnizor nou * (ex: SINTAX)" value={fzNume} autoFocus onChange={e=>setFzNume(e.target.value)} />
+                            <input style={S.input} placeholder="Contact (nume · telefon) — opțional" value={fzContact} onChange={e=>setFzContact(e.target.value)} />
+                            <div style={{ display:'flex', gap:8 }}>
+                              <button onClick={salveazaFurnizor} disabled={fzSaving || !fzNume.trim()} style={{ ...S.btnP, padding:'6px 12px', fontSize:12.5, background:(fzNume.trim()?G.purple:G.border2) }}>{fzSaving ? '...' : '✓ Salvează'}</button>
+                              <button onClick={()=>{ setFzAddingFor(null); setFzNume(''); setFzContact('') }} disabled={fzSaving} style={{ ...S.btnS, padding:'6px 10px', fontSize:12.5 }}>Anulează</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display:'flex', gap:6 }}>
+                            <select style={{ ...S.input, minWidth:0 }} value={furnizorPerLinie[l.id] || ''} onChange={e=>setFurnizorLinie(l.id, e.target.value)}>
+                              <option value="">— furnizor —</option>
+                              {furnizori.map(f => <option key={f.id} value={f.id}>{f.nume}</option>)}
+                            </select>
+                            <button onClick={()=>{ setFzAddingFor(l.id); setFzNume(''); setFzContact('') }} title="Adaugă furnizor nou" style={{ ...S.btnS, padding:'8px 10px', fontSize:13, whiteSpace:'nowrap', color:G.purple, borderColor:G.purple+'66', fontWeight:700 }}>＋</button>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 170px', gap:10 }}>
-                    <div>
-                      <label style={{ fontSize:12, color:G.muted }}>Furnizor</label>
-                      {fzAdding ? (
-                        <div style={{ display:'flex', flexDirection:'column', gap:6, padding:8, border:`1px solid ${G.purple}44`, borderRadius:8, background:G.purple+'0D' }}>
-                          <input style={S.input} placeholder="Nume furnizor nou * (ex: SINTAX)" value={fzNume} autoFocus onChange={e=>setFzNume(e.target.value)} />
-                          <input style={S.input} placeholder="Contact (nume · telefon) — opțional" value={fzContact} onChange={e=>setFzContact(e.target.value)} />
-                          <div style={{ display:'flex', gap:8 }}>
-                            <button onClick={salveazaFurnizor} disabled={fzSaving || !fzNume.trim()} style={{ ...S.btnP, padding:'7px 14px', fontSize:13, background:(fzNume.trim()?G.purple:G.border2) }}>{fzSaving ? '...' : '✓ Salvează furnizor'}</button>
-                            <button onClick={()=>{ setFzAdding(false); setFzNume(''); setFzContact('') }} disabled={fzSaving} style={{ ...S.btnS, padding:'7px 12px', fontSize:13 }}>Anulează</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ display:'flex', gap:8 }}>
-                          <select style={S.input} value={repFurnizor} onChange={e=>setRepFurnizor(e.target.value)}>
-                            <option value="">— alege furnizor —</option>
-                            {furnizori.map(f => <option key={f.id} value={f.id}>{f.nume}</option>)}
-                          </select>
-                          <button onClick={()=>setFzAdding(true)} title="Adaugă furnizor nou" style={{ ...S.btnS, padding:'9px 12px', fontSize:13, whiteSpace:'nowrap', color:G.purple, borderColor:G.purple+'66', fontWeight:700 }}>＋ Nou</button>
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <label style={{ fontSize:12, color:G.muted }}>Termen livrare</label>
-                      <input style={S.input} type="date" value={repTermen||''} onChange={e=>setRepTermen(e.target.value)} />
-                    </div>
-                  </div>
                   <div style={{ display:'flex', alignItems:'center', gap:16, flexWrap:'wrap' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <label style={{ fontSize:12, color:G.muted }}>Termen livrare:</label>
+                      <input style={{ ...S.input, width:150 }} type="date" value={repTermen||''} onChange={e=>setRepTermen(e.target.value)} />
+                    </div>
                     <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer' }}>
                       <input type="checkbox" checked={repFaraForm} onChange={e=>setRepFaraForm(e.target.checked)}
                         style={{ width:16, height:16, accentColor:G.orange, cursor:'pointer' }} />
@@ -520,19 +548,21 @@ function CerereDetailModal({ cerere, proiect, profilesMap, furnizori, furnizoriM
                     </div>
                   </div>
                   <div style={{ fontSize:11, color:G.dim }}>
+                    {grupuri.length > 1 && <span style={{ color:G.purple, fontWeight:700 }}>{grupuri.length} comenzi</span>}
+                    {grupuri.length > 1 && ' · '}
                     {repFaraForm
-                      ? 'Comanda se emite direct (status „emisă", fără PDF de aprobat).'
-                      : 'Comanda se creează ca „draft" în Achiziții pentru emitere/PDF.'}
+                      ? 'Comenzile se emit direct (status „emisă", fără PDF de aprobat).'
+                      : 'Comenzile se creează ca „draft" în Achiziții pentru emitere/PDF.'}
                   </div>
                   <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-                    <button onClick={doGenereaza} disabled={busy || !selLinii.length || !repFurnizor}
-                      style={{ ...S.btnP, background: (selLinii.length && repFurnizor) ? G.purple : G.border2 }}>
-                      🛒 Generează comandă furnizor{selLinii.length ? ` (${selLinii.length})` : ''}
+                    <button onClick={doGenereaza} disabled={busy || !nrLiniiAlese}
+                      style={{ ...S.btnP, background: nrLiniiAlese ? G.purple : G.border2 }}>
+                      🛒 {grupuri.length > 1 ? `Generează ${grupuri.length} comenzi` : 'Generează comandă furnizor'}{nrLiniiAlese ? ` (${nrLiniiAlese})` : ''}
                     </button>
-                    <button onClick={doCerereOferta} disabled={rfqBusy || busy || !selLinii.length || !repFurnizor}
+                    <button onClick={doCerereOferta} disabled={rfqBusy || busy || !nrLiniiAlese}
                       title="Document pentru furnizor — fără prețuri, le completează el"
-                      style={{ ...S.btnS, borderColor:G.blue+'66', color:(selLinii.length && repFurnizor) ? G.blue : G.dim }}>
-                      {rfqBusy ? '⏳ Se generează...' : `📄 PDF Cerere de ofertă${selLinii.length ? ` (${selLinii.length})` : ''}`}
+                      style={{ ...S.btnS, borderColor:G.blue+'66', color: nrLiniiAlese ? G.blue : G.dim }}>
+                      {rfqBusy ? '⏳ Se generează...' : `📄 PDF Cerere de ofertă${nrLiniiAlese ? ` (${nrLiniiAlese})` : ''}`}
                     </button>
                   </div>
                 </div>
