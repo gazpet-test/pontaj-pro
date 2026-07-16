@@ -25,6 +25,7 @@ import FinanciarPage from './Financiar.jsx'
 // ════════════ QR Utilaje (27.05.2026) ════════════
 import QrUtilajPage from './QrUtilajPage.jsx'
 import ConcediuMobilPage from './ConcediuMobilPage.jsx'
+import HomeScada from './HomeScada.jsx'
 // ════════════ Buton global „De aprobat" în navbar (12.06.2026) ════════════
 import DeAprobatButton from './DeAprobatButton.jsx'
 
@@ -975,54 +976,8 @@ function HomeDashboard() {
         </div>
       </div>
 
-      {/* Hero */}
-      <div style={{textAlign:'center',padding:'52px 32px 32px'}}>
-        <div style={{fontSize:28,fontWeight:800,color:'#E6EDF3',marginBottom:8,letterSpacing:'-.5px'}}>
-          Bună{profile?.name?`, ${profile.name.split(' ')[0]}`:''}! 👋
-        </div>
-        <div style={{fontSize:15,color:'#8B949E'}}>Alege modulul cu care vrei să lucrezi</div>
-      </div>
-
-      {/* Module grid */}
-      <div style={{maxWidth:1100,margin:'0 auto',padding:'0 32px 60px',width:'100%'}}>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:16}}>
-          {modules.map((m,i)=>(
-            <div key={i}
-              onClick={()=>m.path&&nav(m.path)}
-              style={{
-                background: m.active ? '#161B22' : '#0D1117',
-                border: `1px solid ${m.active ? m.color+'55' : '#21262D'}`,
-                borderRadius:12,
-                padding:'28px 24px',
-                cursor: m.active ? 'pointer' : 'default',
-                transition:'all .18s ease',
-                position:'relative',
-                overflow:'hidden',
-              }}
-              onMouseEnter={e=>{if(m.active){e.currentTarget.style.borderColor=m.color+'99';e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow=`0 8px 24px ${m.color}22`}}}
-              onMouseLeave={e=>{if(m.active){e.currentTarget.style.borderColor=m.color+'55';e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}}
-            >
-              {/* Glow accent */}
-              {m.active&&<div style={{position:'absolute',top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,transparent,${m.color},transparent)`,borderRadius:'12px 12px 0 0'}}/>}
-
-              <div style={{fontSize:36,marginBottom:12,lineHeight:1}}>{m.icon}</div>
-              <div style={{fontSize:17,fontWeight:700,color: m.active ? '#E6EDF3' : '#484F58',marginBottom:6,letterSpacing:'-.2px'}}>{m.label}</div>
-              <div style={{fontSize:12,color: m.active ? '#8B949E' : '#30363D',lineHeight:1.5}}>{m.desc}</div>
-
-              {!m.active&&(
-                <div style={{marginTop:12,display:'inline-block',background:'#21262D',color:'#484F58',fontSize:10,fontWeight:700,padding:'3px 8px',borderRadius:4,letterSpacing:'.5px',textTransform:'uppercase'}}>
-                  În curând
-                </div>
-              )}
-              {m.active&&(
-                <div style={{marginTop:14,display:'inline-flex',alignItems:'center',gap:5,color:m.color,fontSize:12,fontWeight:600}}>
-                  Deschide <span style={{fontSize:14}}>→</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Corp home: salut + module (cifre live) + SCADA (todo #693) — componentă separată */}
+      <HomeScada profile={profile} modules={modules} onOpen={p => nav(p)} />
 
       <div style={{textAlign:'center',padding:'16px',fontSize:11,color:'#E53935',fontWeight:700,borderTop:'1px solid #21262D',marginTop:'auto',letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
