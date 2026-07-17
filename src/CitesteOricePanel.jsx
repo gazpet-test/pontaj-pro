@@ -524,9 +524,14 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                     </div>
 
                     {eroare ? (
-                      <div style={{ fontSize:12.5, color:G.red, background:G.red + '11', padding:'8px 12px', borderRadius:8 }}>
-                        ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual.
-                      </div>
+                      <>
+                        <div style={{ fontSize:12.5, color:G.red, background:G.red + '11', padding:'8px 12px', borderRadius:8, marginBottom:10 }}>
+                          ⚠ AI nu a putut citi documentul: {row.ai_eroare || 'eroare necunoscută'}. Poți încerca din nou sau adaugă-l manual.
+                        </div>
+                        <div style={{ display:'flex', justifyContent:'flex-end' }}>
+                          <button onClick={() => handleReject(row)} disabled={busyId === row.id} style={{ ...btnS, color:G.red, borderColor:G.red + '55' }}>✕ Scoate din coadă</button>
+                        </div>
+                      </>
                     ) : (
                       <>
                         {/* Ce a detectat AI */}
