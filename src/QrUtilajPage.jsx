@@ -59,6 +59,38 @@ async function lookupBonuriSite(siteId) {
   return await res.json()
 }
 
+// 📖 Caută în cartea tehnică (RAG) — răspuns AI în română + pasaje originale.
+// Endpoint public rate-limitat server-side (rag_qr_log, 30/zi/utilaj).
+async function askManual(activeId, question) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/rag-utilaj`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'apikey': SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({ action: 'ask_qr', active_id: activeId, question }),
+  })
+  return await res.json()
+}
+
+// Render minimal pt răspunsul AI (markdown-lite: ## titluri, **bold**, - liste)
+function MdLite({ text }) {
+  const lines = String(text || '').split('\n')
+  return (
+    <div>
+      {lines.map((ln, i) => {
+        const t = ln.trim()
+        const bold = (s) => s.split(/\*\*(.+?)\*\*/g).map((p, j) => j % 2 ? <b key={j}>{p}</b> : p)
+        if (/^#{1,3}\s/.test(t)) return <div key={i} style={{ fontWeight: 800, fontSize: 14, margin: '10px 0 4px' }}>{bold(t.replace(/^#{1,3}\s/, ''))}</div>
+        if (/^[-•]\s/.test(t)) return <div key={i} style={{ paddingLeft: 14, margin: '2px 0' }}>• {bold(t.replace(/^[-•]\s/, ''))}</div>
+        if (t === '') return <div key={i} style={{ height: 6 }} />
+        return <div key={i} style={{ margin: '2px 0' }}>{bold(t)}</div>
+      })}
+    </div>
+  )
+}
+
 export default function QrUtilajPage() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -93,6 +125,32 @@ export default function QrUtilajPage() {
   const [siteSelectat, setSiteSelectat] = useState(null)
   const [oreBord, setOreBord] = useState('')
   const [kmBord, setKmBord] = useState('')
+  // 📖 Manual (carte tehnică)
+  const [manualQ, setManualQ] = useState('')
+  const [manualLoading, setManualLoading] = useState(false)
+  const [manualAnswer, setManualAnswer] = useState(null)
+  const [manualSources, setManualSources] = useState([])
+  const [manualErr, setManualErr] = useState('')
+
+  async function handleAskManual() {
+    const q = manualQ.trim()
+    if (!q || manualLoading) return
+    setManualLoading(true); setManualErr(''); setManualAnswer(null); setManualSources([])
+    try {
+      const res = await askManual(utilaj.id, q)
+      if (res.error) { setManualErr(res.error); return }
+      if (!res.sources || res.sources.length === 0) {
+        setManualErr('Manualul acestui utilaj nu e încărcat/indexat încă. Întreabă biroul.')
+        return
+      }
+      setManualAnswer(res.answer || 'Nu am găsit un răspuns clar — vezi pasajele de mai jos.')
+      setManualSources(res.sources)
+    } catch {
+      setManualErr('Eroare de conexiune. Verifică internetul.')
+    } finally {
+      setManualLoading(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -301,12 +359,76 @@ export default function QrUtilajPage() {
               borderRadius: 12, fontWeight: 800, fontSize: 16, cursor: 'pointer',
               boxShadow: '0 4px 12px rgba(16,185,129,.3)',
             }}>⛽ Alimentare nouă</button>
+            <button onClick={() => setStep('manual')} style={{
+              padding: 16, background: P.surface, color: P.text,
+              border: `1px solid ${P.warning}55`, borderRadius: 12,
+              fontWeight: 700, fontSize: 15, cursor: 'pointer',
+            }}>📖 Manualul utilajului</button>
             <button disabled style={{
               padding: 14, background: 'transparent', color: P.muted,
               border: `1px solid ${P.border}`, borderRadius: 10,
               fontWeight: 600, fontSize: 13, cursor: 'not-allowed',
             }}>🐛 Raportează defect (în curând)</button>
           </div>
+        </>
+      )}
+
+      {/* 📖 MANUAL — caută în cartea tehnică, fără PIN (nu e date sensibile) */}
+      {step === 'manual' && utilaj && (
+        <>
+          <div style={{ background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16, marginBottom: 12 }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 2 }}>📖 Manualul utilajului</div>
+            <div style={{ fontSize: 11, color: P.muted, marginBottom: 12 }}>
+              {utilaj.marca} {utilaj.model} · întreabă în română — răspunsul vine tradus din carte, cu pagina citată
+            </div>
+            <textarea
+              value={manualQ}
+              onChange={e => setManualQ(e.target.value)}
+              placeholder="ex: cum se demontează ventilele? ce presiune are supapa? ce ulei se pune?"
+              rows={3}
+              style={{
+                width: '100%', boxSizing: 'border-box', background: P.bg, color: P.text,
+                border: `1px solid ${P.border}`, borderRadius: 10, padding: '10px 12px',
+                fontSize: 14, fontFamily: 'inherit', outline: 'none', resize: 'vertical',
+              }}
+            />
+            <button onClick={handleAskManual} disabled={manualLoading || !manualQ.trim()} style={{
+              marginTop: 10, width: '100%', padding: 14,
+              background: manualLoading ? P.border : P.warning, color: '#1a1a1a',
+              border: 'none', borderRadius: 10, fontWeight: 800, fontSize: 15,
+              cursor: manualLoading ? 'wait' : 'pointer',
+            }}>{manualLoading ? '⏳ Caut în manual...' : '🔍 Întreabă manualul'}</button>
+            {manualErr && (
+              <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: 'rgba(239,68,68,0.12)', color: '#FCA5A5', fontSize: 12 }}>
+                {manualErr}
+              </div>
+            )}
+          </div>
+
+          {manualAnswer && (
+            <div style={{ background: P.surface, border: `1px solid ${P.warning}55`, borderLeft: `3px solid ${P.warning}`, borderRadius: 12, padding: 14, marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
+              <MdLite text={manualAnswer} />
+            </div>
+          )}
+
+          {manualSources.length > 0 && (
+            <details style={{ background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: '10px 14px', marginBottom: 12 }}>
+              <summary style={{ fontSize: 12, color: P.muted, cursor: 'pointer' }}>
+                ▶ Pasajele originale din carte ({manualSources.length}) — pot fi în germană/engleză
+              </summary>
+              {manualSources.map((s, i) => (
+                <div key={i} style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${P.border}` }}>
+                  <div style={{ fontSize: 10, color: P.primary, fontWeight: 700, marginBottom: 3 }}>{s.sursa} · {s.referinta}</div>
+                  <div style={{ fontSize: 11, color: P.muted, lineHeight: 1.5 }}>{s.content}</div>
+                </div>
+              ))}
+            </details>
+          )}
+
+          <button onClick={() => { setStep('info'); setManualErr('') }} style={{
+            width: '100%', padding: 12, background: 'transparent', color: P.muted,
+            border: `1px solid ${P.border}`, borderRadius: 10, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+          }}>← Înapoi</button>
         </>
       )}
 
