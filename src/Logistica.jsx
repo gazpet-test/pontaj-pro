@@ -16,6 +16,7 @@ import FaraSantierBulkModal from './FaraSantierBulkModal.jsx'
 import OCRValidateBulkModal from './OCRValidateBulkModal.jsx'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
+import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
@@ -2155,6 +2156,10 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             </div>
           )}
         </div>
+
+        {activ?.id && (
+          <CarteTehnicaSearch activ={activ} showToast={showToast} />
+        )}
 
         {activ?.id && (
           <SupapeDeclaratiiSection
