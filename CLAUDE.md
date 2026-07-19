@@ -11,7 +11,8 @@ ERP intern pentru Gazpet Instal SRL (Ploiești, construcții conducte gaz, 127+ 
 - Fișiere mari: src/App.jsx (~7900 linii), Logistica.jsx (~11900), Magazie.jsx, CereriInterneProiect.jsx, Achizitii.jsx, Tichete.jsx, HR.jsx, ServiceTab.jsx etc.
 
 ## RITUAL DE START — obligatoriu la începutul sesiunii
-Prin Supabase MCP, rulează:
+0. **SINCRONIZARE REPO (înainte de ORICE modificare de cod)**: `git fetch --all --prune` + `git pull --ff-only` pe branch-ul de lucru. Se lucrează de pe 2 laptopuri (birou + acasă) — localul poate fi în urmă; editarea fără pull suprascrie munca celuilalt (anti-bug „sesiuni paralele"). Dacă pull-ul nu e fast-forward → oprește-te și arată-i lui Razvan ce diverge.
+Apoi, prin Supabase MCP, rulează:
 ```sql
 SELECT content_md FROM public.claude_docs WHERE slug = 'handoff_activ';
 SELECT category, title, content, priority, todo_section, todo_completed
@@ -22,7 +23,7 @@ SELECT slug, title, category FROM public.claude_docs WHERE active = true ORDER B
 Integrează natural (nu anunța „am citit memoria"). Reia exact de unde a rămas handoff-ul. NU repeta întrebări la care există deja răspuns în memorie.
 
 ## Cum lucrezi
-1. **Git**: lucrezi pe branch + PR, NU push direct pe main. După merge, Vercel deployează automat (~3 min).
+1. **Git**: ciclul complet obligatoriu = `git pull --ff-only` (vezi pasul 0 din ritual) → modifici pe branch + PR (NU push direct pe main) → la final **commit + push TOT** (nimic nelivrat local — altfel celălalt laptop nu vede munca). După merge, Vercel deployează automat (~3 min).
 2. **Validare înainte de push**: `npm install` + build complet (`npx vite build`) — esbuild parse singur NU prinde ReferenceError la runtime. După orice search&replace pe nume de funcții: `grep -n` că noul nume există.
 3. **BD — pattern preview→confirm→apply**: la orice modificare de date reale: (1) SELECT cu COUNT + breakdown, (2) confirmare explicită de la Razvan, (3) UPDATE/INSERT cu RETURNING + array_agg(id) pt rollback, (4) SELECT sanity check. DDL prin apply_migration (nume snake_case), DML prin execute_sql. NICIODATĂ DROP/DELETE ireversibil fără confirmare.
 4. **Reguli Supabase la orice obiect NOU**: tabele → ENABLE RLS + GRANT authenticated/service_role + policies (folosește `auth.uid() IS NOT NULL`, nu `USING(true)`); views → `WITH (security_invoker = on)`; funcții → `SECURITY DEFINER SET search_path = public, pg_temp` + REVOKE EXECUTE FROM PUBLIC dacă nu-s UI-callable. După migrări importante: get_advisors.
@@ -46,6 +47,7 @@ Integrează natural (nu anunța „am citit memoria"). Reia exact de unde a răm
 PIUSI = doar reconciliere (nu dublu-decrement stoc). TVA pe valoare brută lucrări. Echipamente: service/QR/ITP → logistica_active; scule/EIP → Magazie-Echipamente. Financiar: fără drag&drop generic (doar certificate de plată). „TOTUL PDF": imaginile spre AI se convertesc client-side în PDF (imageToPdf în CitesteOricePanel.jsx). Comenzi Furnizor: tabel separat, auto-status prin triggere.
 
 ## Final de sesiune — obligatoriu
+0. **Repo curat + pushat**: `git status` fără modificări locale — tot ce s-a lucrat e commis și PUSHAT (branch/PR, sau main după merge). Nimic rămas doar pe laptopul curent.
 1. UPDATE `claude_docs` slug `handoff_activ` (secțiuni: ✅ LIVE / ⏳ Pending / ⚠️ Atenționări / 🎯 Următoarele candidate).
 2. INSERT lecții durabile noi în `claude_context` (category: lesson/decision/anti_bug/todo).
 3. Recap scurt: ce s-a pushat, ce PR-uri așteaptă merge, ce e de testat LIVE.
