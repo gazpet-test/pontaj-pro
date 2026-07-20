@@ -17,6 +17,7 @@ import OCRValidateBulkModal from './OCRValidateBulkModal.jsx'
 import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
+import FisaActivExport from './FisaActivExport.jsx'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
@@ -1170,6 +1171,17 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     link_fisa_nas: a?.link_fisa_nas || '',
     observatii: a?.observatii || '',
     serie_sasiu: a?.serie_sasiu || '',
+    // Date talon / CIV
+    serie_motor: a?.serie_motor || '',
+    serie_civ: a?.serie_civ || '',
+    categorie_vehicul: a?.categorie_vehicul || '',
+    nr_omologare: a?.nr_omologare || '',
+    capacitate_motor: a?.capacitate_motor || '',
+    putere_kw: a?.putere_kw || '',
+    culoare: a?.culoare || '',
+    masa_maxima_kg: a?.masa_maxima_kg || '',
+    nr_locuri: a?.nr_locuri || '',
+    data_prima_inmatriculare: a?.data_prima_inmatriculare || '',
     // Dimensiuni transport
     lungime_m: a?.lungime_m || '',
     latime_m: a?.latime_m || '',
@@ -1445,6 +1457,17 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
       link_fisa_nas: form.link_fisa_nas.trim() || null,
       observatii: form.observatii.trim() || null,
       serie_sasiu: form.serie_sasiu.trim() || null,
+      // Date talon / CIV
+      serie_motor: form.serie_motor.trim() || null,
+      serie_civ: form.serie_civ.trim() || null,
+      categorie_vehicul: form.categorie_vehicul.trim() || null,
+      nr_omologare: form.nr_omologare.trim() || null,
+      capacitate_motor: form.capacitate_motor ? Number(form.capacitate_motor) : null,
+      putere_kw: form.putere_kw ? Number(form.putere_kw) : null,
+      culoare: form.culoare.trim() || null,
+      masa_maxima_kg: form.masa_maxima_kg ? Number(form.masa_maxima_kg) : null,
+      nr_locuri: form.nr_locuri ? Number(form.nr_locuri) : null,
+      data_prima_inmatriculare: form.data_prima_inmatriculare || null,
       // Dimensiuni & transport
       lungime_m: form.lungime_m ? Number(form.lungime_m) : null,
       latime_m: form.latime_m ? Number(form.latime_m) : null,
@@ -1584,6 +1607,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                 <button onClick={() => setShowQrModal(true)} style={{...S.btnS, fontSize: 12, color: '#8B5CF6', borderColor: '#8B5CF6' + '55'}} title="Generează QR pentru print + lipire pe utilaj">
                   🏷️ QR
                 </button>
+                <FisaActivExport activ={activ} showToast={showToast} />
                 <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
                   ✏️ Editează
                 </button>
@@ -2058,6 +2082,18 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             <FieldText label="Prag alertă consum (%)" value={form.prag_alerta_consum} onChange={v => setField('prag_alerta_consum', v)} type="number" placeholder="10" readonly={isReadOnly} />
             <FieldText label="Serie șasiu (VIN)" value={form.serie_sasiu} onChange={v => setField('serie_sasiu', v)} placeholder="ex: WDB9061..." readonly={isReadOnly} />
             <FieldSelect label="Firmă proprietară" value={form.firma_proprietara} onChange={v => setField('firma_proprietara', v)} options={FIRME} readonly={isReadOnly} />
+            {/* date din talon / CIV (completate automat de extract-talon-ai) */}
+            <FieldText label="Serie motor" value={form.serie_motor} onChange={v => setField('serie_motor', v)} readonly={isReadOnly} />
+            <FieldText label="Serie CIV" value={form.serie_civ} onChange={v => setField('serie_civ', v)} readonly={isReadOnly} />
+            <FieldText label="Categorie vehicul (M1/N1/N3)" value={form.categorie_vehicul} onChange={v => setField('categorie_vehicul', v)} readonly={isReadOnly} />
+            <FieldText label="Nr. omologare" value={form.nr_omologare} onChange={v => setField('nr_omologare', v)} readonly={isReadOnly} />
+            <FieldText label="Cilindree (cm³)" value={form.capacitate_motor} onChange={v => setField('capacitate_motor', v)} type="number" readonly={isReadOnly} />
+            <FieldText label="Putere (kW)" value={form.putere_kw} onChange={v => setField('putere_kw', v)} type="number" readonly={isReadOnly} />
+            <FieldText label="Culoare" value={form.culoare} onChange={v => setField('culoare', v)} readonly={isReadOnly} />
+            <FieldText label="Masă proprie (kg)" value={form.greutate_kg} onChange={v => setField('greutate_kg', v)} type="number" readonly={isReadOnly} />
+            <FieldText label="Masă maximă (kg)" value={form.masa_maxima_kg} onChange={v => setField('masa_maxima_kg', v)} type="number" readonly={isReadOnly} />
+            <FieldText label="Nr. locuri" value={form.nr_locuri} onChange={v => setField('nr_locuri', v)} type="number" readonly={isReadOnly} />
+            <FieldText label="Prima înmatriculare" value={form.data_prima_inmatriculare} onChange={v => setField('data_prima_inmatriculare', v)} type="date" readonly={isReadOnly} />
           </div>
         </div>
         
@@ -11664,8 +11700,12 @@ export default function LogisticaPage() {
       const cat = a.logistica_categorii
       if (search) {
         const s = search.toLowerCase()
-        const haystack = [a.cod_intern, a.nr_inventar, a.nr_inmatriculare, a.marca, a.model, a.observatii, cat?.tip, cat?.subcategorie].filter(Boolean).join(' ').toLowerCase()
-        if (!haystack.includes(s)) return false
+        // căutare și pe datele tehnice din talon (serie șasiu/motor/CIV, omologare, cilindree, culoare)
+        const haystack = [a.cod_intern, a.nr_inventar, a.nr_inmatriculare, a.marca, a.model, a.observatii, cat?.tip, cat?.subcategorie,
+          a.serie_sasiu, a.serie_motor, a.serie_civ, a.nr_omologare, a.categorie_vehicul, a.culoare, a.an_fabricatie, a.capacitate_motor, a.tip_carburant]
+          .filter(Boolean).join(' ').toLowerCase()
+        // seriile se caută și fără spații/cratime (VIN scris diferit)
+        if (!haystack.includes(s) && !haystack.replace(/[\s-]/g, '').includes(s.replace(/[\s-]/g, ''))) return false
       }
       if (tipF !== 'Toate' && cat?.tip !== tipF) return false
       if (subF !== 'Toate' && cat?.subcategorie !== subF) return false
