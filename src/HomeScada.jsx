@@ -141,6 +141,21 @@ export default function HomeScada({ profile, modules, onOpen }) {
         <div style={{ color:T.muted, fontSize:13, marginTop:5 }}>{azi.charAt(0).toUpperCase() + azi.slice(1)} · alege modulul cu care vrei să lucrezi</div>
         <div style={{ height:2, width:120, marginTop:14, borderRadius:2, background:`linear-gradient(90deg,${GAZ},${APA})`, boxShadow:'0 0 12px #ff7a1a55' }}/>
       </div>
+      {/* intrare rapidă teren — manageri de șantier / șefi echipă (+ owner pt. test) */}
+      {(profile?.is_owner || ['manager_santier','sef_echipa'].includes(profile?.role)) && (
+        <div onClick={() => onOpen('/m')} style={{
+          display:'flex', alignItems:'center', gap:14, cursor:'pointer', marginBottom:22,
+          padding:'16px 20px', borderRadius:14, background:'linear-gradient(90deg,#E3B34118,#E3B34106)',
+          border:'1px solid #E3B34140',
+        }}>
+          <div style={{ fontSize:30, flexShrink:0 }}>📋</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontWeight:700, fontSize:15, color:T.text }}>Raport zilnic de lucrare</div>
+            <div style={{ fontSize:12, color:T.muted, marginTop:2 }}>Versiunea de teren (mobil) — trimite raportul zilei de pe telefon. Adaug-o pe ecranul de start.</div>
+          </div>
+          <div style={{ fontSize:18, color:'#E3B341' }}>→</div>
+        </div>
+      )}
       {/* module */}
       <div className="hs-mgrid">
         {modules.map((m, i) => (

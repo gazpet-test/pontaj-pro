@@ -111,7 +111,9 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [masini, setMasini] = useState('')
   const [probleme, setProbleme] = useState('')
   const [planMaine, setPlanMaine] = useState('')
-  const [poze, setPoze] = useState([])           // File[]
+  const [poze, setPoze] = useState([])           // File[] noi (de urcat)
+  const [pozeExistente, setPozeExistente] = useState([])  // [{path, url}] din raport salvat
+  const [existingId, setExistingId] = useState(null)      // id raport azi dacă există → editare
   const [loadingData, setLoadingData] = useState(false)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -121,6 +123,30 @@ function RaportZilnic({ profile, sites, onBack }) {
   const loadSiteData = useCallback(async (sid) => {
     if (!sid) return
     setLoadingData(true)
+    setMsg(null)
+    // ── Există deja raport azi pe lucrare? → încarcă pentru editare (anti-dublură) ──
+    const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
+    if (existing) {
+      setExistingId(existing.id)
+      setLucrari(existing.lucrari_efectuate || '')
+      setMasini(existing.masini || '')
+      setProbleme(existing.probleme || '')
+      setPlanMaine(existing.plan_maine || '')
+      const ps = existing.personal_snapshot || {}
+      setPersonal({ sudori: ps.sudori || 0, lacatusi: ps.lacatusi || 0, operatori: ps.operatori || 0, soferi: ps.soferi || 0, necalificati: ps.necalificati || 0, altii: ps.altii || 0 })
+      setUtilaje((existing.utilaje_snapshot || []).map(u => ({ active_id: null, cod: u.cod || '', nume: u.nume || '', ultima_alimentare: null, stare: u.stare || 'functional', motiv: u.motiv || '', manual: !u.cod })))
+      const urls = []
+      for (const p of (existing.poze || [])) {
+        const { data: s } = await supabase.storage.from(BUCKET).createSignedUrl(p, 3600)
+        if (s?.signedUrl) urls.push({ path: p, url: s.signedUrl })
+      }
+      setPozeExistente(urls)
+      setPoze([])
+      setLoadingData(false)
+      return
+    }
+    // ── Raport nou: pre-populare din pontaj + alimentări ──
+    setExistingId(null); setPozeExistente([])
     // Personal azi; fallback ieri dacă azi gol
     let { data: per } = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
     if (!per) {
@@ -149,7 +175,7 @@ function RaportZilnic({ profile, sites, onBack }) {
 
   const onPoze = (e) => {
     const files = Array.from(e.target.files || [])
-    setPoze(p => [...p, ...files].slice(0, 12))
+    setPoze(p => [...p, ...files].slice(0, Math.max(0, 12 - pozeExistente.length)))
   }
   const stergePoza = (i) => setPoze(p => p.filter((_, idx) => idx !== i))
 
@@ -158,8 +184,8 @@ function RaportZilnic({ profile, sites, onBack }) {
     setSaving(true); setMsg(null)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      // upload poze
-      const pozePaths = []
+      // păstrează pozele deja urcate (la editare) + urcă cele noi
+      const pozePaths = pozeExistente.map(p => p.path)
       for (const f of poze) {
         const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
         const path = `${siteId}/${azi()}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
@@ -167,7 +193,8 @@ function RaportZilnic({ profile, sites, onBack }) {
         if (!error) pozePaths.push(path)
       }
       const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
-      const { error: insErr } = await supabase.from('rapoarte_zilnice').insert({
+      // upsert pe (site_id, data) → 1 raport/lucrare/zi, reintrarea editează
+      const { error: insErr } = await supabase.from('rapoarte_zilnice').upsert({
         site_id: siteId, data: azi(),
         sef_santier: profile?.name || null,
         lucrari_efectuate: lucrari.trim() || null,
@@ -178,9 +205,10 @@ function RaportZilnic({ profile, sites, onBack }) {
         plan_maine: planMaine.trim() || null,
         poze: pozePaths,
         created_by: user?.id || null,
-      })
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'site_id,data' })
       if (insErr) throw insErr
-      setMsg({ ok: true, text: '✅ Raport trimis cu succes!' })
+      setMsg({ ok: true, text: existingId ? '✅ Raport actualizat!' : '✅ Raport trimis cu succes!' })
       setTimeout(onBack, 1200)
     } catch (e) {
       setMsg({ ok: false, text: 'Eroare: ' + (e.message || e) })
@@ -210,6 +238,11 @@ function RaportZilnic({ profile, sites, onBack }) {
         <div style={{ color: G.dim, textAlign: 'center', padding: 30 }}>Se încarcă datele lucrării…</div>
       ) : (
         <>
+          {existingId && (
+            <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 16, background: G.yellow + '22', color: G.yellow, fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
+              ✏️ Ai trimis deja raport azi pentru această lucrare — îl editezi (nu se creează duplicat).
+            </div>
+          )}
           {/* Personal auto din pontaj */}
           <Section title="👷 Personal (din pontaj)" hint="completat automat — ajustează dacă e cazul">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -277,7 +310,17 @@ function RaportZilnic({ profile, sites, onBack }) {
           </Section>
 
           {/* Poze */}
-          <Section title="📷 Poze" hint={`${poze.length}/12`}>
+          <Section title="📷 Poze" hint={`${pozeExistente.length + poze.length}/12`}>
+            {pozeExistente.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
+                {pozeExistente.map((p, i) => (
+                  <div key={p.path} style={{ position: 'relative', aspectRatio: '1', borderRadius: 10, overflow: 'hidden', border: `1px solid ${G.border2}` }}>
+                    <img src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button onClick={() => setPozeExistente(list => list.filter((_, idx) => idx !== i))} style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(0,0,0,.7)', color: 'white', border: 'none', borderRadius: '50%', width: 24, height: 24, fontSize: 14, cursor: 'pointer', lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <label style={{ display: 'block', background: G.surface2, border: `1px dashed ${G.border2}`, borderRadius: 12, padding: '18px', textAlign: 'center', cursor: 'pointer', color: G.muted, fontSize: 14 }}>
               📷 Apasă pentru a adăuga poze
               <input type="file" accept="image/*" multiple capture="environment" onChange={onPoze} style={{ display: 'none' }} />
@@ -300,7 +343,7 @@ function RaportZilnic({ profile, sites, onBack }) {
             background: G.green, color: '#0D1117', border: 'none', borderRadius: 14, padding: '16px', width: '100%',
             fontSize: 17, fontWeight: 800, cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', marginBottom: 30, opacity: saving ? .6 : 1,
           }}>
-            {saving ? 'Se trimite…' : '✓ Trimite raportul'}
+            {saving ? 'Se trimite…' : (existingId ? '✓ Actualizează raportul' : '✓ Trimite raportul')}
           </button>
         </>
       ))}
