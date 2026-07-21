@@ -60,14 +60,14 @@ export default function RapoarteSantierPage() {
       if (!user) { setLoadingInit(false); return }
       const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
       setProfile(prof || null)
-      const { data: toate } = await supabase.from('sites').select('id, name, beneficiar_principal, active').order('name')
+      const { data: toate } = await supabase.from('sites').select('id, name, beneficiar_principal, active, raport_zilnic_necesar').order('name')
       const active = (toate || []).filter(s => s.active)
       setAllSites(active)
       const vedeTot = prof?.is_owner || prof?.role === 'contabilitate'
       if (vedeTot) {
         setSites(active)
       } else {
-        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal)').eq('profile_id', user.id)
+        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, raport_zilnic_necesar)').eq('profile_id', user.id)
         setSites((ps || []).map(r => r.sites).filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
       }
       setLoadingInit(false)
@@ -95,7 +95,8 @@ export default function RapoarteSantierPage() {
   // ── sumar azi ──
   const azo = azi()
   const rapoarteAzi = useMemo(() => new Set(rapoarte.filter(r => r.data === azo).map(r => r.site_id)), [rapoarte, azo])
-  const santiereFaraRaportAzi = useMemo(() => sites.filter(s => !rapoarteAzi.has(s.id)), [sites, rapoarteAzi])
+  // „lipsă azi" = doar șantierele care necesită raport (exclude birou/parc auto)
+  const santiereFaraRaportAzi = useMemo(() => sites.filter(s => s.raport_zilnic_necesar !== false && !rapoarteAzi.has(s.id)), [sites, rapoarteAzi])
 
   // ── grupare pt. istoric ──
   const istoricRapoarte = useMemo(() => {
