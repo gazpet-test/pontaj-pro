@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
 import AppMobilManageri from './AppMobilManageri.jsx'
+import RapoarteSantierPage from './RapoarteSantierPage.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
@@ -929,9 +930,16 @@ function HomeDashboard() {
     { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'hr' },
     { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
     { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true },
+    { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'] },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
-  const modules = allModules.filter(m => !m.active || !m.requireModule || hasModuleAccess(profile, m.requireModule))
+  // rolesAllow = vizibil pt owner + rolurile listate (fără user_module_access explicit); altfel logica standard requireModule.
+  const modules = allModules.filter(m => {
+    if (!m.active) return true
+    if (m.rolesAllow) return profile?.is_owner || m.rolesAllow.includes(profile?.role)
+    if (!m.requireModule) return true
+    return hasModuleAccess(profile, m.requireModule)
+  })
 
   return (
     <div style={{minHeight:'100vh',background:'#0D1117',display:'flex',flexDirection:'column'}}>
@@ -8247,6 +8255,7 @@ export default function App() {
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="/m" element={<ProtectedRoute><AppMobilManageri/></ProtectedRoute>}/>
+        <Route path="/rapoarte-santier" element={<ProtectedRoute><RapoarteSantierPage/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
       <ChatbotWidgetGate />
