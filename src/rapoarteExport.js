@@ -12,8 +12,9 @@ import LOGO_B64 from './logo.js'
 
 const PERSONAL_CAT = [
   ['sudori', 'Sudori'], ['lacatusi', 'Lăcătuși'], ['operatori', 'Operatori'],
-  ['soferi', 'Șoferi'], ['necalificati', 'Necalif.'], ['altii', 'Alții'],
+  ['soferi', 'Șoferi'], ['necalificati', 'Necalif.'], ['tesa', 'TESA'], ['altii', 'Alții'],
 ]
+const alimentate = (r) => utj(r).filter(u => u.alimentat).length
 const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
 const slug = (s) => String(s || 'santier').replace(/[^\w]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 34) || 'santier'
@@ -26,21 +27,21 @@ export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, t
   const thin = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } }
   const headerStyle = { fill: { fgColor: { rgb: '1F3A5F' } }, font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: thin }
   const cellBase = { font: { name: 'Calibri', sz: 10 }, alignment: { vertical: 'top', wrapText: true }, border: thin }
-  const COLS = 16
+  const COLS = 18
 
   const sorted = [...list].sort((a, b) => a.data.localeCompare(b.data))
   const aoa = [
     ['RAPOARTE ȘANTIER'],
     [`${titluSite}  •  ${from} → ${to}  •  Generat: ${new Date().toLocaleString('ro-RO')}  •  ${sorted.length} rapoarte`],
     [],
-    ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'Alții', 'Total pers.', 'Utilaje', 'Nefuncț.', 'Lucrări efectuate', 'Mașini', 'Probleme', 'Plan mâine'],
+    ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Mașini', 'Probleme', 'Plan mâine'],
   ]
   sorted.forEach(r => {
     const p = r.personal_snapshot || {}
     aoa.push([
       fmtData(r.data), siteNameOf(r.site_id), r.sef_santier || '—',
-      p.sudori || 0, p.lacatusi || 0, p.operatori || 0, p.soferi || 0, p.necalificati || 0, p.altii || 0, p.total || 0,
-      utj(r).length, nefunc(r).length,
+      p.sudori || 0, p.lacatusi || 0, p.operatori || 0, p.soferi || 0, p.necalificati || 0, p.tesa || 0, p.altii || 0, p.total || 0,
+      utj(r).length, alimentate(r), nefunc(r).length,
       r.lucrari_efectuate || '', r.masini || '', r.probleme || '', r.plan_maine || '',
     ])
   })
@@ -55,10 +56,10 @@ export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, t
       const ref = XLSX.utils.encode_cell({ r, c })
       if (!ws[ref]) continue
       ws[ref].s = { ...cellBase }
-      if (c >= 3 && c <= 11) ws[ref].s.alignment = { ...cellBase.alignment, horizontal: 'center', vertical: 'center' }
+      if (c >= 3 && c <= 13) ws[ref].s.alignment = { ...cellBase.alignment, horizontal: 'center', vertical: 'center' }
     }
   }
-  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 8 }, { wch: 6 }, { wch: 9 }, { wch: 8 }, { wch: 8 }, { wch: 42 }, { wch: 22 }, { wch: 30 }, { wch: 30 }]
+  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 8 }, { wch: 6 }, { wch: 6 }, { wch: 9 }, { wch: 13 }, { wch: 10 }, { wch: 8 }, { wch: 42 }, { wch: 22 }, { wch: 30 }, { wch: 30 }]
 
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Rapoarte')
@@ -81,8 +82,9 @@ function buildRaportHtml({ list, titluSite, from, to }) {
   const rows = sorted.map(r => {
     const p = r.personal_snapshot || {}
     const nf = nefunc(r)
+    const alim = alimentate(r)
     const persDetalii = PERSONAL_CAT.filter(([k]) => (p[k] || 0) > 0).map(([k, l]) => `${l}: ${p[k]}`).join(', ')
-    const utilCell = `${utj(r).length}${nf.length ? ` <span style="color:#B42318">(${nf.length}✕)</span>` : ''}`
+    const utilCell = `${utj(r).length}${alim ? ` <span style="color:#1F6FEB">⛽${alim}</span>` : ''}${nf.length ? ` <span style="color:#B42318">(${nf.length}✕)</span>` : ''}`
     const nfDetalii = nf.length ? `<div style="font-size:8px;color:#B42318;margin-top:2px">${nf.map(u => esc((u.nume || u.cod || '?') + (u.motiv ? ': ' + u.motiv : ''))).join(' · ')}</div>` : ''
     return `<tr>
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;white-space:nowrap;font-weight:600">${fmtData(r.data)}</td>
