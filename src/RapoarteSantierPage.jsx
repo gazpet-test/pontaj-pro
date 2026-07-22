@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { exportRapoarteExcel, exportRapoartePDF } from './rapoarteExport.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -52,6 +53,8 @@ export default function RapoarteSantierPage() {
   const [loading, setLoading] = useState(false)
   const [detaliu, setDetaliu] = useState(null)     // raport deschis în modal
   const [istoricSite, setIstoricSite] = useState('') // șantier selectat în tab istoric
+  const [exporting, setExporting] = useState(null) // 'excel' | 'pdf' | null
+  const [exportErr, setExportErr] = useState(null)
 
   // ── init: profil + șantiere accesibile ──
   useEffect(() => {
@@ -103,6 +106,29 @@ export default function RapoarteSantierPage() {
     if (!istoricSite) return []
     return rapoarte.filter(r => r.site_id === Number(istoricSite)).sort((a, b) => a.data.localeCompare(b.data))
   }, [rapoarte, istoricSite])
+
+  // ── export (Faza 4) ──
+  const siteSelectatId = tab === 'istoric' ? (istoricSite ? Number(istoricSite) : null) : (filtruSite ? Number(filtruSite) : null)
+  const listaExport = tab === 'istoric' ? istoricRapoarte : rapoarte
+  const titluExport = siteSelectatId ? siteName(siteSelectatId) : 'Toate șantierele'
+
+  const doExportExcel = useCallback(async () => {
+    if (!listaExport.length) { setExportErr('Nimic de exportat în intervalul selectat.'); return }
+    setExporting('excel'); setExportErr(null)
+    try {
+      await exportRapoarteExcel({ list: listaExport, siteNameOf: siteName, titluSite: titluExport, from, to })
+    } catch (e) { setExportErr('Eroare export Excel: ' + (e?.message || e)) } finally { setExporting(null) }
+  }, [listaExport, siteName, titluExport, from, to])
+
+  const doExportPDF = useCallback(async () => {
+    if (!siteSelectatId) { setExportErr('Pentru PDF sumar alege un singur șantier (din filtru sau tab-ul Istoric).'); return }
+    const list = rapoarte.filter(r => r.site_id === siteSelectatId)
+    if (!list.length) { setExportErr('Niciun raport pentru acest șantier în interval.'); return }
+    setExporting('pdf'); setExportErr(null)
+    try {
+      await exportRapoartePDF({ list, titluSite: siteName(siteSelectatId), from, to })
+    } catch (e) { setExportErr('Eroare export PDF: ' + (e?.message || e)) } finally { setExporting(null) }
+  }, [siteSelectatId, rapoarte, siteName, from, to])
 
   if (loadingInit) return <Shell nav={nav}><div style={{ color: G.dim, textAlign: 'center', padding: 80 }}>Se încarcă…</div></Shell>
 
@@ -170,7 +196,24 @@ export default function RapoarteSantierPage() {
             }}>{p.l}</button>
           ))}
         </div>
+        {/* export */}
+        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+          <button onClick={doExportExcel} disabled={!!exporting} title="Exportă rapoartele filtrate în Excel" style={{
+            background: G.green + '18', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 8, padding: '8px 13px',
+            fontSize: 13, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: exporting ? .6 : 1,
+          }}>{exporting === 'excel' ? '…' : '⬇ Excel'}</button>
+          <button onClick={doExportPDF} disabled={!!exporting} title="PDF sumar pentru un singur șantier" style={{
+            background: G.red + '18', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 8, padding: '8px 13px',
+            fontSize: 13, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: exporting ? .6 : 1,
+          }}>{exporting === 'pdf' ? '…' : '⬇ PDF sumar'}</button>
+        </div>
       </div>
+
+      {exportErr && (
+        <div style={{ background: G.red + '14', border: `1px solid ${G.red}33`, borderRadius: 8, padding: '9px 13px', marginBottom: 14, fontSize: 13, color: G.red }}>
+          {exportErr} <span onClick={() => setExportErr(null)} style={{ cursor: 'pointer', marginLeft: 8, opacity: .7 }}>✕</span>
+        </div>
+      )}
 
       {/* conținut */}
       {loading ? (
