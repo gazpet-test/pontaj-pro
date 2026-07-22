@@ -9,6 +9,21 @@
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import LOGO_B64 from './logo.js'
+import { supabase } from './lib/supabase.js'
+
+const BUCKET = 'rapoarte-zilnice'
+const blobToDataURL = (blob) => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob) })
+// Semnează + descarcă pozele ca data-URL (html2canvas + signed URL = CORS → convertim întâi)
+async function pozeDataUrls(paths) {
+  if (!paths || !paths.length) return []
+  const out = []
+  const { data } = await supabase.storage.from(BUCKET).createSignedUrls(paths, 3600)
+  for (const s of (data || [])) {
+    if (!s?.signedUrl) continue
+    try { const r = await fetch(s.signedUrl); out.push(await blobToDataURL(await r.blob())) } catch (_) { /* poză lipsă → ignor */ }
+  }
+  return out
+}
 
 const PERSONAL_CAT = [
   ['sudori', 'Sudori'], ['lacatusi', 'Lăcătuși'], ['operatori', 'Operatori'],
@@ -124,6 +139,18 @@ function buildRaportHtml({ list, titluSite, from, to }) {
       <tbody>${rows || '<tr><td colspan="5" style="padding:12px;text-align:center;color:#888">Niciun raport în interval.</td></tr>'}</tbody>
     </table>
 
+    ${sorted.some(r => r._pozeData?.length) ? `
+    <div style="margin-top:16px">
+      <div style="background:#1F3A5F;color:#fff;padding:5px 8px;font-size:11px;font-weight:700">📷 POZE DE PE ȘANTIER</div>
+      ${sorted.filter(r => r._pozeData?.length).map(r => `
+        <div style="margin-top:10px">
+          <div style="font-size:10px;font-weight:700;color:#1F3A5F;margin-bottom:5px">${fmtData(r.data)}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${r._pozeData.map(u => `<img src="${u}" style="width:238px;height:170px;object-fit:cover;border:1px solid #ccc;border-radius:4px"/>`).join('')}
+          </div>
+        </div>`).join('')}
+    </div>` : ''}
+
     <div style="margin-top:14px;font-size:8px;color:#888;border-top:1px solid #ddd;padding-top:6px">
       Document generat automat din PontajPRO · Gazpet Instal SRL · ${zile} rapoarte zilnice
     </div>
@@ -131,6 +158,8 @@ function buildRaportHtml({ list, titluSite, from, to }) {
 }
 
 export async function exportRapoartePDF({ list, titluSite, from, to }) {
+  // descarcă pozele fiecărui raport ca data-URL (înainte de randare)
+  for (const r of list) r._pozeData = await pozeDataUrls(r.poze)
   const host = document.createElement('div')
   host.style.cssText = 'position:fixed;left:-10000px;top:0'
   host.innerHTML = buildRaportHtml({ list, titluSite, from, to })
