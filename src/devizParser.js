@@ -8,9 +8,39 @@
 //                     denumire, um, cantitate, valoare}
 // ═══════════════════════════════════════════════════════════════════════════
 
-const UM = String.raw`(?:100 ?MC\.?|100 ?MP\.?|100 ?M\.?|M\.?C\.?|M\.?P\.?|BUC\.?|HA|TONA|TO\.?|ML|M\.?L\.?|KG|M\.?)`
-const UM_RE = new RegExp('(' + UM + ')\\s+([\\d.,]+)')
+// Unități de măsură din deviz → (unitate de bază, factor de conversie spre bază).
+// ATENȚIE: multe articole de conducte/săpături sunt cotate în unități „×100":
+//   HM = hectometru = 100 m  ·  „100 MC"/„100 MP"/„100 M" = ×100.
+// Fără conversie, o lansare de 13,910 HM (1.391 m) apărea ca 13,91 m (÷100 greșit),
+// pentru că regexul vechi prindea „M" din „HM". Ordinea CONTEAZĂ: variantele
+// „100 …" și „HM" trebuie testate ÎNAINTEA celor simple (M).
+const UM_DEFS = [
+  { re: '100\\s*M\\.?C\\.?', base: 'mc',  f: 100 },
+  { re: '100\\s*M\\.?P\\.?', base: 'mp',  f: 100 },
+  { re: '100\\s*M\\.?',      base: 'm',   f: 100 },
+  { re: 'H\\.?M\\.?',        base: 'm',   f: 100 },
+  { re: 'M\\.?C\\.?',        base: 'mc',  f: 1 },
+  { re: 'M\\.?P\\.?',        base: 'mp',  f: 1 },
+  { re: 'M\\.?L\\.?',        base: 'm',   f: 1 },
+  { re: 'BUC\\.?',           base: 'buc', f: 1 },
+  { re: 'TONA',              base: 'to',  f: 1 },
+  { re: 'KG',                base: 'kg',  f: 1 },
+  { re: 'HA',                base: 'ha',  f: 1 },
+  { re: 'M\\.?',             base: 'm',   f: 1 },
+  // NB: „ORA" e intenționat exclusă — liniile în ore (manoperă NMB…, utilaje AUT…,
+  // epuizare apă) sunt resurse, nu articole de lucrări; le-am lăsa în afara catalogului.
+]
+const UM_ALT = UM_DEFS.map(d => d.re).join('|')
 const ART_RE = /^(\d{3})\s+([A-Z]{2,4}\d[A-Z0-9]*)\s+(.*)$/
+// linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE
+const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+([\\d.,]+)')
+
+// tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1.
+function umInfo(token) {
+  const up = String(token).toUpperCase().replace(/\s+/g, ' ').trim()
+  for (const d of UM_DEFS) if (new RegExp('^(?:' + d.re + ')$').test(up)) return d
+  return { base: up.toLowerCase(), f: 1 }
+}
 
 const num = (s) => {
   if (s == null || s === '') return null
@@ -32,7 +62,9 @@ export function articoleDinParagrafe(paras) {
     const [, nr, cod, rest] = ma
     const mu = rest.match(UM_RE)
     if (!mu) continue // linie fără UM+cantitate = resursă (material/utilaj), o sărim
-    const um = mu[1].trim(), cantitate = num(mu[2])
+    const info = umInfo(mu[1])
+    const q = num(mu[2])
+    const um = info.base, cantitate = q == null ? null : Math.round(q * info.f * 1000) / 1000
     // denumirea + valoarea (Total=) vin pe următoarele rânduri
     const den = []
     let valoare = null
