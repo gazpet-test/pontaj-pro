@@ -23,6 +23,8 @@ import CereriInterneProiect from './CereriInterneProiect.jsx'
 import { norm } from './lib/diacritice.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
+import CatalogDevizPanel from './CatalogDevizPanel.jsx'
+import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 const supabase = createClient(
@@ -2219,6 +2221,26 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               </>
             )}
           </div>
+
+          {!isNew && (
+            <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${G.border}` }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: G.text, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📋</span> Catalog deviz — articole de contract
+              </div>
+              <div style={{ fontSize: 11, color: G.dim, marginBottom: 6 }}>
+                Importă antemăsurătoarea (F3) — activitățile + cantitățile de contract, baza pentru raportul zilnic pe activități și progresul cumulat.
+              </div>
+              <CatalogDevizPanel proiectId={proiect.id} showToast={showToast} />
+
+              <div style={{ fontSize: 13, fontWeight: 700, color: G.text, margin: '18px 0 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🔧</span> Activități de raport (vocabularul echipei)
+              </div>
+              <div style={{ fontSize: 11, color: G.dim, marginBottom: 6 }}>
+                Lista de activități pe care MP-ul le alege în raportul zilnic. Fiecare poate fi legată la deviz (coduri) pentru progres cumulat vs contract.
+              </div>
+              <ActivitatiProiectPanel proiectId={proiect.id} showToast={showToast} />
+            </div>
+          )}
 
         </div>
 
