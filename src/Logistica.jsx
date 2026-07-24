@@ -2284,14 +2284,18 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           const window = alimentari.slice(0, 5)  // ultimele 5 (deja sortate desc)
           const totalLitri = window.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
           const oreEfectiveSum = window.reduce((s, a) => s + Number(a.ore_lucrate_efectiv || 0), 0)
-          
-          // Fallback: ore din bord (oldest - newest)
+          // „ore lucrate efectiv" e utilizabilă DOAR dacă e completată pe toate alimentările
+          // din fereastră — altfel litrii acoperă 5 alimentări dar orele doar câteva, iar
+          // raportul iese umflat artificial (fals pozitiv „consum critic")
+          const oreEfectiveComplete = window.every(a => Number(a.ore_lucrate_efectiv || 0) > 0)
+
+          // Ore din bord (oldest - newest) — acoperă exact aceeași fereastră ca litrii
           const oreBordOldest = window[window.length-1]?.ore_la_alimentare
           const oreBordNewest = window[0]?.ore_la_alimentare
           const oreBordDif = (oreBordOldest && oreBordNewest && oreBordNewest > oreBordOldest) ? oreBordNewest - oreBordOldest : null
-          
-          const oreReale = oreEfectiveSum > 0 ? oreEfectiveSum : oreBordDif
-          const sursaOre = oreEfectiveSum > 0 ? 'raport șantier' : 'citire bord'
+
+          const oreReale = oreEfectiveComplete ? oreEfectiveSum : (oreBordDif ?? (oreEfectiveSum > 0 ? oreEfectiveSum : null))
+          const sursaOre = oreEfectiveComplete ? 'raport șantier' : (oreBordDif != null ? 'citire bord' : 'raport șantier (parțial)')
           
           if (!oreReale) return (
             <div style={{padding: 12, background: G.surface, border: `1px dashed ${G.border2}`, borderRadius: 10, marginBottom: 14, fontSize: 12, color: G.muted}}>
