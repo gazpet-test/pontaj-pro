@@ -2331,7 +2331,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
             }
           } else {
             bg = G.yellowDim; color = G.yellow; emoji = '📏'
-            status = `Consum sub normă — norma (${norma} l/h) pare setată prea sus; ajustează manual norma la ~${consumRealLH ? consumRealLH.toFixed(1) : '—'} l/h (consum real măsurat)`
+            status = `Consum sub normă — norma (${norma} l/h) pare setată prea sus; ajustează manual norma la cca. ${consumRealLH ? consumRealLH.toFixed(1) : '—'} l/h (consum real măsurat)`
           }
           
           return (
@@ -2376,7 +2376,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                   <div style={{fontSize: 13, color, fontWeight: 700}}>
                     Diferență: {diferenta > 0 ? '+' : ''}{diferenta.toFixed(1)} L ({procentDif > 0 ? '+' : ''}{procentDif.toFixed(1)}%)
                   </div>
-                  <div style={{fontSize: 11, color: G.muted, marginTop: 2}}>{status}</div>
+                  <div style={{fontSize: 13, color: G.text, marginTop: 3, lineHeight: 1.45}}>{status}</div>
                 </div>
               </div>
             </div>
