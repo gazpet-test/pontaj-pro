@@ -1,0 +1,583 @@
+<!--
+  HARTA BD — PontajPRO / Gazpet ERP
+  Generată de Claude pe 24.07.2026 din information_schema (production dxczwkbciseqniprspcu).
+  REGENERARE: rulează SQL-urile de mai jos prin Supabase MCP și cere-i lui Claude
+  să actualizeze constantele EDGES / ROWS din <script>-ul de la finalul fișierului.
+
+  1) Legături (foreign keys):
+     SELECT tc.table_name AS src, kcu.column_name AS col, ccu.table_name AS dst
+     FROM information_schema.table_constraints tc
+     JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+     JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name AND tc.table_schema = ccu.table_schema
+     WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'
+     ORDER BY tc.table_name, kcu.column_name;
+
+  2) Număr de rânduri (estimat):
+     SELECT relname AS t, greatest(reltuples::bigint, 0) AS n
+     FROM pg_class WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace ORDER BY relname;
+-->
+<title>Harta BD — PontajPRO</title>
+<style>
+  :root {
+    --bg: #0D1117; --surface: #161B22; --surface2: #1C2230;
+    --border: #21262D; --border2: #30363D;
+    --text: #E6EDF3; --muted: #8B949E; --dim: #6E7681;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  .top { position: sticky; top: 0; z-index: 30; background: rgba(13,17,23,.92);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--border2);
+    padding: 12px 18px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .top h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+  .top .stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .top input[type=search] { background: var(--bg); border: 1px solid var(--border2); color: var(--text);
+    border-radius: 8px; padding: 6px 11px; font: inherit; width: 230px; outline: none; }
+  .top input[type=search]:focus { border-color: #58A6FF; }
+  .top label.tgl { display: flex; align-items: center; gap: 6px; color: var(--muted);
+    font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+  .hint { color: var(--dim); font-size: 11.5px; margin-left: auto; }
+
+  #wrap { position: relative; padding: 18px; }
+  #edges { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  #grid { position: relative; z-index: 10; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; align-items: start; }
+
+  .mod { background: var(--surface); border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
+  .mod-h { display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+    border-bottom: 1px solid var(--border); }
+  .mod-h .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .mod-h .nume { font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .5px; }
+  .mod-h .cnt { margin-left: auto; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  .tbl { display: flex; align-items: baseline; gap: 7px; padding: 4px 12px; cursor: pointer;
+    border-left: 2px solid transparent; }
+  .tbl:hover { background: var(--surface2); }
+  .tbl .nm { font-family: ui-monospace, 'Cascadia Code', Menlo, monospace; font-size: 11.5px;
+    overflow-wrap: anywhere; }
+  .tbl .rw { margin-left: auto; color: var(--dim); font-size: 10.5px;
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tbl .lk { color: var(--dim); font-size: 10px; white-space: nowrap; }
+  .tbl.sel { background: var(--surface2); border-left-color: currentColor; }
+  .tbl.vecin { background: rgba(88,166,255,.06); }
+  body.focus .tbl:not(.sel):not(.vecin) { opacity: .28; }
+  body.focus .mod:not(.are-focus) { opacity: .45; }
+  .tbl.hidden { display: none; }
+  .mod.goala { display: none; }
+
+  #panel { position: fixed; right: 16px; bottom: 16px; z-index: 40; width: 360px; max-width: calc(100vw - 32px);
+    max-height: 55vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--border2);
+    border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.5); display: none; }
+  #panel.on { display: block; }
+  #panel .ph { position: sticky; top: 0; background: var(--surface); display: flex; align-items: center;
+    gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  #panel .ph .nm { font-family: ui-monospace, Menlo, monospace; font-weight: 700; font-size: 13px; }
+  #panel .ph button { margin-left: auto; background: none; border: none; color: var(--muted);
+    font-size: 15px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  #panel .ph button:hover { background: var(--surface2); color: var(--text); }
+  #panel .sect { padding: 8px 14px 4px; color: var(--dim); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .5px; }
+  #panel .rel { display: flex; gap: 7px; align-items: baseline; padding: 3px 14px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px; cursor: pointer; }
+  #panel .rel:hover { background: var(--surface2); }
+  #panel .rel .c { color: var(--muted); }
+  #panel .rel .sag { color: var(--dim); }
+  #panel .gol { padding: 4px 14px 10px; color: var(--dim); font-size: 11.5px; }
+  #panel .meta { padding: 8px 14px 12px; color: var(--muted); font-size: 11.5px; }
+
+  footer { padding: 14px 18px 22px; color: var(--dim); font-size: 11px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .tbl, .mod { transition: opacity .15s ease, background .12s ease; }
+  }
+</style>
+
+<div class="top">
+  <h1>🗺 Harta BD — PontajPRO</h1>
+  <span class="stats" id="stats"></span>
+  <input type="search" id="q" placeholder="caută tabel… (ex. proiect)" autocomplete="off">
+  <label class="tgl"><input type="checkbox" id="toate"> toate legăturile</label>
+  <span class="hint">click pe un tabel → vezi cum migrează informația · Esc = înapoi</span>
+</div>
+
+<div id="wrap">
+  <svg id="edges"></svg>
+  <div id="grid"></div>
+</div>
+
+<div id="panel">
+  <div class="ph"><span class="dot" id="p-dot" style="width:9px;height:9px;border-radius:50%"></span>
+    <span class="nm" id="p-nume"></span><button id="p-close" title="Închide (Esc)">✕</button></div>
+  <div class="meta" id="p-meta"></div>
+  <div class="sect">→ Trimite spre (chei străine)</div><div id="p-out"></div>
+  <div class="sect">← Primește de la</div><div id="p-in"></div>
+</div>
+
+<footer>
+  Generată din <code>information_schema</code> (production) · 24.07.2026 · Fișier versionat în repo:
+  <code>docs/harta-bd.html</code> — regenerare: vezi comentariul din sursa paginii.
+</footer>
+
+<script>
+// ── DATE (din information_schema, 24.07.2026) ──────────────────────────────
+const EDGES = `app_modules|parent_key|app_modules
+avize_cjp|depozit_id|logistica_depozite
+avize_cjp|transport_id|logistica_transporturi
+chat_members|chat_id|internal_chats
+chat_messages|chat_id|internal_chats
+claude_bot_silentiate|silentiat_de|profiles
+claude_context|created_by|profiles
+comanda_linii|comanda_id|comenzi
+comanda_linii|oferta_material_id|oferta_materiale
+comenzi|contract_id|contracte_terti
+comenzi|proiect_id|executie_proiecte
+comenzi|proiect_ofertare_id|proiecte_ofertare
+comenzi|site_id|sites
+comenzi_aprobatori|employee_id|employees
+comenzi_aprobatori|profile_id|profiles
+comenzi_documente|comanda_id|comenzi
+comenzi_furnizor|comanda_id|comenzi
+comenzi_furnizor|confirmare_juridica_de|profiles
+comenzi_furnizor|emisa_de|profiles
+comenzi_furnizor|furnizor_contract_id|contracte_terti
+comenzi_furnizor|furnizor_id|logistica_furnizori
+comenzi_furnizor|livrare_site_id|sites
+comenzi_furnizor|predare_achizitii_profile|profiles
+comenzi_furnizor|primire_magazioner_profile|profiles
+comenzi_furnizor|proiect_id|executie_proiecte
+comenzi_furnizor|receptie_achizitii_profile|profiles
+comenzi_furnizor|receptie_mp_profile|profiles
+comenzi_furnizor_aprobari|comanda_furnizor_id|comenzi_furnizor
+comenzi_furnizor_aprobari|profile_id|profiles
+comenzi_furnizor_aprobari|semnat_de|profiles
+comenzi_furnizor_documente|comanda_id|comenzi_furnizor
+comenzi_furnizor_documente|uploadat_de|profiles
+comenzi_furnizor_linii|comanda_furnizor_id|comenzi_furnizor
+comenzi_furnizor_linii|comanda_linie_id|comanda_linii
+consumuri_proiect_linii|consum_id|consumuri_proiect
+contracte_acte_aditionale|contract_id|contracte_terti
+contracte_linii|act_aditional_id|contracte_acte_aditionale
+contracte_linii|contract_id|contracte_terti
+contracte_linii|linie_inlocuita_id|contracte_linii
+contracte_polite|contract_id|contracte_terti
+contracte_polite_acte|polita_id|contracte_polite
+contracte_subcontract_facturi|contract_id|contracte_terti
+contracte_subcontract_facturi|import_id|contracte_subcontract_import
+contracte_terti|beneficiar_id|beneficiari
+contracte_terti|contract_parinte_id|contracte_terti
+contracte_terti|site_id|sites
+ctc_documente|comanda_id|comenzi
+ctc_documente|comenzi_documente_id|comenzi_documente
+diurna_payment_details|employee_id|employees
+diurna_payment_details|payment_id|diurna_payments
+documente_firma|parent_id|documente_firma
+employee_salaries|employee_id|employees
+employees|site_id|sites
+evogps_alias|asset_id|logistica_active
+executie_acte_aditionale|proiect_id|executie_proiecte
+executie_alerte_ai|nas_doc_id_hash|nas_documente
+executie_alerte_ai|proiect_id|executie_proiecte
+executie_alocari_personal|employee_id|employees
+executie_alocari_personal|proiect_id|executie_proiecte
+executie_alocari_personal|site_id|sites
+executie_bonuri_consum|proiect_id|executie_proiecte
+executie_bonuri_consum|situatie_plata_id|executie_situatii_plata
+executie_bonuri_consum_linii|bon_id|executie_bonuri_consum
+executie_bonuri_consum_linii|magazie_bucata_id|magazie_bucati
+executie_bonuri_consum_linii|tip_material_id|magazie_tipuri_material
+executie_documente_contract|proiect_id|executie_proiecte
+executie_documente_referinta|proiect_id|executie_proiecte
+executie_documente_referinta|uploadat_de|profiles
+executie_faze_determinante|proiect_id|executie_proiecte
+executie_ordine_sistare|proiect_id|executie_proiecte
+executie_pachete_cumulat_final|parent_cumulat_id|executie_pachete_cumulat_final
+executie_pachete_cumulat_final|proiect_id|executie_proiecte
+executie_pachete_cumulat_final|tronson_id|executie_tronsoane
+executie_pachete_cumulat_tevi|cumulat_id|executie_pachete_cumulat_final
+executie_pachete_cumulat_tevi|teava_id|executie_tevi
+executie_pachete_documente|pachet_id|executie_pachete_lansare
+executie_pachete_exports|pachet_cumulat_id|executie_pachete_cumulat_final
+executie_pachete_exports|pachet_lansare_id|executie_pachete_lansare
+executie_pachete_exports|pachet_sant_id|executie_pachete_sudura_sant
+executie_pachete_lansare|legare_de_pachet_id|executie_pachete_lansare
+executie_pachete_lansare|parent_pachet_id|executie_pachete_lansare
+executie_pachete_lansare|proiect_id|executie_proiecte
+executie_pachete_lansare|tronson_id|executie_tronsoane
+executie_pachete_sudura_sant|pachet_lansare_id|executie_pachete_lansare
+executie_pachete_sudura_sant|proiect_id|executie_proiecte
+executie_proiecte|contract_id|contracte_terti
+executie_proiecte|mp_employee_id|employees
+executie_proiecte|rte_employee_id|employees
+executie_proiecte|rts_employee_id|employees
+executie_proiecte|site_id|sites
+executie_situatii_plata|ajustare_recuperata_in_sl|executie_situatii_plata
+executie_situatii_plata|proiect_id|executie_proiecte
+executie_situatii_plata_linii|sl_id|executie_situatii_plata
+executie_sl_ajustari|sl_ajustata_id|executie_situatii_plata
+executie_sl_ajustari|sl_id|executie_situatii_plata
+executie_tevi|pachet_id|executie_pachete_lansare
+executie_tevi|pachet_sudura_sant_id|executie_pachete_sudura_sant
+executie_tronsoane|proiect_id|executie_proiecte
+executie_tura_activitati|proiect_id|executie_proiecte
+executie_tura_activitati|site_id|sites
+executie_tura_naveta|masina_id|logistica_active
+executie_tura_naveta|proiect_id|executie_proiecte
+executie_tura_naveta|site_id|sites
+executie_tura_naveta|sofer_id|employees
+executie_tura_subcontractori|contract_id|contracte_terti
+executie_tura_subcontractori|proiect_id|executie_proiecte
+executie_tura_subcontractori|site_id|sites
+executie_ture|proiect_id|executie_proiecte
+executie_ture|site_id|sites
+facturi_emise|beneficiar_id|beneficiari
+facturi_emise|contract_id|contracte_terti
+facturi_emise|proiect_id|executie_proiecte
+gbe_polite|contract_id|contracte_terti
+gbe_restituiri|contract_id|contracte_terti
+gbe_restituiri|proiect_id|executie_proiecte
+hr_aprobatori|profile_id|profiles
+hr_autorizatii|deleted_by|profiles
+hr_autorizatii|employee_id|employees
+hr_autorizatii|tip_id|hr_autorizatii_tipuri
+hr_autorizatii|uploadat_de|profiles
+hr_autorizatii_rsvti_confirmari|autorizatie_id|hr_autorizatii
+hr_autorizatii_rsvti_confirmari|employee_id|employees
+hr_cereri_concediu|aprobator_id|profiles
+hr_cereri_concediu|employee_id|employees
+hr_cereri_concediu|semnat_hr_de|profiles
+hr_cereri_concediu|semnat_mp_de|profiles
+hr_concediu_rute|aprobator_profile_id|profiles
+hr_concediu_rute|employee_id|employees
+hr_concediu_tokens|employee_id|employees
+hr_documente_personale|deleted_by|profiles
+hr_documente_personale|employee_id|employees
+hr_documente_personale|tip_id|hr_documente_personale_tipuri
+hr_employees_private|employee_id|employees
+hr_semnaturi_electronice|deleted_by|profiles
+hr_semnaturi_electronice|employee_id|employees
+hr_semnaturi_electronice|uploadat_de|profiles
+logistica_achizitii_vrac|created_by|profiles
+logistica_achizitii_vrac|rezervor_id|logistica_rezervoare
+logistica_active|categorie_id|logistica_categorii
+logistica_active|comodat_employee_id|employees
+logistica_active|created_by|profiles
+logistica_active|furnizor_id|logistica_furnizori
+logistica_active|site_id|sites
+logistica_active_km_ore_ajustari|activ_id|logistica_active
+logistica_active_km_ore_ajustari|created_by|profiles
+logistica_active_poze|active_id|logistica_active
+logistica_active_poze|uploaded_by|profiles
+logistica_alerte_consum|active_id|logistica_active
+logistica_alerte_consum|bon_id|logistica_bonuri_carburant
+logistica_alerte_consum|dismissed_by|profiles
+logistica_alimentari|active_id|logistica_active
+logistica_alimentari|bon_comun_id|logistica_bonuri_comune
+logistica_alimentari|card_swap_with|logistica_alimentari
+logistica_alimentari|created_by|profiles
+logistica_alimentari|qr_sofer_id|employees
+logistica_alimentari|rezervor_id|logistica_rezervoare
+logistica_alimentari|site_id|sites
+logistica_alimentari_card|active_id|logistica_active
+logistica_alimentari_card|importat_de|profiles
+logistica_alocari|active_id|logistica_active
+logistica_alocari|aprobata_de|profiles
+logistica_alocari|categorie_dorita_id|logistica_categorii
+logistica_alocari|mecanic_id|employees
+logistica_alocari|site_id|sites
+logistica_alocari|solicitata_de|profiles
+logistica_amc|tip_id|logistica_amc_tipuri
+logistica_audit_log|changed_by|profiles
+logistica_avize_arhiva|generat_de|profiles
+logistica_avize_arhiva|transport_id|logistica_transporturi
+logistica_bonuri_carburant|active_id|logistica_active
+logistica_bonuri_carburant|aprobat_de|profiles
+logistica_bonuri_carburant|confirmat_sef_de|profiles
+logistica_bonuri_carburant|intocmit_de|profiles
+logistica_bonuri_carburant|site_id|sites
+logistica_bonuri_comune|creat_de_sofer_id|employees
+logistica_bonuri_comune|site_id|sites
+logistica_cesiuni_subcontractor|rezervor_id|logistica_rezervoare
+logistica_cesiuni_subcontractor|site_id|sites
+logistica_cesiuni_subcontractor|subcontractor_id|logistica_subcontractori
+logistica_comenzi_transport|respinsa_de|profiles
+logistica_comenzi_transport|responsabil_descarcare_id|profiles
+logistica_comenzi_transport|responsabil_incarcare_id|profiles
+logistica_comenzi_transport|santier_destinatie_id|sites
+logistica_comenzi_transport|santier_plecare_id|sites
+logistica_comenzi_transport|solicitant_id|profiles
+logistica_comenzi_transport_itemi|active_id|logistica_active
+logistica_comenzi_transport_itemi|comanda_id|logistica_comenzi_transport
+logistica_costuri|active_id|logistica_active
+logistica_costuri|created_by|profiles
+logistica_curse_gps|active_id|logistica_active
+logistica_declaratii|activ_id|logistica_active
+logistica_depozite|site_id|sites
+logistica_documente|created_by|profiles
+logistica_documente|tip_id|logistica_tipuri_documente
+logistica_importuri_rompetrol|importat_de|profiles
+logistica_mentenanta_istoric|active_id|logistica_active
+logistica_mentenanta_istoric|created_by|profiles
+logistica_mentenanta_plan|active_id|logistica_active
+logistica_mentenanta_plan|updated_by|profiles
+logistica_oscar_dispense|rezervor_id|logistica_rezervoare
+logistica_piese_catalog|created_by|profiles
+logistica_piese_istoric|active_id|logistica_active
+logistica_piese_istoric|created_by|profiles
+logistica_piese_istoric|piesa_cod_id|logistica_piese_catalog
+logistica_qr_submit_log|active_id|logistica_active
+logistica_qr_submit_log|alimentare_id|logistica_alimentari
+logistica_qr_submit_log|sofer_id_match|employees
+logistica_service_fise|activ_id|logistica_active
+logistica_service_fise_documente|fisa_id|logistica_service_fise
+logistica_service_fise_documente|uploadat_de|profiles
+logistica_service_intrari|activ_id|logistica_active
+logistica_service_intrari|fisa_id|logistica_service_fise
+logistica_service_intrari|sofer_id|profiles
+logistica_service_parteneri|created_by|profiles
+logistica_supape|activ_id|logistica_active
+logistica_telemetrie_zilnica|asset_id|logistica_active
+logistica_telemetrie_zilnica|created_by|profiles
+logistica_transporturi|activ_transportat_id|logistica_active
+logistica_transporturi|aprobator_id|profiles
+logistica_transporturi|confirmat_primire_de|profiles
+logistica_transporturi|destinatie_site_id|sites
+logistica_transporturi|manager_destinatie_id|profiles
+logistica_transporturi|manager_plecare_id|profiles
+logistica_transporturi|masina_id|logistica_active
+logistica_transporturi|plecare_site_id|sites
+logistica_transporturi|remorca_id|logistica_active
+logistica_transporturi|semnatura_destinatar_de|profiles
+logistica_transporturi|semnatura_expeditor_de|profiles
+logistica_transporturi|sofer_employee_id|employees
+logistica_transporturi|sofer_id|profiles
+logistica_transporturi|solicitant_id|profiles
+logistica_transporturi|transfer_id|transferuri_interne
+logistica_transporturi_continut|active_id|logistica_active
+logistica_transporturi_continut|transport_id|logistica_transporturi
+magazie_bucati|comanda_furnizor_id|comenzi_furnizor
+magazie_bucati|executie_teava_id|executie_tevi
+magazie_bucati|proiect_id|executie_proiecte
+magazie_bucati|tip_material_id|magazie_tipuri_material
+magazie_echipamente|comanda_sursa_id|comenzi_furnizor
+magazie_echipamente|created_by|profiles
+magazie_inventar_angajat|echipament_id|magazie_echipamente
+magazie_inventar_angajat|employee_id|employees
+magazie_inventar_angajat|predat_de|profiles
+magazii|executie_proiect_id|executie_proiecte
+magazii|site_id|sites
+nas_proiecte|executie_proiect_id|executie_proiecte
+notification_logs|template_name|notification_templates
+notifications|profile_id|profiles
+oferta_materiale|proiect_ofertare_id|proiecte_ofertare
+ordine_deplasare_arhiva|created_by|profiles
+ordine_deplasare_arhiva|employee_id|employees
+pontaj_brut_istoric|exported_by|profiles
+pontaj_net_istoric|exported_by|profiles
+pontaj_net_istoric|source_brut_id|pontaj_brut_istoric
+pontaj_records|employee_id|employees
+pontaj_records|site_id|sites
+probe_calcule|config_id|probe_configuratii
+probe_calcule|config_real_id|probe_configuratii
+probe_calcule|created_by|profiles
+probe_calcule|dn_id|probe_diametre
+probe_calcule|proiect_id|executie_proiecte
+probe_calcule|tronson_id|executie_tronsoane
+probe_log_executie|calc_id|probe_calcule
+probe_log_executie|operator_id|profiles
+probe_oferte|calc_id|probe_calcule
+probe_oferte|created_by|profiles
+profile_sites|profile_id|profiles
+profile_sites|site_id|sites
+proiect_activitate_coduri|activitate_id|proiect_activitati
+proiect_activitate_coduri|articol_id|proiect_articole
+proiect_activitati|proiect_id|executie_proiecte
+proiect_articole|proiect_id|executie_proiecte
+proiect_unitati|proiect_id|executie_proiecte
+proiecte_ofertare|beneficiar_id|beneficiari
+proiecte_ofertare|contract_id|contracte_terti
+proiecte_ofertare|site_id|sites
+rag_ingest_queue|document_id|logistica_documente
+rag_utilaje|active_id|logistica_active
+rag_utilaje|document_id|logistica_documente
+rapoarte_zilnice|site_id|sites
+raport_lucrari|activitate_id|proiect_activitati
+raport_lucrari|proiect_id|executie_proiecte
+raport_lucrari|raport_id|rapoarte_zilnice
+raport_lucrari|unitate_id|proiect_unitati
+service_import_ai_log|created_by|profiles
+service_import_ai_log|matched_activ_id|logistica_active
+service_import_ai_mappings|activ_id|logistica_active
+setari_recycle_bin|updated_by|profiles
+sites|contract_id|contracte_terti
+sites|proiect_id|executie_proiecte
+supliment_hrana_istoric|exported_by|profiles
+talon_extract_staging|active_id|logistica_active
+tichete|service_partener_id|logistica_service_parteneri
+tichete_asignati|profile_id|profiles
+tichete_asignati|tichet_id|tichete
+tichete_comentarii|tichet_id|tichete
+tichete_default_responsabili|profile_id|profiles
+tichete_default_responsabili|set_by|profiles
+tichete_istoric|tichet_id|tichete
+transferuri_interne|comanda_id|comenzi
+transferuri_linii|transfer_id|transferuri_interne
+user_module_access|granted_by|profiles
+user_module_access|module|app_modules
+user_module_access|profile_id|profiles
+whatsapp_messages_processed|alimentare_id|logistica_alimentari
+whatsapp_messages_processed|import_log_id|whatsapp_imports_log`
+  .split('\n').map(l => { const [s, c, d] = l.split('|'); return { s, c, d } })
+
+// rânduri estimate (doar tabelele cu >0; restul 0)
+const ROWS = {ai_documente_inbox:413,ai_usage_log:414,chat_members:14,chatbot_usage:7,claude_bot_runs:205,claude_bot_silentiate:622,claude_bot_sugestii:863,claude_context:767,claude_docs:35,comanda_linii:42,comenzi:11,comenzi_furnizor:61,comenzi_furnizor_aprobari:24,comenzi_furnizor_counter:12,comenzi_furnizor_linii:122,contracte_linii:1,contracte_subcontract_facturi:113,contracte_terti:40,diurna_payment_details:1120,diurna_payments:3,documente_firma:31,employees:154,executie_alerte_ai:210,executie_alocari_personal:151,executie_faze_determinante:26,executie_pachete_lansare:7,executie_proiecte:18,executie_situatii_plata:34,executie_situatii_plata_linii:64,executie_tevi:381,executie_tura_activitati:36,executie_tura_naveta:40,facturi_emise:47,hr_autorizatii:360,hr_autorizatii_tipuri:54,hr_cereri_concediu:84,hr_concediu_tokens:117,hr_documente_personale:266,hr_semnaturi_electronice:1,logistica_active:319,logistica_active_km_ore_ajustari:1,logistica_alimentari:1582,logistica_alocari:47,logistica_bonuri_comune:26,logistica_cesiuni_subcontractor:20,logistica_documente:494,logistica_mentenanta_plan:54,logistica_oscar_dispense:82,logistica_piese_catalog:476,logistica_piese_istoric:1173,logistica_qr_submit_log:435,logistica_rezervoare:8,logistica_service_fise:383,logistica_service_intrari:1332,logistica_service_itemi_preset:70,logistica_subcontractori:1,logistica_telemetrie_zilnica:3297,logistica_transporturi:39,logistica_transporturi_continut:80,magazie_tipuri_material:15,nas_documente:194521,nas_proiecte:581,notifications:19052,ordine_deplasare_arhiva:218,pontaj_brut_istoric:39,pontaj_records:14054,profile_sites:18,profiles:16,proiect_articole:284,rag_ingest_queue:31,rag_utilaje:3011,sites:16,stocuri:166,stocuri_miscari:210,talon_extract_staging:38,tichete:54,tichete_istoric:236,transferuri_linii:33,user_module_access:75,whatsapp_messages_processed:557}
+
+// tabele fără FK (nu apar în EDGES) — completăm lista din ROWS + cele cunoscute goale
+const EXTRA_TABLES = ['ai_documente_inbox','ai_usage_log','avize_serii_counter','beneficiari','calendar_days','chatbot_conversations','chatbot_easter_eggs','chatbot_usage','claude_bot_runs','claude_bot_sugestii','claude_docs','comenzi_furnizor_counter','evogps_imports_log','facturi_serii_counter','hr_salarii_audit','internal_chats','logistica_service_itemi_preset','logistica_setari','materiale','nas_documente','piese_import_staging','probe_transport_tarife','rag_normative','rag_qr_log','scanner_logs','setari_ordin_deplasare','settings','stocuri','stocuri_miscari','tichete_subcategorii','whatsapp_imports_log']
+
+// ── MODULE (grupare pe prefix / apartenență funcțională) ───────────────────
+const MODULE = [
+  { k: 'nucleu',    nume: 'Nucleu (oameni & șantiere)', cul: '#58A6FF',
+    match: t => ['profiles','employees','sites','beneficiari','app_modules','user_module_access','profile_sites','settings','calendar_days','employee_salaries','hr_employees_private'].includes(t) },
+  { k: 'pontaj',    nume: 'Pontaj · HR · Diurnă', cul: '#BC8CFF',
+    match: t => /^(pontaj_|hr_|diurna_)/.test(t) || ['supliment_hrana_istoric','ordine_deplasare_arhiva','setari_ordin_deplasare'].includes(t) },
+  { k: 'rapoarte',  nume: 'Rapoarte șantier & progres', cul: '#F778BA',
+    match: t => /^(rapoarte_zilnice|raport_lucrari|proiect_)/.test(t) },
+  { k: 'executie',  nume: 'Execuție & proiecte', cul: '#FF7B72',
+    match: t => /^(executie_|probe_|consumuri_)/.test(t) || t === 'nas_proiecte' },
+  { k: 'contracte', nume: 'Contracte & financiar', cul: '#3FB950',
+    match: t => /^(contracte_|facturi_|gbe_)/.test(t) || t === 'avize_serii_counter' },
+  { k: 'achizitii', nume: 'Achiziții & comenzi', cul: '#F0883E',
+    match: t => /^(comenzi|comanda_|oferta_|proiecte_ofertare|ctc_)/.test(t) },
+  { k: 'magazie',   nume: 'Magazie & stocuri', cul: '#56D4DD',
+    match: t => /^(magazie_|magazii|stocuri|materiale|transferuri_|piese_import)/.test(t) },
+  { k: 'logistica', nume: 'Logistică & flotă', cul: '#D29922',
+    match: t => /^(logistica_|evogps_|avize_cjp|talon_)/.test(t) },
+  { k: 'ai',        nume: 'AI · documente · integrare', cul: '#8B949E',
+    match: t => /^(claude_|chatbot_|rag_|ai_|nas_documente|documente_firma|scanner_|whatsapp_)/.test(t) },
+  { k: 'comunicare',nume: 'Tichete · chat · notificări', cul: '#79C0FF',
+    match: t => /^(tichete|internal_chats|chat_|notification)/.test(t) },
+  { k: 'altele',    nume: 'Altele', cul: '#6E7681', match: () => true },
+]
+
+// ── CONSTRUCȚIE MODEL ──────────────────────────────────────────────────────
+const tabele = new Set(EXTRA_TABLES)
+for (const e of EDGES) { tabele.add(e.s); tabele.add(e.d) }
+const modPt = t => MODULE.find(m => m.match(t))
+const inEdges = {}, outEdges = {}
+for (const e of EDGES) {
+  (outEdges[e.s] = outEdges[e.s] || []).push(e);
+  (inEdges[e.d] = inEdges[e.d] || []).push(e)
+}
+const fmtN = n => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n)
+
+// ── RANDARE ────────────────────────────────────────────────────────────────
+const grid = document.getElementById('grid')
+const elPt = {}
+for (const m of MODULE) {
+  const ts = [...tabele].filter(t => modPt(t).k === m.k).sort()
+  if (!ts.length) continue
+  const card = document.createElement('div')
+  card.className = 'mod'; card.dataset.mod = m.k
+  card.innerHTML = `<div class="mod-h"><span class="dot" style="background:${m.cul}"></span>
+    <span class="nume" style="color:${m.cul}">${m.nume}</span><span class="cnt">${ts.length}</span></div>`
+  for (const t of ts) {
+    const nLinks = (outEdges[t]?.length || 0) + (inEdges[t]?.length || 0)
+    const row = document.createElement('div')
+    row.className = 'tbl'; row.dataset.t = t; row.style.color = m.cul
+    row.innerHTML = `<span class="nm">${t}</span>
+      ${nLinks ? `<span class="lk">⇄${nLinks}</span>` : ''}
+      <span class="rw">${fmtN(ROWS[t] || 0)}</span>`
+    row.addEventListener('click', ev => { ev.stopPropagation(); selecteaza(t) })
+    card.appendChild(row); elPt[t] = row
+  }
+  grid.appendChild(card)
+}
+document.getElementById('stats').textContent = `${tabele.size} tabele · ${EDGES.length} legături`
+
+// ── SVG EDGES ──────────────────────────────────────────────────────────────
+const svg = document.getElementById('edges'), wrap = document.getElementById('wrap')
+let sel = null
+function pozitie(t) {
+  const el = elPt[t]; if (!el || el.classList.contains('hidden')) return null
+  const r = el.getBoundingClientRect(), w = wrap.getBoundingClientRect()
+  return { x1: r.left - w.left, x2: r.right - w.left, y: r.top - w.top + r.height / 2 }
+}
+function deseneaza() {
+  svg.setAttribute('width', wrap.scrollWidth); svg.setAttribute('height', wrap.scrollHeight)
+  svg.style.width = wrap.scrollWidth + 'px'; svg.style.height = wrap.scrollHeight + 'px'
+  let list = [], strong = false
+  if (sel) { list = [...(outEdges[sel] || []), ...(inEdges[sel] || [])]; strong = true }
+  else if (document.getElementById('toate').checked) list = EDGES
+  let html = ''
+  for (const e of list) {
+    if (e.s === e.d) continue
+    const a = pozitie(e.s), b = pozitie(e.d); if (!a || !b) continue
+    const [x1, x2] = a.x2 < b.x1 ? [a.x2, b.x1] : (b.x2 < a.x1 ? [a.x1, b.x2] : [a.x1, b.x1])
+    const mx = (x1 + x2) / 2
+    const cul = modPt(e.s).cul
+    html += `<path d="M ${x1} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${x2} ${b.y}"
+      fill="none" stroke="${cul}" stroke-width="${strong ? 1.6 : 0.7}"
+      opacity="${strong ? 0.85 : 0.14}"></path>`
+  }
+  svg.innerHTML = html
+}
+
+// ── SELECȚIE + PANOU ───────────────────────────────────────────────────────
+const panel = document.getElementById('panel')
+function selecteaza(t) {
+  if (sel === t) { curata(); return }
+  sel = t
+  document.body.classList.add('focus')
+  document.querySelectorAll('.tbl.sel,.tbl.vecin').forEach(e => e.classList.remove('sel', 'vecin'))
+  document.querySelectorAll('.mod.are-focus').forEach(e => e.classList.remove('are-focus'))
+  elPt[t]?.classList.add('sel')
+  const vecini = new Set()
+  for (const e of (outEdges[t] || [])) vecini.add(e.d)
+  for (const e of (inEdges[t] || [])) vecini.add(e.s)
+  vecini.delete(t)
+  for (const v of vecini) elPt[v]?.classList.add('vecin')
+  for (const x of [t, ...vecini]) elPt[x]?.closest('.mod')?.classList.add('are-focus')
+  // panou
+  const m = modPt(t)
+  document.getElementById('p-dot').style.background = m.cul
+  document.getElementById('p-nume').textContent = t
+  document.getElementById('p-meta').textContent =
+    `${m.nume} · ~${fmtN(ROWS[t] || 0)} rânduri · ${(outEdges[t] || []).length} ieșiri · ${(inEdges[t] || []).length} intrări`
+  const rel = (e, dir) => `<div class="rel" data-go="${dir === 'out' ? e.d : e.s}">
+    ${dir === 'out'
+      ? `<span class="c">${e.c}</span><span class="sag">${e.s === e.d ? '↺' : '→'}</span><span style="color:${modPt(e.d).cul}">${e.d}</span>`
+      : `<span style="color:${modPt(e.s).cul}">${e.s}</span><span class="c">.${e.c}</span><span class="sag">${e.s === e.d ? '↺' : '→'}</span>`}
+  </div>`
+  document.getElementById('p-out').innerHTML = (outEdges[t] || []).map(e => rel(e, 'out')).join('') || '<div class="gol">— nu trimite spre nimic</div>'
+  document.getElementById('p-in').innerHTML = (inEdges[t] || []).map(e => rel(e, 'in')).join('') || '<div class="gol">— nimeni nu o referențiază</div>'
+  panel.classList.add('on')
+  panel.querySelectorAll('.rel').forEach(r => r.addEventListener('click', () => {
+    const go = r.dataset.go
+    selecteaza(go); elPt[go]?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }))
+  deseneaza()
+}
+function curata() {
+  sel = null
+  document.body.classList.remove('focus')
+  document.querySelectorAll('.tbl.sel,.tbl.vecin').forEach(e => e.classList.remove('sel', 'vecin'))
+  document.querySelectorAll('.mod.are-focus').forEach(e => e.classList.remove('are-focus'))
+  panel.classList.remove('on')
+  deseneaza()
+}
+document.getElementById('p-close').addEventListener('click', curata)
+document.addEventListener('keydown', e => { if (e.key === 'Escape') curata() })
+document.addEventListener('click', e => { if (!e.target.closest('.tbl') && !e.target.closest('#panel')) curata() })
+
+// ── CĂUTARE + TOGGLE ───────────────────────────────────────────────────────
+document.getElementById('q').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase()
+  for (const [t, el] of Object.entries(elPt)) el.classList.toggle('hidden', !!q && !t.includes(q))
+  document.querySelectorAll('.mod').forEach(m =>
+    m.classList.toggle('goala', !!q && !m.querySelector('.tbl:not(.hidden)')))
+  deseneaza()
+})
+document.getElementById('toate').addEventListener('change', deseneaza)
+window.addEventListener('resize', () => requestAnimationFrame(deseneaza))
+requestAnimationFrame(deseneaza)
+</script>
