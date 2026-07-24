@@ -2314,16 +2314,24 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           // Direction: pozitivă = consumat MAI MULT decât teoretic (suspect furt), negativă = mai puțin (eficient)
           const isOverConsum = diferenta > 0
           
+          // Roșu = DOAR supra-consum critic (furt/scurgere). Sub-consumul nu-i suspect —
+          // aproape mereu norma e setată prea sus → galben + cerem ajustare manuală a normei.
+          const consumRealLH = oreReale > 0 ? totalLitri / oreReale : null
           let bg, color, emoji, status
           if (!isSuspect) {
             bg = G.greenDim; color = G.green; emoji = '✅'
             status = 'Consum în limite normale'
-          } else if (isCritic) {
-            bg = G.redDim; color = G.red; emoji = '🚨'
-            status = isOverConsum ? 'CONSUM CRITIC — verifică urgent (posibil furt sau scurgere)' : 'Diferență critică — verifică citirile'
+          } else if (isOverConsum) {
+            if (isCritic) {
+              bg = G.redDim; color = G.red; emoji = '🚨'
+              status = 'CONSUM CRITIC — verifică urgent (posibil furt sau scurgere)'
+            } else {
+              bg = G.yellowDim; color = G.orange; emoji = '⚠️'
+              status = 'Consum peste prag — atenție'
+            }
           } else {
-            bg = G.yellowDim; color = G.orange; emoji = '⚠️'
-            status = isOverConsum ? 'Consum peste prag — atenție' : 'Sub prag — verificare recomandată'
+            bg = G.yellowDim; color = G.yellow; emoji = '📏'
+            status = `Consum sub normă — norma (${norma} l/h) pare setată prea sus; ajustează manual norma la ~${consumRealLH ? consumRealLH.toFixed(1) : '—'} l/h (consum real măsurat)`
           }
           
           return (
