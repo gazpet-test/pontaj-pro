@@ -113,6 +113,9 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [personal, setPersonal] = useState(null)
   const [utilaje, setUtilaje] = useState([])
   const [lucrari, setLucrari] = useState('')
+  const [proiectId, setProiectId] = useState(null)          // proiectul legat de lucrare (sites.proiect_id)
+  const [activitati, setActivitati] = useState([])          // proiect_activitati ale proiectului
+  const [lucrariAct, setLucrariAct] = useState({})          // {activitate_id: cantitate azi}
   const [masini, setMasini] = useState('')
   const [probleme, setProbleme] = useState('')
   const [planMaine, setPlanMaine] = useState('')
@@ -129,9 +132,27 @@ function RaportZilnic({ profile, sites, onBack }) {
     if (!sid) return
     setLoadingData(true)
     setMsg(null)
+    // ── Activitățile proiectului legat de lucrare (Faza 5 pas 3) ──
+    const { data: siteRow } = await supabase.from('sites').select('proiect_id').eq('id', sid).maybeSingle()
+    const pid = siteRow?.proiect_id || null
+    setProiectId(pid)
+    let acts = []
+    if (pid) {
+      const { data: a } = await supabase.from('proiect_activitati').select('id, nume, um, ordine')
+        .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id')
+      acts = a || []
+    }
+    setActivitati(acts)
+    setLucrariAct({})
     // ── Există deja raport azi pe lucrare? → încarcă pentru editare (anti-dublură) ──
     const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
     if (existing) {
+      if (acts.length) {
+        const { data: rl } = await supabase.from('raport_lucrari').select('activitate_id, cantitate').eq('raport_id', existing.id)
+        const m = {}
+        for (const r of (rl || [])) if (r.activitate_id) m[r.activitate_id] = Number(r.cantitate) || 0
+        setLucrariAct(m)
+      }
       setExistingId(existing.id)
       setLucrari(existing.lucrari_efectuate || '')
       setMasini(existing.masini || '')
@@ -219,7 +240,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       }
       const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
       // upsert pe (site_id, data) → 1 raport/lucrare/zi, reintrarea editează
-      const { error: insErr } = await supabase.from('rapoarte_zilnice').upsert({
+      const { data: rz, error: insErr } = await supabase.from('rapoarte_zilnice').upsert({
         site_id: siteId, data: azi(),
         sef_santier: profile?.name || null,
         lucrari_efectuate: lucrari.trim() || null,
@@ -231,8 +252,19 @@ function RaportZilnic({ profile, sites, onBack }) {
         poze: pozePaths,
         created_by: user?.id || null,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'site_id,data' })
+      }, { onConflict: 'site_id,data' }).select('id').single()
       if (insErr) throw insErr
+      // ── Lucrări pe activități (Faza 5 pas 3): rescriem setul raportului ──
+      if (rz?.id && proiectId) {
+        await supabase.from('raport_lucrari').delete().eq('raport_id', rz.id)
+        const rows = activitati
+          .filter(a => Number(lucrariAct[a.id]) > 0)
+          .map(a => ({ raport_id: rz.id, proiect_id: proiectId, activitate_id: a.id, cantitate: Number(lucrariAct[a.id]) }))
+        if (rows.length) {
+          const { error: rlErr } = await supabase.from('raport_lucrari').insert(rows)
+          if (rlErr) throw rlErr
+        }
+      }
       setMsg({ ok: true, text: existingId ? '✅ Raport actualizat!' : '✅ Raport trimis cu succes!' })
       setTimeout(onBack, 1200)
     } catch (e) {
@@ -328,8 +360,24 @@ function RaportZilnic({ profile, sites, onBack }) {
             </button>
           </Section>
 
+          {/* Lucrări pe activitățile proiectului (Faza 5 pas 3) */}
+          {activitati.length > 0 && (
+            <Section title="📏 Cantități pe activități" hint="doar ce s-a lucrat azi — restul lasă gol">
+              {activitati.map(a => (
+                <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6 }}>
+                  <span style={{ fontSize: 14, color: G.text, flex: 1, minWidth: 0 }}>{a.nume}</span>
+                  <input type="number" min="0" step="any" inputMode="decimal" placeholder="0"
+                    value={lucrariAct[a.id] ?? ''}
+                    onChange={e => setLucrariAct(m => ({ ...m, [a.id]: e.target.value === '' ? '' : Math.max(0, Number(e.target.value)) }))}
+                    style={{ width: 76, textAlign: 'center', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 6px', fontSize: 16, fontWeight: 700 }} />
+                  <span style={{ fontSize: 12, color: G.muted, width: 32 }}>{a.um || ''}</span>
+                </div>
+              ))}
+            </Section>
+          )}
+
           {/* Activități + text */}
-          <Section title="🔧 Lucrări efectuate" hint="scrie sau lipește din WhatsApp">
+          <Section title="🔧 Lucrări efectuate" hint={activitati.length ? 'detalii libere (opțional)' : 'scrie sau lipește din WhatsApp'}>
             <textarea value={lucrari} onChange={e => setLucrari(e.target.value)} rows={5} placeholder="Ce s-a lucrat azi…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
           </Section>
 
