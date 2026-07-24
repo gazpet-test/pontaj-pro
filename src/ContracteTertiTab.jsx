@@ -120,16 +120,25 @@ export default function ContracteTertiTab() {
         .select('id, name, is_owner, can_manage_contracts').eq('id', user.id).single()
       setProfile(data)
     }
-    const [bRes, cRes, pRes, gRes] = await Promise.all([
+    const [bRes, cRes, pRes, gRes, efRes] = await Promise.all([
       supabase.from('beneficiari').select('*').order('nume'),
       supabase.from('contracte_terti').select('*')
         .order('data_semnare', { ascending: false, nullsFirst: false })
         .order('id', { ascending: false }),
       supabase.from('contracte_polite').select('id, contract_id, tip, status, data_expirare'),
       supabase.from('v_gbe_per_contract').select('contract_id, gbe_retinut'),
+      // valoarea cu acte adiționale (calculată în view) — lista folosea coloana
+      // `valoare_actuala_lei` care nu se populează, deci arăta doar valoarea de bază
+      supabase.from('v_contract_efecte_acte').select('contract_id, valoare_actuala_calc'),
     ])
     setBeneficiari(bRes.data || [])
-    setContracte(cRes.data || [])
+    // suprapunem valoarea actuală cu acte (dacă diferă de bază) peste fiecare contract,
+    // ca `fmtVal` să afișeze în listă exact ce arată și detaliul contractului
+    const efMap = {}
+    for (const e of (efRes.data || [])) efMap[e.contract_id] = e.valoare_actuala_calc
+    setContracte((cRes.data || []).map(c => (
+      efMap[c.id] != null ? { ...c, valoare_actuala_lei: efMap[c.id] } : c
+    )))
     const pm = {}
     for (const p of (pRes.data || [])) { (pm[p.contract_id] = pm[p.contract_id] || []).push(p) }
     setPoliteMap(pm)
