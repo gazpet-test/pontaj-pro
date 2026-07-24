@@ -7887,6 +7887,8 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
           nrAlim: 0, totalLitri: 0, totalCost: 0,
           // Pe ultimele 7 zile pentru consum real
           litri7z: 0, oreLucrate7z: 0, kmParcursi7z: 0, nrAlim7z: 0,
+          // litri DOAR din alimentările cu pereche validă de bord (metoda rezervor-la-rezervor)
+          litriPerechiOre: 0, litriPerechiKm: 0,
           rows: []
         })
       }
@@ -7907,6 +7909,11 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
         const idx = sortedList.findIndex(s => s.id === a.id)
         const prev = idx > 0 ? sortedList[idx - 1] : null
         
+        // FIX 24.07.2026 — metoda „rezervor-la-rezervor": litrii intră în calculul de
+        // consum DOAR când alimentarea are pereche validă de bord cu precedenta.
+        // Altfel numărătorul (litri) acoperea toată perioada iar numitorul (ore/km)
+        // doar perechile cu citiri → consum umflat artificial și „Critic" fals
+        // (prima alimentare din perioadă + alimentările fără citire de bord).
         if (prev) {
           // Calc diff ore bord (pentru utilaje cu ore_la_alimentare populat)
           if (a.ore_la_alimentare != null && prev.ore_la_alimentare != null) {
@@ -7914,6 +7921,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
             // Diff valid: >0.5h și <500h (evită ore_regress și diff absurd între alim foarte rare)
             if (diffOre > 0.5 && diffOre < 500) {
               x.oreLucrate7z += diffOre
+              x.litriPerechiOre += Number(a.cantitate_litri || 0)
             }
           }
           // Calc diff km bord (pentru utilaje cu km_la_alimentare populat)
@@ -7921,14 +7929,16 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
             const diffKm = Number(a.km_la_alimentare) - Number(prev.km_la_alimentare)
             if (diffKm > 5 && diffKm < 5000) {
               x.kmParcursi7z += diffKm
+              x.litriPerechiKm += Number(a.cantitate_litri || 0)
             }
           }
         }
-        
+
         // Fallback: dacă există ore_lucrate_efectiv (introdus manual), îl iau ca backup
         // DOAR dacă nu am calculat încă din diff (utilaj cu 1 alim în 7z + ore_lucrate_efectiv vechi style)
         if (!prev && a.ore_lucrate_efectiv && Number(a.ore_lucrate_efectiv) > 0) {
           x.oreLucrate7z += Number(a.ore_lucrate_efectiv)
+          x.litriPerechiOre += Number(a.cantitate_litri || 0)
         }
       }
     })
@@ -7937,10 +7947,10 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
       // Consum real - aleg unitatea care se potrivește cu norma
       let consumReal = null
       if (x.unitateNorma === 'l/100km' && x.kmParcursi7z > 0) {
-        consumReal = x.litri7z * 100 / x.kmParcursi7z
+        consumReal = x.litriPerechiKm * 100 / x.kmParcursi7z
       } else if (x.oreLucrate7z > 0) {
         // Default: l/h sau kWh/h
-        consumReal = x.litri7z / x.oreLucrate7z
+        consumReal = x.litriPerechiOre / x.oreLucrate7z
       }
       let stareConsum = null  // null | 'ok' | 'warning' | 'critic'
       let abaterePct = null
