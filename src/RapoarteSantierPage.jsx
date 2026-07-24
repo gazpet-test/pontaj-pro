@@ -306,12 +306,17 @@ function CardRaport({ r, siteName, onOpen, showSite }) {
 function ModalDetaliu({ raport, siteName, onClose }) {
   const [pozeUrls, setPozeUrls] = useState([])
   const [zoom, setZoom] = useState(null)
+  const [lucrariAct, setLucrariAct] = useState([])   // cantități pe activități (raport_lucrari + nume activitate)
   useEffect(() => {
     (async () => {
       const paths = raport.poze || []
-      if (paths.length === 0) { setPozeUrls([]); return }
-      const { data } = await supabase.storage.from(BUCKET).createSignedUrls(paths, 3600)
-      setPozeUrls((data || []).map(d => d.signedUrl).filter(Boolean))
+      if (paths.length === 0) { setPozeUrls([]) } else {
+        const { data } = await supabase.storage.from(BUCKET).createSignedUrls(paths, 3600)
+        setPozeUrls((data || []).map(d => d.signedUrl).filter(Boolean))
+      }
+      const { data: rl } = await supabase.from('raport_lucrari')
+        .select('cantitate, observatii, proiect_activitati(nume, um)').eq('raport_id', raport.id)
+      setLucrariAct(rl || [])
     })()
   }, [raport])
 
@@ -358,6 +363,19 @@ function ModalDetaliu({ raport, siteName, onClose }) {
                   </span>
                 </div>
               )})}
+            </div>
+          </Bloc>
+        )}
+
+        {/* cantități pe activitățile proiectului (Faza 5 pas 3) */}
+        {lucrariAct.length > 0 && (
+          <Bloc titlu="📏 Cantități pe activități">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {lucrariAct.map((l, i) => (
+                <span key={i} style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 8, padding: '5px 10px', fontSize: 13, color: G.text }}>
+                  {l.proiect_activitati?.nume || '—'}: <strong style={{ color: G.blue }}>{Number(l.cantitate).toLocaleString('ro-RO', { maximumFractionDigits: 1 })} {l.proiect_activitati?.um || ''}</strong>
+                </span>
+              ))}
             </div>
           </Bloc>
         )}

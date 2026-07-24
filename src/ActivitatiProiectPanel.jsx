@@ -29,17 +29,22 @@ const STANDARD = [
 export default function ActivitatiProiectPanel({ proiectId, showToast }) {
   const [acts, setActs] = useState([])
   const [articole, setArticole] = useState([])
+  const [realizat, setRealizat] = useState({})   // {activitate_id: suma cantităților din rapoartele zilnice}
   const [loading, setLoading] = useState(true)
   const [noua, setNoua] = useState({ nume: '', um: '', coduri_deviz: '' })
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [a, art] = await Promise.all([
+    const [a, art, rl] = await Promise.all([
       supabase.from('proiect_activitati').select('*').eq('proiect_id', proiectId).order('ordine').order('id'),
-      supabase.from('proiect_articole').select('cod, um, cantitate').eq('proiect_id', proiectId),
+      supabase.from('proiect_articole').select('cod, um, cantitate, sursa').eq('proiect_id', proiectId).neq('sursa', 'extras_materiale'),
+      supabase.from('raport_lucrari').select('activitate_id, cantitate').eq('proiect_id', proiectId),
     ])
     setActs(a.data || [])
     setArticole(art.data || [])
+    const r = {}
+    for (const x of (rl.data || [])) if (x.activitate_id) r[x.activitate_id] = (r[x.activitate_id] || 0) + (Number(x.cantitate) || 0)
+    setRealizat(r)
     setLoading(false)
   }, [proiectId])
   useEffect(() => { load() }, [load])
@@ -91,20 +96,31 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
       </div>
 
       {acts.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.6fr 1.1fr auto auto', gap: 6, alignItems: 'center', marginBottom: 4, fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4, padding: '0 2px' }}>
-          <span>Activitate</span><span>UM</span><span>Coduri deviz</span><span>Contract</span><span></span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.5fr 1fr auto 1.1fr auto', gap: 6, alignItems: 'center', marginBottom: 4, fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4, padding: '0 2px' }}>
+          <span>Activitate</span><span>UM</span><span>Coduri deviz</span><span>Contract</span><span>Progres (din rapoarte)</span><span></span>
         </div>
       )}
       {acts.map((a, i) => {
         const c = totalContract[i]
+        const r = realizat[a.id] || 0
+        const pct = c && c.q > 0 ? Math.min(100, r / c.q * 100) : null
         return (
-          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1.6fr 0.6fr 1.1fr auto auto', gap: 6, alignItems: 'center', marginBottom: 5 }}>
+          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.5fr 1fr auto 1.1fr auto', gap: 6, alignItems: 'center', marginBottom: 5 }}>
             <input defaultValue={a.nume} onBlur={e => e.target.value.trim() !== a.nume && salveaza(a.id, { nume: e.target.value.trim() })} style={inp} />
             <input defaultValue={a.um || ''} onBlur={e => e.target.value.trim() !== (a.um || '') && salveaza(a.id, { um: e.target.value.trim() || null })} style={inp} />
             <input defaultValue={a.coduri_deviz || ''} placeholder="ex. GA04,GA05" onBlur={e => e.target.value.trim() !== (a.coduri_deviz || '') && salveaza(a.id, { coduri_deviz: e.target.value.trim() || null })} style={{ ...inp, fontFamily: 'monospace' }} />
             <span style={{ fontSize: 11.5, color: c ? G.green : G.dim, whiteSpace: 'nowrap', textAlign: 'right', minWidth: 90 }}>
               {c ? `${c.q.toLocaleString('ro-RO', { maximumFractionDigits: 1 })} ${a.um || ''} (${c.n})` : '— maparea'}
             </span>
+            <div title={pct != null ? `${r.toLocaleString('ro-RO', { maximumFractionDigits: 1 })} / ${c.q.toLocaleString('ro-RO', { maximumFractionDigits: 1 })} ${a.um || ''}` : (r ? `${r} ${a.um || ''} raportat (fără cantitate de contract)` : 'nimic raportat încă')}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <div style={{ flex: 1, height: 8, background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 5, overflow: 'hidden' }}>
+                {pct != null && <div style={{ width: pct + '%', height: '100%', background: pct >= 100 ? G.green : G.blue, transition: 'width .3s' }} />}
+              </div>
+              <span style={{ fontSize: 11, color: r ? (pct >= 100 ? G.green : G.blue) : G.dim, whiteSpace: 'nowrap', minWidth: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                {pct != null ? `${pct.toFixed(0)}%` : (r ? r.toLocaleString('ro-RO', { maximumFractionDigits: 1 }) : '—')}
+              </span>
+            </div>
             <button onClick={() => sterge(a.id)} title="Șterge" style={{ background: 'transparent', border: 'none', color: G.red, fontSize: 14, cursor: 'pointer' }}>🗑</button>
           </div>
         )
