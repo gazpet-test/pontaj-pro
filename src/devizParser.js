@@ -110,7 +110,8 @@ export async function parseDevizDocx(arrayBuffer) {
 
 // ── .xls/.xlsx: best-effort pe antet (Nr, Cod/Simbol, Denumire, UM, Cantitate) ──
 export async function parseDevizExcel(arrayBuffer) {
-  const XLSX = await import('xlsx-js-style')
+  const _x = await import('xlsx-js-style')
+  const XLSX = _x.default?.read ? _x.default : _x
   const wb = XLSX.read(arrayBuffer, { type: 'array' })
   const out = []
   for (const name of wb.SheetNames) {
@@ -131,6 +132,42 @@ export async function parseDevizExcel(arrayBuffer) {
       if (cant == null || !um || !den) continue
       out.push({ obiect_cod: '', obiect_nume: name, deviz_cod: '', deviz_nume: '', nr: String(r), cod: col.cod >= 0 ? String(row[col.cod] || '').trim() : '', denumire: den.slice(0, 200), um, cantitate: cant, valoare: null })
     }
+  }
+  return out
+}
+
+// ── Extras de materiale (Formular C6 — „Lista consumurilor de resurse materiale") ──
+// Foaia „materiale": antet cu Nr/Denumire/UM/Consumuri/Pret/Valoare, date de la
+// rândul următor. Denumirea începe cu codul numeric de material (ex. „2000092 OTEL…").
+export async function parseExtrasMateriale(file) {
+  const _x = await import('xlsx-js-style')
+  const XLSX = _x.default?.read ? _x.default : _x
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+  const sheet = wb.Sheets['materiale'] || wb.Sheets[wb.SheetNames[0]]
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' })
+  let hdr = -1
+  for (let r = 0; r < Math.min(rows.length, 20); r++) {
+    const cells = rows[r].map(c => String(c).toLowerCase())
+    if (cells.some(c => c.includes('denumirea resursei')) && cells.some(c => c.includes('consumuri'))) { hdr = r; break }
+  }
+  if (hdr < 0) throw new Error('Nu găsesc antetul C6 (Denumirea resursei / Consumuri) în foaia „materiale"')
+  const out = []
+  for (let r = hdr + 1; r < rows.length; r++) {
+    const [nr, den, um, cant, pret, val, furnizor] = rows[r]
+    const cantitate = num(cant)
+    const d = String(den || '').trim()
+    if (!d || cantitate == null || !String(um || '').trim()) continue
+    if (!/^\d+$/.test(String(nr).trim())) continue // sar subtotaluri/EURO/semnături
+    if (!/[A-Za-z]/.test(d)) continue // sar rândul cu indecșii de coloane (0|1|2|…)
+    const mc = d.match(/^(\d{5,})\s+(.*)$/) // cod material numeric la început
+    out.push({
+      obiect_cod: '', obiect_nume: 'MATERIALE (extras C6)', deviz_cod: '', deviz_nume: '',
+      nr: String(nr).trim().padStart(3, '0'), cod: mc ? mc[1] : '',
+      denumire: (mc ? mc[2] : d).slice(0, 200).trim(),
+      um: String(um).trim().toLowerCase().replace(/\.$/, ''), cantitate,
+      valoare: num(val), pret_unitar: num(pret),
+      furnizor: String(furnizor || '').trim() || null,
+    })
   }
   return out
 }
