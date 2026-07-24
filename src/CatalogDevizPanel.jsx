@@ -29,29 +29,54 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
   }, [proiectId])
   useEffect(() => { load() }, [load])
 
-  const onFile = async (file) => {
+  const insertRows = async (arts, extra) => {
+    const rows = arts.map(a => ({
+      proiect_id: proiectId, obiect_cod: a.obiect_cod, obiect_nume: a.obiect_nume,
+      deviz_cod: a.deviz_cod, deviz_nume: a.deviz_nume, nr: a.nr, cod: a.cod,
+      denumire: a.denumire, um: a.um, cantitate: a.cantitate, valoare: a.valoare, ...extra,
+    }))
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabase.from('proiect_articole').insert(rows.slice(i, i + 200))
+      if (error) throw error
+    }
+    return rows.length
+  }
+
+  const onImportInitial = async (file) => {
     if (!file) return
     setImporting(true)
     try {
       const arts = await parseDeviz(file)
-      if (!arts.length) { showToast?.('Nu am găsit articole în fișier (verifică formatul F3).', 'error'); return }
+      if (!arts.length) { showToast?.('Nu am găsit articole (verifică formatul F3).', 'error'); return }
       const val = arts.reduce((s, a) => s + (a.valoare || 0), 0)
-      if (!window.confirm(`Am găsit ${arts.length} articole (${fmtLei(val)}).\n\nÎnlocuiesc catalogul existent al proiectului cu acestea?`)) return
-      await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId)
-      const rows = arts.map(a => ({
-        proiect_id: proiectId, obiect_cod: a.obiect_cod, obiect_nume: a.obiect_nume,
-        deviz_cod: a.deviz_cod, deviz_nume: a.deviz_nume, nr: a.nr, cod: a.cod,
-        denumire: a.denumire, um: a.um, cantitate: a.cantitate, valoare: a.valoare,
-      }))
-      for (let i = 0; i < rows.length; i += 200) {
-        const { error } = await supabase.from('proiect_articole').insert(rows.slice(i, i + 200))
-        if (error) throw error
-      }
-      showToast?.(`✓ ${rows.length} articole importate în catalog`, 'success')
+      if (!window.confirm(`${arts.length} articole (${fmtLei(val)}).\n\nÎnlocuiesc CONTRACTUL INIȚIAL? (actele adiționale rămân)`)) return
+      await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId).eq('sursa', 'contract_initial')
+      const n = await insertRows(arts, { sursa: 'contract_initial', act_nr: null })
+      showToast?.(`✓ ${n} articole — contract inițial`, 'success')
       await load()
-    } catch (e) {
-      showToast?.('Eroare import deviz: ' + (e?.message || e), 'error')
-    } finally { setImporting(false) }
+    } catch (e) { showToast?.('Eroare import: ' + (e?.message || e), 'error') } finally { setImporting(false) }
+  }
+
+  const onImportAct = async (file) => {
+    if (!file) return
+    const nr = window.prompt('Numărul actului adițional (ex. 2):')
+    if (!nr || !nr.trim()) return
+    const supliment = window.confirm('Ce fel de act?\n\nOK = SUPLIMENTARE (+ cantități)\nAnulează = RENUNȚARE (− cantități)')
+    setImporting(true)
+    try {
+      const arts = await parseDeviz(file)
+      if (!arts.length) { showToast?.('Nu am găsit articole (verifică formatul F3).', 'error'); return }
+      const sign = supliment ? 1 : -1
+      const signed = arts.map(a => ({
+        ...a,
+        cantitate: a.cantitate == null ? null : sign * Math.abs(a.cantitate),
+        valoare: a.valoare == null ? null : sign * Math.abs(a.valoare),
+      }))
+      await supabase.from('proiect_articole').delete().eq('proiect_id', proiectId).eq('sursa', 'act_aditional').eq('act_nr', nr.trim())
+      const n = await insertRows(signed, { sursa: 'act_aditional', act_nr: nr.trim() })
+      showToast?.(`✓ ${n} articole — Act ${nr.trim()} (${supliment ? 'suplimentare +' : 'renunțare −'})`, 'success')
+      await load()
+    } catch (e) { showToast?.('Eroare import act: ' + (e?.message || e), 'error') } finally { setImporting(false) }
   }
 
   const grupe = useMemo(() => {
@@ -65,24 +90,26 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
   }, [articole])
 
   const totalVal = useMemo(() => articole.reduce((s, a) => s + (a.valoare || 0), 0), [articole])
+  const acte = useMemo(() => [...new Set(articole.filter(a => a.sursa === 'act_aditional' && a.act_nr).map(a => a.act_nr))].sort(), [articole])
 
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: G.muted }}>
           {loading ? 'Se încarcă…' : articole.length
-            ? <>Catalog: <strong style={{ color: G.text }}>{articole.length}</strong> articole · <strong style={{ color: G.green }}>{fmtLei(totalVal)}</strong></>
+            ? <>Catalog: <strong style={{ color: G.text }}>{articole.length}</strong> articole · <strong style={{ color: G.green }}>{fmtLei(totalVal)}</strong>{acte.length ? <span style={{ color: G.yellow }}> · {acte.length} act(e) adiț. ({acte.join(', ')})</span> : ''}</>
             : 'Niciun articol încă — importă devizul (F3).'}
         </div>
-        <label style={{
-          background: importing ? G.surface2 : G.blue + '20', color: importing ? G.dim : G.blue,
-          border: `1px solid ${G.blue}44`, borderRadius: 8, padding: '7px 13px', fontSize: 13, fontWeight: 700,
-          cursor: importing ? 'wait' : 'pointer',
-        }}>
-          {importing ? '⏳ Se importă…' : '📥 Importă deviz (F3 .docx/.xls)'}
-          <input type="file" accept=".docx,.xls,.xlsx" disabled={importing} style={{ display: 'none' }}
-            onChange={e => { onFile(e.target.files?.[0]); e.target.value = '' }} />
-        </label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <label style={{ background: importing ? G.surface2 : G.blue + '20', color: importing ? G.dim : G.blue, border: `1px solid ${G.blue}44`, borderRadius: 8, padding: '7px 12px', fontSize: 12.5, fontWeight: 700, cursor: importing ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>
+            {importing ? '⏳…' : '📥 Deviz inițial'}
+            <input type="file" accept=".docx,.xls,.xlsx" disabled={importing} style={{ display: 'none' }} onChange={e => { onImportInitial(e.target.files?.[0]); e.target.value = '' }} />
+          </label>
+          <label style={{ background: importing ? G.surface2 : G.yellow + '20', color: importing ? G.dim : G.yellow, border: `1px solid ${G.yellow}44`, borderRadius: 8, padding: '7px 12px', fontSize: 12.5, fontWeight: 700, cursor: importing ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>
+            📎 Act adițional
+            <input type="file" accept=".docx,.xls,.xlsx" disabled={importing} style={{ display: 'none' }} onChange={e => { onImportAct(e.target.files?.[0]); e.target.value = '' }} />
+          </label>
+        </div>
       </div>
 
       {grupe.map((g, i) => (
@@ -97,8 +124,11 @@ export default function CatalogDevizPanel({ proiectId, showToast }) {
               {g.items.map((a) => (
                 <div key={a.id} style={{ display: 'flex', gap: 8, padding: '5px 12px', borderBottom: `1px solid ${G.border}`, fontSize: 12 }}>
                   <span style={{ color: G.dim, fontFamily: 'monospace', flexShrink: 0, width: 74 }}>{a.cod}</span>
-                  <span style={{ color: G.text, flex: 1, minWidth: 0 }}>{a.denumire}</span>
-                  <span style={{ color: G.blue, whiteSpace: 'nowrap', flexShrink: 0 }}>{a.cantitate} {a.um}</span>
+                  <span style={{ color: G.text, flex: 1, minWidth: 0 }}>
+                    {a.sursa === 'act_aditional' && <span style={{ color: G.yellow, fontWeight: 700, marginRight: 5 }}>[Act {a.act_nr}]</span>}
+                    {a.denumire}
+                  </span>
+                  <span style={{ color: Number(a.cantitate) < 0 ? G.red : G.blue, whiteSpace: 'nowrap', flexShrink: 0 }}>{a.cantitate} {a.um}</span>
                 </div>
               ))}
             </div>
