@@ -8,9 +8,39 @@
 //                     denumire, um, cantitate, valoare}
 // ═══════════════════════════════════════════════════════════════════════════
 
-const UM = String.raw`(?:100 ?MC\.?|100 ?MP\.?|100 ?M\.?|M\.?C\.?|M\.?P\.?|BUC\.?|HA|TONA|TO\.?|ML|M\.?L\.?|KG|M\.?)`
-const UM_RE = new RegExp('(' + UM + ')\\s+([\\d.,]+)')
+// Unități de măsură din deviz → (unitate de bază, factor de conversie spre bază).
+// ATENȚIE: multe articole de conducte/săpături sunt cotate în unități „×100":
+//   HM = hectometru = 100 m  ·  „100 MC"/„100 MP"/„100 M" = ×100.
+// Fără conversie, o lansare de 13,910 HM (1.391 m) apărea ca 13,91 m (÷100 greșit),
+// pentru că regexul vechi prindea „M" din „HM". Ordinea CONTEAZĂ: variantele
+// „100 …" și „HM" trebuie testate ÎNAINTEA celor simple (M).
+const UM_DEFS = [
+  { re: '100\\s*M\\.?C\\.?', base: 'mc',  f: 100 },
+  { re: '100\\s*M\\.?P\\.?', base: 'mp',  f: 100 },
+  { re: '100\\s*M\\.?',      base: 'm',   f: 100 },
+  { re: 'H\\.?M\\.?',        base: 'm',   f: 100 },
+  { re: 'M\\.?C\\.?',        base: 'mc',  f: 1 },
+  { re: 'M\\.?P\\.?',        base: 'mp',  f: 1 },
+  { re: 'M\\.?L\\.?',        base: 'm',   f: 1 },
+  { re: 'BUC\\.?',           base: 'buc', f: 1 },
+  { re: 'TONA',              base: 'to',  f: 1 },
+  { re: 'KG',                base: 'kg',  f: 1 },
+  { re: 'HA',                base: 'ha',  f: 1 },
+  { re: 'M\\.?',             base: 'm',   f: 1 },
+  // NB: „ORA" e intenționat exclusă — liniile în ore (manoperă NMB…, utilaje AUT…,
+  // epuizare apă) sunt resurse, nu articole de lucrări; le-am lăsa în afara catalogului.
+]
+const UM_ALT = UM_DEFS.map(d => d.re).join('|')
 const ART_RE = /^(\d{3})\s+([A-Z]{2,4}\d[A-Z0-9]*)\s+(.*)$/
+// linia de articol: eventual „[ N ]" (marcaj fază), apoi UNITATE, apoi CANTITATE
+const UM_RE = new RegExp('^(?:\\[\\s*\\d+\\s*\\]\\s*)?(' + UM_ALT + ')\\s+([\\d.,]+)')
+
+// tokenul brut de unitate → definiția (unitate bază + factor). Fallback ×1.
+function umInfo(token) {
+  const up = String(token).toUpperCase().replace(/\s+/g, ' ').trim()
+  for (const d of UM_DEFS) if (new RegExp('^(?:' + d.re + ')$').test(up)) return d
+  return { base: up.toLowerCase(), f: 1 }
+}
 
 const num = (s) => {
   if (s == null || s === '') return null
@@ -32,7 +62,9 @@ export function articoleDinParagrafe(paras) {
     const [, nr, cod, rest] = ma
     const mu = rest.match(UM_RE)
     if (!mu) continue // linie fără UM+cantitate = resursă (material/utilaj), o sărim
-    const um = mu[1].trim(), cantitate = num(mu[2])
+    const info = umInfo(mu[1])
+    const q = num(mu[2])
+    const um = info.base, cantitate = q == null ? null : Math.round(q * info.f * 1000) / 1000
     // denumirea + valoarea (Total=) vin pe următoarele rânduri
     const den = []
     let valoare = null
@@ -78,7 +110,8 @@ export async function parseDevizDocx(arrayBuffer) {
 
 // ── .xls/.xlsx: best-effort pe antet (Nr, Cod/Simbol, Denumire, UM, Cantitate) ──
 export async function parseDevizExcel(arrayBuffer) {
-  const XLSX = await import('xlsx-js-style')
+  const _x = await import('xlsx-js-style')
+  const XLSX = _x.default?.read ? _x.default : _x
   const wb = XLSX.read(arrayBuffer, { type: 'array' })
   const out = []
   for (const name of wb.SheetNames) {
@@ -99,6 +132,42 @@ export async function parseDevizExcel(arrayBuffer) {
       if (cant == null || !um || !den) continue
       out.push({ obiect_cod: '', obiect_nume: name, deviz_cod: '', deviz_nume: '', nr: String(r), cod: col.cod >= 0 ? String(row[col.cod] || '').trim() : '', denumire: den.slice(0, 200), um, cantitate: cant, valoare: null })
     }
+  }
+  return out
+}
+
+// ── Extras de materiale (Formular C6 — „Lista consumurilor de resurse materiale") ──
+// Foaia „materiale": antet cu Nr/Denumire/UM/Consumuri/Pret/Valoare, date de la
+// rândul următor. Denumirea începe cu codul numeric de material (ex. „2000092 OTEL…").
+export async function parseExtrasMateriale(file) {
+  const _x = await import('xlsx-js-style')
+  const XLSX = _x.default?.read ? _x.default : _x
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+  const sheet = wb.Sheets['materiale'] || wb.Sheets[wb.SheetNames[0]]
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' })
+  let hdr = -1
+  for (let r = 0; r < Math.min(rows.length, 20); r++) {
+    const cells = rows[r].map(c => String(c).toLowerCase())
+    if (cells.some(c => c.includes('denumirea resursei')) && cells.some(c => c.includes('consumuri'))) { hdr = r; break }
+  }
+  if (hdr < 0) throw new Error('Nu găsesc antetul C6 (Denumirea resursei / Consumuri) în foaia „materiale"')
+  const out = []
+  for (let r = hdr + 1; r < rows.length; r++) {
+    const [nr, den, um, cant, pret, val, furnizor] = rows[r]
+    const cantitate = num(cant)
+    const d = String(den || '').trim()
+    if (!d || cantitate == null || !String(um || '').trim()) continue
+    if (!/^\d+$/.test(String(nr).trim())) continue // sar subtotaluri/EURO/semnături
+    if (!/[A-Za-z]/.test(d)) continue // sar rândul cu indecșii de coloane (0|1|2|…)
+    const mc = d.match(/^(\d{5,})\s+(.*)$/) // cod material numeric la început
+    out.push({
+      obiect_cod: '', obiect_nume: 'MATERIALE (extras C6)', deviz_cod: '', deviz_nume: '',
+      nr: String(nr).trim().padStart(3, '0'), cod: mc ? mc[1] : '',
+      denumire: (mc ? mc[2] : d).slice(0, 200).trim(),
+      um: String(um).trim().toLowerCase().replace(/\.$/, ''), cantitate,
+      valoare: num(val), pret_unitar: num(pret),
+      furnizor: String(furnizor || '').trim() || null,
+    })
   }
   return out
 }
