@@ -36,7 +36,7 @@ const PERSONAL_CAT = [
   { key: 'altii', label: '👤 Alții' },
 ]
 // Cât timp ținem un utilaj în raport fără nicio dovadă (alimentare) că mai e pe șantier
-const PRAG_ATENTIE = 14   // zile → îl arătăm, dar cu semn de întrebare
+const PRAG_ATENTIE = 10   // zile → îl arătăm, dar cu semn de întrebare
 const PRAG_SCOATERE = 30  // zile → nu-l mai pre-completăm deloc
 
 const tipIcon = (tip) => /utilaj/i.test(tip || '') ? '🚜' : (tip ? '🚗' : '🔧')
