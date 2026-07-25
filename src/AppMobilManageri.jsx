@@ -35,6 +35,10 @@ const PERSONAL_CAT = [
   { key: 'tesa', label: '👔 TESA' },
   { key: 'altii', label: '👤 Alții' },
 ]
+// Cât timp ținem un utilaj în raport fără nicio dovadă (alimentare) că mai e pe șantier
+const PRAG_ATENTIE = 14   // zile → îl arătăm, dar cu semn de întrebare
+const PRAG_SCOATERE = 30  // zile → nu-l mai pre-completăm deloc
+
 const tipIcon = (tip) => /utilaj/i.test(tip || '') ? '🚜' : (tip ? '🚗' : '🔧')
 const oreKm = (u) => /utilaj/i.test(u.tip || '')
   ? (u.ore != null ? `${Number(u.ore).toLocaleString('ro-RO')} ore` : '')
@@ -208,7 +212,9 @@ function RaportZilnic({ profile, sites, onBack }) {
     })
     // 2) alimentări 14 zile (îmbogățesc / adaugă)
     const { data: ut } = await supabase.from('v_active_santier_recent').select('*').eq('site_id', sid)
+    const dinAlimentariRecente = new Set()
     ;(ut || []).forEach(u => {
+      dinAlimentariRecente.add(u.active_id)
       const it = { active_id: u.active_id, cod: u.cod_intern || '', nume: [u.marca, u.model].filter(Boolean).join(' ') || u.cod_intern || u.nr_inmatriculare || '?', tip: u.tip_categorie || null, ore: u.ore_functionare_actuale ?? null, km: u.km_actuali ?? null, ultima_alimentare: u.ultima_alimentare, stare: 'functional', motiv: '', alimentat: u.ultima_alimentare === azo, manual: false }
       const k = keyOf(it)
       if (map.has(k)) {
@@ -218,7 +224,28 @@ function RaportZilnic({ profile, sites, onBack }) {
         e.ultima_alimentare = it.ultima_alimentare; if (it.alimentat) e.alimentat = true
       } else map.set(k, it)
     })
-    setUtilaje([...map.values()])
+    // 3) „a mai fost văzut pe șantier?" — carry-forward-ul nu avea expirare, așa că
+    // un utilaj intrat o dată în raport rămânea la infinit dacă nimeni nu-l scotea
+    // (ex. compresoarele de probă: vin pentru probă, pleacă, dar rămâneau în listă).
+    // Pentru cele care NU au alimentare în ultimele 14 zile căutăm ultima alimentare
+    // pe ACEST șantier și marcăm/scoatem după vechime.
+    const deVerificat = [...map.values()].filter(u => u.active_id && !dinAlimentariRecente.has(u.active_id))
+    if (deVerificat.length) {
+      const { data: vechi } = await supabase.from('logistica_alimentari')
+        .select('active_id, data_alimentare').eq('site_id', sid)
+        .in('active_id', deVerificat.map(u => u.active_id))
+        .order('data_alimentare', { ascending: false })
+      const ultima = {}
+      for (const r of (vechi || [])) if (!ultima[r.active_id]) ultima[r.active_id] = r.data_alimentare
+      for (const u of deVerificat) {
+        const d = ultima[u.active_id]
+        u.zileFaraDovada = d ? Math.round((new Date(azo) - new Date(d)) / 86400000) : null
+        u.ultimaDovada = d || null
+      }
+    }
+    // >PRAG_SCOATERE zile fără nicio dovadă → nu mai pre-completăm (se poate readăuga manual)
+    const lista = [...map.values()].filter(u => !(u.dinRaport && u.zileFaraDovada != null && u.zileFaraDovada > PRAG_SCOATERE))
+    setUtilaje(lista)
     setLoadingData(false)
   }, [])
 
@@ -332,8 +359,9 @@ function RaportZilnic({ profile, sites, onBack }) {
               <div style={{ color: G.dim, fontSize: 13, fontStyle: 'italic', padding: '6px 0' }}>Niciun utilaj/mașină pe lucrare. Adaugă manual ↓</div>
             ) : utilaje.map((u, i) => {
               const ctx = oreKm(u)
+              const suspect = u.dinRaport && u.zileFaraDovada != null && u.zileFaraDovada >= PRAG_ATENTIE
               return (
-              <div key={i} style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+              <div key={i} style={{ background: G.bg, border: `1px solid ${suspect ? G.yellow + '77' : G.border2}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {u.manual ? (
@@ -359,6 +387,12 @@ function RaportZilnic({ profile, sites, onBack }) {
                     <button onClick={() => setUtil(i, { alimentat: false })} style={stareBtn(u.alimentat === false, G.dim)}>NU</button>
                   </div>
                 </div>
+                {suspect && (
+                  <div style={{ marginTop: 8, padding: '7px 10px', background: G.yellow + '18', borderRadius: 8, fontSize: 12, color: G.yellow, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span>⚠️ Fără alimentare de {u.zileFaraDovada} zile — mai e pe șantier?</span>
+                    <button onClick={() => stergeUtilaj(i)} style={{ background: G.yellow + '28', border: `1px solid ${G.yellow}55`, color: G.yellow, borderRadius: 7, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>Scoate</button>
+                  </div>
+                )}
                 {u.stare === 'nefunctional' && (
                   <input placeholder="Ce problemă are?" value={u.motiv} onChange={e => setUtil(i, { motiv: e.target.value })}
                     style={{ ...inputStyle, padding: '8px 10px', fontSize: 14, marginTop: 8 }} />
