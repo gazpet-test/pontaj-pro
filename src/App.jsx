@@ -173,7 +173,7 @@ tr:hover td{background:#1C2128}
 .fi{animation:fi .3s ease}
 @keyframes sp{to{transform:rotate(360deg)}}
 .sp{width:16px;height:16px;border:2px solid #30363D;border-top-color:#1F6FEB;border-radius:50%;animation:sp .7s linear infinite}
-.toast{position:fixed;bottom:18px;right:18px;padding:10px 16px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.5);animation:fi .3s ease}
+.toast{position:fixed;bottom:96px;right:18px;padding:10px 16px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,.5);animation:fi .3s ease;max-width:min(420px,calc(100vw - 36px))}
 `
 
 // ─── Role definitions ─────────────────────────────────────────────────────────
