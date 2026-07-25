@@ -116,6 +116,8 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [proiectId, setProiectId] = useState(null)          // proiectul legat de lucrare (sites.proiect_id)
   const [activitati, setActivitati] = useState([])          // proiect_activitati ale proiectului
   const [lucrariAct, setLucrariAct] = useState({})          // {activitate_id: cantitate azi}
+  const [unitati, setUnitati] = useState([])                // proiect_unitati active (tronson/obiect/zonă)
+  const [unitateId, setUnitateId] = useState(null)          // unde s-a lucrat azi
   const [masini, setMasini] = useState('')
   const [probleme, setProbleme] = useState('')
   const [planMaine, setPlanMaine] = useState('')
@@ -138,20 +140,28 @@ function RaportZilnic({ profile, sites, onBack }) {
     setProiectId(pid)
     let acts = []
     if (pid) {
-      const { data: a } = await supabase.from('proiect_activitati').select('id, nume, um, ordine')
-        .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id')
+      const [{ data: a }, { data: u }] = await Promise.all([
+        supabase.from('proiect_activitati').select('id, nume, um, ordine')
+          .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
+        supabase.from('proiect_unitati').select('id, tip, cod, nume, ordine')
+          .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
+      ])
       acts = a || []
-    }
+      setUnitati(u || [])
+    } else setUnitati([])
     setActivitati(acts)
     setLucrariAct({})
+    setUnitateId(null)
     // ── Există deja raport azi pe lucrare? → încarcă pentru editare (anti-dublură) ──
     const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
     if (existing) {
       if (acts.length) {
-        const { data: rl } = await supabase.from('raport_lucrari').select('activitate_id, cantitate').eq('raport_id', existing.id)
+        const { data: rl } = await supabase.from('raport_lucrari').select('activitate_id, cantitate, unitate_id').eq('raport_id', existing.id)
         const m = {}
         for (const r of (rl || [])) if (r.activitate_id) m[r.activitate_id] = Number(r.cantitate) || 0
         setLucrariAct(m)
+        const uid = (rl || []).find(r => r.unitate_id)?.unitate_id
+        if (uid) setUnitateId(uid)
       }
       setExistingId(existing.id)
       setLucrari(existing.lucrari_efectuate || '')
@@ -259,7 +269,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         await supabase.from('raport_lucrari').delete().eq('raport_id', rz.id)
         const rows = activitati
           .filter(a => Number(lucrariAct[a.id]) > 0)
-          .map(a => ({ raport_id: rz.id, proiect_id: proiectId, activitate_id: a.id, cantitate: Number(lucrariAct[a.id]) }))
+          .map(a => ({ raport_id: rz.id, proiect_id: proiectId, activitate_id: a.id, cantitate: Number(lucrariAct[a.id]), unitate_id: unitateId || null }))
         if (rows.length) {
           const { error: rlErr } = await supabase.from('raport_lucrari').insert(rows)
           if (rlErr) throw rlErr
@@ -363,6 +373,18 @@ function RaportZilnic({ profile, sites, onBack }) {
           {/* Lucrări pe activitățile proiectului (Faza 5 pas 3) */}
           {activitati.length > 0 && (
             <Section title="📏 Cantități pe activități" hint="doar ce s-a lucrat azi — restul lasă gol">
+              {unitati.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ ...labelStyle, marginBottom: 4 }}>Unde s-a lucrat azi</label>
+                  <select value={unitateId || ''} onChange={e => setUnitateId(Number(e.target.value) || null)} style={{ ...inputStyle, appearance: 'none' }}>
+                    <option value="">— toată lucrarea / nespecificat —</option>
+                    {unitati.map(u => (
+                      <option key={u.id} value={u.id}>{u.cod ? `${u.cod} · ` : ''}{u.nume}</option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>Se aplică tuturor cantităților de mai jos.</div>
+                </div>
+              )}
               {activitati.map(a => (
                 <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6 }}>
                   <span style={{ fontSize: 14, color: G.text, flex: 1, minWidth: 0 }}>{a.nume}</span>

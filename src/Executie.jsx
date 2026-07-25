@@ -26,6 +26,7 @@ import CitesteOricePanel from './CitesteOricePanel.jsx'
 import CatalogDevizPanel from './CatalogDevizPanel.jsx'
 import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
+import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
@@ -2242,6 +2243,14 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
                 Lista de activități pe care MP-ul le alege în raportul zilnic. Fiecare poate fi legată la deviz (coduri) pentru progres cumulat vs contract.
               </div>
               <ActivitatiProiectPanel proiectId={proiect.id} showToast={showToast} />
+
+              <div style={{ fontSize: 13, fontWeight: 700, color: G.text, margin: '18px 0 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📏</span> Axa de raportare — tronsoane / obiecte
+              </div>
+              <div style={{ fontSize: 11, color: G.dim, marginBottom: 6 }}>
+                Unde se împarte lucrarea. Apar în raportul zilnic la „unde s-a lucrat", ca progresul să fie legat de loc, nu doar de proiect.
+              </div>
+              <UnitatiProiectPanel proiectId={proiect.id} showToast={showToast} />
 
               <div style={{ fontSize: 13, fontWeight: 700, color: G.text, margin: '18px 0 4px', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span>📦</span> Materiale — extras C6 (necesar din ofertă)
