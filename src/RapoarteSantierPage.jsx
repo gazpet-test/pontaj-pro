@@ -315,7 +315,7 @@ function ModalDetaliu({ raport, siteName, onClose }) {
         setPozeUrls((data || []).map(d => d.signedUrl).filter(Boolean))
       }
       const { data: rl } = await supabase.from('raport_lucrari')
-        .select('cantitate, observatii, proiect_activitati(nume, um)').eq('raport_id', raport.id)
+        .select('cantitate, observatii, proiect_activitati(nume, um), proiect_unitati(cod, nume)').eq('raport_id', raport.id)
       setLucrariAct(rl || [])
     })()
   }, [raport])
@@ -369,7 +369,7 @@ function ModalDetaliu({ raport, siteName, onClose }) {
 
         {/* cantități pe activitățile proiectului (Faza 5 pas 3) */}
         {lucrariAct.length > 0 && (
-          <Bloc titlu="📏 Cantități pe activități">
+          <Bloc titlu={`📏 Cantități pe activități${lucrariAct.find(l => l.proiect_unitati) ? ' · ' + (() => { const u = lucrariAct.find(l => l.proiect_unitati).proiect_unitati; return (u.cod ? u.cod + ' · ' : '') + u.nume })() : ''}`}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {lucrariAct.map((l, i) => (
                 <span key={i} style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 8, padding: '5px 10px', fontSize: 13, color: G.text }}>
