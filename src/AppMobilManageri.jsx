@@ -207,7 +207,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     // 1) carry-forward din ultimul raport anterior
     const { data: prev } = await supabase.from('rapoarte_zilnice').select('utilaje_snapshot').eq('site_id', sid).lt('data', azo).order('data', { ascending: false }).limit(1).maybeSingle()
     ;(Array.isArray(prev?.utilaje_snapshot) ? prev.utilaje_snapshot : []).forEach(u => {
-      const it = { active_id: u.active_id ?? null, cod: u.cod || '', nume: u.nume || u.cod || '?', tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, ultima_alimentare: null, stare: 'functional', motiv: '', alimentat: false, manual: !u.cod && !u.active_id, dinRaport: true }
+      const it = { active_id: u.active_id ?? null, cod: u.cod || '', inmatriculare: u.inmatriculare || '', nume: u.nume || u.cod || '?', tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, ultima_alimentare: null, stare: 'functional', motiv: '', alimentat: false, manual: !u.cod && !u.active_id, dinRaport: true }
       map.set(keyOf(it), it)
     })
     // 2) alimentări 14 zile (îmbogățesc / adaugă)
@@ -215,11 +215,12 @@ function RaportZilnic({ profile, sites, onBack }) {
     const dinAlimentariRecente = new Set()
     ;(ut || []).forEach(u => {
       dinAlimentariRecente.add(u.active_id)
-      const it = { active_id: u.active_id, cod: u.cod_intern || '', nume: [u.marca, u.model].filter(Boolean).join(' ') || u.cod_intern || u.nr_inmatriculare || '?', tip: u.tip_categorie || null, ore: u.ore_functionare_actuale ?? null, km: u.km_actuali ?? null, ultima_alimentare: u.ultima_alimentare, stare: 'functional', motiv: '', alimentat: u.ultima_alimentare === azo, manual: false }
+      const it = { active_id: u.active_id, cod: u.cod_intern || '', inmatriculare: u.nr_inmatriculare || '', nume: [u.marca, u.model].filter(Boolean).join(' ') || u.cod_intern || u.nr_inmatriculare || '?', tip: u.tip_categorie || null, ore: u.ore_functionare_actuale ?? null, km: u.km_actuali ?? null, ultima_alimentare: u.ultima_alimentare, stare: 'functional', motiv: '', alimentat: u.ultima_alimentare === azo, manual: false }
       const k = keyOf(it)
       if (map.has(k)) {
         const e = map.get(k)
         e.active_id = e.active_id || it.active_id; e.tip = e.tip || it.tip
+        e.inmatriculare = e.inmatriculare || it.inmatriculare
         e.ore = e.ore ?? it.ore; e.km = e.km ?? it.km
         e.ultima_alimentare = it.ultima_alimentare; if (it.alimentat) e.alimentat = true
       } else map.set(k, it)
@@ -253,7 +254,7 @@ function RaportZilnic({ profile, sites, onBack }) {
 
   const setPers = (k, v) => setPersonal(p => ({ ...p, [k]: Math.max(0, parseInt(v) || 0) }))
   const setUtil = (idx, patch) => setUtilaje(list => list.map((u, i) => i === idx ? { ...u, ...patch } : u))
-  const adaugaUtilajManual = () => setUtilaje(list => [...list, { active_id: null, cod: '', nume: '', tip: null, ore: null, km: null, ultima_alimentare: null, stare: 'functional', motiv: '', alimentat: false, manual: true }])
+  const adaugaUtilajManual = () => setUtilaje(list => [...list, { active_id: null, cod: '', inmatriculare: '', nume: '', tip: null, ore: null, km: null, ultima_alimentare: null, stare: 'functional', motiv: '', alimentat: false, manual: true }])
   const stergeUtilaj = (idx) => setUtilaje(list => list.filter((_, i) => i !== idx))
 
   const onPoze = (e) => {
@@ -281,7 +282,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         site_id: siteId, data: azi(),
         sef_santier: profile?.name || null,
         lucrari_efectuate: lucrari.trim() || null,
-        utilaje_snapshot: utilaje.map(u => ({ active_id: u.active_id ?? null, cod: u.cod, nume: u.nume, tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, stare: u.stare, motiv: u.motiv || null, alimentat: !!u.alimentat })),
+        utilaje_snapshot: utilaje.map(u => ({ active_id: u.active_id ?? null, cod: u.cod, inmatriculare: u.inmatriculare || null, nume: u.nume, tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, stare: u.stare, motiv: u.motiv || null, alimentat: !!u.alimentat })),
         personal_snapshot: { ...personal, total: totalPers },
         masini: masini.trim() || null,
         probleme: probleme.trim() || null,
@@ -369,7 +370,7 @@ function RaportZilnic({ profile, sites, onBack }) {
                     ) : (
                       <>
                         <div style={{ fontSize: 14, fontWeight: 700, color: G.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tipIcon(u.tip)} {u.nume}</div>
-                        <div style={{ fontSize: 11, color: G.dim }}>{[u.cod, ctx, u.ultima_alimentare ? `alim. ${fmtDate(u.ultima_alimentare)}` : (u.dinRaport ? 'din raport anterior' : '')].filter(Boolean).join(' · ')}</div>
+                        <div style={{ fontSize: 11, color: G.dim }}>{[u.cod, u.inmatriculare, ctx, u.ultima_alimentare ? `alim. ${fmtDate(u.ultima_alimentare)}` : (u.dinRaport ? 'din raport anterior' : '')].filter(Boolean).join(' · ')}</div>
                       </>
                     )}
                   </div>

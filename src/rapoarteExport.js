@@ -100,7 +100,8 @@ function buildRaportHtml({ list, titluSite, from, to }) {
     const alim = alimentate(r)
     const persDetalii = PERSONAL_CAT.filter(([k]) => (p[k] || 0) > 0).map(([k, l]) => `${l}: ${p[k]}`).join(', ')
     const utilCell = `${utj(r).length}${alim ? ` <span style="color:#1F6FEB">⛽${alim}</span>` : ''}${nf.length ? ` <span style="color:#B42318">(${nf.length}✕)</span>` : ''}`
-    const nfDetalii = nf.length ? `<div style="font-size:8px;color:#B42318;margin-top:2px">${nf.map(u => esc((u.nume || u.cod || '?') + (u.motiv ? ': ' + u.motiv : ''))).join(' · ')}</div>` : ''
+    const idUtilaj = (u) => [u.nume || u.cod || '?', [u.cod && u.nume ? u.cod : '', u.inmatriculare].filter(Boolean).join('/')].filter(Boolean).join(' ')
+    const nfDetalii = nf.length ? `<div style="font-size:8px;color:#B42318;margin-top:2px">${nf.map(u => esc(idUtilaj(u) + (u.motiv ? ': ' + u.motiv : ''))).join(' · ')}</div>` : ''
     return `<tr>
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;white-space:nowrap;font-weight:600">${fmtData(r.data)}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;text-align:center">${p.total || 0}${persDetalii ? `<div style="font-size:8px;color:#888;margin-top:2px">${esc(persDetalii)}</div>` : ''}</td>
