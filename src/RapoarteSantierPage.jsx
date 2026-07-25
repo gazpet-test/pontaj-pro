@@ -354,7 +354,7 @@ function ModalDetaliu({ raport, siteName, onClose }) {
                 const ctx = /utilaj/i.test(u.tip || '') ? (u.ore != null ? `${Number(u.ore).toLocaleString('ro-RO')} ore` : '') : (u.km != null ? `${Number(u.km).toLocaleString('ro-RO')} km` : '')
                 return (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 8, padding: '7px 11px' }}>
-                  <span style={{ fontSize: 13, color: G.text, minWidth: 0 }}>{tipIcon(u.tip)} {u.nume || u.cod || '—'}<span style={{ color: G.dim }}>{[u.cod && u.nume ? u.cod : '', ctx].filter(Boolean).length ? ' · ' + [u.cod && u.nume ? u.cod : '', ctx].filter(Boolean).join(' · ') : ''}</span></span>
+                  <span style={{ fontSize: 13, color: G.text, minWidth: 0 }}>{tipIcon(u.tip)} {u.nume || u.cod || '—'}<span style={{ color: G.dim }}>{(() => { const d = [u.cod && u.nume ? u.cod : '', u.inmatriculare, ctx].filter(Boolean); return d.length ? ' · ' + d.join(' · ') : '' })()}</span></span>
                   <span style={{ display: 'flex', gap: 8, alignItems: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: u.alimentat ? G.blue : G.dim }}>{u.alimentat ? '⛽ alimentat' : '⛽ —'}</span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: u.stare === 'nefunctional' ? G.red : G.green }}>
