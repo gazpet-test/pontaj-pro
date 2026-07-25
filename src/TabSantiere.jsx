@@ -16,10 +16,12 @@ import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import { calcProbe, fmtH, fmtNr } from './utils/probeCalc.js'
 
-const supabase = createClient(
+import { instrumenteazaStorageRls } from './lib/storageRls.js'
+
+const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
-)
+))
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
