@@ -15,10 +15,12 @@ import { createClient } from '@supabase/supabase-js'
 import { useNavigate } from 'react-router-dom'
 import * as XLSX from 'xlsx-js-style'
 
-const supabase = createClient(
+import { instrumenteazaStorageRls } from './lib/storageRls.js'
+
+const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY
-)
+))
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
