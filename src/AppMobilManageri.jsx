@@ -145,7 +145,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     let acts = []
     if (pid) {
       const [{ data: a }, { data: u }] = await Promise.all([
-        supabase.from('proiect_activitati').select('id, nume, um, ordine')
+        supabase.from('proiect_activitati').select('id, nume, um, ordine, tip_raportare')
           .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
         supabase.from('proiect_unitati').select('id, tip, cod, nume, ordine')
           .eq('proiect_id', pid).eq('activ', true).order('ordine').order('id'),
@@ -420,16 +420,29 @@ function RaportZilnic({ profile, sites, onBack }) {
                   <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>Se aplică tuturor cantităților de mai jos.</div>
                 </div>
               )}
-              {activitati.map(a => (
-                <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6 }}>
+              {activitati.map(a => {
+                const bifa = (a.tip_raportare || 'cantitate') === 'bifa'
+                const bifat = Number(lucrariAct[a.id]) > 0
+                return (
+                <div key={a.id} onClick={bifa ? () => setLucrariAct(m => ({ ...m, [a.id]: bifat ? '' : 1 })) : undefined}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, background: bifa && bifat ? G.green + '18' : G.bg, border: `1px solid ${bifa && bifat ? G.green + '66' : G.border2}`, borderRadius: 10, padding: '8px 12px', marginBottom: 6, cursor: bifa ? 'pointer' : 'default', userSelect: 'none' }}>
                   <span style={{ fontSize: 14, color: G.text, flex: 1, minWidth: 0 }}>{a.nume}</span>
-                  <input type="number" min="0" step="any" inputMode="decimal" placeholder="0"
-                    value={lucrariAct[a.id] ?? ''}
-                    onChange={e => setLucrariAct(m => ({ ...m, [a.id]: e.target.value === '' ? '' : Math.max(0, Number(e.target.value)) }))}
-                    style={{ width: 76, textAlign: 'center', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 6px', fontSize: 16, fontWeight: 700 }} />
-                  <span style={{ fontSize: 12, color: G.muted, width: 32 }}>{a.um || ''}</span>
+                  {bifa ? (
+                    <span style={{ width: 38, height: 38, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, flexShrink: 0,
+                      background: bifat ? G.green : 'transparent', color: bifat ? '#0D1117' : G.dim, border: `1px solid ${bifat ? G.green : G.border2}` }}>
+                      {bifat ? '✓' : ''}
+                    </span>
+                  ) : (
+                    <>
+                      <input type="number" min="0" step="any" inputMode="decimal" placeholder="0"
+                        value={lucrariAct[a.id] ?? ''}
+                        onChange={e => setLucrariAct(m => ({ ...m, [a.id]: e.target.value === '' ? '' : Math.max(0, Number(e.target.value)) }))}
+                        style={{ width: 76, textAlign: 'center', background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '8px 6px', fontSize: 16, fontWeight: 700 }} />
+                      <span style={{ fontSize: 12, color: G.muted, width: 32 }}>{a.um || ''}</span>
+                    </>
+                  )}
                 </div>
-              ))}
+              )})}
             </Section>
           )}
 

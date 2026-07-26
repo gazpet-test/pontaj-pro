@@ -63,6 +63,7 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
     const { error } = await supabase.from('proiect_activitati').insert({
       proiect_id: proiectId, nume: row.nume.trim(), um: row.um.trim() || null,
       coduri_deviz: row.coduri_deviz.trim() || null, ordine: acts.length + 1,
+      tip_raportare: /prob[aă]/i.test(row.nume) ? 'bifa' : 'cantitate',  // probele se bifează, nu se cumulează
     })
     if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
     await load()
@@ -96,17 +97,23 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
       </div>
 
       {acts.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.5fr 1fr auto 1.1fr auto', gap: 6, alignItems: 'center', marginBottom: 4, fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4, padding: '0 2px' }}>
-          <span>Activitate</span><span>UM</span><span>Coduri deviz</span><span>Contract</span><span>Progres (din rapoarte)</span><span></span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.75fr 0.45fr 0.9fr auto 1fr auto', gap: 6, alignItems: 'center', marginBottom: 4, fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4, padding: '0 2px' }}>
+          <span>Activitate</span><span>Raportare</span><span>UM</span><span>Coduri deviz</span><span>Contract</span><span>Progres (din rapoarte)</span><span></span>
         </div>
       )}
       {acts.map((a, i) => {
         const c = totalContract[i]
         const r = realizat[a.id] || 0
+        const bifa = (a.tip_raportare || 'cantitate') === 'bifa'
+        // la bifă, „contractul" e numărul de bucăți (ex. 4 probe), iar realizatul = câte s-au bifat
         const pct = c && c.q > 0 ? Math.min(100, r / c.q * 100) : null
         return (
-          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1.5fr 0.5fr 1fr auto 1.1fr auto', gap: 6, alignItems: 'center', marginBottom: 5 }}>
+          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.75fr 0.45fr 0.9fr auto 1fr auto', gap: 6, alignItems: 'center', marginBottom: 5 }}>
             <input defaultValue={a.nume} onBlur={e => e.target.value.trim() !== a.nume && salveaza(a.id, { nume: e.target.value.trim() })} style={inp} />
+            <select value={a.tip_raportare || 'cantitate'} onChange={e => salveaza(a.id, { tip_raportare: e.target.value })} style={{ ...inp, appearance: 'none' }} title="cantitate = câmp numeric cumulat · bifă = s-a făcut / nu (ex. probe)">
+              <option value="cantitate">🔢 cantitate</option>
+              <option value="bifa">☑️ bifă</option>
+            </select>
             <input defaultValue={a.um || ''} onBlur={e => e.target.value.trim() !== (a.um || '') && salveaza(a.id, { um: e.target.value.trim() || null })} style={inp} />
             <input defaultValue={a.coduri_deviz || ''} placeholder="ex. GA04,GA05" onBlur={e => e.target.value.trim() !== (a.coduri_deviz || '') && salveaza(a.id, { coduri_deviz: e.target.value.trim() || null })} style={{ ...inp, fontFamily: 'monospace' }} />
             <span style={{ fontSize: 11.5, color: c ? G.green : G.dim, whiteSpace: 'nowrap', textAlign: 'right', minWidth: 90 }}>
@@ -118,7 +125,9 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
                 {pct != null && <div style={{ width: pct + '%', height: '100%', background: pct >= 100 ? G.green : G.blue, transition: 'width .3s' }} />}
               </div>
               <span style={{ fontSize: 11, color: r ? (pct >= 100 ? G.green : G.blue) : G.dim, whiteSpace: 'nowrap', minWidth: 52, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {pct != null ? `${pct.toFixed(0)}%` : (r ? r.toLocaleString('ro-RO', { maximumFractionDigits: 1 }) : '—')}
+                {bifa && c ? `${r}/${c.q.toLocaleString('ro-RO', { maximumFractionDigits: 0 })}`
+                  : pct != null ? `${pct.toFixed(0)}%`
+                  : (r ? r.toLocaleString('ro-RO', { maximumFractionDigits: 1 }) : '—')}
               </span>
             </div>
             <button onClick={() => sterge(a.id)} title="Șterge" style={{ background: 'transparent', border: 'none', color: G.red, fontSize: 14, cursor: 'pointer' }}>🗑</button>
