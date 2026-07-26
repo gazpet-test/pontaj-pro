@@ -6,6 +6,7 @@ import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
 import AppMobilManageri from './AppMobilManageri.jsx'
 import RapoarteSantierPage from './RapoarteSantierPage.jsx'
+import SedintePage from './SedintePage.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
@@ -931,6 +932,7 @@ function HomeDashboard() {
     { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
     { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true },
     { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'] },
+    { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'] },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
   // rolesAllow = vizibil pt owner + rolurile listate (fără user_module_access explicit); altfel logica standard requireModule.
@@ -8256,6 +8258,7 @@ export default function App() {
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="/m" element={<ProtectedRoute><AppMobilManageri/></ProtectedRoute>}/>
         <Route path="/rapoarte-santier" element={<ProtectedRoute><RapoarteSantierPage/></ProtectedRoute>}/>
+        <Route path="/sedinte" element={<ProtectedRoute><SedintePage/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
       <ChatbotWidgetGate />
