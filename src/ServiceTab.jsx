@@ -23,6 +23,73 @@ import { calcUrmService, urmServiceLevel, urmServiceColor, PRAG_ZILE, PRAG_KM, P
 import PieseCatalogSection from './PieseCatalogSection.jsx'
 import ImportFiseServiceModal from './ImportFiseServiceModal.jsx'
 
+// ─── Validare citiri bord (anti-typo) ───────────────────────────────────────
+// O singură cifră greșită într-o fișă otrăvește permanent v_active_km_ore, care
+// ia GREATEST din toate sursele → alerte false de mentenanță (caz real 24.07.2026:
+// TST019 cu 8.500 ore în loc de ~4.200 → „3237 h depășite"; TST027 cu 80.506 ore).
+// Comparăm cu surse INDEPENDENTE de fișele de service (valoarea manuală de pe
+// activ + maximul din alimentări), ca să nu ne verificăm cu propriul rezultat.
+const SALT_ORE = 1500     // ore peste referință = ~un an de lucru intens
+const REGRES_ORE = 200    // contorul a scăzut (posibil ceas înlocuit)
+const SALT_KM = 80000
+const REGRES_KM = 2000
+
+// Plafoane absolute: peste ele valoarea e imposibilă fizic, indiferent de referință
+// (TST027 avea 80.506 ore = ~40 de ani de lucru cu normă întreagă, de pe un ceas defect).
+const MAX_ORE = 50000
+const MAX_KM = 1500000
+
+async function verificaCitiriBord(activId, valori, fisaIdCurenta = null) {
+  if (!activId) return []
+  const out = []
+  const { data: ref } = await supabase.from('v_active_km_ore')
+    .select('ore_manual, ore_din_alimentari, km_manual, km_din_alimentari')
+    .eq('activ_id', Number(activId)).maybeSingle()
+  let refOre = Math.max(Number(ref?.ore_manual) || 0, Number(ref?.ore_din_alimentari) || 0)
+  let refKm = Math.max(Number(ref?.km_manual) || 0, Number(ref?.km_din_alimentari) || 0)
+
+  // Fallback pentru utilajele fără valoare manuală și fără alimentări: luăm maximul
+  // din CELELALTE fișe de service (nu din cea curentă, ca să nu ne validăm cu noi înșine).
+  if (!refOre || !refKm) {
+    let q = supabase.from('logistica_service_fise')
+      .select('ore_intrare, ore_iesire, km_intrare, km_iesire').eq('activ_id', Number(activId))
+    if (fisaIdCurenta) q = q.neq('id', fisaIdCurenta)
+    const { data: alte } = await q
+    for (const f of (alte || [])) {
+      if (!refOre) refOre = Math.max(refOre, Number(f.ore_intrare) || 0, Number(f.ore_iesire) || 0)
+      if (!refKm) refKm = Math.max(refKm, Number(f.km_intrare) || 0, Number(f.km_iesire) || 0)
+    }
+    // o referință venită tot din fișe poate fi ea însăși poluată — o ignorăm dacă e absurdă
+    if (refOre > MAX_ORE) refOre = 0
+    if (refKm > MAX_KM) refKm = 0
+  }
+
+  const check = (eticheta, val, refVal, salt, regres, plafon, unit) => {
+    if (val == null || val === '') return
+    const v = Number(val)
+    if (!isFinite(v)) return
+    if (v > plafon) { out.push(`${eticheta}: ${v.toLocaleString('ro-RO')} ${unit} — valoare imposibilă (peste ${plafon.toLocaleString('ro-RO')} ${unit}); citire de pe un contor defect?`); return }
+    if (!refVal) return   // fără referință nu putem judeca saltul
+    if (v > refVal + salt) out.push(`${eticheta}: ${v.toLocaleString('ro-RO')} ${unit} — cu ${Math.round(v - refVal).toLocaleString('ro-RO')} ${unit} peste ultima valoare cunoscută (${refVal.toLocaleString('ro-RO')})`)
+    else if (v < refVal - regres) out.push(`${eticheta}: ${v.toLocaleString('ro-RO')} ${unit} — SUB ultima valoare cunoscută (${refVal.toLocaleString('ro-RO')}); contorul a fost înlocuit?`)
+  }
+  check('Ore intrare', valori.ore_intrare, refOre, SALT_ORE, REGRES_ORE, MAX_ORE, 'h')
+  check('Ore ieșire', valori.ore_iesire, refOre, SALT_ORE, REGRES_ORE, MAX_ORE, 'h')
+  check('KM intrare', valori.km_intrare, refKm, SALT_KM, REGRES_KM, MAX_KM, 'km')
+  check('KM ieșire', valori.km_iesire, refKm, SALT_KM, REGRES_KM, MAX_KM, 'km')
+  return out
+}
+
+// Întoarce true dacă se poate continua (fără probleme sau utilizatorul confirmă).
+async function confirmaCitiriBord(activId, valori, fisaIdCurenta = null) {
+  const av = await verificaCitiriBord(activId, valori, fisaIdCurenta)
+  if (!av.length) return true
+  return window.confirm(
+    '⚠️ Citiri de bord neobișnuite:\n\n' + av.map(x => '• ' + x).join('\n\n') +
+    '\n\nO cifră greșită aici strică permanent alertele de mentenanță pentru acest utilaj.\n\nSalvez oricum?'
+  )
+}
+
 // ─── Theme (sincron cu Logistica.jsx) ───────────────────────────────────────
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -441,6 +508,10 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
     if (status === 'finalizat') {
       showToast('Status "finalizat" se setează doar prin butonul de confirmare după creare', 'error'); return
     }
+
+    if (!await confirmaCitiriBord(activId, {
+      ore_intrare: oreIntrare, ore_iesire: oreIesire, km_intrare: kmIntrare, km_iesire: kmIesire,
+    })) return
 
     setSaving(true)
     try {
@@ -898,6 +969,11 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
   }
 
   const saveEdits = async () => {
+    if (!await confirmaCitiriBord(fisa?.activ_id, {
+      ore_intrare: form.ore_intrare, ore_iesire: form.ore_iesire,
+      km_intrare: form.km_intrare, km_iesire: form.km_iesire,
+    }, fisaId)) return
+
     setSaving(true)
     const payload = {
       tip: form.tip,
