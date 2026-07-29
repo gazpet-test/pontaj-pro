@@ -9,6 +9,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { verificaProiect, consemneazaLipsuri } from './lib/verificariProiect.js'
+import { genereazaSedintaPdf } from './sedinteExport.js'
+
+const BUCKET_PDF = 'sedinte-pdf'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -53,6 +56,7 @@ export default function SedintePage() {
   const [deschisa, setDeschisa] = useState(null)      // ședința deschisă
   const [loading, setLoading] = useState(true)
   const [filtruProiect, setFiltruProiect] = useState('')
+  const [doarAleMele, setDoarAleMele] = useState(false)
   const [toast, setToast] = useState(null)
 
   const show = useCallback((m, k = 'ok') => { setToast({ m, k }); setTimeout(() => setToast(null), 3500) }, [])
@@ -79,9 +83,10 @@ export default function SedintePage() {
   const numeProfil = useCallback((id) => profiles.find(p => p.id === id)?.name || '—', [profiles])
   const numeProiect = useCallback((id) => proiecte.find(p => p.id === id)?.nume || null, [proiecte])
 
-  const sedinteFiltrate = useMemo(() => filtruProiect
-    ? sedinte.filter(s => String(s.proiect_id || '') === filtruProiect)
-    : sedinte, [sedinte, filtruProiect])
+  const sedinteFiltrate = useMemo(() => sedinte
+    .filter(s => !filtruProiect || String(s.proiect_id || '') === filtruProiect)
+    .filter(s => !doarAleMele || !profile || (s.participanti_ids || []).includes(profile.id) || s.created_by === profile.id),
+    [sedinte, filtruProiect, doarAleMele, profile])
 
   const restanteFiltrate = useMemo(() => filtruProiect
     ? restante.filter(r => String(r.proiect_id || '') === filtruProiect)
@@ -150,10 +155,16 @@ export default function SedintePage() {
             Ce ne-am propus, cine răspunde, până când — și ce a rămas din ședința trecută.
           </div>
         </div>
-        <select value={filtruProiect} onChange={e => setFiltruProiect(e.target.value)} style={{ ...S.inp, minWidth: 220 }}>
-          <option value="">Toate proiectele</option>
-          {proiecte.map(p => <option key={p.id} value={String(p.id)}>{p.nume}</option>)}
-        </select>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: G.muted, cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={doarAleMele} onChange={e => setDoarAleMele(e.target.checked)} />
+            doar ale mele
+          </label>
+          <select value={filtruProiect} onChange={e => setFiltruProiect(e.target.value)} style={{ ...S.inp, minWidth: 220 }}>
+            <option value="">Toate proiectele</option>
+            {proiecte.map(p => <option key={p.id} value={String(p.id)}>{p.nume}</option>)}
+          </select>
+        </div>
       </div>
 
       {/* ── Restanțe: ecranul cu care începe orice ședință ── */}
@@ -245,6 +256,7 @@ function RandSedinta({ s, onOpen, numeProiect }) {
           {nr.deschise > 0 && <span style={{ color: G.orange, fontWeight: 700 }}> · {nr.deschise} deschise</span>}
         </span>
       )}
+      {s.pdf_path && <span title="Proces-verbal generat" style={{ fontSize: 13 }}>📄</span>}
       <span style={{ color: G.dim }}>›</span>
     </div>
   )
@@ -292,6 +304,52 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
   const salvSed = async (patch) => {
     setSed(x => ({ ...x, ...patch }))
     await supabase.from('sedinte').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', sedintaId)
+  }
+
+  const toggleParticipant = (pid) => {
+    const cur = sed.participanti_ids || []
+    salvSed({ participanti_ids: cur.includes(pid) ? cur.filter(x => x !== pid) : [...cur, pid] })
+  }
+
+  // ── Încheierea ședinței = momentul PDF-ului ──
+  // Se generează procesul-verbal, se urcă în Storage și fiecare participant
+  // primește notificare cu link — „raportul ajunge în contul fiecăruia".
+  const [inchidere, setInchidere] = useState(false)
+  const incheie = async () => {
+    setInchidere(true)
+    try {
+      const { blob, nume } = await genereazaSedintaPdf({
+        sed, linii,
+        numeProiect: numeProiect(sed.proiect_id),
+        numeParticipanti: (sed.participanti_ids || []).map(numeProfil).filter(n => n !== '—'),
+        numeProfil, stare,
+      })
+      const path = `${new Date(sed.data).getFullYear()}/${sedintaId}/${nume}`
+      const { error: upErr } = await supabase.storage.from(BUCKET_PDF)
+        .upload(path, blob, { contentType: 'application/pdf', upsert: true })
+      if (upErr) throw upErr
+      await salvSed({ inchisa_la: new Date().toISOString(), pdf_path: path })
+      // notificare pentru fiecare participant (fără cel care încheie)
+      const { data: { user } } = await supabase.auth.getUser()
+      const dest = (sed.participanti_ids || []).filter(p => p && p !== user?.id)
+      if (dest.length) {
+        await supabase.from('notifications').insert(dest.map(pid => ({
+          profile_id: pid, type: 'info', modul: 'Ședințe',
+          title: `PV ședință ${fmtData(sed.data)}${numeProiect(sed.proiect_id) ? ' — ' + numeProiect(sed.proiect_id) : ''}`,
+          message: 'Procesul-verbal a fost generat. Îl găsești în modulul Ședințe.',
+          link_to: '/sedinte',
+        })))
+      }
+      show('✓ Ședință încheiată — PV generat' + (dest.length ? ` și trimis la ${dest.length} participanți` : ''))
+    } catch (e) {
+      show('Eroare la PDF: ' + (e.message || e), 'err')
+    } finally { setInchidere(false) }
+  }
+
+  const descarcaPdf = async () => {
+    const { data } = await supabase.storage.from(BUCKET_PDF).createSignedUrl(sed.pdf_path, 600)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+    else show('Nu am putut deschide PDF-ul', 'err')
   }
 
   const adauga = async () => {
@@ -371,10 +429,39 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
             {inchisa && <span style={{ fontSize: 11.5, color: G.green, fontWeight: 700 }}>✓ încheiată</span>}
           </div>
         </div>
-        <button onClick={() => salvSed({ inchisa_la: inchisa ? null : new Date().toISOString() })}
-          style={{ ...S.btn, background: inchisa ? G.surface : G.green + '22', color: inchisa ? G.muted : G.green, border: `1px solid ${inchisa ? G.border2 : G.green + '55'}`, whiteSpace: 'nowrap' }}>
-          {inchisa ? 'Redeschide' : '✓ Încheie ședința'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {sed.pdf_path && (
+            <button onClick={descarcaPdf} style={{ ...S.btn, background: G.blue + '18', color: G.blue, border: `1px solid ${G.blue}44`, whiteSpace: 'nowrap' }}>
+              📄 PV (PDF)
+            </button>
+          )}
+          <button onClick={() => inchisa ? salvSed({ inchisa_la: null }) : incheie()} disabled={inchidere}
+            style={{ ...S.btn, background: inchisa ? G.surface : G.green + '22', color: inchisa ? G.muted : G.green, border: `1px solid ${inchisa ? G.border2 : G.green + '55'}`, whiteSpace: 'nowrap', opacity: inchidere ? .6 : 1 }}>
+            {inchidere ? '⏳ Se generează PV…' : inchisa ? 'Redeschide' : '✓ Încheie ședința'}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Participanți: cine primește PV-ul în cont la încheiere ── */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: G.dim, textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>
+          Participanți ({(sed.participanti_ids || []).length}) — primesc PV-ul la încheiere
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {profiles.map(p => {
+            const in_ = (sed.participanti_ids || []).includes(p.id)
+            return (
+              <button key={p.id} onClick={() => !inchisa && toggleParticipant(p.id)} disabled={inchisa}
+                style={{ ...S.btn, padding: '4px 11px', fontSize: 12, background: in_ ? G.cyan + '22' : 'transparent',
+                  color: in_ ? G.cyan : G.dim, border: `1px solid ${in_ ? G.cyan + '66' : G.border2}` }}>
+                {in_ ? '✓ ' : ''}{p.name}
+              </button>
+            )
+          })}
+        </div>
+        <input defaultValue={sed.participanti_alti || ''} onBlur={e => salvSed({ participanti_alti: e.target.value.trim() || null })}
+          disabled={inchisa} placeholder="invitați din afara platformei (opțional)…"
+          style={{ ...S.inp, marginTop: 7, width: '100%', boxSizing: 'border-box', fontSize: 12.5 }} />
       </div>
 
       {/* ── Stare proiect: ședința nu începe cu datele goale ── */}
