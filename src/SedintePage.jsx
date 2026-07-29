@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import { verificaProiect, consemneazaLipsuri } from './lib/verificariProiect.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -99,16 +100,32 @@ export default function SedintePage() {
     const rest = restante.filter(r =>
       (!proiectId || r.proiect_id === proiectId) && r.tip_sedinta === tip)
     if (rest.length) {
+      // cheia de verificare se ia de pe linia-sursă, ca dedup-ul verificărilor să funcționeze
+      const { data: surse } = await supabase.from('sedinte_linii')
+        .select('id, cheie_verificare, auto_generata').in('id', rest.map(r => r.id))
+      const chei = Object.fromEntries((surse || []).map(x => [x.id, x]))
       const rows = rest.map((r, i) => ({
         sedinta_id: s.id, ordine: i, tip: 'actiune', text: r.text,
         responsabil_id: r.responsabil_id, termen: r.termen, status: r.status,
         tichet_id: r.tichet_id, provine_din_id: r.id,
+        cheie_verificare: chei[r.id]?.cheie_verificare || null,
+        auto_generata: chei[r.id]?.auto_generata || false,
       }))
       await supabase.from('sedinte_linii').insert(rows)
       // liniile vechi se închid ca „mutate" — rămân în istoric, dar nu mai apar ca restanțe
       await supabase.from('sedinte_linii').update({ status: 'anulat' }).in('id', rest.map(r => r.id))
     }
-    show(rest.length ? `✓ Ședință nouă — ${rest.length} restanțe preluate` : '✓ Ședință nouă')
+    // ── Verificarea datelor de proiect: lipsurile devin acțiuni cu termen ──
+    let vRez = null
+    if (proiectId) {
+      try {
+        vRez = await consemneazaLipsuri(s.id, proiectId, { termenZile: 7, ordineStart: rest.length })
+      } catch (e) { show('Verificare date: ' + e.message, 'err') }
+    }
+    const parti = [`✓ Ședință nouă`]
+    if (rest.length) parti.push(`${rest.length} restanțe preluate`)
+    if (vRez?.adaugate) parti.push(`${vRez.adaugate} lipsuri de date consemnate`)
+    show(parti.join(' — '))
     await loadAll()
     setDeschisa(s.id)
   }
@@ -239,6 +256,8 @@ function RandSedinta({ s, onOpen, numeProiect }) {
 function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, numeProfil, numeProiect }) {
   const [sed, setSed] = useState(null)
   const [linii, setLinii] = useState([])
+  const [stare, setStare] = useState(null)          // verificaProiect() — termen, risc, lipsuri
+  const [vechime, setVechime] = useState({})        // {cheie_verificare: în câte ședințe a apărut}
   const [loading, setLoading] = useState(true)
   const [nouTip, setNouTip] = useState('actiune')
   const [nouText, setNouText] = useState('')
@@ -255,6 +274,18 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
     setSed(s.data || null)
     setLinii(l.data || [])
     setLoading(false)
+    // stare proiect + vechimea verificărilor (în câte ședințe a tot apărut aceeași lipsă)
+    if (s.data?.proiect_id) {
+      verificaProiect(s.data.proiect_id).then(setStare).catch(() => setStare(null))
+      supabase.from('sedinte_linii')
+        .select('cheie_verificare, sedinta_id, sedinte!inner(proiect_id)')
+        .eq('sedinte.proiect_id', s.data.proiect_id).not('cheie_verificare', 'is', null)
+        .then(({ data }) => {
+          const m = {}
+          for (const r of (data || [])) (m[r.cheie_verificare] = m[r.cheie_verificare] || new Set()).add(r.sedinta_id)
+          setVechime(Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.size])))
+        })
+    } else { setStare(null); setVechime({}) }
   }, [sedintaId])
   useEffect(() => { load() }, [load])
 
@@ -346,6 +377,50 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
         </button>
       </div>
 
+      {/* ── Stare proiect: ședința nu începe cu datele goale ── */}
+      {stare && (
+        <div style={{ ...S.card, padding: '12px 15px', marginBottom: 14, borderLeft: `4px solid ${stare.risc === 'critic' ? G.red : stare.risc === 'atentie' ? G.orange : G.green}` }}>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline' }}>
+            {stare.termen && (
+              <div>
+                <div style={{ fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4 }}>Termen finalizare ({stare.termenSursa})</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: stare.zileRamase < 0 ? G.red : stare.zileRamase < 30 ? G.orange : G.text }}>
+                  {fmtData(stare.termen)}
+                  <span style={{ fontSize: 12, fontWeight: 600, marginLeft: 7, color: stare.zileRamase < 0 ? G.red : G.muted }}>
+                    {stare.zileRamase < 0 ? `depășit cu ${-stare.zileRamase} zile` : `${stare.zileRamase} zile rămase`}
+                  </span>
+                </div>
+              </div>
+            )}
+            {stare.pctTimp != null && (
+              <div>
+                <div style={{ fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4 }}>Timp consumat</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>{stare.pctTimp.toFixed(0)}%</div>
+              </div>
+            )}
+            {stare.stadiu && (
+              <div>
+                <div style={{ fontSize: 10.5, color: G.dim, textTransform: 'uppercase', letterSpacing: .4 }}>Stadiu fizic (din rapoarte)</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>{stare.stadiu.pct.toFixed(0)}%
+                  <span style={{ fontSize: 11, fontWeight: 400, color: G.dim, marginLeft: 5 }}>({stare.stadiu.activitatiMasurate} activități măsurate)</span>
+                </div>
+              </div>
+            )}
+            {stare.risc && stare.risc !== 'ok' && (
+              <div style={{ alignSelf: 'center', padding: '5px 12px', borderRadius: 8, fontSize: 12.5, fontWeight: 800,
+                background: (stare.risc === 'critic' ? G.red : G.orange) + '22', color: stare.risc === 'critic' ? G.red : G.orange }}>
+                {stare.risc === 'critic' ? '🚨' : '⚠️'} decalaj {stare.decalaj.toFixed(0)}% între timp și execuție
+              </div>
+            )}
+            {stare.lipsuri.length > 0 && (
+              <div style={{ alignSelf: 'center', fontSize: 12.5, color: G.yellow }}>
+                📋 {stare.lipsuri.length} date de proiect lipsă
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {actiuni.length > 0 && (
         <div style={{ fontSize: 12.5, color: G.muted, marginBottom: 12 }}>
           {actiuni.length} acțiuni · <strong style={{ color: deschise.length ? G.orange : G.green }}>{deschise.length} deschise</strong>
@@ -368,6 +443,11 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
                   style={{ ...S.inp, flex: 1, minWidth: 0, border: 'none', background: 'transparent', padding: '2px 0', resize: 'vertical', fontSize: 13.5,
                     textDecoration: l.status === 'rezolvat' ? 'line-through' : 'none', color: l.status === 'rezolvat' ? G.muted : G.text }} />
                 {l.provine_din_id && <span title="Preluată din ședința anterioară" style={{ fontSize: 11, color: G.yellow, whiteSpace: 'nowrap' }}>↩ restanță</span>}
+                {l.auto_generata && (vechime[l.cheie_verificare] || 1) > 1 && ['deschis', 'in_lucru'].includes(l.status) && (
+                  <span title="Aceeași lipsă a apărut și în ședințele anterioare" style={{ fontSize: 11, color: G.red, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    ⏳ de {vechime[l.cheie_verificare]} ședințe
+                  </span>
+                )}
                 <button onClick={() => stergeLinie(l.id)} disabled={inchisa} style={{ background: 'transparent', border: 'none', color: G.dim, cursor: 'pointer', fontSize: 13 }}>🗑</button>
               </div>
               {l.tip === 'actiune' && (
