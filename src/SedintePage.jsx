@@ -305,14 +305,17 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
   const [nouTermen, setNouTermen] = useState('')
   const inputRef = useRef(null)
 
+  const [rsvp, setRsvp] = useState([])
   const load = useCallback(async () => {
     setLoading(true)
-    const [s, l] = await Promise.all([
+    const [s, l, r] = await Promise.all([
       supabase.from('sedinte').select('*').eq('id', sedintaId).maybeSingle(),
       supabase.from('sedinte_linii').select('*').eq('sedinta_id', sedintaId).order('ordine').order('id'),
+      supabase.from('sedinte_rsvp').select('status').eq('sedinta_id', sedintaId),
     ])
     setSed(s.data || null)
     setLinii(l.data || [])
+    setRsvp(r.data || [])
     setLoading(false)
     // stare proiect + vechimea verificărilor (în câte ședințe a tot apărut aceeași lipsă)
     if (s.data?.proiect_id) {
@@ -389,6 +392,20 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
         })))
       }
       show('✓ Ședință încheiată — PV generat și semnat' + (dest.length ? `, trimis la ${dest.length} participanți` : ''))
+
+      // ── Invitație email + .ics către participanți (Feature #5) ──
+      // Eroare aici nu blochează încheierea — ședința e deja salvată.
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sedinta-invite`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sedinta_id: sedintaId }),
+        })
+        const r = await resp.json()
+        if (r?.ok && r.trimise > 0) show(`✉️ Invitații trimise la ${r.trimise}/${r.total} participanți`)
+        else if (r?.error) show('Invitații email: ' + r.error, 'err')
+      } catch (e) { show('Invitații email: ' + (e.message || e), 'err') }
     } catch (e) {
       show('Eroare la PDF: ' + (e.message || e), 'err')
     } finally { setInchidere(false) }
@@ -491,8 +508,16 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
       </div>
 
       {inchisa && sed.semnat_de && (
-        <div style={{ fontSize: 12, color: G.green, marginBottom: 12, marginTop: -8 }}>
+        <div style={{ fontSize: 12, color: G.green, marginBottom: 6, marginTop: -8 }}>
           🖊️ Semnat de {numeProfil(sed.semnat_de)} la {new Date(sed.semnat_la).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+        </div>
+      )}
+      {sed.invite_trimisa_la && rsvp.length > 0 && (
+        <div style={{ fontSize: 12, color: G.muted, marginBottom: 12 }}>
+          ✉️ Invitații: <span style={{ color: G.green, fontWeight: 700 }}>✅ {rsvp.filter(r => r.status === 'acceptat').length} confirmate</span>
+          {' · '}<span style={{ color: G.yellow, fontWeight: 700 }}>🤔 {rsvp.filter(r => r.status === 'poate').length} poate</span>
+          {' · '}<span style={{ color: G.red, fontWeight: 700 }}>❌ {rsvp.filter(r => r.status === 'refuzat').length} refuzate</span>
+          {' · '}<span>⏳ {rsvp.filter(r => r.status === 'in_asteptare').length} în așteptare</span>
         </div>
       )}
 
