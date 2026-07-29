@@ -342,23 +342,43 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
   // ── Încheierea ședinței = momentul PDF-ului ──
   // Se generează procesul-verbal, se urcă în Storage și fiecare participant
   // primește notificare cu link — „raportul ajunge în contul fiecăruia".
+  // Cere semnătură ÎNAINTE de generarea PDF-ului (cine încheie, semnează).
   const [inchidere, setInchidere] = useState(false)
-  const incheie = async () => {
+  const [ceruSemnatura, setCeruSemnatura] = useState(false)
+  const incheie = async (semnaturaFile) => {
+    if (!semnaturaFile) { setCeruSemnatura(true); return }
     setInchidere(true)
     try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const semnaturaPath = `${new Date(sed.data).getFullYear()}/${sedintaId}/semnatura_${Date.now()}.png`
+      const { error: semErr } = await supabase.storage.from(BUCKET_PDF)
+        .upload(semnaturaPath, semnaturaFile, { contentType: 'image/png', upsert: true })
+      if (semErr) throw semErr
+
+      const semnaturaDataUrl = await new Promise((res, rej) => {
+        const r = new FileReader()
+        r.onload = () => res(r.result)
+        r.onerror = rej
+        r.readAsDataURL(semnaturaFile)
+      })
+
       const { blob, nume } = await genereazaSedintaPdf({
         sed, linii,
         numeProiect: numeProiect(sed.proiect_id),
         numeParticipanti: (sed.participanti_ids || []).map(numeProfil).filter(n => n !== '—'),
         numeProfil, stare,
+        semnatura: { dataUrl: semnaturaDataUrl, nume: numeProfil(user?.id), data: new Date().toISOString() },
       })
       const path = `${new Date(sed.data).getFullYear()}/${sedintaId}/${nume}`
       const { error: upErr } = await supabase.storage.from(BUCKET_PDF)
         .upload(path, blob, { contentType: 'application/pdf', upsert: true })
       if (upErr) throw upErr
-      await salvSed({ inchisa_la: new Date().toISOString(), pdf_path: path })
+      await salvSed({
+        inchisa_la: new Date().toISOString(), pdf_path: path,
+        semnat_de: user?.id || null, semnat_la: new Date().toISOString(), semnatura_path: semnaturaPath,
+      })
+      setCeruSemnatura(false)
       // notificare pentru fiecare participant (fără cel care încheie)
-      const { data: { user } } = await supabase.auth.getUser()
       const dest = (sed.participanti_ids || []).filter(p => p && p !== user?.id)
       if (dest.length) {
         await supabase.from('notifications').insert(dest.map(pid => ({
@@ -368,7 +388,7 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
           link_to: '/sedinte',
         })))
       }
-      show('✓ Ședință încheiată — PV generat' + (dest.length ? ` și trimis la ${dest.length} participanți` : ''))
+      show('✓ Ședință încheiată — PV generat și semnat' + (dest.length ? `, trimis la ${dest.length} participanți` : ''))
     } catch (e) {
       show('Eroare la PDF: ' + (e.message || e), 'err')
     } finally { setInchidere(false) }
@@ -463,12 +483,18 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
               📄 PV (PDF)
             </button>
           )}
-          <button onClick={() => inchisa ? salvSed({ inchisa_la: null }) : incheie()} disabled={inchidere}
+          <button onClick={() => inchisa ? salvSed({ inchisa_la: null, semnat_de: null, semnat_la: null, semnatura_path: null }) : incheie()} disabled={inchidere}
             style={{ ...S.btn, background: inchisa ? G.surface : G.green + '22', color: inchisa ? G.muted : G.green, border: `1px solid ${inchisa ? G.border2 : G.green + '55'}`, whiteSpace: 'nowrap', opacity: inchidere ? .6 : 1 }}>
             {inchidere ? '⏳ Se generează PV…' : inchisa ? 'Redeschide' : '✓ Încheie ședința'}
           </button>
         </div>
       </div>
+
+      {inchisa && sed.semnat_de && (
+        <div style={{ fontSize: 12, color: G.green, marginBottom: 12, marginTop: -8 }}>
+          🖊️ Semnat de {numeProfil(sed.semnat_de)} la {new Date(sed.semnat_la).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+        </div>
+      )}
 
       {/* ── Participanți: cine primește PV-ul în cont la încheiere ── */}
       <div style={{ marginBottom: 12 }}>
@@ -629,6 +655,88 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
         <div style={{ fontSize: 11.5, color: G.dim, marginBottom: 5 }}>Observații (opțional)</div>
         <textarea defaultValue={sed.observatii || ''} onBlur={e => salvSed({ observatii: e.target.value.trim() || null })} disabled={inchisa} rows={2}
           placeholder="Context, note libere…" style={{ ...S.inp, width: '100%', resize: 'vertical', boxSizing: 'border-box' }} />
+      </div>
+
+      {ceruSemnatura && (
+        <ModalSemnaturaIncheiere
+          onClose={() => setCeruSemnatura(false)}
+          onConfirm={(file) => incheie(file)}
+          saving={inchidere}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── Semnătura care încheie ședința: cere semnătură desenată înainte de PV ──
+function ModalSemnaturaIncheiere({ onClose, onConfirm, saving }) {
+  const canvasRef = useRef(null)
+  const ctxRef = useRef(null)
+  const [drawing, setDrawing] = useState(false)
+  const [hasContent, setHasContent] = useState(false)
+  const height = 180
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = height * dpr
+    const ctx = canvas.getContext('2d')
+    ctx.scale(dpr, dpr)
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, rect.width, height)
+    ctxRef.current = ctx
+  }, [])
+
+  const getPos = (e) => {
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    const t = e.touches && e.touches[0]
+    return { x: (t ? t.clientX : e.clientX) - rect.left, y: (t ? t.clientY : e.clientY) - rect.top }
+  }
+  const start = (e) => { e.preventDefault(); setDrawing(true); setHasContent(true); const { x, y } = getPos(e); ctxRef.current.beginPath(); ctxRef.current.moveTo(x, y) }
+  const move = (e) => { if (!drawing) return; e.preventDefault(); const { x, y } = getPos(e); ctxRef.current.lineTo(x, y); ctxRef.current.stroke() }
+  const end = () => setDrawing(false)
+  const clear = () => {
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    ctxRef.current.fillStyle = '#fff'; ctxRef.current.fillRect(0, 0, rect.width, height)
+    setHasContent(false)
+  }
+  const confirma = () => {
+    if (!hasContent) return
+    canvasRef.current.toBlob((blob) => {
+      if (!blob) return
+      onConfirm(new File([blob], 'semnatura.png', { type: 'image/png' }))
+    }, 'image/png', 0.95)
+  }
+
+  return (
+    <div onClick={() => !saving && onClose()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.85)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ ...S.card, width: 520, padding: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: G.text, marginBottom: 4 }}>🖊️ Semnează procesul-verbal</div>
+        <div style={{ fontSize: 12, color: G.muted, marginBottom: 14 }}>Semnătura ta confirmă conținutul ședinței, apoi se generează PV-ul.</div>
+        <div style={{ position: 'relative', background: '#fff', border: `2px dashed ${G.border2}`, borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
+          <canvas ref={canvasRef}
+            onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+            onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+            style={{ display: 'block', width: '100%', height, cursor: 'crosshair', touchAction: 'none' }} />
+          {!hasContent && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', fontSize: 13, fontStyle: 'italic', pointerEvents: 'none' }}>
+              ✍️ Desenează cu mouse-ul sau cu degetul
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} disabled={saving} style={{ ...S.btn, background: G.surface, color: G.text, border: `1px solid ${G.border2}` }}>Anulează</button>
+          <button onClick={clear} disabled={!hasContent || saving} style={{ ...S.btn, background: 'transparent', color: G.red, border: `1px solid ${G.red}55`, opacity: hasContent ? 1 : .5 }}>🗑 Șterge</button>
+          <button onClick={confirma} disabled={!hasContent || saving}
+            style={{ ...S.btn, background: hasContent ? G.green : G.surface2, color: hasContent ? '#0D1117' : G.dim, opacity: saving ? .6 : 1 }}>
+            {saving ? '⏳ Se generează…' : '✓ Semnează și încheie'}
+          </button>
+        </div>
       </div>
     </div>
   )
