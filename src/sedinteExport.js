@@ -16,7 +16,7 @@ const TIP_LABEL = { problema: '⚠ Problemă', actiune: '✔ Acțiune', decizie:
 const TIP_CULOARE = { problema: '#B45309', actiune: '#166534', decizie: '#0E7490', info: '#6B7280' }
 const ST_LABEL = { deschis: 'deschis', in_lucru: 'în lucru', rezolvat: 'rezolvat', anulat: 'anulat' }
 
-function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare }) {
+function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare, semnatura }) {
   const tipSed = { executie: 'Execuție', logistica: 'Logistică', general: 'General' }[sed.tip_sedinta] || sed.tip_sedinta
   const randuri = linii.filter(l => l.status !== 'anulat').map(l => `
     <tr>
@@ -61,6 +61,14 @@ function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, star
       <tbody>${randuri || '<tr><td colspan="5" style="padding:10px;color:#9CA3AF;font-size:10px">Fără puncte consemnate.</td></tr>'}</tbody>
     </table>
     ${sed.observatii ? `<div style="margin-top:10px;font-size:9.5px;color:#374151"><strong>Observații:</strong> ${esc(sed.observatii)}</div>` : ''}
+    ${semnatura ? `
+    <div style="margin-top:16px;display:flex;justify-content:flex-end">
+      <div style="text-align:center">
+        <img src="${semnatura.dataUrl}" style="height:60px;max-width:220px;object-fit:contain;border-bottom:1px solid #111827" />
+        <div style="font-size:9px;color:#111827;font-weight:700;margin-top:3px">${esc(semnatura.nume)}</div>
+        <div style="font-size:8px;color:#6B7280">semnat ${new Date(semnatura.data).toLocaleString('ro-RO')}</div>
+      </div>
+    </div>` : ''}
     <div style="margin-top:14px;padding-top:6px;border-top:1px solid #E5E7EB;font-size:8px;color:#9CA3AF">
       Generat automat din PontajPRO · ${new Date().toLocaleString('ro-RO')} · Acțiunile nerezolvate se preiau automat în ședința următoare.
     </div>
@@ -68,10 +76,10 @@ function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, star
 }
 
 // Construiește PDF-ul și îl întoarce ca Blob (+ nume de fișier sugerat).
-export async function genereazaSedintaPdf({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare }) {
+export async function genereazaSedintaPdf({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare, semnatura }) {
   const host = document.createElement('div')
   host.style.cssText = 'position:fixed;left:-10000px;top:0'
-  host.innerHTML = buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare })
+  host.innerHTML = buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare, semnatura })
   document.body.appendChild(host)
   try {
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))

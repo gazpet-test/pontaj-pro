@@ -26,6 +26,7 @@ import ExecutiePage from './Executie.jsx'
 import FinanciarPage from './Financiar.jsx'
 // ════════════ QR Utilaje (27.05.2026) ════════════
 import QrUtilajPage from './QrUtilajPage.jsx'
+import RsvpSedintaPage from './RsvpSedintaPage.jsx'
 import ConcediuMobilPage from './ConcediuMobilPage.jsx'
 import HomeScada from './HomeScada.jsx'
 // ════════════ Buton global „De aprobat" în navbar (12.06.2026) ════════════
@@ -8238,6 +8239,8 @@ export default function App() {
         <Route path="/q/:id" element={<QrUtilajPage/>}/>
         {/* Route PUBLIC cerere concediu mobil (token personal) — FĂRĂ cont, pt. toți angajații */}
         <Route path="/co" element={<ConcediuMobilPage/>}/>
+        {/* Route PUBLIC RSVP ședință (token din email invitație) — FĂRĂ cont */}
+        <Route path="/rsvp/:token/:status" element={<RsvpSedintaPage/>}/>
         <Route path="/" element={<ProtectedRoute><HomeDashboard/></ProtectedRoute>}/>
         <Route path="/panou" element={<ProtectedRoute requireModule="pontajpro"><DashboardPage/></ProtectedRoute>}/>
         <Route path="/pontaj" element={<ProtectedRoute requireModule="pontajpro"><PontajPage/></ProtectedRoute>}/>
