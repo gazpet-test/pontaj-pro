@@ -92,12 +92,40 @@ export default function SedintePage() {
     ? restante.filter(r => String(r.proiect_id || '') === filtruProiect)
     : restante, [restante, filtruProiect])
 
+  // ── Participanți impliciți (regulă Razvan 29.07.2026): la orice ședință intră
+  // automat Logistica (Mitrache Alexandru) + managerul de proiect alocat pe
+  // proiectul ședinței. Restul (HR, Financiar, Achiziții) se bifează manual.
+  const participantiImpliciti = async (proiectId, userId) => {
+    const ids = new Set(userId ? [userId] : [])
+    const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    const mitrache = profiles.find(p => norm(p.name).includes('mitrache'))
+    if (mitrache) ids.add(mitrache.id)
+    if (proiectId) {
+      // employees.name e „NUME_FAMILIE PRENUME"; profiles e „Prenume Nume" —
+      // potrivim pe mulțimea de cuvinte, nu pe ordinea lor
+      const { data: p } = await supabase.from('executie_proiecte')
+        .select('mp_employee_id, employees:mp_employee_id(name)').eq('id', proiectId).maybeSingle()
+      const mpNume = p?.employees?.name
+      if (mpNume) {
+        // minim 2 cuvinte comune — angajatul poate avea 3 nume („TOMA RAZVAN ALIN")
+        // iar profilul doar 2 („Razvan Toma")
+        const tokMp = norm(mpNume).split(/\s+/).filter(Boolean)
+        const mp = profiles.find(pr => {
+          const tokPr = norm(pr.name).split(/\s+/).filter(Boolean)
+          return tokMp.filter(t => tokPr.includes(t)).length >= 2
+        })
+        if (mp) ids.add(mp.id)
+      }
+    }
+    return [...ids]
+  }
+
   // ── Ședință nouă: preia restanțele din ședințele anterioare (același proiect+tip) ──
   const sedintaNoua = async (tip, proiectId) => {
     const { data: { user } } = await supabase.auth.getUser()
     const { data: s, error } = await supabase.from('sedinte').insert({
       data: azi(), tip_sedinta: tip, proiect_id: proiectId || null,
-      participanti_ids: user ? [user.id] : [], created_by: user?.id || null,
+      participanti_ids: await participantiImpliciti(proiectId, user?.id), created_by: user?.id || null,
     }).select('*').single()
     if (error) { show('Eroare: ' + error.message, 'err'); return }
 
