@@ -1065,7 +1065,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       // PRIORITATE sume: defalcarea VALIDATĂ din CP (linii_ok) > xls > formulă coeficient.
       const cpOk = !!(pdfResult?.linii_ok && pdfResult?.linii?.length)
       const cpBaza = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.valoare_baza)||0),0)*100)/100 : null
+      // valAj = DOAR ajustarea ICC (col b, clz.48) — asta cere Act Adițional.
+      // Rețineri restituite/penalizări (alte_sume, col c..g) NU intră aici — se închid
+      // singure la intrarea în grafic, fără AA (decizie Razvan 04.08.2026).
       const cpAj   = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.ajustare)||0),0)*100)/100 : null
+      const cpAlte = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.alte_sume)||0),0)*100)/100 : 0
       const valAj = cpAj != null ? cpAj
         : (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0) ? xlsResult.totalAjustare
         : (() => {
@@ -1074,9 +1078,9 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
             if (isNaN(b) || isNaN(c) || c === 1) return 0
             return Math.round((b * c - b) * 100) / 100
           })()
-      // BAZĂ = lucrări FĂRĂ ajustare. Când avem doar totalul din CP: baza = total − ajustare
-      // (altfel baza=total + linia de ajustare = dublare).
-      const valBaza = cpBaza != null ? cpBaza
+      // BAZĂ = lucrări FĂRĂ ajustare ICC. Alte sume (rețineri/penalizări) se includ în bază
+      // ca totalul (valoare_ajustata_lei = bază + ajustare, GENERATED) să dea suma certificatului.
+      const valBaza = cpBaza != null ? Math.round((cpBaza + cpAlte) * 100) / 100
         : (xlsResult?.totalBaza != null) ? xlsResult.totalBaza
         : (certVal != null ? Math.round((certVal - (valAj || 0)) * 100) / 100
            : (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null))
@@ -1390,6 +1394,12 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                   <div style={{color:G.muted}}>Suma aprobată TGZ: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>
                     {fmtLei(pdfResult.valoare_totala_fara_tva)}
                   </span></div>
+                  {(pdfResult.total_ajustare_icc || 0) !== 0 && (
+                    <div style={{color:G.muted}}>din care ajustare ICC (necesită AA): <span style={{color:G.orange, fontFamily:'monospace', fontWeight:700}}>{fmtLei(pdfResult.total_ajustare_icc)}</span></div>
+                  )}
+                  {(pdfResult.total_alte_sume || 0) !== 0 && (
+                    <div style={{color:G.muted}}>rețineri/restituiri/penalizări (fără AA): <span style={{color:G.teal, fontFamily:'monospace', fontWeight:700}}>{fmtLei(pdfResult.total_alte_sume)}</span></div>
+                  )}
                   {pdfResult.confidence < 0.7 && (
                     <div style={{color:G.yellow, marginTop:4}}>⚠️ Confidence scăzut ({Math.round(pdfResult.confidence*100)}%) — verifică manual</div>
                   )}
