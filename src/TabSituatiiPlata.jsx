@@ -965,12 +965,18 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
     [ajustari]
   )
 
+  // Aceeași prioritate ca la Salvare (handleSave): defalcarea validată din CP > XLS > coeficient manual.
+  // Fără asta, preview-ul arăta 0,00 chiar dacă certificatul chiar avea ajustare — salvarea era corectă, dar ecranul mințea.
   const valAjustata = useMemo(() => {
+    if (pdfResult?.linii_ok && pdfResult?.linii?.length) {
+      return Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.ajustare)||0),0)*100)/100
+    }
+    if (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0) return xlsResult.totalAjustare
     const b = parseFloat(form.valoare_baza_lei)
     const c = parseFloat(form.coeficient_ajustare)
     if (isNaN(b) || isNaN(c)) return null
     return Math.round((b * c - b) * 100) / 100
-  }, [form.valoare_baza_lei, form.coeficient_ajustare])
+  }, [form.valoare_baza_lei, form.coeficient_ajustare, pdfResult, xlsResult])
 
   // Parsare XLS borderou ajustat
   const handleXlsParse = async (file) => {
@@ -1059,26 +1065,35 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       // PRIORITATE sume: defalcarea VALIDATĂ din CP (linii_ok) > xls > formulă coeficient.
       const cpOk = !!(pdfResult?.linii_ok && pdfResult?.linii?.length)
       const cpBaza = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.valoare_baza)||0),0)*100)/100 : null
+      // valAj = DOAR ajustarea ICC (col b, clz.48) — asta cere Act Adițional.
+      // Rețineri restituite/penalizări (alte_sume, col c..g) NU intră aici — se închid
+      // singure la intrarea în grafic, fără AA (decizie Razvan 04.08.2026).
       const cpAj   = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.ajustare)||0),0)*100)/100 : null
+      const cpAlte = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.alte_sume)||0),0)*100)/100 : 0
+      // La REDESCHIDEREA unei SL salvate (fără re-upload PDF/XLS) pdfResult/xlsResult sunt
+      // goale — nu rescrie ajustarea existentă cu 0 (bug confirmat 04.08.2026: editarea
+      // statusului ștergea suma certificatului și ajustarea).
       const valAj = cpAj != null ? cpAj
         : (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0) ? xlsResult.totalAjustare
         : (() => {
             const b = parseFloat(form.valoare_baza_lei)
             const c = parseFloat(form.coeficient_ajustare)
-            if (isNaN(b) || isNaN(c) || c === 1) return 0
-            return Math.round((b * c - b) * 100) / 100
+            if (!isNaN(b) && !isNaN(c) && c !== 1) return Math.round((b * c - b) * 100) / 100
+            return item?.valoare_ajustare_lei != null ? parseFloat(item.valoare_ajustare_lei) : 0
           })()
-      // BAZĂ = lucrări FĂRĂ ajustare. Când avem doar totalul din CP: baza = total − ajustare
-      // (altfel baza=total + linia de ajustare = dublare).
-      const valBaza = cpBaza != null ? cpBaza
+      // BAZĂ = lucrări FĂRĂ ajustare ICC. Alte sume (rețineri/penalizări) se includ în bază
+      // ca totalul (valoare_ajustata_lei = bază + ajustare, GENERATED) să dea suma certificatului.
+      const valBaza = cpBaza != null ? Math.round((cpBaza + cpAlte) * 100) / 100
         : (xlsResult?.totalBaza != null) ? xlsResult.totalBaza
         : (certVal != null ? Math.round((certVal - (valAj || 0)) * 100) / 100
            : (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null))
 
-      // Determină status automat
+      // Determină status automat — DOAR ridică din 'in_pregatire' spre 'aprobata' la
+      // primul certificat atașat. Nu retrogradează niciodată un status ales manual mai
+      // avansat (aprobata/facturata/incasata) — bug confirmat 04.08.2026 (Razvan bifase
+      // 'incasata' și salvarea o rescria mereu la 'aprobata').
       let statusAuto = form.status
-      if (pdfResult && certVal) {
-        // Odată ce Certificatul de Plată e încărcat, situația e aprobată de beneficiar.
+      if (pdfResult && certVal && form.status === 'in_pregatire') {
         statusAuto = 'aprobata'
       }
 
@@ -1100,10 +1115,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
         // Câmpuri noi
         certificat_plata_nr:     form.certificat_plata_nr.trim() || null,
         certificat_plata_data:   form.certificat_plata_data || null,
-        certificat_plata_valoare: certVal,
+        // La editare fără re-parse, păstrează valorile certificatului deja salvate
+        certificat_plata_valoare: certVal != null ? certVal : (item?.certificat_plata_valoare ?? null),
         centralizator_xls_path:  xlsPath || null,
         certificat_pdf_path:     pdfPath || null,
-        discrepanta_lei:         discrepanta,
+        discrepanta_lei:         discrepanta != null ? discrepanta : (item?.discrepanta_lei ?? null),
         updated_at:              new Date().toISOString(),
       }
 
@@ -1366,7 +1382,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 }}>
                   {pdfFile ? `✅ ${pdfFile.name}` : '📂 Alege PDF...'}
                 </button>
-                {pdfParsing && <span style={{color:G.muted, fontSize:12}}>⏳ Haiku citește suma... (~3 bani)</span>}
+                {pdfParsing && (
+                  <span style={{color:G.yellow, fontSize:14, fontWeight:700}}>
+                    ⏳ AI citește certificatul — te rog AȘTEAPTĂ, nu închide și nu da click în altă parte!
+                  </span>
+                )}
                 <input ref={pdfRef} type="file" accept=".pdf,image/jpeg,image/png" style={{display:'none'}}
                   onChange={e=>{const f=e.target.files?.[0]; if(f){setPdfFile(f); setPdfResult(null); handlePdfParse(f)}}}/>
               </div>
@@ -1378,6 +1398,12 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                   <div style={{color:G.muted}}>Suma aprobată TGZ: <span style={{color:G.green, fontFamily:'monospace', fontWeight:700}}>
                     {fmtLei(pdfResult.valoare_totala_fara_tva)}
                   </span></div>
+                  {(pdfResult.total_ajustare_icc || 0) !== 0 && (
+                    <div style={{color:G.muted}}>din care ajustare ICC (necesită AA): <span style={{color:G.orange, fontFamily:'monospace', fontWeight:700}}>{fmtLei(pdfResult.total_ajustare_icc)}</span></div>
+                  )}
+                  {(pdfResult.total_alte_sume || 0) !== 0 && (
+                    <div style={{color:G.muted}}>rețineri/restituiri/penalizări (fără AA): <span style={{color:G.teal, fontFamily:'monospace', fontWeight:700}}>{fmtLei(pdfResult.total_alte_sume)}</span></div>
+                  )}
                   {pdfResult.confidence < 0.7 && (
                     <div style={{color:G.yellow, marginTop:4}}>⚠️ Confidence scăzut ({Math.round(pdfResult.confidence*100)}%) — verifică manual</div>
                   )}
@@ -1433,16 +1459,17 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
             </>
           )}
 
-          {/* Certificat manual dacă nu s-a uploadat PDF */}
-          {!pdfResult && (
+          {/* Nr./Data certificat — rămân vizibile și editabile cât timp AI-ul nu le-a completat pe amândouă
+              (altfel dacă citirea automată eșuează pe unul din câmpuri, userul n-are unde să-l scrie manual) */}
+          {(!form.certificat_plata_nr.trim() || !form.certificat_plata_data) && (
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
               <div>
-                <label style={S.label}>Nr. Certificat Plată</label>
+                <label style={S.label}>Nr. Certificat Plată{pdfResult && !form.certificat_plata_nr.trim() && <span style={{color:G.yellow}}> — nu s-a citit automat</span>}</label>
                 <input value={form.certificat_plata_nr} onChange={e=>set('certificat_plata_nr',e.target.value)}
                   style={S.input} placeholder="ex: 10/29.05.2026"/>
               </div>
               <div>
-                <label style={S.label}>Data Certificat</label>
+                <label style={S.label}>Data Certificat{pdfResult && !form.certificat_plata_data && <span style={{color:G.yellow}}> — nu s-a citit automat, completează tu</span>}</label>
                 <input type="date" value={form.certificat_plata_data} onChange={e=>set('certificat_plata_data',e.target.value)} style={S.input}/>
               </div>
             </div>
