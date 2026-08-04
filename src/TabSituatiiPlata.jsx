@@ -1081,10 +1081,12 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
         : (certVal != null ? Math.round((certVal - (valAj || 0)) * 100) / 100
            : (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null))
 
-      // Determină status automat
+      // Determină status automat — DOAR ridică din 'in_pregatire' spre 'aprobata' la
+      // primul certificat atașat. Nu retrogradează niciodată un status ales manual mai
+      // avansat (aprobata/facturata/incasata) — bug confirmat 04.08.2026 (Razvan bifase
+      // 'incasata' și salvarea o rescria mereu la 'aprobata').
       let statusAuto = form.status
-      if (pdfResult && certVal) {
-        // Odată ce Certificatul de Plată e încărcat, situația e aprobată de beneficiar.
+      if (pdfResult && certVal && form.status === 'in_pregatire') {
         statusAuto = 'aprobata'
       }
 
