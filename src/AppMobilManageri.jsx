@@ -249,6 +249,24 @@ function RaportZilnic({ profile, sites, onBack }) {
     }
     // >PRAG_SCOATERE zile fără nicio dovadă → nu mai pre-completăm (se poate readăuga manual)
     const lista = [...map.values()].filter(u => !(u.dinRaport && u.zileFaraDovada != null && u.zileFaraDovada > PRAG_SCOATERE))
+    // ── Logistica = sursa de adevăr pentru stare (decizie Razvan 04.08.2026) ──
+    // Utilajul defect rămâne defect până când Logistica (Mitrache) îl pune înapoi
+    // pe Functional — atunci reapare funcțional aici automat.
+    const idsStare = lista.filter(u => u.active_id).map(u => u.active_id)
+    if (idsStare.length) {
+      const { data: st } = await supabase.from('logistica_active').select('id, stare').in('id', idsStare)
+      const sMap = Object.fromEntries((st || []).map(x => [x.id, x.stare]))
+      for (const u of lista) {
+        if (!u.active_id || !sMap[u.active_id]) continue
+        if (sMap[u.active_id] === 'Nefunctional') {
+          u.stare = 'nefunctional'
+          u.motiv = u.motiv || 'Nefuncțional în Logistica'
+        } else {
+          u.stare = 'functional'
+          u.motiv = ''
+        }
+      }
+    }
     setUtilaje(lista)
     setLoadingData(false)
   }, [])
@@ -306,7 +324,53 @@ function RaportZilnic({ profile, sites, onBack }) {
           if (rlErr) throw rlErr
         }
       }
-      setMsg({ ok: true, text: existingId ? '✅ Raport actualizat!' : '✅ Raport trimis cu succes!' })
+      // ── Utilaje defecte → Logistica + tichet la Mitrache (decizie Razvan 04.08.2026) ──
+      // Eroarea aici NU blochează raportul (deja salvat) — doar anunță.
+      let tichetInfo = ''
+      try {
+        const defecte = utilaje.filter(u => u.active_id && u.stare === 'nefunctional')
+        if (defecte.length) {
+          const ids = defecte.map(u => u.active_id)
+          await supabase.from('logistica_active').update({ stare: 'Nefunctional' }).in('id', ids)
+          // dedup: nu deschidem alt tichet dacă există deja unul deschis pe activ
+          const { data: deschise } = await supabase.from('tichete')
+            .select('entitate_id').eq('departament', 'logistica').eq('entitate_tip', 'activ')
+            .in('entitate_id', ids).in('status', ['deschis', 'in_analiza', 'atribuit', 'in_lucru'])
+          const areTichet = new Set((deschise || []).map(t => t.entitate_id))
+          const deDeschis = defecte.filter(u => !areTichet.has(u.active_id))
+          if (deDeschis.length) {
+            const { data: mit } = await supabase.from('profiles').select('id').ilike('name', '%mitrache%').limit(1).maybeSingle()
+            const { data: ultim } = await supabase.from('tichete').select('numar_tichet').order('id', { ascending: false }).limit(1).maybeSingle()
+            let nrCrt = parseInt(String(ultim?.numar_tichet || '').replace(/\D/g, '')) % 10000 || 0
+            const numeSite = sites.find(s => s.id === siteId)?.name || ''
+            let create = 0
+            for (const u of deDeschis) {
+              nrCrt += 1
+              const { data: t, error: tErr } = await supabase.from('tichete').insert({
+                numar_tichet: `TKT-${new Date().getFullYear()}-${String(nrCrt).padStart(4, '0')}`,
+                departament: 'logistica', subcategorie: 'avarie_utilaj',
+                titlu: `Utilaj defect: ${u.cod || u.inmatriculare || u.nume}`.slice(0, 90),
+                descriere: `Raportat NEFUNCȚIONAL în raportul zilnic din ${azi()}${numeSite ? ' — șantier ' + numeSite : ''}.${u.motiv ? '\n\nMotiv: ' + u.motiv : ''}\n\nUtilaj: ${[u.cod, u.inmatriculare, u.nume].filter(Boolean).join(' · ')}`,
+                urgenta: 'normal',
+                entitate_tip: 'activ', entitate_id: u.active_id,
+                entitate_descriere: [u.cod, u.nume].filter(Boolean).join(' '),
+                status: mit?.id ? 'atribuit' : 'deschis',
+                deschis_de: user?.id || null, data_deschidere: new Date().toISOString(),
+                persoana_responsabila: mit?.id || null,
+                atribuit_de: mit?.id ? (user?.id || null) : null,
+                data_atribuire: mit?.id ? new Date().toISOString() : null,
+              }).select('id').single()
+              if (tErr) { console.error('Tichet utilaj defect:', tErr.message) }
+              else {
+                create += 1
+                if (mit?.id) await supabase.from('tichete_asignati').insert({ tichet_id: t.id, profile_id: mit.id }).then(({ error: aErr }) => { if (aErr) console.error('Asignare tichet:', aErr.message) })
+              }
+            }
+            if (create) tichetInfo = ` 🎫 ${create} tichet${create > 1 ? 'e' : ''} deschis${create > 1 ? 'e' : ''} la Logistică pt. utilaje defecte.`
+          }
+        }
+      } catch (e) { console.error('Sync utilaje defecte:', e?.message || e) }
+      setMsg({ ok: true, text: (existingId ? '✅ Raport actualizat!' : '✅ Raport trimis cu succes!') + tichetInfo })
       setTimeout(onBack, 1200)
     } catch (e) {
       setMsg({ ok: false, text: 'Eroare: ' + (e.message || e) })
