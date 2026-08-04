@@ -205,9 +205,12 @@ function RaportZilnic({ profile, sites, onBack }) {
     const keyOf = (u) => u.active_id ? 'a' + u.active_id : 'c' + String(u.cod || u.nume || '').toLowerCase().trim()
     const map = new Map()
     // 1) carry-forward din ultimul raport anterior
+    // STAREA se moștenește: un utilaj defect ieri e defect și azi până îl trece
+    // managerul înapoi pe funcțional (înainte se reseta silențios la 'functional'
+    // și defectele dispăreau din raport a doua zi — sesizat Razvan 04.08.2026).
     const { data: prev } = await supabase.from('rapoarte_zilnice').select('utilaje_snapshot').eq('site_id', sid).lt('data', azo).order('data', { ascending: false }).limit(1).maybeSingle()
     ;(Array.isArray(prev?.utilaje_snapshot) ? prev.utilaje_snapshot : []).forEach(u => {
-      const it = { active_id: u.active_id ?? null, cod: u.cod || '', inmatriculare: u.inmatriculare || '', nume: u.nume || u.cod || '?', tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, ultima_alimentare: null, stare: 'functional', motiv: '', alimentat: false, manual: !u.cod && !u.active_id, dinRaport: true }
+      const it = { active_id: u.active_id ?? null, cod: u.cod || '', inmatriculare: u.inmatriculare || '', nume: u.nume || u.cod || '?', tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, ultima_alimentare: null, stare: u.stare === 'nefunctional' ? 'nefunctional' : 'functional', motiv: u.stare === 'nefunctional' ? (u.motiv || '') : '', alimentat: false, manual: !u.cod && !u.active_id, dinRaport: true }
       map.set(keyOf(it), it)
     })
     // 2) alimentări 14 zile (îmbogățesc / adaugă)
