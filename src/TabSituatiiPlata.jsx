@@ -1663,7 +1663,15 @@ export default function TabSituatiiPlata({ proiectId: proiectIdProp }) {
         .eq('proiect_id', proiectId)
         .order('an').order('luna').order('nr_situatie')
       if (error) throw error
-      setLista(data || [])
+      // Ordine strict cronologică: an → lună (fără lună = la coadă) → data depunere →
+      // numărul SL ca NUMĂR (sortarea text ar pune SL10 înaintea SL2)
+      const nrSL = (s) => { const m = String(s.nr_situatie || '').match(/\d+/); return m ? parseInt(m[0]) : 999 }
+      setLista((data || []).slice().sort((a, b) =>
+        (a.an || 9999) - (b.an || 9999) ||
+        (a.luna || 13) - (b.luna || 13) ||
+        String(a.data_depunere || '9999').localeCompare(String(b.data_depunere || '9999')) ||
+        nrSL(a) - nrSL(b)
+      ))
     } catch(e) {
       showToast('Eroare: ' + e.message, 'err')
     } finally {
