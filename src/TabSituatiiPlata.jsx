@@ -1070,13 +1070,16 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       // singure la intrarea în grafic, fără AA (decizie Razvan 04.08.2026).
       const cpAj   = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.ajustare)||0),0)*100)/100 : null
       const cpAlte = cpOk ? Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.alte_sume)||0),0)*100)/100 : 0
+      // La REDESCHIDEREA unei SL salvate (fără re-upload PDF/XLS) pdfResult/xlsResult sunt
+      // goale — nu rescrie ajustarea existentă cu 0 (bug confirmat 04.08.2026: editarea
+      // statusului ștergea suma certificatului și ajustarea).
       const valAj = cpAj != null ? cpAj
         : (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0) ? xlsResult.totalAjustare
         : (() => {
             const b = parseFloat(form.valoare_baza_lei)
             const c = parseFloat(form.coeficient_ajustare)
-            if (isNaN(b) || isNaN(c) || c === 1) return 0
-            return Math.round((b * c - b) * 100) / 100
+            if (!isNaN(b) && !isNaN(c) && c !== 1) return Math.round((b * c - b) * 100) / 100
+            return item?.valoare_ajustare_lei != null ? parseFloat(item.valoare_ajustare_lei) : 0
           })()
       // BAZĂ = lucrări FĂRĂ ajustare ICC. Alte sume (rețineri/penalizări) se includ în bază
       // ca totalul (valoare_ajustata_lei = bază + ajustare, GENERATED) să dea suma certificatului.
@@ -1112,10 +1115,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
         // Câmpuri noi
         certificat_plata_nr:     form.certificat_plata_nr.trim() || null,
         certificat_plata_data:   form.certificat_plata_data || null,
-        certificat_plata_valoare: certVal,
+        // La editare fără re-parse, păstrează valorile certificatului deja salvate
+        certificat_plata_valoare: certVal != null ? certVal : (item?.certificat_plata_valoare ?? null),
         centralizator_xls_path:  xlsPath || null,
         certificat_pdf_path:     pdfPath || null,
-        discrepanta_lei:         discrepanta,
+        discrepanta_lei:         discrepanta != null ? discrepanta : (item?.discrepanta_lei ?? null),
         updated_at:              new Date().toISOString(),
       }
 
