@@ -965,12 +965,18 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
     [ajustari]
   )
 
+  // Aceeași prioritate ca la Salvare (handleSave): defalcarea validată din CP > XLS > coeficient manual.
+  // Fără asta, preview-ul arăta 0,00 chiar dacă certificatul chiar avea ajustare — salvarea era corectă, dar ecranul mințea.
   const valAjustata = useMemo(() => {
+    if (pdfResult?.linii_ok && pdfResult?.linii?.length) {
+      return Math.round(pdfResult.linii.reduce((s,l)=>s+(Number(l.ajustare)||0),0)*100)/100
+    }
+    if (xlsResult?.totalAjustare != null && xlsResult.totalAjustare !== 0) return xlsResult.totalAjustare
     const b = parseFloat(form.valoare_baza_lei)
     const c = parseFloat(form.coeficient_ajustare)
     if (isNaN(b) || isNaN(c)) return null
     return Math.round((b * c - b) * 100) / 100
-  }, [form.valoare_baza_lei, form.coeficient_ajustare])
+  }, [form.valoare_baza_lei, form.coeficient_ajustare, pdfResult, xlsResult])
 
   // Parsare XLS borderou ajustat
   const handleXlsParse = async (file) => {
@@ -1366,7 +1372,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                 }}>
                   {pdfFile ? `✅ ${pdfFile.name}` : '📂 Alege PDF...'}
                 </button>
-                {pdfParsing && <span style={{color:G.muted, fontSize:12}}>⏳ Haiku citește suma... (~3 bani)</span>}
+                {pdfParsing && (
+                  <span style={{color:G.yellow, fontSize:14, fontWeight:700}}>
+                    ⏳ AI citește certificatul — te rog AȘTEAPTĂ, nu închide și nu da click în altă parte!
+                  </span>
+                )}
                 <input ref={pdfRef} type="file" accept=".pdf,image/jpeg,image/png" style={{display:'none'}}
                   onChange={e=>{const f=e.target.files?.[0]; if(f){setPdfFile(f); setPdfResult(null); handlePdfParse(f)}}}/>
               </div>
@@ -1433,16 +1443,17 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
             </>
           )}
 
-          {/* Certificat manual dacă nu s-a uploadat PDF */}
-          {!pdfResult && (
+          {/* Nr./Data certificat — rămân vizibile și editabile cât timp AI-ul nu le-a completat pe amândouă
+              (altfel dacă citirea automată eșuează pe unul din câmpuri, userul n-are unde să-l scrie manual) */}
+          {(!form.certificat_plata_nr.trim() || !form.certificat_plata_data) && (
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
               <div>
-                <label style={S.label}>Nr. Certificat Plată</label>
+                <label style={S.label}>Nr. Certificat Plată{pdfResult && !form.certificat_plata_nr.trim() && <span style={{color:G.yellow}}> — nu s-a citit automat</span>}</label>
                 <input value={form.certificat_plata_nr} onChange={e=>set('certificat_plata_nr',e.target.value)}
                   style={S.input} placeholder="ex: 10/29.05.2026"/>
               </div>
               <div>
-                <label style={S.label}>Data Certificat</label>
+                <label style={S.label}>Data Certificat{pdfResult && !form.certificat_plata_data && <span style={{color:G.yellow}}> — nu s-a citit automat, completează tu</span>}</label>
                 <input type="date" value={form.certificat_plata_data} onChange={e=>set('certificat_plata_data',e.target.value)} style={S.input}/>
               </div>
             </div>
