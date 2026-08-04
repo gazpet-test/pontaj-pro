@@ -883,6 +883,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
   const [pdfParsing, setPdfParsing] = useState(false)
   const [pdfResult, setPdfResult] = useState(null)
   const [discrepanta, setDiscrepanta] = useState(null)
+  const [dataDerivata, setDataDerivata] = useState(false)  // data certificat dedusă din nr (scris de mână) — de verificat
   const xlsRef = useRef()
   const pdfRef = useRef()
   const set = (k,v) => setForm(f=>({...f,[k]:v}))
@@ -1034,6 +1035,13 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       // Auto-completare certificat
       if (result.nr_certificat) set('certificat_plata_nr', result.nr_certificat)
       if (result.data_certificat) set('certificat_plata_data', result.data_certificat)
+      else if (result.nr_certificat) {
+        // Data e adesea scrisă de mână și nu se extrage separat, dar apare în nr
+        // („7/22.03.2026") — o derivăm de acolo. Rămâne editabilă (scrisul de mână se
+        // poate citi greșit), cu avertismentul „verifică" pe câmp.
+        const m = String(result.nr_certificat).match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/)
+        if (m) { set('certificat_plata_data', `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`); setDataDerivata(true) }
+      }
       // Calculează discrepanță față de XLS
       if (xlsResult?.totalBaza && result.valoare_totala_fara_tva) {
         const totalXLS = (xlsResult.totalBaza || 0) + (xlsResult.totalAjustare || 0)
@@ -1468,7 +1476,7 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
 
           {/* Nr./Data certificat — rămân vizibile și editabile cât timp AI-ul nu le-a completat pe amândouă
               (altfel dacă citirea automată eșuează pe unul din câmpuri, userul n-are unde să-l scrie manual) */}
-          {(!form.certificat_plata_nr.trim() || !form.certificat_plata_data) && (
+          {(!form.certificat_plata_nr.trim() || !form.certificat_plata_data || dataDerivata) && (
             <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
               <div>
                 <label style={S.label}>Nr. Certificat Plată{pdfResult && !form.certificat_plata_nr.trim() && <span style={{color:G.yellow}}> — nu s-a citit automat</span>}</label>
@@ -1476,8 +1484,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                   style={S.input} placeholder="ex: 10/29.05.2026"/>
               </div>
               <div>
-                <label style={S.label}>Data Certificat{pdfResult && !form.certificat_plata_data && <span style={{color:G.yellow}}> — nu s-a citit automat, completează tu</span>}</label>
-                <input type="date" value={form.certificat_plata_data} onChange={e=>set('certificat_plata_data',e.target.value)} style={S.input}/>
+                <label style={S.label}>Data Certificat
+                  {pdfResult && !form.certificat_plata_data && <span style={{color:G.yellow}}> — nu s-a citit automat, completează tu</span>}
+                  {dataDerivata && form.certificat_plata_data && <span style={{color:G.yellow}}> — dedusă din nr (scris de mână), verifică ziua/luna</span>}
+                </label>
+                <input type="date" value={form.certificat_plata_data} onChange={e=>{set('certificat_plata_data',e.target.value); setDataDerivata(false)}} style={S.input}/>
               </div>
             </div>
           )}
