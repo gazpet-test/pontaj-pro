@@ -1034,6 +1034,21 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
       }
       // Auto-completare certificat
       if (result.nr_certificat) set('certificat_plata_nr', result.nr_certificat)
+      // Luna/anul situației din perioada certificatului (ex „MARTIE 2026",
+      // „LUNILE MAI - NOIEMBRIE 2025"). Convenție: ULTIMA lună acoperită (ca SL4=Oct).
+      // Doar dacă luna nu-i deja aleasă manual.
+      if (result.luna_an && form.luna === '') {
+        const LUNI_CP = ['IANUARIE','FEBRUARIE','MARTIE','APRILIE','MAI','IUNIE','IULIE','AUGUST','SEPTEMBRIE','OCTOMBRIE','NOIEMBRIE','DECEMBRIE']
+        const s = String(result.luna_an).toUpperCase()
+        let lunaGasita = null, pozMax = -1
+        LUNI_CP.forEach((nume, i) => {
+          const poz = s.lastIndexOf(nume)
+          if (poz > pozMax) { pozMax = poz; lunaGasita = i + 1 }
+        })
+        const anGasit = s.match(/20\d{2}/)?.[0]
+        if (lunaGasita) set('luna', String(lunaGasita))
+        if (anGasit) set('an', anGasit)
+      }
       if (result.data_certificat) set('certificat_plata_data', result.data_certificat)
       else if (result.nr_certificat) {
         // Data e adesea scrisă de mână și nu se extrage separat, dar apare în nr
@@ -1433,8 +1448,8 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
                   {discrepanta < 0
                     ? <><span style={{color:G.yellow, fontWeight:700}}>⚠️ TGZ a tăiat {fmtLei(Math.abs(discrepanta))}</span>
                        <span style={{color:G.muted}}> față de suma din XLS. Factura se va emite cu suma certificat.</span></>
-                    : <><span style={{color:G.green, fontWeight:700}}>✅ Sume corespund</span>
-                       <span style={{color:G.muted}}> (diferență {fmtLei(Math.abs(discrepanta))} — rotunjiri)</span></>
+                    : <><span style={{color:G.green, fontWeight:700}}>ℹ️ TGZ a adăugat {fmtLei(Math.abs(discrepanta))}</span>
+                       <span style={{color:G.muted}}> peste suma din XLS (restituiri de rețineri / alte sume incluse în certificat).</span></>
                   }
                 </div>
               )}
