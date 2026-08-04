@@ -1047,6 +1047,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
 
   const handleSave = async () => {
     if (!form.nr_situatie.trim()) { showToast('Numărul situației este obligatoriu', 'err'); return }
+    // PDF ales dar necitit încă (sau citirea a picat) — fără gardă, salvarea cădea pe
+    // sumele din XLS și pierdea reținerile (bug confirmat 04.08.2026 pe SL4: salvat
+    // 3.879.150,71 în loc de 3.491.235,64 fiindcă Salvează a fost apăsat în timpul citirii).
+    if (pdfParsing) { showToast('⏳ AI-ul încă citește certificatul — așteaptă câteva secunde', 'err'); return }
+    if (pdfFile && !pdfResult) { showToast('Certificatul nu a fost citit — apasă din nou pe fișierul PDF sau scoate-l', 'err'); return }
     setSaving(true)
     try {
       const slNrClean = form.nr_situatie.toLowerCase().replace(/[^a-z0-9]/g, '_')
@@ -1083,9 +1088,11 @@ function SLModal({ item, proiectId, proiectDate, onClose, onSaved, showToast }) 
           })()
       // BAZĂ = lucrări FĂRĂ ajustare ICC. Alte sume (rețineri/penalizări) se includ în bază
       // ca totalul (valoare_ajustata_lei = bază + ajustare, GENERATED) să dea suma certificatului.
+      // Certificatul (suma aprobată de beneficiar) primează ÎNTOTDEAUNA peste XLS —
+      // XLS-ul e ce am depus noi, certificatul e ce s-a aprobat la plată.
       const valBaza = cpBaza != null ? Math.round((cpBaza + cpAlte) * 100) / 100
-        : (xlsResult?.totalBaza != null) ? xlsResult.totalBaza
         : (certVal != null ? Math.round((certVal - (valAj || 0)) * 100) / 100
+           : (xlsResult?.totalBaza != null) ? xlsResult.totalBaza
            : (form.valoare_baza_lei !== '' ? parseFloat(form.valoare_baza_lei) : null))
 
       // Determină status automat — DOAR ridică din 'in_pregatire' spre 'aprobata' la
