@@ -64,6 +64,10 @@ export default function CTCPage() {
     const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120)
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
+  const downloadDoc = async (path, nume) => {
+    const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120, { download: nume || true })
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
 
   const filtered = useMemo(() => {
     let list = rows
@@ -170,7 +174,7 @@ export default function CTCPage() {
             {docs.map(d => {
               const t = TIP_DOC[d.tip] || TIP_DOC.calitate
               return (
-                <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 150px 150px 110px 80px', gap: 10, alignItems: 'center', padding: '9px 16px', borderBottom: `1px solid ${G.border}`, fontSize: 12.5 }}>
+                <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 150px 150px 110px 140px', gap: 10, alignItems: 'center', padding: '9px 16px', borderBottom: `1px solid ${G.border}`, fontSize: 12.5 }}>
                   <span style={{ color: t.color, fontSize: 11, fontWeight: 800 }}>{t.emoji} {t.label}</span>
                   <button onClick={() => openDoc(d.fisier_path)} title={d.fisier_nume}
                     style={{ background: 'none', border: 'none', color: t.color, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -179,7 +183,10 @@ export default function CTCPage() {
                   <a href={`/achizitii?id=${d._comandaId}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda în Achiziții">🛒 {d._cmd}</a>
                   <span style={{ color: G.muted, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>🏭 {d._furnizor}</span>
                   <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
-                  <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: t.color + '22', border: `1px solid ${t.color}44`, borderRadius: 6, color: t.color, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: t.color + '22', border: `1px solid ${t.color}44`, borderRadius: 6, color: t.color, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+                    <button onClick={() => downloadDoc(d.fisier_path, d.fisier_nume)} title="Descarcă" style={{ padding: '4px 10px', background: G.blue + '22', border: `1px solid ${G.blue}44`, borderRadius: 6, color: G.blue, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>⬇</button>
+                  </div>
                 </div>
               )
             })}

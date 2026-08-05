@@ -2706,8 +2706,10 @@ function DocCalitateMaterialeSection({ proiectId }) {
           .select('id, numar_comanda, furnizor_id').eq('proiect_id', proiectId)
         const ids = (cmds || []).map(c => c.id)
         if (!ids.length) { setDocs([]); return }
+        // Toate documentele de calitate (nu doar certificatele): certificat 3.1 +
+        // declarație conformitate + aviz — tipurile noi din 05.08.2026. Facturile NU.
         const [rDocs, rFz] = await Promise.all([
-          supabase.from('comenzi_furnizor_documente').select('*').eq('tip', 'calitate').in('comanda_id', ids).order('uploadat_la', { ascending: false }),
+          supabase.from('comenzi_furnizor_documente').select('*').in('tip', ['calitate', 'declaratie', 'aviz']).in('comanda_id', ids).order('uploadat_la', { ascending: false }),
           supabase.from('logistica_furnizori').select('id, nume'),
         ])
         const cmdMap = Object.fromEntries((cmds || []).map(c => [c.id, c]))
@@ -2725,6 +2727,11 @@ function DocCalitateMaterialeSection({ proiectId }) {
     const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120)
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
+  const downloadDoc = async (path, nume) => {
+    const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120, { download: nume || true })
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  const EMOJI_TIP = { calitate: '🏅', declaratie: '📜', aviz: '🚚' }
 
   if (loading) return null
   return (
@@ -2737,15 +2744,18 @@ function DocCalitateMaterialeSection({ proiectId }) {
         {!docs.length && <span style={{ fontSize: 11.5, color: G.dim, fontStyle: 'italic', marginLeft: 'auto' }}>Niciun document încă — se încarcă pe comandă în Achiziții.</span>}
       </div>
       {docs.map(d => (
-        <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 160px 110px 80px', gap: 10, alignItems: 'center', padding: '8px 4px', borderTop: `1px solid ${G.border}`, fontSize: 12.5 }}>
+        <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 160px 110px 140px', gap: 10, alignItems: 'center', padding: '8px 4px', borderTop: `1px solid ${G.border}`, fontSize: 12.5 }}>
           <button onClick={() => openDoc(d.fisier_path)} title={d.fisier_nume}
             style={{ background: 'none', border: 'none', color: G.green, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            🏅 {d.fisier_nume || d.fisier_path.split('/').pop()}
+            {EMOJI_TIP[d.tip] || '📄'} {d.fisier_nume || d.fisier_path.split('/').pop()}
           </button>
           <a href={`/achizitii?id=${d.comanda_id}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda">🛒 {d._cmd}</a>
           <span style={{ color: G.muted, fontSize: 11.5 }}>🏭 {d._furnizor}</span>
           <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
-          <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: G.green + '22', border: `1px solid ${G.green}44`, borderRadius: 6, color: G.green, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: G.green + '22', border: `1px solid ${G.green}44`, borderRadius: 6, color: G.green, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+            <button onClick={() => downloadDoc(d.fisier_path, d.fisier_nume)} title="Descarcă" style={{ padding: '4px 10px', background: '#58A6FF22', border: '1px solid #58A6FF44', borderRadius: 6, color: '#58A6FF', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>⬇</button>
+          </div>
         </div>
       ))}
     </div>

@@ -87,7 +87,7 @@ function DocumenteCalitateTab() {
       setLoading(true)
       try {
         const [rDocs, rCmd, rFz, rProj] = await Promise.all([
-          supabase.from('comenzi_furnizor_documente').select('*').eq('tip', 'calitate').order('uploadat_la', { ascending: false }),
+          supabase.from('comenzi_furnizor_documente').select('*').in('tip', ['calitate', 'declaratie', 'aviz']).order('uploadat_la', { ascending: false }),
           supabase.from('comenzi_furnizor').select('id, numar_comanda, furnizor_id, proiect_id'),
           supabase.from('logistica_furnizori').select('id, nume'),
           supabase.from('executie_proiecte').select('id, nume, cod_intern'),
@@ -115,6 +115,11 @@ function DocumenteCalitateTab() {
     const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120)
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
+  const downloadDoc = async (path, nume) => {
+    const { data } = await supabase.storage.from('comenzi-furnizor').createSignedUrl(path, 120, { download: nume || true })
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  const EMOJI_TIP = { calitate: '🏅', declaratie: '📜', aviz: '🚚' }
 
   const filtered = useMemo(() => {
     if (!search) return rows
@@ -169,15 +174,18 @@ function DocumenteCalitateTab() {
             </span>
           </div>
           {docs.map(d => (
-            <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '1fr 150px 150px 110px 80px', gap: 10, alignItems: 'center', padding: '9px 16px', borderBottom: `1px solid ${G.border}`, fontSize: 12.5 }}>
+            <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '1fr 150px 150px 110px 140px', gap: 10, alignItems: 'center', padding: '9px 16px', borderBottom: `1px solid ${G.border}`, fontSize: 12.5 }}>
               <button onClick={() => openDoc(d.fisier_path)} title={d.fisier_nume}
                 style={{ background: 'none', border: 'none', color: G.green, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                🏅 {d.fisier_nume || d.fisier_path.split('/').pop()}
+                {EMOJI_TIP[d.tip] || '📄'} {d.fisier_nume || d.fisier_path.split('/').pop()}
               </button>
               <a href={`/achizitii?id=${d._comandaId}`} style={{ color: G.muted, fontSize: 11.5, fontFamily: 'monospace', textDecoration: 'none' }} title="Deschide comanda în Achiziții">🛒 {d._cmd}</a>
               <span style={{ color: G.muted, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>🏭 {d._furnizor}</span>
               <span style={{ color: G.dim, fontSize: 11 }}>{d.uploadat_la ? new Date(d.uploadat_la).toLocaleDateString('ro-RO') : '—'}</span>
-              <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: G.green + '22', border: `1px solid ${G.green}44`, borderRadius: 6, color: G.green, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => openDoc(d.fisier_path)} style={{ padding: '4px 10px', background: G.green + '22', border: `1px solid ${G.green}44`, borderRadius: 6, color: G.green, cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+                <button onClick={() => downloadDoc(d.fisier_path, d.fisier_nume)} title="Descarcă" style={{ padding: '4px 10px', background: '#58A6FF22', border: '1px solid #58A6FF44', borderRadius: 6, color: '#58A6FF', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>⬇</button>
+              </div>
             </div>
           ))}
         </div>
