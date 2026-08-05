@@ -42,14 +42,14 @@ export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, t
   const thin = { top: { style: 'thin' }, bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } }
   const headerStyle = { fill: { fgColor: { rgb: '1F3A5F' } }, font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: thin }
   const cellBase = { font: { name: 'Calibri', sz: 10 }, alignment: { vertical: 'top', wrapText: true }, border: thin }
-  const COLS = 18
+  const COLS = 19
 
   const sorted = [...list].sort((a, b) => a.data.localeCompare(b.data))
   const aoa = [
     ['RAPOARTE ȘANTIER'],
     [`${titluSite}  •  ${from} → ${to}  •  Generat: ${new Date().toLocaleString('ro-RO')}  •  ${sorted.length} rapoarte`],
     [],
-    ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Mașini', 'Probleme', 'Plan mâine'],
+    ['Data', 'Șantier', 'Șef șantier', 'Sudori', 'Lăcătuși', 'Operatori', 'Șoferi', 'Necalif.', 'TESA', 'Alții', 'Total pers.', 'Utilaje/mașini', 'Alimentate', 'Nefuncț.', 'Lucrări efectuate', 'Subcontractori', 'Mașini', 'Probleme', 'Plan mâine'],
   ]
   sorted.forEach(r => {
     const p = r.personal_snapshot || {}
@@ -57,7 +57,7 @@ export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, t
       fmtData(r.data), siteNameOf(r.site_id), r.sef_santier || '—',
       p.sudori || 0, p.lacatusi || 0, p.operatori || 0, p.soferi || 0, p.necalificati || 0, p.tesa || 0, p.altii || 0, p.total || 0,
       utj(r).length, alimentate(r), nefunc(r).length,
-      r.lucrari_efectuate || '', r.masini || '', r.probleme || '', r.plan_maine || '',
+      r.lucrari_efectuate || '', r.subcontractori || '', r.masini || '', r.probleme || '', r.plan_maine || '',
     ])
   })
 
@@ -74,7 +74,7 @@ export async function exportRapoarteExcel({ list, siteNameOf, titluSite, from, t
       if (c >= 3 && c <= 13) ws[ref].s.alignment = { ...cellBase.alignment, horizontal: 'center', vertical: 'center' }
     }
   }
-  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 8 }, { wch: 6 }, { wch: 6 }, { wch: 9 }, { wch: 13 }, { wch: 10 }, { wch: 8 }, { wch: 42 }, { wch: 22 }, { wch: 30 }, { wch: 30 }]
+  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 7 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 8 }, { wch: 6 }, { wch: 6 }, { wch: 9 }, { wch: 13 }, { wch: 10 }, { wch: 8 }, { wch: 42 }, { wch: 30 }, { wch: 22 }, { wch: 30 }, { wch: 30 }]
 
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Rapoarte')
@@ -106,7 +106,7 @@ function buildRaportHtml({ list, titluSite, from, to }) {
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;white-space:nowrap;font-weight:600">${fmtData(r.data)}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;text-align:center">${p.total || 0}${persDetalii ? `<div style="font-size:8px;color:#888;margin-top:2px">${esc(persDetalii)}</div>` : ''}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;text-align:center">${utilCell}${nfDetalii}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1">${esc(r.lucrari_efectuate || '—').replace(/\n/g, '<br/>')}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1">${esc(r.lucrari_efectuate || '—').replace(/\n/g, '<br/>')}${r.subcontractori ? `<div style="font-size:8px;color:#555;margin-top:3px"><b>Subcontractori:</b> ${esc(r.subcontractori).replace(/\n/g, '<br/>')}</div>` : ''}</td>
       <td style="padding:4px 6px;border-bottom:1px solid #e8ecf1;color:#B4530B">${esc(r.probleme || '—').replace(/\n/g, '<br/>')}</td>
     </tr>`
   }).join('')

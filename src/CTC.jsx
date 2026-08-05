@@ -17,8 +17,11 @@ const G = {
 }
 
 const TIP_DOC = {
-  calitate: { label: 'Calitate', emoji: '🏅', color: G.green },
-  factura:  { label: 'Factură',  emoji: '🧾', color: G.yellow },
+  calitate:   { label: 'Calitate',    emoji: '🏅', color: G.green },
+  declaratie: { label: 'Declarație',  emoji: '📜', color: G.blue },
+  aviz:       { label: 'Aviz',        emoji: '🚚', color: G.orange },
+  factura:    { label: 'Factură',     emoji: '🧾', color: G.yellow },
+  altele:     { label: 'Alt doc.',    emoji: '📄', color: G.muted },
 }
 
 export default function CTCPage() {
@@ -136,8 +139,9 @@ export default function CTCPage() {
         {/* Filtre */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
           <Chip k="toate" label="Toate" emoji="📄" count={rows.length} color={G.ctc} />
-          <Chip k="calitate" label="Calitate" emoji="🏅" count={kpi.calitate} color={G.green} />
-          <Chip k="factura" label="Facturi" emoji="🧾" count={kpi.facturi} color={G.yellow} />
+          {Object.entries(TIP_DOC).map(([k, t]) => (
+            <Chip key={k} k={k} label={t.label} emoji={t.emoji} count={rows.filter(r => r.tip === k).length} color={t.color} />
+          ))}
           <div style={{ flex: 1 }} />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Caută document / furnizor / comandă / proiect..."
             style={{ padding: '9px 13px', background: G.surface, border: `1px solid ${G.border}`, borderRadius: 8, color: G.text, fontSize: 13, outline: 'none', minWidth: 280 }} />

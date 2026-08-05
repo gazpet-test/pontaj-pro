@@ -293,6 +293,11 @@ function CardRaport({ r, siteName, onOpen, showSite }) {
           {r.lucrari_efectuate}
         </div>
       )}
+      {r.subcontractori && (
+        <div style={{ marginTop: 6, fontSize: 12.5, color: G.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          🤝 {r.subcontractori}
+        </div>
+      )}
       {r.probleme && (
         <div style={{ marginTop: 6, fontSize: 12.5, color: G.orange, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           ⚠️ {r.probleme}
@@ -381,6 +386,7 @@ function ModalDetaliu({ raport, siteName, onClose }) {
         )}
 
         {raport.lucrari_efectuate && <Bloc titlu="🔧 Lucrări efectuate"><Text v={raport.lucrari_efectuate} /></Bloc>}
+        {raport.subcontractori && <Bloc titlu="🤝 Subcontractori"><Text v={raport.subcontractori} /></Bloc>}
         {raport.masini && <Bloc titlu="🚗 Mașini"><Text v={raport.masini} /></Bloc>}
         {raport.probleme && <Bloc titlu="⚠️ Probleme / Observații"><Text v={raport.probleme} color={G.orange} /></Bloc>}
         {raport.plan_maine && <Bloc titlu="📅 Plan pentru mâine"><Text v={raport.plan_maine} /></Bloc>}

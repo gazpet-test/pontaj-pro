@@ -23,6 +23,10 @@ const supabase = instrumenteazaStorageRls(createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 ))
 
+// Lista unică de echipe (TKT-2026-0099: extinsă de la 3 la 6 echipe numerice).
+// Coloana `echipa` din BD e text liber — lista e doar pentru dropdown-uri.
+const ECHIPE_SANTIER = ['Echipa 1', 'Echipa 2', 'Echipa 3', 'Echipa 4', 'Echipa 5', 'Echipa 6', 'Echipa 4 Izolat', 'Paza / Mecanic / Sofer', 'TESA']
+
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -1736,12 +1740,7 @@ function AlocareModal({ item, proiecte, employees, masinaOpts, defaultProiectId,
               <label style={S.lbl}>Echipă</label>
               <select value={f.echipa} onChange={e => setF({...f, echipa:e.target.value})} style={S.input}>
                 <option value="">— Selectează —</option>
-                <option value="Echipa 1">Echipa 1</option>
-                <option value="Echipa 2">Echipa 2</option>
-                <option value="Echipa 3">Echipa 3</option>
-                <option value="Echipa 4 Izolat">Echipa 4 Izolat</option>
-                <option value="Paza / Mecanic / Sofer">Paza / Mecanic / Sofer</option>
-                <option value="TESA">TESA</option>
+                {ECHIPE_SANTIER.map(e2 => <option key={e2} value={e2}>{e2}</option>)}
               </select>
             </div>
             <div>
@@ -2502,7 +2501,7 @@ function EchipaModal({ proiecte, employees, defaultProiectId, defaultStart, defa
   const [selectati, setSelectati] = useState({}) // { emp_id: { meserie, masina_naveta } }
   const [saving, setSaving] = useState(false)
 
-  const ECHIPE = ['Echipa 1','Echipa 2','Echipa 3','Echipa 4 Izolat','Paza / Mecanic / Sofer','TESA']
+  const ECHIPE = ECHIPE_SANTIER
   const ROLURI = [{v:'sudura',l:'🔥 Sudură'},{v:'terasamente',l:'⛏️ Terasamente'},{v:'lansare',l:'🚜 Lansare'},{v:'izolare',l:'🧰 Izolare'},{v:'tesa_paza',l:'💼 TESA / Pază'},{v:'paza',l:'🛡 Pază'},{v:'mecanic',l:'🔧 Mecanic'},{v:'alt',l:'Alt rol'}]
   const MESERII = [{v:'deservent_utilaje',l:'🚜 Deserv. utilaje'},{v:'sudor',l:'🔥 Sudor'},{v:'lacatus_mecanic',l:'🔧 Lăcătuș'},{v:'muncitor_izolator',l:'👷 Muncitor'},{v:'tesa_paza',l:'💼 TESA / Pază'},{v:'sofer',l:'🚗 Șofer'},{v:'alt',l:'Alt'}]
 
