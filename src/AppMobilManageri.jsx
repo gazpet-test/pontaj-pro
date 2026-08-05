@@ -124,6 +124,7 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [unitateId, setUnitateId] = useState(null)          // unde s-a lucrat azi
   const [masini, setMasini] = useState('')
   const [probleme, setProbleme] = useState('')
+  const [subcontractori, setSubcontractori] = useState('')
   const [planMaine, setPlanMaine] = useState('')
   const [poze, setPoze] = useState([])           // File[] noi (de urcat)
   const [pozeExistente, setPozeExistente] = useState([])  // [{path, url}] din raport salvat
@@ -171,6 +172,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       setLucrari(existing.lucrari_efectuate || '')
       setMasini(existing.masini || '')
       setProbleme(existing.probleme || '')
+      setSubcontractori(existing.subcontractori || '')
       setPlanMaine(existing.plan_maine || '')
       const ps = existing.personal_snapshot || {}
       setPersonal({ sudori: ps.sudori || 0, lacatusi: ps.lacatusi || 0, operatori: ps.operatori || 0, soferi: ps.soferi || 0, necalificati: ps.necalificati || 0, tesa: ps.tesa || 0, altii: ps.altii || 0 })
@@ -307,6 +309,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         personal_snapshot: { ...personal, total: totalPers },
         masini: masini.trim() || null,
         probleme: probleme.trim() || null,
+        subcontractori: subcontractori.trim() || null,
         plan_maine: planMaine.trim() || null,
         poze: pozePaths,
         created_by: user?.id || null,
@@ -516,6 +519,10 @@ function RaportZilnic({ profile, sites, onBack }) {
           {/* Activități + text */}
           <Section title="🔧 Lucrări efectuate" hint={activitati.length ? 'detalii libere (opțional)' : 'scrie sau lipește din WhatsApp'}>
             <textarea value={lucrari} onChange={e => setLucrari(e.target.value)} rows={5} placeholder="Ce s-a lucrat azi…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
+          </Section>
+
+          <Section title="🤝 Subcontractori" hint="ce au lucrat azi subcontractorii (opțional)">
+            <textarea value={subcontractori} onChange={e => setSubcontractori(e.target.value)} rows={3} placeholder="ex: Rominsta — Sudură obiecte speciale TR10 – 2 buc; Lansat TR10 – 147 m" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
           </Section>
 
           <Section title="🚗 Mașini (probleme)">
