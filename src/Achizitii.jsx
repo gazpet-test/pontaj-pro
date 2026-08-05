@@ -9,7 +9,7 @@
 // confirmă cu CLICK pe propriul rând din comenzi_furnizor_aprobari.
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
@@ -860,6 +860,93 @@ function ReceptieTransportModal({ comanda, ctx, sites, onClose, onConfirm, busy 
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL: DETALII COMANDĂ (aprobare + acțiuni flux + PDF-uri)
 // ════════════════════════════════════════════════════════════════════════════
+// ── Secțiunea 📎 Documente comandă (calitate/avize/facturi) ─────────────────
+// Reconstruită 04.08.2026: exista doar în versiunea locală a lui Razvan (docs
+// urcate 12.06.2026), pierdută la incidentele de suprascriere din 15–21.06.
+// Scrie în comenzi_furnizor_documente → documentele migrează automat în CTC
+// (grupate pe proiect) + secțiunea „Documente calitate" din Execuție.
+const TIPURI_DOC_COMANDA = [
+  { v: 'calitate',   label: '🏅 Certificat calitate (3.1)' },
+  { v: 'declaratie', label: '📜 Declarație de conformitate' },
+  { v: 'aviz',       label: '🚚 Aviz însoțire marfă' },
+  { v: 'factura',    label: '🧾 Factură furnizor' },
+  { v: 'altele',     label: '📄 Alt document' },
+]
+function DocumenteComanda({ comanda, profile }) {
+  const c = comanda
+  const [docs, setDocs] = useState([])
+  const [tipNou, setTipNou] = useState('calitate')
+  const [up, setUp] = useState(false)
+  const [err, setErr] = useState('')
+  const fileRef = useRef(null)
+
+  const loadDocs = useCallback(async () => {
+    const { data } = await supabase.from('comenzi_furnizor_documente')
+      .select('*').eq('comanda_id', c.id).order('uploadat_la', { ascending: false })
+    setDocs(data || [])
+  }, [c.id])
+  useEffect(() => { loadDocs() }, [loadDocs])
+
+  const uploadDoc = async (files) => {
+    if (!files?.length) return
+    setUp(true); setErr('')
+    try {
+      for (const f of Array.from(files)) {
+        const ext = (f.name.split('.').pop() || 'pdf').toLowerCase()
+        const path = `documente/${c.id}/${tipNou}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}.${ext}`
+        const { error: eUp } = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || 'application/pdf', upsert: false })
+        if (eUp) throw eUp
+        const { error: eIns } = await supabase.from('comenzi_furnizor_documente').insert({
+          comanda_id: c.id, tip: tipNou, fisier_path: path, fisier_nume: f.name,
+          uploadat_de: profile?.id || null,
+        })
+        if (eIns) { await supabase.storage.from(BUCKET).remove([path]).catch(() => {}); throw eIns }
+      }
+      await loadDocs()
+    } catch (e) { setErr('Eroare upload: ' + (e.message || e)) }
+    finally { setUp(false); if (fileRef.current) fileRef.current.value = '' }
+  }
+  const stergeDoc = async (d) => {
+    if (!window.confirm(`Ștergi „${d.fisier_nume || d.fisier_path}"?`)) return
+    const { error } = await supabase.from('comenzi_furnizor_documente').delete().eq('id', d.id)
+    if (error) { setErr('Eroare ștergere: ' + error.message); return }
+    await supabase.storage.from(BUCKET).remove([d.fisier_path]).catch(() => {})
+    await loadDocs()
+  }
+  const tipInfo = (t) => TIPURI_DOC_COMANDA.find(x => x.v === t) || TIPURI_DOC_COMANDA[4]
+
+  return (
+    <div style={{ marginTop:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.border}` }}>
+      <div style={{ fontSize:13, fontWeight:800, marginBottom:4 }}>📎 Documente comandă ({docs.length})</div>
+      <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>
+        Certificate de calitate, declarații de conformitate, avize, facturi — migrează automat în CTC, grupate pe proiect.
+      </div>
+      {docs.map(d => (
+        <div key={d.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderTop:`1px solid ${G.border}`, flexWrap:'wrap' }}>
+          <span style={{ fontSize:11.5, fontWeight:700, color:G.achizitii, whiteSpace:'nowrap' }}>{tipInfo(d.tip).label}</span>
+          <button onClick={() => openStorageFile(d.fisier_path)} title="Deschide"
+            style={{ background:'none', border:'none', color:G.blue, cursor:'pointer', fontFamily:'inherit', fontSize:13, textAlign:'left', padding:0, flex:1, minWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {d.fisier_nume || d.fisier_path.split('/').pop()}
+          </button>
+          <span style={{ fontSize:11, color:G.dim, whiteSpace:'nowrap' }}>{d.uploadat_la ? fmtData(d.uploadat_la) : ''}</span>
+          <button onClick={() => stergeDoc(d)} title="Șterge" style={{ background:'transparent', border:'none', color:G.dim, cursor:'pointer', fontSize:13 }}>🗑</button>
+        </div>
+      ))}
+      <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginTop:10, paddingTop:10, borderTop:`1px solid ${G.border}` }}>
+        <select value={tipNou} onChange={e => setTipNou(e.target.value)} style={{ ...S.input, maxWidth:260 }}>
+          {TIPURI_DOC_COMANDA.map(t => <option key={t.v} value={t.v}>{t.label}</option>)}
+        </select>
+        <button onClick={() => fileRef.current?.click()} disabled={up} style={{ ...S.btnS, fontSize:13, opacity: up ? .6 : 1 }}>
+          {up ? '⏳ Se încarcă...' : '＋ Încarcă documente'}
+        </button>
+        <input ref={fileRef} type="file" multiple accept=".pdf,image/jpeg,image/png" style={{ display:'none' }}
+          onChange={e => uploadDoc(e.target.files)} />
+        {err && <span style={{ fontSize:12, color:G.red }}>{err}</span>}
+      </div>
+    </div>
+  )
+}
+
 function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actions, busy }) {
   const c = comanda
   const total = totalComanda(c)
@@ -1052,6 +1139,9 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
             {c.poza_depozitare_path && <button onClick={() => openStorageFile(c.poza_depozitare_path)} style={{ ...S.btnS, fontSize:14 }}>📸 Poză depozitare</button>}
           </div>
         )}
+
+        {/* 📎 Documente comandă: certificate calitate / declarații / avize / facturi → CTC */}
+        <DocumenteComanda comanda={c} profile={profile} />
 
         {/* Panel recepție pe repere (cantitate primită) */}
         {editPrimite && (
