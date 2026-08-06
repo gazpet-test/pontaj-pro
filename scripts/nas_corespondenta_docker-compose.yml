@@ -1,0 +1,47 @@
+version: '3.8'
+
+# Gazpet — Sync Corespondență Email → foldere proiecte pe NAS
+# Se instalează pe Terra (TOS): Docker → Projects → + →
+#   nume: gazpet-corespondenta, cale: /Volume1/docker/gazpet-corespondenta
+# În folderul ăla trebuie să existe: docker-compose.yml (ăsta) + nas_sync_corespondenta.js
+
+services:
+  corespondenta-sync:
+    image: node:20-alpine
+    container_name: gazpet-corespondenta-sync
+    restart: unless-stopped
+    user: "root"
+    working_dir: /app
+
+    environment:
+      # ── Supabase (aceleași ca la gazpet-facturi-sync) ──────────────────────
+      - SUPABASE_URL=https://dxczwkbciseqniprspcu.supabase.co
+      - SUPABASE_SERVICE_ROLE_KEY=PUNE_AICI_SERVICE_KEY
+
+      # ── NAS ────────────────────────────────────────────────────────────────
+      # Calea INTERNĂ din container (mapată prin volumes la calea reală)
+      - NAS_BASE_PATH=/data/Oferte
+
+      # ── Comportament ───────────────────────────────────────────────────────
+      - SYNC_INTERVAL_SEC=600   # 10 minute
+      - MAX_DOCS_PER_RUN=50
+
+    volumes:
+      # folderul proiectului (scriptul) → /app
+      - /Volume1/docker/gazpet-corespondenta:/app
+      # Calea pe NAS (stânga) → calea din container (dreapta)
+      # IMPORTANT: :rw ca să poată SCRIE documentele în folderele proiectelor!
+      - /Volume1/Licitatii_Executate/Oferte:/data/Oferte:rw
+
+    command: >
+      sh -c "npm install --no-save @supabase/supabase-js >/dev/null 2>&1;
+             while true; do
+               node nas_sync_corespondenta.js;
+               sleep $${SYNC_INTERVAL_SEC:-600};
+             done"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
