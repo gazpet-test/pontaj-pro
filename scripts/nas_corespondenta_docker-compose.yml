@@ -7,7 +7,7 @@ version: '3.8'
 
 services:
   corespondenta-sync:
-    image: node:20-alpine
+    image: node:22-alpine
     container_name: gazpet-corespondenta-sync
     restart: unless-stopped
     user: "root"
