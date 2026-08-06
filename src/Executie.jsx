@@ -305,7 +305,7 @@ function ProiectContextView({ proiectId, tab, onBack }) {
       {tab === 'situatii_plata' && <TabSituatiiPlata proiectId={proiectId} />}
       {tab === 'cereri'         && <CereriInterneProiect proiectId={proiectId} />}
       {tab === 'consumuri'      && <ConsumuriBonuriTab proiectId={proiectId} mode="executie" />}
-      {tab === 'documente'      && (<><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
+      {tab === 'documente'      && (<><CorespondentaEmailSection proiectId={proiectId} /><DocCalitateMaterialeSection proiectId={proiectId} /><TabDocumenteNAS proiectId={proiectId} /></>)}
 
       {/* ── Izometrie + Tronsoane (sub-tabs) ── */}
       {(tab === 'izometrie' || tab === 'tronsoane') && (
@@ -2693,6 +2693,66 @@ function TabProiectDashboard({ proiectId }) {
 // conformitate încărcate pe comenzile furnizor în Achiziții, filtrate pe
 // proiectul curent. Sursa: comenzi_furnizor_documente (tip=calitate).
 // ════════════════════════════════════════════════════════════════════════════
+// Corespondența primită pe email (ingestie automată Gmail → documente_proiect)
+function CorespondentaEmailSection({ proiectId }) {
+  const [docs, setDocs] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true)
+      try {
+        const { data } = await supabase.from('documente_proiect')
+          .select('id, nume_fisier, expeditor, subiect, data_mail, marime_bytes, storage_path, nas_synced')
+          .eq('proiect_id', proiectId)
+          .order('data_mail', { ascending: false })
+        setDocs(data || [])
+      } finally { setLoading(false) }
+    })()
+  }, [proiectId])
+
+  const openDoc = async (path) => {
+    const { data } = await supabase.storage.from('documente-proiect').createSignedUrl(path, 120)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  const downloadDoc = async (path, nume) => {
+    const { data } = await supabase.storage.from('documente-proiect').createSignedUrl(path, 120, { download: nume || true })
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  const fmtExp = e => (e || '').replace(/[<>]/g, ' ').trim()
+  const fmtKb = b => !b ? '' : b < 1024*1024 ? `${Math.round(b/1024)} KB` : `${(b/1024/1024).toFixed(1)} MB`
+
+  if (loading) return null
+  return (
+    <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: docs.length ? 10 : 0 }}>
+        <span style={{ fontSize: 17 }}>📧</span>
+        <span style={{ fontSize: 14, fontWeight: 800 }}>Corespondență</span>
+        <span style={{ fontSize: 11, color: G.muted }}>· primită automat pe email (etichetă Gmail)</span>
+        {docs.length > 0 && <span style={{ background: '#A371F722', color: '#A371F7', border: '1px solid #A371F755', borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 800 }}>{docs.length}</span>}
+        {!docs.length && <span style={{ fontSize: 11.5, color: G.dim, fontStyle: 'italic', marginLeft: 'auto' }}>Nimic încă — mailurile etichetate „Automatizari/…" apar aici automat.</span>}
+      </div>
+      {docs.map(d => (
+        <div key={d.id} style={{ display: 'grid', gridTemplateColumns: '1fr 220px 100px 70px 60px 140px', gap: 10, alignItems: 'center', padding: '8px 4px', borderTop: `1px solid ${G.border}`, fontSize: 12.5 }}>
+          <button onClick={() => openDoc(d.storage_path)} title={d.subiect || d.nume_fisier}
+            style={{ background: 'none', border: 'none', color: '#A371F7', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, textAlign: 'left', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            📎 {d.nume_fisier}
+          </button>
+          <span style={{ color: G.muted, fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fmtExp(d.expeditor)}>✉️ {fmtExp(d.expeditor)}</span>
+          <span style={{ color: G.dim, fontSize: 11 }}>{d.data_mail ? new Date(d.data_mail).toLocaleDateString('ro-RO') : '—'}</span>
+          <span style={{ color: G.dim, fontSize: 11 }}>{fmtKb(d.marime_bytes)}</span>
+          <span title={d.nas_synced ? 'Salvat și pe NAS în folderul lucrării' : 'În curs de copiere pe NAS'}
+            style={{ fontSize: 11, fontWeight: 700, color: d.nas_synced ? G.green : G.yellow }}>{d.nas_synced ? '✅ NAS' : '⏳ NAS'}</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => openDoc(d.storage_path)} style={{ padding: '4px 10px', background: '#A371F722', border: '1px solid #A371F744', borderRadius: 6, color: '#A371F7', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>👁 Vezi</button>
+            <button onClick={() => downloadDoc(d.storage_path, d.nume_fisier)} title="Descarcă" style={{ padding: '4px 10px', background: '#58A6FF22', border: '1px solid #58A6FF44', borderRadius: 6, color: '#58A6FF', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>⬇</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function DocCalitateMaterialeSection({ proiectId }) {
   const [docs, setDocs] = useState([])
   const [loading, setLoading] = useState(true)
