@@ -100,13 +100,20 @@ function LinkFolderModal({ proiectId, proiectCod, onClose, onSaved, showToast })
   const [saving, setSaving] = useState(false)
 
   const handleSearch = async () => {
-    if (search.trim().length < 2) return
+    // Accepta si cai lipite din Explorer (\\gazpet-tnas\...\Oferte\folder\...):
+    // normalizeaza backslash → slash si pastreaza doar partea de dupa "Oferte/"
+    let q = search.trim().replace(/\\/g, '/')
+    const idx = q.toLowerCase().indexOf('oferte/')
+    if (idx !== -1) q = q.slice(idx + 'oferte/'.length)
+    q = q.split('/').filter(Boolean).pop() || q  // numele folderului de proiect
+    if (q.length < 2) return
     setSearching(true)
     try {
+      const esc = q.replace(/[%_,()]/g, ' ').trim()
       const { data } = await supabase
         .from('nas_proiecte')
         .select('id_hash, denumire_folder, beneficiar, nr_licitatie, nas_path')
-        .ilike('denumire_folder', `%${search}%`)
+        .or(`denumire_folder.ilike.%${esc}%,nas_path.ilike.%${esc}%`)
         .is('executie_proiect_id', null)
         .limit(10)
       setResults(data || [])
