@@ -20,6 +20,9 @@
  *   5. CFG.DRY_RUN = true → ruleaza ingestAttachments() → verifica log-ul
  *   6. CFG.DRY_RUN = false → ruleaza din nou → verifica Drive + platforma
  *   7. Ruleaza setupTrigger() → ruleaza automat la 15 minute
+ *   8. (FAZA 1 onboarding) In editor, la "Services" (+) → adauga "Gmail API".
+ *      Din acel moment, orice proiect nou din platforma cu eticheta_gmail setata
+ *      isi primeste automat eticheta si filtrul in Gmail la urmatoarea rulare.
  *
  * Idempotent: dedup pe numele de fisier (contine messageId) in Drive,
  * si pe (gmail_message_id, nume_fisier) in ERP. Re-rularea nu creeaza duplicate.
@@ -41,6 +44,7 @@ const CFG = {
 
 /** Punct de intrare. Leaga-l de un trigger la 15 minute. */
 function ingestAttachments() {
+  try { syncGmailConfig_(); } catch (err) { Logger.log('sync config esuat: %s', err.message); }
   const root = getOrCreateFolder_(DriveApp.getRootFolder(), CFG.ROOT_FOLDER);
   const labels = GmailApp.getUserLabels().filter(isProjectLabel_);
   if (!labels.length) {
@@ -61,10 +65,88 @@ function ingestAttachments() {
   Logger.log('Gata. %s fisiere procesate.', rows.length);
 }
 
+/**
+ * FAZA 1 onboarding automat: intreaba platforma ce etichete/filtre ar trebui
+ * sa existe (executie_proiecte.eticheta_gmail + filtru_gmail_*) si creeaza
+ * ce lipseste. Rulat automat la inceputul fiecarei ingestii.
+ *
+ * NECESITA (o singura data): in editorul Apps Script, stanga la "Services" (+)
+ * → adauga "Gmail API" (pentru crearea FILTRELOR; etichetele merg si fara).
+ */
+function syncGmailConfig_() {
+  const props = PropertiesService.getScriptProperties();
+  const secret = props.getProperty('INGEST_SECRET');
+  const anon = props.getProperty('INGEST_ANON');
+  const ingestUrl = props.getProperty('INGEST_URL');
+  if (!secret || !anon || !ingestUrl) return;
+  const url = ingestUrl.replace(/\/[^\/]+$/, '/gmail-config');
+
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'Authorization': 'Bearer ' + anon, 'x-ingest-secret': secret },
+    payload: JSON.stringify({ action: 'list' }),
+  });
+  if (res.getResponseCode() >= 300) { Logger.log('gmail-config list: HTTP %s', res.getResponseCode()); return; }
+  const cfg = JSON.parse(res.getContentText());
+  if (!cfg.ok || !cfg.proiecte) return;
+
+  const gmailApiOn = (typeof Gmail !== 'undefined');
+  let existingFilters = [];
+  if (gmailApiOn) {
+    try { existingFilters = (Gmail.Users.Settings.Filters.list('me').filter) || []; }
+    catch (e) { Logger.log('Filters.list: %s', e.message); }
+  }
+
+  const sincronizate = [];
+  cfg.proiecte.forEach(function (pr) {
+    if (!pr.eticheta_gmail) return;
+    const fullName = CFG.PARENT_LABEL + '/' + pr.eticheta_gmail;
+    // 1. Eticheta
+    let label = GmailApp.getUserLabelByName(fullName);
+    if (!label) { label = GmailApp.createLabel(fullName); Logger.log('eticheta creata: %s', fullName); }
+    // 2. Filtrul (doar daca proiectul are criterii si Gmail API e activat)
+    const areCriterii = pr.filtru_gmail_from || pr.filtru_gmail_subject || pr.filtru_gmail_query;
+    if (areCriterii && gmailApiOn) {
+      try {
+        const labelId = Gmail.Users.Labels.list('me').labels
+          .filter(function (l) { return l.name === fullName; })
+          .map(function (l) { return l.id; })[0];
+        const dejaExista = existingFilters.some(function (f) {
+          return f.action && (f.action.addLabelIds || []).indexOf(labelId) !== -1;
+        });
+        if (labelId && !dejaExista) {
+          const criteria = {};
+          if (pr.filtru_gmail_from) criteria.from = pr.filtru_gmail_from;
+          if (pr.filtru_gmail_subject) criteria.subject = pr.filtru_gmail_subject;
+          if (pr.filtru_gmail_query) criteria.query = pr.filtru_gmail_query;
+          Gmail.Users.Settings.Filters.create({ criteria: criteria, action: { addLabelIds: [labelId] } }, 'me');
+          Logger.log('filtru creat pentru: %s', fullName);
+        }
+      } catch (e) { Logger.log('filtru %s: %s', fullName, e.message); }
+    }
+    sincronizate.push(pr.eticheta_gmail);
+  });
+
+  // 3. Confirmare inapoi in platforma
+  if (sincronizate.length) {
+    UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { 'Authorization': 'Bearer ' + anon, 'x-ingest-secret': secret },
+      payload: JSON.stringify({ action: 'confirm', etichete: sincronizate }),
+    });
+  }
+}
+
 function isProjectLabel_(label) {
-  const name = label.getName();
-  return name.indexOf(CFG.PARENT_LABEL + '/') === 0
-      && name.split('/').pop() !== CFG.RESERVED_SUFFIX;
+  // try/catch: Gmail poate returna referinte la etichete sterse ("fantoma");
+  // getName() pe ele arunca "Could not locate target object" — le ignoram.
+  try {
+    const name = label.getName();
+    return name.indexOf(CFG.PARENT_LABEL + '/') === 0
+        && name.split('/').pop() !== CFG.RESERVED_SUFFIX;
+  } catch (e) {
+    return false;
+  }
 }
 
 function processLabel_(label, project, root) {
