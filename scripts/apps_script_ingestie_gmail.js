@@ -290,6 +290,87 @@ function createLogSheet_(root) {
 }
 
 // ---------------------------------------------------------------
+// BACKFILL — populare istorica (12 luni), rulare in fundal cu cursor
+// ---------------------------------------------------------------
+// Porneste cu setupBackfill() (o singura data). Proceseaza cate ~4,5 min
+// per rulare, isi tine minte pozitia (Script Properties) si se opreste
+// singur cand a terminat toate etichetele. Dedup-ul (Drive + platforma)
+// garanteaza zero duplicate fata de ingestia curenta, care merge in paralel.
+
+const BACKFILL = {
+  DAYS: 365,                 // cat de departe in urma
+  BATCH_THREADS: 25,         // fire pe pagina
+  BUDGET_MS: 4.5 * 60 * 1000 // opreste-te inainte de limita de 6 min
+};
+
+/** Porneste backfill-ul: reseteaza cursorul si instaleaza triggerul. */
+function setupBackfill() {
+  PropertiesService.getScriptProperties().setProperty('BACKFILL_STATE', JSON.stringify({ li: 0, off: 0 }));
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
+    .forEach(ScriptApp.deleteTrigger);
+  ScriptApp.newTrigger('backfillRun').timeBased().everyMinutes(15).create();
+  Logger.log('Backfill pornit: %s zile, ruleaza automat la 15 min pana termina.', BACKFILL.DAYS);
+}
+
+/** O tura de backfill. NU se ruleaza manual decat pentru test. */
+function backfillRun() {
+  const t0 = Date.now();
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty('BACKFILL_STATE');
+  if (!raw) { Logger.log('Backfill: fara stare — ruleaza setupBackfill() intai.'); return; }
+  let state = JSON.parse(raw);
+
+  const root = getOrCreateFolder_(DriveApp.getRootFolder(), CFG.ROOT_FOLDER);
+  const labels = GmailApp.getUserLabels().filter(isProjectLabel_)
+    .sort(function (a, b) { return a.getName() < b.getName() ? -1 : 1; });
+  const cutoff = new Date(Date.now() - BACKFILL.DAYS * 864e5);
+  const rows = [];
+
+  while (state.li < labels.length && (Date.now() - t0) < BACKFILL.BUDGET_MS) {
+    const label = labels[state.li];
+    const project = label.getName().split('/').pop();
+    const projectFolder = getOrCreateFolder_(root, project);
+    const threads = label.getThreads(state.off, BACKFILL.BATCH_THREADS);
+
+    if (!threads.length) { state.li++; state.off = 0; continue; }
+
+    let restulPreaVechi = false;
+    for (let i = 0; i < threads.length; i++) {
+      if ((Date.now() - t0) >= BACKFILL.BUDGET_MS) break;
+      const thread = threads[i];
+      // firele vin sortate desc dupa activitate: cand am trecut de cutoff, restul e si mai vechi
+      if (thread.getLastMessageDate() < cutoff) { restulPreaVechi = true; state.off += i; break; }
+      thread.getMessages().forEach(function (msg) {
+        if (msg.getDate() < cutoff) return;
+        msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
+           .forEach(function (att) {
+             if (!shouldSave_(att).ok) return;
+             const saved = saveAttachment_(att, msg, projectFolder, project);
+             if (saved) rows.push(saved);
+           });
+      });
+      if (i === threads.length - 1) state.off += threads.length;
+    }
+    if (restulPreaVechi) { state.li++; state.off = 0; }
+  }
+
+  if (rows.length) writeLog_(root, rows);
+
+  if (state.li >= labels.length) {
+    props.deleteProperty('BACKFILL_STATE');
+    ScriptApp.getProjectTriggers()
+      .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
+      .forEach(ScriptApp.deleteTrigger);
+    Logger.log('BACKFILL TERMINAT. %s fisiere in tura finala.', rows.length);
+  } else {
+    props.setProperty('BACKFILL_STATE', JSON.stringify(state));
+    Logger.log('Backfill: eticheta %s/%s, offset %s, %s fisiere in tura asta.',
+      state.li + 1, labels.length, state.off, rows.length);
+  }
+}
+
+// ---------------------------------------------------------------
 // Utilitare de configurare — se ruleaza manual, o singura data
 // ---------------------------------------------------------------
 
