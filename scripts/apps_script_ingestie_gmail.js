@@ -138,9 +138,15 @@ function syncGmailConfig_() {
 }
 
 function isProjectLabel_(label) {
-  const name = label.getName();
-  return name.indexOf(CFG.PARENT_LABEL + '/') === 0
-      && name.split('/').pop() !== CFG.RESERVED_SUFFIX;
+  // try/catch: Gmail poate returna referinte la etichete sterse ("fantoma");
+  // getName() pe ele arunca "Could not locate target object" — le ignoram.
+  try {
+    const name = label.getName();
+    return name.indexOf(CFG.PARENT_LABEL + '/') === 0
+        && name.split('/').pop() !== CFG.RESERVED_SUFFIX;
+  } catch (e) {
+    return false;
+  }
 }
 
 function processLabel_(label, project, root) {
