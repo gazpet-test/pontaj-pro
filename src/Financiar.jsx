@@ -681,28 +681,32 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         const url = URL.createObjectURL(pdfBlob)
         const a = document.createElement('a'); a.href=url; a.download=fileName; a.click()
         URL.revokeObjectURL(url)
+        // Trimitere AUTOMATĂ pe email la emitere (Marilena + Mirela + Razvan, mereu)
+        await trimiteEmailFactura(facturaId || item?.id, true)
       } else throw upErr
     } catch(e) { showToast('Eroare PDF: ' + e.message, 'err') }
     finally { setGenPDF(false) }
   }
 
-  const handleSendEmail = async () => {
-    if (!item?.id && !form.email_destinatar) { showToast('Salvați mai întâi factura', 'err'); return }
+  // Edge-ul adaugă MEREU destinatarii interni (Marilena, Mirela, Razvan) — v12
+  const trimiteEmailFactura = async (idFactura, automat = false) => {
+    if (!idFactura) { if (!automat) showToast('Salvați mai întâi factura', 'err'); return }
     setSendingEmail(true)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-factura-email`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ factura_id: item?.id, email_to: form.email_destinatar })
+        body: JSON.stringify({ factura_id: idFactura, email_to: form.email_destinatar || undefined })
       })
       const res = await resp.json()
       if (!resp.ok) throw new Error(res.error || res.hint || 'Eroare trimitere')
-      showToast(`Email trimis la ${form.email_destinatar}!`, 'ok')
+      showToast(automat ? `📧 Factura trimisă automat (${(res.destinatari||[]).length} destinatari)` : `Email trimis la ${(res.destinatari||[]).join(', ')}`, 'ok')
       onSaved()
     } catch(e) { showToast('Eroare email: ' + e.message, 'err') }
     finally { setSendingEmail(false) }
   }
+  const handleSendEmail = () => trimiteEmailFactura(item?.id)
 
   const fieldStyle = { ...S.input }
 
