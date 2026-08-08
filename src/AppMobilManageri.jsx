@@ -549,10 +549,17 @@ function RaportZilnic({ profile, sites, onBack }) {
                 ))}
               </div>
             )}
-            <label style={{ display: 'block', background: G.surface2, border: `1px dashed ${G.border2}`, borderRadius: 12, padding: '18px', textAlign: 'center', cursor: 'pointer', color: G.muted, fontSize: 14 }}>
-              📷 Apasă pentru a adăuga poze
-              <input type="file" accept="image/*" multiple capture="environment" onChange={onPoze} style={{ display: 'none' }} />
-            </label>
+            {/* Două intrări separate: cu capture = deschide camera; fără = lasă galeria */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <label style={{ flex: 1, background: G.surface2, border: `1px dashed ${G.border2}`, borderRadius: 12, padding: '18px 8px', textAlign: 'center', cursor: 'pointer', color: G.muted, fontSize: 14 }}>
+                📷 Fă poză
+                <input type="file" accept="image/*" capture="environment" onChange={onPoze} style={{ display: 'none' }} />
+              </label>
+              <label style={{ flex: 1, background: G.surface2, border: `1px dashed ${G.border2}`, borderRadius: 12, padding: '18px 8px', textAlign: 'center', cursor: 'pointer', color: G.muted, fontSize: 14 }}>
+                🖼 Din galerie
+                <input type="file" accept="image/*" multiple onChange={onPoze} style={{ display: 'none' }} />
+              </label>
+            </div>
             {poze.length > 0 && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 10 }}>
                 {poze.map((f, i) => (
