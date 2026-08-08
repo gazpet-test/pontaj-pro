@@ -280,9 +280,29 @@ function RaportZilnic({ profile, sites, onBack }) {
   const adaugaUtilajManual = () => setUtilaje(list => [...list, { active_id: null, cod: '', inmatriculare: '', nume: '', tip: null, ore: null, km: null, ultima_alimentare: null, stare: 'functional', motiv: '', alimentat: false, manual: true }])
   const stergeUtilaj = (idx) => setUtilaje(list => list.filter((_, i) => i !== idx))
 
-  const onPoze = (e) => {
+  // Compresie client-side: telefoanele fac poze de 5-10 MB; le aducem la ~max 1600px
+  // JPEG 80% (~200-400 KB) inainte de upload — mai rapid pe semnal slab, storage mic.
+  const comprimaPoza = async (file) => {
+    try {
+      const bmp = await createImageBitmap(file)
+      const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height))
+      if (scale === 1 && file.size < 500 * 1024) return file
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(bmp.width * scale)
+      canvas.height = Math.round(bmp.height * scale)
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.8))
+      if (!blob) return file
+      return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+    } catch {
+      return file // format neacceptat de canvas (ex. HEIC pe unele browsere) → urcam originalul
+    }
+  }
+
+  const onPoze = async (e) => {
     const files = Array.from(e.target.files || [])
-    setPoze(p => [...p, ...files].slice(0, Math.max(0, 12 - pozeExistente.length)))
+    const comprimate = await Promise.all(files.map(comprimaPoza))
+    setPoze(p => [...p, ...comprimate].slice(0, Math.max(0, 12 - pozeExistente.length)))
   }
   const stergePoza = (i) => setPoze(p => p.filter((_, idx) => idx !== i))
 
