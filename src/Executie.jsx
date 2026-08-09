@@ -385,6 +385,10 @@ function DashboardProiectePage({ onSelectProiect }) {
   const [alertFilter, setAlertFilter] = useState(null)
   const [cautaProiect, setCautaProiect] = useState('')
 
+  // PARC AUTO = pseudo-proiect intern (flotă): n-are contract/termene prin design,
+  // deci nu intră în alertele de configurare (la fel cum e exclus de la ingestia Gmail)
+  const eIntern = p => p.cod_intern === 'PARC_AUTO'
+
   const kpiAlerte = useMemo(() => {
     const cuTermen = proiecte.filter(p => p.activ && p.data_termen && p.zile_pana_termen !== null)
     return {
@@ -393,8 +397,8 @@ function DashboardProiectePage({ onSelectProiect }) {
       depasit: cuTermen.filter(p => p.zile_pana_termen < 0),
       critic:  cuTermen.filter(p => p.zile_pana_termen >= 0 && p.zile_pana_termen < 30),
       atentie: cuTermen.filter(p => p.zile_pana_termen >= 30 && p.zile_pana_termen <= 60),
-      fara_contract: proiecte.filter(p => p.activ && !p.are_contract),
-      fara_date:     proiecte.filter(p => p.activ && !p.are_date),
+      fara_contract: proiecte.filter(p => p.activ && !p.are_contract && !eIntern(p)),
+      fara_date:     proiecte.filter(p => p.activ && !p.are_date && !eIntern(p)),
     }
   }, [proiecte])
 
@@ -418,8 +422,8 @@ function DashboardProiectePage({ onSelectProiect }) {
 
   // Proiecte cu probleme de configurare (pentru banner)
   const proiecteIncomplete = useMemo(
-    () => proiecte.filter(p => p.activ && p.nr_probleme > 0),
-    [proiecte]
+    () => proiecte.filter(p => p.activ && p.nr_probleme > 0 && !eIntern(p)),
+    [proiecte]  // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   return (
