@@ -27,6 +27,7 @@ import CatalogDevizPanel from './CatalogDevizPanel.jsx'
 import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
 import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
+import ProiectNouWizard from './ProiectNouWizard.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
@@ -351,6 +352,7 @@ function DashboardProiectePage({ onSelectProiect }) {
   const [profile, setProfile] = useState(null)
   const [selectedProiect, setSelectedProiect] = useState(null)
   const [editProiect, setEditProiect] = useState(null)
+  const [showWizard, setShowWizard] = useState(false)   // 09.08: wizard „Proiect nou" (Faza 2 ingestie)
   const [toast, setToast] = useState(null)
 
   const showToast = (msg, type = 'info') => {
@@ -481,8 +483,8 @@ function DashboardProiectePage({ onSelectProiect }) {
           onChange={e => setCautaProiect(e.target.value)}
           style={{ padding: '9px 14px', background: G.surface, border: `1px solid ${cautaProiect ? G.executie : G.border}`,
                    borderRadius: 8, color: G.text, fontSize: 13, width: 280, boxSizing: 'border-box' }} />
-        {isOwner && (
-          <button onClick={() => setEditProiect({ _isNew: true, activ: true })} style={{
+        {canEdit && (
+          <button onClick={() => setShowWizard(true)} style={{
             padding: '9px 18px', background: G.executie, border: 'none',
             borderRadius: 8, color: '#0D1117', fontWeight: 700, fontSize: 13,
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
@@ -615,6 +617,13 @@ function DashboardProiectePage({ onSelectProiect }) {
           proiect={editProiect}
           onClose={() => setEditProiect(null)}
           onSaved={() => { setEditProiect(null); loadAll() }}
+          showToast={showToast}
+        />
+      )}
+      {showWizard && (
+        <ProiectNouWizard
+          onClose={() => setShowWizard(false)}
+          onCreated={(id) => { setShowWizard(false); loadAll(); onSelectProiect(id, 'proiect') }}
           showToast={showToast}
         />
       )}
