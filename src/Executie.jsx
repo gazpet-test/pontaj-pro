@@ -385,6 +385,60 @@ function DashboardProiectePage({ onSelectProiect }) {
   const [alertFilter, setAlertFilter] = useState(null)
   const [cautaProiect, setCautaProiect] = useState('')
 
+  // ─── Ordine începere/sistare detectate automat (email + NAS) — de confirmat ───
+  const [ordineDetectate, setOrdineDetectate] = useState([])
+  const [showOrdine, setShowOrdine] = useState(false)
+  useEffect(() => {
+    supabase.from('executie_ordine_detectate').select('*')
+      .eq('status', 'propus').order('proiect_id').order('data_ordin', { nullsFirst: false })
+      .then(({ data }) => setOrdineDetectate(data || []))
+  }, [])
+
+  async function decideOrdin(row, decizie) {
+    try {
+      if (decizie === 'respins') {
+        const { error } = await supabase.from('executie_ordine_detectate')
+          .update({ status: 'respins', decis_de: profile?.id || null, decis_la: new Date().toISOString() }).eq('id', row.id)
+        if (error) throw error
+      } else {
+        const d = row._data ?? row.data_ordin
+        if (!d) { showToast('Completează data ordinului întâi', 'error'); return }
+        if (row.tip === 'incepere') {
+          const { error } = await supabase.from('executie_proiecte')
+            .update({ data_start: d, updated_at: new Date().toISOString() }).eq('id', row.proiect_id)
+          if (error) throw error
+        } else if (row.tip === 'sistare') {
+          const { error } = await supabase.from('executie_ordine_sistare').insert({
+            proiect_id: row.proiect_id, numar_ordin: row.numar_ordin, data_sistare: d, activ: true,
+            motiv: 'Detectat automat din corespondență' + (row.fisier_nume ? ` (${row.fisier_nume})` : ''),
+          })
+          if (error) throw error
+        } else if (row.tip === 'reincepere') {
+          // închide ultima sistare deschisă a proiectului (dacă există)
+          const { data: open } = await supabase.from('executie_ordine_sistare').select('id')
+            .eq('proiect_id', row.proiect_id).eq('activ', true).is('data_reluare', null)
+            .order('data_sistare', { ascending: false }).limit(1)
+          if (open?.length) {
+            const { error } = await supabase.from('executie_ordine_sistare').update({ data_reluare: d }).eq('id', open[0].id)
+            if (error) throw error
+          }
+        }
+        const { error: e2 } = await supabase.from('executie_ordine_detectate')
+          .update({ status: 'confirmat', data_ordin: d, decis_de: profile?.id || null, decis_la: new Date().toISOString() }).eq('id', row.id)
+        if (e2) throw e2
+      }
+      setOrdineDetectate(list => list.filter(x => x.id !== row.id))
+      if (decizie === 'confirmat') loadAll()
+      showToast(decizie === 'confirmat' ? 'Ordin aplicat ✔' : 'Propunere respinsă', 'success')
+    } catch (e) { showToast('Eroare: ' + e.message, 'error') }
+  }
+
+  const ORDIN_META = {
+    incepere:   { label: 'Ordin de începere',   emoji: '🟢', color: G.green,  efect: 'setează data start' },
+    reincepere: { label: 'Ordin de reîncepere', emoji: '🔵', color: G.blue,   efect: 'închide sistarea deschisă' },
+    sistare:    { label: 'Ordin de sistare',    emoji: '🔴', color: G.red,    efect: 'adaugă sistare' },
+  }
+
   // PARC AUTO = pseudo-proiect intern (flotă): n-are contract/termene prin design,
   // deci nu intră în alertele de configurare (la fel cum e exclus de la ingestia Gmail)
   const eIntern = p => p.cod_intern === 'PARC_AUTO'
@@ -472,6 +526,69 @@ function DashboardProiectePage({ onSelectProiect }) {
               }}>📅 {kpiAlerte.fara_date.length} fără termene</button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Banner ordine începere/sistare detectate automat */}
+      {ordineDetectate.length > 0 && !alertFilter && (
+        <div style={{
+          background: G.blue + '0D', border: `1px solid ${G.blue}44`,
+          borderRadius: 10, padding: '12px 16px', marginBottom: 20,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 18 }}>📋</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: G.blue }}>
+                  {ordineDetectate.length} ordin{ordineDetectate.length > 1 ? 'e' : ''} de începere/sistare detectat{ordineDetectate.length > 1 ? 'e' : ''} în corespondență
+                </div>
+                <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>
+                  Găsite automat în email + NAS · nimic nu se aplică fără confirmarea ta
+                </div>
+              </div>
+            </div>
+            <button onClick={() => setShowOrdine(v => !v)} style={{
+              padding: '5px 12px', background: G.blue + '22', border: `1px solid ${G.blue}55`,
+              borderRadius: 7, color: G.blue, fontSize: 11, cursor: 'pointer', fontWeight: 700,
+            }}>{showOrdine ? 'Ascunde' : 'Vezi propunerile'}</button>
+          </div>
+          {showOrdine && (
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {ordineDetectate.map(row => {
+                const om = ORDIN_META[row.tip] || ORDIN_META.incepere
+                const proj = proiecte.find(p => p.id === row.proiect_id)
+                return (
+                  <div key={row.id} style={{
+                    background: G.card, border: `1px solid ${G.border}`, borderRadius: 8,
+                    padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                  }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: om.color, minWidth: 150 }}>{om.emoji} {om.label}</span>
+                    <span style={{ fontSize: 12, color: G.text, fontWeight: 600 }}>{proj?.cod_intern || '#' + row.proiect_id}</span>
+                    {row.numar_ordin && <span style={{ fontSize: 11, color: G.muted }}>nr. {row.numar_ordin}</span>}
+                    <input type="date" defaultValue={row.data_ordin || ''}
+                      onChange={e => { row._data = e.target.value }}
+                      style={{ padding: '4px 8px', background: G.surface, border: `1px solid ${row.data_ordin ? G.border : G.orange}`,
+                               borderRadius: 6, color: G.text, fontSize: 12, colorScheme: 'dark' }} />
+                    <span style={{ fontSize: 10, color: G.dim, flex: 1, minWidth: 120 }} title={row.fisier_nume || ''}>
+                      {row.sursa === 'email' ? '📧' : '📁'} {(row.fisier_nume || '').slice(0, 45)}{(row.fisier_nume || '').length > 45 ? '…' : ''} · {row.ai_confidence}% · {om.efect}
+                    </span>
+                    {canEdit && (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={() => decideOrdin(row, 'respins')} style={{
+                          padding: '5px 10px', background: 'transparent', border: `1px solid ${G.red}55`,
+                          borderRadius: 6, color: G.red, fontSize: 11, cursor: 'pointer', fontWeight: 600,
+                        }}>✕ Respinge</button>
+                        <button onClick={() => decideOrdin(row, 'confirmat')} style={{
+                          padding: '5px 12px', background: G.greenBg, border: 'none',
+                          borderRadius: 6, color: '#fff', fontSize: 11, cursor: 'pointer', fontWeight: 700,
+                        }}>✓ Confirmă</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 
