@@ -11,6 +11,7 @@ ERP intern pentru Gazpet Instal SRL (Ploiești, construcții conducte gaz, 127+ 
 - Fișiere mari: src/App.jsx (~7900 linii), Logistica.jsx (~11900), Magazie.jsx, CereriInterneProiect.jsx, Achizitii.jsx, Tichete.jsx, HR.jsx, ServiceTab.jsx etc.
 
 ## RITUAL DE START — obligatoriu la începutul sesiunii
+-1. **ANUNȚĂ MODELUL**: în primul mesaj spune-i lui Razvan ce model rulezi (ex. claude-fable-5) și ce grad de gândire/reasoning e activ (cât e vizibil). Dacă modelul se schimbă mid-sesiune, menționează.
 0. **SINCRONIZARE REPO (înainte de ORICE modificare de cod)**: `git fetch --all --prune` + `git pull --ff-only` pe branch-ul de lucru. Se lucrează de pe 2 laptopuri (birou + acasă) — localul poate fi în urmă; editarea fără pull suprascrie munca celuilalt (anti-bug „sesiuni paralele"). Dacă pull-ul nu e fast-forward → oprește-te și arată-i lui Razvan ce diverge.
 Apoi, prin Supabase MCP, rulează:
 ```sql
