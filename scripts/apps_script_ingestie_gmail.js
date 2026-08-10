@@ -350,7 +350,7 @@ function startBackfill_(etichete, zile) {
   PropertiesService.getScriptProperties().setProperty('BACKFILL_STATE', JSON.stringify(state));
   ScriptApp.getProjectTriggers()
     .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
-    .forEach(ScriptApp.deleteTrigger);
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('backfillRun').timeBased().everyMinutes(15).create();
   Logger.log('Backfill pornit: %s zile, %s. Ruleaza la 15 min pana termina.',
     state.days, state.only.length ? state.only.length + ' etichete' : 'toate etichetele');
@@ -361,7 +361,7 @@ function stopBackfill() {
   PropertiesService.getScriptProperties().deleteProperty('BACKFILL_STATE');
   ScriptApp.getProjectTriggers()
     .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
-    .forEach(ScriptApp.deleteTrigger);
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   Logger.log('Backfill oprit.');
 }
 
@@ -423,7 +423,7 @@ function backfillRun() {
     props.deleteProperty('BACKFILL_STATE');
     ScriptApp.getProjectTriggers()
       .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
-      .forEach(ScriptApp.deleteTrigger);
+      .forEach(function (t) { ScriptApp.deleteTrigger(t); });
     Logger.log('BACKFILL TERMINAT. %s fisiere in tura finala.', rows.length);
   } else {
     props.setProperty('BACKFILL_STATE', JSON.stringify(state));
@@ -505,7 +505,7 @@ function setupLabels() {
 function setupTrigger() {
   ScriptApp.getProjectTriggers()
     .filter(function (t) { return t.getHandlerFunction() === 'ingestAttachments'; })
-    .forEach(ScriptApp.deleteTrigger);
+    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('ingestAttachments').timeBased().everyMinutes(15).create();
   Logger.log('Trigger instalat.');
 }
