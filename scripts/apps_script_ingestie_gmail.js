@@ -65,6 +65,33 @@ function ingestAttachments() {
   Logger.log('Gata. %s fisiere procesate.', rows.length);
 }
 
+/** Cere platformei lista de proiecte cu eticheta + criterii. null la esec. */
+function fetchGmailConfig_() {
+  const props = PropertiesService.getScriptProperties();
+  const secret = props.getProperty('INGEST_SECRET');
+  const anon = props.getProperty('INGEST_ANON');
+  const ingestUrl = props.getProperty('INGEST_URL');
+  if (!secret || !anon || !ingestUrl) return null;
+  const url = ingestUrl.replace(/\/[^\/]+$/, '/gmail-config');
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'Authorization': 'Bearer ' + anon, 'x-ingest-secret': secret },
+    payload: JSON.stringify({ action: 'list' }),
+  });
+  if (res.getResponseCode() >= 300) { Logger.log('gmail-config list: HTTP %s', res.getResponseCode()); return null; }
+  const cfg = JSON.parse(res.getContentText());
+  return (cfg.ok && cfg.proiecte) ? cfg.proiecte : null;
+}
+
+/** Criteriile proiectului → query Gmail (identic cu ce pune filtrul). */
+function construiesteQuery_(pr) {
+  const parti = [];
+  if (pr.filtru_gmail_from) parti.push('from:(' + pr.filtru_gmail_from + ')');
+  if (pr.filtru_gmail_subject) parti.push('subject:(' + pr.filtru_gmail_subject + ')');
+  if (pr.filtru_gmail_query) parti.push(pr.filtru_gmail_query);
+  return parti.join(' ');
+}
+
 /**
  * FAZA 1 onboarding automat: intreaba platforma ce etichete/filtre ar trebui
  * sa existe (executie_proiecte.eticheta_gmail + filtru_gmail_*) si creeaza
@@ -74,21 +101,13 @@ function ingestAttachments() {
  * → adauga "Gmail API" (pentru crearea FILTRELOR; etichetele merg si fara).
  */
 function syncGmailConfig_() {
+  const proiecte = fetchGmailConfig_();
+  if (!proiecte) return;
   const props = PropertiesService.getScriptProperties();
   const secret = props.getProperty('INGEST_SECRET');
   const anon = props.getProperty('INGEST_ANON');
-  const ingestUrl = props.getProperty('INGEST_URL');
-  if (!secret || !anon || !ingestUrl) return;
-  const url = ingestUrl.replace(/\/[^\/]+$/, '/gmail-config');
-
-  const res = UrlFetchApp.fetch(url, {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { 'Authorization': 'Bearer ' + anon, 'x-ingest-secret': secret },
-    payload: JSON.stringify({ action: 'list' }),
-  });
-  if (res.getResponseCode() >= 300) { Logger.log('gmail-config list: HTTP %s', res.getResponseCode()); return; }
-  const cfg = JSON.parse(res.getContentText());
-  if (!cfg.ok || !cfg.proiecte) return;
+  const url = props.getProperty('INGEST_URL').replace(/\/[^\/]+$/, '/gmail-config');
+  const cfg = { proiecte: proiecte };
 
   const gmailApiOn = (typeof Gmail !== 'undefined');
   let existingFilters = [];
@@ -298,19 +317,58 @@ function createLogSheet_(root) {
 // garanteaza zero duplicate fata de ingestia curenta, care merge in paralel.
 
 const BACKFILL = {
-  DAYS: 365,                 // cat de departe in urma
+  DAYS: 365,                 // fereastra implicita
   BATCH_THREADS: 25,         // fire pe pagina
   BUDGET_MS: 4.5 * 60 * 1000 // opreste-te inainte de limita de 6 min
 };
 
-/** Porneste backfill-ul: reseteaza cursorul si instaleaza triggerul. */
+/** Backfill pentru TOATE etichetele, pe BACKFILL.DAYS zile. */
 function setupBackfill() {
-  PropertiesService.getScriptProperties().setProperty('BACKFILL_STATE', JSON.stringify({ li: 0, off: 0 }));
+  startBackfill_([], BACKFILL.DAYS);
+}
+
+/**
+ * Backfill DOAR pentru anumite proiecte, pe o fereastra la alegere.
+ * EDITEAZA cele doua constante de mai jos, apoi ruleaza functia asta.
+ * Util cand adaugi proiecte noi: nu re-plimbi backfill-ul peste tot istoricul deja tras.
+ * IMPORTANT: ruleaza INTAI aplicaEticheteRetroactiv() — backfill-ul umbla pe ETICHETE,
+ * iar filtrele Gmail eticheteaza doar mailul NOU, deci istoricul nu e etichetat singur.
+ */
+function setupBackfillSelectiv() {
+  const ETICHETE = [
+    'ADI-Ialomita', 'Cosmesti', 'Munteni-Barlad', 'Tigveni', 'Isaccea-Negru-Voda',
+    'PIS-Rau-Doamnei', 'PIS-Comarnic', 'PIS-Siminicea', 'Bretea-Romana',
+    'Habau-Bilciuresti-Depogaz', 'Habau-Gaze-Umede', 'Neptun-Deep',
+  ];
+  const ZILE = 180;
+  startBackfill_(ETICHETE, ZILE);
+}
+
+/** Porneste backfill-ul: reseteaza cursorul si instaleaza triggerul. */
+function startBackfill_(etichete, zile) {
+  const state = { li: 0, off: 0, only: etichete || [], days: zile || BACKFILL.DAYS };
+  PropertiesService.getScriptProperties().setProperty('BACKFILL_STATE', JSON.stringify(state));
   ScriptApp.getProjectTriggers()
     .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
     .forEach(ScriptApp.deleteTrigger);
   ScriptApp.newTrigger('backfillRun').timeBased().everyMinutes(15).create();
-  Logger.log('Backfill pornit: %s zile, ruleaza automat la 15 min pana termina.', BACKFILL.DAYS);
+  Logger.log('Backfill pornit: %s zile, %s. Ruleaza la 15 min pana termina.',
+    state.days, state.only.length ? state.only.length + ' etichete' : 'toate etichetele');
+}
+
+/** Opreste backfill-ul in curs (trigger + cursor). */
+function stopBackfill() {
+  PropertiesService.getScriptProperties().deleteProperty('BACKFILL_STATE');
+  ScriptApp.getProjectTriggers()
+    .filter(function (t) { return t.getHandlerFunction() === 'backfillRun'; })
+    .forEach(ScriptApp.deleteTrigger);
+  Logger.log('Backfill oprit.');
+}
+
+/** Unde a ajuns backfill-ul. */
+function backfillStatus() {
+  const raw = PropertiesService.getScriptProperties().getProperty('BACKFILL_STATE');
+  Logger.log(raw ? 'Backfill in curs: ' + raw : 'Backfill inactiv.');
 }
 
 /** O tura de backfill. NU se ruleaza manual decat pentru test. */
@@ -322,9 +380,13 @@ function backfillRun() {
   let state = JSON.parse(raw);
 
   const root = getOrCreateFolder_(DriveApp.getRootFolder(), CFG.ROOT_FOLDER);
-  const labels = GmailApp.getUserLabels().filter(isProjectLabel_)
+  const only = state.only || [];
+  let labels = GmailApp.getUserLabels().filter(isProjectLabel_)
     .sort(function (a, b) { return a.getName() < b.getName() ? -1 : 1; });
-  const cutoff = new Date(Date.now() - BACKFILL.DAYS * 864e5);
+  if (only.length) {
+    labels = labels.filter(function (l) { return only.indexOf(l.getName().split('/').pop()) !== -1; });
+  }
+  const cutoff = new Date(Date.now() - (state.days || BACKFILL.DAYS) * 864e5);
   const rows = [];
 
   while (state.li < labels.length && (Date.now() - t0) < BACKFILL.BUDGET_MS) {
@@ -368,6 +430,56 @@ function backfillRun() {
     Logger.log('Backfill: eticheta %s/%s, offset %s, %s fisiere in tura asta.',
       state.li + 1, labels.length, state.off, rows.length);
   }
+}
+
+// ---------------------------------------------------------------
+// ETICHETARE RETROACTIVA — acopera istoricul
+// ---------------------------------------------------------------
+// Filtrele Gmail se aplica DOAR mailului nou. Cand adaugi un proiect (sau ii pui
+// criterii de filtru abia acum), corespondenta veche ramane neetichetata, deci
+// backfill-ul n-are ce sa gaseasca. Functia asta cauta in Gmail dupa exact
+// aceleasi criterii ca filtrul si pune eticheta pe firele vechi.
+//
+// FLUX RECOMANDAT pentru proiecte noi:
+//   1. RETRO.DRY_RUN = true  → aplicaEticheteRetroactiv() → vezi in log cate fire ar prinde
+//   2. daca numerele arata bine: RETRO.DRY_RUN = false → aplicaEticheteRetroactiv()
+//   3. setupBackfillSelectiv() → trage atasamentele in Drive + platforma
+
+const RETRO = {
+  DAYS: 365,          // cat de departe in urma caut mail de etichetat
+  MAX_THREADS: 1000,  // plafon per proiect (protectie)
+  CHUNK: 100,         // addToThreads accepta max 100 fire
+  DRY_RUN: true,      // true = nu eticheteaza nimic, doar numara
+};
+
+function aplicaEticheteRetroactiv() {
+  const proiecte = fetchGmailConfig_();
+  if (!proiecte) { Logger.log('Nu am putut lua configul din platforma (Script Properties?).'); return; }
+
+  proiecte.forEach(function (pr) {
+    if (!pr.eticheta_gmail) return;
+    const criterii = construiesteQuery_(pr);
+    if (!criterii) { Logger.log('skip %s — proiectul nu are criterii de filtru', pr.eticheta_gmail); return; }
+
+    const fullName = CFG.PARENT_LABEL + '/' + pr.eticheta_gmail;
+    const label = GmailApp.getUserLabelByName(fullName) || GmailApp.createLabel(fullName);
+    // -label: exclude ce e deja etichetat => in modul real, firele ies din rezultate
+    // pe masura ce le etichetam si putem relua mereu de la offset 0.
+    const q = criterii + ' -label:"' + fullName + '" newer_than:' + RETRO.DAYS + 'd';
+
+    let total = 0, tur = 0;
+    while (total < RETRO.MAX_THREADS && tur < 20) {
+      tur++;
+      const threads = GmailApp.search(q, RETRO.DRY_RUN ? total : 0, RETRO.CHUNK);
+      if (!threads.length) break;
+      if (!RETRO.DRY_RUN) label.addToThreads(threads);
+      total += threads.length;
+      if (threads.length < RETRO.CHUNK) break;
+    }
+    Logger.log('%s %s: %s fire   [q: %s]',
+      RETRO.DRY_RUN ? '[DRY] as eticheta' : 'ETICHETATE', pr.eticheta_gmail, total, q);
+  });
+  if (RETRO.DRY_RUN) Logger.log('--- DRY_RUN activ: nu s-a etichetat nimic. Pune RETRO.DRY_RUN = false si ruleaza din nou. ---');
 }
 
 // ---------------------------------------------------------------
