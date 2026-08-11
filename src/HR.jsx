@@ -12,6 +12,7 @@ import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
+import HrAngajatNouWizard from './HrAngajatNouWizard.jsx'
 import SugestiiChuckTab from './SugestiiChuckTab.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
@@ -116,6 +117,7 @@ export default function HRPage() {
   const [showAddAut, setShowAddAut] = useState(null)  // employee_id
   const [editAut, setEditAut] = useState(null)  // autorizatie object
   const [citesteOpen, setCitesteOpen] = useState(false)  // 01.07.2026: panel „Citește Orice" HR
+  const [wizardAngajat, setWizardAngajat] = useState(false)  // 11.08.2026: wizard „Angajat nou" (todo 835)
   
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type })
@@ -222,11 +224,18 @@ export default function HRPage() {
           </div>
         </div>
         {canAccessPersonal && (
-          <button onClick={() => setCitesteOpen(true)} style={{
-            padding:'10px 18px', background:G.hr + '22', color:G.hr, border:`1px solid ${G.hr}66`,
-            borderRadius:10, cursor:'pointer', fontWeight:700, fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
-            📥 Citește Orice
-          </button>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={() => setCitesteOpen(true)} style={{
+              padding:'10px 18px', background:G.hr + '22', color:G.hr, border:`1px solid ${G.hr}66`,
+              borderRadius:10, cursor:'pointer', fontWeight:700, fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
+              📥 Citește Orice
+            </button>
+            <button onClick={() => setWizardAngajat(true)} style={{
+              padding:'10px 18px', background:G.hr, color:'#0D1117', border:'none',
+              borderRadius:10, cursor:'pointer', fontWeight:800, fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
+              ➕ Angajat nou
+            </button>
+          </div>
         )}
       </div>
       
@@ -270,6 +279,16 @@ export default function HRPage() {
           profile={profile}
           modul="hr"
           onConfirmed={loadAll}
+        />
+      )}
+
+      {profile && (
+        <HrAngajatNouWizard
+          open={wizardAngajat}
+          onClose={() => setWizardAngajat(false)}
+          profile={profile}
+          showToast={showToast}
+          onCreated={loadAll}
         />
       )}
       
