@@ -86,8 +86,8 @@ def is_bold(span):
     return bool(span.get('flags', 0) & 2 ** 4) or 'bold' in span.get('font', '').lower()
 
 
-def line_record(line, page_no):
-    """O linie rawdict → {text, y0, y1, x0, bold, fonts, sizes}."""
+def line_record(line, page_no, blk):
+    """O linie rawdict → {text, y0, y1, x0, bold, size, blk}."""
     parts, fonts, sizes, bolds = [], [], [], []
     for span in line.get('spans', []):
         t = span_from_chars(span)
@@ -111,6 +111,7 @@ def line_record(line, page_no):
     bb = line['bbox']
     return {
         'text': text, 'y0': bb[1], 'y1': bb[3], 'x0': bb[0], 'page': page_no,
+        'blk': blk,   # granita de bloc rawdict = granita de paragraf in sursa
         'bold': (sum(bolds) >= max(1, len(bolds) // 2)) if bolds else False,
         'size': max(sizes) if sizes else 0,
     }
@@ -185,11 +186,11 @@ def main(pdf_path, out_dir):
         pg = doc[pno]
         raw = pg.get_text('rawdict')
         recs = []
-        for block in raw.get('blocks', []):
+        for bidx, block in enumerate(raw.get('blocks', [])):
             if block.get('type') == 1:
                 continue  # imaginile le luam separat, cu xref
             for line in block.get('lines', []):
-                r = line_record(line, pno + 1)
+                r = line_record(line, pno + 1, bidx)
                 if r:
                     recs.append(r)
         recs.sort(key=lambda r: (round(r['y0'], 1), r['x0']))
@@ -394,7 +395,8 @@ def main(pdf_path, out_dir):
                 items.append({'y': r['y0'], 'kind': 'h', 'lvl': lvl, 'text': txt})
                 meta['titluri'].append({'lvl': lvl, 'text': txt, 'pag': pno + 1})
             else:
-                items.append({'y': r['y0'], 'kind': 'p', 'text': t, 'x0': r['x0']})
+                items.append({'y': r['y0'], 'kind': 'p', 'text': t, 'x0': r['x0'],
+                              'blk': r['blk'], 'y1': r['y1'], 'size': r['size']})
 
         for tb in tables:
             body, fel = table_to_md(tb['rows'])
@@ -403,25 +405,32 @@ def main(pdf_path, out_dir):
         items += [{'y': im['y'], 'kind': 'i', 'text': im['md']} for im in img_items]
         items.sort(key=lambda it: it['y'])
 
-        # paragrafe: linii consecutive de text → un paragraf; separatoare pt rest
-        buf = []
+        # paragrafe: granita de BLOC rawdict = granita de paragraf; o linie care
+        # incepe cu marcator de bulina (• / -) porneste mereu element nou, iar
+        # continuarea ei (aceeasi granita de bloc, fara marcator) ramane lipita
+        buf, buf_blk, buf_y1, buf_size = [], None, 0, 12
         page_chars = 0
         def flush():
             nonlocal buf
             if buf:
-                page_md.append(' '.join(buf) if not buf[0].startswith('• ')
-                               else '\n'.join(buf))
+                page_md.append(' '.join(buf))
                 page_md.append('')
                 buf = []
         for it in items:
             page_chars += len(it['text'])
             if it['kind'] == 'p':
-                if it['text'].startswith('• '):
-                    flush()
-                    buf = [it['text']]
-                    flush()
-                else:
-                    buf.append(it['text'])
+                e_bulina = it['text'].startswith('• ') or it['text'].startswith('- ')
+                if buf:
+                    # continuare de propozitie rupta de o granita de bloc PyMuPDF:
+                    # fara punct terminal + incepe cu minuscula + gap de rand normal
+                    cont = (not e_bulina
+                            and not buf[-1].rstrip().endswith(('.', ':', ';', '!', '?'))
+                            and it['text'][:1].islower()
+                            and 0 <= it['y'] - buf_y1 < (buf_size or 12) * 0.75)
+                    if e_bulina or (it['blk'] != buf_blk and not cont):
+                        flush()
+                buf.append(it['text'])
+                buf_blk, buf_y1, buf_size = it['blk'], it['y1'], it['size']
             else:
                 flush()
                 if it['kind'] == 'h':
