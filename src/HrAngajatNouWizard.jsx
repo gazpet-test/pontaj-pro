@@ -94,6 +94,7 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
   const [cetatenie, setCetatenie] = useState('roman')
   const [f, setF] = useState({
     nume:'', functie:'', department:'Execuție', telefon:'', email:'', iban:'',
+    cnp:'', adresa:'', data_nasterii:'',
     hire_date: new Date().toISOString().slice(0, 10),
   })
   // docs: rânduri din ai_documente_inbox urcate de wizard (+ metadate locale)
@@ -148,21 +149,12 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
       for (const c of campuri) {
         if (!next.nume.trim() && c.nume_complet) next.nume = String(c.nume_complet).toUpperCase()
         if (!next.iban.trim() && c.iban) next.iban = String(c.iban).replace(/\s+/g, '')
+        if (!next.cnp.trim() && c.cnp) next.cnp = String(c.cnp).replace(/\D+/g, '')
+        if (!next.adresa.trim() && c.adresa) next.adresa = String(c.adresa)
+        if (!next.data_nasterii && c.data_nasterii && /^\d{4}-\d{2}-\d{2}$/.test(c.data_nasterii)) next.data_nasterii = c.data_nasterii
       }
       return next
     })
-  }, [docs])
-
-  // Info extrase, doar afișate (nu există coloane în employees — decizie separată)
-  const infoExtras = useMemo(() => {
-    const out = {}
-    for (const d of docs) {
-      const c = d.payload_ai?.campuri || {}
-      if (c.cnp && !out.cnp) out.cnp = c.cnp
-      if (c.adresa && !out.adresa) out.adresa = c.adresa
-      if (c.data_nasterii && !out.data_nasterii) out.data_nasterii = c.data_nasterii
-    }
-    return out
   }, [docs])
 
   // ─── Checklist obligatorii după cetățenie ─────────────────────
@@ -238,6 +230,9 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
         telefon: f.telefon.trim() || null,
         email: f.email.trim() || null,
         iban: f.iban.trim() || null,
+        cnp: f.cnp.trim() || null,
+        adresa: f.adresa.trim() || null,
+        data_nasterii: f.data_nasterii || null,
         hire_date: f.hire_date,
         cetatenie,
         active: true,
@@ -279,9 +274,42 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
         }
       }
 
+      // 3. Tichet „Alocare EIP" → Cristiana (todo 648): angajatul nou pleacă
+      //    direct în circuitul de echipare; alocarea efectivă se face din Magazie.
+      let tichetEip = null
+      try {
+        const { data: cristiana } = await supabase.from('profiles')
+          .select('id').eq('email', 'cristiana.puscasu@gazpet.ro').maybeSingle()
+        const tk = {
+          departament: 'hr', subcategorie: 'alocare_eip',
+          titlu: `Alocare EIP — ${emp.name}`,
+          descriere: `Angajat nou din ${f.hire_date} (${f.department}${f.functie ? ', ' + f.functie : ''}). ` +
+            `De alocat echipamentul individual de protecție din Magazie → Echipamente și de trecut pe inventarul personal.`,
+          urgenta: 'normal',
+          entitate_tip: 'angajat', entitate_id: emp.id, entitate_descriere: emp.name,
+          deschis_de: profile?.id || null,
+          status: cristiana?.id ? 'atribuit' : 'deschis',
+          metadata: { sursa: 'wizard_angajare', employee_id: emp.id },
+          ...(cristiana?.id ? {
+            persoana_responsabila: cristiana.id, atribuit_de: profile?.id || null,
+            data_atribuire: new Date().toISOString(), asignat_la: 'intern',
+          } : {}),
+        }
+        const { data: tkRow, error: tkErr } = await supabase.from('tichete').insert(tk).select('id,numar_tichet').single()
+        if (tkErr) throw tkErr
+        tichetEip = tkRow
+        if (cristiana?.id) {
+          // trigger-ul pe tichete_asignati îi trimite notificarea Cristianei
+          await supabase.from('tichete_asignati').insert({ tichet_id: tkRow.id, profile_id: cristiana.id, asignat_de: profile?.id || null })
+        }
+      } catch (e) {
+        showToast?.('Angajatul e creat, dar tichetul EIP a eșuat: ' + e.message, 'warning')
+      }
+
       const msgLipsa = lipsa.length ? ` · lipsesc din dosar: ${lipsa.map(t => t.denumire).join(', ')}` : ''
+      const msgEip = tichetEip ? ` · EIP → tichet ${tichetEip.numar_tichet} la Cristiana` : ''
       if (esuate.length) showToast?.(`Angajat creat, dar ${esuate.length} documente au eșuat: ${esuate[0]}`, 'warning')
-      else showToast?.(`✔ ${emp.name} creat cu ${ok} documente${msgLipsa}. Nu uita: asignare EIP din Magazie!`, 'success')
+      else showToast?.(`✔ ${emp.name} creat cu ${ok} documente${msgEip}${msgLipsa}`, 'success')
 
       onCreated?.(emp.id)
       resetSiInchide(false)
@@ -390,16 +418,19 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
                 <label style={S.lbl}>IBAN (se ia și din extrasul de cont)</label>
                 <input style={S.input} value={f.iban} onChange={e => setF({ ...f, iban: e.target.value })} placeholder="RO…" />
               </div>
-            </div>
-            {(infoExtras.cnp || infoExtras.adresa || infoExtras.data_nasterii) && (
-              <div style={{ marginTop:10, padding:'8px 12px', background:G.blue + '11', border:`1px solid ${G.blue}33`, borderRadius:8, fontSize:11.5, color:G.muted }}>
-                🤖 Citit din documente:
-                {infoExtras.cnp && <> CNP <b style={{ color:G.text }}>{infoExtras.cnp}</b> ·</>}
-                {infoExtras.data_nasterii && <> născut <b style={{ color:G.text }}>{infoExtras.data_nasterii}</b> ·</>}
-                {infoExtras.adresa && <> {infoExtras.adresa}</>}
-                <span style={{ color:G.dim }}> (rămân pe documentele din dosar)</span>
+              <div>
+                <label style={S.lbl}>CNP (se ia din CI/pașaport)</label>
+                <input style={S.input} value={f.cnp} maxLength={13} onChange={e => setF({ ...f, cnp: e.target.value.replace(/\D+/g, '') })} placeholder="13 cifre" />
               </div>
-            )}
+              <div>
+                <label style={S.lbl}>DATA NAȘTERII</label>
+                <input type="date" style={{ ...S.input, colorScheme:'dark' }} value={f.data_nasterii} onChange={e => setF({ ...f, data_nasterii: e.target.value })} />
+              </div>
+              <div style={{ gridColumn:'1 / -1' }}>
+                <label style={S.lbl}>ADRESA (domiciliul din CI)</label>
+                <input style={S.input} value={f.adresa} onChange={e => setF({ ...f, adresa: e.target.value })} placeholder="se completează din actul de identitate" />
+              </div>
+            </div>
           </div>
 
           {/* 3. Dosarul — dropzone + documente */}
