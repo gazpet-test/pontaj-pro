@@ -43,8 +43,14 @@ GAP_FACTOR = 0.35      # spatiu daca gap > 0.35 × latimea medie a glifelor din 
 DOT_LEADER = re.compile(r'\.{4,}\s*\d+\s*$')
 RX_CAP = re.compile(r'^\s*(CAP(?:ITOLUL)?)\b\s*\.?\s*(?:(\d{1,2})|([IVXLC]{1,6})(?![A-ZĂÎÂȘȚ]))\s*[.\-–]?\s*(.*)', re.I)
 RX_CAP_LIT = re.compile(r'^\s*CAPITOLUL\s+([A-Z])\s*[.\-–]?\s*(.*)')
-RX_H2 = re.compile(r'^\s*(\d{1,2})\.(\d{1,2})\.?\s+\S')
-RX_H3 = re.compile(r'^\s*(\d{1,2})\.(\d{1,2})\.(\d{1,2})\.?\s+\S')
+# numerotari de sub-titlu: arabe si ROMANE, 2-4 niveluri; spatiul dupa punct
+# poate lipsi in sursa („5.4.Materiale utilizate") — cerem doar majuscula
+RX_H4 = re.compile(r'^\s*(\d{1,2}\.\d{1,2}\.\d{1,2}\.\d{1,2})\s*\.?\s*([A-ZĂÎÂȘȚŞŢ].*)')
+RX_H3 = re.compile(r'^\s*(\d{1,2}\.\d{1,2}\.\d{1,2})\s*\.?\s*([A-ZĂÎÂȘȚŞŢ].*)')
+RX_H3R = re.compile(r'^\s*([IVXLC]{1,4}\.\d{1,2}\.\d{1,2})\s*\.?\s*([A-ZĂÎÂȘȚŞŢ].*)')
+RX_H2 = re.compile(r'^\s*(\d{1,2}\.\d{1,2})\s*\.?\s*([A-ZĂÎÂȘȚŞŢ].*)')
+RX_H2R = re.compile(r'^\s*([IVXLC]{1,4}\.\d{1,2})\s*\.?\s*([A-ZĂÎÂȘȚŞŢ].*)')
+RX_NUMEROTATE = (RX_H4, RX_H3, RX_H3R, RX_H2, RX_H2R)  # ordinea = specificitate
 BULLET_CHARS = {'', '', '', '', '•', '●', '▪', '·', '', ''}
 BULLET_FONTS = ('wingdings', 'symbol', 'zapf')
 
@@ -124,10 +130,11 @@ def classify_heading(rec):
         num = m.group(2) or m.group(3).upper()
         rest = norm_txt(m.group(4))
         return 1, f"{cuv} {num}. {rest}" if rest else f"{cuv} {num}."
-    if RX_H3.match(t) and len(t) < 120:
-        return 3, t
-    if RX_H2.match(t) and len(t) < 120:
-        return 2, t
+    if len(t) < 120:
+        for rx, lvl in zip(RX_NUMEROTATE, (4, 3, 3, 2, 2)):
+            m = rx.match(t)
+            if m:
+                return lvl, norm_txt(f"{m.group(1)}. {m.group(2)}")
     letters = [c for c in t if c.isalpha()]
     if (rec['bold'] and letters and len(letters) >= 4
             and sum(1 for c in letters if c.isupper()) / len(letters) > 0.9
@@ -303,15 +310,17 @@ def main(pdf_path, out_dir):
             if is_toc_page:
                 # se elimina din output, dar intrarile se RETIN (ghid titluri + validare)
                 meta['linii_cuprins_eliminate'] += 1
-                if norm_match(nt) in ('CUPRINS', 'OPIS', 'CONTENTS', 'TABLA DE MATERII'):
-                    toc_acc = []
+                if norm_match(nt).replace(' ', '') in ('CUPRINS', 'OPIS', 'CONTENTS', 'TABLADEMATERII'):
+                    toc_acc = []    # titlul paginii de cuprins (poate fi C U P R I N S)
                 elif DOT_LEADER.search(t):
+                    if RX_CAP.match(t) or RX_CAP_LIT.match(t) or any(rx.match(t) for rx in RX_NUMEROTATE):
+                        toc_acc = []  # linia isi incepe propria intrare — acumularea e junk
                     entry = norm_txt(DOT_LEADER.sub('', ' '.join(toc_acc + [t])))
                     if entry:
                         meta['cuprins_titluri'].append(entry)
                         toc_norm.append(norm_match(entry))
                     toc_acc = []
-                elif RX_CAP.match(t) or RX_CAP_LIT.match(t) or RX_H2.match(t) or RX_H3.match(t):
+                elif RX_CAP.match(t) or RX_CAP_LIT.match(t) or any(rx.match(t) for rx in RX_NUMEROTATE):
                     toc_acc = [t]   # intrare numerotata noua — ce era inainte e junk
                 else:
                     toc_acc = (toc_acc + [t])[-3:]  # max 3 randuri per intrare
@@ -359,7 +368,7 @@ def main(pdf_path, out_dir):
                     nxt_titleish = (nxt['bold'] and nletters
                                     and sum(1 for c in nletters if c.isupper()) / len(nletters) > 0.7)
                     nxt_e_titlu_numerotat = bool(RX_CAP.match(nxt['text']) or RX_CAP_LIT.match(nxt['text'])
-                                                 or RX_H2.match(nxt['text']) or RX_H3.match(nxt['text']))
+                                                 or any(rx.match(nxt['text']) for rx in RX_NUMEROTATE))
                     style_ok = (nxt_titleish and len(txt) + len(nxt['text']) < 170
                                 and not txt.rstrip().endswith(('.', ':'))
                                 and not nxt_e_titlu_numerotat
@@ -376,6 +385,12 @@ def main(pdf_path, out_dir):
                     last = nxt
                     j += 1
                 txt = txt.rstrip(',')
+                # promovare la H1 ghidata de cuprins: corpul pierde uneori prefixul
+                # „CAP." („8. CONTROLUL..."), dar cuprinsul il confirma drept capitol
+                if lvl != 1:
+                    tn = norm_match(txt)
+                    if any(e == 'CAP ' + tn or e.startswith('CAP ' + tn + ' ') for e in toc_norm):
+                        lvl = 1
                 items.append({'y': r['y0'], 'kind': 'h', 'lvl': lvl, 'text': txt})
                 meta['titluri'].append({'lvl': lvl, 'text': txt, 'pag': pno + 1})
             else:
