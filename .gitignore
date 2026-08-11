@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 .env.local
+# artefacte de lucru spike A/B/C — regenerabile din PDF-urile fixture (render 300dpi, output OCR)
+test-fixtures/import-documente/spike/
