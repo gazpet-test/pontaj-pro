@@ -483,6 +483,58 @@ function aplicaEticheteRetroactiv() {
 }
 
 // ---------------------------------------------------------------
+// REIMPROSPATARE FILTRE — ruleaza cand se schimba criteriile in platforma
+// ---------------------------------------------------------------
+// syncGmailConfig_ creeaza filtrul DOAR daca nu exista (dejaExista) — deci un
+// filtru odata creat ramane INGHETAT chiar daca schimbi filtru_gmail_* in BD.
+// Functia asta sterge filtrele de proiect (cele care adauga o eticheta
+// Automatizari/*) si le recreeaza din configul curent al platformei.
+// NU atinge alte filtre personale din Gmail.
+function reimprospateazaFiltre() {
+  if (typeof Gmail === 'undefined') { Logger.log('Gmail API nu e activat (Services → Gmail API).'); return; }
+  const proiecte = fetchGmailConfig_();
+  if (!proiecte) { Logger.log('Nu am putut lua configul din platforma.'); return; }
+
+  // id → nume pentru toate etichetele Automatizari/*
+  const labelById = {};
+  (Gmail.Users.Labels.list('me').labels || []).forEach(function (l) {
+    if (l.name && l.name.indexOf(CFG.PARENT_LABEL + '/') === 0) labelById[l.id] = l.name;
+  });
+
+  // 1. Sterge filtrele care adauga o eticheta de proiect
+  let sterse = 0;
+  ((Gmail.Users.Settings.Filters.list('me').filter) || []).forEach(function (f) {
+    const adauga = (f.action && f.action.addLabelIds) || [];
+    if (adauga.some(function (id) { return labelById[id]; })) {
+      try { Gmail.Users.Settings.Filters.remove('me', f.id); sterse++; }
+      catch (e) { Logger.log('stergere filtru %s: %s', f.id, e.message); }
+    }
+  });
+  Logger.log('Filtre de proiect sterse: %s', sterse);
+
+  // 2. Recreeaza din configul curent (aceeasi logica ca syncGmailConfig_)
+  let create = 0;
+  proiecte.forEach(function (pr) {
+    if (!pr.eticheta_gmail) return;
+    const areCriterii = pr.filtru_gmail_from || pr.filtru_gmail_subject || pr.filtru_gmail_query;
+    if (!areCriterii) return;
+    const fullName = CFG.PARENT_LABEL + '/' + pr.eticheta_gmail;
+    const label = GmailApp.getUserLabelByName(fullName) || GmailApp.createLabel(fullName);
+    try {
+      const labelId = Object.keys(labelById).filter(function (id) { return labelById[id] === fullName; })[0]
+        || Gmail.Users.Labels.list('me').labels.filter(function (l) { return l.name === fullName; })[0].id;
+      const criteria = {};
+      if (pr.filtru_gmail_from) criteria.from = pr.filtru_gmail_from;
+      if (pr.filtru_gmail_subject) criteria.subject = pr.filtru_gmail_subject;
+      if (pr.filtru_gmail_query) criteria.query = pr.filtru_gmail_query;
+      Gmail.Users.Settings.Filters.create({ criteria: criteria, action: { addLabelIds: [labelId] } }, 'me');
+      create++;
+    } catch (e) { Logger.log('filtru %s: %s', fullName, e.message); }
+  });
+  Logger.log('Filtre recreate din platforma: %s. GATA.', create);
+}
+
+// ---------------------------------------------------------------
 // Utilitare de configurare — se ruleaza manual, o singura data
 // ---------------------------------------------------------------
 
