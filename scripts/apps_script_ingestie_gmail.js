@@ -38,7 +38,9 @@ const CFG = {
   IMG_EXT: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff', 'svg'],
   MAX_ERP_BYTES: 30 * 1024 * 1024,  // peste 30 MB nu se trimite base64 la ERP
   SKIP_EXT: ['ics', 'vcf'],         // extensii ignorate
-  SKIP_NAME_RX: /^(image\d+|logo|signature)/i,
+  // Logo-uri din semnaturi + fisiere operationale de flota care nu sunt NICIODATA
+  // documente de proiect (vin zilnic pe mailurile OSCAR si au propriul flux).
+  SKIP_NAME_RX: /^(image\d+|logo|signature)|template[_ ]?alimentari|dispenses/i,
   LOG_SHEET_NAME: '_log_ingestie',  // se creeaza automat in ROOT_FOLDER
   PUSH_TO_ERP: true,                // false = doar Drive, fara platforma
   DRY_RUN: false,                   // true = nu scrie nimic, doar logheaza
@@ -546,6 +548,33 @@ function reimprospateazaFiltre() {
 // ---------------------------------------------------------------
 // Utilitare de configurare — se ruleaza manual, o singura data
 // ---------------------------------------------------------------
+
+/**
+ * DIAGNOSTIC: listeaza toate filtrele Gmail care pun o eticheta de proiect.
+ * De rulat cand un mail primeste o eticheta pe care filtrul din platforma
+ * ar fi trebuit sa o excluda — arata daca au ramas filtre vechi/manuale.
+ */
+function listeazaFiltreProiect() {
+  if (typeof Gmail === 'undefined') { Logger.log('Gmail API nu e activat (Services → Gmail API).'); return; }
+  const labelById = {};
+  (Gmail.Users.Labels.list('me').labels || []).forEach(function (l) {
+    if (l.name && l.name.indexOf(CFG.PARENT_LABEL + '/') === 0) labelById[l.id] = l.name;
+  });
+  const filtre = (Gmail.Users.Settings.Filters.list('me').filter) || [];
+  let n = 0;
+  filtre.forEach(function (f) {
+    const etichete = ((f.action && f.action.addLabelIds) || [])
+      .map(function (id) { return labelById[id]; }).filter(Boolean);
+    if (!etichete.length) return;
+    n++;
+    const c = f.criteria || {};
+    Logger.log('--- %s → %s\n    query: %s\n    from: %s | subject: %s | negat: %s',
+      f.id, etichete.join(', '), c.query || '(gol)',
+      c.from || '-', c.subject || '-', c.negatedQuery || '-');
+  });
+  Logger.log('TOTAL: %s filtre care pun etichete de proiect (din %s in casuta).', n, filtre.length);
+  Logger.log('Cauta mai sus daca fiecare are "-subject:OSCAR" in query. Cele fara = filtre vechi, de sters.');
+}
 
 /** Creeaza arborele de etichete in Gmail. */
 function setupLabels() {
