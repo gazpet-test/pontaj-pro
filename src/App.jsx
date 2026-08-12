@@ -4602,7 +4602,22 @@ function ReportsPage() {
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setExpD(true)
     try{
-    let eq=supabase.from('employees').select('*').eq('active',true).order('name')
+    // TKT-2026-0110 (Marilena, 10.08.2026): cine a avut încetare în cursul lunii
+    // dispărea DEFINITIV din export — nu doar zilele lui de diurnă, ci rândul întreg.
+    // Din exportul ăsta se întocmesc ordinele de deplasare și se împart diurnele pe
+    // lucrări, deci omul trebuie să rămână în listă până se închide luna, cu zilele
+    // lucrate și cu 0 în dreptul zilelor de după încetare.
+    // Se includ deci și inactivii cu încetare în luna exportată.
+    const dLuna=new Date(dt)
+    const lunaStart=`${dLuna.getFullYear()}-${String(dLuna.getMonth()+1).padStart(2,'0')}-01`
+    const lFin=new Date(lunaStart); lFin.setMonth(lFin.getMonth()+1); lFin.setDate(0)
+    const lunaEnd=lFin.toISOString().split('T')[0]
+
+    // Criteriul e „încetare DE LA începutul lunii exportate încolo", nu „încetare
+    // ÎN luna exportată": cine a plecat pe 7 august a lucrat tot iulie, iar la
+    // exportul pe iulie trebuie să apară. Un filtru pe luna exportată l-ar sări.
+    let eq=supabase.from('employees').select('*').order('name')
+      .or(`active.eq.true,termination_date.gte.${lunaStart}`)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
 
@@ -4668,7 +4683,11 @@ function ReportsPage() {
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
       const er=(diurnaRecs||[]).filter(r=>r.employee_id===emp.id)
-      if(!er.length) return null
+      // Angajatul cu încetare în luna exportată rămâne în listă chiar dacă în
+      // tranșa asta are zero zile — apare cu 0, ca să poată fi întocmit ordinul
+      // de deplasare și împărțită diurna pe lucrări până la închiderea lunii.
+      const incetatInLuna=!emp.active && emp.termination_date && emp.termination_date>=monthStart
+      if(!er.length && !incetatInLuna) return null
 
       // Norme cumulate: DOAR pe zile lucrătoare (exclude weekend/sărbători)
       const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma)&&workDaySet.has(r.date))
@@ -4726,9 +4745,18 @@ function ReportsPage() {
       // Group by site
       const siteMap={}
       er.forEach(r=>{const s=r.sites?.name||'Nealocate'; siteMap[s]=(siteMap[s]||0)+1})
-      const sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
+      let sites=Object.entries(siteMap).map(([name,zile])=>({name,zile,val:zile*diurnaAmt}))
+      // Fără nicio zi în tranșă (încetare înainte de începutul perioadei) — un rând
+      // cu 0, ca omul să nu dispară din listă până la închiderea lunii.
+      if(!sites.length) sites=[{name:'Nealocate',zile:0,val:0}]
       const p=emp.name.split(' ')
-      return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,diurnaMax,normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata}
+      // Rândul de încetare fără zile: toate cifrele pe 0 — inclusiv „Diurnă Max.
+      // Admisă", altfel ar arăta un plafon disponibil pentru cineva care a plecat.
+      const faraZile=diurnaReala===0&&incetatInLuna
+      return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,
+              diurnaMax:faraZile?0:diurnaMax,
+              normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata,
+              incetatLa:incetatInLuna?emp.termination_date:null}
     }).filter(Boolean).sort((a,b)=>{
       const n=(a.nume||'').localeCompare((b.nume||''),'ro')
       if(n!==0) return n
@@ -4756,6 +4784,7 @@ function ReportsPage() {
     const totalRowIdxs=[]
     const empRanges=[]
 
+    const fmtInc=d=>d?new Date(d).toLocaleDateString('ro-RO'):''
     empStats.forEach(emp=>{
       const startRow=rowIdx
       emp.sites.forEach((site,si)=>{
@@ -4764,18 +4793,20 @@ function ReportsPage() {
           si===0?nr:'',
           si===0?emp.nume:'',
           si===0?emp.prenume:'',
-          site.name,
+          // la rândul gol al unui angajat cu încetare, în loc de „Nealocate" se
+          // scrie motivul — altfel un 0 fără explicație pare o greșeală de export
+          (site.zile===0&&emp.incetatLa)?`Încetat ${fmtInc(emp.incetatLa)}`:site.name,
           site.zile,
           diurnaAmt,
           site.val,
           si===0?emp.diurnaMax:'',
-          si===0?(emp.pesteLimita>0?emp.pesteLimita:''):''
+          si===0?(emp.pesteLimita>0?emp.pesteLimita:(emp.incetatLa?0:'')):''
         ])
         siteRowIdxs.push({row:rowIdx,isAlt:si%2===1,hasPeste:si===0&&emp.pesteLimita>0})
         rowIdx++
       })
       // Total per angajat
-      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0])
+      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0])
       totalRowIdxs.push({row:rowIdx,hasPeste:emp.pesteLimita>0})
       empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
       rowIdx++; nr++
