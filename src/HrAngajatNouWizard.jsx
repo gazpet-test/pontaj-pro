@@ -20,7 +20,7 @@
 // wizard (informativ) și rămân în documentele atașate. Coloane noi = decizie
 // separată cu Razvan (nu modificăm schema din proprie inițiativă).
 // ════════════════════════════════════════════════════════════════
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
@@ -109,7 +109,7 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
   useEffect(() => {
     if (!open) return
     supabase.from('hr_documente_personale_tipuri')
-      .select('id,cod,denumire,categorie,are_expirare,obligatoriu_ro,obligatoriu_non_ue,permite_multiple,ordine')
+      .select('id,cod,denumire,categorie,are_expirare,obligatoriu_ro,obligatoriu_non_ue,permite_multiple,ordine,etapa_non_ue,grup_obligatoriu')
       .eq('activ', true).order('ordine')
       .then(({ data }) => setTipuri(data || []))
   }, [open])
@@ -165,13 +165,50 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
     return tipuri.filter(t => t.obligatoriu_ro && t.obligatoriu_non_ue)
   }, [tipuri, cetatenie])
 
+  // Non-UE: documentele se împart în două etape (confirmat de Natalia 12.08.2026).
+  // Permisul de ședere, contul bancar și adeverința medicală NU pot exista înainte
+  // de CIM — la înregistrare se cer doar cele din etapa 1, restul rămân de urmărit.
+  const etapaDoi = useMemo(
+    () => (cetatenie === 'non_ue' ? obligatorii.filter(t => t.etapa_non_ue === 'dupa_cim') : []),
+    [obligatorii, cetatenie])
+  const laInregistrare = useMemo(
+    () => obligatorii.filter(t => !etapaDoi.includes(t)),
+    [obligatorii, etapaDoi])
+
   const tipuriAcoperite = useMemo(() => new Set(docs.filter(d => d.tip_id).map(d => d.tip_id)), [docs])
   const identitateUE = useMemo(() => {
     if (cetatenie !== 'ue') return true
     const ids = tipuri.filter(t => ['buletin', 'pasaport'].includes(t.cod)).map(t => t.id)
     return ids.some(id => tipuriAcoperite.has(id))
   }, [cetatenie, tipuri, tipuriAcoperite])
-  const lipsa = useMemo(() => obligatorii.filter(t => !tipuriAcoperite.has(t.id)), [obligatorii, tipuriAcoperite])
+
+  // Grupuri „cel puțin unul" (ex. studii: diplomă SAU certificat de calificare)
+  const grupuriAcoperite = useMemo(() => {
+    const set = new Set()
+    for (const t of tipuri) {
+      if (t.grup_obligatoriu && tipuriAcoperite.has(t.id)) set.add(t.grup_obligatoriu)
+    }
+    return set
+  }, [tipuri, tipuriAcoperite])
+
+  const eAcoperit = useCallback(
+    t => tipuriAcoperite.has(t.id) || (t.grup_obligatoriu && grupuriAcoperite.has(t.grup_obligatoriu)),
+    [tipuriAcoperite, grupuriAcoperite])
+
+  // Lipsa se calculează DOAR pe etapa 1 — etapa 2 nu e o lipsă, e o etapă viitoare.
+  // Grupurile se numără o singură dată, nu o dată per membru.
+  const lipsa = useMemo(() => {
+    const out = [], grupuriVazute = new Set()
+    for (const t of laInregistrare) {
+      if (eAcoperit(t)) continue
+      if (t.grup_obligatoriu) {
+        if (grupuriVazute.has(t.grup_obligatoriu)) continue
+        grupuriVazute.add(t.grup_obligatoriu)
+      }
+      out.push(t)
+    }
+    return out
+  }, [laInregistrare, eAcoperit])
 
   // ─── Upload dosar ─────────────────────────────────────────────
   async function handleFiles(fileList) {
@@ -486,13 +523,18 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
 
           {/* 4. Checklist */}
           <div style={S.sect}>
-            <label style={S.lbl}>CHECKLIST OBLIGATORII — {CETATENII.find(c => c.key === cetatenie)?.label}</label>
+            <label style={S.lbl}>
+              CHECKLIST OBLIGATORII — {CETATENII.find(c => c.key === cetatenie)?.label}
+              {etapaDoi.length > 0 && <span style={{ color:G.dim, fontWeight:400 }}> · la înregistrare</span>}
+            </label>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))', gap:6 }}>
-              {obligatorii.map(t => {
-                const are = tipuriAcoperite.has(t.id)
+              {laInregistrare.map(t => {
+                const are = eAcoperit(t)
+                const eGrup = !!t.grup_obligatoriu
                 return (
                   <div key={t.id} style={{ fontSize:12.5, color: are ? G.green : G.muted, display:'flex', gap:7, alignItems:'center' }}>
                     <span>{are ? '✅' : '⬜'}</span> {t.denumire}
+                    {eGrup && <span style={{ color:G.dim, fontSize:11 }}>(sau echivalent)</span>}
                   </div>
                 )
               })}
@@ -505,6 +547,27 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
             {lipsa.length > 0 && (
               <div style={{ marginTop:10, fontSize:11.5, color:G.yellow }}>
                 ⚠ Dosar incomplet ({lipsa.length} lipsă) — poți salva oricum; documentele se adaugă ulterior prin Citește Orice.
+              </div>
+            )}
+
+            {etapaDoi.length > 0 && (
+              <div style={{ marginTop:14, padding:'10px 12px', background:G.bg,
+                            border:`1px dashed ${G.border2}`, borderRadius:8 }}>
+                <div style={{ fontSize:11.5, color:G.muted, fontWeight:700, marginBottom:6 }}>
+                  DUPĂ SEMNAREA CIM — nu se cer acum
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(240px, 1fr))', gap:6 }}>
+                  {etapaDoi.map(t => (
+                    <div key={t.id} style={{ fontSize:12.5, color: eAcoperit(t) ? G.green : G.dim,
+                                             display:'flex', gap:7, alignItems:'center' }}>
+                      <span>{eAcoperit(t) ? '✅' : '⏳'}</span> {t.denumire}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop:7, fontSize:11, color:G.dim }}>
+                  Permisul de ședere, contul bancar și medicul de familie se obțin abia după
+                  întocmirea contractului — se adaugă în dosar pe măsură ce apar.
+                </div>
               </div>
             )}
           </div>
