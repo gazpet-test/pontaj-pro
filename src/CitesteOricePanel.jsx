@@ -187,13 +187,17 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   }, [open, loadQueue, loadEntitati])
 
   // ─── UPLOAD ───────────────────────────────────────────────────
-  async function handleFiles(fileList) {
-    const files = Array.from(fileList || [])
-    if (!files.length) return
-    for (const original of files) {
-      const rowState = { nume: original.name, stare: 'upload' }
-      setUploading(u => [...u, rowState])
-      try {
+  // Fisierele se urca IN PARALEL (cate MAX_PARALEL deodata) si NU se asteapta
+  // clasificarea AI inainte de a trece mai departe. Varianta veche procesa
+  // strict secvential si astepta pana la 48s per document — la un dosar de
+  // 10 acte, ecranul parea inghetat minute intregi, iar omul reincarca acelasi
+  // fisier (de aici perechile de duplicate din 12.08).
+  const MAX_PARALEL = 4
+
+  async function urcaUnFisier(original) {
+    const rowState = { nume: original.name, stare: 'upload' }
+    setUploading(u => [...u, rowState])
+    try {
         // Orice imagine → PDF comprimat în browser, înainte de upload.
         // Așa fișierul ajunge mereu PDF (mic) în coadă, iar AI-ul îl citește garantat.
         let file = original
@@ -214,32 +218,56 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         }
         if (proiectContextId && modul === 'executie') { ins.entitate_tip = 'proiect'; ins.entitate_id = proiectContextId; ins.entitate_match_confidence = 100; ins.modul_tinta = 'executie' }
         const { data: row, error: insErr } = await supabase.from('ai_documente_inbox').insert(ins).select('id').single()
-        if (insErr) throw new Error(insErr.message)
+        if (insErr) {
+          // rândul nu s-a creat (ex. dublură respinsă) — scoatem fișierul din
+          // bucket, altfel rămâne orfan fără nimic care să-l lege de ceva
+          await supabase.storage.from(BUCKET_INBOX).remove([path]).catch(() => {})
+          throw new Error(insErr.message)
+        }
 
-        setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'ai' } : x))
-        const st = await pollStatus(row.id)
-        if (st === 'eroare') throw new Error('AI nu a putut citi documentul')
-        if (st === 'timeout') throw new Error('Clasificarea durează prea mult — reîncearcă')
-
-        setUploading(u => u.filter(x => x !== rowState))
-      } catch (e) {
-        setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'eroare', err: String(e.message || e) } : x))
-      }
+      // Documentul e in coada — atat trebuie sa astepte omul. Clasificarea AI
+      // merge in fundal si se vede in lista de confirmare, pe masura ce vine.
+      setUploading(u => u.filter(x => x !== rowState))
+      return row.id
+    } catch (e) {
+      setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'eroare', err: String(e.message || e) } : x))
+      return null
     }
-    await loadQueue()
-    setView('confirm')
-    flash('ok', 'Document(e) citit(e). Verifică și confirmă mai jos.')
   }
 
-  async function pollStatus(id, tries = 24) {
-    for (let i = 0; i < tries; i++) {
-      await new Promise(r => setTimeout(r, 2000))
-      try {
-        const { data } = await supabase.from('ai_documente_inbox').select('status').eq('id', id).single()
-        if (data && data.status !== 'in_asteptare') return data.status
-      } catch (_) { /* reîncearcă */ }
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+
+    // valuri de cate MAX_PARALEL — destul cat sa fie rapid, nu atat cat sa
+    // sufoce reteaua sau edge-ul de clasificare cu un dosar intreg deodata
+    const ids = []
+    for (let i = 0; i < files.length; i += MAX_PARALEL) {
+      const val = await Promise.all(files.slice(i, i + MAX_PARALEL).map(urcaUnFisier))
+      ids.push(...val.filter(Boolean))
     }
-    return 'timeout'
+
+    await loadQueue()
+    setView('confirm')
+    if (!ids.length) return
+    flash('ok', ids.length === 1
+      ? 'Document urcat. AI-ul îl citește — apare mai jos în câteva secunde.'
+      : `${ids.length} documente urcate. AI-ul le citește — apar mai jos pe măsură ce sunt gata.`)
+
+    // reimprospatare in fundal cat timp mai exista documente neclasificate
+    asteaptaClasificarea(ids)
+  }
+
+  // Nu blocheaza nimic: doar reincarca lista pana se clasifica tot (sau expira).
+  async function asteaptaClasificarea(ids, tries = 40) {
+    for (let i = 0; i < tries; i++) {
+      await new Promise(r => setTimeout(r, 2500))
+      const { data } = await supabase.from('ai_documente_inbox')
+        .select('id,status').in('id', ids)
+      if (!data) continue
+      await loadQueue()
+      if (!data.some(d => d.status === 'in_asteptare')) return
+    }
   }
 
   // ─── CONFIRMARE — dispecer per modul ──────────────────────────
