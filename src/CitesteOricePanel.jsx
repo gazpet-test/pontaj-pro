@@ -82,6 +82,19 @@ const fmtDate = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit'
 const fmtD = v => v ? new Date(v).toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' }) : '—'
 const randId = () => Math.random().toString(36).slice(2, 10)
 
+// Operațiile pe storage nu au timeout implicit. Dacă rețeaua se împotmolește la
+// mijlocul unui download/upload, promisiunea nu se rezolvă NICIODATĂ: blocul
+// `finally` nu mai rulează, butonul rămâne înțepenit pe „⏳…" și singura ieșire
+// e reîncărcarea paginii. (Natalia, 12.08.2026: „s-a blocat aplicația".)
+const TIMEOUT_STORAGE_MS = 45000
+function cuTimeout(promisiune, ms, mesaj) {
+  let t
+  return Promise.race([
+    Promise.resolve(promisiune).finally(() => clearTimeout(t)),
+    new Promise((_, rej) => { t = setTimeout(() => rej(new Error(mesaj)), ms) }),
+  ])
+}
+
 // Match cod tip AI (ex 'itp', 'copie_conforma') → cod real din tipuriFK (ex 'ITP',
 // 'Copie conformă'). HR are coduri identice (match exact); logistică are nume RO cu
 // majuscule/diacritice → normalizare (fără diacritice, fără spații/underscore).
@@ -258,15 +271,23 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
     asteaptaClasificarea(ids)
   }
 
-  // Nu blocheaza nimic: doar reincarca lista pana se clasifica tot (sau expira).
+  // Nu blocheaza nimic: verifica periodic ce s-a clasificat si reincarca lista
+  // DOAR cand chiar s-a schimbat ceva. Varianta initiala reincarca toata coada
+  // la fiecare 2.5s — cu 44 de documente in ea, asta tinea interfata ocupata
+  // permanent si dadea senzatia de „incarca incet".
   async function asteaptaClasificarea(ids, tries = 40) {
+    let inAsteptare = ids.length
     for (let i = 0; i < tries; i++) {
       await new Promise(r => setTimeout(r, 2500))
       const { data } = await supabase.from('ai_documente_inbox')
         .select('id,status').in('id', ids)
       if (!data) continue
-      await loadQueue()
-      if (!data.some(d => d.status === 'in_asteptare')) return
+      const restante = data.filter(d => d.status === 'in_asteptare').length
+      if (restante !== inAsteptare) {
+        inAsteptare = restante
+        await loadQueue()
+      }
+      if (!restante) return
     }
   }
 
@@ -281,11 +302,15 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // Descarcă fișierul din staging și îl urcă în bucketul destinație. Întoarce destPath.
   async function mutaFisier(row, bucketDest, prefix) {
-    const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET_INBOX).download(row.fisier_path)
+    const { data: blob, error: dlErr } = await cuTimeout(
+      supabase.storage.from(BUCKET_INBOX).download(row.fisier_path),
+      TIMEOUT_STORAGE_MS, 'Descărcarea documentului a durat prea mult — încearcă din nou.')
     if (dlErr || !blob) throw new Error('Nu pot descărca fișierul: ' + (dlErr?.message || ''))
     const ext = (row.fisier_nume.split('.').pop() || 'pdf').toLowerCase()
     const destPath = `${prefix}/aidoc_${Date.now()}_${randId()}.${ext}`
-    const { error: upErr } = await supabase.storage.from(bucketDest).upload(destPath, blob, { upsert: false, contentType: row.fisier_mime || undefined })
+    const { error: upErr } = await cuTimeout(
+      supabase.storage.from(bucketDest).upload(destPath, blob, { upsert: false, contentType: row.fisier_mime || undefined }),
+      TIMEOUT_STORAGE_MS, 'Salvarea documentului a durat prea mult — încearcă din nou.')
     if (upErr) throw new Error('Upload destinație: ' + upErr.message)
     return destPath
   }
