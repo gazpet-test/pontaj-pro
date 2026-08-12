@@ -228,7 +228,12 @@ export default function HrAngajatNouWizard({ open, onClose, profile, showToast, 
           fisier_mime: file.type || 'application/pdf', status: 'in_asteptare',
           uploadat_de: profile?.id || null,
         }).select('id,status,fisier_nume,fisier_path').single()
-        if (insErr) throw insErr
+        if (insErr) {
+          // fișierul e deja în storage — dacă rândul nu s-a creat (ex. dublură
+          // respinsă de trigger), îl scoatem, altfel rămâne orfan în bucket
+          await supabase.storage.from(BUCKET_INBOX).remove([path]).catch(() => {})
+          throw insErr
+        }
         setDocs(list => [...list, { ...row, tip_id: null, payload_ai: null, clasificare_confidence: null }])
       } catch (e) {
         showToast?.(`${orig.name}: ${e.message}`, 'error')

@@ -214,7 +214,12 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
         }
         if (proiectContextId && modul === 'executie') { ins.entitate_tip = 'proiect'; ins.entitate_id = proiectContextId; ins.entitate_match_confidence = 100; ins.modul_tinta = 'executie' }
         const { data: row, error: insErr } = await supabase.from('ai_documente_inbox').insert(ins).select('id').single()
-        if (insErr) throw new Error(insErr.message)
+        if (insErr) {
+          // rândul nu s-a creat (ex. dublură respinsă) — scoatem fișierul din
+          // bucket, altfel rămâne orfan fără nimic care să-l lege de ceva
+          await supabase.storage.from(BUCKET_INBOX).remove([path]).catch(() => {})
+          throw new Error(insErr.message)
+        }
 
         setUploading(u => u.map(x => x === rowState ? { ...x, stare: 'ai' } : x))
         const st = await pollStatus(row.id)
