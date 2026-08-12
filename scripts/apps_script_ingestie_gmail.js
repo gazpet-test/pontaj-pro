@@ -33,10 +33,17 @@ const CFG = {
   RESERVED_SUFFIX: '_procesat',     // sub-eticheta ignorata
   LOOKBACK_DAYS: 14,                // cat de departe in trecut cauta
   MAX_THREADS: 100,                 // plafon per rulare, per proiect
-  MIN_BYTES: 20 * 1024,             // ignora logo-uri din semnaturi (<20 KB)
+  MIN_BYTES: 20 * 1024,             // prag DOAR pentru imagini: logo-uri din semnaturi (<20 KB)
+  MIN_BYTES_DOC: 1024,              // sub 1 KB = fisier gol/corupt, indiferent de tip
+  IMG_EXT: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff', 'svg'],
   MAX_ERP_BYTES: 30 * 1024 * 1024,  // peste 30 MB nu se trimite base64 la ERP
   SKIP_EXT: ['ics', 'vcf'],         // extensii ignorate
-  SKIP_NAME_RX: /^(image\d+|logo|signature)/i,
+  // Logo-uri din semnaturi + fisiere operationale de flota care nu sunt NICIODATA
+  // documente de proiect (vin zilnic pe mailurile OSCAR si au propriul flux).
+  SKIP_NAME_RX: /^(image\d+|logo|signature)|template[_ ]?alimentari|dispenses/i,
+  // Expeditori de sistem: mailurile lor pot ajunge INTR-UN FIR legitim (bounce la
+  // un raspuns), iar eticheta e pe fir — filtrul Gmail nu le poate opri acolo.
+  SKIP_FROM_RX: /mailer-daemon@|postmaster@/i,
   LOG_SHEET_NAME: '_log_ingestie',  // se creeaza automat in ROOT_FOLDER
   PUSH_TO_ERP: true,                // false = doar Drive, fara platforma
   DRY_RUN: false,                   // true = nu scrie nimic, doar logheaza
@@ -176,6 +183,10 @@ function processLabel_(label, project, root) {
     if (thread.getLastMessageDate() < cutoff) return;
     thread.getMessages().forEach(function (msg) {
       if (msg.getDate() < cutoff) return;
+      if (CFG.SKIP_FROM_RX.test(msg.getFrom() || '')) {
+        Logger.log('skip [%s] mesaj de sistem: %s', project, msg.getSubject());
+        return;
+      }
       msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
          .forEach(function (att) {
            const decision = shouldSave_(att);
@@ -194,9 +205,17 @@ function processLabel_(label, project, root) {
 function shouldSave_(att) {
   const name = att.getName() || '';
   const ext = name.split('.').pop().toLowerCase();
-  if (att.getSize() < CFG.MIN_BYTES) return { ok: false, reason: 'prea mic' };
+  if (!name.trim()) return { ok: false, reason: 'atasament fara nume' };
   if (CFG.SKIP_EXT.indexOf(ext) !== -1) return { ok: false, reason: 'extensie ignorata' };
   if (CFG.SKIP_NAME_RX.test(name))      return { ok: false, reason: 'nume de semnatura' };
+  // Pragul de 20 KB a fost gandit pentru logo-urile din semnaturi — dar arunca si
+  // documente reale: un contract .docx sau un deviz .xlsx numai text sta des la
+  // 12-18 KB, iar un registru .csv la cateva sute de octeti. Prag mare = doar imagini.
+  const e_imagine = CFG.IMG_EXT.indexOf(ext) !== -1;
+  const prag = e_imagine ? CFG.MIN_BYTES : CFG.MIN_BYTES_DOC;
+  if (att.getSize() < prag) {
+    return { ok: false, reason: e_imagine ? 'imagine mica (semnatura)' : 'fisier gol' };
+  }
   return { ok: true };
 }
 
@@ -537,6 +556,33 @@ function reimprospateazaFiltre() {
 // ---------------------------------------------------------------
 // Utilitare de configurare — se ruleaza manual, o singura data
 // ---------------------------------------------------------------
+
+/**
+ * DIAGNOSTIC: listeaza toate filtrele Gmail care pun o eticheta de proiect.
+ * De rulat cand un mail primeste o eticheta pe care filtrul din platforma
+ * ar fi trebuit sa o excluda — arata daca au ramas filtre vechi/manuale.
+ */
+function listeazaFiltreProiect() {
+  if (typeof Gmail === 'undefined') { Logger.log('Gmail API nu e activat (Services → Gmail API).'); return; }
+  const labelById = {};
+  (Gmail.Users.Labels.list('me').labels || []).forEach(function (l) {
+    if (l.name && l.name.indexOf(CFG.PARENT_LABEL + '/') === 0) labelById[l.id] = l.name;
+  });
+  const filtre = (Gmail.Users.Settings.Filters.list('me').filter) || [];
+  let n = 0;
+  filtre.forEach(function (f) {
+    const etichete = ((f.action && f.action.addLabelIds) || [])
+      .map(function (id) { return labelById[id]; }).filter(Boolean);
+    if (!etichete.length) return;
+    n++;
+    const c = f.criteria || {};
+    Logger.log('--- %s → %s\n    query: %s\n    from: %s | subject: %s | negat: %s',
+      f.id, etichete.join(', '), c.query || '(gol)',
+      c.from || '-', c.subject || '-', c.negatedQuery || '-');
+  });
+  Logger.log('TOTAL: %s filtre care pun etichete de proiect (din %s in casuta).', n, filtre.length);
+  Logger.log('Cauta mai sus daca fiecare are "-subject:OSCAR" in query. Cele fara = filtre vechi, de sters.');
+}
 
 /** Creeaza arborele de etichete in Gmail. */
 function setupLabels() {
