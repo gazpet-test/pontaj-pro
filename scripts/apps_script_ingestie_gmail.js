@@ -33,7 +33,9 @@ const CFG = {
   RESERVED_SUFFIX: '_procesat',     // sub-eticheta ignorata
   LOOKBACK_DAYS: 14,                // cat de departe in trecut cauta
   MAX_THREADS: 100,                 // plafon per rulare, per proiect
-  MIN_BYTES: 20 * 1024,             // ignora logo-uri din semnaturi (<20 KB)
+  MIN_BYTES: 20 * 1024,             // prag DOAR pentru imagini: logo-uri din semnaturi (<20 KB)
+  MIN_BYTES_DOC: 1024,              // sub 1 KB = fisier gol/corupt, indiferent de tip
+  IMG_EXT: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tif', 'tiff', 'svg'],
   MAX_ERP_BYTES: 30 * 1024 * 1024,  // peste 30 MB nu se trimite base64 la ERP
   SKIP_EXT: ['ics', 'vcf'],         // extensii ignorate
   SKIP_NAME_RX: /^(image\d+|logo|signature)/i,
@@ -194,9 +196,16 @@ function processLabel_(label, project, root) {
 function shouldSave_(att) {
   const name = att.getName() || '';
   const ext = name.split('.').pop().toLowerCase();
-  if (att.getSize() < CFG.MIN_BYTES) return { ok: false, reason: 'prea mic' };
   if (CFG.SKIP_EXT.indexOf(ext) !== -1) return { ok: false, reason: 'extensie ignorata' };
   if (CFG.SKIP_NAME_RX.test(name))      return { ok: false, reason: 'nume de semnatura' };
+  // Pragul de 20 KB a fost gandit pentru logo-urile din semnaturi — dar arunca si
+  // documente reale: un contract .docx sau un deviz .xlsx numai text sta des la
+  // 12-18 KB, iar un registru .csv la cateva sute de octeti. Prag mare = doar imagini.
+  const e_imagine = CFG.IMG_EXT.indexOf(ext) !== -1;
+  const prag = e_imagine ? CFG.MIN_BYTES : CFG.MIN_BYTES_DOC;
+  if (att.getSize() < prag) {
+    return { ok: false, reason: e_imagine ? 'imagine mica (semnatura)' : 'fisier gol' };
+  }
   return { ok: true };
 }
 
