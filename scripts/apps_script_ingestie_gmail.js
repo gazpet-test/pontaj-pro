@@ -41,6 +41,9 @@ const CFG = {
   // Logo-uri din semnaturi + fisiere operationale de flota care nu sunt NICIODATA
   // documente de proiect (vin zilnic pe mailurile OSCAR si au propriul flux).
   SKIP_NAME_RX: /^(image\d+|logo|signature)|template[_ ]?alimentari|dispenses/i,
+  // Expeditori de sistem: mailurile lor pot ajunge INTR-UN FIR legitim (bounce la
+  // un raspuns), iar eticheta e pe fir — filtrul Gmail nu le poate opri acolo.
+  SKIP_FROM_RX: /mailer-daemon@|postmaster@/i,
   LOG_SHEET_NAME: '_log_ingestie',  // se creeaza automat in ROOT_FOLDER
   PUSH_TO_ERP: true,                // false = doar Drive, fara platforma
   DRY_RUN: false,                   // true = nu scrie nimic, doar logheaza
@@ -180,6 +183,10 @@ function processLabel_(label, project, root) {
     if (thread.getLastMessageDate() < cutoff) return;
     thread.getMessages().forEach(function (msg) {
       if (msg.getDate() < cutoff) return;
+      if (CFG.SKIP_FROM_RX.test(msg.getFrom() || '')) {
+        Logger.log('skip [%s] mesaj de sistem: %s', project, msg.getSubject());
+        return;
+      }
       msg.getAttachments({ includeInlineImages: false, includeAttachments: true })
          .forEach(function (att) {
            const decision = shouldSave_(att);
@@ -198,6 +205,7 @@ function processLabel_(label, project, root) {
 function shouldSave_(att) {
   const name = att.getName() || '';
   const ext = name.split('.').pop().toLowerCase();
+  if (!name.trim()) return { ok: false, reason: 'atasament fara nume' };
   if (CFG.SKIP_EXT.indexOf(ext) !== -1) return { ok: false, reason: 'extensie ignorata' };
   if (CFG.SKIP_NAME_RX.test(name))      return { ok: false, reason: 'nume de semnatura' };
   // Pragul de 20 KB a fost gandit pentru logo-urile din semnaturi — dar arunca si
