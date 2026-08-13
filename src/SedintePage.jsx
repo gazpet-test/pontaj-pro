@@ -306,17 +306,23 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
   const inputRef = useRef(null)
 
   const [rsvp, setRsvp] = useState([])
+  const [invitati, setInvitati] = useState([])      // parteneri din afara platformei
+  const [agenda, setAgenda] = useState([])          // parteneri folosiți în ședințe anterioare
   const load = useCallback(async () => {
     setLoading(true)
-    const [s, l, r] = await Promise.all([
+    const [s, l, r, iv] = await Promise.all([
       supabase.from('sedinte').select('*').eq('id', sedintaId).maybeSingle(),
       supabase.from('sedinte_linii').select('*').eq('sedinta_id', sedintaId).order('ordine').order('id'),
       supabase.from('sedinte_rsvp').select('status').eq('sedinta_id', sedintaId),
+      supabase.from('sedinte_invitati').select('*').eq('sedinta_id', sedintaId).order('id'),
     ])
     setSed(s.data || null)
     setLinii(l.data || [])
     setRsvp(r.data || [])
+    setInvitati(iv.data || [])
     setLoading(false)
+    supabase.from('v_sedinte_invitati_agenda').select('*').order('ultima_folosire', { ascending: false }).limit(40)
+      .then(({ data }) => setAgenda(data || []))
     // stare proiect + vechimea verificărilor (în câte ședințe a tot apărut aceeași lipsă)
     if (s.data?.proiect_id) {
       verificaProiect(s.data.proiect_id).then(setStare).catch(() => setStare(null))
@@ -342,6 +348,40 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
     salvSed({ participanti_ids: cur.includes(pid) ? cur.filter(x => x !== pid) : [...cur, pid] })
   }
 
+  // ── Invitați externi (parteneri): primesc invitația și PV-ul pe mail ──
+  const adaugaInvitat = async ({ nume, firma, email }) => {
+    if (!nume?.trim()) return
+    const { data, error } = await supabase.from('sedinte_invitati')
+      .insert({ sedinta_id: sedintaId, nume: nume.trim(), firma: firma?.trim() || null, email: email?.trim() || null })
+      .select().single()
+    if (error) { show('Nu am putut adăuga invitatul: ' + error.message, 'err'); return }
+    setInvitati(x => [...x, data])
+  }
+  const stergeInvitat = async (id) => {
+    await supabase.from('sedinte_invitati').delete().eq('id', id)
+    setInvitati(x => x.filter(i => i.id !== id))
+  }
+
+  // ── Trimiterea invitației, oricând ÎNAINTE de ședință (nu doar la încheiere) ──
+  const [trimitInvit, setTrimitInvit] = useState(false)
+  const trimiteInvitatia = async () => {
+    setTrimitInvit(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sedinta-invite`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sedinta_id: sedintaId }),
+      })
+      const r = await resp.json()
+      if (r?.ok) {
+        show(`✉️ Invitații trimise la ${r.trimise}/${r.total}` + (r.externi ? ` (din care ${r.externi} parteneri)` : ''))
+        setSed(x => ({ ...x, invite_trimisa_la: new Date().toISOString() }))
+      } else show('Invitații: ' + (r?.error || 'eroare necunoscută'), 'err')
+    } catch (e) { show('Invitații: ' + (e.message || e), 'err') }
+    finally { setTrimitInvit(false) }
+  }
+
   // ── Încheierea ședinței = momentul PDF-ului ──
   // Se generează procesul-verbal, se urcă în Storage și fiecare participant
   // primește notificare cu link — „raportul ajunge în contul fiecăruia".
@@ -353,6 +393,20 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
     setInchidere(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
+
+      // ANTI-BUG: textarea-urile salvează pe blur, iar blur-ul se declanșează în
+      // același tick cu click-ul pe „Încheie" — starea din React e încă cea veche.
+      // Recitim din BD ca observațiile scrise chiar înainte de click să intre în PV.
+      const [sFresh, lFresh, iFresh] = await Promise.all([
+        supabase.from('sedinte').select('*').eq('id', sedintaId).maybeSingle(),
+        supabase.from('sedinte_linii').select('*').eq('sedinta_id', sedintaId).order('ordine').order('id'),
+        supabase.from('sedinte_invitati').select('*').eq('sedinta_id', sedintaId).order('id'),
+      ])
+      const sedPdf = sFresh.data || sed
+      const liniiPdf = lFresh.data || linii
+      const invitatiPdf = iFresh.data || invitati
+      setSed(sedPdf); setLinii(liniiPdf); setInvitati(invitatiPdf)
+
       const semnaturaPath = `${new Date(sed.data).getFullYear()}/${sedintaId}/semnatura_${Date.now()}.png`
       const { error: semErr } = await supabase.storage.from(BUCKET_PDF)
         .upload(semnaturaPath, semnaturaFile, { contentType: 'image/png', upsert: true })
@@ -366,9 +420,10 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
       })
 
       const { blob, nume } = await genereazaSedintaPdf({
-        sed, linii,
-        numeProiect: numeProiect(sed.proiect_id),
-        numeParticipanti: (sed.participanti_ids || []).map(numeProfil).filter(n => n !== '—'),
+        sed: sedPdf, linii: liniiPdf,
+        numeProiect: numeProiect(sedPdf.proiect_id),
+        numeParticipanti: (sedPdf.participanti_ids || []).map(numeProfil).filter(n => n !== '—'),
+        invitati: invitatiPdf,
         numeProfil, stare,
         semnatura: { dataUrl: semnaturaDataUrl, nume: numeProfil(user?.id), data: new Date().toISOString() },
       })
@@ -393,19 +448,21 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
       }
       show('✓ Ședință încheiată — PV generat și semnat' + (dest.length ? `, trimis la ${dest.length} participanți` : ''))
 
-      // ── Invitație email + .ics către participanți (Feature #5) ──
-      // Eroare aici nu blochează încheierea — ședința e deja salvată.
+      // ── PV-ul pleacă automat pe mail: participanți + parteneri externi ──
+      // Eroare aici nu blochează încheierea — ședința e deja salvată și PV-ul urcat.
       try {
         const { data: { session } } = await supabase.auth.getSession()
-        const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sedinta-invite`, {
+        const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sedinta-pv`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ sedinta_id: sedintaId }),
         })
         const r = await resp.json()
-        if (r?.ok && r.trimise > 0) show(`✉️ Invitații trimise la ${r.trimise}/${r.total} participanți`)
-        else if (r?.error) show('Invitații email: ' + r.error, 'err')
-      } catch (e) { show('Invitații email: ' + (e.message || e), 'err') }
+        if (r?.ok) {
+          show(`📧 PV trimis pe mail la ${r.trimise}/${r.total}` + (r.externi ? ` (din care ${r.externi} parteneri)` : ''))
+          setSed(x => ({ ...x, pv_trimis_la: new Date().toISOString() }))
+        } else if (r?.error) show('PV pe mail: ' + r.error, 'err')
+      } catch (e) { show('PV pe mail: ' + (e.message || e), 'err') }
     } catch (e) {
       show('Eroare la PDF: ' + (e.message || e), 'err')
     } finally { setInchidere(false) }
@@ -538,10 +595,30 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
             )
           })}
         </div>
-        <input defaultValue={sed.participanti_alti || ''} onBlur={e => salvSed({ participanti_alti: e.target.value.trim() || null })}
-          disabled={inchisa} placeholder="invitați din afara platformei (opțional)…"
-          style={{ ...S.inp, marginTop: 7, width: '100%', boxSizing: 'border-box', fontSize: 12.5 }} />
       </div>
+
+      {/* ── Invitați externi: parteneri (Apazol, Aranewconst…) — primesc invitația și PV-ul ── */}
+      <InvitatiExterni
+        invitati={invitati} agenda={agenda} inchisa={inchisa}
+        onAdauga={adaugaInvitat} onSterge={stergeInvitat}
+        vechiText={sed.participanti_alti}
+        onMutaVechiText={() => salvSed({ participanti_alti: null })}
+      />
+
+      {/* ── Invitația pleacă înainte de ședință, nu la încheiere ── */}
+      {!inchisa && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+          <button onClick={trimiteInvitatia} disabled={trimitInvit}
+            style={{ ...S.btn, background: G.cyan + '18', color: G.cyan, border: `1px solid ${G.cyan}44`, opacity: trimitInvit ? .6 : 1 }}>
+            {trimitInvit ? '⏳ Se trimite…' : sed.invite_trimisa_la ? '✉️ Retrimite invitația' : '✉️ Trimite invitația acum'}
+          </button>
+          <span style={{ fontSize: 11.5, color: G.dim }}>
+            {sed.invite_trimisa_la
+              ? `trimisă ${new Date(sed.invite_trimisa_la).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} — retrimite după ce adaugi participanți`
+              : 'participanții primesc mail cu .ics și butoane de confirmare — trimite-o din timp, nu la încheiere'}
+          </span>
+        </div>
+      )}
 
       {/* ── Stare proiect: ședința nu începe cu datele goale ── */}
       {stare && (
@@ -639,6 +716,8 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
                     : <button onClick={() => faTichet(l)} disabled={inchisa} style={{ ...S.btn, padding: '3px 9px', fontSize: 11, background: G.purple + '18', color: G.purple, border: `1px solid ${G.purple}44` }}>🎫 Fă tichet</button>}
                 </div>
               )}
+              {/* Notă/detaliu pe orice tip de linie — decizii și info aveau doar textul */}
+              <NotaLinie l={l} inchisa={inchisa} onSalveaza={obs => salvLinie(l.id, { observatii: obs })} />
             </div>
           )
         })}
@@ -688,6 +767,106 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
           onConfirm={(file) => incheie(file)}
           saving={inchidere}
         />
+      )}
+    </div>
+  )
+}
+
+// ── Notă pe o linie de ședință (orice tip: problemă, acțiune, decizie, info) ──
+// Intră în PV sub punctul discutat, cursiv.
+function NotaLinie({ l, inchisa, onSalveaza }) {
+  const [deschis, setDeschis] = useState(!!l.observatii)
+  if (!deschis) {
+    if (inchisa) return null
+    return (
+      <button onClick={() => setDeschis(true)}
+        style={{ background: 'transparent', border: 'none', color: G.dim, cursor: 'pointer', fontSize: 11, padding: '4px 0 0 4px' }}>
+        ＋ notă
+      </button>
+    )
+  }
+  return (
+    <textarea defaultValue={l.observatii || ''} disabled={inchisa} rows={2}
+      onBlur={e => { const v = e.target.value.trim() || null; if (v !== (l.observatii || null)) onSalveaza(v) }}
+      placeholder="detalii, context, ce s-a stabilit concret…"
+      style={{ ...S.inp, marginTop: 7, marginLeft: 4, width: 'calc(100% - 4px)', boxSizing: 'border-box',
+        fontSize: 12.5, resize: 'vertical', fontStyle: 'italic', color: G.muted, background: G.bg }} />
+  )
+}
+
+// ── Invitați din afara platformei: parteneri, subcontractori, beneficiari ──
+// Cu email ca să primească invitația și PV-ul, nu doar să apară scriși în PV.
+function InvitatiExterni({ invitati, agenda, inchisa, onAdauga, onSterge, vechiText, onMutaVechiText }) {
+  const [nume, setNume] = useState('')
+  const [firma, setFirma] = useState('')
+  const [email, setEmail] = useState('')
+  const sugestii = useMemo(() => {
+    const q = nume.trim().toLowerCase()
+    if (q.length < 2) return []
+    return (agenda || []).filter(a =>
+      !invitati.some(i => i.nume.toLowerCase() === a.nume.toLowerCase()) &&
+      ((a.nume || '').toLowerCase().includes(q) || (a.firma || '').toLowerCase().includes(q))
+    ).slice(0, 5)
+  }, [nume, agenda, invitati])
+
+  const adauga = () => {
+    if (!nume.trim()) return
+    onAdauga({ nume, firma, email })
+    setNume(''); setFirma(''); setEmail('')
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 11, color: G.dim, textTransform: 'uppercase', letterSpacing: .4, marginBottom: 6 }}>
+        Invitați externi ({invitati.length}) — parteneri, subcontractori, beneficiar
+      </div>
+      {invitati.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 7 }}>
+          {invitati.map(i => (
+            <span key={i.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', fontSize: 12,
+              borderRadius: 8, background: G.orange + '18', color: G.orange, border: `1px solid ${G.orange}44` }}>
+              {i.nume}{i.firma ? ` · ${i.firma}` : ''}
+              {i.email ? <span title={i.email} style={{ fontSize: 10 }}>✉️</span>
+                       : <span title="fără email — nu primește invitația și PV-ul" style={{ fontSize: 10, opacity: .7 }}>⚠️</span>}
+              {!inchisa && <button onClick={() => onSterge(i.id)} style={{ background: 'transparent', border: 'none', color: G.orange, cursor: 'pointer', fontSize: 12, padding: 0 }}>×</button>}
+            </span>
+          ))}
+        </div>
+      )}
+      {!inchisa && (
+        <>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input value={nume} onChange={e => setNume(e.target.value)} placeholder="nume persoană"
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); adauga() } }}
+              style={{ ...S.inp, fontSize: 12.5, maxWidth: 190 }} />
+            <input value={firma} onChange={e => setFirma(e.target.value)} placeholder="firmă (Apazol, Aranewconst…)"
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); adauga() } }}
+              style={{ ...S.inp, fontSize: 12.5, maxWidth: 210 }} />
+            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="email (ca să primească PV-ul)" type="email"
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); adauga() } }}
+              style={{ ...S.inp, fontSize: 12.5, maxWidth: 240 }} />
+            <button onClick={adauga} disabled={!nume.trim()}
+              style={{ ...S.btn, padding: '6px 12px', fontSize: 12, background: nume.trim() ? G.orange + '22' : 'transparent',
+                color: nume.trim() ? G.orange : G.dim, border: `1px solid ${nume.trim() ? G.orange + '55' : G.border2}` }}>＋ Adaugă</button>
+          </div>
+          {sugestii.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+              <span style={{ fontSize: 11, color: G.dim, alignSelf: 'center' }}>din ședințe anterioare:</span>
+              {sugestii.map((a, i) => (
+                <button key={i} onClick={() => { onAdauga(a); setNume(''); setFirma(''); setEmail('') }}
+                  style={{ ...S.btn, padding: '3px 9px', fontSize: 11.5, background: 'transparent', color: G.muted, border: `1px solid ${G.border2}` }}>
+                  {a.nume}{a.firma ? ` · ${a.firma}` : ''}
+                </button>
+              ))}
+            </div>
+          )}
+          {vechiText && (
+            <div style={{ marginTop: 7, fontSize: 11.5, color: G.yellow }}>
+              Text vechi de invitați: „{vechiText}" — adaugă-i mai sus ca să primească PV-ul pe mail,{' '}
+              <button onClick={onMutaVechiText} style={{ background: 'transparent', border: 'none', color: G.cyan, cursor: 'pointer', fontSize: 11.5, textDecoration: 'underline', padding: 0 }}>apoi șterge textul</button>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
