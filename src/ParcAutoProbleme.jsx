@@ -48,9 +48,10 @@ function Chip({ text, color }) {
 }
 
 function numeActiv(p) {
+  if (p.nume_afisat) return p.nume_afisat
   const bits = [p.marca, p.model].filter(Boolean).join(' ')
   const idf = p.nr_inmatriculare || p.cod_intern
-  return idf ? `${bits} · ${idf}` : bits || `Activ #${p.activ_id}`
+  return idf ? `${bits} · ${idf}` : bits || p.extern || `Activ #${p.activ_id}`
 }
 
 export default function ParcAutoProbleme({ active = [], canEdit = false, profile, showToast }) {
@@ -249,7 +250,7 @@ export default function ParcAutoProbleme({ active = [], canEdit = false, profile
             return (
               <div key={p.id} style={{ ...S.card, padding:12, marginBottom:8, opacity:.85 }}>
                 <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
-                  <strong>{a ? numeActiv({ ...a, activ_id: a.id }) : `Activ #${p.activ_id}`}</strong>
+                  <strong>{a ? numeActiv({ ...a, activ_id: a.id }) : (p.extern || `#${p.activ_id || p.scula_id}`)}</strong>
                   <Chip text={STATUSURI[p.status]?.label} color={STATUSURI[p.status]?.color} />
                   <span style={{ fontSize:12, color:G.muted }}>{fmtD(p.data_deschidere)} → {fmtD(p.data_rezolvare)}</span>
                 </div>
@@ -306,8 +307,12 @@ function DetaliuProblema({ r, jurnal, canEdit, onJurnal, onReload, showToast }) 
 
 // ─── Modal problemă nouă ─────────────────────────────────────────────────────
 function ModalProblemaNoua({ active, onClose, onSaved, showToast }) {
+  const [tip, setTip] = useState('activ')            // activ | scula | extern
   const [qa, setQa] = useState('')
   const [activId, setActivId] = useState(null)
+  const [sculaId, setSculaId] = useState(null)
+  const [scule, setScule] = useState([])
+  const [extern, setExtern] = useState('')
   const [f, setF] = useState({ titlu:'', descriere:'', severitate:'major', locatie:'', responsabil:'', asteapta:'', cost_estimat:'' })
   const [saving, setSaving] = useState(false)
 
@@ -317,14 +322,31 @@ function ModalProblemaNoua({ active, onClose, onSaved, showToast }) {
     return active.filter(a => [a.marca, a.model, a.nr_inmatriculare, a.cod_intern].filter(Boolean).join(' ').toLowerCase().includes(nq)).slice(0, 8)
   }, [qa, active])
 
-  const ales = active.find(a => a.id === activId)
+  // căutare scule în Magazie-Echipamente (server-side, lista nu e încărcată local)
+  useEffect(() => {
+    if (tip !== 'scula' || qa.trim().length < 2) { setScule([]); return }
+    const t = setTimeout(async () => {
+      const { data } = await supabase.from('magazie_echipamente').select('id,denumire,serie,categorie')
+        .eq('activ', true).ilike('denumire', `%${qa.trim()}%`).limit(8)
+      setScule(data || [])
+    }, 300)
+    return () => clearTimeout(t)
+  }, [tip, qa])
+
+  const ales = tip === 'activ' ? active.find(a => a.id === activId) : tip === 'scula' ? scule.find(s => s.id === sculaId) : null
+  const alesNume = ales ? (tip === 'activ' ? `${[ales.marca, ales.model].filter(Boolean).join(' ')} ${ales.nr_inmatriculare || ales.cod_intern || ''}` : `${ales.denumire}${ales.serie ? ' (' + ales.serie + ')' : ''}`) : null
 
   async function salveaza() {
-    if (!activId) { showToast?.('Alege vehiculul/utilajul', 'error'); return }
+    if (tip === 'activ' && !activId) { showToast?.('Alege vehiculul/utilajul', 'error'); return }
+    if (tip === 'scula' && !sculaId) { showToast?.('Alege scula din Magazie', 'error'); return }
+    if (tip === 'extern' && !extern.trim()) { showToast?.('Scrie ce vehicul/sculă e (extern)', 'error'); return }
     if (!f.titlu.trim()) { showToast?.('Scrie pe scurt problema', 'error'); return }
     setSaving(true)
     const { error } = await supabase.from('logistica_probleme').insert({
-      activ_id: activId, titlu: f.titlu.trim(), descriere: f.descriere.trim() || null,
+      activ_id: tip === 'activ' ? activId : null,
+      scula_id: tip === 'scula' ? sculaId : null,
+      extern: tip === 'extern' ? extern.trim() : null,
+      titlu: f.titlu.trim(), descriere: f.descriere.trim() || null,
       severitate: f.severitate, locatie: f.locatie.trim() || null, responsabil: f.responsabil.trim() || null,
       asteapta: f.asteapta.trim() || null, cost_estimat: f.cost_estimat === '' ? null : Number(f.cost_estimat),
     })
@@ -338,20 +360,31 @@ function ModalProblemaNoua({ active, onClose, onSaved, showToast }) {
     <div style={{ position:'fixed', inset:0, background:'#000A', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:16 }} onClick={onClose}>
       <div style={{ ...S.card, padding:20, width:560, maxWidth:'100%', maxHeight:'90vh', overflowY:'auto' }} onClick={e => e.stopPropagation()}>
         <strong style={{ fontSize:16 }}>➕ Problemă nouă parc auto</strong>
-        <div style={{ marginTop:14 }}>
-          {!ales ? (
+        <div style={{ display:'flex', gap:6, marginTop:12 }}>
+          {[['activ','🚛 Vehicul/Utilaj'], ['scula','🔨 Sculă (Magazie)'], ['extern','🌐 Extern']].map(([k, l]) => (
+            <button key={k} style={{ ...S.btnS, ...(tip === k ? { borderColor:G.logistica, color:G.logistica, fontWeight:700 } : {}) }}
+              onClick={() => { setTip(k); setActivId(null); setSculaId(null); setQa('') }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ marginTop:10 }}>
+          {tip === 'extern' ? (
+            <input style={S.input} autoFocus placeholder="Ce e (ex: Ford Transit Custom — Transgaz, avariat în șantier)" value={extern} onChange={e => setExtern(e.target.value)} />
+          ) : !ales ? (
             <>
-              <input style={S.input} autoFocus placeholder="Caută vehicul (marcă / model / plăcuță / cod TST)..." value={qa} onChange={e => setQa(e.target.value)} />
-              {sugestii.map(a => (
-                <div key={a.id} style={{ padding:'8px 10px', cursor:'pointer', borderBottom:`1px solid ${G.border}`, fontSize:14 }} onClick={() => setActivId(a.id)}>
-                  {[a.marca, a.model].filter(Boolean).join(' ')} <span style={{ color:G.muted }}>{a.nr_inmatriculare || a.cod_intern || ''}</span>
+              <input style={S.input} autoFocus placeholder={tip === 'activ' ? 'Caută vehicul (marcă / model / plăcuță / cod TST)...' : 'Caută scula în Magazie (min. 2 litere)...'} value={qa} onChange={e => setQa(e.target.value)} />
+              {(tip === 'activ' ? sugestii : scule).map(a => (
+                <div key={a.id} style={{ padding:'8px 10px', cursor:'pointer', borderBottom:`1px solid ${G.border}`, fontSize:14 }}
+                  onClick={() => tip === 'activ' ? setActivId(a.id) : setSculaId(a.id)}>
+                  {tip === 'activ'
+                    ? <>{[a.marca, a.model].filter(Boolean).join(' ')} <span style={{ color:G.muted }}>{a.nr_inmatriculare || a.cod_intern || ''}</span></>
+                    : <>{a.denumire} <span style={{ color:G.muted }}>{a.serie || a.categorie || ''}</span></>}
                 </div>
               ))}
             </>
           ) : (
             <div style={{ display:'flex', gap:8, alignItems:'center', padding:'8px 10px', background:G.bg, borderRadius:8 }}>
-              <strong>{[ales.marca, ales.model].filter(Boolean).join(' ')} {ales.nr_inmatriculare || ales.cod_intern || ''}</strong>
-              <button style={{ ...S.btnS, padding:'2px 8px', marginLeft:'auto' }} onClick={() => setActivId(null)}>schimbă</button>
+              <strong>{alesNume}</strong>
+              <button style={{ ...S.btnS, padding:'2px 8px', marginLeft:'auto' }} onClick={() => { setActivId(null); setSculaId(null) }}>schimbă</button>
             </div>
           )}
         </div>
