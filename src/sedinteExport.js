@@ -16,12 +16,12 @@ const TIP_LABEL = { problema: '⚠ Problemă', actiune: '✔ Acțiune', decizie:
 const TIP_CULOARE = { problema: '#B45309', actiune: '#166534', decizie: '#0E7490', info: '#6B7280' }
 const ST_LABEL = { deschis: 'deschis', in_lucru: 'în lucru', rezolvat: 'rezolvat', anulat: 'anulat' }
 
-function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare, semnatura }) {
+function buildHtml({ sed, linii, numeProiect, numeParticipanti, invitati = [], numeProfil, stare, semnatura }) {
   const tipSed = { executie: 'Execuție', logistica: 'Logistică', general: 'General' }[sed.tip_sedinta] || sed.tip_sedinta
   const randuri = linii.filter(l => l.status !== 'anulat').map(l => `
     <tr>
       <td style="padding:5px 7px;border-bottom:1px solid #E5E7EB;white-space:nowrap;vertical-align:top;color:${TIP_CULOARE[l.tip] || '#374151'};font-weight:700;font-size:9px">${TIP_LABEL[l.tip] || l.tip}</td>
-      <td style="padding:5px 7px;border-bottom:1px solid #E5E7EB;font-size:10px;color:#111827">${esc(l.text)}${l.provine_din_id ? ' <span style="color:#B45309;font-size:8.5px">(restanță din ședința anterioară)</span>' : ''}${l.tichet_id ? ` <span style="color:#7C3AED;font-size:8.5px">(tichet #${l.tichet_id})</span>` : ''}</td>
+      <td style="padding:5px 7px;border-bottom:1px solid #E5E7EB;font-size:10px;color:#111827">${esc(l.text)}${l.provine_din_id ? ' <span style="color:#B45309;font-size:8.5px">(restanță din ședința anterioară)</span>' : ''}${l.tichet_id ? ` <span style="color:#7C3AED;font-size:8.5px">(tichet #${l.tichet_id})</span>` : ''}${l.observatii ? `<div style="margin-top:3px;font-size:9px;color:#4B5563;font-style:italic;white-space:pre-wrap">${esc(l.observatii)}</div>` : ''}</td>
       <td style="padding:5px 7px;border-bottom:1px solid #E5E7EB;white-space:nowrap;font-size:9.5px;color:#374151;vertical-align:top">${l.tip === 'actiune' ? esc(numeProfil(l.responsabil_id) === '—' ? '' : numeProfil(l.responsabil_id)) : ''}</td>
       <td style="padding:5px 7px;border-bottom:1px solid #E5E7EB;white-space:nowrap;font-size:9.5px;color:#374151;vertical-align:top">${l.tip === 'actiune' && l.termen ? fmtData(l.termen) : ''}</td>
       <td style="padding:5px 7px;border-bottom:1px solid #E5E7EB;white-space:nowrap;font-size:9.5px;vertical-align:top;color:${l.status === 'rezolvat' ? '#166534' : l.status === 'in_lucru' ? '#1D4ED8' : '#6B7280'}">${l.tip === 'actiune' ? (ST_LABEL[l.status] || l.status) : ''}</td>
@@ -48,7 +48,11 @@ function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, star
         <div style="color:#9CA3AF">GAZPET INSTAL SRL</div>
       </div>
     </div>
-    ${numeParticipanti.length ? `<div style="font-size:9.5px;color:#374151;margin-top:7px"><strong>Participanți:</strong> ${numeParticipanti.map(esc).join(', ')}${sed.participanti_alti ? ' · ' + esc(sed.participanti_alti) : ''}</div>` : ''}
+    ${numeParticipanti.length ? `<div style="font-size:9.5px;color:#374151;margin-top:7px"><strong>Participanți:</strong> ${numeParticipanti.map(esc).join(', ')}</div>` : ''}
+    ${(invitati.length || sed.participanti_alti) ? `<div style="font-size:9.5px;color:#374151;margin-top:3px"><strong>Invitați externi:</strong> ${[
+      ...invitati.map(i => esc(i.nume) + (i.firma ? ' (' + esc(i.firma) + ')' : '')),
+      ...(sed.participanti_alti ? [esc(sed.participanti_alti)] : []),
+    ].join(', ')}</div>` : ''}
     ${stareHtml}
     <table style="width:100%;border-collapse:collapse;margin-top:8px">
       <thead><tr style="background:#111827;color:#fff">
@@ -60,7 +64,7 @@ function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, star
       </tr></thead>
       <tbody>${randuri || '<tr><td colspan="5" style="padding:10px;color:#9CA3AF;font-size:10px">Fără puncte consemnate.</td></tr>'}</tbody>
     </table>
-    ${sed.observatii ? `<div style="margin-top:10px;font-size:9.5px;color:#374151"><strong>Observații:</strong> ${esc(sed.observatii)}</div>` : ''}
+    ${sed.observatii ? `<div style="margin-top:10px;font-size:9.5px;color:#374151;white-space:pre-wrap"><strong>Observații:</strong> ${esc(sed.observatii)}</div>` : ''}
     ${semnatura ? `
     <div style="margin-top:16px;display:flex;justify-content:flex-end">
       <div style="text-align:center">
@@ -76,10 +80,10 @@ function buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, star
 }
 
 // Construiește PDF-ul și îl întoarce ca Blob (+ nume de fișier sugerat).
-export async function genereazaSedintaPdf({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare, semnatura }) {
+export async function genereazaSedintaPdf({ sed, linii, numeProiect, numeParticipanti, invitati, numeProfil, stare, semnatura }) {
   const host = document.createElement('div')
   host.style.cssText = 'position:fixed;left:-10000px;top:0'
-  host.innerHTML = buildHtml({ sed, linii, numeProiect, numeParticipanti, numeProfil, stare, semnatura })
+  host.innerHTML = buildHtml({ sed, linii, numeProiect, numeParticipanti, invitati, numeProfil, stare, semnatura })
   document.body.appendChild(host)
   try {
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
