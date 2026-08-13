@@ -23,6 +23,7 @@ import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
 import TicheteWidget from './TicheteWidget.jsx'
 import SugestiiScorilosTab from './SugestiiScorilosTab.jsx'
+import ParcAutoProbleme from './ParcAutoProbleme.jsx'
 import SupapeDeclaratiiSection from './SupapeDeclaratiiSection.jsx'
 import DeclaratieTehnicaSection from './DeclaratieTehnicaSection.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
@@ -2529,6 +2530,7 @@ function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0, co
     { key: 'confirmare_ai', icon: '🤖', label: 'Confirmă AI', badge: confirmareAICount },
     { key: 'documente', icon: '📎', label: 'Documente' },
     { key: 'service',   icon: '🔧', label: 'Service' },
+    { key: 'probleme',  icon: '🚨', label: 'Probleme Parc' },
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
     { key: 'arhiva',    icon: '📂', label: 'Arhivă Avize' },
@@ -11072,7 +11074,7 @@ export default function LogisticaPage() {
   useEffect(() => {
     const params = new URLSearchParams(loc.search)
     const t = params.get('tab')
-    const valid = ['lista','alimentari','documente','service','tichete','transporturi','arhiva','arhiva_alimentari','bot-sugestii']
+    const valid = ['lista','alimentari','documente','service','probleme','tichete','transporturi','arhiva','arhiva_alimentari','bot-sugestii','confirmare_ai','audit_anaf','qr_recon']
     if (t && valid.includes(t) && t !== tab) setTab(t)
   }, [loc.search])
   
@@ -11883,6 +11885,9 @@ export default function LogisticaPage() {
       
       {/* TAB: Service (placeholder) */}
       {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
+
+      {/* TAB: Probleme Parc Auto — problemă per vehicul cu istoric, raport ședință generat */}
+      {tab === 'probleme' && <ParcAutoProbleme active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} profile={profile} showToast={showToast} />}
       
       {/* TAB: Sugestii Scorilos — Etapa 12.8 (owner + admin_logistica) */}
       {tab === 'bot-sugestii' && (profile?.is_owner || profile?.role === 'admin_logistica') && (
