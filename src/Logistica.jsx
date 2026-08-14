@@ -6833,19 +6833,28 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
 }
 
 // ----- Pagina Transporturi -----
-function TransporturiPage({ active, sites, profile, accessLevel, showToast }) {
+function TransporturiPage({ active, sites, profile, accessLevel, showToast, initialFocus, onFocusConsumed }) {
   const loc = useLocation()
   const nav = useNavigate()
   const [allInPeriod, setAllInPeriod] = useState([])  // TOATE din perioadă (pentru KPI corect)
   const [loading, setLoading] = useState(false)
-  const [statusFilter, setStatusFilter] = useState('Toate')
-  const [perioadaFilter, setPerioadaFilter] = useState('luna')
+  // Când vin din bannerul „Transporturi blocate", filtrul implicit pe luna curentă
+  // ar ascunde exact transporturile pentru care am fost trimis aici — cele blocate
+  // sunt vechi prin definiție. Deschid pe „Toate" + „Aprobat".
+  const venitDinBlocate = initialFocus === 'blocate'
+  const [statusFilter, setStatusFilter] = useState(venitDinBlocate ? 'aprobat' : 'Toate')
+  const [perioadaFilter, setPerioadaFilter] = useState(venitDinBlocate ? 'tot' : 'luna')
   const [meleFilter, setMeleFilter] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [showComanda, setShowComanda] = useState(false)
   const [editTransport, setEditTransport] = useState(null)
   const [detaliiTransport, setDetaliiTransport] = useState(null)
   
+  // Focusul e consumat o singură dată, la montare. Componenta se remontează la
+  // fiecare intrare pe tab, deci filtrele de mai sus s-au inițializat deja —
+  // resetez flagul în părinte ca următoarea intrare normală să pornească pe „Luna".
+  useEffect(() => { if (venitDinBlocate) onFocusConsumed?.() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-deschide modal dacă vine din butonul global "Cere transport" (?action=new)
   useEffect(() => {
     const params = new URLSearchParams(loc.search)
@@ -10968,6 +10977,7 @@ export default function LogisticaPage() {
   const [showSetariPret, setShowSetariPret] = useState(false)
   const [alerteTransp, setAlerteTransp] = useState([])     // transporturi cu status='cerut'
   const [transpBlocate, setTranspBlocate] = useState([])   // aprobate sau in_tranzit cu data depășită
+  const [transpFocus, setTranspFocus] = useState(null)     // 'blocate' când intru din bannerul de alertă
   const [kpiTransp, setKpiTransp] = useState({ cerute: 0, aprobate: 0, inTranzit: 0, livrate: 0 })  // KPI transporturi luna curentă
   const [sugestiiPendente, setSugestiiPendente] = useState(0)  // ETAPA 12.8: count sugestii Scorilos pentru badge tab
   const [confirmareAICount, setConfirmareAICount] = useState(0)  // 26.05.2026 ETAPA 4.6: count alimentări AI pending
@@ -11148,6 +11158,7 @@ export default function LogisticaPage() {
       // (în fetch luăm mai larg, filtrăm exact pe client)
       supabase.from('logistica_transporturi')
         .select(`id, tip, data_transport, continut_descriere, status,
+          plecare_tip, plecare_locatie_text, destinatie_tip, destinatie_locatie_text,
           activ_transportat:logistica_active!activ_transportat_id(cod_intern, marca, model),
           plecare_site:sites!plecare_site_id(name),
           destinatie_site:sites!destinatie_site_id(name),
@@ -11926,6 +11937,8 @@ export default function LogisticaPage() {
           profile={profile}
           accessLevel={accessLevel}
           showToast={showToast}
+          initialFocus={transpFocus}
+          onFocusConsumed={() => setTranspFocus(null)}
         />
       )}
       
@@ -12236,8 +12249,8 @@ export default function LogisticaPage() {
                   </div>
                 </div>
               </div>
-              <button 
-                onClick={() => setTab('transporturi')}
+              <button
+                onClick={() => { setTranspFocus('blocate'); setTab('transporturi') }}
                 style={{...S.btnS, fontSize: 12, color: borderColor, borderColor: borderColor + '88', fontWeight: 700}}>
                 → Vezi în Transporturi
               </button>
@@ -12248,13 +12261,16 @@ export default function LogisticaPage() {
                 const continut = t.tip === 'utilaj' && t.activ_transportat
                   ? `🚛 ${t.activ_transportat.cod_intern || ''} ${t.activ_transportat.marca || ''} ${t.activ_transportat.model || ''}`.trim()
                   : `📄 ${t.continut_descriere || '—'}`
-                const traseu = `${t.plecare_site?.name || '?'} → ${t.destinatie_site?.name || '?'}`
+                // Nu toate transporturile pleacă/ajung la un șantier: pot fi „sediu"
+                // sau o locație liberă (service, furnizor). Fără fallback ieșea „? → ?".
+                const capat = (site, text, tip) => site?.name || text || (tip === 'sediu' ? 'Sediu Gazpet' : '?')
+                const traseu = `${capat(t.plecare_site, t.plecare_locatie_text, t.plecare_tip)} → ${capat(t.destinatie_site, t.destinatie_locatie_text, t.destinatie_tip)}`
                 const zileInt = daysOverdue(t.data_transport)
                 const persoana = isTranzit ? (t.sofer?.name || t.solicitant?.name) : t.solicitant?.name
                 return (
-                  <div 
+                  <div
                     key={t.id}
-                    onClick={() => setTab('transporturi')}
+                    onClick={() => { setTranspFocus('blocate'); setTab('transporturi') }}
                     style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       padding: '5px 10px', background: G.bg, borderRadius: 4, cursor: 'pointer',
