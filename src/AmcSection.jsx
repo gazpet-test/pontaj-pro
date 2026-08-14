@@ -98,25 +98,71 @@ function StareBadge({ stare }) {
   )
 }
 
-async function openPdfFromBucket(pdfPath, showToast, setLoadingId, docId) {
-  if (!pdfPath) { showToast('Acest echipament nu are PDF uploadat', 'warn'); return }
-  if (setLoadingId) setLoadingId(docId)
-  try {
-    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(pdfPath, 60)
-    if (error) throw error
-    window.open(data.signedUrl, '_blank')
-  } catch (e) {
-    showToast('Eroare preview PDF: ' + (e.message || e), 'error')
-  } finally {
-    if (setLoadingId) setLoadingId(null)
+// Întoarce un signed URL valabil 10 min. Suficient pentru preview în iframe +
+// download, fără să reînnoim tokenul la fiecare click.
+async function signedUrlFor(pdfPath) {
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(pdfPath, 600)
+  if (error) throw error
+  return data.signedUrl
+}
+
+// Numele sub care se salvează fișierul la download — altfel iese cu hash-ul din bucket.
+const numeDescarcare = (doc) =>
+  `Certificat_${slugify(doc?.denumire) || 'amc'}${doc?.serie ? '_' + slugify(doc.serie) : ''}.pdf`
+
+// Forțează Content-Disposition: attachment. Parametrul ?download e onorat de
+// Storage indiferent de versiunea de supabase-js, spre deosebire de opțiunea
+// { download } din createSignedUrl, care e mai nouă.
+const urlDeDescarcare = (signedUrl, nume) =>
+  signedUrl + (signedUrl.includes('?') ? '&' : '?') + 'download=' + encodeURIComponent(nume)
+
+// ─── Modal preview PDF (iframe, ca la HR > Autorizații) ─────────────────────
+
+function PdfViewerModal({ doc, url, onClose, showToast }) {
+  const nume = numeDescarcare(doc)
+
+  const descarca = () => {
+    const a = document.createElement('a')
+    a.href = urlDeDescarcare(url, nume)
+    a.download = nume
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    showToast('⬇ Se descarcă certificatul…', 'success')
   }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.88)', zIndex:400, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div onClick={e => e.stopPropagation()} style={{...S.card, padding:14, width:'95vw', height:'92vh', display:'flex', flexDirection:'column', borderTop:`3px solid ${G.logistica}`}}>
+
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:10}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:15, fontWeight:800, color:G.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+              📄 {doc?.denumire || 'Certificat'}
+            </div>
+            <div style={{fontSize:11, color:G.muted, marginTop:2}}>
+              {[doc?.serie && `serie ${doc.serie}`, doc?.emitent, doc?.data_expirare && `expiră ${fmtDate(doc.data_expirare)}`]
+                .filter(Boolean).join(' · ')}
+            </div>
+          </div>
+          <div style={{display:'flex', gap:8, flexShrink:0}}>
+            <button onClick={descarca} style={{...S.btnS, fontSize:13, color:G.green, borderColor:G.green+'55'}}>⬇ Descarcă</button>
+            <button onClick={() => window.open(url, '_blank')} style={{...S.btnS, fontSize:13, color:G.blue}}>↗ Tab nou</button>
+            <button onClick={onClose} style={{...S.btnS, padding:'7px 12px', fontSize:14}}>✕</button>
+          </div>
+        </div>
+
+        <iframe src={url} title="Certificat AMC" style={{flex:1, border:`1px solid ${G.border}`, borderRadius:8, background:'#fff'}} />
+      </div>
+    </div>
+  )
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // MODAL: Add / Edit Echipament AMC
 // ════════════════════════════════════════════════════════════════════════════
 
-function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast }) {
+function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpenViewer }) {
   const isEdit = !!doc
 
   const [form, setForm] = useState({
@@ -351,7 +397,7 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast }) {
                 <div style={{fontSize:12, color:G.text, fontWeight:600}}>Certificat existent</div>
                 <div style={{fontSize:10, color:G.muted, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{doc.pdf_url}</div>
               </div>
-              <button onClick={() => openPdfFromBucket(doc.pdf_url, showToast)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue}}>👁 Vezi</button>
+              <button onClick={() => onOpenViewer(doc)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue}}>👁 Vezi</button>
               {canEdit && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
             </div>
           )}
@@ -599,6 +645,7 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
   const [tipuri, setTipuri] = useState([])
   const [load, setLoad]     = useState(true)
   const [openingPdfId, setOpeningPdfId] = useState(null)
+  const [viewer, setViewer] = useState(null)        // { doc, url }
   const [modal, setModal]   = useState(null)        // { mode:'add'|'edit', doc? }
   const [showTipuri, setShowTipuri] = useState(false)
 
@@ -609,6 +656,20 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
   const [page, setPage]     = useState(1)
 
   const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
+
+  // Deschide previewul. Semnăm URL-ul o singură dată și îl ținem în state —
+  // acelaşi token serveşte şi iframe-ul, şi butonul de download.
+  const openViewer = useCallback(async (doc) => {
+    if (!doc?.pdf_url) { showToast('Acest echipament nu are certificat încărcat', 'warning'); return }
+    setOpeningPdfId(doc.id)
+    try {
+      setViewer({ doc, url: await signedUrlFor(doc.pdf_url) })
+    } catch (e) {
+      showToast('Eroare deschidere certificat: ' + (e.message || e), 'error')
+    } finally {
+      setOpeningPdfId(null)
+    }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadAll = useCallback(async () => {
     setLoad(true)
@@ -794,9 +855,9 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
               <div><StareBadge stare={d._status} /></div>
               <div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); if (hasPdf) openPdfFromBucket(d.pdf_url, showToast, setOpeningPdfId, d.id) }}
+                  onClick={(e) => { e.stopPropagation(); if (hasPdf) openViewer(d) }}
                   disabled={!hasPdf || openingPdfId === d.id}
-                  title={hasPdf ? 'Deschide certificat PDF' : 'Fără certificat uploadat'}
+                  title={hasPdf ? 'Vezi și descarcă certificatul' : 'Fără certificat încărcat — deschide rândul și încarcă-l'}
                   style={{
                     width:32, height:32, borderRadius:6,
                     background: hasPdf ? G.bg : 'transparent',
@@ -838,8 +899,18 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
           tipuri={tipuri}
           canEdit={canEdit}
           showToast={showToast}
+          onOpenViewer={openViewer}
           onClose={() => setModal(null)}
           onSaved={() => { setModal(null); loadAll() }}
+        />
+      )}
+
+      {viewer && (
+        <PdfViewerModal
+          doc={viewer.doc}
+          url={viewer.url}
+          showToast={showToast}
+          onClose={() => setViewer(null)}
         />
       )}
 
