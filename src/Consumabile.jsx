@@ -48,6 +48,14 @@ const fmtLuna = (d) => d ? new Date(String(d).slice(0,10)+'T00:00:00').toLocaleD
 const fmtCant = (n) => Number(n) % 1 === 0 ? String(Number(n)) : Number(n).toFixed(2)
 // Căutare directă în Freshful (livrează în Ploiești, factură pe firmă) — fără parantezele de ambalaj.
 const linkFreshful = (den) => 'https://www.freshful.ro/search?q=' + encodeURIComponent(String(den || '').replace(/\s*\([^)]*\)/g, '').trim())
+// Magazine Glovo care livrează în Ploiești (slug-uri verificate 08.2026).
+const GLOVO_PLOIESTI = [
+  ['Carrefour', 'https://glovoapp.com/ro/ro/ploiesti/stores/carrefour-plo'],
+  ['Kaufland', 'https://glovoapp.com/ro/ro/ploiesti/stores/kaufland-braila'],
+  ['PENNY', 'https://glovoapp.com/ro/ro/ploiesti/stores/penny-plo'],
+  ['Mega', 'https://glovoapp.com/ro/ro/ploiesti/stores/mega-image-plo'],
+]
+const GLOVO_PN = [['Glovo Piatra Neamț', 'https://glovoapp.com/ro/ro/piatra-neamt/']]
 
 // Ora României, nu ora serverului — altfel deadline-ul de joi 16:00 se mută.
 const acumRO = () => new Date(new Date().toLocaleString('en-US', { timeZone:'Europe/Bucharest' }))
@@ -448,6 +456,15 @@ function VedereCumulat({ runda, cumulat, onSchimbare, profile, setMesaj, aprobar
             <span style={{fontWeight:800, fontSize:14}}>{loc}</span>
             <span style={{fontSize:11, color:G.dim}}>
               {Object.values(date.categorii).flat().length} poziții
+            </span>
+            <span style={{marginLeft:'auto', fontSize:10, color:G.dim, display:'flex', gap:9, alignItems:'center', flexWrap:'wrap'}}>
+              Comandă:
+              <a href="https://www.freshful.ro/" target="_blank" rel="noreferrer"
+                 style={{color:G.green, textDecoration:'none', fontWeight:700}}>🛒 Freshful</a>
+              {(/piatra/i.test(loc) ? GLOVO_PN : GLOVO_PLOIESTI).map(([n, u]) => (
+                <a key={n} href={u} target="_blank" rel="noreferrer"
+                   style={{color:G.orange, textDecoration:'none', fontWeight:700}}>🛵 {n}</a>
+              ))}
             </span>
           </div>
           {CAT_ORD.filter(c => date.categorii[c]?.length).map(cat => (
