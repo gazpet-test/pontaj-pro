@@ -16,6 +16,7 @@ import ContracteComerciale from './ContracteComerciale.jsx'
 import DashboardSubcontractori from './DashboardSubcontractori.jsx'
 import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 import Consumabile from './Consumabile.jsx'
+import LocatiiInchiriate from './LocatiiInchiriate.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -754,7 +755,7 @@ function FurnizoriTab() {
 // ===========================================================================
 
 export default function AdministrativPage() {
-  const [tab, setTab] = useState('documente')
+  const [tabDorit, setTab] = useState('documente')
   const [profile, setProfile] = useState(null)
   const [loadingProfile, setLoadingProfile] = useState(true)
 
@@ -778,9 +779,14 @@ export default function AdministrativPage() {
 
   const isOwner = profile?.is_owner === true
   const canManageContracts = profile?.can_manage_contracts === true
+  const accesTot = isOwner || (profile?.module_access || []).includes('administrativ')
+  const subTaburi = (profile?.module_access || [])
+    .filter(m => m.startsWith('administrativ.'))
+    .map(m => m.slice('administrativ.'.length))
 
   const tabs = [
     { key: 'consumabile', icon: '🛒', label: 'Consumabile birou' },
+    { key: 'locatii',    icon: '🏠', label: 'Locații închiriate' },
     { key: 'documente',  icon: '📁', label: 'Documente firmă' },
     { key: 'furnizori',  icon: '🏢', label: 'Furnizori' },
     { key: 'ticketing',  icon: '🎫', label: 'Ticketing' },
@@ -789,6 +795,12 @@ export default function AdministrativPage() {
     { key: 'subcontractori', icon: '🔗', label: 'Dashboard subcontractori' },
     { key: 'costuri_ai', icon: '💰', label: 'Costuri AI', ownerOnly: true },
   ].filter(t => !t.ownerOnly || isOwner)
+   // Acces granular: cheia 'administrativ' deschide tot modulul, iar
+   // 'administrativ.<tab>' doar tab-ul respectiv (ruta acceptă deja sub-modulele).
+   .filter(t => accesTot || subTaburi.includes(t.key))
+
+  // Tab-ul afișat e cel cerut doar dacă e permis; altfel primul disponibil.
+  const tab = tabs.some(t => t.key === tabDorit) ? tabDorit : (tabs[0]?.key || '')
 
   return (
     <div style={S.page}>
@@ -824,6 +836,9 @@ export default function AdministrativPage() {
           vederea de gestiune (cumulat + comandă). Ruta liberă e pentru toți. */}
       {tab === 'consumabile' && <Consumabile profile={profile} embedded={true} />}
 
+      {/* Locații închiriate — apartamente cazare + puncte de lucru: chirie + utilități */}
+      {tab === 'locatii' && <LocatiiInchiriate profile={profile} />}
+
       {/* Tab Costuri AI (real, nu placeholder) */}
       {tab === 'costuri_ai' && isOwner && <TabCosturiAI />}
 
@@ -846,7 +861,7 @@ export default function AdministrativPage() {
       {tab === 'furnizori' && <FurnizoriTab />}
 
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && tab !== 'locatii' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'contracte' && '📜'}
