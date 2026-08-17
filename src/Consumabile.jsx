@@ -46,6 +46,8 @@ const UM_OPTIUNI = ['buc','top','set','cutie','pachet','bax','rola','kg','l','pe
 const fmtData = (d) => d ? new Date(String(d).slice(0,10)+'T00:00:00').toLocaleDateString('ro-RO',{day:'2-digit',month:'short',year:'numeric'}) : '—'
 const fmtLuna = (d) => d ? new Date(String(d).slice(0,10)+'T00:00:00').toLocaleDateString('ro-RO',{month:'long',year:'numeric'}) : '—'
 const fmtCant = (n) => Number(n) % 1 === 0 ? String(Number(n)) : Number(n).toFixed(2)
+// Căutare directă în Freshful (livrează în Ploiești, factură pe firmă) — fără parantezele de ambalaj.
+const linkFreshful = (den) => 'https://www.freshful.ro/search?q=' + encodeURIComponent(String(den || '').replace(/\s*\([^)]*\)/g, '').trim())
 
 // Ora României, nu ora serverului — altfel deadline-ul de joi 16:00 se mută.
 const acumRO = () => new Date(new Date().toLocaleString('en-US', { timeZone:'Europe/Bucharest' }))
@@ -376,7 +378,19 @@ function VedereCumulat({ runda, cumulat, onSchimbare, profile, setMesaj, aprobar
           .update({ status_linie: nou === 'primita' ? 'primita' : 'comandata' })
           .eq('runda_id', runda.id).neq('status_linie','taiata')
       }
-      setMesaj({ tip:'success', text:'Runda a trecut în: ' + nou })
+      if (nou === 'primita') {
+        // Notificare „marfa a sosit" către cei care au cerut — dedup pe server (necesar_notif_log).
+        try {
+          const { data: notif } = await supabase.functions.invoke('necesar-notificari', {
+            body: { actiune: 'sosire', runda_id: runda.id },
+          })
+          setMesaj({ tip:'success', text:`Marfa marcată ca primită · notificări trimise: ${notif?.trimise ?? 0}` })
+        } catch {
+          setMesaj({ tip:'warn', text:'Marfa marcată ca primită, dar notificarea pe email nu a plecat.' })
+        }
+      } else {
+        setMesaj({ tip:'success', text:'Runda a trecut în: ' + nou })
+      }
       onSchimbare()
     } catch (e) { setMesaj({ tip:'error', text:'Eroare: ' + (e.message || e) }) }
     finally { setLucrez(false) }
@@ -449,6 +463,8 @@ function VedereCumulat({ runda, cumulat, onSchimbare, profile, setMesaj, aprobar
                     {r.articol}
                     {r.din_text_liber && <span style={{marginLeft:7, fontSize:9, fontWeight:800, color:G.purple}}>LIBER</span>}
                     {r.are_urgent && <span style={{marginLeft:7, fontSize:9, fontWeight:800, color:G.red}}>URGENT</span>}
+                    <a href={linkFreshful(r.articol)} target="_blank" rel="noreferrer" title="Caută în Freshful"
+                       style={{marginLeft:8, fontSize:10, color:G.green, textDecoration:'none', fontWeight:700}}>🔍 Freshful</a>
                   </div>
                   <div style={{fontSize:15, fontWeight:800, color:G.orange, textAlign:'right', fontVariantNumeric:'tabular-nums'}}>
                     {fmtCant(r.cantitate_totala)} <span style={{fontSize:11, color:G.muted, fontWeight:600}}>{r.um}</span>
