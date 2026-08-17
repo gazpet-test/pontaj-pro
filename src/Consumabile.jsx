@@ -618,11 +618,13 @@ export default function Consumabile({ profile, embedded = false }) {
   const [sumar, setSumar]       = useState([])
   const [setari, setSetari]     = useState({})
 
-  // Gestionează = owner sau cine are acces la administrativ/achiziții.
+  // Gestionează = owner, acces administrativ/achiziții, sau cheia granulară 'consumabile'
+  // (dă doar Cumulat & comandă aici, fără să deschidă modulul Administrativ).
   const canManage = useMemo(() => {
     if (profile?.is_owner) return true
     const ma = profile?.module_access || []
-    return ma.some(m => m === 'administrativ' || m.startsWith('administrativ.') || m === 'achizitii')
+    return ma.some(m => m === 'administrativ' || m.startsWith('administrativ.') || m === 'achizitii'
+                     || m === 'consumabile' || m.startsWith('consumabile.'))
   }, [profile])
 
   const aprobareActiva = setari.aprobare_activa === 'true'
