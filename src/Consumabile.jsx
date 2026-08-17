@@ -46,6 +46,8 @@ const UM_OPTIUNI = ['buc','top','set','cutie','pachet','bax','rola','kg','l','pe
 const fmtData = (d) => d ? new Date(String(d).slice(0,10)+'T00:00:00').toLocaleDateString('ro-RO',{day:'2-digit',month:'short',year:'numeric'}) : '—'
 const fmtLuna = (d) => d ? new Date(String(d).slice(0,10)+'T00:00:00').toLocaleDateString('ro-RO',{month:'long',year:'numeric'}) : '—'
 const fmtCant = (n) => Number(n) % 1 === 0 ? String(Number(n)) : Number(n).toFixed(2)
+// Căutare directă în Freshful (livrează în Ploiești, factură pe firmă) — fără parantezele de ambalaj.
+const linkFreshful = (den) => 'https://www.freshful.ro/search?q=' + encodeURIComponent(String(den || '').replace(/\s*\([^)]*\)/g, '').trim())
 
 // Ora României, nu ora serverului — altfel deadline-ul de joi 16:00 se mută.
 const acumRO = () => new Date(new Date().toLocaleString('en-US', { timeZone:'Europe/Bucharest' }))
@@ -461,6 +463,8 @@ function VedereCumulat({ runda, cumulat, onSchimbare, profile, setMesaj, aprobar
                     {r.articol}
                     {r.din_text_liber && <span style={{marginLeft:7, fontSize:9, fontWeight:800, color:G.purple}}>LIBER</span>}
                     {r.are_urgent && <span style={{marginLeft:7, fontSize:9, fontWeight:800, color:G.red}}>URGENT</span>}
+                    <a href={linkFreshful(r.articol)} target="_blank" rel="noreferrer" title="Caută în Freshful"
+                       style={{marginLeft:8, fontSize:10, color:G.green, textDecoration:'none', fontWeight:700}}>🔍 Freshful</a>
                   </div>
                   <div style={{fontSize:15, fontWeight:800, color:G.orange, textAlign:'right', fontVariantNumeric:'tabular-nums'}}>
                     {fmtCant(r.cantitate_totala)} <span style={{fontSize:11, color:G.muted, fontWeight:600}}>{r.um}</span>
