@@ -376,7 +376,19 @@ function VedereCumulat({ runda, cumulat, onSchimbare, profile, setMesaj, aprobar
           .update({ status_linie: nou === 'primita' ? 'primita' : 'comandata' })
           .eq('runda_id', runda.id).neq('status_linie','taiata')
       }
-      setMesaj({ tip:'success', text:'Runda a trecut în: ' + nou })
+      if (nou === 'primita') {
+        // Notificare „marfa a sosit" către cei care au cerut — dedup pe server (necesar_notif_log).
+        try {
+          const { data: notif } = await supabase.functions.invoke('necesar-notificari', {
+            body: { actiune: 'sosire', runda_id: runda.id },
+          })
+          setMesaj({ tip:'success', text:`Marfa marcată ca primită · notificări trimise: ${notif?.trimise ?? 0}` })
+        } catch {
+          setMesaj({ tip:'warn', text:'Marfa marcată ca primită, dar notificarea pe email nu a plecat.' })
+        }
+      } else {
+        setMesaj({ tip:'success', text:'Runda a trecut în: ' + nou })
+      }
       onSchimbare()
     } catch (e) { setMesaj({ tip:'error', text:'Eroare: ' + (e.message || e) }) }
     finally { setLucrez(false) }
