@@ -16,6 +16,7 @@ import ContracteComerciale from './ContracteComerciale.jsx'
 import DashboardSubcontractori from './DashboardSubcontractori.jsx'
 import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 import Consumabile from './Consumabile.jsx'
+import LocatiiInchiriate from './LocatiiInchiriate.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -781,6 +782,7 @@ export default function AdministrativPage() {
 
   const tabs = [
     { key: 'consumabile', icon: '🛒', label: 'Consumabile birou' },
+    { key: 'locatii',    icon: '🏠', label: 'Locații închiriate' },
     { key: 'documente',  icon: '📁', label: 'Documente firmă' },
     { key: 'furnizori',  icon: '🏢', label: 'Furnizori' },
     { key: 'ticketing',  icon: '🎫', label: 'Ticketing' },
@@ -824,6 +826,9 @@ export default function AdministrativPage() {
           vederea de gestiune (cumulat + comandă). Ruta liberă e pentru toți. */}
       {tab === 'consumabile' && <Consumabile profile={profile} embedded={true} />}
 
+      {/* Locații închiriate — apartamente cazare + puncte de lucru: chirie + utilități */}
+      {tab === 'locatii' && <LocatiiInchiriate profile={profile} />}
+
       {/* Tab Costuri AI (real, nu placeholder) */}
       {tab === 'costuri_ai' && isOwner && <TabCosturiAI />}
 
@@ -846,7 +851,7 @@ export default function AdministrativPage() {
       {tab === 'furnizori' && <FurnizoriTab />}
 
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && tab !== 'locatii' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'contracte' && '📜'}
