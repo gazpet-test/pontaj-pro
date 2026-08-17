@@ -940,6 +940,7 @@ function HomeDashboard() {
     { path:'/administrativ', icon:'🏢', label:'Administrativ',color:'#F0883E',desc:'Documente · Furnizori · Active', active:true, requireModule:'administrativ' },
     { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'hr' },
     { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
+    { path:'/consumabile', icon:'🛒', label:'Consumabile', color:'#F0883E', desc:'Papetărie · Protocol · Curățenie · IT', active:true },
     { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true },
     { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'] },
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'] },
