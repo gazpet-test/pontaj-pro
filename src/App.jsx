@@ -10,6 +10,7 @@ import SedintePage from './SedintePage.jsx'
 import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
+import Consumabile from './Consumabile.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import BugReportButton from './BugReportButton.jsx'
@@ -100,6 +101,13 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
   if (salaryAccess && !profile?.can_access_salarii && !profile?.is_owner) return <Navigate to="/" replace />
   if (requireModule && !hasModuleAccess(profile, requireModule)) return <Navigate to="/" replace />
   return children
+}
+
+// Consumabile are nevoie de profile (cine cere, ce locații are voie, dacă
+// gestionează). Rutele nu primesc props, deci îl iau aici din context.
+function ConsumabileRoute() {
+  const { profile } = useAuth()
+  return <Consumabile profile={profile} />
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -698,6 +706,7 @@ function Layout({ children }) {
     ...(hasModuleAccess(profile, 'hr') ? [{p:'/hr',i:'👥',l:'HR'}] : []),
     ...(hasModuleAccess(profile, 'administrativ') ? [{p:'/administrativ',i:'🏢',l:'Administrativ'}] : []),
     { p:'/tichete', i:'🎫', l:'Tichete' },
+    { p:'/consumabile', i:'🛒', l:'Consumabile' },
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
     ...(isSuperAdmin || profile?.can_modify_employees === true ? [{p:'/admin',i:'⚙️',l:'Admin'}] : []),
   ]
@@ -8281,6 +8290,9 @@ export default function App() {
         <Route path="/executie" element={<ProtectedRoute><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
         <Route path="/financiar" element={<ProtectedRoute><Layout><FinanciarPage/></Layout></ProtectedRoute>}/>
         <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
+        {/* Consumabile birou: fără requireModule — e cerința explicită să ajungă
+            toată lumea, iar modulul Administrativ are doar 6 utilizatori. */}
+        <Route path="/consumabile" element={<ProtectedRoute><Layout><ConsumabileRoute/></Layout></ProtectedRoute>}/>
         {/* ════════════ Etapa 15 Faza 1: Routes module Comercial ════════════ */}
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
