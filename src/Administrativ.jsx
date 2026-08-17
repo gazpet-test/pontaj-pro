@@ -755,7 +755,7 @@ function FurnizoriTab() {
 // ===========================================================================
 
 export default function AdministrativPage() {
-  const [tab, setTab] = useState('documente')
+  const [tabDorit, setTab] = useState('documente')
   const [profile, setProfile] = useState(null)
   const [loadingProfile, setLoadingProfile] = useState(true)
 
@@ -779,6 +779,10 @@ export default function AdministrativPage() {
 
   const isOwner = profile?.is_owner === true
   const canManageContracts = profile?.can_manage_contracts === true
+  const accesTot = isOwner || (profile?.module_access || []).includes('administrativ')
+  const subTaburi = (profile?.module_access || [])
+    .filter(m => m.startsWith('administrativ.'))
+    .map(m => m.slice('administrativ.'.length))
 
   const tabs = [
     { key: 'consumabile', icon: '🛒', label: 'Consumabile birou' },
@@ -791,6 +795,12 @@ export default function AdministrativPage() {
     { key: 'subcontractori', icon: '🔗', label: 'Dashboard subcontractori' },
     { key: 'costuri_ai', icon: '💰', label: 'Costuri AI', ownerOnly: true },
   ].filter(t => !t.ownerOnly || isOwner)
+   // Acces granular: cheia 'administrativ' deschide tot modulul, iar
+   // 'administrativ.<tab>' doar tab-ul respectiv (ruta acceptă deja sub-modulele).
+   .filter(t => accesTot || subTaburi.includes(t.key))
+
+  // Tab-ul afișat e cel cerut doar dacă e permis; altfel primul disponibil.
+  const tab = tabs.some(t => t.key === tabDorit) ? tabDorit : (tabs[0]?.key || '')
 
   return (
     <div style={S.page}>
