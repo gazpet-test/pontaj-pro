@@ -574,6 +574,22 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
     } catch (e) { showToast('Eroare ZIP: ' + (e.message || e), 'error') }
     finally { setExporting(null) }
   }
+
+  // PDF unic pentru anexa propunerii tehnice: opis + toate scan-urile lipite.
+  // Generarea se face server-side (edge fn anexe-sudori, pdf-lib în Deno —
+  // pdf-lib în frontend e interzis de anti-bug-ul cu Vercel/Rollup).
+  const exportAnexaPdf = async () => {
+    setExporting('pdf')
+    try {
+      const { data, error } = await supabase.functions.invoke('anexe-sudori', { body: {} })
+      if (error) throw error
+      if (!data?.ok) throw new Error(data?.error || 'necunoscut')
+      window.open(data.url, '_blank')
+      showToast(`Anexă generată: ${data.sudori_in_anexa} autorizații · ${data.pagini} pagini` +
+        (data.sarite?.length ? ` · ⚠️ sărite: ${data.sarite.length}` : ''), data.sarite?.length ? 'warning' : 'success')
+    } catch (e) { showToast('Eroare anexă: ' + (e.message || e), 'error') }
+    finally { setExporting(null) }
+  }
   
   return (
     <div>
@@ -586,6 +602,11 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
         <button onClick={exportSudoriZip} disabled={!!exporting}
           style={{padding:'7px 13px', background:'transparent', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
           {exporting === 'zip' ? 'Se adună…' : '🗂'} Scan-uri sudori (ZIP)
+        </button>
+        <button onClick={exportAnexaPdf} disabled={!!exporting}
+          title="Un singur PDF: opis + toate scan-urile autorizațiilor valide — anexa propunerii tehnice"
+          style={{padding:'7px 13px', background:'transparent', color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
+          {exporting === 'pdf' ? 'Se generează…' : '📎'} Anexă PDF (opis + scan-uri)
         </button>
       </div>
       {/* === CHIP-URI FILTRU pe TIP DOCUMENT === */}
