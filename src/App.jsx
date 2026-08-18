@@ -930,7 +930,7 @@ function HomeDashboard() {
 
   const allModules = [
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
-    { path:'/financiar', icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi emise · Generator · Email · NAS', active:true },
+    { path:'/financiar', icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi emise · Generator · Email · NAS', active:true, requireModule:'financiar' },
     { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
     { path:'/ofertare', icon:'📋', label:'Ofertare',    color:'#3FB6E2', desc:'Cereri ofertă · Licitații · Calculații', active:true, requireModule:'ofertare' },
     { path:'/magazie',  icon:'📦', label:'Magazie',     color:'#FF7B72', desc:'Stocuri · Inventar · Materiale',   active:true, requireModule:'magazie' },
@@ -8289,7 +8289,7 @@ export default function App() {
         <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
         <Route path="/executie" element={<ProtectedRoute><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
-        <Route path="/financiar" element={<ProtectedRoute><Layout><FinanciarPage/></Layout></ProtectedRoute>}/>
+        <Route path="/financiar" element={<ProtectedRoute requireModule="financiar"><Layout><FinanciarPage/></Layout></ProtectedRoute>}/>
         <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
         {/* Consumabile birou: fără requireModule — e cerința explicită să ajungă
             toată lumea, iar modulul Administrativ are doar 6 utilizatori. */}
