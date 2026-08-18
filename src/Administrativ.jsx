@@ -765,12 +765,16 @@ export default function AdministrativPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (cancelled) return
       if (user) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('id, name, email, is_owner, can_manage_contracts')
-          .eq('id', user.id)
-          .single()
-        setProfile(data)
+        // module_access stă în alt tabel — fără el, filtrarea tab-urilor de mai jos
+        // ar da listă goală pentru oricine nu e owner.
+        const [{ data }, { data: ma }] = await Promise.all([
+          supabase.from('profiles')
+            .select('id, name, email, is_owner, can_manage_contracts')
+            .eq('id', user.id).single(),
+          supabase.from('user_module_access').select('module').eq('profile_id', user.id),
+        ])
+        if (cancelled) return
+        setProfile(data ? { ...data, module_access: (ma || []).map(x => x.module) } : null)
       }
       setLoadingProfile(false)
     })()
@@ -801,6 +805,23 @@ export default function AdministrativPage() {
 
   // Tab-ul afișat e cel cerut doar dacă e permis; altfel primul disponibil.
   const tab = tabs.some(t => t.key === tabDorit) ? tabDorit : (tabs[0]?.key || '')
+
+  // Cât se încarcă profilul nu știm încă ce tab-uri are omul — fără asta ar
+  // clipi placeholderul „ÎN CURÂND" înainte să apară tab-urile reale.
+  if (loadingProfile) {
+    return <div style={{...S.page, color:G.muted, fontSize:14, paddingTop:40}}>Se încarcă…</div>
+  }
+  if (!tabs.length) {
+    return (
+      <div style={{...S.page, paddingTop:40}}>
+        <div style={{...S.card, padding:'30px 24px', textAlign:'center'}}>
+          <div style={{fontSize:34, marginBottom:10}}>🔒</div>
+          <div style={{fontSize:15, fontWeight:700, marginBottom:6}}>Nu ai acces la niciun tab din Administrativ</div>
+          <div style={{fontSize:12, color:G.muted}}>Cere-i lui Razvan acces din Admin → Utilizatori.</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={S.page}>
