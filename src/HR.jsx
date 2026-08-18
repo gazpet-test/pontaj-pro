@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import * as XLSX from 'xlsx-js-style'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
 import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
@@ -508,9 +509,85 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
     if (error) showToast('Eroare: ' + error.message, 'error')
     else { showToast(`🗑 Mutată în Coș: ${a.tip_denumire}`); onReload() }
   }
+
+  // === Export sudori pentru propuneri tehnice (tabel XLSX + scan-uri ZIP) ===
+  // Sursa: v_sudori_pentru_oferte — aceeași pe care o interoghează și instanța
+  // Claude care lucrează propunerea; exportul de aici e varianta „de mână".
+  const [exporting, setExporting] = useState(null)
+
+  const numeFisier = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 _-]/g, '').trim().replace(/\s+/g, '_')
+
+  const exportSudoriXlsx = async () => {
+    setExporting('xlsx')
+    try {
+      const { data, error } = await supabase.from('v_sudori_pentru_oferte').select('*')
+        .order('categorie').order('nume_prenume')
+      if (error) throw error
+      if (!data?.length) { showToast('Niciun sudor în evidență', 'warning'); return }
+      const rows = data.map(r => ({
+        'Nume Prenume': r.nume_prenume, 'Categorie': r.categorie,
+        'Nr. autorizație': r.numar_autorizatie || '—', 'Emitent': r.emitent || '—',
+        'Valabilitate': r.fara_expirare ? 'fără expirare' : (r.data_expirare || '—'),
+        'Status': r.status, 'Procedeu': r.procedeu_sudura || '—',
+        'Diametru țeavă (mm)': r.diametru_teava_mm || '—', 'Calitate material': r.calitate_material || '—',
+      }))
+      const ws = XLSX.utils.json_to_sheet(rows)
+      ws['!cols'] = [{wch:28},{wch:20},{wch:16},{wch:12},{wch:14},{wch:12},{wch:12},{wch:18},{wch:18}]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Sudori')
+      XLSX.writeFile(wb, `Sudori_autorizati_${new Date().toISOString().slice(0,10)}.xlsx`)
+      const faraNr = data.filter(r => !r.numar_autorizatie).length
+      showToast(`${data.length} sudori exportați` + (faraNr ? ` · ⚠️ ${faraNr} fără număr de autorizație` : ''), faraNr ? 'warning' : 'success')
+    } catch (e) { showToast('Eroare export: ' + (e.message || e), 'error') }
+    finally { setExporting(null) }
+  }
+
+  const exportSudoriZip = async () => {
+    setExporting('zip')
+    try {
+      const { data, error } = await supabase.from('v_sudori_pentru_oferte').select('*')
+        .eq('status', 'valid').order('categorie').order('nume_prenume')
+      if (error) throw error
+      const cuScan = (data || []).filter(r => r.fisier_path)
+      if (!cuScan.length) { showToast('Niciun scan de autorizație la sudorii valizi', 'warning'); return }
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
+      let ok = 0
+      for (const r of cuScan) {
+        const { data: su, error: sErr } = await supabase.storage.from('autorizatii').createSignedUrl(r.fisier_path, 300)
+        if (sErr) continue
+        const resp = await fetch(su.signedUrl)
+        if (!resp.ok) continue
+        const ext = (r.fisier_path.split('.').pop() || 'pdf').toLowerCase()
+        zip.folder(numeFisier(r.categorie))
+           .file(`${numeFisier(r.nume_prenume)}${r.numar_autorizatie ? '_' + numeFisier(r.numar_autorizatie) : ''}.${ext}`, await resp.blob())
+        ok++
+      }
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `Scanuri_sudori_${new Date().toISOString().slice(0,10)}.zip`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      const faraScan = (data || []).length - cuScan.length
+      showToast(`${ok} scan-uri în ZIP` + (faraScan ? ` · ⚠️ ${faraScan} sudori valizi fără scan` : ''), faraScan ? 'warning' : 'success')
+    } catch (e) { showToast('Eroare ZIP: ' + (e.message || e), 'error') }
+    finally { setExporting(null) }
+  }
   
   return (
     <div>
+      {/* Export sudori pt propuneri tehnice: tabelul + scan-urile (anexele fizice) */}
+      <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginBottom:10}}>
+        <button onClick={exportSudoriXlsx} disabled={!!exporting}
+          style={{padding:'7px 13px', background:'transparent', color:G.green, border:`1px solid ${G.green}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
+          {exporting === 'xlsx' ? '…' : '📤'} Export sudori (XLSX)
+        </button>
+        <button onClick={exportSudoriZip} disabled={!!exporting}
+          style={{padding:'7px 13px', background:'transparent', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
+          {exporting === 'zip' ? 'Se adună…' : '🗂'} Scan-uri sudori (ZIP)
+        </button>
+      </div>
       {/* === CHIP-URI FILTRU pe TIP DOCUMENT === */}
       {(() => {
         const tipCountsAll = autorizatii.reduce((acc, a) => {
