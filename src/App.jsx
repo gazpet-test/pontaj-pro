@@ -941,7 +941,7 @@ function HomeDashboard() {
     { path:'/hr',       icon:'👥', label:'HR',           color:'#EC6CB9', desc:'Personal · Autorizații · Training',  active:true, requireModule:'hr' },
     { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
     { path:'/consumabile', icon:'🛒', label:'Consumabile', color:'#F0883E', desc:'Papetărie · Protocol · Curățenie · IT', active:true },
-    { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true },
+    { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true, requireModule:'executie' },
     { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'] },
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'] },
   ]
@@ -8288,7 +8288,7 @@ export default function App() {
         <Route path="/logistica" element={<ProtectedRoute requireModule="logistica"><Layout><LogisticaPage/></Layout></ProtectedRoute>}/>
         <Route path="/hr" element={<ProtectedRoute requireModule="hr"><Layout><HRPage/></Layout></ProtectedRoute>}/>
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
-        <Route path="/executie" element={<ProtectedRoute><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
+        <Route path="/executie" element={<ProtectedRoute requireModule="executie"><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
         <Route path="/financiar" element={<ProtectedRoute requireModule="financiar"><Layout><FinanciarPage/></Layout></ProtectedRoute>}/>
         <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
         {/* Consumabile birou: fără requireModule — e cerința explicită să ajungă
