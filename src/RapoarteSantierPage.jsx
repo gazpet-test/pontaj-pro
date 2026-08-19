@@ -65,14 +65,14 @@ export default function RapoarteSantierPage() {
       if (!user) { setLoadingInit(false); return }
       const { data: prof } = await supabase.from('profiles').select('id, name, role, is_owner').eq('id', user.id).maybeSingle()
       setProfile(prof || null)
-      const { data: toate } = await supabase.from('sites').select('id, name, beneficiar_principal, active, raport_zilnic_necesar').order('name')
+      const { data: toate } = await supabase.from('sites').select('id, name, beneficiar_principal, active, raport_zilnic_necesar, tip_locatie').order('name')
       const active = (toate || []).filter(s => s.active)
       setAllSites(active)
       const vedeTot = prof?.is_owner || prof?.role === 'contabilitate'
       if (vedeTot) {
         setSites(active)
       } else {
-        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, raport_zilnic_necesar)').eq('profile_id', user.id)
+        const { data: ps } = await supabase.from('profile_sites').select('site_id, sites(id, name, beneficiar_principal, raport_zilnic_necesar, tip_locatie)').eq('profile_id', user.id)
         setSites((ps || []).map(r => r.sites).filter(Boolean).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
       }
       setLoadingInit(false)
@@ -111,6 +111,14 @@ export default function RapoarteSantierPage() {
 
   // ── export (Faza 4) ──
   const siteSelectatId = tab === 'istoric' ? (istoricSite ? Number(istoricSite) : null) : (filtruSite ? Number(filtruSite) : null)
+
+  // Parc Auto nu trimite rapoarte zilnice — raportul lui e fluxul problemelor
+  // din Logistică → Probleme Parc (deschise/rezolvate/sold pe interval).
+  const parcSelectat = useMemo(() => {
+    if (!siteSelectatId) return false
+    const s = sites.find(x => x.id === siteSelectatId) || allSites.find(x => x.id === siteSelectatId)
+    return s?.tip_locatie === 'parc_auto'
+  }, [siteSelectatId, sites, allSites])
   const listaExport = tab === 'istoric' ? istoricRapoarte : rapoarte
   const titluExport = siteSelectatId ? siteName(siteSelectatId) : 'Toate șantierele'
 
@@ -198,8 +206,8 @@ export default function RapoarteSantierPage() {
             }}>{p.l}</button>
           ))}
         </div>
-        {/* export */}
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+        {/* export — pe Parc Auto nu au sens (raportul lui vine din Probleme Parc) */}
+        {!parcSelectat && <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
           <button onClick={doExportExcel} disabled={!!exporting} title="Exportă rapoartele filtrate în Excel" style={{
             background: G.green + '18', color: G.green, border: `1px solid ${G.green}44`, borderRadius: 8, padding: '8px 13px',
             fontSize: 13, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: exporting ? .6 : 1,
@@ -208,7 +216,7 @@ export default function RapoarteSantierPage() {
             background: G.red + '18', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 8, padding: '8px 13px',
             fontSize: 13, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: exporting ? .6 : 1,
           }}>{exporting === 'pdf' ? '…' : '⬇ PDF sumar'}</button>
-        </div>
+        </div>}
       </div>
 
       {exportErr && (
@@ -220,6 +228,8 @@ export default function RapoarteSantierPage() {
       {/* conținut */}
       {loading ? (
         <div style={{ color: G.dim, textAlign: 'center', padding: 50 }}>Se încarcă rapoartele…</div>
+      ) : parcSelectat ? (
+        <FluxProblemeParc from={from} to={to} />
       ) : tab === 'lista' ? (
         <ListaRapoarte rapoarte={rapoarte} siteName={siteName} onOpen={setDetaliu} />
       ) : (
@@ -460,4 +470,120 @@ function Text({ v, color }) {
 }
 function Empty({ text }) {
   return <div style={{ color: G.dim, textAlign: 'center', padding: 50, fontSize: 14 }}>{text}</div>
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PARC AUTO — raportul e fluxul problemelor (19.08.2026)
+// Parcul nu trimite rapoarte zilnice; Mitrache & Dani lucrează în Logistică →
+// Probleme Parc. Aici e vederea de urmărire pe interval: ce s-a deschis nou,
+// ce s-a rezolvat (cu rezolvarea), ce rămâne în sold + mișcările din jurnal.
+// ═══════════════════════════════════════════════════════════════════════════
+const PR_STATUS = {
+  deschisa: { l: 'Deschisă', c: '#F0883E' }, in_lucru: { l: 'În lucru', c: '#58A6FF' },
+  asteapta_piese: { l: 'Așteaptă piese', c: '#D29922' }, asteapta_service: { l: 'Așteaptă service', c: '#BC8CFF' },
+  rezolvata: { l: 'Rezolvată', c: '#2EA043' }, anulata: { l: 'Anulată', c: '#6E7681' },
+}
+const PR_SEV = { blocant: '#F85149', major: '#F0883E', minor: '#8B949E' }
+const PR_OPEN = ['deschisa', 'in_lucru', 'asteapta_piese', 'asteapta_service']
+
+function FluxProblemeParc({ from, to }) {
+  const [probleme, setProbleme] = useState([])
+  const [jurnal, setJurnal] = useState([])
+  const [loadingP, setLoadingP] = useState(true)
+
+  useEffect(() => {
+    let cancel = false
+    ;(async () => {
+      setLoadingP(true)
+      const [{ data: pr }, { data: jr }] = await Promise.all([
+        supabase.from('logistica_probleme')
+          .select('id, titlu, status, severitate, locatie, asteapta, cost_estimat, data_deschidere, data_rezolvare, rezolvare, sursa, extern, activ:logistica_active(marca, model, nr_inmatriculare), scula:magazie_echipamente(denumire)')
+          .order('data_deschidere', { ascending: false }),
+        supabase.from('logistica_probleme_jurnal')
+          .select('id, problema_id, data, text, status_nou, created_at')
+          .gte('data', from).lte('data', to)
+          .order('data', { ascending: false }).order('created_at', { ascending: false }).limit(60),
+      ])
+      if (cancel) return
+      setProbleme(pr || []); setJurnal(jr || []); setLoadingP(false)
+    })()
+    return () => { cancel = true }
+  }, [from, to])
+
+  const utilajLbl = (p) => p.activ
+    ? [[p.activ.marca, p.activ.model].filter(Boolean).join(' '), p.activ.nr_inmatriculare].filter(Boolean).join(' · ')
+    : (p.scula?.denumire || p.extern || '—')
+
+  const noi = useMemo(() => probleme.filter(p => p.data_deschidere >= from && p.data_deschidere <= to), [probleme, from, to])
+  const rezolvate = useMemo(() => probleme.filter(p => p.data_rezolvare && p.data_rezolvare >= from && p.data_rezolvare <= to), [probleme, from, to])
+  const sold = useMemo(() => probleme.filter(p => PR_OPEN.includes(p.status)), [probleme])
+  const blocante = useMemo(() => sold.filter(p => p.severitate === 'blocant'), [sold])
+  const costSold = useMemo(() => sold.reduce((s, p) => s + (Number(p.cost_estimat) || 0), 0), [sold])
+  const titluPr = useMemo(() => Object.fromEntries(probleme.map(p => [p.id, `${p.titlu} (${utilajLbl(p)})`])), [probleme])
+
+  if (loadingP) return <div style={{ color: G.dim, textAlign: 'center', padding: 50 }}>Se încarcă problemele parcului…</div>
+
+  const card = { background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, overflow: 'hidden', marginBottom: 14 }
+  const cardHead = (icon, txt, n, color) => (
+    <div style={{ padding: '11px 16px', background: G.bg, borderBottom: `1px solid ${G.border}`, fontSize: 13, fontWeight: 800, color, display: 'flex', gap: 8, alignItems: 'center' }}>
+      <span>{icon}</span><span>{txt}</span><span style={{ color: G.dim, fontWeight: 600 }}>({n})</span>
+    </div>
+  )
+  const chip = (txt, c) => <span style={{ fontSize: 10, fontWeight: 800, color: c, background: c + '1C', border: `1px solid ${c}44`, borderRadius: 5, padding: '2px 7px', whiteSpace: 'nowrap' }}>{txt}</span>
+  const fmtD = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('ro-RO', { day: '2-digit', month: 'short' }) : '—'
+
+  const randProblema = (p, aratRezolvare) => (
+    <div key={p.id} style={{ padding: '10px 16px', borderBottom: `1px solid ${G.border}22`, display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{utilajLbl(p)}</div>
+        <div style={{ fontSize: 12, color: G.muted, marginTop: 2 }}>{p.titlu}</div>
+        {aratRezolvare && p.rezolvare && <div style={{ fontSize: 12, color: '#2EA043', marginTop: 3 }}>✔ {p.rezolvare}</div>}
+        {!aratRezolvare && p.asteapta && <div style={{ fontSize: 11, color: G.dim, marginTop: 3 }}>⏳ Așteaptă: {p.asteapta}</div>}
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        {p.severitate && chip(p.severitate.toUpperCase(), PR_SEV[p.severitate] || G.muted)}
+        {chip((PR_STATUS[p.status] || {}).l || p.status, (PR_STATUS[p.status] || {}).c || G.muted)}
+        {p.sursa === 'raport' && chip('DIN RAPORT ȘANTIER', '#58A6FF')}
+        <span style={{ fontSize: 11, color: G.dim }}>{aratRezolvare ? fmtD(p.data_rezolvare) : fmtD(p.data_deschidere)}</span>
+      </div>
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+        <MiniStat label="Deschise nou în interval" val={noi.length} color="#F0883E" />
+        <MiniStat label="Rezolvate în interval" val={rezolvate.length} color="#2EA043" />
+        <MiniStat label="Sold deschis acum" val={sold.length} color="#58A6FF" />
+        <MiniStat label="Blocante" val={blocante.length} color={blocante.length ? '#F85149' : G.dim} />
+        <MiniStat label="Cost estimat sold" val={costSold ? costSold.toLocaleString('ro-RO') + ' lei' : '—'} color="#D29922" />
+      </div>
+
+      <div style={card}>
+        {cardHead('🆕', 'Probleme deschise nou în interval', noi.length, '#F0883E')}
+        {noi.length === 0 ? <Empty text="Nicio problemă nouă în intervalul selectat. 🎉" /> : noi.map(p => randProblema(p, false))}
+      </div>
+
+      <div style={card}>
+        {cardHead('✅', 'Rezolvate în interval', rezolvate.length, '#2EA043')}
+        {rezolvate.length === 0 ? <Empty text="Nimic rezolvat în intervalul selectat." /> : rezolvate.map(p => randProblema(p, true))}
+      </div>
+
+      <div style={card}>
+        {cardHead('📓', 'Mișcări în jurnal (interval)', jurnal.length, '#BC8CFF')}
+        {jurnal.length === 0 ? <Empty text="Nicio mișcare în jurnal în interval." /> : jurnal.map(j => (
+          <div key={j.id} style={{ padding: '8px 16px', borderBottom: `1px solid ${G.border}22`, fontSize: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <span style={{ color: G.dim, whiteSpace: 'nowrap' }}>{fmtD(j.data)}</span>
+            <span style={{ color: G.text, fontWeight: 600, flex: '0 1 auto' }}>{titluPr[j.problema_id] || `#${j.problema_id}`}</span>
+            <span style={{ color: G.muted, flex: '1 1 240px' }}>{j.text}</span>
+            {j.status_nou && chip((PR_STATUS[j.status_nou] || {}).l || j.status_nou, (PR_STATUS[j.status_nou] || {}).c || G.muted)}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 12, color: G.dim, textAlign: 'center', padding: '4px 0 10px' }}>
+        Lucrul efectiv pe probleme (rezolvare, piese, jurnal) se face în <b>Logistică → Probleme Parc</b> — aici e doar urmărirea.
+      </div>
+    </div>
+  )
 }

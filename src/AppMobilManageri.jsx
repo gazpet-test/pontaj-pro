@@ -354,6 +354,8 @@ function RaportZilnic({ profile, sites, onBack }) {
         const defecte = utilaje.filter(u => u.active_id && u.stare === 'nefunctional')
         if (defecte.length) {
           const ids = defecte.map(u => u.active_id)
+          const numeSite = sites.find(s => s.id === siteId)?.name || ''
+          const ticheteNoi = {}   // activ_id → tichet_id creat acum (se leagă la problema de parc)
           await supabase.from('logistica_active').update({ stare: 'Nefunctional' }).in('id', ids)
           // dedup: nu deschidem alt tichet dacă există deja unul deschis pe activ
           const { data: deschise } = await supabase.from('tichete')
@@ -365,7 +367,6 @@ function RaportZilnic({ profile, sites, onBack }) {
             const { data: mit } = await supabase.from('profiles').select('id').ilike('name', '%mitrache%').limit(1).maybeSingle()
             const { data: ultim } = await supabase.from('tichete').select('numar_tichet').order('id', { ascending: false }).limit(1).maybeSingle()
             let nrCrt = parseInt(String(ultim?.numar_tichet || '').replace(/\D/g, '')) % 10000 || 0
-            const numeSite = sites.find(s => s.id === siteId)?.name || ''
             let create = 0
             for (const u of deDeschis) {
               nrCrt += 1
@@ -386,11 +387,49 @@ function RaportZilnic({ profile, sites, onBack }) {
               if (tErr) { console.error('Tichet utilaj defect:', tErr.message) }
               else {
                 create += 1
+                ticheteNoi[u.active_id] = t.id
                 if (mit?.id) await supabase.from('tichete_asignati').insert({ tichet_id: t.id, profile_id: mit.id }).then(({ error: aErr }) => { if (aErr) console.error('Asignare tichet:', aErr.message) })
               }
             }
             if (create) tichetInfo = ` 🎫 ${create} tichet${create > 1 ? 'e' : ''} deschis${create > 1 ? 'e' : ''} la Logistică pt. utilaje defecte.`
           }
+
+          // ── Probleme Parc (19.08): aceleași utilaje intră și în fluxul mecanicilor ──
+          // Dedup: dacă utilajul are deja o problemă nerezolvată, doar notăm în jurnal
+          // (o singură dată pe zi — upsert-ul raportului poate rula de mai multe ori).
+          const { data: prDeschise } = await supabase.from('logistica_probleme')
+            .select('id, activ_id').in('activ_id', ids)
+            .in('status', ['deschisa', 'in_lucru', 'asteapta_piese', 'asteapta_service'])
+          const prMap = Object.fromEntries((prDeschise || []).map(p => [p.activ_id, p.id]))
+          let prNoi = 0
+          for (const u of defecte) {
+            const motiv = (u.motiv || '').trim()
+            if (prMap[u.active_id]) {
+              const { data: dejaAzi } = await supabase.from('logistica_probleme_jurnal')
+                .select('id').eq('problema_id', prMap[u.active_id]).eq('data', azi())
+                .like('text', 'Semnalat din raportul zilnic%').limit(1)
+              if (!dejaAzi?.length) {
+                await supabase.from('logistica_probleme_jurnal').insert({
+                  problema_id: prMap[u.active_id], data: azi(),
+                  text: `Semnalat din raportul zilnic${numeSite ? ' — ' + numeSite : ''}${motiv ? ': ' + motiv : ''}`,
+                  created_by: user?.id || null,
+                })
+              }
+            } else {
+              const { error: prErr } = await supabase.from('logistica_probleme').insert({
+                activ_id: u.active_id,
+                titlu: (motiv || `Defect raportat din șantier — ${u.cod || u.nume}`).slice(0, 120),
+                descriere: `Raportat NEFUNCȚIONAL în raportul zilnic din ${azi()}${numeSite ? ' — șantier ' + numeSite : ''}.${motiv ? '\nMotiv: ' + motiv : ''}\nUtilaj: ${[u.cod, u.inmatriculare, u.nume].filter(Boolean).join(' · ')}`,
+                status: 'deschisa', severitate: 'major',
+                locatie: numeSite || null, sursa: 'raport',
+                tichet_id: ticheteNoi[u.active_id] || null,
+                data_deschidere: azi(), created_by: user?.id || null,
+              })
+              if (prErr) console.error('Problema parc:', prErr.message)
+              else prNoi += 1
+            }
+          }
+          if (prNoi) tichetInfo += ` 🔧 ${prNoi} ${prNoi > 1 ? 'probleme noi' : 'problemă nouă'} în Probleme Parc.`
         }
       } catch (e) { console.error('Sync utilaje defecte:', e?.message || e) }
       setMsg({ ok: true, text: (existingId ? '✅ Raport actualizat!' : '✅ Raport trimis cu succes!') + tichetInfo })
