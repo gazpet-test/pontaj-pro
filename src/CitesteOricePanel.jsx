@@ -14,7 +14,7 @@
 //       - financiar → contracte_subcontract_facturi (entitate = furnizor)  [Faza 2 — în curând]
 // ===========================================================================
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { jsPDF } from 'jspdf'
 
@@ -99,6 +99,15 @@ function cuTimeout(promisiune, ms, mesaj) {
 // 'Copie conformă'). HR are coduri identice (match exact); logistică are nume RO cu
 // majuscule/diacritice → normalizare (fără diacritice, fără spații/underscore).
 const normTip = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+// Decizie 19.08 (TKT-2026-0114): sub acest prag de încredere NU pre-selectăm
+// entitatea — omul alege singur (cazul MITITELU PETRONEL → PAUL MARIAN).
+const PRAG_ENTITATE = 70
+function entitateAleasa(row) {
+  if ('_editEntitate' in row) return row._editEntitate
+  if (row.entitate_match_confidence != null && row.entitate_match_confidence < PRAG_ENTITATE) return null
+  return row.entitate_id
+}
+
 function resolveTipCod(rawTip, tipuriFK) {
   if (!rawTip) return ''
   const exact = (tipuriFK || []).find(t => t.cod === rawTip)
@@ -141,7 +150,8 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
   const cfg = MODUL_CFG[modul] || MODUL_CFG.executie
   const meta = MODUL_META[modul] || MODUL_META.executie
 
-  const [view, setView] = useState('upload')            // 'upload' | 'confirm'
+  const [view, setView] = useState('upload')
+  const busyRef = useRef(new Set())   // anti dublu-click, sincron (state-ul busyId nu apucă să se randeze în <100ms)            // 'upload' | 'confirm'
   const [queue, setQueue] = useState([])
   const [entitati, setEntitati] = useState([])          // proiecte / angajați / vehicule
   const [tipuriFK, setTipuriFK] = useState([])          // pt hr/logistica: [{id,cod,denumire}]
@@ -293,11 +303,18 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // ─── CONFIRMARE — dispecer per modul ──────────────────────────
   async function handleConfirm(row) {
-    if (modul === 'executie') return confirmExecutie(row)
-    if (modul === 'hr') return confirmHR(row)
-    if (modul === 'logistica') return confirmLogistica(row)
-    if (modul === 'financiar') return confirmFinanciar(row)
-    flash('err', 'Confirmarea pentru acest modul nu e încă activă.')
+    // Blindaj dublu-click (cazul Mănăilă 18.08: 2 inserturi la 90ms): ref-ul e
+    // sincron, deci al doilea click e refuzat chiar dacă UI-ul n-a apucat să se
+    // re-randeze cu butonul dezactivat.
+    if (busyRef.current.has(row.id)) return
+    busyRef.current.add(row.id)
+    try {
+      if (modul === 'executie') return await confirmExecutie(row)
+      if (modul === 'hr') return await confirmHR(row)
+      if (modul === 'logistica') return await confirmLogistica(row)
+      if (modul === 'financiar') return await confirmFinanciar(row)
+      flash('err', 'Confirmarea pentru acest modul nu e încă activă.')
+    } finally { busyRef.current.delete(row.id) }
   }
 
   // Descarcă fișierul din staging și îl urcă în bucketul destinație. Întoarce destPath.
@@ -317,7 +334,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // ── Execuție (Faza 1, neschimbat) ─────────────────────────────
   async function confirmExecutie(row) {
-    const proiectId = row._editEntitate ?? row.entitate_id
+    const proiectId = entitateAleasa(row)
     const tip = row._editTip ?? row.tip_document
     if (!proiectId) { flash('err', 'Alege proiectul înainte de a confirma.'); return }
     setBusyId(row.id)
@@ -361,13 +378,19 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // ── HR (Faza 2) ───────────────────────────────────────────────
   async function confirmHR(row) {
-    const angajatId = row._editEntitate ?? row.entitate_id
+    const angajatId = entitateAleasa(row)
     const tipCod = row._editTip ?? row.tip_document
     if (!angajatId) { flash('err', 'Alege angajatul înainte de a confirma.'); return }
     const tipRow = tipuriFK.find(t => t.cod === tipCod) || tipuriFK.find(t => t.cod === row.tip_document)
     if (!tipRow) { flash('err', 'Alege tipul documentului (autorizațiile ISCIR/sudură se adaugă din secțiunea Autorizații).'); return }
     setBusyId(row.id)
     try {
+      // Al doilea strat anti-duplicat: același fișier la același angajat nu se
+      // inserează de două ori, indiferent de unde vine click-ul.
+      const { data: dublura } = await supabase.from('hr_documente_personale')
+        .select('id').eq('employee_id', angajatId).eq('fisier_nume', row.fisier_nume)
+        .is('deleted_at', null).limit(1)
+      if (dublura?.length) { flash('err', `„${row.fisier_nume}" există deja la acest angajat — nu îl dublez.`); return }
       const destPath = await mutaFisier(row, cfg.bucket, String(angajatId))
       const dd = row.payload_ai?.date_document || {}
       const dataExp = dd.data_expirare || null
@@ -390,7 +413,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
   // ── Logistică (Faza 2) ────────────────────────────────────────
   async function confirmLogistica(row) {
-    const vehiculId = row._editEntitate ?? row.entitate_id
+    const vehiculId = entitateAleasa(row)
     const tipCod = row._editTip ?? resolveTipCod(row.tip_document, tipuriFK)
     if (!vehiculId) { flash('err', 'Alege vehiculul înainte de a confirma.'); return }
     const tipRow = tipuriFK.find(t => t.cod === tipCod)
@@ -431,7 +454,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       flash('err', 'Aici se confirmă doar certificatele de plată. Facturile intră prin importul WinMentor, IPC-urile prin parserul dedicat.')
       return
     }
-    const slId = row._editEntitate ?? row.entitate_id
+    const slId = entitateAleasa(row)
     const sl = entitati.find(e => e.id === slId)
     if (!sl) { flash('err', 'Alege situația de plată înainte de a confirma.'); return }
     setBusyId(row.id)
@@ -564,7 +587,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                 }
                 const eroare = row.status === 'eroare'
                 const potConfirma = cfg.activ && (row.modul_tinta === modul || (modul === 'executie' && row.modul_tinta == null))
-                const entMatch = entitati.find(e => e.id === (row._editEntitate ?? row.entitate_id))
+                const entMatch = entitati.find(e => e.id === (entitateAleasa(row)))
                 const dd = row.payload_ai?.date_document
                 return (
                   <div key={row.id} style={{ background:G.card, border:`1px solid ${eroare ? G.red + '66' : G.border}`, borderRadius:12, padding:14 }}>
@@ -611,15 +634,25 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               🔗 {cfg.entitateLabel.toLowerCase()} găsit ({row.entitate_match_confidence}%)
                             </span>
                           )}
+                          {row.entitate_id && !('_editEntitate' in row) && row.entitate_match_confidence != null && row.entitate_match_confidence < PRAG_ENTITATE && (
+                            <span style={{ ...chip, background:G.yellow + '18', color:G.yellow, border:`1px solid ${G.yellow}55` }}>
+                              ⚠️ potrivire slabă ({row.entitate_match_confidence}%) — alege manual
+                            </span>
+                          )}
                         </div>
 
                         {potConfirma ? (
                           <>
+                            {modul === 'hr' && !resolveTipCod(row.tip_document, tipuriFK) && /autorizat|iscir|sudor|sudur|anre|stivuitor|macara/i.test(`${row.tip_document || ''} ${row.payload_ai?.titlu_scurt || ''}`) && (
+                              <div style={{ padding:'8px 12px', marginBottom:10, borderRadius:8, background:G.yellow + '14', border:`1px solid ${G.yellow}44`, color:G.yellow, fontSize:12, lineHeight:1.5 }}>
+                                ⚠️ Pare o <b>autorizație</b> (ISCIR / sudură / ANRE) — nu se încarcă de aici. Se adaugă din <b>HR → Autorizații</b>, cu tipul, numărul și valabilitatea ei. Aici se confirmă doar documente personale (CI, contracte, diplome, caziere etc.).
+                              </div>
+                            )}
                             {/* Corecție entitate + tip */}
                             <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
                               <label style={{ flex:'1 1 260px', fontSize:12 }}>
                                 <span style={{ color:G.muted, display:'block', marginBottom:4 }}>{cfg.entitateLabel}</span>
-                                <select value={row._editEntitate ?? row.entitate_id ?? ''} onChange={e => patch(row.id, '_editEntitate', e.target.value ? Number(e.target.value) : null)} style={sel}>
+                                <select value={entitateAleasa(row) ?? ''} onChange={e => patch(row.id, '_editEntitate', e.target.value ? Number(e.target.value) : null)} style={sel}>
                                   <option value="">— alege {cfg.entitateLabel.toLowerCase()} —</option>
                                   {entitati.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
                                 </select>
