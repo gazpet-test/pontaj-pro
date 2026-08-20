@@ -53,6 +53,7 @@ const MODUL_META = {
   hr:{ label:'HR', color:G.pink, emoji:'👷' },
   logistica:{ label:'Logistică', color:G.orange, emoji:'🚚' },
   financiar:{ label:'Financiar', color:G.green, emoji:'💰' },
+  upa:{ label:'Unități protejate', color:G.teal, emoji:'♿' },
 }
 
 // ── Config per modul ────────────────────────────────────────────
@@ -69,6 +70,12 @@ const MODUL_CFG = {
   logistica: {
     activ:true, entitateLabel:'Vehicul', entitateTip:'activ', color:G.orange,
     bucket:'documente-flota',
+  },
+  upa: {
+    activ:true, entitateLabel:'Furnizor UPA', entitateTip:'furnizor', color:G.teal,
+    bucket:'documente-upa',
+    // Facturile de la unități protejate → upa_achizitii (plafonul lunar deductibil).
+    tipuriText:['factura','altul'],
   },
   financiar: {
     activ:true, entitateLabel:'Situație de plată', entitateTip:'situatie_plata', color:G.green,
@@ -190,6 +197,11 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       setEntitati((data || []).map(a => ({ id:a.id, label:[a.nr_inmatriculare, a.marca, a.cod_intern].filter(Boolean).join(' · ') })))
       const { data: tp } = await supabase.from('logistica_tipuri_documente').select('id,nume').eq('activ', true).order('nume')
       setTipuriFK((tp || []).map(t => ({ id:t.id, cod:t.nume, denumire:t.nume })))
+    } else if (modul === 'upa') {
+      const { data } = await supabase.from('logistica_furnizori')
+        .select('id,nume,cui,upa_valabil_pana').eq('este_upa', true).eq('activ', true).order('nume')
+      setEntitati((data || []).map(f => ({ id:f.id, nume:f.nume, label:f.nume + (f.upa_valabil_pana ? ` (aut. până ${new Date(f.upa_valabil_pana + 'T00:00:00').toLocaleDateString('ro-RO')})` : '') })))
+      setTipuriFK([{ id:'factura', cod:'factura', denumire:'Factură' }])
     } else if (modul === 'financiar') {
       // Entitatea = situația de plată. Păstrez proiect_id + nr_situatie pentru path-ul PDF.
       const { data } = await supabase.from('executie_situatii_plata')
@@ -240,6 +252,9 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
           fisier_mime: file.type || null, status: 'in_asteptare', uploadat_de: profile.id,
         }
         if (proiectContextId && modul === 'executie') { ins.entitate_tip = 'proiect'; ins.entitate_id = proiectContextId; ins.entitate_match_confidence = 100; ins.modul_tinta = 'executie' }
+        // Facturile urcate din panoul UPA rămân în coada UPA, indiferent ce crede AI-ul
+        // despre modul (clasificatorul respectă modul_tinta pre-setat, v18).
+        if (modul === 'upa') ins.modul_tinta = 'upa'
         const { data: row, error: insErr } = await supabase.from('ai_documente_inbox').insert(ins).select('id').single()
         if (insErr) {
           // rândul nu s-a creat (ex. dublură respinsă) — scoatem fișierul din
@@ -313,6 +328,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
       if (modul === 'hr') return await confirmHR(row)
       if (modul === 'logistica') return await confirmLogistica(row)
       if (modul === 'financiar') return await confirmFinanciar(row)
+      if (modul === 'upa') return await confirmUPA(row)
       flash('err', 'Confirmarea pentru acest modul nu e încă activă.')
     } finally { busyRef.current.delete(row.id) }
   }
@@ -478,6 +494,35 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
 
       await finalizeInbox(row, 'financiar', 'certificat_plata', 'situatie_plata', slId, slId)
       flash('ok', 'Certificat atașat la situația de plată ✓')
+      await loadQueue(); onConfirmed && onConfirmed()
+    } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
+  }
+
+  // ── UPA (20.08): factura de la unitate protejată → upa_achizitii ──
+  // Furnizorul TREBUIE să fie marcat este_upa în nomenclator (lista entitati e
+  // deja filtrată). Valoarea și luna sunt editabile pe card; PDF-ul se mută în
+  // bucketul documente-upa și rămâne dovada pentru control.
+  async function confirmUPA(row) {
+    const furnizorId = entitateAleasa(row)
+    const fz = entitati.find(e => e.id === furnizorId)
+    if (!fz) { flash('err', 'Alege furnizorul UPA. Dacă nu e în listă, marchează-l întâi ca unitate protejată în Unități protejate → Furnizori.'); return }
+    if ((row._editTip ?? row.tip_document) !== 'factura') { flash('err', 'Aici se confirmă doar facturi de la unități protejate.'); return }
+    const dd = row.payload_ai?.date_document || {}
+    const valoare = Number(row._editValoare ?? dd.valoare_totala)
+    if (!valoare || valoare <= 0) { flash('err', 'Completează valoarea facturii (lei, cu TVA).'); return }
+    const lunaStr = row._editLuna || (dd.data_emitere ? dd.data_emitere.slice(0, 7) : new Date().toISOString().slice(0, 7))
+    setBusyId(row.id)
+    try {
+      const destPath = await mutaFisier(row, cfg.bucket, String(furnizorId))
+      const { data: created, error: insErr } = await supabase.from('upa_achizitii').insert({
+        furnizor_id: furnizorId, furnizor_nume: fz.nume || fz.label,
+        luna: lunaStr + '-01', numar_factura: dd.numar || null, data_factura: dd.data_emitere || null,
+        valoare, descriere: row.payload_ai?.titlu_scurt || null,
+        document_path: destPath, created_by: profile.id,
+      }).select('id').single()
+      if (insErr) throw new Error('Insert achiziție UPA: ' + insErr.message)
+      await finalizeInbox(row, 'upa', 'factura', 'furnizor', furnizorId, created.id)
+      flash('ok', `Factura ${dd.numar || ''} — ${valoare.toLocaleString('ro-RO')} lei scăzută din plafonul lunii ✓`)
       await loadQueue(); onConfirmed && onConfirmed()
     } catch (e) { flash('err', String(e.message || e)) } finally { setBusyId(null) }
   }
@@ -659,7 +704,7 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                               </label>
                               <label style={{ flex:'1 1 180px', fontSize:12 }}>
                                 <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Tip document</span>
-                                {modul === 'executie' ? (
+                                {cfg.tipuriText ? (
                                   <select value={row._editTip ?? row.tip_document ?? 'altul'} onChange={e => patch(row.id, '_editTip', e.target.value)} style={sel}>
                                     {cfg.tipuriText.map(t => <option key={t} value={t}>{TIP_LABEL[t] || t}</option>)}
                                   </select>
@@ -688,6 +733,26 @@ export default function CitesteOricePanel({ open, onClose, profile, modul = 'exe
                                     {dp.durata_luni && <span>Durată: <b>{dp.durata_luni} luni</b></span>}
                                   </div>
                                   <div style={{ fontSize:10.5, color:G.dim, marginTop:5, paddingLeft:24 }}>Se completează doar câmpurile goale — nu suprascrie ce ai pus deja.</div>
+                                </div>
+                              )
+                            })()}
+
+                            {/* UPA: valoarea și luna deducerii, editabile */}
+                            {modul === 'upa' && (() => {
+                              const dd = row.payload_ai?.date_document || {}
+                              return (
+                                <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+                                  <label style={{ flex:'1 1 160px', fontSize:12 }}>
+                                    <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Valoare factură (lei, cu TVA)</span>
+                                    <input type="number" step="0.01" value={row._editValoare ?? dd.valoare_totala ?? ''}
+                                      onChange={e => patch(row.id, '_editValoare', e.target.value)} style={sel} placeholder="0.00" />
+                                  </label>
+                                  <label style={{ flex:'1 1 150px', fontSize:12 }}>
+                                    <span style={{ color:G.muted, display:'block', marginBottom:4 }}>Luna din care se scade</span>
+                                    <input type="month" value={row._editLuna ?? (dd.data_emitere ? dd.data_emitere.slice(0,7) : new Date().toISOString().slice(0,7))}
+                                      onChange={e => patch(row.id, '_editLuna', e.target.value)} style={sel} />
+                                  </label>
+                                  {dd.numar && <div style={{ alignSelf:'flex-end', fontSize:11, color:G.dim, paddingBottom:9 }}>Factura nr. <b style={{color:G.text}}>{dd.numar}</b>{dd.data_emitere ? ` din ${fmtD(dd.data_emitere)}` : ''}</div>}
                                 </div>
                               )
                             })()}
