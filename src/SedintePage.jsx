@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { verificaProiect, consemneazaLipsuri } from './lib/verificariProiect.js'
 import { genereazaSedintaPdf } from './sedinteExport.js'
+import SedintaVoice from './SedintaVoice.jsx'
 
 const BUCKET_PDF = 'sedinte-pdf'
 
@@ -308,6 +309,9 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
   const [rsvp, setRsvp] = useState([])
   const [invitati, setInvitati] = useState([])      // parteneri din afara platformei
   const [agenda, setAgenda] = useState([])          // parteneri folosiți în ședințe anterioare
+  const [voiceOpen, setVoiceOpen] = useState(false) // camera audio a ședinței (8x8 JaaS)
+  // identitate stabilă — altfel fiecare re-render al detaliului remontează iframe-ul audio
+  const inchideVoice = useCallback(() => setVoiceOpen(false), [])
   const load = useCallback(async () => {
     setLoading(true)
     const [s, l, r, iv] = await Promise.all([
@@ -552,6 +556,12 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          {!inchisa && !voiceOpen && (
+            <button onClick={() => setVoiceOpen(true)}
+              style={{ ...S.btn, background: G.cyan + '22', color: G.cyan, border: `1px solid ${G.cyan}55`, whiteSpace: 'nowrap' }}>
+              🎧 Intră în audio
+            </button>
+          )}
           {sed.pdf_path && (
             <button onClick={descarcaPdf} style={{ ...S.btn, background: G.blue + '18', color: G.blue, border: `1px solid ${G.blue}44`, whiteSpace: 'nowrap' }}>
               📄 PV (PDF)
@@ -563,6 +573,9 @@ function SedintaDetaliu({ sedintaId, onBack, proiecte, profiles, profile, show, 
           </button>
         </div>
       </div>
+
+      {/* ── Camera audio a ședinței: toți văd același buton, identitatea vine din platformă ── */}
+      {voiceOpen && <SedintaVoice sedintaId={sedintaId} onClose={inchideVoice} />}
 
       {inchisa && sed.semnat_de && (
         <div style={{ fontSize: 12, color: G.green, marginBottom: 6, marginTop: -8 }}>
