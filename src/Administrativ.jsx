@@ -17,6 +17,7 @@ import DashboardSubcontractori from './DashboardSubcontractori.jsx'
 import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 import Consumabile from './Consumabile.jsx'
 import LocatiiInchiriate from './LocatiiInchiriate.jsx'
+import UnitatiProtejate from './UnitatiProtejate.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -482,6 +483,7 @@ function FurnizorModal({ item, onClose, onDone }) {
     telefon: item?.telefon || '', email: item?.email || '', adresa: item?.adresa || '',
     iban: item?.iban || '', termen_plata_zile: item?.termen_plata_zile ?? '', observatii: item?.observatii || '',
     activ: item?.activ ?? true,
+    este_upa: item?.este_upa ?? false, upa_autorizatie: item?.upa_autorizatie || '', upa_valabil_pana: item?.upa_valabil_pana || '',
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -496,6 +498,8 @@ function FurnizorModal({ item, onClose, onDone }) {
         telefon: f.telefon.trim() || null, email: f.email.trim() || null, adresa: f.adresa.trim() || null,
         iban: f.iban.trim() || null, termen_plata_zile: f.termen_plata_zile !== '' ? Number(f.termen_plata_zile) : null,
         observatii: f.observatii.trim() || null, activ: f.activ,
+        este_upa: f.este_upa, upa_autorizatie: f.este_upa ? (f.upa_autorizatie.trim() || null) : null,
+        upa_valabil_pana: f.este_upa ? (f.upa_valabil_pana || null) : null,
       }
       const { error } = edit
         ? await supabase.from('logistica_furnizori').update(payload).eq('id', item.id)
@@ -524,6 +528,16 @@ function FurnizorModal({ item, onClose, onDone }) {
           <div><label style={fLabel}>Termen plată (zile)</label><input type="number" min="0" style={fInput} value={f.termen_plata_zile} onChange={e => set('termen_plata_zile', e.target.value)} placeholder="30" /></div>
         </div>
         <div style={{ marginBottom:12 }}><label style={fLabel}>Observații</label><input style={fInput} value={f.observatii} onChange={e => set('observatii', e.target.value)} /></div>
+        {/* UPA = Legea 448/2006: achizițiile de la ei se scad din taxa de handicap (tab Unități protejate) */}
+        <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', marginBottom:8 }}>
+          <input type="checkbox" checked={f.este_upa} onChange={e => set('este_upa', e.target.checked)} /> ♿ Unitate protejată autorizată (UPA)
+        </label>
+        {f.este_upa && (
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 170px', gap:12, marginBottom:12 }}>
+            <div><label style={fLabel}>Nr. autorizație UPA</label><input style={fInput} value={f.upa_autorizatie} onChange={e => set('upa_autorizatie', e.target.value)} /></div>
+            <div><label style={fLabel}>Valabilă până la</label><input type="date" style={fInput} value={f.upa_valabil_pana} onChange={e => set('upa_valabil_pana', e.target.value)} /></div>
+          </div>
+        )}
         <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', marginBottom:8 }}>
           <input type="checkbox" checked={f.activ} onChange={e => set('activ', e.target.checked)} /> Furnizor activ
         </label>
@@ -791,6 +805,7 @@ export default function AdministrativPage() {
   const tabs = [
     { key: 'consumabile', icon: '🛒', label: 'Consumabile birou' },
     { key: 'locatii',    icon: '🏠', label: 'Locații închiriate' },
+    { key: 'upa',        icon: '♿', label: 'Unități protejate' },
     { key: 'documente',  icon: '📁', label: 'Documente firmă' },
     { key: 'furnizori',  icon: '🏢', label: 'Furnizori' },
     { key: 'ticketing',  icon: '🎫', label: 'Ticketing' },
@@ -860,6 +875,9 @@ export default function AdministrativPage() {
       {/* Locații închiriate — apartamente cazare + puncte de lucru: chirie + utilități */}
       {tab === 'locatii' && <LocatiiInchiriate profile={profile} />}
 
+      {/* Plafonul lunar deductibil pe achiziții de la unități protejate (L448/2006) */}
+      {tab === 'upa' && <UnitatiProtejate profile={profile} />}
+
       {/* Tab Costuri AI (real, nu placeholder) */}
       {tab === 'costuri_ai' && isOwner && <TabCosturiAI />}
 
@@ -882,7 +900,7 @@ export default function AdministrativPage() {
       {tab === 'furnizori' && <FurnizoriTab />}
 
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && tab !== 'locatii' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && tab !== 'locatii' && tab !== 'upa' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'contracte' && '📜'}
