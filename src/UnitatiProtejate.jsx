@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
+import CitesteOricePanel from './CitesteOricePanel.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#30363D', border2:'#21262D',
@@ -147,6 +148,7 @@ export default function UnitatiProtejate({ profile }) {
   const [load, setLoad]           = useState(true)
   const [mesaj, setMesaj]         = useState(null)
   const [formAch, setFormAch]     = useState(false)
+  const [citesteOpen, setCitesteOpen] = useState(false)
   const [editPlafon, setEditPlafon] = useState(false)
   const [plafonNou, setPlafonNou] = useState('')
 
@@ -256,6 +258,7 @@ export default function UnitatiProtejate({ profile }) {
             ) : (
               <>
                 <button onClick={() => { setPlafonNou(String(plafon)); setEditPlafon(true) }} style={S.btnS}>⚙️ Plafon</button>
+                <button onClick={() => setCitesteOpen(true)} style={{...S.btnS, color:'#2DD4BF', borderColor:'#2DD4BF55'}}>🤖 Citește factura (AI)</button>
                 <button onClick={() => setFormAch(true)} style={S.btnP}>➕ Achiziție</button>
               </>
             )}
@@ -367,6 +370,18 @@ export default function UnitatiProtejate({ profile }) {
       {formAch && (
         <FormAchizitie furnizoriUpa={furnizori} setMesaj={setMesaj}
                        onSalvat={incarca} onClose={() => setFormAch(false)} />
+      )}
+
+      {/* Citește Orice pe destinația UPA: arunci factura, AI extrage furnizor/număr/
+          valoare, confirmi → intră în plafon cu PDF-ul ca dovadă. */}
+      {citesteOpen && profile && (
+        <CitesteOricePanel
+          open={citesteOpen}
+          modul="upa"
+          profile={profile}
+          onClose={() => setCitesteOpen(false)}
+          onConfirmed={() => incarca()}
+        />
       )}
     </div>
   )
