@@ -75,6 +75,12 @@ function _esteLinieFactura(l) {
   if (l?.tip === 'lucr_cm' && v < 1000) return false  // valori de indice (~150 lei), nu lucrări
   return true
 }
+// Centralizatorul pe obiect are propria linie de ajustare? Dacă NU, ajustarea de pe
+// header-ul SL trebuie adăugată separat — altfel dispare din factură (cazul GAZ-395,
+// 21.08.2026: XLS-ul importat avea doar rândul de lucrări C+M, fără ajustare ICC).
+function _obiectAreAjustare(objLinii) {
+  return (objLinii || []).some(o => o?.tip === 'ajustare' || /ajustare/i.test(String(o?.denumire || '')))
+}
 // Mapează liniile-obiect stocate → articole factură (1:1), stil manual (per obiect).
 function objLinesToArticole(objLinii, startNr) {
   let _nr = startNr
@@ -291,6 +297,11 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     if (_obj.linii.length) {
       // Linii pe obiect din centralizator (stil manual: lucrări + ajustări separate)
       linii.push(..._obj.linii); _nr = _obj.nextNr
+      // Dacă centralizatorul NU are linia de ajustare, dar SL-ul are ajustare pe header,
+      // o adăugăm de acolo — altfel factura pierde ajustarea ICC
+      if (hasAjust && !_obiectAreAjustare(objLinii)) {
+        linii.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
+      }
     } else if (hasAjust) {
       linii.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT })
       linii.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
@@ -436,6 +447,10 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       if (_objArt.linii.length) {
         // Linii pe obiect din centralizator (stil manual: lucrări + ajustări separate)
         articoleSL.push(..._objArt.linii); _nr = _objArt.nextNr
+        // Ajustarea de pe header-ul SL, dacă centralizatorul n-o conține (anti-bug GAZ-395)
+        if (hasAjust && !_obiectAreAjustare(objLiniiSL)) {
+          articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
+        }
       } else if (hasAjust) {
         articoleSL.push({ nr:_nr++, denumire:den, um:'buc', cantitate:1, pret_unitar:valBaza.toFixed(2), valoare:valBaza.toFixed(2), tva_pct:TVA_DEFAULT })
         articoleSL.push({ nr:_nr++, denumire:`Ajustare de preț conform coeficient ICC${coefAjust ? ' ' + coefAjust.toFixed(4).replace('.', ',') : ''} — situație de lucrări nr.${slDefault.nr_situatie}`, um:'buc', cantitate:1, pret_unitar:valAjust.toFixed(2), valoare:valAjust.toFixed(2), tva_pct:TVA_DEFAULT })
