@@ -56,15 +56,23 @@ function colorFromId(id) {
   return colors[Math.abs(hash) % colors.length]
 }
 
-function Avatar({ name, userId, size = 36 }) {
+function Avatar({ name, userId, size = 36, online }) {
   const bg = colorFromId(userId)
   return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontSize: Math.max(11, Math.round(size * 0.4)), fontWeight: 800,
-      flexShrink: 0,
-    }}>{getInitials(name)}</div>
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <div style={{
+        width: size, height: size, borderRadius: '50%',
+        background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontSize: Math.max(11, Math.round(size * 0.4)), fontWeight: 800,
+      }}>{getInitials(name)}</div>
+      {online && (
+        <span title="Online acum" style={{
+          position: 'absolute', bottom: -1, right: -1,
+          width: Math.max(10, Math.round(size * 0.28)), height: Math.max(10, Math.round(size * 0.28)),
+          borderRadius: '50%', background: G.green, border: `2px solid ${G.surface}`,
+        }} />
+      )}
+    </div>
   )
 }
 
@@ -78,12 +86,31 @@ export default function InternalChat({ profile }) {
   const [sending, setSending] = useState(false)
   const [totalUnread, setTotalUnread] = useState(0)
   const [notifyEnabled, setNotifyEnabled] = useState(false)
+  const [uploadingImg, setUploadingImg] = useState(false)
+  const [imgUrls, setImgUrls] = useState({})            // imagine_path → signed URL
+  const [onlineIds, setOnlineIds] = useState(new Set()) // profile.id cu aplicația deschisă
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const fileInputRef = useRef(null)
   const realtimeChannelRef = useRef(null)
   const lastNotifiedMsgIdRef = useRef(null)
+  const imgUrlsRef = useRef({})
 
   const currentUserId = profile?.id
+
+  // ─── Poze: URL-uri semnate în batch, cu cache (ref → fără loop de deps) ──
+  const incarcaUrlImagini = useCallback(async (paths) => {
+    const noi = [...new Set((paths || []).filter(p => p && !imgUrlsRef.current[p]))]
+    if (!noi.length) return
+    try {
+      const { data } = await supabase.storage.from('chat-imagini').createSignedUrls(noi, 3600)
+      if (!data) return
+      const adaugate = {}
+      data.forEach((d, i) => { if (d?.signedUrl) adaugate[noi[i]] = d.signedUrl })
+      imgUrlsRef.current = { ...imgUrlsRef.current, ...adaugate }
+      setImgUrls(imgUrlsRef.current)
+    } catch (e) { console.warn('signed urls imagini:', e) }
+  }, [])
 
   // ─── Load chats list ────────────────────────────────────────────────
   const loadChats = useCallback(async () => {
@@ -111,17 +138,18 @@ export default function InternalChat({ profile }) {
     try {
       const { data, error } = await supabase
         .from('chat_messages')
-        .select('id, chat_id, sender_id, content, created_at, edited_at, deleted')
+        .select('id, chat_id, sender_id, content, imagine_path, created_at, edited_at, deleted')
         .eq('chat_id', chatId)
         .eq('deleted', false)
         .order('created_at', { ascending: true })
         .limit(200)
       if (error) throw error
       setMessages(data || [])
+      incarcaUrlImagini((data || []).map(m => m.imagine_path))
     } catch (e) {
       console.error('loadMessages error:', e)
     }
-  }, [])
+  }, [incarcaUrlImagini])
 
   // ─── Load members + their profile names ─────────────────────────────
   const loadMembers = useCallback(async (chatId) => {
@@ -193,6 +221,32 @@ export default function InternalChat({ profile }) {
       alert('Eroare la trimitere: ' + e.message)
     } finally {
       setSending(false)
+      setTimeout(() => inputRef.current?.focus(), 50)
+    }
+  }
+
+  // ─── Trimite o imagine (buton 🖼️ sau paste din clipboard) ──────────
+  const trimiteImagine = async (file) => {
+    if (!file || !activeChatId || uploadingImg) return
+    if (!file.type?.startsWith('image/')) { alert('Se pot trimite doar imagini.'); return }
+    if (file.size > 8 * 1024 * 1024) { alert('Imaginea e prea mare (max. 8 MB).'); return }
+    setUploadingImg(true)
+    try {
+      const ext = ((file.name || '').split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png'
+      const path = `${activeChatId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
+      const { error: upErr } = await supabase.storage.from('chat-imagini').upload(path, file, { contentType: file.type })
+      if (upErr) throw upErr
+      const caption = input.trim()
+      const { error } = await supabase.from('chat_messages').insert({
+        chat_id: activeChatId, sender_id: currentUserId, content: caption, imagine_path: path,
+      })
+      if (error) throw error
+      if (caption) setInput('')
+      incarcaUrlImagini([path])
+    } catch (e) {
+      alert('Eroare la trimiterea pozei: ' + e.message)
+    } finally {
+      setUploadingImg(false)
       setTimeout(() => inputRef.current?.focus(), 50)
     }
   }
@@ -271,6 +325,7 @@ export default function InternalChat({ profile }) {
         (payload) => {
           const newMsg = payload.new
           if (!newMsg) return
+          if (newMsg.imagine_path) incarcaUrlImagini([newMsg.imagine_path])
 
           // Dacă e chatul activ + panel deschis → adaugă în messages + mark read
           if (newMsg.chat_id === activeChatId && open) {
@@ -301,7 +356,7 @@ export default function InternalChat({ profile }) {
                   const emoji = chat?.avatar_emoji || '💬'
                   showBrowserNotification(
                     `${emoji} ${chatName}`,
-                    `${senderName}: ${newMsg.content}`
+                    `${senderName}: ${newMsg.content || (newMsg.imagine_path ? '🖼️ a trimis o poză' : '')}`
                   )
                 } catch (e) {
                   console.warn('Notification fetch error:', e)
@@ -321,7 +376,19 @@ export default function InternalChat({ profile }) {
         realtimeChannelRef.current = null
       }
     }
-  }, [currentUserId, activeChatId, open, loadChats, markAsRead, showBrowserNotification])
+  }, [currentUserId, activeChatId, open, loadChats, markAsRead, showBrowserNotification, incarcaUrlImagini])
+
+  // ─── Prezență online: cine are aplicația deschisă (nu doar chatul) ──
+  useEffect(() => {
+    if (!currentUserId) return
+    const ch = supabase.channel('gazpet-online', { config: { presence: { key: currentUserId } } })
+    ch.on('presence', { event: 'sync' }, () => {
+      setOnlineIds(new Set(Object.keys(ch.presenceState())))
+    }).subscribe((status) => {
+      if (status === 'SUBSCRIBED') ch.track({ online_din: new Date().toISOString() })
+    })
+    return () => { supabase.removeChannel(ch) }
+  }, [currentUserId])
 
   // ─── Auto-scroll messages la mesaj nou ─────────────────────────────
   useEffect(() => {
@@ -385,7 +452,8 @@ export default function InternalChat({ profile }) {
           top: 64,
           right: 12,
           width: 'min(820px, calc(100vw - 24px))',
-          height: 'calc(100vh - 84px)',
+          // -180: lasă liber colțul din dreapta-jos (Nenicu + butonul Tichet)
+          height: 'calc(100vh - 180px)',
           background: G.surface,
           border: `1px solid ${G.border2}`,
           borderRadius: 14,
@@ -547,6 +615,7 @@ export default function InternalChat({ profile }) {
                     <div style={{ fontSize: 19, fontWeight: 800, color: G.text }}>{activeChat.name}</div>
                     <div style={{ fontSize: 13, color: G.muted, marginTop: 2 }}>
                       {activeChat.total_members} membri · {members.filter(m => m.member_role === 'admin').length} admini
+                      <span style={{ color: G.green, marginLeft: 6 }}>· ● {members.filter(m => onlineIds.has(m.user_id)).length} online</span>
                       {activeChat.my_role === 'admin' && <span style={{ color: G.yellow, marginLeft: 6 }}>· Tu ești ADMIN 👑</span>}
                     </div>
                   </div>
@@ -613,7 +682,7 @@ export default function InternalChat({ profile }) {
                       }}>
                         {/* Avatar - doar la primul mesaj din streak */}
                         <div style={{ width: 38, flexShrink: 0 }}>
-                          {showSender && <Avatar name={senderName} userId={m.sender_id} size={38} />}
+                          {showSender && <Avatar name={senderName} userId={m.sender_id} size={38} online={onlineIds.has(m.sender_id)} />}
                         </div>
                         <div style={{ maxWidth: '70%', display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
                           {showSender && !isOwn && (
@@ -632,6 +701,18 @@ export default function InternalChat({ profile }) {
                             whiteSpace: 'pre-wrap',
                             wordBreak: 'break-word',
                           }}>
+                            {m.imagine_path && (
+                              imgUrls[m.imagine_path] ? (
+                                <img
+                                  src={imgUrls[m.imagine_path]}
+                                  alt="imagine"
+                                  onClick={() => window.open(imgUrls[m.imagine_path], '_blank')}
+                                  style={{ maxWidth: 'min(300px, 100%)', maxHeight: 280, borderRadius: 8, cursor: 'pointer', display: 'block', margin: m.content ? '2px 0 8px' : '2px 0' }}
+                                />
+                              ) : (
+                                <div style={{ fontSize: 13, color: isOwn ? '#ffffffaa' : G.dim, padding: '14px 22px' }}>🖼️ se încarcă…</div>
+                              )
+                            )}
                             {m.content}
                           </div>
                           <div style={{ fontSize: 11, color: G.dim, marginTop: 3, padding: '0 4px' }}>
@@ -651,11 +732,33 @@ export default function InternalChat({ profile }) {
                   background: G.bg,
                 }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) trimiteImagine(f); e.target.value = '' }}
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingImg || sending}
+                      title="Trimite o poză (sau lipește cu Ctrl+V direct în mesaj)"
+                      style={{
+                        background: G.surface, border: `1px solid ${G.border2}`, color: G.muted,
+                        borderRadius: 8, minHeight: 48, padding: '0 13px', fontSize: 20, cursor: 'pointer',
+                        opacity: uploadingImg ? 0.6 : 1,
+                      }}>
+                      {uploadingImg ? '⏳' : '🖼️'}
+                    </button>
                     <textarea
                       ref={inputRef}
                       value={input}
                       onChange={e => setInput(e.target.value)}
                       onKeyDown={handleKeyDown}
+                      onPaste={e => {
+                        const item = [...(e.clipboardData?.items || [])].find(i => i.type?.startsWith('image/'))
+                        if (item) { e.preventDefault(); const f = item.getAsFile(); if (f) trimiteImagine(f) }
+                      }}
                       placeholder="Scrie un mesaj..."
                       rows={1}
                       disabled={sending}
