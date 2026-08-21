@@ -947,14 +947,15 @@ function HomeDashboard() {
     { path:'/tichete',  icon:'🎫', label:'Tichete',      color:'#BC8CFF', desc:'Avarii · Defecțiuni · Reclamații',   active:true },
     { path:'/consumabile', icon:'🛒', label:'Consumabile', color:'#F0883E', desc:'Papetărie · Protocol · Curățenie · IT', active:true },
     { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true, requireModule:'executie' },
-    { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'] },
-    { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'] },
+    { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'], moduleKey:'rapoarte_santier' },
+    { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
-  // rolesAllow = vizibil pt owner + rolurile listate (fără user_module_access explicit); altfel logica standard requireModule.
+  // rolesAllow = vizibil pt owner + rolurile listate + oricine are cheia moduleKey
+  // bifată explicit în user_module_access (modelul DUAL — rol SAU bifă per persoană).
   const modules = allModules.filter(m => {
     if (!m.active) return true
-    if (m.rolesAllow) return profile?.is_owner || m.rolesAllow.includes(profile?.role)
+    if (m.rolesAllow) return profile?.is_owner || m.rolesAllow.includes(profile?.role) || (m.moduleKey && hasModuleAccess(profile, m.moduleKey))
     if (!m.requireModule) return true
     return hasModuleAccess(profile, m.requireModule)
   })
