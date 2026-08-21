@@ -1831,9 +1831,15 @@ export default function AchizitiiPage() {
     }
     const chips = Object.keys(counts).map(pid => {
       const p = proiecteMap[pid]
-      return { id: pid, label: p ? `${p.cod_intern ? `[${p.cod_intern}] ` : ''}${p.nume}` : `Proiect #${pid}`, count: counts[pid] }
+      const scurt = p?.cod_intern ? p.cod_intern.replace(/_/g, ' ') : (p?.nume || `Proiect #${pid}`)
+      return {
+        id: pid,
+        label: scurt.length > 26 ? scurt.slice(0, 24) + '…' : scurt,
+        full: p ? `${p.cod_intern ? `[${p.cod_intern}] ` : ''}${p.nume}` : `Proiect #${pid}`,
+        count: counts[pid],
+      }
     }).sort((a, b) => b.count - a.count)
-    if (general > 0) chips.push({ id: 'general', label: '📂 General (fără proiect)', count: general })
+    if (general > 0) chips.push({ id: 'general', label: 'General (fără proiect)', full: 'Comenzi fără proiect', count: general })
     return chips
   }, [comenzi, proiecteMap])
 
@@ -1901,17 +1907,17 @@ export default function AchizitiiPage() {
 
       {/* Chips proiecte — dashboard-ul + lista se filtrează împreună */}
       {proiecteChips.length > 0 && (
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:14 }}>
-          {[{ id: '', label: '📂 Toate proiectele', count: comenzi.length }, ...proiecteChips].map(ch => {
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:12, alignItems:'center' }}>
+          {[{ id: '', label: '📂 Toate', full: 'Toate proiectele', count: comenzi.length }, ...proiecteChips].map(ch => {
             const active = String(fProiect) === String(ch.id)
             return (
-              <button key={ch.id || 'all'} onClick={() => setFProiect(active && ch.id !== '' ? '' : ch.id)}
-                style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 20px', fontSize:14, fontWeight:700, borderRadius:24, cursor:'pointer', fontFamily:'inherit',
-                  background: active ? G.achizitii + '22' : G.surface,
-                  color: active ? G.achizitii : G.text,
-                  border: `2px solid ${active ? G.achizitii : G.border2}` }}>
+              <button key={ch.id || 'all'} onClick={() => setFProiect(active && ch.id !== '' ? '' : ch.id)} title={ch.full}
+                style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 10px', fontSize:12, fontWeight:700, borderRadius:8, cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap', letterSpacing:0.2,
+                  background: active ? G.achizitii + '22' : 'transparent',
+                  color: active ? G.achizitii : G.muted,
+                  border: `1px solid ${active ? G.achizitii : G.border2}` }}>
                 {ch.label}
-                <span style={{ background: active ? G.achizitii : G.border2, color: active ? '#0D1117' : G.text, borderRadius:12, padding:'2px 9px', fontSize:13, fontWeight:800 }}>{ch.count}</span>
+                <span style={{ background: active ? G.achizitii + '33' : G.border2 + '55', color: active ? G.achizitii : G.dim, borderRadius:6, padding:'1px 6px', fontSize:11, fontWeight:800 }}>{ch.count}</span>
               </button>
             )
           })}
