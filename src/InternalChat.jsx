@@ -89,6 +89,9 @@ export default function InternalChat({ profile }) {
   const [uploadingImg, setUploadingImg] = useState(false)
   const [imgUrls, setImgUrls] = useState({})            // imagine_path → signed URL
   const [onlineIds, setOnlineIds] = useState(new Set()) // profile.id cu aplicația deschisă
+  // Mobil: chat fullscreen ca WhatsApp — listă → conversație cu ← înapoi
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 720)
+  const [mobilePane, setMobilePane] = useState('list')  // 'list' | 'conv'
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -378,6 +381,14 @@ export default function InternalChat({ profile }) {
     }
   }, [currentUserId, activeChatId, open, loadChats, markAsRead, showBrowserNotification, incarcaUrlImagini])
 
+  // ─── Mobil: urmărește lățimea + la deschidere pornește pe listă ─────
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 720)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  useEffect(() => { if (open && isMobile) setMobilePane('list') }, [open, isMobile])
+
   // ─── Prezență online: cine are aplicația deschisă (nu doar chatul) ──
   useEffect(() => {
     if (!currentUserId) return
@@ -447,7 +458,11 @@ export default function InternalChat({ profile }) {
     <>
       {/* CHAT PANEL (butonul e în navbar via App.jsx Layout) */}
       {open && (
-        <div style={{
+        <div style={isMobile ? {
+          // Mobil: fullscreen ca WhatsApp
+          position: 'fixed', inset: 0, width: '100%', height: '100dvh',
+          background: G.surface, display: 'flex', zIndex: 10001, overflow: 'hidden',
+        } : {
           position: 'fixed',
           top: 64,
           right: 12,
@@ -462,12 +477,12 @@ export default function InternalChat({ profile }) {
           zIndex: 9995,
           overflow: 'hidden',
         }}>
-          {/* SIDEBAR CHATS */}
+          {/* SIDEBAR CHATS — pe mobil e „ecranul listă" (fullscreen), ascuns când e conversația deschisă */}
           <div style={{
-            width: 270,
+            width: isMobile ? '100%' : 270,
             background: G.bg,
-            borderRight: `1px solid ${G.border}`,
-            display: 'flex',
+            borderRight: isMobile ? 'none' : `1px solid ${G.border}`,
+            display: isMobile && mobilePane !== 'list' ? 'none' : 'flex',
             flexDirection: 'column',
           }}>
             {/* Sidebar header */}
@@ -479,7 +494,11 @@ export default function InternalChat({ profile }) {
               justifyContent: 'space-between',
             }}>
               <div style={{ fontSize: 17, fontWeight: 800, color: G.text }}>Chat-uri</div>
-              <div style={{ display: 'flex', gap: 5 }}>
+              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                {isMobile && (
+                  <button onClick={() => setOpen(false)} title="Închide"
+                    style={{ background: 'transparent', border: 'none', color: G.muted, fontSize: 24, cursor: 'pointer', lineHeight: 1, padding: '0 4px', order: 9 }}>×</button>
+                )}
                 <button
                   onClick={() => setShowNewChatModal(true)}
                   title="Chat nou"
@@ -521,7 +540,7 @@ export default function InternalChat({ profile }) {
               ) : chats.map(c => (
                 <button
                   key={c.id}
-                  onClick={() => setActiveChatId(c.id)}
+                  onClick={() => { setActiveChatId(c.id); if (isMobile) setMobilePane('conv') }}
                   style={{
                     width: '100%',
                     background: activeChatId === c.id ? G.primary + '22' : 'transparent',
@@ -592,19 +611,23 @@ export default function InternalChat({ profile }) {
             </div>
           </div>
 
-          {/* MAIN AREA */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          {/* MAIN AREA — pe mobil e „ecranul conversație", ascuns când e lista */}
+          <div style={{ flex: 1, display: isMobile && mobilePane !== 'conv' ? 'none' : 'flex', flexDirection: 'column', minWidth: 0 }}>
             {activeChat ? (
               <>
                 {/* Header */}
                 <div style={{
-                  padding: '12px 18px',
+                  padding: isMobile ? '10px 12px' : '12px 18px',
                   borderBottom: `1px solid ${G.border}`,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 12,
                   background: `linear-gradient(135deg, ${G.primary}10, ${G.purple}10)`,
                 }}>
+                  {isMobile && (
+                    <button onClick={() => setMobilePane('list')} title="Înapoi la conversații"
+                      style={{ background: 'transparent', border: 'none', color: G.text, fontSize: 24, cursor: 'pointer', lineHeight: 1, padding: '0 4px', flexShrink: 0 }}>←</button>
+                  )}
                   <div style={{
                     width: 46, height: 46, borderRadius: '50%',
                     background: activeChat.is_general ? G.primary : G.purple + '44',
@@ -728,6 +751,7 @@ export default function InternalChat({ profile }) {
                 {/* Composer */}
                 <div style={{
                   padding: '10px 14px',
+                  paddingBottom: isMobile ? 'calc(10px + env(safe-area-inset-bottom))' : 10,
                   borderTop: `1px solid ${G.border}`,
                   background: G.bg,
                 }}>

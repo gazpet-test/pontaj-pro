@@ -174,7 +174,10 @@ th{text-align:left;padding:8px 12px;font-size:11px;font-weight:700;color:#8B949E
 td{padding:9px 12px;font-size:13px;border-bottom:1px solid #161B22;vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#1C2128}
-.nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s}
+.nl{background:none;border:none;cursor:pointer;padding:7px 13px;border-radius:8px;font-family:inherit;font-size:13px;font-weight:600;color:#8B949E;transition:all .2s;white-space:nowrap;flex-shrink:0}
+.topbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.topbar::-webkit-scrollbar{display:none}
+@media (max-width:719px){.nl{display:none}}
 .nl:hover,.nl.active{background:#21262D;color:#E6EDF3}
 .nl.active{color:#58A6FF;background:#1F6FEB15}
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
@@ -712,13 +715,15 @@ function Layout({ children }) {
   ]
   return (
     <div style={S.page}><style>{css}</style>
-      <div style={{background:G.surface,borderBottom:`1px solid ${G.border}`,padding:'0 22px',display:'flex',alignItems:'center',height:56,gap:18,position:'sticky',top:0,zIndex:100}}>
-        <div style={{display:'flex',alignItems:'center',gap:9,marginRight:6}}>
+      {/* topbar: pe telefon toată banda se derulează cu degetul (nimic nu forțează pagina la zoom-out) */}
+      <div className="topbar" style={{background:G.surface,borderBottom:`1px solid ${G.border}`,padding:'0 14px',display:'flex',alignItems:'center',height:56,gap:14,position:'sticky',top:0,zIndex:100}}>
+        {/* logo = buton Acasă (pe mobil taburile-s ascunse, navigarea se face din cardurile de pe home) */}
+        <div onClick={()=>nav('/')} title="Acasă" style={{display:'flex',alignItems:'center',gap:9,marginRight:6,flexShrink:0,cursor:'pointer'}}>
           <div style={{width:28,height:28,background:'linear-gradient(135deg,#1F6FEB,#388BFD)',borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>⏱</div>
           <span style={{fontWeight:800,fontSize:14,letterSpacing:'-.3px'}}>PontajPRO</span>
         </div>
         {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
-        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
           {/* Buton global De aprobat — comenzi furnizor + transporturi care așteaptă decizia user-ului (12.06.2026) */}
           <DeAprobatButton profile={profile} />
           {/* Buton global Cere Transport — vizibil pentru oricine cu acces la modulul comanda_transport */}
