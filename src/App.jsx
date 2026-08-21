@@ -997,11 +997,59 @@ function HomeDashboard() {
         </div>
       </div>
 
+      {/* PWA: propunere de instalare pe telefon (dismissable) */}
+      <InstallPwaBanner />
+
       {/* Corp home: salut + module (cifre live) + SCADA (todo #693) — componentă separată */}
       <HomeScada profile={profile} modules={modules} onOpen={p => nav(p)} />
 
       <div style={{textAlign:'center',padding:'16px',fontSize:11,color:'#E53935',fontWeight:700,borderTop:'1px solid #21262D',marginTop:'auto',letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
+      </div>
+    </div>
+  )
+}
+
+// ─── PWA: banner „Instalează aplicația" (prompt nativ Android/desktop, hint iPhone)
+function InstallPwaBanner() {
+  const [deferred, setDeferred] = useState(null)
+  const [ascuns, setAscuns] = useState(() => { try { return localStorage.getItem('pwa_banner_ascuns') === '1' } catch { return false } })
+  const [instalat, setInstalat] = useState(false)
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+  const esteiOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+
+  useEffect(() => {
+    const h = (e) => { e.preventDefault(); setDeferred(e) }
+    const done = () => setInstalat(true)
+    window.addEventListener('beforeinstallprompt', h)
+    window.addEventListener('appinstalled', done)
+    return () => { window.removeEventListener('beforeinstallprompt', h); window.removeEventListener('appinstalled', done) }
+  }, [])
+
+  if (standalone || instalat || ascuns) return null
+  if (!deferred && !esteiOS) return null
+  const inchide = () => { try { localStorage.setItem('pwa_banner_ascuns', '1') } catch { /* privat */ } setAscuns(true) }
+
+  return (
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'0 24px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,background:'#161B22',border:'1px solid #30363D',borderRadius:12,padding:'10px 14px',marginTop:14}}>
+        <img src="/icon-192.png" alt="" style={{width:34,height:34,borderRadius:8,background:'#fff'}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:14,fontWeight:700,color:'#E6EDF3'}}>Instalează PontajPRO pe telefon</div>
+          <div style={{fontSize:12,color:'#8B949E'}}>
+            {esteiOS && !deferred
+              ? 'Pe iPhone: Safari → butonul Share (pătratul cu săgeată) → „Adaugă pe ecranul principal".'
+              : 'Icon pe ecran, pornește pe tot ecranul — ca o aplicație normală.'}
+          </div>
+        </div>
+        {deferred && (
+          <button
+            onClick={async () => { deferred.prompt(); const r = await deferred.userChoice.catch(() => null); if (r?.outcome === 'accepted') setInstalat(true); setDeferred(null) }}
+            style={{background:'#1F6FEB',border:'none',color:'#fff',borderRadius:8,padding:'8px 14px',fontSize:13,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>
+            📲 Instalează
+          </button>
+        )}
+        <button onClick={inchide} title="Nu-mi mai arăta" style={{background:'transparent',border:'none',color:'#6E7681',fontSize:18,cursor:'pointer',padding:'0 2px'}}>×</button>
       </div>
     </div>
   )
