@@ -16,6 +16,13 @@ Sentry.init({
   enabled: import.meta.env.PROD,
 })
 
+// PWA: service worker doar în producție (în dev ar încurca hot-reload-ul)
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
