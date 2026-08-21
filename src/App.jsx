@@ -7850,6 +7850,14 @@ export function SalariiPage({ noExport = false } = {}) {
   const [editSal,setEditSal]=useState(null)
   const [saving,setSaving]=useState(false)
   const [toast,showToast]=useToast()
+  const [tab,setTab]=useState('contracte')
+  // Stat lunar (salarii_importuri + salarii_stat_linii — RLS strict: owner/can_access_salarii)
+  const [statImporturi,setStatImporturi]=useState(null) // null = neîncărcat încă
+  const [statImportSel,setStatImportSel]=useState(null)
+  const [statLinii,setStatLinii]=useState([])
+  const [statLoad,setStatLoad]=useState(false)
+  const [statSearch,setStatSearch]=useState('')
+  const [statSect,setStatSect]=useState('Toate')
 
   // === RE-AUTENTIFICARE: lockscreen cu parolă + inactivity timer ===
   const SALARII_TIMEOUT_MIN = 20  // minute valabilitate unlock (reset la activitate)
@@ -7933,6 +7941,23 @@ export function SalariiPage({ noExport = false } = {}) {
   }
 
   useEffect(()=>{ if(unlocked) loadData() },[unlocked])
+
+  useEffect(()=>{ if(unlocked&&tab==='stat'&&statImporturi===null) loadStatImporturi() },[unlocked,tab])
+  useEffect(()=>{ if(unlocked&&statImportSel!=null) loadStatLinii(statImportSel) },[unlocked,statImportSel])
+
+  const loadStatImporturi=async()=>{
+    setStatLoad(true)
+    const {data}=await supabase.from('salarii_importuri').select('*').order('luna',{ascending:false})
+    setStatImporturi(data||[])
+    if((data||[]).length) setStatImportSel(data[0].id)
+    else setStatLoad(false)
+  }
+  const loadStatLinii=async(impId)=>{
+    setStatLoad(true)
+    const {data}=await supabase.from('salarii_stat_linii').select('*').eq('import_id',impId).order('sectiune').order('nume')
+    setStatLinii(data||[])
+    setStatLoad(false)
+  }
 
   const loadData=async()=>{
     setLoad(true)
@@ -8062,7 +8087,9 @@ export function SalariiPage({ noExport = false } = {}) {
   }
 
   return (
-    noExport ? (<><Toast toast={toast}/><SalariiInner/></>) : (<Layout><Toast toast={toast}/><SalariiInner/></Layout>)
+    // SalariiInner() apelat ca funcție, NU ca <SalariiInner/>: componentă inline = tip nou la fiecare
+    // render → remount total → inputurile pierd focusul (resetTimer face setState la fiecare keydown)
+    noExport ? (<><Toast toast={toast}/>{SalariiInner()}</>) : (<Layout><Toast toast={toast}/>{SalariiInner()}</Layout>)
   )
 
   function SalariiInner() { return (<>
@@ -8073,6 +8100,13 @@ export function SalariiPage({ noExport = false } = {}) {
         </div>
         <button onClick={handleLock} style={{...S.btnS,padding:'4px 10px',fontSize:11,borderColor:G.red+'66',color:G.red}}>🔒 Lock acum</button>
       </div>
+
+      {/* Tab-uri: Contracte (date contractuale) | Stat lunar (statul importat de la Mari) */}
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        <button onClick={()=>setTab('contracte')} style={{...S.btnS,padding:'8px 18px',fontSize:12,fontWeight:700,...(tab==='contracte'?{background:G.blue+'22',borderColor:G.blue,color:G.blue}:{})}}>📋 Contracte</button>
+        <button onClick={()=>setTab('stat')} style={{...S.btnS,padding:'8px 18px',fontSize:12,fontWeight:700,...(tab==='stat'?{background:G.green+'22',borderColor:G.green,color:G.green}:{})}}>📊 Stat lunar</button>
+      </div>
+
       {/* Edit modal */}
       {editSal&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.8)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',overflow:'auto',padding:20}}>
@@ -8237,6 +8271,7 @@ export function SalariiPage({ noExport = false } = {}) {
         </div>
       )}
 
+      {tab==='stat' ? StatLunarTab() : (<>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
         <div>
           <div style={{fontSize:19,fontWeight:800}}>💵 Salarii</div>
@@ -8285,7 +8320,99 @@ export function SalariiPage({ noExport = false } = {}) {
           </tbody>
         </table>
       </div>}
+      </>)}
     </>) }
+
+  // ── Tab „Stat lunar": read-only peste salarii_importuri + salarii_stat_linii ──
+  function StatLunarTab() {
+    const imp=(statImporturi||[]).find(i=>i.id===statImportSel)
+    const lunaRo=(d)=>{ const s=new Date(d+'T12:00').toLocaleDateString('ro-RO',{month:'long',year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1) }
+    const fmt=(v)=>Number(v||0).toLocaleString('ro-RO',{maximumFractionDigits:0})
+    const linii=statLinii.filter(l=>{
+      const ms=(l.nume||'').toLowerCase().includes(statSearch.toLowerCase())
+      const md=statSect==='Toate'||l.sectiune===statSect
+      return ms&&md
+    })
+    const tot=linii.reduce((a,l)=>({brut:a.brut+Number(l.total_brut||0),net:a.net+Number(l.salariu_net||0),cost:a.cost+Number(l.cost_angajator||0),premii:a.premii+Number(l.premii||0),avans:a.avans+Number(l.avans||0),rest:a.rest+Number(l.rest_plata||0)}),{brut:0,net:0,cost:0,premii:0,avans:0,rest:0})
+    const chip=(v)=>(<button key={v} onClick={()=>setStatSect(v)} style={{...S.btnS,padding:'5px 12px',fontSize:11,fontWeight:700,...(statSect===v?{background:G.green+'22',borderColor:G.green,color:G.green}:{})}}>{v==='SANTIER'?'🏗️ Șantier':v==='SEDIU'?'🏢 Sediu':'Toate'}</button>)
+    return (<>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,gap:10,flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontSize:19,fontWeight:800}}>📊 Stat lunar</div>
+          <div style={{fontSize:11,color:G.muted,marginTop:3}}>
+            {imp?`${imp.fisier_nume||'stat'}${imp.importat_la?` · importat ${new Date(imp.importat_la).toLocaleDateString('ro-RO')}`:''}${imp.provizoriu?' · ⚠️ PROVIZORIU (fără prime)':''}`:'statul de salarii importat în platformă'}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          {(statImporturi||[]).length>0&&(
+            <select value={statImportSel||''} onChange={e=>setStatImportSel(Number(e.target.value))}>
+              {(statImporturi||[]).map(i=><option key={i.id} value={i.id}>{lunaRo(i.luna)}{i.provizoriu?' (provizoriu)':''}</option>)}
+            </select>
+          )}
+          {['Toate','SANTIER','SEDIU'].map(chip)}
+          <input placeholder="🔍 Caută..." value={statSearch} onChange={e=>setStatSearch(e.target.value)} style={{...S.input,width:170}}/>
+        </div>
+      </div>
+
+      {statLoad?<div style={{display:'flex',justifyContent:'center',padding:60}}><div className="sp" style={{width:30,height:30}}/></div>
+      :(statImporturi||[]).length===0?(
+        <div style={{...S.card,padding:40,textAlign:'center',color:G.muted,fontSize:13}}>
+          📭 Niciun stat importat încă.<br/><span style={{fontSize:11,color:G.dim}}>Statul lunar de la Mari se importă în BD — primul disponibil: Iulie 2026.</span>
+        </div>
+      ):(<>
+        {/* KPI */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:14}}>
+          {[['👥 Angajați',linii.length,G.text],['💰 Total brut',fmt(tot.brut)+' RON',G.text],['💸 Prime',fmt(tot.premii)+' RON',G.yellow],['✅ Total net',fmt(tot.net)+' RON',G.green],['🏭 Cost angajator',fmt(tot.cost)+' RON',G.orange]].map(([l,v,c])=>(
+            <div key={l} style={{...S.card,padding:'12px 14px'}}>
+              <div style={{fontSize:10,color:G.muted,fontWeight:700,textTransform:'uppercase',letterSpacing:'.4px'}}>{l}</div>
+              <div style={{fontSize:17,fontWeight:800,color:c,marginTop:4}}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{...S.card,overflowX:'auto'}}>
+          <table style={{minWidth:1150}}>
+            <thead><tr style={{background:G.bg}}>
+              <th>Angajat</th><th>Secț.</th><th style={{textAlign:'right'}}>Tarifar</th><th style={{textAlign:'right'}}>Ore</th><th style={{textAlign:'right'}}>Zile CO</th><th style={{textAlign:'right'}}>Prime</th><th style={{textAlign:'right'}}>Brut</th><th style={{textAlign:'right'}}>CAS</th><th style={{textAlign:'right'}}>CASS</th><th style={{textAlign:'right'}}>Impozit</th><th style={{textAlign:'right'}}>Net</th><th style={{textAlign:'right'}}>Avans</th><th style={{textAlign:'right'}}>Rest plată</th><th style={{textAlign:'right'}}>Cost angajator</th>
+            </tr></thead>
+            <tbody>
+              {linii.length===0?<tr><td colSpan={14} style={{textAlign:'center',color:G.muted,padding:40}}>Nicio linie</td></tr>
+              :linii.map(l=>(
+                <tr key={l.id}>
+                  <td><span style={{fontWeight:600,fontSize:12}}>{l.nume}</span>{!l.employee_id&&<span title="fără corespondent în angajați" style={{marginLeft:6,fontSize:10,color:G.yellow}}>⚠</span>}</td>
+                  <td><span className="badge bd" style={l.sectiune==='SEDIU'?{color:G.blue}:{}}>{l.sectiune==='SANTIER'?'Șantier':'Sediu'}</span></td>
+                  <td style={{textAlign:'right',fontSize:12,color:G.muted}}>{fmt(l.salar_tarifar)}</td>
+                  <td style={{textAlign:'right',fontSize:12,color:G.muted}}>{fmt(l.ore_lucrate)}</td>
+                  <td style={{textAlign:'right',fontSize:12,color:Number(l.zile_co)>0?G.yellow:G.dim}}>{Number(l.zile_co)>0?fmt(l.zile_co):'—'}</td>
+                  <td style={{textAlign:'right',fontSize:12,color:Number(l.premii)>0?G.yellow:G.dim}}>{Number(l.premii)>0?fmt(l.premii):'—'}</td>
+                  <td style={{textAlign:'right',fontSize:12,fontWeight:700}}>{fmt(l.total_brut)}</td>
+                  <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(l.cas)}</td>
+                  <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(l.sanatate)}</td>
+                  <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(l.impozit)}</td>
+                  <td style={{textAlign:'right',fontSize:12,fontWeight:700,color:G.green}}>{fmt(l.salariu_net)}</td>
+                  <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(l.avans)}</td>
+                  <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(l.rest_plata)}</td>
+                  <td style={{textAlign:'right',fontSize:12,fontWeight:700,color:G.orange}}>{fmt(l.cost_angajator)}</td>
+                </tr>
+              ))}
+            </tbody>
+            {linii.length>0&&(
+              <tfoot><tr style={{background:G.bg,fontWeight:800}}>
+                <td style={{fontSize:12}}>TOTAL ({linii.length})</td><td/><td/><td/><td/>
+                <td style={{textAlign:'right',fontSize:12,color:G.yellow}}>{fmt(tot.premii)}</td>
+                <td style={{textAlign:'right',fontSize:12}}>{fmt(tot.brut)}</td><td/><td/><td/>
+                <td style={{textAlign:'right',fontSize:12,color:G.green}}>{fmt(tot.net)}</td>
+                <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(tot.avans)}</td>
+                <td style={{textAlign:'right',fontSize:11,color:G.muted}}>{fmt(tot.rest)}</td>
+                <td style={{textAlign:'right',fontSize:12,color:G.orange}}>{fmt(tot.cost)}</td>
+              </tr></tfoot>
+            )}
+          </table>
+        </div>
+        <div style={{fontSize:10,color:G.dim,marginTop:8}}>Cost angajator = Brut × 1,0225 (CAM 2,25%) · Date read-only din statul de salarii importat · unde Net ≠ Avans+Rest, diferența = rețineri/popriri din stat</div>
+      </>)}
+    </>)
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
