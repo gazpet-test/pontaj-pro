@@ -1103,7 +1103,7 @@ function ContabilitateWMTab() {
 
   const deschideDrill = async (row) => {
     let q = supabase.from('contab_expert_linii')
-      .select('document_nr, document_data, partener, articol, gestiune, venit, cheltuiala, cont')
+      .select('document_nr, document_data, partener, articol, gestiune, persoana_nume, venit, cheltuiala, cont')
       .eq('import_id', lunaSel).order('cheltuiala', { ascending: false }).limit(300)
     q = row.cheie.startsWith('p') ? q.eq('proiect_id', Number(row.cheie.slice(1))) : q.eq('santier_text', row.cheie.slice(2))
     const { data } = await q
@@ -1171,7 +1171,7 @@ function ContabilitateWMTab() {
           </div>
           <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, overflow: 'auto', maxHeight: 420 }}>
             <table>
-              <thead><tr><th>Doc</th><th>Data</th><th>Partener</th><th>Articol</th><th>Gestiune</th><th style={{ textAlign: 'right' }}>Venit</th><th style={{ textAlign: 'right' }}>Chelt.</th><th>Cont</th></tr></thead>
+              <thead><tr><th>Doc</th><th>Data</th><th>Partener</th><th>Articol</th><th>Gestiune</th><th>Persoană</th><th style={{ textAlign: 'right' }}>Venit</th><th style={{ textAlign: 'right' }}>Chelt.</th><th>Cont</th></tr></thead>
               <tbody>
                 {drill.linii.map((l, i) => (
                   <tr key={i}>
@@ -1180,6 +1180,7 @@ function ContabilitateWMTab() {
                     <td style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.partener}>{l.partener}</td>
                     <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.articol}>{l.articol}</td>
                     <td style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.gestiune}>{l.gestiune}</td>
+                    <td style={{ maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.persoana_nume}>{l.persoana_nume}</td>
                     <td style={{ textAlign: 'right', color: Number(l.venit) ? G.green : G.dim, fontVariantNumeric: 'tabular-nums' }}>{fmtL(l.venit)}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtL(l.cheltuiala)}</td>
                     <td style={{ color: G.muted }}>{l.cont}</td>
