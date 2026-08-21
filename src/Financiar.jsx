@@ -1067,6 +1067,133 @@ function FacturiFurnizoriTab() {
   )
 }
 
+// ═══════════════════════════════════════════
+// TAB CONTABILITATE — analiza descriptivă WinMentor Expert, importată lunar
+// (contab_expert_importuri/_linii, mapare contab_santier_map, fn contab-expert-import)
+function ContabilitateWMTab() {
+  const [importuri, setImporturi] = useState([])
+  const [lunaSel, setLunaSel] = useState(null)
+  const [sumar, setSumar] = useState([])
+  const [drill, setDrill] = useState(null)      // { cheie, nume, linii }
+  const [loading, setLoading] = useState(true)
+  const fmtL = v => (Number(v) || 0).toLocaleString('ro-RO', { maximumFractionDigits: 0 })
+
+  useEffect(() => { (async () => {
+    const { data } = await supabase.from('contab_expert_importuri').select('*').order('luna', { ascending: false })
+    setImporturi(data || [])
+    if (data?.length) setLunaSel(data[0].id)
+    setLoading(false)
+  })() }, [])
+
+  useEffect(() => { if (lunaSel) { (async () => {
+    const { data } = await supabase.from('contab_expert_linii')
+      .select('proiect_id, santier_text, venit, cheltuiala, proiect:executie_proiecte(nume, cod_intern)')
+      .eq('import_id', lunaSel)
+    const agg = new Map()
+    for (const l of (data || [])) {
+      const cheie = l.proiect_id ? `p${l.proiect_id}` : `t:${l.santier_text || '(gol)'}`
+      const nume = l.proiect?.cod_intern || l.proiect?.nume || l.santier_text || '(fără șantier)'
+      if (!agg.has(cheie)) agg.set(cheie, { cheie, nume, mapat: !!l.proiect_id, venit: 0, chelt: 0, doc: 0 })
+      const a = agg.get(cheie)
+      a.venit += Number(l.venit) || 0; a.chelt += Number(l.cheltuiala) || 0; a.doc++
+    }
+    setSumar([...agg.values()].sort((a, b) => (b.venit - b.chelt) - (a.venit - a.chelt)))
+    setDrill(null)
+  })() } }, [lunaSel])
+
+  const deschideDrill = async (row) => {
+    let q = supabase.from('contab_expert_linii')
+      .select('document_nr, document_data, partener, articol, gestiune, venit, cheltuiala, cont')
+      .eq('import_id', lunaSel).order('cheltuiala', { ascending: false }).limit(300)
+    q = row.cheie.startsWith('p') ? q.eq('proiect_id', Number(row.cheie.slice(1))) : q.eq('santier_text', row.cheie.slice(2))
+    const { data } = await q
+    setDrill({ ...row, linii: data || [] })
+  }
+
+  const imp = importuri.find(i => i.id === lunaSel)
+  const totV = sumar.reduce((s, x) => s + x.venit, 0), totC = sumar.reduce((s, x) => s + x.chelt, 0)
+  const nemapate = sumar.filter(s => !s.mapat)
+
+  if (loading) return <div style={{ padding: 40, color: G.muted }}>Se încarcă...</div>
+  if (!importuri.length) return (
+    <div style={{ padding: 40, color: G.muted, textAlign: 'center' }}>
+      Niciun import încă. Analiza descriptivă lunară de la contabilitate (WinMentor Expert) apare aici după importul mailului Mirelei.
+    </div>
+  )
+
+  return (
+    <div style={{ padding: '18px 28px', maxWidth: 1150 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+        <select value={lunaSel || ''} onChange={e => setLunaSel(Number(e.target.value))}>
+          {importuri.map(i => <option key={i.id} value={i.id}>{new Date(i.luna).toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })}</option>)}
+        </select>
+        <div style={{ fontSize: 12.5, color: G.muted }}>
+          {imp?.nr_linii} documente · importat {imp?.importat_la ? new Date(imp.importat_la).toLocaleDateString('ro-RO') : '—'} din „{imp?.fisier_nume}"
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 14, fontSize: 13, fontWeight: 800 }}>
+          <span style={{ color: G.green }}>Venit: {fmtL(totV)} lei</span>
+          <span style={{ color: G.red }}>Cheltuieli: {fmtL(totC)} lei</span>
+          <span style={{ color: totV - totC >= 0 ? G.green : G.red }}>Rezultat: {fmtL(totV - totC)} lei</span>
+        </div>
+      </div>
+
+      {nemapate.length > 0 && (
+        <div style={{ background: G.orange + '12', border: `1px solid ${G.orange}55`, borderRadius: 10, padding: '9px 14px', marginBottom: 12, fontSize: 12.5, color: G.orange }}>
+          ⚠️ {nemapate.length} „șantiere" din WinMentor fără proiect în platformă: {nemapate.map(n => n.nume).join(' · ')} — cele generice („SANTIER") se realocă în WinMentor de contabilitate.
+        </div>
+      )}
+
+      <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, overflow: 'hidden' }}>
+        <table>
+          <thead><tr><th>Șantier / Proiect</th><th style={{ textAlign: 'right' }}>Venit</th><th style={{ textAlign: 'right' }}>Cheltuieli</th><th style={{ textAlign: 'right' }}>Rezultat</th><th style={{ textAlign: 'right' }}>Doc.</th></tr></thead>
+          <tbody>
+            {sumar.map(r => {
+              const rez = r.venit - r.chelt
+              return (
+                <tr key={r.cheie} onClick={() => deschideDrill(r)} style={{ cursor: 'pointer' }} title="Click pentru documente">
+                  <td style={{ fontWeight: 600 }}>{r.mapat ? '' : '⚠️ '}{r.nume}</td>
+                  <td style={{ textAlign: 'right', color: r.venit ? G.green : G.dim, fontVariantNumeric: 'tabular-nums' }}>{fmtL(r.venit)}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtL(r.chelt)}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 800, color: rez >= 0 ? G.green : G.red, fontVariantNumeric: 'tabular-nums' }}>{fmtL(rez)}</td>
+                  <td style={{ textAlign: 'right', color: G.dim }}>{r.doc}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {drill && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>📄 {drill.nume} — top documente ({drill.linii.length}{drill.linii.length === 300 ? '+' : ''})</div>
+            <button onClick={() => setDrill(null)} style={{ background: 'transparent', border: `1px solid ${G.border}`, color: G.muted, borderRadius: 6, padding: '3px 10px', fontSize: 12, cursor: 'pointer' }}>închide</button>
+          </div>
+          <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, overflow: 'auto', maxHeight: 420 }}>
+            <table>
+              <thead><tr><th>Doc</th><th>Data</th><th>Partener</th><th>Articol</th><th>Gestiune</th><th style={{ textAlign: 'right' }}>Venit</th><th style={{ textAlign: 'right' }}>Chelt.</th><th>Cont</th></tr></thead>
+              <tbody>
+                {drill.linii.map((l, i) => (
+                  <tr key={i}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{l.document_nr}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{l.document_data ? new Date(l.document_data).toLocaleDateString('ro-RO') : ''}</td>
+                    <td style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.partener}>{l.partener}</td>
+                    <td style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.articol}>{l.articol}</td>
+                    <td style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.gestiune}>{l.gestiune}</td>
+                    <td style={{ textAlign: 'right', color: Number(l.venit) ? G.green : G.dim, fontVariantNumeric: 'tabular-nums' }}>{fmtL(l.venit)}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtL(l.cheltuiala)}</td>
+                    <td style={{ color: G.muted }}>{l.cont}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function FinanciarPage() {
   const [facturi, setFacturi]       = useState([])
   const [loading, setLoading]       = useState(true)
@@ -1204,7 +1331,7 @@ export default function FinanciarPage() {
           <div style={{width:30,height:30,background:`linear-gradient(135deg,${G.financiar},#2DD4BF)`,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>💰</div>
           <div style={{fontSize:14,fontWeight:700}}>Financiar</div>
           <div style={{marginLeft:10,display:'flex',gap:6}}>
-            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri']].map(([k,l]) => (
+            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri'],['contab','📊 Contabilitate']].map(([k,l]) => (
               <button key={k} onClick={()=>setTab(k)} style={{
                 padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:8,
                 background: tab===k ? G.financiar+'22' : 'transparent',
@@ -1231,6 +1358,8 @@ export default function FinanciarPage() {
       <div style={{padding:'24px 28px',maxWidth:1400,margin:'0 auto'}}>
 
         {tab === 'furnizori' && <FacturiFurnizoriTab />}
+
+        {tab === 'contab' && <ContabilitateWMTab />}
 
         {tab === 'consumuri' && <ConsumuriBonuriTab mode="financiar" />}
 
