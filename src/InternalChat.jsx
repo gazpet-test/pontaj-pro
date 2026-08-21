@@ -36,6 +36,25 @@ function formatTime(d) {
   return date.toLocaleDateString('ro-RO', { day: '2-digit', month: 'short' }) + ' ' + date.toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })
 }
 
+// Ora pentru lista de conversații (ca WhatsApp): azi → HH:MM, ieri → „ieri", altfel data
+function oraLista(d) {
+  if (!d) return ''
+  const date = new Date(d), now = new Date()
+  if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' })
+  const y = new Date(now); y.setDate(y.getDate() - 1)
+  if (date.toDateString() === y.toDateString()) return 'ieri'
+  return date.toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit' })
+}
+
+// Eticheta separatorului de zi din conversație
+function etichetaZi(d) {
+  const date = new Date(d), now = new Date()
+  if (date.toDateString() === now.toDateString()) return 'Azi'
+  const y = new Date(now); y.setDate(y.getDate() - 1)
+  if (date.toDateString() === y.toDateString()) return 'Ieri'
+  return date.toLocaleDateString('ro-RO', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
 function getInitials(name) {
   if (!name) return '?'
   const parts = name.trim().split(/\s+/)
@@ -92,6 +111,8 @@ export default function InternalChat({ profile }) {
   // Mobil: chat fullscreen ca WhatsApp — listă → conversație cu ← înapoi
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 720)
   const [mobilePane, setMobilePane] = useState('list')  // 'list' | 'conv'
+  const [cautare, setCautare] = useState('')            // căutare în lista de chat-uri
+  const [filtruChat, setFiltruChat] = useState('toate') // 'toate' | 'necitite'
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -531,72 +552,106 @@ export default function InternalChat({ profile }) {
               </div>
             </div>
             
+            {/* Căutare + filtre (ca WhatsApp) */}
+            <div style={{ padding: '8px 10px 6px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <input
+                value={cautare}
+                onChange={e => setCautare(e.target.value)}
+                placeholder="🔍 Caută o conversație..."
+                style={{
+                  width: '100%', background: G.surface, border: `1px solid ${G.border2}`, color: G.text,
+                  borderRadius: 18, padding: '9px 14px', fontSize: 14, fontFamily: 'inherit', outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[['toate', 'Toate'], ['necitite', `Necitite${totalUnread ? ` ${totalUnread}` : ''}`]].map(([k, t]) => (
+                  <button key={k} onClick={() => setFiltruChat(k)}
+                    style={{
+                      background: filtruChat === k ? G.green + '26' : 'transparent',
+                      border: `1px solid ${filtruChat === k ? G.green : G.border2}`,
+                      color: filtruChat === k ? G.green : G.muted,
+                      borderRadius: 16, padding: '4px 13px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                    }}>{t}</button>
+                ))}
+              </div>
+            </div>
+
             {/* Chats list */}
-            <div style={{ flex: 1, overflowY: 'auto' }}>
-              {chats.length === 0 ? (
-                <div style={{ padding: 20, color: G.muted, fontSize: 13, textAlign: 'center' }}>
-                  Niciun chat încă.
-                </div>
-              ) : chats.map(c => (
+            <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+              {(() => {
+                const vizibile = chats
+                  .filter(c => !cautare.trim() || (c.name || '').toLowerCase().includes(cautare.trim().toLowerCase()))
+                  .filter(c => filtruChat !== 'necitite' || (c.unread_count || 0) > 0)
+                  .sort((a, b) => new Date(b.last_message_at || b.created_at || 0) - new Date(a.last_message_at || a.created_at || 0))
+                if (!vizibile.length) return (
+                  <div style={{ padding: 20, color: G.muted, fontSize: 13, textAlign: 'center' }}>
+                    {chats.length === 0 ? 'Niciun chat încă.' : filtruChat === 'necitite' ? 'Nimic necitit. 🎉' : 'Nicio conversație nu se potrivește.'}
+                  </div>
+                )
+                return vizibile.map(c => (
                 <button
                   key={c.id}
                   onClick={() => { setActiveChatId(c.id); if (isMobile) setMobilePane('conv') }}
                   style={{
                     width: '100%',
-                    background: activeChatId === c.id ? G.primary + '22' : 'transparent',
+                    background: !isMobile && activeChatId === c.id ? G.primary + '22' : 'transparent',
                     border: 'none',
-                    borderLeft: activeChatId === c.id ? `3px solid ${G.primary}` : '3px solid transparent',
+                    borderLeft: !isMobile && activeChatId === c.id ? `3px solid ${G.primary}` : '3px solid transparent',
                     color: G.text,
                     textAlign: 'left',
-                    padding: '13px 14px',
+                    padding: isMobile ? '14px 14px' : '13px 14px',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 11,
+                    gap: 12,
                     transition: 'background .15s',
+                    borderBottom: `1px solid ${G.border}44`,
                   }}
                   onMouseEnter={e => { if (activeChatId !== c.id) e.currentTarget.style.background = G.border }}
                   onMouseLeave={e => { if (activeChatId !== c.id) e.currentTarget.style.background = 'transparent' }}
                 >
                   <div style={{
-                    width: 42, height: 42, borderRadius: '50%',
+                    width: 46, height: 46, borderRadius: '50%',
                     background: c.is_general ? G.primary : G.purple + '44',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 22, flexShrink: 0,
+                    fontSize: 24, flexShrink: 0,
                   }}>{c.avatar_emoji || '💬'}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontSize: 16, fontWeight: 700, color: G.text,
-                      display: 'flex', alignItems: 'center', gap: 6,
-                    }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.name}
+                    {/* rând 1: nume + ora ultimului mesaj (dreapta) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ flex: 1, fontSize: 15.5, fontWeight: 700, color: G.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.name}{c.my_role === 'admin' && <span style={{ fontSize: 11, color: G.yellow, marginLeft: 5 }}>👑</span>}
                       </span>
-                      {c.my_role === 'admin' && (
-                        <span style={{ fontSize: 11, color: G.yellow, fontWeight: 700 }}>👑</span>
+                      <span style={{ fontSize: 12, color: c.unread_count > 0 ? G.green : G.dim, fontWeight: c.unread_count > 0 ? 700 : 400, flexShrink: 0 }}>
+                        {oraLista(c.last_message_at)}
+                      </span>
+                    </div>
+                    {/* rând 2: preview + badge necitite verde (dreapta) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                      <span style={{ flex: 1, fontSize: 13, color: G.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.last_message || (c.last_message_at ? '🖼️ Poză' : 'Niciun mesaj încă')}
+                      </span>
+                      {c.unread_count > 0 && (
+                        <span style={{
+                          background: G.green, color: '#0D1117', borderRadius: 11,
+                          padding: '1px 7px', fontSize: 12, fontWeight: 800, minWidth: 21, textAlign: 'center', flexShrink: 0,
+                        }}>{c.unread_count > 99 ? '99+' : c.unread_count}</span>
                       )}
                     </div>
-                    <div style={{
-                      fontSize: 13, color: G.muted, marginTop: 2,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {c.last_message ? c.last_message : 'Niciun mesaj încă'}
-                    </div>
                   </div>
-                  {c.unread_count > 0 && (
-                    <span style={{
-                      background: G.red,
-                      color: '#fff',
-                      borderRadius: 10,
-                      padding: '2px 7px',
-                      fontSize: 12,
-                      fontWeight: 800,
-                      minWidth: 22,
-                      textAlign: 'center',
-                    }}>{c.unread_count > 99 ? '99+' : c.unread_count}</span>
-                  )}
                 </button>
-              ))}
+                ))
+              })()}
+              {/* FAB chat nou — doar pe mobil, ca WhatsApp */}
+              {isMobile && (
+                <button onClick={() => setShowNewChatModal(true)} title="Chat nou"
+                  style={{
+                    position: 'fixed', right: 18, bottom: 'calc(24px + env(safe-area-inset-bottom))',
+                    width: 56, height: 56, borderRadius: 16, border: 'none', cursor: 'pointer',
+                    background: G.green, color: '#0D1117', fontSize: 26, fontWeight: 800,
+                    boxShadow: '0 6px 20px rgba(0,0,0,.45)', zIndex: 10002,
+                  }}>➕</button>
+              )}
             </div>
             
             {/* Sidebar footer */}
@@ -694,9 +749,19 @@ export default function InternalChat({ profile }) {
                     const senderName = sender?.name || 'Necunoscut'
                     const prevMsg = messages[idx - 1]
                     const showSender = !prevMsg || prevMsg.sender_id !== m.sender_id
+                    const ziNoua = !prevMsg || new Date(prevMsg.created_at).toDateString() !== new Date(m.created_at).toDateString()
                     
                     return (
-                      <div key={m.id} style={{
+                      <div key={m.id}>
+                      {/* separator de zi, ca la WhatsApp */}
+                      {ziNoua && (
+                        <div style={{ textAlign: 'center', margin: '10px 0 8px' }}>
+                          <span style={{ background: G.surface, border: `1px solid ${G.border}`, color: G.muted, fontSize: 11.5, fontWeight: 700, padding: '3px 12px', borderRadius: 12 }}>
+                            {etichetaZi(m.created_at)}
+                          </span>
+                        </div>
+                      )}
+                      <div style={{
                         display: 'flex',
                         flexDirection: isOwn ? 'row-reverse' : 'row',
                         alignItems: 'flex-start',
@@ -743,6 +808,7 @@ export default function InternalChat({ profile }) {
                             {m.edited_at && <span style={{ marginLeft: 4 }}>· editat</span>}
                           </div>
                         </div>
+                      </div>
                       </div>
                     )
                   })}
