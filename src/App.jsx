@@ -959,12 +959,16 @@ function HomeDashboard() {
     { path:'/executie', icon:'🏗️', label:'Execuție',    color:'#58A6FF', desc:'Izometrie · Șantiere · Devize · Vreme live', active:true, requireModule:'executie' },
     { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'], moduleKey:'rapoarte_santier' },
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
+    // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
+    { path:'/inventar-corectii', icon:'🏷️', label:'Inventar Corecții', color:'#D29922', desc:'Registru ↔ BD · VECHI→NOU · TEMPORAR', active:true, emailsAllow:['m.alexandru@gazpet.ro','daniel.oancea@gazpet.ro','marilena.tudorache@gazpet.ro'] },
   ]
   // Filtrez modulele active la care user-ul nu are acces (zero scurgere de info)
   // rolesAllow = vizibil pt owner + rolurile listate + oricine are cheia moduleKey
   // bifată explicit în user_module_access (modelul DUAL — rol SAU bifă per persoană).
   const modules = allModules.filter(m => {
     if (!m.active) return true
+    // emailsAllow = card temporar vizibil doar pt owner + emailurile listate (ex. Inventar Corecții)
+    if (m.emailsAllow) return profile?.is_owner || m.emailsAllow.includes((profile?.email || '').toLowerCase())
     if (m.rolesAllow) return profile?.is_owner || m.rolesAllow.includes(profile?.role) || (m.moduleKey && hasModuleAccess(profile, m.moduleKey))
     if (!m.requireModule) return true
     return hasModuleAccess(profile, m.requireModule)
