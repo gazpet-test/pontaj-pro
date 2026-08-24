@@ -32,6 +32,9 @@ import ConcediuMobilPage from './ConcediuMobilPage.jsx'
 import HomeScada from './HomeScada.jsx'
 // ════════════ Buton global „De aprobat" în navbar (12.06.2026) ════════════
 import DeAprobatButton from './DeAprobatButton.jsx'
+// ════════════ PROVIZORIU: corecții registru imobilizări ↔ inventar (24.08.2026) ════════════
+// Se scoate (ruta + fișierul InventarCorectii.jsx) când proiectul de aliniere e încheiat.
+import InventarCorectii from './InventarCorectii.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -108,6 +111,13 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
 function ConsumabileRoute() {
   const { profile } = useAuth()
   return <Consumabile profile={profile} />
+}
+
+// PROVIZORIU (24.08.2026): corecții registru imobilizări. Gate-ul pe persoane
+// (owner + Mitrache/Oancea/Marilena) e în interiorul componentei.
+function InventarCorectiiRoute() {
+  const { profile } = useAuth()
+  return <InventarCorectii profile={profile} />
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -8475,6 +8485,8 @@ export default function App() {
         {/* Consumabile birou: fără requireModule — e cerința explicită să ajungă
             toată lumea, iar modulul Administrativ are doar 6 utilizatori. */}
         <Route path="/consumabile" element={<ProtectedRoute><Layout><ConsumabileRoute/></Layout></ProtectedRoute>}/>
+        {/* PROVIZORIU: corecții registru imobilizări (se scoate la finalul proiectului) */}
+        <Route path="/inventar-corectii" element={<ProtectedRoute><Layout><InventarCorectiiRoute/></Layout></ProtectedRoute>}/>
         {/* ════════════ Etapa 15 Faza 1: Routes module Comercial ════════════ */}
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
