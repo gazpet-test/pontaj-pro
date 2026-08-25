@@ -9,9 +9,12 @@
 // Extensibil: orice flux nou de aprobare se adaugă aici ca secțiune.
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+// Bara de sus taie pe verticală (overflow-x:auto pt. swipe) — meniul se randează
+// prin portal, altfel se deschide invizibil. Vezi PopoverBara.jsx.
+import PopoverBara from './PopoverBara.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -25,6 +28,7 @@ const fmtData = (d) => { if (!d) return '—'; const x = new Date(d); return isN
 export default function DeAprobatButton({ profile }) {
   const nav = useNavigate()
   const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
   const [comenzi, setComenzi] = useState([])
   const [transporturi, setTransporturi] = useState([])
 
@@ -68,6 +72,7 @@ export default function DeAprobatButton({ profile }) {
     <div style={{ position:'relative' }}>
       <style>{`@keyframes deAprobatPulse{0%,100%{box-shadow:0 0 0 0 rgba(63,185,80,.45)}50%{box-shadow:0 0 0 6px rgba(63,185,80,0)}}`}</style>
       <button
+        ref={btnRef}
         onClick={() => { setOpen(v => !v); if (!open) load() }}
         title="Tot ce așteaptă aprobarea ta — comenzi furnizor, transporturi"
         style={{
@@ -91,12 +96,10 @@ export default function DeAprobatButton({ profile }) {
       </button>
 
       {open && (
-        <>
-          <div onClick={() => setOpen(false)} style={{ position:'fixed', inset:0, zIndex:199 }} />
+        <PopoverBara anchorRef={btnRef} onClose={() => setOpen(false)} width={360}>
           <div style={{
-            position:'absolute', top:'calc(100% + 8px)', right:0, zIndex:200,
             background:G.surface, border:`1px solid ${G.border}`, borderRadius:12,
-            boxShadow:'0 8px 32px rgba(0,0,0,.4)', overflow:'hidden', minWidth:330, maxWidth:400,
+            boxShadow:'0 8px 32px rgba(0,0,0,.4)', overflow:'hidden',
           }}>
             <div style={{ padding:'10px 14px', borderBottom:`1px solid ${G.border}`, fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'.5px' }}>
               ✅ Așteaptă aprobarea ta
@@ -146,7 +149,7 @@ export default function DeAprobatButton({ profile }) {
               </div>
             )}
           </div>
-        </>
+        </PopoverBara>
       )}
     </div>
   )

@@ -32,6 +32,9 @@ import ConcediuMobilPage from './ConcediuMobilPage.jsx'
 import HomeScada from './HomeScada.jsx'
 // ════════════ Buton global „De aprobat" în navbar (12.06.2026) ════════════
 import DeAprobatButton from './DeAprobatButton.jsx'
+// Meniurile din bara de sus se randează prin portal — bara are overflow-x:auto
+// (swipe pe telefon) și le-ar tăia pe verticală. Vezi PopoverBara.jsx.
+import PopoverBara from './PopoverBara.jsx'
 // ════════════ PROVIZORIU: corecții registru imobilizări ↔ inventar (24.08.2026) ════════════
 // Se scoate (ruta + fișierul InventarCorectii.jsx) când proiectul de aliniere e încheiat.
 import InventarCorectii from './InventarCorectii.jsx'
@@ -424,6 +427,7 @@ function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const dropdownRef = useRef(null)
+  const bellBtnRef = useRef(null)
   
   const loadNotifs = useCallback(async () => {
     if (!profile?.id) return
@@ -449,15 +453,10 @@ function NotificationBell() {
     return () => clearInterval(t)
   }, [loadNotifs])
   
-  // Close dropdown la click în afara lui
-  useEffect(() => {
-    if (!open) return
-    const handler = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
+  // Închiderea la click în afară o face overlay-ul din PopoverBara. Nu mai
+  // punem handler pe document: panoul e randat prin portal în <body>, deci
+  // dropdownRef nu-l mai „conține" — handler-ul l-ar închide chiar la clickul
+  // pe el, înainte să apuce butonul dinăuntru să reacționeze.
   
   const markAsRead = async (id) => {
     await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id)
@@ -505,6 +504,7 @@ function NotificationBell() {
   return (
     <div ref={dropdownRef} style={{ position: 'relative' }}>
       <button
+        ref={bellBtnRef}
         onClick={() => setOpen(o => !o)}
         title={`Notificări${unreadCount > 0 ? ` (${unreadCount} necitite)` : ''}`}
         style={{
@@ -549,17 +549,13 @@ function NotificationBell() {
       </button>
       
       {open && (
+        <PopoverBara anchorRef={bellBtnRef} onClose={() => setOpen(false)} width={400}>
         <div style={{
-          position: 'absolute',
-          top: 'calc(100% + 8px)',
-          right: 0,
-          width: 400,
           maxHeight: 540,
           background: G.surface,
           border: `1px solid ${G.border}`,
           borderRadius: 12,
           boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
-          zIndex: 1000,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -668,6 +664,7 @@ function NotificationBell() {
             ))}
           </div>
         </div>
+        </PopoverBara>
       )}
       <style>{`@keyframes nb-pulse { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.2) } }`}</style>
     </div>
@@ -687,6 +684,7 @@ function Layout({ children }) {
   // Tichete ale mele — split deschise de mine vs asignate mie + de confirmat (12.06.2026)
   const [ticheteMele, setTicheteMele] = useState({ deschise: 0, asignate: 0, deConfirmat: 0 })
   const [showTicheteMele, setShowTicheteMele] = useState(false)
+  const ticheteMeleRef = useRef(null)
   useEffect(() => {
     if (!profile?.id) return
     // FIX 12.06.2026: + 'rezolvat' (workflow generic) — lipsea, tichetele care așteptau
@@ -785,6 +783,7 @@ function Layout({ children }) {
           {/* Ale mele — popover split */}
           <div style={{ position:'relative' }}>
             <button
+              ref={ticheteMeleRef}
               onClick={() => setShowTicheteMele(v => !v)}
               title={ticheteMele.deConfirmat > 0 ? `Ai ${ticheteMele.deConfirmat} tichet(e) rezolvate care așteaptă confirmarea ta!` : "Tichete ale mele — deschise de mine + asignate mie"}
               style={{
@@ -814,16 +813,11 @@ function Layout({ children }) {
             </button>
 
             {showTicheteMele && (
-              <>
-                {/* Overlay transparent ca sa inchida la click afara */}
-                <div onClick={() => setShowTicheteMele(false)}
-                  style={{ position:'fixed', inset:0, zIndex:199 }} />
-                {/* Popover */}
+              <PopoverBara anchorRef={ticheteMeleRef} onClose={() => setShowTicheteMele(false)} width={240}>
                 <div style={{
-                  position:'absolute', top:'calc(100% + 8px)', right:0,
-                  zIndex:200, background:G.surface, border:`1px solid ${G.border}`,
+                  background:G.surface, border:`1px solid ${G.border}`,
                   borderRadius:12, boxShadow:'0 8px 32px rgba(0,0,0,.4)',
-                  overflow:'hidden', minWidth:220,
+                  overflow:'hidden',
                 }}>
                   {/* Header */}
                   <div style={{ padding:'10px 14px', borderBottom:`1px solid ${G.border}`, fontSize:11, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:'.5px' }}>
@@ -881,7 +875,7 @@ function Layout({ children }) {
                     📋 Vezi toate ale mele ({ticheteMele.deschise + ticheteMele.asignate})
                   </button>
                 </div>
-              </>
+              </PopoverBara>
             )}
           </div>
           <button
