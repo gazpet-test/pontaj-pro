@@ -97,12 +97,27 @@ export default function OfertareLicitatiiTab() {
       garantie_participare: form.garantie_participare.trim() || null,
       nas_path: form.nas_path.trim() || null,
       observatii: form.observatii.trim() || null,
+      ...(form.loturi_ai ? { loturi: form.loturi_ai } : {}),
       updated_at: new Date().toISOString(),
     }
-    const { error } = editRow
-      ? await supabase.from('ofertare_licitatii').update(payload).eq('id', editRow.id)
-      : await supabase.from('ofertare_licitatii').insert({ ...payload, created_by: profile?.id || null })
-    if (error) { showToast('Eroare la salvare: ' + error.message, 'err'); return false }
+    let licId = editRow?.id
+    if (editRow) {
+      const { error } = await supabase.from('ofertare_licitatii').update(payload).eq('id', editRow.id)
+      if (error) { showToast('Eroare la salvare: ' + error.message, 'err'); return false }
+    } else {
+      const { data: ins, error } = await supabase.from('ofertare_licitatii')
+        .insert({ ...payload, created_by: profile?.id || null }).select('id').single()
+      if (error) { showToast('Eroare la salvare: ' + error.message, 'err'); return false }
+      licId = ins.id
+    }
+    // Fișa de date trasă în formular devine primul document al licitației (tip fisa_date)
+    if (form.fisa_path && licId) {
+      const { error: eDoc } = await supabase.from('ofertare_documente_atribuire').insert({
+        licitatie_id: licId, fisier_path: form.fisa_path, nume_original: form.fisa_nume || 'fisa_date.pdf',
+        tip: 'fisa_date', procesat_la: new Date().toISOString(),
+      })
+      if (eDoc) showToast('Licitația s-a salvat, dar fișa nu s-a atașat: ' + eDoc.message, 'warn')
+    }
     showToast(editRow ? 'Licitație actualizată.' : `Licitație înregistrată — ${payload.nr_anunt}.`)
     setShowForm(false); setEditRow(null)
     await load()
@@ -228,10 +243,48 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
     link_seap: e0?.link_seap || '', valoare_estimata: e0?.valoare_estimata ?? '', moneda: e0?.moneda || 'RON',
     termen_depunere: toLocalInput(e0?.termen_depunere), criteriu: e0?.criteriu || '',
     garantie_participare: e0?.garantie_participare || '', nas_path: e0?.nas_path || '', observatii: e0?.observatii || '',
+    fisa_path: null, fisa_nume: null, loturi_ai: null,
   })
   const [saving, setSaving] = useState(false)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiMsg, setAiMsg] = useState(null)   // { tip:'ok'|'err', text }
+  const [dragOver, setDragOver] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const valid = form.nr_anunt.trim() && form.autoritate.trim() && form.obiect.trim()
+
+  // E0 auto-fill: PDF-ul fișei de date → Storage → edge fn → precompletare formular.
+  // AI propune, omul verifică — nimic nu se salvează până nu apeși „Înregistrează".
+  const citesteFisa = async (file) => {
+    if (!file) return
+    if (!/\.pdf$/i.test(file.name)) { setAiMsg({ tip:'err', text:'Doar PDF — exportă fișa de date din SEAP ca PDF.' }); return }
+    setAiBusy(true); setAiMsg(null)
+    try {
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-80)
+      const path = `e0/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safe}`
+      const { error: eUp } = await supabase.storage.from('ofertare').upload(path, file, { contentType: 'application/pdf' })
+      if (eUp) throw eUp
+      const { data, error } = await supabase.functions.invoke('ofertare-e0-autofill', { body: { path, fisier_nume: file.name } })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      setForm(f => ({
+        ...f,
+        nr_anunt: data.nr_anunt || f.nr_anunt,
+        autoritate: data.autoritate || f.autoritate,
+        obiect: data.obiect || f.obiect,
+        valoare_estimata: data.valoare_estimata ?? f.valoare_estimata,
+        moneda: data.moneda || f.moneda,
+        termen_depunere: data.termen_depunere ? toLocalInput(data.termen_depunere) : f.termen_depunere,
+        criteriu: data.criteriu || f.criteriu,
+        garantie_participare: data.garantie_participare || f.garantie_participare,
+        loturi_ai: Array.isArray(data.loturi) && data.loturi.length ? data.loturi : f.loturi_ai,
+        fisa_path: path, fisa_nume: file.name,
+      }))
+      const gasite = ['nr_anunt','autoritate','obiect','valoare_estimata','termen_depunere','criteriu','garantie_participare'].filter(k => data[k] != null).length
+      setAiMsg({ tip:'ok', text:`✨ ${gasite}/7 câmpuri completate din „${file.name}" (încredere ${data.confidence}%). Verifică-le înainte de salvare — fișa se atașează automat licitației.` })
+    } catch (e) {
+      setAiMsg({ tip:'err', text:'Nu am putut citi fișa: ' + (e?.message || e) })
+    } finally { setAiBusy(false) }
+  }
 
   const submit = async () => {
     if (!valid) return
@@ -243,7 +296,29 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', overflowY:'auto', padding:'30px 14px' }} onClick={onClose}>
       <div style={{ ...S.card, width:'min(760px,100%)', padding:24 }} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize:17, fontWeight:800, marginBottom:16 }}>🏛 {e0 ? `Editează ${e0.nr_anunt}` : 'Licitație nouă'}</div>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:12 }}>🏛 {e0 ? `Editează ${e0.nr_anunt}` : 'Licitație nouă'}</div>
+
+        {/* Dropzone AI — trage fișa de date, formularul se completează singur */}
+        <label onDragOver={e => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)}
+          onDrop={e => { e.preventDefault(); setDragOver(false); citesteFisa(e.dataTransfer.files?.[0]) }}
+          style={{ display:'block', marginBottom:16, padding:'16px 18px', borderRadius:10, textAlign:'center', cursor:'pointer',
+            border:`2px dashed ${dragOver ? G.ofertare : form.fisa_path ? G.green : G.border}`,
+            background: dragOver ? G.ofertare + '15' : form.fisa_path ? G.green + '0D' : G.bg }}>
+          <input type="file" accept="application/pdf,.pdf" style={{ display:'none' }} disabled={aiBusy}
+            onChange={e => { citesteFisa(e.target.files?.[0]); e.target.value = '' }} />
+          {aiBusy ? (
+            <span style={{ fontSize:13, color:G.ofertare, fontWeight:700 }}>🤖 AI citește fișa de date... (câteva secunde)</span>
+          ) : form.fisa_path ? (
+            <span style={{ fontSize:13, color:G.green, fontWeight:700 }}>📎 {form.fisa_nume} — atașată. Trage alt PDF ca să recitești.</span>
+          ) : (
+            <span style={{ fontSize:13, color:G.muted }}>✨ <b style={{ color:G.text }}>Trage aici fișa de date / anunțul de participare (PDF)</b> sau apasă pentru a alege — AI completează formularul, tu doar verifici</span>
+          )}
+        </label>
+        {aiMsg && (
+          <div style={{ marginBottom:14, padding:'9px 13px', borderRadius:8, fontSize:12.5, fontWeight:600,
+            border:`1px solid ${aiMsg.tip === 'err' ? G.red : G.green}55`,
+            background:(aiMsg.tip === 'err' ? G.red : G.green) + '11', color: aiMsg.tip === 'err' ? G.red : G.green }}>{aiMsg.text}</div>
+        )}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
           <div><label style={S.lbl}>Nr. anunț SEAP *</label>
             <input style={S.input} value={form.nr_anunt} onChange={e => set('nr_anunt', e.target.value)} placeholder="ex: CN1094135" /></div>
