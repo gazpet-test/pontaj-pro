@@ -473,10 +473,11 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
     livrare_site_id: comanda.livrare_site_id || '',
     moneda: comanda.moneda || 'EUR',
     confirmare_juridica: !!comanda.confirmare_juridica,
+    este_servicii: !!comanda.este_servicii,
     observatii: comanda.observatii || '',
   } : {
     proiect_id:'', furnizor_id:'', persoana_contact:'', telefon_contact:'',
-    livrare_tip:'santier', livrare_site_id:'', moneda:'EUR', confirmare_juridica:false, observatii:'',
+    livrare_tip:'santier', livrare_site_id:'', moneda:'EUR', confirmare_juridica:false, este_servicii:false, observatii:'',
   })
   const [linii, setLinii] = useState(() => editMode && comanda.linii?.length
     ? comanda.linii.slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => ({ _k: uniq8(), denumire: l.denumire || '', um: l.um || '', cantitate: l.cantitate ?? '', pret_unitar: l.pret_unitar ?? '', termen_livrare: l.termen_livrare || '', observatii: l.observatii || '' }))
@@ -534,6 +535,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         livrare_site_id: form.livrare_tip === 'santier' ? (form.livrare_site_id || null) : null,
         moneda: form.moneda,
         confirmare_juridica: form.confirmare_juridica,
+        este_servicii: form.este_servicii,
         confirmare_juridica_de: form.confirmare_juridica ? profile.id : null,
         confirmare_juridica_la: form.confirmare_juridica ? new Date().toISOString() : null,
         observatii: form.observatii.trim() || null,
@@ -624,6 +626,13 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
             </select>
           </div>
         </div>
+
+        {/* TKT-2026-0138 (Kostas): comandă de servicii — nu intră în gestiune */}
+        <label style={{ display:'flex', alignItems:'center', gap:10, marginTop:14, padding:'10px 12px', borderRadius:10, border:`1px solid ${form.este_servicii ? G.purple : G.border2}`, background: form.este_servicii ? G.purple + '14' : G.bg, cursor:'pointer' }}>
+          <input type="checkbox" checked={form.este_servicii} onChange={e => set('este_servicii', e.target.checked)} style={{ accentColor:G.purple }} />
+          <span style={{ fontSize:13, fontWeight:700 }}>🛠 Prestare servicii — nu intră în gestiune</span>
+          <span style={{ fontSize:11.5, color:G.muted }}>transport, curier, prelucrare, instalare etc. — fără PV recepție/predare, fără stoc</span>
+        </label>
 
         {/* Linii comandă */}
         <div style={{ marginTop:18 }}>
@@ -858,6 +867,71 @@ function ReceptieTransportModal({ comanda, ctx, sites, onClose, onConfirm, busy 
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// MODAL: CREEAZĂ AVIZ / TRANSPORT DIN COMANDĂ ÎN STOC (TKT-2026-0131)
+// Comanda e deja recepționată/în stoc — aici DOAR se creează transportul cu
+// toate materialele din comandă; avizul se semnează/generează în Logistică.
+// Fără mișcări de stoc (au fost făcute la recepție/predare).
+// ════════════════════════════════════════════════════════════════════════════
+function AvizTransportModal({ comanda, ctx, sites, onClose, onConfirm, busy }) {
+  const c = comanda
+  const [destinatieSiteId, setDestinatieSiteId] = useState(comanda.livrare_site_id || '')
+  const [dataTransport, setDataTransport] = useState(todayISO())
+  const [observatii, setObservatii] = useState('')
+  const linii = (c.linii || []).filter(l => l.denumire && Number(l.cantitate) > 0)
+  const canConfirm = !!destinatieSiteId && !!dataTransport && linii.length > 0 && !busy
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:14, overflowY:'auto' }} onClick={onClose}>
+      <div style={{ ...S.card, width:'min(640px,100%)', padding:22 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>🚚 Creează aviz (transport) din comandă</div>
+        <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>
+          Comanda <b style={{ color:G.text }}>{c.numar_comanda}</b>{ctx.proiectNume ? <> · {ctx.proiectNume}</> : null} e deja în stoc. Se creează un <b>transport draft</b> cu toate materialele din comandă — avizul de însoțire se completează și se semnează în <b>Logistică → Transporturi</b>. Stocul NU se mai mișcă aici.
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 160px', gap:12, marginBottom:12 }}>
+          <div>
+            <label style={{ fontSize:12, color:G.muted, fontWeight:700 }}>Șantier destinație *</label>
+            <select style={S.input} value={destinatieSiteId} onChange={e => setDestinatieSiteId(e.target.value)}>
+              <option value="">— alege șantierul —</option>
+              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:G.muted, fontWeight:700 }}>Data transport *</label>
+            <input style={S.input} type="date" value={dataTransport} onChange={e => setDataTransport(e.target.value)} />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:12, color:G.muted, fontWeight:700 }}>Observații (opțional)</label>
+          <input style={S.input} value={observatii} onChange={e => setObservatii(e.target.value)} placeholder="ex: pleacă mâine dimineață cu duba" />
+        </div>
+
+        <div style={{ padding:12, borderRadius:10, border:`1px solid ${G.border2}`, background:G.bg, marginBottom:6 }}>
+          <div style={{ fontSize:12.5, fontWeight:800, marginBottom:6 }}>📦 Materiale pe aviz ({linii.length})</div>
+          {linii.length === 0 ? <div style={{ fontSize:12, color:G.red }}>Comanda nu are linii cu cantitate.</div> :
+            <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:180, overflowY:'auto' }}>
+              {linii.map((l, i) => (
+                <div key={i} style={{ display:'flex', justifyContent:'space-between', fontSize:12.5 }}>
+                  <span>{l.denumire}</span><span style={{ color:G.muted }}>{Number(l.cantitate)} {l.um || ''}</span>
+                </div>
+              ))}
+            </div>}
+        </div>
+        <div style={{ fontSize:11, color:G.dim, marginBottom:14 }}>Șoferul/mașina și avizul semnat se completează în Logistică → Transporturi. Aici doar creezi transportul draft.</div>
+
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+          <button onClick={onClose} disabled={busy} style={S.btnS}>Anulează</button>
+          <button onClick={() => onConfirm({ destinatieSiteId, dataTransport, observatii })} disabled={!canConfirm}
+            style={{ ...S.btnP, background: canConfirm ? G.blue : G.border2, color:'#0D1117', opacity: busy ? .6 : 1 }}>
+            {busy ? 'Procesez...' : '🚚 Creează transport (aviz)'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MODAL: DETALII COMANDĂ (aprobare + acțiuni flux + PDF-uri)
 // ════════════════════════════════════════════════════════════════════════════
 // ── Secțiunea 📎 Documente comandă (calitate/avize/facturi) ─────────────────
@@ -1022,6 +1096,7 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
         <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:8, flexWrap:'wrap' }}>
           <div style={{ fontSize:19, fontWeight:800 }}>🛒 {c.numar_comanda}</div>
           <StatusBadge status={c.status} big />
+          {c.este_servicii && <span style={{ background:G.purple + '22', color:G.purple, border:`1px solid ${G.purple}66`, borderRadius:14, padding:'3px 12px', fontSize:12, fontWeight:800 }}>🛠 Servicii — fără gestiune</span>}
           {(recapPrimite.complet + recapPrimite.partial) > 0 && (
             <span style={{ fontSize:12, fontWeight:700, padding:'4px 10px', borderRadius:20,
               background: recapPrimite.complet === recapPrimite.total ? G.green + '22' : G.orange + '22',
@@ -1189,7 +1264,7 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
 
         {/* Acțiuni flux */}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
-          {['emisa','in_tranzit','ajunsa','receptionata','finalizata'].includes(c.status) && ctx.canCreate && (
+          {['emisa','in_tranzit','ajunsa','receptionata','finalizata'].includes(c.status) && ctx.canCreate && !c.este_servicii && (
             <Btn color={G.blue} onClick={() => actions.deschideReceptieBucati(c)}>🔍 Recepție bucăți (packing list)</Btn>
           )}
           {profile?.is_owner && (
@@ -1203,16 +1278,22 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {c.status === 'in_aprobare' && (profile?.is_owner || ctx.canCreate) && (
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează comanda</Btn>
           )}
-          {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa') && ctx.canCreate && !editPrimite && <Btn color={G.green} onClick={deschideEditPrimite}>📦 Recepție pe repere</Btn>}
+          {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa') && ctx.canCreate && !editPrimite && !c.este_servicii && <Btn color={G.green} onClick={deschideEditPrimite}>📦 Recepție pe repere</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && !editTermene && <Btn color={G.orange} onClick={deschideEditTermene}>📅 Modifică termene</Btn>}
           {c.status === 'emisa' && ctx.canCreate && <Btn color={G.purple} onClick={() => actions.markStatus(c, 'in_tranzit')}>🚚 Marchează ÎN TRANZIT</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && <Btn color={G.orange} onClick={() => actions.markStatus(c, 'ajunsa')}>📦 Marchează AJUNSĂ</Btn>}
-          {c.status === 'ajunsa' && <Btn color={G.green} onClick={() => actions.deschideReceptie(c)}>✅ Recepție (PV 1)</Btn>}
+          {c.status === 'ajunsa' && !c.este_servicii && <Btn color={G.green} onClick={() => actions.deschideReceptie(c)}>✅ Recepție (PV 1)</Btn>}
+          {/* TKT-2026-0138: servicii — la „ajunsă" (= prestat) se finalizează direct, fără PV/stoc.
+              Status terminal 'in_stoc' doar ca să ajungă în Arhivă — badge-ul 🛠 clarifică natura. */}
+          {c.status === 'ajunsa' && c.este_servicii && ctx.canCreate && <Btn color={G.green} onClick={() => actions.finalizeazaServicii(c)}>✅ Serviciu prestat — finalizează</Btn>}
           {/* TKT-2026-0051: recepție + transport direct la șantier (ridicăm noi, pleacă direct) */}
-          {c.status === 'ajunsa' && ctx.canCreate && c.proiect_id && <Btn color={G.blue} onClick={() => actions.deschideReceptieTransport(c)}>🚚 Recepție + transport la șantier</Btn>}
+          {c.status === 'ajunsa' && ctx.canCreate && c.proiect_id && !c.este_servicii && <Btn color={G.blue} onClick={() => actions.deschideReceptieTransport(c)}>🚚 Recepție + transport la șantier</Btn>}
           {/* TKT-2026-0040: undo „ajunsă" apăsat din greșeală → revine ÎN TRANZIT (înainte de recepție) */}
           {c.status === 'ajunsa' && ctx.canCreate && <Btn color={G.dim} onClick={() => actions.markStatus(c, 'in_tranzit')}>↩️ Anulează „ajunsă"</Btn>}
-          {c.status === 'receptionata' && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
+          {c.status === 'receptionata' && !c.este_servicii && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
+          {/* TKT-2026-0131 (Kostas): comandă în stoc → creezi transport cu toate materialele,
+              avizul se generează prin fluxul normal din Logistică → Transporturi */}
+          {(c.status === 'in_stoc' || c.status === 'receptionata') && ctx.canCreate && !c.este_servicii && <Btn color={G.blue} onClick={() => actions.deschideAvizTransport(c)}>🚚 Creează aviz (transport)</Btn>}
         </div>
       </div>
     </div>
@@ -1323,6 +1404,7 @@ export default function AchizitiiPage() {
   const [selectedId, setSelectedId] = useState(null)
   const [receptieId, setReceptieId] = useState(null)
   const [receptieTransportId, setReceptieTransportId] = useState(null)  // TKT-2026-0051: recepție + transport direct la șantier
+  const [avizTransportId, setAvizTransportId] = useState(null)          // TKT-2026-0131: aviz/transport din comandă în stoc
   const [predareId, setPredareId] = useState(null)
   const [receptieBucatiId, setReceptieBucatiId] = useState(null)
   const [fStatus, setFStatus] = useState('')
@@ -1418,6 +1500,7 @@ export default function AchizitiiPage() {
   const selected = useMemo(() => comenzi.find(c => c.id === selectedId) || null, [comenzi, selectedId])
   const receptieComanda = useMemo(() => comenzi.find(c => c.id === receptieId) || null, [comenzi, receptieId])
   const receptieTransportComanda = useMemo(() => comenzi.find(c => c.id === receptieTransportId) || null, [comenzi, receptieTransportId])
+  const avizTransportComanda = useMemo(() => comenzi.find(c => c.id === avizTransportId) || null, [comenzi, avizTransportId])
   const predareComanda = useMemo(() => comenzi.find(c => c.id === predareId) || null, [comenzi, predareId])
   const receptieBucatiComanda = useMemo(() => comenzi.find(c => c.id === receptieBucatiId) || null, [comenzi, receptieBucatiId])
 
@@ -1550,6 +1633,17 @@ export default function AchizitiiPage() {
       } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
 
+    // TKT-2026-0138: serviciu prestat → direct terminal (Arhivă), fără PV/predare/stoc
+    finalizeazaServicii: async (c) => {
+      setBusy(true)
+      try {
+        const { error } = await supabase.from('comenzi_furnizor').update({ status: 'in_stoc', updated_at: new Date().toISOString() }).eq('id', c.id)
+        if (error) throw error
+        showToast(`✅ ${c.numar_comanda} — serviciu prestat, comanda finalizată (arhivată, fără gestiune).`)
+        await loadAll()
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
+
     anuleaza: async (c) => {
       if (!window.confirm(`Anulezi comanda ${c.numar_comanda}? Acțiunea nu poate fi inversată din UI.`)) return
       await actions.markStatus(c, 'anulata')
@@ -1607,6 +1701,7 @@ export default function AchizitiiPage() {
     },
     deschideReceptie: (c) => { setSelectedId(null); setReceptieId(c.id) },
     deschideReceptieTransport: (c) => { setSelectedId(null); setReceptieTransportId(c.id) },
+    deschideAvizTransport: (c) => { setSelectedId(null); setAvizTransportId(c.id) },
     deschidePredare: (c) => { setSelectedId(null); setPredareId(c.id) },
     deschideReceptieBucati: (c) => { setSelectedId(null); setReceptieBucatiId(c.id) },
   }
@@ -1719,6 +1814,39 @@ export default function AchizitiiPage() {
       setReceptieTransportId(null)
       await loadAll()
     } catch (e) { console.error(e); showToast('Eroare recepție+transport: ' + (e.message || e), 'error') } finally { setBusy(false) }
+  }
+
+  // ── TKT-2026-0131: AVIZ/TRANSPORT DIN COMANDĂ ÎN STOC ────────────────────
+  // Doar transport draft + conținut (toate materialele din comandă) — fără
+  // mișcări de stoc (au fost făcute la recepție/predare). Avizul se generează
+  // în Logistică → Transporturi (fluxul normal, cu șofer + semnături).
+  const creeazaAvizTransport = async ({ destinatieSiteId, dataTransport, observatii }) => {
+    const c = avizTransportComanda; if (!c) return
+    if (!destinatieSiteId) { showToast('Alege șantierul destinație.', 'error'); return }
+    const linii = (c.linii || []).filter(l => l.denumire && Number(l.cantitate) > 0)
+    if (!linii.length) { showToast('Comanda nu are linii cu cantitate.', 'error'); return }
+    setBusy(true)
+    try {
+      const { data: tr, error: eT } = await supabase.from('logistica_transporturi').insert({
+        tip: 'materiale', continut_multiplu: true,
+        plecare_tip: 'alta', plecare_locatie_text: 'Magazie centrală (sediu Ploiești)',
+        destinatie_tip: 'site', destinatie_site_id: Number(destinatieSiteId),
+        data_transport: dataTransport || todayISO(),
+        sofer_gazpet: true, transport_intern_santier: false, transport_teava: false,
+        status: 'cerut', solicitant_id: profile?.id, data_solicitarii: new Date().toISOString(),
+        observatii: (observatii?.trim() ? observatii.trim() + ' · ' : '') + `Aviz din comanda ${c.numar_comanda} (comandă în stoc)`,
+      }).select('id, numar_transport').single()
+      if (eT) throw eT
+      const cont = linii.map((l, idx) => ({
+        transport_id: tr.id, tip: 'marfa', active_id: null,
+        denumire: l.denumire, cantitate: Number(l.cantitate), unitate_masura: l.um || null,
+        observatii: null, ordine: idx, din_stoc: false, created_by: profile?.id || null,
+      }))
+      const { error: eC } = await supabase.from('logistica_transporturi_continut').insert(cont)
+      if (eC) throw eC
+      showToast(`✅ Transport ${tr.numar_transport || '#' + tr.id} creat cu ${linii.length} materiale din ${c.numar_comanda}. Avizul se generează în Logistică → Transporturi.`)
+      setAvizTransportId(null)
+    } catch (e) { console.error(e); showToast('Eroare la creare transport: ' + (e.message || e), 'error') } finally { setBusy(false) }
   }
 
   // ── PREDARE MAGAZIE (PV 2) + intrare STOC automată ───────────────────────
@@ -2022,7 +2150,7 @@ export default function AchizitiiPage() {
                 <div style={{ overflow:'hidden' }}>{ctx.furnizorNume}<div style={{ fontSize:11, color:G.muted }}>{(c.linii || []).length} {((c.linii || []).length === 1) ? 'linie' : 'linii'}</div></div>
                 <div style={{ color:G.muted, fontSize:12.5, overflow:'hidden', textOverflow:'ellipsis' }}>{ctx.proiectNume || '—'}</div>
                 <div style={{ textAlign:'right', fontWeight:700, whiteSpace:'nowrap' }}>{fmtNr(totalComanda(c))} {c.moneda}</div>
-                <div><StatusBadge status={c.status} /></div>
+                <div><StatusBadge status={c.status} />{c.este_servicii && <span title="Prestare servicii — nu intră în gestiune" style={{ marginLeft:5, fontSize:12 }}>🛠</span>}</div>
                 <div style={{ textAlign:'right', display:'flex', gap:6, justifyContent:'flex-end' }} onClick={e => e.stopPropagation()}>
                   <button onClick={() => setSelectedId(c.id)} title="Detalii" style={{ ...S.btnIcon, padding:'7px 11px' }}>👁</button>
                   {c.status === 'draft' && canCreate && (
@@ -2088,6 +2216,10 @@ export default function AchizitiiPage() {
       {receptieTransportComanda && (
         <ReceptieTransportModal comanda={receptieTransportComanda} ctx={ctxFor(receptieTransportComanda)} sites={sites}
           onClose={() => setReceptieTransportId(null)} onConfirm={finalizeazaReceptieTransport} busy={busy} />
+      )}
+      {avizTransportComanda && (
+        <AvizTransportModal comanda={avizTransportComanda} ctx={ctxFor(avizTransportComanda)} sites={sites}
+          onClose={() => setAvizTransportId(null)} onConfirm={creeazaAvizTransport} busy={busy} />
       )}
       {receptieBucatiComanda && (
         <ReceptieBucatiModal
