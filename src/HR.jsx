@@ -16,6 +16,8 @@ import CitesteOricePanel from './CitesteOricePanel.jsx'
 import HrAngajatNouWizard from './HrAngajatNouWizard.jsx'
 import SugestiiChuckTab from './SugestiiChuckTab.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
+import DomeniiPicker from './HrDomeniiPicker.jsx'
+import HrPersonalExtern from './HrPersonalExtern.jsx'
 
 // Theme
 const G = {
@@ -193,6 +195,7 @@ export default function HRPage() {
   const tabs = [
     { key: 'personal',    icon: '👥', label: 'Angajați' },
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
+    { key: 'extern',      icon: '🤝', label: 'Personal extern' },
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z + stats.viza_expirat },
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
@@ -265,6 +268,7 @@ export default function HRPage() {
       {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
+      {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
@@ -1225,9 +1229,9 @@ function Field({ label, value }) {
 // ===========================================================================
 // MODAL ADAUGĂ AUTORIZAȚIE
 // ===========================================================================
-const DOMENII_RTE = ['Gaze', 'Apă', 'Țiței', 'Electrice', 'Construcții civile', 'Construcții edilitare']
 const PROCEDEE_SUDURA = ['111', '111MMA', '135', '136', '135-136', '141', '141-111', '111+141']
 const CALITATI_MATERIAL = ['Oțel', 'Oțel inox', 'Oțel carbon', 'PEHD', 'Aluminiu', 'Cupru', 'Aliaj']
+
 
 function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }) {
   const [tipId, setTipId] = useState('')
@@ -1361,19 +1365,7 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
         )}
         
         {tipSelectat?.necesita_domenii && (
-          <div style={{marginBottom:12, padding:12, background:G.blue+'11', border:`1px solid ${G.blue}33`, borderRadius:8}}>
-            <div style={{fontSize:11, color:G.blue, fontWeight:700, marginBottom:8}}>🏷 RTE / RTS — Domenii (selectează multiple)</div>
-            <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
-              {DOMENII_RTE.map(d => (
-                <label key={d} style={{display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background: domenii.includes(d) ? G.blue+'33' : G.bg, border:`1px solid ${domenii.includes(d) ? G.blue : G.border}`, borderRadius:6, cursor:'pointer', fontSize:12}}>
-                  <input type="checkbox" checked={domenii.includes(d)} onChange={e => {
-                    setDomenii(e.target.checked ? [...domenii, d] : domenii.filter(x => x !== d))
-                  }} style={{accentColor:G.blue}}/>
-                  {d}
-                </label>
-              ))}
-            </div>
-          </div>
+          <DomeniiPicker domenii={domenii} setDomenii={setDomenii} />
         )}
         
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10}}>
@@ -1584,19 +1576,7 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
         )}
         
         {tipSelectat?.necesita_domenii && (
-          <div style={{marginBottom:12, padding:12, background:G.blue+'11', border:`1px solid ${G.blue}33`, borderRadius:8}}>
-            <div style={{fontSize:11, color:G.blue, fontWeight:700, marginBottom:8}}>🏷 Domenii (selectează multiple)</div>
-            <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
-              {DOMENII_RTE.map(d => (
-                <label key={d} style={{display:'flex', alignItems:'center', gap:6, padding:'6px 10px', background: domenii.includes(d) ? G.blue+'33' : G.bg, border:`1px solid ${domenii.includes(d) ? G.blue : G.border}`, borderRadius:6, cursor:'pointer', fontSize:12}}>
-                  <input type="checkbox" checked={domenii.includes(d)} onChange={e => {
-                    setDomenii(e.target.checked ? [...domenii, d] : domenii.filter(x => x !== d))
-                  }} style={{accentColor:G.blue}}/>
-                  {d}
-                </label>
-              ))}
-            </div>
-          </div>
+          <DomeniiPicker domenii={domenii} setDomenii={setDomenii} />
         )}
         
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10}}>
