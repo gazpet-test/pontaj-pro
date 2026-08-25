@@ -8,7 +8,7 @@
 // Fișier separat de Ofertare.jsx ca tab-urile vechi (calitate/probe) să rămână
 // neatinse; componentele stau la nivel de modul (lecția #105 — remount).
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 
 const G = {
@@ -358,6 +358,165 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// SECȚIUNE: DOCUMENTAȚIA DE ATRIBUIRE (E1 — ingestie)
+// Regulile din claude_docs/ofertare-structura-nas-licitatii (corpus v5):
+// - arhivele (7z/rar/zip/.001) NU se urcă din browser — se dezarhivează local
+//   și se urcă FOLDERUL (regula 1); dedup pe (nume, mărime) la re-upload
+// - gunoaie excluse: ~$*, .log, _Claude_*, .db, .tmp (regulile 7/23)
+// - clasificarea din nume e doar INDICIU (regula 25 — „PALNSE"), omul o poate
+//   schimba; conținutul decide în E2
+// - procesarea AI: un document pe rând, cu continuare (pagini_procesate) —
+//   edge fn ofertare-ingest-doc, felii mici sub IDLE_TIMEOUT-ul gateway-ului
+// ════════════════════════════════════════════════════════════════
+const JUNK_RE = /(^|\/)~\$|\.log$|_Claude_|\.db$|\.tmp$|(^|\/)Thumbs\.db$/i
+const ARHIVA_RE = /\.(7z|rar|zip|z\d{2}|\d{3})$|\.part\d+\.rar$/i
+const DOC_STATUS = {
+  neprocesat: { label:'neprocesat', color:G.muted },
+  in_lucru:   { label:'în lucru',   color:G.yellow },
+  procesat:   { label:'✓ procesat', color:G.green },
+  eroare:     { label:'eroare',     color:G.red },
+  ignorat:    { label:'doar fișier',color:G.dim },
+}
+const ghicesteTip = (nume) => {
+  const n = (nume || '').toLowerCase()
+  if (/fisadate|fisa.de.date|instructiuni.?ofertanti/.test(n)) return 'fisa_date'
+  if (/clarificare|raspuns.*consolidat|erata/.test(n)) return 'raspuns_clarificare'
+  if (/formular|duae/.test(n)) return 'formular'
+  if (/contract/.test(n)) return 'model_contract'
+  if (/cantitat|antemasur|^f[1-3][_ .-]/.test(n)) return 'lista_cantitati'
+  if (/desene|plans|palnse|\.dwg$|izometri/.test(n)) return 'plansa'
+  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum'
+  return 'alta'
+}
+
+function DocumenteSection({ licitatie, onChanged }) {
+  const [docs, setDocs] = useState(null)
+  const [upBusy, setUpBusy] = useState(null)   // text progres upload
+  const [procBusy, setProcBusy] = useState(null) // text progres procesare
+  const stopRef = useRef(false)                // ref, nu state — loop-ul citește valoarea LIVE
+  const [warn, setWarn] = useState(null)
+
+  const load = async () => {
+    const { data } = await supabase.from('ofertare_documente_atribuire')
+      .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, ocr, revizie, size_bytes, eroare')
+      .eq('licitatie_id', licitatie.id).order('id')
+    setDocs(data || [])
+  }
+  useEffect(() => { load() }, [licitatie.id])
+
+  const urca = async (fileList) => {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+    const arhive = files.filter(f => ARHIVA_RE.test(f.name))
+    const bune = files.filter(f => !JUNK_RE.test((f.webkitRelativePath || f.name)) && !ARHIVA_RE.test(f.name))
+    setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — dezarhivează-le local și urcă folderul rezultat.` : null)
+    if (!bune.length) { setUpBusy(null); return }
+    // Dedup pe (nume, mărime) față de ce e deja urcat (regula 1 — dublă-ingestie)
+    const existente = new Set((docs || []).map(d => `${d.nume_original}|${d.size_bytes || ''}`))
+    setUpBusy(`0/${bune.length}`)
+    let ok = 0, sarite = 0
+    for (let i = 0; i < bune.length; i++) {
+      const f = bune[i]
+      const rel = (f.webkitRelativePath || f.name).replace(/^[^/]*\//, '') // fără folderul rădăcină
+      if (existente.has(`${rel}|${f.size}`) || existente.has(`${rel}|`)) { sarite++; setUpBusy(`${i + 1}/${bune.length}`); continue }
+      const safe = rel.replace(/[^a-zA-Z0-9ăâîșțĂÂÎȘȚ._/-]+/g, '_').slice(-180)
+      const path = `${licitatie.id}/atribuire/${Date.now().toString(36)}_${safe}`
+      const { error: eUp } = await supabase.storage.from('ofertare').upload(path, f)
+      if (eUp) { setWarn(`Eroare la „${rel}": ${eUp.message}`); continue }
+      const estePdf = /\.pdf$/i.test(rel)
+      await supabase.from('ofertare_documente_atribuire').insert({
+        licitatie_id: licitatie.id, fisier_path: path, nume_original: rel,
+        tip: ghicesteTip(rel), size_bytes: f.size,
+        status_procesare: estePdf ? 'neprocesat' : 'ignorat',
+        eroare: estePdf ? null : 'non-PDF — rămâne ca fișier (docx/xls/dwg se parsează în M2)',
+      })
+      ok++
+      setUpBusy(`${i + 1}/${bune.length}`)
+    }
+    setUpBusy(null)
+    if (ok || sarite) setWarn(w => [w, `✅ ${ok} fișiere urcate${sarite ? `, ${sarite} sărite (deja există — dedup)` : ''}.`].filter(Boolean).join(' '))
+    await load(); onChanged?.()
+  }
+
+  // Procesare secvențială cu continuare — un doc pe rând, apeluri repetate cât continua=true
+  const proceseaza = async () => {
+    const deRulat = (docs || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original))
+    if (!deRulat.length) return
+    stopRef.current = false
+    for (let i = 0; i < deRulat.length; i++) {
+      const d = deRulat[i]
+      let continua = true, runde = 0
+      while (continua && runde < 60 && !stopRef.current) {
+        setProcBusy(`${i + 1}/${deRulat.length} · ${d.nume_original.split('/').pop()} (rundă ${runde + 1})`)
+        const { data, error } = await supabase.functions.invoke('ofertare-ingest-doc', { body: { doc_id: d.id } })
+        if (error || data?.error) { setWarn(`Eroare la „${d.nume_original}": ${data?.error || error.message}`); break }
+        continua = !!data?.continua
+        runde++
+      }
+      await load()
+      if (stopRef.current) break
+    }
+    setProcBusy(null); stopRef.current = false
+    await load(); onChanged?.()
+  }
+
+  const nrDeProcesat = (docs || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original)).length
+  const fmtMB = b => b ? (b / 1e6).toFixed(1) + ' MB' : ''
+
+  return (
+    <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:800 }}>📥 Documentația de atribuire {docs ? `(${docs.length})` : ''}</div>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          <label style={{ ...S.btnS, padding:'7px 12px', fontSize:12, cursor:'pointer' }}>
+            📁 Urcă folder
+            <input type="file" webkitdirectory="" directory="" multiple style={{ display:'none' }}
+              disabled={!!upBusy} onChange={e => { urca(e.target.files); e.target.value = '' }} />
+          </label>
+          <label style={{ ...S.btnS, padding:'7px 12px', fontSize:12, cursor:'pointer' }}>
+            📄 Urcă fișiere
+            <input type="file" multiple style={{ display:'none' }}
+              disabled={!!upBusy} onChange={e => { urca(e.target.files); e.target.value = '' }} />
+          </label>
+          {nrDeProcesat > 0 && !procBusy && (
+            <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={proceseaza}>🤖 Procesează ({nrDeProcesat})</button>
+          )}
+          {procBusy && (
+            <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12, color:G.red, borderColor:G.red + '66' }} onClick={() => { stopRef.current = true }}>⏹ Oprește</button>
+          )}
+        </div>
+      </div>
+      {upBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬆️ Se urcă... {upBusy}</div>}
+      {procBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 AI citește: {procBusy}</div>}
+      {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
+
+      {docs === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
+        !docs.length ? (
+          <div style={{ fontSize:12, color:G.dim }}>
+            Niciun document încă. Dezarhivează local documentația din SEAP (7z/rar/zip nu se urcă direct) și trage folderul cu „📁 Urcă folder" — apoi „🤖 Procesează" extrage textul, antetele și reviziile.
+          </div>
+        ) : (
+          <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
+            {docs.map(d => {
+              const st = DOC_STATUS[d.status_procesare] || DOC_STATUS.neprocesat
+              return (
+                <div key={d.id} style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, padding:'5px 8px', borderRadius:6, background:G.surface }}>
+                  <span style={{ color:st.color, fontWeight:700, minWidth:86 }}>{st.label}</span>
+                  <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.nume_original}>{d.nume_original}</span>
+                  <span style={{ color:G.dim, whiteSpace:'nowrap' }}>{d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}</span>
+                  <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
+                    {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
 function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus, onDecide, onDelete }) {
@@ -392,6 +551,9 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
         <R k="Documente / Cerințe" v={`${l.nr_documente} documente · ${l.nr_cerinte} cerințe (${l.nr_eliminatorii} eliminatorii, ${l.eliminatorii_neacoperite} neacoperite)`} />
         <R k="Motivare decizie" v={l.decizie_motivare} />
         <R k="Observații" v={l.observatii} />
+
+        {/* E1: documentația de atribuire — upload folder + procesare AI */}
+        <DocumenteSection licitatie={l} />
 
         {/* E0: decizia GO/NO-GO — doar în analiză, doar owner */}
         {l.status === 'analiza' && profile?.is_owner && (
