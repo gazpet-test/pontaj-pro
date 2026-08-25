@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI } from './utils/probeCalc.js'
+import OfertareLicitatiiTab from './OfertareLicitatii.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -44,7 +45,7 @@ const OFERTA_STATUS = {
 // PAGINA PRINCIPALĂ — tab-uri
 // ════════════════════════════════════════════════════════════════
 export default function OfertarePage() {
-  const [tab, setTab] = useState('calitate')
+  const [tab, setTab] = useState('licitatii')
 
   return (
     <div style={{ background: G.bg, minHeight: 'calc(100vh - 60px)', color: G.text }}>
@@ -54,6 +55,7 @@ export default function OfertarePage() {
           <div style={{ fontSize: 14, fontWeight: 700 }}>Ofertare</div>
           <div style={{ display:'flex', gap:6, marginLeft:18 }}>
             {[
+              { k:'licitatii', l:'🏛 Licitații' },
               { k:'calitate', l:'🏅 Documente calitate' },
               { k:'probe',    l:'🔬 Oferte probe presiune' },
             ].map(t => (
@@ -67,6 +69,7 @@ export default function OfertarePage() {
       </div>
 
       <div style={{ padding: '24px 28px', maxWidth: 1300, margin: '0 auto' }}>
+        {tab === 'licitatii' && <OfertareLicitatiiTab />}
         {tab === 'calitate' && <DocumenteCalitateTab />}
         {tab === 'probe' && <OferteProbeTab />}
       </div>
