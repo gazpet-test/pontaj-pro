@@ -517,6 +517,160 @@ function DocumenteSection({ licitatie, onChanged }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// SECȚIUNE: REGISTRUL DE CERINȚE (E2)
+// Extragere pe Opus (edge fn ofertare-cerinte, un apel/secțiune — II/III/IV/rest),
+// insert cu confirmata_de NULL. Poarta E2 = confirmarea umană de aici.
+// Bucla de corecție (ai_feedback): Confirm → verdict 'confirmat'; Corectez →
+// diff-ul AI↔om cu verdict 'corectat' (devine few-shot la extracțiile viitoare
+// pe aceeași autoritate); Respinge → 'respins' + rândul dispare.
+// ════════════════════════════════════════════════════════════════
+const TIP_CERINTA = {
+  eliminatorie: { label:'ELIMINATORIE', color:G.red },
+  propunere:    { label:'propunere',    color:G.blue },
+  forma:        { label:'formă',        color:G.muted },
+  contractuala: { label:'contractuală', color:G.purple },
+}
+const contextCheie = (autoritate) =>
+  `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
+
+function CerinteSection({ licitatie, profile, onChanged }) {
+  const [cerinte, setCerinte] = useState(null)
+  const [busy, setBusy] = useState(null)      // text progres extragere
+  const [editId, setEditId] = useState(null)  // rând în editare
+  const [editVal, setEditVal] = useState({})
+  const [warn, setWarn] = useState(null)
+  const [fTip, setFTip] = useState('')
+
+  const load = async () => {
+    const { data } = await supabase.from('ofertare_cerinte')
+      .select('id, sursa_sectiune, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai')
+      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
+      .order('sursa_sectiune').order('id')
+    setCerinte(data || [])
+  }
+  useEffect(() => { load() }, [licitatie.id])
+
+  const extrage = async () => {
+    if (cerinte?.length && !window.confirm('Re-extragerea șterge cerințele NEconfirmate și le extrage din nou (cele confirmate rămân). Continui?')) return
+    setWarn(null)
+    const sectiuni = ['III', 'IV', 'II', 'rest']
+    for (let i = 0; i < sectiuni.length; i++) {
+      setBusy(`Opus citește secțiunea ${sectiuni[i]} (${i + 1}/4)...`)
+      const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
+        { body: { licitatie_id: licitatie.id, sectiune: sectiuni[i], reset: i === 0 } })
+      if (error || data?.error) { setWarn(`Secțiunea ${sectiuni[i]}: ${data?.error || error.message}`); break }
+      await load()
+    }
+    setBusy(null); await load(); onChanged?.()
+  }
+
+  const feedback = async (c, verdict, corectat) => {
+    await supabase.from('ai_feedback').insert({
+      function_name: 'ofertare-cerinte', context_cheie: contextCheie(licitatie.autoritate),
+      ref_table: 'ofertare_cerinte', ref_id: c.id,
+      output_ai: { sursa_sectiune: c.sursa_sectiune, text_cerinta: c.text_cerinta, tip: c.tip, document_probant: c.document_probant },
+      verdict, output_corectat: corectat || null,
+      corectat_de: profile?.id || null, corectat_la: new Date().toISOString(),
+    })
+  }
+
+  const confirma = async (c) => {
+    await feedback(c, 'confirmat')
+    await supabase.from('ofertare_cerinte').update({ confirmata_de: profile.id, confirmata_la: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', c.id)
+    await load(); onChanged?.()
+  }
+  const salveazaCorectia = async (c) => {
+    const nou = { sursa_sectiune: editVal.sursa_sectiune?.trim() || c.sursa_sectiune, text_cerinta: editVal.text_cerinta?.trim() || c.text_cerinta, tip: editVal.tip || c.tip, document_probant: editVal.document_probant?.trim() || null }
+    await feedback(c, 'corectat', nou)
+    await supabase.from('ofertare_cerinte').update({ ...nou, confirmata_de: profile.id, confirmata_la: new Date().toISOString(), extras_de_ai: false, updated_at: new Date().toISOString() }).eq('id', c.id)
+    setEditId(null); await load(); onChanged?.()
+  }
+  const respinge = async (c) => {
+    if (!window.confirm('Respingi cerința? (dispare din registru; respingerea se ține minte ca feedback)')) return
+    await feedback(c, 'respins')
+    await supabase.from('ofertare_cerinte').delete().eq('id', c.id)
+    await load(); onChanged?.()
+  }
+  // Poarta E2 — confirmă tot ce a rămas neconfirmat, dintr-un click (după ce ai citit lista)
+  const confirmaTot = async () => {
+    const rest = (cerinte || []).filter(c => !c.confirmata_de)
+    if (!rest.length) return
+    if (!window.confirm(`Confirmi TOATE cele ${rest.length} cerințe neconfirmate? (poarta E2 — registrul devine oficial)`)) return
+    setBusy('Se confirmă registrul...')
+    for (const c of rest) await feedback(c, 'confirmat')
+    await supabase.from('ofertare_cerinte').update({ confirmata_de: profile.id, confirmata_la: new Date().toISOString() })
+      .eq('licitatie_id', licitatie.id).is('confirmata_de', null)
+    setBusy(null); await load(); onChanged?.()
+  }
+
+  const filtrate = (cerinte || []).filter(c => !fTip || c.tip === fTip)
+  const neconfirmate = (cerinte || []).filter(c => !c.confirmata_de).length
+
+  return (
+    <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:800 }}>📋 Registrul de cerințe {cerinte ? `(${cerinte.length}${neconfirmate ? ` · ${neconfirmate} neconfirmate` : ' · ✅ confirmat'})` : ''}</div>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={fTip} onChange={e => setFTip(e.target.value)}>
+            <option value="">toate tipurile</option>
+            {Object.entries(TIP_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          {!busy && <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={extrage}>🤖 {cerinte?.length ? 'Re-extrage' : 'Extrage cerințele'} (Opus)</button>}
+          {!busy && neconfirmate > 0 && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={confirmaTot}>✅ Confirmă registrul ({neconfirmate})</button>}
+        </div>
+      </div>
+      {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
+      {warn && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>{warn}</div>}
+
+      {cerinte === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
+        !cerinte.length ? (
+          <div style={{ fontSize:12, color:G.dim }}>Niciun rând încă. „🤖 Extrage cerințele" citește fișa de date procesată (secțiunile III, IV, II + restul) cu Opus — apoi tu confirmi/corectezi fiecare rând. Corecțiile tale devin exemple pentru extracțiile viitoare.</div>
+        ) : (
+          <div style={{ maxHeight:340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
+            {filtrate.map(c => {
+              const t = TIP_CERINTA[c.tip] || TIP_CERINTA.propunere
+              const inEdit = editId === c.id
+              return (
+                <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.confirmata_de ? G.green : t.color}` }}>
+                  <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
+                    <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
+                    {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
+                    {!inEdit && (
+                      <span style={{ display:'flex', gap:5, marginLeft:'auto' }}>
+                        {c.confirmata_de ? <span style={{ fontSize:11, color:G.green, fontWeight:700 }}>✓</span> : (<>
+                          <button title="Confirm" onClick={() => confirma(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66' }}>✓</button>
+                          <button title="Corectez" onClick={() => { setEditId(c.id); setEditVal({ sursa_sectiune: c.sursa_sectiune, text_cerinta: c.text_cerinta, tip: c.tip, document_probant: c.document_probant || '' }) }} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>✏️</button>
+                          <button title="Resping" onClick={() => respinge(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.red, borderColor:G.red + '66' }}>✕</button>
+                        </>)}
+                      </span>
+                    )}
+                  </div>
+                  {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
+                  {inEdit && (
+                    <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:6 }}>
+                      <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={editVal.text_cerinta} onChange={e => setEditVal(v => ({ ...v, text_cerinta: e.target.value }))} />
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                        <input style={{ ...S.input, maxWidth:120 }} value={editVal.sursa_sectiune} onChange={e => setEditVal(v => ({ ...v, sursa_sectiune: e.target.value }))} placeholder="secțiune" />
+                        <select style={{ ...S.input, maxWidth:150 }} value={editVal.tip} onChange={e => setEditVal(v => ({ ...v, tip: e.target.value }))}>
+                          {Object.entries(TIP_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
+                        <input style={{ ...S.input, flex:1, minWidth:160 }} value={editVal.document_probant} onChange={e => setEditVal(v => ({ ...v, document_probant: e.target.value }))} placeholder="document probant" />
+                        <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={() => salveazaCorectia(c)}>💾 Salvează corecția</button>
+                        <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={() => setEditId(null)}>Anulează</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
 function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus, onDecide, onDelete }) {
@@ -554,6 +708,9 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
 
         {/* E1: documentația de atribuire — upload folder + procesare AI */}
         <DocumenteSection licitatie={l} />
+
+        {/* E2: registrul de cerințe — Opus + confirmarea umană (poarta) + ai_feedback */}
+        <CerinteSection licitatie={l} profile={profile} />
 
         {/* E0: decizia GO/NO-GO — doar în analiză, doar owner */}
         {l.status === 'analiza' && profile?.is_owner && (
