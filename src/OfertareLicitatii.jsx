@@ -671,6 +671,152 @@ function CerinteSection({ licitatie, profile, onChanged }) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// SECȚIUNE: ACOPERIREA CERINȚELOR (E3) — cine acoperă fiecare cerință
+// Opus propune din catalogul REAL (hr_autorizatii + parteneri); omul verifică
+// pe scan (R1 — CHECK în BD: verificat cere fișier; scanul vine din autorizație).
+// Golurile devin tichete (modelul TKT-2026-0139). Poarta E3: zero eliminatorii GOL.
+// ════════════════════════════════════════════════════════════════
+const ACOPERIRE_STATUS = {
+  acoperit:          { label:'✅ acoperit',  color:G.green },
+  acoperit_partener: { label:'🤝 partener',  color:G.teal },
+  gol:               { label:'🔴 GOL',       color:G.red },
+}
+
+function AcoperireSection({ licitatie, profile, onChanged }) {
+  const [cerinte, setCerinte] = useState(null)
+  const [acoperiri, setAcoperiri] = useState({})   // cerinta_id -> rând acoperire (+ autorizația join)
+  const [busy, setBusy] = useState(null)
+  const [warn, setWarn] = useState(null)
+  const [fDoarGoluri, setFDoarGoluri] = useState(false)
+
+  const load = async () => {
+    const { data: cs } = await supabase.from('ofertare_cerinte')
+      .select('id, sursa_sectiune, text_cerinta, tip, lot')
+      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
+      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('sursa_sectiune')
+    setCerinte(cs || [])
+    if (cs?.length) {
+      const { data: ac } = await supabase.from('ofertare_acoperire')
+        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume)')
+        .in('cerinta_id', cs.map(c => c.id))
+      const map = {}; (ac || []).forEach(a => { map[a.cerinta_id] = a })
+      setAcoperiri(map)
+    } else setAcoperiri({})
+  }
+  useEffect(() => { load() }, [licitatie.id])
+
+  const propune = async () => {
+    setWarn(null)
+    for (const batch of ['eliminatorie', 'propunere']) {
+      setBusy(`Opus confruntă cerințele ${batch === 'eliminatorie' ? 'eliminatorii' : 'de propunere'} cu catalogul HR...`)
+      const { data, error } = await supabase.functions.invoke('ofertare-acoperire', { body: { licitatie_id: licitatie.id, batch } })
+      if (error || data?.error) { setWarn(`${batch}: ${data?.error || error.message}`); break }
+      await load()
+    }
+    setBusy(null); await load(); onChanged?.()
+  }
+
+  // R1: verificarea copiază scanul autorizației în acoperire — fără scan nu se poate
+  const verifica = async (a) => {
+    const scan = a.autorizatie?.fisier_path
+    if (!scan) { setWarn('Autorizația nu are scan încărcat în HR — încarcă scanul acolo întâi (R1).'); return }
+    const { error } = await supabase.from('ofertare_acoperire').update({
+      verificat_pe_scan: true, fisier_path: scan, verificat_de: profile?.id || null,
+      verificat_la: new Date().toISOString(), updated_at: new Date().toISOString(),
+    }).eq('id', a.id)
+    if (error) { setWarn('Eroare: ' + error.message); return }
+    await load(); onChanged?.()
+  }
+
+  const creeazaTichet = async (c, a) => {
+    const eElim = c.tip === 'eliminatorie'
+    const { data: tkt, error } = await supabase.from('tichete').insert({
+      departament: 'hr', subcategorie: 'altele',
+      titlu: `${eElim ? '🚫 ELIMINATORIE — ' : ''}Gol ofertare: ${c.text_cerinta.slice(0, 80)}`,
+      descriere: `Cerință neacoperită la licitația ${licitatie.nr_anunt} (${licitatie.autoritate}), sursa ${c.sursa_sectiune}:\n\n„${c.text_cerinta}"\n\nMotiv AI: ${a?.referinta_text || '—'}\n\nGenerat din modulul Ofertare (E3).`,
+      urgenta: 'normal', status: 'deschis', deschis_de: profile?.id || null,
+      entitate_tip: 'altele', entitate_descriere: `Licitație ${licitatie.nr_anunt}`,
+    }).select('id, numar_tichet').single()
+    if (error) { setWarn('Tichet: ' + error.message); return }
+    if (a) await supabase.from('ofertare_acoperire').update({ tichet_id: tkt.id, updated_at: new Date().toISOString() }).eq('id', a.id)
+    setWarn(`🎫 ${tkt.numar_tichet} creat pentru gol.`)
+    await load()
+  }
+
+  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0 }
+  ;(cerinte || []).forEach(c => {
+    const a = acoperiri[c.id]
+    if (!a) { stats.neevaluate++; return }
+    stats[a.status] = (stats[a.status] || 0) + 1
+    if (a.status === 'gol' && c.tip === 'eliminatorie') stats.goluriElim++
+  })
+  const randuri = (cerinte || []).filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol')
+
+  return (
+    <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:800 }}>🎯 Acoperirea cerințelor</div>
+        {cerinte?.length > 0 && (
+          <span style={{ fontSize:11.5, color:G.muted }}>
+            ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate
+            {stats.goluriElim > 0 && <b style={{ color:G.red }}> · {stats.goluriElim} ELIMINATORII neacoperite!</b>}
+          </span>
+        )}
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" checked={fDoarGoluri} onChange={e => setFDoarGoluri(e.target.checked)} style={{ accentColor:G.red }} /> doar goluri
+          </label>
+          {!busy && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={propune}>🤖 Propune acoperiri (Opus)</button>}
+        </div>
+      </div>
+      {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
+      {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
+
+      {cerinte === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
+        !cerinte.length ? <div style={{ fontSize:12, color:G.dim }}>Întâi extrage registrul de cerințe (secțiunea de mai sus) — apoi aici Opus îl confruntă cu autorizațiile din HR și partenerii.</div> :
+        (
+          <div style={{ maxHeight:320, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
+            {randuri.map(c => {
+              const a = acoperiri[c.id]
+              const st = a ? (ACOPERIRE_STATUS[a.status] || ACOPERIRE_STATUS.gol) : null
+              const titular = a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume
+              return (
+                <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}` }}>
+                  <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
+                    {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
+                    <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
+                    <span style={{ flex:1, fontSize:12.5, minWidth:200 }}>{c.text_cerinta}</span>
+                    <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
+                      {a && a.status !== 'gol' && !a.verificat_pe_scan && (
+                        <button title={a.autorizatie?.fisier_path ? 'Verificat pe scan (R1) — copiază scanul autorizației' : 'Autorizația nu are scan în HR'}
+                          onClick={() => verifica(a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66', opacity: a.autorizatie?.fisier_path ? 1 : .45 }}>👁 Verificat</button>
+                      )}
+                      {a?.verificat_pe_scan && <span style={{ fontSize:11, color:G.green, fontWeight:700 }} title="Verificat pe scan">✓✓</span>}
+                      {a && a.status === 'gol' && !a.tichet_id && (
+                        <button title="Golul devine tichet" onClick={() => creeazaTichet(c, a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>🎫 Tichet</button>
+                      )}
+                      {a?.tichet_id && <span style={{ fontSize:11, color:G.orange, fontWeight:700 }} title="Are tichet deschis">🎫</span>}
+                    </span>
+                  </div>
+                  {a && (titular || a.referinta_text) && (
+                    <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>
+                      {titular && <b style={{ color:G.text }}>{titular}</b>}
+                      {a.autorizatie?.tip?.denumire && <> · {a.autorizatie.tip.denumire}{a.autorizatie.numar_autorizatie ? ` nr. ${a.autorizatie.numar_autorizatie}` : ''}</>}
+                      {a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
+                      {a.referinta_text && <> — {a.referinta_text}</>}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
 function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus, onDecide, onDelete }) {
@@ -711,6 +857,9 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
 
         {/* E2: registrul de cerințe — Opus + confirmarea umană (poarta) + ai_feedback */}
         <CerinteSection licitatie={l} profile={profile} />
+
+        {/* E3: acoperirea cerințelor — catalog HR + parteneri, goluri ca tichete */}
+        <AcoperireSection licitatie={l} profile={profile} />
 
         {/* E0: decizia GO/NO-GO — doar în analiză, doar owner */}
         {l.status === 'analiza' && profile?.is_owner && (
