@@ -389,7 +389,7 @@ const ghicesteTip = (nume) => {
   return 'alta'
 }
 
-function DocumenteSection({ licitatie, onChanged }) {
+function DocumenteSection({ licitatie, profile, onChanged }) {
   const [docs, setDocs] = useState(null)
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
@@ -902,7 +902,7 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
         <R k="Observații" v={l.observatii} />
 
         {/* E1: documentația de atribuire — upload folder + procesare AI */}
-        <DocumenteSection licitatie={l} />
+        <DocumenteSection licitatie={l} profile={profile} />
 
         {/* E2: registrul de cerințe — Opus + confirmarea umană (poarta) + ai_feedback */}
         <CerinteSection licitatie={l} profile={profile} />
