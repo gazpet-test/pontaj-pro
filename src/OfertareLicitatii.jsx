@@ -467,13 +467,22 @@ function DocumenteSection({ licitatie, onChanged }) {
     let deRulat = listaPdf(docs)
     if (!deRulat.length) return
     stopRef.current = false
+    // 3 documente ÎN PARALEL (cerut de Razvan — serial dura ~90 min pe un fixture);
+    // edge functions scalează orizontal, fiecare doc e independent
+    const PARALEL = 3
     for (let trecere = 1; trecere <= 2 && deRulat.length && !stopRef.current; trecere++) {
-      for (let i = 0; i < deRulat.length; i++) {
-        const d = deRulat[i]
-        await proceseazaDoc(d, `${trecere === 2 ? 'reluare ' : ''}${i + 1}/${deRulat.length}`)
-        await load()
-        if (stopRef.current) break
+      let urmatorul = 0
+      const total = deRulat.length
+      const lucrator = async () => {
+        while (!stopRef.current) {
+          const idx = urmatorul++
+          if (idx >= total) return
+          const d = deRulat[idx]
+          await proceseazaDoc(d, `${trecere === 2 ? 'reluare ' : ''}${idx + 1}/${total} (3 în paralel)`)
+          await load()
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(PARALEL, total) }, () => lucrator()))
       // A doua trecere: doar restanțele (eroare / neterminate)
       const { data: fresh } = await supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, status_procesare').eq('licitatie_id', licitatie.id)
