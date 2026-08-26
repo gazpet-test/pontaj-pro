@@ -438,23 +438,56 @@ function DocumenteSection({ licitatie, onChanged }) {
     await load(); onChanged?.()
   }
 
-  // Procesare secvențială cu continuare — un doc pe rând, apeluri repetate cât continua=true
+  // Procesare secvențială cu continuare — un doc pe rând, apeluri repetate cât continua=true.
+  // Robustețe (cerut de Razvan 26.08): eroarea pe un document primește AUTO-RETRY
+  // (pauză + reîncercare — worker-ul edge crapă intermitent pe PDF-uri grele),
+  // la finalul cozii se face O A DOUA TRECERE peste restanțe, iar dacă tot rămân
+  // erori pleacă NOTIFICARE în clopoțel (nu doar un text care dispare de pe ecran).
+  const proceseazaDoc = async (d, eticheta) => {
+    let continua = true, runde = 0, incercariEsuate = 0
+    while (continua && runde < 60 && !stopRef.current) {
+      setProcBusy(`${eticheta} · ${d.nume_original.split('/').pop()} (rundă ${runde + 1})`)
+      const { data, error } = await supabase.functions.invoke('ofertare-ingest-doc', { body: { doc_id: d.id } })
+      if (error || data?.error) {
+        incercariEsuate++
+        if (incercariEsuate > 2) { setWarn(`Eroare persistentă la „${d.nume_original}": ${data?.error || error.message}`); return false }
+        setProcBusy(`${eticheta} · ${d.nume_original.split('/').pop()} — reîncerc (${incercariEsuate}/2)...`)
+        await new Promise(r => setTimeout(r, 5000))
+        continue
+      }
+      incercariEsuate = 0
+      continua = !!data?.continua
+      runde++
+    }
+    return !continua
+  }
+
   const proceseaza = async () => {
-    const deRulat = (docs || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original))
+    const listaPdf = (ds) => (ds || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original))
+    let deRulat = listaPdf(docs)
     if (!deRulat.length) return
     stopRef.current = false
-    for (let i = 0; i < deRulat.length; i++) {
-      const d = deRulat[i]
-      let continua = true, runde = 0
-      while (continua && runde < 60 && !stopRef.current) {
-        setProcBusy(`${i + 1}/${deRulat.length} · ${d.nume_original.split('/').pop()} (rundă ${runde + 1})`)
-        const { data, error } = await supabase.functions.invoke('ofertare-ingest-doc', { body: { doc_id: d.id } })
-        if (error || data?.error) { setWarn(`Eroare la „${d.nume_original}": ${data?.error || error.message}`); break }
-        continua = !!data?.continua
-        runde++
+    for (let trecere = 1; trecere <= 2 && deRulat.length && !stopRef.current; trecere++) {
+      for (let i = 0; i < deRulat.length; i++) {
+        const d = deRulat[i]
+        await proceseazaDoc(d, `${trecere === 2 ? 'reluare ' : ''}${i + 1}/${deRulat.length}`)
+        await load()
+        if (stopRef.current) break
       }
-      await load()
-      if (stopRef.current) break
+      // A doua trecere: doar restanțele (eroare / neterminate)
+      const { data: fresh } = await supabase.from('ofertare_documente_atribuire')
+        .select('id, nume_original, status_procesare').eq('licitatie_id', licitatie.id)
+      deRulat = listaPdf(fresh)
+    }
+    // Restanțe după ambele treceri → notificare persistentă în clopoțel
+    if (deRulat.length && !stopRef.current && profile?.id) {
+      await supabase.from('notifications').insert({
+        profile_id: profile.id, type: 'warning', modul: 'ofertare',
+        title: `Ofertare: ${deRulat.length} documente neprocesate la ${licitatie.nr_anunt}`,
+        message: `După 2 treceri au rămas cu probleme: ${deRulat.slice(0, 3).map(d => d.nume_original.split('/').pop()).join(', ')}${deRulat.length > 3 ? '…' : ''}. Deschide licitația și apasă „Procesează" din nou, sau cere-i lui Claude să le spargă în bucăți mai mici.`,
+        link_to: '/ofertare',
+      })
+      setWarn(`⚠️ ${deRulat.length} documente au rămas neprocesate după 2 treceri — ai primit notificare în clopoțel.`)
     }
     setProcBusy(null); stopRef.current = false
     await load(); onChanged?.()
@@ -467,6 +500,13 @@ function DocumenteSection({ licitatie, onChanged }) {
     <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
         <div style={{ fontSize:13, fontWeight:800 }}>📥 Documentația de atribuire {docs ? `(${docs.length})` : ''}</div>
+        {/* Clopoțel separat pe secțiune (cerut de Razvan): erorile rămân vizibile
+            oricând reintri în pagină, nu doar cât rulează procesarea */}
+        {(docs || []).some(d => d.status_procesare === 'eroare') && (
+          <span style={{ fontSize:11, fontWeight:800, color:G.red, background:G.red + '18', border:`1px solid ${G.red}66`, borderRadius:12, padding:'3px 10px' }}>
+            🔔 {(docs || []).filter(d => d.status_procesare === 'eroare').length} cu erori — apasă Procesează pentru reluare
+          </span>
+        )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
           <label style={{ ...S.btnS, padding:'7px 12px', fontSize:12, cursor:'pointer' }}>
             📁 Urcă folder
