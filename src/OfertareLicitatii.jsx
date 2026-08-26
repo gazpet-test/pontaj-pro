@@ -600,14 +600,38 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   useEffect(() => { load() }, [licitatie.id])
 
   const extrage = async () => {
-    if (cerinte?.length && !window.confirm('Re-extragerea șterge cerințele NEconfirmate și le extrage din nou (cele confirmate rămân). Continui?')) return
+    if (cerinte?.length && !window.confirm('Re-extragerea șterge cerințele NEconfirmate și le extrage din nou — din fișă ȘI din caiete/clarificări (cele confirmate rămân). Durează 15-25 min cu tot corpusul. Continui?')) return
     setWarn(null)
     const sectiuni = ['III', 'IV', 'II', 'rest']
     for (let i = 0; i < sectiuni.length; i++) {
-      setBusy(`Opus citește secțiunea ${sectiuni[i]} (${i + 1}/4)...`)
+      setBusy(`Opus citește fișa — secțiunea ${sectiuni[i]} (${i + 1}/4)...`)
       const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
         { body: { licitatie_id: licitatie.id, sectiune: sectiuni[i], reset: i === 0 } })
-      if (error || data?.error) { setWarn(`Secțiunea ${sectiuni[i]}: ${data?.error || error.message}`); break }
+      if (error || data?.error) { setWarn(`Secțiunea ${sectiuni[i]}: ${data?.error || error.message}`); setBusy(null); await load(); return }
+      await load()
+    }
+    // Sweep pe corpus: caiete de sarcini + clarificări + „alta" procesate. Un original
+    // spart în „— partea N" se sare (părțile îl înlocuiesc — cazul VOLUM III întreg).
+    const { data: docs } = await supabase.from('ofertare_documente_atribuire')
+      .select('id, nume_original, tip').eq('licitatie_id', licitatie.id)
+      .eq('status_procesare', 'procesat').in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta'])
+      .order('id')
+    const toateNumele = (docs || []).map(d => d.nume_original || '')
+    const deCitit = (docs || []).filter(d => {
+      const baza = (d.nume_original || '').replace(/\.pdf$/i, '')
+      return !toateNumele.some(n => n !== d.nume_original && n.startsWith(baza + ' — partea'))
+    })
+    let esecuri = 0
+    for (let i = 0; i < deCitit.length; i++) {
+      const d = deCitit[i]
+      setBusy(`Opus citește caietele/clarificările: ${i + 1}/${deCitit.length} · ${(d.nume_original || '').split('/').pop()}`)
+      const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
+        { body: { licitatie_id: licitatie.id, doc_id: d.id } })
+      if (error || data?.error) {
+        esecuri++
+        if (esecuri >= 3) { setWarn(`Prea multe erori la caiete (ultima: ${data?.error || error.message}) — restul se reiau mai târziu cu „Re-extrage".`); break }
+        continue
+      }
       await load()
     }
     setBusy(null); await load(); onChanged?.()
@@ -673,7 +697,7 @@ function CerinteSection({ licitatie, profile, onChanged }) {
 
       {cerinte === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !cerinte.length ? (
-          <div style={{ fontSize:12, color:G.dim }}>Niciun rând încă. „🤖 Extrage cerințele" citește fișa de date procesată (secțiunile III, IV, II + restul) cu Opus — apoi tu confirmi/corectezi fiecare rând. Corecțiile tale devin exemple pentru extracțiile viitoare.</div>
+          <div style={{ fontSize:12, color:G.dim }}>Niciun rând încă. „🤖 Extrage cerințele" citește cu Opus fișa de date (secțiunile III, IV, II + restul) și apoi TOATE caietele de sarcini + clarificările procesate — apoi tu confirmi/corectezi fiecare rând. Corecțiile tale devin exemple pentru extracțiile viitoare.</div>
         ) : (
           <div style={{ maxHeight:340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
             {filtrate.map(c => {
@@ -756,11 +780,31 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 
   const propune = async () => {
     setWarn(null)
+    // Felii de 55 (v3 cu ids) — registrul întreg nu încape în max_tokens la un singur apel.
+    // O felie raportată „trunchiat" se reia la jumătate de mărime (o singură dată).
+    const FELIE = 55
     for (const batch of ['eliminatorie', 'propunere']) {
-      setBusy(`Opus confruntă cerințele ${batch === 'eliminatorie' ? 'eliminatorii' : 'de propunere'} cu catalogul HR...`)
-      const { data, error } = await supabase.functions.invoke('ofertare-acoperire', { body: { licitatie_id: licitatie.id, batch } })
-      if (error || data?.error) { setWarn(`${batch}: ${data?.error || error.message}`); break }
-      await load()
+      const ids = (cerinte || []).filter(c => c.tip === batch).map(c => c.id)
+      if (!ids.length) continue
+      const eticheta = batch === 'eliminatorie' ? 'eliminatoriile' : 'propunerile'
+      const deReluat = []
+      for (let i = 0; i < ids.length; i += FELIE) {
+        const felie = ids.slice(i, i + FELIE)
+        setBusy(`Opus confruntă ${eticheta} cu catalogul HR: ${Math.min(i + FELIE, ids.length)}/${ids.length}...`)
+        const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
+          { body: { licitatie_id: licitatie.id, batch, ids: felie } })
+        if (error || data?.error) { setWarn(`${batch}: ${data?.error || error.message}`); setBusy(null); await load(); onChanged?.(); return }
+        if (data?.trunchiat) deReluat.push(...felie)
+        await load()
+      }
+      for (let i = 0; i < deReluat.length; i += 27) {
+        const felie = deReluat.slice(i, i + 27)
+        setBusy(`Reluare felii trunchiate (${eticheta}): ${Math.min(i + 27, deReluat.length)}/${deReluat.length}...`)
+        const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
+          { body: { licitatie_id: licitatie.id, batch, ids: felie } })
+        if (error || data?.error) { setWarn(`${batch} (reluare): ${data?.error || error.message}`); break }
+        await load()
+      }
     }
     setBusy(null); await load(); onChanged?.()
   }
