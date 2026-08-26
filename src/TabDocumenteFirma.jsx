@@ -84,10 +84,15 @@ export default function TabDocumenteFirma() {
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
       const { data } = await supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).single()
-      // Verifică și accesul la nivel de modul (admin pe 'administrativ' = poate edita)
+      // Poate edita: admin pe tot modulul, SAU acces granular pe tab-ul ăsta
+      // ('administrativ.documente', admin/editor — cazul Natalia: adaugă autorizațiile firmei)
       const { data: modAccess } = await supabase.from('user_module_access')
-        .select('access_level').eq('profile_id', user.id).eq('module', 'administrativ').maybeSingle()
-      setProfile({ ...data, _adminAccess: modAccess?.access_level === 'admin' })
+        .select('module, access_level').eq('profile_id', user.id)
+        .in('module', ['administrativ', 'administrativ.documente'])
+      const poateEdita = (modAccess || []).some(m =>
+        (m.module === 'administrativ' && m.access_level === 'admin') ||
+        (m.module === 'administrativ.documente' && ['admin', 'editor'].includes(m.access_level)))
+      setProfile({ ...data, _adminAccess: poateEdita })
     }
     const { data } = await supabase.from('v_documente_firma_alerte').select('*').order('data_valabilitate', { ascending: true, nullsFirst: false })
     // Adaug și documente inactive separat dacă vrem să afișăm istoric
