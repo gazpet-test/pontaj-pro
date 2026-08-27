@@ -59,6 +59,7 @@ export default function OfertareLicitatiiTab() {
   const [selected, setSelected] = useState(null)
   const [fStatus, setFStatus] = useState('active')
   const [toast, setToast] = useState(null)
+  const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
@@ -162,6 +163,17 @@ export default function OfertareLicitatiiTab() {
           background: toast.tip === 'err' ? G.red : toast.tip === 'warn' ? G.orange : G.green, color:'#0D1117' }}>{toast.msg}</div>
       )}
 
+      {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară']].map(([k, lbl]) => (
+          <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
+            ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
+        ))}
+      </div>
+
+      {vedere === 'experienta' && <ExperientaCatalog licitatii={rows} profile={profile} showToast={showToast} />}
+
+      {vedere === 'licitatii' && <>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
         <div>
           <div style={{ fontSize:19, fontWeight:800 }}>🏛 Licitații</div>
@@ -219,6 +231,7 @@ export default function OfertareLicitatiiTab() {
           )
         })}
       </div>
+      </>}
 
       {showForm && (
         <LicitatieFormModal licitatie={editRow} onClose={() => { setShowForm(false); setEditRow(null) }} onSave={salveaza} />
@@ -976,6 +989,269 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
             <button key={s} style={{ ...S.btnS, color:LICITATIE_STATUS[s].color, borderColor:LICITATIE_STATUS[s].color + '66', fontWeight:700 }}
               onClick={() => onStatus(l, s)}>{LICITATIE_STATUS[s].icon} Marchează {LICITATIE_STATUS[s].label}</button>
           ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// CATALOG EXPERIENȚĂ SIMILARĂ (ofertare_experienta)
+// Sursa: Calificare/EXPERIENTA SIMILARA rev.1/ de pe NAS — un dosar pe lucrare
+// (fișă, contract, PV recepție, DC, recomandare). Convenția valorilor: numărul
+// din numele folderului = mii lei (excepția Bentu = lei, notată în observații).
+// Fereastra de invocare (uzual 5 ani din termenul de depunere — Instrucțiunea
+// ANAP 2/2017 art. 13) se calculează aici; combinația bifată se verifică pe
+// prag valoric + număr maxim de contracte. La lucrările în ASOCIERE se invocă
+// doar cota Gazpet — se verifică în fișa lucrării înainte de depunere.
+// ════════════════════════════════════════════════════════════════
+const TIP_PV_OPT = ['PVRTL', 'PV final', 'PV partial', 'PV PIF', 'PV']
+const fmtLei = v => (v || v === 0) ? new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 2 }).format(v) : '—'
+const fmtZi = d => d ? new Date(d + (d.length === 10 ? 'T00:00:00' : '')).toLocaleDateString('ro-RO') : '—'
+
+function ExperientaCatalog({ licitatii, profile, showToast }) {
+  const [lucrari, setLucrari] = useState(null)
+  const [showForm, setShowForm] = useState(false)
+  const [editRow, setEditRow] = useState(null)
+  const [termenRef, setTermenRef] = useState(() => new Date().toISOString().slice(0, 10))
+  const [aniFereastra, setAniFereastra] = useState('5')
+  const [prag, setPrag] = useState('29000000')
+  const [maxCtr, setMaxCtr] = useState('3')
+  const [sel, setSel] = useState(() => new Set())
+  const [arataInactive, setArataInactive] = useState(false)
+
+  const load = async () => {
+    const { data, error } = await supabase.from('ofertare_experienta').select('*')
+    if (error) { showToast('Eroare la încărcarea catalogului: ' + error.message, 'err'); return }
+    setLucrari(data || [])
+  }
+  useEffect(() => { load() }, [])
+
+  const inceput = (() => { const d = new Date(termenRef + 'T00:00:00'); d.setFullYear(d.getFullYear() - (Number(aniFereastra) || 5)); return d })()
+  const inFereastra = (l) => !!l.data_pv && new Date(l.data_pv + 'T12:00:00') >= inceput && new Date(l.data_pv + 'T00:00:00') <= new Date(termenRef + 'T23:59:59')
+
+  const vizibile = (lucrari || []).filter(l => arataInactive || l.activ)
+  // Ordinea: în fereastră (valoare desc) → ieșite din fereastră → fără dată PV
+  const ordonate = [...vizibile].sort((a, b) => {
+    const g = l => l.data_pv ? (inFereastra(l) ? 0 : 1) : 2
+    return g(a) - g(b) || (Number(b.valoare_lei) || 0) - (Number(a.valoare_lei) || 0)
+  })
+  const nrFereastra = vizibile.filter(inFereastra).length
+
+  const toggleSel = (id) => setSel(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const selectate = vizibile.filter(l => sel.has(l.id))
+  const totalSel = selectate.reduce((s, l) => s + (Number(l.valoare_lei) || 0), 0)
+  const pragN = Number(prag) || 0
+  const maxN = Number(maxCtr) || 3
+  const selOK = selectate.length > 0 && selectate.length <= maxN && totalSel >= pragN
+  const selAsocieri = selectate.filter(l => l.asociere)
+  const selPartiale = selectate.filter(l => (l.tip_pv || '').toLowerCase().includes('partial'))
+
+  const salveaza = async (form) => {
+    const payload = {
+      denumire: form.denumire.trim(),
+      beneficiar: form.beneficiar.trim() || null,
+      valoare_lei: form.valoare_lei !== '' ? Number(form.valoare_lei) : null,
+      data_pv: form.data_pv || null,
+      tip_pv: form.tip_pv || null,
+      piese: form.piese.trim() || null,
+      folder_nas: form.folder_nas.trim() || null,
+      dosar_sursa_path: form.dosar_sursa_path.trim() || null,
+      asociere: !!form.asociere,
+      observatii: form.observatii.trim() || null,
+      activ: !!form.activ,
+      updated_at: new Date().toISOString(),
+    }
+    const { error } = editRow
+      ? await supabase.from('ofertare_experienta').update(payload).eq('id', editRow.id)
+      : await supabase.from('ofertare_experienta').insert(payload)
+    if (error) { showToast('Eroare la salvare: ' + error.message, 'err'); return false }
+    showToast(editRow ? 'Lucrare actualizată.' : `Lucrare adăugată — ${payload.denumire}.`)
+    setShowForm(false); setEditRow(null)
+    await load()
+    return true
+  }
+
+  const sterge = async (l) => {
+    if (!profile?.is_owner) return
+    if (!window.confirm(`Ștergi „${l.denumire}" din catalog? IREVERSIBIL — de regulă e mai sigur să o faci inactivă.`)) return
+    const { error } = await supabase.from('ofertare_experienta').delete().eq('id', l.id)
+    if (error) { showToast('Eroare: ' + error.message, 'err'); return }
+    showToast(`🗑 „${l.denumire}" ștearsă.`, 'warn')
+    setShowForm(false); setEditRow(null)
+    setSel(s => { const n = new Set(s); n.delete(l.id); return n })
+    await load()
+  }
+
+  const cuTermen = (licitatii || []).filter(x => x.termen_depunere)
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14, flexWrap:'wrap', gap:10 }}>
+        <div>
+          <div style={{ fontSize:19, fontWeight:800 }}>📚 Experiență similară</div>
+          <div style={{ fontSize:12, color:G.muted }}>
+            Catalogul lucrărilor executate — dosarele din <b>Calificare\EXPERIENTA SIMILARA rev.1</b> de pe NAS. Bifează lucrările pe care le invoci și compară cu pragul licitației.
+          </div>
+        </div>
+        <button style={S.btnP} onClick={() => { setEditRow(null); setShowForm(true) }}>＋ Lucrare</button>
+      </div>
+
+      {/* Fereastra de invocare + pragul licitației */}
+      <div style={{ ...S.card, padding:14, marginBottom:12 }}>
+        <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'flex-end' }}>
+          <div><label style={S.lbl}>Termen depunere (referință)</label>
+            <input style={{ ...S.input, width:150 }} type="date" value={termenRef} onChange={e => e.target.value && setTermenRef(e.target.value)} /></div>
+          {cuTermen.length > 0 && (
+            <div><label style={S.lbl}>Preia din licitație</label>
+              <select style={{ ...S.input, width:190 }} value="" onChange={e => { if (e.target.value) setTermenRef(e.target.value.slice(0, 10)) }}>
+                <option value="">alege...</option>
+                {cuTermen.map(x => <option key={x.id} value={x.termen_depunere}>{x.nr_anunt} · {fmtZi(x.termen_depunere.slice(0, 10))}</option>)}
+              </select></div>
+          )}
+          <div><label style={S.lbl}>Fereastră (ani)</label>
+            <input style={{ ...S.input, width:70 }} type="number" min="1" max="15" value={aniFereastra} onChange={e => setAniFereastra(e.target.value)} /></div>
+          <div><label style={S.lbl}>Prag valoare (lei fără TVA)</label>
+            <input style={{ ...S.input, width:150 }} type="number" min="0" value={prag} onChange={e => setPrag(e.target.value)} /></div>
+          <div><label style={S.lbl}>Max. contracte</label>
+            <input style={{ ...S.input, width:70 }} type="number" min="1" max="10" value={maxCtr} onChange={e => setMaxCtr(e.target.value)} /></div>
+          <div style={{ fontSize:12, color:G.muted, paddingBottom:9 }}>
+            Fereastra: <b style={{ color:G.text }}>{fmtZi(inceput.toISOString().slice(0, 10))} → {fmtZi(termenRef)}</b> · {nrFereastra}/{vizibile.length} lucrări în fereastră
+          </div>
+        </div>
+
+        {/* Combinația bifată vs. cerință */}
+        {selectate.length > 0 && (
+          <div style={{ marginTop:12, padding:'10px 14px', borderRadius:8, display:'flex', gap:14, alignItems:'center', flexWrap:'wrap',
+            border:`1px solid ${selOK ? G.green : G.red}66`, background:(selOK ? G.green : G.red) + '11' }}>
+            <span style={{ fontSize:13, fontWeight:800, color: selOK ? G.green : G.red }}>
+              {selOK ? '✅' : '❌'} Selecție: {selectate.length}/{maxN} contracte · {fmtLei(totalSel)} lei
+            </span>
+            <span style={{ fontSize:12, color:G.muted }}>prag {fmtLei(pragN)} lei — {totalSel >= pragN ? `peste cu ${fmtLei(totalSel - pragN)}` : `lipsesc ${fmtLei(pragN - totalSel)}`}</span>
+            {selectate.length > maxN && <span style={{ fontSize:12, color:G.red, fontWeight:700 }}>prea multe contracte!</span>}
+            {selAsocieri.length > 0 && <span style={{ fontSize:12, color:G.orange, fontWeight:700 }}>⚠ {selAsocieri.length} în asociere — se invocă doar cota Gazpet (verifică fișa)</span>}
+            {selPartiale.length > 0 && <span style={{ fontSize:12, color:G.orange, fontWeight:700 }}>⚠ {selPartiale.length} cu recepție parțială</span>}
+            <button style={{ ...S.btnS, padding:'4px 10px', fontSize:11, marginLeft:'auto' }} onClick={() => setSel(new Set())}>golește</button>
+          </div>
+        )}
+      </div>
+
+      {lucrari === null && <div style={{ padding:30, textAlign:'center', color:G.muted }}>Se încarcă catalogul...</div>}
+      {lucrari !== null && !ordonate.length && (
+        <div style={{ ...S.card, padding:30, textAlign:'center', color:G.dim, fontSize:13 }}>Catalogul e gol — adaugă lucrări cu „＋ Lucrare".</div>
+      )}
+
+      <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+        {ordonate.map(l => {
+          const inWin = inFereastra(l)
+          const faraData = !l.data_pv
+          return (
+            <div key={l.id} style={{ ...S.card, padding:'9px 12px', opacity: l.activ ? (inWin ? 1 : .55) : .35,
+              borderLeft:`3px solid ${faraData ? G.orange : inWin ? G.green : G.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap:9, flexWrap:'wrap' }}>
+                <input type="checkbox" checked={sel.has(l.id)} disabled={!inWin} onChange={() => toggleSel(l.id)}
+                  title={inWin ? 'Include în combinația invocată' : 'În afara ferestrei — nu se poate invoca'} style={{ accentColor:G.green, cursor: inWin ? 'pointer' : 'not-allowed' }} />
+                <span style={{ fontWeight:800, fontSize:13.5 }}>{l.denumire}</span>
+                {l.beneficiar && <span style={{ fontSize:11, color:G.blue, fontWeight:700, border:`1px solid ${G.blue}44`, borderRadius:10, padding:'1px 8px', whiteSpace:'nowrap' }}>{l.beneficiar}</span>}
+                {l.asociere && <span style={{ fontSize:10.5, color:G.orange, fontWeight:800, border:`1px solid ${G.orange}55`, borderRadius:10, padding:'1px 7px', whiteSpace:'nowrap' }} title="Executată în asociere — se invocă doar cota Gazpet">⚠ asociere</span>}
+                {(l.tip_pv || '').toLowerCase().includes('partial') && <span style={{ fontSize:10.5, color:G.orange, fontWeight:800, whiteSpace:'nowrap' }}>recepție parțială</span>}
+                {faraData && <span style={{ fontSize:10.5, color:G.orange, fontWeight:800, whiteSpace:'nowrap' }}>fără dată PV!</span>}
+                {!l.activ && <span style={{ fontSize:10.5, color:G.dim, fontWeight:800 }}>inactivă</span>}
+                <span style={{ marginLeft:'auto', display:'flex', gap:10, alignItems:'center', whiteSpace:'nowrap' }}>
+                  <span style={{ fontSize:13.5, fontWeight:800, color: inWin ? G.green : G.muted }}>{fmtLei(l.valoare_lei)} lei</span>
+                  <span style={{ fontSize:11.5, color:G.muted }}>{l.tip_pv || 'PV'} {fmtZi(l.data_pv)}</span>
+                  <button title="Editează" onClick={() => { setEditRow(l); setShowForm(true) }}
+                    style={{ ...S.btnS, padding:'3px 9px', fontSize:11 }}>✏️</button>
+                </span>
+              </div>
+              <div style={{ fontSize:11, color:G.dim, marginTop:3, display:'flex', gap:12, flexWrap:'wrap' }}>
+                {l.piese && <span>🗂 {l.piese}</span>}
+                {l.folder_nas && <span title={'Calificare\\EXPERIENTA SIMILARA rev.1\\' + l.folder_nas} style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:420 }}>📁 {l.folder_nas}</span>}
+                {l.observatii && <span style={{ color:G.muted }} title={l.observatii}>💬 {l.observatii.length > 110 ? l.observatii.slice(0, 110) + '…' : l.observatii}</span>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ display:'flex', gap:14, alignItems:'center', marginTop:10, fontSize:11.5, color:G.dim, flexWrap:'wrap' }}>
+        <span>Convenție NAS: numărul din numele folderului = valoarea în <b>mii lei</b>.</span>
+        <label style={{ display:'flex', alignItems:'center', gap:5, cursor:'pointer', marginLeft:'auto' }}>
+          <input type="checkbox" checked={arataInactive} onChange={e => setArataInactive(e.target.checked)} style={{ accentColor:G.dim }} /> arată și inactivele
+        </label>
+      </div>
+
+      {showForm && (
+        <ExperientaFormModal lucrare={editRow} profile={profile}
+          onClose={() => { setShowForm(false); setEditRow(null) }} onSave={salveaza} onDelete={sterge} />
+      )}
+    </div>
+  )
+}
+
+function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
+  const e0 = lucrare
+  const [form, setForm] = useState({
+    denumire: e0?.denumire || '', beneficiar: e0?.beneficiar || '',
+    valoare_lei: e0?.valoare_lei ?? '', data_pv: e0?.data_pv || '', tip_pv: e0?.tip_pv || 'PVRTL',
+    piese: e0?.piese || '', folder_nas: e0?.folder_nas || '', dosar_sursa_path: e0?.dosar_sursa_path || '',
+    asociere: e0?.asociere || false, observatii: e0?.observatii || '', activ: e0 ? !!e0.activ : true,
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const valid = form.denumire.trim()
+
+  const submit = async () => {
+    if (!valid) return
+    setSaving(true)
+    const ok = await onSave(form)
+    if (!ok) setSaving(false)
+  }
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', overflowY:'auto', padding:'30px 14px' }} onClick={onClose}>
+      <div style={{ ...S.card, width:'min(680px,100%)', padding:24 }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:14 }}>📚 {e0 ? `Editează „${e0.denumire}"` : 'Lucrare nouă în catalog'}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Denumire *</label>
+            <input style={S.input} value={form.denumire} onChange={e => set('denumire', e.target.value)} placeholder="ex: Balaceanca - Cond. Dn500 Plataresti - Balaceanca" /></div>
+          <div><label style={S.lbl}>Beneficiar</label>
+            <input style={S.input} value={form.beneficiar} onChange={e => set('beneficiar', e.target.value)} placeholder="ex: TRANSGAZ" /></div>
+          <div><label style={S.lbl}>Valoare (lei fără TVA)</label>
+            <input style={S.input} type="number" min="0" step="0.01" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} placeholder="ex: 33289000" /></div>
+          <div><label style={S.lbl}>Data PV recepție</label>
+            <input style={S.input} type="date" value={form.data_pv} onChange={e => set('data_pv', e.target.value)} /></div>
+          <div><label style={S.lbl}>Tip PV</label>
+            <select style={S.input} value={form.tip_pv} onChange={e => set('tip_pv', e.target.value)}>
+              {TIP_PV_OPT.map(t => <option key={t} value={t}>{t}</option>)}
+            </select></div>
+          <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Piese în dosar (F/C/DC/R/PV)</label>
+            <input style={S.input} value={form.piese} onChange={e => set('piese', e.target.value)} placeholder="ex: F, C, DC, PVRTL" /></div>
+          <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Folder NAS (în Calificare\EXPERIENTA SIMILARA rev.1)</label>
+            <input style={S.input} value={form.folder_nas} onChange={e => set('folder_nas', e.target.value)} placeholder="numele exact al folderului" /></div>
+          <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Dosar-sursă licitație (opțional)</label>
+            <input style={S.input} value={form.dosar_sursa_path} onChange={e => set('dosar_sursa_path', e.target.value)} placeholder={'ex: 1.TRANSGAZ\\63. Cond. Dn500 Plataresti Balaceanca...'} /></div>
+          <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Observații</label>
+            <textarea style={{ ...S.input, minHeight:56, resize:'vertical' }} value={form.observatii} onChange={e => set('observatii', e.target.value)} /></div>
+          <label style={{ display:'flex', alignItems:'center', gap:7, fontSize:13, cursor:'pointer' }}>
+            <input type="checkbox" checked={form.asociere} onChange={e => set('asociere', e.target.checked)} style={{ accentColor:G.orange }} />
+            Executată în asociere <span style={{ color:G.dim, fontSize:11 }}>(se invocă doar cota Gazpet)</span>
+          </label>
+          {e0 && (
+            <label style={{ display:'flex', alignItems:'center', gap:7, fontSize:13, cursor:'pointer' }}>
+              <input type="checkbox" checked={form.activ} onChange={e => set('activ', e.target.checked)} style={{ accentColor:G.green }} />
+              Activă în catalog
+            </label>
+          )}
+        </div>
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
+          {e0 && profile?.is_owner && (
+            <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', marginRight:'auto' }} onClick={() => onDelete(e0)} disabled={saving}>🗑 Șterge</button>
+          )}
+          <button style={S.btnS} onClick={onClose} disabled={saving}>Anulează</button>
+          <button style={{ ...S.btnP, opacity: valid && !saving ? 1 : .5 }} onClick={submit} disabled={!valid || saving}>
+            {saving ? 'Se salvează...' : e0 ? '💾 Salvează' : '✅ Adaugă în catalog'}
+          </button>
         </div>
       </div>
     </div>
