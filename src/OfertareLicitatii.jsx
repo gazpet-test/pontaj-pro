@@ -770,7 +770,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
-        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume)')
+        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path)')
         .in('cerinta_id', cs.map(c => c.id))
       const map = {}; (ac || []).forEach(a => { map[a.cerinta_id] = a })
       setAcoperiri(map)
@@ -872,7 +872,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
             {randuri.map(c => {
               const a = acoperiri[c.id]
               const st = a ? (ACOPERIRE_STATUS[a.status] || ACOPERIRE_STATUS.gol) : null
-              const titular = a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume
+              const titular = a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume)
               return (
                 <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}` }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
@@ -896,6 +896,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
                     <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>
                       {titular && <b style={{ color:G.text }}>{titular}</b>}
                       {a.autorizatie?.tip?.denumire && <> · {a.autorizatie.tip.denumire}{a.autorizatie.numar_autorizatie ? ` nr. ${a.autorizatie.numar_autorizatie}` : ''}</>}
+                      {a.doc_firma && <> · {a.doc_firma.tip}{a.doc_firma.numar_document ? ` nr. ${a.doc_firma.numar_document}` : ''}</>}
                       {a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
                       {a.referinta_text && <> — {a.referinta_text}</>}
                     </div>

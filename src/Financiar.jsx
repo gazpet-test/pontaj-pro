@@ -225,6 +225,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
   const [genPDF, setGenPDF]       = useState(false)
   const [sendingEmail, setSendingEmail] = useState(false)
   const [pdfUrl, setPdfUrl]       = useState(item?.pdf_path ? `PDF existent: ${item.pdf_path}` : null)
+  const [verifBusy, setVerifBusy] = useState(false)
+  const [verifRez, setVerifRez]   = useState(null)   // verdictul Opus: linii corecte + diferențe vs generator
   const [proiecte, setProiecte]   = useState([])
   const [slLista, setSlLista]     = useState([])
   const previewRef                = useRef(null)
@@ -824,10 +826,47 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
 
           {/* Articole */}
           <div style={{borderTop:`1px solid ${G.border}`,paddingTop:12}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,gap:8,flexWrap:'wrap'}}>
               <div style={{fontSize:12,fontWeight:700,color:G.muted,textTransform:'uppercase',letterSpacing:'.5px'}}>📋 Articole</div>
-              <button onClick={addArticol} style={{padding:'4px 12px',background:G.financiar+'22',border:`1px solid ${G.financiar}44`,borderRadius:6,color:G.financiar,fontSize:12,cursor:'pointer',fontWeight:700}}>＋ Adaugă linie</button>
+              <div style={{display:'flex',gap:8}}>
+                {form.situatie_plata_ids?.length > 0 && (
+                  <button disabled={verifBusy} onClick={async()=>{
+                    // Verificare cu borderoul real al SL-ului (Opus). Adevărul = borderoul:
+                    // prinde dublarea provizoriu+recalculat, baza lipsă, rețineri (cazul Tigveni SL3).
+                    setVerifBusy(true); setVerifRez(null)
+                    const { data, error } = await supabase.functions.invoke('financiar-verifica-factura',
+                      { body: { sl_id: form.situatie_plata_ids[0], articole: form.articole.map(a=>({denumire:a.denumire, valoare:parseFloat(a.valoare||0), tva_pct:a.tva_pct})) } })
+                    setVerifBusy(false)
+                    if (error || data?.error) { showToast('Verificare eșuată: ' + (data?.error || error.message), 'err'); return }
+                    setVerifRez(data)
+                  }} style={{padding:'4px 12px',background:G.purple+'22',border:`1px solid ${G.purple}55`,borderRadius:6,color:G.purple,fontSize:12,cursor:verifBusy?'wait':'pointer',fontWeight:700}}>
+                    {verifBusy ? '⏳ Opus citește borderoul...' : '🤖 Verifică cu borderoul (Opus)'}
+                  </button>
+                )}
+                <button onClick={addArticol} style={{padding:'4px 12px',background:G.financiar+'22',border:`1px solid ${G.financiar}44`,borderRadius:6,color:G.financiar,fontSize:12,cursor:'pointer',fontWeight:700}}>＋ Adaugă linie</button>
+              </div>
             </div>
+            {verifRez && (
+              <div style={{background:G.purple+'0E',border:`1px solid ${G.purple}55`,borderRadius:8,padding:'12px 14px',marginBottom:10}}>
+                <div style={{fontSize:12,fontWeight:800,color:G.purple,marginBottom:6}}>
+                  🤖 Verdictul borderoului (încredere {verifRez.incredere || '—'}): total fără TVA <span style={{fontFamily:'monospace'}}>{fmtLei(verifRez.total_fara_tva)}</span> · TVA <span style={{fontFamily:'monospace'}}>{fmtLei(verifRez.tva)}</span> · cu TVA <span style={{fontFamily:'monospace'}}>{fmtLei(verifRez.total_cu_tva)}</span>
+                </div>
+                {(verifRez.diferente||[]).length > 0 ? (
+                  <ul style={{margin:'4px 0 8px 16px',padding:0,fontSize:12,color:G.text}}>
+                    {verifRez.diferente.map((d,i)=><li key={i} style={{marginBottom:3}}>{d}</li>)}
+                  </ul>
+                ) : <div style={{fontSize:12,color:G.green,marginBottom:8}}>✓ Liniile propuse corespund borderoului.</div>}
+                {verifRez.observatii && <div style={{fontSize:11,color:G.dim,marginBottom:8}}>{verifRez.observatii}</div>}
+                {(verifRez.linii||[]).length > 0 && (
+                  <button onClick={()=>{
+                    setForm(f=>({ ...f, articole: verifRez.linii.map((l,i)=>({ nr:i+1, denumire:l.denumire, um:'buc', cantitate:1, pret_unitar:Number(l.valoare).toFixed(2), valoare:Number(l.valoare).toFixed(2), tva_pct:(l.tva_pct ?? TVA_DEFAULT) })) }))
+                    showToast(`✓ ${verifRez.linii.length} linii aplicate din borderou`)
+                  }} style={{padding:'6px 14px',background:G.purple,border:'none',borderRadius:6,color:'#fff',fontSize:12,cursor:'pointer',fontWeight:700}}>
+                    ⤵ Aplică liniile din borderou ({verifRez.linii.length})
+                  </button>
+                )}
+              </div>
+            )}
             {form.articole.map((a,i)=>(
               <div key={i} style={{background:G.card2,borderRadius:8,padding:'10px 12px',marginBottom:8,border:`1px solid ${G.border}`}}>
                 <div style={{marginBottom:8}}>
