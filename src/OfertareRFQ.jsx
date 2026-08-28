@@ -175,6 +175,9 @@ function RFQDetaliu({ rfq, licitatii, showToast, onBack, onChange }) {
       if (y > 255) { pdf.addPage(); y = 20 }
       pdf.setFontSize(9.5)
       pdf.text('In oferta va rugam sa precizati: valabilitatea ofertei, termenul si conditiile de livrare, conditiile de plata.', 14, y); y += 6
+      pdf.setFont(undefined, 'bold')
+      pdf.text(`Oferta se transmite pe e-mail la: oferte@gazpet.ro — cu referinta "RFQ-${rfq.id}" in subiect.`, 14, y); y += 6
+      pdf.setFont(undefined, 'normal')
       if (meta.termen_raspuns) { pdf.text(`Termen de raspuns: ${new Date(meta.termen_raspuns).toLocaleDateString('ro-RO')}`, 14, y); y += 6 }
       pdf.text('Va multumim,', 14, y + 6)
       pdf.text('GAZPET INSTAL S.R.L.', 14, y + 12)
@@ -256,6 +259,8 @@ function RFQDetaliu({ rfq, licitatii, showToast, onBack, onChange }) {
         <button style={S.btnS} onClick={onBack}>← înapoi</button>
         <div style={{ fontSize:17, fontWeight:800, flex:1 }}>🛒 {meta.titlu}</div>
         <button style={S.btnS} onClick={genereazaPdf} disabled={!mats?.length}>📄 PDF cerere</button>
+        <a style={{ ...S.btnS, textDecoration:'none', display:'inline-block' }} title="Deschide mailul tău cu subiectul și textul gata scrise — atașezi PDF-ul și dai Send"
+          href={`mailto:?subject=${encodeURIComponent(`Cerere de ofertă RFQ-${rfq.id} — Gazpet Instal — ${meta.titlu}`)}&body=${encodeURIComponent(`Bună ziua,\n\nVă rugăm să ne transmiteți cea mai bună ofertă de preț pentru materialele din cererea atașată (RFQ-${rfq.id}).\n\nOferta se transmite la oferte@gazpet.ro, menționând în subiect referința RFQ-${rfq.id}.${meta.termen_raspuns ? `\nTermen de răspuns: ${new Date(meta.termen_raspuns).toLocaleDateString('ro-RO')}.` : ''}\n\nVă mulțumim,\nGAZPET INSTAL S.R.L.`)}`}>✉ mail</a>
         <button style={S.btnP} onClick={trimiteReferinte}>✔ Prețurile alese → Referințe</button>
       </div>
 
