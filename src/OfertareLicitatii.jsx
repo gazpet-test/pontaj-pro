@@ -1055,6 +1055,10 @@ function ExperientaCatalog({ licitatii, profile, showToast }) {
   const [maxCtr, setMaxCtr] = useState('3')
   const [sel, setSel] = useState(() => new Set())
   const [arataInactive, setArataInactive] = useState(false)
+  // Regula valorii invocate (practica beneficiarilor): la Transgaz/Romgaz/Conpet se ia
+  // valoarea TOTALĂ a contractului; la distribuții (primării) valoarea EXECUTATĂ real.
+  const [regulaVal, setRegulaVal] = useState('totala')   // totala | executata
+  const valInv = (l) => regulaVal === 'executata' ? (Number(l.valoare_executata_lei) || Number(l.valoare_lei) || 0) : (Number(l.valoare_lei) || 0)
 
   const load = async () => {
     const { data, error } = await supabase.from('ofertare_experienta').select('*')
@@ -1070,24 +1074,27 @@ function ExperientaCatalog({ licitatii, profile, showToast }) {
   // Ordinea: în fereastră (valoare desc) → ieșite din fereastră → fără dată PV
   const ordonate = [...vizibile].sort((a, b) => {
     const g = l => l.data_pv ? (inFereastra(l) ? 0 : 1) : 2
-    return g(a) - g(b) || (Number(b.valoare_lei) || 0) - (Number(a.valoare_lei) || 0)
+    return g(a) - g(b) || valInv(b) - valInv(a)
   })
   const nrFereastra = vizibile.filter(inFereastra).length
 
   const toggleSel = (id) => setSel(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const selectate = vizibile.filter(l => sel.has(l.id))
-  const totalSel = selectate.reduce((s, l) => s + (Number(l.valoare_lei) || 0), 0)
+  const totalSel = selectate.reduce((s, l) => s + valInv(l), 0)
   const pragN = Number(prag) || 0
   const maxN = Number(maxCtr) || 3
   const selOK = selectate.length > 0 && selectate.length <= maxN && totalSel >= pragN
   const selAsocieri = selectate.filter(l => l.asociere)
   const selPartiale = selectate.filter(l => (l.tip_pv || '').toLowerCase().includes('partial'))
+  // la regula "executată", asocierile fără cota Gazpet completată intră cu valoarea totală — pericol la evaluare
+  const selFaraCota = regulaVal === 'executata' ? selectate.filter(l => l.asociere && !l.valoare_executata_lei) : []
 
   const salveaza = async (form) => {
     const payload = {
       denumire: form.denumire.trim(),
       beneficiar: form.beneficiar.trim() || null,
       valoare_lei: form.valoare_lei !== '' ? Number(form.valoare_lei) : null,
+      valoare_executata_lei: form.valoare_executata_lei !== '' ? Number(form.valoare_executata_lei) : null,
       data_pv: form.data_pv || null,
       tip_pv: form.tip_pv || null,
       piese: form.piese.trim() || null,
@@ -1140,11 +1147,23 @@ function ExperientaCatalog({ licitatii, profile, showToast }) {
             <input style={{ ...S.input, width:150 }} type="date" value={termenRef} onChange={e => e.target.value && setTermenRef(e.target.value)} /></div>
           {cuTermen.length > 0 && (
             <div><label style={S.lbl}>Preia din licitație</label>
-              <select style={{ ...S.input, width:190 }} value="" onChange={e => { if (e.target.value) setTermenRef(e.target.value.slice(0, 10)) }}>
+              <select style={{ ...S.input, width:190 }} value="" onChange={e => {
+                const x = cuTermen.find(y => String(y.id) === e.target.value)
+                if (!x) return
+                setTermenRef(x.termen_depunere.slice(0, 10))
+                // regula valorii după segmentul licitației țintă
+                const seg = x.segment || detectSegment(x.autoritate, x.obiect)
+                setRegulaVal(['transgaz', 'romgaz', 'conpet'].includes(seg) ? 'totala' : 'executata')
+              }}>
                 <option value="">alege...</option>
-                {cuTermen.map(x => <option key={x.id} value={x.termen_depunere}>{x.nr_anunt} · {fmtZi(x.termen_depunere.slice(0, 10))}</option>)}
+                {cuTermen.map(x => <option key={x.id} value={x.id}>{x.nr_anunt} · {fmtZi(x.termen_depunere.slice(0, 10))}</option>)}
               </select></div>
           )}
+          <div><label style={S.lbl}>Valoare invocată</label>
+            <select style={{ ...S.input, width:230 }} value={regulaVal} onChange={e => setRegulaVal(e.target.value)}>
+              <option value="totala">totală contract (Transgaz/Romgaz/Conpet)</option>
+              <option value="executata">executată Gazpet (distribuții/primării)</option>
+            </select></div>
           <div><label style={S.lbl}>Fereastră (ani)</label>
             <input style={{ ...S.input, width:70 }} type="number" min="1" max="15" value={aniFereastra} onChange={e => setAniFereastra(e.target.value)} /></div>
           <div><label style={S.lbl}>Prag valoare (lei fără TVA)</label>
@@ -1165,7 +1184,9 @@ function ExperientaCatalog({ licitatii, profile, showToast }) {
             </span>
             <span style={{ fontSize:12, color:G.muted }}>prag {fmtLei(pragN)} lei — {totalSel >= pragN ? `peste cu ${fmtLei(totalSel - pragN)}` : `lipsesc ${fmtLei(pragN - totalSel)}`}</span>
             {selectate.length > maxN && <span style={{ fontSize:12, color:G.red, fontWeight:700 }}>prea multe contracte!</span>}
-            {selAsocieri.length > 0 && <span style={{ fontSize:12, color:G.orange, fontWeight:700 }}>⚠ {selAsocieri.length} în asociere — se invocă doar cota Gazpet (verifică fișa)</span>}
+            {regulaVal === 'totala' && selAsocieri.length > 0 && <span style={{ fontSize:12, color:G.muted }}>ℹ {selAsocieri.length} în asociere — la Transgaz/Romgaz/Conpet se invocă valoarea totală (practica acceptată)</span>}
+            {selFaraCota.length > 0 && <span style={{ fontSize:12, color:G.red, fontWeight:700 }}>⚠ {selFaraCota.length} în asociere FĂRĂ cota executată completată — intră cu totalul, risc la evaluare!</span>}
+            {regulaVal === 'executata' && selAsocieri.length > selFaraCota.length && <span style={{ fontSize:12, color:G.orange, fontWeight:700 }}>⚠ asocieri invocate cu cota Gazpet</span>}
             {selPartiale.length > 0 && <span style={{ fontSize:12, color:G.orange, fontWeight:700 }}>⚠ {selPartiale.length} cu recepție parțială</span>}
             <button style={{ ...S.btnS, padding:'4px 10px', fontSize:11, marginLeft:'auto' }} onClick={() => setSel(new Set())}>golește</button>
           </div>
@@ -1194,7 +1215,15 @@ function ExperientaCatalog({ licitatii, profile, showToast }) {
                 {faraData && <span style={{ fontSize:10.5, color:G.orange, fontWeight:800, whiteSpace:'nowrap' }}>fără dată PV!</span>}
                 {!l.activ && <span style={{ fontSize:10.5, color:G.dim, fontWeight:800 }}>inactivă</span>}
                 <span style={{ marginLeft:'auto', display:'flex', gap:10, alignItems:'center', whiteSpace:'nowrap' }}>
-                  <span style={{ fontSize:13.5, fontWeight:800, color: inWin ? G.green : G.muted }}>{fmtLei(l.valoare_lei)} lei</span>
+                  <span style={{ textAlign:'right' }}>
+                    <span style={{ fontSize:13.5, fontWeight:800, color: inWin ? G.green : G.muted }}>{fmtLei(valInv(l))} lei</span>
+                    {regulaVal === 'executata' && l.valoare_executata_lei && Number(l.valoare_executata_lei) !== Number(l.valoare_lei) && (
+                      <span style={{ display:'block', fontSize:10, color:G.dim }}>executat · contract {fmtLei(l.valoare_lei)}</span>
+                    )}
+                    {regulaVal === 'executata' && l.asociere && !l.valoare_executata_lei && (
+                      <span style={{ display:'block', fontSize:10, color:G.red, fontWeight:700 }}>cota Gazpet necompletată!</span>
+                    )}
+                  </span>
                   <span style={{ fontSize:11.5, color:G.muted }}>{l.tip_pv || 'PV'} {fmtZi(l.data_pv)}</span>
                   <button title="Editează" onClick={() => { setEditRow(l); setShowForm(true) }}
                     style={{ ...S.btnS, padding:'3px 9px', fontSize:11 }}>✏️</button>
@@ -1229,7 +1258,8 @@ function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
   const e0 = lucrare
   const [form, setForm] = useState({
     denumire: e0?.denumire || '', beneficiar: e0?.beneficiar || '',
-    valoare_lei: e0?.valoare_lei ?? '', data_pv: e0?.data_pv || '', tip_pv: e0?.tip_pv || 'PVRTL',
+    valoare_lei: e0?.valoare_lei ?? '', valoare_executata_lei: e0?.valoare_executata_lei ?? '',
+    data_pv: e0?.data_pv || '', tip_pv: e0?.tip_pv || 'PVRTL',
     piese: e0?.piese || '', folder_nas: e0?.folder_nas || '', dosar_sursa_path: e0?.dosar_sursa_path || '',
     asociere: e0?.asociere || false, observatii: e0?.observatii || '', activ: e0 ? !!e0.activ : true,
   })
@@ -1253,8 +1283,10 @@ function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
             <input style={S.input} value={form.denumire} onChange={e => set('denumire', e.target.value)} placeholder="ex: Balaceanca - Cond. Dn500 Plataresti - Balaceanca" /></div>
           <div><label style={S.lbl}>Beneficiar</label>
             <input style={S.input} value={form.beneficiar} onChange={e => set('beneficiar', e.target.value)} placeholder="ex: TRANSGAZ" /></div>
-          <div><label style={S.lbl}>Valoare (lei fără TVA)</label>
+          <div><label style={S.lbl}>Valoare contract (lei fără TVA)</label>
             <input style={S.input} type="number" min="0" step="0.01" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} placeholder="ex: 33289000" /></div>
+          <div><label style={S.lbl}>Valoare executată Gazpet (la asocieri)</label>
+            <input style={S.input} type="number" min="0" step="0.01" value={form.valoare_executata_lei} onChange={e => set('valoare_executata_lei', e.target.value)} placeholder="cota reală — pt. distribuții" /></div>
           <div><label style={S.lbl}>Data PV recepție</label>
             <input style={S.input} type="date" value={form.data_pv} onChange={e => set('data_pv', e.target.value)} /></div>
           <div><label style={S.lbl}>Tip PV</label>
