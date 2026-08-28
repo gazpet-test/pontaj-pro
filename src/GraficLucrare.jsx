@@ -157,6 +157,7 @@ export default function GraficLucrare({ profile }) {
         durata_zile: Math.max(0, Number(r.durata_zile) || 0),
         jalon: !!r.jalon, predecesori: r.predecesori || [],
         resurse: (r.resurse || '').trim() || null, nivel: r.nivel || 0,
+        valoare_lei: r.valoare_lei !== '' && r.valoare_lei != null ? Number(r.valoare_lei) : null,
         ordine: r.ordine, note: (r.note || '').trim() || null, updated_at: new Date().toISOString(),
       }
       if (r._nou) {
@@ -193,6 +194,53 @@ export default function GraficLucrare({ profile }) {
       pdf.save(`grafic_${eProiect ? 'proiect' : 'licitatie'}_${id}.pdf`)
       showToast('PDF generat.')
     } catch (e) { showToast('Eroare la PDF: ' + (e?.message || e), 'err') }
+    setBusy(null)
+  }
+
+  // F9 — Grafic fizic și valoric (model Conpet, făcut până acum manual în Excel):
+  // rânduri = activitățile graficului, coloane = lunile, valoarea repartizată
+  // proporțional cu zilele activității din fiecare lună. Export .xlsx editabil,
+  // pentru că formularul diferă ușor de la o autoritate la alta.
+  const exportF9 = async () => {
+    setBusy('Se generează F9...')
+    try {
+      const XLSX = await import('xlsx-js-style')
+      const nrLuni = Math.max(1, Math.ceil(total / 30))
+      const titlu = eProiect ? (lucrare?.nume || '') : (lucrare?.obiect || lucrare?.nr_anunt || '')
+      const head = ['Nr. crt.', 'Denumirea activității', 'Valoare (lei, fără TVA)', ...Array.from({ length: nrLuni }, (_, i) => `Luna ${i + 1}`)]
+      const aoa = [
+        ['Formular nr. 9'], [],
+        [`GRAFIC FIZIC ȘI VALORIC DE EXECUȚIE — ${titlu}`],
+        [`Durata: ${total} zile calendaristice · Start: ${dataStart}`], [],
+        head,
+      ]
+      let totalV = 0
+      const totLuni = Array(nrLuni).fill(0)
+      rows.forEach((r, i) => {
+        const c = rez[r.id] || {}
+        const v = Number(r.valoare_lei) || 0
+        totalV += v
+        const rand = [r.ordine ?? i + 1, (r.nivel ? '    '.repeat(r.nivel) : '') + (r.denumire || ''), v || null]
+        for (let l = 0; l < nrLuni; l++) {
+          const ls0 = l * 30, le0 = (l + 1) * 30
+          const zile = Math.max(0, Math.min(c.ef ?? 0, le0) - Math.max(c.es ?? 0, ls0))
+          const dur = Math.max(1, (c.ef ?? 0) - (c.es ?? 0))
+          if (r.jalon) { rand.push((c.es ?? 0) >= ls0 && (c.es ?? 0) < le0 ? '◆' : null); continue }
+          const cota = v && zile ? Math.round((v * zile / dur) * 100) / 100 : null
+          if (cota) totLuni[l] += cota
+          rand.push(cota || (zile > 0 ? '█' : null))
+        }
+        aoa.push(rand)
+      })
+      aoa.push([])
+      aoa.push(['', 'TOTAL GENERAL (lei, fără TVA)', totalV || null, ...totLuni.map(v => v ? Math.round(v * 100) / 100 : null)])
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      ws['!cols'] = [{ wch: 7 }, { wch: 52 }, { wch: 16 }, ...Array(nrLuni).fill({ wch: 12 })]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'F9')
+      XLSX.writeFile(wb, `F9_grafic_fizic_valoric_${eProiect ? 'proiect' : 'licitatie'}_${id}.xlsx`)
+      showToast('F9 exportat (Excel) — Silviu îl poate ajusta unde formularul diferă.')
+    } catch (e) { showToast('Eroare la F9: ' + (e?.message || e), 'err') }
     setBusy(null)
   }
 
@@ -234,6 +282,7 @@ export default function GraficLucrare({ profile }) {
         <button style={S.btnS} onClick={adauga}>＋ Activitate</button>
         <button style={{ ...S.btnP, opacity: dirty && !busy ? 1 : .5 }} disabled={!dirty || !!busy} onClick={salveaza}>💾 Salvează graficul</button>
         <button style={S.btnS} onClick={exportPdf} disabled={!!busy}>📄 Export PDF</button>
+        <button style={S.btnS} onClick={exportF9} disabled={!!busy} title="Grafic fizic și valoric (model Conpet) — Excel editabil">📊 Export F9</button>
         {busy && <span style={{ fontSize:12.5, color:G.accent, fontWeight:700 }}>{busy}</span>}
       </div>
 
@@ -278,7 +327,7 @@ export default function GraficLucrare({ profile }) {
         <table style={{ borderCollapse:'collapse', width:'100%', minWidth:900, fontSize:12 }}>
           <thead>
             <tr style={{ color:G.muted, textAlign:'left' }}>
-              {['#','Activitate','Zile','Jalon','Predecesori','Resurse','Start–Final','Rezervă','',''].map((h, i) => (
+              {['#','Activitate','Zile','Jalon','Predecesori','Resurse','Valoare (lei)','Start–Final','Rezervă','',''].map((h, i) => (
                 <th key={i} style={{ padding:'6px 8px', borderBottom:`1px solid ${G.border}`, fontSize:11, fontWeight:700 }}>{h}</th>
               ))}
             </tr>
@@ -299,6 +348,8 @@ export default function GraficLucrare({ profile }) {
                     <input style={S.input} value={r._predText} onChange={e => setPred(r.id, e.target.value)} placeholder="ex: 3FS, 7SS+10" /></td>
                   <td style={{ padding:'4px 8px', minWidth:150 }}>
                     <input style={S.input} value={r.resurse || ''} onChange={e => set(r.id, 'resurse', e.target.value)} /></td>
+                  <td style={{ padding:'4px 8px', width:110 }}>
+                    <input style={S.input} type="number" min="0" value={r.valoare_lei ?? ''} onChange={e => set(r.id, 'valoare_lei', e.target.value)} placeholder="—" /></td>
                   <td style={{ padding:'4px 8px', color:G.muted, whiteSpace:'nowrap' }}>{fmtData(dataStart, c.es || 0)} – {fmtData(dataStart, c.ef || 0)}</td>
                   <td style={{ padding:'4px 8px', color: c.critic ? G.red : G.green, fontWeight:700 }}>{c.critic ? 'CRITIC' : `${c.float}z`}</td>
                   <td style={{ padding:'4px 2px', whiteSpace:'nowrap' }}>

@@ -45,6 +45,23 @@ const TRANZITII = {
   castigata:    [], pierduta: [], abandonata: [],
 }
 
+// Segmente de piață — dimensiune transversală (filtru pipeline, radar, calibrări), nu module separate
+export const SEGMENTE = {
+  transgaz:    { label:'Transgaz',         color:'#58A6FF' },
+  romgaz:      { label:'Romgaz',           color:'#A371F7' },
+  conpet:      { label:'Conpet',           color:'#F0883E' },
+  distributie: { label:'Distribuție gaze', color:'#3FB950' },
+  altele:      { label:'Altele',           color:'#8B949E' },
+}
+export const detectSegment = (autoritate = '', obiect = '') => {
+  const t = (autoritate + ' ' + obiect).toLowerCase()
+  if (t.includes('transgaz')) return 'transgaz'
+  if (t.includes('romgaz')) return 'romgaz'
+  if (t.includes('conpet')) return 'conpet'
+  if (/gaze|gaz metan|bransament|branșament/.test(t)) return 'distributie'
+  return 'altele'
+}
+
 const fmtVal = v => (v || v === 0) ? new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v) : '—'
 const fmtTermen = t => t ? new Date(t).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
 // timestamptz → valoare pentru <input type="datetime-local"> (ora locală, nu UTC)
@@ -58,6 +75,7 @@ export default function OfertareLicitatiiTab() {
   const [editRow, setEditRow] = useState(null)
   const [selected, setSelected] = useState(null)
   const [fStatus, setFStatus] = useState('active')
+  const [fSegment, setFSegment] = useState('')
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
 
@@ -82,8 +100,9 @@ export default function OfertareLicitatiiTab() {
   }, [])
 
   const FINALE = ['castigata', 'pierduta', 'abandonata']
-  const filtrate = rows.filter(r => fStatus === 'active' ? !FINALE.includes(r.status)
+  const filtrate = rows.filter(r => (fStatus === 'active' ? !FINALE.includes(r.status)
     : fStatus === 'finale' ? FINALE.includes(r.status) : true)
+    && (!fSegment || r.segment === fSegment))
 
   const salveaza = async (form) => {
     const payload = {
@@ -98,6 +117,7 @@ export default function OfertareLicitatiiTab() {
       garantie_participare: form.garantie_participare.trim() || null,
       nas_path: form.nas_path.trim() || null,
       observatii: form.observatii.trim() || null,
+      segment: form.segment || detectSegment(form.autoritate, form.obiect),
       ...(form.loturi_ai ? { loturi: form.loturi_ai } : {}),
       updated_at: new Date().toISOString(),
     }
@@ -165,7 +185,7 @@ export default function OfertareLicitatiiTab() {
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
       <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar']].map(([k, lbl]) => (
+        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
@@ -175,6 +195,8 @@ export default function OfertareLicitatiiTab() {
 
       {vedere === 'radar' && <RadarLicitatii profile={profile} showToast={showToast} onPromovat={load} />}
 
+      {vedere === 'referinte' && <ReferinteFinanciare showToast={showToast} />}
+
       {vedere === 'licitatii' && <>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
         <div>
@@ -182,6 +204,10 @@ export default function OfertareLicitatiiTab() {
           <div style={{ fontSize:12, color:G.muted }}>Pipeline de la anunț SEAP la depunere — countdown, GO/NO-GO, cerințe eliminatorii</div>
         </div>
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <select style={{ ...S.input, width:'auto' }} value={fSegment} onChange={e => setFSegment(e.target.value)}>
+            <option value="">Toate segmentele</option>
+            {Object.entries(SEGMENTE).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+          </select>
           <select style={{ ...S.input, width:'auto' }} value={fStatus} onChange={e => setFStatus(e.target.value)}>
             <option value="active">În desfășurare</option>
             <option value="finale">Finalizate</option>
@@ -210,6 +236,9 @@ export default function OfertareLicitatiiTab() {
               <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
                 <span style={{ background: st.color + '22', color: st.color, border:`1px solid ${st.color}66`, borderRadius:14, padding:'3px 12px', fontSize:11.5, fontWeight:800, whiteSpace:'nowrap' }}>{st.icon} {st.label}</span>
                 <span style={{ fontWeight:800, fontSize:14.5 }}>{l.nr_anunt}</span>
+                {l.segment && SEGMENTE[l.segment] && (
+                  <span style={{ color:SEGMENTE[l.segment].color, border:`1px solid ${SEGMENTE[l.segment].color}55`, borderRadius:10, padding:'1px 9px', fontSize:10.5, fontWeight:800 }}>{SEGMENTE[l.segment].label}</span>
+                )}
                 <span style={{ color:G.muted, fontSize:13, flex:1, minWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{l.obiect}</span>
                 {urgent && (
                   <span style={{ color:cZile, fontWeight:800, fontSize:13, whiteSpace:'nowrap' }}>
@@ -258,7 +287,7 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
     link_seap: e0?.link_seap || '', valoare_estimata: e0?.valoare_estimata ?? '', moneda: e0?.moneda || 'RON',
     termen_depunere: toLocalInput(e0?.termen_depunere), criteriu: e0?.criteriu || '',
     garantie_participare: e0?.garantie_participare || '', nas_path: e0?.nas_path || '', observatii: e0?.observatii || '',
-    fisa_path: null, fisa_nume: null, loturi_ai: null,
+    segment: e0?.segment || '', fisa_path: null, fisa_nume: null, loturi_ai: null,
   })
   const [saving, setSaving] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
@@ -339,6 +368,11 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
             <input style={S.input} value={form.nr_anunt} onChange={e => set('nr_anunt', e.target.value)} placeholder="ex: CN1094135" /></div>
           <div><label style={S.lbl}>Autoritate contractantă *</label>
             <input style={S.input} value={form.autoritate} onChange={e => set('autoritate', e.target.value)} placeholder="ex: SNGN Romgaz SA" /></div>
+          <div><label style={S.lbl}>Segment</label>
+            <select style={S.input} value={form.segment} onChange={e => set('segment', e.target.value)}>
+              <option value="">auto ({SEGMENTE[detectSegment(form.autoritate, form.obiect)].label})</option>
+              {Object.entries(SEGMENTE).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+            </select></div>
           <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Obiect *</label>
             <input style={S.input} value={form.obiect} onChange={e => set('obiect', e.target.value)} placeholder="ex: Conductă aducțiune Grup 9 Șincai – Grup 15 Râciu (Lot 2)" /></div>
           <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Link SEAP</label>
@@ -1308,6 +1342,7 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
     const { data: ins, error } = await supabase.from('ofertare_licitatii').insert({
       nr_anunt: r.nr_seap, autoritate: r.autoritate, obiect: r.titlu,
       link_seap: r.link, valoare_estimata: r.valoare_lei, moneda: 'RON',
+      segment: r.segment || detectSegment(r.autoritate, r.titlu),
       termen_depunere: r.termen_depunere, canal: 'radar', status: 'identificata',
       observatii: r.motiv_scor ? `Radar (scor ${r.scor_potrivire}): ${r.motiv_scor}` : null,
       created_by: profile?.id || null,
@@ -1420,6 +1455,128 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// ── 💰 Referințe financiare — calibrări istorice + prețuri unitare + materiale ──
+// Sursa: anatomia celor 5 oferte depuse (doc claude: anatomia-oferta-financiara).
+// Calibrări = cu ce coeficienți s-a mers per beneficiar/an. Prețurile de materiale
+// sunt istoric orientativ — fluxul viu va fi generatorul de cereri de ofertă (RFQ).
+function ReferinteFinanciare({ showToast }) {
+  const [cal, setCal] = useState([])
+  const [pu, setPu] = useState([])
+  const [mat, setMat] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [cauta, setCauta] = useState('')
+  const [tab, setTab] = useState('calibrari')  // calibrari | preturi | materiale
+
+  useEffect(() => {
+    (async () => {
+      const [{ data: c }, { data: p }, { data: m }] = await Promise.all([
+        supabase.from('ofertare_calibrari').select('*').order('an', { ascending: false, nullsFirst: false }),
+        supabase.from('ofertare_preturi_unitare').select('*').order('an', { ascending: false, nullsFirst: false }),
+        supabase.from('ofertare_preturi_materiale').select('*').order('an', { ascending: false, nullsFirst: false }),
+      ])
+      setCal(c || []); setPu(p || []); setMat(m || []); setLoading(false)
+    })()
+  }, [])
+
+  const q = cauta.toLowerCase()
+  const fPu = pu.filter(r => !q || `${r.simbol} ${r.denumire} ${r.lucrare}`.toLowerCase().includes(q))
+  const fMat = mat.filter(r => !q || `${r.denumire} ${r.furnizor} ${r.lucrare}`.toLowerCase().includes(q))
+  const fmtPct = v => v == null ? '—' : `${Number(v)}%`
+  const REZ = { castigata: ['🏆', G.green], pierduta: ['❌', G.red], depusa: ['📮', G.purple], anulata: ['⛔', G.dim] }
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, flexWrap:'wrap', gap:10 }}>
+        <div>
+          <div style={{ fontSize:19, fontWeight:800 }}>💰 Referințe financiare</div>
+          <div style={{ fontSize:12, color:G.muted }}>Cu ce coeficienți s-a mers istoric, pe segmente — plus prețuri unitare și materiale din ofertele depuse</div>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`]].map(([k, lbl]) => (
+            <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, padding:'6px 13px', fontSize:12, fontWeight:700,
+              ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă referințele...</div>}
+
+      {!loading && tab === 'calibrari' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {cal.map(r => {
+            const seg = SEGMENTE[r.segment] || SEGMENTE.altele
+            const [rIcon, rCol] = REZ[r.rezultat] || ['❔', G.dim]
+            return (
+              <div key={r.id} style={{ ...S.card, padding:'14px 18px', borderLeft:`3px solid ${seg.color}` }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                  <span style={{ color:seg.color, border:`1px solid ${seg.color}55`, borderRadius:10, padding:'1px 9px', fontSize:10.5, fontWeight:800 }}>{seg.label}</span>
+                  <span style={{ fontWeight:700, fontSize:13.5, flex:1, minWidth:240 }}>{r.lucrare}</span>
+                  <span style={{ color:rCol, fontWeight:800, fontSize:12 }}>{rIcon} {r.rezultat || '—'}</span>
+                  <span style={{ color:G.dim, fontSize:12 }}>{r.an || '—'}</span>
+                </div>
+                <div style={{ display:'flex', gap:16, marginTop:8, flexWrap:'wrap' }}>
+                  {[['Valoare', r.valoare_lei != null ? fmtVal(r.valoare_lei) + ' lei' : '—'],
+                    ['Indirecte', fmtPct(r.indirecte_pct)], ['Profit', fmtPct(r.profit_pct)],
+                    ['Manoperă', r.tarif_manopera != null ? `${Number(r.tarif_manopera)} lei/h` : '—'],
+                    ['OS', fmtPct(r.os_pct)]].map(([k, v]) => (
+                    <div key={k} style={{ background:G.bg, border:`1px solid ${G.border2}`, borderRadius:7, padding:'5px 12px' }}>
+                      <div style={{ fontSize:9.5, color:G.dim, textTransform:'uppercase', fontWeight:700 }}>{k}</div>
+                      <div style={{ fontSize:13.5, fontWeight:800 }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {r.note && <div style={{ fontSize:12, color:G.muted, marginTop:8 }}>{r.note}</div>}
+              </div>
+            )
+          })}
+          <div style={{ fontSize:11.5, color:G.dim, padding:'6px 4px' }}>
+            Formula devizului: directe (mat+man+uti+tra) + CAM 2,25% pe manoperă → + indirecte % → + profit %. Rândurile se completează la fiecare ofertă depusă.
+          </div>
+        </div>
+      )}
+
+      {!loading && tab !== 'calibrari' && (
+        <>
+          <input style={{ ...S.input, marginBottom:12, maxWidth:420 }} placeholder="🔍 Caută (denumire, simbol, lucrare, furnizor...)" value={cauta} onChange={e => setCauta(e.target.value)} />
+          <div style={{ ...S.card, overflow:'hidden' }}>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12.5 }}>
+                <thead>
+                  <tr style={{ background:G.surface, color:G.muted, fontSize:11, textTransform:'uppercase' }}>
+                    {(tab === 'preturi' ? ['Simbol', 'Denumire', 'UM', 'Preț', 'Tip', 'Lucrare', 'An']
+                      : ['Denumire', 'UM', 'Preț', 'Furnizor', 'Lucrare', 'An']).map(h => (
+                      <th key={h} style={{ textAlign:'left', padding:'9px 12px', borderBottom:`1px solid ${G.border}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(tab === 'preturi' ? fPu : fMat).map(r => (
+                    <tr key={r.id} style={{ borderBottom:`1px solid ${G.border2}` }} title={r.note || ''}>
+                      {tab === 'preturi' && <td style={{ padding:'8px 12px', color:G.ofertare, fontWeight:700, whiteSpace:'nowrap' }}>{r.simbol || '—'}</td>}
+                      <td style={{ padding:'8px 12px', maxWidth:380 }}>{r.denumire}{r.note ? ' *' : ''}</td>
+                      <td style={{ padding:'8px 12px', color:G.dim }}>{r.um || '—'}</td>
+                      <td style={{ padding:'8px 12px', fontWeight:800, whiteSpace:'nowrap' }}>{fmtVal(r.pret)} lei</td>
+                      {tab === 'preturi' ? <td style={{ padding:'8px 12px', color:G.muted }}>{r.tip}</td>
+                        : <td style={{ padding:'8px 12px', color:G.muted }}>{r.furnizor || '—'}</td>}
+                      <td style={{ padding:'8px 12px', color:G.dim, maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.lucrare || '—'}</td>
+                      <td style={{ padding:'8px 12px', color:G.dim }}>{r.an || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {tab === 'materiale' && (
+            <div style={{ fontSize:11.5, color:G.dim, padding:'8px 4px' }}>
+              ⚠️ Prețurile de materiale se învechesc — sunt referință, nu ofertă. Fluxul complet (generator cereri de ofertă → import oferte primite → comparativ → prețuri per licitație) e următorul pas al modulului.
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
