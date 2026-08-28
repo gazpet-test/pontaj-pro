@@ -12,10 +12,13 @@
 // - ZIP-ul SEAP tine dimensiunile in local file header (fara data descriptor), deci
 //   se poate parcurge streaming, sarind peste ce avem deja.
 // - cheile noi (sb_...) nu sunt JWT: uploadul reluabil le vrea prin apikey.
+// - fisierele .p7s au continutul FRAGMENTAT in ASN.1; se desface cu _p7s.js, nu
+//   prin decupare intre %PDF si %%EOF (vezi comentariul de acolo).
 // - tip are CHECK in BD ('duae' nu e valoare valida), iar erorile de scriere se
 //   raporteaza — altfel fisierul ajunge in storage si documentul lipseste din lista.
 import { createClient } from '@supabase/supabase-js'
 import { inflateRawSync } from 'node:zlib'
+import { continutSemnat } from './_p7s.js'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR = {
@@ -40,22 +43,6 @@ function ghicesteTip(nume) {
   if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum'
   if (/raspuns|clarificar/.test(n)) return 'raspuns_clarificare'
   return 'alta'
-}
-
-// Fisierele SEAP sunt semnate: continutul real e in interiorul containerului CMS.
-function desfaP7s(buf, nume) {
-  if (!/\.p7s$/i.test(nume)) return { buf, nume }
-  const numeReal = nume.replace(/\.p7s$/i, '')
-  const start = buf.indexOf('%PDF')
-  if (start >= 0) {
-    const eof = buf.lastIndexOf('%%EOF')
-    return { buf: buf.subarray(start, eof >= 0 ? eof + 5 : buf.length), nume: numeReal }
-  }
-  for (const s of ['PK', '<?xml']) {
-    const p = buf.indexOf(s)
-    if (p >= 0) return { buf: buf.subarray(p), nume: numeReal }
-  }
-  return { buf, nume: numeReal }
 }
 
 // Citeste fluxul arhivei pe bucati, cu o coada — fara concatenari repetate
@@ -200,7 +187,7 @@ export default async function handler(req, res) {
       if (!comprimat) { raport.erori.push(`${numeCurat}: flux intrerupt`); break }
       try {
         const brut = metoda === 0 ? comprimat : inflateRawSync(comprimat)
-        const { buf, nume: numeFinal } = desfaP7s(brut, nume)
+        const { buf, nume: numeFinal } = continutSemnat(brut, nume)
         const estePdf = /\.pdf$/i.test(numeFinal)
         const ctype = estePdf ? 'application/pdf' : 'application/octet-stream'
         const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180)
