@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import RFQPanel from './OfertareRFQ.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -185,7 +186,7 @@ export default function OfertareLicitatiiTab() {
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
       <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
+        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe'], ['rfq', '🛒 Cereri ofertă']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
@@ -196,6 +197,8 @@ export default function OfertareLicitatiiTab() {
       {vedere === 'radar' && <RadarLicitatii profile={profile} showToast={showToast} onPromovat={load} />}
 
       {vedere === 'referinte' && <ReferinteFinanciare showToast={showToast} />}
+
+      {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
 
       {vedere === 'licitatii' && <>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
