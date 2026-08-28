@@ -38,6 +38,7 @@ import PopoverBara from './PopoverBara.jsx'
 // ════════════ PROVIZORIU: corecții registru imobilizări ↔ inventar (24.08.2026) ════════════
 // Se scoate (ruta + fișierul InventarCorectii.jsx) când proiectul de aliniere e încheiat.
 import InventarCorectii from './InventarCorectii.jsx'
+import GraficLucrare from './GraficLucrare.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -121,6 +122,13 @@ function ConsumabileRoute() {
 function InventarCorectiiRoute() {
   const { profile } = useAuth()
   return <InventarCorectii profile={profile} />
+}
+
+// Graficul de execuție (Gantt + drum critic) al unei lucrări — /grafic/proiect/25
+// sau /grafic/licitatie/3. Componenta stă în GraficLucrare.jsx.
+function GraficLucrareRoute() {
+  const { profile } = useAuth()
+  return <GraficLucrare profile={profile} />
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -8485,6 +8493,7 @@ export default function App() {
         <Route path="/consumabile" element={<ProtectedRoute><Layout><ConsumabileRoute/></Layout></ProtectedRoute>}/>
         {/* PROVIZORIU: corecții registru imobilizări (se scoate la finalul proiectului) */}
         <Route path="/inventar-corectii" element={<ProtectedRoute><Layout><InventarCorectiiRoute/></Layout></ProtectedRoute>}/>
+        <Route path="/grafic/:tip/:id" element={<ProtectedRoute><GraficLucrareRoute/></ProtectedRoute>}/>
         {/* ════════════ Etapa 15 Faza 1: Routes module Comercial ════════════ */}
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
         <Route path="/achizitii" element={<ProtectedRoute requireModule="achizitii"><Layout><AchizitiiPage/></Layout></ProtectedRoute>}/>
