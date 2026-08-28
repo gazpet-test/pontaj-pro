@@ -59,7 +59,7 @@ export default function OfertareLicitatiiTab() {
   const [selected, setSelected] = useState(null)
   const [fStatus, setFStatus] = useState('active')
   const [toast, setToast] = useState(null)
-  const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta
+  const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
@@ -165,13 +165,15 @@ export default function OfertareLicitatiiTab() {
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
       <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară']].map(([k, lbl]) => (
+        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
       </div>
 
       {vedere === 'experienta' && <ExperientaCatalog licitatii={rows} profile={profile} showToast={showToast} />}
+
+      {vedere === 'radar' && <RadarLicitatii profile={profile} showToast={showToast} onPromovat={load} />}
 
       {vedere === 'licitatii' && <>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
@@ -1253,6 +1255,170 @@ function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
             {saving ? 'Se salvează...' : e0 ? '💾 Salvează' : '✅ Adaugă în catalog'}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 📡 Radar licitații — anunțuri SEAP scanate zilnic + scoring AI (gap-analysis) ──
+// Sursa: tabela ofertare_radar, populată de edge function ofertare-radar-scan
+// (cron zilnic + buton „Scanează acum"). Doar anunțurile relevante (CPV/cuvinte-cheie).
+function RadarLicitatii({ profile, showToast, onPromovat }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [lastScan, setLastScan] = useState(null)
+  const [scanning, setScanning] = useState(false)
+  const [fStat, setFStat] = useState('activ')   // activ = nou+interesant
+  const [fScor, setFScor] = useState(0)
+  const [expanded, setExpanded] = useState(null)
+
+  const load = async () => {
+    setLoading(true)
+    const [{ data: r }, { data: log }] = await Promise.all([
+      supabase.from('ofertare_radar').select('*').eq('relevant', true)
+        .order('scor_potrivire', { ascending: false, nullsFirst: false })
+        .order('termen_depunere', { ascending: true }),
+      supabase.from('ofertare_radar_scan_log').select('*')
+        .order('pornit_la', { ascending: false }).limit(1),
+    ])
+    setRows(r || []); setLastScan(log?.[0] || null); setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  const scaneaza = async () => {
+    setScanning(true)
+    const { data, error } = await supabase.functions.invoke('ofertare-radar-scan', { body: { zile: 2 } })
+    setScanning(false)
+    if (error) { showToast('Scanarea a eșuat: ' + error.message, 'err'); return }
+    showToast(`📡 Scanat: ${data?.anunturi_vazute ?? '?'} anunțuri, ${data?.anunturi_noi ?? 0} noi, ${data?.relevante_noi ?? 0} relevante.`)
+    await load()
+  }
+
+  const setStatus = async (r, status) => {
+    const { error } = await supabase.from('ofertare_radar')
+      .update({ status, actualizat_la: new Date().toISOString() }).eq('id', r.id)
+    if (error) { showToast('Eroare: ' + error.message, 'err'); return }
+    showToast(status === 'interesant' ? `⭐ ${r.nr_seap} — marcat interesant.` : `🙈 ${r.nr_seap} — ignorat.`)
+    await load()
+  }
+
+  // Promovarea creează licitația în pipeline (E0) și leagă rândul de radar de ea
+  const promoveaza = async (r) => {
+    if (!window.confirm(`Promovezi ${r.nr_seap} în pipeline-ul de licitații?`)) return
+    const { data: ins, error } = await supabase.from('ofertare_licitatii').insert({
+      nr_anunt: r.nr_seap, autoritate: r.autoritate, obiect: r.titlu,
+      link_seap: r.link, valoare_estimata: r.valoare_lei, moneda: 'RON',
+      termen_depunere: r.termen_depunere, canal: 'radar', status: 'identificata',
+      observatii: r.motiv_scor ? `Radar (scor ${r.scor_potrivire}): ${r.motiv_scor}` : null,
+      created_by: profile?.id || null,
+    }).select('id').single()
+    if (error) { showToast('Eroare la promovare: ' + error.message, 'err'); return }
+    await supabase.from('ofertare_radar')
+      .update({ status: 'preluat', licitatie_id: ins.id, actualizat_la: new Date().toISOString() }).eq('id', r.id)
+    showToast(`🏛 ${r.nr_seap} promovată în licitații.`)
+    await load(); onPromovat?.()
+  }
+
+  const zileRamase = t => t ? Math.ceil((new Date(t) - Date.now()) / 86400000) : null
+  const scorCul = s => s == null ? G.dim : s >= 70 ? G.green : s >= 40 ? G.yellow : G.dim
+
+  const filtrate = rows.filter(r => {
+    if (fStat === 'activ' && !['nou', 'interesant'].includes(r.status)) return false
+    if (fStat !== 'activ' && fStat !== 'toate' && r.status !== fStat) return false
+    if (fScor && (r.scor_potrivire == null || r.scor_potrivire < fScor)) return false
+    return true
+  })
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
+        <div>
+          <div style={{ fontSize:19, fontWeight:800 }}>📡 Radar licitații</div>
+          <div style={{ fontSize:12, color:G.muted }}>
+            Anunțuri SEAP scanate automat (conducte gaze + apă/canal) cu scor de potrivire AI
+            {lastScan && ` · ultima scanare: ${fmtTermen(lastScan.pornit_la)} — ${lastScan.anunturi_vazute ?? 0} anunțuri, ${lastScan.relevante_noi ?? 0} relevante noi`}
+          </div>
+        </div>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <select style={{ ...S.input, width:'auto' }} value={fStat} onChange={e => setFStat(e.target.value)}>
+            <option value="activ">Noi + interesante</option>
+            <option value="interesant">Doar interesante</option>
+            <option value="ignorat">Ignorate</option>
+            <option value="preluat">Preluate</option>
+            <option value="toate">Toate</option>
+          </select>
+          <select style={{ ...S.input, width:'auto' }} value={fScor} onChange={e => setFScor(Number(e.target.value))}>
+            <option value={0}>Orice scor</option>
+            <option value={70}>Scor ≥ 70</option>
+            <option value={40}>Scor ≥ 40</option>
+          </select>
+          <button style={{ ...S.btnP, opacity: scanning ? .6 : 1 }} disabled={scanning} onClick={scaneaza}>
+            {scanning ? '⏳ Scanez...' : '🔄 Scanează acum'}
+          </button>
+        </div>
+      </div>
+
+      {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă radarul...</div>}
+      {!loading && !filtrate.length && (
+        <div style={{ ...S.card, padding:40, textAlign:'center', color:G.dim, fontSize:14 }}>
+          Nimic pe filtrul curent. Radarul scanează zilnic anunțurile noi din SEAP.
+        </div>
+      )}
+
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {filtrate.map(r => {
+          const zile = zileRamase(r.termen_depunere)
+          const exp = expanded === r.id
+          return (
+            <div key={r.id} style={{ ...S.card, padding:'14px 18px', cursor:'pointer',
+              opacity: ['ignorat'].includes(r.status) ? .55 : 1 }}
+              onClick={() => setExpanded(exp ? null : r.id)}>
+              <div style={{ display:'flex', alignItems:'flex-start', gap:14, flexWrap:'wrap' }}>
+                <div style={{ minWidth:52, textAlign:'center' }}>
+                  <div style={{ fontSize:21, fontWeight:800, color: scorCul(r.scor_potrivire) }}>{r.scor_potrivire ?? '—'}</div>
+                  <div style={{ fontSize:9.5, color:G.dim, textTransform:'uppercase' }}>scor</div>
+                </div>
+                <div style={{ flex:1, minWidth:260 }}>
+                  <div style={{ fontSize:14, fontWeight:700, lineHeight:1.35 }}>
+                    {r.status === 'interesant' && '⭐ '}{r.status === 'preluat' && '🏛 '}{r.titlu}
+                  </div>
+                  <div style={{ fontSize:12, color:G.muted, marginTop:3 }}>
+                    {r.autoritate} · {fmtVal(r.valoare_lei)} lei · {r.cpv}
+                  </div>
+                  <div style={{ fontSize:12, marginTop:4 }}>
+                    <span style={{ color: zile != null && zile <= 7 ? G.red : zile != null && zile <= 14 ? G.orange : G.muted, fontWeight:700 }}>
+                      ⏱ {fmtTermen(r.termen_depunere)}{zile != null && zile >= 0 ? ` — ${zile} zile` : zile != null ? ' — EXPIRAT' : ''}
+                    </span>
+                    {r.tip_procedura && <span style={{ color:G.dim }}> · {r.tip_procedura}</span>}
+                    {r.are_loturi && <span style={{ color:G.dim }}> · pe loturi</span>}
+                  </div>
+                  {r.motiv_scor && <div style={{ fontSize:12, color:G.text, marginTop:6, opacity:.85 }}>{r.motiv_scor}</div>}
+                  {exp && Array.isArray(r.lipsuri) && r.lipsuri.length > 0 && (
+                    <div style={{ marginTop:8, padding:'8px 12px', background:G.bg, borderRadius:7, border:`1px solid ${G.border2}` }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:G.orange, marginBottom:4 }}>⚠ CE NE-AR LIPSI</div>
+                      {r.lipsuri.map((l, i) => <div key={i} style={{ fontSize:12, color:G.muted, marginBottom:3 }}>• {l}</div>)}
+                    </div>
+                  )}
+                  {exp && Array.isArray(r.documente) && r.documente.length > 0 && (
+                    <div style={{ marginTop:8, padding:'8px 12px', background:G.bg, borderRadius:7, border:`1px solid ${G.border2}` }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:G.muted, marginBottom:4 }}>📎 DOCUMENTAȚIA PUBLICATĂ ({r.documente.length}) — descărcarea cere login SEAP</div>
+                      {r.documente.map((d, i) => <div key={i} style={{ fontSize:12, color:G.dim, marginBottom:2 }}>• {d.nume}</div>)}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6, alignItems:'stretch' }} onClick={e => e.stopPropagation()}>
+                  {r.link && <a href={r.link} target="_blank" rel="noreferrer" style={{ ...S.btnS, padding:'6px 12px', fontSize:12, textAlign:'center', textDecoration:'none', color:G.blue }}>SEAP ↗</a>}
+                  {['nou', 'interesant'].includes(r.status) && <>
+                    {r.status === 'nou' && <button style={{ ...S.btnS, padding:'6px 12px', fontSize:12 }} onClick={() => setStatus(r, 'interesant')}>⭐ Interesant</button>}
+                    <button style={{ ...S.btnS, padding:'6px 12px', fontSize:12 }} onClick={() => setStatus(r, 'ignorat')}>🙈 Ignoră</button>
+                    <button style={{ ...S.btnP, padding:'6px 12px', fontSize:12 }} onClick={() => promoveaza(r)}>🏛 Promovează</button>
+                  </>}
+                  {r.status === 'ignorat' && <button style={{ ...S.btnS, padding:'6px 12px', fontSize:12 }} onClick={() => setStatus(r, 'nou')}>↩ Readu</button>}
+                </div>
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
