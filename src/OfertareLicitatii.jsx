@@ -444,6 +444,10 @@ const ghicesteTip = (nume) => {
   return 'alta'
 }
 
+// Rând de inventar fără fișier real în storage. fisier_path e NOT NULL în BD,
+// așa că poziția „știm că există documentul, dar nu-l avem" poartă marcajul din cale.
+const ESTE_PLACEHOLDER = d => !d.fisier_path || d.fisier_path.includes('/neincarcat/')
+
 function DocumenteSection({ licitatie, profile, onChanged }) {
   const [docs, setDocs] = useState(null)
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
@@ -468,11 +472,12 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
     setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — dezarhivează-le local și urcă folderul rezultat.` : null)
     if (!bune.length) { setUpBusy(null); return }
     // Dedup pe (nume, mărime) DOAR față de fișierele urcate efectiv (regula 1 — dublă-ingestie).
-    // Rândurile-placeholder (inventar fără fisier_path — ex. planșele mari notate manual)
-    // NU blochează uploadul real: altfel „0 urcate, 3 sărite" și fișierul nu ajunge niciodată.
-    const urcate = (docs || []).filter(d => d.fisier_path)
+    // Rândurile-placeholder (poziții de inventar cu cale marcată „neincarcat" — ex. planșele
+    // mari notate manual) NU blochează uploadul real: altfel „0 urcate, 3 sărite" și fișierul
+    // nu ajunge niciodată în storage.
+    const urcate = (docs || []).filter(d => !ESTE_PLACEHOLDER(d))
     const existente = new Set(urcate.map(d => `${d.nume_original}|${d.size_bytes || ''}`))
-    const placeholders = new Map((docs || []).filter(d => !d.fisier_path).map(d => [d.nume_original, d.id]))
+    const placeholders = new Map((docs || []).filter(ESTE_PLACEHOLDER).map(d => [d.nume_original, d.id]))
     setUpBusy(`0/${bune.length}`)
     let ok = 0, sarite = 0
     for (let i = 0; i < bune.length; i++) {
