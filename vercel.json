@@ -1,5 +1,11 @@
 {
+  "functions": {
+    "api/seap-import.js": {
+      "maxDuration": 300,
+      "memory": 3009
+    }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

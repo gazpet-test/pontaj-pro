@@ -533,6 +533,33 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       }
       deLa = data.next_index; runde++
     }
+
+    // A doua trecere, pentru ce a rămas: la arhivele foarte mari (sute de MB) bugetul
+    // edge function-ului se consumă pe octeții parcurși, așa că documentele de la coada
+    // arhivei nu sunt atinse. Aceeași treabă o face /api/seap-import (pe Vercel), unde
+    // arhiva se poate parcurge integral într-o singură trecere.
+    const { data: raman } = await supabase.from('ofertare_documente_atribuire')
+      .select('id').eq('licitatie_id', licitatie.id).like('fisier_path', '%/neincarcat/%')
+    if (raman?.length) {
+      setSeapBusy(`aduc documentele grele (${raman.length}) — poate dura câteva minute...`)
+      try {
+        const { data: sesiune } = await supabase.auth.getSession()
+        const r = await fetch('/api/seap-import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sesiune?.session?.access_token || ''}` },
+          body: JSON.stringify({ licitatie_id: licitatie.id }),
+        })
+        const rez = await r.json().catch(() => ({}))
+        if (r.ok) {
+          adaugate += rez.adaugate || 0; completate += rez.completate || 0
+          setWarn(`✅ Din SEAP: ${adaugate} documente noi${completate ? `, ${completate} completate` : ''}.${rez.erori?.length ? ` Rămase: ${rez.erori.slice(0, 2).join('; ')}` : ''}`)
+        } else {
+          setWarn(w => `${w || ''} ⚠️ Documentele grele nu au putut fi aduse: ${rez.error || `HTTP ${r.status}`}`)
+        }
+      } catch (e) {
+        setWarn(w => `${w || ''} ⚠️ Documentele grele nu au putut fi aduse: ${e.message}`)
+      }
+    }
     setSeapBusy(null); await load(); onChanged?.()
   }
 
