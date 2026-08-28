@@ -444,16 +444,21 @@ const ghicesteTip = (nume) => {
   return 'alta'
 }
 
+// Rând de inventar fără fișier real în storage. fisier_path e NOT NULL în BD,
+// așa că poziția „știm că există documentul, dar nu-l avem" poartă marcajul din cale.
+const ESTE_PLACEHOLDER = d => !d.fisier_path || d.fisier_path.includes('/neincarcat/')
+
 function DocumenteSection({ licitatie, profile, onChanged }) {
   const [docs, setDocs] = useState(null)
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
+  const [seapBusy, setSeapBusy] = useState(null) // text progres aducere din SEAP
   const stopRef = useRef(false)                // ref, nu state — loop-ul citește valoarea LIVE
   const [warn, setWarn] = useState(null)
 
   const load = async () => {
     const { data } = await supabase.from('ofertare_documente_atribuire')
-      .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, ocr, revizie, size_bytes, eroare')
+      .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, ocr, revizie, size_bytes, eroare, fisier_path')
       .eq('licitatie_id', licitatie.id).order('id')
     setDocs(data || [])
   }
@@ -466,8 +471,13 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
     const bune = files.filter(f => !JUNK_RE.test((f.webkitRelativePath || f.name)) && !ARHIVA_RE.test(f.name))
     setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — dezarhivează-le local și urcă folderul rezultat.` : null)
     if (!bune.length) { setUpBusy(null); return }
-    // Dedup pe (nume, mărime) față de ce e deja urcat (regula 1 — dublă-ingestie)
-    const existente = new Set((docs || []).map(d => `${d.nume_original}|${d.size_bytes || ''}`))
+    // Dedup pe (nume, mărime) DOAR față de fișierele urcate efectiv (regula 1 — dublă-ingestie).
+    // Rândurile-placeholder (poziții de inventar cu cale marcată „neincarcat" — ex. planșele
+    // mari notate manual) NU blochează uploadul real: altfel „0 urcate, 3 sărite" și fișierul
+    // nu ajunge niciodată în storage.
+    const urcate = (docs || []).filter(d => !ESTE_PLACEHOLDER(d))
+    const existente = new Set(urcate.map(d => `${d.nume_original}|${d.size_bytes || ''}`))
+    const placeholders = new Map((docs || []).filter(ESTE_PLACEHOLDER).map(d => [d.nume_original, d.id]))
     setUpBusy(`0/${bune.length}`)
     let ok = 0, sarite = 0
     for (let i = 0; i < bune.length; i++) {
@@ -479,18 +489,51 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       const { error: eUp } = await supabase.storage.from('ofertare').upload(path, f)
       if (eUp) { setWarn(`Eroare la „${rel}": ${eUp.message}`); continue }
       const estePdf = /\.pdf$/i.test(rel)
-      await supabase.from('ofertare_documente_atribuire').insert({
+      const randNou = {
         licitatie_id: licitatie.id, fisier_path: path, nume_original: rel,
         tip: ghicesteTip(rel), size_bytes: f.size,
         status_procesare: estePdf ? 'neprocesat' : 'ignorat',
         eroare: estePdf ? null : 'non-PDF — rămâne ca fișier (docx/xls/dwg se parsează în M2)',
-      })
+      }
+      // dacă exista un placeholder cu acest nume, îl COMPLETĂM (nu lăsăm rând dublu)
+      const idPlaceholder = placeholders.get(rel)
+      if (idPlaceholder) await supabase.from('ofertare_documente_atribuire').update(randNou).eq('id', idPlaceholder)
+      else await supabase.from('ofertare_documente_atribuire').insert(randNou)
       ok++
       setUpBusy(`${i + 1}/${bune.length}`)
     }
     setUpBusy(null)
     if (ok || sarite) setWarn(w => [w, `✅ ${ok} fișiere urcate${sarite ? `, ${sarite} sărite (deja există — dedup)` : ''}.`].filter(Boolean).join(' '))
     await load(); onChanged?.()
+  }
+
+  // Aducerea documentației DIRECT din SEAP — nimeni nu mai descarcă/urcă manual.
+  // Edge fn-ul streamuiește arhiva publică a anunțului (butonul „Descarcă documentație
+  // și clarificări") și urcă fișier cu fișier; dacă nu apucă tot într-o rulare
+  // întoarce continua=true și reluăm de la indexul următor.
+  const aduDinSeap = async () => {
+    if (!licitatie.c_notice_id || !licitatie.sys_notice_type_id) {
+      setWarn('⚠️ Licitația nu are identificatorii SEAP (c_notice_id / sys_notice_type_id). Se completează singuri la promovarea din 📡 Radar; pentru cele vechi, cere-i lui Claude să-i pună.')
+      return
+    }
+    setWarn(null); setSeapBusy('mă conectez la SEAP...')
+    let deLa = 0, runde = 0, adaugate = 0, completate = 0, mari = []
+    while (runde < 12) {
+      setSeapBusy(`descarc din SEAP${runde ? ` (continuare ${runde + 1})` : ''} — poate dura, arhiva are sute de MB...`)
+      const { data, error } = await supabase.functions.invoke('ofertare-seap-import', {
+        body: { licitatie_id: licitatie.id, de_la_index: deLa },
+      })
+      if (error || data?.error) { setWarn(`Eroare SEAP: ${data?.error || error.message}`); break }
+      adaugate += data.adaugate || 0; completate += data.completate || 0
+      if (data.sarite_mari?.length) mari = [...mari, ...data.sarite_mari]
+      await load()
+      if (!data.continua) {
+        setWarn(`✅ Din SEAP: ${adaugate} documente noi${completate ? `, ${completate} completate` : ''}${data.sarite_existente ? `, ${data.sarite_existente} existau deja` : ''}.${mari.length ? ` Sărite (prea mari): ${mari.join(', ')}.` : ''}`)
+        break
+      }
+      deLa = data.next_index; runde++
+    }
+    setSeapBusy(null); await load(); onChanged?.()
   }
 
   // Procesare secvențială cu continuare — un doc pe rând, apeluri repetate cât continua=true.
@@ -572,6 +615,12 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           </span>
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          {!seapBusy && (
+            <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} disabled={!!upBusy || !!procBusy} onClick={aduDinSeap}
+              title="Descarcă singură toată documentația publicată în SEAP (inclusiv planșele de zeci de MB)">
+              ⬇️ Adu din SEAP
+            </button>
+          )}
           <label style={{ ...S.btnS, padding:'7px 12px', fontSize:12, cursor:'pointer' }}>
             📁 Urcă folder
             <input type="file" webkitdirectory="" directory="" multiple style={{ display:'none' }}
@@ -590,6 +639,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           )}
         </div>
       </div>
+      {seapBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬇️ SEAP: {seapBusy}</div>}
       {upBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬆️ Se urcă... {upBusy}</div>}
       {procBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 AI citește: {procBusy}</div>}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
@@ -1383,12 +1433,15 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
       segment: r.segment || detectSegment(r.autoritate, r.titlu),
       termen_depunere: r.termen_depunere, canal: 'radar', status: 'identificata',
       observatii: r.motiv_scor ? `Radar (scor ${r.scor_potrivire}): ${r.motiv_scor}` : null,
+      // identificatorii SEAP merg mai departe: cu ei butonul „Adu din SEAP"
+      // descarcă singur toată documentația de atribuire (inclusiv planșele mari)
+      c_notice_id: r.c_notice_id || null, sys_notice_type_id: r.sys_notice_type_id || null,
       created_by: profile?.id || null,
     }).select('id').single()
     if (error) { showToast('Eroare la promovare: ' + error.message, 'err'); return }
     await supabase.from('ofertare_radar')
       .update({ status: 'preluat', licitatie_id: ins.id, actualizat_la: new Date().toISOString() }).eq('id', r.id)
-    showToast(`🏛 ${r.nr_seap} promovată în licitații.`)
+    showToast(`🏛 ${r.nr_seap} promovată în licitații — documentația se poate aduce din SEAP cu un buton.`)
     await load(); onPromovat?.()
   }
 
