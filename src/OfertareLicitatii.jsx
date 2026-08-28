@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import RFQPanel from './OfertareRFQ.jsx'
+import CantitatiPanel from './OfertareCantitati.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -186,7 +187,7 @@ export default function OfertareLicitatiiTab() {
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
       <div style={{ display:'flex', gap:8, marginBottom:16 }}>
-        {[['licitatii', '🏛 Licitații'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe'], ['rfq', '🛒 Cereri ofertă']].map(([k, lbl]) => (
+        {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
@@ -199,6 +200,8 @@ export default function OfertareLicitatiiTab() {
       {vedere === 'referinte' && <ReferinteFinanciare showToast={showToast} />}
 
       {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
+
+      {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} />}
 
       {vedere === 'licitatii' && <>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
@@ -1502,20 +1505,21 @@ function ReferinteFinanciare({ showToast }) {
   const [cal, setCal] = useState([])
   const [pu, setPu] = useState([])
   const [mat, setMat] = useState([])
+  const [norme, setNorme] = useState([])
   const [loading, setLoading] = useState(true)
   const [cauta, setCauta] = useState('')
-  const [tab, setTab] = useState('calibrari')  // calibrari | preturi | materiale
+  const [tab, setTab] = useState('calibrari')  // calibrari | preturi | materiale | normative
 
-  useEffect(() => {
-    (async () => {
-      const [{ data: c }, { data: p }, { data: m }] = await Promise.all([
-        supabase.from('ofertare_calibrari').select('*').order('an', { ascending: false, nullsFirst: false }),
-        supabase.from('ofertare_preturi_unitare').select('*').order('an', { ascending: false, nullsFirst: false }),
-        supabase.from('ofertare_preturi_materiale').select('*').order('an', { ascending: false, nullsFirst: false }),
-      ])
-      setCal(c || []); setPu(p || []); setMat(m || []); setLoading(false)
-    })()
-  }, [])
+  const loadAll = async () => {
+    const [{ data: c }, { data: p }, { data: m }, { data: n }] = await Promise.all([
+      supabase.from('ofertare_calibrari').select('*').order('an', { ascending: false, nullsFirst: false }),
+      supabase.from('ofertare_preturi_unitare').select('*').order('an', { ascending: false, nullsFirst: false }),
+      supabase.from('ofertare_preturi_materiale').select('*').order('an', { ascending: false, nullsFirst: false }),
+      supabase.from('ofertare_normative').select('*').order('created_at', { ascending: false }),
+    ])
+    setCal(c || []); setPu(p || []); setMat(m || []); setNorme(n || []); setLoading(false)
+  }
+  useEffect(() => { loadAll() }, [])
 
   const q = cauta.toLowerCase()
   const fPu = pu.filter(r => !q || `${r.simbol} ${r.denumire} ${r.lucrare}`.toLowerCase().includes(q))
@@ -1531,7 +1535,7 @@ function ReferinteFinanciare({ showToast }) {
           <div style={{ fontSize:12, color:G.muted }}>Cu ce coeficienți s-a mers istoric, pe segmente — plus prețuri unitare și materiale din ofertele depuse</div>
         </div>
         <div style={{ display:'flex', gap:8 }}>
-          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`]].map(([k, lbl]) => (
+          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`]].map(([k, lbl]) => (
             <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, padding:'6px 13px', fontSize:12, fontWeight:700,
               ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
           ))}
@@ -1574,7 +1578,9 @@ function ReferinteFinanciare({ showToast }) {
         </div>
       )}
 
-      {!loading && tab !== 'calibrari' && (
+      {!loading && tab === 'normative' && <NormativeLista norme={norme} showToast={showToast} onChange={loadAll} />}
+
+      {!loading && (tab === 'preturi' || tab === 'materiale') && (
         <>
           <input style={{ ...S.input, marginBottom:12, maxWidth:420 }} placeholder="🔍 Caută (denumire, simbol, lucrare, furnizor...)" value={cauta} onChange={e => setCauta(e.target.value)} />
           <div style={{ ...S.card, overflow:'hidden' }}>
@@ -1612,6 +1618,98 @@ function ReferinteFinanciare({ showToast }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ── 📜 Normative — ordine ANRE, prescripții, comunicări sudură, standarde ──
+// Registrul "ordinelor în vigoare" (cerut de Razvan 28.08): echipa le găsește
+// într-un loc, iar AI-ul citează din ele la cereri de ofertă / clarificări /
+// propuneri tehnice. Statusul (în vigoare / abrogat / înlocuit) e vital.
+const NORM_TIP = { ordin_anre:'Ordin ANRE', prescriptie_iscir:'Prescripție ISCIR', lege:'Lege', hg:'HG', standard:'Standard', comunicare:'Comunicare', norma_tehnica:'Normă tehnică', altele:'Altele' }
+const NORM_STATUS = { in_vigoare:['✅ în vigoare', G.green], abrogat:['⛔ abrogat', G.red], inlocuit:['🔁 înlocuit', G.orange] }
+
+function NormativeLista({ norme, showToast, onChange }) {
+  const [showAdd, setShowAdd] = useState(false)
+  const [f, setF] = useState({ tip:'ordin_anre', numar:'', titlu:'', emitent:'', data_emitere:'', status:'in_vigoare', inlocuit_de:'', domenii:'', link:'', note:'' })
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }))
+
+  const salveaza = async () => {
+    if (!f.titlu.trim()) { showToast('Titlul e obligatoriu.', 'err'); return }
+    const { error } = await supabase.from('ofertare_normative').insert({
+      tip: f.tip, numar: f.numar.trim() || null, titlu: f.titlu.trim(), emitent: f.emitent.trim() || null,
+      data_emitere: f.data_emitere || null, status: f.status, inlocuit_de: f.inlocuit_de.trim() || null,
+      domenii: f.domenii.trim() ? f.domenii.split(',').map(s => s.trim()).filter(Boolean) : null,
+      link: f.link.trim() || null, note: f.note.trim() || null,
+    })
+    if (error) { showToast('Eroare: ' + error.message, 'err'); return }
+    showToast('Normativ adăugat.')
+    setShowAdd(false); setF({ tip:'ordin_anre', numar:'', titlu:'', emitent:'', data_emitere:'', status:'in_vigoare', inlocuit_de:'', domenii:'', link:'', note:'' })
+    onChange()
+  }
+  const schimbaStatus = async (n, status) => {
+    await supabase.from('ofertare_normative').update({ status, updated_at: new Date().toISOString() }).eq('id', n.id)
+    onChange()
+  }
+  const sterge = async (n) => {
+    if (!window.confirm(`Ștergi „${n.titlu.slice(0, 60)}"?`)) return
+    await supabase.from('ofertare_normative').delete().eq('id', n.id)
+    onChange()
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
+        <button style={S.btnP} onClick={() => setShowAdd(s => !s)}>{showAdd ? '✕ renunță' : '＋ Normativ'}</button>
+      </div>
+      {showAdd && (
+        <div style={{ ...S.card, padding:14, marginBottom:12, display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:10 }}>
+          <div><label style={S.lbl}>Tip</label>
+            <select style={S.input} value={f.tip} onChange={e => set('tip', e.target.value)}>
+              {Object.entries(NORM_TIP).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select></div>
+          <div><label style={S.lbl}>Număr (ex: 89/2018)</label><input style={S.input} value={f.numar} onChange={e => set('numar', e.target.value)} /></div>
+          <div><label style={S.lbl}>Emitent</label><input style={S.input} value={f.emitent} onChange={e => set('emitent', e.target.value)} placeholder="ANRE / ISCIR / Transgaz..." /></div>
+          <div><label style={S.lbl}>Data emiterii</label><input style={S.input} type="date" value={f.data_emitere} onChange={e => set('data_emitere', e.target.value)} /></div>
+          <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Titlu *</label><input style={S.input} value={f.titlu} onChange={e => set('titlu', e.target.value)} /></div>
+          <div><label style={S.lbl}>Status</label>
+            <select style={S.input} value={f.status} onChange={e => set('status', e.target.value)}>
+              {Object.entries(NORM_STATUS).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}
+            </select></div>
+          <div><label style={S.lbl}>Înlocuit de</label><input style={S.input} value={f.inlocuit_de} onChange={e => set('inlocuit_de', e.target.value)} /></div>
+          <div><label style={S.lbl}>Domenii (virgulă)</label><input style={S.input} value={f.domenii} onChange={e => set('domenii', e.target.value)} placeholder="distributie, sudura_pe" /></div>
+          <div><label style={S.lbl}>Link</label><input style={S.input} value={f.link} onChange={e => set('link', e.target.value)} /></div>
+          <div style={{ gridColumn:'1 / -1', display:'flex', gap:10, alignItems:'flex-end' }}>
+            <div style={{ flex:1 }}><label style={S.lbl}>Note</label><input style={S.input} value={f.note} onChange={e => set('note', e.target.value)} /></div>
+            <button style={S.btnP} onClick={salveaza}>Salvează</button>
+          </div>
+        </div>
+      )}
+      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+        {norme.map(n => {
+          const [stLbl, stCol] = NORM_STATUS[n.status] || NORM_STATUS.in_vigoare
+          return (
+            <div key={n.id} style={{ ...S.card, padding:'11px 15px', borderLeft:`3px solid ${stCol}`, opacity: n.status === 'abrogat' ? .55 : 1 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <span style={{ fontSize:11, color:G.ofertare, fontWeight:800, border:`1px solid ${G.ofertare}44`, borderRadius:10, padding:'1px 9px', whiteSpace:'nowrap' }}>{NORM_TIP[n.tip] || n.tip}{n.numar ? ' ' + n.numar : ''}</span>
+                <span style={{ fontWeight:700, fontSize:13, flex:1, minWidth:220 }}>{n.link ? <a href={n.link} target="_blank" rel="noreferrer" style={{ color:G.text }}>{n.titlu}</a> : n.titlu}</span>
+                <span style={{ color:stCol, fontWeight:800, fontSize:11.5, whiteSpace:'nowrap' }}>{stLbl}{n.inlocuit_de ? ` → ${n.inlocuit_de}` : ''}</span>
+                <select style={{ ...S.input, width:'auto', fontSize:11, padding:'3px 7px' }} value={n.status} onChange={e => schimbaStatus(n, e.target.value)}>
+                  {Object.entries(NORM_STATUS).map(([k, [l]]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <button onClick={() => sterge(n)} style={{ ...S.btnS, padding:'3px 8px', fontSize:11, color:G.red, borderColor:G.red + '66' }}>✕</button>
+              </div>
+              <div style={{ fontSize:11.5, color:G.dim, marginTop:4, display:'flex', gap:14, flexWrap:'wrap' }}>
+                {n.emitent && <span>🏛 {n.emitent}</span>}
+                {n.data_emitere && <span>📅 {new Date(n.data_emitere).toLocaleDateString('ro-RO')}</span>}
+                {Array.isArray(n.domenii) && n.domenii.length > 0 && <span>🏷 {n.domenii.join(', ')}</span>}
+                {n.note && <span>💬 {n.note}</span>}
+              </div>
+            </div>
+          )
+        })}
+        {!norme.length && <div style={{ ...S.card, padding:26, textAlign:'center', color:G.dim, fontSize:13 }}>Niciun normativ încă — adaugă ordinele ANRE și comunicările de sudură cu „＋ Normativ".</div>}
+      </div>
     </div>
   )
 }
