@@ -23,7 +23,7 @@ const SEAP_HDR = {
   'Origin': 'https://e-licitatie.ro',
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
 }
-const PRAG_RELUABIL = 45e6      // peste asta uploadul se face in felii
+const PRAG_RELUABIL = 45e6      // reper pentru mesaje; uploadul in felii e rezerva
 const FELIE = 6 * 1024 * 1024   // Storage cere felii de 6MB, ultima poate fi mai mica
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)/i
 const estePlaceholder = (d) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
@@ -206,12 +206,12 @@ export default async function handler(req, res) {
         const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180)
         const path = `${licitatieId}/atribuire/${Date.now().toString(36)}_${safe}`
 
-        if (buf.length > PRAG_RELUABIL) {
+        // Uploadul obisnuit duce si fisiere mari (bucket-ul permite 200MB) si e o
+        // singura cerere; uploadul in felii ramane rezerva, pentru cand acela refuza.
+        const { error: eUp } = await supa.storage.from('ofertare').upload(path, buf, { contentType: ctype })
+        if (eUp) {
           const eroare = await urcaInFelii(SUPA_URL, SERVICE, 'ofertare', path, ctype, buf)
-          if (eroare) { raport.erori.push(`${numeFinal}: ${eroare}`); continue }
-        } else {
-          const { error } = await supa.storage.from('ofertare').upload(path, buf, { contentType: ctype })
-          if (error) { raport.erori.push(`${numeFinal}: ${error.message}`); continue }
+          if (eroare) { raport.erori.push(`${numeFinal}: ${eUp.message} | in felii: ${eroare}`); continue }
         }
 
         await scrie({
