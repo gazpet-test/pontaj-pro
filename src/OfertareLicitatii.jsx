@@ -589,7 +589,9 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
     // Restanțe după ambele treceri → notificare persistentă în clopoțel
     if (deRulat.length && !stopRef.current && profile?.id) {
       await supabase.from('notifications').insert({
-        profile_id: profile.id, type: 'warning', modul: 'ofertare',
+        // modul are CHECK în BD pe lista fixă de module (Comercial e cel al ofertării);
+        // cu 'ofertare' insertul pica silențios și notificarea nu ajungea niciodată
+        profile_id: profile.id, type: 'warning', modul: 'Comercial',
         title: `Ofertare: ${deRulat.length} documente neprocesate la ${licitatie.nr_anunt}`,
         message: `După 2 treceri au rămas cu probleme: ${deRulat.slice(0, 3).map(d => d.nume_original.split('/').pop()).join(', ')}${deRulat.length > 3 ? '…' : ''}. Deschide licitația și apasă „Procesează" din nou, sau cere-i lui Claude să le spargă în bucăți mai mici.`,
         link_to: '/ofertare',
