@@ -452,6 +452,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   const [docs, setDocs] = useState(null)
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
+  const [plansaBusy, setPlansaBusy] = useState(null) // text progres citire planșă
   const [seapBusy, setSeapBusy] = useState(null) // text progres aducere din SEAP
   const stopRef = useRef(false)                // ref, nu state — loop-ul citește valoarea LIVE
   const [warn, setWarn] = useState(null)
@@ -632,6 +633,45 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   const nrDeProcesat = (docs || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original)).length
   const fmtMB = b => b ? (b / 1e6).toFixed(1) + ' MB' : ''
 
+  // Planșele mari nu se pot citi dintr-o bucată (o scanare A0 are ~140 de milioane de
+  // pixeli), așa că se taie în felii care se suprapun și se citesc pe rând. De aici ies
+  // tabelele de dimensionare — adică lungimile reale pe tronsoane și diametre.
+  const citestePlansa = async (d) => {
+    setWarn(null); setPlansaBusy(`${d.nume_original}: pregătesc feliile...`)
+    try {
+      const { data: sesiune } = await supabase.auth.getSession()
+      const tok = sesiune?.session?.access_token || ''
+      const r = await fetch('/api/plansa-felii', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ doc_id: d.id }),
+      })
+      const felii = await r.json().catch(() => ({}))
+      if (!r.ok) { setWarn(`Nu am putut pregăti planșa: ${felii.error || `HTTP ${r.status}`}`); return }
+      if (felii.citibila === false) { setWarn(`⚠️ ${felii.motiv}`); await load(); return }
+
+      let deLa = 0, runde = 0, sumar = null
+      while (runde < 15) {
+        setPlansaBusy(`${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
+        const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa } })
+        if (error || data?.error) { setWarn(`Eroare la citire: ${data?.error || error.message}`); break }
+        sumar = data.sumar
+        if (!data.continua) break
+        deLa = data.de_la_urmator; runde++
+      }
+      if (sumar) {
+        setWarn(`✅ Planșă citită: ${sumar.tronsoane_gasite} tronsoane (${sumar.lungime_totala_m.toLocaleString('ro-RO')} m)` +
+          `${sumar.tabele.length ? `, tabele: ${sumar.tabele.join(', ')}` : ''}` +
+          `${sumar.subtraversari ? `, ${sumar.subtraversari} subtraversări` : ''}` +
+          `${sumar.erori ? ` — ${sumar.erori} zone cu erori` : ''}.`)
+      }
+    } catch (e) {
+      setWarn(`Eroare la citirea planșei: ${e.message}`)
+    } finally {
+      setPlansaBusy(null); await load(); onChanged?.()
+    }
+  }
+
   return (
     <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
@@ -671,6 +711,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       {seapBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬇️ SEAP: {seapBusy}</div>}
       {upBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬆️ Se urcă... {upBusy}</div>}
       {procBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 AI citește: {procBusy}</div>}
+      {plansaBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>📐 {plansaBusy}</div>}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
 
       {docs === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
@@ -690,6 +731,13 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
                   </span>
+                  {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && (
+                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
+                      title={d.analiza?.citire_ai ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
+                      onClick={() => citestePlansa(d)}>
+                      {d.analiza?.citire_ai ? '📐 recitește' : '📐 citește'}
+                    </button>
+                  )}
                 </div>
               )
             })}
