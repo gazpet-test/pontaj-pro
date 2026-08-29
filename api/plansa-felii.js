@@ -40,31 +40,37 @@ function jpegDinPdf(buf) {
   return iesiri.sort((a, b) => b.length - a.length)
 }
 
-// O plansa citibila are fond alb si linii inchise. Una stricata (sau goala) iese
-// uniforma: decodorul umple cu gri ce nu a putut reface. Verificam pe cateva sonde
-// raspandite, nu pe toata imaginea, ca sa fie ieftin.
-async function esteCitibila(img, latime, inaltime) {
-  const sonde = []
-  const pas = 4
+// O plansa citibila are fond alb si linii inchise, deci variatie locala. Una stricata
+// iese uniforma: decodorul umple cu gri ce nu a putut reface.
+//
+// Verificarea se face pe imaginea REDUSA, dintr-o singura decodare. Varianta care taia
+// noua zone direct din originalul de 140 de milioane de pixeli cerea o decodare completa
+// pentru fiecare zona si cadea in productie (toate sondele esuau, iar o plansa buna era
+// declarata necitibila). Asa dureaza sub o secunda.
+async function esteCitibila(img) {
+  const { data, info } = await sharp(img, { limitInputPixels: false, failOn: 'none' })
+    .resize({ width: 1600, fit: 'inside' }).greyscale().raw().toBuffer({ resolveWithObject: true })
+  const pas = 4, raza = 60
+  let sonde = 0, cuContinut = 0
   for (let r = 1; r < pas; r++) {
     for (let c = 1; c < pas; c++) {
-      const l = Math.min(400, Math.floor(latime / pas))
-      const h = Math.min(400, Math.floor(inaltime / pas))
-      sonde.push({ left: Math.floor((c * latime) / pas) - Math.floor(l / 2), top: Math.floor((r * inaltime) / pas) - Math.floor(h / 2), width: l, height: h })
+      sonde++
+      const cx = Math.floor((c * info.width) / pas), cy = Math.floor((r * info.height) / pas)
+      let n = 0, s = 0, s2 = 0
+      for (let y = Math.max(0, cy - raza); y < Math.min(info.height, cy + raza); y++) {
+        for (let x = Math.max(0, cx - raza); x < Math.min(info.width, cx + raza); x++) {
+          const v = data[y * info.width + x]; n++; s += v; s2 += v * v
+        }
+      }
+      if (!n) continue
+      const medie = s / n
+      const abatere = Math.sqrt(Math.max(0, s2 / n - medie * medie))
+      // masurat pe documentatia Manastirea: plansa buna da 3–30 pe fiecare zona,
+      // cea alterata da exact 0 peste tot
+      if (abatere > 2) cuContinut++
     }
   }
-  let cuContinut = 0
-  for (const s of sonde) {
-    try {
-      const st = await sharp(img, { limitInputPixels: false, failOn: 'none' })
-        .extract({ left: Math.max(0, s.left), top: Math.max(0, s.top), width: s.width, height: s.height })
-        .greyscale().stats()
-      // deviatie mica = zona plata (gri uniform sau alb curat); ne intereseaza sa
-      // existe variatie, adica desen
-      if (st.channels[0].stdev > 3) cuContinut++
-    } catch (_) { /* sonda cazuta = zona necitibila */ }
-  }
-  return { sonde: sonde.length, cu_continut: cuContinut, citibila: cuContinut >= Math.ceil(sonde.length * 0.25) }
+  return { sonde, cu_continut: cuContinut, citibila: cuContinut >= Math.ceil(sonde * 0.25) }
 }
 
 export default async function handler(req, res) {
@@ -90,7 +96,7 @@ export default async function handler(req, res) {
 
   const supa = createClient(SUPA_URL, SERVICE, { auth: { persistSession: false } })
   const { data: doc } = await supa.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, nume_original, fisier_path, size_bytes').eq('id', docId).single()
+    .select('id, licitatie_id, nume_original, fisier_path, size_bytes, analiza').eq('id', docId).single()
   if (!doc) return res.status(404).json({ error: 'document inexistent' })
   if (doc.size_bytes && doc.size_bytes > MAX_MB * 1e6) return res.status(400).json({ error: `document peste ${MAX_MB}MB` })
 
@@ -101,7 +107,7 @@ export default async function handler(req, res) {
   const imagini = /\.pdf$/i.test(doc.nume_original) ? jpegDinPdf(buf) : [buf]
   if (!imagini.length) {
     const mesaj = 'Nu am gasit nicio imagine scanata in document.'
-    await supa.from('ofertare_documente_atribuire').update({ analiza: { plansa: { citibila: false, motiv: mesaj } }, analiza_la: new Date().toISOString() }).eq('id', docId)
+    await supa.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, plansa: { citibila: false, motiv: mesaj } }, analiza_la: new Date().toISOString() }).eq('id', docId)
     return res.status(200).json({ citibila: false, motiv: mesaj })
   }
 
@@ -113,38 +119,47 @@ export default async function handler(req, res) {
     return res.status(200).json({ citibila: false, motiv: 'imaginea nu poate fi deschisa: ' + String(e?.message || e).slice(0, 120) })
   }
 
-  const verdict = await esteCitibila(sursa, meta.width, meta.height)
+  const verdict = await esteCitibila(sursa)
   if (!verdict.citibila) {
     const motiv = `Imaginea se deschide, dar continutul nu se poate reface: ${verdict.cu_continut} din ${verdict.sonde} zone verificate au desen. ` +
       'Fisierul publicat are date deteriorate — se vede doar in Acrobat. Deschide-l acolo si salveaza-l din nou (Export ca imagine sau tiparire in PDF nou), apoi urca varianta curata.'
     await supa.from('ofertare_documente_atribuire').update({
-      analiza: { plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height } },
+      analiza: { ...doc.analiza, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height } },
       analiza_la: new Date().toISOString(),
       eroare: 'Plansa nu poate fi citita automat — necesita conversie (vezi detalii).',
     }).eq('id', docId)
-    return res.status(200).json({ citibila: false, motiv, verificare: verdict })
+    return res.status(200).json({ citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height, imagini_gasite: imagini.length })
   }
 
-  // taiem in felii care se suprapun, ca sa nu pierdem randuri de tabel pe margini
-  const pas = Math.floor(LATURA * (1 - SUPRAPUNERE))
-  const coloane = Math.max(1, Math.ceil(meta.width / pas))
-  const randuri = Math.max(1, Math.ceil(meta.height / pas))
+  // Taiem in felii care se suprapun, ca sa nu pierdem randuri de tabel pe margini.
+  // Latura decupajului creste pana cand numarul de felii intra in buget: o plansa A0
+  // taiata la 1600px ar iesi in ~90 de bucati, adica 90 de citiri AI pentru un singur
+  // desen. Feliile mai mari se micsoreaza la salvare, deci raman citibile.
+  let latura = LATURA, pas = 0, coloane = 0, randuri = 0
+  for (let i = 0; i < 12; i++) {
+    pas = Math.floor(latura * (1 - SUPRAPUNERE))
+    coloane = Math.max(1, Math.ceil(meta.width / pas))
+    randuri = Math.max(1, Math.ceil(meta.height / pas))
+    if (coloane * randuri <= MAX_FELII) break
+    latura = Math.floor(latura * 1.25)
+  }
   if (coloane * randuri > MAX_FELII) {
-    return res.status(400).json({ error: `plansa ar iesi in ${coloane * randuri} felii (peste ${MAX_FELII}) — mareste latura feliei` })
+    return res.status(400).json({ error: `plansa ar iesi in ${coloane * randuri} felii chiar si la ${latura}px` })
   }
 
   const bazaCale = `${doc.licitatie_id}/felii/${docId}`
   const felii = []
   for (let r = 0; r < randuri; r++) {
     for (let c = 0; c < coloane; c++) {
-      const left = Math.min(c * pas, Math.max(0, meta.width - LATURA))
-      const top = Math.min(r * pas, Math.max(0, meta.height - LATURA))
-      const width = Math.min(LATURA, meta.width - left)
-      const height = Math.min(LATURA, meta.height - top)
+      const left = Math.min(c * pas, Math.max(0, meta.width - latura))
+      const top = Math.min(r * pas, Math.max(0, meta.height - latura))
+      const width = Math.min(latura, meta.width - left)
+      const height = Math.min(latura, meta.height - top)
       if (width < 50 || height < 50) continue
       try {
         const iesire = await sharp(sursa, { limitInputPixels: false, failOn: 'none' })
           .extract({ left, top, width, height })
+          .resize({ width: LATURA, height: LATURA, fit: 'inside', withoutEnlargement: true })
           .jpeg({ quality: 82 }).toBuffer()
         const cale = `${bazaCale}/z${r + 1}_${c + 1}.jpg`
         const { error } = await supa.storage.from('ofertare').upload(cale, iesire, { contentType: 'image/jpeg', upsert: true })
@@ -157,10 +172,14 @@ export default async function handler(req, res) {
   }
 
   const reusite = felii.filter((f) => f.cale)
+  // Coloana `analiza` tine mai multe lucruri despre acelasi document (tabelul de
+  // dimensionare citit, rezultatul citirii AI). Scriem DOAR cheia `plansa`, altfel
+  // sterge restul — asa s-a pierdut o data tabelul de 18 tronsoane de pe plansa 1.1.
   const analiza = {
+    ...doc.analiza,
     plansa: {
       citibila: true, latime: meta.width, inaltime: meta.height,
-      felii: reusite.length, randuri, coloane, latura: LATURA,
+      felii: reusite.length, randuri, coloane, latura,
       cale_felii: bazaCale, verificare: verdict,
     },
   }
