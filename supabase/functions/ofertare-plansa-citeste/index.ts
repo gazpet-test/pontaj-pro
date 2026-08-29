@@ -44,6 +44,7 @@ Raspunde NUMAI cu JSON valid, fara text in jurul lui:
 
 Reguli:
 - OBLIGATORIU: fiecare rand dintr-un tabel de dimensionare trebuie sa apara SI in "tronsoane", cu sursa "tabel". Tabelul ramane in "tabele" asa cum e; "tronsoane" e lista din care se calculeaza cantitatile, deci nu sari niciun rand.
+- Pune sursa "adnotare" DOAR pentru ce citesti de pe desen, nu dintr-un tabel. Daca acelasi tronson apare si in tabel, si scris pe traseu, da-l o singura data, cu sursa "tabel".
 - In "zona" pune localitatea/satul/strada de pe randul respectiv, daca tabelul le are.
 - Lungimile trec-le in METRI (daca pe plansa scrie km, inmulteste cu 1000 si da valoarea in metri).
 - Foloseste punctul ca separator zecimal in JSON si NU folosi separator de mii (scrie 4800, nu 4.800).
@@ -65,7 +66,13 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string) 
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 4000,
+      // Transcrierea unui tabel scanat nu are ce rationament sa ceara, iar gandirea
+      // consuma din acelasi buget: la 4000 de tokeni o felie cu tabel mare a terminat
+      // bugetul gandind si n-a mai apucat sa scrie JSON-ul (stop_reason max_tokens,
+      // singurul bloc intors fiind cel de gandire). Masurat pe aceeasi felie:
+      // cu gandire 6894 tokeni de iesire, fara 4625 - aceeasi informatie, o treime mai ieftin.
+      max_tokens: 12000,
+      thinking: { type: 'disabled' },
       system: INSTRUCTIUNI,
       messages: [{
         role: 'user',
@@ -78,9 +85,17 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string) 
   });
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
-  const txt = j?.content?.[0]?.text || '';
+  // Raspunsul poate incepe cu un bloc de gandire, deci textul NU e neaparat content[0]:
+  // luat orbeste de pe prima pozitie, ieseau "raspuns gol" pe trei felii din patru si se
+  // pierdea tacut trei sferturi din plansa.
+  const blocuri = Array.isArray(j?.content) ? j.content : [];
+  const txt = blocuri.filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
   const m = txt.match(/\{[\s\S]*\}/);
-  if (!m) return { eticheta, eroare: (j?.error?.message || txt || 'raspuns gol').slice(0, 200), _tin: tin, _tout: tout };
+  if (!m) {
+    const detaliu = j?.error?.message || txt ||
+      `fara text (http ${r.status}, stop ${j?.stop_reason}, blocuri ${blocuri.map((c: any) => c?.type).join('+') || 'niciunul'})`;
+    return { eticheta, eroare: String(detaliu).slice(0, 300), _tin: tin, _tout: tout };
+  }
   try {
     return { eticheta, ...JSON.parse(m[0]), _tin: tin, _tout: tout };
   } catch (e) {
@@ -133,6 +148,7 @@ function tronsoaneUnice(lista: any[]) {
 // Cantitatile deja existente vin din memoriu (partea scrisa). Plansa da a doua sursa
 // pentru aceleasi diametre, deci nu duplicam pozitii: completam `cantitate_plansa` si
 // notam diferenta. Pozitia se adauga doar daca diametrul nu exista deloc in oferta.
+// Primeste lista deja filtrata (vezi `pentruCantitati` mai jos).
 async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null) {
   const peDiametru = new Map<number, { m: number; n: number; zone: Set<string> }>();
   for (const t of tronsoane) {
@@ -275,13 +291,23 @@ Deno.serve(async (req: Request) => {
   // doua ori si totalul ar iesi umflat.
   const brute = toate.flatMap((r: any) => r.tronsoane || []);
   const unice = tronsoaneUnice(brute);
+  // Acelasi tronson poate fi citit de doua ori: o data din tabelul de dimensionare si o
+  // data din adnotarea de pe traseu — aceeasi teava, dar cu alte denumiri de capete
+  // ("Nod 2 -> Nod 3" vs "Limita Intravilan -> Limita UAT Ulmeni"), deci deduplicarea pe
+  // text nu le poate lega. Tabelul e enumerarea completa si autoritara, deci cand exista
+  // tabel se numara doar el; adnotarile raman doar pe plansele fara tabel.
+  // Masurat la Manastirea: cu adnotarile adunate ieseau 42.490 m, fara ele exact 37.320 m,
+  // adica fix cat declara memoriul.
+  const dinTabel = unice.filter((t: any) => text(t?.sursa) === 'tabel');
+  const pentruCantitati = dinTabel.length ? dinTabel : unice;
   const nrPlansa = toate.map((r: any) => r?.cartus?.plansa_nr).find(Boolean) ||
     doc.analiza?.cartus?.plansa_nr || null;
   const sumar: Record<string, unknown> = {
     felii_citite: toate.length,
-    tronsoane_gasite: unice.length,
+    tronsoane_gasite: pentruCantitati.length,
     tronsoane_brute: brute.length,
-    lungime_totala_m: +unice.reduce((s: number, t: any) => s + t.lungime_m, 0).toFixed(1),
+    adnotari_lasate_deoparte: unice.length - pentruCantitati.length,
+    lungime_totala_m: +pentruCantitati.reduce((s: number, t: any) => s + t.lungime_m, 0).toFixed(1),
     tabele: [...new Set(toate.flatMap((r: any) => (r.tabele || []).map((t: any) => t.denumire)).filter(Boolean))],
     subtraversari: toate.flatMap((r: any) => r.subtraversari || []).length,
     bransamente: toate.flatMap((r: any) => r.bransamente || []).length,
@@ -293,7 +319,7 @@ Deno.serve(async (req: Request) => {
   let cantitati: unknown = null;
   if (gata) {
     try {
-      cantitati = await treciInCantitati(supa, doc, unice, nrPlansa);
+      cantitati = await treciInCantitati(supa, doc, pentruCantitati, nrPlansa);
     } catch (e) {
       cantitati = { eroare: String((e as Error)?.message || e).slice(0, 200) };
     }
