@@ -96,7 +96,7 @@ export default async function handler(req, res) {
 
   const supa = createClient(SUPA_URL, SERVICE, { auth: { persistSession: false } })
   const { data: doc } = await supa.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, nume_original, fisier_path, size_bytes').eq('id', docId).single()
+    .select('id, licitatie_id, nume_original, fisier_path, size_bytes, analiza').eq('id', docId).single()
   if (!doc) return res.status(404).json({ error: 'document inexistent' })
   if (doc.size_bytes && doc.size_bytes > MAX_MB * 1e6) return res.status(400).json({ error: `document peste ${MAX_MB}MB` })
 
@@ -107,7 +107,7 @@ export default async function handler(req, res) {
   const imagini = /\.pdf$/i.test(doc.nume_original) ? jpegDinPdf(buf) : [buf]
   if (!imagini.length) {
     const mesaj = 'Nu am gasit nicio imagine scanata in document.'
-    await supa.from('ofertare_documente_atribuire').update({ analiza: { plansa: { citibila: false, motiv: mesaj } }, analiza_la: new Date().toISOString() }).eq('id', docId)
+    await supa.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, plansa: { citibila: false, motiv: mesaj } }, analiza_la: new Date().toISOString() }).eq('id', docId)
     return res.status(200).json({ citibila: false, motiv: mesaj })
   }
 
@@ -124,7 +124,7 @@ export default async function handler(req, res) {
     const motiv = `Imaginea se deschide, dar continutul nu se poate reface: ${verdict.cu_continut} din ${verdict.sonde} zone verificate au desen. ` +
       'Fisierul publicat are date deteriorate — se vede doar in Acrobat. Deschide-l acolo si salveaza-l din nou (Export ca imagine sau tiparire in PDF nou), apoi urca varianta curata.'
     await supa.from('ofertare_documente_atribuire').update({
-      analiza: { plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height } },
+      analiza: { ...doc.analiza, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height } },
       analiza_la: new Date().toISOString(),
       eroare: 'Plansa nu poate fi citita automat — necesita conversie (vezi detalii).',
     }).eq('id', docId)
@@ -172,7 +172,11 @@ export default async function handler(req, res) {
   }
 
   const reusite = felii.filter((f) => f.cale)
+  // Coloana `analiza` tine mai multe lucruri despre acelasi document (tabelul de
+  // dimensionare citit, rezultatul citirii AI). Scriem DOAR cheia `plansa`, altfel
+  // sterge restul — asa s-a pierdut o data tabelul de 18 tronsoane de pe plansa 1.1.
   const analiza = {
+    ...doc.analiza,
     plansa: {
       citibila: true, latime: meta.width, inaltime: meta.height,
       felii: reusite.length, randuri, coloane, latura,
