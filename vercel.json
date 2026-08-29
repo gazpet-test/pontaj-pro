@@ -3,9 +3,20 @@
     "api/seap-import.js": {
       "maxDuration": 300,
       "memory": 3009
+    },
+    "api/cad-parse.js": {
+      "maxDuration": 120,
+      "memory": 2048
+    },
+    "api/plansa-felii.js": {
+      "maxDuration": 300,
+      "memory": 3009
     }
   },
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
