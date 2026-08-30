@@ -137,6 +137,15 @@ Deno.serve(async (req: Request) => {
     const perechi: any[] = Array.isArray(body?.perechi) ? body.perechi : [];
     if (!perechi.length) return json({ error: 'nicio pereche doc_id/aut_id' }, 400);
 
+    // Un document poate acoperi mai multe autorizatii: certificatul ANRE al lui Trusu tine de doua
+    // (EGD si EGT), al lui Apostol la fel. Se retrage din dosarul personal abia dupa ultima
+    // autorizatie pe care o serveste — altfel a doua pereche n-ar mai gasi documentul.
+    const ramase = new Map<number, number>();
+    for (const p of perechi) {
+      const k = Number(p.doc_id);
+      ramase.set(k, (ramase.get(k) || 0) + 1);
+    }
+
     const raport: any[] = [];
     for (const p of perechi) {
       try {
@@ -181,13 +190,21 @@ Deno.serve(async (req: Request) => {
         const { error: eAut } = await supa.from('hr_autorizatii').update(patch).eq('id', a.id);
         if (eAut) throw new Error(`update autorizatie: ${eAut.message}`);
 
-        // Documentul personal se retrage, dar nu se sterge: ramane recuperabil.
-        await supa.from('hr_documente_personale').update({
-          deleted_at: new Date().toISOString(),
-          observatii: `Mutat la Autorizatii (id ${a.id}) pe ${new Date().toISOString().slice(0, 10)} — e autorizatie profesionala, nu document personal.`,
-        }).eq('id', d.id);
+        // Documentul personal se retrage, dar nu se sterge: ramane recuperabil. Doar dupa ultima
+        // autorizatie pe care o serveste, si niciodata daca s-a cerut explicit sa ramana pe loc.
+        const catMaiAre = (ramase.get(d.id) || 1) - 1;
+        ramase.set(d.id, catMaiAre);
+        const toate = perechi.filter((q) => Number(q.doc_id) === d.id).map((q) => q.aut_id).join(', ');
+        const retras = catMaiAre === 0 && !p.pastreaza;
+        if (retras) {
+          await supa.from('hr_documente_personale').update({
+            deleted_at: new Date().toISOString(),
+            observatii: `Mutat la Autorizatii (id ${toate}) pe ${new Date().toISOString().slice(0, 10)} — e autorizatie profesionala, nu document personal.`,
+          }).eq('id', d.id);
+        }
 
-        raport.push({ doc_id: d.id, aut_id: a.id, cale_noua: cale, completate, nepotriviri: sarite, ok: true });
+        raport.push({ doc_id: d.id, aut_id: a.id, cale_noua: cale, completate, nepotriviri: sarite,
+          document_retras: retras, ok: true });
       } catch (e) {
         raport.push({ doc_id: p.doc_id, aut_id: p.aut_id, eroare: String((e as Error)?.message || e).slice(0, 160) });
       }
