@@ -19,7 +19,13 @@ import { detectDocumentType, potrivesteAngajat, numeDinDosar, esteSablon, detect
 const DOSARE_ANGAJATI = '1PFtUo5zV--1W5dam4fZrnyXoxWHjQ4CK'  // „A - DOSARELE ANGAJATILOR"
 const BUCKET = 'documente-personal'
 const BUGET_MS = 240_000        // functia are 300s; ne oprim cu marja de siguranta
-const MAX_FISIER = 40 * 1024 * 1024
+// Bucket-ul `documente-personal` refuza peste 10MB, deci verificam noi inainte sa
+// descarcam degeaba. Masurat pe 282 de fisiere reale din arhiva: mediana 205 KB,
+// cel mai mare 7,3 MB — niciunul nu atinge plafonul.
+const MAX_FISIER = 10 * 1024 * 1024
+// Arhivele nu se pot incadra pe un tip de document si nu se pot deschide din interfata.
+// Se raporteaza, ca sa fie desfacute pe Drive de catre om.
+const ARHIVE = /\.(zip|rar|7z|tar|gz)$/i
 const INCREDERE_MINIMA = 60     // sub atat nu legam un dosar de un angajat
 
 // Foldere care nu sunt oameni.
@@ -117,8 +123,9 @@ export default async function handler(req, res) {
       if (Date.now() - inceput > BUGET_MS) break
       if (aduseDeja.has(f.id)) { rand.sarite++; sarite++; continue }
       if (esteSablon(f.name)) { rand.sabloane++; sabloane++; continue }
+      if (ARHIVE.test(f.name)) { rand.erori.push(`${f.name}: arhiva — de desfacut pe Drive`); erori++; continue }
       if (Number(f.size || 0) > MAX_FISIER) {
-        rand.erori.push(`${f.name}: peste 40MB`); erori++; continue
+        rand.erori.push(`${f.name}: peste 10MB, cat accepta bucket-ul`); erori++; continue
       }
 
       const { tip } = detectDocumentType(f.name, tipuri)
