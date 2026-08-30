@@ -26,6 +26,10 @@ const MAX_FISIER = 10 * 1024 * 1024
 // Arhivele nu se pot incadra pe un tip de document si nu se pot deschide din interfata.
 // Se raporteaza, ca sa fie desfacute pe Drive de catre om.
 const ARHIVE = /\.(zip|rar|7z|tar|gz)$/i
+// Cine e anuntat cand intra documente noi. Deliberat scurt: 14 persoane au bifa HR,
+// iar o notificare zilnica catre toti devine zgomot pe care nu-l mai citeste nimeni.
+// Aici sunt cei care chiar lucreaza dosarele.
+const ANUNTA = ['natalia.udrea@gazpet.ro', 'marilena.tudorache@gazpet.ro']
 const INCREDERE_MINIMA = 60     // sub atat nu legam un dosar de un angajat
 
 // Potriviri hotarate de om, acolo unde numele de pe Drive nu se poate lega automat.
@@ -99,6 +103,7 @@ export default async function handler(req, res) {
 
   const raport = []
   const nepotrivite = []
+  let erori_notificare = null
   let adaugate = 0, sarite = 0, sabloane = 0, neclasificate = 0, erori = 0
   let i = deLa
 
@@ -185,7 +190,33 @@ export default async function handler(req, res) {
   }
 
   const gata = i >= dosare.length
+
+  // Cand a intrat ceva nou, HR-ul afla singur — altfel automatizarea ar fi doar
+  // pe jumatate: fisierele intra, dar nu stie nimeni ca au intrat.
+  if (!doarProba && adaugate > 0) {
+    try {
+      const { data: destinatari } = await supa.from('profiles').select('id').in('email', ANUNTA)
+      if (destinatari?.length) {
+        const oameni = raport.filter((r) => r.adaugate > 0).length
+        await supa.from('notifications').insert(destinatari.map((d) => ({
+          profile_id: d.id,
+          type: 'info',
+          modul: 'HR',
+          title: `${adaugate} documente noi din Drive`,
+          message: `Aduse pentru ${oameni} ${oameni === 1 ? 'angajat' : 'angajați'}.` +
+            (neclasificate ? ` ${neclasificate} au nevoie de încadrare pe tip.` : '') +
+            (erori ? ` ${erori} fișiere nu au putut fi aduse.` : ''),
+          link_to: '/hr',
+        })))
+      }
+    } catch (e) {
+      // o notificare ratata nu are voie sa strice importul
+      erori_notificare = String(e?.message || e).slice(0, 120)
+    }
+  }
+
   return res.status(200).json({
+    erori_notificare,
     dry_run: doarProba,
     dosare_total: dosare.length,
     dosare_procesate: i - deLa,
