@@ -152,33 +152,50 @@ export function potrivesteAngajat(text, employees, { includeInactivi = false } =
   const tokens = [...new Set(normalizeStr(text).split(' ').filter((t) => t.length >= 3))]
   if (tokens.length === 0) return { employee: null, confidence: 0, marja: 0 }
 
-  let best = null
-  let bestScore = 0
-  let alDoilea = 0
-  let laEgalitate = 0
-
+  const candidati = []
   for (const emp of employees) {
     if (!includeInactivi && emp.active === false) continue
     const empTokens = [...new Set(normalizeStr(emp.name).split(' ').filter((t) => t.length >= 3))]
     if (empTokens.length === 0) continue
 
-    const matches = empTokens.filter((e) => tokens.some((t) => acelasiCuvant(e, t))).length
-    if (matches < 2) continue
+    const potriviri = empTokens.filter((e) => tokens.some((t) => acelasiCuvant(e, t))).length
+    if (potriviri < 2) continue
+    candidati.push({ emp, potriviri, scor: potriviri / Math.min(empTokens.length, tokens.length) })
+  }
+  if (!candidati.length) return { employee: null, confidence: 0, marja: 0 }
 
-    const score = matches / Math.min(empTokens.length, tokens.length)
-    if (score > bestScore) { alDoilea = bestScore; bestScore = score; best = emp; laEgalitate = 1 }
-    else if (score === bestScore) { laEgalitate++; alDoilea = score }
-    else if (score > alDoilea) { alDoilea = score }
+  candidati.sort((a, b) => b.scor - a.scor)
+  const scorMax = candidati[0].scor
+  const alDoilea = candidati.find((c) => c.scor < scorMax)?.scor || 0
+  let fruntasi = candidati.filter((c) => c.scor === scorMax)
+
+  // Departajari, in ordine — fiecare are un motiv, nu e ghicit:
+  if (fruntasi.length > 1) {
+    // 1. mai multe cuvinte potrivite in absolut. „CIOBANU LENUTA LILIANA" bate
+    //    „CIOBANU LILIANA" (3 fata de 2), desi amandoua acopera integral numele scurt.
+    const maxPotriviri = Math.max(...fruntasi.map((c) => c.potriviri))
+    const dupaPotriviri = fruntasi.filter((c) => c.potriviri === maxPotriviri)
+    if (dupaPotriviri.length < fruntasi.length) fruntasi = dupaPotriviri
+  }
+  if (fruntasi.length > 1) {
+    // 2. fisele marcate „CTR VECHI" sunt dubluri ale contractului anterior;
+    //    daca exista si varianta fara marcaj, aia e cea buna.
+    const faraCtrVechi = fruntasi.filter((c) => !/ctr vechi/i.test(c.emp.name))
+    if (faraCtrVechi.length && faraCtrVechi.length < fruntasi.length) fruntasi = faraCtrVechi
+  }
+  if (fruntasi.length > 1) {
+    // 3. la doua fise cu acelasi nume, cea activa e angajarea curenta.
+    const activi = fruntasi.filter((c) => c.emp.active !== false)
+    if (activi.length === 1) fruntasi = activi
   }
 
-  // Doi oameni cu acelasi scor inseamna ca nu se poate decide — nici macar la 100%.
-  // Doi frati „POPESCU MARIA" si „POPESCU MARIAN" ar iesi amandoi perfect.
-  if (laEgalitate > 1) return { employee: null, confidence: 0, marja: 0, ambiguu: true }
+  // Daca tot au ramas mai multi, chiar nu se poate decide — si nu inventam.
+  if (fruntasi.length > 1) return { employee: null, confidence: 0, marja: 0, ambiguu: true }
 
   return {
-    employee: best,
-    confidence: Math.round(Math.min(1, bestScore) * 100),
-    marja: Math.round(Math.min(1, bestScore - alDoilea) * 100),
+    employee: fruntasi[0].emp,
+    confidence: Math.round(Math.min(1, scorMax) * 100),
+    marja: Math.round(Math.min(1, scorMax - alDoilea) * 100),
   }
 }
 
