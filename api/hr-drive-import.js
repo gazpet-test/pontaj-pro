@@ -43,6 +43,21 @@ const ALIASE = {
 // (`!A - CIM - INCETATE`, `!B - COLABORATOR EXTERN`) sau cu numele firmei.
 const NU_E_ANGAJAT = /^\s*!|^\s*gazpet|nu se printeaza/i
 
+/**
+ * Citeste un tabel intreg, pe pagini. PostgREST poate taia raspunsul la o limita de randuri,
+ * iar aici lista „ce am adus deja" trece de 2.500 de linii — daca ar veni trunchiata, importul
+ * ar crede ca fisierele lipsesc si le-ar aduce inca o data.
+ */
+async function toatePaginile(construieste, pas = 1000) {
+  const out = []
+  for (let de = 0; ; de += pas) {
+    const { data, error } = await construieste(de, de + pas - 1)
+    if (error) throw new Error(`citire pe pagini: ${error.message}`)
+    out.push(...(data || []))
+    if (!data || data.length < pas) return out
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'doar POST' })
@@ -85,11 +100,31 @@ export default async function handler(req, res) {
   const tipNeclasificat = tipuri.find((t) => t.cod === 'neclasificat')
 
   // Ce s-a adus deja din Drive — ca reluarea sa nu refaca munca
-  const { data: existente } = await supa
+  const existente = await toatePaginile((de, la) => supa
     .from('hr_documente_personale')
     .select('drive_file_id')
     .not('drive_file_id', 'is', null)
-  const aduseDeja = new Set((existente || []).map((r) => r.drive_file_id))
+    .order('id')
+    .range(de, la))
+  const aduseDeja = new Set(existente.map((r) => r.drive_file_id))
+
+  // Acelasi document poate exista deja in platforma, pus de om inainte sa avem Drive-ul:
+  // atunci nu are `drive_file_id`, deci verificarea de mai sus nu-l vede si l-am aduce a doua
+  // oara. Prima rulare a facut exact asta — 1.151 de copii, pe 117 oameni. Asa ca ne uitam si
+  // la perechea nume+marime, care s-a dovedit de incredere: la toate cele 993 de grupuri
+  // gasite, fisierele erau identice bit cu bit (acelasi MD5 in storage).
+  const dejaInPlatforma = await toatePaginile((de, la) => supa
+    .from('hr_documente_personale')
+    .select('id, employee_id, fisier_nume, fisier_size_bytes, drive_file_id')
+    .eq('activ', true)
+    .order('id')
+    .range(de, la))
+  const cheieDoc = (employeeId, nume, marime) =>
+    `${employeeId}|${String(nume || '').trim().toLowerCase()}|${marime}`
+  const dupaContinut = new Map()
+  for (const r of dejaInPlatforma) {
+    dupaContinut.set(cheieDoc(r.employee_id, r.fisier_nume, r.fisier_size_bytes), r)
+  }
 
   // Dosarele de pe Drive, in ordine stabila (ca `de_la` sa insemne acelasi lucru la reluare)
   let dosare
@@ -104,7 +139,7 @@ export default async function handler(req, res) {
   const raport = []
   const nepotrivite = []
   let erori_notificare = null
-  let adaugate = 0, sarite = 0, sabloane = 0, neclasificate = 0, erori = 0
+  let adaugate = 0, sarite = 0, sabloane = 0, neclasificate = 0, erori = 0, deja_aveam = 0
   let i = deLa
 
   for (; i < dosare.length; i++) {
@@ -135,12 +170,26 @@ export default async function handler(req, res) {
       erori++; raport.push({ dosar: dosar.name, eroare: String(e.message || e).slice(0, 150) }); continue
     }
 
-    const rand = { dosar: dosar.name, angajat: employee.name, employee_id: employee.id, potrivire: confidence, fisiere: fisiere.length, adaugate: 0, sarite: 0, sabloane: 0, neclasificate: 0, erori: [] }
+    const rand = { dosar: dosar.name, angajat: employee.name, employee_id: employee.id, potrivire: confidence, fisiere: fisiere.length, adaugate: 0, sarite: 0, deja_aveam: 0, sabloane: 0, neclasificate: 0, erori: [] }
 
     for (const f of fisiere) {
       if (Date.now() - inceput > BUGET_MS) break
       if (aduseDeja.has(f.id)) { rand.sarite++; sarite++; continue }
       if (esteSablon(f.name)) { rand.sabloane++; sabloane++; continue }
+
+      // Documentul e deja in platforma, pus de om inainte de Drive. Nu-l aducem a doua oara;
+      // ii lipim doar id-ul de Drive pe randul existent, ca sa fie sarit si la rularile viitoare.
+      // (Fisierele Google native n-au `size` in listare — pentru ele verificarea se sare de la sine.)
+      const gemene = f.size ? dupaContinut.get(cheieDoc(employee.id, f.name, Number(f.size))) : null
+      if (gemene) {
+        if (!gemene.drive_file_id && !doarProba) {
+          const { error: eLeg } = await supa.from('hr_documente_personale')
+            .update({ drive_file_id: f.id }).eq('id', gemene.id)
+          if (!eLeg) { gemene.drive_file_id = f.id; aduseDeja.add(f.id) }
+        }
+        rand.deja_aveam++; deja_aveam++
+        continue
+      }
       if (ARHIVE.test(f.name)) { rand.erori.push(`${f.name}: arhiva — de desfacut pe Drive`); erori++; continue }
       if (Number(f.size || 0) > MAX_FISIER) {
         rand.erori.push(`${f.name}: peste 10MB, cat accepta bucket-ul`); erori++; continue
@@ -179,6 +228,8 @@ export default async function handler(req, res) {
         if (eIns) { rand.sarite++; sarite++; continue }
 
         aduseDeja.add(f.id)
+        dupaContinut.set(cheieDoc(employee.id, f.name, buf.length),
+          { id: null, employee_id: employee.id, drive_file_id: f.id })
         rand.adaugate++; adaugate++
       } catch (e) {
         rand.erori.push(`${f.name}: ${String(e.message || e).slice(0, 120)}`)
@@ -220,7 +271,7 @@ export default async function handler(req, res) {
     dry_run: doarProba,
     dosare_total: dosare.length,
     dosare_procesate: i - deLa,
-    adaugate, sarite, sabloane_ignorate: sabloane, neclasificate, erori,
+    adaugate, sarite, deja_aveam, sabloane_ignorate: sabloane, neclasificate, erori,
     nepotrivite,
     raport,
     secunde: Math.round((Date.now() - inceput) / 1000),
