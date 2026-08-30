@@ -28,8 +28,9 @@ const MAX_FISIER = 10 * 1024 * 1024
 const ARHIVE = /\.(zip|rar|7z|tar|gz)$/i
 const INCREDERE_MINIMA = 60     // sub atat nu legam un dosar de un angajat
 
-// Foldere care nu sunt oameni.
-const NU_E_ANGAJAT = /gazpet\s*-?\s*invest|nu se printeaza|^gazpet hr/i
+// Foldere care nu sunt oameni: cele organizatorice incep cu „!”
+// (`!A - CIM - INCETATE`, `!B - COLABORATOR EXTERN`) sau cu numele firmei.
+const NU_E_ANGAJAT = /^\s*!|^\s*gazpet|nu se printeaza/i
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end()
@@ -100,13 +101,14 @@ export default async function handler(req, res) {
 
     if (NU_E_ANGAJAT.test(dosar.name)) { nepotrivite.push({ dosar: dosar.name, motiv: 'nu e dosar de angajat' }); continue }
 
-    const { employee, confidence, marja } = potrivesteAngajat(numeDinDosar(dosar.name), employees)
-    if (!employee || confidence < INCREDERE_MINIMA) {
-      nepotrivite.push({ dosar: dosar.name, motiv: 'niciun angajat potrivit', potrivire: confidence })
+    // Fostii angajati au si ei dosar pe Drive, iar documentele lor tot ale lor sunt.
+    const { employee, confidence, marja, ambiguu } = potrivesteAngajat(numeDinDosar(dosar.name), employees, { includeInactivi: true })
+    if (ambiguu) {
+      nepotrivite.push({ dosar: dosar.name, motiv: 'doi angajati la fel de probabili — nu ghicesc' })
       continue
     }
-    if (marja === 0 && confidence < 100) {
-      nepotrivite.push({ dosar: dosar.name, motiv: 'doi angajati la fel de probabili — nu ghicesc', potrivire: confidence })
+    if (!employee || confidence < INCREDERE_MINIMA) {
+      nepotrivite.push({ dosar: dosar.name, motiv: 'niciun angajat potrivit', potrivire: confidence })
       continue
     }
 

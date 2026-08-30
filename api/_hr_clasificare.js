@@ -131,8 +131,11 @@ function distanta(a, b) {
 // cuvant lung inseamna acelasi nume, nu alt om.
 function acelasiCuvant(a, b) {
   if (a === b) return true
-  if (Math.min(a.length, b.length) < 6) return false
-  return distanta(a, b) <= 2
+  const scurt = Math.min(a.length, b.length)
+  // O litera in plus pe un nume scurt e tot o transcriere: „AVRAM" / „AVRAAM".
+  if (scurt >= 5 && distanta(a, b) <= 1) return true
+  // Doua litere se accepta doar pe nume lungi, unde nu se pot confunda doi oameni.
+  return scurt >= 7 && distanta(a, b) <= 2
 }
 
 /**
@@ -145,16 +148,17 @@ function acelasiCuvant(a, b) {
  * iesea 40% fata de „SETUNGA MUDIYANSELAGE SURESH NIROSHAN PREMASIRI" si era respins,
  * desi nu exista alt SETUNGA in firma.
  */
-export function potrivesteAngajat(text, employees) {
+export function potrivesteAngajat(text, employees, { includeInactivi = false } = {}) {
   const tokens = [...new Set(normalizeStr(text).split(' ').filter((t) => t.length >= 3))]
   if (tokens.length === 0) return { employee: null, confidence: 0, marja: 0 }
 
   let best = null
   let bestScore = 0
   let alDoilea = 0
+  let laEgalitate = 0
 
   for (const emp of employees) {
-    if (emp.active === false) continue
+    if (!includeInactivi && emp.active === false) continue
     const empTokens = [...new Set(normalizeStr(emp.name).split(' ').filter((t) => t.length >= 3))]
     if (empTokens.length === 0) continue
 
@@ -162,14 +166,18 @@ export function potrivesteAngajat(text, employees) {
     if (matches < 2) continue
 
     const score = matches / Math.min(empTokens.length, tokens.length)
-    if (score > bestScore) { alDoilea = bestScore; bestScore = score; best = emp }
+    if (score > bestScore) { alDoilea = bestScore; bestScore = score; best = emp; laEgalitate = 1 }
+    else if (score === bestScore) { laEgalitate++; alDoilea = score }
     else if (score > alDoilea) { alDoilea = score }
   }
+
+  // Doi oameni cu acelasi scor inseamna ca nu se poate decide — nici macar la 100%.
+  // Doi frati „POPESCU MARIA" si „POPESCU MARIAN" ar iesi amandoi perfect.
+  if (laEgalitate > 1) return { employee: null, confidence: 0, marja: 0, ambiguu: true }
 
   return {
     employee: best,
     confidence: Math.round(Math.min(1, bestScore) * 100),
-    // cat de departe e urmatorul candidat: daca doi frati ies la fel, nu ghicim
     marja: Math.round(Math.min(1, bestScore - alDoilea) * 100),
   }
 }
