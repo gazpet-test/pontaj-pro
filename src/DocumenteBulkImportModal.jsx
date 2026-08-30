@@ -8,6 +8,7 @@
 // ===========================================================================
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
+import { detectDocumentType, potrivesteAngajat, detectDate } from '../api/_hr_clasificare.js'
 
 // Theme consistent cu TabDocumentePersonale.jsx
 const G = {
@@ -38,122 +39,10 @@ const CAT_META = {
   contract_intern: { emoji: '📄', label: 'Contract & Formulare' },
 }
 
-// ─── Mapping keyword → tip cod (priority descending) ───────────────────────
-// Ordinea contează: cele cu priority mai mare se verifică ÎNTÂI
-// Exemplu: „CALIFICARE STIVUITORIST - SUPLIMENT" trebuie să prindă SUPLIMENT, NU CALIFICARE
-const TYPE_PATTERNS = [
-  // Studii — Suplimentele ÎNAINTE de Calificări
-  { cod: 'supliment_calificare', keywords: ['supliment'], priority: 100 },
-  { cod: 'cert_calificare', keywords: ['calificare', 'calificat'], priority: 90 },
-  { cod: 'diploma_scoala_prof', keywords: ['scoala profesionala', 'profesionala'], priority: 95 },
-  { cod: 'diploma_liceu', keywords: ['diploma liceu', 'liceu', 'bacalaureat', 'diploma de liceu'], priority: 92 },
-  { cod: 'diploma_studii_sup', keywords: ['diploma studii', 'diploma facultate', 'diploma master', 'licenta', 'diploma de studii'], priority: 90 },
-  
-  // Stare civilă — cert nastere COPIL ÎNAINTE de cert nastere angajat
-  { cod: 'cert_nastere_copil', keywords: ['nastere copil', 'copil minor', 'copil_minor'], priority: 100 },
-  { cod: 'cert_casatorie', keywords: ['casatorie'], priority: 95 },
-  { cod: 'adeverinta_scoala_copil', keywords: ['adeverinta scoala', 'adev scoala', 'scoala copil'], priority: 95 },
-  { cod: 'cert_nastere_angajat', keywords: ['certificat nastere', 'cert nastere', 'certificat de nastere'], priority: 85 },
-  
-  // Identitate
-  { cod: 'buletin', keywords: ['carte de identitate', 'carte identitate', 'c.i.', '(c.i)', 'buletin', ' ci ', '_ci_', '-ci-', '/ci.'], priority: 95 },
-  { cod: 'pasaport', keywords: ['pasaport', 'passport'], priority: 95 },
-  { cod: 'permis_conducere', keywords: ['permis de conducere', 'permis conducere'], priority: 95 },
-  
-  // Juridic
-  { cod: 'cazier_judiciar', keywords: ['cazier'], priority: 95 },
-  { cod: 'decl_propria_raspundere', keywords: ['declaratie proprie', 'declaratie propria', 'lipsa interdictii', 'decl_propria'], priority: 90 },
-  
-  // Angajator anterior
-  { cod: 'dec_incetare_anterior', keywords: ['decizie incetare', 'dec incetare', 'decizie de incetare'], priority: 100 },
-  { cod: 'adev_incetare_anterior', keywords: ['adeverinta incetare', 'adev incetare'], priority: 100 },
-  { cod: 'anexa7_cotizare', keywords: ['anexa 7', 'anexa7', 'stadiu cotizare'], priority: 100 },
-  
-  // Fiscal — handicap ÎNAINTE de orice ce ar putea conține „decizie"
-  { cod: 'decizie_handicap', keywords: ['handicap'], priority: 100 },
-  { cod: 'extras_cont_bancar', keywords: ['extras cont', 'iban'], priority: 95 },
-  { cod: 'decl_persoane_intretinere', keywords: ['persoane intretinere', 'deducere taxe'], priority: 90 },
-  
-  // Medical
-  { cod: 'adeverinta_medic_familie', keywords: ['adeverinta medic familie', 'adev medic familie', 'medic familie', 'apt de munca', 'apt munca'], priority: 95 },
-  
-  // Contract & Formulare interne
-  { cod: 'contract_munca', keywords: ['contract individual', 'contract munca', 'contract de munca', ' cim ', '_cim_', '-cim-'], priority: 95 },
-  { cod: 'fisa_post', keywords: ['fisa post', 'fisa postului', 'fisa de post', 'fişa post'], priority: 95 },
-  { cod: 'acord_gdpr', keywords: ['gdpr', 'consimtamant', 'acord prelucrare'], priority: 95 },
-  { cod: 'dosar_acorduri_formulare', keywords: ['dosar angajare', 'dosar acorduri', 'formulare angajare', 'minuta informare'], priority: 95 },
-]
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function normalizeStr(s) {
-  return (s || '')
-    .toString()
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // strip diacritics
-    .replace(/[._\-]+/g, ' ')                          // separators → space
-    .replace(/[^a-z0-9 ]+/g, ' ')                      // non-alphanumeric → space
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function detectDocumentType(filename, tipuri) {
-  const norm = ` ${normalizeStr(filename)} `  // padding pentru match exact
-  const sorted = [...TYPE_PATTERNS].sort((a, b) => b.priority - a.priority)
-  
-  for (const pattern of sorted) {
-    for (const kw of pattern.keywords) {
-      const normKw = ` ${normalizeStr(kw)} `
-      if (norm.includes(normKw)) {
-        const tip = tipuri.find(t => t.cod === pattern.cod)
-        if (tip) return { tip, confidence: pattern.priority, matchedKeyword: kw }
-      }
-    }
-  }
-  return { tip: null, confidence: 0, matchedKeyword: null }
-}
-
-function fuzzyMatchEmployee(filename, employees) {
-  const fileTokens = new Set(normalizeStr(filename).split(' ').filter(t => t.length >= 3))
-  if (fileTokens.size === 0) return { employee: null, confidence: 0 }
-  
-  let best = null
-  let bestScore = 0
-  
-  for (const emp of employees) {
-    if (emp.active === false) continue
-    const empTokens = normalizeStr(emp.name).split(' ').filter(t => t.length >= 2)
-    if (empTokens.length === 0) continue
-    
-    const matches = empTokens.filter(t => fileTokens.has(t)).length
-    if (matches < 2) continue  // minimum 2 tokens match (nume + prenume)
-    
-    const score = matches / empTokens.length
-    if (score > bestScore) {
-      bestScore = score
-      best = emp
-    }
-  }
-  
-  return { employee: best, confidence: Math.round(bestScore * 100) }
-}
-
-function detectDate(filename) {
-  // YYYY-MM-DD, YYYY_MM_DD, YYYY.MM.DD
-  let m = filename.match(/(\d{4})[-_.\s](\d{1,2})[-_.\s](\d{1,2})/)
-  if (m && Number(m[1]) >= 1950 && Number(m[1]) <= 2050) {
-    return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`
-  }
-  // DD-MM-YYYY, DD.MM.YYYY
-  m = filename.match(/(\d{1,2})[-_.\s](\d{1,2})[-_.\s](\d{4})/)
-  if (m && Number(m[3]) >= 1950 && Number(m[3]) <= 2050) {
-    return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
-  }
-  // Doar an (ex: VIZA 2016)
-  m = filename.match(/(?:^|[^\d])(19[5-9]\d|20[0-4]\d)(?:[^\d]|$)/)
-  if (m) return `${m[1]}-01-01`
-  return null
-}
+// Regulile de recunoastere (tip document, angajat, data) stau in api/_hr_clasificare.js,
+// ca sa fie ACELEASI si pentru importul automat din Google Drive. Erau scrise aici si
+// mergeau doar cand cineva tragea fisiere cu mana; daca le tineam in doua locuri,
+// acelasi fisier ar fi intrat pe alt tip in functie de drumul pe care a venit.
 
 function genStoragePath(employeeId, tipCod, fileName) {
   const ext = fileName.split('.').pop().toLowerCase()
@@ -202,7 +91,7 @@ export default function DocumenteBulkImportModal({ employees, tipuri, onClose, o
   const processFiles = (files) => {
     const newRows = Array.from(files).map((file, idx) => {
       const { tip, confidence: tipConf } = detectDocumentType(file.name, tipuri)
-      const { employee: emp, confidence: empConf } = fuzzyMatchEmployee(file.name, employees)
+      const { employee: emp, confidence: empConf } = potrivesteAngajat(file.name, employees)
       const dataEmitere = detectDate(file.name)
       const isDuplicate = emp ? checkDuplicate(emp.id, file.name) : false
       
