@@ -13,6 +13,7 @@
 // Sigur la reluare: fiecare document retine `drive_file_id`, iar un index unic
 // impiedica acelasi fisier sa intre de doua ori la acelasi om.
 import { createClient } from '@supabase/supabase-js'
+import JSZip from 'jszip'
 import { tokenGoogle, listeazaFolder, fisiereRecursiv, descarcaFisier, E_FOLDER } from './_google.js'
 import { detectDocumentType, potrivesteAngajat, numeDinDosar, esteSablon, detectDate } from './_hr_clasificare.js'
 
@@ -23,9 +24,17 @@ const BUGET_MS = 240_000        // functia are 300s; ne oprim cu marja de sigura
 // descarcam degeaba. Masurat pe 282 de fisiere reale din arhiva: mediana 205 KB,
 // cel mai mare 7,3 MB — niciunul nu atinge plafonul.
 const MAX_FISIER = 10 * 1024 * 1024
-// Arhivele nu se pot incadra pe un tip de document si nu se pot deschide din interfata.
-// Se raporteaza, ca sa fie desfacute pe Drive de catre om.
+// Arhivele .zip se desfac din zbor si fiecare fisier dinauntru intra ca document normal —
+// pe server erau 26, toate dosare IGI, si asteptau luni de zile sa le desfaca cineva.
+// Restul formatelor (.rar, .7z) raman de desfacut manual: nu avem cu ce le citi aici.
 const ARHIVE = /\.(zip|rar|7z|tar|gz)$/i
+const MAX_ARHIVA = 200 * 1024 * 1024
+// Ce accepta bucket-ul (allowed_mime_types) — restul intrarilor din arhive se raporteaza.
+const MIME_EXT = {
+  pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+  webp: 'image/webp', doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
 // Cine e anuntat cand intra documente noi. Deliberat scurt: 14 persoane au bifa HR,
 // iar o notificare zilnica catre toti devine zgomot pe care nu-l mai citeste nimeni.
 // Aici sunt cei care chiar lucreaza dosarele.
@@ -99,6 +108,20 @@ export default async function handler(req, res) {
   if (!employees?.length) return res.status(500).json({ error: 'nu am putut citi angajatii' })
   const tipNeclasificat = tipuri.find((t) => t.cod === 'neclasificat')
 
+  // Detectia fisierelor ratacite: autorizatia lui NICOLAE MARIAN a stat luni de zile in dosarul
+  // lui KODITHUWAKKU, fiindca importul leaga documentul de om dupa numele FOLDERULUI, nu al
+  // fisierului. De acum, un fisier al carui nume contine numele complet al ALTUI angajat se
+  // importa normal, dar se strange intr-o lista de banuieli si HR-ul primeste o notificare.
+  const faraDiac = (x) => String(x).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const numeDetectie = employees
+    .map((e) => ({ id: e.id, nume: String(e.name || '').trim(), norm: faraDiac(String(e.name || '').trim()) }))
+    .filter((e) => e.norm.split(/\s+/).length >= 2)
+  const banuieli = []
+  const numeStrain = (numeFisier, employeeId) => {
+    const n = faraDiac(numeFisier)
+    return numeDetectie.find((x) => x.id !== employeeId && n.includes(x.norm)) || null
+  }
+
   // Ce s-a adus deja din Drive — ca reluarea sa nu refaca munca
   const existente = await toatePaginile((de, la) => supa
     .from('hr_documente_personale')
@@ -136,10 +159,55 @@ export default async function handler(req, res) {
   dosare.sort((a, b) => a.name.localeCompare(b.name, 'ro'))
   if (doarDosarul) dosare = dosare.filter((d) => d.name.toLowerCase().includes(doarDosarul))
 
+  // Drumul comun al unui document spre platforma, fie ca vine ca fisier de pe Drive, fie ca
+  // intrare dintr-o arhiva. NU arunca: erorile se aduna in raport, ca un fisier stricat sa nu
+  // opreasca restul dosarului.
+  async function salveazaDocument({ employee, dosar, rand, nume, buf, mime, extensie, idDrive, nota }) {
+    try {
+      const { tip } = detectDocumentType(nume, tipuri)
+      const tipFinal = tip || tipNeclasificat
+      if (!tipFinal) { rand.erori.push(`${nume}: nu exista tipul „neclasificat"`); erori++; return }
+
+      const cale = `${employee.id}/drive/${String(idDrive).replace(/[^A-Za-z0-9_.-]/g, '_')}.${extensie}`
+      const { error: eUp } = await supa.storage.from(BUCKET)
+        .upload(cale, buf, { contentType: mime, upsert: true })
+      if (eUp) throw new Error(`storage: ${eUp.message}`)
+
+      const { data: ins, error: eIns } = await supa.from('hr_documente_personale').insert({
+        employee_id: employee.id,
+        tip_id: tipFinal.id,
+        fisier_path: cale,
+        fisier_nume: nume,
+        fisier_mime: mime,
+        fisier_size_bytes: buf.length,
+        data_emitere: detectDate(nume),
+        activ: true,
+        drive_file_id: idDrive,
+        observatii: nota + (tip ? '' : ' Tipul NU s-a putut deduce din numele fisierului — de incadrat.'),
+      }).select('id').single()
+      // 23505 = fisierul era deja adus (cursa intre doua rulari) — nu e eroare
+      if (eIns && eIns.code !== '23505') throw new Error(`insert: ${eIns.message}`)
+      if (eIns) { rand.sarite++; sarite++; return }
+
+      if (!tip) { rand.neclasificate++; neclasificate++ }
+      aduseDeja.add(idDrive)
+      dupaContinut.set(cheieDoc(employee.id, nume, buf.length),
+        { id: ins?.id ?? null, employee_id: employee.id, drive_file_id: idDrive })
+
+      const strain = numeStrain(nume, employee.id)
+      if (strain) banuieli.push({ doc_id: ins?.id ?? null, dosar: dosar.name, fisier: nume, seamana_cu: strain.nume })
+
+      rand.adaugate++; adaugate++
+    } catch (e) {
+      rand.erori.push(`${nume}: ${String(e.message || e).slice(0, 120)}`)
+      erori++
+    }
+  }
+
   const raport = []
   const nepotrivite = []
   let erori_notificare = null
-  let adaugate = 0, sarite = 0, sabloane = 0, neclasificate = 0, erori = 0, deja_aveam = 0
+  let adaugate = 0, sarite = 0, sabloane = 0, neclasificate = 0, erori = 0, deja_aveam = 0, arhive_desfacute = 0
   let i = deLa
 
   for (; i < dosare.length; i++) {
@@ -190,47 +258,60 @@ export default async function handler(req, res) {
         rand.deja_aveam++; deja_aveam++
         continue
       }
-      if (ARHIVE.test(f.name)) { rand.erori.push(`${f.name}: arhiva — de desfacut pe Drive`); erori++; continue }
+      if (ARHIVE.test(f.name)) {
+        if (!/\.zip$/i.test(f.name)) { rand.erori.push(`${f.name}: arhiva ne-zip — de desfacut pe Drive`); erori++; continue }
+        if (Number(f.size || 0) > MAX_ARHIVA) { rand.erori.push(`${f.name}: arhiva peste 200MB — de desfacut pe Drive`); erori++; continue }
+        if (doarProba) { rand.arhive = (rand.arhive || 0) + 1; arhive_desfacute++; continue }
+        try {
+          const { buf: bufZip } = await descarcaFisier(token, f)
+          const zip = await JSZip.loadAsync(bufZip)
+          const intrari = Object.values(zip.files)
+            .filter((e) => !e.dir)
+            .filter((e) => !/^__MACOSX\//i.test(e.name) && !/(^|\/)(\.|Thumbs\.db$|desktop\.ini$)/i.test(e.name))
+            .sort((a, b) => a.name.localeCompare(b.name))
+          for (const intrare of intrari) {
+            if (Date.now() - inceput > BUGET_MS) break
+            const numeIntrare = intrare.name.split('/').pop()
+            // Id stabil per intrare: la reluare, indexul unic (employee_id, drive_file_id) o sare.
+            const idIntrare = `${f.id}#${intrare.name}`
+            if (aduseDeja.has(idIntrare)) { rand.sarite++; sarite++; continue }
+            if (esteSablon(numeIntrare)) { rand.sabloane++; sabloane++; continue }
+            const continut = await intrare.async('nodebuffer')
+            if (continut.length > MAX_FISIER) { rand.erori.push(`${f.name} → ${numeIntrare}: peste 10MB, cat accepta bucket-ul`); erori++; continue }
+            if (dupaContinut.get(cheieDoc(employee.id, numeIntrare, continut.length))) { rand.deja_aveam++; deja_aveam++; continue }
+            const ext = numeIntrare.includes('.') ? numeIntrare.split('.').pop().toLowerCase() : ''
+            const mimeIntrare = MIME_EXT[ext]
+            if (!mimeIntrare) { rand.erori.push(`${f.name} → ${numeIntrare}: tipul .${ext || '?'} nu e acceptat de bucket`); erori++; continue }
+            await salveazaDocument({
+              employee, dosar, rand, nume: numeIntrare, buf: continut, mime: mimeIntrare,
+              extensie: ext, idDrive: idIntrare,
+              nota: `Adus automat din arhiva „${f.name}" (dosarul „${dosar.name}").`,
+            })
+          }
+          arhive_desfacute++
+        } catch (e) {
+          rand.erori.push(`${f.name}: arhiva nu s-a putut desface — ${String(e.message || e).slice(0, 100)}`)
+          erori++
+        }
+        continue
+      }
       if (Number(f.size || 0) > MAX_FISIER) {
         rand.erori.push(`${f.name}: peste 10MB, cat accepta bucket-ul`); erori++; continue
       }
 
-      const { tip } = detectDocumentType(f.name, tipuri)
-      const tipFinal = tip || tipNeclasificat
-      if (!tipFinal) { rand.erori.push(`${f.name}: nu exista tipul „neclasificat"`); erori++; continue }
-      if (!tip) { rand.neclasificate++; neclasificate++ }
-
-      if (doarProba) { rand.adaugate++; adaugate++; continue }
+      if (doarProba) {
+        const { tip } = detectDocumentType(f.name, tipuri)
+        if (!tip) { rand.neclasificate++; neclasificate++ }
+        rand.adaugate++; adaugate++
+        continue
+      }
 
       try {
         const { buf, mime, extensie } = await descarcaFisier(token, f)
-        const cale = `${employee.id}/drive/${f.id}.${extensie}`
-        const { error: eUp } = await supa.storage.from(BUCKET)
-          .upload(cale, buf, { contentType: mime, upsert: true })
-        if (eUp) throw new Error(`storage: ${eUp.message}`)
-
-        const { error: eIns } = await supa.from('hr_documente_personale').insert({
-          employee_id: employee.id,
-          tip_id: tipFinal.id,
-          fisier_path: cale,
-          fisier_nume: f.name,
-          fisier_mime: mime,
-          fisier_size_bytes: buf.length,
-          data_emitere: detectDate(f.name),
-          activ: true,
-          drive_file_id: f.id,
-          observatii: tip
-            ? `Adus automat din Google Drive (dosarul „${dosar.name}").`
-            : `Adus automat din Google Drive (dosarul „${dosar.name}"). Tipul NU s-a putut deduce din numele fisierului — de incadrat.`,
+        await salveazaDocument({
+          employee, dosar, rand, nume: f.name, buf, mime, extensie, idDrive: f.id,
+          nota: `Adus automat din Google Drive (dosarul „${dosar.name}").`,
         })
-        // 23505 = fisierul era deja adus (cursa intre doua rulari) — nu e eroare
-        if (eIns && eIns.code !== '23505') throw new Error(`insert: ${eIns.message}`)
-        if (eIns) { rand.sarite++; sarite++; continue }
-
-        aduseDeja.add(f.id)
-        dupaContinut.set(cheieDoc(employee.id, f.name, buf.length),
-          { id: null, employee_id: employee.id, drive_file_id: f.id })
-        rand.adaugate++; adaugate++
       } catch (e) {
         rand.erori.push(`${f.name}: ${String(e.message || e).slice(0, 120)}`)
         erori++
@@ -241,6 +322,42 @@ export default async function handler(req, res) {
   }
 
   const gata = i >= dosare.length
+
+  // Banuielile de fisiere ratacite. Un nume care apare in fisiere din 3+ dosare diferite e al
+  // unui imputernicit (actele Nataliei stau legitim in toate dosarele IGI), nu un fisier ratacit
+  // — la scanarea manuala, filtrul asta a taiat ~40 de fals-pozitive si a lasat 8 cazuri reale.
+  const dosarePeNume = new Map()
+  for (const b of banuieli) {
+    if (!dosarePeNume.has(b.seamana_cu)) dosarePeNume.set(b.seamana_cu, new Set())
+    dosarePeNume.get(b.seamana_cu).add(b.dosar)
+  }
+  const posibil_ratacite = banuieli.filter((b) => dosarePeNume.get(b.seamana_cu).size < 3)
+
+  if (!doarProba && posibil_ratacite.length) {
+    const ids = posibil_ratacite.map((b) => b.doc_id).filter(Boolean)
+    if (ids.length) {
+      const { data: docsSusp } = await supa.from('hr_documente_personale').select('id, observatii').in('id', ids)
+      for (const d of docsSusp || []) {
+        const b = posibil_ratacite.find((x) => x.doc_id === d.id)
+        await supa.from('hr_documente_personale').update({
+          observatii: `${d.observatii || ''} ATENTIE: numele fisierului contine numele altui angajat (${b.seamana_cu}) — verifica daca nu cumva e in dosarul gresit.`.trim(),
+        }).eq('id', d.id)
+      }
+    }
+    try {
+      const { data: destinatari } = await supa.from('profiles').select('id').in('email', ANUNTA)
+      const exemple = posibil_ratacite.slice(0, 3)
+        .map((b) => `„${b.fisier}" în dosarul ${b.dosar}`).join('; ')
+      await supa.from('notifications').insert((destinatari || []).map((d) => ({
+        profile_id: d.id,
+        type: 'warning',
+        modul: 'HR',
+        title: `⚠ ${posibil_ratacite.length} ${posibil_ratacite.length === 1 ? 'fișier pare rătăcit' : 'fișiere par rătăcite'} în alt dosar`,
+        message: `${exemple}${posibil_ratacite.length > 3 ? ' …' : ''} Verifică și mută-le pe server, în folderul omului potrivit.`,
+        link_to: '/hr',
+      })))
+    } catch (_) { /* notificarea ratata nu strica importul */ }
+  }
 
   // Cand a intrat ceva nou, HR-ul afla singur — altfel automatizarea ar fi doar
   // pe jumatate: fisierele intra, dar nu stie nimeni ca au intrat.
@@ -271,7 +388,8 @@ export default async function handler(req, res) {
     dry_run: doarProba,
     dosare_total: dosare.length,
     dosare_procesate: i - deLa,
-    adaugate, sarite, deja_aveam, sabloane_ignorate: sabloane, neclasificate, erori,
+    adaugate, sarite, deja_aveam, arhive_desfacute, sabloane_ignorate: sabloane, neclasificate, erori,
+    posibil_ratacite: posibil_ratacite.map(({ doc_id, ...rest }) => rest),
     nepotrivite,
     raport,
     secunde: Math.round((Date.now() - inceput) / 1000),
