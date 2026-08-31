@@ -1097,6 +1097,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 // ════════════════════════════════════════════════════════════════
 function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus, onDecide, onDelete }) {
   const [motivare, setMotivare] = useState(l.decizie_motivare || '')
+  const [regim, setRegim] = useState(l.regim_achizitie || '')
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const R = ({ k, v }) => v ? (
@@ -1118,6 +1119,17 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
         <div style={{ fontSize:13.5, color:G.text, marginBottom:14 }}>{l.obiect}</div>
 
         <R k="Autoritate" v={l.autoritate} />
+        <R k="Regim achiziție" v={
+          <span style={{ display:'inline-flex', gap:8, alignItems:'center' }}>
+            <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px' }} value={regim}
+              onChange={async e => { const v = e.target.value; setRegim(v); await supabase.from('ofertare_licitatii').update({ regim_achizitie: v || null, updated_at: new Date().toISOString() }).eq('id', l.id) }}>
+              <option value="">— nestabilit —</option>
+              <option value="sectorial">⚡ sectorial (Legea 99/2016 + HG 394)</option>
+              <option value="clasic">🏛 clasic (Legea 98/2016 + HG 395)</option>
+            </select>
+            <span style={{ fontSize:11, color:G.dim }}>legea citată în fișa de date primează asupra tipului autorității</span>
+          </span>
+        } />
         <R k="Valoare estimată" v={l.valoare_estimata != null ? `${fmtVal(l.valoare_estimata)} ${l.moneda}` : null} />
         <R k="Termen de depunere" v={l.termen_depunere ? `${fmtTermen(l.termen_depunere)} (${l.zile_ramase ?? '—'} zile rămase)` : null} />
         <R k="Criteriu" v={l.criteriu} />
@@ -1783,7 +1795,8 @@ function ReferinteFinanciare({ showToast }) {
 // Registrul "ordinelor în vigoare" (cerut de Razvan 28.08): echipa le găsește
 // într-un loc, iar AI-ul citează din ele la cereri de ofertă / clarificări /
 // propuneri tehnice. Statusul (în vigoare / abrogat / înlocuit) e vital.
-const NORM_TIP = { ordin_anre:'Ordin ANRE', prescriptie_iscir:'Prescripție ISCIR', lege:'Lege', hg:'HG', standard:'Standard', comunicare:'Comunicare', norma_tehnica:'Normă tehnică', altele:'Altele' }
+const NORM_TIP = { ordin_anre:'Ordin ANRE', prescriptie_iscir:'Prescripție ISCIR', lege:'Lege', hg:'HG', oug:'OUG', ordin:'Ordin', standard:'Standard', comunicare:'Comunicare', norma_tehnica:'Normă tehnică', altele:'Altele' }
+const NORM_APLIC = { 'achiziții SECTORIALE':['⚡ SECTORIAL (L99)', '#D68B4A'], 'achiziții CLASICE':['🏛 CLASIC (L98)', '#58A6FF'], 'cadru general':['cadru general', '#8B949E'], 'tehnic':['tehnic', '#3FB6E2'], 'ambele':['ambele', '#3FB950'] }
 const NORM_STATUS = { in_vigoare:['✅ în vigoare', G.green], abrogat:['⛔ abrogat', G.red], inlocuit:['🔁 înlocuit', G.orange] }
 
 // ── 🗂 Căutare în indexul NAS (nas_documente) — categoriile calificare_* + tot corpusul ──
@@ -1864,6 +1877,8 @@ function DocumenteNasCauta() {
 
 function NormativeLista({ norme, showToast, onChange }) {
   const [showAdd, setShowAdd] = useState(false)
+  const [fAplic, setFAplic] = useState('')
+  const [fCauta, setFCauta] = useState('')
   const [f, setF] = useState({ tip:'ordin_anre', numar:'', titlu:'', emitent:'', data_emitere:'', status:'in_vigoare', inlocuit_de:'', domenii:'', link:'', note:'' })
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
 
@@ -1892,7 +1907,13 @@ function NormativeLista({ norme, showToast, onChange }) {
 
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:10 }}>
+      <div style={{ display:'flex', gap:8, marginBottom:10, flexWrap:'wrap', alignItems:'center' }}>
+        <select style={{ ...S.input, width:'auto' }} value={fAplic} onChange={e => setFAplic(e.target.value)}>
+          <option value="">Toate aplicabilitățile</option>
+          {Object.keys(NORM_APLIC).map(k => <option key={k} value={k}>{NORM_APLIC[k][0]}</option>)}
+        </select>
+        <input style={{ ...S.input, flex:1, minWidth:200, maxWidth:360 }} placeholder="🔍 Caută normativ / standard..." value={fCauta} onChange={e => setFCauta(e.target.value)} />
+        <div style={{ flex:1 }} />
         <button style={S.btnP} onClick={() => setShowAdd(s => !s)}>{showAdd ? '✕ renunță' : '＋ Normativ'}</button>
       </div>
       {showAdd && (
@@ -1919,12 +1940,17 @@ function NormativeLista({ norme, showToast, onChange }) {
         </div>
       )}
       <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-        {norme.map(n => {
+        {norme.filter(n => (!fAplic || n.aplicabilitate === fAplic) && (!fCauta || `${n.titlu} ${n.numar || ''} ${n.identificator || ''} ${n.note || ''}`.toLowerCase().includes(fCauta.toLowerCase()))).map(n => {
           const [stLbl, stCol] = NORM_STATUS[n.status] || NORM_STATUS.in_vigoare
+          const neconf = (n.stare || '').includes('NECONFIRMAT')
+          const aplic = NORM_APLIC[n.aplicabilitate]
           return (
-            <div key={n.id} style={{ ...S.card, padding:'11px 15px', borderLeft:`3px solid ${stCol}`, opacity: n.status === 'abrogat' ? .55 : 1 }}>
+            <div key={n.id} style={{ ...S.card, padding:'11px 15px', borderLeft:`3px solid ${neconf ? G.red : stCol}`, opacity: n.status === 'abrogat' ? .55 : 1 }}>
               <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
                 <span style={{ fontSize:11, color:G.ofertare, fontWeight:800, border:`1px solid ${G.ofertare}44`, borderRadius:10, padding:'1px 9px', whiteSpace:'nowrap' }}>{NORM_TIP[n.tip] || n.tip}{n.numar ? ' ' + n.numar : ''}</span>
+                {aplic && <span style={{ fontSize:10, color:aplic[1], fontWeight:800, border:`1px solid ${aplic[1]}55`, borderRadius:10, padding:'1px 8px', whiteSpace:'nowrap' }}>{aplic[0]}</span>}
+                {neconf && <span title={n.stare} style={{ fontSize:10, color:'#0D1117', background:G.red, fontWeight:800, borderRadius:10, padding:'1px 8px', whiteSpace:'nowrap' }}>⚠ NECONFIRMAT — nu cita fără verificare</span>}
+                {n.stare && n.stare.includes('înlocuit') && <span style={{ fontSize:10, color:G.orange, fontWeight:800, border:`1px solid ${G.orange}55`, borderRadius:10, padding:'1px 8px' }}>⚠ {n.stare}</span>}
                 <span style={{ fontWeight:700, fontSize:13, flex:1, minWidth:220 }}>{n.link ? <a href={n.link} target="_blank" rel="noreferrer" style={{ color:G.text }}>{n.titlu}</a> : n.titlu}</span>
                 <span style={{ color:stCol, fontWeight:800, fontSize:11.5, whiteSpace:'nowrap' }}>{stLbl}{n.inlocuit_de ? ` → ${n.inlocuit_de}` : ''}</span>
                 <select style={{ ...S.input, width:'auto', fontSize:11, padding:'3px 7px' }} value={n.status} onChange={e => schimbaStatus(n, e.target.value)}>
@@ -1936,8 +1962,10 @@ function NormativeLista({ norme, showToast, onChange }) {
                 {n.emitent && <span>🏛 {n.emitent}</span>}
                 {n.data_emitere && <span>📅 {new Date(n.data_emitere).toLocaleDateString('ro-RO')}</span>}
                 {Array.isArray(n.domenii) && n.domenii.length > 0 && <span>🏷 {n.domenii.join(', ')}</span>}
-                {n.note && <span>💬 {n.note}</span>}
+                {n.prioritate && <span style={{ color: n.prioritate === 'CRITIC' ? G.red : n.prioritate === 'IMPORTANT' ? G.orange : G.dim, fontWeight:700 }}>◆ {n.prioritate}</span>}
               </div>
+              {n.modificari_ulterioare && <div style={{ fontSize:11.5, color:G.ofertare, marginTop:3 }}>📌 Se citează consolidat: {n.modificari_ulterioare}</div>}
+              {n.note && <div style={{ fontSize:11.5, color:G.muted, marginTop:3 }}>💬 {n.note}</div>}
             </div>
           )
         })}
