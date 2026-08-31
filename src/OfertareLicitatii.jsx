@@ -1636,18 +1636,20 @@ function ReferinteFinanciare({ showToast }) {
   const [pu, setPu] = useState([])
   const [mat, setMat] = useState([])
   const [norme, setNorme] = useState([])
+  const [part, setPart] = useState([])
   const [loading, setLoading] = useState(true)
   const [cauta, setCauta] = useState('')
-  const [tab, setTab] = useState('calibrari')  // calibrari | preturi | materiale | normative
+  const [tab, setTab] = useState('calibrari')  // calibrari | preturi | materiale | normative | parteneri | documente
 
   const loadAll = async () => {
-    const [{ data: c }, { data: p }, { data: m }, { data: n }] = await Promise.all([
+    const [{ data: c }, { data: p }, { data: m }, { data: n }, { data: pa }] = await Promise.all([
       supabase.from('ofertare_calibrari').select('*').order('an', { ascending: false, nullsFirst: false }),
       supabase.from('ofertare_preturi_unitare').select('*').order('an', { ascending: false, nullsFirst: false }),
       supabase.from('ofertare_preturi_materiale').select('*').order('an', { ascending: false, nullsFirst: false }),
       supabase.from('ofertare_normative').select('*').order('created_at', { ascending: false }),
+      supabase.from('ofertare_parteneri').select('*').order('nume'),
     ])
-    setCal(c || []); setPu(p || []); setMat(m || []); setNorme(n || []); setLoading(false)
+    setCal(c || []); setPu(p || []); setMat(m || []); setNorme(n || []); setPart(pa || []); setLoading(false)
   }
   useEffect(() => { loadAll() }, [])
 
@@ -1665,7 +1667,7 @@ function ReferinteFinanciare({ showToast }) {
           <div style={{ fontSize:12, color:G.muted }}>Cu ce coeficienți s-a mers istoric, pe segmente — plus prețuri unitare și materiale din ofertele depuse</div>
         </div>
         <div style={{ display:'flex', gap:8 }}>
-          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`]].map(([k, lbl]) => (
+          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS']].map(([k, lbl]) => (
             <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, padding:'6px 13px', fontSize:12, fontWeight:700,
               ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
           ))}
@@ -1709,6 +1711,31 @@ function ReferinteFinanciare({ showToast }) {
       )}
 
       {!loading && tab === 'normative' && <NormativeLista norme={norme} showToast={showToast} onChange={loadAll} />}
+
+      {!loading && tab === 'parteneri' && (
+        <>
+          <input style={{ ...S.input, marginBottom:12, maxWidth:420 }} placeholder="🔍 Caută partener..." value={cauta} onChange={e => setCauta(e.target.value)} />
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {part.filter(p => !q || `${p.nume} ${p.observatii || ''}`.toLowerCase().includes(q)).map(p => (
+              <div key={p.id} style={{ ...S.card, padding:'12px 16px', borderLeft:`3px solid ${p.tip_relatie === 'subcontractant' ? G.ofertare : G.blue}`, opacity: p.abandonat ? 0.5 : 1 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                  <span style={{ fontWeight:800, fontSize:13.5 }}>{p.nume}</span>
+                  <span style={{ fontSize:10.5, fontWeight:700, color:G.muted, border:`1px solid ${G.border}`, borderRadius:10, padding:'1px 8px' }}>{p.tip_relatie === 'subcontractant' ? '🔧 subcontractant' : '📦 furnizor servicii'}</span>
+                  {p.abandonat && <span style={{ fontSize:10.5, color:G.red, fontWeight:700 }}>⛔ abandonat{p.abandonat_motiv ? ` — ${p.abandonat_motiv}` : ''}</span>}
+                  {p.cui && <span style={{ fontSize:11, color:G.dim }}>{p.cui}</span>}
+                  {p.contact && <span style={{ fontSize:11, color:G.dim }}>{p.contact}</span>}
+                </div>
+                {p.observatii && <div style={{ fontSize:12, color:G.muted, marginTop:5 }}>{p.observatii}</div>}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize:11.5, color:G.dim, padding:'8px 4px' }}>
+            Sursa: folderele de pe NAS din <code>Oferte\Calificare\autorizari firme</code> — documentele fiecăruia se caută în tabul 🗂 Documente NAS.
+          </div>
+        </>
+      )}
+
+      {!loading && tab === 'documente' && <DocumenteNasCauta />}
 
       {!loading && (tab === 'preturi' || tab === 'materiale') && (
         <>
@@ -1758,6 +1785,82 @@ function ReferinteFinanciare({ showToast }) {
 // propuneri tehnice. Statusul (în vigoare / abrogat / înlocuit) e vital.
 const NORM_TIP = { ordin_anre:'Ordin ANRE', prescriptie_iscir:'Prescripție ISCIR', lege:'Lege', hg:'HG', standard:'Standard', comunicare:'Comunicare', norma_tehnica:'Normă tehnică', altele:'Altele' }
 const NORM_STATUS = { in_vigoare:['✅ în vigoare', G.green], abrogat:['⛔ abrogat', G.red], inlocuit:['🔁 înlocuit', G.orange] }
+
+// ── 🗂 Căutare în indexul NAS (nas_documente) — categoriile calificare_* + tot corpusul ──
+// Nu descarcă fișiere: arată calea de pe NAS (Z:\), care se deschide de pe laptopurile din birou.
+const NAS_CATEGORII = [
+  ['', 'Toate categoriile'],
+  ['calificare_autorizari_parteneri', '🤝 Autorizări parteneri'],
+  ['calificare_firma', '🏢 Documente firmă (calificare)'],
+  ['calificare_personal', '👷 Personal (calificare)'],
+  ['calificare_experienta', '📚 Experiență similară'],
+  ['calificare_experienta_manageri', '🎓 Experiență manageri'],
+  ['calificare_model_propuneri', '📄 Modele propuneri tehnice'],
+  ['calificare_instructiuni_lucru', '🛠 Instrucțiuni de lucru'],
+  ['calificare_utilaje_echip', '🚜 Utilaje & echipamente'],
+  ['calificare_declaratii', '✍️ Declarații disponibilitate'],
+  ['calificare_invest', '🏗 Gazpet Invest'],
+  ['calificare_semnaturi', '🔏 Semnături'],
+  ['calificare_sablon_fise_post', '🗃 Șabloane fișe post'],
+  ['seap', 'SEAP (toate licitațiile)'],
+  ['propunere_tehnica', 'Propuneri tehnice (istoric)'],
+  ['calitate', 'Calitate (istoric)'],
+]
+
+function DocumenteNasCauta() {
+  const [q, setQ] = useState('')
+  const [cat, setCat] = useState('calificare_autorizari_parteneri')
+  const [rez, setRez] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const cautaDocs = async () => {
+    if (!q.trim() && !cat) return
+    setLoading(true)
+    let query = supabase.from('nas_documente')
+      .select('id, nas_path, denumire, extensie, categorie, size_bytes, data_modificare')
+      .order('data_modificare', { ascending: false }).limit(200)
+    if (cat) query = query.eq('categorie', cat)
+    if (q.trim()) query = query.or(`denumire.ilike.%${q.trim()}%,nas_path.ilike.%${q.trim()}%`)
+    const { data, error } = await query
+    setRez(error ? [] : (data || []))
+    setLoading(false)
+  }
+
+  const kb = b => b == null ? '—' : b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`
+  const caleWin = p => 'Z:\\' + p.replace(/^Oferte\//, 'Oferte\\').replace(/\//g, '\\')
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+        <select style={{ ...S.input, maxWidth:300 }} value={cat} onChange={e => setCat(e.target.value)}>
+          {NAS_CATEGORII.map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
+        </select>
+        <input style={{ ...S.input, flex:1, minWidth:220, maxWidth:420 }} placeholder="🔍 Caută în nume sau cale (min. o literă)..."
+          value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && cautaDocs()} />
+        <button style={{ ...S.btnP, padding:'8px 18px' }} onClick={cautaDocs} disabled={loading}>{loading ? '...' : 'Caută'}</button>
+      </div>
+
+      {rez === null && <div style={{ padding:30, textAlign:'center', color:G.dim, fontSize:12.5 }}>Alege o categorie și/sau scrie un cuvânt, apoi apasă Caută. Indexul acoperă tot NAS-ul de oferte (~248.000 fișiere).</div>}
+      {rez !== null && (
+        <>
+          <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>{rez.length === 200 ? 'Primele 200 de rezultate (restrânge căutarea)' : `${rez.length} rezultate`} · sortate după data modificării</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+            {rez.map(d => (
+              <div key={d.id} style={{ ...S.card, padding:'8px 14px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <span style={{ fontWeight:700, fontSize:12.5, flex:1, minWidth:220 }}>{d.denumire}</span>
+                <span style={{ fontSize:10.5, color:G.dim }}>{kb(d.size_bytes)}</span>
+                <span style={{ fontSize:10.5, color:G.dim }}>{d.data_modificare || ''}</span>
+                <button style={{ ...S.btnS, fontSize:10.5, padding:'3px 10px' }} title={caleWin(d.nas_path)}
+                  onClick={() => { navigator.clipboard.writeText(caleWin(d.nas_path)); }}>📋 Copiază calea</button>
+                <div style={{ flexBasis:'100%', fontSize:10.5, color:G.dim, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{d.nas_path}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 function NormativeLista({ norme, showToast, onChange }) {
   const [showAdd, setShowAdd] = useState(false)
