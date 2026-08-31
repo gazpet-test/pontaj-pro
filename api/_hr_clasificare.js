@@ -47,7 +47,14 @@ export const TYPE_PATTERNS = [
   { cod: 'decl_persoane_intretinere', keywords: ['persoane intretinere', 'deducere taxe'], priority: 90 },
 
   // Medical
-  { cod: 'adeverinta_medic_familie', keywords: ['adeverinta medic familie', 'adev medic familie', 'medic familie', 'apt de munca', 'apt munca'], priority: 95 },
+  // Deschise si verificate toate, 31.08.2026: „ADEVERINTA MEDICALA" si „ADEVERINTA MEDIC" sunt
+  // acelasi lucru — formularul de la medicul de familie, eliberat pentru angajare sau pentru
+  // dosarul IGI. Ramane sub 'fisa_aptitudini' (96), ca fisa de medicina muncii sa castige.
+  { cod: 'adeverinta_medic_familie', priority: 95, keywords: [
+    'adeverinta medic familie', 'adev medic familie', 'medic familie', 'medic fam',
+    'adeverinta medic', 'adeverinta medicala', 'adev medicala',
+    'apt de munca', 'apt munca',
+  ] },
 
   // Contract & Formulare interne
   { cod: 'contract_munca', keywords: ['contract individual', 'contract munca', 'contract de munca', ' cim ', '_cim_', '-cim-'], priority: 95 },
@@ -78,6 +85,30 @@ export const TYPE_PATTERNS = [
   { cod: 'adev_venituri_6luni', keywords: ['adeverinta venituri', 'adev venituri'], priority: 94 },
   { cod: 'adev_concedii_medicale', keywords: ['concedii medicale', 'adeverinta concedii'], priority: 94 },
   { cod: 'acord_confidentialitate', keywords: ['confidentialitate'], priority: 90 },
+
+  // Rubrici proprii cerute de Razvan (30.08.2026), ca sa fie usor de gasit fara sa rascolesti dosarul.
+  // Prioritate peste 'contract_munca', altfel „ACT ADITIONAL LA CONTRACTUL INDIVIDUAL DE MUNCA" ar
+  // ajunge la contract, iar „CONTRACT COMODAT" la fel.
+  { cod: 'act_aditional_cim', keywords: ['act aditional', 'acte aditionale', 'acti aditional'], priority: 98 },
+  { cod: 'contract_comodat', keywords: ['comodat'], priority: 98 },
+
+  // Documente ale firmei, nu ale omului: au ajuns in dosarele personale fiindca acolo au fost
+  // salvate pe server. Se aduna deoparte, ca sa poata fi mutate cand se decide unde le e locul.
+  { cod: 'alte_documente', priority: 88, keywords: [
+    'organigrama', 'proces verbal selectie', 'proces verbal de selectie',
+    'anunt angajare', 'anunt ziar', 'anunturi', 'ziarul', 'locuri de munca', 'ajofm',
+    'certificat constatator',
+  ] },
+
+  // Cosul de la coada: are rost doar sub tot restul, deci prioritate mica.
+  { cod: 'alte_doc_personale', priority: 40, keywords: [
+    'taxa', 'chitanta', 'ordin de plata',
+    'pilonul', 'pilon ii', 'casa de pensii', 'certificat fiscal',
+    'oferta angajare', 'oferta de angajare',
+    'expunere la riscuri', 'expunere riscuri',
+    'stabilire obiective', 'criterii de evaluare', 'obiective si criterii',
+    'aviz psihologic',
+  ] },
 ]
 
 // Fisiere care apar in dosarul fiecarui angajat dar NU sunt documente personale:

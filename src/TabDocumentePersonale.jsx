@@ -40,6 +40,7 @@ const CAT_META_DOCUMENTE = {
   fiscal:             { emoji: '🏦', label: 'Fiscal' },
   medical:            { emoji: '🩺', label: 'Medical' },
   contract_intern:    { emoji: '📄', label: 'Contract & Formulare' },
+  alte:               { emoji: '🗂', label: 'Alte documente' },
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

@@ -37,6 +37,7 @@ const CAT_META = {
   fiscal: { emoji: '🏦', label: 'Fiscal' },
   medical: { emoji: '🩺', label: 'Medical' },
   contract_intern: { emoji: '📄', label: 'Contract & Formulare' },
+  alte: { emoji: '🗂', label: 'Alte documente' },
 }
 
 // Regulile de recunoastere (tip document, angajat, data) stau in api/_hr_clasificare.js,
