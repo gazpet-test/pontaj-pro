@@ -113,10 +113,21 @@ export default async function handler(req, res) {
   // fisierului. De acum, un fisier al carui nume contine numele complet al ALTUI angajat se
   // importa normal, dar se strange intr-o lista de banuieli si HR-ul primeste o notificare.
   const faraDiac = (x) => String(x).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  // Doar angajatii ACTIVI intra in detectie: Dumitrescu exista de doua ori in baza (pensionare
+  // + CIM nou in aceeasi zi), iar numele randului vechi, inactiv, i-ar alarma propriile acte.
   const numeDetectie = employees
+    .filter((e) => e.active !== false)
     .map((e) => ({ id: e.id, nume: String(e.name || '').trim(), norm: faraDiac(String(e.name || '').trim()) }))
     .filter((e) => e.norm.split(/\s+/).length >= 2)
   const banuieli = []
+  // Un nume care sta in dosarele a 3+ oameni e al unui imputernicit, nu un fisier ratacit.
+  // Harta se umple din TOATA baza (mai jos) si abia apoi din lotul curent: prima rulare live
+  // a alarmat actele Nataliei (imputernicita IGI) fiindca in lotul acela aparea in doar 2 dosare.
+  const dosarePeNume = new Map()
+  const noteazaDosar = (nume, employeeId) => {
+    if (!dosarePeNume.has(nume)) dosarePeNume.set(nume, new Set())
+    dosarePeNume.get(nume).add(employeeId)
+  }
   const numeStrain = (numeFisier, employeeId) => {
     const n = faraDiac(numeFisier)
     return numeDetectie.find((x) => x.id !== employeeId && n.includes(x.norm)) || null
@@ -147,6 +158,8 @@ export default async function handler(req, res) {
   const dupaContinut = new Map()
   for (const r of dejaInPlatforma) {
     dupaContinut.set(cheieDoc(r.employee_id, r.fisier_nume, r.fisier_size_bytes), r)
+    const strainIstoric = numeStrain(r.fisier_nume, r.employee_id)
+    if (strainIstoric) noteazaDosar(strainIstoric.nume, r.employee_id)
   }
 
   // Dosarele de pe Drive, in ordine stabila (ca `de_la` sa insemne acelasi lucru la reluare)
@@ -195,7 +208,10 @@ export default async function handler(req, res) {
         { id: ins?.id ?? null, employee_id: employee.id, drive_file_id: idDrive })
 
       const strain = numeStrain(nume, employee.id)
-      if (strain) banuieli.push({ doc_id: ins?.id ?? null, dosar: dosar.name, fisier: nume, seamana_cu: strain.nume })
+      if (strain) {
+        banuieli.push({ doc_id: ins?.id ?? null, dosar: dosar.name, fisier: nume, seamana_cu: strain.nume })
+        noteazaDosar(strain.nume, employee.id)
+      }
 
       rand.adaugate++; adaugate++
     } catch (e) {
@@ -216,11 +232,14 @@ export default async function handler(req, res) {
 
     if (NU_E_ANGAJAT.test(dosar.name)) { nepotrivite.push({ dosar: dosar.name, motiv: 'nu e dosar de angajat' }); continue }
 
-    // Fostii angajati au si ei dosar pe Drive, iar documentele lor tot ale lor sunt.
+    // DOAR angajati activi. Dosarul lui Dumitrescu se lega de randul ei vechi, inactiv
+    // (pensionare + CIM nou in aceeasi zi), si 16 documente au curs pe angajatul mort.
+    // Fostii angajati stau oricum sub `!A - CIM - INCETATE`, care e sarit; un dosar orfan
+    // ajunge vizibil la `nepotrivite`, nu umple in tacere un rand inactiv.
     const aliasId = ALIASE[numeDinDosar(dosar.name).trim().toLowerCase()]
     const potrivire = aliasId
       ? { employee: employees.find((e) => e.id === aliasId), confidence: 100, marja: 100 }
-      : potrivesteAngajat(numeDinDosar(dosar.name), employees, { includeInactivi: true })
+      : potrivesteAngajat(numeDinDosar(dosar.name), employees)
     const { employee, confidence, marja, ambiguu } = potrivire
     if (ambiguu) {
       nepotrivite.push({ dosar: dosar.name, motiv: 'doi angajati la fel de probabili — nu ghicesc' })
@@ -323,15 +342,9 @@ export default async function handler(req, res) {
 
   const gata = i >= dosare.length
 
-  // Banuielile de fisiere ratacite. Un nume care apare in fisiere din 3+ dosare diferite e al
-  // unui imputernicit (actele Nataliei stau legitim in toate dosarele IGI), nu un fisier ratacit
-  // — la scanarea manuala, filtrul asta a taiat ~40 de fals-pozitive si a lasat 8 cazuri reale.
-  const dosarePeNume = new Map()
-  for (const b of banuieli) {
-    if (!dosarePeNume.has(b.seamana_cu)) dosarePeNume.set(b.seamana_cu, new Set())
-    dosarePeNume.get(b.seamana_cu).add(b.dosar)
-  }
-  const posibil_ratacite = banuieli.filter((b) => dosarePeNume.get(b.seamana_cu).size < 3)
+  // Banuielile de fisiere ratacite, filtrate prin istoricul intreg (harta umpluta mai sus):
+  // la scanarea manuala a serverului, filtrul a taiat ~40 de fals-pozitive si a lasat 7 reale.
+  const posibil_ratacite = banuieli.filter((b) => (dosarePeNume.get(b.seamana_cu)?.size ?? 0) < 3)
 
   if (!doarProba && posibil_ratacite.length) {
     const ids = posibil_ratacite.map((b) => b.doc_id).filter(Boolean)
