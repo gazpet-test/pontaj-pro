@@ -32,7 +32,9 @@ export const TYPE_PATTERNS = [
 
   // Juridic
   { cod: 'cazier_judiciar', keywords: ['cazier'], priority: 95 },
-  { cod: 'decl_propria_raspundere', keywords: ['declaratie proprie', 'declaratie propria', 'lipsa interdictii', 'decl_propria'], priority: 90 },
+  // „declaratie lipsa interdictii" a fost comasata in dosarul de acorduri (tipul propriu e
+  // dezactivat in baza). Regula ramasese sa arate spre codul vechi, deci nu prindea nimic.
+  { cod: 'dosar_acorduri_formulare', keywords: ['declaratie proprie', 'declaratie propria', 'lipsa interdictii', 'decl_propria'], priority: 90 },
 
   // Angajator anterior
   { cod: 'dec_incetare_anterior', keywords: ['decizie incetare', 'dec incetare', 'decizie de incetare'], priority: 100 },
@@ -45,13 +47,33 @@ export const TYPE_PATTERNS = [
   { cod: 'decl_persoane_intretinere', keywords: ['persoane intretinere', 'deducere taxe'], priority: 90 },
 
   // Medical
-  { cod: 'adeverinta_medic_familie', keywords: ['adeverinta medic familie', 'adev medic familie', 'medic familie', 'apt de munca', 'apt munca'], priority: 95 },
+  // Deschise si verificate toate, 31.08.2026: „ADEVERINTA MEDICALA" si „ADEVERINTA MEDIC" sunt
+  // acelasi lucru — formularul de la medicul de familie, eliberat pentru angajare sau pentru
+  // dosarul IGI. Ramane sub 'fisa_aptitudini' (96), ca fisa de medicina muncii sa castige.
+  { cod: 'adeverinta_medic_familie', priority: 95, keywords: [
+    'adeverinta medic familie', 'adev medic familie', 'medic familie', 'medic fam',
+    'adeverinta medic', 'adeverinta medicala', 'adev medicala',
+    'apt de munca', 'apt munca',
+  ] },
 
   // Contract & Formulare interne
   { cod: 'contract_munca', keywords: ['contract individual', 'contract munca', 'contract de munca', ' cim ', '_cim_', '-cim-'], priority: 95 },
   { cod: 'fisa_post', keywords: ['fisa post', 'fisa postului', 'fisa de post', 'fişa post'], priority: 95 },
-  { cod: 'acord_gdpr', keywords: ['gdpr', 'consimtamant', 'acord prelucrare'], priority: 95 },
-  { cod: 'dosar_acorduri_formulare', keywords: ['dosar angajare', 'dosar acorduri', 'formulare angajare', 'minuta informare'], priority: 95 },
+  // Formularele de angajare stau toate sub un singur tip — asa au vrut cei de la HR, ca sa nu aiba
+  // zece randuri pentru un teanc care se semneaza odata. Codurile 'acord_gdpr' si
+  // 'decl_propria_raspundere' sunt dezactivate in baza tocmai fiindca au fost comasate aici.
+  //
+  // Cuvintele-cheie sunt scrise ca in numele reale de pe Drive: „2_MINUTA DE INFORMARE PREALABILA
+  // CONFORM ART.17 CM - NUME.docx", „6_ACORD GDPR - NUME.docx". Potrivirea e pe subsir exact, deci
+  // „minuta informare" NU prinde „minuta de informare" — asta a lasat 112 documente neincadrate.
+  { cod: 'dosar_acorduri_formulare', priority: 95, keywords: [
+    'gdpr', 'consimtamant', 'acord prelucrare',
+    'dosar angajare', 'dosar acorduri', 'formulare angajare',
+    'minuta informare', 'minuta de informare', 'informare prealabila',
+    'cerere angajare', 'cerere de angajare',
+    'monitorizare video', 'monitorizare gps', 'monitorizare prin gps', 'acord monitorizare',
+    'luare la cunostinta', 'regulament intern',
+  ] },
 
   // Tipare adaugate pentru dosarele de pe Drive (nume scrise de mana de-a lungul anilor)
   { cod: 'fisa_aptitudini', keywords: ['fisa aptitudini', 'fisa de aptitudini', 'aptitudini', 'medicina muncii'], priority: 96 },
@@ -63,6 +85,30 @@ export const TYPE_PATTERNS = [
   { cod: 'adev_venituri_6luni', keywords: ['adeverinta venituri', 'adev venituri'], priority: 94 },
   { cod: 'adev_concedii_medicale', keywords: ['concedii medicale', 'adeverinta concedii'], priority: 94 },
   { cod: 'acord_confidentialitate', keywords: ['confidentialitate'], priority: 90 },
+
+  // Rubrici proprii cerute de Razvan (30.08.2026), ca sa fie usor de gasit fara sa rascolesti dosarul.
+  // Prioritate peste 'contract_munca', altfel „ACT ADITIONAL LA CONTRACTUL INDIVIDUAL DE MUNCA" ar
+  // ajunge la contract, iar „CONTRACT COMODAT" la fel.
+  { cod: 'act_aditional_cim', keywords: ['act aditional', 'acte aditionale', 'acti aditional'], priority: 98 },
+  { cod: 'contract_comodat', keywords: ['comodat'], priority: 98 },
+
+  // Documente ale firmei, nu ale omului: au ajuns in dosarele personale fiindca acolo au fost
+  // salvate pe server. Se aduna deoparte, ca sa poata fi mutate cand se decide unde le e locul.
+  { cod: 'alte_documente', priority: 88, keywords: [
+    'organigrama', 'proces verbal selectie', 'proces verbal de selectie',
+    'anunt angajare', 'anunt ziar', 'anunturi', 'ziarul', 'locuri de munca', 'ajofm',
+    'certificat constatator',
+  ] },
+
+  // Cosul de la coada: are rost doar sub tot restul, deci prioritate mica.
+  { cod: 'alte_doc_personale', priority: 40, keywords: [
+    'taxa', 'chitanta', 'ordin de plata',
+    'pilonul', 'pilon ii', 'casa de pensii', 'certificat fiscal',
+    'oferta angajare', 'oferta de angajare',
+    'expunere la riscuri', 'expunere riscuri',
+    'stabilire obiective', 'criterii de evaluare', 'obiective si criterii',
+    'aviz psihologic',
+  ] },
 ]
 
 // Fisiere care apar in dosarul fiecarui angajat dar NU sunt documente personale:
