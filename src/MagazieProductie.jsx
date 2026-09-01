@@ -250,9 +250,23 @@ function ProdusModal({ item, onClose, onSaved, onError }) {
           <div><label style={S.label}>Partener agrement</label><input value={f.partener} onChange={e => setF({ ...f, partener:e.target.value })} style={S.input} /></div>
           <div><label style={S.label}>Cota partener %</label><input type="number" value={f.partener_cota_pct} onChange={e => setF({ ...f, partener_cota_pct:e.target.value })} style={S.input} /></div>
         </div>
-        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18 }}>
-          <button onClick={onClose} style={S.btnS}>Anulează</button>
-          <button onClick={save} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează'}</button>
+        <div style={{ display:'flex', justifyContent:'space-between', gap:10, marginTop:18 }}>
+          <div>
+            {!isNew && (
+              <button disabled={busy} style={{ ...S.btnS, color:G.red }} onClick={async () => {
+                if (!window.confirm(`Ștergi produsul „${f.denumire}"? Merge doar dacă nu are loturi sau mișcări de stoc.`)) return
+                setBusy(true)
+                const { error } = await supabase.from('productie_produse').delete().eq('id', item.produs_id)
+                setBusy(false)
+                if (error) return onError(error.message.includes('foreign key') || error.message.includes('violates') ? 'Nu se poate șterge: produsul are loturi sau mișcări de stoc. Șterge-le întâi sau dezactivează produsul.' : 'Eroare: ' + error.message)
+                onSaved()
+              }}>🗑 Șterge</button>
+            )}
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={onClose} style={S.btnS}>Anulează</button>
+            <button onClick={save} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează'}</button>
+          </div>
         </div>
       </div>
     </div>
@@ -443,7 +457,19 @@ function LotModal({ ctx, materiale = [], onClose, onSaved, onError }) {
         )}
 
         <div style={{ display:'flex', justifyContent:'space-between', gap:10 }}>
-          <div>{lot && !finalizat && <button onClick={finalizeaza} disabled={busy} style={{ ...S.btnP, background:G.blue, color:'#06182B' }}>✅ Finalizează lotul (intră în stoc)</button>}</div>
+          <div style={{ display:'flex', gap:10 }}>
+            {lot && !finalizat && <button onClick={finalizeaza} disabled={busy} style={{ ...S.btnP, background:G.blue, color:'#06182B' }}>✅ Finalizează lotul (intră în stoc)</button>}
+            {lot && !finalizat && (
+              <button disabled={busy} style={{ ...S.btnS, color:G.red }} onClick={async () => {
+                if (!window.confirm(`Ștergi lotul ${f.cod_lot || '#' + lot.id}? Componentele lui se șterg și ele; consumurile din stocul de materii prime NU se returnează automat.`)) return
+                setBusy(true)
+                const { error } = await supabase.from('productie_loturi').delete().eq('id', lot.id)
+                setBusy(false)
+                if (error) return onError('Eroare: ' + error.message)
+                onSaved('✓ Lot șters')
+              }}>🗑 Șterge lotul</button>
+            )}
+          </div>
           <div style={{ display:'flex', gap:10 }}>
             <button onClick={onClose} style={S.btnS}>Închide</button>
             {!finalizat && <button onClick={salveazaLot} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : (lot ? 'Salvează lot' : 'Creează lot')}</button>}
