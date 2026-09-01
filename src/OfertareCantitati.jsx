@@ -115,32 +115,55 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
     if (!deTrimis.length) { showToast('Nicio întrebare cu status „de trimis".', 'warn'); return }
     setBusy('PDF...')
     try {
-      const { default: jsPDF } = await import('jspdf')
+      // HTML pe antet → html2canvas → A4 (fontul standard jsPDF nu are diacritice)
+      const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const azi = new Date().toLocaleDateString('ro-RO')
+      const html = `
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#111;padding:48px 56px;font-size:13.5px;line-height:1.55">
+          <table style="width:100%;border-collapse:collapse"><tr>
+            <td style="vertical-align:bottom">
+              <div style="font-size:21px;font-weight:800;letter-spacing:.4px">GAZPET INSTAL S.R.L.</div>
+              <div style="font-size:10.5px;color:#444;margin-top:3px">Str. Fluturilor nr. 34, Ploiești, Prahova &nbsp;·&nbsp; CUI RO 22029920 &nbsp;·&nbsp; J29/1650/2007<br/>office@gazpet.ro &nbsp;·&nbsp; tel/fax 0244/435005</div>
+            </td>
+            <td style="vertical-align:bottom;text-align:right;font-size:11px;color:#444">Ploiești, ${azi}</td>
+          </tr></table>
+          <div style="border-bottom:2.5px solid #111;margin:10px 0 26px"></div>
+          <div style="margin-bottom:4px"><b>Către:</b> ${esc(lic?.autoritate || '—')}</div>
+          <div style="font-size:11.5px;color:#444;margin-bottom:26px">În atenția comisiei de evaluare</div>
+          <div style="text-align:center;font-size:16px;font-weight:800;letter-spacing:.5px;margin-bottom:6px">SOLICITARE DE CLARIFICĂRI</div>
+          <div style="text-align:center;font-size:12px;color:#333;margin-bottom:24px">Referitor: anunțul de participare <b>${esc(lic?.nr_anunt || '')}</b> — „${esc(lic?.obiect || '')}"</div>
+          <p style="text-align:justify;margin:0 0 14px">Stimate doamne / Stimați domni,</p>
+          <p style="text-align:justify;margin:0 0 18px">În conformitate cu prevederile art. 160 din Legea nr. 98/2016 privind achizițiile publice, vă adresăm următoarele solicitări de clarificare cu privire la documentația de atribuire:</p>
+          ${deTrimis.map(q => `
+            <table style="width:100%;border-collapse:collapse;margin-bottom:14px"><tr>
+              <td style="vertical-align:top;width:34px;font-weight:800;font-size:13.5px;padding-top:1px">${q.nr}.</td>
+              <td style="text-align:justify">${esc(q.intrebare.trim())}</td>
+            </tr></table>`).join('')}
+          <p style="text-align:justify;margin:20px 0 0">Vă mulțumim și așteptăm răspunsul dumneavoastră în termenul legal, prin intermediul SEAP.</p>
+          <table style="width:100%;border-collapse:collapse;margin-top:44px"><tr>
+            <td style="width:55%"></td>
+            <td style="text-align:center">
+              <div style="font-weight:800">GAZPET INSTAL S.R.L.</div>
+              <div style="font-size:12px;margin-top:2px">Administrator</div>
+              <div style="font-size:12px;font-weight:700;margin-top:2px">Trușu Răzvan</div>
+            </td>
+          </tr></table>
+        </div>`
+      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([import('jspdf'), import('html2canvas')])
+      const div = document.createElement('div')
+      div.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#fff'
+      div.innerHTML = html
+      document.body.appendChild(div)
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const canvas = await html2canvas(div, { scale: 2, backgroundColor: '#fff' })
+      document.body.removeChild(div)
       const pdf = new jsPDF({ unit: 'mm', format: 'a4' })
-      const W = pdf.internal.pageSize.getWidth()
-      pdf.setFontSize(12); pdf.setFont(undefined, 'bold'); pdf.text('GAZPET INSTAL S.R.L.', 14, 16)
-      pdf.setFontSize(8); pdf.setFont(undefined, 'normal')
-      pdf.text('Str. Fluturilor nr. 34, Ploiesti, Prahova · RO 22029920 · J29/1650/2007 · office@gazpet.ro · 0244/435005', 14, 21)
-      pdf.line(14, 25, W - 14, 25)
-      pdf.setFontSize(10)
-      pdf.text(`Catre: ${lic?.autoritate || '—'}`, 14, 33)
-      pdf.setFontSize(11); pdf.setFont(undefined, 'bold')
-      pdf.text('SOLICITARE DE CLARIFICARI', W / 2, 43, { align: 'center' })
-      pdf.setFontSize(9.5); pdf.setFont(undefined, 'normal')
-      const ref = pdf.splitTextToSize(`Referitor: anuntul de participare ${lic?.nr_anunt || ''} — „${lic?.obiect || ''}"`, W - 28)
-      pdf.text(ref, 14, 51)
-      let y = 51 + ref.length * 4.5 + 4
-      pdf.text('In conformitate cu prevederile art. 160 din Legea 98/2016, va adresam urmatoarele solicitari de clarificare:', 14, y)
-      y += 8
-      deTrimis.forEach(q => {
-        const txt = pdf.splitTextToSize(`${q.nr}. ${q.intrebare.trim()}`, W - 28)
-        if (y + txt.length * 4.3 > 275) { pdf.addPage(); y = 20 }
-        pdf.text(txt, 14, y)
-        y += txt.length * 4.3 + 4
-      })
-      if (y > 255) { pdf.addPage(); y = 20 }
-      pdf.text('Va multumim si asteptam raspunsul dumneavoastra in termenul legal.', 14, y + 4)
-      pdf.text('GAZPET INSTAL S.R.L.', 14, y + 14)
+      const imgH = canvas.height * 210 / canvas.width
+      const pagini = Math.max(1, Math.ceil(imgH / 297))
+      for (let i = 0; i < pagini; i++) {
+        if (i > 0) pdf.addPage()
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -i * 297, 210, imgH)
+      }
       pdf.save(`clarificari_${lic?.nr_anunt || licId}.pdf`)
       showToast(`Adresa cu ${deTrimis.length} întrebări generată — de depus în SEAP, apoi marchează-le „trimisă".`)
     } catch (e) { showToast('Eroare PDF: ' + (e?.message || e), 'err') }
