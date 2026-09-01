@@ -1652,6 +1652,7 @@ function ReferinteFinanciare({ showToast }) {
   const [loading, setLoading] = useState(true)
   const [cauta, setCauta] = useState('')
   const [particip, setParticip] = useState([])
+  const [fEnt, setFEnt] = useState('')  // filtru entitate în tab Participări
   const [tab, setTab] = useState('calibrari')  // calibrari | participari | preturi | materiale | normative | parteneri | documente
 
   const loadAll = async () => {
@@ -1762,30 +1763,7 @@ function ReferinteFinanciare({ showToast }) {
         </div>
       )}
 
-      {!loading && tab === 'participari' && (
-        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-          {(() => {
-            const gi = particip.filter(p => p.entitate === 'gazpet_instal')
-            const sumGi = gi.reduce((s, p) => s + Number(p.valoare_ron || 0), 0)
-            return (
-              <div style={{ ...S.card, padding:'12px 18px', display:'flex', gap:16, flexWrap:'wrap', alignItems:'center', fontSize:13 }}>
-                <span style={{ fontWeight:800, fontSize:14 }}>🏆 Atribuiri SEAP unde Gazpet-Instal apare câștigător</span>
-                <span><b style={{ color:G.green }}>{gi.length}</b> contracte · <b style={{ color:G.yellow }}>{fmtVal(sumGi)} lei</b></span>
-                <span style={{ color:G.dim, fontSize:12 }}>direct din API SEAP (winnerId 114759) · refresh automat lunea · valorile pe asocieri sunt totalul contractului, nu doar cota Gazpet</span>
-              </div>
-            )
-          })()}
-          {particip.map(p => (
-            <div key={p.id} style={{ ...S.card, padding:'11px 16px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', fontSize:13, opacity: p.entitate === 'gazpet_instal' ? 1 : .65 }}>
-              <span style={{ fontSize:10.5, fontWeight:800, color: p.entitate === 'gazpet_instal' ? G.ofertare : G.muted, border:`1px solid ${G.border2}`, borderRadius:10, padding:'1px 8px' }}>{p.entitate === 'gazpet_instal' ? 'GAZPET-INSTAL' : 'GAZPET INVEST (grup)'}</span>
-              <a href={p.link || '#'} target="_blank" rel="noreferrer" style={{ fontWeight:700, color:G.blue, textDecoration:'none', flex:1, minWidth:260 }}>{p.titlu}</a>
-              <span style={{ color:G.muted, fontSize:12 }}>{(p.autoritate || '').replace(/^[A-Z0-9]+ - /, '').slice(0, 42)}</span>
-              <span style={{ color:G.dim, fontSize:11.5 }}>{p.nr_seap}</span>
-              <span style={{ color:G.yellow, fontWeight:700, minWidth:110, textAlign:'right' }}>{p.valoare_ron != null ? fmtVal(p.valoare_ron) + ' lei' : '—'}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {!loading && tab === 'participari' && <ParticipariSeap particip={particip} fEnt={fEnt} setFEnt={setFEnt} />}
 
       {!loading && tab === 'normative' && <NormativeLista norme={norme} showToast={showToast} onChange={loadAll} />}
 
@@ -2036,6 +2014,61 @@ function NormativeLista({ norme, showToast, onChange }) {
         })}
         {!norme.length && <div style={{ ...S.card, padding:26, textAlign:'center', color:G.dim, fontSize:13 }}>Niciun normativ încă — adaugă ordinele ANRE și comunicările de sudură cu „＋ Normativ".</div>}
       </div>
+    </div>
+  )
+}
+
+// ── 🛰️ Participări SEAP — Gazpet + competitori (atribuiri din API, winnerId) ──
+function ParticipariSeap({ particip, fEnt, setFEnt }) {
+  const ETICHETE = {
+    gazpet_instal: ['GAZPET-INSTAL', '#3FB950'], gazpet_invest: ['GAZPET INVEST (grup)', '#58A6FF'],
+    'competitor:inspet': ['INSPET', '#F85149'], 'competitor:moldocor': ['MOLDOCOR', '#F0883E'],
+    'competitor:cis_gaz': ['CIS GAZ', '#BC8CFF'], 'competitor:habau': ['HABAU', '#D29922'],
+    'competitor:instgaz': ['INSTGAZ', '#2FB6C9'], 'competitor:miral_instal': ['MIRAL INSTAL', '#FF7B72'],
+    'competitor:armax_gaz': ['ARMAX GAZ', '#8B949E'], 'competitor:condmag': ['CONDMAG', '#8B949E'],
+    'competitor:timgaz': ['TIMGAZ', '#8B949E'], 'competitor:amarad': ['AMARAD', '#8B949E'],
+  }
+  const eticheta = (e) => ETICHETE[e] || [e.replace('competitor:', '').toUpperCase(), G.muted]
+  const sumar = {}
+  for (const p of particip) {
+    sumar[p.entitate] = sumar[p.entitate] || { n:0, val:0 }
+    sumar[p.entitate].n++; sumar[p.entitate].val += Number(p.valoare_ron || 0)
+  }
+  const ordonate = Object.entries(sumar).sort((a, b) => (a[0] === 'gazpet_instal' ? -1 : b[0] === 'gazpet_instal' ? 1 : b[1].val - a[1].val))
+  const lista = particip.filter(p => !fEnt || p.entitate === fEnt)
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+      <div style={{ fontSize:12, color:G.muted }}>
+        Atribuiri SEAP unde entitatea apare câștigător (direct din API, refresh automat lunea). La asocieri, valoarea e a întregului contract. Click pe o firmă filtrează lista.
+      </div>
+      {/* Sumar pe entitate — analiza pe competitor */}
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        {ordonate.map(([ent, s]) => {
+          const [lbl, col] = eticheta(ent)
+          const activ = fEnt === ent
+          return (
+            <div key={ent} onClick={() => setFEnt(activ ? '' : ent)} style={{ ...S.card, padding:'8px 14px', cursor:'pointer', borderLeft:`3px solid ${col}`, ...(activ ? { background:col + '18', border:`1px solid ${col}88` } : {}) }}>
+              <div style={{ fontSize:11, fontWeight:800, color:col }}>{lbl}</div>
+              <div style={{ fontSize:14, fontWeight:800 }}>{s.n} <span style={{ fontSize:11.5, color:G.muted, fontWeight:600 }}>ctr. · {fmtVal(Math.round(s.val / 1e6))} mil lei</span></div>
+            </div>
+          )
+        })}
+        {fEnt && <button onClick={() => setFEnt('')} style={{ ...S.btnS, padding:'4px 12px', fontSize:12, alignSelf:'center' }}>✕ tot</button>}
+      </div>
+      {/* Lista atribuirilor */}
+      {lista.map(p => {
+        const [lbl, col] = eticheta(p.entitate)
+        return (
+          <div key={p.id} style={{ ...S.card, padding:'10px 16px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', fontSize:13, borderLeft:`3px solid ${col}` }}>
+            <span style={{ fontSize:10.5, fontWeight:800, color:col, border:`1px solid ${col}55`, borderRadius:10, padding:'1px 8px', minWidth:88, textAlign:'center' }}>{lbl}</span>
+            <a href={p.link || '#'} target="_blank" rel="noreferrer" style={{ fontWeight:700, color:G.blue, textDecoration:'none', flex:1, minWidth:260 }}>{p.titlu}</a>
+            <span style={{ color:G.muted, fontSize:12 }}>{(p.autoritate || '').replace(/^[A-Z0-9]+ - /, '').slice(0, 40)}</span>
+            <span style={{ color:G.dim, fontSize:11.5 }}>{p.nr_seap}</span>
+            <span style={{ color:G.yellow, fontWeight:700, minWidth:105, textAlign:'right' }}>{p.valoare_ron != null ? fmtVal(p.valoare_ron) + ' lei' : '—'}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }
