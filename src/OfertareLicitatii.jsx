@@ -2029,7 +2029,11 @@ function ParticipariSeap({ particip, fEnt, setFEnt }) {
     'competitor:timgaz': ['TIMGAZ', '#8B949E'], 'competitor:amarad': ['AMARAD', '#8B949E'],
     'competitor:comesad': ['COMESAD', '#E3B341'], 'competitor:petroconst': ['PETROCONST', '#79C0FF'],
     'competitor:totalgaz': ['TOTALGAZ', '#56D364'], 'competitor:irigc': ['IRIGC', '#FFA657'],
-    'competitor:general_invest': ['GENERAL INVEST', '#D2A8FF'],
+    'competitor:ruxo': ['RUXO', '#D2A8FF'], 'competitor:cfi': ['CFI (Foraje)', '#7EE787'],
+    'competitor:erdesign': ['EDGE ROUND DESIGN', '#A5D6FF'], 'competitor:prodrep_star': ['PRODREP STAR', '#FFAB70'],
+    'competitor:talpac': ['TALPAC', '#8B949E'], 'competitor:invest_general_construct': ['INVEST GENERAL', '#F778BA'],
+    'competitor:menada': ['MENADA', '#8B949E'], 'competitor:utilitar_fluid': ['UTILITAR FLUID', '#79C0FF'],
+    'competitor:rominsta': ['ROMINSTA', '#E3B341'], 'competitor:rapid_complex': ['RAPID COMPLEX', '#56D364'],
   }
   const eticheta = (e) => ETICHETE[e] || [e.replace('competitor:', '').toUpperCase(), G.muted]
   const sumar = {}
