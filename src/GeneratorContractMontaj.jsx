@@ -28,6 +28,19 @@ const BENEFICIARI_FINALI = {
   conpet:   'Conpet S.A.',
 }
 
+// Tipuri de contract (decizie 01.09.2026, opțiunea A):
+// montaj conducte → model Petroconst rev.01GI; restul → template-uri V2 FERM din contracte_templates
+const TIPURI = {
+  montaj_transport_gaze: { label:'Montaj țeavă — Transport Gaze',   motor:'petroconst' },
+  montaj_distributie:    { label:'Montaj țeavă — Distribuție Gaze', motor:'petroconst' },
+  montaj_titei:          { label:'Montaj țeavă — Transport Țiței',  motor:'petroconst' },
+  probe_presiune:        { label:'Probe presiune',                  motor:'template', slug:'probe_presiune' },
+  constructii_civile:    { label:'Construcții civile',              motor:'template', slug:'v2_lucrari_subcontractare' },
+  terasamente:           { label:'Terasamente',                     motor:'template', slug:'v2_lucrari_subcontractare' },
+  chirie_utilaje:        { label:'Chirie utilaje',                  motor:'template', slug:'v2_prestari_servicii' },
+  chirie_personal:       { label:'Chirie personal',                 motor:'template', slug:'v2_prestari_servicii' },
+}
+
 const GAZPET_ANTET = `GAZPET INSTAL SRL cu sediul social in Ploiesti, str. Fluturilor, nr. 34, judetul Prahova, tel/fax 0244435005, e-mail: office@gazpet.ro, inmatriculata sub nr. J29/1650/2007, cod fiscal RO 22029920, reprezentata prin Administrator Trusu Razvan, avand contul nr. RO04 BRDE 300S V361 0123 3000 deschis la BRD Ploiesti, in calitate de Beneficiar`
 
 const fmtLei = v => Number(v || 0).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -175,6 +188,166 @@ async function renderContractPdf(html) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ANEXE OBLIGATORII (regulă 01.09.2026): Convenție SSM + PV recepție
+// la TOATE contractele; PV predare amplasament la toate MAI PUȚIN
+// chirie utilaje. Se generează PDF-uri separate din contracte_templates,
+// urcate lângă contract și descărcate local.
+// ═══════════════════════════════════════════════════════════════
+function anexeSlugs(tipKey) {
+  const slugs = ['conventie_ssm', 'confirmare_receptie']
+  if (tipKey !== 'chirie_utilaje') slugs.splice(1, 0, 'pv_predare_amplasament')
+  return slugs
+}
+
+async function genereazaAnexe({ tipKey, prestator, obiectiv, dataRo, safeNr }) {
+  const slugs = anexeSlugs(tipKey)
+  const { data: tpls } = await supabase.from('contracte_templates').select('slug, denumire, corp_text').in('slug', slugs)
+  const paths = []
+  for (const slug of slugs) {
+    const tpl = (tpls || []).find(t => t.slug === slug)
+    if (!tpl) continue
+    let t = tpl.corp_text
+    const fill = { 'DENUMIRE': prestator, 'DENUMIRE EXECUTANT': prestator, 'AMPLASAMENT': obiectiv, 'DENUMIRE PROIECT': obiectiv, 'DATA': dataRo }
+    for (const [k, v] of Object.entries(fill)) { if (v) t = t.split(`[${k}]`).join(v) }
+    const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#111;padding:34px 40px;width:794px;box-sizing:border-box;background:#fff;font-size:11.5px;line-height:1.5;white-space:pre-wrap;text-align:justify;">${esc(t)}</div>`
+    const blob = await renderContractPdf(html)
+    const path = `generat/anexe/${Date.now()}_${slug}_${safeNr}.pdf`
+    const { error } = await supabase.storage.from('contracte-terti').upload(path, blob, { contentType: 'application/pdf', upsert: false })
+    if (!error) {
+      paths.push(path)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `${tpl.denumire} - ${safeNr}.pdf`; a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+  return paths
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MOTOR TEMPLATE (V2 FERM etc.) — formular dinamic din placeholderele
+// [CAMP] ale template-ului din contracte_templates + corp editabil
+// (negociere) înainte de generarea PDF-ului.
+// ═══════════════════════════════════════════════════════════════
+function TemplateForm({ tip, slug, contractMama, showToast, onClose, onSaved }) {
+  const m = contractMama
+  const [tpl, setTpl] = useState(null)
+  const [campuri, setCampuri] = useState({})
+  const [meta, setMeta] = useState({ numar:'', data_contract:new Date().toISOString().slice(0,10), prestator:'', valoare_lei:'' })
+  const [corp, setCorp] = useState(null)   // null = încă în pasul de câmpuri; string = corp editabil
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    supabase.from('contracte_templates').select('*').eq('slug', slug).single().then(({ data, error }) => {
+      if (error || !data) { showToast?.('Template negăsit: ' + slug, 'err'); onClose?.(); return }
+      setTpl(data)
+      const init = {}
+      for (const c of (data.campuri || [])) init[c] = ''
+      // precompletări din contractul-mamă
+      if (m) {
+        if ('AMPLASAMENT' in init) init['AMPLASAMENT'] = m.denumire || ''
+        if ('DENUMIRE PROIECT' in init) init['DENUMIRE PROIECT'] = m.denumire || ''
+        if ('TERMEN PLATA' in init && m.termen_plata_zile) init['TERMEN PLATA'] = `${m.termen_plata_zile} zile`
+      }
+      setCampuri(init)
+    })
+  }, [slug])
+
+  const completeaza = () => {
+    let t = tpl.corp_text
+    for (const [k, v] of Object.entries(campuri)) {
+      if (v) t = t.split(`[${k}]`).join(v)
+    }
+    setCorp(t)
+  }
+
+  const genereaza = async () => {
+    if (!meta.prestator.trim()) { showToast?.('Completează prestatorul', 'err'); return }
+    setBusy(true)
+    try {
+      const html = `<div style="font-family:Arial,Helvetica,sans-serif;color:#111;padding:34px 40px;width:794px;box-sizing:border-box;background:#fff;font-size:11.5px;line-height:1.5;white-space:pre-wrap;text-align:justify;">${esc(corp)}</div>`
+      const blob = await renderContractPdf(html)
+      const safeNr = (meta.numar || 'fara-nr').replace(/[^\w.-]+/g, '_')
+      const path = `generat/${Date.now()}_${tip}_${safeNr}.pdf`
+      const { error: upErr } = await supabase.storage.from('contracte-terti')
+        .upload(path, blob, { contentType: 'application/pdf', upsert: false })
+      if (upErr) throw upErr
+      const { error: insErr } = await supabase.from('contracte_terti').insert({
+        numar_contract: meta.numar || null,
+        denumire: `${TIPURI[tip].label} — ${campuri['AMPLASAMENT'] || campuri['DENUMIRE PROIECT'] || m?.denumire || meta.prestator}`.slice(0, 200),
+        partener_text: meta.prestator,
+        categorie: 'prestari_servicii', sens: 'plata', status: 'draft',
+        tip_contract: tip,
+        valoare_lei: Number(String(meta.valoare_lei).replace(',', '.')) || null,
+        data_semnare: meta.data_contract || null,
+        contract_parinte_id: m?.id || null,
+        site_id: m?.site_id || null,
+        pdf_path: path,
+        observatii: `Generat din platformă (template ${tpl.denumire})` + (m ? ` din contractul-mamă „${m.numar_contract || m.denumire}"` : ''),
+      })
+      if (insErr) throw insErr
+      const anexePaths = await genereazaAnexe({
+        tipKey: tip, prestator: meta.prestator,
+        obiectiv: campuri['AMPLASAMENT'] || campuri['DENUMIRE PROIECT'] || m?.denumire || '',
+        dataRo: meta.data_contract ? new Date(meta.data_contract).toLocaleDateString('ro-RO') : '', safeNr,
+      })
+      if (anexePaths.length) await supabase.from('contracte_terti')
+        .update({ observatii: `Generat din platformă (template ${tpl.denumire}). Anexe generate: ${anexePaths.join(' · ')}` })
+        .eq('pdf_path', path)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `Contract ${TIPURI[tip].label} ${safeNr} - ${meta.prestator}.pdf`; a.click()
+      URL.revokeObjectURL(url)
+      showToast?.('✓ Contract generat, salvat ca DRAFT și descărcat')
+      onSaved?.(); onClose?.()
+    } catch (e) { showToast?.('Eroare: ' + e.message, 'err') } finally { setBusy(false) }
+  }
+
+  if (!tpl) return <div style={{ padding:20, color:G.muted, fontSize:13 }}>⏳ Se încarcă template-ul...</div>
+
+  if (corp !== null) return (
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+      <div style={{ fontSize:11, color:G.yellow }}>
+        ✍️ Corpul contractului e editabil — modifică direct clauzele negociate, apoi generează PDF-ul.
+      </div>
+      <textarea style={{ ...S.input, minHeight:420, resize:'vertical', fontFamily:'monospace', fontSize:12, lineHeight:1.5 }}
+        value={corp} onChange={e => setCorp(e.target.value)} />
+      <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+        <button style={S.btnS} onClick={() => setCorp(null)} disabled={busy}>← Înapoi la câmpuri</button>
+        <button style={S.btnP} onClick={genereaza} disabled={busy}>{busy ? '⏳ Generez...' : '📄 Generează PDF + salvează draft'}</button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+      <div style={{ fontSize:11, color:G.muted }}>Template: <b style={{ color:G.text }}>{tpl.denumire}</b> — completează câmpurile, apoi editezi corpul contractului.</div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+        <div><label style={S.lbl}>Nr. contract</label><input style={S.input} value={meta.numar} onChange={e => setMeta({ ...meta, numar: e.target.value })} /></div>
+        <div><label style={S.lbl}>Data</label><input type="date" style={S.input} value={meta.data_contract} onChange={e => setMeta({ ...meta, data_contract: e.target.value })} /></div>
+        <div><label style={S.lbl}>Prestator *</label><input style={S.input} value={meta.prestator} onChange={e => setMeta({ ...meta, prestator: e.target.value })} /></div>
+        <div><label style={S.lbl}>Valoare (lei, fără TVA)</label><input style={S.input} value={meta.valoare_lei} onChange={e => setMeta({ ...meta, valoare_lei: e.target.value })} /></div>
+      </div>
+      {(tpl.campuri || []).length > 0 && (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          {(tpl.campuri || []).map(c => (
+            <div key={c}>
+              <label style={S.lbl}>{c.toLowerCase()}</label>
+              <input style={S.input} value={campuri[c] || ''} onChange={e => setCampuri(prev => ({ ...prev, [c]: e.target.value }))} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize:10.5, color:G.dim }}>Câmpurile goale rămân ca [PLACEHOLDER] în corp — le poți completa și direct în pasul de editare.</div>
+      <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+        <button style={S.btnS} onClick={onClose}>Renunță</button>
+        <button style={S.btnP} onClick={completeaza}>Continuă → editare corp contract</button>
+      </div>
+    </div>
+  )
+}
+
 // ghicește beneficiarul final din numele beneficiarului contractului-mamă
 const ghicesteBF = (nume = '') => {
   const n = nume.toLowerCase()
@@ -186,6 +359,7 @@ const ghicesteBF = (nume = '') => {
 export default function GeneratorContractMontaj({ onClose, onSaved, showToast, contractMama = null, beneficiarMamaNume = '' }) {
   const [parteneri, setParteneri] = useState([])
   const [busy, setBusy] = useState(false)
+  const [tip, setTip] = useState('montaj_transport_gaze')
   const m = contractMama
   // durata sugerată din contractul-mamă: termen_executie_zile sau data_termen − azi
   const durataDinMama = m ? (
@@ -232,9 +406,10 @@ export default function GeneratorContractMontaj({ onClose, onSaved, showToast, c
       if (upErr) throw upErr
       const { error: insErr } = await supabase.from('contracte_terti').insert({
         numar_contract: f.numar || null,
-        denumire: `Montaj conducte — ${f.obiectiv}`.slice(0, 200),
+        denumire: `${TIPURI[tip]?.label || 'Montaj conducte'} — ${f.obiectiv}`.slice(0, 200),
         partener_text: f.prestator_nume,
         categorie: 'prestari_servicii', sens: 'plata', status: 'draft',
+        tip_contract: tip,
         valoare_lei: Number(String(f.valoare_lei).replace(',', '.')) || null,
         data_semnare: f.data_contract || null,
         termen_plata_zile: Number(f.termen_plata_zile) || null,
@@ -252,7 +427,11 @@ export default function GeneratorContractMontaj({ onClose, onSaved, showToast, c
       const a = document.createElement('a')
       a.href = url; a.download = `Contract montaj ${safeNr} - ${f.prestator_nume}.pdf`; a.click()
       URL.revokeObjectURL(url)
-      showToast?.('✓ Contract generat, salvat ca DRAFT în listă și descărcat')
+      await genereazaAnexe({
+        tipKey: tip, prestator: f.prestator_nume, obiectiv: f.obiectiv,
+        dataRo: f.data_contract ? new Date(f.data_contract).toLocaleDateString('ro-RO') : '', safeNr,
+      })
+      showToast?.('✓ Contract + anexe (SSM, PV-uri) generate, draft salvat și descărcate')
       onSaved?.(); onClose?.()
     } catch (e) {
       showToast?.('Eroare: ' + e.message, 'err')
@@ -272,11 +451,18 @@ export default function GeneratorContractMontaj({ onClose, onSaved, showToast, c
       <div style={{ background:G.surface, border:`1px solid ${G.border2}`, borderRadius:12, padding:22, width:'100%', maxWidth:760 }} onClick={e => e.stopPropagation()}>
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
           <span style={{ fontSize:22 }}>📄</span>
-          <div style={{ fontSize:17, fontWeight:800, color:G.blue }}>Generator contract montaj conducte</div>
+          <div style={{ fontSize:17, fontWeight:800, color:G.blue }}>Generator contract prestări servicii</div>
         </div>
         <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>
-          Model „Petroconst rev.01GI" — folosit DOAR pentru lucrări Transgaz / Romgaz / Conpet (contracte de montaj conducte).
-          Contractul se salvează ca <b>DRAFT</b> în Contracte cu terți și se descarcă PDF pentru semnare.
+          Montajul de conducte folosește modelul „Petroconst rev.01GI" (Transgaz / Romgaz / Conpet); restul tipurilor folosesc
+          template-urile V2 FERM din baza de date. Contractul se salvează ca <b>DRAFT</b> în Contracte cu terți și se descarcă
+          PDF pentru semnare, împreună cu anexele obligatorii (Convenție SSM, PV predare amplasament — fără chirie utilaje, PV recepție).
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <label style={S.lbl}>Tip contract</label>
+          <select style={S.input} value={tip} onChange={e => setTip(e.target.value)}>
+            {Object.entries(TIPURI).map(([k, v]) => <option key={k} value={k}>{v.label}{v.motor === 'petroconst' ? ' · model Petroconst' : ' · template V2'}</option>)}
+          </select>
         </div>
         {m && (
           <div style={{ padding:'8px 12px', background:G.blue+'18', border:`1px solid ${G.blue}44`, borderRadius:7, fontSize:11, color:G.blue, marginBottom:14 }}>
@@ -286,6 +472,10 @@ export default function GeneratorContractMontaj({ onClose, onSaved, showToast, c
           </div>
         )}
 
+        {TIPURI[tip].motor === 'template' ? (
+          <TemplateForm tip={tip} slug={TIPURI[tip].slug} contractMama={m}
+            showToast={showToast} onClose={onClose} onSaved={onSaved} />
+        ) : (<>
         <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
           <Row>
             <Fld k="numar" label="Nr. contract" placeholder="ex. 152/2026" />
@@ -358,6 +548,7 @@ export default function GeneratorContractMontaj({ onClose, onSaved, showToast, c
           <button style={S.btnS} onClick={onClose} disabled={busy}>Renunță</button>
           <button style={S.btnP} onClick={genereaza} disabled={busy}>{busy ? '⏳ Generez...' : '📄 Generează PDF + salvează draft'}</button>
         </div>
+        </>)}
       </div>
     </div>
   )
