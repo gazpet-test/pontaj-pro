@@ -37,6 +37,8 @@ const CATEGORII = {
   iso:              { label:'Certificate ISO',    icon:'🏆', color:G.green },
   financiar:        { label:'Financiar',          icon:'💰', color:G.yellow },
   hr:               { label:'HR',                 icon:'👥', color:G.pink },
+  sudura_otel:      { label:'Sudură Oțel',        icon:'🔥', color:G.red  },
+  sudura_pehd:      { label:'Sudură PEHD',        icon:'🔵', color:G.cyan || G.blue },
   altele:           { label:'Altele',             icon:'📄', color:G.dim },
 }
 
