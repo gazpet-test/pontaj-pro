@@ -30,7 +30,8 @@ Integrează natural (nu anunța „am citit memoria"). Reia exact de unde a răm
 4. **Reguli Supabase la orice obiect NOU**: tabele → ENABLE RLS + GRANT authenticated/service_role + policies (folosește `auth.uid() IS NOT NULL`, nu `USING(true)`); views → `WITH (security_invoker = on)`; funcții → `SECURITY DEFINER SET search_path = public, pg_temp` + REVOKE EXECUTE FROM PUBLIC dacă nu-s UI-callable. După migrări importante: get_advisors.
 5. **Stil cod existent**: inline styles pe obiecte JS (G = paleta, S = stiluri comune), stil compact, comentarii în română OK. NU introduce TypeScript / CSS modules / librării noi fără să întrebi.
 6. **NU atinge fără cerere explicită**: SalariiPage (calcul taxe sensibil), RPC-uri server-side, schema BD, Logistica.jsx / HR.jsx / Administrativ.jsx / ServiceTab.jsx dacă task-ul nu le vizează direct.
-7. **Ambiguu? Întreabă ÎNAINTE** să generezi mii de linii. Opțiuni A/B/C scurte — Razvan răspunde rapid. Când o decizie e proastă, spune-i direct.
+7. **Registru automatizări**: după ORICE automatizare nouă (edge fn, cron, trigger, webhook) sau cheie/secret nou(ă) → actualizează în aceeași sesiune `claude_docs` slug `registru_automatizari` (fără valori de secrete — doar nume, unde stau, cine le folosește).
+8. **Ambiguu? Întreabă ÎNAINTE** să generezi mii de linii. Opțiuni A/B/C scurte — Razvan răspunde rapid. Când o decizie e proastă, spune-i direct.
 
 ## Anti-bug-uri critice (verificate în producție)
 - `logistica_alimentari`: coloana e `active_id` (cu E), NU activ_id. Chei module: lowercase fără diacritice ('logistica').
