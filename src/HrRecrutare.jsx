@@ -37,6 +37,17 @@ const TIP_INTER = { mail_trimis:'✉️ Mail trimis', mail_primit:'📨 Mail pri
 const FORM_URL = 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/recrutare-aplica'
 const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
 
+// apel edge fn olx-api cu JWT-ul userului curent
+async function olxApi(payload) {
+  const { data: { session } } = await supabase.auth.getSession()
+  const r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/olx-api', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
+    body: JSON.stringify(payload),
+  })
+  return r.json()
+}
+
 export default function HrRecrutare({ profile, showToast }) {
   const [pozitii, setPozitii] = useState([])
   const [candidati, setCandidati] = useState([])
@@ -47,6 +58,16 @@ export default function HrRecrutare({ profile, showToast }) {
   const [openId, setOpenId] = useState(null)
   const [editCand, setEditCand] = useState(null)
   const [editPoz, setEditPoz] = useState(null)
+  const [olx, setOlx] = useState(null)          // status conexiune OLX
+  const [olxPoz, setOlxPoz] = useState(null)    // poziția pentru care publicăm pe OLX
+
+  useEffect(() => { olxApi({ actiune: 'status' }).then(setOlx).catch(() => setOlx({ eroare: true })) }, [])
+
+  const conecteazaOlx = async () => {
+    const d = await olxApi({ actiune: 'connect-url' })
+    if (d.url) window.open(d.url, '_blank')
+    else showToast?.(d.eroare || 'Setează OLX_CLIENT_ID/SECRET în Supabase secrets', 'error')
+  }
 
   const loadAll = async () => {
     const [pRes, cRes] = await Promise.all([
@@ -97,18 +118,33 @@ export default function HrRecrutare({ profile, showToast }) {
             onClick={() => { navigator.clipboard?.writeText(FORM_URL); showToast?.('✓ Link formular public copiat — pune-l în anunțul OLX/eJobs') }}>
             🔗 Copiază link formular aplicare
           </button>
+          <button style={{ ...S.btnS, padding:'6px 12px', color: olx?.conectat ? G.green : G.yellow }}
+            title={olx?.conectat ? `Cont OLX conectat${olx?.cont?.email ? ': ' + olx.cont.email : ''}` : 'Conectează contul OLX Business pentru publicare din ERP'}
+            onClick={conecteazaOlx}>
+            {olx?.conectat ? '🟢 OLX conectat' : '🔌 Conectează OLX'}
+          </button>
           <button style={{ ...S.btnP, padding:'6px 12px' }} onClick={() => setEditPoz({})}>+ Poziție</button>
         </div>
         <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
           {pozitii.map(p => (
-            <div key={p.id} onClick={() => setEditPoz(p)} style={{
-              padding:'10px 14px', borderRadius:8, cursor:'pointer', minWidth:220,
+            <div key={p.id} style={{
+              padding:'10px 14px', borderRadius:8, minWidth:220,
               background:G.bg, border:`1px solid ${p.status === 'deschisa' ? G.green + '55' : G.border2}` }}>
-              <div style={{ fontSize:13, fontWeight:700, color:G.text }}>{p.denumire}</div>
-              <div style={{ fontSize:11, color:G.muted, marginTop:3 }}>
-                {p.status === 'deschisa' ? '🟢 deschisă' : p.status === 'suspendata' ? '⏸ suspendată' : '🔒 închisă'}
-                {' · '}{candidati.filter(c => c.pozitie_id === p.id).length} candidați
-                {p.salariu_min ? ` · ${Number(p.salariu_min).toLocaleString('ro-RO')} lei ${p.tip_salariu}` : ''}
+              <div onClick={() => setEditPoz(p)} style={{ cursor:'pointer' }}>
+                <div style={{ fontSize:13, fontWeight:700, color:G.text }}>{p.denumire}</div>
+                <div style={{ fontSize:11, color:G.muted, marginTop:3 }}>
+                  {p.status === 'deschisa' ? '🟢 deschisă' : p.status === 'suspendata' ? '⏸ suspendată' : '🔒 închisă'}
+                  {' · '}{candidati.filter(c => c.pozitie_id === p.id).length} candidați
+                  {p.salariu_min ? ` · ${Number(p.salariu_min).toLocaleString('ro-RO')} lei ${p.tip_salariu}` : ''}
+                </div>
+              </div>
+              <div style={{ display:'flex', gap:6, marginTop:7 }}>
+                {p.olx_url
+                  ? <a href={p.olx_url} target="_blank" rel="noreferrer" style={{ fontSize:11, color:G.green, fontWeight:700, textDecoration:'none' }}>🟢 pe OLX ({p.olx_status || 'activ'}) ↗</a>
+                  : p.status === 'deschisa' && <button style={{ ...S.btnS, padding:'4px 9px', fontSize:11 }}
+                      onClick={() => olx?.conectat ? setOlxPoz(p) : showToast?.('Conectează întâi contul OLX (butonul de sus)', 'error')}>
+                      📣 Publică pe OLX
+                    </button>}
               </div>
             </div>
           ))}
@@ -187,6 +223,11 @@ export default function HrRecrutare({ profile, showToast }) {
         <PozitieModal item={editPoz} showToast={showToast}
           onClose={() => setEditPoz(null)}
           onSaved={() => { setEditPoz(null); loadAll() }} />
+      )}
+      {olxPoz && (
+        <OlxPublicaModal pozitie={olxPoz} showToast={showToast}
+          onClose={() => setOlxPoz(null)}
+          onPublicat={() => { setOlxPoz(null); loadAll() }} />
       )}
     </div>
   )
@@ -397,6 +438,74 @@ function PozitieModal({ item, showToast, onClose, onSaved }) {
       <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:14 }}>
         <button style={S.btnS} onClick={onClose}>Renunță</button>
         <button style={S.btnP} onClick={salveaza}>Salvează</button>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Modal publicare anunț pe OLX ───────────────────────────────
+function OlxPublicaModal({ pozitie, showToast, onClose, onPublicat }) {
+  const [f, setF] = useState({
+    titlu: `Angajăm ${pozitie.denumire} — Gazpet Instal Ploiești`,
+    descriere: `${pozitie.descriere || pozitie.denumire}\n\nGazpet Instal S.R.L. — constructor autorizat de conducte de gaze naturale (Transgaz, Romgaz, Conpet), Ploiești, Prahova. Echipă de 127+ angajați, proiecte în toată țara.\n\nAplică direct cu CV-ul în formularul nostru online. Datele tale sunt prelucrate conform GDPR (retenție 12 luni).`,
+    category_id: '', city_id: '', contact_name: 'Gazpet Instal', contact_phone: '0244435005',
+  })
+  const [categorii, setCategorii] = useState([])
+  const [orase, setOrase] = useState([])
+  const [busy, setBusy] = useState(false)
+  const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
+
+  useEffect(() => {
+    olxApi({ actiune: 'categorii', q: pozitie.denumire }).then(d => {
+      const list = d?.data || []
+      setCategorii(list)
+      if (list[0]?.id) set('category_id', String(list[0].id))
+    })
+    olxApi({ actiune: 'orase', q: 'Ploiesti' }).then(d => {
+      const list = d?.data || []
+      setOrase(list)
+      if (list[0]?.id) set('city_id', String(list[0].id))
+    })
+  }, [])
+
+  const publica = async () => {
+    if (!f.category_id || !f.city_id) { showToast?.('Alege categoria și orașul', 'error'); return }
+    if (f.titlu.length < 16) { showToast?.('Titlul trebuie să aibă minim 16 caractere', 'error'); return }
+    if (f.descriere.length < 80) { showToast?.('Descrierea trebuie să aibă minim 80 caractere', 'error'); return }
+    setBusy(true)
+    const d = await olxApi({ actiune: 'publica', pozitie_id: pozitie.id, titlu: f.titlu, descriere: f.descriere,
+      category_id: f.category_id, city_id: f.city_id, contact_name: f.contact_name, contact_phone: f.contact_phone })
+    setBusy(false)
+    if (d.ok) { showToast?.(`✓ Anunț publicat pe OLX (status: ${d.advert?.status})`); onPublicat() }
+    else showToast?.((d.eroare || 'Eroare OLX') + (d.detalii?.error?.validation ? ' — ' + d.detalii.error.validation.map(v => v.detail).join('; ') : ''), 'error')
+  }
+
+  return (
+    <Modal titlu={`📣 Publică pe OLX — ${pozitie.denumire}`} onClose={onClose}>
+      <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>
+        Consumă un anunț din pachetul Ultra (3 × 30 zile). Regulile OLX: titlu 16-150 caractere, descriere minim 80, fără telefoane/emailuri în text.
+      </div>
+      <Fld l="Titlu anunț"><input style={S.input} value={f.titlu} onChange={e => set('titlu', e.target.value)} /></Fld>
+      <Fld l="Descriere"><textarea style={{ ...S.input, minHeight:130, resize:'vertical' }} value={f.descriere} onChange={e => set('descriere', e.target.value)} /></Fld>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:8 }}>
+        <Fld l="Categorie OLX">
+          <select style={S.input} value={f.category_id} onChange={e => set('category_id', e.target.value)}>
+            <option value="">— alege —</option>
+            {categorii.map(c => <option key={c.id} value={c.id}>{c.names?.path || c.name || c.id}</option>)}
+          </select>
+        </Fld>
+        <Fld l="Oraș">
+          <select style={S.input} value={f.city_id} onChange={e => set('city_id', e.target.value)}>
+            <option value="">— alege —</option>
+            {orase.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        </Fld>
+        <Fld l="Nume contact"><input style={S.input} value={f.contact_name} onChange={e => set('contact_name', e.target.value)} /></Fld>
+        <Fld l="Telefon contact"><input style={S.input} value={f.contact_phone} onChange={e => set('contact_phone', e.target.value)} /></Fld>
+      </div>
+      <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:14 }}>
+        <button style={S.btnS} onClick={onClose} disabled={busy}>Renunță</button>
+        <button style={S.btnP} onClick={publica} disabled={busy}>{busy ? '⏳ Public...' : '📣 Publică anunțul'}</button>
       </div>
     </Modal>
   )
