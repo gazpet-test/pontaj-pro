@@ -714,6 +714,8 @@ function Layout({ children }) {
     const t = setInterval(load, 60000)
     return () => clearInterval(t)
   }, [profile?.id])
+  // Externii (email non-@gazpet.ro, ex. partenerul Adrom Evolution) nu văd Tichete/Consumabile
+  const esteExtern = !(profile?.email || '').toLowerCase().endsWith('@gazpet.ro')
   const navItems = [
     {p:'/',i:'🏠',l:'Acasă'},
     ...(hasModuleAccess(profile, 'pontajpro') ? [
@@ -724,8 +726,10 @@ function Layout({ children }) {
     ...(hasModuleAccess(profile, 'logistica') ? [{p:'/logistica',i:'🚛',l:'Logistică'}] : []),
     ...(hasModuleAccess(profile, 'hr') ? [{p:'/hr',i:'👥',l:'HR'}] : []),
     ...(hasModuleAccess(profile, 'administrativ') ? [{p:'/administrativ',i:'🏢',l:'Administrativ'}] : []),
-    { p:'/tichete', i:'🎫', l:'Tichete' },
-    { p:'/consumabile', i:'🛒', l:'Consumabile' },
+    ...(esteExtern ? [] : [
+      { p:'/tichete', i:'🎫', l:'Tichete' },
+      { p:'/consumabile', i:'🛒', l:'Consumabile' },
+    ]),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
     ...(isSuperAdmin || profile?.can_modify_employees === true ? [{p:'/admin',i:'⚙️',l:'Admin'}] : []),
   ]
@@ -766,6 +770,7 @@ function Layout({ children }) {
               🚚 Cere transport
             </button>
           )}
+          {!esteExtern && (<>
           <button
             onClick={() => nav('/tichete')}
             title="Modul Tichete - avarii, defecțiuni, reclamații"
@@ -909,6 +914,7 @@ function Layout({ children }) {
           >
             ＋
           </button>
+          </>)}
           <ChatNavButton />
           <NotificationBell />
           <div style={{textAlign:'right'}}>
@@ -8487,10 +8493,10 @@ export default function App() {
         <Route path="/administrativ" element={<ProtectedRoute requireModule="administrativ"><Layout><AdministrativPage/></Layout></ProtectedRoute>}/>
         <Route path="/executie" element={<ProtectedRoute requireModule="executie"><Layout><ExecutiePage/></Layout></ProtectedRoute>}/>
         <Route path="/financiar" element={<ProtectedRoute requireModule="financiar"><Layout><FinanciarPage/></Layout></ProtectedRoute>}/>
-        <Route path="/tichete" element={<ProtectedRoute><Layout><Tichete/></Layout></ProtectedRoute>}/>
+        <Route path="/tichete" element={<ProtectedRoute><Layout><DoarIntern><Tichete/></DoarIntern></Layout></ProtectedRoute>}/>
         {/* Consumabile birou: fără requireModule — e cerința explicită să ajungă
             toată lumea, iar modulul Administrativ are doar 6 utilizatori. */}
-        <Route path="/consumabile" element={<ProtectedRoute><Layout><ConsumabileRoute/></Layout></ProtectedRoute>}/>
+        <Route path="/consumabile" element={<ProtectedRoute><Layout><DoarIntern><ConsumabileRoute/></DoarIntern></Layout></ProtectedRoute>}/>
         {/* PROVIZORIU: corecții registru imobilizări (se scoate la finalul proiectului) */}
         <Route path="/inventar-corectii" element={<ProtectedRoute><Layout><InventarCorectiiRoute/></Layout></ProtectedRoute>}/>
         <Route path="/grafic/:tip/:id" element={<ProtectedRoute><GraficLucrareRoute/></ProtectedRoute>}/>
@@ -8514,4 +8520,16 @@ export default function App() {
       <TichetModulGate />
     </AuthProvider>
   )
+}
+
+// Gardă rută: doar utilizatorii interni (@gazpet.ro) — externii (ex. Adrom Evolution)
+// sunt trimiși pe Acasă chiar dacă tastează URL-ul direct (tichetele-s interne).
+function DoarIntern({ children }) {
+  const [ok, setOk] = useState(null)
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) =>
+      setOk((user?.email || '').toLowerCase().endsWith('@gazpet.ro')))
+  }, [])
+  if (ok === null) return null
+  return ok ? children : <Navigate to="/" replace />
 }
