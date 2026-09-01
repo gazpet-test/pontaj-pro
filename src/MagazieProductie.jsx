@@ -40,6 +40,14 @@ const TIP_COMPONENTA = {
   transport:     { label:'Transport', emoji:'🚚' },
   altele:        { label:'Altele', emoji:'📎' },
 }
+const TIP_DOCUMENT = {
+  agrement:                 { label:'Agrement tehnic',            emoji:'📜', color:'#D29922' },
+  certificat_calitate:      { label:'Certificat calitate material', emoji:'🧾', color:'#2FB6C9' },
+  declaratie_conformitate:  { label:'Declarație de conformitate', emoji:'✍️', color:'#3FB950' },
+  certificat_conformitate:  { label:'Certificat de conformitate', emoji:'🏅', color:'#BC8CFF' },
+  altul:                    { label:'Alt document',               emoji:'📎', color:'#8B949E' },
+}
+const MAGAZIE_TIP_PRODUS_PRODUCTIE = 16 // magazie_tipuri_material 'Produs finit producție'
 const TIP_MISCARE = {
   intrare_productie: { label:'Intrare din producție', emoji:'📥', color:G.green },
   iesire_proiect:    { label:'Ieșire pe proiect',     emoji:'🏗️', color:G.blue },
@@ -62,6 +70,9 @@ export default function ProductieTab() {
   const [miscareModal, setMiscareModal] = useState(null) // {produs}
   const [facturaModal, setFacturaModal] = useState(false) // true = upload nou | {pending: rând} = factură venită pe mail
   const [facturiPending, setFacturiPending] = useState([])
+  const [documente, setDocumente] = useState([])       // productie_documente
+  const [docModal, setDocModal] = useState(false)      // upload agrement/certificat
+  const [genModal, setGenModal] = useState(null)       // {lot, produs} → generator declarație/certificat
 
   const show = (text, type='ok') => { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }
 
@@ -74,8 +85,11 @@ export default function ProductieTab() {
       supabase.from('sites').select('id, name').eq('active', true).order('name'),
       supabase.from('productie_materiale').select('*').order('denumire'),
     ])
-    const { data: fp } = await supabase.from('productie_facturi').select('*').eq('confirmata', false).order('id', { ascending:false })
-    setStoc(st || []); setLoturi(lt || []); setMiscari(ms || []); setSites(si || []); setMateriale(mat || []); setFacturiPending(fp || [])
+    const [{ data: fp }, { data: docs }] = await Promise.all([
+      supabase.from('productie_facturi').select('*').eq('confirmata', false).order('id', { ascending:false }),
+      supabase.from('productie_documente').select('*').order('id', { ascending:false }),
+    ])
+    setStoc(st || []); setLoturi(lt || []); setMiscari(ms || []); setSites(si || []); setMateriale(mat || []); setFacturiPending(fp || []); setDocumente(docs || [])
     setLoading(false)
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
@@ -133,6 +147,48 @@ export default function ProductieTab() {
           </div>
         </div>
       )}
+
+      {/* Agremente & certificate */}
+      {!documente.some(d => d.tip === 'agrement') && (
+        <div style={{ ...S.card, padding:'10px 16px', marginBottom:14, borderLeft:`3px solid ${G.orange}`, fontSize:13, color:G.orange }}>
+          ⚠️ Lipsesc agrementele tehnice — Dragoș (Adrom Evolution) trebuie să le urce în secțiunea „📜 Agremente & certificate" de mai jos.
+        </div>
+      )}
+      <div style={{ ...S.card, padding:'14px 18px', marginBottom:14 }}>
+        <div style={{ display:'flex', alignItems:'center', marginBottom: documente.length ? 8 : 0 }}>
+          <div style={{ fontWeight:800, fontSize:14, flex:1 }}>📜 Agremente & certificate ({documente.length})</div>
+          <button onClick={() => setDocModal(true)} style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }}>+ Adaugă document</button>
+        </div>
+        {documente.length > 0 && (
+          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+            {documente.map(d => {
+              const dm = TIP_DOCUMENT[d.tip] || TIP_DOCUMENT.altul
+              const prod = stoc.find(p => p.produs_id === d.produs_id)
+              const mat = materiale.find(m => m.id === d.material_id)
+              const expirat = d.valabil_pana && new Date(d.valabil_pana) < new Date()
+              return (
+                <div key={d.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'5px 0', borderBottom:`1px solid ${G.border}`, fontSize:13, flexWrap:'wrap' }}>
+                  <span>{dm.emoji}</span>
+                  <span style={{ color:dm.color, fontSize:11, fontWeight:800, textTransform:'uppercase' }}>{dm.label}</span>
+                  <span style={{ fontWeight:700 }}>{d.denumire}</span>
+                  {prod && <span style={{ color:G.muted, fontSize:12 }}>· {prod.denumire} {prod.dimensiune || ''}</span>}
+                  {mat && <span style={{ color:G.muted, fontSize:12 }}>· {mat.denumire}</span>}
+                  {d.valabil_pana && <span style={{ color: expirat ? G.red : G.muted, fontSize:12 }}>{expirat ? '⚠ expirat ' : 'valabil până '}{fmtD(d.valabil_pana)}</span>}
+                  <span style={{ flex:1 }} />
+                  {d.file_path && <button onClick={async () => { const { data } = await supabase.storage.from('productie').createSignedUrl(d.file_path, 600); if (data?.signedUrl) window.open(data.signedUrl, '_blank') }} style={{ ...S.btnS, padding:'2px 8px', fontSize:12 }}>📄 Vezi</button>}
+                  <button onClick={async () => {
+                    if (!window.confirm(`Ștergi documentul „${d.denumire}"?`)) return
+                    const { error } = await supabase.from('productie_documente').delete().eq('id', d.id)
+                    if (error) return show('Eroare: ' + error.message, 'err')
+                    if (d.file_path) await supabase.storage.from('productie').remove([d.file_path])
+                    loadAll()
+                  }} style={{ ...S.btnS, padding:'2px 8px', fontSize:12, color:G.red }}>✕</button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Stoc materii prime pentru producție */}
       {materiale.length > 0 && (
@@ -198,6 +254,7 @@ export default function ProductieTab() {
                       <span style={{ flex:1 }} />
                       <span style={{ color:G.yellow }}>{cost > 0 ? fmt(cost) + ' lei' : 'fără costuri încă'}</span>
                       <span style={{ color:G.dim, fontSize:12 }}>({(l.productie_lot_componente || []).length} componente)</span>
+                      {l.status === 'finalizat' && <button onClick={ev => { ev.stopPropagation(); setGenModal({ lot:l, produs:p }) }} style={{ ...S.btnS, padding:'2px 9px', fontSize:12 }} title="Declarație / Certificat de conformitate">📜</button>}
                     </div>
                   )
                 })}
@@ -228,6 +285,8 @@ export default function ProductieTab() {
       {lotModal && <LotModal ctx={lotModal} materiale={materiale} onClose={() => setLotModal(null)} onSaved={(t) => { setLotModal(null); loadAll(); show(t || '✓ Lot salvat') }} onError={t => show(t, 'err')} />}
       {facturaModal && <FacturaAiModal pending={facturaModal?.pending || null} onClose={() => setFacturaModal(false)} onSaved={(t) => { setFacturaModal(false); loadAll(); show(t) }} onError={t => show(t, 'err')} />}
       {miscareModal && <MiscareModal produs={miscareModal.produs} sites={sites} onClose={() => setMiscareModal(null)} onSaved={() => { setMiscareModal(null); loadAll(); show('✓ Mișcare înregistrată') }} onError={t => show(t, 'err')} />}
+      {docModal && <DocumentModal stoc={stoc} materiale={materiale} onClose={() => setDocModal(false)} onSaved={() => { setDocModal(false); loadAll(); show('✓ Document salvat') }} onError={t => show(t, 'err')} />}
+      {genModal && <GenDocModal ctx={genModal} documente={documente} onClose={() => setGenModal(null)} onSaved={(t) => { loadAll(); show(t) }} onError={t => show(t, 'err')} />}
     </div>
   )
 }
@@ -397,22 +456,73 @@ function LotModal({ ctx, materiale = [], onClose, onSaved, onError }) {
     setComp(comp.filter(x => x.id !== c.id))
   }
 
+  // Flux complet #45: serii unice + magazia mare + valoare inventar (cost+3%) + mail Marilena (WinMentor)
   const finalizeaza = async () => {
     if (!lot) return
-    if (!window.confirm(`Finalizezi lotul? ${fmt(f.cantitate)} buc intră în stocul de produse finite.`)) return
+    const cant = Number(f.cantitate)
+    const inventarTotal = costTotal * 1.03
+    if (!window.confirm(`Finalizezi lotul? ${fmt(cant)} buc intră în stoc cu serii unice și în magazia mare.\nValoare inventar: ${fmt(costTotal)} lei + 3% pierderi tehnologice = ${fmt(inventarTotal)} lei.\nMarilena primește mail cu materialele de scăzut din WinMentor.`)) return
     setBusy(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('productie_loturi').update({ status:'finalizat', data_finalizare: new Date().toISOString().slice(0, 10) }).eq('id', lot.id)
-    if (!error) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const azi = new Date().toISOString().slice(0, 10)
+      const an = new Date().getFullYear()
+      // cod serie de pe produs (ex FM8) — fallback din denumire+dimensiune
+      const { data: prodRow } = await supabase.from('productie_produse').select('cod_serie, denumire, dimensiune, clasa').eq('id', produs.produs_id).single()
+      const cod = (prodRow?.cod_serie || (produs.denumire || 'PR').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() + String(produs.dimensiune || '').replace(/[^0-9]/g, '')).trim()
+      // următorul număr de serie pentru codul ăsta în anul curent
+      const prefix = `GZP-${cod}-${an}-`
+      const { data: ultima } = await supabase.from('productie_serii').select('serie').like('serie', prefix + '%').order('serie', { ascending:false }).limit(1)
+      let nr = ultima?.length ? Number(ultima[0].serie.slice(prefix.length)) || 0 : 0
+      const inventarBuc = cant > 0 ? inventarTotal / cant : null
+
+      const { error } = await supabase.from('productie_loturi').update({ status:'finalizat', data_finalizare: azi }).eq('id', lot.id)
+      if (error) throw new Error(error.message)
+
+      // per bucată: rând în magazia mare (magazie_bucati) + seria în productie_serii
+      const serii = []
+      for (let i = 0; i < cant; i++) {
+        const serie = prefix + String(++nr).padStart(4, '0')
+        const { data: bucata, error: eB } = await supabase.from('magazie_bucati').insert({
+          tip_material_id: MAGAZIE_TIP_PRODUS_PRODUCTIE, serie,
+          dimensiune: [prodRow?.dimensiune, prodRow?.clasa].filter(Boolean).join(' ') || null,
+          cantitate: 1, um: 'buc', provenienta: 'Producție internă',
+          furnizor: 'Gazpet Instal (producție proprie)', producator: 'Gazpet Instal + Adrom Evolution',
+          stare: 'sosit', locatie_tip: 'sediu', data_receptie: azi,
+          observatii: `${prodRow?.denumire || ''} — ${f.cod_lot || 'lot #' + lot.id} · valoare inventar ${fmt(inventarBuc)} lei/buc (cost + 3% pierderi tehnologice)`,
+          atribute: { produs_id: produs.produs_id, lot_id: lot.id, valoare_inventar: inventarBuc },
+          created_by: user?.id || null,
+        }).select('id').single()
+        if (eB) throw new Error('Magazie: ' + eB.message)
+        const { error: eS } = await supabase.from('productie_serii').insert({
+          produs_id: produs.produs_id, lot_id: lot.id, serie,
+          magazie_bucata_id: bucata.id, valoare_inventar: inventarBuc,
+        })
+        if (eS) throw new Error('Serii: ' + eS.message)
+        serii.push(serie)
+      }
+
       const { error: e2 } = await supabase.from('productie_stoc_miscari').insert({
         produs_id: produs.produs_id, lot_id: lot.id, tip:'intrare_productie',
-        cantitate: Number(f.cantitate), note: `Finalizare ${f.cod_lot || 'lot #' + lot.id} · cost ${fmt(costTotal)} lei (${costBuc != null ? fmt(costBuc) + ' lei/buc' : '—'})`,
+        cantitate: cant, note: `Finalizare ${f.cod_lot || 'lot #' + lot.id} · cost ${fmt(costTotal)} lei · inventar ${fmt(inventarTotal)} lei (+3%) · serii ${serii[0] || ''}${serii.length > 1 ? '…' + serii[serii.length - 1] : ''}`,
         created_by: user?.id || null,
       })
+      if (e2) throw new Error('Stoc: ' + e2.message)
+
+      // mail Marilena + Razvan (WinMentor) — eroarea de mail nu blochează finalizarea
+      let mailOk = false
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        const r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/productie-lot-final', {
+          method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lot_id: lot.id }),
+        })
+        mailOk = (await r.json())?.ok === true
+      } catch { /* raportăm mai jos */ }
+
       setBusy(false)
-      if (e2) return onError('Stoc: ' + e2.message)
-      onSaved('✓ Lot finalizat — ' + fmt(f.cantitate) + ' buc în stoc')
-    } else { setBusy(false); onError('Eroare: ' + error.message) }
+      onSaved(`✓ Lot finalizat: ${fmt(cant)} buc cu seriile ${serii.join(', ')} — în stoc + magazia mare.` + (mailOk ? ' Mail trimis la Marilena.' : ' ⚠ Mailul către Marilena NU a plecat — anunț-o manual.'))
+    } catch (e) { setBusy(false); onError('Eroare: ' + (e?.message || e)) }
   }
 
   const veziPdf = async (c) => {
@@ -725,6 +835,184 @@ function FacturaAiModal({ pending, onClose, onSaved, onError }) {
           </>
         )}
         {!ex && <div style={{ display:'flex', justifyContent:'flex-end', marginTop:14 }}><button onClick={onClose} style={S.btnS}>Închide</button></div>}
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal document (agrement / certificat calitate) ────────────────────────
+function DocumentModal({ stoc = [], materiale = [], onClose, onSaved, onError }) {
+  const [f, setF] = useState({ tip:'agrement', denumire:'', produs_id:'', material_id:'', valabil_pana:'', note:'' })
+  const [file, setFile] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const salveaza = async () => {
+    if (!f.denumire.trim()) return onError('Completează denumirea documentului')
+    setBusy(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      let file_path = null
+      if (file) {
+        const path = `documente/${Date.now()}_${file.name.replace(/[^\w.-]+/g, '_')}`
+        const { error: upErr } = await supabase.storage.from('productie').upload(path, file, { upsert:false })
+        if (upErr) throw new Error('Upload: ' + upErr.message)
+        file_path = path
+      }
+      const { error } = await supabase.from('productie_documente').insert({
+        tip: f.tip, denumire: f.denumire.trim(), file_path,
+        produs_id: f.produs_id ? Number(f.produs_id) : null,
+        material_id: f.material_id ? Number(f.material_id) : null,
+        valabil_pana: f.valabil_pana || null, note: f.note.trim() || null,
+        uploaded_by: user?.id || null,
+      })
+      if (error) throw new Error(error.message)
+      // agrementul se leagă și pe produs (nr afișat pe card + folosit în declarații)
+      if (f.tip === 'agrement' && f.produs_id) {
+        await supabase.from('productie_produse').update({ agrement_nr: f.denumire.trim() }).eq('id', Number(f.produs_id))
+      }
+      setBusy(false)
+      onSaved()
+    } catch (e) { setBusy(false); onError('Eroare: ' + (e?.message || e)) }
+  }
+
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.modal, maxWidth:560 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>📜 Document nou — Producție</div>
+        <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>Agremente tehnice (le urcă Dragoș), certificate de calitate materiale, alte documente.</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div><label style={S.label}>Tip document</label>
+            <select value={f.tip} onChange={e => setF({ ...f, tip:e.target.value })} style={S.input}>
+              {Object.entries(TIP_DOCUMENT).filter(([k]) => !['declaratie_conformitate','certificat_conformitate'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
+            </select>
+          </div>
+          <div><label style={S.label}>Valabil până la (opțional)</label><input type="date" value={f.valabil_pana} onChange={e => setF({ ...f, valabil_pana:e.target.value })} style={S.input} /></div>
+          <div style={{ gridColumn:'1/3' }}><label style={S.label}>Denumire / număr</label><input value={f.denumire} onChange={e => setF({ ...f, denumire:e.target.value })} placeholder="ex: Agrement tehnic 016-07/1234-2026" style={S.input} /></div>
+          <div><label style={S.label}>Produs (opțional)</label>
+            <select value={f.produs_id} onChange={e => setF({ ...f, produs_id:e.target.value })} style={S.input}>
+              <option value="">—</option>
+              {stoc.map(p => <option key={p.produs_id} value={p.produs_id}>{p.denumire} {p.dimensiune || ''} {p.clasa || ''}</option>)}
+            </select>
+          </div>
+          <div><label style={S.label}>Material (opțional)</label>
+            <select value={f.material_id} onChange={e => setF({ ...f, material_id:e.target.value })} style={S.input}>
+              <option value="">—</option>
+              {materiale.map(m => <option key={m.id} value={m.id}>{m.denumire}</option>)}
+            </select>
+          </div>
+          <div style={{ gridColumn:'1/3' }}><label style={S.label}>Note</label><input value={f.note} onChange={e => setF({ ...f, note:e.target.value })} style={S.input} /></div>
+          <label style={{ ...S.btnS, textAlign:'center', cursor:'pointer', gridColumn:'1/3' }}>
+            {file ? '📄 ' + file.name : '📎 Atașează fișierul (PDF/imagine)'}
+            <input type="file" accept=".pdf,image/*" onChange={e => setFile(e.target.files?.[0] || null)} style={{ display:'none' }} />
+          </label>
+        </div>
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
+          <button onClick={onClose} style={S.btnS}>Anulează</button>
+          <button onClick={salveaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Salvează'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Generator Declarație / Certificat de conformitate (pe lot finalizat) ───
+function GenDocModal({ ctx, documente = [], onClose, onSaved, onError }) {
+  const { lot, produs } = ctx
+  const [f, setF] = useState({ beneficiar:'', obiect:'', nr_doc:'' })
+  const [serii, setSerii] = useState([])
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    supabase.from('productie_serii').select('serie').eq('lot_id', lot.id).order('serie').then(({ data }) => setSerii((data || []).map(s => s.serie)))
+  }, [lot.id])
+
+  const agrement = produs.agrement_nr || documente.find(d => d.tip === 'agrement' && d.produs_id === produs.produs_id)?.denumire || null
+  const certMat = documente.filter(d => d.tip === 'certificat_calitate')
+  const numeProdus = `${produs.denumire} ${produs.dimensiune || ''} ${produs.clasa || ''}`.trim()
+
+  const genereaza = async (tipDoc) => {
+    const titlu = tipDoc === 'declaratie_conformitate' ? 'DECLARAȚIE DE CONFORMITATE' : 'CERTIFICAT DE CONFORMITATE'
+    setBusy(true)
+    try {
+      const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const azi = new Date().toLocaleDateString('ro-RO')
+      const an = new Date().getFullYear()
+      const nrDoc = f.nr_doc.trim() || `${tipDoc === 'declaratie_conformitate' ? 'DC' : 'CC'}-${lot.cod_lot || lot.id}-${an}`
+      const html = `
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#111;padding:48px 56px;font-size:13.5px;line-height:1.6">
+          <table style="width:100%;border-collapse:collapse"><tr>
+            <td style="vertical-align:bottom">
+              <div style="font-size:21px;font-weight:800;letter-spacing:.4px">GAZPET INSTAL S.R.L.</div>
+              <div style="font-size:10.5px;color:#444;margin-top:3px">Str. Fluturilor nr. 34, Ploiești, Prahova &nbsp;·&nbsp; CUI RO 22029920 &nbsp;·&nbsp; J29/1650/2007<br/>office@gazpet.ro &nbsp;·&nbsp; tel/fax 0244/435005</div>
+            </td>
+            <td style="vertical-align:bottom;text-align:right;font-size:11px;color:#444">Ploiești, ${azi}</td>
+          </tr></table>
+          <div style="border-bottom:2.5px solid #111;margin:10px 0 30px"></div>
+          <div style="text-align:center;font-size:17px;font-weight:800;letter-spacing:.6px;margin-bottom:4px">${titlu}</div>
+          <div style="text-align:center;font-size:12px;color:#333;margin-bottom:28px">Nr. ${esc(nrDoc)} din ${azi}</div>
+          <p style="text-align:justify;margin:0 0 16px">Subscrisa <b>GAZPET INSTAL S.R.L.</b>, cu sediul în Ploiești, str. Fluturilor nr. 34, jud. Prahova, CUI RO 22029920, în calitate de producător${tipDoc === 'declaratie_conformitate' ? ', declarăm pe propria răspundere că produsul' : ', certificăm că produsul'} descris mai jos este conform cu cerințele tehnice aplicabile și cu documentația tehnică de execuție${agrement ? `, fiind fabricat în baza <b>Agrementului tehnic ${esc(agrement)}</b> (partener de agrement: Adrom Evolution S.R.L.)` : ''}.</p>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px">
+            <tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;width:200px;font-weight:700">Produs</td><td style="padding:6px 10px;border:1px solid #999">${esc(numeProdus)}</td></tr>
+            <tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;font-weight:700">Lot de fabricație</td><td style="padding:6px 10px;border:1px solid #999">${esc(lot.cod_lot || 'Lot #' + lot.id)} · finalizat ${fmtD(lot.data_finalizare)}</td></tr>
+            <tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;font-weight:700">Cantitate</td><td style="padding:6px 10px;border:1px solid #999">${fmt(lot.cantitate)} buc</td></tr>
+            <tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;font-weight:700">Serii unice</td><td style="padding:6px 10px;border:1px solid #999">${serii.length ? serii.map(esc).join('<br/>') : '—'}</td></tr>
+            ${agrement ? `<tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;font-weight:700">Agrement tehnic</td><td style="padding:6px 10px;border:1px solid #999">${esc(agrement)}</td></tr>` : ''}
+            ${f.beneficiar.trim() ? `<tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;font-weight:700">Beneficiar</td><td style="padding:6px 10px;border:1px solid #999">${esc(f.beneficiar.trim())}</td></tr>` : ''}
+            ${f.obiect.trim() ? `<tr><td style="padding:6px 10px;border:1px solid #999;background:#f2f2f2;font-weight:700">Obiectiv / lucrare</td><td style="padding:6px 10px;border:1px solid #999">${esc(f.obiect.trim())}</td></tr>` : ''}
+          </table>
+          ${certMat.length ? `<p style="text-align:justify;margin:0 0 16px;font-size:12.5px">Materialele utilizate sunt însoțite de certificate de calitate: ${certMat.map(c => esc(c.denumire)).join('; ')}.</p>` : ''}
+          <p style="text-align:justify;margin:0 0 16px">Produsul a fost verificat și corespunde din punct de vedere calitativ și dimensional. Prezentul document însoțește produsul la livrare.</p>
+          <table style="width:100%;border-collapse:collapse;margin-top:46px"><tr>
+            <td style="width:55%"></td>
+            <td style="text-align:center">
+              <div style="font-weight:800">GAZPET INSTAL S.R.L.</div>
+              <div style="font-size:12px;margin-top:2px">Administrator</div>
+              <div style="font-size:12px;font-weight:700;margin-top:2px">Trușu Răzvan</div>
+            </td>
+          </tr></table>
+        </div>`
+      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([import('jspdf'), import('html2canvas')])
+      const div = document.createElement('div')
+      div.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#fff'
+      div.innerHTML = html
+      document.body.appendChild(div)
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const canvas = await html2canvas(div, { scale: 2, backgroundColor: '#fff' })
+      document.body.removeChild(div)
+      const pdf = new jsPDF({ unit:'mm', format:'a4' })
+      const imgH = canvas.height * 210 / canvas.width
+      const pagini = Math.max(1, Math.ceil(imgH / 297))
+      for (let i = 0; i < pagini; i++) {
+        if (i > 0) pdf.addPage()
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -i * 297, 210, imgH)
+      }
+      pdf.save(`${nrDoc.replace(/[^\w.-]+/g, '_')}.pdf`)
+      // evidența documentelor emise
+      const { data: { user } } = await supabase.auth.getUser()
+      await supabase.from('productie_documente').insert({
+        tip: tipDoc, denumire: nrDoc, produs_id: produs.produs_id, lot_id: lot.id,
+        note: [f.beneficiar.trim(), f.obiect.trim()].filter(Boolean).join(' · ') || null, uploaded_by: user?.id || null,
+      })
+      setBusy(false)
+      onSaved(`✓ ${titlu.charAt(0) + titlu.slice(1).toLowerCase()} generată (${nrDoc})`)
+    } catch (e) { setBusy(false); onError('Eroare PDF: ' + (e?.message || e)) }
+  }
+
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.modal, maxWidth:600 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>📜 Declarație / Certificat de conformitate</div>
+        <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>{numeProdus} · {lot.cod_lot || 'Lot #' + lot.id} · {fmt(lot.cantitate)} buc{serii.length ? ` · serii ${serii[0]}…${serii[serii.length - 1]}` : ''}</div>
+        {!agrement && <div style={{ ...S.card, background:G.bg, padding:'8px 12px', marginBottom:12, fontSize:12.5, color:G.orange }}>⚠️ Produsul nu are agrement atașat — documentul se generează fără referință la agrement. Urcă agrementul în „📜 Agremente & certificate".</div>}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <div style={{ gridColumn:'1/3' }}><label style={S.label}>Beneficiar (opțional)</label><input value={f.beneficiar} onChange={e => setF({ ...f, beneficiar:e.target.value })} placeholder="ex: TRANSGAZ S.A." style={S.input} /></div>
+          <div style={{ gridColumn:'1/3' }}><label style={S.label}>Obiectiv / lucrare (opțional)</label><input value={f.obiect} onChange={e => setF({ ...f, obiect:e.target.value })} style={S.input} /></div>
+          <div style={{ gridColumn:'1/3' }}><label style={S.label}>Nr. document (gol = automat)</label><input value={f.nr_doc} onChange={e => setF({ ...f, nr_doc:e.target.value })} placeholder="ex: DC-FM8-2026-01" style={S.input} /></div>
+        </div>
+        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16, flexWrap:'wrap' }}>
+          <button onClick={onClose} style={S.btnS}>Închide</button>
+          <button onClick={() => genereaza('declaratie_conformitate')} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>✍️ Declarație de conformitate</button>
+          <button onClick={() => genereaza('certificat_conformitate')} disabled={busy} style={{ ...S.btnP, background:G.purple, color:'#1E0A3C', opacity: busy ? .6 : 1 }}>🏅 Certificat de conformitate</button>
+        </div>
       </div>
     </div>
   )
