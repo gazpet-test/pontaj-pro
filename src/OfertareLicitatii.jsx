@@ -2029,6 +2029,7 @@ function ParticipariSeap({ particip, fEnt, setFEnt }) {
     'competitor:timgaz': ['TIMGAZ', '#8B949E'], 'competitor:amarad': ['AMARAD', '#8B949E'],
     'competitor:comesad': ['COMESAD', '#E3B341'], 'competitor:petroconst': ['PETROCONST', '#79C0FF'],
     'competitor:totalgaz': ['TOTALGAZ', '#56D364'], 'competitor:irigc': ['IRIGC', '#FFA657'],
+    'competitor:general_invest': ['GENERAL INVEST', '#D2A8FF'],
   }
   const eticheta = (e) => ETICHETE[e] || [e.replace('competitor:', '').toUpperCase(), G.muted]
   const sumar = {}
