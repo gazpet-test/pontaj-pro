@@ -15,6 +15,7 @@ import TicheteWidget from './TicheteWidget.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import HrAngajatNouWizard from './HrAngajatNouWizard.jsx'
 import SugestiiChuckTab from './SugestiiChuckTab.jsx'
+import HrRecrutare from './HrRecrutare.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 import DomeniiPicker from './HrDomeniiPicker.jsx'
 import HrPersonalExtern from './HrPersonalExtern.jsx'
@@ -201,6 +202,7 @@ export default function HRPage() {
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'concedii',    icon: '🌴', label: 'Concedii' },
+    { key: 'recrutare',   icon: '🧲', label: 'Recrutare', personalOnly: true },
     { key: 'arhiva',      icon: '📦', label: 'Arhivă', badge: arhiva.length, personalOnly: true },
     { key: 'cos',         icon: '🗑', label: 'Coș', badge: cosCount, personalOnly: true },
     { key: 'scanner',     icon: '📷', label: 'Scanner AI', scannerOnly: true },
@@ -272,6 +274,7 @@ export default function HRPage() {
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
+      {!load && tab === 'recrutare' && canAccessPersonal && <HrRecrutare profile={profile} showToast={showToast} />}
       {!load && tab === 'arhiva' && canAccessPersonal && <TabArhivaAutorizatii arhiva={arhiva} showToast={showToast} />}
       {!load && tab === 'cos' && canAccessPersonal && <TabCos profile={profile} showToast={showToast} />}
       {!load && tab === 'scanner' && canUseScanner && <TabScannerDocumenteHR profile={profile} employees={employees} showToast={showToast} />}
