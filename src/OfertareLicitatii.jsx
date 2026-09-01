@@ -1651,7 +1651,8 @@ function ReferinteFinanciare({ showToast }) {
   const [part, setPart] = useState([])
   const [loading, setLoading] = useState(true)
   const [cauta, setCauta] = useState('')
-  const [tab, setTab] = useState('calibrari')  // calibrari | preturi | materiale | normative | parteneri | documente
+  const [particip, setParticip] = useState([])
+  const [tab, setTab] = useState('calibrari')  // calibrari | participari | preturi | materiale | normative | parteneri | documente
 
   const loadAll = async () => {
     const [{ data: c }, { data: p }, { data: m }, { data: n }, { data: pa }] = await Promise.all([
@@ -1661,7 +1662,8 @@ function ReferinteFinanciare({ showToast }) {
       supabase.from('ofertare_normative').select('*').order('created_at', { ascending: false }),
       supabase.from('ofertare_parteneri').select('*').order('nume'),
     ])
-    setCal(c || []); setPu(p || []); setMat(m || []); setNorme(n || []); setPart(pa || []); setLoading(false)
+    const { data: pp } = await supabase.from('ofertare_participari').select('*').order('nr_seap', { ascending:false })
+    setCal(c || []); setPu(p || []); setMat(m || []); setNorme(n || []); setPart(pa || []); setParticip(pp || []); setLoading(false)
   }
   useEffect(() => { loadAll() }, [])
 
@@ -1679,7 +1681,7 @@ function ReferinteFinanciare({ showToast }) {
           <div style={{ fontSize:12, color:G.muted }}>Cu ce coeficienți s-a mers istoric, pe segmente — plus prețuri unitare și materiale din ofertele depuse</div>
         </div>
         <div style={{ display:'flex', gap:8 }}>
-          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS']].map(([k, lbl]) => (
+          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['participari', `🛰️ Participări SEAP (${particip.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS']].map(([k, lbl]) => (
             <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, padding:'6px 13px', fontSize:12, fontWeight:700,
               ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
           ))}
@@ -1757,6 +1759,31 @@ function ReferinteFinanciare({ showToast }) {
           <div style={{ fontSize:11.5, color:G.dim, padding:'6px 4px' }}>
             Formula devizului: directe (mat+man+uti+tra) + CAM 2,25% pe manoperă → + indirecte % → + profit %. Rândurile se completează la fiecare ofertă depusă.
           </div>
+        </div>
+      )}
+
+      {!loading && tab === 'participari' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {(() => {
+            const gi = particip.filter(p => p.entitate === 'gazpet_instal')
+            const sumGi = gi.reduce((s, p) => s + Number(p.valoare_ron || 0), 0)
+            return (
+              <div style={{ ...S.card, padding:'12px 18px', display:'flex', gap:16, flexWrap:'wrap', alignItems:'center', fontSize:13 }}>
+                <span style={{ fontWeight:800, fontSize:14 }}>🏆 Atribuiri SEAP unde Gazpet-Instal apare câștigător</span>
+                <span><b style={{ color:G.green }}>{gi.length}</b> contracte · <b style={{ color:G.yellow }}>{fmtVal(sumGi)} lei</b></span>
+                <span style={{ color:G.dim, fontSize:12 }}>direct din API SEAP (winnerId 114759) · refresh automat lunea · valorile pe asocieri sunt totalul contractului, nu doar cota Gazpet</span>
+              </div>
+            )
+          })()}
+          {particip.map(p => (
+            <div key={p.id} style={{ ...S.card, padding:'11px 16px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', fontSize:13, opacity: p.entitate === 'gazpet_instal' ? 1 : .65 }}>
+              <span style={{ fontSize:10.5, fontWeight:800, color: p.entitate === 'gazpet_instal' ? G.ofertare : G.muted, border:`1px solid ${G.border2}`, borderRadius:10, padding:'1px 8px' }}>{p.entitate === 'gazpet_instal' ? 'GAZPET-INSTAL' : 'GAZPET INVEST (grup)'}</span>
+              <a href={p.link || '#'} target="_blank" rel="noreferrer" style={{ fontWeight:700, color:G.blue, textDecoration:'none', flex:1, minWidth:260 }}>{p.titlu}</a>
+              <span style={{ color:G.muted, fontSize:12 }}>{(p.autoritate || '').replace(/^[A-Z0-9]+ - /, '').slice(0, 42)}</span>
+              <span style={{ color:G.dim, fontSize:11.5 }}>{p.nr_seap}</span>
+              <span style={{ color:G.yellow, fontWeight:700, minWidth:110, textAlign:'right' }}>{p.valoare_ron != null ? fmtVal(p.valoare_ron) + ' lei' : '—'}</span>
+            </div>
+          ))}
         </div>
       )}
 
