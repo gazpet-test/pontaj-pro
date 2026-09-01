@@ -237,6 +237,25 @@ function TemplateForm({ tip, slug, contractMama, showToast, onClose, onSaved }) 
   const [meta, setMeta] = useState({ numar:'', data_contract:new Date().toISOString().slice(0,10), prestator:'', valoare_lei:'' })
   const [corp, setCorp] = useState(null)   // null = încă în pasul de câmpuri; string = corp editabil
   const [busy, setBusy] = useState(false)
+  const [aiInstr, setAiInstr] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiRezumat, setAiRezumat] = useState('')
+
+  const ruleazaAI = async (payload) => {
+    setAiBusy(true); setAiRezumat('')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/contracte-ai', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
+        body: JSON.stringify({ ...payload, corp }),
+      })
+      const d = await r.json()
+      if (d.corp_nou) { setCorp(d.corp_nou); setAiRezumat(d.rezumat_modificari || 'modificări aplicate'); setAiInstr('') }
+      else showToast?.(d.eroare || 'Eroare AI', 'error')
+    } catch (e) { showToast?.('Eroare AI: ' + e.message, 'error') }
+    finally { setAiBusy(false) }
+  }
 
   useEffect(() => {
     supabase.from('contracte_templates').select('*').eq('slug', slug).single().then(({ data, error }) => {
@@ -311,8 +330,31 @@ function TemplateForm({ tip, slug, contractMama, showToast, onClose, onSaved }) 
       <div style={{ fontSize:11, color:G.yellow }}>
         ✍️ Corpul contractului e editabil — modifică direct clauzele negociate, apoi generează PDF-ul.
       </div>
+      {/* Bara AI (E4.3): reformulare la negociere + adaptare din contractul-mamă */}
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', padding:'10px 12px', background:G.blue+'12', border:`1px solid ${G.blue}44`, borderRadius:8 }}>
+        <input style={{ ...S.input, flex:1, minWidth:220 }} disabled={aiBusy}
+          placeholder='🤖 Instrucțiune de negociere… ex: „retenția devine 5%, plata la 30 de zile"'
+          value={aiInstr} onChange={e => setAiInstr(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && aiInstr.trim()) ruleazaAI({ actiune:'reformuleaza', instructiune: aiInstr }) }} />
+        <button style={{ ...S.btnS, color:G.blue }} disabled={aiBusy || !aiInstr.trim()}
+          onClick={() => ruleazaAI({ actiune:'reformuleaza', instructiune: aiInstr })}>
+          {aiBusy ? '⏳' : '🤖 Reformulează'}
+        </button>
+        {m && (
+          <button style={{ ...S.btnS, color:G.blue }} disabled={aiBusy}
+            title="Propagă termenele, garanțiile și obligațiile speciale din contractul-mamă (back-to-back)"
+            onClick={() => ruleazaAI({ actiune:'adapteaza', contract_mama_id: m.id })}>
+            {aiBusy ? '⏳' : '🤖 Adaptează din contractul-mamă'}
+          </button>
+        )}
+      </div>
+      {aiRezumat && (
+        <div style={{ fontSize:11, color:G.green, padding:'8px 12px', background:G.green+'12', border:`1px solid ${G.green}44`, borderRadius:7, whiteSpace:'pre-wrap' }}>
+          ✅ Modificări AI: {aiRezumat} — verifică textul înainte de generare.
+        </div>
+      )}
       <textarea style={{ ...S.input, minHeight:420, resize:'vertical', fontFamily:'monospace', fontSize:12, lineHeight:1.5 }}
-        value={corp} onChange={e => setCorp(e.target.value)} />
+        value={corp} onChange={e => setCorp(e.target.value)} disabled={aiBusy} />
       <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
         <button style={S.btnS} onClick={() => setCorp(null)} disabled={busy}>← Înapoi la câmpuri</button>
         <button style={S.btnP} onClick={genereaza} disabled={busy}>{busy ? '⏳ Generez...' : '📄 Generează PDF + salvează draft'}</button>
