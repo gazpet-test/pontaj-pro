@@ -16,6 +16,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
+import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -112,6 +113,7 @@ export default function ContracteTertiTab() {
   const [editBen, setEditBen] = useState(null)
   const [editCon, setEditCon] = useState(null)
   const [viewCon, setViewCon] = useState(null)
+  const [genMama, setGenMama] = useState(null)   // contract-mamă pt „Generează contract prestări servicii"
 
   const loadAll = async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -226,10 +228,11 @@ export default function ContracteTertiTab() {
       )}
 
       {subTab === 'contracte' && (
-        <ContracteSubTab 
+        <ContracteSubTab
           contracte={contracte} beneficiari={beneficiari}
           canWrite={canWrite} isOwner={isOwner}
           onAdd={() => setEditCon({})}
+          onGenPrestari={c => setGenMama(c)}
           onView={c => setViewCon(c)}
           onEdit={c => setEditCon(c)}
           onDelete={async c => {
@@ -256,6 +259,15 @@ export default function ContracteTertiTab() {
           onSaved={() => { setEditCon(null); loadAll(); show('✓ Contract salvat') }}
           onError={e => show('Eroare: ' + e, 'err')}
           onAiSuccess={() => { setEditCon(null); loadAll(); show('🤖 AI extract complet · contract actualizat', 'ok') }}
+        />
+      )}
+      {genMama && (
+        <GeneratorContractMontaj
+          contractMama={genMama}
+          beneficiarMamaNume={beneficiari.find(b => b.id === genMama.beneficiar_id)?.nume || ''}
+          showToast={show}
+          onClose={() => setGenMama(null)}
+          onSaved={() => { setGenMama(null); loadAll() }}
         />
       )}
       {viewCon && (
@@ -345,7 +357,7 @@ function BeneficiariSubTab({ beneficiari, contracte, isOwner, onAdd, onEdit, onT
 // ══════════════════════════════════════════════════════════
 // CONTRACTE SUB-TAB — cu filtre categorie + sens
 // ══════════════════════════════════════════════════════════
-function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onView, onEdit, onDelete, politeMap = {}, gbeRetinutMap = {} }) {
+function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onGenPrestari, onView, onEdit, onDelete, politeMap = {}, gbeRetinutMap = {} }) {
   // 11.06.2026: alerte polițe pe rând (contracte de încasare active): lipsă GBE / expiră curând
   // 24.06.2026: GBE poate fi acoperit și prin REȚINERE (din IPC), nu doar prin poliță. Dacă
   //             contractul are gbe_tip='retinere' SAU reținut>0 → nu mai e „fără GBE", ci „GBE prin reținere".
@@ -497,6 +509,11 @@ function ContracteSubTab({ contracte, beneficiari, canWrite, isOwner, onAdd, onV
 
                   {/* Actions */}
                   <div style={{display:'flex', gap:4}} onClick={e => e.stopPropagation()}>
+                    {canWrite && c.sens === 'incasare' && c.categorie === 'executie' && (
+                      <button onClick={() => onGenPrestari(c)}
+                        title="Generează contract prestări servicii (montaj conducte) din acest contract"
+                        style={{...S.btnS, padding:'8px 13px', fontSize:16, color:G.blue}}>📄⚡</button>
+                    )}
                     <button
                       onClick={() => setExpandedId(isExpanded ? null : c.id)}
                       title="Acte adiționale"
