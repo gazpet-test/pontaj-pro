@@ -2095,6 +2095,20 @@ function CostModal({ poz, onClose, onDone }) {
 // ════════════════════════════════════════════════════════════════
 export default function MagaziePage() {
   const [tab, setTab] = useState('materiale')
+  // Externii (email non-@gazpet.ro, ex. partenerul de agrement Adrom Evolution)
+  // văd DOAR tab-ul Producție — restul magaziei e intern.
+  const [extern, setExtern] = useState(null)
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      const e = !(user?.email || '').toLowerCase().endsWith('@gazpet.ro')
+      setExtern(e)
+      if (e) setTab('productie')
+    })
+  }, [])
+  if (extern === null) return <div style={{ ...S.page, padding:40, textAlign:'center', color:G.dim }}>Se încarcă…</div>
+  const tabsVizibile = extern
+    ? [['productie', '🏭 Producție']]
+    : [['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['productie', '🏭 Producție']]
   return (
     <div style={{ ...S.page, padding:'24px 0' }}>
       <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18, flexWrap:'wrap' }}>
@@ -2106,7 +2120,7 @@ export default function MagaziePage() {
       </div>
 
       <div style={{ display:'flex', gap:8, marginBottom:18 }}>
-        {[['materiale', '📋 Materiale'], ['magazii', '🏬 Magazii'], ['transferuri', '🔁 Transferuri'], ['consum', '🔧 Consum'], ['catalog', '📒 Catalog'], ['echipamente', '🧰 Echipamente'], ['stoc_trasabil', '🔍 Stoc trasabil'], ['productie', '🏭 Producție']].map(([k, l]) => (
+        {tabsVizibile.map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{
             padding:'9px 18px', fontSize:14, fontWeight:700, cursor:'pointer', borderRadius:8,
             background: tab === k ? G.magazie + '22' : 'transparent',
