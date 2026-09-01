@@ -55,22 +55,25 @@ export default function ProductieTab() {
   const [loturi, setLoturi] = useState([])
   const [miscari, setMiscari] = useState([])
   const [sites, setSites] = useState([])
+  const [materiale, setMateriale] = useState([]) // productie_materiale (materii prime)
   const [msg, setMsg] = useState(null)
   const [produsModal, setProdusModal] = useState(null)   // {} nou | rând existent
   const [lotModal, setLotModal] = useState(null)         // {produs} nou | {lot, produs} existent
   const [miscareModal, setMiscareModal] = useState(null) // {produs}
+  const [facturaModal, setFacturaModal] = useState(false)
 
   const show = (text, type='ok') => { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }
 
   const loadAll = useCallback(async () => {
     setLoading(true)
-    const [{ data: st }, { data: lt }, { data: ms }, { data: si }] = await Promise.all([
+    const [{ data: st }, { data: lt }, { data: ms }, { data: si }, { data: mat }] = await Promise.all([
       supabase.from('v_productie_stoc').select('*').order('denumire'),
       supabase.from('productie_loturi').select('*, productie_lot_componente(*)').order('id', { ascending:false }),
       supabase.from('productie_stoc_miscari').select('*').order('data', { ascending:false }).order('id', { ascending:false }).limit(200),
       supabase.from('sites').select('id, name').eq('active', true).order('name'),
+      supabase.from('productie_materiale').select('*').order('denumire'),
     ])
-    setStoc(st || []); setLoturi(lt || []); setMiscari(ms || []); setSites(si || [])
+    setStoc(st || []); setLoturi(lt || []); setMiscari(ms || []); setSites(si || []); setMateriale(mat || [])
     setLoading(false)
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
@@ -100,8 +103,24 @@ export default function ProductieTab() {
           </div>
         ))}
         <div style={{ flex:1 }} />
+        <button onClick={() => setFacturaModal(true)} style={{ ...S.btnP, background:G.purple, color:'#fff', alignSelf:'center' }}>📥 Factură (AI)</button>
         <button onClick={() => setProdusModal({})} style={{ ...S.btnP, alignSelf:'center' }}>+ Produs nou</button>
       </div>
+
+      {/* Stoc materii prime pentru producție */}
+      {materiale.length > 0 && (
+        <div style={{ ...S.card, padding:'14px 18px', marginBottom:14 }}>
+          <div style={{ fontWeight:800, fontSize:14, marginBottom:8 }}>🧱 Materii prime & componente (stoc producție)</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+            {materiale.map(m => (
+              <div key={m.id} style={{ background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8, padding:'7px 12px', fontSize:12.5 }}>
+                {m.denumire} · <b style={{ color: Number(m.cantitate) > 0 ? G.green : G.red }}>{fmt(m.cantitate)} {m.um}</b>
+                {m.cost_mediu != null && <span style={{ color:G.muted }}> · {fmt(m.cost_mediu)} lei/{m.um}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Produse */}
       {stoc.length === 0 && (
@@ -179,7 +198,8 @@ export default function ProductieTab() {
       })}
 
       {produsModal && <ProdusModal item={produsModal} onClose={() => setProdusModal(null)} onSaved={() => { setProdusModal(null); loadAll(); show('✓ Produs salvat') }} onError={t => show(t, 'err')} />}
-      {lotModal && <LotModal ctx={lotModal} onClose={() => setLotModal(null)} onSaved={(t) => { setLotModal(null); loadAll(); show(t || '✓ Lot salvat') }} onError={t => show(t, 'err')} />}
+      {lotModal && <LotModal ctx={lotModal} materiale={materiale} onClose={() => setLotModal(null)} onSaved={(t) => { setLotModal(null); loadAll(); show(t || '✓ Lot salvat') }} onError={t => show(t, 'err')} />}
+      {facturaModal && <FacturaAiModal onClose={() => setFacturaModal(false)} onSaved={(t) => { setFacturaModal(false); loadAll(); show(t) }} onError={t => show(t, 'err')} />}
       {miscareModal && <MiscareModal produs={miscareModal.produs} sites={sites} onClose={() => setMiscareModal(null)} onSaved={() => { setMiscareModal(null); loadAll(); show('✓ Mișcare înregistrată') }} onError={t => show(t, 'err')} />}
     </div>
   )
@@ -240,7 +260,9 @@ function ProdusModal({ item, onClose, onSaved, onError }) {
 }
 
 // ─── Modal lot (componente + finalizare) ────────────────────────────────────
-function LotModal({ ctx, onClose, onSaved, onError }) {
+function LotModal({ ctx, materiale = [], onClose, onSaved, onError }) {
+  const [matSel, setMatSel] = useState('')
+  const [matCant, setMatCant] = useState('')
   const { produs } = ctx
   const isNew = !ctx.lot
   const [lot, setLot] = useState(ctx.lot || null)
@@ -300,6 +322,34 @@ function LotModal({ ctx, onClose, onSaved, onError }) {
     setFile(null)
   }
 
+  // Consum din stocul de materii prime: scade stocul + intră drept componentă a lotului
+  const adaugaDinStoc = async () => {
+    if (!lot) return onError('Salvează întâi lotul')
+    const mat = materiale.find(x => x.id === Number(matSel))
+    const cant = Number(String(matCant).replace(',', '.'))
+    if (!mat || !cant || cant <= 0) return onError('Alege materialul și cantitatea')
+    if (cant > Number(mat.cantitate)) return onError(`Stoc insuficient: ${fmt(mat.cantitate)} ${mat.um} disponibil`)
+    setBusy(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const valoare = mat.cost_mediu != null ? cant * Number(mat.cost_mediu) : null
+    const { data: comp, error: e1 } = await supabase.from('productie_lot_componente').insert({
+      lot_id: lot.id, tip: 'materie_prima', descriere: mat.denumire,
+      cantitate: cant, um: mat.um, valoare_lei: valoare,
+    }).select('*').single()
+    if (e1) { setBusy(false); return onError('Eroare: ' + e1.message) }
+    const { error: e2 } = await supabase.from('productie_materiale_miscari').insert({
+      material_id: mat.id, tip: 'iesire_lot', cantitate: -cant, lot_id: lot.id,
+      note: `Consum pe ${f.cod_lot || 'lot #' + lot.id}`, created_by: user?.id || null,
+    })
+    if (!e2) await supabase.from('productie_materiale').update({ cantitate: Number(mat.cantitate) - cant, updated_at: new Date().toISOString() }).eq('id', mat.id)
+    setBusy(false)
+    if (e2) return onError('Stoc: ' + e2.message)
+    mat.cantitate = Number(mat.cantitate) - cant
+    setComp([...comp2Add(comp)])
+    setMatSel(''); setMatCant('')
+  }
+  const comp2Add = (c) => { const arr = comp.slice(); arr.push(c); return arr }
+
   const stergeComponenta = async (c) => {
     const { error } = await supabase.from('productie_lot_componente').delete().eq('id', c.id)
     if (error) return onError('Eroare: ' + error.message)
@@ -355,6 +405,17 @@ function LotModal({ ctx, onClose, onSaved, onError }) {
                 {!finalizat && <button onClick={() => stergeComponenta(c)} style={{ ...S.btnS, padding:'3px 8px', fontSize:12, color:G.red }}>✕</button>}
               </div>
             ))}
+            {!finalizat && materiale.length > 0 && (
+              <div style={{ marginTop:10, display:'flex', gap:8, alignItems:'center', padding:'8px 0', borderBottom:`1px dashed ${G.border2}` }}>
+                <span style={{ fontSize:12.5, color:G.cyan, fontWeight:700 }}>🧱 Din stoc:</span>
+                <select value={matSel} onChange={e => setMatSel(e.target.value)} style={{ ...S.input, flex:2 }}>
+                  <option value="">— alege materialul —</option>
+                  {materiale.filter(m => Number(m.cantitate) > 0).map(m => <option key={m.id} value={m.id}>{m.denumire} ({fmt(m.cantitate)} {m.um}{m.cost_mediu != null ? ` · ${fmt(m.cost_mediu)} lei` : ''})</option>)}
+                </select>
+                <input value={matCant} onChange={e => setMatCant(e.target.value)} placeholder="Cant." style={{ ...S.input, width:80 }} />
+                <button onClick={adaugaDinStoc} disabled={busy} style={{ ...S.btnP, background:G.cyan, color:'#06272B' }}>Consumă</button>
+              </div>
+            )}
             {!finalizat && (
               <div style={{ marginTop:10, display:'grid', gridTemplateColumns:'1.2fr 2fr 1fr', gap:8 }}>
                 <select value={cNou.tip} onChange={e => setCNou({ ...cNou, tip:e.target.value })} style={S.input}>
@@ -457,6 +518,137 @@ function MiscareModal({ produs, sites, onClose, onSaved, onError }) {
           <button onClick={onClose} style={S.btnS}>Anulează</button>
           <button onClick={save} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : 'Înregistrează'}</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Modal factură cu AI ────────────────────────────────────────────────────
+// Upload PDF → productie-factura-ai (Claude) → tabel editabil → Confirmă:
+// bunurile intră în stocul de materii prime (cost mediu ponderat), serviciile
+// se marchează informativ (se atașează pe lot la prelucrare).
+function FacturaAiModal({ onClose, onSaved, onError }) {
+  const [file, setFile] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [pdfPath, setPdfPath] = useState(null)
+  const [ex, setEx] = useState(null)   // extractia editabilă
+
+  const citeste = async () => {
+    if (!file) return onError('Alege PDF-ul facturii')
+    setBusy(true)
+    try {
+      const path = `facturi/${Date.now()}_${file.name.replace(/[^\w.-]+/g, '_')}`
+      const { error: upErr } = await supabase.storage.from('productie').upload(path, file, { upsert: false })
+      if (upErr) throw new Error('Upload: ' + upErr.message)
+      setPdfPath(path)
+      const { data: { session } } = await supabase.auth.getSession()
+      const r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/productie-factura-ai', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_path: path }),
+      })
+      const j = await r.json()
+      if (j.error) throw new Error(j.error)
+      setEx(j.extractie)
+    } catch (e) { onError('Eroare: ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
+  const setLinie = (i, patch) => setEx(x => ({ ...x, linii: x.linii.map((l, k) => k === i ? { ...l, ...patch } : l) }))
+  const stergeLinie = (i) => setEx(x => ({ ...x, linii: x.linii.filter((_, k) => k !== i) }))
+
+  const confirma = async () => {
+    if (!ex?.linii?.length) return onError('Nimic de confirmat')
+    setBusy(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data: fact, error: eF } = await supabase.from('productie_facturi').insert({
+        furnizor: ex.furnizor || null, numar: ex.numar || null, data: ex.data || null,
+        total_fara_tva: Number(ex.total_fara_tva) || null, pdf_path: pdfPath,
+        ai_jsonb: ex, confirmata: true, created_by: user?.id || null,
+      }).select('id').single()
+      if (eF) throw new Error(eF.message)
+      let intrate = 0
+      for (const l of ex.linii) {
+        if (l.este_serviciu) continue
+        const cant = Number(l.cantitate) || 0
+        if (cant <= 0) continue
+        const denum = String(l.descriere || '').trim()
+        // upsert material pe denumire (case-insensitive) + cost mediu ponderat
+        const { data: exist } = await supabase.from('productie_materiale').select('*').ilike('denumire', denum).limit(1).maybeSingle()
+        let matId
+        if (exist) {
+          const vNou = Number(l.pret_unitar) || 0
+          const cTot = Number(exist.cantitate) + cant
+          const cost = cTot > 0 && vNou > 0
+            ? ((Number(exist.cost_mediu) || 0) * Number(exist.cantitate) + vNou * cant) / cTot
+            : (exist.cost_mediu ?? (vNou || null))
+          await supabase.from('productie_materiale').update({ cantitate: cTot, cost_mediu: cost, updated_at: new Date().toISOString() }).eq('id', exist.id)
+          matId = exist.id
+        } else {
+          const { data: nou, error: eM } = await supabase.from('productie_materiale').insert({
+            denumire: denum, um: l.um || 'buc', cantitate: cant, cost_mediu: Number(l.pret_unitar) || null,
+          }).select('id').single()
+          if (eM) throw new Error(eM.message)
+          matId = nou.id
+        }
+        await supabase.from('productie_materiale_miscari').insert({
+          material_id: matId, tip: 'intrare_factura', cantitate: cant,
+          pret_unitar: Number(l.pret_unitar) || null, factura_id: fact.id,
+          data: ex.data || new Date().toISOString().slice(0, 10),
+          note: `${ex.furnizor || ''} fact. ${ex.numar || ''}`.trim(), created_by: user?.id || null,
+        })
+        intrate++
+      }
+      const servicii = ex.linii.filter(l => l.este_serviciu).length
+      onSaved(`✓ Factură confirmată: ${intrate} materiale în stoc` + (servicii ? ` · ${servicii} servicii (le atașezi pe lot la prelucrare)` : ''))
+    } catch (e) { onError('Eroare: ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.modal, maxWidth: 820 }}>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>📥 Factură nouă — citită cu AI</div>
+        <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>Urci PDF-ul, AI-ul extrage liniile, tu verifici și confirmi. Bunurile intră în stocul de materii prime; serviciile (prelucrare/manoperă) le atașezi pe lot.</div>
+
+        {!ex && (
+          <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+            <label style={{ ...S.btnS, cursor:'pointer', flex:1, textAlign:'center' }}>
+              {file ? '📄 ' + file.name : '📎 Alege PDF-ul facturii'}
+              <input type="file" accept=".pdf" onChange={e => setFile(e.target.files?.[0] || null)} style={{ display:'none' }} />
+            </label>
+            <button onClick={citeste} disabled={busy || !file} style={{ ...S.btnP, background:G.purple, color:'#fff', opacity: busy || !file ? .6 : 1 }}>{busy ? 'Citesc cu AI…' : '🤖 Citește factura'}</button>
+          </div>
+        )}
+
+        {ex && (
+          <>
+            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr', gap:10, marginBottom:12 }}>
+              <div><label style={S.label}>Furnizor</label><input value={ex.furnizor || ''} onChange={e => setEx({ ...ex, furnizor: e.target.value })} style={S.input} /></div>
+              <div><label style={S.label}>Nr. factură</label><input value={ex.numar || ''} onChange={e => setEx({ ...ex, numar: e.target.value })} style={S.input} /></div>
+              <div><label style={S.label}>Data</label><input type="date" value={ex.data || ''} onChange={e => setEx({ ...ex, data: e.target.value })} style={S.input} /></div>
+              <div><label style={S.label}>Total fără TVA</label><input value={ex.total_fara_tva ?? ''} onChange={e => setEx({ ...ex, total_fara_tva: e.target.value })} style={S.input} /></div>
+            </div>
+            <div style={{ ...S.card, background:G.bg, padding:12, marginBottom:14, maxHeight:340, overflowY:'auto' }}>
+              {(ex.linii || []).map((l, i) => (
+                <div key={i} style={{ display:'grid', gridTemplateColumns:'24px 3fr 70px 60px 90px 90px 90px 30px', gap:8, alignItems:'center', padding:'6px 0', borderBottom:`1px solid ${G.border}`, fontSize:13 }}>
+                  <input type="checkbox" checked={!l.este_serviciu} onChange={e => setLinie(i, { este_serviciu: !e.target.checked })} title="Bifat = intră în stoc (bun fizic); nebifat = serviciu" />
+                  <input value={l.descriere || ''} onChange={e => setLinie(i, { descriere: e.target.value })} style={{ ...S.input, padding:'6px 8px' }} />
+                  <input value={l.cantitate ?? ''} onChange={e => setLinie(i, { cantitate: e.target.value })} style={{ ...S.input, padding:'6px 8px' }} />
+                  <input value={l.um || ''} onChange={e => setLinie(i, { um: e.target.value })} style={{ ...S.input, padding:'6px 8px' }} />
+                  <input value={l.pret_unitar ?? ''} onChange={e => setLinie(i, { pret_unitar: e.target.value })} style={{ ...S.input, padding:'6px 8px' }} title="Preț unitar fără TVA" />
+                  <span style={{ color:G.yellow, textAlign:'right' }}>{l.valoare != null ? fmt(l.valoare) + ' lei' : '—'}</span>
+                  <span style={{ fontSize:11, color: l.este_serviciu ? G.purple : G.green, fontWeight:700 }}>{l.este_serviciu ? 'serviciu' : '→ stoc'}</span>
+                  <button onClick={() => stergeLinie(i)} style={{ ...S.btnS, padding:'2px 7px', fontSize:11, color:G.red }}>✕</button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+              <button onClick={onClose} style={S.btnS}>Anulează</button>
+              <button onClick={confirma} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : '✅ Confirmă — bagă în stoc'}</button>
+            </div>
+          </>
+        )}
+        {!ex && <div style={{ display:'flex', justifyContent:'flex-end', marginTop:14 }}><button onClick={onClose} style={S.btnS}>Închide</button></div>}
       </div>
     </div>
   )
