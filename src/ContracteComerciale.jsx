@@ -45,6 +45,20 @@ const TIP_META = {
   furnizare_materiale:{ label: 'Furnizare Materiale', emoji: '📦', color: G.orange },
 }
 
+// Tipuri generate din platformă (GeneratorContractMontaj) — doar afișare badge/filtru,
+// NU apar în formularul de creare manuală (n-au roluri asociate)
+const TIP_META_GENERATE = {
+  montaj_transport_gaze: { label: 'Montaj Transport Gaze',   emoji: '🔩', color: G.purple },
+  montaj_distributie:    { label: 'Montaj Distribuție Gaze', emoji: '🔩', color: G.purple },
+  montaj_titei:          { label: 'Montaj Transport Țiței',  emoji: '🛢️', color: G.purple },
+  probe_presiune:        { label: 'Probe presiune',          emoji: '🧪', color: G.blue },
+  constructii_civile:    { label: 'Construcții civile',      emoji: '🏗️', color: G.yellow },
+  terasamente:           { label: 'Terasamente',             emoji: '🚜', color: G.yellow },
+  chirie_utilaje:        { label: 'Chirie utilaje',          emoji: '🚛', color: G.orange },
+  chirie_personal:       { label: 'Chirie personal',         emoji: '👷', color: G.orange },
+}
+const TIP_META_ALL = { ...TIP_META, ...TIP_META_GENERATE }
+
 const ROL_META = {
   lider:                   { label: 'Asociat Lider',          color: G.green },
   asociat_simplu:          { label: 'Asociat Simplu',         color: G.blue },
@@ -641,7 +655,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
 
 // ─── Card contract ──────────────────────────────────────────────────────────
 function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onViewActe, onViewGBE, onViewPdf, onChangeStatus, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
-  const tip = TIP_META[c.tip_contract]
+  const tip = TIP_META_ALL[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
   const isDownstream = c.sens === 'plata'
@@ -2472,7 +2486,7 @@ export default function ContracteComerciale({ profile }) {
 
         <select value={filterTip} onChange={e => setFilterTip(e.target.value)} style={{ ...S.select, width: 180 }}>
           <option value="">Toate tipurile</option>
-          {Object.entries(TIP_META).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
+          {Object.entries(TIP_META_ALL).map(([k, v]) => <option key={k} value={k}>{v.emoji} {v.label}</option>)}
         </select>
 
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...S.select, width: 140 }}>
@@ -2546,7 +2560,7 @@ export default function ContracteComerciale({ profile }) {
                       <div style={{ marginLeft: 24, marginBottom: 8 }}>
                         {childDs.map(d => {
                           const dSt = STATUS_META[d.status] || STATUS_META.draft
-                          const dTip = TIP_META[d.tip_contract]
+                          const dTip = TIP_META_ALL[d.tip_contract]
                           return (
                             <div key={d.id} style={{
                               padding: '10px 14px', marginBottom: 4, borderRadius: 8,
