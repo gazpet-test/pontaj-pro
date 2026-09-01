@@ -60,7 +60,8 @@ export default function ProductieTab() {
   const [produsModal, setProdusModal] = useState(null)   // {} nou | rând existent
   const [lotModal, setLotModal] = useState(null)         // {produs} nou | {lot, produs} existent
   const [miscareModal, setMiscareModal] = useState(null) // {produs}
-  const [facturaModal, setFacturaModal] = useState(false)
+  const [facturaModal, setFacturaModal] = useState(false) // true = upload nou | {pending: rând} = factură venită pe mail
+  const [facturiPending, setFacturiPending] = useState([])
 
   const show = (text, type='ok') => { setMsg({ text, type }); setTimeout(() => setMsg(null), 4000) }
 
@@ -73,7 +74,8 @@ export default function ProductieTab() {
       supabase.from('sites').select('id, name').eq('active', true).order('name'),
       supabase.from('productie_materiale').select('*').order('denumire'),
     ])
-    setStoc(st || []); setLoturi(lt || []); setMiscari(ms || []); setSites(si || []); setMateriale(mat || [])
+    const { data: fp } = await supabase.from('productie_facturi').select('*').eq('confirmata', false).order('id', { ascending:false })
+    setStoc(st || []); setLoturi(lt || []); setMiscari(ms || []); setSites(si || []); setMateriale(mat || []); setFacturiPending(fp || [])
     setLoading(false)
   }, [])
   useEffect(() => { loadAll() }, [loadAll])
@@ -106,6 +108,31 @@ export default function ProductieTab() {
         <button onClick={() => setFacturaModal(true)} style={{ ...S.btnP, background:G.purple, color:'#fff', alignSelf:'center' }}>📥 Factură (AI)</button>
         <button onClick={() => setProdusModal({})} style={{ ...S.btnP, alignSelf:'center' }}>+ Produs nou</button>
       </div>
+
+      {/* Facturi pescuite de pe mail, în așteptare de confirmare */}
+      {facturiPending.length > 0 && (
+        <div style={{ ...S.card, padding:'14px 18px', marginBottom:14, borderLeft:`3px solid ${G.yellow}` }}>
+          <div style={{ fontWeight:800, fontSize:14, marginBottom:8 }}>⏳ Facturi în așteptare ({facturiPending.length}) — venite pe mail, verifică și confirmă</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {facturiPending.map(fp => {
+              const mail = fp.ai_jsonb?._mail
+              const err = fp.ai_jsonb?._eroare_ai
+              return (
+                <div key={fp.id} onClick={() => setFacturaModal({ pending: fp })} style={{ display:'flex', alignItems:'center', gap:10, background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8, padding:'8px 12px', cursor:'pointer', fontSize:13, flexWrap:'wrap' }}>
+                  <span>📧</span>
+                  <span style={{ fontWeight:700 }}>{fp.furnizor || 'Furnizor necunoscut'}</span>
+                  <span style={{ color:G.muted }}>{fp.numar || '—'} · {fmtD(fp.data)}</span>
+                  {fp.total_fara_tva != null && <span style={{ color:G.yellow }}>{fmt(fp.total_fara_tva)} lei fără TVA</span>}
+                  <span style={{ flex:1 }} />
+                  {err && <span style={{ color:G.red, fontSize:12 }}>⚠ AI: {err}</span>}
+                  {mail?.from && <span style={{ color:G.dim, fontSize:12 }}>de la {mail.from.replace(/<.*>/, '').trim()}</span>}
+                  <span style={{ ...S.btnS, padding:'3px 10px', fontSize:12 }}>Verifică →</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Stoc materii prime pentru producție */}
       {materiale.length > 0 && (
@@ -199,7 +226,7 @@ export default function ProductieTab() {
 
       {produsModal && <ProdusModal item={produsModal} onClose={() => setProdusModal(null)} onSaved={() => { setProdusModal(null); loadAll(); show('✓ Produs salvat') }} onError={t => show(t, 'err')} />}
       {lotModal && <LotModal ctx={lotModal} materiale={materiale} onClose={() => setLotModal(null)} onSaved={(t) => { setLotModal(null); loadAll(); show(t || '✓ Lot salvat') }} onError={t => show(t, 'err')} />}
-      {facturaModal && <FacturaAiModal onClose={() => setFacturaModal(false)} onSaved={(t) => { setFacturaModal(false); loadAll(); show(t) }} onError={t => show(t, 'err')} />}
+      {facturaModal && <FacturaAiModal pending={facturaModal?.pending || null} onClose={() => setFacturaModal(false)} onSaved={(t) => { setFacturaModal(false); loadAll(); show(t) }} onError={t => show(t, 'err')} />}
       {miscareModal && <MiscareModal produs={miscareModal.produs} sites={sites} onClose={() => setMiscareModal(null)} onSaved={() => { setMiscareModal(null); loadAll(); show('✓ Mișcare înregistrată') }} onError={t => show(t, 'err')} />}
     </div>
   )
@@ -553,11 +580,16 @@ function MiscareModal({ produs, sites, onClose, onSaved, onError }) {
 // Upload PDF → productie-factura-ai (Claude) → tabel editabil → Confirmă:
 // bunurile intră în stocul de materii prime (cost mediu ponderat), serviciile
 // se marchează informativ (se atașează pe lot la prelucrare).
-function FacturaAiModal({ onClose, onSaved, onError }) {
+function FacturaAiModal({ pending, onClose, onSaved, onError }) {
+  // pending = rând productie_facturi cu confirmata=false (venit pe mail) → prefill + UPDATE în loc de INSERT
   const [file, setFile] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [pdfPath, setPdfPath] = useState(null)
-  const [ex, setEx] = useState(null)   // extractia editabilă
+  const [pdfPath, setPdfPath] = useState(pending?.pdf_path || null)
+  const [ex, setEx] = useState(() => {   // extractia editabilă
+    if (!pending) return null
+    const { _mail, _eroare_ai, ...rest } = pending.ai_jsonb || {}
+    return { furnizor: pending.furnizor, numar: pending.numar, data: pending.data, total_fara_tva: pending.total_fara_tva, linii: [], ...rest }
+  })
 
   const citeste = async () => {
     if (!file) return onError('Alege PDF-ul facturii')
@@ -587,12 +619,21 @@ function FacturaAiModal({ onClose, onSaved, onError }) {
     setBusy(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { data: fact, error: eF } = await supabase.from('productie_facturi').insert({
+      const antet = {
         furnizor: ex.furnizor || null, numar: ex.numar || null, data: ex.data || null,
         total_fara_tva: Number(ex.total_fara_tva) || null, pdf_path: pdfPath,
-        ai_jsonb: ex, confirmata: true, created_by: user?.id || null,
-      }).select('id').single()
-      if (eF) throw new Error(eF.message)
+        ai_jsonb: pending ? { ...ex, _mail: pending.ai_jsonb?._mail } : ex, confirmata: true,
+      }
+      let fact
+      if (pending) {
+        const { data: d, error: eF } = await supabase.from('productie_facturi').update(antet).eq('id', pending.id).select('id').single()
+        if (eF) throw new Error(eF.message)
+        fact = d
+      } else {
+        const { data: d, error: eF } = await supabase.from('productie_facturi').insert({ ...antet, created_by: user?.id || null }).select('id').single()
+        if (eF) throw new Error(eF.message)
+        fact = d
+      }
       let intrate = 0
       for (const l of ex.linii) {
         if (l.este_serviciu) continue
@@ -633,7 +674,7 @@ function FacturaAiModal({ onClose, onSaved, onError }) {
   return (
     <div style={S.overlay}>
       <div style={{ ...S.modal, maxWidth: 820 }}>
-        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>📥 Factură nouă — citită cu AI</div>
+        <div style={{ fontSize:17, fontWeight:800, marginBottom:6 }}>{pending ? '📧 Factură venită pe mail — verifică și confirmă' : '📥 Factură nouă — citită cu AI'}</div>
         <div style={{ fontSize:12.5, color:G.muted, marginBottom:14 }}>Urci PDF-ul, AI-ul extrage liniile, tu verifici și confirmi. Bunurile intră în stocul de materii prime; serviciile (prelucrare/manoperă) le atașezi pe lot.</div>
 
         {!ex && (
@@ -669,6 +710,15 @@ function FacturaAiModal({ onClose, onSaved, onError }) {
               ))}
             </div>
             <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+              {pending && (
+                <button onClick={async () => {
+                  if (!window.confirm('Ștergi factura asta din așteptare? (dacă nu e a producției)')) return
+                  setBusy(true)
+                  const { error } = await supabase.from('productie_facturi').delete().eq('id', pending.id)
+                  if (error) { onError('Eroare: ' + error.message); setBusy(false) }
+                  else { if (pending.pdf_path) await supabase.storage.from('productie').remove([pending.pdf_path]); onSaved('🗑 Factură ștearsă din așteptare') }
+                }} disabled={busy} style={{ ...S.btnS, color:G.red, marginRight:'auto' }}>🗑 Nu e a producției — șterge</button>
+              )}
               <button onClick={onClose} style={S.btnS}>Anulează</button>
               <button onClick={confirma} disabled={busy} style={{ ...S.btnP, opacity: busy ? .6 : 1 }}>{busy ? '...' : '✅ Confirmă — bagă în stoc'}</button>
             </div>
