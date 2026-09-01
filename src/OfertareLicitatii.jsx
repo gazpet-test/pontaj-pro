@@ -1690,6 +1690,27 @@ function ReferinteFinanciare({ showToast }) {
 
       {!loading && tab === 'calibrari' && (
         <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {/* VS câștigat / pierdut (participările din inventar; rezultatele le completează Razvan) */}
+          {(() => {
+            const w = cal.filter(r => r.rezultat === 'castigata'), l = cal.filter(r => r.rezultat === 'pierduta')
+            const p = cal.filter(r => r.rezultat === 'depusa'), decise = w.length + l.length
+            const suma = a => a.reduce((s, r) => s + Number(r.valoare_lei || 0), 0)
+            return (
+              <div style={{ ...S.card, padding:'14px 18px', display:'flex', gap:18, flexWrap:'wrap', alignItems:'center' }}>
+                <div style={{ fontWeight:800, fontSize:14 }}>⚔️ Câștigat vs Pierdut</div>
+                {[['🏆 Câștigate', w.length, fmtVal(suma(w)) + ' lei', G.green],
+                  ['❌ Pierdute', l.length, fmtVal(suma(l)) + ' lei', G.red],
+                  ['📮 Fără rezultat', p.length, fmtVal(suma(p)) + ' lei', G.purple]].map(([lbl, n, v, c]) => (
+                  <div key={lbl} style={{ background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8, padding:'6px 14px' }}>
+                    <div style={{ fontSize:10, color:G.dim, fontWeight:700 }}>{lbl}</div>
+                    <div style={{ fontSize:16, fontWeight:800, color:c }}>{n} <span style={{ fontSize:11, color:G.muted, fontWeight:600 }}>· {v}</span></div>
+                  </div>
+                ))}
+                {decise > 0 && <div style={{ fontSize:13, color:G.muted }}>Rată de câștig: <b style={{ color:G.ofertare }}>{Math.round(w.length * 100 / decise)}%</b> din {decise} decise</div>}
+                {p.length > 0 && <div style={{ fontSize:12, color:G.purple }}>👉 completează rezultatele cu butoanele de pe rânduri</div>}
+              </div>
+            )
+          })()}
           {cal.map(r => {
             const seg = SEGMENTE[r.segment] || SEGMENTE.altele
             const [rIcon, rCol] = REZ[r.rezultat] || ['❔', G.dim]
@@ -1699,6 +1720,23 @@ function ReferinteFinanciare({ showToast }) {
                   <span style={{ color:seg.color, border:`1px solid ${seg.color}55`, borderRadius:10, padding:'1px 9px', fontSize:10.5, fontWeight:800 }}>{seg.label}</span>
                   <span style={{ fontWeight:700, fontSize:13.5, flex:1, minWidth:240 }}>{r.lucrare}</span>
                   <span style={{ color:rCol, fontWeight:800, fontSize:12 }}>{rIcon} {r.rezultat || '—'}</span>
+                  {r.rezultat === 'depusa' && (
+                    <span style={{ display:'flex', gap:6 }}>
+                      <button title="Marchează câștigată" style={{ ...S.btnS, padding:'2px 9px', fontSize:11, color:G.green }} onClick={async () => {
+                        const { error } = await supabase.from('ofertare_calibrari').update({ rezultat:'castigata', updated_at:new Date().toISOString() }).eq('id', r.id)
+                        if (error) return showToast('Eroare: ' + error.message, 'err')
+                        loadAll()
+                      }}>🏆</button>
+                      <button title="Marchează pierdută (+ câștigător)" style={{ ...S.btnS, padding:'2px 9px', fontSize:11, color:G.red }} onClick={async () => {
+                        const cine = window.prompt('Cine a câștigat? (gol = necunoscut)')
+                        if (cine === null) return
+                        const nota = cine.trim() ? `${r.note ? r.note + ' · ' : ''}Câștigător: ${cine.trim()}` : r.note
+                        const { error } = await supabase.from('ofertare_calibrari').update({ rezultat:'pierduta', note: nota || null, updated_at:new Date().toISOString() }).eq('id', r.id)
+                        if (error) return showToast('Eroare: ' + error.message, 'err')
+                        loadAll()
+                      }}>❌</button>
+                    </span>
+                  )}
                   <span style={{ color:G.dim, fontSize:12 }}>{r.an || '—'}</span>
                 </div>
                 <div style={{ display:'flex', gap:16, marginTop:8, flexWrap:'wrap' }}>
