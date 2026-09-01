@@ -125,6 +125,7 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [masini, setMasini] = useState('')
   const [probleme, setProbleme] = useState('')
   const [subcontractori, setSubcontractori] = useState('')
+  const [aprovizionare, setAprovizionare] = useState('')
   const [planMaine, setPlanMaine] = useState('')
   const [poze, setPoze] = useState([])           // File[] noi (de urcat)
   const [pozeExistente, setPozeExistente] = useState([])  // [{path, url}] din raport salvat
@@ -173,6 +174,7 @@ function RaportZilnic({ profile, sites, onBack }) {
       setMasini(existing.masini || '')
       setProbleme(existing.probleme || '')
       setSubcontractori(existing.subcontractori || '')
+      setAprovizionare(existing.aprovizionare || '')
       setPlanMaine(existing.plan_maine || '')
       const ps = existing.personal_snapshot || {}
       setPersonal({ sudori: ps.sudori || 0, lacatusi: ps.lacatusi || 0, operatori: ps.operatori || 0, soferi: ps.soferi || 0, necalificati: ps.necalificati || 0, tesa: ps.tesa || 0, altii: ps.altii || 0 })
@@ -330,6 +332,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         masini: masini.trim() || null,
         probleme: probleme.trim() || null,
         subcontractori: subcontractori.trim() || null,
+        aprovizionare: aprovizionare.trim() || null,
         plan_maine: planMaine.trim() || null,
         poze: pozePaths,
         created_by: user?.id || null,
@@ -432,6 +435,44 @@ function RaportZilnic({ profile, sites, onBack }) {
           if (prNoi) tichetInfo += ` 🔧 ${prNoi} ${prNoi > 1 ? 'probleme noi' : 'problemă nouă'} în Probleme Parc.`
         }
       } catch (e) { console.error('Sync utilaje defecte:', e?.message || e) }
+      // ── Aprovizionare materiale → tichet la Kostas, Comercial (todo #982) ──
+      // Un singur tichet per raport/zi: la re-editare se actualizează descrierea.
+      try {
+        const aprov = aprovizionare.trim()
+        if (aprov && rz?.id) {
+          const numeSite = sites.find(s => s.id === siteId)?.name || ''
+          const descr = `Cerere de aprovizionare din raportul zilnic ${azi()}${numeSite ? ' — șantier ' + numeSite : ''} (${profile?.name || '?'}):\n\n${aprov}`
+          const { data: tExist } = await supabase.from('tichete')
+            .select('id, status').eq('entitate_tip', 'raport_aprovizionare').eq('entitate_id', rz.id)
+            .limit(1).maybeSingle()
+          if (tExist && !['rezolvat', 'confirmat', 'inchis', 'respins'].includes(tExist.status)) {
+            await supabase.from('tichete').update({ descriere: descr }).eq('id', tExist.id)
+            tichetInfo += ' 🛒 Cererea de aprovizionare a fost actualizată la Kostas.'
+          } else if (!tExist) {
+            const { data: kos } = await supabase.from('profiles').select('id').ilike('name', '%kostas%').limit(1).maybeSingle()
+            const { data: ultim } = await supabase.from('tichete').select('numar_tichet').order('id', { ascending: false }).limit(1).maybeSingle()
+            const nrCrt = (parseInt(String(ultim?.numar_tichet || '').replace(/\D/g, '')) % 10000 || 0) + 1
+            const { data: t, error: tErr } = await supabase.from('tichete').insert({
+              numar_tichet: `TKT-${new Date().getFullYear()}-${String(nrCrt).padStart(4, '0')}`,
+              departament: 'comercial', subcategorie: 'aprovizionare_santier',
+              titlu: `Aprovizionare materiale${numeSite ? ' — ' + numeSite : ''} (${azi()})`.slice(0, 90),
+              descriere: descr, urgenta: 'normal',
+              entitate_tip: 'raport_aprovizionare', entitate_id: rz.id,
+              entitate_descriere: numeSite || null,
+              status: kos?.id ? 'atribuit' : 'deschis',
+              deschis_de: user?.id || null, data_deschidere: new Date().toISOString(),
+              persoana_responsabila: kos?.id || null,
+              atribuit_de: kos?.id ? (user?.id || null) : null,
+              data_atribuire: kos?.id ? new Date().toISOString() : null,
+            }).select('id').single()
+            if (tErr) console.error('Tichet aprovizionare:', tErr.message)
+            else {
+              if (kos?.id) await supabase.from('tichete_asignati').insert({ tichet_id: t.id, profile_id: kos.id }).then(({ error: aErr }) => { if (aErr) console.error('Asignare tichet aprovizionare:', aErr.message) })
+              tichetInfo += ' 🛒 Cererea de aprovizionare a plecat la Kostas (Achiziții).'
+            }
+          }
+        }
+      } catch (e) { console.error('Tichet aprovizionare:', e?.message || e) }
       setMsg({ ok: true, text: (existingId ? '✅ Raport actualizat!' : '✅ Raport trimis cu succes!') + tichetInfo })
       setTimeout(onBack, 1200)
     } catch (e) {
@@ -582,6 +623,10 @@ function RaportZilnic({ profile, sites, onBack }) {
 
           <Section title="🤝 Subcontractori" hint="ce au lucrat azi subcontractorii (opțional)">
             <textarea value={subcontractori} onChange={e => setSubcontractori(e.target.value)} rows={3} placeholder="ex: Rominsta — Sudură obiecte speciale TR10 – 2 buc; Lansat TR10 – 147 m" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
+          </Section>
+
+          <Section title="🛒 Aprovizionare materiale" hint="ce trebuie comandat — ajunge automat la Kostas (Achiziții)">
+            <textarea value={aprovizionare} onChange={e => setAprovizionare(e.target.value)} rows={3} placeholder="ex: electrozi E7018 – 50 kg; discuri polizat 125mm – 30 buc; geotextil – 200 mp" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
           </Section>
 
           <Section title="🚗 Mașini (probleme)">
