@@ -1685,7 +1685,7 @@ function ReferinteFinanciare({ showToast }) {
           <div style={{ fontSize:12, color:G.muted }}>Cu ce coeficienți s-a mers istoric, pe segmente — plus prețuri unitare și materiale din ofertele depuse</div>
         </div>
         <div style={{ display:'flex', gap:8 }}>
-          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['participari', `🛰️ Participări SEAP (${particip.length})`], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS']].map(([k, lbl]) => (
+          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['participari', `🛰️ Participări SEAP (${particip.length})`], ['sezonier', '📅 Sezonier'], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS']].map(([k, lbl]) => (
             <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, padding:'6px 13px', fontSize:12, fontWeight:700,
               ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
           ))}
@@ -1767,6 +1767,7 @@ function ReferinteFinanciare({ showToast }) {
       )}
 
       {!loading && tab === 'participari' && <ParticipariSeap particip={particip} fEnt={fEnt} setFEnt={setFEnt} />}
+      {!loading && tab === 'sezonier' && <RadarSezonier />}
 
       {!loading && tab === 'normative' && <NormativeLista norme={norme} showToast={showToast} onChange={loadAll} />}
 
@@ -2142,6 +2143,41 @@ function VerificareFinalaSection({ licitatie: l }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── 📅 Radar sezonier (#39) — tiparul atribuirilor per autoritate + CPV ──────
+// Sursa: v_radar_sezonier (atribuirile Gazpet + competitori din ofertare_participari).
+// Autoritățile cu ani_distincti >= 2 au tipar de reapariție — luna tipică = când să fii pe fază.
+function RadarSezonier() {
+  const [rows, setRows] = useState(null)
+  useEffect(() => {
+    supabase.from('v_radar_sezonier').select('*').gte('ani_distincti', 2)
+      .order('nr_atribuiri', { ascending:false }).limit(60)
+      .then(({ data }) => setRows(data || []))
+  }, [])
+  const LUNI = ['', 'ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
+  const lunaCurenta = new Date().getMonth() + 1
+  if (rows === null) return <div style={{ padding:30, textAlign:'center', color:G.muted }}>Se încarcă tiparul sezonier...</div>
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ fontSize:12, color:G.muted }}>
+        Autorități cu atribuiri repetate pe același CPV (din istoricul Gazpet + competitori) — luna tipică arată când se atribuie de obicei, deci anunțurile apar cu ~2-4 luni înainte. Rândurile aprinse sunt în fereastra activă acum.
+      </div>
+      {rows.map((r, i) => {
+        const activ = r.luna_tipica != null && [0, 1, 2, 3].includes((r.luna_tipica - lunaCurenta + 12) % 12)
+        return (
+          <div key={i} style={{ ...S.card, padding:'10px 16px', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', fontSize:13, borderLeft:`3px solid ${activ ? G.yellow : G.border2}` }}>
+            {activ && <span title="Fereastra de atribuire se apropie — anunțul e probabil deja în lucru la autoritate">🔥</span>}
+            <span style={{ fontWeight:700, flex:1, minWidth:240 }}>{r.autoritate}</span>
+            <span style={{ color:G.muted, fontSize:12 }} title={r.cpv_exemplu}>{r.cpv_cod}</span>
+            <span style={{ color:G.blue }}>{r.nr_atribuiri} atribuiri · {r.ani_distincti} ani ({r.ani?.[0]}–{r.ani?.[r.ani.length - 1]})</span>
+            <span style={{ color:G.yellow, fontWeight:700 }}>vârf: {LUNI[r.luna_tipica] || '—'}</span>
+            <span style={{ color:G.muted, fontSize:12 }}>{fmtVal(r.total_mil_ron)} mil lei</span>
+          </div>
+        )
+      })}
     </div>
   )
 }
