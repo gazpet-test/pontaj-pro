@@ -1149,6 +1149,9 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
         {/* E3: acoperirea cerințelor — catalog HR + parteneri, goluri ca tichete */}
         <AcoperireSection licitatie={l} profile={profile} />
 
+        {/* Poarta 4: verificarea finală anti-descalificare (3 treceri: determinist + adversarial + arbitru) */}
+        <VerificareFinalaSection licitatie={l} />
+
         {/* E0: decizia GO/NO-GO — doar în analiză, doar owner */}
         {l.status === 'analiza' && profile?.is_owner && (
           <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.teal}55`, background:G.teal + '0D' }}>
@@ -2076,6 +2079,69 @@ function ParticipariSeap({ particip, fEnt, setFEnt }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── 🔍 Poarta 4: verificarea finală anti-descalificare ──────────────────────
+// 3 treceri: (A) determinist din registru, (B) adversarial (Sonnet 5),
+// (C) arbitrul final (Fable 5.1). Rulează câteva minute; verdictul se salvează.
+function VerificareFinalaSection({ licitatie: l }) {
+  const [ultima, setUltima] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  useEffect(() => {
+    supabase.from('ofertare_verificari').select('*').eq('licitatie_id', l.id).order('id', { ascending:false }).limit(1)
+      .then(({ data }) => setUltima(data?.[0] || null))
+  }, [l.id])
+
+  const ruleaza = async () => {
+    if (!window.confirm('Rulezi verificarea finală? Durează câteva minute (3 treceri AI, inclusiv arbitrul Fable 5.1).')) return
+    setBusy(true); setErr(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const r = await fetch('https://dxczwkbciseqniprspcu.supabase.co/functions/v1/ofertare-verificare-finala', {
+        method:'POST', headers: { Authorization: `Bearer ${session?.access_token}`, 'Content-Type':'application/json' },
+        body: JSON.stringify({ licitatie_id: l.id }),
+      })
+      const j = await r.json()
+      if (!j.ok) throw new Error(j.error || 'eroare necunoscută')
+      const { data } = await supabase.from('ofertare_verificari').select('*').eq('id', j.verificare_id).single()
+      setUltima(data)
+    } catch (e) { setErr(String(e?.message || e)) } finally { setBusy(false) }
+  }
+
+  const VC = { verde:['🟢 VERDE — depunere sigură', G.green], galben:['🟡 GALBEN — de rezolvat punctele înainte de depunere', G.yellow], rosu:['🔴 ROȘU — NU se depune', G.red] }
+  const arb = ultima?.raport?.arbitru || {}
+  const [vLbl, vCol] = VC[ultima?.verdict] || ['— nerulată încă', G.dim]
+
+  return (
+    <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${vCol}55`, background:G.bg }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:800 }}>🔍 Verificare finală (anti-descalificare)</div>
+        <span style={{ fontSize:12.5, fontWeight:800, color:vCol }}>{vLbl}</span>
+        {ultima && <span style={{ fontSize:11, color:G.dim }}>rulată {new Date(ultima.created_at).toLocaleString('ro-RO')}</span>}
+        <button style={{ ...S.btnP, marginLeft:'auto', padding:'6px 13px', fontSize:12, opacity: busy ? .6 : 1 }} disabled={busy} onClick={ruleaza}>
+          {busy ? '⏳ Rulează cele 3 treceri…' : (ultima ? '🔁 Rulează din nou' : '🔍 Rulează verificarea')}
+        </button>
+      </div>
+      {err && <div style={{ marginTop:8, fontSize:12.5, color:G.red }}>Eroare: {err}</div>}
+      {ultima && (
+        <div style={{ marginTop:10, fontSize:12.5 }}>
+          {arb.motivare && <div style={{ color:G.muted, marginBottom:8 }}>{arb.motivare}</div>}
+          {(arb.probleme_critice || []).map((p, i) => (
+            <div key={i} style={{ padding:'6px 10px', marginBottom:5, borderRadius:7, background:G.surface, borderLeft:`3px solid ${vCol}` }}>
+              <b>{p.titlu}</b>{p.actiune ? <span style={{ color:G.muted }}> — {p.actiune}</span> : null}
+            </div>
+          ))}
+          {(arb.puncte_de_verificat_de_om || []).length > 0 && (
+            <div style={{ marginTop:8 }}>
+              <div style={{ fontWeight:800, fontSize:12, color:G.orange, marginBottom:4 }}>👤 De verificat de om:</div>
+              {(arb.puncte_de_verificat_de_om || []).map((p, i) => <div key={i} style={{ color:G.muted, padding:'2px 0' }}>• {p}</div>)}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
