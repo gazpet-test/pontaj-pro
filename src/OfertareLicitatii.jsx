@@ -2096,8 +2096,11 @@ function VerificareFinalaSection({ licitatie: l }) {
       .then(({ data }) => setUltima(data?.[0] || null))
   }, [l.id])
 
+  // parolă cerută de Razvan (03.09) — verificarea consumă mult, nu se apasă „de curiozitate"
   const ruleaza = async () => {
-    if (!window.confirm('Rulezi verificarea finală? Durează câteva minute (3 treceri AI, inclusiv arbitrul Fable 5.1).')) return
+    const p = window.prompt('⚠️ Această verificare consumă foarte multe resurse, este indicat să se folosească doar la finalul licitației, până la depunerea în SEAP!\n\nIntrodu parola pentru a continua:')
+    if (p === null) return
+    if (p !== 'Gazpet2026') { setErr('Parolă greșită — verificarea nu a pornit.'); return }
     setBusy(true); setErr(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
