@@ -240,6 +240,25 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
           <div style={{ fontWeight:800, fontSize:13.5 }}>❓ Clarificări către autoritate ({clar?.length ?? '...'})</div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={addQ}>＋ întrebare</button>
+            {/* clarificare depusă în afara generatorului (ex. de Mirela, direct în SEAP) — se urcă PDF-ul ca platforma să țină cont de ea */}
+            <label style={{ ...S.btnS, padding:'5px 12px', fontSize:12, cursor:'pointer' }}>
+              📎 Clarificare externă (PDF)
+              <input type="file" accept=".pdf" style={{ display:'none' }} onChange={async e => {
+                const file = e.target.files?.[0]; e.target.value = ''
+                if (!file) return
+                const path = `${licId}/clarificari/${Date.now()}_${file.name.replace(/[^\w.-]+/g, '_')}`
+                const { error: eUp } = await supabase.storage.from('ofertare').upload(path, file, { upsert:false })
+                if (eUp) return showToast('Upload: ' + eUp.message, 'err')
+                const nr = (clar?.length ? Math.max(...clar.map(q => q.nr || 0)) : 0) + 1
+                const { error } = await supabase.from('ofertare_clarificari').insert({
+                  licitatie_id: licId, nr, sursa: 'extern', status: 'trimisa', fisier_path: path,
+                  intrebare: `(clarificare depusă extern — ${file.name}; completează aici pe scurt ce s-a întrebat)`,
+                })
+                if (error) return showToast('Eroare: ' + error.message, 'err')
+                showToast('✓ Clarificarea externă e în platformă — completează întrebarea pe scurt și, când vine, răspunsul.')
+                load()
+              }} />
+            </label>
             <button style={{ ...S.btnP, padding:'5px 14px', fontSize:12 }} onClick={genereazaAdresa} disabled={!!busy}>📄 Generează adresa</button>
           </div>
         </div>
@@ -253,7 +272,13 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
                   <div style={{ flex:1 }}>
                     <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={q.intrebare || ''} placeholder="Textul întrebării..."
                       onChange={e => setQ(q.id, 'intrebare', e.target.value)} onBlur={() => saveQ(q)} />
-                    {q.sursa && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>sursa: {q.sursa}</div>}
+                    <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:3 }}>
+                      {q.sursa && <span style={{ fontSize:11, color:G.dim }}>sursa: {q.sursa}</span>}
+                      {q.fisier_path && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={async () => {
+                        const { data } = await supabase.storage.from('ofertare').createSignedUrl(q.fisier_path, 600)
+                        if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+                      }}>📄 PDF-ul depus</button>}
+                    </div>
                     {(q.status === 'raspunsa' || q.raspuns) && (
                       <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
                         onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
