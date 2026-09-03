@@ -5,3 +5,4 @@ dist/
 # artefacte de lucru spike A/B/C — regenerabile din PDF-urile fixture (render 300dpi, output OCR)
 test-fixtures/import-documente/spike/
 test-fixtures/import-documente/out/
+supabase/.temp/
