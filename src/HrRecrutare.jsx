@@ -118,10 +118,14 @@ export default function HrRecrutare({ profile, showToast }) {
             onClick={() => { navigator.clipboard?.writeText(FORM_URL); showToast?.('✓ Link formular public copiat — pune-l în anunțul OLX/eJobs') }}>
             🔗 Copiază link formular aplicare
           </button>
-          <button style={{ ...S.btnS, padding:'6px 12px', color: olx?.conectat ? G.green : G.yellow }}
-            title={olx?.conectat ? `Cont OLX conectat${olx?.cont?.email ? ': ' + olx.cont.email : ''}` : 'Conectează contul OLX Business pentru publicare din ERP'}
-            onClick={conecteazaOlx}>
-            {olx?.conectat ? '🟢 OLX conectat' : '🔌 Conectează OLX'}
+          {/* Led stare OLX: verde = conectat (butonul nu mai face nimic), roșu = deconectat, gri = se verifică */}
+          <span title={olx == null ? 'Se verifică conexiunea OLX...' : olx?.conectat ? `OLX conectat${olx?.cont?.email ? ' — ' + olx.cont.email : ''}` : 'OLX deconectat — apasă „Conectează OLX"'}
+            style={{ width:12, height:12, borderRadius:'50%', flexShrink:0, background: olx == null ? G.dim : olx?.conectat ? G.green : G.red, boxShadow: olx?.conectat ? `0 0 6px ${G.green}` : olx ? `0 0 6px ${G.red}` : 'none' }} />
+          <button disabled={!!olx?.conectat}
+            style={{ ...S.btnS, padding:'6px 12px', color: olx?.conectat ? G.green : G.red, borderColor: olx?.conectat ? G.green + '66' : G.red + '66', opacity: olx?.conectat ? .85 : 1, cursor: olx?.conectat ? 'default' : 'pointer' }}
+            title={olx?.conectat ? `Cont OLX conectat${olx?.cont?.email ? ': ' + olx.cont.email : ''} — nu e nevoie să apeși` : 'Conectează contul OLX Business pentru publicare din ERP'}
+            onClick={() => { if (!olx?.conectat) conecteazaOlx() }}>
+            {olx?.conectat ? 'OLX conectat' : '🔌 Conectează OLX'}
           </button>
           <button style={{ ...S.btnP, padding:'6px 12px' }} onClick={() => setEditPoz({})}>+ Poziție</button>
         </div>
