@@ -448,65 +448,118 @@ function PozitieModal({ item, showToast, onClose, onSaved }) {
 }
 
 // ── Modal publicare anunț pe OLX ───────────────────────────────
+// Categoriile vin din BD (v_olx_categorii, încărcate din OLX Partner API), cu atributele setului categoriei.
+const OLX_CAT_GHICIT = [
+  [/sudor/i, 1498], [/operator|buldo|excavator|utilaj/i, 1497], [/instalator/i, 1493], [/electric/i, 1494],
+  [/mecanic|electromecanic|intretinere|întreținere/i, 1496], [/inginer/i, 3356], [/sofer|șofer|conduc/i, 1508],
+  [/proiect|manager/i, 3353], [/ssm|protectia muncii|protecția muncii/i, 3338], [/licitat|achizit/i, 3347],
+  [/muncitor|necalificat|ajutor/i, 1490],
+]
+const OLX_ATTR_DEFAULT = {
+  type: 'full-time', tip_contract: 'perioada_nedeterminata', nivel_studii: 'calificat', nivel_experienta: 'mid_level',
+  job_character: 'need-to-travel', program_demunca: 'normal', ua_people: '1', visa_needed: '0', deschis_pt_studenti: '0',
+  mandatory_cv: 'mandatory', open_for_people_with_disabilities: '0', comission: 'only_salary', cui: 'RO22029920',
+}
 function OlxPublicaModal({ pozitie, showToast, onClose, onPublicat }) {
   const [f, setF] = useState({
     titlu: `Angajăm ${pozitie.denumire} — Gazpet Instal Ploiești`,
-    descriere: `${pozitie.descriere || pozitie.denumire}\n\nGazpet Instal S.R.L. — constructor autorizat de conducte de gaze naturale (Transgaz, Romgaz, Conpet), Ploiești, Prahova. Echipă de 127+ angajați, proiecte în toată țara.\n\nAplică direct cu CV-ul în formularul nostru online. Datele tale sunt prelucrate conform GDPR (retenție 12 luni).`,
+    descriere: `${pozitie.descriere || pozitie.denumire}\n\nGazpet Instal S.R.L. — constructor autorizat de conducte de gaze naturale (Transgaz, Romgaz, Conpet), Ploiești, Prahova. Echipă de 127+ angajați, proiecte în toată țara.\n\nAplică direct cu CV-ul prin butonul OLX. Datele tale sunt prelucrate conform GDPR (retenție 12 luni).`,
     category_id: '', city_id: '', contact_name: 'Gazpet Instal', contact_phone: '0244435005',
+    salariu_de_la: pozitie.salariu_min ?? '', salariu_pana_la: pozitie.salariu_max ?? '', negociabil: false,
   })
+  const [attr, setAttr] = useState({ ...OLX_ATTR_DEFAULT, numar_posturi: String(pozitie.numar_posturi || 1) })
   const [categorii, setCategorii] = useState([])
   const [orase, setOrase] = useState([])
+  const [qOras, setQOras] = useState('Ploiesti')
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
+  const setA = (k, v) => setAttr(prev => ({ ...prev, [k]: v }))
+
+  const cautaOrase = (q) => olxApi({ actiune: 'orase', q: q || 'Ploiesti' }).then(d => {
+    const list = d?.data || []
+    setOrase(list)
+    if (list[0]?.id && !list.some(o => String(o.id) === f.city_id)) set('city_id', String(list[0].id))
+  })
 
   useEffect(() => {
-    olxApi({ actiune: 'categorii', q: pozitie.denumire }).then(d => {
-      const list = d?.data || []
+    supabase.from('v_olx_categorii').select('id, path, atribute').eq('is_leaf', true).order('path').then(({ data }) => {
+      const list = data || []
       setCategorii(list)
-      if (list[0]?.id) set('category_id', String(list[0].id))
+      const ghicit = OLX_CAT_GHICIT.find(([re]) => re.test(pozitie.denumire))?.[1]
+      if (ghicit && list.some(c => c.id === ghicit)) set('category_id', String(ghicit))
     })
-    olxApi({ actiune: 'orase', q: 'Ploiesti' }).then(d => {
-      const list = d?.data || []
-      setOrase(list)
-      if (list[0]?.id) set('city_id', String(list[0].id))
-    })
+    cautaOrase('Ploiesti')
   }, [])
+
+  const cat = categorii.find(c => String(c.id) === f.category_id)
+  const atributeCat = (cat?.atribute || []).filter(a => a.code !== 'cui')
 
   const publica = async () => {
     if (!f.category_id || !f.city_id) { showToast?.('Alege categoria și orașul', 'error'); return }
     if (f.titlu.length < 16) { showToast?.('Titlul trebuie să aibă minim 16 caractere', 'error'); return }
     if (f.descriere.length < 80) { showToast?.('Descrierea trebuie să aibă minim 80 caractere', 'error'); return }
+    const lipsa = atributeCat.filter(a => a.required && !attr[a.code])
+    if (lipsa.length) { showToast?.('Completează: ' + lipsa.map(a => a.label).join(', '), 'error'); return }
+    const attributes = [...atributeCat, { code: 'cui' }].filter(a => attr[a.code] !== '' && attr[a.code] != null)
+      .map(a => ({ code: a.code, value: String(attr[a.code]) }))
+    const salary = f.salariu_de_la !== '' ? { value_from: Number(f.salariu_de_la), value_to: f.salariu_pana_la !== '' ? Number(f.salariu_pana_la) : null, currency: 'RON', negotiable: !!f.negociabil, type: 'monthly' } : null
     setBusy(true)
     const d = await olxApi({ actiune: 'publica', pozitie_id: pozitie.id, titlu: f.titlu, descriere: f.descriere,
-      category_id: f.category_id, city_id: f.city_id, contact_name: f.contact_name, contact_phone: f.contact_phone })
+      category_id: f.category_id, city_id: f.city_id, contact_name: f.contact_name, contact_phone: f.contact_phone, attributes, salary })
     setBusy(false)
-    if (d.ok) { showToast?.(`✓ Anunț publicat pe OLX (status: ${d.advert?.status})`); onPublicat() }
-    else showToast?.((d.eroare || 'Eroare OLX') + (d.detalii?.error?.validation ? ' — ' + d.detalii.error.validation.map(v => v.detail).join('; ') : ''), 'error')
+    if (d.ok) { showToast?.(`✓ Anunț publicat pe OLX (status: ${d.advert?.status}) — intră în moderare, se activează singur`); onPublicat() }
+    else showToast?.((d.eroare || 'Eroare OLX') + (d.detalii?.error?.validation ? ' — ' + d.detalii.error.validation.map(v => `${v.field}: ${v.detail}`).join('; ') : ''), 'error')
   }
 
   return (
     <Modal titlu={`📣 Publică pe OLX — ${pozitie.denumire}`} onClose={onClose}>
       <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>
-        Consumă un anunț din pachetul Ultra (3 × 30 zile). Regulile OLX: titlu 16-150 caractere, descriere minim 80, fără telefoane/emailuri în text.
+        Consumă un anunț din pachetul Ultra (3 × 30 zile). Regulile OLX: titlu 16-150 caractere, descriere minim 80, fără telefoane/emailuri în text. Categoria NU se mai poate schimba după publicare.
       </div>
       <Fld l="Titlu anunț"><input style={S.input} value={f.titlu} onChange={e => set('titlu', e.target.value)} /></Fld>
       <Fld l="Descriere"><textarea style={{ ...S.input, minHeight:130, resize:'vertical' }} value={f.descriere} onChange={e => set('descriere', e.target.value)} /></Fld>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:8 }}>
-        <Fld l="Categorie OLX">
+        <Fld l={`Categorie OLX (${categorii.length} din BD)`}>
           <select style={S.input} value={f.category_id} onChange={e => set('category_id', e.target.value)}>
             <option value="">— alege —</option>
-            {categorii.map(c => <option key={c.id} value={c.id}>{c.names?.path || c.name || c.id}</option>)}
+            {categorii.map(c => <option key={c.id} value={c.id}>{(c.path || '').replace(/^Locuri de munca > /, '')}</option>)}
           </select>
         </Fld>
-        <Fld l="Oraș">
-          <select style={S.input} value={f.city_id} onChange={e => set('city_id', e.target.value)}>
+        <Fld l="Oraș / județ">
+          <div style={{ display:'flex', gap:6 }}>
+            <input style={{ ...S.input, flex:1 }} value={qOras} placeholder="caută…" onChange={e => setQOras(e.target.value)} onKeyDown={e => e.key === 'Enter' && cautaOrase(qOras)} />
+            <button type="button" style={{ ...S.btnS, padding:'4px 9px' }} onClick={() => cautaOrase(qOras)}>🔍</button>
+          </div>
+          <select style={{ ...S.input, marginTop:4 }} value={f.city_id} onChange={e => set('city_id', e.target.value)}>
             <option value="">— alege —</option>
-            {orase.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+            {orase.map(o => <option key={o.id} value={o.id}>{o.name}{o.county ? ` (${o.county})` : ''}</option>)}
           </select>
+        </Fld>
+        <Fld l="Salariu de la (lei/lună)"><input style={S.input} type="number" value={f.salariu_de_la} onChange={e => set('salariu_de_la', e.target.value)} /></Fld>
+        <Fld l="Salariu până la (opțional)">
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            <input style={{ ...S.input, flex:1 }} type="number" value={f.salariu_pana_la} onChange={e => set('salariu_pana_la', e.target.value)} />
+            <label style={{ fontSize:11, color:G.muted, whiteSpace:'nowrap' }}><input type="checkbox" checked={f.negociabil} onChange={e => set('negociabil', e.target.checked)} /> negociabil</label>
+          </div>
         </Fld>
         <Fld l="Nume contact"><input style={S.input} value={f.contact_name} onChange={e => set('contact_name', e.target.value)} /></Fld>
         <Fld l="Telefon contact"><input style={S.input} value={f.contact_phone} onChange={e => set('contact_phone', e.target.value)} /></Fld>
       </div>
+      {atributeCat.length > 0 && <>
+        <div style={{ fontSize:11, fontWeight:700, color:G.muted, margin:'12px 0 4px' }}>Atribute OLX pentru categoria aleasă</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+          {atributeCat.map(a => (
+            <Fld key={a.code} l={a.label + (a.required ? ' *' : '')}>
+              {a.values?.length
+                ? <select style={S.input} value={attr[a.code] ?? ''} onChange={e => setA(a.code, e.target.value)}>
+                    <option value="">—</option>
+                    {a.values.map(v => <option key={String(v.code)} value={String(v.code)}>{v.label}</option>)}
+                  </select>
+                : <input style={S.input} type={a.numeric ? 'number' : 'text'} value={attr[a.code] ?? ''} onChange={e => setA(a.code, e.target.value)} />}
+            </Fld>
+          ))}
+        </div>
+      </>}
       <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:14 }}>
         <button style={S.btnS} onClick={onClose} disabled={busy}>Renunță</button>
         <button style={S.btnP} onClick={publica} disabled={busy}>{busy ? '⏳ Public...' : '📣 Publică anunțul'}</button>
