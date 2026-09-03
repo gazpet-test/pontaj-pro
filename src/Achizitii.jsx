@@ -178,6 +178,14 @@ const semnBox = (rol, nume, dataUrl, decisLa) => `
     <div style="font-size:9px;color:#777;">${decisLa ? 'confirmat ' + new Date(decisLa).toLocaleDateString('ro-RO') : (dataUrl ? '' : 'semnătură olografă')}</div>
   </div>`
 
+// TKT-2026-0176 (Kostas): cantitatea EFECTIV recepționată — dacă s-a completat
+// „Recepție pe repere", primează cantitate_primita (reper anulat de furnizor = 0);
+// altfel cantitatea comandată. Se folosește la PV recepție/predare și la intrarea în stoc.
+const qtyEfectiva = (l) => l.cantitate_primita != null ? (Number(l.cantitate_primita) || 0) : (Number(l.cantitate) || 0)
+const liniiReceptionate = (linii) => (linii || [])
+  .filter(l => l.denumire && qtyEfectiva(l) > 0)
+  .map(l => ({ ...l, cantitate: qtyEfectiva(l) }))
+
 function liniileTabelHtml(linii, moneda) {
   const total = (linii || []).reduce((a, l) => a + (Number(l.cantitate) || 0) * (Number(l.pret_unitar) || 0), 0)
   const rows = (linii || []).map((l, i) => `
@@ -324,7 +332,7 @@ function buildPvReceptieHtml(c, ctx) {
       ${ctx.proiectNume ? `pentru lucrarea <b>${ctx.proiectNume}</b>` : ''},
       cu livrare la <b>${ctx.livrareTxt}</b>.
     </div>
-    ${liniileTabelHtml(c.linii, c.moneda)}
+    ${liniileTabelHtml(liniiReceptionate(c.linii), c.moneda)}
     <div style="font-size:11px;margin-top:10px;">
       Materialele de mai sus corespund calitativ și cantitativ cu documentele de livrare și cu comanda emisă.
       Comisia constată că recepția poate fi efectuată fără obiecțiuni.
@@ -345,7 +353,7 @@ function buildPvPredareHtml(c, ctx) {
       ${ctx.proiectNume ? `(lucrarea <b>${ctx.proiectNume}</b>)` : ''} au fost predate de Departamentul Achiziții
       și primite în gestiune la <b>${ctx.livrareTxt}</b>. Cantitățile intră automat în evidența de stoc Gazpet ERP.
     </div>
-    ${liniileTabelHtml(c.linii, c.moneda)}
+    ${liniileTabelHtml(liniiReceptionate(c.linii), c.moneda)}
     ${ctx.pozaDataUrl ? `
       <div style="margin-top:10px;">
         <div style="font-size:10px;font-weight:bold;color:#1F6FEB;margin-bottom:4px;">DOVADĂ FOTO — LOC DEPOZITARE</div>
@@ -1055,6 +1063,19 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
     await actions.salveazaTermene(c, termeneLocal, termenGlobalLocal)
     setEditTermene(false)
   }
+  // TKT-2026-0176: edit/ștergere repere când furnizorul anulează sau schimbă livrarea
+  const [editRepere, setEditRepere] = useState(false)
+  const [repereLocal, setRepereLocal] = useState({})
+  const deschideEditRepere = () => {
+    const init = {}
+    ;(c.linii || []).forEach(l => { init[l.id] = { cantitate: l.cantitate ?? '', observatii: l.observatii || '' } })
+    setRepereLocal(init)
+    setEditRepere(true)
+  }
+  const salveazaRepereLocal = async () => {
+    await actions.salveazaModificariRepere(c, repereLocal)
+    setEditRepere(false)
+  }
   const [editPrimite, setEditPrimite] = useState(false)
   const [primiteLocal, setPrimiteLocal] = useState({})
   const deschideEditPrimite = () => {
@@ -1240,6 +1261,26 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           </div>
         )}
 
+        {/* TKT-2026-0176: Panel modificare/ștergere repere (furnizorul a anulat sau a schimbat livrarea) */}
+        {editRepere && (
+          <div style={{ marginTop:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.red}55` }}>
+            <div style={{ fontSize:13, fontWeight:800, color:G.red, marginBottom:4 }}>✏️ Modifică / șterge repere</div>
+            <div style={{ fontSize:11, color:G.muted, marginBottom:10 }}>Pentru repere anulate sau modificate de furnizor. Ștergerea scoate reperul definitiv din comandă (nu va intra în PV/stoc). Cantitatea 0 îl păstrează în comandă dar nu intră în stoc.</div>
+            {(c.linii || []).slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => (
+              <div key={l.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 0', borderTop:`1px solid ${G.border}`, flexWrap:'wrap' }}>
+                <div style={{ flex:1, minWidth:180, fontSize:13 }}>{l.denumire}<span style={{ color:G.muted }}> · {l.um || ''}</span></div>
+                <input type="number" min="0" step="any" value={repereLocal[l.id]?.cantitate ?? ''} onChange={e => setRepereLocal(p => ({ ...p, [l.id]: { ...p[l.id], cantitate: e.target.value } }))} placeholder="cant." style={{ ...S.input, maxWidth:110 }} />
+                <input value={repereLocal[l.id]?.observatii ?? ''} onChange={e => setRepereLocal(p => ({ ...p, [l.id]: { ...p[l.id], observatii: e.target.value } }))} placeholder="specificații / motiv modificare" style={{ ...S.input, maxWidth:260 }} />
+                <button onClick={() => actions.stergeLinie(c, l)} disabled={busy} title="Șterge reperul (anulat de furnizor)" style={{ ...S.btnS, fontSize:13, color:G.red, borderColor:G.red + '66' }}>🗑</button>
+              </div>
+            ))}
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', marginTop:12 }}>
+              <button onClick={() => setEditRepere(false)} disabled={busy} style={{ ...S.btnS, fontSize:14 }}>Anulează</button>
+              <button onClick={salveazaRepereLocal} disabled={busy} style={{ ...S.btnP, background:G.red, color:'#0D1117', fontSize:14, opacity: busy ? .6 : 1 }}>{busy ? '⏳ Se salvează...' : '💾 Salvează modificările'}</button>
+            </div>
+          </div>
+        )}
+
         {/* Panel modificare termene livrare (emisă / în tranzit) */}
         {editTermene && (
           <div style={{ marginTop:14, padding:14, background:G.bg, borderRadius:10, border:`1px solid ${G.orange}55` }}>
@@ -1279,6 +1320,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează comanda</Btn>
           )}
           {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa') && ctx.canCreate && !editPrimite && !c.este_servicii && <Btn color={G.green} onClick={deschideEditPrimite}>📦 Recepție pe repere</Btn>}
+          {/* TKT-2026-0176: repere anulate/modificate de furnizor înainte de recepție */}
+          {(c.status === 'emisa' || c.status === 'in_tranzit' || c.status === 'ajunsa') && ctx.canCreate && !editRepere && !c.este_servicii && <Btn color={G.red} onClick={deschideEditRepere}>✏️ Modifică repere</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && !editTermene && <Btn color={G.orange} onClick={deschideEditTermene}>📅 Modifică termene</Btn>}
           {c.status === 'emisa' && ctx.canCreate && <Btn color={G.purple} onClick={() => actions.markStatus(c, 'in_tranzit')}>🚚 Marchează ÎN TRANZIT</Btn>}
           {(c.status === 'emisa' || c.status === 'in_tranzit') && ctx.canCreate && <Btn color={G.orange} onClick={() => actions.markStatus(c, 'ajunsa')}>📦 Marchează AJUNSĂ</Btn>}
@@ -1699,6 +1742,31 @@ export default function AchizitiiPage() {
         await loadAll()
       } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
+    // TKT-2026-0176 (Kostas): furnizorul nu mai livrează un reper / schimbă cantitatea →
+    // edit cantitate+specificații sau ștergere reper, permis până la recepție (emisa/in_tranzit/ajunsa)
+    salveazaModificariRepere: async (c, patchMap) => {
+      setBusy(true)
+      try {
+        for (const [lineId, p] of Object.entries(patchMap || {})) {
+          const { error } = await supabase.from('comenzi_furnizor_linii')
+            .update({ cantitate: p.cantitate === '' ? 0 : Number(p.cantitate), observatii: p.observatii?.trim() || null })
+            .eq('id', lineId)
+          if (error) throw error
+        }
+        showToast(`✏️ Repere actualizate pentru ${c.numar_comanda}.`)
+        await loadAll()
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
+    stergeLinie: async (c, l) => {
+      if (!window.confirm(`Ștergi reperul „${l.denumire}" din ${c.numar_comanda}?\nDe folosit când furnizorul anulează livrarea. IREVERSIBIL.`)) return
+      setBusy(true)
+      try {
+        const { error } = await supabase.from('comenzi_furnizor_linii').delete().eq('id', l.id)
+        if (error) throw error
+        showToast(`🗑 Reper „${l.denumire}" șters din ${c.numar_comanda}.`, 'warn')
+        await loadAll()
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
+    },
     deschideReceptie: (c) => { setSelectedId(null); setReceptieId(c.id) },
     deschideReceptieTransport: (c) => { setSelectedId(null); setReceptieTransportId(c.id) },
     deschideAvizTransport: (c) => { setSelectedId(null); setAvizTransportId(c.id) },
@@ -1746,8 +1814,9 @@ export default function AchizitiiPage() {
     const c = receptieTransportComanda; if (!c) return
     if (!c.proiect_id) { showToast('Comanda nu are proiect — necesar pentru transferul pe stocul șantierului.', 'error'); return }
     if (!destinatieSiteId) { showToast('Alege șantierul destinație.', 'error'); return }
-    const linii = (c.linii || []).filter(l => l.denumire && Number(l.cantitate) > 0)
-    if (!linii.length) { showToast('Comanda nu are linii cu cantitate.', 'error'); return }
+    // TKT-2026-0176: doar cantitățile efectiv primite (reper anulat de furnizor = exclus)
+    const linii = liniiReceptionate(c.linii)
+    if (!linii.length) { showToast('Comanda nu are linii cu cantitate primită.', 'error'); return }
     setBusy(true)
     try {
       // 1. PV1 recepție calitativă (semnături: MP proiect + Achiziții)
@@ -1823,8 +1892,8 @@ export default function AchizitiiPage() {
   const creeazaAvizTransport = async ({ destinatieSiteId, dataTransport, observatii }) => {
     const c = avizTransportComanda; if (!c) return
     if (!destinatieSiteId) { showToast('Alege șantierul destinație.', 'error'); return }
-    const linii = (c.linii || []).filter(l => l.denumire && Number(l.cantitate) > 0)
-    if (!linii.length) { showToast('Comanda nu are linii cu cantitate.', 'error'); return }
+    const linii = liniiReceptionate(c.linii)
+    if (!linii.length) { showToast('Comanda nu are linii cu cantitate primită.', 'error'); return }
     setBusy(true)
     try {
       const { data: tr, error: eT } = await supabase.from('logistica_transporturi').insert({
@@ -1866,8 +1935,8 @@ export default function AchizitiiPage() {
     const locatie_tip = c.livrare_tip === 'sediu' ? 'sediu' : 'proiect'
     const locatie_id = c.livrare_tip === 'sediu' ? null : (c.proiect_id || null)
     // Intrare prin registrul de mișcări → trigger aplică în stoc + calculează cost mediu (WAC) din preț
-    const miscari = (c.linii || [])
-      .filter(l => l.denumire && Number(l.cantitate) > 0)
+    // TKT-2026-0176: intră DOAR cantitățile efectiv primite (liniiReceptionate)
+    const miscari = liniiReceptionate(c.linii)
       .map(l => ({
         locatie_tip, locatie_id,
         material_denumire: l.denumire, um: l.um || null,
