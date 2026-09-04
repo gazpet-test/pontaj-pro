@@ -151,6 +151,7 @@ export default function UnitatiProtejate({ profile }) {
   const [citesteOpen, setCitesteOpen] = useState(false)
   const [editPlafon, setEditPlafon] = useState(false)
   const [plafonNou, setPlafonNou] = useState('')
+  const [lunaSel, setLunaSel]     = useState(lunaAcum().slice(0,7))   // TKT-2026-0177: istoric comenzi pe luni
 
   const incarca = useCallback(async () => {
     setLoad(true)
@@ -225,6 +226,12 @@ export default function UnitatiProtejate({ profile }) {
   }, [achizitii])
 
   const expirate = furnizori.filter(f => f.upa_valabil_pana && f.upa_valabil_pana < azi())
+  const luniDisponibile = useMemo(() => {
+    const set = new Set(achizitii.map(a => String(a.luna).slice(0,7))); set.add(luna.slice(0,7))
+    return [...set].sort((a,b) => b.localeCompare(a))
+  }, [achizitii, luna])
+  const achizitiiLuna = achizitii.filter(a => String(a.luna).slice(0,7) === lunaSel)
+  const totalLunaSel = achizitiiLuna.reduce((s, a) => s + Number(a.valoare || 0), 0)
 
   if (load) return <div style={{color:G.muted, fontSize:14, padding:'40px 0', textAlign:'center'}}>Se încarcă…</div>
 
@@ -325,14 +332,22 @@ export default function UnitatiProtejate({ profile }) {
 
       {/* Achiziții luna curentă */}
       <div style={{...S.card, marginBottom:16, overflow:'hidden'}}>
-        <div style={{padding:'11px 16px', background:G.bg, borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800}}>
-          🧾 Achiziții {fmtLuna(luna)}
+        <div style={{padding:'11px 16px', background:G.bg, borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800, display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+          <span>🧾 Achiziții {fmtLuna(lunaSel + '-01')}{lunaSel === luna.slice(0,7) ? '' : ' (istoric)'}</span>
+          <span style={{display:'flex', gap:8, alignItems:'center'}}>
+            <span style={{fontSize:12, color:G.green, fontWeight:800}}>{lei(totalLunaSel)} lei · {achizitiiLuna.length} {achizitiiLuna.length === 1 ? 'achiziție' : 'achiziții'}</span>
+            <select value={lunaSel} onChange={e => setLunaSel(e.target.value)} style={{...S.input, width:'auto', padding:'4px 8px', fontSize:12}}>
+              {luniDisponibile.map(k => <option key={k} value={k}>{fmtLuna(k + '-01')}</option>)}
+            </select>
+          </span>
         </div>
-        {achizitii.filter(a => String(a.luna).slice(0,7) === luna.slice(0,7)).length === 0 ? (
+        {achizitiiLuna.length === 0 ? (
           <div style={{padding:'22px 16px', textAlign:'center', color:G.muted, fontSize:13}}>
-            Nicio achiziție luna asta. Ai <b style={{color:G.orange}}>{lei(plafon)} lei</b> de consumat în {zile} {zile === 1 ? 'zi' : 'zile'}.
+            {lunaSel === luna.slice(0,7)
+              ? <>Nicio achiziție luna asta. Ai <b style={{color:G.orange}}>{lei(plafon)} lei</b> de consumat în {zile} {zile === 1 ? 'zi' : 'zile'}.</>
+              : <>Nicio achiziție înregistrată în {fmtLuna(lunaSel + '-01')}.</>}
           </div>
-        ) : achizitii.filter(a => String(a.luna).slice(0,7) === luna.slice(0,7)).map(a => (
+        ) : achizitiiLuna.map(a => (
           <div key={a.id} style={{padding:'10px 16px', borderBottom:`1px solid ${G.border2}`, display:'grid', gridTemplateColumns:'1fr 130px 110px 60px', gap:12, alignItems:'center'}}>
             <div style={{minWidth:0}}>
               <div style={{fontSize:13, fontWeight:700}}>{a.furnizor?.nume || a.furnizor_nume || '—'}</div>
@@ -347,7 +362,7 @@ export default function UnitatiProtejate({ profile }) {
         ))}
       </div>
 
-      {/* Istoric */}
+      {/* Istoric — click pe o lună o deschide în lista de achiziții (TKT-2026-0177) */}
       {istoric.length > 1 && (
         <div style={{...S.card, overflow:'hidden'}}>
           <div style={{padding:'11px 16px', background:G.bg, borderBottom:`1px solid ${G.border}`, fontSize:13, fontWeight:800}}>📊 Ultimele luni</div>
@@ -355,8 +370,8 @@ export default function UnitatiProtejate({ profile }) {
             const pierdut = Math.max(0, plafon - v)
             const eLunaCurenta = k === luna.slice(0,7)
             return (
-              <div key={k} style={{padding:'9px 16px', borderBottom:`1px solid ${G.border2}`, display:'flex', gap:12, alignItems:'center', fontSize:12}}>
-                <span style={{flex:'1 1 auto', fontWeight:600}}>{fmtLuna(k + '-01')}</span>
+              <div key={k} onClick={() => setLunaSel(k)} title="Arată achizițiile lunii" style={{padding:'9px 16px', borderBottom:`1px solid ${G.border2}`, display:'flex', gap:12, alignItems:'center', fontSize:12, cursor:'pointer', background: k === lunaSel ? G.bg : 'transparent'}}>
+                <span style={{flex:'1 1 auto', fontWeight:600}}>{fmtLuna(k + '-01')}{k === lunaSel ? ' ◂' : ''}</span>
                 <span style={{color:G.green, fontWeight:700}}>{lei(v)} lei</span>
                 {!eLunaCurenta && pierdut > 0 && <span style={{color:G.red, fontSize:11}}>· {lei(pierdut)} lei neconsumați</span>}
                 {!eLunaCurenta && pierdut === 0 && <span style={{color:G.green, fontSize:11}}>· plafon consumat ✓</span>}
