@@ -1136,6 +1136,7 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
         <R k="Garanție participare" v={l.garantie_participare} />
         <R k="Link SEAP" v={l.link_seap ? <a href={l.link_seap} target="_blank" rel="noreferrer" style={{ color:G.blue }}>{l.link_seap}</a> : null} />
         <R k="Folder NAS" v={l.nas_path} />
+        <R k="Grafic de execuție" v={<a href={`/grafic/licitatie/${l.id}`} style={{ color:G.blue }}>📅 Poarta grafic + Gantt (drum critic, MS Project, F9)</a>} />
         <R k="Documente / Cerințe" v={`${l.nr_documente} documente · ${l.nr_cerinte} cerințe (${l.nr_eliminatorii} eliminatorii, ${l.eliminatorii_neacoperite} neacoperite)`} />
         <R k="Motivare decizie" v={l.decizie_motivare} />
         <R k="Observații" v={l.observatii} />

@@ -11,6 +11,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import PoartaGrafic, { exportMSPDI } from './GraficPoarta.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -283,8 +284,12 @@ export default function GraficLucrare({ profile }) {
         <button style={{ ...S.btnP, opacity: dirty && !busy ? 1 : .5 }} disabled={!dirty || !!busy} onClick={salveaza}>💾 Salvează graficul</button>
         <button style={S.btnS} onClick={exportPdf} disabled={!!busy}>📄 Export PDF</button>
         <button style={S.btnS} onClick={exportF9} disabled={!!busy} title="Grafic fizic și valoric (model Conpet) — Excel editabil">📊 Export F9</button>
+        <button style={S.btnS} disabled={!!busy || !rows.length} title="MS Project XML (MSPDI) — fișierul editabil cerut la clarificări"
+          onClick={() => exportMSPDI({ rows, rez, dataStart, titlu: eProiect ? (lucrare?.nume || '') : (lucrare?.obiect || ''), fisier: `grafic_${eProiect ? 'proiect' : 'licitatie'}_${id}` })}>🗓 Export MS Project</button>
         {busy && <span style={{ fontSize:12.5, color:G.accent, fontWeight:700 }}>{busy}</span>}
       </div>
+
+      {!eProiect && <PoartaGrafic licitatieId={Number(id)} profile={profile} rows={rows} dataStart={dataStart} onDataStart={setDataStart} onGenerat={load} showToast={showToast} />}
 
       {/* ── Tabelul + Gantt-ul, aliniate pe rânduri ── */}
       <div ref={ganttRef} style={{ ...S.card, padding:14, overflowX:'auto' }}>
@@ -362,7 +367,7 @@ export default function GraficLucrare({ profile }) {
             })}
           </tbody>
         </table>
-        {!rows.length && <div style={{ color:G.dim, fontSize:13, padding:20, textAlign:'center' }}>Niciun rând — „＋ Activitate" sau (în curând) „🤖 Propune graficul".</div>}
+        {!rows.length && <div style={{ color:G.dim, fontSize:13, padding:20, textAlign:'center' }}>Niciun rând — „＋ Activitate" sau „⚙️ Generează grafic" din Poarta grafic.</div>}
       </div>
     </div>
   )
