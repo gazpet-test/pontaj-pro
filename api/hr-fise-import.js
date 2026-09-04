@@ -104,8 +104,11 @@ export default async function handler(req, res) {
       // aceeasi data sau la cateva zile distanta: Natalia scrie pe fisier data de pe scan, iar in
       // platforma s-a tastat uneori cu o zi-doua diferenta (IOAN SORIN 16.10 / 15.10). Sub 8 zile
       // e acelasi act, nu o reinnoire.
-      const laData = ale.filter((r) => r.data_expirare && Math.abs(zile(r.data_expirare, citit.data_expirare)) <= 7)
-        .sort((a, b) => Math.abs(zile(a.data_expirare, citit.data_expirare)) - Math.abs(zile(b.data_expirare, citit.data_expirare)))
+      // Pe unele scanuri Natalia a scris data EXAMENULUI, nu a expirarii („03.03.2026 - GUMMADI",
+      // iar in platforma fisa expira 03.03.2027): daca data din nume + 1 an cade pe un rand, e acela.
+      const unAn = anulUrmator(citit.data_expirare)
+      const dist = (r) => Math.min(Math.abs(zile(r.data_expirare, citit.data_expirare)), Math.abs(zile(r.data_expirare, unAn)))
+      const laData = ale.filter((r) => r.data_expirare && dist(r) <= 7).sort((a, b) => dist(a) - dist(b))
       const faraData = ale.filter((r) => !r.data_expirare && !r.fisier_path)
       const maxData = ale.map((r) => r.data_expirare).filter(Boolean).sort().pop() || null
       if (citit.pagina > 1) {
@@ -113,7 +116,8 @@ export default async function handler(req, res) {
         nou = { data_expirare: citit.data_expirare, observatii: `Pagina ${citit.pagina} a scanului. ${nota}` }
       } else if (laData.some((r) => !r.fisier_path)) {
         tinta = laData.find((r) => !r.fisier_path)
-        if (tinta.data_expirare !== citit.data_expirare) nota += ` Pe numele scanului data e ${citit.data_expirare}, in platforma ${tinta.data_expirare} — verifica.`
+        if (Math.abs(zile(tinta.data_expirare, unAn)) <= 7) nota += ` Pe numele scanului e ${citit.data_expirare} (data examenului); expirarea din platforma, ${tinta.data_expirare}, ramane.`
+        else if (tinta.data_expirare !== citit.data_expirare) nota += ` Pe numele scanului data e ${citit.data_expirare}, in platforma ${tinta.data_expirare} — verifica.`
       } else if (laData.length) {
         raport.push({ fisier: f.name, ce: 'sarit', angajat: employee.name, motiv: `are deja fisier la ${laData[0].data_expirare}: „${laData[0].fisier_nume}"` })
         sarite++; continue
@@ -211,6 +215,11 @@ export default async function handler(req, res) {
 }
 
 function zile(a, b) { return Math.round((new Date(a) - new Date(b)) / 86400000) }
+
+function anulUrmator(iso) {
+  const [a, l, z] = iso.split('-').map(Number)
+  return `${a + 1}-${String(l).padStart(2, '0')}-${String(z).padStart(2, '0')}`
+}
 
 function anulAnterior(iso) {
   const [a, l, z] = iso.split('-').map(Number)
