@@ -36,13 +36,16 @@ const PARAM_DEFAULT = {
   iarna: true,                   // întrerupere tehnologică explicită dec–feb
   os_zile: 15, procurare_zile: 60, receptie_zile: 30,
   include_bransamente: true,     // Răzvan 04.09.2026: în 98% din contracte branșamentele sunt incluse
-  nr_bransamente: 0,             // 0 = necunoscut → motorul estimează ~20 buc/km (media Hoghilag)
+  nr_bransamente: 0,             // 0 = necunoscut → motorul estimează BRANS_PE_KM buc/km
   srm: false, srm_zile: 120,
   fronturi: [],                  // [{nume, lungime_m, dn, echipe}]
   jaloane: ['Ordin administrativ de începere', 'Predare / preluare amplasament', 'Recepție la terminarea lucrărilor'],
   ferestre_operator: '',         // text liber: cuplări, avize, autorizații spargere
 }
 
+// Branșamente/km când numărul nu e în documentație: media Finta (sat compact de câmpie, 590 branș. / 17,4 km rețea PE).
+// Hoghilag (20/km) e sat de munte, răsfirat — nu e reprezentativ (Răzvan 04.09.2026).
+const BRANS_PE_KM = 34
 const zileLuni = (luni) => Math.round((Number(luni) || 0) * 30.44)
 const addZile = (iso, n) => { if (!iso) return ''; const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
 
@@ -89,10 +92,10 @@ export function motorPEHD(p, norme) {
     let ultim = ast
     if (p.include_bransamente) {
       const estimat = !Number(p.nr_bransamente)
-      const nb = estimat ? Math.round(L / 1000 * 20) : Math.round((Number(p.nr_bransamente) || 0) * L / Math.max(1, totalFronturi(p)))
+      const nb = estimat ? Math.round(L / 1000 * BRANS_PE_KM) : Math.round((Number(p.nr_bransamente) || 0) * L / Math.max(1, totalFronturi(p)))
       if (nb > 0) {
         const zb = Math.max(2, Math.ceil(nb / 2.5))
-        ultim = add({ denumire: `Branșamente + răsuflători + PRM (~${nb} buc${estimat ? ', estimat 20/km' : ''})`, durata_zile: zb, resurse: 'Echipă branșamente', predecesori: [{ id: mon, tip: 'SS', lag: 10 }] })
+        ultim = add({ denumire: `Branșamente + răsuflători + PRM (~${nb} buc${estimat ? `, estimat ${BRANS_PE_KM}/km` : ''})`, durata_zile: zb, resurse: 'Echipă branșamente', predecesori: [{ id: mon, tip: 'SS', lag: 10 }] })
       }
     }
     const nrTr = Math.max(1, Math.ceil(L / 3000))
@@ -267,7 +270,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
       detalii: `${p.data_start || 'fără dată'} · ${dl || '—'} luni${durataMax ? ` (maxim din cerințe: ${durataMax} luni)` : ' (nu am găsit durata maximă în cerințe)'}${durataMax && dl > durataMax ? ' — DEPĂȘEȘTE' : ''}` })
     out.push({ k: 'cerinte', titlu: 'Cerințe de grafic extrase din registru', stare: cerinte.length ? 'ok' : 'block', detalii: `${cerinte.length} cerințe (durată, jaloane, format, resurse)` })
     out.push({ k: 'brans', titlu: 'Branșamente', stare: p.include_bransamente === null ? 'block' : (p.include_bransamente && !Number(p.nr_bransamente)) ? 'warn' : 'ok',
-      detalii: p.include_bransamente === null ? 'nedecis: contractul include branșamente?' : p.include_bransamente ? (Number(p.nr_bransamente) ? `da, ${p.nr_bransamente} buc` : `da, număr necunoscut → estimat 20/km (~${Math.round(totalFronturi(p) / 1000 * 20)} buc); completează când vine clarificarea`) : 'nu (doar rețeaua)' })
+      detalii: p.include_bransamente === null ? 'nedecis: contractul include branșamente?' : p.include_bransamente ? (Number(p.nr_bransamente) ? `da, ${p.nr_bransamente} buc` : `da, număr necunoscut → estimat ${BRANS_PE_KM}/km, media Finta (~${Math.round(totalFronturi(p) / 1000 * BRANS_PE_KM)} buc); completează când vine clarificarea`) : 'nu (doar rețeaua)' })
     out.push({ k: 'ferestre', titlu: 'Constrângeri operator (cuplări, avize, spargeri)', stare: (p.ferestre_operator || '').trim() ? 'ok' : 'warn', detalii: (p.ferestre_operator || '').trim() || 'necompletate — merg în notele graficului' })
     return out
   }, [p, cantitati, norme, cerinte, durataMax])
