@@ -97,19 +97,29 @@ export default async function handler(req, res) {
     const tipNume = citit.tip_id === TIP_AVIZ ? 'aviz psihologic' : 'fisa de aptitudini'
     let tinta = null       // randul care primeste fisierul
     let nou = null         // randul de creat
+    let seteazaData = false
     let nota = `Adus automat de pe server (Drive) din „${f.name}". ${MARCAJ(f.id)}`
 
     if (citit.data_expirare) {
-      const laData = ale.filter((r) => r.data_expirare === citit.data_expirare)
+      // aceeasi data sau la cateva zile distanta: Natalia scrie pe fisier data de pe scan, iar in
+      // platforma s-a tastat uneori cu o zi-doua diferenta (IOAN SORIN 16.10 / 15.10). Sub 8 zile
+      // e acelasi act, nu o reinnoire.
+      const laData = ale.filter((r) => r.data_expirare && Math.abs(zile(r.data_expirare, citit.data_expirare)) <= 7)
+        .sort((a, b) => Math.abs(zile(a.data_expirare, citit.data_expirare)) - Math.abs(zile(b.data_expirare, citit.data_expirare)))
+      const faraData = ale.filter((r) => !r.data_expirare && !r.fisier_path)
       const maxData = ale.map((r) => r.data_expirare).filter(Boolean).sort().pop() || null
       if (citit.pagina > 1) {
         // pagina a doua a aceluiasi scan: rand separat, ca sa nu ramana pe server
         nou = { data_expirare: citit.data_expirare, observatii: `Pagina ${citit.pagina} a scanului. ${nota}` }
       } else if (laData.some((r) => !r.fisier_path)) {
         tinta = laData.find((r) => !r.fisier_path)
+        if (tinta.data_expirare !== citit.data_expirare) nota += ` Pe numele scanului data e ${citit.data_expirare}, in platforma ${tinta.data_expirare} — verifica.`
       } else if (laData.length) {
-        raport.push({ fisier: f.name, ce: 'sarit', angajat: employee.name, motiv: `are deja fisier la ${citit.data_expirare}: „${laData[0].fisier_nume}"` })
+        raport.push({ fisier: f.name, ce: 'sarit', angajat: employee.name, motiv: `are deja fisier la ${laData[0].data_expirare}: „${laData[0].fisier_nume}"` })
         sarite++; continue
+      } else if (faraData.length === 1) {
+        // randul exista, dar fara data si fara fisier (MITITELU PAUL MARIAN): ii punem amandoua
+        tinta = faraData[0]; tinta.data_expirare = citit.data_expirare; seteazaData = true
       } else if (maxData && citit.data_expirare < maxData) {
         raport.push({ fisier: f.name, ce: 'istoric', angajat: employee.name, motiv: `in platforma e una mai noua (${maxData})` })
         istoric++; continue
@@ -118,13 +128,17 @@ export default async function handler(req, res) {
       }
     } else {
       const faraFisier = ale.filter((r) => !r.fisier_path)
+      const singuraData = ale.length === 1 ? ale[0].data_expirare : null
       if (citit.pagina > 1) {
-        nou = { data_expirare: null, observatii: `Pagina ${citit.pagina} a scanului. Data de expirare lipseste din numele fisierului — de completat. ${nota}` }
+        nou = { data_expirare: singuraData, observatii: `Pagina ${citit.pagina} a scanului.${singuraData ? '' : ' Data de expirare lipseste din numele fisierului — de completat.'} ${nota}` }
       } else if (faraFisier.length === 1) {
         tinta = faraFisier[0]
         nota += ' Data de expirare nu era in numele fisierului — verifica ca scanul e cel de la data randului.'
       } else if (!ale.length) {
         nou = { data_expirare: null, observatii: `Data de expirare lipseste din numele fisierului — de completat. ${nota}` }
+      } else if (ale.length === 1) {
+        raport.push({ fisier: f.name, ce: 'sarit', angajat: employee.name, motiv: `fara data in nume; singurul rand (${ale[0].data_expirare}) are deja fisier „${ale[0].fisier_nume}"` })
+        sarite++; continue
       } else {
         raport.push({ fisier: f.name, ce: 'sarit', angajat: employee.name, motiv: `fara data in nume si omul are ${ale.length} randuri de ${tipNume} — nu stiu la care e` })
         sarite++; continue
@@ -146,7 +160,9 @@ export default async function handler(req, res) {
 
       if (tinta) {
         const obs = [tinta.observatii, nota].filter(Boolean).join(' ')
-        const { error } = await supa.from('hr_autorizatii').update({ ...fisier, observatii: obs }).eq('id', tinta.id)
+        const upd = { ...fisier, observatii: obs }
+        if (seteazaData) { upd.data_expirare = tinta.data_expirare; upd.data_emitere = anulAnterior(tinta.data_expirare) }
+        const { error } = await supa.from('hr_autorizatii').update(upd).eq('id', tinta.id)
         if (error) throw new Error(`update: ${error.message}`)
         tinta.fisier_path = cale; tinta.fisier_nume = f.name; tinta.observatii = obs
         legate++
@@ -193,6 +209,8 @@ export default async function handler(req, res) {
     secunde: Math.round((Date.now() - inceput) / 1000), continua: oprit,
   })
 }
+
+function zile(a, b) { return Math.round((new Date(a) - new Date(b)) / 86400000) }
 
 function anulAnterior(iso) {
   const [a, l, z] = iso.split('-').map(Number)
