@@ -66,15 +66,19 @@ Deno.serve(async (req: Request) => {
   if (et || !tok) return json({ error: 'META_PAGE_TOKEN lipsă în Vault' }, 500);
   const TOKEN = tok as string;
 
-  const graph = async (path: string, init?: RequestInit & { form?: Record<string, string> }) => {
+  // `tok` = tokenul cu care se face apelul: implicit system user; pentru actiuni PE pagina (poze
+  // nepublicate, feed) Meta cere PAGE access token — eroarea (#200) „Unpublished posts must be
+  // posted to a page as the page itself" (05.09.2026). Page token-ul vine din me/accounts.
+  const graph = async (path: string, init?: RequestInit & { form?: Record<string, string>; tok?: string }) => {
     const url = `${GRAPH}/${path}`;
+    const t = init?.tok || TOKEN;
     let r: Response;
     if (init?.form) {
-      const fd = new URLSearchParams({ ...init.form, access_token: TOKEN });
+      const fd = new URLSearchParams({ ...init.form, access_token: t });
       r = await fetch(url, { method: 'POST', body: fd });
     } else {
       const sep = url.includes('?') ? '&' : '?';
-      r = await fetch(`${url}${sep}access_token=${encodeURIComponent(TOKEN)}`, init);
+      r = await fetch(`${url}${sep}access_token=${encodeURIComponent(t)}`, init);
     }
     const j = await r.json().catch(() => ({}));
     if (!r.ok || j.error) throw new Error(j?.error?.message || `Graph ${r.status}`);
@@ -83,7 +87,7 @@ Deno.serve(async (req: Request) => {
 
   // Pagina administrata (prima din /me/accounts); tokenul e system user → tasks include CREATE_CONTENT
   const pagina = async () => {
-    const acc = await graph('me/accounts?fields=id,name,followers_count,instagram_business_account{id,username},tasks');
+    const acc = await graph('me/accounts?fields=id,name,followers_count,instagram_business_account{id,username},tasks,access_token');
     const p = acc?.data?.[0];
     if (!p) throw new Error('tokenul nu vede nicio pagină');
     return p;
@@ -92,7 +96,7 @@ Deno.serve(async (req: Request) => {
   try {
     // ── STATUS ──
     if (actiune === 'status') {
-      const p = await pagina();
+      const { access_token: _t, ...p } = await pagina();
       return json({ ok: true, pagina: p, poateAproba, user: prof?.name });
     }
 
@@ -146,25 +150,27 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
       if (!(post.text_postare || '').trim()) return json({ error: 'textul e gol' }, 400);
       if (!mk?.postabil) return json({ error: 'șantierul nu e marcat postabil' }, 400);
       const p = await pagina();
+      const PT = p.access_token as string;  // page token
+      if (!PT) throw new Error('Meta nu a returnat tokenul paginii (me/accounts.access_token)');
       const photoIds: string[] = [];
       for (const path of (post.poze || []).slice(0, 10)) {
         const { data: su, error: es } = await db.storage.from(BUCKET).createSignedUrl(path, 900);
         if (es || !su?.signedUrl) throw new Error(`poza ${path}: ${es?.message || 'fără URL'}`);
-        const ph = await graph(`${p.id}/photos`, { form: { url: su.signedUrl, published: 'false' } });
+        const ph = await graph(`${p.id}/photos`, { form: { url: su.signedUrl, published: 'false' }, tok: PT });
         photoIds.push(ph.id);
       }
       let postId: string;
       if (photoIds.length) {
         const form: Record<string, string> = { message: post.text_postare };
         photoIds.forEach((id, i) => { form[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id }); });
-        const fp = await graph(`${p.id}/feed`, { form });
+        const fp = await graph(`${p.id}/feed`, { form, tok: PT });
         postId = fp.id;
       } else {
-        const fp = await graph(`${p.id}/feed`, { form: { message: post.text_postare } });
+        const fp = await graph(`${p.id}/feed`, { form: { message: post.text_postare }, tok: PT });
         postId = fp.id;
       }
       let permalink = '';
-      try { const pl = await graph(`${postId}?fields=permalink_url`); permalink = pl.permalink_url || ''; } catch { /* nu blocam */ }
+      try { const pl = await graph(`${postId}?fields=permalink_url`, { tok: PT }); permalink = pl.permalink_url || ''; } catch { /* nu blocam */ }
       await db.from('marketing_postari').update({
         status: 'publicata', fb_post_id: postId, fb_permalink: permalink, fb_photo_ids: photoIds,
         publicat_de: user.id, publicat_la: new Date().toISOString(), eroare: null, updated_at: new Date().toISOString(),
