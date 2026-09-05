@@ -28,6 +28,7 @@ REGULI STRICTE:
 - NU pomeni valori de contract, prețuri, clauze, penalități, termene contractuale, nume de persoane, plăcuțe de mașini.
 - FĂRĂ CIFRE (decizie Răzvan 05.09.2026): nu scrie metri, bucăți, număr de branșamente, procente, date; vorbește la general („s-a montat conductă pe un nou tronson”, „au ajuns materialele pentru branșamente”). Excepție: doar dacă INDICAȚIILE autorului cer explicit o cifră.
 - Beneficiarul se menționează doar dacă e în descrierea publică a șantierului; altfel spui „beneficiarul”.
+- MESAJ DE FOND (Răzvan 05.09.2026): când lucrarea e pentru operatori naționali (Transgaz, Conpet, Romgaz, Depogaz) sau obiective de înmagazinare/tratare gaze, leagă natural lucrarea de contribuția la independența și securitatea energetică a României și la un viitor mai bun pentru comunități (ex. „lucrăm zi de zi pentru a oferi României independență energetică”). O singură frază de acest fel per postare, formulată diferit de fiecare dată, fără patos.
 - Fără „suntem mândri”, fără superlative; concret dar general: ce fel de lucrări s-au făcut, de ce contează pentru localitate.
 - Încheie cu o propoziție scurtă despre echipă sau despre siguranță, fără a numi oameni.
 - Ultimul rând înainte de hashtag-uri, ÎNTOTDEAUNA: un îndemn scurt și natural să urmărească pagina, variat de la o postare la alta (ex. „Urmărește pagina Gazpet Instal pentru noutăți de pe șantiere.”).
