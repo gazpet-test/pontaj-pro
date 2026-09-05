@@ -30,7 +30,13 @@ REGULI STRICTE:
 - Beneficiarul se menționează doar dacă e în descrierea publică a șantierului; altfel spui „beneficiarul”.
 - Fără „suntem mândri”, fără superlative; concret dar general: ce fel de lucrări s-au făcut, de ce contează pentru localitate.
 - Încheie cu o propoziție scurtă despre echipă sau despre siguranță, fără a numi oameni.
+- Ultimul rând înainte de hashtag-uri, ÎNTOTDEAUNA: un îndemn scurt și natural să urmărească pagina, variat de la o postare la alta (ex. „Urmărește pagina Gazpet Instal pentru noutăți de pe șantiere.”).
 Răspunde DOAR cu textul postării, fără titlu, fără ghilimele.`;
+
+// Textul pentru distribuirea de pe profilul vechi „Gazpet Instal” (profil personal, se retrage treptat → pagina nouă)
+const PROMPT_DISTRIBUIRE = `Scrie în română un text de 25–45 de cuvinte care însoțește distribuirea unei postări de pe PAGINA oficială Gazpet Instal,
+pusă de pe vechiul PROFIL personal „Gazpet Instal”. Scop: oamenii să dea „Urmărește” paginii noi; spune calm că acest profil se va retrage treptat
+și că noutățile de pe șantiere vor apărea doar pe pagină. Ton prietenos, fără cifre, fără emoji-uri multe (max 1). Variază formularea. Răspunde DOAR cu textul.`;
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
@@ -119,8 +125,18 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
       const j = await r.json();
       if (!r.ok) return json({ error: j?.error?.message || 'eroare AI' }, 500);
       const text = (j.content || []).map((c: any) => c.text || '').join('').trim();
-      await db.from('marketing_postari').update({ text_postare: text, ai_generat: true, updated_at: new Date().toISOString() }).eq('id', post.id);
-      return json({ ok: true, text });
+      let textDistribuire = post.text_distribuire || '';
+      try {
+        const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify({ model: MODEL, max_tokens: 200, system: PROMPT_DISTRIBUIRE, messages: [{ role: 'user', content: `Postarea distribuită:\n${text}` }] }),
+        });
+        const j2 = await r2.json();
+        if (r2.ok) textDistribuire = (j2.content || []).map((c: any) => c.text || '').join('').trim() || textDistribuire;
+      } catch { /* textul de distribuire e opțional */ }
+      await db.from('marketing_postari').update({ text_postare: text, text_distribuire: textDistribuire, ai_generat: true, updated_at: new Date().toISOString() }).eq('id', post.id);
+      return json({ ok: true, text, text_distribuire: textDistribuire });
     }
 
     // ── PUBLICA ──

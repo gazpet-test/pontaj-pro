@@ -264,6 +264,7 @@ export default function Marketing() {
                     <div style={{ whiteSpace:'pre-wrap', fontSize:13, lineHeight:1.45, color: p.text_postare ? G.text : G.dim }}>{p.text_postare || '(fără text încă)'}</div>
                   )}
                   {p.eroare && <div style={{ color:G.red, fontSize:12, marginTop:6 }}>Eroare: {p.eroare}</div>}
+                  {p.text_distribuire && <div style={{ fontSize:12, marginTop:8, padding:'6px 9px', background:G.surface, borderRadius:6, color:G.muted }}><b style={{ color:G.text }}>Text pentru distribuirea de pe profilul vechi:</b> {p.text_distribuire}</div>}
                   {p.fb_permalink && <div style={{ fontSize:12, marginTop:6 }}><a href={p.fb_permalink} target="_blank" rel="noreferrer" style={{ color:G.blue }}>Vezi postarea pe Facebook ↗</a> · publicată {fmtDT(p.publicat_la)} de {numeProfil(p.publicat_de)}</div>}
                   <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 }}>
                     {(p.status === 'ciorna' || p.status === 'eroare') && !inEdit && <button style={S.btnS} onClick={() => setEdit({ id: p.id, text: p.text_postare || '' })}>✏️ Editează</button>}
@@ -275,6 +276,7 @@ export default function Marketing() {
                     {p.status === 'aprobata' && <button style={S.btnS} onClick={() => upd(p.id, { status: 'ciorna' })}>↩ Înapoi în ciornă</button>}
                     {p.status === 'eroare' && poateAproba && <button style={S.btnS} onClick={() => upd(p.id, { status: 'aprobata', eroare: null })}>🔁 Reîncearcă (re-aprobă)</button>}
                     {p.status === 'publicata' && p.fb_permalink && <a href={p.fb_permalink} target="_blank" rel="noreferrer" style={{ ...S.btnS, textDecoration:'none', color:G.text }}>↗ Distribuie de pe profil</a>}
+                    {p.status === 'publicata' && p.text_distribuire && <button style={S.btnS} title={p.text_distribuire} onClick={() => { navigator.clipboard?.writeText(p.text_distribuire); showToast('Textul pentru profil e copiat — lipește-l la distribuire.') }}>📋 Copiază textul pentru profil</button>}
                     {(p.status === 'ciorna' || p.status === 'eroare') && <button style={{ ...S.btnS, color:G.red, marginLeft:'auto' }} onClick={() => { if (window.confirm('Anulezi ciorna?')) upd(p.id, { status: 'anulata' }) }}>✕ Anulează</button>}
                   </div>
                 </div>
