@@ -102,7 +102,7 @@ Deno.serve(async (req: Request) => {
 
   // Pagina administrata (prima din /me/accounts); tokenul e system user → tasks include CREATE_CONTENT
   const pagina = async () => {
-    const acc = await graph('me/accounts?fields=id,name,followers_count,instagram_business_account{id,username},tasks,access_token');
+    const acc = await graph('me/accounts?fields=id,name,link,followers_count,instagram_business_account{id,username},tasks,access_token');
     const p = acc?.data?.[0];
     if (!p) throw new Error('tokenul nu vede nicio pagină');
     return p;
@@ -218,6 +218,8 @@ ${lucrari || '(niciun raport selectat — scrie despre progresul general al lucr
         const j2 = await r2.json();
         if (r2.ok) textDistribuire = (j2.content || []).map((c: any) => c.text || '').join('').trim() || textDistribuire;
       } catch { /* textul de distribuire e opțional */ }
+      // Link-ul paginii noi la finalul textului de distribuire (Răzvan 05.09.2026)
+      try { const pg = await pagina(); if (pg.link && textDistribuire && !textDistribuire.includes(pg.link)) textDistribuire = `${textDistribuire}\n${pg.link}`; } catch { /* fără link */ }
       await db.from('marketing_postari').update({ text_postare: text, text_distribuire: textDistribuire, ai_generat: true, updated_at: new Date().toISOString() }).eq('id', post.id);
       return json({ ok: true, text, text_distribuire: textDistribuire });
     }

@@ -100,7 +100,7 @@ export default function Marketing() {
     if (siteId || postabile[0]?.id) await incarcaRapoarte(siteId || postabile[0].id)
   }
   const incarcaRapoarte = async (siteId) => {
-    const de = new Date(); de.setDate(de.getDate() - 21)
+    const de = new Date(); de.setDate(de.getDate() - 60)
     const { data } = await supabase.from('rapoarte_zilnice').select('id, data, sef_santier, lucrari_efectuate, poze')
       .eq('site_id', siteId).gte('data', de.toISOString().slice(0, 10)).order('data', { ascending: false })
     const rap = data || []
@@ -241,7 +241,7 @@ export default function Marketing() {
             <select style={{ ...S.input, width:360 }} value={nou.site_id || ''} onChange={e => incarcaRapoarte(Number(e.target.value))}>
               {postabile.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            <span style={{ fontSize:12, color:G.muted }}>{nou.rapoarte.length} rapoarte în ultimele 21 zile · {nou.pozeAlese.length}/10 poze alese</span>
+            <span style={{ fontSize:12, color:G.muted }}>{nou.rapoarte.length} rapoarte în ultimele 2 luni · {nou.pozeAlese.length}/10 poze alese</span>
             <button style={{ ...S.btnS, marginLeft:'auto' }} onClick={() => setNou(null)}>✕</button>
           </div>
           {!nou.rapoarte.length && <div style={{ color:G.dim, fontSize:12.5 }}>Niciun raport zilnic în ultimele 3 săptămâni pe șantierul ăsta.</div>}
