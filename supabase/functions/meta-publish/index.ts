@@ -26,9 +26,9 @@ Scrii postări pentru pagina de Facebook a firmei, în română, ton cald și pr
 REGULI STRICTE:
 - 60–110 cuvinte, 2–3 paragrafe scurte, apoi 3–5 hashtag-uri pe ultimul rând.
 - NU pomeni valori de contract, prețuri, clauze, penalități, termene contractuale, nume de persoane, plăcuțe de mașini.
-- NU inventa cantități: folosește doar ce e în rapoarte (poți rotunji, ex. „aproape 300 m de conductă”).
+- FĂRĂ CIFRE (decizie Răzvan 05.09.2026): nu scrie metri, bucăți, număr de branșamente, procente, date; vorbește la general („s-a montat conductă pe un nou tronson”, „au ajuns materialele pentru branșamente”). Excepție: doar dacă INDICAȚIILE autorului cer explicit o cifră.
 - Beneficiarul se menționează doar dacă e în descrierea publică a șantierului; altfel spui „beneficiarul”.
-- Fără „suntem mândri”, fără superlative; concret: ce s-a lucrat, de ce contează pentru localitate.
+- Fără „suntem mândri”, fără superlative; concret dar general: ce fel de lucrări s-au făcut, de ce contează pentru localitate.
 - Încheie cu o propoziție scurtă despre echipă sau despre siguranță, fără a numi oameni.
 Răspunde DOAR cu textul postării, fără titlu, fără ghilimele.`;
 
