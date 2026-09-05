@@ -46,6 +46,8 @@ export default function Marketing() {
   const [edit, setEdit] = useState(null)      // {id, text}
   const [thumbs, setThumbs] = useState({})    // path → signed url
   const [busy, setBusy] = useState(null)
+  const [analiza, setAnaliza] = useState(null)  // răspunsul meta-publish/analiza
+  const [progr, setProgr] = useState({})        // postare_id → valoarea datetime-local
   const [toast, setToast] = useState(null)
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 5000) }
 
@@ -142,6 +144,33 @@ export default function Marketing() {
     if (error || data?.error) { showToast('Eroare AI: ' + (error?.message || data?.error), 'err'); return }
     setEdit({ id: p.id, text: data.text }); await load()
   }
+  // Programare (Răzvan 05.09.2026): aprobată + programat_la → cron-ul marketing_publica_programate (la 10 min) o publică singur
+  const programeaza = async (p) => {
+    const v = progr[p.id] || toLocalInput(urmatorulSlot())
+    const d = new Date(v); if (d.getTime() < Date.now() - 60e3) { showToast('Ora e în trecut.', 'err'); return }
+    if (await upd(p.id, { programat_la: d.toISOString(), programat_de: profile.id })) showToast(`Programată pentru ${fmtDT(d)}. Pleacă singură, fără să mai apese cineva.`)
+  }
+  const incarcaAnaliza = async (forta) => {
+    setBusy('Citesc statisticile de pe Facebook...')
+    const { data, error } = await supabase.functions.invoke('meta-publish', { body: { actiune: 'analiza', forta: !!forta } })
+    setBusy(null)
+    if (error || data?.error) { showToast('Eroare statistici: ' + (error?.message || data?.error), 'err'); return }
+    setAnaliza(data); await load()
+  }
+  useEffect(() => { if (tab === 'analiza' && !analiza) incarcaAnaliza(false) }, [tab])
+  // Slot recomandat implicit (până avem destule postări proprii): marți–joi 18:30, sau duminică 10:30
+  const urmatorulSlot = () => {
+    const d = new Date(); d.setSeconds(0, 0)
+    for (let i = 0; i < 8; i++) {
+      const c = new Date(d); c.setDate(d.getDate() + i)
+      const wd = c.getDay()
+      if ([2, 3, 4].includes(wd)) c.setHours(18, 30, 0, 0); else if (wd === 0) c.setHours(10, 30, 0, 0); else continue
+      if (c.getTime() > Date.now() + 10 * 60e3) return c
+    }
+    return d
+  }
+  const toLocalInput = (d) => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60e3); return z.toISOString().slice(0, 16) }
+
   const publica = async (p) => {
     if (!window.confirm(`Publici ACUM pe pagina de Facebook postarea pentru „${siteNume(p.site_id)}" (${(p.poze || []).length} poze)?`)) return
     setBusy('Se publică pe Facebook...')
@@ -176,7 +205,7 @@ export default function Marketing() {
       </div>
 
       <div style={{ display:'flex', gap:6, marginBottom:14 }}>
-        {[['postari', '📝 Postări'], ['santiere', '🏗️ Șantiere postabile']].map(([k, l]) => (
+        {[['postari', '📝 Postări'], ['santiere', '🏗️ Șantiere postabile'], ['analiza', '📊 Analiză']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, background: tab === k ? G.accent : G.surface, color: tab === k ? '#fff' : G.text, fontWeight:700 }}>{l}</button>
         ))}
         {tab === 'postari' && <button style={{ ...S.btnP, marginLeft:'auto', opacity: postabile.length ? 1 : .5 }} disabled={!postabile.length} onClick={() => deschideNou()} title={postabile.length ? '' : 'Marchează întâi un șantier ca postabil'}>＋ Ciornă nouă</button>}
@@ -243,6 +272,49 @@ export default function Marketing() {
         </div>
       )}
 
+      {/* ── Tab: analiză ── ce zi/oră merge cel mai bine (din postările noastre); până avem destule, recomandare generală */}
+      {tab === 'analiza' && (() => {
+        const ZILE = ['Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri', 'Sâmbătă', 'Duminică']
+        const SLOT = [['dimineata', 'Dimineață 7–11'], ['pranz', 'Prânz 11–15'], ['dupa-amiaza', 'După-amiază 15–19'], ['seara', 'Seară 19–24']]
+        const ag = analiza?.agregare || {}
+        const posts = analiza?.postari || []
+        const maxE = Math.max(1, ...Object.values(ag).map(a => a.n ? a.engaj / a.n : 0))
+        return (
+          <div style={{ display:'grid', gap:12 }}>
+            <div style={{ ...S.card, padding:14, fontSize:12.5, lineHeight:1.5 }}>
+              <b>Cum citim:</b> pentru fiecare postare publicată luăm de pe Facebook reach-ul (persoane unice), reacțiile, comentariile și distribuirile, apoi le grupăm pe ziua și intervalul orar în care a fost publicată (ora României).
+              Statisticile devin relevante după vreo 15–20 de postări; până atunci folosim recomandarea generală pentru pagini de firmă din România:
+              <b> marți–joi 18:00–20:00</b> (lumea e acasă, scrollează) și <b>duminică 10:00–12:00</b>. Butonul „Programează" propune automat următorul astfel de slot.
+              <div style={{ marginTop:6, color:G.dim }}>Statisticile se reîmprospătează automat la 6 ore. Postări analizate: {posts.length}{analiza?.urmaritori != null ? ` · urmăritori pagină: ${analiza.urmaritori}` : ''}</div>
+              <button style={{ ...S.btnS, marginTop:8 }} disabled={!!busy} onClick={() => incarcaAnaliza(true)}>🔄 Reîmprospătează acum</button>
+            </div>
+            <div style={{ ...S.card, padding:14, overflowX:'auto' }}>
+              <div style={{ fontWeight:700, marginBottom:8 }}>Angajament mediu (reacții + comentarii + distribuiri) pe zi × interval</div>
+              <table style={{ borderCollapse:'collapse', fontSize:12.5, minWidth:640 }}>
+                <thead><tr><th style={{ textAlign:'left', padding:'4px 8px', color:G.muted }}>Zi</th>{SLOT.map(([k, l]) => <th key={k} style={{ padding:'4px 8px', color:G.muted, fontWeight:600 }}>{l}</th>)}</tr></thead>
+                <tbody>{ZILE.map((z, wd) => (
+                  <tr key={z} style={{ borderTop:`1px solid ${G.border2}` }}>
+                    <td style={{ padding:'6px 8px', fontWeight:700 }}>{z}</td>
+                    {SLOT.map(([k]) => { const a = ag[`${wd}|${k}`]; const e = a?.n ? a.engaj / a.n : null; const r = a?.n ? Math.round(a.reach / a.n) : null
+                      const rec = ([2, 3, 4].includes(wd + 1) && k === 'seara') || (wd === 6 && k === 'dimineata')
+                      return <td key={k} style={{ padding:'6px 8px', textAlign:'center', background: e != null ? `rgba(63,185,80,${0.12 + 0.5 * e / maxE})` : (rec ? G.purple + '22' : 'transparent'), borderRadius:4 }}>
+                        {e != null ? <><b>{e.toFixed(1)}</b><div style={{ fontSize:10.5, color:G.muted }}>{a.n} post. · reach ~{r}</div></> : <span style={{ color:G.dim, fontSize:11 }}>{rec ? 'recomandat' : '—'}</span>}
+                      </td> })}
+                  </tr>))}</tbody>
+              </table>
+            </div>
+            <div style={{ ...S.card, padding:14 }}>
+              <div style={{ fontWeight:700, marginBottom:8 }}>Postări publicate</div>
+              {!posts.length && <div style={{ color:G.dim, fontSize:12.5 }}>Nimic încă.</div>}
+              {posts.map(o => <div key={o.id} style={{ display:'flex', gap:14, fontSize:12.5, padding:'5px 0', borderTop:`1px solid ${G.border2}`, flexWrap:'wrap' }}>
+                <span style={{ minWidth:130 }}>{fmtDT(o.publicat_la)}</span><b style={{ minWidth:220 }}>{siteNume(o.site_id)}</b>
+                <span>reach <b>{o.fb_reach ?? '—'}</b></span><span>impresii <b>{o.fb_impresii ?? '—'}</b></span><span>👍 <b>{o.fb_reactii ?? 0}</b></span><span>💬 <b>{o.fb_comentarii ?? 0}</b></span><span>↗ <b>{o.fb_distribuiri ?? 0}</b></span>
+              </div>)}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* ── Tab: postări ── */}
       {tab === 'postari' && (
         <div style={{ display:'grid', gap:12 }}>
@@ -265,6 +337,7 @@ export default function Marketing() {
                   )}
                   {p.eroare && <div style={{ color:G.red, fontSize:12, marginTop:6 }}>Eroare: {p.eroare}</div>}
                   {p.text_distribuire && <div style={{ fontSize:12, marginTop:8, padding:'6px 9px', background:G.surface, borderRadius:6, color:G.muted }}><b style={{ color:G.text }}>Text pentru distribuirea de pe profilul vechi:</b> {p.text_distribuire}</div>}
+                  {p.status === 'aprobata' && p.programat_la && <div style={{ fontSize:12.5, marginTop:8, color:G.purple, fontWeight:700 }}>⏰ Programată: pleacă singură {fmtDT(p.programat_la)} (programat de {numeProfil(p.programat_de)})</div>}
                   {p.fb_permalink && <div style={{ fontSize:12, marginTop:6 }}><a href={p.fb_permalink} target="_blank" rel="noreferrer" style={{ color:G.blue }}>Vezi postarea pe Facebook ↗</a> · publicată {fmtDT(p.publicat_la)} de {numeProfil(p.publicat_de)}</div>}
                   <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 }}>
                     {(p.status === 'ciorna' || p.status === 'eroare') && !inEdit && <button style={S.btnS} onClick={() => setEdit({ id: p.id, text: p.text_postare || '' })}>✏️ Editează</button>}
@@ -273,7 +346,12 @@ export default function Marketing() {
                     {(p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => { const ind = window.prompt('Indicații pentru AI (opțional):', '') ; if (ind !== null) regenereaza(p, ind) }}>🤖 Rescrie cu AI</button>}
                     {p.status === 'ciorna' && poateAproba && !inEdit && <button style={{ ...S.btnS, color:G.blue, borderColor:G.blue + '66' }} disabled={!(p.text_postare || '').trim()} onClick={() => upd(p.id, { status: 'aprobata', aprobat_de: profile.id, aprobat_la: new Date().toISOString() })}>✔ Aprobă</button>}
                     {p.status === 'aprobata' && poateAproba && <button style={{ ...S.btnP, background:G.green, color:'#0D1117' }} disabled={!!busy} onClick={() => publica(p)}>📣 Publică pe Facebook</button>}
-                    {p.status === 'aprobata' && <button style={S.btnS} onClick={() => upd(p.id, { status: 'ciorna' })}>↩ Înapoi în ciornă</button>}
+                    {p.status === 'aprobata' && !p.programat_la && <span style={{ display:'inline-flex', gap:6, alignItems:'center' }}>
+                      <input type="datetime-local" style={{ ...S.input, width:'auto', padding:'5px 8px' }} value={progr[p.id] ?? toLocalInput(urmatorulSlot())} onChange={e => setProgr(x => ({ ...x, [p.id]: e.target.value }))} />
+                      <button style={{ ...S.btnS, color:G.purple, borderColor:G.purple + '66' }} disabled={!poateAproba} title={poateAproba ? 'Pleacă singură la ora aleasă' : 'doar aprobatorii'} onClick={() => { if (!progr[p.id]) setProgr(x => ({ ...x, [p.id]: toLocalInput(urmatorulSlot()) })); programeaza(p) }}>⏰ Programează</button>
+                    </span>}
+                    {p.status === 'aprobata' && p.programat_la && <button style={S.btnS} onClick={() => upd(p.id, { programat_la: null })}>✕ Anulează programarea</button>}
+                    {p.status === 'aprobata' && <button style={S.btnS} onClick={() => upd(p.id, { status: 'ciorna', programat_la: null })}>↩ Înapoi în ciornă</button>}
                     {p.status === 'eroare' && poateAproba && <button style={S.btnS} onClick={() => upd(p.id, { status: 'aprobata', eroare: null })}>🔁 Reîncearcă (re-aprobă)</button>}
                     {p.status === 'publicata' && p.fb_permalink && <a href={p.fb_permalink} target="_blank" rel="noreferrer" style={{ ...S.btnS, textDecoration:'none', color:G.text }}>↗ Distribuie de pe profil</a>}
                     {p.status === 'publicata' && p.text_distribuire && <button style={S.btnS} title={p.text_distribuire} onClick={() => { navigator.clipboard?.writeText(p.text_distribuire); showToast('Textul pentru profil e copiat — lipește-l la distribuire.') }}>📋 Copiază textul pentru profil</button>}
