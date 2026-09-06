@@ -45,7 +45,9 @@ export default function Cladire() {
 
   const centrala = disp.find(x => x.sursa === 'vicare'), v = centrala?.ultima_citire || {}
   const termostate = disp.filter(x => x.sursa === 'salus' && !x.privat)
-  const acasa = disp.filter(x => x.sursa === 'salus' && x.privat)
+  const acasa = disp.filter(x => x.privat)
+  const tuya = disp.filter(x => x.sursa === 'tuya' && !x.privat)
+  const camere = tuya.filter(x => x.meta?.tip === 'camera'), tuyaAlte = tuya.filter(x => x.meta?.tip !== 'camera')
   // PIN pentru secțiunea privată: se compară SHA-256 în browser cu hash-ul din config; nu pleacă nicăieri
   const verificaPin = async () => {
     const pin = window.prompt('PIN pentru secțiunea privată:'); if (!pin) return
@@ -121,13 +123,25 @@ export default function Cladire() {
             : termostate.map(t => { const r = t.ultima_citire || {}; return <Row key={t.id} k={t.nume} v={r.temp != null ? `${nr(r.temp)}° (setat ${nr(r.setat)}°)${r.incalzeste ? ' 🔥' : ''}` : '—'} /> })}
         </div>
 
+        {/* Camere Tuya (șantiere + curte) — doar stare online/offline până activăm Video Live Stream */}
+        {tuya.length > 0 && (
+          <div style={S.card}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>📷 Camere & prize Tuya</div><span style={{ fontSize:11.5, color:G.dim }}>{camere.filter(c => c.ultima_citire?.online).length}/{camere.length} camere online</span></div>
+            {camere.map(c => <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
+              <span style={{ color:G.muted }}>{c.nume}</span><b style={{ color: c.ultima_citire?.online ? G.green : G.red }}>{c.ultima_citire?.online ? '● online' : '○ offline'}</b></div>)}
+            {tuyaAlte.map(c => { const r = c.ultima_citire || {}; const val = r.putere_w != null ? `${nr(r.putere_w)} W` : r.temp != null ? `${nr(r.temp)}°` : r.pornit != null ? (r.pornit ? 'pornit' : 'oprit') : ''
+              return <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
+                <span style={{ color:G.muted }}>{c.nume} <span style={{ fontSize:10.5, color:G.dim }}>{c.meta?.model || ''}</span></span><b style={{ color: r.online ? G.text : G.dim }}>{r.online ? (val || 'online') : 'offline'}</b></div> })}
+          </div>
+        )}
+
         {/* Acasă — privat (doar iot_privat_acces + PIN) */}
         {privatOk && acasa.length > 0 && (
           <div style={{ ...S.card, borderColor:G.blue + '55' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>🏠 Acasă</div><span style={{ fontSize:11, color:G.dim }}>privat · doar tu și Mari</span>
               {deblocat && <button style={{ ...S.btnS, marginLeft:'auto', padding:'3px 9px' }} onClick={() => { setDeblocat(false); try { sessionStorage.removeItem('cladire_privat') } catch { /* ignore */ } }}>🔒 Blochează</button>}</div>
             {!deblocat ? <button style={S.btnS} onClick={verificaPin}>🔐 Deblochează cu PIN</button>
-              : acasa.map(t => { const r = t.ultima_citire || {}; return <Row key={t.id} k={t.nume} v={r.temp != null ? `${nr(r.temp)}° (setat ${nr(r.setat)}°)${r.incalzeste ? ' 🔥' : ''}` : '—'} /> })}
+              : acasa.map(t => { const r = t.ultima_citire || {}; return <Row key={t.id} k={t.nume} v={r.temp != null ? `${nr(r.temp)}°${r.setat != null ? ` (setat ${nr(r.setat)}°)` : ''}${r.incalzeste ? ' 🔥' : ''}` : (r.online != null ? (r.online ? (r.pornit ? 'pornit' : 'online') : 'offline') : '—')} /> })}
           </div>
         )}
 
