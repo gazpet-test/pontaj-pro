@@ -163,9 +163,14 @@ Deno.serve(async (req: Request) => {
             else if (f.feature === 'device.messages.errors.raw') v[nume] = (p.entries?.value || []).map((e: any) => ({ cod: e.errorCode, prioritate: e.priority, la: e.timestamp }));
             else v[nume] = p.value?.value ?? p.value ?? null;
           }
+          // Mesaje/erori: pe generatia E3 pot veni sub alte chei decat device.messages.errors.raw — le prindem pe toate
+          const msgs = feats.filter((f: any) => /messages|error|fault|status\.|alarm/i.test(f.feature) && f.isEnabled);
+          const brut: Record<string, unknown> = {};
+          for (const f of msgs) brut[f.feature] = f.properties;
+          if (msgs.length) v._mesaje = brut;
           const { data: disp } = await db.from('iot_dispozitive').upsert({
             sursa: 'vicare', extern_id: key, nume: `${d.modelId || d.deviceType || 'Viessmann'}${g.serial ? ' · ' + g.serial : ''}`,
-            meta: { installation: i.id, gateway: g.serial, device: d.id, model: d.modelId, tip: d.deviceType, adresa: i.address || null },
+            meta: { installation: i.id, gateway: g.serial, device: d.id, model: d.modelId, tip: d.deviceType, adresa: i.address || null, features: feats.map((f: any) => f.feature) },
             ultima_citire: v, citit_la: new Date().toISOString(),
           }, { onConflict: 'sursa,extern_id' }).select('id, site_id').single();
           if (disp?.id) await db.from('iot_citiri').insert({ dispozitiv_id: disp.id, valori: v });
