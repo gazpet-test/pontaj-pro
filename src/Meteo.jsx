@@ -57,7 +57,7 @@ export function MeteoBadge({ siteId, style }) {
 // Banda de pe Home: sediu + șantiere cu raport zilnic, cu prognoza pe mâine în tooltip
 export function MeteoStrip() {
   const [sites, setSites] = useState([])
-  useEffect(() => { supabase.from('sites').select('id, name, tip_locatie, raport_zilnic_necesar').eq('active', true).then(({ data }) => setSites(data || [])) }, [])
+  useEffect(() => { supabase.from('sites').select('id, name, tip_locatie, raport_zilnic_necesar, meteo_activ').eq('active', true).eq('meteo_activ', true).then(({ data }) => setSites(data || [])) }, [])
   const m = useMeteo(sites.map(s => s.id))
   const lista = sites.filter(s => m[s.id]?.curent && (s.tip_locatie === 'sediu' || s.raport_zilnic_necesar)).sort((a, b) => (a.tip_locatie === 'sediu' ? 0 : 1) - (b.tip_locatie === 'sediu' ? 0 : 1))
   if (!lista.length) return null
@@ -80,4 +80,34 @@ export function MeteoStrip() {
       })}
     </div>
   )
+}
+
+// Bifa „Meteo" pe cardul proiectului din Execuție: implicit ON; OFF când execuția e gata dar recepția nu (Răzvan 06.09.2026)
+export function MeteoToggle({ siteId, canEdit, style }) {
+  const [on, setOn] = useState(null)
+  useEffect(() => { if (!siteId) return; supabase.from('sites').select('meteo_activ').eq('id', siteId).maybeSingle().then(({ data }) => setOn(data ? data.meteo_activ !== false : null)) }, [siteId])
+  if (!siteId || on === null) return null
+  const toggle = async () => {
+    if (!canEdit) return
+    const v = !on; setOn(v)
+    const { error } = await supabase.from('sites').update({ meteo_activ: v }).eq('id', siteId)
+    if (error) setOn(!v)
+  }
+  return (
+    <label title={on ? 'Vremea se urmărește pe această lucrare (implicit). Dezactivează dacă execuția e terminată și aștepți doar recepția.' : 'Meteo oprit pe această lucrare — nu mai consumă cotă Xweather și nu apare pe Home.'}
+      style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:11.5, color: on ? G.text : G.dim, cursor: canEdit ? 'pointer' : 'default', userSelect:'none', ...style }}>
+      <input type="checkbox" checked={on} onChange={toggle} disabled={!canEdit} style={{ accentColor:'#3FB950', width:14, height:14, margin:0 }} />
+      🌤 Meteo {on ? 'ON' : 'OFF'}
+    </label>
+  )
+}
+
+// Vremea salvată în raportul zilnic (rapoarte_zilnice.meteo) — chip pe card + bloc în detaliu
+export function MeteoRaportChip({ meteo }) {
+  if (!meteo?.temp && meteo?.temp !== 0) return null
+  return <span title={`${vremeRo(meteo.vreme)} · vânt ${Math.round(meteo.vant_kph || 0)} km/h${meteo.alerte?.length ? ' · ' + meteo.alerte.join(', ') : ''}`} style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'3px 8px', borderRadius:12, background:G.surface, border:`1px solid ${G.border}`, fontSize:12, color:G.text }}>{iconMeteo(meteo.icon)} {Math.round(meteo.temp)}°</span>
+}
+export function MeteoRaportText({ meteo }) {
+  if (!meteo?.temp && meteo?.temp !== 0) return null
+  return <span>{iconMeteo(meteo.icon)} {vremeRo(meteo.vreme)}, {Math.round(meteo.temp)}° (resimțit {Math.round(meteo.feels ?? meteo.temp)}°), vânt {Math.round(meteo.vant_kph || 0)} km/h din {meteo.dir || '—'}, rafale {Math.round(meteo.rafale_kph || 0)} km/h, umiditate {meteo.umiditate ?? '—'}%{meteo.precip_mm ? `, precipitații ${meteo.precip_mm} mm` : ''}{meteo.alerte?.length ? ` · ⚠ ${meteo.alerte.join(', ')}` : ''}</span>
 }

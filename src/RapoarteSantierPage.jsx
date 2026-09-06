@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { exportRapoarteExcel, exportRapoartePDF } from './rapoarteExport.js'
+import { MeteoRaportChip, MeteoRaportText } from './Meteo.jsx'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -296,6 +297,7 @@ function CardRaport({ r, siteName, onOpen, showSite }) {
           <Chip icon="👷" val={pers.total || 0} color={G.green} />
           <Chip icon="🚜" val={utj.length} color={G.blue} warn={nefunc > 0 ? nefunc : null} />
           {nrPoze > 0 && <Chip icon="📷" val={nrPoze} color={G.purple} />}
+          <MeteoRaportChip meteo={r.meteo} />
         </div>
       </div>
       {r.lucrari_efectuate && (
@@ -400,6 +402,7 @@ function ModalDetaliu({ raport, siteName, onClose }) {
           </Bloc>
         )}
 
+        {raport.meteo?.temp != null && <Bloc titlu="🌤 Vremea la trimiterea raportului"><div style={{ fontSize: 13, color: G.text }}><MeteoRaportText meteo={raport.meteo} /></div></Bloc>}
         {raport.lucrari_efectuate && <Bloc titlu="🔧 Lucrări efectuate"><Text v={raport.lucrari_efectuate} /></Bloc>}
         {raport.subcontractori && <Bloc titlu="🤝 Subcontractori"><Text v={raport.subcontractori} /></Bloc>}
         {raport.aprovizionare && <Bloc titlu="🛒 Aprovizionare materiale (→ Achiziții)"><Text v={raport.aprovizionare} color={G.yellow} /></Bloc>}
