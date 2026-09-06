@@ -55,10 +55,11 @@ Deno.serve(async (req: Request) => {
   const rez: any[] = [];
   for (const s of tinte) {
     try {
-      const [cond, fc, al] = await Promise.all([
+      const [cond, fc, al, aq] = await Promise.all([
         get(`conditions/${loc(s)}?fields=periods.tempC,periods.feelslikeC,periods.weather,periods.icon,periods.windSpeedKPH,periods.windGustKPH,periods.windDir,periods.humidity,periods.precipMM,periods.pop,periods.isDay,periods.dateTimeISO`),
         complet ? get(`forecasts/${loc(s)}?filter=day&limit=4&fields=periods.dateTimeISO,periods.maxTempC,periods.minTempC,periods.weather,periods.icon,periods.precipMM,periods.pop,periods.windSpeedMaxKPH,periods.windGustKPH`) : null,
         complet ? get(`alerts/${loc(s)}?limit=5&fields=details.name,details.type,timestamps.beginsISO,timestamps.expiresISO`).catch(() => []) : null,
+        complet ? get(`airquality/${loc(s)}?fields=periods.aqi,periods.category,periods.dominant,periods.pollutants,periods.dateTimeISO`).catch(() => null) : null,
       ]);
       const p = (Array.isArray(cond) ? cond[0] : cond)?.periods?.[0];
       if (!p) throw new Error('fără date conditions');
@@ -67,6 +68,11 @@ Deno.serve(async (req: Request) => {
       if (complet) {
         row.prognoza = ((Array.isArray(fc) ? fc[0] : fc)?.periods || []).map((d: any) => ({ data: (d.dateTimeISO || '').slice(0, 10), max: d.maxTempC, min: d.minTempC, vreme: d.weather, icon: d.icon, precip_mm: d.precipMM, prob: d.pop, vant_kph: d.windSpeedMaxKPH, rafale_kph: d.windGustKPH }));
         row.alerte = (Array.isArray(al) ? al : []).map((a: any) => ({ titlu: a.details?.name, tip: a.details?.type, de_la: a.timestamps?.beginsISO, pana_la: a.timestamps?.expiresISO }));
+        const a = (Array.isArray(aq) ? aq[0] : aq)?.periods?.[0];
+        if (a) {
+          const pol = (t: string) => (a.pollutants || []).find((x: any) => x.type === t)?.valueUGM3 ?? null;
+          row.aer = { aqi: a.aqi, categorie: a.category, poluant: a.dominant, pm25: pol('pm2.5'), pm10: pol('pm10'), la: a.dateTimeISO };
+        }
       }
       await db.from('meteo_cache').upsert(row, { onConflict: 'site_id' });
       rez.push({ site: s.id, ok: true, temp: p.tempC, vreme: p.weather, complet });

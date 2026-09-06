@@ -2,7 +2,8 @@
 // Meteo.jsx — vremea la sediu + pe fiecare șantier (Răzvan 06.09.2026, sursă Xweather)
 // Datele vin din meteo_cache (umplut de edge fn meteo-sync la fiecare oră, cron meteo_sync_orar).
 // UI-ul NU bate API-ul Xweather direct — citește doar cache-ul.
-//  - <MeteoStrip/>  : bandă compactă pe HomeDashboard (sediu + șantiere active cu raport)
+//  - <MeteoSediu/>  : sediul, compact — pe Home și în header-ul modulelor (nu în Execuție, unde e per proiect)
+//  - <MeteoSantier siteId/> : card complet per lucrare (acum + mâine + aer + alerte) pe cardul proiectului din Execuție
 //  - <MeteoBadge siteId/> : badge mic pentru o lucrare (raport mobil, pagini șantier)
 //  - iconMeteo(icon) : emoji din numele iconului Xweather
 // ════════════════════════════════════════════════════════════════
@@ -110,4 +111,70 @@ export function MeteoRaportChip({ meteo }) {
 export function MeteoRaportText({ meteo }) {
   if (!meteo?.temp && meteo?.temp !== 0) return null
   return <span>{iconMeteo(meteo.icon)} {vremeRo(meteo.vreme)}, {Math.round(meteo.temp)}° (resimțit {Math.round(meteo.feels ?? meteo.temp)}°), vânt {Math.round(meteo.vant_kph || 0)} km/h din {meteo.dir || '—'}, rafale {Math.round(meteo.rafale_kph || 0)} km/h, umiditate {meteo.umiditate ?? '—'}%{meteo.precip_mm ? `, precipitații ${meteo.precip_mm} mm` : ''}{meteo.alerte?.length ? ` · ⚠ ${meteo.alerte.join(', ')}` : ''}</span>
+}
+
+// Culori AQI (scara US EPA folosită de Xweather)
+export const aerInfo = (aer) => {
+  if (!aer || aer.aqi == null) return null
+  const a = aer.aqi
+  const [l, c] = a <= 50 ? ['aer bun', '#3FB950'] : a <= 100 ? ['aer moderat', '#E3B341'] : a <= 150 ? ['nesănătos pt. sensibili', '#F0883E'] : a <= 200 ? ['aer nesănătos', '#F85149'] : ['aer foarte nesănătos', '#A371F7']
+  const pol = { 'pm2.5':'PM2.5', pm10:'PM10', o3:'ozon', no2:'NO₂', so2:'SO₂', co:'CO' }[aer.poluant] || aer.poluant || ''
+  return { label: l, color: c, pol }
+}
+
+// Sediul (Ploiești), compact — o singură pastilă
+export function MeteoSediu({ style }) {
+  const [site, setSite] = useState(null)
+  useEffect(() => { supabase.from('sites').select('id, name').eq('tip_locatie', 'sediu').eq('active', true).order('id').limit(1).maybeSingle().then(({ data }) => setSite(data)) }, [])
+  const m = useMeteo(site ? [site.id] : [])
+  const r = site && m[site.id]
+  if (!r?.curent) return null
+  const c = r.curent, maine = (r.prognoza || [])[1], al = (r.alerte || []).length, ai = aerInfo(r.aer)
+  return (
+    <span title={`Sediu Ploiești · ${vremeRo(c.vreme)}, vânt ${Math.round(c.vant_kph)} km/h, rafale ${Math.round(c.rafale_kph)}${maine ? `\nMâine: ${vremeRo(maine.vreme)} ${Math.round(maine.min)}…${Math.round(maine.max)}°, ploaie ${maine.prob}%` : ''}${ai ? `\nAer: AQI ${r.aer.aqi} (${ai.label}${ai.pol ? ', ' + ai.pol : ''})` : ''}${al ? '\nALERTĂ: ' + r.alerte.map(a => a.titlu).join(', ') : ''}\nactualizat ${new Date(r.actualizat_la).toLocaleTimeString('ro-RO', { hour:'2-digit', minute:'2-digit' })}`}
+      style={{ display:'inline-flex', alignItems:'center', gap:6, padding:'4px 10px', borderRadius:16, background:G.card, border:`1px solid ${al ? G.yellow + '88' : G.border}`, fontSize:12, color:G.text, opacity: vechi(r.actualizat_la) ? .6 : 1, cursor:'default', whiteSpace:'nowrap', ...style }}>
+      <span style={{ color:G.muted }}>Sediu</span><span>{iconMeteo(c.icon)}</span><b>{Math.round(c.temp)}°</b>
+      {ai && <span title={ai.label} style={{ width:8, height:8, borderRadius:4, background:ai.color, display:'inline-block' }} />}
+      {maine && maine.prob >= 50 && <span style={{ color:G.blue, fontSize:11 }}>mâine 🌧{maine.prob}%</span>}
+      {al > 0 && <span style={{ color:G.yellow }}>⚠</span>}
+    </span>
+  )
+}
+
+// Card complet per lucrare: acum · mâine · poimâine · aer · alerte (pe cardul proiectului din Execuție)
+export function MeteoSantier({ siteId, style }) {
+  const m = useMeteo(siteId ? [siteId] : [])
+  const r = m[siteId]
+  if (!r?.curent) return null
+  const c = r.curent, pr = (r.prognoza || []).slice(1, 3), al = r.alerte || [], ai = aerInfo(r.aer)
+  const zi = (d) => new Date(d + 'T12:00:00').toLocaleDateString('ro-RO', { weekday:'short' })
+  const cell = { display:'flex', flexDirection:'column', alignItems:'center', gap:2, minWidth:64, padding:'6px 8px', borderRadius:8, background:G.surface, border:`1px solid ${G.border}` }
+  return (
+    <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'stretch', opacity: vechi(r.actualizat_la) ? .6 : 1, ...style }}>
+      <div style={{ ...cell, minWidth:150, alignItems:'flex-start' }} title={`actualizat ${new Date(r.actualizat_la).toLocaleTimeString('ro-RO', { hour:'2-digit', minute:'2-digit' })}`}>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}><span style={{ fontSize:22 }}>{iconMeteo(c.icon)}</span><span style={{ fontSize:20, fontWeight:800, color:G.text }}>{Math.round(c.temp)}°</span><span style={{ fontSize:12, color:G.muted }}>{vremeRo(c.vreme)}</span></div>
+        <div style={{ fontSize:11, color:G.dim }}>💨 {Math.round(c.vant_kph)} km/h{c.rafale_kph >= 40 ? ` (rafale ${Math.round(c.rafale_kph)})` : ''} · 💧 {c.umiditate}%{c.prob >= 30 ? ` · 🌧 ${c.prob}%` : ''}</div>
+      </div>
+      {pr.map(d => (
+        <div key={d.data} style={cell} title={`${vremeRo(d.vreme)} · ploaie ${d.prob}% (${d.precip_mm} mm) · vânt ${Math.round(d.vant_kph || 0)} km/h`}>
+          <span style={{ fontSize:10.5, color:G.dim, textTransform:'capitalize' }}>{zi(d.data)}</span>
+          <span style={{ fontSize:16 }}>{iconMeteo(d.icon)}</span>
+          <span style={{ fontSize:11.5, color:G.text }}><b>{Math.round(d.max)}°</b> <span style={{ color:G.dim }}>{Math.round(d.min)}°</span></span>
+          {d.prob >= 40 && <span style={{ fontSize:10.5, color:G.blue }}>🌧 {d.prob}%</span>}
+        </div>
+      ))}
+      {ai && (
+        <div style={cell} title={`Indice calitate aer (AQI) ${r.aer.aqi}${ai.pol ? ' · poluant dominant ' + ai.pol : ''}${r.aer.pm25 != null ? ` · PM2.5 ${r.aer.pm25} µg/m³` : ''}`}>
+          <span style={{ fontSize:10.5, color:G.dim }}>Aer</span>
+          <span style={{ fontSize:16, fontWeight:800, color:ai.color }}>{r.aer.aqi}</span>
+          <span style={{ fontSize:10.5, color:ai.color }}>{ai.label}</span>
+        </div>
+      )}
+      {al.length > 0 && (
+        <div style={{ ...cell, borderColor:G.yellow + '88', alignItems:'flex-start', justifyContent:'center' }}>
+          {al.slice(0, 2).map((a, i) => <span key={i} style={{ fontSize:11, color:G.yellow }}>⚠ {a.titlu}</span>)}
+        </div>
+      )}
+    </div>
+  )
 }
