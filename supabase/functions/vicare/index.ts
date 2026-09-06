@@ -40,6 +40,10 @@ const FEATURES: Record<string, string> = {
   'heating.gas.consumption.summary.dhw': 'gaz_acm',
   'heating.power.consumption.summary.heating': 'curent_incalzire',
   'device.messages.errors.raw': 'erori',
+  'device.messages.status.raw': 'mesaje_status',
+  'device.messages.service.raw': 'mesaje_service',
+  'device.messages.info.raw': 'mesaje_info',
+  'device.lock.malfunction': 'blocat',       // generatia E3: „System locked” = defectiune care blocheaza centrala
   'heating.boiler.serial': 'serie_cazan',
 };
 
@@ -160,12 +164,19 @@ Deno.serve(async (req: Request) => {
             if (f.feature === 'heating.burners.0') v[nume] = p.active?.value ?? null;
             else if (f.feature === 'heating.burners.0.statistics') v[nume] = { ore: p.hours?.value ?? null, porniri: p.starts?.value ?? null };
             else if (f.feature.startsWith('heating.gas.consumption') || f.feature.startsWith('heating.power.consumption')) v[nume] = { azi: p.currentDay?.value ?? null, luna: p.currentMonth?.value ?? null, an: p.currentYear?.value ?? null, um: p.currentDay?.unit ?? null };
-            else if (f.feature === 'device.messages.errors.raw') v[nume] = (p.entries?.value || []).map((e: any) => ({ cod: e.errorCode, prioritate: e.priority, la: e.timestamp }));
+            else if (f.feature.startsWith('device.messages.')) v[nume] = (p.entries?.value || []).map((e: any) => ({ cod: e.errorCode, prioritate: e.priority, la: e.timestamp }));
+            else if (f.feature === 'device.lock.malfunction') v[nume] = p.active?.value ?? p.value?.value ?? null;
             else v[nume] = p.value?.value ?? p.value ?? null;
           }
+          // Mesaje/erori: pe generatia E3 pot veni sub alte chei decat device.messages.errors.raw — le prindem pe toate
+          // toate mesajele cu cod (erori + status + service) intr-o lista unica, cele mai noi primele
+          const toate = ([] as any[]).concat(v.erori as any[] || [], v.mesaje_service as any[] || [], v.mesaje_status as any[] || [], v.mesaje_info as any[] || []).filter(m => m.cod);
+          toate.sort((a, b) => String(b.la).localeCompare(String(a.la)));
+          v.mesaje = toate.slice(0, 20);
+          v.erori = toate.filter(m => /^(F|E)\./i.test(String(m.cod)) || m.prioritate === 'error' || m.prioritate === 'critical');
           const { data: disp } = await db.from('iot_dispozitive').upsert({
             sursa: 'vicare', extern_id: key, nume: `${d.modelId || d.deviceType || 'Viessmann'}${g.serial ? ' · ' + g.serial : ''}`,
-            meta: { installation: i.id, gateway: g.serial, device: d.id, model: d.modelId, tip: d.deviceType, adresa: i.address || null },
+            meta: { installation: i.id, gateway: g.serial, device: d.id, model: d.modelId, tip: d.deviceType, adresa: i.address || null, features: feats.map((f: any) => f.feature) },
             ultima_citire: v, citit_la: new Date().toISOString(),
           }, { onConflict: 'sursa,extern_id' }).select('id, site_id').single();
           if (disp?.id) await db.from('iot_citiri').insert({ dispozitiv_id: disp.id, valori: v });

@@ -112,7 +112,10 @@ export default function Integrari() {
                     <select value={d.site_id || ''} onChange={e => setSite(d.id, Number(e.target.value))} style={{ marginLeft:6, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:6, padding:'3px 6px', fontSize:12 }}>
                       <option value="">— alege —</option>{sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select></label>
-                  {err.length > 0 && <div style={{ color:G.red, fontSize:12.5, fontWeight:700, marginBottom:6 }}>⚠ Erori: {err.map(e => e.cod).join(', ')}</div>}
+                  {v.blocat && <div style={{ color:G.red, fontSize:12.5, fontWeight:800, marginBottom:6 }}>🔒 Centrala e BLOCATĂ de o defecțiune — necesită intervenție</div>}
+                  {err.length > 0 && <div style={{ color:G.red, fontSize:12.5, fontWeight:700, marginBottom:6 }}>⚠ Erori active: {err.map(e => `${e.cod} (${fmtDT(e.la)})`).join(', ')}</div>}
+                  {Array.isArray(v.mesaje) && v.mesaje.length > 0 && <div style={{ fontSize:11.5, color:G.dim, marginBottom:6 }}>Mesaje centrală: {v.mesaje.slice(0, 5).map(m => `${m.cod} · ${m.prioritate} · ${fmtDT(m.la)}`).join(' | ')}</div>}
+                  <V k="Stare" v={v.blocat === true ? 'BLOCATĂ' : v.blocat === false ? 'funcțională' : null} />
                   <V k="Arzător" v={v.arzator_activ == null ? null : (v.arzator_activ ? 'pornit' : 'oprit')} />
                   <V k="Modulație" v={v.modulatie_pct} um="%" />
                   <V k="Temperatură cazan" v={v.temp_cazan} um="°C" />
