@@ -69,13 +69,14 @@ Deno.serve(async (req: Request) => {
     };
     // Doar gateway-ul firmei (iot_integrari.config.gateway_nume, ex. „Gazpet”) — contul SALUS are și casa lui Răzvan, care NU intră în ERP
     const { data: integ } = await db.from('iot_integrari').select('config').eq('cheie', 'salus').maybeSingle();
-    const gwFiltru: string | null = integ?.config?.gateway_id || null;   // slider_list nu întoarce nume, doar id
+    // config.gateways = { <id>: {nume, privat} } — doar cele listate intra in ERP; privat=true (casa) e vizibil doar pentru iot_privat_acces
+    const cfgGw: Record<string, { nume?: string; privat?: boolean }> = integ?.config?.gateways || {};
     const lista = await api('/occupants/slider_list');
-    const gws = ((lista?.data || []) as any[]).filter(x => x.type === 'gateway' && (!gwFiltru || x.id === gwFiltru));
+    const gws = ((lista?.data || []) as any[]).filter(x => x.type === 'gateway' && (!Object.keys(cfgGw).length || cfgGw[x.id]));
     const devices: any[] = [];
     for (const g of gws) {
       const det = await api(`/occupants/slider_details?id=${encodeURIComponent(g.id)}&type=gateway`);
-      for (const it of det?.data?.items || []) { if (it.rule_trigger_key || !it.device_code) continue; devices.push({ ...it, _gw: g.id, _gw_nume: g.name }); }
+      for (const it of det?.data?.items || []) { if (it.rule_trigger_key || !it.device_code) continue; devices.push({ ...it, _gw: g.id, _gw_nume: cfgGw[g.id]?.nume || g.name || null, _privat: !!cfgGw[g.id]?.privat }); }
     }
     const codes = devices.map(d => d.device_code);
     const sh = codes.length ? await api('/devices/device_shadows', { method: 'POST', body: JSON.stringify({ request_id: 'gazpet-erp', device_codes: codes }) }) : null;
@@ -105,6 +106,7 @@ Deno.serve(async (req: Request) => {
       const { data: disp } = await db.from('iot_dispozitive').upsert({
         sursa: 'salus', extern_id: d.device_code, nume: d.name || model || d.device_code,
         meta: { model, gateway: d._gw, gateway_nume: d._gw_nume, tip: este_termostat ? 'termostat' : (v.onoff != null ? 'releu' : 'senzor'), props_chei: Object.keys(props).slice(0, 60) },
+        privat: d._privat, ...(d._privat ? { site_id: null } : {}),
         ultima_citire: v, citit_la: new Date().toISOString(),
       }, { onConflict: 'sursa,extern_id', ignoreDuplicates: false }).select('id').single();
       if (disp?.id) await db.from('iot_citiri').insert({ dispozitiv_id: disp.id, valori: v });
