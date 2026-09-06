@@ -19,14 +19,20 @@ export default function Cladire() {
   const [alerte, setAlerte] = useState([])
   const [istoric, setIstoric] = useState([])
   const [busy, setBusy] = useState(null)
+  const [privatOk, setPrivatOk] = useState(false)     // userul e în iot_privat_acces
+  const [pinHash, setPinHash] = useState(null)
+  const [deblocat, setDeblocat] = useState(() => { try { return sessionStorage.getItem('cladire_privat') === '1' } catch { return false } })
 
   const load = async () => {
-    const [{ data: s }, { data: d }, { data: a }] = await Promise.all([
+    const { data: { user } } = await supabase.auth.getUser()
+    const [{ data: s }, { data: d }, { data: a }, { data: pa }, { data: ig }] = await Promise.all([
       supabase.from('sites').select('id, name, adresa').eq('tip_locatie', 'sediu').eq('active', true).order('id').limit(1).maybeSingle(),
       supabase.from('iot_dispozitive').select('*').eq('activ', true).order('sursa').order('id'),
       supabase.from('notifications').select('id, title, message, created_at, read_at').eq('modul', 'cladire').order('created_at', { ascending: false }).limit(10),
+      user ? supabase.from('iot_privat_acces').select('profile_id').eq('profile_id', user.id).maybeSingle() : { data: null },
+      supabase.from('iot_integrari').select('config').eq('cheie', 'salus').maybeSingle(),
     ])
-    setSediu(s); setDisp(d || []); setAlerte(a || [])
+    setSediu(s); setDisp(d || []); setAlerte(a || []); setPrivatOk(!!pa); setPinHash(ig?.config?.pin_hash || null)
     const c = (d || []).find(x => x.sursa === 'vicare')
     if (c) { const { data: h } = await supabase.from('iot_citiri').select('la, valori').eq('dispozitiv_id', c.id).gte('la', new Date(Date.now() - 24 * 3600e3).toISOString()).order('la'); setIstoric(h || []) }
   }
@@ -38,7 +44,15 @@ export default function Cladire() {
   }
 
   const centrala = disp.find(x => x.sursa === 'vicare'), v = centrala?.ultima_citire || {}
-  const termostate = disp.filter(x => x.sursa === 'salus')
+  const termostate = disp.filter(x => x.sursa === 'salus' && !x.privat)
+  const acasa = disp.filter(x => x.sursa === 'salus' && x.privat)
+  // PIN pentru secțiunea privată: se compară SHA-256 în browser cu hash-ul din config; nu pleacă nicăieri
+  const verificaPin = async () => {
+    const pin = window.prompt('PIN pentru secțiunea privată:'); if (!pin) return
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
+    const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('')
+    if (hex === pinHash) { setDeblocat(true); try { sessionStorage.setItem('cladire_privat', '1') } catch { /* ignore */ } } else alert('PIN greșit.')
+  }
   const err = Array.isArray(v.erori) ? v.erori : []
   const stareC = v.blocat === true ? { t: 'BLOCATĂ', c: G.red } : err.length ? { t: 'cu erori', c: G.orange } : v.arzator_activ ? { t: 'arde', c: G.green } : { t: 'în așteptare', c: G.muted }
   // mini-grafic 24h: presiune + tur
@@ -106,6 +120,16 @@ export default function Cladire() {
           {!termostate.length ? <div style={{ color:G.dim, fontSize:12.5 }}>Neconectate încă. Se leagă prin cloud-ul SALUS Sense din <Link to="/integrari/vicare" style={{ color:G.blue }}>Integrări</Link>.</div>
             : termostate.map(t => { const r = t.ultima_citire || {}; return <Row key={t.id} k={t.nume} v={r.temp != null ? `${nr(r.temp)}° (setat ${nr(r.setat)}°)${r.incalzeste ? ' 🔥' : ''}` : '—'} /> })}
         </div>
+
+        {/* Acasă — privat (doar iot_privat_acces + PIN) */}
+        {privatOk && acasa.length > 0 && (
+          <div style={{ ...S.card, borderColor:G.blue + '55' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>🏠 Acasă</div><span style={{ fontSize:11, color:G.dim }}>privat · doar tu și Mari</span>
+              {deblocat && <button style={{ ...S.btnS, marginLeft:'auto', padding:'3px 9px' }} onClick={() => { setDeblocat(false); try { sessionStorage.removeItem('cladire_privat') } catch { /* ignore */ } }}>🔒 Blochează</button>}</div>
+            {!deblocat ? <button style={S.btnS} onClick={verificaPin}>🔐 Deblochează cu PIN</button>
+              : acasa.map(t => { const r = t.ultima_citire || {}; return <Row key={t.id} k={t.nume} v={r.temp != null ? `${nr(r.temp)}° (setat ${nr(r.setat)}°)${r.incalzeste ? ' 🔥' : ''}` : '—'} /> })}
+          </div>
+        )}
 
         {/* Alerte */}
         <div style={S.card}>
