@@ -41,6 +41,7 @@ import PopoverBara from './PopoverBara.jsx'
 import InventarCorectii from './InventarCorectii.jsx'
 import GraficLucrare from './GraficLucrare.jsx'
 import { MeteoSediu } from './Meteo.jsx'
+import Integrari from './Integrari.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -8518,6 +8519,8 @@ export default function App() {
         <Route path="/rapoarte-santier" element={<ProtectedRoute><RapoarteSantierPage/></ProtectedRoute>}/>
         <Route path="/sedinte" element={<ProtectedRoute><SedintePage/></ProtectedRoute>}/>
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
+        <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
+        <Route path="/integrari" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
       <ChatbotWidgetGate />
