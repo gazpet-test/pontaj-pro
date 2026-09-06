@@ -67,8 +67,11 @@ Deno.serve(async (req: Request) => {
       if (!r.ok) throw new Error(`${path}: ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
       return j;
     };
+    // Doar gateway-ul firmei (iot_integrari.config.gateway_nume, ex. „Gazpet”) — contul SALUS are și casa lui Răzvan, care NU intră în ERP
+    const { data: integ } = await db.from('iot_integrari').select('config').eq('cheie', 'salus').maybeSingle();
+    const gwFiltru = integ?.config?.gateway_nume || null;
     const lista = await api('/occupants/slider_list');
-    const gws = ((lista?.data || []) as any[]).filter(x => x.type === 'gateway');
+    const gws = ((lista?.data || []) as any[]).filter(x => x.type === 'gateway' && (!gwFiltru || x.name === gwFiltru));
     const devices: any[] = [];
     for (const g of gws) {
       const det = await api(`/occupants/slider_details?id=${encodeURIComponent(g.id)}&type=gateway`);
@@ -98,11 +101,12 @@ Deno.serve(async (req: Request) => {
         online: d.online ?? d.dashboard_attributes?.online ?? null,
       };
       const este_termostat = v.temp != null;
+      if (!este_termostat && v.onoff == null) { out.push({ device: d.device_code, nume: d.name, model, ok: true, sarit: 'fără senzori (TRV/receptor/repeater/gateway)' }); continue; }
       const { data: disp } = await db.from('iot_dispozitive').upsert({
         sursa: 'salus', extern_id: d.device_code, nume: d.name || model || d.device_code,
         meta: { model, gateway: d._gw, gateway_nume: d._gw_nume, tip: este_termostat ? 'termostat' : (v.onoff != null ? 'releu' : 'senzor'), props_chei: Object.keys(props).slice(0, 60) },
         ultima_citire: v, citit_la: new Date().toISOString(),
-      }, { onConflict: 'sursa,extern_id' }).select('id').single();
+      }, { onConflict: 'sursa,extern_id', ignoreDuplicates: false }).select('id').single();
       if (disp?.id) await db.from('iot_citiri').insert({ dispozitiv_id: disp.id, valori: v });
       out.push({ device: d.device_code, nume: d.name, model, ok: true, ...v });
     }
