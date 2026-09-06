@@ -42,6 +42,7 @@ import InventarCorectii from './InventarCorectii.jsx'
 import GraficLucrare from './GraficLucrare.jsx'
 import { MeteoSediu } from './Meteo.jsx'
 import Integrari from './Integrari.jsx'
+import Cladire from './Cladire.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -972,6 +973,7 @@ function HomeDashboard() {
     { path:'/rapoarte-santier', icon:'📋', label:'Rapoarte Șantier', color:'#E3B341', desc:'Rapoarte zilnice · Istoric · Poze', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate'], moduleKey:'rapoarte_santier' },
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
+    { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
     // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
     { path:'/inventar-corectii', icon:'🏷️', label:'Inventar Corecții', color:'#D29922', desc:'Registru ↔ BD · VECHI→NOU · TEMPORAR', active:true, emailsAllow:['m.alexandru@gazpet.ro','daniel.oancea@gazpet.ro','marilena.tudorache@gazpet.ro'] },
   ]
@@ -8519,6 +8521,7 @@ export default function App() {
         <Route path="/rapoarte-santier" element={<ProtectedRoute><RapoarteSantierPage/></ProtectedRoute>}/>
         <Route path="/sedinte" element={<ProtectedRoute><SedintePage/></ProtectedRoute>}/>
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
+        <Route path="/cladire" element={<ProtectedRoute requireModule="cladire"><Cladire/></ProtectedRoute>}/>
         <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="/integrari" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
