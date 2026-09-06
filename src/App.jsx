@@ -40,6 +40,7 @@ import PopoverBara from './PopoverBara.jsx'
 // Se scoate (ruta + fișierul InventarCorectii.jsx) când proiectul de aliniere e încheiat.
 import InventarCorectii from './InventarCorectii.jsx'
 import GraficLucrare from './GraficLucrare.jsx'
+import { MeteoStrip } from './Meteo.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -1026,6 +1027,7 @@ function HomeDashboard() {
           <button onClick={signOut} style={{background:'transparent',border:'1px solid #30363D',color:'#8B949E',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12,marginLeft:8}}>Ieșire</button>
         </div>
       </div>
+      <MeteoStrip />
 
       {/* PWA: propunere de instalare pe telefon (dismissable) */}
       <InstallPwaBanner />

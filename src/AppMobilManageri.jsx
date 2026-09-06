@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { MeteoBadge } from './Meteo.jsx'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -330,6 +331,9 @@ function RaportZilnic({ profile, sites, onBack }) {
         if (!error) pozePaths.push(path)
       }
       const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
+      // vremea la momentul raportului (din meteo_cache, Xweather) — dovadă pentru zilele nelucrate pe motive meteo
+      let meteoSnap = null
+      try { const { data: mc } = await supabase.from('meteo_cache').select('curent, alerte, actualizat_la').eq('site_id', siteId).maybeSingle(); if (mc?.curent) meteoSnap = { ...mc.curent, alerte: (mc.alerte || []).map(a => a.titlu), sursa_la: mc.actualizat_la } } catch { /* fără meteo */ }
       // upsert pe (site_id, data) → 1 raport/lucrare/zi, reintrarea editează
       const { data: rz, error: insErr } = await supabase.from('rapoarte_zilnice').upsert({
         site_id: siteId, data: azi(),
@@ -343,6 +347,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         aprovizionare: aprovizionare.trim() || null,
         plan_maine: planMaine.trim() || null,
         poze: pozePaths,
+        meteo: meteoSnap,
         created_by: user?.id || null,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'site_id,data' }).select('id').single()
@@ -505,6 +510,7 @@ function RaportZilnic({ profile, sites, onBack }) {
           <option value="">— alege lucrarea —</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
+        {siteId && <div style={{ marginTop: 8 }}><MeteoBadge siteId={siteId} /></div>}
       </div>
 
       {siteId && (loadingData ? (
