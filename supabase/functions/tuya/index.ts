@@ -67,6 +67,16 @@ Deno.serve(async (req: Request) => {
     token = tk.access_token;
     const uid = tk.uid;
 
+    // ── STREAM LIVE (Video Live Stream autorizat 06.09.2026): URL HLS/RTSP valabil cateva minute pentru o camera
+    if (actiune === 'stream') {
+      const devId = String(body.device_id || ''); const tip = body.tip === 'rtsp' ? 'rtsp' : 'hls';
+      if (!devId) return json({ error: 'device_id lipsă' }, 400);
+      try {
+        const r = await call('POST', `/v1.0/devices/${devId}/stream/actions/allocate`, { type: tip });
+        return json({ ok: true, url: r?.url || null, tip, expira_s: 300 });
+      } catch (e) { return json({ error: (e as Error)?.message || String(e) }, 502); } // nu marcam integrarea ca 'eroare' pt un stream esuat
+    }
+
     // ── LISTA DISPOZITIVE ── uid-urile conturilor legate (config.uids) sau uid-ul proiectului; fallback: dispozitivele proiectului
     let devs: any[] = [];
     const uids: string[] = Array.isArray(cfg.uids) && cfg.uids.length ? cfg.uids : (uid ? [uid] : []);
