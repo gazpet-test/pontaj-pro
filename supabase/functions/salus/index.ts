@@ -69,9 +69,9 @@ Deno.serve(async (req: Request) => {
     };
     // Doar gateway-ul firmei (iot_integrari.config.gateway_nume, ex. „Gazpet”) — contul SALUS are și casa lui Răzvan, care NU intră în ERP
     const { data: integ } = await db.from('iot_integrari').select('config').eq('cheie', 'salus').maybeSingle();
-    const gwFiltru = integ?.config?.gateway_nume || null;
+    const gwFiltru: string | null = integ?.config?.gateway_id || null;   // slider_list nu întoarce nume, doar id
     const lista = await api('/occupants/slider_list');
-    const gws = ((lista?.data || []) as any[]).filter(x => x.type === 'gateway' && (!gwFiltru || x.name === gwFiltru));
+    const gws = ((lista?.data || []) as any[]).filter(x => x.type === 'gateway' && (!gwFiltru || x.id === gwFiltru));
     const devices: any[] = [];
     for (const g of gws) {
       const det = await api(`/occupants/slider_details?id=${encodeURIComponent(g.id)}&type=gateway`);
