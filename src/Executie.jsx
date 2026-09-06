@@ -17,6 +17,7 @@ import { useSearchParams } from 'react-router-dom'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
+import { MeteoToggle } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
 import CereriInterneProiect from './CereriInterneProiect.jsx'
@@ -1016,12 +1017,15 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
             borderRadius: 6, color: G.purple, fontSize: 12, cursor: 'pointer', fontWeight: 600,
           }}>📐 Izometrie</button>
         </div>
-        {canEdit && (
-          <button onClick={onEdit} style={{
-            padding: '6px 12px', background: 'transparent', border: `1px solid ${G.border}`,
-            borderRadius: 6, color: G.muted, fontSize: 12, cursor: 'pointer',
-          }}>✏️ Editează</button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <MeteoToggle siteId={p.site_id} canEdit={canEdit} />
+          {canEdit && (
+            <button onClick={onEdit} style={{
+              padding: '6px 12px', background: 'transparent', border: `1px solid ${G.border}`,
+              borderRadius: 6, color: G.muted, fontSize: 12, cursor: 'pointer',
+            }}>✏️ Editează</button>
+          )}
+        </div>
       </div>
     </div>
   )

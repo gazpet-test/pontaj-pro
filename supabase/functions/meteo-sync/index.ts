@@ -39,7 +39,7 @@ Deno.serve(async (req: Request) => {
   if (!cid || !csec) return json({ error: 'XWEATHER_CLIENT_ID / XWEATHER_CLIENT_SECRET lipsă în Vault' }, 500);
   const auth = `client_id=${encodeURIComponent(cid)}&client_secret=${encodeURIComponent(csec)}`;
 
-  const { data: sites } = await db.from('sites').select('id, name, lat, lng, localitate_meteo, tip_locatie, raport_zilnic_necesar').eq('active', true);
+  const { data: sites } = await db.from('sites').select('id, name, lat, lng, localitate_meteo, tip_locatie, raport_zilnic_necesar, meteo_activ').eq('active', true).eq('meteo_activ', true);
   const tinte = (sites || []).filter(s => (s.lat && s.lng) || s.localitate_meteo).filter(s => s.tip_locatie === 'sediu' || s.raport_zilnic_necesar || body.toate);
   const loc = (s: any) => s.lat && s.lng ? `${s.lat},${s.lng}` : encodeURIComponent(s.localitate_meteo);
   const get = async (path: string) => {
