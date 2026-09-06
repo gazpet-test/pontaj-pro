@@ -308,8 +308,16 @@ function RaportZilnic({ profile, sites, onBack }) {
   }
   const stergePoza = (i) => setPoze(p => p.filter((_, idx) => idx !== i))
 
+  // Minim 4 poze la raport (Răzvan 05.09.2026: „dacă nu avem poze nu avem ce posta”). Excepție: zi fără
+  // personal pe șantier (total 0 = ploaie / pauză / deplasare) — atunci raportul se închide și fără poze.
+  const MIN_POZE = 4
+  const nrPoze = pozeExistente.length + poze.length
+  const totalPersonal = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
+  const pozeOk = nrPoze >= MIN_POZE || totalPersonal === 0
+
   const trimite = async () => {
     if (!siteId) { setMsg({ ok: false, text: 'Alege lucrarea' }); return }
+    if (!pozeOk) { setMsg({ ok: false, text: `Raportul se trimite cu minim ${MIN_POZE} poze de pe șantier (ai ${nrPoze}). Pozele ajung pe pagina firmei — fă-le cu lucrarea executată corect.` }); return }
     setSaving(true); setMsg(null)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -642,7 +650,8 @@ function RaportZilnic({ profile, sites, onBack }) {
           </Section>
 
           {/* Poze */}
-          <Section title="📷 Poze" hint={`${pozeExistente.length + poze.length}/12`}>
+          <Section title="📷 Poze" hint={`${nrPoze}/12 · minim ${MIN_POZE}`}>
+            {!pozeOk && <div style={{ padding: '8px 10px', borderRadius: 8, marginBottom: 10, background: G.red + '22', color: G.red, fontSize: 13, fontWeight: 600 }}>Mai ai nevoie de {MIN_POZE - nrPoze} {MIN_POZE - nrPoze === 1 ? 'poză' : 'poze'}. Pozele din raport ajung pe pagina de Facebook a firmei: lucrare executată corect, echipă cu EIP, fără fețe în prim-plan, fără numere de mașini, fără documente.</div>}
             {pozeExistente.length > 0 && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
                 {pozeExistente.map((p, i) => (
@@ -679,10 +688,10 @@ function RaportZilnic({ profile, sites, onBack }) {
           {msg && <div style={{ padding: '12px 14px', borderRadius: 10, marginBottom: 12, background: (msg.ok ? G.green : G.red) + '22', color: msg.ok ? G.green : G.red, fontSize: 14, fontWeight: 600, textAlign: 'center' }}>{msg.text}</div>}
 
           <button onClick={trimite} disabled={saving} style={{
-            background: G.green, color: '#0D1117', border: 'none', borderRadius: 14, padding: '16px', width: '100%',
+            background: pozeOk ? G.green : G.border2, color: pozeOk ? '#0D1117' : G.muted, border: 'none', borderRadius: 14, padding: '16px', width: '100%',
             fontSize: 17, fontWeight: 800, cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit', marginBottom: 30, opacity: saving ? .6 : 1,
           }}>
-            {saving ? 'Se trimite…' : (existingId ? '✓ Actualizează raportul' : '✓ Trimite raportul')}
+            {saving ? 'Se trimite…' : !pozeOk ? `📷 Lipsesc ${MIN_POZE - nrPoze} poze` : (existingId ? '✓ Actualizează raportul' : '✓ Trimite raportul')}
           </button>
         </>
       ))}
