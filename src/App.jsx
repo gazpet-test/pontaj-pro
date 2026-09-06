@@ -40,7 +40,7 @@ import PopoverBara from './PopoverBara.jsx'
 // Se scoate (ruta + fișierul InventarCorectii.jsx) când proiectul de aliniere e încheiat.
 import InventarCorectii from './InventarCorectii.jsx'
 import GraficLucrare from './GraficLucrare.jsx'
-import { MeteoStrip } from './Meteo.jsx'
+import { MeteoSediu } from './Meteo.jsx'
 
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
@@ -917,7 +917,8 @@ function Layout({ children }) {
             ＋
           </button>
           </>)}
-          <ChatNavButton />
+          {!loc.pathname.startsWith('/executie') && <MeteoSediu style={{marginRight:10}} />}
+        <ChatNavButton />
           <NotificationBell />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
@@ -995,6 +996,7 @@ function HomeDashboard() {
           <span style={{fontWeight:800,fontSize:16,letterSpacing:'-.3px',color:'#E6EDF3'}}>Gazpet</span>
           <span style={{fontWeight:300,fontSize:16,color:'#8B949E'}}>ERP</span>
         </div>
+        <MeteoSediu style={{marginRight:12}} />
         <div style={{textAlign:'right',marginRight:16}}>
           <div style={{fontSize:18,fontWeight:800,color:'#58A6FF',fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
           <div style={{fontSize:11,color:'#8B949E'}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}</div>
@@ -1027,7 +1029,6 @@ function HomeDashboard() {
           <button onClick={signOut} style={{background:'transparent',border:'1px solid #30363D',color:'#8B949E',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12,marginLeft:8}}>Ieșire</button>
         </div>
       </div>
-      <MeteoStrip />
 
       {/* PWA: propunere de instalare pe telefon (dismissable) */}
       <InstallPwaBanner />

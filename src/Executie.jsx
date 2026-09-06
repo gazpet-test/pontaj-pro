@@ -17,7 +17,7 @@ import { useSearchParams } from 'react-router-dom'
 import IzometriePage from './Izometrie.jsx'
 import TabSantiere, { NavetaTura } from './TabSantiere.jsx'
 import TabTronsoane from './TabTronsoane.jsx'
-import { MeteoToggle } from './Meteo.jsx'
+import { MeteoToggle, MeteoSantier } from './Meteo.jsx'
 import TabSituatiiPlata from './TabSituatiiPlata.jsx'
 import TabDocumenteNAS from './TabDocumenteNAS.jsx'
 import CereriInterneProiect from './CereriInterneProiect.jsx'
@@ -839,6 +839,7 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
           <span>🏢</span> {p.beneficiar || '—'} &nbsp;·&nbsp;
           <span>📍</span> {p.site_name || '—'}
         </div>
+        <MeteoSantier siteId={p.site_id} style={{ marginTop: 10 }} />
       </div>
 
       {/* KPI grid */}
