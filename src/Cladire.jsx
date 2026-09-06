@@ -13,7 +13,48 @@ const S = { card: { background:G.card, border:`1px solid ${G.border}`, borderRad
 const fmtDT = (d) => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
 const nr = (v, dec = 1) => v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: dec })
 
+// ── Live stream cameră Tuya (HLS). hls.js se încarcă la cerere de pe cdnjs (Safari/iOS redă HLS nativ, fără librărie).
+let _hlsP = null
+const loadHls = () => _hlsP || (_hlsP = new Promise((res, rej) => {
+  if (window.Hls) return res(window.Hls)
+  const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js'
+  sc.onload = () => res(window.Hls); sc.onerror = () => { _hlsP = null; rej(new Error('hls.js nu s-a încărcat')) }; document.head.appendChild(sc)
+}))
+
+function CameraLive({ cam, onClose }) {
+  const [stare, setStare] = useState('Se alocă stream-ul de la Tuya…')
+  const [url, setUrl] = useState(null)
+  useEffect(() => {
+    let hls = null, video = null, oprit = false
+    ;(async () => {
+      const { data, error } = await supabase.functions.invoke('tuya', { body: { actiune: 'stream', device_id: cam.extern_id, tip: 'hls' } })
+      if (oprit) return
+      if (error || !data?.url) { setStare('Nu am primit stream: ' + (data?.error || error?.message || 'fără URL')); return }
+      setUrl(data.url); video = document.getElementById('cam-live-video'); if (!video) return
+      if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = data.url; video.play().catch(() => {}); setStare(null); return }
+      try { const Hls = await loadHls(); if (oprit) return
+        hls = new Hls({ lowLatencyMode: true }); hls.loadSource(data.url); hls.attachMedia(video)
+        hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); setStare(null) })
+        hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setStare('Eroare stream: ' + d.details) })
+      } catch (e) { setStare(e.message) }
+    })()
+    return () => { oprit = true; try { hls?.destroy() } catch { /* ignore */ } }
+  }, [cam.extern_id])
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#000a', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ ...S.card, width:'min(960px, 100%)', padding:12 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><b>📷 {cam.nume}</b><span style={{ fontSize:11, color:G.dim }}>live · link valabil câteva minute</span>
+          <button style={{ ...S.btnS, marginLeft:'auto', padding:'3px 9px' }} onClick={onClose}>✕ Închide</button></div>
+        <video id="cam-live-video" controls muted playsInline style={{ width:'100%', maxHeight:'70vh', background:'#000', borderRadius:8 }} />
+        {stare && <div style={{ color: stare.startsWith('Se ') ? G.muted : G.red, fontSize:12.5, marginTop:8 }}>{stare}</div>}
+        {url && !stare && <div style={{ color:G.dim, fontSize:11, marginTop:6 }}>Dacă se oprește, închide și redeschide — Tuya alocă un link nou.</div>}
+      </div>
+    </div>
+  )
+}
+
 export default function Cladire() {
+  const [camLive, setCamLive] = useState(null)
   const [sediu, setSediu] = useState(null)
   const [disp, setDisp] = useState([])
   const [alerte, setAlerte] = useState([])
@@ -127,8 +168,8 @@ export default function Cladire() {
         {tuya.length > 0 && (
           <div style={S.card}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>📷 Camere & prize Tuya</div><span style={{ fontSize:11.5, color:G.dim }}>{camere.filter(c => c.ultima_citire?.online).length}/{camere.length} camere online</span></div>
-            {camere.map(c => <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
-              <span style={{ color:G.muted }}>{c.nume}</span><b style={{ color: c.ultima_citire?.online ? G.green : G.red }}>{c.ultima_citire?.online ? '● online' : '○ offline'}</b></div>)}
+            {camere.map(c => { const on = !!c.ultima_citire?.online; return <div key={c.id} onClick={() => on && setCamLive(c)} title={on ? 'Vezi live' : ''} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33`, cursor: on ? 'pointer' : 'default' }}>
+              <span style={{ color: on ? G.text : G.muted }}>{c.nume}{on && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}</span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
             {tuyaAlte.map(c => { const r = c.ultima_citire || {}; const val = r.putere_w != null ? `${nr(r.putere_w)} W` : r.temp != null ? `${nr(r.temp)}°` : r.pornit != null ? (r.pornit ? 'pornit' : 'oprit') : ''
               return <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
                 <span style={{ color:G.muted }}>{c.nume} <span style={{ fontSize:10.5, color:G.dim }}>{c.meta?.model || ''}</span></span><b style={{ color: r.online ? G.text : G.dim }}>{r.online ? (val || 'online') : 'offline'}</b></div> })}
@@ -144,6 +185,8 @@ export default function Cladire() {
               : acasa.map(t => { const r = t.ultima_citire || {}; return <Row key={t.id} k={t.nume} v={r.temp != null ? `${nr(r.temp)}°${r.setat != null ? ` (setat ${nr(r.setat)}°)` : ''}${r.incalzeste ? ' 🔥' : ''}` : (r.online != null ? (r.online ? (r.pornit ? 'pornit' : 'online') : 'offline') : '—')} /> })}
           </div>
         )}
+
+        {camLive && <CameraLive cam={camLive} onClose={() => setCamLive(null)} />}
 
         {/* Alerte */}
         <div style={S.card}>
