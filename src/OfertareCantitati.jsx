@@ -193,7 +193,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
           <div style={{ fontSize:19, fontWeight:800 }}>📋 Cantități & Clarificări</div>
           <div style={{ fontSize:12, color:G.muted }}>Extrase cu AI din documentație → verificate pe planșe → validate de om; diferențele merg la clarificări</div>
         </div>
-        <select style={{ ...S.input, width:'auto', minWidth:220 }} value={licId || ''} onChange={e => setLicId(Number(e.target.value))}>
+        <select style={{ ...S.input, flex:1, minWidth:260, maxWidth:760 }} title="Licitația de lucru" value={licId || ''} onChange={e => setLicId(Number(e.target.value))}>
           {active.map(l => <option key={l.id} value={l.id}>{l.nr_anunt} · {(l.obiect || '').slice(0, 44)}</option>)}
         </select>
       </div>

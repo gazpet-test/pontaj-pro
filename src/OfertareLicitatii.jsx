@@ -1180,7 +1180,7 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
   const KPI = ({ l: lbl, v, unit, color }) => (
     <div style={{ background:G.surface, border:`1px solid ${G.border}`, borderRadius:14, padding:'14px 16px', minWidth:0 }}>
       <div style={{ fontSize:11, color:G.dim, textTransform:'uppercase', letterSpacing:.5, fontWeight:700, marginBottom:5 }}>{lbl}</div>
-      <div style={{ fontSize:21, fontWeight:800, color: color || G.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{v}{unit && <span style={{ fontSize:12.5, color:G.dim, marginLeft:5 }}>{unit}</span>}</div>
+      <div style={{ fontSize: String(v ?? '').length > 9 ? 15 : 21, fontWeight:800, color: color || G.text, lineHeight:1.25, wordBreak:'break-word' }}>{v}{unit && <span style={{ fontSize:12.5, color:G.dim, marginLeft:5, fontWeight:600 }}>{unit}</span>}</div>
     </div>
   )
   const Row = ({ k, v, last }) => (
@@ -1215,7 +1215,7 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
         <div style={{ fontSize:15, color:G.muted, margin:'6px 0 18px', maxWidth:900 }}>{l.obiect}</div>
 
         {/* KPI */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:12, marginBottom:18 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>
           <KPI l="Valoare estimată" v={fmtMil(l.valoare_estimata)} unit={l.valoare_estimata >= 1e6 ? `mil ${l.moneda || 'lei'}` : (l.moneda || 'lei')} />
           <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
           <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} />
