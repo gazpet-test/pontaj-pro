@@ -23,6 +23,26 @@ const S = {
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
 const BUCKET = 'rapoarte-zilnice'
+// Clepsidra (Răzvan 07.09.2026): în timpul publicării/generării, o bară animată + cronometru, ca să nu pară blocat.
+function Lucru({ text, detaliu }) {
+  const [sec, setSec] = useState(0)
+  useEffect(() => { setSec(0); const t = setInterval(() => setSec(x => x + 1), 1000); return () => clearInterval(t) }, [text])
+  return (
+    <div style={{ position:'fixed', top:14, left:'50%', transform:'translateX(-50%)', zIndex:1900, minWidth:340, maxWidth:560, background:'#161B22', border:`1px solid ${G.accent}66`, borderRadius:12, padding:'12px 18px', boxShadow:'0 10px 40px #000a' }}>
+      <style>{`@keyframes mk-sp{to{transform:rotate(360deg)}}@keyframes mk-bar{0%{left:-40%}100%{left:100%}}`}</style>
+      <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:13.5, fontWeight:700, color:G.text }}>
+        <span style={{ width:16, height:16, border:`2px solid ${G.accent}44`, borderTopColor:G.accent, borderRadius:'50%', animation:'mk-sp .9s linear infinite', flexShrink:0 }} />
+        <span style={{ flex:1 }}>{text}</span>
+        <span style={{ fontFamily:'monospace', color:G.muted, fontSize:12 }}>⏱ {Math.floor(sec / 60)}:{String(sec % 60).padStart(2, '0')}</span>
+      </div>
+      <div style={{ position:'relative', height:5, borderRadius:3, background:'#30363D', overflow:'hidden', marginTop:9 }}>
+        <i style={{ position:'absolute', top:0, bottom:0, width:'40%', borderRadius:3, background:G.accent, animation:'mk-bar 1.4s ease-in-out infinite' }} />
+      </div>
+      {detaliu && <div style={{ fontSize:11.5, color:G.muted, marginTop:6 }}>{detaliu}</div>}
+    </div>
+  )
+}
+
 const STATUS = {
   ciorna:    { l:'Ciornă',     c:G.yellow },
   aprobata:  { l:'Aprobată',   c:G.blue },
@@ -46,6 +66,7 @@ export default function Marketing() {
   const [edit, setEdit] = useState(null)      // {id, text}
   const [thumbs, setThumbs] = useState({})    // path → signed url
   const [busy, setBusy] = useState(null)
+  const [busyDetaliu, setBusyDetaliu] = useState(null)
   const [analiza, setAnaliza] = useState(null)  // răspunsul meta-publish/analiza
   const [progr, setProgr] = useState({})        // postare_id → valoarea datetime-local
   const [toast, setToast] = useState(null)
@@ -125,11 +146,11 @@ export default function Marketing() {
     }).select('id').single()
     if (error) { showToast('Eroare: ' + error.message, 'err'); setBusy(null); return }
     if (cuAI) {
-      setBusy('AI scrie textul...')
+      setBusy('AI scrie textul postării…'); setBusyDetaliu('Citește rapoartele zilnice alese și pozele; 10–30 secunde.')
       const { data, error: e2 } = await supabase.functions.invoke('meta-publish', { body: { actiune: 'genereaza', postare_id: ins.id, indicatii: nou.indicatii } })
       if (e2 || data?.error) showToast('Ciorna e creată, dar AI a dat eroare: ' + (e2?.message || data?.error), 'err')
     }
-    setBusy(null); setNou(null); await load()
+    setBusy(null); setBusyDetaliu(null); setNou(null); await load()
     setEdit({ id: ins.id, text: '' })
     showToast('Ciornă creată. Citește textul, ajustează, apoi Aprobă.')
   }
@@ -141,9 +162,9 @@ export default function Marketing() {
     await load(); return true
   }
   const regenereaza = async (p, indicatii) => {
-    setBusy('AI rescrie textul...')
+    setBusy('AI rescrie textul…'); setBusyDetaliu('10–30 secunde.')
     const { data, error } = await supabase.functions.invoke('meta-publish', { body: { actiune: 'genereaza', postare_id: p.id, indicatii } })
-    setBusy(null)
+    setBusy(null); setBusyDetaliu(null)
     if (error || data?.error) { showToast('Eroare AI: ' + (error?.message || data?.error), 'err'); return }
     setEdit({ id: p.id, text: data.text }); await load()
   }
@@ -176,9 +197,11 @@ export default function Marketing() {
 
   const publica = async (p) => {
     if (!window.confirm(`Publici ACUM pe pagina de Facebook postarea pentru „${siteNume(p.site_id)}" (${(p.poze || []).length} poze)?`)) return
-    setBusy('Se publică pe Facebook...')
+    const nPoze = (p.poze || []).length
+    setBusy(`Se publică pe Facebook: „${siteNume(p.site_id)}”…`)
+    setBusyDetaliu(`Pozele (${nPoze}) se urcă una câte una pe Facebook, apoi se creează postarea și se salvează linkul. De obicei durează ${Math.max(15, nPoze * 8)}–${Math.max(40, nPoze * 15)} secunde — nu închide pagina.`)
     const { data, error } = await supabase.functions.invoke('meta-publish', { body: { actiune: 'publica', postare_id: p.id } })
-    setBusy(null)
+    setBusy(null); setBusyDetaliu(null)
     if (error || data?.error) { showToast('Publicarea a eșuat: ' + (error?.message || data?.error), 'err'); await load(); return }
     showToast(`Publicat! ${data.poze} poze. ${data.permalink ? 'Link salvat.' : ''}`); await load()
   }
@@ -193,7 +216,7 @@ export default function Marketing() {
         <Link to="/" style={{ color:G.muted, textDecoration:'none', fontSize:13 }}>← înapoi</Link>
         <div style={{ fontSize:19, fontWeight:800 }}>📣 Marketing</div>
         <span style={{ fontSize:12.5, color:G.muted }}>Postări pe Facebook din rapoartele de șantier · o postare pe săptămână pe șantier · nimic nu pleacă fără aprobare</span>
-        {busy && <span style={{ marginLeft:'auto', fontSize:12.5, color:G.accent, fontWeight:700 }}>{busy}</span>}
+        {busy && <Lucru text={busy} detaliu={busyDetaliu} />}
       </div>
       {/* Starea legăturii cu Meta */}
       <div style={{ ...S.card, padding:'8px 14px', marginBottom:14, display:'flex', gap:16, alignItems:'center', fontSize:12.5, flexWrap:'wrap' }}>
@@ -348,7 +371,7 @@ export default function Marketing() {
                     {inEdit && <button style={S.btnS} onClick={() => setEdit(null)}>Renunță</button>}
                     {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => { const ind = window.prompt('Indicații pentru AI (opțional):', '') ; if (ind !== null) regenereaza(p, ind) }}>🤖 Rescrie cu AI</button>}
                     {p.status === 'ciorna' && poateAproba && !inEdit && <button style={{ ...S.btnS, color:G.blue, borderColor:G.blue + '66' }} disabled={!(p.text_postare || '').trim()} onClick={() => upd(p.id, { status: 'aprobata', aprobat_de: profile.id, aprobat_la: new Date().toISOString() })}>✔ Aprobă</button>}
-                    {p.status === 'aprobata' && poateAproba && <button style={{ ...S.btnP, background:G.green, color:'#0D1117' }} disabled={!!busy} onClick={() => publica(p)}>📣 Publică pe Facebook</button>}
+                    {p.status === 'aprobata' && poateAproba && <button style={{ ...S.btnP, background:G.green, color:'#0D1117', opacity: busy ? .6 : 1 }} disabled={!!busy} onClick={() => publica(p)}>{busy && String(busy).startsWith('Se publică') ? '⏳ Se publică…' : '📣 Publică pe Facebook'}</button>}
                     {poateAproba && p.status === 'aprobata' && !p.programat_la && <span style={{ display:'inline-flex', gap:6, alignItems:'center' }}>
                       <input type="datetime-local" style={{ ...S.input, width:'auto', padding:'5px 8px' }} value={progr[p.id] ?? toLocalInput(urmatorulSlot())} onChange={e => setProgr(x => ({ ...x, [p.id]: e.target.value }))} />
                       <button style={{ ...S.btnS, color:G.purple, borderColor:G.purple + '66' }} disabled={!poateAproba} title={poateAproba ? 'Pleacă singură la ora aleasă' : 'doar aprobatorii'} onClick={() => { if (!progr[p.id]) setProgr(x => ({ ...x, [p.id]: toLocalInput(urmatorulSlot()) })); programeaza(p) }}>⏰ Programează</button>
