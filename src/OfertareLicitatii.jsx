@@ -55,6 +55,16 @@ export const SEGMENTE = {
   distributie: { label:'Distribuție gaze', color:'#3FB950' },
   altele:      { label:'Altele',           color:'#8B949E' },
 }
+// Identificatorii SEAP deduși din nr. anunț + link (D, 07.09.2026): c_notice_id = numărul din .../view/<id>,
+// sys_notice_type_id = 2 (CN/DF — anunț de participare), 17 (SCN — simplificată), 3 (ADV — publicitate). Radarul îi
+// aduce direct, dar dacă lipsesc (promovare veche / anunț introdus manual) îi completăm din link.
+export const deduIdSeap = (nr = '', link = '') => {
+  const m = String(link || '').match(/\/view\/(\d{6,})/)
+  const c_notice_id = m ? Number(m[1]) : null
+  const sys_notice_type_id = /^SCN/i.test(nr) ? 17 : /^(CN|DF)/i.test(nr) ? 2 : /^ADV/i.test(nr) ? 3 : null
+  return { c_notice_id, sys_notice_type_id }
+}
+
 export const detectSegment = (autoritate = '', obiect = '') => {
   const t = (autoritate + ' ' + obiect).toLowerCase()
   if (t.includes('transgaz')) return 'transgaz'
@@ -514,8 +524,15 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   // întoarce continua=true și reluăm de la indexul următor.
   const aduDinSeap = async () => {
     if (!licitatie.c_notice_id || !licitatie.sys_notice_type_id) {
-      setWarn('⚠️ Licitația nu are identificatorii SEAP (c_notice_id / sys_notice_type_id). Se completează singuri la promovarea din 📡 Radar; pentru cele vechi, cere-i lui Claude să-i pună.')
-      return
+      const d = deduIdSeap(licitatie.nr_anunt, licitatie.link_seap)
+      if (d.c_notice_id && d.sys_notice_type_id) {
+        const { error } = await supabase.from('ofertare_licitatii').update(d).eq('id', licitatie.id)
+        if (!error) { Object.assign(licitatie, d); await load() }
+        else { setWarn('Nu am putut salva identificatorii SEAP: ' + error.message); return }
+      } else {
+        setWarn('⚠️ Licitația nu are identificatorii SEAP și nu îi pot deduce: completează „Link SEAP” cu adresa anunțului (…/view/<număr>) și reîncearcă.')
+        return
+      }
     }
     setWarn(null); setSeapBusy('mă conectez la SEAP...')
     let deLa = 0, runde = 0, adaugate = 0, completate = 0, mari = []
@@ -1536,7 +1553,7 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
       observatii: r.motiv_scor ? `Radar (scor ${r.scor_potrivire}): ${r.motiv_scor}` : null,
       // identificatorii SEAP merg mai departe: cu ei butonul „Adu din SEAP"
       // descarcă singur toată documentația de atribuire (inclusiv planșele mari)
-      c_notice_id: r.c_notice_id || null, sys_notice_type_id: r.sys_notice_type_id || null,
+      c_notice_id: r.c_notice_id || deduIdSeap(r.nr_seap, r.link).c_notice_id, sys_notice_type_id: r.sys_notice_type_id || deduIdSeap(r.nr_seap, r.link).sys_notice_type_id,
       created_by: profile?.id || null,
     }).select('id').single()
     if (error) { showToast('Eroare la promovare: ' + error.message, 'err'); return }
