@@ -7,6 +7,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { verificaProiect, consemneazaLipsuri } from './lib/verificariProiect.js'
 import { genereazaSedintaPdf } from './sedinteExport.js'
@@ -179,6 +180,8 @@ export default function SedintePage() {
     <div style={{ padding: '18px 20px 60px', maxWidth: 1180, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginBottom: 18 }}>
         <div>
+          {/* TKT-2026-0187: pagina nu are Layout (fără bara de sus) → buton de întoarcere la Acasă, ca în Marketing/Clădire */}
+          <Link to="/" style={{ color: G.muted, textDecoration: 'none', fontSize: 13 }}>← înapoi</Link>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: G.text }}>🗓️ Ședințe de progres</h1>
           <div style={{ fontSize: 13, color: G.muted, marginTop: 3 }}>
             Ce ne-am propus, cine răspunde, până când — și ce a rămas din ședința trecută.
