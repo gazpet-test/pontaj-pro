@@ -88,8 +88,11 @@ export default function OfertareLicitatiiTab() {
   const [selected, setSelected] = useState(null)
   const [fStatus, setFStatus] = useState('active')
   const [fSegment, setFSegment] = useState('')
+  const [fResp, setFResp] = useState('')          // filtru responsabil (profile id)
+  const [echipa, setEchipa] = useState([])         // colegii cu acces la modulul Ofertare — candidați la „responsabil”
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
+  const [cantLicId, setCantLicId] = useState(null)   // licitația cu care intri în Cantități din fișă (Răzvan 07.09: nu mai alegi din listă)
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
@@ -100,7 +103,30 @@ export default function OfertareLicitatiiTab() {
       supabase.from('ofertare_licitatii').select('*'),
     ])
     const fullMap = {}; (full || []).forEach(l => { fullMap[l.id] = l })
-    setRows((v || []).map(r => ({ ...fullMap[r.id], ...r })))
+    // Redesign #40 (GO Răzvan 07.09.2026): cifrele de pe carduri/KPI — acoperire, dovezi roșii, verdict, clarificări
+    const ids = (v || []).map(r => r.id)
+    const stats = {}
+    ids.forEach(id => { stats[id] = { cerinte: 0, acoperite: 0, rosii: 0, verdict: null, verdict_la: null, clarificari: 0 } })
+    if (ids.length) {
+      const [{ data: cs }, { data: vf }, { data: cl }] = await Promise.all([
+        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null),
+        supabase.from('ofertare_verificari').select('licitatie_id, verdict, created_at').in('licitatie_id', ids).order('id', { ascending: false }),
+        supabase.from('ofertare_clarificari').select('licitatie_id').in('licitatie_id', ids),
+      ])
+      const cerLic = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; stats[c.licitatie_id].cerinte++ })
+      const cIds = Object.keys(cerLic)
+      if (cIds.length) {
+        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds)
+        ;(ac || []).forEach(a => { const lid = cerLic[a.cerinta_id]; const st = stats[lid]; if (!st) return
+          if (a.status === 'acoperit' || a.status === 'acoperit_partener') st.acoperite++
+          // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci
+          if (a.doc_firma?.se_reemite) { if (reemisUrgent(a.doc_firma, fullMap[lid]?.termen_depunere)) st.rosii++ }
+          else if (a.valabil_la_depunere === false) st.rosii++ })
+      }
+      ;(vf || []).forEach(x => { const st = stats[x.licitatie_id]; if (st && !st.verdict) { st.verdict = x.verdict; st.verdict_la = x.created_at } })
+      ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
+    }
+    setRows((v || []).map(r => ({ ...fullMap[r.id], ...r, _st: stats[r.id] })))
     setLoading(false)
   }
   useEffect(() => {
@@ -109,12 +135,34 @@ export default function OfertareLicitatiiTab() {
       if (user) supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).single()
         .then(({ data }) => setProfile(data))
     })
+    // echipa de ofertare = cine are acces explicit la modul (+ ownerul)
+    // (fără embed profiles — user_module_access nu are FK spre profiles, embed-ul cădea și rămâneau doar ownerii)
+    supabase.from('user_module_access').select('profile_id').eq('module', 'ofertare').then(async ({ data }) => {
+      const ids = (data || []).map(x => x.profile_id).filter(Boolean)
+      const { data: ps } = await supabase.from('profiles').select('id, name, is_owner').or(`is_owner.eq.true${ids.length ? `,id.in.(${ids.join(',')})` : ''}`)
+      setEchipa((ps || []).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
+    })
   }, [])
 
   const FINALE = ['castigata', 'pierduta', 'abandonata']
+  const areProbleme = r => (r.eliminatorii_neacoperite > 0) || (r._st?.rosii > 0) || r._st?.verdict === 'rosu'
   const filtrate = rows.filter(r => (fStatus === 'active' ? !FINALE.includes(r.status)
-    : fStatus === 'finale' ? FINALE.includes(r.status) : true)
-    && (!fSegment || r.segment === fSegment))
+    : fStatus === 'finale' ? FINALE.includes(r.status)
+    : fStatus === 'in_lucru' ? ['go', 'in_lucru', 'analiza'].includes(r.status)
+    : fStatus === 'depuse' ? r.status === 'depusa'
+    : fStatus === 'radar' ? /^Radar/i.test(r.observatii || '') && !FINALE.includes(r.status)
+    : fStatus === 'probleme' ? areProbleme(r) && !FINALE.includes(r.status) : true)
+    && (!fSegment || r.segment === fSegment) && (!fResp || r.responsabil_id === fResp))
+  // contor pe responsabil: în lucru acum + total pe anul curent (cine ce are și câte face pe an)
+  const anCurent = new Date().getFullYear()
+  const perResp = {}
+  rows.forEach(r => { if (!r.responsabil_id) return; const x = perResp[r.responsabil_id] ||= { nume: r.responsabil_nume, in_lucru: 0, an: 0 }
+    if (!FINALE.includes(r.status)) x.in_lucru++
+    if (new Date(r.created_at).getFullYear() === anCurent) x.an++ })
+  const nrInLucru = rows.filter(r => ['go', 'in_lucru', 'analiza'].includes(r.status)).length
+  const nrDepuse = rows.filter(r => r.status === 'depusa').length
+  const nrArhiva = rows.filter(r => FINALE.includes(r.status)).length
+  const fmtMil = v => v == null ? '—' : v >= 1e6 ? `${(v / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 2 })} mil` : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v)
 
   const salveaza = async (form) => {
     const payload = {
@@ -211,26 +259,33 @@ export default function OfertareLicitatiiTab() {
 
       {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
 
-      {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} />}
+      {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={cantLicId}
+        onInapoi={cantLicId ? () => { const r = rows.find(x => x.id === cantLicId); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'licitatii' && <>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:10 }}>
-        <div>
-          <div style={{ fontSize:19, fontWeight:800 }}>🏛 Licitații</div>
-          <div style={{ fontSize:12, color:G.muted }}>Pipeline de la anunț SEAP la depunere — countdown, GO/NO-GO, cerințe eliminatorii</div>
-        </div>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+      {/* ── Redesign #40: antet cu contoare + filtre-chip + carduri aerisite (macheta redesign_lista, GO 07.09.2026) ── */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+        <div style={{ fontSize:22, fontWeight:800 }}>📑 Licitații</div>
+        <span style={{ background:'#1c2a44', color:G.blue, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>{nrInLucru} în lucru</span>
+        <span style={{ background:'#2a2211', color:G.yellow, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>{nrDepuse} depuse</span>
+        <span style={{ background:G.surface, color:G.muted, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>arhivă {nrArhiva}</span>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          <select style={{ ...S.input, width:'auto' }} value={fResp} onChange={e => setFResp(e.target.value)} title="Filtru după responsabil">
+            <option value="">Toți responsabilii</option>
+            {echipa.map(p => <option key={p.id} value={p.id}>{p.name}{perResp[p.id] ? ` (${perResp[p.id].in_lucru} în lucru · ${perResp[p.id].an} în ${anCurent})` : ''}</option>)}
+          </select>
           <select style={{ ...S.input, width:'auto' }} value={fSegment} onChange={e => setFSegment(e.target.value)}>
             <option value="">Toate segmentele</option>
-            {Object.entries(SEGMENTE).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
+            {Object.entries(SEGMENTE).map(([k, sg]) => <option key={k} value={k}>{sg.label}</option>)}
           </select>
-          <select style={{ ...S.input, width:'auto' }} value={fStatus} onChange={e => setFStatus(e.target.value)}>
-            <option value="active">În desfășurare</option>
-            <option value="finale">Finalizate</option>
-            <option value="toate">Toate</option>
-          </select>
-          <button style={S.btnP} onClick={() => { setEditRow(null); setShowForm(true) }}>＋ Licitație nouă</button>
+          <button style={{ ...S.btnP, borderRadius:10, padding:'10px 18px' }} onClick={() => { setEditRow(null); setShowForm(true) }}>＋ Licitație nouă</button>
         </div>
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:16, flexWrap:'wrap' }}>
+        {[['active', 'Toate active'], ['in_lucru', '🔨 în lucru'], ['depuse', '📮 depuse'], ['radar', '🛰️ din radar'], ['probleme', '⚠️ cu probleme'], ['finale', '📦 arhivă'], ['toate', 'toate']].map(([k, lbl]) => (
+          <button key={k} onClick={() => setFStatus(k)} style={{ borderRadius:999, padding:'7px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
+            background: fStatus === k ? '#3a3113' : G.surface, color: fStatus === k ? G.ofertare : G.muted, border:`1px solid ${fStatus === k ? '#5c4d1c' : G.border2}` }}>{lbl}</button>
+        ))}
       </div>
 
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă licitațiile...</div>}
@@ -240,39 +295,43 @@ export default function OfertareLicitatiiTab() {
         </div>
       )}
 
-      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
         {filtrate.map(l => {
           const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
-          const urgent = l.termen_depunere && !FINALE.includes(l.status) && l.status !== 'depusa'
+          const sx = l._st || {}
           const zile = l.zile_ramase
-          const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : G.green
+          const activa = !FINALE.includes(l.status) && l.status !== 'depusa'
+          const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : zile <= 21 ? G.yellow : G.green
+          const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
+          const probl = areProbleme(l)
+          const cBord = probl && activa ? G.red : activa && zile != null && zile <= 21 ? G.yellow : l.status === 'depusa' ? G.purple : st.color
+          const VC = { verde: ['VERDE', G.green], galben: ['GALBEN', G.yellow], rosu: ['ROȘU', G.red] }
+          const canalLbl = l.canal ? l.canal.replace('seap_', 'SEAP ').toUpperCase() : (l.tip_procedura || '')
           return (
-            <div key={l.id} onClick={() => setSelected(l)} style={{ ...S.card, padding:'14px 18px', cursor:'pointer',
-              borderLeft:`3px solid ${l.eliminatorii_neacoperite > 0 ? G.red : st.color}` }}>
-              <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-                <span style={{ background: st.color + '22', color: st.color, border:`1px solid ${st.color}66`, borderRadius:14, padding:'3px 12px', fontSize:11.5, fontWeight:800, whiteSpace:'nowrap' }}>{st.icon} {st.label}</span>
-                <span style={{ fontWeight:800, fontSize:14.5 }}>{l.nr_anunt}</span>
-                {l.segment && SEGMENTE[l.segment] && (
-                  <span style={{ color:SEGMENTE[l.segment].color, border:`1px solid ${SEGMENTE[l.segment].color}55`, borderRadius:10, padding:'1px 9px', fontSize:10.5, fontWeight:800 }}>{SEGMENTE[l.segment].label}</span>
-                )}
-                <span style={{ color:G.muted, fontSize:13, flex:1, minWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{l.obiect}</span>
-                {urgent && (
-                  <span style={{ color:cZile, fontWeight:800, fontSize:13, whiteSpace:'nowrap' }}>
-                    ⏳ {zile == null ? 'fără termen' : zile === 0 ? 'AZI!' : `${zile} ${zile === 1 ? 'zi' : 'zile'}`}
-                  </span>
-                )}
-                {l.eliminatorii_neacoperite > 0 && (
-                  <span style={{ background:G.red + '22', color:G.red, border:`1px solid ${G.red}66`, borderRadius:14, padding:'3px 12px', fontSize:11.5, fontWeight:800, whiteSpace:'nowrap' }}>
-                    🚫 {l.eliminatorii_neacoperite} eliminatorii neacoperite
-                  </span>
-                )}
+            <div key={l.id} onClick={() => setSelected(l)} style={{ ...S.card, padding:'16px 22px', cursor:'pointer', borderRadius:14,
+              display:'grid', gridTemplateColumns:'1fr auto', gap:'6px 20px', borderLeft:`4px solid ${cBord}` }}>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:12.5, color:G.dim, fontWeight:700 }}>{l.nr_anunt}{canalLbl ? ` · ${canalLbl}` : ''} · {l.autoritate}
+                  {l.segment && SEGMENTE[l.segment] && <span style={{ marginLeft:8, color:SEGMENTE[l.segment].color, border:`1px solid ${SEGMENTE[l.segment].color}55`, borderRadius:10, padding:'0 8px', fontSize:10.5 }}>{SEGMENTE[l.segment].label}</span>}
+                </div>
+                <div style={{ fontSize:15.5, fontWeight:700, margin:'3px 0 7px', overflow:'hidden', textOverflow:'ellipsis', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical' }}>{l.obiect}</div>
+                <div style={{ display:'flex', gap:18, fontSize:13, color:G.muted, flexWrap:'wrap' }}>
+                  <span>💰 <b style={{ color:G.text }}>{fmtMil(l.valoare_estimata)}</b> {l.moneda || 'lei'}</span>
+                  <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>
+                  {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }}>🚫 eliminatorii neacoperite: <b>{l.eliminatorii_neacoperite}</b></span>}
+                  {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
+                  {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
+                  {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
+                  <span title="Responsabil licitație">👤 {l.responsabil_nume ? <b style={{ color:G.text }}>{l.responsabil_nume}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
+                </div>
               </div>
-              <div style={{ display:'flex', gap:18, marginTop:8, fontSize:12, color:G.dim, flexWrap:'wrap' }}>
-                <span>🏢 {l.autoritate}</span>
-                <span>💰 {fmtVal(l.valoare_estimata)} {l.moneda}</span>
-                <span>📅 depunere: {fmtTermen(l.termen_depunere)}</span>
-                <span>📄 {l.nr_documente} documente</span>
-                <span>📋 {l.nr_cerinte} cerințe{l.nr_eliminatorii > 0 ? ` (${l.nr_eliminatorii} eliminatorii)` : ''}</span>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, textAlign:'right' }}>
+                <span style={{ background: st.color + '22', color: st.color, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800, whiteSpace:'nowrap' }}>{st.icon} {st.label}{l.decizie_go === 'go' ? ' · GO' : ''}</span>
+                {activa && <span style={{ fontSize:13.5, color:G.muted, whiteSpace:'nowrap' }}>termen: <b style={{ fontSize:19, color:cZile }}>{zile == null ? '—' : zile === 0 ? 'AZI' : `${zile} ${zile === 1 ? 'zi' : 'zile'}`}</b></span>}
+                {!activa && l.termen_depunere && <span style={{ fontSize:12.5, color:G.dim }}>depunere {fmtTermen(l.termen_depunere).slice(0, 10)}</span>}
+                <span style={{ height:7, borderRadius:5, background:G.border, overflow:'hidden', width:190, display:'block' }}>
+                  <i style={{ display:'block', height:'100%', width:`${pct}%`, background: probl ? G.red : 'linear-gradient(90deg,#D29922,#3FB950)' }} />
+                </span>
               </div>
             </div>
           )
@@ -284,10 +343,10 @@ export default function OfertareLicitatiiTab() {
         <LicitatieFormModal licitatie={editRow} onClose={() => { setShowForm(false); setEditRow(null) }} onSave={salveaza} />
       )}
       {selected && (
-        <LicitatieDetailModal licitatie={selected} profile={profile}
+        <LicitatieDetailModal licitatie={selected} profile={profile} echipa={echipa} onChanged={load}
           onClose={() => setSelected(null)}
           onEdit={() => { setEditRow(selected); setSelected(null); setShowForm(true) }}
-          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} />
+          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setCantLicId(selected.id); setVedere('cantitati') }} />
       )}
     </div>
   )
@@ -442,6 +501,14 @@ const DOC_STATUS = {
   eroare:     { label:'eroare',     color:G.red },
   ignorat:    { label:'doar fișier',color:G.dim },
 }
+// Certificat cu valabilitate 30 zile (constatator ONRC, atestare fiscală, cazier fiscal): se emite proaspăt la depunere.
+// Urgent (roșu) doar dacă termenul e în ≤ 10 zile și certificatul nu e valabil în ziua depunerii; altfel doar reminder portocaliu.
+const reemisUrgent = (doc, termen) => {
+  if (!doc?.se_reemite || !termen) return false
+  const zile = Math.ceil((new Date(termen) - Date.now()) / 86400000)
+  const valabil = doc.data_valabilitate && new Date(doc.data_valabilitate) >= new Date(termen.slice(0, 10))
+  return zile <= 10 && !valabil
+}
 const ghicesteTip = (nume) => {
   const n = (nume || '').toLowerCase()
   if (/fisadate|fisa.de.date|instructiuni.?ofertanti/.test(n)) return 'fisa_date'
@@ -457,6 +524,30 @@ const ghicesteTip = (nume) => {
 // Rând de inventar fără fișier real în storage. fisier_path e NOT NULL în BD,
 // așa că poziția „știm că există documentul, dar nu-l avem" poartă marcajul din cale.
 const ESTE_PLACEHOLDER = d => !d.fisier_path || d.fisier_path.includes('/neincarcat/')
+
+// Răzvan 07.09.2026: „clepsidră” — să se vadă că lucrează, nu că s-a blocat: spinner + cronometru + bară de progres pe pagini
+function Lucru({ icon, text, pct, detaliu }) {
+  const [t0] = useState(Date.now())
+  const [sec, setSec] = useState(0)
+  useEffect(() => { const t = setInterval(() => setSec(Math.floor((Date.now() - t0) / 1000)), 1000); return () => clearInterval(t) }, [t0])
+  const mm = String(Math.floor(sec / 60)).padStart(2, '0'), ss = String(sec % 60).padStart(2, '0')
+  return (
+    <div style={{ marginBottom:8, padding:'8px 12px', borderRadius:8, background:G.ofertare + '14', border:`1px solid ${G.ofertare}44` }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:12.5, color:G.ofertare, fontWeight:700 }}>
+        <span className="sp" style={{ borderTopColor:G.ofertare, flexShrink:0 }} />
+        <span style={{ flex:1 }}>{icon} {text}</span>
+        <span style={{ fontVariantNumeric:'tabular-nums', color:G.muted, fontWeight:600 }}>⏱ {mm}:{ss}</span>
+      </div>
+      {pct != null && (
+        <div style={{ marginTop:6 }}>
+          <div style={{ height:6, borderRadius:4, background:G.border, overflow:'hidden' }}><i style={{ display:'block', height:'100%', width:`${Math.max(2, Math.min(100, pct))}%`, background:G.ofertare, transition:'width .6s' }} /></div>
+          {detaliu && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>{detaliu}</div>}
+        </div>
+      )}
+      <div style={{ fontSize:11, color:G.dim, marginTop:4 }}>Lucrează în fundal — poți lăsa pagina deschisă; se actualizează singură la fiecare felie citită.</div>
+    </div>
+  )
+}
 
 function DocumenteSection({ licitatie, profile, onChanged }) {
   const [docs, setDocs] = useState(null)
@@ -732,10 +823,16 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           )}
         </div>
       </div>
-      {seapBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬇️ SEAP: {seapBusy}</div>}
-      {upBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬆️ Se urcă... {upBusy}</div>}
-      {procBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 AI citește: {procBusy}</div>}
-      {plansaBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>📐 {plansaBusy}</div>}
+      {seapBusy && <Lucru icon="⬇️" text={`SEAP: ${seapBusy}`} />}
+      {upBusy && <Lucru icon="⬆️" text={`Se urcă… ${upBusy}`} />}
+      {procBusy && (() => {
+        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat'].includes(d.status_procesare))
+        const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
+        const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : (d.pagini_procesate || 0)), 0)
+        const ramase = rel.filter(d => d.status_procesare !== 'procesat').length
+        return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={tot ? Math.round(100 * done / tot) : null} detaliu={tot ? `${done}/${tot} pagini citite · ${ramase} documente rămase` : `${ramase} documente rămase`} />
+      })()}
+      {plansaBusy && <Lucru icon="📐" text={plansaBusy} />}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
 
       {docs === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
@@ -747,14 +844,25 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
             {docs.map(d => {
               const st = DOC_STATUS[d.status_procesare] || DOC_STATUS.neprocesat
+              const spart = d.status_procesare === 'ignorat' && /spart .*în (\d+) bucăți/i.exec(d.eroare || '')
+              const formularXml = d.status_procesare === 'ignorat' && /\.xml$/i.test(d.nume_original || '')
               return (
                 <div key={d.id} style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, padding:'5px 8px', borderRadius:6, background:G.surface }}>
-                  <span style={{ color:st.color, fontWeight:700, minWidth:86 }}>{st.label}</span>
-                  <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.nume_original}>{d.nume_original}</span>
+                  <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }} title={d.eroare || ''}>{spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : st.label}</span>
+                  <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
+                    {d.nume_original}
+                    {spart && <span style={{ color:G.muted, fontStyle:'italic' }}> — prea mare, s-a spart în {spart[1]} bucăți; se citesc bucățile, fișierul acesta NU intră în analiză</span>}
+                    {formularXml && <span style={{ color:G.muted, fontStyle:'italic' }}> — DUAE/formular SEAP: se completează la depunere, nu se citește</span>}
+                  </span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>{d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}</span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
                   </span>
+                  {d.status_procesare === 'in_lucru' && (
+                    <span title={d.pagini ? `${Math.round(100 * (d.pagini_procesate || 0) / d.pagini)}%` : 'se pregătește'} style={{ width:64, height:5, borderRadius:3, background:G.border, overflow:'hidden', flexShrink:0 }}>
+                      <i style={{ display:'block', height:'100%', width:`${d.pagini ? Math.max(3, Math.round(100 * (d.pagini_procesate || 0) / d.pagini)) : 3}%`, background:G.ofertare }} />
+                    </span>
+                  )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={d.analiza?.citire_ai ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
@@ -976,7 +1084,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
-        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path)')
+        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate)')
         .in('cerinta_id', cs.map(c => c.id))
       const map = {}; (ac || []).forEach(a => { map[a.cerinta_id] = a })
       setAcoperiri(map)
@@ -1103,7 +1211,11 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
                       {titular && <b style={{ color:G.text }}>{titular}</b>}
                       {a.autorizatie?.tip?.denumire && <> · {a.autorizatie.tip.denumire}{a.autorizatie.numar_autorizatie ? ` nr. ${a.autorizatie.numar_autorizatie}` : ''}</>}
                       {a.doc_firma && <> · {a.doc_firma.tip}{a.doc_firma.numar_document ? ` nr. ${a.doc_firma.numar_document}` : ''}</>}
-                      {a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
+                      {a.doc_firma?.se_reemite
+                        ? (reemisUrgent(a.doc_firma, licitatie.termen_depunere)
+                            ? <b style={{ color:G.red }}> · 🔄 DE REEMIS ACUM — certificat de 30 zile, nu e valabil la depunere!</b>
+                            : <b style={{ color:G.orange }}> · 🔄 se emite proaspăt la depunere (valabil 30 zile){a.doc_firma.data_valabilitate ? ` — actualul până la ${fmtZi(a.doc_firma.data_valabilitate)}` : ''}</b>)
+                        : a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
                       {a.referinta_text && <> — {a.referinta_text}</>}
                     </div>
                   )}
@@ -1119,85 +1231,176 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
-function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus, onDecide, onDelete }) {
+function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati }) {
+  // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
+  // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
   const [motivare, setMotivare] = useState(l.decizie_motivare || '')
   const [regim, setRegim] = useState(l.regim_achizitie || '')
+  const [resp, setResp] = useState(l.responsabil_id || '')
+  const [tab, setTab] = useState('cerinte')   // cerinte | documente | clarificari | detalii | verificari
+  const [clar, setClar] = useState(null)
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
-  const R = ({ k, v }) => v ? (
-    <div style={{ display:'flex', gap:10, padding:'6px 0', borderBottom:`1px solid ${G.border2}`, fontSize:13 }}>
-      <span style={{ color:G.muted, minWidth:170 }}>{k}</span>
-      <span style={{ flex:1, wordBreak:'break-word' }}>{v}</span>
+  const sx = l._st || {}
+  const zile = l.zile_ramase
+  const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : zile <= 21 ? G.yellow : G.green
+  const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
+  const VC = { verde: ['🟢 VERDE — depunere sigură', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
+  const [vLbl, vCol] = VC[sx.verdict] || ['— verificare nerulată', G.dim]
+  const fmtMil = v => v == null ? '—' : v >= 1e6 ? `${(v / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 2 })}` : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v)
+
+  useEffect(() => {
+    if (tab !== 'clarificari') return
+    supabase.from('ofertare_clarificari').select('id, nr, intrebare, status, origine, citita_la, raspuns').eq('licitatie_id', l.id).order('nr')
+      .then(({ data }) => setClar(data || []))
+  }, [tab, l.id])
+
+  const KPI = ({ l: lbl, v, unit, color }) => (
+    <div style={{ background:G.surface, border:`1px solid ${G.border}`, borderRadius:14, padding:'14px 16px', minWidth:0 }}>
+      <div style={{ fontSize:11, color:G.dim, textTransform:'uppercase', letterSpacing:.5, fontWeight:700, marginBottom:5 }}>{lbl}</div>
+      <div style={{ fontSize: String(v ?? '').length > 9 ? 15 : 21, fontWeight:800, color: color || G.text, lineHeight:1.25, wordBreak:'break-word' }}>{v}{unit && <span style={{ fontSize:12.5, color:G.dim, marginLeft:5, fontWeight:600 }}>{unit}</span>}</div>
     </div>
-  ) : null
+  )
+  const Row = ({ k, v, last }) => (
+    <div style={{ display:'flex', justifyContent:'space-between', gap:12, padding:'9px 0', borderBottom: last ? 'none' : `1px solid ${G.border}`, fontSize:13.5 }}>
+      <span style={{ color:G.muted, whiteSpace:'nowrap' }}>{k}</span><span style={{ textAlign:'right', wordBreak:'break-word' }}>{v || '—'}</span>
+    </div>
+  )
+  const TABS = [
+    ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
+    ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
+    ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
+    ['detalii', '📝 Detalii & decizie'],
+    ['verificari', `🔍 Verificări${sx.verdict ? ` · ${sx.verdict.toUpperCase()}` : ''}`],
+  ]
+  const CL_ST = { de_trimis: ['📝 de trimis', G.orange], trimisa: ['📮 trimisă', G.blue], raspunsa: ['✅ răspunsă', G.green] }
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', overflowY:'auto', padding:'30px 14px' }} onClick={onClose}>
-      <div style={{ ...S.card, width:'min(820px,100%)', padding:24 }} onClick={e => e.stopPropagation()}>
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:6, flexWrap:'wrap' }}>
-          <div style={{ fontSize:18, fontWeight:800 }}>🏛 {l.nr_anunt}</div>
-          <span style={{ background: st.color + '22', color: st.color, border:`1px solid ${st.color}66`, borderRadius:14, padding:'3px 12px', fontSize:12, fontWeight:800 }}>{st.icon} {st.label}</span>
-          {l.decizie_go && <span style={{ fontSize:12, color: l.decizie_go === 'go' ? G.teal : G.red, fontWeight:700 }}>decizie: {l.decizie_go.toUpperCase()}</span>}
-          <button onClick={onClose} style={{ marginLeft:'auto', background:'transparent', border:'none', color:G.muted, fontSize:20, cursor:'pointer' }}>✕</button>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', overflowY:'auto', padding:'22px 14px' }} onClick={onClose}>
+      <div style={{ ...S.card, width:'min(1180px,100%)', padding:'22px 26px', borderRadius:16 }} onClick={e => e.stopPropagation()}>
+        {/* antet */}
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <div style={{ fontSize:22, fontWeight:800, letterSpacing:-.3 }}>🏛 {l.nr_anunt}</div>
+          <span style={{ background: st.color + '22', color: st.color, borderRadius:999, padding:'5px 15px', fontSize:12.5, fontWeight:800 }}>{st.icon} {st.label}</span>
+          {l.decizie_go && <span style={{ background: l.decizie_go === 'go' ? '#12261a' : '#2b1517', color: l.decizie_go === 'go' ? G.green : G.red, borderRadius:999, padding:'5px 15px', fontSize:12.5, fontWeight:800 }}>decizie: {l.decizie_go === 'go' ? 'GO' : 'NO-GO'}</span>}
+          <div style={{ marginLeft:'auto', display:'flex', gap:8, flexWrap:'wrap' }}>
+            <button style={{ ...S.btnS, borderRadius:10 }} onClick={() => setTab('documente')}>⬇️ Adu din SEAP</button>
+            <button style={{ ...S.btnS, borderRadius:10 }} onClick={() => setTab('clarificari')}>❓ Clarificări</button>
+            <button style={{ ...S.btnP, borderRadius:10, background:G.green }} onClick={() => setTab('verificari')}>🔍 Verificare finală</button>
+            <button onClick={onClose} style={{ background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer', padding:'0 4px' }}>✕</button>
+          </div>
         </div>
-        <div style={{ fontSize:13.5, color:G.text, marginBottom:14 }}>{l.obiect}</div>
+        <div style={{ fontSize:15, color:G.muted, margin:'6px 0 18px', maxWidth:900 }}>{l.obiect}</div>
 
-        <R k="Autoritate" v={l.autoritate} />
-        <R k="Regim achiziție" v={
-          <span style={{ display:'inline-flex', gap:8, alignItems:'center' }}>
-            <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px' }} value={regim}
-              onChange={async e => { const v = e.target.value; setRegim(v); await supabase.from('ofertare_licitatii').update({ regim_achizitie: v || null, updated_at: new Date().toISOString() }).eq('id', l.id) }}>
-              <option value="">— nestabilit —</option>
-              <option value="sectorial">⚡ sectorial (Legea 99/2016 + HG 394)</option>
-              <option value="clasic">🏛 clasic (Legea 98/2016 + HG 395)</option>
-            </select>
-            <span style={{ fontSize:11, color:G.dim }}>legea citată în fișa de date primează asupra tipului autorității</span>
-          </span>
-        } />
-        <R k="Valoare estimată" v={l.valoare_estimata != null ? `${fmtVal(l.valoare_estimata)} ${l.moneda}` : null} />
-        <R k="Termen de depunere" v={l.termen_depunere ? `${fmtTermen(l.termen_depunere)} (${l.zile_ramase ?? '—'} zile rămase)` : null} />
-        <R k="Criteriu" v={l.criteriu} />
-        <R k="Garanție participare" v={l.garantie_participare} />
-        <R k="Link SEAP" v={l.link_seap ? <a href={l.link_seap} target="_blank" rel="noreferrer" style={{ color:G.blue }}>{l.link_seap}</a> : null} />
-        <R k="Folder NAS" v={l.nas_path} />
-        <R k="Grafic de execuție" v={<a href={`/grafic/licitatie/${l.id}`} style={{ color:G.blue }}>📅 Poarta grafic + Gantt (drum critic, MS Project, F9)</a>} />
-        <R k="Documente / Cerințe" v={`${l.nr_documente} documente · ${l.nr_cerinte} cerințe (${l.nr_eliminatorii} eliminatorii, ${l.eliminatorii_neacoperite} neacoperite)`} />
-        <R k="Motivare decizie" v={l.decizie_motivare} />
-        <R k="Observații" v={l.observatii} />
+        {/* KPI */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>
+          <KPI l="Valoare estimată" v={fmtMil(l.valoare_estimata)} unit={l.valoare_estimata >= 1e6 ? `mil ${l.moneda || 'lei'}` : (l.moneda || 'lei')} />
+          <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
+          <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
+          <KPI l="Eliminatorii neacoperite" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
+          <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
+          {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
+          <KPI l="Garanție participare" v={l.garantie_participare || '—'} color={l.garantie_status === 'original' ? G.green : l.garantie_participare ? G.red : G.text} />
+        </div>
 
-        {/* E1: documentația de atribuire — upload folder + procesare AI */}
-        <DocumenteSection licitatie={l} profile={profile} />
+        {/* tab-uri */}
+        <div style={{ display:'flex', gap:4, borderBottom:`1px solid ${G.border2}`, marginBottom:18, overflowX:'auto' }}>
+          {TABS.map(([k, lbl]) => (
+            <button key={k} onClick={() => setTab(k)} style={{ padding:'10px 16px', fontSize:13.5, fontWeight:700, whiteSpace:'nowrap', background:'none', border:'none', cursor:'pointer',
+              color: tab === k ? G.ofertare : G.muted, borderBottom:`2.5px solid ${tab === k ? G.ofertare : 'transparent'}`, marginBottom:-1 }}>{lbl}</button>
+          ))}
+        </div>
 
-        {/* E2: registrul de cerințe — Opus + confirmarea umană (poarta) + ai_feedback */}
-        <CerinteSection licitatie={l} profile={profile} />
+        <div style={{ display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(260px, 1fr)', gap:18 }}>
+          <div style={{ minWidth:0 }}>
+            {tab === 'cerinte' && <>
+              <CerinteSection licitatie={l} profile={profile} />
+              <AcoperireSection licitatie={l} profile={profile} />
+            </>}
+            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
+            {tab === 'verificari' && <VerificareFinalaSection licitatie={l} />}
+            {tab === 'clarificari' && (
+              <div style={{ ...S.card, padding:16, background:G.surface }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+                  <div style={{ fontWeight:800, fontSize:14 }}>❓ Clarificări către autoritate ({clar?.length ?? '…'})</div>
+                  <button style={{ ...S.btnP, marginLeft:'auto', padding:'6px 13px', fontSize:12 }} onClick={() => { onClose(); onGoCantitati?.() }}>✏️ Editează / adaugă în 📋 Cantități</button>
+                </div>
+                {clar === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
+                  : !clar.length ? <div style={{ color:G.dim, fontSize:13 }}>Nicio clarificare. Se generează din diferențele de cantități sau se adaugă manual în 📋 Cantități.</div>
+                  : clar.map(q => { const [lbl, col] = CL_ST[q.status] || CL_ST.de_trimis; return (
+                    <div key={q.id} style={{ display:'flex', gap:12, padding:'11px 13px', borderRadius:11, marginBottom:8, background:'#1C2430', borderLeft:`3px solid ${col}`, alignItems:'flex-start' }}>
+                      <span style={{ fontWeight:800, color:G.muted }}>{q.nr}.</span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:13.5, whiteSpace:'pre-wrap' }}>{q.intrebare}</div>
+                        <div style={{ fontSize:11.5, color:G.dim, marginTop:4 }}>{q.origine === 'manual' ? '👤 încărcată manual' : '🤖 generată de platformă'}{q.origine === 'manual' && (q.citita_la ? ' · ✓ citită de platformă' : ' · ⚠ necitită')}</div>
+                        {q.raspuns && <div style={{ fontSize:12.5, color:G.green, marginTop:6, whiteSpace:'pre-wrap' }}>↳ {q.raspuns}</div>}
+                      </div>
+                      <span style={{ fontSize:11.5, fontWeight:800, color:col, whiteSpace:'nowrap' }}>{lbl}</span>
+                    </div>) })}
+              </div>
+            )}
+            {tab === 'detalii' && (
+              <div style={{ ...S.card, padding:16, background:G.surface }}>
+                <Row k="Link SEAP" v={l.link_seap ? <a href={l.link_seap} target="_blank" rel="noreferrer" style={{ color:G.blue }}>{l.link_seap}</a> : null} />
+                <Row k="Identificatori SEAP" v={l.c_notice_id ? `${l.c_notice_id} / tip ${l.sys_notice_type_id}` : <span style={{ color:G.orange }}>lipsă — se completează din link la „Adu din SEAP”</span>} />
+                <Row k="Folder NAS" v={l.nas_path} />
+                <Row k="Grafic de execuție" v={<a href={`/grafic/licitatie/${l.id}`} style={{ color:G.blue }}>📅 Poarta grafic + Gantt (drum critic, MS Project, F9)</a>} />
+                <Row k="Termen depunere" v={l.termen_depunere ? fmtTermen(l.termen_depunere) : null} />
+                <Row k="Loturi" v={Array.isArray(l.loturi) && l.loturi.length ? `${l.loturi.length}` : null} />
+                <Row k="Motivare decizie" v={l.decizie_motivare} />
+                <Row k="Observații" v={l.observatii} last />
 
-        {/* E3: acoperirea cerințelor — catalog HR + parteneri, goluri ca tichete */}
-        <AcoperireSection licitatie={l} profile={profile} />
+                {l.status === 'analiza' && profile?.is_owner && (
+                  <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.teal}55`, background:G.teal + '0D' }}>
+                    <div style={{ fontSize:13, fontWeight:800, marginBottom:8 }}>⚡ Decizia GO / NO-GO</div>
+                    <input style={{ ...S.input, marginBottom:10 }} placeholder="Motivare (se păstrează — obligatorie la NO-GO)" value={motivare} onChange={e => setMotivare(e.target.value)} />
+                    <div style={{ display:'flex', gap:10 }}>
+                      <button style={{ ...S.btnP, background:G.teal }} onClick={() => onDecide(l, 'go', motivare)}>🟢 GO — intrăm</button>
+                      <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', opacity: motivare.trim() ? 1 : .5 }} disabled={!motivare.trim()} onClick={() => onDecide(l, 'no_go', motivare)}>⛔ NO-GO — abandonăm</button>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16, flexWrap:'wrap' }}>
+                  {profile?.is_owner && <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66' }} onClick={() => onDelete(l)}>🗑 Șterge</button>}
+                  <button style={S.btnS} onClick={onEdit}>✏️ Editează</button>
+                  {next.map(s2 => (
+                    <button key={s2} style={{ ...S.btnS, color:LICITATIE_STATUS[s2].color, borderColor:LICITATIE_STATUS[s2].color + '66', fontWeight:700 }} onClick={() => onStatus(l, s2)}>{LICITATIE_STATUS[s2].icon} Marchează {LICITATIE_STATUS[s2].label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
-        {/* Poarta 4: verificarea finală anti-descalificare (3 treceri: determinist + adversarial + arbitru) */}
-        <VerificareFinalaSection licitatie={l} />
-
-        {/* E0: decizia GO/NO-GO — doar în analiză, doar owner */}
-        {l.status === 'analiza' && profile?.is_owner && (
-          <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.teal}55`, background:G.teal + '0D' }}>
-            <div style={{ fontSize:13, fontWeight:800, marginBottom:8 }}>⚡ Decizia GO / NO-GO</div>
-            <input style={{ ...S.input, marginBottom:10 }} placeholder="Motivare (se păstrează — obligatorie la NO-GO)"
-              value={motivare} onChange={e => setMotivare(e.target.value)} />
-            <div style={{ display:'flex', gap:10 }}>
-              <button style={{ ...S.btnP, background:G.teal }} onClick={() => onDecide(l, 'go', motivare)}>🟢 GO — intrăm</button>
-              <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66', opacity: motivare.trim() ? 1 : .5 }}
-                disabled={!motivare.trim()} onClick={() => onDecide(l, 'no_go', motivare)}>⛔ NO-GO — abandonăm</button>
+          {/* Pe scurt */}
+          <div>
+            <div style={{ ...S.card, padding:'16px 18px', background:G.surface, borderRadius:14 }}>
+              <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>⚡ Pe scurt</div>
+              <Row k="Autoritate" v={l.autoritate} />
+              <Row k="Responsabil" v={
+                <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp ? G.text : G.orange }} value={resp} title="Colegul care are licitația în lucru — primește sarcinile nominal"
+                  onChange={async e => { const v = e.target.value; setResp(v); await supabase.from('ofertare_licitatii').update({ responsabil_id: v || null, updated_at: new Date().toISOString() }).eq('id', l.id); onChanged && onChanged() }}>
+                  <option value="">— fără responsabil —</option>
+                  {echipa.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>} />
+              <Row k="Regim" v={
+                <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px' }} value={regim} title="legea citată în fișa de date primează asupra tipului autorității"
+                  onChange={async e => { const v = e.target.value; setRegim(v); await supabase.from('ofertare_licitatii').update({ regim_achizitie: v || null, updated_at: new Date().toISOString() }).eq('id', l.id) }}>
+                  <option value="">— nestabilit —</option>
+                  <option value="sectorial">⚡ sectorial (L99/2016)</option>
+                  <option value="clasic">🏛 clasic (L98/2016)</option>
+                </select>} />
+              <Row k="Procedură" v={l.canal ? l.canal.replace('seap_', 'SEAP ').toUpperCase() : l.tip_procedura} />
+              <Row k="Criteriu" v={l.criteriu} />
+              <Row k="Rol Gazpet" v={l.rol_gazpet} />
+              <Row k="Segment" v={l.segment && SEGMENTE[l.segment] ? SEGMENTE[l.segment].label : l.segment} last />
+              <div style={{ marginTop:14, fontSize:12.5, color:G.muted }}>Acoperire cerințe</div>
+              <div style={{ height:10, borderRadius:6, background:G.border, overflow:'hidden', margin:'8px 0 4px' }}><i style={{ display:'block', height:'100%', width:`${pct}%`, background:'linear-gradient(90deg,#D29922,#3FB950)' }} /></div>
+              <div style={{ fontSize:12, color:G.dim }}>{sx.acoperite || 0} acoperite · {Math.max((sx.cerinte || 0) - (sx.acoperite || 0), 0)} rămase · {sx.rosii || 0} dovezi roșii</div>
+              <div style={{ display:'flex', alignItems:'center', gap:10, background:'#221c0d', border:`1px solid ${vCol}55`, borderRadius:12, padding:'12px 14px', marginTop:14, cursor:'pointer' }} onClick={() => setTab('verificari')}>
+                <div><b style={{ color:vCol, fontSize:13.5 }}>{vLbl}</b>{sx.verdict_la && <div style={{ fontSize:12, color:G.muted }}>rulată {new Date(sx.verdict_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</div>}</div>
+              </div>
             </div>
           </div>
-        )}
-
-        <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
-          {profile?.is_owner && <button style={{ ...S.btnS, color:G.red, borderColor:G.red + '66' }} onClick={() => onDelete(l)}>🗑 Șterge</button>}
-          <button style={S.btnS} onClick={onEdit}>✏️ Editează</button>
-          {next.map(s => (
-            <button key={s} style={{ ...S.btnS, color:LICITATIE_STATUS[s].color, borderColor:LICITATIE_STATUS[s].color + '66', fontWeight:700 }}
-              onClick={() => onStatus(l, s)}>{LICITATIE_STATUS[s].icon} Marchează {LICITATIE_STATUS[s].label}</button>
-          ))}
         </div>
       </div>
     </div>
