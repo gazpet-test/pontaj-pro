@@ -1524,7 +1524,8 @@ function RadarLicitatii({ profile, showToast, onPromovat }) {
       nr_anunt: r.nr_seap, autoritate: r.autoritate, obiect: r.titlu,
       link_seap: r.link, valoare_estimata: r.valoare_lei, moneda: 'RON',
       segment: r.segment || detectSegment(r.autoritate, r.titlu),
-      termen_depunere: r.termen_depunere, canal: 'radar', status: 'identificata',
+      // canal = din prefixul nr. SEAP (constraint: seap_cn/seap_scn/seap_adv/non_seap) — 'radar' pica check-ul (Răzvan 07.09.2026)
+      termen_depunere: r.termen_depunere, canal: /^SCN/i.test(r.nr_seap || '') ? 'seap_scn' : /^CN/i.test(r.nr_seap || '') ? 'seap_cn' : /^ADV/i.test(r.nr_seap || '') ? 'seap_adv' : 'non_seap', status: 'identificata',
       observatii: r.motiv_scor ? `Radar (scor ${r.scor_potrivire}): ${r.motiv_scor}` : null,
       // identificatorii SEAP merg mai departe: cu ei butonul „Adu din SEAP"
       // descarcă singur toată documentația de atribuire (inclusiv planșele mari)
