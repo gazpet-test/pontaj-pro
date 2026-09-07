@@ -98,7 +98,7 @@ export default function TabDocumenteFirma() {
     }
     const { data } = await supabase.from('v_documente_firma_alerte').select('*').order('data_valabilitate', { ascending: true, nullsFirst: false })
     // Adaug și documente inactive separat dacă vrem să afișăm istoric
-    const { data: allDocs } = await supabase.from('documente_firma').select('id, parent_id, versiune, activ, pdf_size_bytes, ai_extracted_at, uploadat_la, uploadat_de').order('uploadat_la', { ascending: false })
+    const { data: allDocs } = await supabase.from('documente_firma').select('id, parent_id, versiune, activ, pdf_size_bytes, ai_extracted_at, uploadat_la, uploadat_de, pentru_permis_sedere').order('uploadat_la', { ascending: false })
     // Combinăm: status din view + size din tabel
     const sizeMap = Object.fromEntries((allDocs || []).map(d => [d.id, d]))
     const merged = (data || []).map(d => ({ ...d, ...sizeMap[d.id] }))
@@ -330,6 +330,7 @@ export default function TabDocumenteFirma() {
                     </div>
                   )}
                   {d.fara_expirare && <div style={{color:G.green}}>∞ Fără expirare</div>}
+                  {d.pentru_permis_sedere && <div style={{color:G.blue}}>🛂 În dosarul angajaților (permis ședere)</div>}
                   {d.pdf_size_bytes && <div>📄 {fmtSize(d.pdf_size_bytes)}</div>}
                 </div>
               </div>
@@ -398,6 +399,7 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
     data_emitere: item.data_emitere || '',
     data_valabilitate: item.data_valabilitate || '',
     fara_expirare: item.fara_expirare || false,
+    pentru_permis_sedere: item.pentru_permis_sedere || false,   // TKT-2026-0183: apare în dosarul angajaților (HR)
     observatii: item.observatii || '',
     pdf_path: item.pdf_path || '',
     pdf_size_bytes: item.pdf_size_bytes || 0,
@@ -441,6 +443,7 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
       data_emitere: f.data_emitere || null,
       data_valabilitate: f.fara_expirare ? null : (f.data_valabilitate || null),
       fara_expirare: !!f.fara_expirare,
+      pentru_permis_sedere: !!f.pentru_permis_sedere,
       observatii: f.observatii.trim() || null,
       pdf_path: f.pdf_path || null,
       pdf_size_bytes: f.pdf_size_bytes || null,
@@ -548,6 +551,10 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
             style={{accentColor:G.green, width:16, height:16}}
           />
           <span style={{fontSize:13, color:G.text, fontWeight:600}}>∞ Document fără expirare (ex: CIF, act constitutiv, balanțe lunare)</span>
+        </label>
+        <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', padding:'8px 12px', background:G.bg, borderRadius:6}}>
+          <input type="checkbox" checked={!!f.pentru_permis_sedere} onChange={e => setF({...f, pentru_permis_sedere:e.target.checked})} style={{accentColor:G.blue, width:16, height:16}} />
+          <span style={{fontSize:13, color:G.text, fontWeight:600}}>🛂 Necesar la permisul de ședere — apare în dosarul angajaților (HR), fără copie (ex: organigramă, cazier firmă, certificat constatator)</span>
         </label>
 
         <div>
