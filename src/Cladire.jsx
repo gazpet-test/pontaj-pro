@@ -24,7 +24,9 @@ const loadHls = () => _hlsP || (_hlsP = new Promise((res, rej) => {
 function CameraLive({ cam, onClose }) {
   const [stare, setStare] = useState('Se alocă stream-ul de la Tuya…')
   const [url, setUrl] = useState(null)
+  const [tick, setTick] = useState(0)     // TKT-2026-0188: 🔄 reconectare doar a stream-ului, fără F5 pe toată pagina
   useEffect(() => {
+    setStare('Se alocă stream-ul de la Tuya…'); setUrl(null)
     let hls = null, video = null, oprit = false
     ;(async () => {
       const { data, error } = await supabase.functions.invoke('tuya', { body: { actiune: 'stream', device_id: cam.extern_id, tip: 'hls' } })
@@ -39,15 +41,16 @@ function CameraLive({ cam, onClose }) {
       } catch (e) { setStare(e.message) }
     })()
     return () => { oprit = true; try { hls?.destroy() } catch { /* ignore */ } }
-  }, [cam.extern_id])
+  }, [cam.extern_id, tick])
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'#000a', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
       <div onClick={e => e.stopPropagation()} style={{ ...S.card, width:'min(960px, 100%)', padding:12 }}>
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><b>📷 {cam.nume}</b><span style={{ fontSize:11, color:G.dim }}>live · link valabil câteva minute</span>
-          <button style={{ ...S.btnS, marginLeft:'auto', padding:'3px 9px' }} onClick={onClose}>✕ Închide</button></div>
+          <button style={{ ...S.btnS, marginLeft:'auto', padding:'3px 9px' }} title="Cere un link nou de stream de la Tuya (fără să reîncarci pagina)" onClick={() => setTick(t => t + 1)}>🔄 Reconectează</button>
+          <button style={{ ...S.btnS, padding:'3px 9px' }} onClick={onClose}>✕ Închide</button></div>
         <video id="cam-live-video" controls muted playsInline style={{ width:'100%', maxHeight:'70vh', background:'#000', borderRadius:8 }} />
         {stare && <div style={{ color: stare.startsWith('Se ') ? G.muted : G.red, fontSize:12.5, marginTop:8 }}>{stare}</div>}
-        {url && !stare && <div style={{ color:G.dim, fontSize:11, marginTop:6 }}>Dacă se oprește, închide și redeschide — Tuya alocă un link nou.</div>}
+        {url && !stare && <div style={{ color:G.dim, fontSize:11, marginTop:6 }}>Dacă se oprește, apasă 🔄 Reconectează — Tuya alocă un link nou. Pe telefon, dacă imaginea nu pornește singură, atinge butonul ▶ din centru.</div>}
       </div>
     </div>
   )
