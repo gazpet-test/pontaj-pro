@@ -34,7 +34,7 @@ const STATUS = {
 const VERDICTE = { potrivire_directa:'Potrivire directă', potential_mid:'Potențial mid', transferabil:'Transferabil', respins:'Respins' }
 const TIP_INTER = { mail_trimis:'✉️ Mail trimis', mail_primit:'📨 Mail primit', telefon:'📞 Telefon', interviu:'🗣 Interviu', oferta:'💼 Ofertă', raspuns_candidat:'💬 Răspuns candidat', nota:'📝 Notă' }
 
-const FORM_URL = 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/recrutare-aplica'
+const FORM_URL = 'https://pontaj-pro-sooty.vercel.app/aplica'   // 07.09.2026: pagina publică e pe Vercel (Supabase rescrie HTML-ul edge fn în text/plain)
 const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
 
 // apel edge fn olx-api cu JWT-ul userului curent
