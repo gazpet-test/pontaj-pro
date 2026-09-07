@@ -92,6 +92,7 @@ export default function OfertareLicitatiiTab() {
   const [echipa, setEchipa] = useState([])         // colegii cu acces la modulul Ofertare — candidați la „responsabil”
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
+  const [cantLicId, setCantLicId] = useState(null)   // licitația cu care intri în Cantități din fișă (Răzvan 07.09: nu mai alegi din listă)
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
@@ -258,7 +259,8 @@ export default function OfertareLicitatiiTab() {
 
       {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
 
-      {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} />}
+      {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={cantLicId}
+        onInapoi={cantLicId ? () => { const r = rows.find(x => x.id === cantLicId); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'licitatii' && <>
       {/* ── Redesign #40: antet cu contoare + filtre-chip + carduri aerisite (macheta redesign_lista, GO 07.09.2026) ── */}
@@ -344,7 +346,7 @@ export default function OfertareLicitatiiTab() {
         <LicitatieDetailModal licitatie={selected} profile={profile} echipa={echipa} onChanged={load}
           onClose={() => setSelected(null)}
           onEdit={() => { setEditRow(selected); setSelected(null); setShowForm(true) }}
-          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => setVedere('cantitati')} />
+          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setCantLicId(selected.id); setVedere('cantitati') }} />
       )}
     </div>
   )
@@ -1294,10 +1296,11 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>
           <KPI l="Valoare estimată" v={fmtMil(l.valoare_estimata)} unit={l.valoare_estimata >= 1e6 ? `mil ${l.moneda || 'lei'}` : (l.moneda || 'lei')} />
           <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
-          <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} />
+          <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
           <KPI l="Eliminatorii neacoperite" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
           <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
-          <KPI l="Garanție participare" v={l.garantie_participare || '—'} />
+          {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
+          <KPI l="Garanție participare" v={l.garantie_participare || '—'} color={l.garantie_status === 'original' ? G.green : l.garantie_participare ? G.red : G.text} />
         </div>
 
         {/* tab-uri */}
