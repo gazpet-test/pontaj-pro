@@ -739,7 +739,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
         // cu 'ofertare' insertul pica silențios și notificarea nu ajungea niciodată
         profile_id: profile.id, type: 'warning', modul: 'Comercial',
         title: `Ofertare: ${deRulat.length} documente neprocesate la ${licitatie.nr_anunt}`,
-        message: `După 2 treceri au rămas cu probleme: ${deRulat.slice(0, 3).map(d => d.nume_original.split('/').pop()).join(', ')}${deRulat.length > 3 ? '…' : ''}. Deschide licitația și apasă „Procesează" din nou, sau cere-i lui Claude să le spargă în bucăți mai mici.`,
+        message: `După 2 treceri au rămas cu probleme: ${deRulat.slice(0, 3).map(d => d.nume_original.split('/').pop()).join(', ')}${deRulat.length > 3 ? '…' : ''}. Deschide licitația și apasă „Procesează" din nou, sau lasă platforma să le spargă în bucăți mai mici (documentele mari se sparg automat).`,
         link_to: '/ofertare',
       })
       setWarn(`⚠️ ${deRulat.length} documente au rămas neprocesate după 2 treceri — ai primit notificare în clopoțel.`)
@@ -1078,6 +1078,16 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
   const [busy, setBusy] = useState(null)
   const [warn, setWarn] = useState(null)
   const [fDoarGoluri, setFDoarGoluri] = useState(false)
+  // răspunsul colegilor la goluri / dovezi roșii — se citește de platformă (raport zilnic), nu pe mail (Răzvan 07.09)
+  const [raspEdit, setRaspEdit] = useState(null)
+  const [profiles, setProfiles] = useState({})
+  useEffect(() => { supabase.from('profiles').select('id, name').then(({ data }) => { const m = {}; (data || []).forEach(p => { m[p.id] = p.name }); setProfiles(m) }) }, [])
+  const salveazaRaspuns = async (a, text) => {
+    const { error } = await supabase.from('ofertare_acoperire').update({ raspuns_coleg: text.trim() || null, raspuns_de: profile?.id || null, raspuns_la: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', a.id)
+    if (error) return setWarn('Nu s-a salvat răspunsul: ' + error.message)
+    setAcoperiri(m => ({ ...m, [a.cerinta_id]: { ...m[a.cerinta_id], raspuns_coleg: text.trim() || null, raspuns_de: profile?.id || null, raspuns_la: new Date().toISOString() } }))
+    setRaspEdit(null)
+  }
 
   const load = async () => {
     const { data: cs } = await supabase.from('ofertare_cerinte')
@@ -1207,8 +1217,23 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
                         <button title="Golul devine tichet" onClick={() => creeazaTichet(c, a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>🎫 Tichet</button>
                       )}
                       {a?.tichet_id && <span style={{ fontSize:11, color:G.orange, fontWeight:700 }} title="Are tichet deschis">🎫</span>}
+                      {a && (a.status === 'gol' || a.valabil_la_depunere === false) && (
+                        <button title="Răspunsul tău pentru platformă: ce ai găsit / ce ai făcut / până când rezolvi" onClick={() => setRaspEdit(raspEdit === a.id ? null : a.id)}
+                          style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color: a.raspuns_coleg ? G.green : G.blue, borderColor: (a.raspuns_coleg ? G.green : G.blue) + '66' }}>{a.raspuns_coleg ? '💬 răspuns ✓' : '💬 răspunde'}</button>
+                      )}
                     </span>
                   </div>
+                  {a && raspEdit === a.id && (
+                    <div style={{ marginTop:6, display:'flex', gap:6 }}>
+                      <textarea autoFocus defaultValue={a.raspuns_coleg || ''} id={`rasp-${a.id}`} placeholder="ex: am cerut constatatorul la ONRC, vine joi / documentul e la Mirela / nu avem, propun partener X" style={{ ...S.input, minHeight:52, fontSize:12 }} />
+                      <button style={{ ...S.btnP, padding:'6px 12px', fontSize:12, alignSelf:'flex-end' }} onClick={() => salveazaRaspuns(a, document.getElementById(`rasp-${a.id}`).value)}>Salvează</button>
+                    </div>
+                  )}
+                  {a?.raspuns_coleg && raspEdit !== a.id && (
+                    <div style={{ fontSize:11.5, color:G.text, marginTop:4, padding:'5px 8px', background:G.card, borderRadius:6, borderLeft:`2px solid ${G.blue}` }}>
+                      💬 <b>{profiles[a.raspuns_de] || 'coleg'}</b> ({a.raspuns_la ? new Date(a.raspuns_la).toLocaleDateString('ro-RO') : ''}): {a.raspuns_coleg}
+                    </div>
+                  )}
                   {a && (titular || a.referinta_text) && (
                     <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>
                       {titular && <b style={{ color:G.text }}>{titular}</b>}
@@ -1242,6 +1267,26 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [resp, setResp] = useState(l.responsabil_id || '')
   const [tab, setTab] = useState('cerinte')   // cerinte | documente | clarificari | detalii | verificari
   const [clar, setClar] = useState(null)
+  // Răzvan 07.09 (varianta C): mail „Etapa 1” către echipa Ofertare — previzualizare → confirmare → trimitere (edge fn ofertare-etapa1-mail)
+  const [ultimMail, setUltimMail] = useState(null)
+  const [etapa1Busy, setEtapa1Busy] = useState(false)
+  useEffect(() => { supabase.from('ofertare_mailuri').select('id, tip, trimis_la, destinatari').eq('licitatie_id', l.id).eq('tip', 'etapa1').order('id', { ascending: false }).limit(1).maybeSingle().then(({ data }) => setUltimMail(data || null)) }, [l.id])
+  const trimiteEtapa1 = async () => {
+    setEtapa1Busy(true)
+    const { data: pv, error } = await supabase.functions.invoke('ofertare-etapa1-mail', { body: { actiune: 'previzualizare', licitatie_id: l.id } })
+    if (error || pv?.error) { setEtapa1Busy(false); return alert('Nu pot pregăti mailul: ' + (pv?.error || error?.message)) }
+    const r = pv.rezumat
+    const ok = window.confirm(`Trimit „Etapa 1” pentru ${l.nr_anunt} către ${pv.destinatari.length} colegi (responsabil: ${r.responsabil || 'NESETAT — sarcinile merg la toată echipa'}):\n\n` +
+      `• documente: ${r.docs.procesate}/${r.docs.pdf} PDF citite${r.docs.in_lucru ? ` (${r.docs.in_lucru} încă neprocesate!)` : ''}\n• registru: ${r.cerinte.total} cerințe (${r.cerinte.eliminatorii} eliminatorii, ${r.cerinte.neconfirmate} neconfirmate)\n` +
+      `• acoperire: ${r.acoperire.acoperite + r.acoperire.partener} acoperite, ${r.acoperire.goluri} goluri, ${r.acoperire.rosii} roșii, ${r.acoperire.reemis} de reemis\n• sarcini nominale în mail: ${r.sarcini}${r.neevaluate ? ` (+${r.neevaluate} cerințe neevaluate — rulează întâi „Propune acoperire” dacă vrei să intre)` : ''}\n\n` +
+      (ultimMail ? `⚠️ A mai fost trimis pe ${new Date(ultimMail.trimis_la).toLocaleDateString('ro-RO')}. Retrimit?` : 'Continui?'))
+    if (!ok) { setEtapa1Busy(false); return }
+    const { data, error: e2 } = await supabase.functions.invoke('ofertare-etapa1-mail', { body: { actiune: 'etapa1', licitatie_id: l.id } })
+    setEtapa1Busy(false)
+    if (e2 || data?.error) return alert('Mailul nu a plecat: ' + (data?.error || e2?.message))
+    setUltimMail({ trimis_la: new Date().toISOString(), destinatari: [...(data.to || []), ...(data.cc || [])] })
+    alert(`✓ Etapa 1 trimisă: ${data.to.join(', ')}${data.cc?.length ? ` (+${data.cc.length} în CC)` : ''} — ${data.sarcini} sarcini.`)
+  }
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const sx = l._st || {}
@@ -1290,6 +1335,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <div style={{ marginLeft:'auto', display:'flex', gap:8, flexWrap:'wrap' }}>
             <button style={{ ...S.btnS, borderRadius:10 }} onClick={() => setTab('documente')}>⬇️ Adu din SEAP</button>
             <button style={{ ...S.btnS, borderRadius:10 }} onClick={() => setTab('clarificari')}>❓ Clarificări</button>
+            <button style={{ ...S.btnS, borderRadius:10, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={!!etapa1Busy} onClick={trimiteEtapa1}
+              title={ultimMail ? `Ultimul mail Etapa 1: ${new Date(ultimMail.trimis_la).toLocaleString('ro-RO', { dateStyle:'short', timeStyle:'short' })} → ${(ultimMail.destinatari || []).length} colegi` : 'Rezumatul Etapei 1 + sarcinile nominale, pe mail către echipa Ofertare (responsabilul în TO)'}>
+              {etapa1Busy ? '⏳ …' : `📧 Etapa 1 → echipă${ultimMail ? ' ✓' : ''}`}</button>
             <button style={{ ...S.btnP, borderRadius:10, background:G.green }} onClick={() => setTab('verificari')}>🔍 Verificare finală</button>
             <button onClick={onClose} style={{ background:'transparent', border:'none', color:G.muted, fontSize:22, cursor:'pointer', padding:'0 4px' }}>✕</button>
           </div>
