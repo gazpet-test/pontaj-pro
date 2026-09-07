@@ -135,10 +135,11 @@ export default function OfertareLicitatiiTab() {
         .then(({ data }) => setProfile(data))
     })
     // echipa de ofertare = cine are acces explicit la modul (+ ownerul)
-    supabase.from('user_module_access').select('profile:profiles(id, name)').eq('module', 'ofertare').then(async ({ data }) => {
-      const { data: own } = await supabase.from('profiles').select('id, name').eq('is_owner', true)
-      const m = {}; [...(own || []), ...(data || []).map(x => x.profile)].forEach(p => { if (p?.id) m[p.id] = p })
-      setEchipa(Object.values(m).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
+    // (fără embed profiles — user_module_access nu are FK spre profiles, embed-ul cădea și rămâneau doar ownerii)
+    supabase.from('user_module_access').select('profile_id').eq('module', 'ofertare').then(async ({ data }) => {
+      const ids = (data || []).map(x => x.profile_id).filter(Boolean)
+      const { data: ps } = await supabase.from('profiles').select('id, name, is_owner').or(`is_owner.eq.true${ids.length ? `,id.in.(${ids.join(',')})` : ''}`)
+      setEchipa((ps || []).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
     })
   }, [])
 
