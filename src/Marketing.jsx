@@ -43,6 +43,14 @@ function Lucru({ text, detaliu }) {
   )
 }
 
+// Stereotip de postări pe etape (Răzvan 07.09.2026): fiecare șantier are 1 postare de START, N de EXECUȚIE, 1 de PROBE, 1 de FINAL
+export const ETAPE = {
+  start:    { l:'🚀 Început de proiect',   c:'#58A6FF', hint:'„Lucrările pentru proiectul X au demarat. Lucrarea constă în…” (din ce cuprinde lucrarea, la Șantiere postabile)' },
+  executie: { l:'🔧 Proiectul continuă',   c:'#3FB950', hint:'echipele lucrează, confruntările cu terenul sunt inevitabile, ce s-a făcut săptămâna asta' },
+  probe:    { l:'🧪 Probe de presiune',    c:'#E3B341', hint:'etapa standard: probele de presiune au fost finalizate cu succes, ce urmează' },
+  final:    { l:'🏁 Proiect finalizat',    c:'#A371F7', hint:'lucrarea s-a încheiat, recepție, mulțumiri echipei și beneficiarului' },
+}
+
 const STATUS = {
   ciorna:    { l:'Ciornă',     c:G.yellow },
   aprobata:  { l:'Aprobată',   c:G.blue },
@@ -120,7 +128,8 @@ export default function Marketing() {
 
   // ── Ciornă nouă ──
   const deschideNou = async (siteId) => {
-    setNou({ site_id: siteId || postabile[0]?.id || null, rapoarte: [], pozeAlese: [], rapAlese: [], indicatii: '' })
+    const sid = siteId || postabile[0]?.id || null
+    setNou({ site_id: sid, rapoarte: [], pozeAlese: [], rapAlese: [], indicatii: '', etapa: postari.some(p => p.site_id === sid && p.status !== 'anulata') ? 'executie' : 'start' })
     if (siteId || postabile[0]?.id) await incarcaRapoarte(siteId || postabile[0].id)
   }
   const incarcaRapoarte = async (siteId) => {
@@ -142,7 +151,7 @@ export default function Marketing() {
     if (!nou?.site_id) return
     setBusy('Se creează ciorna...')
     const { data: ins, error } = await supabase.from('marketing_postari').insert({
-      site_id: nou.site_id, raport_ids: nou.rapAlese, poze: nou.pozeAlese, text_postare: '', creat_de: profile?.id || null,
+      site_id: nou.site_id, raport_ids: nou.rapAlese, poze: nou.pozeAlese, text_postare: '', creat_de: profile?.id || null, etapa: nou.etapa || 'executie',
     }).select('id').single()
     if (error) { showToast('Eroare: ' + error.message, 'err'); setBusy(null); return }
     if (cuAI) {
@@ -250,6 +259,7 @@ export default function Marketing() {
                   <span>{s.name}<div style={{ fontSize:11, color:G.dim, fontWeight:400 }}>{s.beneficiar_principal || ''}</div></span>
                 </label>
                 <label><span style={lbl}>Descriere publică</span><textarea readOnly={!poateEdita} style={{ ...S.input, minHeight:54 }} value={r.descriere_publica || ''} onChange={e => setMkField(s.id, 'descriere_publica', e.target.value)} placeholder="ex: rețea de distribuție gaze naturale în Valchid și Prod, comuna Hoghilag, pentru primăria comunei" /></label>
+                <label><span style={lbl}>Ce cuprinde lucrarea (din caietul de sarcini — pentru postarea de început)</span><textarea readOnly={!poateEdita} style={{ ...S.input, minHeight:54 }} value={r.etape_lucrare || ''} onChange={e => setMkField(s.id, 'etape_lucrare', e.target.value)} placeholder="ex: terasamente, montaj conductă PEHD, branșamente, subtraversări, probe de presiune, refacere carosabil" /></label>
                 <label><span style={lbl}>Hashtag-uri</span><input readOnly={!poateEdita} style={S.input} value={r.hashtaguri || ''} onChange={e => setMkField(s.id, 'hashtaguri', e.target.value)} placeholder="#GazpetInstal #gazenaturale #Hoghilag" /></label>
                 <label><span style={lbl}>Restricții poze/text</span><textarea readOnly={!poateEdita} style={{ ...S.input, minHeight:54 }} value={r.restrictii || ''} onChange={e => setMkField(s.id, 'restrictii', e.target.value)} placeholder="ex: fără poze cu stația, fără fețe, fără plăcuțe" /></label>
                 {poateEdita && <button style={{ ...S.btnS, opacity: r._dirty ? 1 : .4, marginTop:14 }} disabled={!r._dirty} onClick={() => salveazaMk(s.id)}>💾</button>}
@@ -291,9 +301,13 @@ export default function Marketing() {
             </div>
           ))}
           <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:10, flexWrap:'wrap' }}>
+            <select style={{ ...S.input, width:'auto', minWidth:200, borderColor:(ETAPE[nou.etapa] || ETAPE.executie).c + '88' }} value={nou.etapa || 'executie'} onChange={e => setNou(n => ({ ...n, etapa: e.target.value }))} title={(ETAPE[nou.etapa] || ETAPE.executie).hint}>
+              {Object.entries(ETAPE).map(([k, e]) => <option key={k} value={k}>{e.l}</option>)}
+            </select>
             <input style={{ ...S.input, flex:1, minWidth:280 }} value={nou.indicatii} onChange={e => setNou(n => ({ ...n, indicatii: e.target.value }))} placeholder="indicații pentru AI (opțional): ex. accent pe probele de presiune, ton mai scurt" />
             <button style={{ ...S.btnP, opacity: nou.pozeAlese.length && !busy ? 1 : .5 }} disabled={!nou.pozeAlese.length || !!busy} onClick={() => creeazaCiorna(true)}>🤖 Creează ciornă cu text AI</button>
             <button style={S.btnS} disabled={!nou.pozeAlese.length || !!busy} onClick={() => creeazaCiorna(false)}>Creează goală (scriu eu)</button>
+            <div style={{ width:'100%', fontSize:11.5, color:G.muted }}>{(ETAPE[nou.etapa] || ETAPE.executie).hint}{nou.etapa === 'start' && !(mk[nou.site_id]?.etape_lucrare || '').trim() ? <b style={{ color:G.orange }}> — completează „Ce cuprinde lucrarea” la Șantiere postabile, altfel AI-ul rămâne general.</b> : ''}</div>
           </div>
         </div>
       )}
@@ -353,6 +367,7 @@ export default function Marketing() {
                 <div>
                   <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:6 }}>
                     <span style={{ padding:'2px 9px', borderRadius:12, background: st.c + '22', color: st.c, fontWeight:700, fontSize:11.5 }}>{st.l}</span>
+                    {p.etapa && ETAPE[p.etapa] && <span style={{ padding:'2px 9px', borderRadius:12, background: ETAPE[p.etapa].c + '22', color: ETAPE[p.etapa].c, fontWeight:700, fontSize:11.5 }}>{ETAPE[p.etapa].l}</span>}
                     <b style={{ fontSize:13.5 }}>{siteNume(p.site_id)}</b>
                     <span style={{ fontSize:11.5, color:G.dim }}>#{p.id} · creată {fmtDT(p.created_at)} de {numeProfil(p.creat_de)}{p.ai_generat ? ' · text AI' : ''}</span>
                   </div>
