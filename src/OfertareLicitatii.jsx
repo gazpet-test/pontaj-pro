@@ -524,7 +524,14 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       const { data, error } = await supabase.functions.invoke('ofertare-seap-import', {
         body: { licitatie_id: licitatie.id, de_la_index: deLa },
       })
-      if (error || data?.error) { setWarn(`Eroare SEAP: ${data?.error || error.message}`); break }
+      if (error || data?.error) {
+        // la non-2xx supabase-js nu populeaza data — citim corpul din error.context ca sa vedem motivul real (ex. „SEAP HTTP 500")
+        let motiv = data?.error
+        if (!motiv && error?.context) { try { motiv = (await error.context.json())?.error } catch { /* corp gol */ } }
+        motiv = motiv || error?.message || 'eroare necunoscută'
+        setWarn(`Eroare SEAP: ${motiv}${/SEAP HTTP 5\d\d/.test(motiv) ? ' — serverul SEAP nu livrează arhiva momentan (nu e platforma noastră). Descarcă documentația de pe pagina anunțului din SEAP și trage folderul cu „📁 Urcă folder”.' : ''}`)
+        break
+      }
       adaugate += data.adaugate || 0; completate += data.completate || 0
       if (data.sarite_mari?.length) mari = [...mari, ...data.sarite_mari]
       await load()
