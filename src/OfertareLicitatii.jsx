@@ -88,6 +88,8 @@ export default function OfertareLicitatiiTab() {
   const [selected, setSelected] = useState(null)
   const [fStatus, setFStatus] = useState('active')
   const [fSegment, setFSegment] = useState('')
+  const [fResp, setFResp] = useState('')          // filtru responsabil (profile id)
+  const [echipa, setEchipa] = useState([])         // colegii cu acces la modulul Ofertare — candidați la „responsabil”
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
 
@@ -132,6 +134,12 @@ export default function OfertareLicitatiiTab() {
       if (user) supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).single()
         .then(({ data }) => setProfile(data))
     })
+    // echipa de ofertare = cine are acces explicit la modul (+ ownerul)
+    supabase.from('user_module_access').select('profile:profiles(id, name)').eq('module', 'ofertare').then(async ({ data }) => {
+      const { data: own } = await supabase.from('profiles').select('id, name').eq('is_owner', true)
+      const m = {}; [...(own || []), ...(data || []).map(x => x.profile)].forEach(p => { if (p?.id) m[p.id] = p })
+      setEchipa(Object.values(m).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
+    })
   }, [])
 
   const FINALE = ['castigata', 'pierduta', 'abandonata']
@@ -142,7 +150,13 @@ export default function OfertareLicitatiiTab() {
     : fStatus === 'depuse' ? r.status === 'depusa'
     : fStatus === 'radar' ? /^Radar/i.test(r.observatii || '') && !FINALE.includes(r.status)
     : fStatus === 'probleme' ? areProbleme(r) && !FINALE.includes(r.status) : true)
-    && (!fSegment || r.segment === fSegment))
+    && (!fSegment || r.segment === fSegment) && (!fResp || r.responsabil_id === fResp))
+  // contor pe responsabil: în lucru acum + total pe anul curent (cine ce are și câte face pe an)
+  const anCurent = new Date().getFullYear()
+  const perResp = {}
+  rows.forEach(r => { if (!r.responsabil_id) return; const x = perResp[r.responsabil_id] ||= { nume: r.responsabil_nume, in_lucru: 0, an: 0 }
+    if (!FINALE.includes(r.status)) x.in_lucru++
+    if (new Date(r.created_at).getFullYear() === anCurent) x.an++ })
   const nrInLucru = rows.filter(r => ['go', 'in_lucru', 'analiza'].includes(r.status)).length
   const nrDepuse = rows.filter(r => r.status === 'depusa').length
   const nrArhiva = rows.filter(r => FINALE.includes(r.status)).length
@@ -253,6 +267,10 @@ export default function OfertareLicitatiiTab() {
         <span style={{ background:'#2a2211', color:G.yellow, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>{nrDepuse} depuse</span>
         <span style={{ background:G.surface, color:G.muted, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>arhivă {nrArhiva}</span>
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          <select style={{ ...S.input, width:'auto' }} value={fResp} onChange={e => setFResp(e.target.value)} title="Filtru după responsabil">
+            <option value="">Toți responsabilii</option>
+            {echipa.map(p => <option key={p.id} value={p.id}>{p.name}{perResp[p.id] ? ` (${perResp[p.id].in_lucru} în lucru · ${perResp[p.id].an} în ${anCurent})` : ''}</option>)}
+          </select>
           <select style={{ ...S.input, width:'auto' }} value={fSegment} onChange={e => setFSegment(e.target.value)}>
             <option value="">Toate segmentele</option>
             {Object.entries(SEGMENTE).map(([k, sg]) => <option key={k} value={k}>{sg.label}</option>)}
@@ -301,6 +319,7 @@ export default function OfertareLicitatiiTab() {
                   {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
                   {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
                   {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
+                  <span title="Responsabil licitație">👤 {l.responsabil_nume ? <b style={{ color:G.text }}>{l.responsabil_nume}</b> : <span style={{ color:G.orange }}>fără responsabil</span>}</span>
                 </div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, textAlign:'right' }}>
@@ -321,7 +340,7 @@ export default function OfertareLicitatiiTab() {
         <LicitatieFormModal licitatie={editRow} onClose={() => { setShowForm(false); setEditRow(null) }} onSave={salveaza} />
       )}
       {selected && (
-        <LicitatieDetailModal licitatie={selected} profile={profile}
+        <LicitatieDetailModal licitatie={selected} profile={profile} echipa={echipa} onChanged={load}
           onClose={() => setSelected(null)}
           onEdit={() => { setEditRow(selected); setSelected(null); setShowForm(true) }}
           onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => setVedere('cantitati')} />
@@ -1209,11 +1228,12 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
-function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati }) {
+function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
   // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
   const [motivare, setMotivare] = useState(l.decizie_motivare || '')
   const [regim, setRegim] = useState(l.regim_achizitie || '')
+  const [resp, setResp] = useState(l.responsabil_id || '')
   const [tab, setTab] = useState('cerinte')   // cerinte | documente | clarificari | detalii | verificari
   const [clar, setClar] = useState(null)
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
@@ -1352,6 +1372,12 @@ function LicitatieDetailModal({ licitatie: l, profile, onClose, onEdit, onStatus
             <div style={{ ...S.card, padding:'16px 18px', background:G.surface, borderRadius:14 }}>
               <div style={{ fontSize:14, fontWeight:800, marginBottom:8 }}>⚡ Pe scurt</div>
               <Row k="Autoritate" v={l.autoritate} />
+              <Row k="Responsabil" v={
+                <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px', color: resp ? G.text : G.orange }} value={resp} title="Colegul care are licitația în lucru — primește sarcinile nominal"
+                  onChange={async e => { const v = e.target.value; setResp(v); await supabase.from('ofertare_licitatii').update({ responsabil_id: v || null, updated_at: new Date().toISOString() }).eq('id', l.id); onChanged && onChanged() }}>
+                  <option value="">— fără responsabil —</option>
+                  {echipa.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>} />
               <Row k="Regim" v={
                 <select style={{ ...S.input, width:'auto', fontSize:12, padding:'3px 8px' }} value={regim} title="legea citată în fișa de date primează asupra tipului autorității"
                   onChange={async e => { const v = e.target.value; setRegim(v); await supabase.from('ofertare_licitatii').update({ regim_achizitie: v || null, updated_at: new Date().toISOString() }).eq('id', l.id) }}>
