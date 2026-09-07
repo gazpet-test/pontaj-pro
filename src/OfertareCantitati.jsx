@@ -51,6 +51,19 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     load()
   }
   const [busy, setBusy] = useState(null)
+  // Răzvan 07.09: răspunsul autorității → „Aplică în registru” (edge fn ofertare-clarificare-aplica, Sonnet 5): modifică/anulează/adaugă
+  // cerințele afectate (versiune nouă + acoperirea copiată), fără să se reia „Propune acoperire” pe tot registrul
+  const [aplicand, setAplicand] = useState(null)
+  const aplicaInRegistru = async (q) => {
+    if (!(q.raspuns || '').trim()) return showToast('Completează întâi răspunsul autorității.', 'err')
+    if (!window.confirm(`Aplic răspunsul la clarificarea nr. ${q.nr} în registrul de cerințe? Cerințele afectate primesc versiune nouă (cele vechi rămân în istoric), acoperirea se copiază pe versiunea nouă.`)) return
+    setAplicand(q.id)
+    const { data, error } = await supabase.functions.invoke('ofertare-clarificare-aplica', { body: { clarificare_id: q.id } })
+    setAplicand(null)
+    if (error || data?.error) return showToast('Aplicare: ' + (data?.error || error?.message), 'err')
+    showToast(data.fara_efect ? `ℹ️ Răspunsul nu schimbă nicio cerință. ${data.rezumat || ''}` : `✓ Registru actualizat: ${data.modificate} modificate, ${data.anulate} anulate, ${data.noi} noi (${data.acoperiri_copiate} acoperiri păstrate). ${data.rezumat || ''}`)
+    load()
+  }
 
   useEffect(() => {
     if (licId == null && active.length) {
@@ -307,8 +320,17 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
                     </div>
                     {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
                     {(q.status === 'raspunsa' || q.raspuns) && (
-                      <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
-                        onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
+                      <>
+                        <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
+                          onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
+                        {(q.raspuns || '').trim() && (
+                          <div style={{ marginTop:5 }}>
+                            <button style={{ ...S.btnS, padding:'3px 10px', fontSize:11.5, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={aplicand === q.id}
+                              title="AI-ul compară răspunsul cu registrul de cerințe și modifică/anulează/adaugă doar cerințele afectate" onClick={() => aplicaInRegistru(q)}>
+                              {aplicand === q.id ? '⏳ aplic în registru…' : '📋 Aplică în registru'}</button>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                   <div style={{ display:'flex', flexDirection:'column', gap:5, minWidth:120 }}>
