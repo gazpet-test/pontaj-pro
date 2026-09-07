@@ -51,20 +51,23 @@ export default function Marketing() {
   const [toast, setToast] = useState(null)
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 5000) }
 
-  const poateAproba = !!profile?.is_owner || aprobatori.includes(profile?.id)
+  const [nivel, setNivel] = useState(null)        // user_module_access.access_level pe 'marketing' (viewer = doar vede)
+  const poateEdita = !!profile?.is_owner || ['admin', 'editor'].includes(nivel)
+  const poateAproba = (!!profile?.is_owner || aprobatori.includes(profile?.id)) && poateEdita
   const numeProfil = (id) => profiles.find(p => p.id === id)?.name || '—'
 
   const load = async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [{ data: prof }, { data: apr }, { data: prs }, { data: st }, { data: m }, { data: ps }] = await Promise.all([
+    const [{ data: prof }, { data: acc }, { data: apr }, { data: prs }, { data: st }, { data: m }, { data: ps }] = await Promise.all([
       user ? supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).maybeSingle() : { data: null },
+      user ? supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'marketing').maybeSingle() : { data: null },
       supabase.from('marketing_aprobatori').select('profile_id'),
       supabase.from('profiles').select('id, name'),
       supabase.from('sites').select('id, name, beneficiar_principal, tip_locatie, active').order('name'),
       supabase.from('marketing_santiere').select('*'),
       supabase.from('marketing_postari').select('*').order('created_at', { ascending: false }).limit(100),
     ])
-    setProfile(prof); setAprobatori((apr || []).map(a => a.profile_id)); setProfiles(prs || [])
+    setProfile(prof); setNivel(acc?.access_level || null); setAprobatori((apr || []).map(a => a.profile_id)); setProfiles(prs || [])
     setSites((st || []).filter(s => s.active !== false))
     const map = {}; (m || []).forEach(x => { map[x.site_id] = x }); setMk(map)
     setPostari(ps || [])
@@ -208,7 +211,7 @@ export default function Marketing() {
         {[['postari', '📝 Postări'], ['santiere', '🏗️ Șantiere postabile'], ['analiza', '📊 Analiză']].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, background: tab === k ? G.accent : G.surface, color: tab === k ? '#fff' : G.text, fontWeight:700 }}>{l}</button>
         ))}
-        {tab === 'postari' && <button style={{ ...S.btnP, marginLeft:'auto', opacity: postabile.length ? 1 : .5 }} disabled={!postabile.length} onClick={() => deschideNou()} title={postabile.length ? '' : 'Marchează întâi un șantier ca postabil'}>＋ Ciornă nouă</button>}
+        {tab === 'postari' && poateEdita && <button style={{ ...S.btnP, marginLeft:'auto', opacity: postabile.length ? 1 : .5 }} disabled={!postabile.length} onClick={() => deschideNou()} title={postabile.length ? '' : 'Marchează întâi un șantier ca postabil'}>＋ Ciornă nouă</button>}
       </div>
 
       {/* ── Tab: șantiere ── */}
@@ -223,10 +226,10 @@ export default function Marketing() {
                   <input type="checkbox" checked={!!r.postabil} disabled={!profile.is_owner} onChange={e => setMkField(s.id, 'postabil', e.target.checked)} style={{ accentColor:G.green, width:16, height:16 }} />
                   <span>{s.name}<div style={{ fontSize:11, color:G.dim, fontWeight:400 }}>{s.beneficiar_principal || ''}</div></span>
                 </label>
-                <label><span style={lbl}>Descriere publică</span><textarea style={{ ...S.input, minHeight:54 }} value={r.descriere_publica || ''} onChange={e => setMkField(s.id, 'descriere_publica', e.target.value)} placeholder="ex: rețea de distribuție gaze naturale în Valchid și Prod, comuna Hoghilag, pentru primăria comunei" /></label>
-                <label><span style={lbl}>Hashtag-uri</span><input style={S.input} value={r.hashtaguri || ''} onChange={e => setMkField(s.id, 'hashtaguri', e.target.value)} placeholder="#GazpetInstal #gazenaturale #Hoghilag" /></label>
-                <label><span style={lbl}>Restricții poze/text</span><textarea style={{ ...S.input, minHeight:54 }} value={r.restrictii || ''} onChange={e => setMkField(s.id, 'restrictii', e.target.value)} placeholder="ex: fără poze cu stația, fără fețe, fără plăcuțe" /></label>
-                <button style={{ ...S.btnS, opacity: r._dirty ? 1 : .4, marginTop:14 }} disabled={!r._dirty} onClick={() => salveazaMk(s.id)}>💾</button>
+                <label><span style={lbl}>Descriere publică</span><textarea readOnly={!poateEdita} style={{ ...S.input, minHeight:54 }} value={r.descriere_publica || ''} onChange={e => setMkField(s.id, 'descriere_publica', e.target.value)} placeholder="ex: rețea de distribuție gaze naturale în Valchid și Prod, comuna Hoghilag, pentru primăria comunei" /></label>
+                <label><span style={lbl}>Hashtag-uri</span><input readOnly={!poateEdita} style={S.input} value={r.hashtaguri || ''} onChange={e => setMkField(s.id, 'hashtaguri', e.target.value)} placeholder="#GazpetInstal #gazenaturale #Hoghilag" /></label>
+                <label><span style={lbl}>Restricții poze/text</span><textarea readOnly={!poateEdita} style={{ ...S.input, minHeight:54 }} value={r.restrictii || ''} onChange={e => setMkField(s.id, 'restrictii', e.target.value)} placeholder="ex: fără poze cu stația, fără fețe, fără plăcuțe" /></label>
+                {poateEdita && <button style={{ ...S.btnS, opacity: r._dirty ? 1 : .4, marginTop:14 }} disabled={!r._dirty} onClick={() => salveazaMk(s.id)}>💾</button>}
               </div>
             )
           })}
@@ -340,22 +343,22 @@ export default function Marketing() {
                   {p.status === 'aprobata' && p.programat_la && <div style={{ fontSize:12.5, marginTop:8, color:G.purple, fontWeight:700 }}>⏰ Programată: pleacă singură {fmtDT(p.programat_la)} (programat de {numeProfil(p.programat_de)})</div>}
                   {p.fb_permalink && <div style={{ fontSize:12, marginTop:6 }}><a href={p.fb_permalink} target="_blank" rel="noreferrer" style={{ color:G.blue }}>Vezi postarea pe Facebook ↗</a> · publicată {fmtDT(p.publicat_la)} de {numeProfil(p.publicat_de)}</div>}
                   <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 }}>
-                    {(p.status === 'ciorna' || p.status === 'eroare') && !inEdit && <button style={S.btnS} onClick={() => setEdit({ id: p.id, text: p.text_postare || '' })}>✏️ Editează</button>}
+                    {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && !inEdit && <button style={S.btnS} onClick={() => setEdit({ id: p.id, text: p.text_postare || '' })}>✏️ Editează</button>}
                     {inEdit && <button style={S.btnP} onClick={async () => { if (await upd(p.id, { text_postare: edit.text })) setEdit(null) }}>💾 Salvează textul</button>}
                     {inEdit && <button style={S.btnS} onClick={() => setEdit(null)}>Renunță</button>}
-                    {(p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => { const ind = window.prompt('Indicații pentru AI (opțional):', '') ; if (ind !== null) regenereaza(p, ind) }}>🤖 Rescrie cu AI</button>}
+                    {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && <button style={S.btnS} disabled={!!busy} onClick={() => { const ind = window.prompt('Indicații pentru AI (opțional):', '') ; if (ind !== null) regenereaza(p, ind) }}>🤖 Rescrie cu AI</button>}
                     {p.status === 'ciorna' && poateAproba && !inEdit && <button style={{ ...S.btnS, color:G.blue, borderColor:G.blue + '66' }} disabled={!(p.text_postare || '').trim()} onClick={() => upd(p.id, { status: 'aprobata', aprobat_de: profile.id, aprobat_la: new Date().toISOString() })}>✔ Aprobă</button>}
                     {p.status === 'aprobata' && poateAproba && <button style={{ ...S.btnP, background:G.green, color:'#0D1117' }} disabled={!!busy} onClick={() => publica(p)}>📣 Publică pe Facebook</button>}
-                    {p.status === 'aprobata' && !p.programat_la && <span style={{ display:'inline-flex', gap:6, alignItems:'center' }}>
+                    {poateAproba && p.status === 'aprobata' && !p.programat_la && <span style={{ display:'inline-flex', gap:6, alignItems:'center' }}>
                       <input type="datetime-local" style={{ ...S.input, width:'auto', padding:'5px 8px' }} value={progr[p.id] ?? toLocalInput(urmatorulSlot())} onChange={e => setProgr(x => ({ ...x, [p.id]: e.target.value }))} />
                       <button style={{ ...S.btnS, color:G.purple, borderColor:G.purple + '66' }} disabled={!poateAproba} title={poateAproba ? 'Pleacă singură la ora aleasă' : 'doar aprobatorii'} onClick={() => { if (!progr[p.id]) setProgr(x => ({ ...x, [p.id]: toLocalInput(urmatorulSlot()) })); programeaza(p) }}>⏰ Programează</button>
                     </span>}
-                    {p.status === 'aprobata' && p.programat_la && <button style={S.btnS} onClick={() => upd(p.id, { programat_la: null })}>✕ Anulează programarea</button>}
-                    {p.status === 'aprobata' && <button style={S.btnS} onClick={() => upd(p.id, { status: 'ciorna', programat_la: null })}>↩ Înapoi în ciornă</button>}
+                    {poateEdita && p.status === 'aprobata' && p.programat_la && <button style={S.btnS} onClick={() => upd(p.id, { programat_la: null })}>✕ Anulează programarea</button>}
+                    {poateEdita && p.status === 'aprobata' && <button style={S.btnS} onClick={() => upd(p.id, { status: 'ciorna', programat_la: null })}>↩ Înapoi în ciornă</button>}
                     {p.status === 'eroare' && poateAproba && <button style={S.btnS} onClick={() => upd(p.id, { status: 'aprobata', eroare: null })}>🔁 Reîncearcă (re-aprobă)</button>}
                     {p.status === 'publicata' && p.fb_permalink && <a href={p.fb_permalink} target="_blank" rel="noreferrer" style={{ ...S.btnS, textDecoration:'none', color:G.text }}>↗ Distribuie de pe profil</a>}
                     {p.status === 'publicata' && p.text_distribuire && <button style={S.btnS} title={p.text_distribuire} onClick={() => { navigator.clipboard?.writeText(p.text_distribuire); showToast('Textul pentru profil e copiat — lipește-l la distribuire.') }}>📋 Copiază textul pentru profil</button>}
-                    {(p.status === 'ciorna' || p.status === 'eroare') && <button style={{ ...S.btnS, color:G.red, marginLeft:'auto' }} onClick={() => { if (window.confirm('Anulezi ciorna?')) upd(p.id, { status: 'anulata' }) }}>✕ Anulează</button>}
+                    {poateEdita && (p.status === 'ciorna' || p.status === 'eroare') && <button style={{ ...S.btnS, color:G.red, marginLeft:'auto' }} onClick={() => { if (window.confirm('Anulezi ciorna?')) upd(p.id, { status: 'anulata' }) }}>✕ Anulează</button>}
                   </div>
                 </div>
                 {/* previzualizare tip Facebook */}
