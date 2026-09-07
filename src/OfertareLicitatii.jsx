@@ -113,10 +113,12 @@ export default function OfertareLicitatiiTab() {
       const cerLic = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; stats[c.licitatie_id].cerinte++ })
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
-        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere').in('cerinta_id', cIds)
-        ;(ac || []).forEach(a => { const st = stats[cerLic[a.cerinta_id]]; if (!st) return
+        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds)
+        ;(ac || []).forEach(a => { const lid = cerLic[a.cerinta_id]; const st = stats[lid]; if (!st) return
           if (a.status === 'acoperit' || a.status === 'acoperit_partener') st.acoperite++
-          if (a.valabil_la_depunere === false) st.rosii++ })
+          // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci
+          if (a.doc_firma?.se_reemite) { if (reemisUrgent(a.doc_firma, fullMap[lid]?.termen_depunere)) st.rosii++ }
+          else if (a.valabil_la_depunere === false) st.rosii++ })
       }
       ;(vf || []).forEach(x => { const st = stats[x.licitatie_id]; if (st && !st.verdict) { st.verdict = x.verdict; st.verdict_la = x.created_at } })
       ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
@@ -477,6 +479,14 @@ const DOC_STATUS = {
   eroare:     { label:'eroare',     color:G.red },
   ignorat:    { label:'doar fișier',color:G.dim },
 }
+// Certificat cu valabilitate 30 zile (constatator ONRC, atestare fiscală, cazier fiscal): se emite proaspăt la depunere.
+// Urgent (roșu) doar dacă termenul e în ≤ 10 zile și certificatul nu e valabil în ziua depunerii; altfel doar reminder portocaliu.
+const reemisUrgent = (doc, termen) => {
+  if (!doc?.se_reemite || !termen) return false
+  const zile = Math.ceil((new Date(termen) - Date.now()) / 86400000)
+  const valabil = doc.data_valabilitate && new Date(doc.data_valabilitate) >= new Date(termen.slice(0, 10))
+  return zile <= 10 && !valabil
+}
 const ghicesteTip = (nume) => {
   const n = (nume || '').toLowerCase()
   if (/fisadate|fisa.de.date|instructiuni.?ofertanti/.test(n)) return 'fisa_date'
@@ -812,10 +822,16 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
             {docs.map(d => {
               const st = DOC_STATUS[d.status_procesare] || DOC_STATUS.neprocesat
+              const spart = d.status_procesare === 'ignorat' && /spart .*în (\d+) bucăți/i.exec(d.eroare || '')
+              const formularXml = d.status_procesare === 'ignorat' && /\.xml$/i.test(d.nume_original || '')
               return (
                 <div key={d.id} style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, padding:'5px 8px', borderRadius:6, background:G.surface }}>
-                  <span style={{ color:st.color, fontWeight:700, minWidth:86 }}>{st.label}</span>
-                  <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.nume_original}>{d.nume_original}</span>
+                  <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }} title={d.eroare || ''}>{spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : st.label}</span>
+                  <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
+                    {d.nume_original}
+                    {spart && <span style={{ color:G.muted, fontStyle:'italic' }}> — prea mare, s-a spart în {spart[1]} bucăți; se citesc bucățile, fișierul acesta NU intră în analiză</span>}
+                    {formularXml && <span style={{ color:G.muted, fontStyle:'italic' }}> — DUAE/formular SEAP: se completează la depunere, nu se citește</span>}
+                  </span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>{d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}</span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
@@ -1046,7 +1062,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
-        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path)')
+        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate)')
         .in('cerinta_id', cs.map(c => c.id))
       const map = {}; (ac || []).forEach(a => { map[a.cerinta_id] = a })
       setAcoperiri(map)
@@ -1173,7 +1189,11 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
                       {titular && <b style={{ color:G.text }}>{titular}</b>}
                       {a.autorizatie?.tip?.denumire && <> · {a.autorizatie.tip.denumire}{a.autorizatie.numar_autorizatie ? ` nr. ${a.autorizatie.numar_autorizatie}` : ''}</>}
                       {a.doc_firma && <> · {a.doc_firma.tip}{a.doc_firma.numar_document ? ` nr. ${a.doc_firma.numar_document}` : ''}</>}
-                      {a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
+                      {a.doc_firma?.se_reemite
+                        ? (reemisUrgent(a.doc_firma, licitatie.termen_depunere)
+                            ? <b style={{ color:G.red }}> · 🔄 DE REEMIS ACUM — certificat de 30 zile, nu e valabil la depunere!</b>
+                            : <b style={{ color:G.orange }}> · 🔄 se emite proaspăt la depunere (valabil 30 zile){a.doc_firma.data_valabilitate ? ` — actualul până la ${fmtZi(a.doc_firma.data_valabilitate)}` : ''}</b>)
+                        : a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
                       {a.referinta_text && <> — {a.referinta_text}</>}
                     </div>
                   )}

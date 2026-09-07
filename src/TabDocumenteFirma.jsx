@@ -44,6 +44,7 @@ const CATEGORII = {
 
 const STATUS = {
   expirat:        { label:'Expirat',           color:G.red,     bg:G.red+'22',     icon:'🔴' },
+  de_reemis:      { label:'De reemis la depunere', color:G.orange, bg:G.orange+'22', icon:'🔄' },  // certificat 30 zile — nu e „expirat", se cere proaspăt
   urgent:         { label:'Expiră în 7z',      color:G.red,     bg:G.red+'15',     icon:'🟠' },
   atentie:        { label:'Expiră în 30z',     color:G.orange,  bg:G.orange+'22',  icon:'🟠' },
   aproape:        { label:'Expiră în 60z',     color:G.yellow,  bg:G.yellow+'22',  icon:'🟡' },
@@ -149,7 +150,7 @@ export default function TabDocumenteFirma() {
     return k
   }, [docs])
 
-  const alerte = docs.filter(d => d.activ !== false && ['expirat','urgent','atentie'].includes(d.status_expirare))
+  const alerte = docs.filter(d => d.activ !== false && ['expirat','urgent','atentie','de_reemis'].includes(d.status_expirare))
 
   if (loading) {
     return <div style={{padding:40, textAlign:'center', color:G.muted, fontSize:13}}>⏳ Se încarcă documentele...</div>
@@ -248,6 +249,7 @@ export default function TabDocumenteFirma() {
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{...S.input, width:'auto', minWidth:150}}>
           <option value="all">📊 Toate statusurile</option>
           <option value="expirat">🔴 Expirat</option>
+          <option value="de_reemis">🔄 De reemis la depunere</option>
           <option value="urgent">🟠 Urgent &lt;7z</option>
           <option value="atentie">🟡 Atenție &lt;30z</option>
           <option value="aproape">🟡 Aproape &lt;60z</option>
@@ -400,6 +402,7 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
     data_valabilitate: item.data_valabilitate || '',
     fara_expirare: item.fara_expirare || false,
     pentru_permis_sedere: item.pentru_permis_sedere || false,   // TKT-2026-0183: apare în dosarul angajaților (HR)
+    se_reemite: item.se_reemite || false,   // certificat 30 zile (constatator, atestare fiscală, cazier fiscal) — se emite proaspăt la depunere
     observatii: item.observatii || '',
     pdf_path: item.pdf_path || '',
     pdf_size_bytes: item.pdf_size_bytes || 0,
@@ -444,6 +447,7 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
       data_valabilitate: f.fara_expirare ? null : (f.data_valabilitate || null),
       fara_expirare: !!f.fara_expirare,
       pentru_permis_sedere: !!f.pentru_permis_sedere,
+      se_reemite: !!f.se_reemite,
       observatii: f.observatii.trim() || null,
       pdf_path: f.pdf_path || null,
       pdf_size_bytes: f.pdf_size_bytes || null,
@@ -551,6 +555,10 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
             style={{accentColor:G.green, width:16, height:16}}
           />
           <span style={{fontSize:13, color:G.text, fontWeight:600}}>∞ Document fără expirare (ex: CIF, act constitutiv, balanțe lunare)</span>
+        </label>
+        <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', padding:'8px 12px', background:G.bg, borderRadius:6}}>
+          <input type="checkbox" checked={!!f.se_reemite} onChange={e => setF({...f, se_reemite:e.target.checked})} style={{accentColor:G.orange, width:16, height:16}} />
+          <span style={{fontSize:13, color:G.text, fontWeight:600}}>🔄 Certificat de 30 zile — se emite proaspăt la fiecare depunere (constatator ONRC, atestare fiscală, cazier fiscal); nu se alertează ca expirat</span>
         </label>
         <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer', padding:'8px 12px', background:G.bg, borderRadius:6}}>
           <input type="checkbox" checked={!!f.pentru_permis_sedere} onChange={e => setF({...f, pentru_permis_sedere:e.target.checked})} style={{accentColor:G.blue, width:16, height:16}} />
