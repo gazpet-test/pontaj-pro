@@ -62,6 +62,13 @@ function statusBadge(status, zile) {
   )
 }
 
+async function openDocFirma(path, showToast) {
+  if (!path) { showToast('Documentul nu are fișier', 'warn'); return }
+  const { data, error } = await supabase.storage.from('documente-firma').createSignedUrl(path, 60)
+  if (error) { showToast('Eroare deschidere: ' + error.message, 'error'); return }
+  window.open(data.signedUrl, '_blank')
+}
+
 async function openDocPreview(path, showToast) {
   if (!path) { showToast('Acest document nu are fișier uploadat', 'warn'); return }
   try {
@@ -607,6 +614,7 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
   const [showBulkImport, setShowBulkImport] = useState(false)
   const [viewMode, setViewMode] = useState('flat')  // 'flat' | 'grouped'
   const [expandedEmp, setExpandedEmp] = useState(new Set())
+  const [docsFirma, setDocsFirma] = useState([])   // TKT-2026-0183: documente firmă marcate „pentru permis de ședere” (link, fără copie)
   
   const loadAll = async () => {
     setLoading(true)
@@ -658,6 +666,8 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
     
     setDocumente(docs)
     setTipuri(tipuriRes.data || [])
+    const { data: df } = await supabase.from('documente_firma').select('id, tip, denumire, categorie, numar_document, data_valabilitate, fara_expirare, pdf_path').eq('pentru_permis_sedere', true).eq('activ', true).order('tip')
+    setDocsFirma(df || [])
     setLoading(false)
   }
   
@@ -811,6 +821,28 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
   
   return (
     <div>
+      {/* Documente firmă pentru permis de ședere (TKT-2026-0183, Natalia): link către Administrativ → Documente firmă, fără copii */}
+      <div style={{marginBottom:14, padding:'10px 14px', background:G.blueDim, border:`1px solid ${G.blue}55`, borderRadius:8}}>
+        <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+          <span style={{fontSize:12, fontWeight:700, color:G.blue}}>🛂 Documente firmă pentru permisul de ședere</span>
+          <span style={{fontSize:11, color:G.muted}}>se atașează dosarului angajaților străini · sursa: Administrativ → Documente firmă (bifa „Necesar la permisul de ședere”)</span>
+        </div>
+        {docsFirma.length === 0
+          ? <div style={{fontSize:12, color:G.dim, marginTop:6}}>Niciun document marcat încă. În Administrativ → Documente firmă, la editarea unui document (organigramă, cazier firmă, certificat constatator), bifează „🛂 Necesar la permisul de ședere”.</div>
+          : <div style={{display:'flex', flexWrap:'wrap', gap:6, marginTop:8}}>
+              {docsFirma.map(d => {
+                const exp = d.data_valabilitate && !d.fara_expirare ? new Date(d.data_valabilitate) : null
+                const expirat = exp && exp < new Date()
+                return (
+                  <button key={d.id} onClick={() => openDocFirma(d.pdf_path, showToast)} title={d.denumire || ''}
+                    style={{padding:'5px 10px', fontSize:12, fontWeight:600, background:G.surface, color: expirat ? G.red : G.text, border:`1px solid ${expirat ? G.red : G.border}`, borderRadius:6, cursor:'pointer'}}>
+                    📄 {d.tip}{d.numar_document ? ` · ${d.numar_document}` : ''}{exp ? ` · ${expirat ? 'EXPIRAT ' : 'valabil până '}${exp.toLocaleDateString('ro-RO')}` : ''}
+                  </button>
+                )
+              })}
+            </div>}
+      </div>
+
       {/* KPI Bar */}
       <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(170px, 1fr))', gap:12, marginBottom:14}}>
         <KPICard icon="📁" label="Documente active" value={stats.total} color={G.text} />
