@@ -49,6 +49,7 @@ export const ETAPE = {
   executie: { l:'🔧 Proiectul continuă',   c:'#3FB950', hint:'echipele lucrează, confruntările cu terenul sunt inevitabile, ce s-a făcut săptămâna asta' },
   probe:    { l:'🧪 Probe de presiune',    c:'#E3B341', hint:'etapa standard: probele de presiune au fost finalizate cu succes, ce urmează' },
   final:    { l:'🏁 Proiect finalizat',    c:'#A371F7', hint:'lucrarea s-a încheiat, recepție, mulțumiri echipei și beneficiarului' },
+  ofertare: { l:'📐 Echipa de ofertare',   c:'#2DD4BF', hint:'din culise: cum se naște un proiect în faza de ofertare — planuri, cantități, valori, imaginația traseului înainte de prima lopată' },
 }
 
 const STATUS = {
