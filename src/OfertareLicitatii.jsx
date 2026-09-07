@@ -493,6 +493,30 @@ const ghicesteTip = (nume) => {
 // așa că poziția „știm că există documentul, dar nu-l avem" poartă marcajul din cale.
 const ESTE_PLACEHOLDER = d => !d.fisier_path || d.fisier_path.includes('/neincarcat/')
 
+// Răzvan 07.09.2026: „clepsidră” — să se vadă că lucrează, nu că s-a blocat: spinner + cronometru + bară de progres pe pagini
+function Lucru({ icon, text, pct, detaliu }) {
+  const [t0] = useState(Date.now())
+  const [sec, setSec] = useState(0)
+  useEffect(() => { const t = setInterval(() => setSec(Math.floor((Date.now() - t0) / 1000)), 1000); return () => clearInterval(t) }, [t0])
+  const mm = String(Math.floor(sec / 60)).padStart(2, '0'), ss = String(sec % 60).padStart(2, '0')
+  return (
+    <div style={{ marginBottom:8, padding:'8px 12px', borderRadius:8, background:G.ofertare + '14', border:`1px solid ${G.ofertare}44` }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:12.5, color:G.ofertare, fontWeight:700 }}>
+        <span className="sp" style={{ borderTopColor:G.ofertare, flexShrink:0 }} />
+        <span style={{ flex:1 }}>{icon} {text}</span>
+        <span style={{ fontVariantNumeric:'tabular-nums', color:G.muted, fontWeight:600 }}>⏱ {mm}:{ss}</span>
+      </div>
+      {pct != null && (
+        <div style={{ marginTop:6 }}>
+          <div style={{ height:6, borderRadius:4, background:G.border, overflow:'hidden' }}><i style={{ display:'block', height:'100%', width:`${Math.max(2, Math.min(100, pct))}%`, background:G.ofertare, transition:'width .6s' }} /></div>
+          {detaliu && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>{detaliu}</div>}
+        </div>
+      )}
+      <div style={{ fontSize:11, color:G.dim, marginTop:4 }}>Lucrează în fundal — poți lăsa pagina deschisă; se actualizează singură la fiecare felie citită.</div>
+    </div>
+  )
+}
+
 function DocumenteSection({ licitatie, profile, onChanged }) {
   const [docs, setDocs] = useState(null)
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
@@ -767,10 +791,16 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           )}
         </div>
       </div>
-      {seapBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬇️ SEAP: {seapBusy}</div>}
-      {upBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>⬆️ Se urcă... {upBusy}</div>}
-      {procBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 AI citește: {procBusy}</div>}
-      {plansaBusy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>📐 {plansaBusy}</div>}
+      {seapBusy && <Lucru icon="⬇️" text={`SEAP: ${seapBusy}`} />}
+      {upBusy && <Lucru icon="⬆️" text={`Se urcă… ${upBusy}`} />}
+      {procBusy && (() => {
+        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat'].includes(d.status_procesare))
+        const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
+        const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : (d.pagini_procesate || 0)), 0)
+        const ramase = rel.filter(d => d.status_procesare !== 'procesat').length
+        return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={tot ? Math.round(100 * done / tot) : null} detaliu={tot ? `${done}/${tot} pagini citite · ${ramase} documente rămase` : `${ramase} documente rămase`} />
+      })()}
+      {plansaBusy && <Lucru icon="📐" text={plansaBusy} />}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
 
       {docs === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
@@ -790,6 +820,11 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
                   </span>
+                  {d.status_procesare === 'in_lucru' && (
+                    <span title={d.pagini ? `${Math.round(100 * (d.pagini_procesate || 0) / d.pagini)}%` : 'se pregătește'} style={{ width:64, height:5, borderRadius:3, background:G.border, overflow:'hidden', flexShrink:0 }}>
+                      <i style={{ display:'block', height:'100%', width:`${d.pagini ? Math.max(3, Math.round(100 * (d.pagini_procesate || 0) / d.pagini)) : 3}%`, background:G.ofertare }} />
+                    </span>
+                  )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={d.analiza?.citire_ai ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
