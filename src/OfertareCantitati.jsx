@@ -38,6 +38,18 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
   const [licId, setLicId] = useState(null)
   const [cant, setCant] = useState(null)
   const [clar, setClar] = useState(null)
+  const [profiles, setProfiles] = useState([])
+  const [citind, setCitind] = useState(null)     // id clarificare în curs de citire AI
+  const numeProfil = (id) => profiles.find(p => p.id === id)?.name || '—'
+  // Răzvan 07.09.2026: clarificările încărcate manual (PDF) sunt citite de platformă cu AI → citita_la + rezumat
+  const citesteClarificare = async (q) => {
+    setCitind(q.id)
+    const { data, error } = await supabase.functions.invoke('ofertare-clarificare-citeste', { body: { clarificare_id: q.id } })
+    setCitind(null)
+    if (error || data?.error) return showToast('Citire AI: ' + (data?.error || error?.message), 'err')
+    showToast('✓ Platforma a citit clarificarea: ' + (data?.rezumat || '').slice(0, 120))
+    load()
+  }
   const [busy, setBusy] = useState(null)
 
   useEffect(() => {
@@ -50,11 +62,12 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
 
   const load = async () => {
     if (!licId) return
-    const [{ data: c }, { data: q }] = await Promise.all([
+    const [{ data: c }, { data: q }, { data: pr }] = await Promise.all([
       supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('id'),
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
+      supabase.from('profiles').select('id, name'),
     ])
-    setCant(c || []); setClar(q || [])
+    setCant(c || []); setClar(q || []); setProfiles(pr || [])
   }
   useEffect(() => { load() }, [licId])
 
@@ -237,7 +250,9 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
       {/* Clarificări */}
       <div style={{ ...S.card, padding:14 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:8 }}>
-          <div style={{ fontWeight:800, fontSize:13.5 }}>❓ Clarificări către autoritate ({clar?.length ?? '...'})</div>
+          <div style={{ fontWeight:800, fontSize:13.5 }}>❓ Clarificări către autoritate ({clar?.length ?? '...'})
+            {!!clar?.length && <span style={{ fontSize:11, fontWeight:400, color:G.dim, marginLeft:8 }}>🤖 {clar.filter(q => q.origine !== 'manual').length} platformă · 👤 {clar.filter(q => q.origine === 'manual').length} manual{clar.some(q => q.origine === 'manual' && !q.citita_la) ? ` · ⚠ ${clar.filter(q => q.origine === 'manual' && !q.citita_la).length} necitite` : ''}</span>}
+          </div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={addQ}>＋ întrebare</button>
             {/* clarificare depusă în afara generatorului (ex. de Mirela, direct în SEAP) — se urcă PDF-ul ca platforma să țină cont de ea */}
@@ -250,13 +265,15 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
                 const { error: eUp } = await supabase.storage.from('ofertare').upload(path, file, { upsert:false })
                 if (eUp) return showToast('Upload: ' + eUp.message, 'err')
                 const nr = (clar?.length ? Math.max(...clar.map(q => q.nr || 0)) : 0) + 1
-                const { error } = await supabase.from('ofertare_clarificari').insert({
-                  licitatie_id: licId, nr, sursa: 'extern', status: 'trimisa', fisier_path: path,
+                const { data: { user } } = await supabase.auth.getUser()
+                const { data: ins, error } = await supabase.from('ofertare_clarificari').insert({
+                  licitatie_id: licId, nr, sursa: 'extern', status: 'trimisa', fisier_path: path, origine: 'manual', creat_de: user?.id || null,
                   intrebare: `(clarificare depusă extern — ${file.name}; completează aici pe scurt ce s-a întrebat)`,
-                })
+                }).select('id').single()
                 if (error) return showToast('Eroare: ' + error.message, 'err')
-                showToast('✓ Clarificarea externă e în platformă — completează întrebarea pe scurt și, când vine, răspunsul.')
-                load()
+                showToast('✓ PDF-ul e în platformă — îl citesc acum cu AI…')
+                await load()
+                if (ins?.id) citesteClarificare({ id: ins.id })
               }} />
             </label>
             <button style={{ ...S.btnP, padding:'5px 14px', fontSize:12 }} onClick={genereazaAdresa} disabled={!!busy}>📄 Generează adresa</button>
@@ -272,13 +289,20 @@ export default function CantitatiPanel({ licitatii, profile, showToast }) {
                   <div style={{ flex:1 }}>
                     <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={q.intrebare || ''} placeholder="Textul întrebării..."
                       onChange={e => setQ(q.id, 'intrebare', e.target.value)} onBlur={() => saveQ(q)} />
-                    <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:3 }}>
+                    <div style={{ display:'flex', gap:10, alignItems:'center', marginTop:3, flexWrap:'wrap' }}>
+                      {q.origine === 'manual'
+                        ? <span title="PDF încărcat de un coleg (depus direct în SEAP)" style={{ fontSize:10.5, fontWeight:700, color:G.orange, background:G.orange + '1A', border:`1px solid ${G.orange}55`, borderRadius:5, padding:'1px 7px' }}>👤 încărcată manual{q.creat_de ? ` · ${numeProfil(q.creat_de)}` : ''}</span>
+                        : <span title="Generată de platformă din analiza documentației" style={{ fontSize:10.5, fontWeight:700, color:G.blue, background:G.blue + '1A', border:`1px solid ${G.blue}55`, borderRadius:5, padding:'1px 7px' }}>🤖 generată de platformă</span>}
+                      {q.origine === 'manual' && (q.citita_la
+                        ? <span title={q.citita_rezumat || ''} style={{ fontSize:10.5, fontWeight:700, color:G.green }}>✓ citită de platformă {new Date(q.citita_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</span>
+                        : <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.yellow, borderColor:G.yellow + '66' }} disabled={citind === q.id} onClick={() => citesteClarificare(q)}>{citind === q.id ? '⏳ citesc…' : '⚠ necitită — 🤖 citește PDF-ul'}</button>)}
                       {q.sursa && <span style={{ fontSize:11, color:G.dim }}>sursa: {q.sursa}</span>}
                       {q.fisier_path && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={async () => {
                         const { data } = await supabase.storage.from('ofertare').createSignedUrl(q.fisier_path, 600)
                         if (data?.signedUrl) window.open(data.signedUrl, '_blank')
                       }}>📄 PDF-ul depus</button>}
                     </div>
+                    {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
                     {(q.status === 'raspunsa' || q.raspuns) && (
                       <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
                         onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
