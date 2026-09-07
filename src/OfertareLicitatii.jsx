@@ -602,9 +602,11 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       }
       // dacă exista un placeholder cu acest nume, îl COMPLETĂM (nu lăsăm rând dublu)
       const idPlaceholder = placeholders.get(rel)
+      let idNou = idPlaceholder
       if (idPlaceholder) await supabase.from('ofertare_documente_atribuire').update(randNou).eq('id', idPlaceholder)
-      else await supabase.from('ofertare_documente_atribuire').insert(randNou)
+      else { const { data: ins } = await supabase.from('ofertare_documente_atribuire').insert(randNou).select('id').single(); idNou = ins?.id }
       ok++
+      if (estePdf && f.size > 20e6 && idNou && ghicesteTip(rel) !== 'plansa') await sparge({ id: idNou, nume_original: rel }, `${(f.size / 1e6).toFixed(0)} MB — sparg în bucăți`)
       setUpBusy(`${i + 1}/${bune.length}`)
     }
     setUpBusy(null)
@@ -710,6 +712,15 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
     const listaPdf = (ds) => (ds || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original))
     let deRulat = listaPdf(docs)
     if (!deRulat.length) return
+    // întâi sparg PDF-urile mari (altfel ingestia cade tăcut pe ele)
+    const mari = deRulat.filter(eMare)
+    if (mari.length) {
+      for (const d of mari) await sparge(d, `${((d.size_bytes || 0) / 1e6).toFixed(0)} MB — sparg înainte de procesare`)
+      const { data: fresh } = await supabase.from('ofertare_documente_atribuire').select('id, nume_original, status_procesare, size_bytes, tip, eroare').eq('licitatie_id', licitatie.id)
+      deRulat = listaPdf(fresh)
+      await load()
+      if (!deRulat.length) return
+    }
     stopRef.current = false
     // 3 documente ÎN PARALEL (cerut de Razvan — serial dura ~90 min pe un fixture);
     // edge functions scalează orizontal, fiecare doc e independent
@@ -754,6 +765,23 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   // Planșele mari nu se pot citi dintr-o bucată (o scanare A0 are ~140 de milioane de
   // pixeli), așa că se taie în felii care se suprapun și se citesc pe rând. De aici ies
   // tabelele de dimensionare — adică lungimile reale pe tronsoane și diametre.
+  // Regula PDF-uri mari (Răzvan 07.09.2026): > 20 MB → /api/pdf-sparge (Vercel, pdf-lib) le taie pe pagini în bucăți ≤ 15 MB;
+  // bucățile intră la procesare, originalul rămâne „🔀 spart în N”. Se apelează automat la urcare și înainte de „Procesează”.
+  const sparge = async (d, eticheta) => {
+    setPlansaBusy(`🔀 ${d.nume_original}: ${eticheta || 'sparg în bucăți'}…`)
+    try {
+      const { data: sesiune } = await supabase.auth.getSession()
+      const r = await fetch('/api/pdf-sparge', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sesiune?.session?.access_token || ''}` }, body: JSON.stringify({ doc_id: d.id }) })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) setWarn(`Nu am putut sparge „${d.nume_original}”: ${j.error || `HTTP ${r.status}`}`)
+      else if (j.plansa) setWarn(`📐 „${d.nume_original}”: ${j.motiv} — se citește ca planșă.`)
+      else if (j.bucati) setWarn(w => [w, `🔀 „${d.nume_original}” spart în ${j.bucati} bucăți (${j.pagini} pagini) — intră la procesare.`].filter(Boolean).join(' '))
+      return j
+    } catch (e) { setWarn(`Spargere eșuată: ${e.message}`); return null }
+    finally { setPlansaBusy(null) }
+  }
+  const eMare = d => /\.pdf$/i.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
+
   const citestePlansa = async (d) => {
     setWarn(null); setPlansaBusy(`${d.nume_original}: pregătesc feliile...`)
     try {
@@ -865,6 +893,10 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
                     <span title={d.pagini ? `${Math.round(100 * (d.pagini_procesate || 0) / d.pagini)}%` : 'se pregătește'} style={{ width:64, height:5, borderRadius:3, background:G.border, overflow:'hidden', flexShrink:0 }}>
                       <i style={{ display:'block', height:'100%', width:`${d.pagini ? Math.max(3, Math.round(100 * (d.pagini_procesate || 0) / d.pagini)) : 3}%`, background:G.ofertare }} />
                     </span>
+                  )}
+                  {eMare(d) && (
+                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={!!plansaBusy} title="PDF peste 20 MB — citirea AI cade pe el; îl sparg în bucăți ≤ 15 MB"
+                      onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
