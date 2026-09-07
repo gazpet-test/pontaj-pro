@@ -12,6 +12,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
+import GarantieSection from './OfertareGarantie.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -126,7 +127,9 @@ export default function OfertareLicitatiiTab() {
       ;(vf || []).forEach(x => { const st = stats[x.licitatie_id]; if (st && !st.verdict) { st.verdict = x.verdict; st.verdict_la = x.created_at } })
       ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
     }
-    setRows((v || []).map(r => ({ ...fullMap[r.id], ...r, _st: stats[r.id] })))
+    const randuri = (v || []).map(r => ({ ...fullMap[r.id], ...r, _st: stats[r.id] }))
+    setRows(randuri)
+    setSelected(s => s ? (randuri.find(x => x.id === s.id) || s) : s)   // fișa deschisă vede KPI-urile noi (garanție, acoperire)
     setLoading(false)
   }
   useEffect(() => {
@@ -1270,6 +1273,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
+    ['garantie', `🛡 Garanție${l.garantie_status === 'original' ? ' · ✓' : l.garantie_status ? ' · în curs' : ''}`],
     ['detalii', '📝 Detalii & decizie'],
     ['verificari', `🔍 Verificări${sx.verdict ? ` · ${sx.verdict.toUpperCase()}` : ''}`],
   ]
@@ -1300,7 +1304,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <KPI l="Eliminatorii neacoperite" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
           <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
           {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
-          <KPI l="Garanție participare" v={l.garantie_participare || '—'} color={l.garantie_status === 'original' ? G.green : l.garantie_participare ? G.red : G.text} />
+          <div onClick={() => setTab('garantie')} style={{ cursor:'pointer', display:'contents' }} title="Deschide fluxul garanției (cerere poliță → plată → original)">
+            <KPI l="Garanție participare" v={l.garantie_participare || '—'} unit={l.garantie_status === 'original' ? '✓ original' : l.garantie_status ? 'în curs' : ''} color={l.garantie_status === 'original' ? G.green : l.garantie_participare ? G.red : G.text} />
+          </div>
         </div>
 
         {/* tab-uri */}
@@ -1318,6 +1324,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <AcoperireSection licitatie={l} profile={profile} />
             </>}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
+            {tab === 'garantie' && <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />}
             {tab === 'verificari' && <VerificareFinalaSection licitatie={l} />}
             {tab === 'clarificari' && (
               <div style={{ ...S.card, padding:16, background:G.surface }}>
