@@ -12,6 +12,10 @@
       "maxDuration": 300,
       "memory": 3009
     },
+    "api/pdf-sparge.js": {
+      "maxDuration": 300,
+      "memory": 3009
+    },
     "api/hr-drive-import.js": {
       "maxDuration": 300,
       "memory": 3009

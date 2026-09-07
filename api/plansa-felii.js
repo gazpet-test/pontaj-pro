@@ -15,7 +15,7 @@ import sharp from 'sharp'
 const LATURA = 1600        // latura unei felii trimise la AI
 const SUPRAPUNERE = 0.12   // 12% ca sa nu taiem un rand de tabel exact pe margine
 const MAX_FELII = 40
-const MAX_MB = 60
+const MAX_MB = 100   // 07.09.2026: planșele SF Potlogi au 73–92 MB
 
 // Imaginea scanata sta in PDF ca stream JPEG (/DCTDecode). O scoatem direct, fara sa
 // randam pagina: e mai rapid si pastreaza rezolutia originala a scanarii.
