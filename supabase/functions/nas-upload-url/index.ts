@@ -4,7 +4,7 @@
 // Folosit la completarea datelor de proiect din serverul \\gazpet-tnas (ordin începere, CS, propuneri, PCCVI).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 const H = { 'Content-Type': 'application/json' }
-const ALLOWED = ['executie-contracte', 'documente-proiect']
+const ALLOWED = ['executie-contracte', 'documente-proiect', 'documente-flota']
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return new Response(JSON.stringify({ error: 'POST' }), { status: 405, headers: H })
   if (req.headers.get('x-radar-secret') !== 'gazpet-radar-x7Q2mK-2026') return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: H })
