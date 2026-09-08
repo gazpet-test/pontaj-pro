@@ -14,6 +14,10 @@ Sentry.init({
   tracesSampleRate: 0.1,
   environment: import.meta.env.MODE,
   enabled: import.meta.env.PROD,
+  // 08.09.2026: zgomot din browserele in-app (Facebook/Instagram/TikTok injectează scripturi proprii — „Java object is gone”,
+  // iabjs://…) — nu sunt erori ale platformei; nu ne trezesc pe mail
+  ignoreErrors: [/Java object is gone/i, /postMessage/i, /iabjs:\/\//i, /ResizeObserver loop/i],
+  denyUrls: [/^iabjs:\/\//i, /fbcdn\.net/i, /connect\.facebook\.net/i, /_next-live\//i, /vercel\.live/i],
 })
 
 // PWA: service worker doar în producție (în dev ar încurca hot-reload-ul)
