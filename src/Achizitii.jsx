@@ -286,7 +286,7 @@ export function buildCerereOfertaHtml(c, ctx, solicitant) {
       </colgroup>
       <thead>
         <tr style="background:#E8F0FE;">
-          ${['Nr.', 'Denumire produs / material', 'Specificații', 'UM', 'Cantitate', `Preț unitar ofertat (${c.moneda || 'RON'})`, 'Termen livrare']
+          ${['Nr.', c.este_servicii ? 'Denumire serviciu' : 'Denumire produs / material', 'Specificații', 'UM', 'Cantitate', `Preț unitar ofertat (${c.moneda || 'RON'})`, c.este_servicii ? 'Termen prestare' : 'Termen livrare']
             .map(h => `<th style="border:1px solid #999;padding:6px;font-size:10px;">${h}</th>`).join('')}
         </tr>
       </thead>
@@ -314,8 +314,11 @@ export function buildCerereOfertaHtml(c, ctx, solicitant) {
         ])}
       </div>
     </div>
-    <div style="margin:12px 0 0;font-size:11px;">Vă rugăm să ne transmiteți oferta de preț (fără TVA) și termenul de livrare pentru produsele / materialele de mai jos:</div>
+    <div style="margin:12px 0 0;font-size:11px;">${c.este_servicii
+      ? 'Vă rugăm să ne transmiteți oferta de preț (fără TVA) și termenul de prestare pentru serviciile de mai jos:'
+      : 'Vă rugăm să ne transmiteți oferta de preț (fără TVA) și termenul de livrare pentru produsele / materialele de mai jos:'}</div>
     ${tabel}
+    ${c.observatii ? `<div style="margin-top:10px;border:1px solid #ccc;border-radius:6px;padding:8px;font-size:10px;"><b>Observații / informații pentru cotație:</b><div style="white-space:pre-wrap;margin-top:3px;">${c.observatii}</div></div>` : ''}
     <div style="margin-top:14px;font-size:10px;color:#555;">Vă rugăm să precizați validitatea ofertei și condițiile de plată. Vă mulțumim.</div>
     ${pdfFooterAudit()}
   </div>`
