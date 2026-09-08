@@ -434,6 +434,37 @@ function DashboardProiectePage({ onSelectProiect }) {
     } catch (e) { showToast('Eroare: ' + e.message, 'error') }
   }
 
+  // ─── Completări propuse de tura de noapte (NAS / Drive / mail) — cifre & persoane, se aplică doar cu ✓ ───
+  const [completari, setCompletari] = useState([])
+  const [showCompletari, setShowCompletari] = useState(false)
+  const [numeAngajati, setNumeAngajati] = useState({})
+  const loadCompletari = useCallback(async () => {
+    const { data } = await supabase.from('executie_completari_propuse').select('*').eq('status', 'propus').order('proiect_id').order('camp')
+    setCompletari(data || [])
+    const ids = [...new Set((data || []).filter(r => r.camp.endsWith('employee_id')).map(r => Number(r.valoare)).filter(Boolean))]
+    if (ids.length) {
+      const { data: emp } = await supabase.from('employees').select('id, name').in('id', ids)
+      setNumeAngajati(Object.fromEntries((emp || []).map(e => [e.id, e.name])))
+    }
+  }, [])
+  useEffect(() => { loadCompletari() }, [loadCompletari])
+  async function decideCompletare(row, accepta) {
+    try {
+      const { error } = await supabase.rpc('fn_completare_aplica', { p_id: row.id, p_accepta: accepta })
+      if (error) throw error
+      setCompletari(list => list.filter(x => x.id !== row.id))
+      if (accepta) loadAll()
+      showToast(accepta ? 'Aplicat ✔' : 'Propunere respinsă', 'success')
+    } catch (e) { showToast('Eroare: ' + e.message, 'error') }
+  }
+  const CAMP_LABEL = {
+    rte_employee_id: 'RTE', rts_employee_id: 'RTS', mp_employee_id: 'Manager proiect', coordonator_transgaz: 'Coordonator beneficiar',
+    garantie_buna_exec_pct: 'Garanție bună execuție (%)', penalitati_zi_pct: 'Penalități/zi (%)', valoare_lei: 'Valoare contract (lei)',
+    valoare_eur: 'Valoare contract (EUR)', data_start: 'Data start', data_termen: 'Termen finalizare', durata_contract_luni: 'Durată (luni)',
+    nr_contract: 'Nr. contract', data_contract: 'Data contract', beneficiar_final: 'Beneficiar final', lungime_proiect_m: 'Lungime (m)',
+  }
+  const afisCompletare = r => r.valoare_afisata || (r.camp.endsWith('employee_id') ? (numeAngajati[Number(r.valoare)] || `angajat #${r.valoare}`) : r.valoare)
+
   const ORDIN_META = {
     incepere:   { label: 'Ordin de începere',   emoji: '🟢', color: G.green,  efect: 'setează data start' },
     reincepere: { label: 'Ordin de reîncepere', emoji: '🔵', color: G.blue,   efect: 'închide sistarea deschisă' },
@@ -583,6 +614,56 @@ function DashboardProiectePage({ onSelectProiect }) {
                           padding: '5px 12px', background: G.greenBg, border: 'none',
                           borderRadius: 6, color: '#fff', fontSize: 11, cursor: 'pointer', fontWeight: 700,
                         }}>✓ Confirmă</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {completari.length > 0 && !alertFilter && (
+        <div style={{ background: G.purple + '0D', border: `1px solid ${G.purple}44`, borderRadius: 10, padding: '12px 16px', marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 18 }}>🌙</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: G.purple }}>
+                  {completari.length} {completari.length > 1 ? 'date de proiect găsite' : 'dată de proiect găsită'} pe server / Drive / mail — de confirmat
+                </div>
+                <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>
+                  Tura de noapte atașează documentele singură; cifrele și persoanele se aplică doar cu ✓ de aici
+                </div>
+              </div>
+            </div>
+            <button onClick={() => setShowCompletari(v => !v)} style={{
+              padding: '5px 12px', background: G.purple + '22', border: `1px solid ${G.purple}55`,
+              borderRadius: 7, color: G.purple, fontSize: 11, cursor: 'pointer', fontWeight: 700,
+            }}>{showCompletari ? 'Ascunde' : 'Vezi propunerile'}</button>
+          </div>
+          {showCompletari && (
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {completari.map(row => {
+                const proj = proiecte.find(p => p.id === row.proiect_id)
+                return (
+                  <div key={row.id} style={{ background: G.card, border: `1px solid ${G.border}`, borderRadius: 8, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: G.text, fontWeight: 600, minWidth: 140 }}>{proj?.cod_intern || '#' + row.proiect_id}</span>
+                    <span style={{ fontSize: 12, color: G.purple, fontWeight: 700, minWidth: 170 }}>{CAMP_LABEL[row.camp] || row.camp}</span>
+                    <span style={{ fontSize: 13, color: G.text, fontWeight: 700 }}>{afisCompletare(row)}</span>
+                    <span style={{ fontSize: 10, color: G.dim, flex: 1, minWidth: 160 }} title={row.motiv || ''}>
+                      {row.sursa === 'mail' ? '📧' : row.sursa === 'drive' ? '☁️' : '📁'} {(row.sursa_detaliu || '').slice(0, 60)}{(row.sursa_detaliu || '').length > 60 ? '…' : ''}
+                      {row.confidenta != null && ` · ${row.confidenta}%`}{row.motiv ? ` · ${row.motiv}` : ''}
+                    </span>
+                    {row.dovada_path && (
+                      <button onClick={async () => { const { data } = await supabase.storage.from('executie-contracte').createSignedUrl(row.dovada_path, 300); if (data?.signedUrl) window.open(data.signedUrl, '_blank') }}
+                        style={{ padding: '4px 8px', background: 'transparent', border: `1px solid ${G.border}`, borderRadius: 6, color: G.muted, fontSize: 11, cursor: 'pointer' }}>📎 dovada</button>
+                    )}
+                    {canEdit && (
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={() => decideCompletare(row, false)} style={{ padding: '5px 10px', background: 'transparent', border: `1px solid ${G.red}55`, borderRadius: 6, color: G.red, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>✕ Respinge</button>
+                        <button onClick={() => decideCompletare(row, true)} style={{ padding: '5px 12px', background: G.greenBg, border: 'none', borderRadius: 6, color: '#fff', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}>✓ Confirmă</button>
                       </div>
                     )}
                   </div>
