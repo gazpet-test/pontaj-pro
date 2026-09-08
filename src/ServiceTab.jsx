@@ -22,6 +22,7 @@ import html2canvas from 'html2canvas'
 import { calcUrmService, urmServiceLevel, urmServiceColor, PRAG_ZILE, PRAG_KM, PRAG_ORE } from './lib/service.js'
 import PieseCatalogSection from './PieseCatalogSection.jsx'
 import ImportFiseServiceModal from './ImportFiseServiceModal.jsx'
+import PiesePozeSection from './PiesePozeSection.jsx'  // 08.09.2026: piese schimbate — serie + poze per activ
 
 // ─── Validare citiri bord (anti-typo) ───────────────────────────────────────
 // O singură cifră greșită într-o fișă otrăvește permanent v_active_km_ore, care
@@ -1820,7 +1821,7 @@ async function generateServicePDF(fisa, intrari, activ, showToast) {
 // Listă cronologică toate fișele service pentru un utilaj. Date deja există în BD.
 // Util pentru a vedea evoluția mentenanței + tendințe + total cheltuieli per utilaj.
 
-function IstoricServiceModal({ activ, onClose, onOpenFisa, showToast }) {
+function IstoricServiceModal({ activ, canEdit, onClose, onOpenFisa, showToast }) {
   const [fise, setFise] = useState([])
   const [loading, setLoading] = useState(true)
   
@@ -1949,6 +1950,9 @@ function IstoricServiceModal({ activ, onClose, onOpenFisa, showToast }) {
             </table>
           </div>
         )}
+
+        {/* 08.09.2026: piese schimbate cu serie + poze (compresate în browser) */}
+        <PiesePozeSection activ={activ} canEdit={canEdit} showToast={showToast} />
       </div>
     </div>
   )
@@ -2477,6 +2481,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       {istoricModal && (
         <IstoricServiceModal
           activ={istoricModal.activ}
+          canEdit={canEdit}
           onClose={() => setIstoricModal(null)}
           onOpenFisa={(fisaId) => {
             setIstoricModal(null)

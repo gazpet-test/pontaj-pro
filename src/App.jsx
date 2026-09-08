@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
 import LogisticaPage from './Logistica.jsx'
@@ -749,6 +750,8 @@ function Layout({ children }) {
         </div>
         {navItems.map(x=><button key={x.p} className={`nl ${loc.pathname===x.p?'active':''}`} onClick={()=>nav(x.p)}>{x.i} {x.l}</button>)}
         <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
+          {/* ℹ️ Noutăți modul — anunțuri per modul, reminder la 12 h până la „Am citit" (08.09.2026) */}
+          <ModulNoutati modul={(loc.pathname.split('/')[1] || '').toLowerCase() || null} profile={profile} />
           {/* Buton global De aprobat — comenzi furnizor + transporturi care așteaptă decizia user-ului (12.06.2026) */}
           <DeAprobatButton profile={profile} />
           {/* Buton global Cere Transport — vizibil pentru oricine cu acces la modulul comanda_transport */}
