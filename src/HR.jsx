@@ -2,7 +2,7 @@
 // MODUL HR — Personal · Autorizații · Documente · Alerte expirări · Semnături · Coș
 // ===========================================================================
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
@@ -109,6 +109,7 @@ const fmtDataRo = (d) => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
 
 export default function HRPage() {
   const nav = useNavigate()
+  const loc = useLocation()
   const [profile, setProfile] = useState(null)
   const [tab, setTab] = useState('personal')  // personal | autorizatii | alerte | documente | semnaturi | cos | scanner | salarii
   const [employees, setEmployees] = useState([])
@@ -216,6 +217,15 @@ export default function HRPage() {
     if (t.personalOnly && !canAccessPersonal) return false
     return true
   })
+
+  // Deep-link din clopoțel: /hr?tab=adeverinte deschide direct tab-ul. Reacționează
+  // și când ești deja pe /hr (componenta nu se remontează, doar search-ul se schimbă)
+  // și doar după ce se știu drepturile — altfel un tab „personalOnly" ar fi ignorat
+  // fiindcă lista încă nu-l conține.
+  useEffect(() => {
+    const t = new URLSearchParams(loc.search).get('tab')
+    if (t && tabs.some(x => x.key === t)) setTab(t)
+  }, [loc.search, isSuperAdmin, canUseScanner, canAccessPersonal])
   
   return (
     <div style={S.page}>
