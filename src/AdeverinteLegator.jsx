@@ -32,6 +32,21 @@ const RSVTI_EMPLOYEE_ID    = 81    // NICA EUGEN — autorizatie RSVTI PL 1628
 const fmtRo = d => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
 
+// Primele 7 cifre din CNP dau data nasterii (S=secolul). 7/8 (rezident) si 9
+// (strain) nu spun limpede secolul, deci nu ghicim — mai bine null decat gresit.
+function dataNasteriiDinCnp(cnp) {
+  if (!/^\d{13}$/.test(cnp || '')) return null
+  const s = Number(cnp[0])
+  const secol = s === 1 || s === 2 ? 1900 : s === 3 || s === 4 ? 1800 : s === 5 || s === 6 ? 2000 : null
+  if (!secol) return null
+  const an = secol + Number(cnp.slice(1, 3))
+  const luna = Number(cnp.slice(3, 5)), zi = Number(cnp.slice(5, 7))
+  if (luna < 1 || luna > 12 || zi < 1 || zi > 31) return null
+  const d = new Date(Date.UTC(an, luna - 1, zi))
+  if (d.getUTCMonth() !== luna - 1 || d.getUTCDate() !== zi) return null
+  return d.toISOString().slice(0, 10)
+}
+
 function Lbl({ children }) {
   return <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>{children}</div>
 }
@@ -106,7 +121,7 @@ function ModalGenerare({ rand, onClose, onGata, showToast }) {
   useEffect(() => {
     (async () => {
       try {
-        const [{ data: ultima }, { data: max }, { data: citit }] = await Promise.all([
+        const [{ data: ultima }, { data: max }, { data: citit }, { data: priv }] = await Promise.all([
           supabase.from('hr_adeverinte_legator')
             .select('date_identificare, echipament').eq('employee_id', rand.employee_id)
             .order('numar', { ascending:false }).limit(1).maybeSingle(),
@@ -115,10 +130,14 @@ function ModalGenerare({ rand, onClose, onGata, showToast }) {
           supabase.from('hr_ci_extrase')
             .select('cnp, ci_serie, ci_numar, ci_eliberat_de, ci_eliberat_la, domiciliu')
             .eq('employee_id', rand.employee_id).eq('status', 'confirmat').maybeSingle(),
+          // sursa canonica pentru CNP, indiferent cine l-a pus acolo
+          supabase.from('hr_employees_private').select('cnp')
+            .eq('employee_id', rand.employee_id).maybeSingle(),
         ])
         // adeverința anterioară bate propunerea: ce s-a tipărit o dată rămâne
         if (citit) { setD({ ...GOL, ...citit }); setSursa('act') }
         if (ultima?.date_identificare) { setD({ ...GOL, ...ultima.date_identificare }); setSursa('adeverinta') }
+        if (priv?.cnp) { setD(x => ({ ...x, cnp: priv.cnp })); setSursa(v => v || 'fisa') }
         if (ultima?.echipament) setEchipament(ultima.echipament)
         setUrmatorul((max?.numar ?? 498) + 1)
       } finally { setIncarc(false) }
@@ -228,6 +247,8 @@ function ModalGenerare({ rand, onClose, onGata, showToast }) {
               <div style={{padding:11, background:sursa?G.greenDim:G.blueDim, borderLeft:`3px solid ${sursa?G.green:G.blue}`, borderRadius:6, marginBottom:16, fontSize:11, lineHeight:1.6, color:sursa?'#8FD9A8':'#9CC9FF'}}>
                 {sursa === 'act'
                   ? 'Datele sunt preluate din actul de identitate din dosar, verificate și confirmate. Citește-le încă o dată înainte de a genera.'
+                  : sursa === 'fisa'
+                    ? 'CNP-ul vine din fișa privată a angajatului. Restul câmpurilor se completează o singură dată.'
                   : sursa === 'adeverinta'
                     ? 'Datele sunt preluate din adeverința anterioară a acestui om.'
                     : 'Datele de identificare nu sunt în platformă. Completează-le o singură dată — la reînnoire se preiau automat.'}
@@ -460,6 +481,20 @@ export function PanouDateIdentificare({ showToast, onSchimbat }) {
       .update({ status, confirmat_de: user?.id || null, confirmat_la: new Date().toISOString() })
       .eq('id', rand.id)
     if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+
+    // CNP-ul confirmat isi are locul in hr_employees_private — acolo il cauta
+    // restul platformei. hr_ci_extrase ramane doar zona de propuneri.
+    if (status === 'confirmat' && rand.cnp && rand.cnp_valid) {
+      const { error: ePriv } = await supabase.from('hr_employees_private').upsert({
+        employee_id: rand.employee_id,
+        cnp: rand.cnp,
+        data_nastere: dataNasteriiDinCnp(rand.cnp),
+        modificat_de: user?.id || null,
+        modificat_la: new Date().toISOString(),
+      }, { onConflict: 'employee_id' })
+      if (ePriv) showToast?.('Confirmat, dar CNP-ul nu s-a salvat în fișa privată: ' + ePriv.message, 'warning')
+    }
+
     showToast?.(status === 'confirmat' ? `✓ Confirmat: ${rand.employees?.name}` : 'Propunere respinsă')
     load_(); onSchimbat?.()
   }
