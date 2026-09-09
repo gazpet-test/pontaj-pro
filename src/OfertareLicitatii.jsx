@@ -502,6 +502,8 @@ const DOC_STATUS = {
   neprocesat: { label:'neprocesat', color:G.muted },
   in_lucru:   { label:'în lucru',   color:G.yellow },
   procesat:   { label:'✓ procesat', color:G.green },
+  // are text, dar nu tot: paginile lipsă sunt în pagini_necitite (ingest v8)
+  partial:    { label:'⚠ parțial',  color:G.orange },
   eroare:     { label:'eroare',     color:G.red },
   ignorat:    { label:'doar fișier',color:G.dim },
 }
@@ -564,7 +566,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
 
   const load = async () => {
     const { data } = await supabase.from('ofertare_documente_atribuire')
-      .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, ocr, revizie, size_bytes, eroare, fisier_path')
+      .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path')
       .eq('licitatie_id', licitatie.id).order('id')
     setDocs(data || [])
   }
@@ -858,10 +860,10 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       {seapBusy && <Lucru icon="⬇️" text={`SEAP: ${seapBusy}`} />}
       {upBusy && <Lucru icon="⬆️" text={`Se urcă… ${upBusy}`} />}
       {procBusy && (() => {
-        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat'].includes(d.status_procesare))
+        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
         const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
-        const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : (d.pagini_procesate || 0)), 0)
-        const ramase = rel.filter(d => d.status_procesare !== 'procesat').length
+        const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : d.status_procesare === 'partial' ? Math.max(0, (d.pagini || 0) - (d.pagini_necitite?.length || 0)) : (d.pagini_procesate || 0)), 0)
+        const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
         return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={tot ? Math.round(100 * done / tot) : null} detaliu={tot ? `${done}/${tot} pagini citite · ${ramase} documente rămase` : `${ramase} documente rămase`} />
       })()}
       {plansaBusy && <Lucru icon="📐" text={plansaBusy} />}
@@ -889,6 +891,9 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>{d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}</span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
+                    {d.status_procesare === 'partial' && d.pagini_necitite?.length > 0 && (
+                      <span style={{ color:G.orange, marginLeft:6 }} title={`Pagini necitite: ${d.pagini_necitite.join(', ')}`}>· {d.pagini_necitite.length} necitite</span>
+                    )}
                   </span>
                   {d.status_procesare === 'in_lucru' && (
                     <span title={d.pagini ? `${Math.round(100 * (d.pagini_procesate || 0) / d.pagini)}%` : 'se pregătește'} style={{ width:64, height:5, borderRadius:3, background:G.border, overflow:'hidden', flexShrink:0 }}>
@@ -964,7 +969,7 @@ function CerinteSection({ licitatie, profile, onChanged }) {
     // spart în „— partea N" se sare (părțile îl înlocuiesc — cazul VOLUM III întreg).
     const { data: docs } = await supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip').eq('licitatie_id', licitatie.id)
-      .eq('status_procesare', 'procesat').in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta'])
+      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta'])
       .order('id')
     const toateNumele = (docs || []).map(d => d.nume_original || '')
     const deCitit = (docs || []).filter(d => {
