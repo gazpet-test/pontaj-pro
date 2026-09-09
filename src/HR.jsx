@@ -8,6 +8,7 @@ import * as XLSX from 'xlsx-js-style'
 import { SalariiPage as SalariiOriginal } from './App.jsx'
 import TabDocumentePersonale from './TabDocumentePersonale.jsx'
 import TabSemnaturi from './TabSemnaturi.jsx'
+import AdeverinteLegator from './AdeverinteLegator.jsx'
 import TabConcedii from './TabConcedii.jsx'
 import TabScannerDocumenteHR from './TabScannerDocumenteHR.jsx'
 import TabCos from './TabCos.jsx'
@@ -202,6 +203,7 @@ export default function HRPage() {
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
+    { key: 'adeverinte',  icon: '📄', label: 'Adeverințe legători', personalOnly: true },
     { key: 'concedii',    icon: '🌴', label: 'Concedii' },
     { key: 'recrutare',   icon: '🧲', label: 'Recrutare', personalOnly: true },
     { key: 'arhiva',      icon: '📦', label: 'Arhivă', badge: arhiva.length, personalOnly: true },
@@ -274,6 +276,7 @@ export default function HRPage() {
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
+      {!load && tab === 'adeverinte' && canAccessPersonal && <AdeverinteLegator profile={profile} showToast={showToast} />}
       {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'recrutare' && canAccessPersonal && <HrRecrutare profile={profile} showToast={showToast} />}
       {!load && tab === 'arhiva' && canAccessPersonal && <TabArhivaAutorizatii arhiva={arhiva} showToast={showToast} />}
