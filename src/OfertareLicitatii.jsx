@@ -959,17 +959,22 @@ function CerinteSection({ licitatie, profile, onChanged }) {
     setWarn(null)
     const sectiuni = ['III', 'IV', 'II', 'rest']
     for (let i = 0; i < sectiuni.length; i++) {
-      setBusy(`Opus citește fișa — secțiunea ${sectiuni[i]} (${i + 1}/4)...`)
-      const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
-        { body: { licitatie_id: licitatie.id, sectiune: sectiuni[i], reset: i === 0 } })
-      if (error || data?.error) { setWarn(`Secțiunea ${sectiuni[i]}: ${data?.error || error.message}`); setBusy(null); await load(); return }
-      await load()
+      // v6: o bucată per apel — se continuă cât timp funcția mai are bucăți (nimic nu se mai taie la 180k)
+      let bucata = 0, continua = true
+      while (continua) {
+        setBusy(`Opus citește fișa — secțiunea ${sectiuni[i]} (${i + 1}/4)${bucata ? ` · bucata ${bucata + 1}` : ''}...`)
+        const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
+          { body: { licitatie_id: licitatie.id, sectiune: sectiuni[i], reset: i === 0 && bucata === 0, bucata } })
+        if (error || data?.error) { setWarn(`Secțiunea ${sectiuni[i]}: ${data?.error || error.message}`); setBusy(null); await load(); return }
+        continua = !!data?.continua; bucata = data?.bucata_urmatoare ?? bucata + 1
+        await load()
+      }
     }
     // Sweep pe corpus: caiete de sarcini + clarificări + „alta" procesate. Un original
     // spart în „— partea N" se sare (părțile îl înlocuiesc — cazul VOLUM III întreg).
     const { data: docs } = await supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip').eq('licitatie_id', licitatie.id)
-      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta'])
+      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta', 'formular'])
       .order('id')
     const toateNumele = (docs || []).map(d => d.nume_original || '')
     const deCitit = (docs || []).filter(d => {
@@ -979,15 +984,20 @@ function CerinteSection({ licitatie, profile, onChanged }) {
     let esecuri = 0
     for (let i = 0; i < deCitit.length; i++) {
       const d = deCitit[i]
-      setBusy(`Opus citește caietele/clarificările: ${i + 1}/${deCitit.length} · ${(d.nume_original || '').split('/').pop()}`)
-      const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
-        { body: { licitatie_id: licitatie.id, doc_id: d.id } })
-      if (error || data?.error) {
+      let bucata = 0, continua = true, esec = false
+      while (continua) {
+        setBusy(`Opus citește caietele/clarificările: ${i + 1}/${deCitit.length} · ${(d.nume_original || '').split('/').pop()}${bucata ? ` · bucata ${bucata + 1}` : ''}`)
+        const { data, error } = await supabase.functions.invoke('ofertare-cerinte',
+          { body: { licitatie_id: licitatie.id, doc_id: d.id, bucata } })
+        if (error || data?.error) { esec = true; break }
+        continua = !!data?.continua; bucata = data?.bucata_urmatoare ?? bucata + 1
+        await load()
+      }
+      if (esec) {
         esecuri++
-        if (esecuri >= 3) { setWarn(`Prea multe erori la caiete (ultima: ${data?.error || error.message}) — restul se reiau mai târziu cu „Re-extrage".`); break }
+        if (esecuri >= 3) { setWarn('Prea multe erori la caiete — restul se reiau mai târziu cu „Re-extrage".'); break }
         continue
       }
-      await load()
     }
     setBusy(null); await load(); onChanged?.()
   }
