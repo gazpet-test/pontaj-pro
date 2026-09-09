@@ -13,7 +13,7 @@ import HRPage from './HR.jsx'
 import AdministrativPage from './Administrativ.jsx'
 import Tichete from './Tichete.jsx'
 import Consumabile from './Consumabile.jsx'
-import TabSemnaturi from './TabSemnaturi.jsx'
+import TabSemnaturi, { ModalSemnaturaMea } from './TabSemnaturi.jsx'
 import ChatbotWidget from './ChatbotWidget.jsx'
 import BugReportButton from './BugReportButton.jsx'
 import TichetModulButton from './TichetModulButton.jsx'
@@ -695,6 +695,9 @@ function Layout({ children }) {
   const isContabilitate = profile?.role==='contabilitate'
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
   const [showPwd, setShowPwd] = useState(false)
+  // Semnatura proprie: accesibila oricui are cont, fara drepturi HR (vezi ModalSemnaturaMea)
+  const [showSem, setShowSem] = useState(false)
+  const [semToast, showSemToast] = useToast()
   // Tichete ale mele — split deschise de mine vs asignate mie + de confirmat (12.06.2026)
   const [ticheteMele, setTicheteMele] = useState({ deschise: 0, asignate: 0, deConfirmat: 0 })
   const [showTicheteMele, setShowTicheteMele] = useState(false)
@@ -937,6 +940,7 @@ function Layout({ children }) {
             <RoleBadge role={profile?.role} size="small"/>
           </div>
           <button className="nl" onClick={()=>setShowPwd(true)} title="Schimbă parola" style={{padding:'5px 8px',color:G.muted}}>🔑</button>
+          <button className="nl" onClick={()=>setShowSem(true)} title="Semnătura mea" style={{padding:'5px 8px',color:G.muted}}>🖋️</button>
           <button className="nl" onClick={signOut} title="Ieșire" style={{color:G.red,padding:'5px 8px'}}>⎋</button>
         </div>
       </div>
@@ -945,6 +949,7 @@ function Layout({ children }) {
         Made by Trusu Razvan - Administrator Gazpet Instal
       </div>
       {showPwd && <ChangePasswordModal onClose={()=>setShowPwd(false)} />}
+      {showSem && <><ModalSemnaturaMea profile={profile} onClose={()=>setShowSem(false)} showToast={showSemToast} /><Toast toast={semToast} /></>}
     </div>
   )
 }
@@ -955,6 +960,8 @@ function HomeDashboard() {
   const { profile, signOut } = useAuth()
   const nav = useNavigate()
   const [now, setNow] = useState(new Date())
+  const [showSem, setShowSem] = useState(false)
+  const [semToast, showSemToast] = useToast()
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t) },[])
   const isSuperAdmin = profile?.is_owner === true
   const isContabilitate = profile?.role==='contabilitate'
@@ -1033,9 +1040,12 @@ function HomeDashboard() {
             <div style={{fontSize:13,fontWeight:600,color:'#E6EDF3',lineHeight:1.3}}>{profile?.name||profile?.email?.split('@')[0]}</div>
             <RoleBadge role={profile?.role} size="small"/>
           </div>
+          <button onClick={()=>setShowSem(true)} title="Semnătura mea" style={{background:'transparent',border:'1px solid #30363D',color:'#8B949E',borderRadius:6,padding:'5px 10px',cursor:'pointer',fontSize:13,marginLeft:8}}>🖋️</button>
           <button onClick={signOut} style={{background:'transparent',border:'1px solid #30363D',color:'#8B949E',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12,marginLeft:8}}>Ieșire</button>
         </div>
       </div>
+
+      {showSem && <><ModalSemnaturaMea profile={profile} onClose={()=>setShowSem(false)} showToast={showSemToast} /><Toast toast={semToast} /></>}
 
       {/* PWA: propunere de instalare pe telefon (dismissable) */}
       <InstallPwaBanner />
