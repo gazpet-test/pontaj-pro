@@ -322,7 +322,7 @@ export default function OfertareLicitatiiTab() {
                 <div style={{ display:'flex', gap:18, fontSize:13, color:G.muted, flexWrap:'wrap' }}>
                   <span>💰 <b style={{ color:G.text }}>{fmtMil(l.valoare_estimata)}</b> {l.moneda || 'lei'}</span>
                   <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>
-                  {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }}>🚫 eliminatorii neacoperite: <b>{l.eliminatorii_neacoperite}</b></span>}
+                  {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }} title={'Eliminatorii fără rând de acoperire „acoperit”: goluri + neevaluate'}>🚫 eliminatorii fără dovadă: <b>{l.eliminatorii_neacoperite}</b></span>}
                   {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
                   {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
                   {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
@@ -1201,13 +1201,15 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
     await load()
   }
 
-  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0 }
+  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0 }
   ;(cerinte || []).forEach(c => {
     const a = acoperiri[c.id]
-    if (!a) { stats.neevaluate++; return }
+    if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie') stats.neevaluateElim++; return }
     stats[a.status] = (stats[a.status] || 0) + 1
     if (a.status === 'gol' && c.tip === 'eliminatorie') stats.goluriElim++
   })
+  // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă
+  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim
   const randuri = (cerinte || []).filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol')
 
   return (
@@ -1217,7 +1219,11 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
         {cerinte?.length > 0 && (
           <span style={{ fontSize:11.5, color:G.muted }}>
             ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate
-            {stats.goluriElim > 0 && <b style={{ color:G.red }}> · {stats.goluriElim} ELIMINATORII neacoperite!</b>}
+            {elimFaraDovada > 0 && (
+              <b style={{ color:G.red }} title={`Eliminatorii fără dovadă = goluri (${stats.goluriElim}) + neevaluate (${stats.neevaluateElim}). Aceeași cifră ca în lista de licitații.`}>
+                {' '}· {elimFaraDovada} ELIMINATORII fără dovadă ({stats.goluriElim} goluri + {stats.neevaluateElim} neevaluate)
+              </b>
+            )}
           </span>
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
@@ -1387,7 +1393,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <KPI l="Valoare estimată" v={fmtMil(l.valoare_estimata)} unit={l.valoare_estimata >= 1e6 ? `mil ${l.moneda || 'lei'}` : (l.moneda || 'lei')} />
           <KPI l="Termen depunere" v={zile == null ? (l.termen_depunere ? fmtTermen(l.termen_depunere).slice(0, 10) : '—') : zile === 0 ? 'AZI' : zile} unit={zile != null ? (zile === 1 ? 'zi' : 'zile') : ''} color={cZile} />
           <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
-          <KPI l="Eliminatorii neacoperite" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
+          <KPI l="Eliminatorii fără dovadă (goluri + neevaluate)" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
           <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
           {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
           <div onClick={() => setTab('garantie')} style={{ cursor:'pointer', display:'contents' }} title="Deschide fluxul garanției (cerere poliță → plată → original)">

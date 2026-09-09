@@ -95,7 +95,14 @@ Reguli: modifică DOAR cerințele pe care răspunsul le schimbă efectiv (relaxa
       const { data: ac } = await db.from('ofertare_acoperire').select('*').eq('cerinta_id', c.id).maybeSingle()
       if (ac) {
         const { id: _i, created_at: _c, updated_at: _u, ...rest } = ac
-        const { error: eA } = await db.from('ofertare_acoperire').insert({ ...rest, cerinta_id: ins.id, observatii: [ac.observatii, `copiată de la cerința #${c.id} după clarificarea nr. ${cl.nr} — de reverificat`].filter(Boolean).join(' · ') })
+        // Cerința s-a schimbat, deci verificarea pe scan NU mai e valabilă: se resetează
+        // explicit, nu doar cu o notă în observații (auditul 09.09: marcajul supraviețuia
+        // prin ...rest și cerința nouă părea verificată fără să fi văzut-o nimeni).
+        const { error: eA } = await db.from('ofertare_acoperire').insert({
+          ...rest, cerinta_id: ins.id,
+          verificat_pe_scan: false, verificat_de: null, verificat_la: null,
+          observatii: [ac.observatii, `copiată de la cerința #${c.id} după clarificarea nr. ${cl.nr} — de reverificat`].filter(Boolean).join(' · '),
+        })
         if (!eA) rezultat.acoperiri_copiate++
       }
     }
