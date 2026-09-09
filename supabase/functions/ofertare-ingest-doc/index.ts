@@ -1,4 +1,5 @@
-// ofertare-ingest-doc v8 (09.09.2026) — CITIRE COMPLETĂ, DOVEDIBILĂ.
+// ofertare-ingest-doc v9 (09.09.2026) — {apeluri:N} din body (workerul server cere 1).
+// v8 (09.09.2026) — CITIRE COMPLETĂ, DOVEDIBILĂ.
 // v8 (Faza 1 corectitudine): (1) fiecare pagină e marcată în text cu ⟦PAGINA N⟧, ca
 // extragerea cerințelor să poată spune pagina-sursă; (2) o felie prea mare se
 // înjumătățește până la o pagină înainte să renunțăm; (3) paginile pe care chiar nu
@@ -73,7 +74,10 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { doc_id, reia } = await req.json()
+    const { doc_id, reia, apeluri } = await req.json()
+    // Workerul de pe server (cron + pg_net) cere {apeluri:1}: gateway-ul taie la 150s (IDLE_TIMEOUT),
+    // iar două felii de scan cu Haiku pot depăși; din browser rămân 2 apeluri.
+    const apeluriMax = Math.max(1, Math.min(Number(apeluri) || APELURI_PER_INVOCARE, APELURI_PER_INVOCARE))
     docId = Number(doc_id)
     if (!docId) return new Response(JSON.stringify({ error: 'doc_id required' }), { status: 400, headers: CORS })
 
@@ -112,7 +116,7 @@ Deno.serve(async (req: Request) => {
     // paginile necitite se acumulează peste invocări (documentul mare se citește în mai multe runde)
     const necitite = new Set<number>(reiaDeLaZero ? [] : ((row.pagini_necitite as number[] | null) || []))
 
-    for (let apel = 0; apel < APELURI_PER_INVOCARE && poz < nPag; apel++) {
+    for (let apel = 0; apel < apeluriMax && poz < nPag; apel++) {
       const s = poz, e = Math.min(poz + felie, nPag)
       let pdfFelie: Uint8Array
       try { pdfFelie = (s === 0 && e === nPag) ? bytes : await feliePdf(pdf, s, e) }
