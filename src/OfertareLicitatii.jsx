@@ -13,6 +13,7 @@ import { supabase } from './lib/supabase.js'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
+import { GbeLicitatie } from './GbeEvidenta.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1404,7 +1405,11 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <AcoperireSection licitatie={l} profile={profile} />
             </>}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
-            {tab === 'garantie' && <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />}
+            {tab === 'garantie' && <>
+              <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
+              {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
+              <GbeLicitatie licitatie={l} profile={profile} accent={G.ofertare} onChanged={onChanged} />
+            </>}
             {tab === 'verificari' && <VerificareFinalaSection licitatie={l} />}
             {tab === 'clarificari' && (
               <div style={{ ...S.card, padding:16, background:G.surface }}>
