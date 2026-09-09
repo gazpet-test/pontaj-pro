@@ -31,6 +31,13 @@ export function alerteGbe(c, v, polite = [], restituiri = []) {
     const pct = Number(c.gbe_pct_deblocare_receptie ?? 70)
     out.push({ n:'critic', t:`Recepție la terminare ${fmtZi(c.gbe_data_receptie_terminare)} — ${pct}% (${fmtLei(ramas * pct / 100)}) de cerut beneficiarului` })
   }
+  // Punctul orb: fără data recepției nu se declanșează alerta de mai sus, deci banii pot sta blocați
+  // la nesfârșit fără ca nimeni să afle (cazul Comișani: 327.478 lei, 7 luni). 09.09.2026
+  if (c.gbe_tip === 'retinere' && !areRec && ramas > 0 && c.status !== 'draft') {
+    const pct = Number(c.gbe_pct_deblocare_receptie ?? 70)
+    out.push({ n: c.status === 'finalizat' ? 'critic' : 'warn',
+      t:`Lipsește data recepției la terminare — caută PV-ul și completeaz-o, altfel nu se cere deblocarea de ${pct}% (${fmtLei(ramas * pct / 100)})` })
+  }
   const zr = zile(c.gbe_data_estimata_recuperare)
   if (ramas > 0 && zr != null && zr <= 60) out.push({ n: zr <= 0 ? 'critic' : 'warn', t: zr <= 0 ? `Termen de recuperare depășit (${fmtZi(c.gbe_data_estimata_recuperare)}) — ${fmtLei(ramas)} de recuperat` : `Recuperare în ${zr} zile (${fmtZi(c.gbe_data_estimata_recuperare)}) — ${fmtLei(ramas)}` })
   if (c.gbe_tip === 'polita' && c.gbe_data_receptie_finala && polite.length) out.push({ n:'critic', t:`Recepție finală ${fmtZi(c.gbe_data_receptie_finala)} — poliță GBE de eliberat / restul de recuperat` })
