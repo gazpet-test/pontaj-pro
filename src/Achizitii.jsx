@@ -102,7 +102,7 @@ async function fetchAsDataURL(url) {
 
 // Cache semnături pe sesiune (aceiași aprobatori la toate comenzile)
 const _semnCache = new Map()
-async function getSemnaturaDataURL(employeeId) {
+export async function getSemnaturaDataURL(employeeId) {
   if (!employeeId) return null
   if (_semnCache.has(employeeId)) return _semnCache.get(employeeId)
   try {
