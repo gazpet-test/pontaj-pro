@@ -57,10 +57,11 @@ const CAT_META = {
 function Toast({ toast }) {
   if (!toast) return null
   const colors = {
-    success: G.green, error: G.red, warn: G.orange, info: G.blue,
+    success: G.green, error: G.red, warn: G.orange, warning: G.orange, info: G.blue,
   }
+  // sus-dreapta + z-index peste butonul de tichet/bot (bottom-right) — altfel mesajul rămâne ascuns sub ele
   return (
-    <div style={{position:'fixed', bottom:20, right:20, zIndex:1000, background:colors[toast.type] || G.green, color:'#fff', padding:'12px 18px', borderRadius:8, fontSize:13, fontWeight:600, boxShadow:'0 4px 12px rgba(0,0,0,0.5)'}}>
+    <div style={{position:'fixed', top:76, right:18, zIndex:10002, background:colors[toast.type] || G.green, color:'#fff', padding:'12px 18px', borderRadius:8, fontSize:13, fontWeight:600, boxShadow:'0 8px 32px rgba(0,0,0,0.5)', maxWidth:'min(420px, calc(100vw - 36px))'}}>
       {toast.msg}
     </div>
   )
