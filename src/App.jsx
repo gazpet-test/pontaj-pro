@@ -241,7 +241,7 @@ function Avatar({ name, id=1, size=34 }) {
 }
 function Toast({ toast }) {
   if (!toast) return null
-  const c={success:[G.greenDim,G.green],error:[G.redDim,G.red],warn:[G.yellowDim,G.yellow]}
+  const c={success:[G.greenDim,G.green],error:[G.redDim,G.red],warn:[G.yellowDim,G.yellow],warning:[G.yellowDim,G.yellow]}
   const [bg,col]=c[toast.type]||c.success
   return <div className="toast" style={{background:bg,color:col,border:`1px solid ${col}44`}}>{toast.msg}</div>
 }
