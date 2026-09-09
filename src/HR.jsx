@@ -449,9 +449,12 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
   const uploadRefGlobal = useRef(null)
   const uploadTargetRef = useRef(null) // { id, employee_id }
 
-  const handleViewPdf = useCallback(async (path) => {
+  // Dovada poate sta în două locuri: urcată direct pe autorizație (bucket `autorizatii`)
+  // sau deja în dosarul personal, adusă automat din Drive (bucket `documente-personal`).
+  // View-ul `v_hr_autorizatii_status` spune care e cazul prin `dovada_bucket`.
+  const handleViewPdf = useCallback(async (path, bucket = 'autorizatii') => {
     if (!path) { showToast('Nicio dovadă atașată', 'warning'); return }
-    const { data, error } = await supabase.storage.from('autorizatii').createSignedUrl(path, 120)
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 120)
     if (error) { showToast('Eroare deschidere: ' + error.message, 'error'); return }
     window.open(data.signedUrl, '_blank')
   }, [showToast])
@@ -741,9 +744,9 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
                   {isAdmin && (
                     <td style={{...tdStyle, textAlign:'right'}}>
                       <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
-                        <button onClick={() => handleViewPdf(a.fisier_path)}
-                          style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
-                          title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
+                        <button onClick={() => handleViewPdf(a.dovada_path, a.dovada_bucket)}
+                          style={{padding:'4px 8px', background: a.dovada_path ? G.green+'22' : G.muted+'22', color: a.dovada_path ? G.green : G.muted, border:`1px solid ${a.dovada_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+                          title={a.dovada_path ? (a.document_personal_id ? 'Vezi documentul din dosarul personal' : 'Vizualizează fișier') : 'Nicio dovadă atașată'}>📄</button>
                         <button onClick={() => { uploadTargetRef.current={id:a.id,employee_id:a.employee_id}; uploadRefGlobal.current?.click() }}
                           disabled={uploadingId===a.id}
                           style={{padding:'4px 8px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
@@ -991,9 +994,12 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   const uploadRef = useRef(null)
   const uploadTarget = useRef(null)
 
-  const handleViewPdf = useCallback(async (path) => {
+  // Dovada poate sta în două locuri: urcată direct pe autorizație (bucket `autorizatii`)
+  // sau deja în dosarul personal, adusă automat din Drive (bucket `documente-personal`).
+  // View-ul `v_hr_autorizatii_status` spune care e cazul prin `dovada_bucket`.
+  const handleViewPdf = useCallback(async (path, bucket = 'autorizatii') => {
     if (!path) { showToast('Nicio dovadă atașată', 'warning'); return }
-    const { data, error } = await supabase.storage.from('autorizatii').createSignedUrl(path, 120)
+    const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 120)
     if (error) { showToast('Eroare deschidere: ' + error.message, 'error'); return }
     window.open(data.signedUrl, '_blank')
   }, [showToast])
@@ -1183,9 +1189,9 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                           {statusBadge(a.status, a.zile_pana_expirare)}
                           {isAdmin && (
                             <div style={{display:'flex', gap:4}}>
-                              <button onClick={() => handleViewPdf(a.fisier_path)}
-                                style={{padding:'4px 8px', background: a.fisier_path ? G.green+'22' : G.muted+'22', color: a.fisier_path ? G.green : G.muted, border:`1px solid ${a.fisier_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
-                                title={a.fisier_path ? 'Vizualizează fișier' : 'Nicio dovadă atașată'}>📄</button>
+                              <button onClick={() => handleViewPdf(a.dovada_path, a.dovada_bucket)}
+                                style={{padding:'4px 8px', background: a.dovada_path ? G.green+'22' : G.muted+'22', color: a.dovada_path ? G.green : G.muted, border:`1px solid ${a.dovada_path ? G.green+'55' : G.muted+'44'}`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+                                title={a.dovada_path ? (a.document_personal_id ? 'Vezi documentul din dosarul personal' : 'Vizualizează fișier') : 'Nicio dovadă atașată'}>📄</button>
                               <button onClick={() => { uploadTarget.current={id:a.id,employee_id:a.employee_id}; uploadRef.current?.click() }}
                                 disabled={uploadingId===a.id}
                                 style={{padding:'4px 8px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
