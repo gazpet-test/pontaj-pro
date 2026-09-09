@@ -101,17 +101,24 @@ function ModalGenerare({ rand, onClose, onGata, showToast }) {
   const [incarc, setIncarc] = useState(true)
   const [lucrez, setLucrez] = useState(false)
   const [urmatorul, setUrmatorul] = useState(null)
+  const [sursa, setSursa] = useState(null)   // 'act' | 'adeverinta' | null
 
   useEffect(() => {
     (async () => {
       try {
-        const [{ data: ultima }, { data: max }] = await Promise.all([
+        const [{ data: ultima }, { data: max }, { data: citit }] = await Promise.all([
           supabase.from('hr_adeverinte_legator')
             .select('date_identificare, echipament').eq('employee_id', rand.employee_id)
             .order('numar', { ascending:false }).limit(1).maybeSingle(),
           supabase.from('hr_adeverinte_legator').select('numar').order('numar', { ascending:false }).limit(1).maybeSingle(),
+          // datele citite din buletin și confirmate de un om (vezi TabDateIdentificare)
+          supabase.from('hr_ci_extrase')
+            .select('cnp, ci_serie, ci_numar, ci_eliberat_de, ci_eliberat_la, domiciliu')
+            .eq('employee_id', rand.employee_id).eq('status', 'confirmat').maybeSingle(),
         ])
-        if (ultima?.date_identificare) setD({ ...GOL, ...ultima.date_identificare })
+        // adeverința anterioară bate propunerea: ce s-a tipărit o dată rămâne
+        if (citit) { setD({ ...GOL, ...citit }); setSursa('act') }
+        if (ultima?.date_identificare) { setD({ ...GOL, ...ultima.date_identificare }); setSursa('adeverinta') }
         if (ultima?.echipament) setEchipament(ultima.echipament)
         setUrmatorul((max?.numar ?? 498) + 1)
       } finally { setIncarc(false) }
@@ -218,9 +225,12 @@ function ModalGenerare({ rand, onClose, onGata, showToast }) {
             <div style={{textAlign:'center', padding:26, color:G.muted, fontSize:13}}>Se încarcă…</div>
           ) : (
             <>
-              <div style={{padding:11, background:G.blueDim, borderLeft:`3px solid ${G.blue}`, borderRadius:6, marginBottom:16, fontSize:11, lineHeight:1.6, color:'#9CC9FF'}}>
-                Datele de identificare nu sunt în platformă, deci se completează o singură dată —
-                la reînnoirea de anul viitor se preiau automat de aici.
+              <div style={{padding:11, background:sursa?G.greenDim:G.blueDim, borderLeft:`3px solid ${sursa?G.green:G.blue}`, borderRadius:6, marginBottom:16, fontSize:11, lineHeight:1.6, color:sursa?'#8FD9A8':'#9CC9FF'}}>
+                {sursa === 'act'
+                  ? 'Datele sunt preluate din actul de identitate din dosar, verificate și confirmate. Citește-le încă o dată înainte de a genera.'
+                  : sursa === 'adeverinta'
+                    ? 'Datele sunt preluate din adeverința anterioară a acestui om.'
+                    : 'Datele de identificare nu sunt în platformă. Completează-le o singură dată — la reînnoire se preiau automat.'}
               </div>
               {camp('domiciliu', 'Domiciliu (localitate, județ)', 'COM. ILOVIȚA, SAT BAHNA, JUD. MEHEDINȚI')}
               <div style={{display:'grid', gridTemplateColumns:'1fr 2fr', gap:10}}>
@@ -255,6 +265,7 @@ export default function AdeverinteLegator({ profile, showToast }) {
   const [q, setQ] = useState('')
   const [doarFaraPdf, setDoarFaraPdf] = useState(false)
   const [genPentru, setGenPentru] = useState(null)
+  const [sub, setSub] = useState('adeverinte')   // 'adeverinte' | 'identificare'
   const [semnaturi, setSemnaturi] = useState({ director:false, rsvti:false })
 
   const hasAccess = profile?.can_access_personal_data === true || profile?.is_owner === true
@@ -310,6 +321,17 @@ export default function AdeverinteLegator({ profile, showToast }) {
 
   return (
     <div>
+      <div style={{display:'flex', gap:8, marginBottom:16}}>
+        {[['adeverinte','📄 Adeverințe'], ['identificare','🪪 Date de identificare']].map(([k, l]) => (
+          <button key={k} onClick={()=>setSub(k)} style={{...S.btnS,
+            background: sub===k ? G.hr+'22' : G.surface, color: sub===k ? G.hr : G.muted,
+            fontWeight: sub===k ? 700 : 400}}>{l}</button>
+        ))}
+      </div>
+
+      {sub === 'identificare' && <PanouDateIdentificare showToast={showToast} onSchimbat={load_} />}
+      {sub === 'adeverinte' && <>
+
       {/* Fără ambele semnături, PDF-ul iese cu spațiu gol de semnat olograf */}
       {(!semnaturi.director || !semnaturi.rsvti) && (
         <div style={{...S.card, padding:'12px 16px', marginBottom:14, borderLeft:`3px solid ${G.orange}`, background:G.orangeDim, fontSize:12, lineHeight:1.6, color:'#FFC494'}}>
@@ -394,6 +416,159 @@ export default function AdeverinteLegator({ profile, showToast }) {
 
       {genPentru && (
         <ModalGenerare rand={genPentru} onClose={()=>setGenPentru(null)} onGata={load_} showToast={showToast} />
+      )}
+      </>}
+    </div>
+  )
+}
+
+// ─── Panou: citirea actelor cu AI + confirmarea propunerilor ────────────────
+// Nimic din ce citește modelul nu ajunge pe o adeverință fără ca cineva să apese
+// „Confirmă". Rândurile care au picat o verificare (CNP invalid, nume care nu se
+// potrivește) se văd cu motivul lor, ca să se știe de ce n-au trecut.
+export function PanouDateIdentificare({ showToast, onSchimbat }) {
+  const [propuneri, setPropuneri] = useState([])
+  const [load, setLoad] = useState(true)
+  const [citesc, setCitesc] = useState(false)
+  const [edit, setEdit] = useState(null)   // rândul deschis pentru corectură
+
+  const load_ = useCallback(async () => {
+    setLoad(true)
+    const { data } = await supabase.from('hr_ci_extrase')
+      .select('*, employees(name)').order('status').order('id', { ascending:false })
+    setPropuneri(data || [])
+    setLoad(false)
+  }, [])
+  useEffect(() => { load_() }, [load_])
+
+  const citesteActe = async (limita) => {
+    setCitesc(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('hr-extrage-ci', { body: { limita } })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      showToast?.(`Citite ${data.citite ?? 0} acte · ${data.bune ?? 0} curate, ${data.de_verificat ?? 0} de verificat, ${data.erori ?? 0} erori · ${data.cost_usd ?? 0} $`)
+      load_()
+    } catch (e) {
+      showToast?.('Eroare citire: ' + (e.message || e), 'error')
+    } finally { setCitesc(false) }
+  }
+
+  const decide = async (rand, status) => {
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error } = await supabase.from('hr_ci_extrase')
+      .update({ status, confirmat_de: user?.id || null, confirmat_la: new Date().toISOString() })
+      .eq('id', rand.id)
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    showToast?.(status === 'confirmat' ? `✓ Confirmat: ${rand.employees?.name}` : 'Propunere respinsă')
+    load_(); onSchimbat?.()
+  }
+
+  const salveazaCorectura = async () => {
+    const { error } = await supabase.from('hr_ci_extrase').update({
+      cnp: edit.cnp, ci_serie: edit.ci_serie, ci_numar: edit.ci_numar,
+      ci_eliberat_de: edit.ci_eliberat_de, ci_eliberat_la: edit.ci_eliberat_la,
+      domiciliu: edit.domiciliu,
+    }).eq('id', edit.id)
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    showToast?.('Corectură salvată')
+    setEdit(null); load_()
+  }
+
+  const nrPropuse = propuneri.filter(p => p.status === 'propus').length
+  const nrConfirmate = propuneri.filter(p => p.status === 'confirmat').length
+
+  return (
+    <div>
+      <div style={{...S.card, padding:'14px 16px', marginBottom:14, display:'flex', gap:12, alignItems:'center', flexWrap:'wrap'}}>
+        <div style={{flex:1, minWidth:240, fontSize:12, color:G.muted, lineHeight:1.6}}>
+          Datele de pe adeverință (CNP, CI, domiciliu) nu există în platformă. Butonul citește actele
+          de identitate deja urcate în dosare și le propune aici. <strong style={{color:G.text}}>Nimic nu ajunge
+          pe un document fără confirmarea ta.</strong>
+        </div>
+        <button onClick={()=>citesteActe(10)} disabled={citesc} style={{...S.btnP, opacity:citesc?.5:1}}>
+          {citesc ? 'Se citește…' : '🤖 Citește 10 acte'}
+        </button>
+        <button onClick={()=>citesteActe(40)} disabled={citesc} style={{...S.btnS, opacity:citesc?.5:1}}>
+          Citește 40
+        </button>
+      </div>
+
+      <div style={{display:'flex', gap:14, marginBottom:14, fontSize:12}}>
+        <span style={{color:G.orange}}>⏳ {nrPropuse} de confirmat</span>
+        <span style={{color:G.green}}>✓ {nrConfirmate} confirmate</span>
+      </div>
+
+      <div style={{...S.card, overflow:'hidden'}}>
+        {load ? (
+          <div style={{padding:26, textAlign:'center', color:G.muted, fontSize:13}}>Se încarcă…</div>
+        ) : !propuneri.length ? (
+          <div style={{padding:26, textAlign:'center', color:G.muted, fontSize:13}}>
+            Nicio propunere încă — apasă „Citește 10 acte".
+          </div>
+        ) : (
+          <table style={{width:'100%', borderCollapse:'collapse'}}>
+            <thead><tr style={{background:G.bg}}>
+              <th style={th}>Angajat</th><th style={th}>CNP</th><th style={th}>CI</th>
+              <th style={th}>Domiciliu</th><th style={th}>Verificări</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {propuneri.map(p => (
+                <tr key={p.id} style={{borderTop:`1px solid ${G.border}`, opacity:p.status==='respins'?.45:1}}>
+                  <td style={{...td, fontWeight:600}}>
+                    {p.employees?.name || p.employee_id}
+                    {p.nume_pe_document && !p.nume_se_potriveste && (
+                      <div style={{fontSize:10.5, color:G.red, fontWeight:400}}>pe act: {p.nume_pe_document}</div>
+                    )}
+                  </td>
+                  <td style={{...td, fontFamily:'monospace', fontSize:12}}>{p.cnp || '—'}</td>
+                  <td style={td}>{[p.ci_serie, p.ci_numar].filter(Boolean).join(' ') || '—'}</td>
+                  <td style={{...td, maxWidth:220, fontSize:11.5}}>{p.domiciliu || '—'}</td>
+                  <td style={td}>
+                    {p.motiv_respingere
+                      ? <span style={{color:G.orange, fontSize:11}}>⚠ {p.motiv_respingere}</span>
+                      : <span style={{color:G.green, fontSize:11}}>✓ CNP valid · nume ok · {p.incredere}%</span>}
+                  </td>
+                  <td style={{...td, textAlign:'right', whiteSpace:'nowrap'}}>
+                    {p.status === 'propus' ? (
+                      <>
+                        <button onClick={()=>setEdit(p)} style={{...S.btnS, padding:'4px 9px', marginRight:5}} title="Corectează">✏️</button>
+                        <button onClick={()=>decide(p, 'confirmat')} style={{...S.btnS, padding:'4px 10px', marginRight:5, color:G.green, borderColor:G.green+'55'}}>Confirmă</button>
+                        <button onClick={()=>decide(p, 'respins')} style={{...S.btnS, padding:'4px 10px', color:G.red, borderColor:G.red+'55'}}>Respinge</button>
+                      </>
+                    ) : (
+                      <span style={{fontSize:11, color:p.status==='confirmat'?G.green:G.muted}}>
+                        {p.status === 'confirmat' ? '✓ confirmat' : 'respins'}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {edit && (
+        <div onClick={()=>setEdit(null)} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.85)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{...S.card, width:520, borderTop:`3px solid ${G.hr}`}}>
+            <div style={{padding:'14px 18px', borderBottom:`1px solid ${G.border}`, fontSize:14, fontWeight:700}}>
+              ✏️ Corectează datele — {edit.employees?.name}
+            </div>
+            <div style={{padding:18}}>
+              {[['cnp','CNP'],['ci_serie','CI serie'],['ci_numar','CI număr'],['ci_eliberat_de','Eliberată de'],['ci_eliberat_la','La data'],['domiciliu','Domiciliu']].map(([k, l]) => (
+                <div key={k} style={{marginBottom:11}}>
+                  <Lbl>{l}</Lbl>
+                  <input value={edit[k] || ''} onChange={e=>setEdit(x=>({...x,[k]:e.target.value}))} style={S.input} />
+                </div>
+              ))}
+              <div style={{display:'flex', gap:10, marginTop:16}}>
+                <button onClick={()=>setEdit(null)} style={{...S.btnS, flex:1}}>Renunță</button>
+                <button onClick={salveazaCorectura} style={{...S.btnP, flex:2}}>Salvează corectura</button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
