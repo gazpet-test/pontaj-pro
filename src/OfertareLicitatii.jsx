@@ -111,14 +111,16 @@ export default function OfertareLicitatiiTab() {
     ids.forEach(id => { stats[id] = { cerinte: 0, acoperite: 0, rosii: 0, verdict: null, verdict_la: null, clarificari: 0 } })
     if (ids.length) {
       const [{ data: cs }, { data: vf }, { data: cl }] = await Promise.all([
-        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null),
+        // .limit explicit: implicit PostgREST întoarce 1.000 de rânduri, iar cerințele active sunt peste 2.000 —
+        // Mănăstirea apărea cu 150/419 în loc de 226/655 (auditul 09.09.2026)
+        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null).limit(20000),
         supabase.from('ofertare_verificari').select('licitatie_id, verdict, created_at').in('licitatie_id', ids).order('id', { ascending: false }),
         supabase.from('ofertare_clarificari').select('licitatie_id').in('licitatie_id', ids),
       ])
       const cerLic = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; stats[c.licitatie_id].cerinte++ })
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
-        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds)
+        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).limit(20000)
         ;(ac || []).forEach(a => { const lid = cerLic[a.cerinta_id]; const st = stats[lid]; if (!st) return
           if (a.status === 'acoperit' || a.status === 'acoperit_partener') st.acoperite++
           // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci
@@ -950,6 +952,7 @@ function CerinteSection({ licitatie, profile, onChanged }) {
       .select('id, sursa_sectiune, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
       .order('sursa_sectiune').order('id')
+      .limit(5000)
     setCerinte(data || [])
   }
   useEffect(() => { load() }, [licitatie.id])
@@ -1141,12 +1144,12 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
     const { data: cs } = await supabase.from('ofertare_cerinte')
       .select('id, sursa_sectiune, text_cerinta, tip, lot')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
-      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('sursa_sectiune')
+      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('sursa_sectiune').limit(5000)
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
         .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate)')
-        .in('cerinta_id', cs.map(c => c.id))
+        .in('cerinta_id', cs.map(c => c.id)).limit(5000)
       const map = {}; (ac || []).forEach(a => { map[a.cerinta_id] = a })
       setAcoperiri(map)
     } else setAcoperiri({})
