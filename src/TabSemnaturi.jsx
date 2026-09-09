@@ -265,7 +265,7 @@ function SignaturePad({ onCapture, height = 180 }) {
 
 // ─── MODAL UPLOAD SEMNĂTURĂ ─────────────────────────────────────────────────
 
-function ModalUploadSemnatura({ employee, existing, onClose, onSaved, showToast }) {
+export function ModalUploadSemnatura({ employee, existing, onClose, onSaved, showToast }) {
   const [mode, setMode] = useState('upload')  // 'upload' | 'draw'
   const [file, setFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
@@ -844,6 +844,120 @@ export default function TabSemnaturi({ profile, showToast }) {
           onClose={()=>setPreviewFor(null)}
         />
       )}
+    </div>
+  )
+}
+
+// ─── SEMNĂTURA MEA (self-service, pentru orice utilizator cu cont) ──────────
+// Nu cere can_access_personal_data: omul vede și schimbă DOAR propria semnătură,
+// prin profiles.employee_id + politicile RLS "hr_sem_self_*".
+export function ModalSemnaturaMea({ profile, onClose, showToast }) {
+  const [loading, setLoading] = useState(true)
+  const [employee, setEmployee] = useState(null)
+  const [existing, setExisting] = useState(null)
+  const [editing, setEditing] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      if (!profile?.employee_id) { setEmployee(null); return }
+      const [empRes, semRes] = await Promise.all([
+        supabase.from('employees').select('id, name, department, position').eq('id', profile.employee_id).maybeSingle(),
+        supabase.from('hr_semnaturi_electronice').select('*')
+          .eq('employee_id', profile.employee_id).eq('activ', true).is('deleted_at', null).maybeSingle(),
+      ])
+      setEmployee(empRes.data || null)
+      setExisting(semRes.data || null)
+    } catch (e) {
+      showToast?.('Eroare încărcare: ' + (e.message || e), 'error')
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [profile?.employee_id])
+
+  // Retragere = soft delete pe propriul rând (politica de UPDATE permite doar rândul propriu)
+  const retrage = async () => {
+    if (!existing) return
+    if (!window.confirm('Retragi semnătura ta din platformă?\n\nNu va mai fi aplicată pe documente noi. Poți înregistra oricând alta.')) return
+    try {
+      const { data: u } = await supabase.auth.getUser()
+      const { error } = await supabase.from('hr_semnaturi_electronice')
+        .update({ activ: false, deleted_at: new Date().toISOString(), deleted_by: u?.user?.id })
+        .eq('id', existing.id)
+      if (error) throw error
+      showToast?.('Semnătura a fost retrasă')
+      load()
+    } catch (e) {
+      showToast?.('Eroare: ' + (e.message || e), 'error')
+    }
+  }
+
+  if (editing && employee) {
+    return <ModalUploadSemnatura
+      employee={employee} existing={existing}
+      onClose={()=>setEditing(false)}
+      onSaved={()=>{ setEditing(false); load() }}
+      showToast={showToast}
+    />
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(0,0,0,.85)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{...S.card, width:520, maxHeight:'90vh', overflowY:'auto', borderTop:`3px solid ${G.hr}`}}>
+        <div style={{padding:'16px 20px', borderBottom:`1px solid ${G.border}`, display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:15, fontWeight:800}}>🖋️ Semnătura mea</div>
+            <div style={{fontSize:11, color:G.muted, marginTop:3}}>{employee?.name || profile?.name}</div>
+          </div>
+          <button onClick={onClose} style={{background:'none', border:'none', color:G.muted, cursor:'pointer', fontSize:20}}>×</button>
+        </div>
+
+        <div style={{padding:20}}>
+          {loading ? (
+            <div style={{textAlign:'center', padding:30, color:G.muted, fontSize:13}}>Se încarcă…</div>
+          ) : !employee ? (
+            <div style={{padding:14, background:G.orangeDim, borderLeft:`3px solid ${G.orange}`, borderRadius:6, fontSize:12, lineHeight:1.6, color:'#FFC494'}}>
+              Contul tău nu e legat de o fișă de angajat, deci nu pot ști a cui e semnătura.
+              Cere-i Nataliei sau Oanei să facă legătura din HR, apoi revino aici.
+            </div>
+          ) : (
+            <>
+              <div style={{padding:12, background:G.blueDim, borderLeft:`3px solid ${G.blue}`, borderRadius:6, marginBottom:16, fontSize:11, lineHeight:1.6, color:'#9CC9FF'}}>
+                Semnătura se aplică automat pe documentele care oricum îți revin (ordine de deplasare,
+                adeverințe, formulare interne). Se vede oricând pe ce document a fost folosită,
+                iar tu o poți înlocui sau retrage de aici.
+              </div>
+
+              {existing ? (
+                <>
+                  <Lbl>Semnătura activă</Lbl>
+                  <div style={{background:'#fff', borderRadius:8, padding:10, marginBottom:6, textAlign:'center'}}>
+                    <SemnaturaThumbnail path={existing.fisier_path} height={80} />
+                  </div>
+                  <div style={{fontSize:10, color:G.muted, marginBottom:16}}>
+                    Înregistrată la {new Date(existing.uploadat_la).toLocaleDateString('ro-RO')}
+                    {existing.width_px ? ` · ${existing.width_px}×${existing.height_px}px` : ''}
+                  </div>
+                  <div style={{display:'flex', gap:10}}>
+                    <button onClick={()=>setEditing(true)} style={{...S.btnP, flex:2}}>🖋️ Înlocuiește</button>
+                    <button onClick={retrage} style={{...S.btnS, flex:1, color:G.red, borderColor:G.red+'55'}}>Retrage</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{textAlign:'center', padding:'18px 0 22px'}}>
+                    <div style={{fontSize:40, marginBottom:10}}>✍️</div>
+                    <div style={{fontSize:13, color:G.text, fontWeight:600, marginBottom:4}}>Nu ai încă o semnătură înregistrată</div>
+                    <div style={{fontSize:11, color:G.muted}}>O desenezi cu degetul sau cu mouse-ul, ori încarci o poză.</div>
+                  </div>
+                  <button onClick={()=>setEditing(true)} style={{...S.btnP, width:'100%'}}>🖋️ Înregistrează-mi semnătura</button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
