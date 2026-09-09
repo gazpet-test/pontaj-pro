@@ -565,14 +565,37 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   const [seapBusy, setSeapBusy] = useState(null) // text progres aducere din SEAP
   const stopRef = useRef(false)                // ref, nu state — loop-ul citește valoarea LIVE
   const [warn, setWarn] = useState(null)
+  const [coada, setCoada] = useState(null)     // rândul din ofertare_ingest_coada (worker server-side)
 
   const load = async () => {
-    const { data } = await supabase.from('ofertare_documente_atribuire')
-      .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path')
-      .eq('licitatie_id', licitatie.id).order('id')
-    setDocs(data || [])
+    const [{ data }, { data: c }] = await Promise.all([
+      supabase.from('ofertare_documente_atribuire')
+        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path')
+        .eq('licitatie_id', licitatie.id).order('id'),
+      supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
+    ])
+    setDocs(data || []); setCoada(c || null)
   }
   useEffect(() => { load() }, [licitatie.id])
+  // Cât timp workerul de pe server citește, reîmprospătăm lista la 20s ca să se vadă progresul
+  useEffect(() => {
+    if (!coada?.activ) return
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [coada?.activ, licitatie.id])
+
+  // Citire PE SERVER (09.09.2026): coada e bătută de un cron la fiecare minut (ofertare_ingest_tick),
+  // deci nu mai depinde de tab-ul deschis / laptopul treaz. La final vine notificare în clopoțel.
+  const proceseazaPeServer = async () => {
+    const { error } = await supabase.from('ofertare_ingest_coada')
+      .upsert({ licitatie_id: licitatie.id, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(), terminat_la: null, nota: null }, { onConflict: 'licitatie_id' })
+    if (error) { setWarn(`Nu am putut porni citirea pe server: ${error.message}`); return }
+    setWarn(null); await load()
+  }
+  const opresteServer = async () => {
+    await supabase.from('ofertare_ingest_coada').update({ activ: false, nota: 'oprită manual' }).eq('licitatie_id', licitatie.id)
+    await load()
+  }
 
   const urca = async (fileList) => {
     const files = Array.from(fileList || [])
@@ -851,8 +874,17 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
             <input type="file" multiple style={{ display:'none' }}
               disabled={!!upBusy} onChange={e => { urca(e.target.files); e.target.value = '' }} />
           </label>
-          {nrDeProcesat > 0 && !procBusy && (
+          {nrDeProcesat > 0 && !procBusy && !coada?.activ && (
             <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={proceseaza}>🤖 Procesează ({nrDeProcesat})</button>
+          )}
+          {nrDeProcesat > 0 && !procBusy && !coada?.activ && (
+            <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={proceseazaPeServer}
+              title="Citirea rulează pe server, câte 3 documente pe minut — poți închide tab-ul; primești notificare în clopoțel când se termină">
+              ☁️ Pe server
+            </button>
+          )}
+          {coada?.activ && (
+            <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12, color:G.red, borderColor:G.red + '66' }} onClick={opresteServer}>⏹ Oprește serverul</button>
           )}
           {procBusy && (
             <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12, color:G.red, borderColor:G.red + '66' }} onClick={() => { stopRef.current = true }}>⏹ Oprește</button>
@@ -868,6 +900,16 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
         const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
         return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={tot ? Math.round(100 * done / tot) : null} detaliu={tot ? `${done}/${tot} pagini citite · ${ramase} documente rămase` : `${ramase} documente rămase`} />
       })()}
+      {coada?.activ && !procBusy && (() => {
+        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
+        const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
+        const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : d.status_procesare === 'partial' ? Math.max(0, (d.pagini || 0) - (d.pagini_necitite?.length || 0)) : (d.pagini_procesate || 0)), 0)
+        const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
+        return <Lucru icon="☁️" text="Serverul citește documentația (poți închide pagina)" pct={tot ? Math.round(100 * done / tot) : null} detaliu={`${done}/${tot} pagini citite · ${ramase} documente rămase · ${coada.lansari || 0} lansări`} />
+      })()}
+      {coada && !coada.activ && coada.terminat_la && (
+        <div style={{ fontSize:12, color:G.green, marginBottom:8 }}>☁️ Citire pe server terminată {new Date(coada.terminat_la).toLocaleString('ro-RO')}: {coada.nota}</div>
+      )}
       {plansaBusy && <Lucru icon="📐" text={plansaBusy} />}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
 
