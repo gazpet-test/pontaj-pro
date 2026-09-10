@@ -1,4 +1,5 @@
-// ofertare-cerinte v8 (10.09.2026) — bucata_max minim 6k (felii de ~2 pagini).
+// ofertare-cerinte v9 (10.09.2026) — model din body (Opus implicit, Sonnet pentru test/economie).
+// v8 (10.09.2026) — bucata_max minim 6k (felii de ~2 pagini).
 // v7 (10.09.2026) — bucata_max din body + max_tokens 16000.
 // v6 (09.09.2026) — Faza 1/2: FĂRĂ TĂIERE, CU PAGINĂ ȘI PASAJ.
 // v6: (1) textul nu se mai taie la 180k (doc 98 la Mânăstirea avea 290k → 38%
@@ -14,8 +15,13 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
-const MODEL = 'claude-opus-5'
-const PRICE_IN = 5 / 1e6, PRICE_OUT = 25 / 1e6
+// v9: modelul se poate cere din body. Implicit Opus (cum a fost dintotdeauna); Sonnet costa
+// ~40% mai putin si la citire s-a dovedit la egalitate — de comparat pe extragere inainte de comutare.
+const MODELE: Record<string, { in: number; out: number }> = {
+  'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 },
+  'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 },
+}
+const MODEL_IMPLICIT = 'claude-opus-5'
 const BUCATA_MAX_DEFAULT = 150_000          // caractere per apel; sub limita de context, cu loc pentru răspuns
 const MARCAJ = /⟦PAGINA (\d+)(?:-(\d+))?⟧/g
 
@@ -147,7 +153,9 @@ Deno.serve(async (req: Request) => {
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
 
   try {
-    const { licitatie_id, sectiune, reset, doc_id, bucata, bucata_max } = await req.json()
+    const { licitatie_id, sectiune, reset, doc_id, bucata, bucata_max, model } = await req.json()
+    const MODEL = (typeof model === 'string' && MODELE[model]) ? model : MODEL_IMPLICIT
+    const PRICE_IN = MODELE[MODEL].in, PRICE_OUT = MODELE[MODEL].out
     // v7: mărimea bucății se poate cere din body (workerul server trimite 40k): bucăți mai mici =
     // răspuns mai scurt și apel sub 150s (gateway IDLE_TIMEOUT / pg_net timeout); același număr
     // trebuie trimis la toate apelurile unui pas, altfel indexul bucății nu mai corespunde.
@@ -302,7 +310,8 @@ Deno.serve(async (req: Request) => {
       ok: true, sectiune: modCorpus ? undefined : sectiune, doc_id: modCorpus ? srcDocId : undefined,
       cerinte: rows.length, pasaje_verificate: verificate, bucata: nrBucata + 1, bucati: toate.length, pagini,
       continua, bucata_urmatoare: continua ? nrBucata + 1 : null,
-      trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
+      trunchiat, model: MODEL, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
+      cost_usd: Number(((data.usage?.input_tokens || 0) * PRICE_IN + (data.usage?.output_tokens || 0) * PRICE_OUT).toFixed(4)),
     }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
