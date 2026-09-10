@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
   if (!cl) return json({ error: 'clarificarea nu există' }, 404)
   if (!(cl.raspuns || '').trim()) return json({ error: 'clarificarea nu are răspunsul autorității — completează-l întâi' }, 400)
 
-  const { data: cer } = await db.from('ofertare_cerinte').select('id, tip, sursa_sectiune, text_cerinta, document_probant, cand_se_prezinta, lot, versiune, sursa_document_id')
+  const { data: cer } = await db.from('ofertare_cerinte').select('id, tip, sursa_sectiune, text_cerinta, document_probant, cand_se_prezinta, lot, versiune, sursa_document_id, stare, stare_motiv, stare_de, stare_la')
     .eq('licitatie_id', cl.licitatie_id).is('inlocuita_de', null).order('id')
   if (!cer?.length) return json({ error: 'licitația nu are registru de cerințe' }, 400)
 
@@ -86,14 +86,19 @@ Reguli: modifică DOAR cerințele pe care răspunsul le schimbă efectiv (relaxa
       licitatie_id: cl.licitatie_id, sursa_document_id: c.sursa_document_id, sursa_sectiune: c.sursa_sectiune, text_cerinta: textNou, tip: c.tip, lot: c.lot,
       document_probant: anul ? null : c.document_probant, cand_se_prezinta: c.cand_se_prezinta, versiune: (c.versiune || 1) + 1,
       raspuns_clarificare_id: id, extras_de_ai: true, confirmata_de: null,
+      // starea de lucru pusa de om (inclusiv „nu se aplica" cu motivul ei) se muta pe versiunea noua —
+      // altfel un raspuns al autoritatii resetase tacit decizia si cerinta reaparea ca eliminatorie fara dovada
+      stare: c.stare || 'de_analizat', stare_motiv: c.stare_motiv, stare_de: c.stare_de, stare_la: c.stare_la,
     }).select('id').single()
     if (eI || !ins) continue
     await db.from('ofertare_cerinte').update({ inlocuita_de: ins.id, updated_at: now }).eq('id', c.id)
     if (anul) rezultat.anulate++; else {
       rezultat.modificate++
       // acoperirea de pe cerința veche se mută pe cea nouă (rămâne de reverificat de om, dar nu se pierde)
-      const { data: ac } = await db.from('ofertare_acoperire').select('*').eq('cerinta_id', c.id).maybeSingle()
-      if (ac) {
+      // .maybeSingle() da eroare (si data null) cand o cerinta are mai multe randuri de acoperire —
+      // exista astfel de cazuri in BD, iar efectul era ca acoperirea NU se copia, tacut. Se copiaza toate.
+      const { data: acs } = await db.from('ofertare_acoperire').select('*').eq('cerinta_id', c.id).order('id')
+      for (const ac of (acs || [])) {
         const { id: _i, created_at: _c, updated_at: _u, ...rest } = ac
         // Cerința s-a schimbat, deci verificarea pe scan NU mai e valabilă: se resetează
         // explicit, nu doar cu o notă în observații (auditul 09.09: marcajul supraviețuia

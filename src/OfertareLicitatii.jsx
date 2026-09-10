@@ -978,6 +978,15 @@ const TIP_CERINTA = {
   forma:        { label:'formă',        color:G.muted },
   contractuala: { label:'contractuală', color:G.purple },
 }
+// Stările de lucru pe cerință (pct. 5) — ce face OMUL cu rândul, separat de dovada din acoperire.
+// „nu se aplică" o scoate din numărătoarea de eliminatorii fără dovadă (aici și în v_ofertare_dashboard).
+const STARE_CERINTA = {
+  de_analizat:  { label:'⬜ de analizat', color:G.dim,    motiv:false },
+  in_lucru:     { label:'🔧 în lucru',    color:G.orange, motiv:false },
+  rezolvata:    { label:'✅ rezolvată',   color:G.green,  motiv:false },
+  nu_se_aplica: { label:'⊘ nu se aplică', color:G.purple, motiv:true  },
+  blocata:      { label:'⛔ blocată',     color:G.red,    motiv:true  },
+}
 const contextCheie = (autoritate) =>
   `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
 
@@ -988,10 +997,11 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   const [editVal, setEditVal] = useState({})
   const [warn, setWarn] = useState(null)
   const [fTip, setFTip] = useState('')
+  const [fStare, setFStare] = useState('')
 
   const load = async () => {
     const { data } = await supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai')
+      .select('id, sursa_sectiune, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
       .order('sursa_sectiune').order('id')
       .limit(5000)
@@ -1086,7 +1096,23 @@ function CerinteSection({ licitatie, profile, onChanged }) {
     setBusy(null); await load(); onChanged?.()
   }
 
-  const filtrate = (cerinte || []).filter(c => !fTip || c.tip === fTip)
+  // „nu se aplică" și „blocată" cer motiv scris (CHECK în BD) — altfel nu se mai știe de ce a ieșit din calcul
+  const setStare = async (c, stare) => {
+    if (stare === c.stare) return
+    let motiv = c.stare_motiv || null
+    if (STARE_CERINTA[stare]?.motiv) {
+      motiv = window.prompt(`De ce „${STARE_CERINTA[stare].label}"? (motivul rămâne scris pe cerință)`, motiv || '')
+      if (!motiv || !motiv.trim()) return
+      motiv = motiv.trim()
+    }
+    const patch = { stare, stare_motiv: motiv, stare_de: profile?.id || null, stare_la: new Date().toISOString(), updated_at: new Date().toISOString() }
+    const { error } = await supabase.from('ofertare_cerinte').update(patch).eq('id', c.id)
+    if (error) return setWarn('Nu s-a salvat starea: ' + error.message)
+    setCerinte(cs => (cs || []).map(x => x.id === c.id ? { ...x, stare, stare_motiv: motiv } : x))
+    onChanged?.()
+  }
+
+  const filtrate = (cerinte || []).filter(c => (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
   const neconfirmate = (cerinte || []).filter(c => !c.confirmata_de).length
 
   return (
@@ -1097,6 +1123,10 @@ function CerinteSection({ licitatie, profile, onChanged }) {
           <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={fTip} onChange={e => setFTip(e.target.value)}>
             <option value="">toate tipurile</option>
             {Object.entries(TIP_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={fStare} onChange={e => setFStare(e.target.value)}>
+            <option value="">toate stările</option>
+            {Object.entries(STARE_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
           {!busy && <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={extrage}>🤖 {cerinte?.length ? 'Re-extrage' : 'Extrage cerințele'} (Opus)</button>}
           {!busy && neconfirmate > 0 && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={confirmaTot}>✅ Confirmă registrul ({neconfirmate})</button>}
@@ -1112,15 +1142,22 @@ function CerinteSection({ licitatie, profile, onChanged }) {
           <div style={{ maxHeight:340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
             {filtrate.map(c => {
               const t = TIP_CERINTA[c.tip] || TIP_CERINTA.propunere
+              const st = STARE_CERINTA[c.stare || 'de_analizat'] || STARE_CERINTA.de_analizat
               const inEdit = editId === c.id
               return (
-                <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.confirmata_de ? G.green : t.color}` }}>
+                <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.stare === 'nu_se_aplica' ? G.purple : c.confirmata_de ? G.green : t.color}`, opacity: c.stare === 'nu_se_aplica' ? 0.72 : 1 }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
                     {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
                     {!inEdit && (
-                      <span style={{ display:'flex', gap:5, marginLeft:'auto' }}>
+                      <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
+                        <select
+                          title="Starea de lucru — „nu se aplică” scoate cerința din eliminatoriile fără dovadă"
+                          value={c.stare || 'de_analizat'} onChange={e => setStare(c, e.target.value)}
+                          style={{ ...S.input, width:'auto', padding:'3px 6px', fontSize:11, color:st.color, fontWeight:700, borderColor:st.color + '55' }}>
+                          {Object.entries(STARE_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
                         {c.confirmata_de ? <span style={{ fontSize:11, color:G.green, fontWeight:700 }}>✓</span> : (<>
                           <button title="Confirm" onClick={() => confirma(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66' }}>✓</button>
                           <button title="Corectez" onClick={() => { setEditId(c.id); setEditVal({ sursa_sectiune: c.sursa_sectiune, text_cerinta: c.text_cerinta, tip: c.tip, document_probant: c.document_probant || '' }) }} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>✏️</button>
@@ -1130,6 +1167,7 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                     )}
                   </div>
                   {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
+                  {c.stare_motiv && !inEdit && <div style={{ fontSize:11, color:st.color, marginTop:3 }}>{st.label} — {c.stare_motiv}</div>}
                   {inEdit && (
                     <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:6 }}>
                       <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={editVal.text_cerinta} onChange={e => setEditVal(v => ({ ...v, text_cerinta: e.target.value }))} />
@@ -1144,6 +1182,123 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                       </div>
                     </div>
                   )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </div>
+  )
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// SECȚIUNE: VERIFICARE INDEPENDENTĂ (pct. 3) — ce a găsit al treilea cititor (Gemini/GPT)
+// pe PDF-ul ORIGINAL și noi nu avem în registru. Perecherea se face în BD pe similaritate
+// de text (RPC ofertare_inventar_pereche), nu cu un apel de model, deci nu costă nimic.
+// Regula lui Răzvan: AI-ul propune, omul apasă. Nimic nu intră singur în registru.
+// ════════════════════════════════════════════════════════════════
+const FURNIZOR_LBL = { gemini: '🔷 Gemini', openai: '🟢 ChatGPT', anthropic: '🟣 Claude' }
+
+function InventarIndependentSection({ licitatie, profile, onChanged }) {
+  const [randuri, setRanduri] = useState(null)
+  const [rulari, setRulari] = useState([])
+  const [sel, setSel] = useState(null)        // {furnizor, versiune}
+  const [busy, setBusy] = useState(false)
+  const [warn, setWarn] = useState(null)
+  const [doarLipsa, setDoarLipsa] = useState(true)
+
+  const load = async (r = sel) => {
+    const { data: toate } = await supabase.from('ofertare_inventar_ai')
+      .select('id, furnizor, model, versiune, pagina, sectiune, obligatie, tip_principal, verdict, pereche_cerinta_id')
+      .eq('licitatie_id', licitatie.id).order('versiune', { ascending: false }).order('nr').limit(5000)
+    const lista = toate || []
+    const chei = []
+    lista.forEach(x => { const k = `${x.furnizor}|${x.versiune}`; if (!chei.some(c => c.k === k)) chei.push({ k, furnizor: x.furnizor, versiune: x.versiune, model: x.model, n: 0 }) })
+    chei.forEach(c => { c.n = lista.filter(x => x.furnizor === c.furnizor && x.versiune === c.versiune).length })
+    setRulari(chei)
+    const cur = r && chei.some(c => c.furnizor === r.furnizor && c.versiune === r.versiune) ? r : chei[0] || null
+    setSel(cur)
+    setRanduri(cur ? lista.filter(x => x.furnizor === cur.furnizor && x.versiune === cur.versiune) : [])
+  }
+  useEffect(() => { load(null) }, [licitatie.id])
+
+  const imperecheaza = async () => {
+    if (!sel) return
+    setBusy(true); setWarn(null)
+    const { data, error } = await supabase.rpc('ofertare_inventar_pereche', { p_lic: licitatie.id, p_furnizor: sel.furnizor, p_versiune: sel.versiune })
+    setBusy(false)
+    if (error) return setWarn('Împerechere: ' + error.message)
+    const r = Array.isArray(data) ? data[0] : data
+    setWarn(`Împerechere gata: ${r?.imperecheate ?? 0} regăsite în registru, ${r?.ramase_fara_pereche ?? 0} fără pereche.`)
+    await load()
+  }
+
+  // AI-ul propune, omul apasă: rândul devine cerință în registru doar la click, marcat ca neconfirmat
+  const adaugaInRegistru = async (r) => {
+    const tip = ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(r.tip_principal) ? r.tip_principal : 'propunere'
+    const { error } = await supabase.from('ofertare_cerinte').insert({
+      licitatie_id: licitatie.id, sursa_sectiune: r.sectiune || `Verificare ${FURNIZOR_LBL[r.furnizor] || r.furnizor}`,
+      sursa_pagina: r.pagina || null, text_cerinta: r.obligatie, tip, extras_de_ai: true,
+    })
+    if (error) return setWarn('Nu s-a adăugat: ' + error.message)
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'confirmat_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
+    await load(); onChanged?.()
+  }
+  const respinge = async (r) => {
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'respins_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
+    await load()
+  }
+
+  const lipsa = (randuri || []).filter(r => r.verdict === 'lipsa_din_registru')
+  const afisate = doarLipsa ? lipsa : (randuri || [])
+
+  return (
+    <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:800 }}>🔍 Verificare independentă {randuri ? `(${randuri.length} obligații citite${lipsa.length ? ` · ${lipsa.length} fără pereche în registru` : ''})` : ''}</div>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          {rulari.length > 1 && (
+            <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={sel ? `${sel.furnizor}|${sel.versiune}` : ''}
+              onChange={e => { const [f, v] = e.target.value.split('|'); load({ furnizor: f, versiune: Number(v) }) }}>
+              {rulari.map(c => <option key={c.k} value={c.k}>{FURNIZOR_LBL[c.furnizor] || c.furnizor} v{c.versiune} ({c.n})</option>)}
+            </select>
+          )}
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" checked={doarLipsa} onChange={e => setDoarLipsa(e.target.checked)} style={{ accentColor:G.yellow }} /> doar ce lipsește
+          </label>
+          <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} disabled={busy || !sel} onClick={imperecheaza} title="Compară obligațiile citite independent cu registrul nostru, pe similaritate de text (fără cost AI)">
+            {busy ? '⏳ compar…' : '🔗 Compară cu registrul'}</button>
+        </div>
+      </div>
+      {warn && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>{warn}</div>}
+
+      {randuri === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
+        !rulari.length ? (
+          <div style={{ fontSize:12, color:G.dim }}>Nicio citire independentă pe licitația asta. Inventarul se generează cu funcția <code>ofertare-inventar-ai</code> (Gemini sau ChatGPT citesc PDF-ul ORIGINAL, nu textul extras de noi) — rostul lui e să prindă ce am ratat, nu să scrie în registru.</div>
+        ) : !afisate.length ? (
+          <div style={{ fontSize:12, color:G.green }}>✓ Nimic fără pereche — tot ce a citit {FURNIZOR_LBL[sel?.furnizor] || sel?.furnizor} se regăsește în registru. (Dacă n-ai apăsat „Compară cu registrul", apasă întâi.)</div>
+        ) : (
+          <div style={{ maxHeight:340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
+            {afisate.map(r => {
+              const t = TIP_CERINTA[r.tip_principal] || TIP_CERINTA.propunere
+              const decis = r.verdict === 'confirmat_de_om' || r.verdict === 'respins_de_om'
+              return (
+                <div key={r.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${decis ? G.dim : t.color}`, opacity: decis ? .6 : 1 }}>
+                  <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
+                    {r.pagina && <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>p. {r.pagina}</span>}
+                    {r.sectiune && <span style={{ fontSize:11, color:G.dim, whiteSpace:'nowrap' }}>{r.sectiune}</span>}
+                    <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{r.obligatie}</span>
+                    <span style={{ display:'flex', gap:5, marginLeft:'auto' }}>
+                      {r.verdict === 'confirmat_de_om' ? <span style={{ fontSize:11, color:G.green, fontWeight:700 }}>✓ adăugată</span>
+                        : r.verdict === 'respins_de_om' ? <span style={{ fontSize:11, color:G.dim, fontWeight:700 }}>✕ respinsă</span>
+                        : (<>
+                          <button title="O adaug în registru ca cerință neconfirmată" onClick={() => adaugaInRegistru(r)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66' }}>➕ în registru</button>
+                          <button title="Nu e cerință / e deja acoperită altfel" onClick={() => respinge(r)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.dim, borderColor:G.border2 }}>✕</button>
+                        </>)}
+                    </span>
+                  </div>
                 </div>
               )
             })}
@@ -1184,7 +1339,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 
   const load = async () => {
     const { data: cs } = await supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, tip, lot')
+      .select('id, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
       .in('tip', ['eliminatorie', 'propunere']).order('tip').order('sursa_sectiune').limit(5000)
     setCerinte(cs || [])
@@ -1256,12 +1411,15 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
     await load()
   }
 
-  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0 }
+  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0 }
   ;(cerinte || []).forEach(c => {
     const a = acoperiri[c.id]
-    if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie') stats.neevaluateElim++; return }
+    // marcate „nu se aplică" de om: nu mai sunt goluri, dar rămân numărate separat (nimic nu dispare tăcut)
+    const scoasa = c.stare === 'nu_se_aplica'
+    if (scoasa) stats.nuSeAplica++
+    if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie' && !scoasa) stats.neevaluateElim++; return }
     stats[a.status] = (stats[a.status] || 0) + 1
-    if (a.status === 'gol' && c.tip === 'eliminatorie') stats.goluriElim++
+    if (a.status === 'gol' && c.tip === 'eliminatorie' && !scoasa) stats.goluriElim++
   })
   // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă
   const elimFaraDovada = stats.goluriElim + stats.neevaluateElim
@@ -1274,8 +1432,9 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
         {cerinte?.length > 0 && (
           <span style={{ fontSize:11.5, color:G.muted }}>
             ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate
+            {stats.nuSeAplica > 0 && <span style={{ color:G.purple }} title="Marcate „nu se aplică” în registrul de cerințe — ies din numărătoarea de eliminatorii fără dovadă"> · ⊘ {stats.nuSeAplica} nu se aplică</span>}
             {elimFaraDovada > 0 && (
-              <b style={{ color:G.red }} title={`Eliminatorii fără dovadă = goluri (${stats.goluriElim}) + neevaluate (${stats.neevaluateElim}). Aceeași cifră ca în lista de licitații.`}>
+              <b style={{ color:G.red }} title={`Eliminatorii fără dovadă = goluri (${stats.goluriElim}) + neevaluate (${stats.neevaluateElim}), fără cele marcate „nu se aplică". Aceeași cifră ca în lista de licitații.`}>
                 {' '}· {elimFaraDovada} ELIMINATORII fără dovadă ({stats.goluriElim} goluri + {stats.neevaluateElim} neevaluate)
               </b>
             )}
@@ -1304,6 +1463,8 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
                     <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
+                    {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}
+                    {c.stare === 'blocata' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>⛔ BLOCATĂ</span>}
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
                     <span style={{ flex:1, fontSize:12.5, minWidth:200 }}>{c.text_cerinta}</span>
                     <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
@@ -1468,6 +1629,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <div style={{ minWidth:0 }}>
             {tab === 'cerinte' && <>
               <CerinteSection licitatie={l} profile={profile} />
+              <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} />
             </>}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
