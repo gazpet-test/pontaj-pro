@@ -1002,6 +1002,8 @@ const TIP_CERINTA = {
 }
 // Stările de lucru pe cerință (pct. 5) — ce face OMUL cu rândul, separat de dovada din acoperire.
 // „nu se aplică" o scoate din numărătoarea de eliminatorii fără dovadă (aici și în v_ofertare_dashboard).
+// Numele documentelor din SEAP sunt lungi și se termină cu partea utilă („— p03_pag41-64.pdf")
+const right60 = (n) => (n || '').length > 58 ? '…' + n.slice(-58) : n
 const STARE_CERINTA = {
   de_analizat:  { label:'⬜ de analizat', color:G.dim,    motiv:false },
   in_lucru:     { label:'🔧 în lucru',    color:G.orange, motiv:false },
@@ -1039,11 +1041,12 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   const [selC, setSelC] = useState([])      // id-uri bifate pentru starea în bloc
 
   const load = async () => {
-    const { data } = await supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv')
+    const { data, error } = await supabase.from('ofertare_cerinte')
+      .select('id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
-      .order('sursa_sectiune').order('id')
+      .order('nr_ordine')
       .limit(5000)
+    if (error) setWarn('Nu s-a încărcat registrul: ' + error.message)
     setCerinte(data || [])
   }
   useEffect(() => { load() }, [licitatie.id])
@@ -1227,6 +1230,7 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                     <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
                       checked={selC.includes(c.id)}
                       onChange={e => setSelC(v => e.target.checked ? [...v, c.id] : v.filter(x => x !== c.id))} />
+                    <span title="Număr de ordine — același în acoperire" style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
                     {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
@@ -1246,7 +1250,13 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                       </span>
                     )}
                   </div>
-                  {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
+                  {!inEdit && (c.doc?.nume_original || c.sursa_pagina) && (
+                    <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="De unde provine cerința în documentație">
+                      📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : 'document șters din licitație'}
+                      {c.sursa_pagina ? ` · pagina ${c.sursa_pagina}` : ' · pagină necunoscută (document citit înainte de marcaje)'}
+                    </div>
+                  )}
+                  {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 se dovedește cu: {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
                   {c.stare_motiv && !inEdit && <div style={{ fontSize:11, color:st.color, marginTop:3 }}>{st.label} — {c.stare_motiv}</div>}
                   {inEdit && (
                     <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:6 }}>
@@ -1468,9 +1478,9 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 
   const load = async () => {
     const { data: cs } = await supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
+      .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
-      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('sursa_sectiune').limit(5000)
+      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
@@ -1590,6 +1600,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
               return (
                 <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}` }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <span title="Număr de ordine — același în registrul de cerințe" style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
                     {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}
