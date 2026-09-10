@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
@@ -250,11 +251,16 @@ export default function OfertareLicitatiiTab() {
       )}
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
-      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+      <div style={{ display:'flex', gap:8, marginBottom:16, alignItems:'center', flexWrap:'wrap' }}>
         {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
+        {/* Clopoțelul modulului: doar alertele de ofertare (SEAP, pagini goale, clarificări nedepuse,
+            extrageri terminate). Cel general le exclude — altfel se pierdeau printre cele de logistică. */}
+        <div style={{ marginLeft:'auto' }}>
+          <NotificationBell doarModul="Ofertare" icon="📣" titlu="Alerte ofertare" />
+        </div>
       </div>
 
       {vedere === 'experienta' && <ExperientaCatalog licitatii={rows} profile={profile} showToast={showToast} />}

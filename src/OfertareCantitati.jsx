@@ -2,7 +2,7 @@
 // OfertareCantitati.jsx — 📋 Cantități & Clarificări per licitație
 // Cantitățile se extrag cu AI din documentație (PT/planșe/CS), se verifică
 // încrucișat și se validează de om; diferențele devin întrebări de clarificare.
-// Adresa de clarificări se generează pe antet Gazpet (PDF) — se depune în SEAP.
+// Adresa de clarificări se generează ca PDF ANONIM (fără antet/nume firmă) — se depune în SEAP.
 // Regula fluxului (Razvan, 28.08): tranșa 1 RFQ pe cantitățile certe,
 // tranșa 2 după răspunsurile la clarificări.
 // ════════════════════════════════════════════════════════════════
@@ -140,7 +140,10 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     await load()
   }
 
-  // Adresa de clarificări — PDF pe antet, cu întrebările "de trimis"
+  // Adresa de clarificări — PDF ANONIM, cu întrebările "de trimis".
+  // Răzvan 10.09.2026: numele firmei NU apare în clarificări. O solicitare de clarificări
+  // depusă pe antet propriu dezvăluie autorității cine e ofertantul înainte de deschidere.
+  // Fără antet, fără CUI, fără semnătura administratorului — identificarea o face SEAP-ul.
   const genereazaAdresa = async () => {
     const deTrimis = (clar || []).filter(q => q.status === 'de_trimis' && (q.intrebare || '').trim())
     if (!deTrimis.length) { showToast('Nicio întrebare cu status „de trimis".', 'warn'); return }
@@ -153,10 +156,10 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
         <div style="font-family:Arial,Helvetica,sans-serif;color:#111;padding:48px 56px;font-size:13.5px;line-height:1.55">
           <table style="width:100%;border-collapse:collapse"><tr>
             <td style="vertical-align:bottom">
-              <div style="font-size:21px;font-weight:800;letter-spacing:.4px">GAZPET INSTAL S.R.L.</div>
-              <div style="font-size:10.5px;color:#444;margin-top:3px">Str. Fluturilor nr. 34, Ploiești, Prahova &nbsp;·&nbsp; CUI RO 22029920 &nbsp;·&nbsp; J29/1650/2007<br/>office@gazpet.ro &nbsp;·&nbsp; tel/fax 0244/435005</div>
+              <div style="font-size:13px;font-weight:700;color:#333">Operator economic interesat</div>
+              <div style="font-size:10.5px;color:#666;margin-top:3px">identificat în SEAP prin contul de depunere</div>
             </td>
-            <td style="vertical-align:bottom;text-align:right;font-size:11px;color:#444">Ploiești, ${azi}</td>
+            <td style="vertical-align:bottom;text-align:right;font-size:11px;color:#444">${azi}</td>
           </tr></table>
           <div style="border-bottom:2.5px solid #111;margin:10px 0 26px"></div>
           <div style="margin-bottom:4px"><b>Către:</b> ${esc(lic?.autoritate || '—')}</div>
@@ -174,9 +177,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
           <table style="width:100%;border-collapse:collapse;margin-top:44px"><tr>
             <td style="width:55%"></td>
             <td style="text-align:center">
-              <div style="font-weight:800">GAZPET INSTAL S.R.L.</div>
-              <div style="font-size:12px;margin-top:2px">Administrator</div>
-              <div style="font-size:12px;font-weight:700;margin-top:2px">Trușu Răzvan</div>
+              <div style="font-size:12px;color:#444">Operator economic interesat</div>
+              <div style="font-size:11px;color:#666;margin-top:2px">semnat electronic la depunerea în SEAP</div>
             </td>
           </tr></table>
         </div>`
@@ -196,7 +198,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -i * 297, 210, imgH)
       }
       pdf.save(`clarificari_${lic?.nr_anunt || licId}.pdf`)
-      showToast(`Adresa cu ${deTrimis.length} întrebări generată — de depus în SEAP, apoi marchează-le „trimisă".`)
+      showToast(`Adresa cu ${deTrimis.length} întrebări generată (anonimă — fără numele firmei) — de depus în SEAP, apoi marchează-le „trimisă".`)
     } catch (e) { showToast('Eroare PDF: ' + (e?.message || e), 'err') }
     setBusy(null)
   }
