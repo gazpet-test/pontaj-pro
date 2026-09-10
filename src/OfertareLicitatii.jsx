@@ -188,6 +188,22 @@ export default function OfertareLicitatiiTab() {
       ...(form.loturi_ai ? { loturi: form.loturi_ai } : {}),
       updated_at: new Date().toISOString(),
     }
+    // Garda anti-dublură: la o licitație NOUĂ, dacă mai există una pe aceeași autoritate cu obiect
+    // asemănător, omul e întrebat înainte — nu se creează tăcut a doua înregistrare a aceleiași proceduri.
+    if (!editRow) {
+      const candidati = (rows || []).filter(l =>
+        suprapunere(l.autoritate, payload.autoritate) >= 0.5 &&
+        suprapunere(l.obiect, payload.obiect) >= 0.6)
+      if (candidati.length) {
+        const lista = candidati.slice(0, 3).map(l =>
+          `• ${l.nr_anunt} — ${(l.obiect || '').slice(0, 70)}${(l.obiect || '').length > 70 ? '…' : ''}` +
+          ` (${l.status}${l.termen_depunere ? ', termen ' + new Date(l.termen_depunere).toLocaleDateString('ro-RO') : ''})`).join('\n')
+        if (!window.confirm(
+          `Există deja ${candidati.length === 1 ? 'o licitație' : candidati.length + ' licitații'} pe aceeași autoritate, cu obiect asemănător:\n\n${lista}\n\n` +
+          `Aceeași procedură are și număr SCN, și număr DF — s-ar putea să fie aceeași.\n\n` +
+          `OK = o înregistrez oricum ca licitație nouă · Anulează = mă întorc și o deschid pe cea existentă`)) return false
+      }
+    }
     let licId = editRow?.id
     if (editRow) {
       const { error } = await supabase.from('ofertare_licitatii').update(payload).eq('id', editRow.id)
@@ -993,6 +1009,22 @@ const STARE_CERINTA = {
   nu_se_aplica: { label:'⊘ nu se aplică', color:G.purple, motiv:true  },
   blocata:      { label:'⛔ blocată',     color:G.red,    motiv:true  },
 }
+// Garda anti-dublură la înregistrarea manuală (10.09.2026): aceeași procedură are și număr SCN
+// (anunțul simplificat) și număr DF (documentația de atribuire). Răcari a intrat de două ori — o dată
+// din SEAP ca SCN1179379, o dată manual ca DF1279352, din numele fișierului fișei. Nimeni n-a fost
+// întrebat nimic. Comparăm pe autoritate + obiect, nu pe număr, fiindcă numărul e exact ce diferă.
+const normText = (s) => (s || '').toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+const STOP_CUVINTE = new Set(['de','la','in','din','si','a','al','ale','cu','pe','pentru','judetul','jud','orasul','comuna','municipiul','sat','lucrari','executie','proiectare'])
+const cuvinteCheie = (s) => new Set(normText(s).split(' ').filter(w => w.length > 3 && !STOP_CUVINTE.has(w)))
+const suprapunere = (a, b) => {
+  const A = cuvinteCheie(a), B = cuvinteCheie(b)
+  if (!A.size || !B.size) return 0
+  let comun = 0; A.forEach(w => { if (B.has(w)) comun++ })
+  return comun / Math.min(A.size, B.size)
+}
+
 const contextCheie = (autoritate) =>
   `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
 
