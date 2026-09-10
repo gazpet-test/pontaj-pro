@@ -84,6 +84,9 @@ export default async function handler(req, res) {
     const { data: ins, error: eI } = await supa.from('ofertare_documente_atribuire').insert({
       licitatie_id: doc.licitatie_id, fisier_path: path, nume_original: nume, tip: doc.tip, size_bytes: p.buf.length,
       status_procesare: 'neprocesat', eroare: null,
+      // câte pagini are originalul înaintea acestei bucăți — citirea numerotează de la offset+1,
+      // altfel o cerință din bucata a doua ar ieși cu „pagina 3" când în document e pagina 51
+      pagina_offset: p.de - 1,
     }).select('id').single()
     if (eI) return res.status(500).json({ error: `insert bucata ${i + 1}: ${eI.message}`, partial: ids })
     ids.push(ins.id)
