@@ -1,4 +1,5 @@
-// ofertare-cerinte v6 (09.09.2026) — Faza 1/2: FĂRĂ TĂIERE, CU PAGINĂ ȘI PASAJ.
+// ofertare-cerinte v7 (10.09.2026) — bucata_max din body + max_tokens 16000.
+// v6 (09.09.2026) — Faza 1/2: FĂRĂ TĂIERE, CU PAGINĂ ȘI PASAJ.
 // v6: (1) textul nu se mai taie la 180k (doc 98 la Mânăstirea avea 290k → 38%
 // nu ajungea la AI, fără niciun marcaj); se împarte în bucăți la ⟦PAGINA N⟧ și se
 // procesează O bucată per apel — UI-ul continuă cât timp răspunsul are continua=true.
@@ -14,7 +15,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-opus-5'
 const PRICE_IN = 5 / 1e6, PRICE_OUT = 25 / 1e6
-const BUCATA_MAX = 150_000          // caractere per apel; sub limita de context, cu loc pentru răspuns
+const BUCATA_MAX_DEFAULT = 150_000          // caractere per apel; sub limita de context, cu loc pentru răspuns
 const MARCAJ = /⟦PAGINA (\d+)(?:-(\d+))?⟧/g
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
@@ -79,7 +80,7 @@ Răspunde EXCLUSIV JSON compact, fără markdown:
 {"cerinte":[{"sursa_sectiune":"...","text_cerinta":"...","tip":"...","lot":"...","document_probant":"...","cand_se_prezinta":"...","pagina":12,"pasaj":"..."}]}`
 
 // ── împărțirea textului în bucăți, la marcajele de pagină ────────────────────
-function bucati(text: string): string[] {
+function bucati(text: string, BUCATA_MAX = BUCATA_MAX_DEFAULT): string[] {
   if (text.length <= BUCATA_MAX) return [text]
   const out: string[] = []
   const idx: number[] = [0]
@@ -145,7 +146,11 @@ Deno.serve(async (req: Request) => {
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
 
   try {
-    const { licitatie_id, sectiune, reset, doc_id, bucata } = await req.json()
+    const { licitatie_id, sectiune, reset, doc_id, bucata, bucata_max } = await req.json()
+    // v7: mărimea bucății se poate cere din body (workerul server trimite 40k): bucăți mai mici =
+    // răspuns mai scurt și apel sub 150s (gateway IDLE_TIMEOUT / pg_net timeout); același număr
+    // trebuie trimis la toate apelurile unui pas, altfel indexul bucății nu mai corespunde.
+    const bucataMax = Math.max(20_000, Math.min(Number(bucata_max) || BUCATA_MAX_DEFAULT, BUCATA_MAX_DEFAULT))
     const licId = Number(licitatie_id)
     const modCorpus = !!doc_id
     const nrBucata = Math.max(0, Number(bucata) || 0)
@@ -202,7 +207,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // Bucățile: nimic nu se mai pierde. O bucată per apel; UI-ul continuă cu bucata următoare.
-    const toate = bucati(text)
+    const toate = bucati(text, bucataMax)
     if (nrBucata >= toate.length) return new Response(JSON.stringify({ ok: true, cerinte: 0, skip: 'nu mai sunt bucati', continua: false }), { headers: CORS })
     const slice = toate[nrBucata]
     const pagini = intervalPagini(slice)
@@ -230,7 +235,7 @@ Deno.serve(async (req: Request) => {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, max_tokens: 12000, system: sys, messages: [{ role: 'user', content: userMsg }] }),
+      body: JSON.stringify({ model: MODEL, max_tokens: 16000, system: sys, messages: [{ role: 'user', content: userMsg }] }),
     })
     const data = await resp.json()
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
