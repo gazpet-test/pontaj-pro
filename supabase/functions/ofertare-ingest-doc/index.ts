@@ -1,6 +1,11 @@
-// ofertare-ingest-doc v10 (10.09.2026) — Sonnet pe documente critice + renumerotare marcaje.
+// ofertare-ingest-doc v11 (10.09.2026) — marcajele pornesc de la pagina_offset+1.
+// v10 (10.09.2026) — Sonnet pe documente critice + renumerotare marcaje.
 // v9 (09.09.2026) — {apeluri:N} din body (workerul server cere 1).
 // v8 (09.09.2026) — CITIRE COMPLETĂ, DOVEDIBILĂ.
+// v11: marcajele pornesc de la pagina_offset+1, nu de la 1. Documentele prea mari sunt
+// tăiate de /api/pdf-sparge în bucăți separate („… — p02_pag49-72.pdf"); înainte, fiecare bucată se
+// numerota de la 1, deci o cerință din bucata a doua ieșea cu „pagina 3" când în documentul real era
+// pagina 51. Numele fișierului știa adevărul; acum îl știe și coloana pagina_offset.
 // v8 (Faza 1 corectitudine): (1) fiecare pagină e marcată în text cu ⟦PAGINA N⟧, ca
 // extragerea cerințelor să poată spune pagina-sursă; (2) o felie prea mare se
 // înjumătățește până la o pagină înainte să renunțăm; (3) paginile pe care chiar nu
@@ -124,6 +129,7 @@ Deno.serve(async (req: Request) => {
 
     const bytesPerPage = bytes.length / Math.max(nPag, 1)
     const feliaMax = Math.max(1, Math.min(PAGINI_PER_FELIE, Math.floor(MAX_CHUNK_BYTES / Math.max(bytesPerPage * 1.4, 1))))
+    const off = Math.max(0, Number(row.pagina_offset) || 0)   // câte pagini are originalul înaintea acestei bucăți
     const start = reiaDeLaZero ? 0 : Math.min(Math.max(row.pagini_procesate || 0, 0), nPag)
     let poz = start
     let felie = Math.max(1, Math.min(row.pagini_felie || feliaMax, feliaMax))
@@ -136,16 +142,18 @@ Deno.serve(async (req: Request) => {
 
     for (let apel = 0; apel < apeluriMax && poz < nPag; apel++) {
       const s = poz, e = Math.min(poz + felie, nPag)
+      // numerotarea pe care o vede omul: pagina din documentul ORIGINAL, nu din bucată
+      const sAbs = s + off, eAbs = e + off
       let pdfFelie: Uint8Array
       try { pdfFelie = (s === 0 && e === nPag) ? bytes : await feliePdf(pdf, s, e) }
-      catch (er: any) { return await fail(`split pagini ${s + 1}-${e}: ` + (er?.message || er)) }
+      catch (er: any) { return await fail(`split pagini ${sAbs + 1}-${eAbs}: ` + (er?.message || er)) }
 
       if (pdfFelie.length > MAX_CHUNK_BYTES + 4_000_000) {
         // Prea mare: înjumătățim felia și încercăm din nou, până la o singură pagină.
         if (e - s > 1) { felie = Math.max(1, Math.ceil((e - s) / 2)); apel--; continue }
         // O singură pagină și tot prea mare: se notează cinstit ca necitită, nu ca procesată.
-        necitite.add(s + 1)
-        textNou += `\n${marcaj(s + 1)}\n[PAGINA ${s + 1}: NECITITĂ — fișier prea mare pentru citire (${(pdfFelie.length / 1e6).toFixed(0)} MB)]\n`
+        necitite.add(sAbs + 1)
+        textNou += `\n${marcaj(sAbs + 1)}\n[PAGINA ${sAbs + 1}: NECITITĂ — fișier prea mare pentru citire (${(pdfFelie.length / 1e6).toFixed(0)} MB)]\n`
         poz = e
         continue
       }
@@ -158,12 +166,12 @@ Deno.serve(async (req: Request) => {
           model: MODEL, max_tokens: MAX_OUT,
           messages: [{ role: 'user', content: [
             { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(pdfFelie) } },
-            { type: 'text', text: primaFelie ? PROMPT_ANTET(s + 1, e - s) : PROMPT_TEXT(s + 1, e - s) },
+            { type: 'text', text: primaFelie ? PROMPT_ANTET(sAbs + 1, e - s) : PROMPT_TEXT(sAbs + 1, e - s) },
           ] }],
         }),
       })
       const data = await resp.json()
-      if (!resp.ok) return await fail(`Claude paginile ${s + 1}-${e}: ` + (data.error?.message || resp.status))
+      if (!resp.ok) return await fail(`Claude paginile ${sAbs + 1}-${eAbs}: ` + (data.error?.message || resp.status))
       tokIn += data.usage?.input_tokens || 0; tokOut += data.usage?.output_tokens || 0
 
       if (data.stop_reason === 'max_tokens' && (e - s) > 1) {
@@ -175,8 +183,8 @@ Deno.serve(async (req: Request) => {
       if (data.stop_reason === 'max_tokens') {
         // O singură pagină care nu încape în plafon: parțial citită = necitită, ca să nu
         // pretindem ce n-avem. Textul rămâne, e util, dar pagina e marcată.
-        txt += `\n[PAGINA ${s + 1}: transcriere trunchiată la plafon — pagină extrem de densă]\n`
-        necitite.add(s + 1)
+        txt += `\n[PAGINA ${sAbs + 1}: transcriere trunchiată la plafon — pagină extrem de densă]\n`
+        necitite.add(sAbs + 1)
       }
       if (primaFelie) {
         const sep = txt.indexOf('===TEXT===')
@@ -189,12 +197,12 @@ Deno.serve(async (req: Request) => {
           txt = txt.slice(sep + 10)
         }
       }
-      textNou += asiguraMarcaje(txt, s, e) + '\n'
+      textNou += asiguraMarcaje(txt, sAbs, eAbs) + '\n'
       poz = e
       if (((start === 0 ? '' : (row.text_extras || '')).length + textNou.length) > MAX_TEXT) {
         // Plafonul de text atins: restul paginilor NU sunt citite — se spune explicit.
-        for (let p = poz + 1; p <= nPag; p++) necitite.add(p)
-        textNou += `\n[TRUNCHIAT la 900k caractere — paginile ${poz + 1}-${nPag} necitite]`
+        for (let p = poz + 1; p <= nPag; p++) necitite.add(p + off)
+        textNou += `\n[TRUNCHIAT la 900k caractere — paginile ${poz + 1 + off}-${nPag + off} necitite]`
         poz = nPag
         break
       }
