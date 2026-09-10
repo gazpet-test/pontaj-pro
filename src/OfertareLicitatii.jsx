@@ -1052,6 +1052,24 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   useEffect(() => { load() }, [licitatie.id])
 
   const extrage = async () => {
+    // Plasa dinainte de cheltuială (10.09): la Răcari toate documentele fuseseră citite înainte să
+    // existe marcajele de pagină. Extragerea a mers perfect și a ieșit un registru fără nicio pagină —
+    // s-a văzut abia după ce s-au dat banii. Acum se vede înainte.
+    const { data: pregatire } = await supabase.rpc('ofertare_pregatire_extragere', { p_lic: licitatie.id })
+    const probleme = (pregatire || []).filter(d => d.problema)
+    const faraMarcaje = probleme.filter(d => (d.problema || '').startsWith('FĂRĂ marcaje'))
+    const gata = (pregatire || []).length - probleme.length
+    if (probleme.length) {
+      const lista = probleme.slice(0, 6).map(d => `• ${d.nume} — ${d.problema}`).join('\n')
+      const cap = faraMarcaje.length
+        ? `⚠ ${faraMarcaje.length} documente NU au marcaje de pagină. Cerințele extrase din ele vor ieși FĂRĂ număr de pagină, definitiv (până le recitești).\n\n`
+        : ''
+      if (!window.confirm(
+        `${cap}Ce se întâmplă dacă pornești acum:\n` +
+        `✓ ${gata} documente intră complet\n⚠ ${probleme.length} au probleme:\n\n${lista}` +
+        `${probleme.length > 6 ? `\n… și încă ${probleme.length - 6}` : ''}\n\n` +
+        `OK = extrag oricum · Anulează = recitesc întâi documentele („☁️ Pe server")`)) return
+    }
     if (cerinte?.length && !window.confirm('Re-extragerea șterge cerințele NEconfirmate și le extrage din nou — din fișă ȘI din caiete/clarificări (cele confirmate rămân). Durează 15-25 min cu tot corpusul. Continui?')) return
     setWarn(null)
     const sectiuni = ['III', 'IV', 'II', 'rest']
