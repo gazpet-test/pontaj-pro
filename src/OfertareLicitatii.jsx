@@ -1191,6 +1191,123 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   )
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// SECȚIUNE: VERIFICARE INDEPENDENTĂ (pct. 3) — ce a găsit al treilea cititor (Gemini/GPT)
+// pe PDF-ul ORIGINAL și noi nu avem în registru. Perecherea se face în BD pe similaritate
+// de text (RPC ofertare_inventar_pereche), nu cu un apel de model, deci nu costă nimic.
+// Regula lui Răzvan: AI-ul propune, omul apasă. Nimic nu intră singur în registru.
+// ════════════════════════════════════════════════════════════════
+const FURNIZOR_LBL = { gemini: '🔷 Gemini', openai: '🟢 ChatGPT', anthropic: '🟣 Claude' }
+
+function InventarIndependentSection({ licitatie, profile, onChanged }) {
+  const [randuri, setRanduri] = useState(null)
+  const [rulari, setRulari] = useState([])
+  const [sel, setSel] = useState(null)        // {furnizor, versiune}
+  const [busy, setBusy] = useState(false)
+  const [warn, setWarn] = useState(null)
+  const [doarLipsa, setDoarLipsa] = useState(true)
+
+  const load = async (r = sel) => {
+    const { data: toate } = await supabase.from('ofertare_inventar_ai')
+      .select('id, furnizor, model, versiune, pagina, sectiune, obligatie, tip_principal, verdict, pereche_cerinta_id')
+      .eq('licitatie_id', licitatie.id).order('versiune', { ascending: false }).order('nr').limit(5000)
+    const lista = toate || []
+    const chei = []
+    lista.forEach(x => { const k = `${x.furnizor}|${x.versiune}`; if (!chei.some(c => c.k === k)) chei.push({ k, furnizor: x.furnizor, versiune: x.versiune, model: x.model, n: 0 }) })
+    chei.forEach(c => { c.n = lista.filter(x => x.furnizor === c.furnizor && x.versiune === c.versiune).length })
+    setRulari(chei)
+    const cur = r && chei.some(c => c.furnizor === r.furnizor && c.versiune === r.versiune) ? r : chei[0] || null
+    setSel(cur)
+    setRanduri(cur ? lista.filter(x => x.furnizor === cur.furnizor && x.versiune === cur.versiune) : [])
+  }
+  useEffect(() => { load(null) }, [licitatie.id])
+
+  const imperecheaza = async () => {
+    if (!sel) return
+    setBusy(true); setWarn(null)
+    const { data, error } = await supabase.rpc('ofertare_inventar_pereche', { p_lic: licitatie.id, p_furnizor: sel.furnizor, p_versiune: sel.versiune })
+    setBusy(false)
+    if (error) return setWarn('Împerechere: ' + error.message)
+    const r = Array.isArray(data) ? data[0] : data
+    setWarn(`Împerechere gata: ${r?.imperecheate ?? 0} regăsite în registru, ${r?.ramase_fara_pereche ?? 0} fără pereche.`)
+    await load()
+  }
+
+  // AI-ul propune, omul apasă: rândul devine cerință în registru doar la click, marcat ca neconfirmat
+  const adaugaInRegistru = async (r) => {
+    const tip = ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(r.tip_principal) ? r.tip_principal : 'propunere'
+    const { error } = await supabase.from('ofertare_cerinte').insert({
+      licitatie_id: licitatie.id, sursa_sectiune: r.sectiune || `Verificare ${FURNIZOR_LBL[r.furnizor] || r.furnizor}`,
+      sursa_pagina: r.pagina || null, text_cerinta: r.obligatie, tip, extras_de_ai: true,
+    })
+    if (error) return setWarn('Nu s-a adăugat: ' + error.message)
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'confirmat_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
+    await load(); onChanged?.()
+  }
+  const respinge = async (r) => {
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'respins_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
+    await load()
+  }
+
+  const lipsa = (randuri || []).filter(r => r.verdict === 'lipsa_din_registru')
+  const afisate = doarLipsa ? lipsa : (randuri || [])
+
+  return (
+    <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+        <div style={{ fontSize:13, fontWeight:800 }}>🔍 Verificare independentă {randuri ? `(${randuri.length} obligații citite${lipsa.length ? ` · ${lipsa.length} fără pereche în registru` : ''})` : ''}</div>
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          {rulari.length > 1 && (
+            <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={sel ? `${sel.furnizor}|${sel.versiune}` : ''}
+              onChange={e => { const [f, v] = e.target.value.split('|'); load({ furnizor: f, versiune: Number(v) }) }}>
+              {rulari.map(c => <option key={c.k} value={c.k}>{FURNIZOR_LBL[c.furnizor] || c.furnizor} v{c.versiune} ({c.n})</option>)}
+            </select>
+          )}
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" checked={doarLipsa} onChange={e => setDoarLipsa(e.target.checked)} style={{ accentColor:G.yellow }} /> doar ce lipsește
+          </label>
+          <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} disabled={busy || !sel} onClick={imperecheaza} title="Compară obligațiile citite independent cu registrul nostru, pe similaritate de text (fără cost AI)">
+            {busy ? '⏳ compar…' : '🔗 Compară cu registrul'}</button>
+        </div>
+      </div>
+      {warn && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>{warn}</div>}
+
+      {randuri === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
+        !rulari.length ? (
+          <div style={{ fontSize:12, color:G.dim }}>Nicio citire independentă pe licitația asta. Inventarul se generează cu funcția <code>ofertare-inventar-ai</code> (Gemini sau ChatGPT citesc PDF-ul ORIGINAL, nu textul extras de noi) — rostul lui e să prindă ce am ratat, nu să scrie în registru.</div>
+        ) : !afisate.length ? (
+          <div style={{ fontSize:12, color:G.green }}>✓ Nimic fără pereche — tot ce a citit {FURNIZOR_LBL[sel?.furnizor] || sel?.furnizor} se regăsește în registru. (Dacă n-ai apăsat „Compară cu registrul", apasă întâi.)</div>
+        ) : (
+          <div style={{ maxHeight:340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
+            {afisate.map(r => {
+              const t = TIP_CERINTA[r.tip_principal] || TIP_CERINTA.propunere
+              const decis = r.verdict === 'confirmat_de_om' || r.verdict === 'respins_de_om'
+              return (
+                <div key={r.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${decis ? G.dim : t.color}`, opacity: decis ? .6 : 1 }}>
+                  <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
+                    {r.pagina && <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>p. {r.pagina}</span>}
+                    {r.sectiune && <span style={{ fontSize:11, color:G.dim, whiteSpace:'nowrap' }}>{r.sectiune}</span>}
+                    <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{r.obligatie}</span>
+                    <span style={{ display:'flex', gap:5, marginLeft:'auto' }}>
+                      {r.verdict === 'confirmat_de_om' ? <span style={{ fontSize:11, color:G.green, fontWeight:700 }}>✓ adăugată</span>
+                        : r.verdict === 'respins_de_om' ? <span style={{ fontSize:11, color:G.dim, fontWeight:700 }}>✕ respinsă</span>
+                        : (<>
+                          <button title="O adaug în registru ca cerință neconfirmată" onClick={() => adaugaInRegistru(r)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66' }}>➕ în registru</button>
+                          <button title="Nu e cerință / e deja acoperită altfel" onClick={() => respinge(r)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.dim, borderColor:G.border2 }}>✕</button>
+                        </>)}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+    </div>
+  )
+}
+
 // ════════════════════════════════════════════════════════════════
 // SECȚIUNE: ACOPERIREA CERINȚELOR (E3) — cine acoperă fiecare cerință
 // Opus propune din catalogul REAL (hr_autorizatii + parteneri); omul verifică
@@ -1512,6 +1629,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <div style={{ minWidth:0 }}>
             {tab === 'cerinte' && <>
               <CerinteSection licitatie={l} profile={profile} />
+              <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} />
             </>}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
