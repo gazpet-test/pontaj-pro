@@ -1,8 +1,8 @@
-// ofertare-inventar-ai v1 (10.09.2026) — INVENTAR INDEPENDENT pe PDF-ul ORIGINAL.
+// ofertare-inventar-ai v2 (10.09.2026) — INVENTAR INDEPENDENT pe PDF-ul ORIGINAL.
 // Al doilea/al treilea ochi peste extragerea noastră: modelul primește PDF-ul brut din
 // bucket (NU textul citit de noi) și întoarce obligațiile atomice, cu pagina fizică și
 // pasajul copiat — aceleași coloane ca tabelul uman (protocol agreat cu GPT, runda 3-4).
-// Body: { doc_id, furnizor: 'gemini'|'openai', model?, pagini?: [de_la, pana_la] }
+// Body: { doc_id, furnizor: 'gemini'|'openai', model?, pagini?: [de_la, pana_la], versiune? }
 // Scrie în ofertare_inventar_ai. NU atinge ofertare_cerinte (registrul de producție).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -57,7 +57,7 @@ Deno.serve(async (req: Request) => {
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
 
   try {
-    const { doc_id, furnizor, model, pagini } = await req.json()
+    const { doc_id, furnizor, model, pagini, versiune: versCeruta } = await req.json()
     const f = String(furnizor || 'gemini')
     if (!doc_id || !['gemini', 'openai'].includes(f)) return fail('doc_id + furnizor (gemini|openai) obligatorii')
     if (f === 'gemini' && !GEMINI_KEY) return fail('GEMINI_API_KEY lipsește din Edge Secrets')
@@ -137,9 +137,13 @@ Deno.serve(async (req: Request) => {
     } catch (_) {}
 
     // Rulare nouă = versiune nouă; nu ștergem nimic (inventarele se îngheață, regula GPT).
-    const { data: ult } = await supabase.from('ofertare_inventar_ai')
-      .select('versiune').eq('doc_id', row.id).eq('model', MODEL).order('versiune', { ascending: false }).limit(1)
-    const versiune = ((ult?.[0]?.versiune as number) || 0) + 1
+    // Feliile aceluiasi inventar se leaga cu o versiune data explicit in body.
+    let versiune = Number(versCeruta)
+    if (!Number.isInteger(versiune) || versiune < 1) {
+      const { data: ult } = await supabase.from('ofertare_inventar_ai')
+        .select('versiune').eq('doc_id', row.id).eq('model', MODEL).order('versiune', { ascending: false }).limit(1)
+      versiune = ((ult?.[0]?.versiune as number) || 0) + 1
+    }
 
     const TIPURI = ['eliminatorie', 'propunere', 'forma', 'contractuala']
     const ETAPE = ['depunere', 'executie', 'ambele']
@@ -148,7 +152,7 @@ Deno.serve(async (req: Request) => {
       .slice(0, 500)
       .map((o: any, i: number) => ({
         doc_id: row.id, licitatie_id: row.licitatie_id, furnizor: f, model: MODEL, versiune,
-        nr: i + 1,
+        nr: deLa * 1000 + i + 1,
         pagina: Number.isInteger(o.pagina) ? Number(o.pagina) : null,
         pagina_pana_la: Number.isInteger(o.pagina_pana_la) ? Number(o.pagina_pana_la) : null,
         sectiune: typeof o.sectiune === 'string' ? o.sectiune.trim().slice(0, 60) || null : null,
