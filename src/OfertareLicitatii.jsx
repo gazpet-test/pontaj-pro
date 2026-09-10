@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
@@ -187,6 +188,22 @@ export default function OfertareLicitatiiTab() {
       ...(form.loturi_ai ? { loturi: form.loturi_ai } : {}),
       updated_at: new Date().toISOString(),
     }
+    // Garda anti-dublură: la o licitație NOUĂ, dacă mai există una pe aceeași autoritate cu obiect
+    // asemănător, omul e întrebat înainte — nu se creează tăcut a doua înregistrare a aceleiași proceduri.
+    if (!editRow) {
+      const candidati = (rows || []).filter(l =>
+        suprapunere(l.autoritate, payload.autoritate) >= 0.5 &&
+        suprapunere(l.obiect, payload.obiect) >= 0.6)
+      if (candidati.length) {
+        const lista = candidati.slice(0, 3).map(l =>
+          `• ${l.nr_anunt} — ${(l.obiect || '').slice(0, 70)}${(l.obiect || '').length > 70 ? '…' : ''}` +
+          ` (${l.status}${l.termen_depunere ? ', termen ' + new Date(l.termen_depunere).toLocaleDateString('ro-RO') : ''})`).join('\n')
+        if (!window.confirm(
+          `Există deja ${candidati.length === 1 ? 'o licitație' : candidati.length + ' licitații'} pe aceeași autoritate, cu obiect asemănător:\n\n${lista}\n\n` +
+          `Aceeași procedură are și număr SCN, și număr DF — s-ar putea să fie aceeași.\n\n` +
+          `OK = o înregistrez oricum ca licitație nouă · Anulează = mă întorc și o deschid pe cea existentă`)) return false
+      }
+    }
     let licId = editRow?.id
     if (editRow) {
       const { error } = await supabase.from('ofertare_licitatii').update(payload).eq('id', editRow.id)
@@ -250,11 +267,16 @@ export default function OfertareLicitatiiTab() {
       )}
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
-      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+      <div style={{ display:'flex', gap:8, marginBottom:16, alignItems:'center', flexWrap:'wrap' }}>
         {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
+        {/* Clopoțelul modulului: doar alertele de ofertare (SEAP, pagini goale, clarificări nedepuse,
+            extrageri terminate). Cel general le exclude — altfel se pierdeau printre cele de logistică. */}
+        <div style={{ marginLeft:'auto' }}>
+          <NotificationBell doarModul="Ofertare" icon="📣" titlu="Alerte ofertare" />
+        </div>
       </div>
 
       {vedere === 'experienta' && <ExperientaCatalog licitatii={rows} profile={profile} showToast={showToast} />}
@@ -980,6 +1002,8 @@ const TIP_CERINTA = {
 }
 // Stările de lucru pe cerință (pct. 5) — ce face OMUL cu rândul, separat de dovada din acoperire.
 // „nu se aplică" o scoate din numărătoarea de eliminatorii fără dovadă (aici și în v_ofertare_dashboard).
+// Numele documentelor din SEAP sunt lungi și se termină cu partea utilă („— p03_pag41-64.pdf")
+const right60 = (n) => (n || '').length > 58 ? '…' + n.slice(-58) : n
 const STARE_CERINTA = {
   de_analizat:  { label:'⬜ de analizat', color:G.dim,    motiv:false },
   in_lucru:     { label:'🔧 în lucru',    color:G.orange, motiv:false },
@@ -987,6 +1011,22 @@ const STARE_CERINTA = {
   nu_se_aplica: { label:'⊘ nu se aplică', color:G.purple, motiv:true  },
   blocata:      { label:'⛔ blocată',     color:G.red,    motiv:true  },
 }
+// Garda anti-dublură la înregistrarea manuală (10.09.2026): aceeași procedură are și număr SCN
+// (anunțul simplificat) și număr DF (documentația de atribuire). Răcari a intrat de două ori — o dată
+// din SEAP ca SCN1179379, o dată manual ca DF1279352, din numele fișierului fișei. Nimeni n-a fost
+// întrebat nimic. Comparăm pe autoritate + obiect, nu pe număr, fiindcă numărul e exact ce diferă.
+const normText = (s) => (s || '').toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+const STOP_CUVINTE = new Set(['de','la','in','din','si','a','al','ale','cu','pe','pentru','judetul','jud','orasul','comuna','municipiul','sat','lucrari','executie','proiectare'])
+const cuvinteCheie = (s) => new Set(normText(s).split(' ').filter(w => w.length > 3 && !STOP_CUVINTE.has(w)))
+const suprapunere = (a, b) => {
+  const A = cuvinteCheie(a), B = cuvinteCheie(b)
+  if (!A.size || !B.size) return 0
+  let comun = 0; A.forEach(w => { if (B.has(w)) comun++ })
+  return comun / Math.min(A.size, B.size)
+}
+
 const contextCheie = (autoritate) =>
   `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
 
@@ -998,18 +1038,38 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   const [warn, setWarn] = useState(null)
   const [fTip, setFTip] = useState('')
   const [fStare, setFStare] = useState('')
+  const [selC, setSelC] = useState([])      // id-uri bifate pentru starea în bloc
 
   const load = async () => {
-    const { data } = await supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv')
+    const { data, error } = await supabase.from('ofertare_cerinte')
+      .select('id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
-      .order('sursa_sectiune').order('id')
+      .order('nr_ordine')
       .limit(5000)
+    if (error) setWarn('Nu s-a încărcat registrul: ' + error.message)
     setCerinte(data || [])
   }
   useEffect(() => { load() }, [licitatie.id])
 
   const extrage = async () => {
+    // Plasa dinainte de cheltuială (10.09): la Răcari toate documentele fuseseră citite înainte să
+    // existe marcajele de pagină. Extragerea a mers perfect și a ieșit un registru fără nicio pagină —
+    // s-a văzut abia după ce s-au dat banii. Acum se vede înainte.
+    const { data: pregatire } = await supabase.rpc('ofertare_pregatire_extragere', { p_lic: licitatie.id })
+    const probleme = (pregatire || []).filter(d => d.problema)
+    const faraMarcaje = probleme.filter(d => (d.problema || '').startsWith('FĂRĂ marcaje'))
+    const gata = (pregatire || []).length - probleme.length
+    if (probleme.length) {
+      const lista = probleme.slice(0, 6).map(d => `• ${d.nume} — ${d.problema}`).join('\n')
+      const cap = faraMarcaje.length
+        ? `⚠ ${faraMarcaje.length} documente NU au marcaje de pagină. Cerințele extrase din ele vor ieși FĂRĂ număr de pagină, definitiv (până le recitești).\n\n`
+        : ''
+      if (!window.confirm(
+        `${cap}Ce se întâmplă dacă pornești acum:\n` +
+        `✓ ${gata} documente intră complet\n⚠ ${probleme.length} au probleme:\n\n${lista}` +
+        `${probleme.length > 6 ? `\n… și încă ${probleme.length - 6}` : ''}\n\n` +
+        `OK = extrag oricum · Anulează = recitesc întâi documentele („☁️ Pe server")`)) return
+    }
     if (cerinte?.length && !window.confirm('Re-extragerea șterge cerințele NEconfirmate și le extrage din nou — din fișă ȘI din caiete/clarificări (cele confirmate rămân). Durează 15-25 min cu tot corpusul. Continui?')) return
     setWarn(null)
     const sectiuni = ['III', 'IV', 'II', 'rest']
@@ -1112,6 +1172,24 @@ function CerinteSection({ licitatie, profile, onChanged }) {
     onChanged?.()
   }
 
+  // Aceeași regulă ca pe rândul singur (motiv obligatoriu la „nu se aplică"/„blocată"),
+  // dar motivul se cere O SINGURĂ DATĂ pentru tot grupul — altfel 20 de rânduri = 20 de casete.
+  const setStareSelectate = async (stare) => {
+    const alese = (cerinte || []).filter(c => selC.includes(c.id))
+    if (!alese.length) return
+    let motiv = null
+    if (STARE_CERINTA[stare]?.motiv) {
+      motiv = window.prompt(`De ce „${STARE_CERINTA[stare].label}" pentru ${alese.length} cerințe? (același motiv se scrie pe toate)`, '')
+      if (!motiv || !motiv.trim()) return
+      motiv = motiv.trim()
+    }
+    const patch = { stare, stare_motiv: motiv, stare_de: profile?.id || null, stare_la: new Date().toISOString(), updated_at: new Date().toISOString() }
+    const { error } = await supabase.from('ofertare_cerinte').update(patch).in('id', alese.map(c => c.id))
+    if (error) return setWarn('Nu s-a salvat starea: ' + error.message)
+    setCerinte(cs => (cs || []).map(x => selC.includes(x.id) ? { ...x, stare, stare_motiv: motiv } : x))
+    setSelC([]); onChanged?.()
+  }
+
   const filtrate = (cerinte || []).filter(c => (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
   const neconfirmate = (cerinte || []).filter(c => !c.confirmata_de).length
 
@@ -1135,6 +1213,26 @@ function CerinteSection({ licitatie, profile, onChanged }) {
       {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
       {warn && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>{warn}</div>}
 
+      {!!filtrate.length && (
+        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap', padding:'6px 8px', background:G.surface, borderRadius:7 }}>
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" style={{ accentColor:G.ofertare }}
+              checked={selC.length > 0 && selC.length === filtrate.length}
+              onChange={e => setSelC(e.target.checked ? filtrate.map(c => c.id) : [])} />
+            bifează tot ce se vede ({filtrate.length})
+          </label>
+          <span style={{ fontSize:11.5, color: selC.length ? G.ofertare : G.dim, fontWeight:700 }}>{selC.length} selectate</span>
+          {selC.length > 0 && (<>
+            <span style={{ fontSize:11.5, color:G.dim }}>pune starea:</span>
+            {Object.entries(STARE_CERINTA).map(([k, v]) => (
+              <button key={k} onClick={() => setStareSelectate(k)}
+                style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5, color:v.color, borderColor:v.color + '66' }}>{v.label}</button>
+            ))}
+            <button onClick={() => setSelC([])} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5 }}>renunț</button>
+          </>)}
+        </div>
+      )}
+
       {cerinte === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !cerinte.length ? (
           <div style={{ fontSize:12, color:G.dim }}>Niciun rând încă. „🤖 Extrage cerințele" citește cu Opus fișa de date (secțiunile III, IV, II + restul) și apoi TOATE caietele de sarcini + clarificările procesate — apoi tu confirmi/corectezi fiecare rând. Corecțiile tale devin exemple pentru extracțiile viitoare.</div>
@@ -1147,6 +1245,10 @@ function CerinteSection({ licitatie, profile, onChanged }) {
               return (
                 <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.stare === 'nu_se_aplica' ? G.purple : c.confirmata_de ? G.green : t.color}`, opacity: c.stare === 'nu_se_aplica' ? 0.72 : 1 }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
+                      checked={selC.includes(c.id)}
+                      onChange={e => setSelC(v => e.target.checked ? [...v, c.id] : v.filter(x => x !== c.id))} />
+                    <span title="Număr de ordine — același în acoperire" style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
                     {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
@@ -1166,7 +1268,13 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                       </span>
                     )}
                   </div>
-                  {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
+                  {!inEdit && (c.doc?.nume_original || c.sursa_pagina) && (
+                    <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="De unde provine cerința în documentație">
+                      📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : 'document șters din licitație'}
+                      {c.sursa_pagina ? ` · pagina ${c.sursa_pagina}` : ' · pagină necunoscută (document citit înainte de marcaje)'}
+                    </div>
+                  )}
+                  {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 se dovedește cu: {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
                   {c.stare_motiv && !inEdit && <div style={{ fontSize:11, color:st.color, marginTop:3 }}>{st.label} — {c.stare_motiv}</div>}
                   {inEdit && (
                     <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:6 }}>
@@ -1207,6 +1315,7 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [warn, setWarn] = useState(null)
   const [doarLipsa, setDoarLipsa] = useState(true)
+  const [sel2, setSel2] = useState([])       // id-uri bifate pentru acțiune în bloc
 
   const load = async (r = sel) => {
     const { data: toate } = await supabase.from('ofertare_inventar_ai')
@@ -1245,6 +1354,34 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
     await supabase.from('ofertare_inventar_ai').update({ verdict: 'confirmat_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
     await load(); onChanged?.()
   }
+  // Acțiune în bloc (Răzvan 10.09): 89 de rânduri de triat înseamnă 89 de clickuri.
+  // Bifezi ce e clar, apeși o dată. Decizia rămâne a omului — doar apăsatul se adună.
+  const adaugaSelectate = async () => {
+    const alese = (randuri || []).filter(r => sel2.includes(r.id) && r.verdict === 'lipsa_din_registru')
+    if (!alese.length) return
+    if (!window.confirm(`Adaug ${alese.length} obligații în registru, ca cerințe NEconfirmate (le confirmi tu pe fiecare după)?`)) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_cerinte').insert(alese.map(r => ({
+      licitatie_id: licitatie.id,
+      sursa_sectiune: r.sectiune || `Verificare ${FURNIZOR_LBL[r.furnizor] || r.furnizor}`,
+      sursa_pagina: r.pagina || null, text_cerinta: r.obligatie,
+      tip: ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(r.tip_principal) ? r.tip_principal : 'propunere',
+      extras_de_ai: true,
+    })))
+    if (error) { setBusy(false); return setWarn('Nu s-au adăugat: ' + error.message) }
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'confirmat_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).in('id', alese.map(r => r.id))
+    setBusy(false); setSel2([]); await load(); onChanged?.()
+    setWarn(`✓ ${alese.length} cerințe adăugate în registru, neconfirmate.`)
+  }
+  const respingeSelectate = async () => {
+    const ids = (randuri || []).filter(r => sel2.includes(r.id) && r.verdict === 'lipsa_din_registru').map(r => r.id)
+    if (!ids.length) return
+    if (!window.confirm(`Marchez ${ids.length} rânduri ca „nu e cerință"?`)) return
+    setBusy(true)
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'respins_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).in('id', ids)
+    setBusy(false); setSel2([]); await load()
+  }
+
   const respinge = async (r) => {
     await supabase.from('ofertare_inventar_ai').update({ verdict: 'respins_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
     await load()
@@ -1273,6 +1410,23 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
       </div>
       {warn && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>{warn}</div>}
 
+      {!!afisate.filter(r => r.verdict === 'lipsa_din_registru').length && (
+        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap', padding:'6px 8px', background:G.surface, borderRadius:7 }}>
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" style={{ accentColor:G.ofertare }}
+              checked={sel2.length > 0 && sel2.length === afisate.filter(r => r.verdict === 'lipsa_din_registru').length}
+              onChange={e => setSel2(e.target.checked ? afisate.filter(r => r.verdict === 'lipsa_din_registru').map(r => r.id) : [])} />
+            bifează tot ce se vede
+          </label>
+          <span style={{ fontSize:11.5, color: sel2.length ? G.ofertare : G.dim, fontWeight:700 }}>{sel2.length} selectate</span>
+          {sel2.length > 0 && (<>
+            <button disabled={busy} onClick={adaugaSelectate} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }}>➕ adaugă în registru ({sel2.length})</button>
+            <button disabled={busy} onClick={respingeSelectate} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5, color:G.dim }}>✕ nu sunt cerințe ({sel2.length})</button>
+            <button onClick={() => setSel2([])} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5 }}>renunț</button>
+          </>)}
+        </div>
+      )}
+
       {randuri === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !rulari.length ? (
           <div style={{ fontSize:12, color:G.dim }}>Nicio citire independentă pe licitația asta. Inventarul se generează cu funcția <code>ofertare-inventar-ai</code> (Gemini sau ChatGPT citesc PDF-ul ORIGINAL, nu textul extras de noi) — rostul lui e să prindă ce am ratat, nu să scrie în registru.</div>
@@ -1286,6 +1440,9 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
               return (
                 <div key={r.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${decis ? G.dim : t.color}`, opacity: decis ? .6 : 1 }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    {!decis && <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
+                      checked={sel2.includes(r.id)}
+                      onChange={e => setSel2(v => e.target.checked ? [...v, r.id] : v.filter(x => x !== r.id))} />}
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     {r.pagina && <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>p. {r.pagina}</span>}
                     {r.sectiune && <span style={{ fontSize:11, color:G.dim, whiteSpace:'nowrap' }}>{r.sectiune}</span>}
@@ -1339,9 +1496,9 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
 
   const load = async () => {
     const { data: cs } = await supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
+      .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
-      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('sursa_sectiune').limit(5000)
+      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
@@ -1461,6 +1618,7 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
               return (
                 <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}` }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <span title="Număr de ordine — același în registrul de cerințe" style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
                     {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}

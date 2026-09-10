@@ -433,7 +433,9 @@ function ChatNavButton() {
 // NOTIFICATION BELL — clopoțel notificări cu badge count + dropdown listă
 // Auto-refresh la 30s. Click pe item → marchează read_at + navigate la link_to.
 // ════════════════════════════════════════════════════════════════════════════
-function NotificationBell() {
+// Clopoțel filtrabil pe modul (Răzvan 10.09): cel general nu mai arată Ofertare — se strângeau
+// prea multe într-un singur loc — iar modulul Ofertare are clopoțelul lui, cu doar alertele lui.
+export function NotificationBell({ doarModul = null, excludeModul = null, icon = '🔔', titlu = 'Notificări' }) {
   const { profile } = useAuth()
   const nav = useNavigate()
   const [open, setOpen] = useState(false)
@@ -447,18 +449,19 @@ function NotificationBell() {
     if (!profile?.id) return
     setLoading(true)
     // Iau ultimele 30, prioritar necitite + recente
-    const { data, error } = await supabase
+    let q = supabase
       .from('notifications')
       .select('id, type, modul, title, message, link_to, read_at, created_at')
       .eq('profile_id', profile.id)
-      .order('created_at', { ascending: false })
-      .limit(30)
+    if (doarModul) q = q.eq('modul', doarModul)
+    if (excludeModul) q = q.neq('modul', excludeModul)
+    const { data, error } = await q.order('created_at', { ascending: false }).limit(30)
     if (!error) {
       setNotifs(data || [])
       setUnreadCount((data || []).filter(n => !n.read_at).length)
     }
     setLoading(false)
-  }, [profile?.id])
+  }, [profile?.id, doarModul, excludeModul])
   
   useEffect(() => {
     loadNotifs()
@@ -537,7 +540,7 @@ function NotificationBell() {
         onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)' }}
         onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)' }}
       >
-        🔔
+        {icon}
         {unreadCount > 0 && (
           <span style={{
             position: 'absolute',
@@ -582,7 +585,7 @@ function NotificationBell() {
             alignItems: 'center',
           }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>
-              🔔 Notificări {unreadCount > 0 && <span style={{ color: G.red, fontWeight: 600 }}>· {unreadCount} noi</span>}
+              {icon} {titlu} {unreadCount > 0 && <span style={{ color: G.red, fontWeight: 600 }}>· {unreadCount} noi</span>}
             </div>
             {unreadCount > 0 && (
               <button
@@ -928,7 +931,7 @@ function Layout({ children }) {
           </>)}
           {!loc.pathname.startsWith('/executie') && <MeteoSediu style={{marginRight:10}} />}
         <ChatNavButton />
-          <NotificationBell />
+          <NotificationBell excludeModul="Ofertare" />
           <div style={{textAlign:'right'}}>
             <div style={{fontSize:17,fontWeight:800,color:G.blue,fontVariantNumeric:'tabular-nums'}}>{now.toLocaleTimeString('ro-RO',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</div>
             <div style={{fontSize:10,color:G.muted}}>{now.toLocaleDateString('ro-RO',{weekday:'short',day:'numeric',month:'short'})}</div>

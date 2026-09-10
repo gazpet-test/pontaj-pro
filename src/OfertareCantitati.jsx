@@ -2,7 +2,8 @@
 // OfertareCantitati.jsx — 📋 Cantități & Clarificări per licitație
 // Cantitățile se extrag cu AI din documentație (PT/planșe/CS), se verifică
 // încrucișat și se validează de om; diferențele devin întrebări de clarificare.
-// Adresa de clarificări se generează pe antet Gazpet (PDF) — se depune în SEAP.
+// Adresa de clarificări se generează pe antet Gazpet (PDF) — se depune în SEAP. Antetul e OK;
+// numele firmei nu are voie doar în TEXTUL întrebărilor, fiindcă SEAP le publică tuturor ofertanților.
 // Regula fluxului (Razvan, 28.08): tranșa 1 RFQ pe cantitățile certe,
 // tranșa 2 după răspunsurile la clarificări.
 // ════════════════════════════════════════════════════════════════
@@ -140,7 +141,11 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     await load()
   }
 
-  // Adresa de clarificări — PDF pe antet, cu întrebările "de trimis"
+  // Adresa de clarificări — antet normal, dar CONȚINUTUL întrebărilor rămâne impersonal.
+  // Răzvan 10.09.2026: clarificările sunt secrete față de CEILALȚI ofertanți, nu față de
+  // autoritate — ea știe oricum cine întreabă, depunerea se face din contul nostru SEAP.
+  // Dar SEAP publică întrebările și răspunsurile către toți operatorii, deci numele firmei
+  // în textul întrebării ajunge la concurență. Antetul e emitentul adresei, e în regulă.
   const genereazaAdresa = async () => {
     const deTrimis = (clar || []).filter(q => q.status === 'de_trimis' && (q.intrebare || '').trim())
     if (!deTrimis.length) { showToast('Nicio întrebare cu status „de trimis".', 'warn'); return }
@@ -196,7 +201,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -i * 297, 210, imgH)
       }
       pdf.save(`clarificari_${lic?.nr_anunt || licId}.pdf`)
-      showToast(`Adresa cu ${deTrimis.length} întrebări generată — de depus în SEAP, apoi marchează-le „trimisă".`)
+      showToast(`Adresa cu ${deTrimis.length} întrebări generată — verifică să nu apară numele firmei în textul întrebărilor (SEAP le publică tuturor ofertanților), apoi depune și marchează-le „trimisă".`)
     } catch (e) { showToast('Eroare PDF: ' + (e?.message || e), 'err') }
     setBusy(null)
   }
