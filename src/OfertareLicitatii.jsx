@@ -1036,6 +1036,7 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   const [warn, setWarn] = useState(null)
   const [fTip, setFTip] = useState('')
   const [fStare, setFStare] = useState('')
+  const [selC, setSelC] = useState([])      // id-uri bifate pentru starea în bloc
 
   const load = async () => {
     const { data } = await supabase.from('ofertare_cerinte')
@@ -1150,6 +1151,24 @@ function CerinteSection({ licitatie, profile, onChanged }) {
     onChanged?.()
   }
 
+  // Aceeași regulă ca pe rândul singur (motiv obligatoriu la „nu se aplică"/„blocată"),
+  // dar motivul se cere O SINGURĂ DATĂ pentru tot grupul — altfel 20 de rânduri = 20 de casete.
+  const setStareSelectate = async (stare) => {
+    const alese = (cerinte || []).filter(c => selC.includes(c.id))
+    if (!alese.length) return
+    let motiv = null
+    if (STARE_CERINTA[stare]?.motiv) {
+      motiv = window.prompt(`De ce „${STARE_CERINTA[stare].label}" pentru ${alese.length} cerințe? (același motiv se scrie pe toate)`, '')
+      if (!motiv || !motiv.trim()) return
+      motiv = motiv.trim()
+    }
+    const patch = { stare, stare_motiv: motiv, stare_de: profile?.id || null, stare_la: new Date().toISOString(), updated_at: new Date().toISOString() }
+    const { error } = await supabase.from('ofertare_cerinte').update(patch).in('id', alese.map(c => c.id))
+    if (error) return setWarn('Nu s-a salvat starea: ' + error.message)
+    setCerinte(cs => (cs || []).map(x => selC.includes(x.id) ? { ...x, stare, stare_motiv: motiv } : x))
+    setSelC([]); onChanged?.()
+  }
+
   const filtrate = (cerinte || []).filter(c => (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
   const neconfirmate = (cerinte || []).filter(c => !c.confirmata_de).length
 
@@ -1173,6 +1192,26 @@ function CerinteSection({ licitatie, profile, onChanged }) {
       {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
       {warn && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>{warn}</div>}
 
+      {!!filtrate.length && (
+        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap', padding:'6px 8px', background:G.surface, borderRadius:7 }}>
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" style={{ accentColor:G.ofertare }}
+              checked={selC.length > 0 && selC.length === filtrate.length}
+              onChange={e => setSelC(e.target.checked ? filtrate.map(c => c.id) : [])} />
+            bifează tot ce se vede ({filtrate.length})
+          </label>
+          <span style={{ fontSize:11.5, color: selC.length ? G.ofertare : G.dim, fontWeight:700 }}>{selC.length} selectate</span>
+          {selC.length > 0 && (<>
+            <span style={{ fontSize:11.5, color:G.dim }}>pune starea:</span>
+            {Object.entries(STARE_CERINTA).map(([k, v]) => (
+              <button key={k} onClick={() => setStareSelectate(k)}
+                style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5, color:v.color, borderColor:v.color + '66' }}>{v.label}</button>
+            ))}
+            <button onClick={() => setSelC([])} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5 }}>renunț</button>
+          </>)}
+        </div>
+      )}
+
       {cerinte === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !cerinte.length ? (
           <div style={{ fontSize:12, color:G.dim }}>Niciun rând încă. „🤖 Extrage cerințele" citește cu Opus fișa de date (secțiunile III, IV, II + restul) și apoi TOATE caietele de sarcini + clarificările procesate — apoi tu confirmi/corectezi fiecare rând. Corecțiile tale devin exemple pentru extracțiile viitoare.</div>
@@ -1185,6 +1224,9 @@ function CerinteSection({ licitatie, profile, onChanged }) {
               return (
                 <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.stare === 'nu_se_aplica' ? G.purple : c.confirmata_de ? G.green : t.color}`, opacity: c.stare === 'nu_se_aplica' ? 0.72 : 1 }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
+                      checked={selC.includes(c.id)}
+                      onChange={e => setSelC(v => e.target.checked ? [...v, c.id] : v.filter(x => x !== c.id))} />
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
                     {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
@@ -1245,6 +1287,7 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [warn, setWarn] = useState(null)
   const [doarLipsa, setDoarLipsa] = useState(true)
+  const [sel2, setSel2] = useState([])       // id-uri bifate pentru acțiune în bloc
 
   const load = async (r = sel) => {
     const { data: toate } = await supabase.from('ofertare_inventar_ai')
@@ -1283,6 +1326,34 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
     await supabase.from('ofertare_inventar_ai').update({ verdict: 'confirmat_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
     await load(); onChanged?.()
   }
+  // Acțiune în bloc (Răzvan 10.09): 89 de rânduri de triat înseamnă 89 de clickuri.
+  // Bifezi ce e clar, apeși o dată. Decizia rămâne a omului — doar apăsatul se adună.
+  const adaugaSelectate = async () => {
+    const alese = (randuri || []).filter(r => sel2.includes(r.id) && r.verdict === 'lipsa_din_registru')
+    if (!alese.length) return
+    if (!window.confirm(`Adaug ${alese.length} obligații în registru, ca cerințe NEconfirmate (le confirmi tu pe fiecare după)?`)) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_cerinte').insert(alese.map(r => ({
+      licitatie_id: licitatie.id,
+      sursa_sectiune: r.sectiune || `Verificare ${FURNIZOR_LBL[r.furnizor] || r.furnizor}`,
+      sursa_pagina: r.pagina || null, text_cerinta: r.obligatie,
+      tip: ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(r.tip_principal) ? r.tip_principal : 'propunere',
+      extras_de_ai: true,
+    })))
+    if (error) { setBusy(false); return setWarn('Nu s-au adăugat: ' + error.message) }
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'confirmat_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).in('id', alese.map(r => r.id))
+    setBusy(false); setSel2([]); await load(); onChanged?.()
+    setWarn(`✓ ${alese.length} cerințe adăugate în registru, neconfirmate.`)
+  }
+  const respingeSelectate = async () => {
+    const ids = (randuri || []).filter(r => sel2.includes(r.id) && r.verdict === 'lipsa_din_registru').map(r => r.id)
+    if (!ids.length) return
+    if (!window.confirm(`Marchez ${ids.length} rânduri ca „nu e cerință"?`)) return
+    setBusy(true)
+    await supabase.from('ofertare_inventar_ai').update({ verdict: 'respins_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).in('id', ids)
+    setBusy(false); setSel2([]); await load()
+  }
+
   const respinge = async (r) => {
     await supabase.from('ofertare_inventar_ai').update({ verdict: 'respins_de_om', verdict_de: profile?.id || null, verdict_la: new Date().toISOString() }).eq('id', r.id)
     await load()
@@ -1311,6 +1382,23 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
       </div>
       {warn && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>{warn}</div>}
 
+      {!!afisate.filter(r => r.verdict === 'lipsa_din_registru').length && (
+        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap', padding:'6px 8px', background:G.surface, borderRadius:7 }}>
+          <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+            <input type="checkbox" style={{ accentColor:G.ofertare }}
+              checked={sel2.length > 0 && sel2.length === afisate.filter(r => r.verdict === 'lipsa_din_registru').length}
+              onChange={e => setSel2(e.target.checked ? afisate.filter(r => r.verdict === 'lipsa_din_registru').map(r => r.id) : [])} />
+            bifează tot ce se vede
+          </label>
+          <span style={{ fontSize:11.5, color: sel2.length ? G.ofertare : G.dim, fontWeight:700 }}>{sel2.length} selectate</span>
+          {sel2.length > 0 && (<>
+            <button disabled={busy} onClick={adaugaSelectate} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }}>➕ adaugă în registru ({sel2.length})</button>
+            <button disabled={busy} onClick={respingeSelectate} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5, color:G.dim }}>✕ nu sunt cerințe ({sel2.length})</button>
+            <button onClick={() => setSel2([])} style={{ ...S.btnS, padding:'4px 10px', fontSize:11.5 }}>renunț</button>
+          </>)}
+        </div>
+      )}
+
       {randuri === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !rulari.length ? (
           <div style={{ fontSize:12, color:G.dim }}>Nicio citire independentă pe licitația asta. Inventarul se generează cu funcția <code>ofertare-inventar-ai</code> (Gemini sau ChatGPT citesc PDF-ul ORIGINAL, nu textul extras de noi) — rostul lui e să prindă ce am ratat, nu să scrie în registru.</div>
@@ -1324,6 +1412,9 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
               return (
                 <div key={r.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${decis ? G.dim : t.color}`, opacity: decis ? .6 : 1 }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+                    {!decis && <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
+                      checked={sel2.includes(r.id)}
+                      onChange={e => setSel2(v => e.target.checked ? [...v, r.id] : v.filter(x => x !== r.id))} />}
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     {r.pagina && <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>p. {r.pagina}</span>}
                     {r.sectiune && <span style={{ fontSize:11, color:G.dim, whiteSpace:'nowrap' }}>{r.sectiune}</span>}
