@@ -1,4 +1,5 @@
-// ofertare-cerinte v7 (10.09.2026) — bucata_max din body + max_tokens 16000.
+// ofertare-cerinte v8 (10.09.2026) — bucata_max minim 6k (felii de ~2 pagini).
+// v7 (10.09.2026) — bucata_max din body + max_tokens 16000.
 // v6 (09.09.2026) — Faza 1/2: FĂRĂ TĂIERE, CU PAGINĂ ȘI PASAJ.
 // v6: (1) textul nu se mai taie la 180k (doc 98 la Mânăstirea avea 290k → 38%
 // nu ajungea la AI, fără niciun marcaj); se împarte în bucăți la ⟦PAGINA N⟧ și se
@@ -150,7 +151,10 @@ Deno.serve(async (req: Request) => {
     // v7: mărimea bucății se poate cere din body (workerul server trimite 40k): bucăți mai mici =
     // răspuns mai scurt și apel sub 150s (gateway IDLE_TIMEOUT / pg_net timeout); același număr
     // trebuie trimis la toate apelurile unui pas, altfel indexul bucății nu mai corespunde.
-    const bucataMax = Math.max(20_000, Math.min(Number(bucata_max) || BUCATA_MAX_DEFAULT, BUCATA_MAX_DEFAULT))
+    // v8: minimul coboară la 6k (~2 pagini). La 20k, secțiunea IV a fișei Mănăstirea intra
+    // într-o singură bucată care depășea 150s, pasul era sărit și paginile 19-21 nu ajungeau
+    // niciodată la model — registrul rămânea gol acolo, deși documentul era citit complet.
+    const bucataMax = Math.max(6_000, Math.min(Number(bucata_max) || BUCATA_MAX_DEFAULT, BUCATA_MAX_DEFAULT))
     const licId = Number(licitatie_id)
     const modCorpus = !!doc_id
     const nrBucata = Math.max(0, Number(bucata) || 0)
