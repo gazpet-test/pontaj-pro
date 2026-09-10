@@ -1,4 +1,5 @@
-// ofertare-ingest-doc v9 (09.09.2026) — {apeluri:N} din body (workerul server cere 1).
+// ofertare-ingest-doc v10 (10.09.2026) — Sonnet pe documente critice + renumerotare marcaje.
+// v9 (09.09.2026) — {apeluri:N} din body (workerul server cere 1).
 // v8 (09.09.2026) — CITIRE COMPLETĂ, DOVEDIBILĂ.
 // v8 (Faza 1 corectitudine): (1) fiecare pagină e marcată în text cu ⟦PAGINA N⟧, ca
 // extragerea cerințelor să poată spune pagina-sursă; (2) o felie prea mare se
@@ -13,9 +14,15 @@ import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
-const MODEL = 'claude-haiku-4-5-20251001'
-const PRICE_IN = 1 / 1e6, PRICE_OUT = 5 / 1e6
-const PAGINI_PER_FELIE = 8
+// v10: cititorul depinde de tipul documentului. Testul din 10.09 (fișa Mănăstirea, 23 pag):
+// Haiku nu pierde conținut, dar mută text între pagini (4 din 23 greșite); Sonnet ≈ Opus.
+// Documentele critice (fișa de date, clarificări, formulare) → Sonnet 5, felii de 2 pagini;
+// volumele (caiete, planșe, alta) → Haiku, felii de 8.
+const MODELE: Record<string, { id: string; in: number; out: number; felie: number }> = {
+  haiku: { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6, felie: 8 },
+  sonnet: { id: 'claude-sonnet-5', in: 3 / 1e6, out: 15 / 1e6, felie: 2 },
+}
+const TIPURI_CRITICE = ['fisa_date', 'clarificare', 'raspuns_clarificare', 'formular']
 const APELURI_PER_INVOCARE = 2
 const MAX_CHUNK_BYTES = 24_000_000
 const MAX_TEXT = 900_000
@@ -58,9 +65,18 @@ async function feliePdf(src: PDFDocument, start: number, end: number): Promise<U
 // Dacă modelul n-a pus marcajele cerute, punem noi unul pe tot fragmentul (interval),
 // ca să nu rămână niciodată text fără pagină. Mai bine „pag. 9–16" decât nimic.
 function asiguraMarcaje(txt: string, s: number, e: number): string {
-  const are = /⟦PAGINA \d+⟧/.test(txt)
-  if (are) return txt
-  return `⟦PAGINA ${s + 1}${e - s > 1 ? `-${e}` : ''}⟧\n` + txt
+  const gasite = [...txt.matchAll(/⟦PAGINA (\d+)⟧/g)]
+  if (!gasite.length) return `⟦PAGINA ${s + 1}${e - s > 1 ? `-${e}` : ''}⟧\n` + txt
+  // v10: RENUMEROTARE. Știm exact ce pagini conține felia (s+1..e). Dacă modelul a pus
+  // exact atâtea marcaje câte pagini, le rescriem secvențial (modelul repetă uneori numărul
+  // tipărit pe foaie, nu pe cel fizic). Dacă numărul diferă, păstrăm doar marcajele din
+  // intervalul feliei și le lăsăm cum sunt — mai bine o pagină ±1 decât o etichetă inventată.
+  const nr = e - s
+  if (gasite.length === nr) {
+    let i = 0
+    return txt.replace(/⟦PAGINA \d+⟧/g, () => `⟦PAGINA ${s + 1 + (i++)}⟧`)
+  }
+  return txt.replace(/⟦PAGINA (\d+)⟧/g, (m, p) => { const n = Number(p); return (n >= s + 1 && n <= e) ? m : `⟦PAGINA ${Math.min(Math.max(n, s + 1), e)}⟧` })
 }
 
 Deno.serve(async (req: Request) => {
@@ -74,7 +90,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { doc_id, reia, apeluri } = await req.json()
+    const { doc_id, reia, apeluri, model } = await req.json()
     // Workerul de pe server (cron + pg_net) cere {apeluri:1}: gateway-ul taie la 150s (IDLE_TIMEOUT),
     // iar două felii de scan cu Haiku pot depăși; din browser rămân 2 apeluri.
     const apeluriMax = Math.max(1, Math.min(Number(apeluri) || APELURI_PER_INVOCARE, APELURI_PER_INVOCARE))
@@ -94,6 +110,8 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: true, skip: 'non-pdf', continua: false }), { headers: CORS })
     }
     await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: null }).eq('id', docId)
+    const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
+    const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
 
     const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.fisier_path)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
