@@ -40,6 +40,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   const [clar, setClar] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [citind, setCitind] = useState(null)     // id clarificare în curs de citire AI
+  const [docRasp, setDocRasp] = useState([])    // documentele SEAP de tip raspuns_clarificare ale licitației
   const numeProfil = (id) => profiles.find(p => p.id === id)?.name || '—'
   // Răzvan 07.09.2026: clarificările încărcate manual (PDF) sunt citite de platformă cu AI → citita_la + rezumat
   const citesteClarificare = async (q) => {
@@ -75,12 +76,15 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
 
   const load = async () => {
     if (!licId) return
-    const [{ data: c }, { data: q }, { data: pr }] = await Promise.all([
+    const [{ data: c }, { data: q }, { data: pr }, { data: dr }] = await Promise.all([
       supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('id'),
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
       supabase.from('profiles').select('id, name'),
+      // PDF-urile de raspuns ale autoritatii, ca sa se poata lega de intrebarea careia ii raspund
+      supabase.from('ofertare_documente_atribuire').select('id, nume_original, text_extras')
+        .eq('licitatie_id', licId).eq('tip', 'raspuns_clarificare').order('id'),
     ])
-    setCant(c || []); setClar(q || []); setProfiles(pr || [])
+    setCant(c || []); setClar(q || []); setProfiles(pr || []); setDocRasp(dr || [])
   }
   useEffect(() => { load() }, [licId])
 
@@ -119,6 +123,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     if (!q._mod) return
     await supabase.from('ofertare_clarificari').update({
       intrebare: q.intrebare, sursa: q.sursa || null, raspuns: q.raspuns || null,
+      raspuns_document_id: q.raspuns_document_id || null,
       status: q.status, updated_at: new Date().toISOString(),
     }).eq('id', q.id)
     await load()
@@ -319,10 +324,33 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
                       }}>📄 PDF-ul depus</button>}
                     </div>
                     {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
-                    {(q.status === 'raspunsa' || q.raspuns) && (
+                    {/* Câmpul de răspuns apare de la „trimisă" încolo. Înainte era legat de status='raspunsa',
+                        deci nimeni nu putea completa răspunsul fără să bifeze întâi că a primit unul. */}
+                    {(q.status === 'trimisa' || q.status === 'raspunsa' || q.raspuns) && (
                       <>
                         <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
                           onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
+                        {/* Răspunsurile vin din SEAP ca PDF-uri. Legarea lor aici e ce lipsea:
+                            fără ea, PDF-ul era citit ca document oarecare și producea cerințe paralele,
+                            neversionate, lângă cerințele pe care de fapt le modifica. */}
+                        {docRasp.length > 0 && (
+                          <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:5, flexWrap:'wrap' }}>
+                            <span style={{ fontSize:11, color:G.dim }}>📎 răspunsul e în documentul:</span>
+                            <select style={{ ...S.input, width:'auto', fontSize:11.5, maxWidth:320 }} value={q.raspuns_document_id || ''}
+                              onChange={e => {
+                                const did = e.target.value ? Number(e.target.value) : null
+                                const d = docRasp.find(x => x.id === did)
+                                setQ(q.id, 'raspuns_document_id', did)
+                                if (d && !(q.raspuns || '').trim() && (d.text_extras || '').trim()) {
+                                  setQ(q.id, 'raspuns', d.text_extras.slice(0, 20000))
+                                  showToast('Am pus textul documentului în răspuns — verifică-l și taie ce nu ține de întrebarea asta.')
+                                }
+                              }}>
+                              <option value="">— niciunul —</option>
+                              {docRasp.map(d => <option key={d.id} value={d.id}>{d.nume_original}</option>)}
+                            </select>
+                          </div>
+                        )}
                         {(q.raspuns || '').trim() && (
                           <div style={{ marginTop:5 }}>
                             <button style={{ ...S.btnS, padding:'3px 10px', fontSize:11.5, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={aplicand === q.id}
