@@ -8,8 +8,9 @@
 // platformă, cu jszip (deja dependență în proiect) — fără Word, fără laptop, fără librărie nouă.
 // Regula lui Răzvan (11.09.2026): tot ce se poate face în platformă, se face în platformă.
 //
-// Ce NU face: `.doc` vechi (binar, dinainte de 2007) n-are parser curat — acelea se resalvează ca
-// .docx și reintră pe același flux. Funcția le respinge explicit, nu se preface că le-a citit.
+// `.doc` vechi (binar, OLE, dinainte de 2007) se citește cu word-extractor. Răzvan, 11.09.2026:
+// „sigur o să mai avem, că lucrăm cu primăriile" — și are dreptate, primăriile încă trimit .doc,
+// deci nu are rost să tratăm fiecare fișier ca pe o excepție rezolvată cu mâna.
 //
 // Paginile: un .docx n-are paginație fixă (depinde de imprimantă și de fonturi), deci `pagini`
 // rămâne NULL, iar cerințele extrase de aici vor purta „document Word, fără paginație fixă”
@@ -19,8 +20,10 @@
 // Body: {doc_id} pentru un document, sau {licitatie_id} pentru toate Word-urile unei licitații.
 //       {dry_run: true} → întoarce ce ar extrage, fără să scrie nimic.
 // Erorile de business se întorc în răspuns, nu se aruncă (throw în try + update în catch omoară workerul).
+import { Buffer } from 'node:buffer'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import JSZip from 'npm:jszip@3.10.1'
+import WordExtractor from 'npm:word-extractor@1.0.4'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -59,6 +62,16 @@ function xmlToText(xml: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/ \| (?=\n)/g, '')
     .trim()
+}
+
+// .doc binar: OLE compound file, nu zip. word-extractor scoate corpul + antetele/subsolurile.
+async function textDinDoc(bytes: Uint8Array): Promise<{ text: string; parti: number }> {
+  const ext = new WordExtractor()
+  const doc = await ext.extract(Buffer.from(bytes))
+  const bucati = [doc.getBody(), doc.getHeaders(), doc.getFooters()]
+    .map((t: string) => (t || '').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim())
+    .filter(Boolean)
+  return { text: bucati.join('\n\n'), parti: bucati.length }
 }
 
 async function textDinDocx(bytes: Uint8Array): Promise<{ text: string; parti: number }> {
@@ -108,11 +121,6 @@ Deno.serve(async (req: Request) => {
   const rezultate: any[] = []
   for (const r of deLucru) {
     const vechi = (r.text_extras || '').length
-    if (/\.doc$/i.test(r.nume_original)) {
-      rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'nesuportat',
-        nota: '.doc binar (pre-2007) — n-are parser; resalvează-l ca .docx și reîncarcă-l' })
-      continue
-    }
     if (!r.fisier_path) {
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'fără fisier_path' })
       continue
@@ -124,7 +132,10 @@ Deno.serve(async (req: Request) => {
     }
     let text = '', parti = 0
     try {
-      const out = await textDinDocx(new Uint8Array(await blob.arrayBuffer()))
+      const octeti = new Uint8Array(await blob.arrayBuffer())
+      const out = /\.docx$/i.test(r.nume_original)
+        ? await textDinDocx(octeti)
+        : await textDinDoc(octeti)
       text = out.text; parti = out.parti
     } catch (e) {
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'despachetare: ' + String(e) })
@@ -146,7 +157,7 @@ Deno.serve(async (req: Request) => {
       // pagini rămâne NULL intenționat: .docx n-are paginație fixă, n-o inventăm
       pagini_procesate: 0,
       procesat_la: new Date().toISOString(),
-      eroare: `text extras din .docx în platformă (${parti} părți, ${text.length} caractere) — fără paginație fixă`,
+      eroare: `text extras din ${/\.docx$/i.test(r.nume_original) ? '.docx' : '.doc'} în platformă (${parti} părți, ${text.length} caractere) — fără paginație fixă`,
     }).eq('id', r.id)
     if (upErr) { rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'update: ' + upErr.message }); continue }
     rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'scris', caractere: text.length, parti, inainte: vechi })
