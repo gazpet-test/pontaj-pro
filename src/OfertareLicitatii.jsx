@@ -114,7 +114,7 @@ export default function OfertareLicitatiiTab() {
       const [{ data: cs }, { data: vf }, { data: cl }] = await Promise.all([
         // .limit explicit: implicit PostgREST întoarce 1.000 de rânduri, iar cerințele active sunt peste 2.000 —
         // Mănăstirea apărea cu 150/419 în loc de 226/655 (auditul 09.09.2026)
-        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null).limit(20000),
+        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null).is('duplicat_al', null).limit(20000),
         supabase.from('ofertare_verificari').select('licitatie_id, verdict, created_at').in('licitatie_id', ids).order('id', { ascending: false }),
         supabase.from('ofertare_clarificari').select('licitatie_id').in('licitatie_id', ids),
       ])
@@ -1058,14 +1058,34 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
   const selC = sel ?? selIntern
   const setSelC = setSel ?? setSelIntern
 
+  // Repetările (duplicat_al) nu se șterg — se scot din listă și se arată sub cerința păstrată,
+  // ca proveniența multiplă („apare și în PT partea 4, pag. 29") să fie informație, nu gunoi.
+  // Un document spart în felii își reia capitolele generale, deci aceeași obligație apare de
+  // 6-8 ori; fără asta, omul bifează de șase ori aceeași acoperire.
+  const [repetari, setRepetari] = useState({})   // id reprezentant → [repetări]
+  const [aratRepetari, setAratRepetari] = useState(false)
   const load = async () => {
+    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
     const { data, error } = await supabase.from('ofertare_cerinte')
-      .select('id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)')
-      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
+      .select(camp)
+      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
       .order('nr_ordine')
       .limit(5000)
     if (error) setWarn('Nu s-a încărcat registrul: ' + error.message)
     setCerinte(data || [])
+    const { data: dup } = await supabase.from('ofertare_cerinte')
+      .select('id, nr_ordine, sursa_pagina, duplicat_al, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)')
+      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).not('duplicat_al', 'is', null)
+      .order('nr_ordine').limit(5000)
+    const m = {}; (dup || []).forEach(d => { (m[d.duplicat_al] ||= []).push(d) })
+    setRepetari(m)
+  }
+  const nrRepetari = Object.values(repetari).reduce((n, l) => n + l.length, 0)
+  // Desface o repetare: cerința redevine de sine stătătoare în registru.
+  const desfaRepetarea = async (id) => {
+    const { error } = await supabase.from('ofertare_cerinte').update({ duplicat_al: null, duplicat_scor: null, duplicat_la: null }).eq('id', id)
+    if (error) return setWarn('Nu s-a desfăcut: ' + error.message)
+    load()
   }
   useEffect(() => { load() }, [licitatie.id])
 
@@ -1215,6 +1235,12 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
     <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
         <div style={{ fontSize:13, fontWeight:800 }}>📋 Registrul de cerințe {cerinte ? `(${cerinte.length}${neconfirmate ? ` · ${neconfirmate} neconfirmate` : ' · ✅ confirmat'})` : ''}</div>
+        {nrRepetari > 0 && (
+          <button onClick={() => setAratRepetari(v => !v)} title="Aceleași obligații, repetate în mai multe felii ale documentației. Se bifează o singură dată; aici vezi unde se mai repetă."
+            style={{ ...S.btnS, padding:'4px 9px', fontSize:11, color: aratRepetari ? G.ofertare : G.dim, borderColor: (aratRepetari ? G.ofertare : G.border2) }}>
+            🔁 {nrRepetari} repetări {aratRepetari ? '(ascunde unde)' : '(arată unde)'}
+          </button>
+        )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
           <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={fTip} onChange={e => setFTip(e.target.value)}>
             <option value="">toate tipurile</option>
@@ -1294,6 +1320,19 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
                     <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="De unde provine cerința în documentație">
                       📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : (c.sursa_sectiune ? 'document scos din licitație' : 'document șters din licitație')}
                       {locProvenienta(c)}
+                    </div>
+                  )}
+                  {!inEdit && repetari[c.id]?.length > 0 && (
+                    <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="Aceeași obligație, repetată în alte felii ale documentației — se bifează o singură dată">
+                      🔁 se repetă de {repetari[c.id].length} ori
+                      {aratRepetari
+                        ? <>: {repetari[c.id].map(r => (
+                            <span key={r.id} style={{ marginLeft:6 }}>
+                              #{r.nr_ordine} {right60(r.doc?.nume_original || '—')}{r.sursa_pagina ? ` p.${r.sursa_pagina}` : ''}
+                              <button title="Nu e aceeași cerință — scoate-o din repetări" onClick={() => desfaRepetarea(r.id)}
+                                style={{ ...S.btnS, padding:'0 5px', fontSize:10, marginLeft:4, color:G.orange, borderColor:G.orange + '55' }}>desfă</button>
+                            </span>))}</>
+                        : <> în documentație</>}
                     </div>
                   )}
                   {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 se dovedește cu: {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
@@ -1519,7 +1558,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const load = async () => {
     const { data: cs } = await supabase.from('ofertare_cerinte')
       .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
-      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null)
+      .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
       .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
     setCerinte(cs || [])
     if (cs?.length) {
