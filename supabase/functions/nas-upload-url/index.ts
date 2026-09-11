@@ -4,13 +4,18 @@
 // Folosit la completarea datelor de proiect din serverul \\gazpet-tnas (ordin începere, CS, propuneri, PCCVI).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 const H = { 'Content-Type': 'application/json' }
-const ALLOWED = ['executie-contracte', 'documente-proiect', 'documente-flota']
+// 11.09.2026: `ofertare` adăugat la ÎNCĂRCARE (nu și la descărcare). Motivul: SEAP a întors
+// HTTP 500 la arhiva anunțului Potlogi de două ori, iar documentele lipsă erau oricum în
+// Drive-ul sincronizat pe laptop. O cale de urcare nu poate scoate nimic din platformă, deci
+// nu redeschide expunerea închisă azi-dimineață la `recrutare-cv`.
+const ALLOWED = ['executie-contracte', 'documente-proiect', 'documente-flota', 'ofertare']
 // 11.09.2026: `recrutare-cv` NU mai e in lista de descarcare. Bucketul tine CV-uri de
 // candidati, adica date personale, iar aceasta functie se autentifica doar cu un antet
 // care a stat luni de zile intr-un repo public. O citire nu lasa nicio urma, deci nici
 // n-am fi stiut. CV-urile raman accesibile acolo unde trebuie: in ecranul HR Recrutare,
 // unde fiecare om deschide cu propriul cont si trece prin politicile de storage.
-const ALLOWED_DOWNLOAD = [...ALLOWED]
+// Descărcarea rămâne pe lista scurtă: `ofertare` NU e aici, deliberat.
+const ALLOWED_DOWNLOAD = ['executie-contracte', 'documente-proiect', 'documente-flota']
 // Secretul NU mai sta in sursa: repo-ul e public, deci orice valoare scrisa aici e publica.
 // Se verifica prin RPC contra Vault (fn_verifica_radar_secret), care accepta si valoarea
 // precedenta cat tine fereastra de rotire — altfel cron-urile ar pica toate deodata.
