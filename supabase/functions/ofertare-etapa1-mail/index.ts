@@ -8,12 +8,22 @@
 // Colegii primesc mail DOAR la Etapa 1 și la reminder; răspunsurile lor vin în platformă (ofertare_acoperire.raspuns_coleg, tichete), nu pe mail.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+// Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
+// accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
+async function secretOk(req: Request): Promise<boolean> {
+  const s = req.headers.get('x-radar-secret')
+  if (!s) return false
+  const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
+  return !error && data === true
+}
+
+
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info, x-radar-secret',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
-const RADAR_SECRET = 'gazpet-radar-x7Q2mK-2026';
 const APP = 'https://pontaj-pro-sooty.vercel.app';
 const OFFICE = 'office@gazpet.ro';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
@@ -31,7 +41,7 @@ Deno.serve(async (req: Request) => {
 
   // auth: cron cu secret sau utilizator cu JWT
   let userId: string | null = null; let meNume = 'Platforma Gazpet'; let meMail = OFFICE;
-  if (req.headers.get('x-radar-secret') === RADAR_SECRET) { /* cron */ }
+  if ((await secretOk(req))) { /* cron */ }
   else {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
     if (!jwt) return json({ error: 'fără autentificare' }, 401);

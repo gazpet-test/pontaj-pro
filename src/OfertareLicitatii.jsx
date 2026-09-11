@@ -1004,6 +1004,18 @@ const TIP_CERINTA = {
 // „nu se aplică" o scoate din numărătoarea de eliminatorii fără dovadă (aici și în v_ofertare_dashboard).
 // Numele documentelor din SEAP sunt lungi și se termină cu partea utilă („— p03_pag41-64.pdf")
 const right60 = (n) => (n || '').length > 58 ? '…' + n.slice(-58) : n
+
+// Unde anume, în document, stă cerința. Pagina NU e proveniența potrivită peste tot:
+// un .docx nu are paginație fixă (se schimbă cu fontul și imprimanta), iar pentru un
+// acord contractual referința corectă e clauza, nu pagina. Așa că afișăm ce are sens
+// pentru tipul documentului, și nu mai raportăm ca lipsă ceea ce e citare corectă.
+const E_WORD = (n) => /\.(docx?|odt)$/i.test(n || '')
+const locProvenienta = (c) => {
+  if (c.sursa_pagina) return ` · pagina ${c.sursa_pagina}${c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}`
+  if (c.sursa_sectiune) return ` · ${c.sursa_sectiune}`
+  if (E_WORD(c.doc?.nume_original)) return ' · document Word, fără paginație fixă'
+  return ' · pagină necunoscută (document citit înainte de marcaje)'
+}
 const STARE_CERINTA = {
   de_analizat:  { label:'⬜ de analizat', color:G.dim,    motiv:false },
   in_lucru:     { label:'🔧 în lucru',    color:G.orange, motiv:false },
@@ -1268,10 +1280,10 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                       </span>
                     )}
                   </div>
-                  {!inEdit && (c.doc?.nume_original || c.sursa_pagina) && (
+                  {!inEdit && (c.doc?.nume_original || c.sursa_pagina || c.sursa_sectiune) && (
                     <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="De unde provine cerința în documentație">
-                      📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : 'document șters din licitație'}
-                      {c.sursa_pagina ? ` · pagina ${c.sursa_pagina}` : ' · pagină necunoscută (document citit înainte de marcaje)'}
+                      📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : (c.sursa_sectiune ? 'document scos din licitație' : 'document șters din licitație')}
+                      {locProvenienta(c)}
                     </div>
                   )}
                   {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 se dovedește cu: {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}

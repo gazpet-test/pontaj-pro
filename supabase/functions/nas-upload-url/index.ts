@@ -5,10 +5,25 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 const H = { 'Content-Type': 'application/json' }
 const ALLOWED = ['executie-contracte', 'documente-proiect', 'documente-flota']
-const ALLOWED_DOWNLOAD = [...ALLOWED, 'recrutare-cv']  // doar citire (signed URL 10 min) — CV-uri pentru evaluare în chat
+// 11.09.2026: `recrutare-cv` NU mai e in lista de descarcare. Bucketul tine CV-uri de
+// candidati, adica date personale, iar aceasta functie se autentifica doar cu un antet
+// care a stat luni de zile intr-un repo public. O citire nu lasa nicio urma, deci nici
+// n-am fi stiut. CV-urile raman accesibile acolo unde trebuie: in ecranul HR Recrutare,
+// unde fiecare om deschide cu propriul cont si trece prin politicile de storage.
+const ALLOWED_DOWNLOAD = [...ALLOWED]
+// Secretul NU mai sta in sursa: repo-ul e public, deci orice valoare scrisa aici e publica.
+// Se verifica prin RPC contra Vault (fn_verifica_radar_secret), care accepta si valoarea
+// precedenta cat tine fereastra de rotire — altfel cron-urile ar pica toate deodata.
+async function secretOk(req: Request): Promise<boolean> {
+  const s = req.headers.get('x-radar-secret')
+  if (!s) return false
+  const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
+  return !error && data === true
+}
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return new Response(JSON.stringify({ error: 'POST' }), { status: 405, headers: H })
-  if (req.headers.get('x-radar-secret') !== 'gazpet-radar-x7Q2mK-2026') return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: H })
+  if (!(await secretOk(req))) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: H })
   let b: any = {}; try { b = await req.json() } catch { /* gol */ }
   const bucket = String(b.bucket || 'executie-contracte'), path = String(b.path || '')
   // citire: {download: path} → signed URL de descărcare (10 min)

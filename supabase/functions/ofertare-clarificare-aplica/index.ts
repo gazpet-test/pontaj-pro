@@ -6,6 +6,17 @@
 // Auth: JWT user SAU x-radar-secret. Body {clarificare_id, doar_propunere?: true} → cu doar_propunere întoarce planul fără să aplice.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
+// Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
+// accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
+async function secretOk(req: Request): Promise<boolean> {
+  const s = req.headers.get('x-radar-secret')
+  if (!s) return false
+  const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
+  return !error && data === true
+}
+
+
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
 const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
@@ -16,7 +27,7 @@ Deno.serve(async (req: Request) => {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   let userId: string | null = null
-  if (req.headers.get('x-radar-secret') !== 'gazpet-radar-x7Q2mK-2026') {
+  if (!(await secretOk(req))) {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
