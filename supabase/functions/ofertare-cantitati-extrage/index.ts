@@ -204,24 +204,24 @@ Deno.serve(async (req: Request) => {
     // arata altfel decat model care a raspuns aiurea. Prima proba a esuat tacut fara ele.
     if (!lista) {
       raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'raspuns neinterpretabil',
-        out: data.usage?.output_tokens, stop: data.stop_reason })
+        out: outF, stop: r.stop })
       poz++; continue
     }
     let alePastrate = 0
     const feliaAsta: any[] = []
-    for (const r of lista) {
+    for (const p of lista) {
       // [categorie, denumire, um, cantitate, sursa, e_total]
-      if (!Array.isArray(r) || !r[1]) continue
-      const eTotal = r[5] === 1 || r[5] === true
-      const den = String(r[1]).slice(0, 480)
+      if (!Array.isArray(p) || !p[1]) continue
+      const eTotal = p[5] === 1 || p[5] === true
+      const den = String(p[1]).slice(0, 480)
       feliaAsta.push({
         licitatie_id: licId,
-        categorie: r[0] ? String(r[0]).slice(0, 120) : null,
+        categorie: p[0] ? String(p[0]).slice(0, 120) : null,
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
-        um: r[2] ? String(r[2]).slice(0, 20) : null,
+        um: p[2] ? String(p[2]).slice(0, 20) : null,
         // un model poate intoarce "1.234,56" sau text; NaN nu are ce cauta in coloana
-        cantitate: Number.isFinite(Number(r[3])) ? Number(r[3]) : null,
-        sursa: `${d.nume_original}${r[4] ? ' \u2014 ' + r[4] : ''}`.slice(0, 300),
+        cantitate: Number.isFinite(Number(p[3])) ? Number(p[3]) : null,
+        sursa: `${d.nume_original}${p[4] ? ' \u2014 ' + p[4] : ''}`.slice(0, 300),
         status: 'extras',
         extras_de_ai: true,
       })
@@ -252,11 +252,7 @@ Deno.serve(async (req: Request) => {
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
   }
   if (dryRun) return json({ ...comun, dry_run: true, esantion: toate.slice(0, 25) })
-  if (!toate.length) return json(comun)
-
-  // se scrie la FIECARE rulare, nu la final: altfel o rulare tăiată de gateway pierde
-  // tot ce a plătit pana atunci
-  const { data: scrise, error: iErr } = await db.from('ofertare_cantitati').insert(toate).select('id')
-  if (iErr) return json({ ...comun, error: 'scriere: ' + iErr.message })
-  return json({ ...comun, scrise: scrise?.length || 0 })
+  // NU se mai scrie nimic aici. Scrierea se face pe felie, mai sus. O a doua inserare la final
+  // ar re-scrie tot ce s-a scris deja — exact asa au aparut cele 77 de duplicate pe Domnesti.
+  return json({ ...comun, scrise: scriseTotal })
 })
