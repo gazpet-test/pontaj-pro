@@ -189,10 +189,16 @@ Deno.serve(async (req: Request) => {
       const docs = rawDocs.length
         ? rawDocs.slice(0, 60).map((f: any) => ({ nume: f.noticeDocumentName || null, cod: f.noticeDocumentCode || null, url: f.noticeDocumentUrl || null }))
         : null;
+      // detalii_extrase = true doar daca CHIAR am extras ceva. Altfel randul ramane pe
+      // false si se reincearca la scanul urmator: filtrul urmatoarei scanari e
+      // `detalii_extrase = false`, deci un true pus dupa un fetch esuat scotea anuntul
+      // definitiv din flux (vazut in productie — vezi comentariul de la reincercari).
+      const areContinut = parti.length > 0 || (docs?.length || 0) > 0;
+      if (!areContinut) rezumat.erori.push(`${r.nr_seap}: fara continut extras — ramane de reincercat`);
       await supa.from('ofertare_radar').update({
         sectiune3_text: parti.join('\n\n').slice(0, 30000) || null,
         documente: docs,
-        detalii_extrase: true,
+        detalii_extrase: areContinut,
         actualizat_la: new Date().toISOString(),
       }).eq('id', r.id);
       r._sectiune = parti.join('\n\n');
@@ -200,6 +206,28 @@ Deno.serve(async (req: Request) => {
 
     const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
     const deScorat = (deExtras || []).filter((r: any) => r.scor_potrivire == null);
+
+    // REINCERCARI — anunturi ramase fara scor din rulari trecute.
+    // Verificat in date la 11.09.2026: 12 anunturi relevante aveau detalii_extrase = true
+    // si scor_potrivire NULL, deci nu mai intrau niciodata in scoring (filtrul de mai sus
+    // cere detalii_extrase = false), iar alerte-mail trimite doar la scor >= 50. Rezultatul:
+    // anunturi deschise, de pana la 58 mil. lei, invizibile in fluxul automat.
+    // Cauza dominanta: raspunsul AI se taia la max_tokens, JSON-ul ramanea nedeschis si
+    // parserul intorcea null (motiv_scor pastra textul brut — de acolo s-a vazut).
+    // Se reiau doar cele inca deschise si maxim 5 pe rulare, ca sa ramana cost marginit.
+    if (cuScor) {
+      const { data: ramase } = await supa.from('ofertare_radar')
+        .select('id, nr_seap, titlu, autoritate, cpv, valoare_lei, termen_depunere, tip_procedura, are_loturi, scor_potrivire, sectiune3_text')
+        .eq('relevant', true).eq('detalii_extrase', true).is('scor_potrivire', null)
+        .gte('termen_depunere', new Date().toISOString())
+        .order('termen_depunere', { ascending: true }).limit(5);
+      const deja = new Set((deScorat || []).map((r: any) => r.id));
+      for (const r of (ramase || [])) {
+        if (deja.has(r.id)) continue;
+        (r as any)._sectiune = r.sectiune3_text || '';
+        deScorat.push(r as any);
+      }
+    }
     if (cuScor && apiKey && deScorat.length) {
       const { data: exp } = await supa.from('ofertare_experienta')
         .select('denumire, valoare_lei, tip_pv').eq('activ', true)
@@ -220,18 +248,32 @@ Deno.serve(async (req: Request) => {
             headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
             body: JSON.stringify({
               model: 'claude-haiku-4-5-20251001',
-              max_tokens: 700,
-              system: 'Esti analistul de licitatii al unui constructor roman de conducte de gaze naturale. Evaluezi cat de potrivit e un anunt SEAP pentru firma. REGULA CRITICA la experienta similara: citeste INTAI definitia exacta a "lucrarilor similare" din cerinte. Multe fise de date accepta explicit "retele de fluide", "retele tehnice edilitare", "conducte" generic sau "lucrari similare din punct de vedere al complexitatii" — conductele de gaze naturale (transport pana la 63 bar / distributie) SE INCADREAZA in aceste definitii si sunt superioare tehnologic retelelor de apa/canalizare, deci firma SE CALIFICA: NU penaliza lipsa referintelor de apa in acest caz. Penalizeaza doar cand definitia cere strict si limitativ apa/canalizare. Daca definitia nu apare in textul primit, scrie la lipsuri "de verificat in fisa de date definitia exacta a experientei similare — gazele pot fi acceptate ca retele de fluide/complexitate" in loc sa presupui ca nu se accepta. Raspunzi DOAR cu JSON valid: {"scor": 0-100, "motiv": "1-2 fraze in romana", "lipsuri": ["cerinte pe care firma probabil NU le acopera"]}. Ghid scor: 90-100 = exact profilul (conducte gaze, valoare 1-40 mil., cerinte acoperite de experienta); 70-89 = potrivit, cu efort de calificare rezonabil (inclusiv apa/canal cu definitie larga a similaritatii); 40-69 = adiacent (cerinte grele sau valoare nepotrivita); sub 40 = nepotrivit. La "lipsuri" fii concret.',
+              max_tokens: 1600,
+              system: 'Esti analistul de licitatii al unui constructor roman de conducte de gaze naturale. Evaluezi cat de potrivit e un anunt SEAP pentru firma. REGULA CRITICA la experienta similara: citeste INTAI definitia exacta a "lucrarilor similare" din cerinte. Multe fise de date accepta explicit "retele de fluide", "retele tehnice edilitare", "conducte" generic sau "lucrari similare din punct de vedere al complexitatii" — conductele de gaze naturale (transport pana la 63 bar / distributie) SE INCADREAZA in aceste definitii si sunt superioare tehnologic retelelor de apa/canalizare, deci firma SE CALIFICA: NU penaliza lipsa referintelor de apa in acest caz. Penalizeaza doar cand definitia cere strict si limitativ apa/canalizare. Daca definitia nu apare in textul primit, scrie la lipsuri "de verificat in fisa de date definitia exacta a experientei similare — gazele pot fi acceptate ca retele de fluide/complexitate" in loc sa presupui ca nu se accepta. Raspunzi DOAR cu JSON valid: {"scor": 0-100, "motiv": "1-2 fraze in romana", "lipsuri": ["cerinte pe care firma probabil NU le acopera"]}. Ghid scor: 90-100 = exact profilul (conducte gaze, valoare 1-40 mil., cerinte acoperite de experienta); 70-89 = potrivit, cu efort de calificare rezonabil (inclusiv apa/canal cu definitie larga a similaritatii); 40-69 = adiacent (cerinte grele sau valoare nepotrivita); sub 40 = nepotrivit. La "lipsuri" fii concret, dar maxim 4 intrari, fiecare sub 140 de caractere — raspunsul TREBUIE sa incapa intreg, altfel JSON-ul se taie si scorul se pierde.',
               messages: [{ role: 'user', content: profil + '\n\n---\n\n' + anunt }],
             }),
           });
           const aj = await ai.json();
           const txt = aj?.content?.[0]?.text || '';
+          if (!txt) rezumat.erori.push(`${r.nr_seap} ai: raspuns gol${aj?.error?.message ? ' — ' + aj.error.message : ''}`);
           let scor = null, motiv = txt.slice(0, 500), lipsuri = null;
           try {
             const m = txt.match(/\{[\s\S]*\}/);
             if (m) { const p = JSON.parse(m[0]); scor = p.scor ?? null; motiv = p.motiv || motiv; lipsuri = p.lipsuri || null; }
           } catch (_) { /* pastram textul brut in motiv */ }
+          if (scor == null && txt) {
+            // Salvare din raspuns taiat: cand JSON-ul nu s-a inchis (max_tokens), scorul si
+            // motivul sunt oricum primele campuri scrise, deci se pot citi direct.
+            const mS = txt.match(/"scor"\s*:\s*(\d{1,3})/);
+            if (mS) {
+              const n = Number(mS[1]);
+              if (n >= 0 && n <= 100) scor = n;
+              const mM = txt.match(/"motiv"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+              if (mM) { try { motiv = JSON.parse('"' + mM[1] + '"').slice(0, 500); } catch (_) { /* ramane brut */ } }
+              rezumat.erori.push(`${r.nr_seap} ai: JSON incomplet (${aj?.stop_reason || '?'}) — scor recuperat din text`);
+            }
+          }
+          if (scor == null) rezumat.erori.push(`${r.nr_seap} ai: fara scor in raspuns (stop=${aj?.stop_reason || '?'})`);
           await supa.from('ofertare_radar').update({ scor_potrivire: scor, motiv_scor: motiv, lipsuri, actualizat_la: new Date().toISOString() }).eq('id', r.id);
           if (scor != null) rezumat.scorate++;
         } catch (e) {
