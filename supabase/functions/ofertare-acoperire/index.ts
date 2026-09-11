@@ -54,7 +54,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: auth } = await supabase.from('hr_autorizatii')
       .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)')
-      .is('deleted_at', null)
+      .is('deleted_at', null).order('id')   // ordine STABILA: fara ea, prefixul difera intre apeluri si cache-ul nu se potriveste
     const catalog = (auth || []).map((a: any) => ({
       id: a.id, tip: a.tip?.denumire, cod: a.tip?.cod || undefined,
       titular: a.emp?.name || a.ext?.nume || '?', extern: !!a.ext,
@@ -66,7 +66,7 @@ Deno.serve(async (req: Request) => {
     }))
     const { data: docsF } = await supabase.from('documente_firma')
       .select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, pdf_path')
-      .eq('activ', true)
+      .eq('activ', true).order('id')
     const catalogFirma = (docsF || []).map((d: any) => ({
       id: 'F' + d.id, tip: d.tip, denumire: d.denumire, categorie: d.categorie || undefined,
       numar: d.numar_document || undefined, emitent: d.autoritate_emitenta || undefined,
@@ -74,22 +74,47 @@ Deno.serve(async (req: Request) => {
       are_scan: !!d.pdf_path,
     }))
     const { data: partAll } = await supabase.from('ofertare_parteneri')
-      .select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false)
+      .select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('id')
     const parteneri = (partAll || []).map((p: any) => ({ id: p.id, nume: p.nume, tip_relatie: p.tip_relatie, acopera: (p.observatii || '').slice(0, 400) || undefined }))
 
-    const user = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}`
+    // CACHE (12.09.2026): catalogul — autorizatii, documente de firma, parteneri — e IDENTIC
+    // la fiecare apel: nu depinde nici de licitatie, nici de felie. Erau ~35 de mii de tokeni
+    // retrimisi si platiti integral de 158 de ori. Anthropic poate tine prefixul in cache, dar
+    // DOAR ca prefix: mai intai partea stabila, pe urma cea variabila. Inainte era exact invers
+    // (licitatia si cerintele primele), deci un `cache_control` pus fara reordonare n-ar fi
+    // prins nimic. De-asta si `.order('id')` de mai sus: o singura linie mutata in catalog
+    // schimba prefixul si rateaza cache-ul.
+    const stabil = `CATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}`
+    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, max_tokens: 9000, system: PROMPT, messages: [{ role: 'user', content: user }] }),
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 9000,
+        system: [{ type: 'text', text: PROMPT }],
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: stabil, cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: variabil },
+        ] }],
+      }),
     })
     const data = await resp.json()
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
 
     try {
       const u = data.usage || {}
-      await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-acoperire', model: MODEL, tokens_in: u.input_tokens || 0, tokens_out: u.output_tokens || 0, cost_usd: (u.input_tokens || 0) * PRICE_IN + (u.output_tokens || 0) * PRICE_OUT, ref_table: 'ofertare_licitatii', ref_id: licId })
+      // Tokenii de cache se factureaza separat: scrierea 1.25x pretul de intrare, citirea 0.1x.
+      // Fara ei in formula, cost_usd ar arata artificial mic si n-am mai sti cat costa de fapt.
+      const cacheW = u.cache_creation_input_tokens || 0
+      const cacheR = u.cache_read_input_tokens || 0
+      await supabase.from('ai_usage_log').insert({
+        function_name: 'ofertare-acoperire', model: MODEL,
+        tokens_in: (u.input_tokens || 0) + cacheW + cacheR,
+        tokens_out: u.output_tokens || 0,
+        cost_usd: (u.input_tokens || 0) * PRICE_IN + cacheW * PRICE_IN * 1.25 + cacheR * PRICE_IN * 0.1 + (u.output_tokens || 0) * PRICE_OUT,
+        ref_table: 'ofertare_licitatii', ref_id: licId,
+      })
     } catch (_) {}
 
     const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
@@ -158,7 +183,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const goluri = rows.filter(r => r.status === 'gol').length
-    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null, propuneri: rows.length, goluri, firma: rows.filter(r => r.mod === 'firma').length, trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens }), { headers: CORS })
+    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null, propuneri: rows.length, goluri, firma: rows.filter(r => r.mod === 'firma').length, trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens, cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
   }
