@@ -1042,7 +1042,7 @@ const suprapunere = (a, b) => {
 const contextCheie = (autoritate) =>
   `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
 
-function CerinteSection({ licitatie, profile, onChanged }) {
+function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
   const [cerinte, setCerinte] = useState(null)
   const [busy, setBusy] = useState(null)      // text progres extragere
   const [editId, setEditId] = useState(null)  // rând în editare
@@ -1050,7 +1050,13 @@ function CerinteSection({ licitatie, profile, onChanged }) {
   const [warn, setWarn] = useState(null)
   const [fTip, setFTip] = useState('')
   const [fStare, setFStare] = useState('')
-  const [selC, setSelC] = useState([])      // id-uri bifate pentru starea în bloc
+  // Bifele sunt ținute de componenta părinte, ca aceeași selecție să se vadă și în
+  // „Acoperirea cerințelor": bifezi #47 aici, îl vezi evidențiat acolo. Fără asta, omul
+  // căuta de fiecare dată același număr de ordine în a doua listă. Fallback intern ca
+  // secțiunea să meargă și dacă e randată singură.
+  const [selIntern, setSelIntern] = useState([])
+  const selC = sel ?? selIntern
+  const setSelC = setSel ?? setSelIntern
 
   const load = async () => {
     const { data, error } = await supabase.from('ofertare_cerinte')
@@ -1260,7 +1266,11 @@ function CerinteSection({ licitatie, profile, onChanged }) {
                     <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
                       checked={selC.includes(c.id)}
                       onChange={e => setSelC(v => e.target.checked ? [...v, c.id] : v.filter(x => x !== c.id))} />
-                    <span title="Număr de ordine — același în acoperire" style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
+                    <span title="Sari la aceeași cerință în „Acoperirea cerințelor”" onClick={() => {
+                        const el = document.getElementById(`acop-${c.id}`)
+                        if (el) el.scrollIntoView({ behavior:'smooth', block:'center' })
+                      }}
+                      style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums', cursor:'pointer' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
                     {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
@@ -1489,7 +1499,7 @@ const ACOPERIRE_STATUS = {
   gol:               { label:'🔴 GOL',       color:G.red },
 }
 
-function AcoperireSection({ licitatie, profile, onChanged }) {
+function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const [cerinte, setCerinte] = useState(null)
   const [acoperiri, setAcoperiri] = useState({})   // cerinta_id -> rând acoperire (+ autorizația join)
   const [busy, setBusy] = useState(null)
@@ -1592,7 +1602,14 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
   })
   // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă
   const elimFaraDovada = stats.goluriElim + stats.neevaluateElim
-  const randuri = (cerinte || []).filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol')
+  // Legătura cu registrul: ce e bifat sus se vede aici. Cu „doar bifatele" rămân doar
+  // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
+  const [fDoarBifate, setFDoarBifate] = useState(false)
+  const nrBifateAici = (cerinte || []).filter(c => sel.includes(c.id)).length
+  useEffect(() => { if (!sel.length) setFDoarBifate(false) }, [sel.length])
+  const randuri = (cerinte || [])
+    .filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol')
+    .filter(c => !fDoarBifate || sel.includes(c.id))
 
   return (
     <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
@@ -1613,6 +1630,11 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
           <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
             <input type="checkbox" checked={fDoarGoluri} onChange={e => setFDoarGoluri(e.target.checked)} style={{ accentColor:G.red }} /> doar goluri
           </label>
+          {nrBifateAici > 0 && (
+            <label title="Cerințele bifate în registrul de mai sus" style={{ fontSize:11.5, color:G.ofertare, fontWeight:700, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
+              <input type="checkbox" checked={fDoarBifate} onChange={e => setFDoarBifate(e.target.checked)} style={{ accentColor:G.ofertare }} /> doar bifatele din registru ({nrBifateAici})
+            </label>
+          )}
           {!busy && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={propune}>🤖 Propune acoperiri (Opus)</button>}
         </div>
       </div>
@@ -1627,10 +1649,12 @@ function AcoperireSection({ licitatie, profile, onChanged }) {
               const a = acoperiri[c.id]
               const st = a ? (ACOPERIRE_STATUS[a.status] || ACOPERIRE_STATUS.gol) : null
               const titular = a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume)
+              const bifat = sel.includes(c.id)
               return (
-                <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}` }}>
+                <div key={c.id} id={`acop-${c.id}`} style={{ padding:'7px 10px', borderRadius:7, background: bifat ? G.ofertare + '1a' : G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}`, outline: bifat ? `1px solid ${G.ofertare}66` : 'none' }}>
                   <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
-                    <span title="Număr de ordine — același în registrul de cerințe" style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
+                    <span title={bifat ? 'Bifată în registrul de cerințe' : 'Număr de ordine — același în registrul de cerințe'}
+                      style={{ fontSize:11.5, fontWeight:800, color: bifat ? G.ofertare : G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
                     {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}
@@ -1696,6 +1720,11 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [regim, setRegim] = useState(l.regim_achizitie || '')
   const [resp, setResp] = useState(l.responsabil_id || '')
   const [tab, setTab] = useState('cerinte')   // cerinte | documente | clarificari | detalii | verificari
+  // Bifele din registrul de cerințe stau aici, nu în secțiune, ca aceeași selecție să se
+  // vadă și în „Acoperirea cerințelor" — altfel omul bifa sus și căuta manual, jos, același
+  // număr de ordine. Se golește când schimbi licitația.
+  const [selCerinte, setSelCerinte] = useState([])
+  useEffect(() => { setSelCerinte([]) }, [l.id])
   const [clar, setClar] = useState(null)
   // Răzvan 07.09 (varianta C): mail „Etapa 1” către echipa Ofertare — previzualizare → confirmare → trimitere (edge fn ofertare-etapa1-mail)
   const [ultimMail, setUltimMail] = useState(null)
@@ -1798,9 +1827,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         <div style={{ display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(260px, 1fr)', gap:18 }}>
           <div style={{ minWidth:0 }}>
             {tab === 'cerinte' && <>
-              <CerinteSection licitatie={l} profile={profile} />
+              <CerinteSection licitatie={l} profile={profile} sel={selCerinte} setSel={setSelCerinte} />
               <InventarIndependentSection licitatie={l} profile={profile} />
-              <AcoperireSection licitatie={l} profile={profile} />
+              <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
             {tab === 'garantie' && <>
