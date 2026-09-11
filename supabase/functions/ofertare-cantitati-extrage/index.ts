@@ -33,8 +33,52 @@ const CORS = {
 // le face codul în v_ofertare_contradictii. Opus costă $25/milion la IEȘIRE, iar ieșirea e
 // partea grea aici (o listă de cantități are sute de rânduri): o singură felie de probă a
 // costat $0,23 și s-a tăiat la jumătate. Haiku e 5x mai ieftin exact pe partea care doare.
-const MODEL = 'claude-haiku-4-5-20251001'
-const PRICE_IN = 1 / 1e6, PRICE_OUT = 5 / 1e6
+//
+// `furnizor: "gemini"` rulează aceleași felii prin Gemini, ca să comparăm pe date reale în loc
+// să presupunem. Prețuri verificate pe ai.google.dev/gemini-api/docs/pricing la 11.09.2026.
+// ⚠️ Tariful Gemini se DUBLEAZĂ la 1 ianuarie 2027 ($1,50 / $7,50) — atunci devine mai scump
+// decât Haiku, deci alegerea de azi trebuie recântărită înainte de anul nou.
+const MODELE = {
+  anthropic: { nume: 'claude-haiku-4-5-20251001', in: 1 / 1e6,    out: 5 / 1e6 },
+  gemini:    { nume: 'gemini-3.8-flash',          in: 0.75 / 1e6, out: 3.75 / 1e6 },
+} as const
+
+// Un singur loc unde se vorbește cu modelele, ca schimbarea furnizorului să nu însemne
+// rescrierea buclei. Erorile se ÎNTORC, nu se aruncă.
+async function cheama(furnizor: 'anthropic' | 'gemini', intrebare: string, keyA: string, keyG: string):
+  Promise<{ txt: string; inF: number; outF: number; stop?: string; eroare?: string }> {
+  if (furnizor === 'gemini') {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODELE.gemini.nume}:generateContent?key=${keyG}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: intrebare }] }],
+          // responseMimeType json: Gemini scoate JSON curat, fără gard de ```
+          generationConfig: { maxOutputTokens: 16000, temperature: 0, responseMimeType: 'application/json' },
+        }) })
+    const d = await r.json()
+    if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'Gemini: ' + (d?.error?.message || r.status) }
+    const c = d.candidates?.[0]
+    return {
+      txt: (c?.content?.parts || []).map((p: any) => p.text || '').join(''),
+      inF: d.usageMetadata?.promptTokenCount || 0,
+      outF: d.usageMetadata?.candidatesTokenCount || 0,
+      stop: c?.finishReason,
+    }
+  }
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': keyA, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    // 8000 taia raspunsul la jumatate pe o lista de cantitati si il facea necitibil
+    body: JSON.stringify({ model: MODELE.anthropic.nume, max_tokens: 16000, messages: [{ role: 'user', content: intrebare }] }),
+  })
+  const d = await r.json()
+  if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'Claude: ' + (d?.error?.message || r.status) }
+  return {
+    txt: (d.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'),
+    inF: d.usage?.input_tokens || 0, outF: d.usage?.output_tokens || 0, stop: d.stop_reason,
+  }
+}
 const FELIE = 55000        // caractere per apel — sub pragul unde se pierde mijlocul
 const SUPRAPUNERE = 2000   // ca un tabel rupt între felii să nu dispară
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
@@ -92,15 +136,19 @@ Deno.serve(async (req: Request) => {
     const { data: u } = await uc.auth.getUser()
     if (!u?.user) return json({ error: 'token invalid' }, 401)
   }
-  const KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
-  if (!KEY) return json({ error: 'ANTHROPIC_API_KEY lipsă' }, 500)
+  const KEY_A = Deno.env.get('ANTHROPIC_API_KEY') || ''
+  const KEY_G = Deno.env.get('GEMINI_API_KEY') || ''
 
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
   const licId = Number(body.licitatie_id)
   const dryRun = body.dry_run === true
   const deLa = Number(body.de_la) || 0
   const maxFelii = Number(body.max_felii) || 0   // pentru probe ieftine de calitate
+  const furnizor: 'anthropic' | 'gemini' = body.furnizor === 'gemini' ? 'gemini' : 'anthropic'
+  const M = MODELE[furnizor]
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
+  if (furnizor === 'gemini' && !KEY_G) return json({ error: 'GEMINI_API_KEY lipsă din secretele funcției' }, 500)
+  if (furnizor === 'anthropic' && !KEY_A) return json({ error: 'ANTHROPIC_API_KEY lipsă' }, 500)
   const t0 = Date.now()
   // 110s păreau o marjă bună față de pragul de 150s, dar bugetul se verifică ÎNAINTE de o felie,
   // iar o felie durează până la 40s: prima rulare a ajuns la ~155s, a fost tăiată, și a pierdut
@@ -134,29 +182,21 @@ Deno.serve(async (req: Request) => {
     if (Date.now() - t0 > BUGET_MS) { continua = true; break }
     if (maxFelii && poz - deLa >= maxFelii) { continua = true; break }
     const { doc: d, bucata, nr, din } = munca[poz]
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        // 8000 taia raspunsul la jumatate pe o lista de cantitati si il facea necitibil
-        model: MODEL, max_tokens: 16000,
-        messages: [{ role: 'user', content: `${PROMPT(d.nume_original, d.tip)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}` }],
-      }),
-    })
-    const data = await resp.json()
-    if (!resp.ok) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: data.error?.message || resp.status }); poz++; continue }
-    const inF = data.usage?.input_tokens || 0, outF = data.usage?.output_tokens || 0
+    const intrebare = `${PROMPT(d.nume_original, d.tip)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}`
+    const r = await cheama(furnizor, intrebare, KEY_A, KEY_G)
+    if (r.eroare) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: r.eroare }); poz++; continue }
+    const inF = r.inF, outF = r.outF
     tokIn += inF; tokOut += outF
     // jurnalul se scrie PE FELIE: rularea pierduta la timeout a cheltuit bani pe care
     // nu i-am mai putut masura, fiindca logul se scria abia la final
     try {
       await db.from('ai_usage_log').insert({
-        function_name: 'ofertare-cantitati-extrage', model: MODEL,
-        tokens_in: inF, tokens_out: outF, cost_usd: inF * PRICE_IN + outF * PRICE_OUT,
+        function_name: 'ofertare-cantitati-extrage', model: M.nume,
+        tokens_in: inF, tokens_out: outF, cost_usd: inF * M.in + outF * M.out,
         ref_table: 'ofertare_licitatii', ref_id: licId,
       })
     } catch { /* jurnalul nu blocheaza munca */ }
-    const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+    const txt = r.txt
     let j: any = null
     try { const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
     const lista = Array.isArray(j?.p) ? j.p : null
@@ -164,24 +204,24 @@ Deno.serve(async (req: Request) => {
     // arata altfel decat model care a raspuns aiurea. Prima proba a esuat tacut fara ele.
     if (!lista) {
       raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'raspuns neinterpretabil',
-        out: data.usage?.output_tokens, stop: data.stop_reason })
+        out: outF, stop: r.stop })
       poz++; continue
     }
     let alePastrate = 0
     const feliaAsta: any[] = []
-    for (const r of lista) {
+    for (const p of lista) {
       // [categorie, denumire, um, cantitate, sursa, e_total]
-      if (!Array.isArray(r) || !r[1]) continue
-      const eTotal = r[5] === 1 || r[5] === true
-      const den = String(r[1]).slice(0, 480)
+      if (!Array.isArray(p) || !p[1]) continue
+      const eTotal = p[5] === 1 || p[5] === true
+      const den = String(p[1]).slice(0, 480)
       feliaAsta.push({
         licitatie_id: licId,
-        categorie: r[0] ? String(r[0]).slice(0, 120) : null,
+        categorie: p[0] ? String(p[0]).slice(0, 120) : null,
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
-        um: r[2] ? String(r[2]).slice(0, 20) : null,
+        um: p[2] ? String(p[2]).slice(0, 20) : null,
         // un model poate intoarce "1.234,56" sau text; NaN nu are ce cauta in coloana
-        cantitate: Number.isFinite(Number(r[3])) ? Number(r[3]) : null,
-        sursa: `${d.nume_original}${r[4] ? ' \u2014 ' + r[4] : ''}`.slice(0, 300),
+        cantitate: Number.isFinite(Number(p[3])) ? Number(p[3]) : null,
+        sursa: `${d.nume_original}${p[4] ? ' \u2014 ' + p[4] : ''}`.slice(0, 300),
         status: 'extras',
         extras_de_ai: true,
       })
@@ -200,10 +240,10 @@ Deno.serve(async (req: Request) => {
     poz++
   }
 
-  const cost = tokIn * PRICE_IN + tokOut * PRICE_OUT
+  const cost = tokIn * M.in + tokOut * M.out
 
   const comun = {
-    ok: true, felii_total: munca.length, de_la: deLa, pana_la: poz, continua,
+    ok: true, furnizor, model: M.nume, felii_total: munca.length, de_la: deLa, pana_la: poz, continua,
     urmatorul: continua ? poz : null,
     pozitii: toate.length,
     cu_cantitate: toate.filter(x => x.cantitate !== null).length,
@@ -212,11 +252,7 @@ Deno.serve(async (req: Request) => {
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
   }
   if (dryRun) return json({ ...comun, dry_run: true, esantion: toate.slice(0, 25) })
-  if (!toate.length) return json(comun)
-
-  // se scrie la FIECARE rulare, nu la final: altfel o rulare tăiată de gateway pierde
-  // tot ce a plătit pana atunci
-  const { data: scrise, error: iErr } = await db.from('ofertare_cantitati').insert(toate).select('id')
-  if (iErr) return json({ ...comun, error: 'scriere: ' + iErr.message })
-  return json({ ...comun, scrise: scrise?.length || 0 })
+  // NU se mai scrie nimic aici. Scrierea se face pe felie, mai sus. O a doua inserare la final
+  // ar re-scrie tot ce s-a scris deja — exact asa au aparut cele 77 de duplicate pe Domnesti.
+  return json({ ...comun, scrise: scriseTotal })
 })
