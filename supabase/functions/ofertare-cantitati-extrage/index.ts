@@ -38,15 +38,48 @@ const CORS = {
 // să presupunem. Prețuri verificate pe ai.google.dev/gemini-api/docs/pricing la 11.09.2026.
 // ⚠️ Tariful Gemini se DUBLEAZĂ la 1 ianuarie 2027 ($1,50 / $7,50) — atunci devine mai scump
 // decât Haiku, deci alegerea de azi trebuie recântărită înainte de anul nou.
+//
+// `openai_mini` / `openai_nano`: a treia ramura, ceruta de Razvan dupa proba Gemini. Tarifele
+// de IESIRE sunt cele care conteaza (o lista de cantitati are sute de randuri, intrarea e o
+// felie de text), si acolo sunt sub Haiku: $2,00 si $0,40 fata de $5,00.
+// Preturi de pe developers.openai.com/api/docs/pricing, 11.09.2026.
 const MODELE = {
-  anthropic: { nume: 'claude-haiku-4-5-20251001', in: 1 / 1e6,    out: 5 / 1e6 },
-  gemini:    { nume: 'gemini-3.8-flash',          in: 0.75 / 1e6, out: 3.75 / 1e6 },
+  anthropic:   { nume: 'claude-haiku-4-5-20251001', in: 1 / 1e6,    out: 5 / 1e6 },
+  gemini:      { nume: 'gemini-3.8-flash',          in: 0.75 / 1e6, out: 3.75 / 1e6 },
+  openai_mini: { nume: 'gpt-5-mini',                in: 0.25 / 1e6, out: 2 / 1e6 },
+  openai_nano: { nume: 'gpt-5-nano',                in: 0.05 / 1e6, out: 0.4 / 1e6 },
 } as const
+type Furnizor = keyof typeof MODELE
 
 // Un singur loc unde se vorbește cu modelele, ca schimbarea furnizorului să nu însemne
 // rescrierea buclei. Erorile se ÎNTORC, nu se aruncă.
-async function cheama(furnizor: 'anthropic' | 'gemini', intrebare: string, keyA: string, keyG: string):
+async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG: string, keyO: string):
   Promise<{ txt: string; inF: number; outF: number; stop?: string; eroare?: string }> {
+  if (furnizor === 'openai_mini' || furnizor === 'openai_nano') {
+    // Responses API, acelasi tipar ca in ofertare-inventar-ai (deja in productie).
+    // reasoning effort minimal: gpt-5-* sunt modele de rationament, iar tokenii de gandire
+    // se taxeaza ca IESIRE si intra in acelasi plafon. Aici n-avem ce rationa — se copiaza
+    // cifra din tabel — deci gandirea ar fi bani si plafon cheltuiti degeaba.
+    const r = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${keyO}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: MODELE[furnizor].nume,
+        input: [{ role: 'user', content: [{ type: 'input_text', text: intrebare }] }],
+        text: { format: { type: 'json_object' } },
+        reasoning: { effort: 'minimal' },
+        max_output_tokens: 16000,
+      }),
+    })
+    const d = await r.json()
+    if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'OpenAI: ' + (d?.error?.message || r.status) }
+    const txt = d?.output_text
+      || (d?.output || []).flatMap((o: any) => (o?.content || []).map((c: any) => c?.text || '')).join('')
+    return {
+      txt, inF: d?.usage?.input_tokens || 0, outF: d?.usage?.output_tokens || 0,
+      stop: d?.status === 'incomplete' ? (d?.incomplete_details?.reason || 'incomplete') : d?.status,
+    }
+  }
   if (furnizor === 'gemini') {
     const r = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${MODELE.gemini.nume}:generateContent?key=${keyG}`,
@@ -138,17 +171,20 @@ Deno.serve(async (req: Request) => {
   }
   const KEY_A = Deno.env.get('ANTHROPIC_API_KEY') || ''
   const KEY_G = Deno.env.get('GEMINI_API_KEY') || ''
+  const KEY_O = Deno.env.get('OPENAI_API_KEY') || ''
 
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
   const licId = Number(body.licitatie_id)
   const dryRun = body.dry_run === true
   const deLa = Number(body.de_la) || 0
   const maxFelii = Number(body.max_felii) || 0   // pentru probe ieftine de calitate
-  const furnizor: 'anthropic' | 'gemini' = body.furnizor === 'gemini' ? 'gemini' : 'anthropic'
+  const furnizor: Furnizor = (String(body.furnizor) in MODELE ? body.furnizor : 'anthropic') as Furnizor
   const M = MODELE[furnizor]
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
-  if (furnizor === 'gemini' && !KEY_G) return json({ error: 'GEMINI_API_KEY lipsă din secretele funcției' }, 500)
-  if (furnizor === 'anthropic' && !KEY_A) return json({ error: 'ANTHROPIC_API_KEY lipsă' }, 500)
+  const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
+    : furnizor === 'anthropic' ? (!KEY_A && 'ANTHROPIC_API_KEY')
+    : (!KEY_O && 'OPENAI_API_KEY')
+  if (cheiaLipsa) return json({ error: cheiaLipsa + ' lipsă din secretele funcției' }, 500)
   const t0 = Date.now()
   // 110s păreau o marjă bună față de pragul de 150s, dar bugetul se verifică ÎNAINTE de o felie,
   // iar o felie durează până la 40s: prima rulare a ajuns la ~155s, a fost tăiată, și a pierdut
@@ -183,7 +219,7 @@ Deno.serve(async (req: Request) => {
     if (maxFelii && poz - deLa >= maxFelii) { continua = true; break }
     const { doc: d, bucata, nr, din } = munca[poz]
     const intrebare = `${PROMPT(d.nume_original, d.tip)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}`
-    const r = await cheama(furnizor, intrebare, KEY_A, KEY_G)
+    const r = await cheama(furnizor, intrebare, KEY_A, KEY_G, KEY_O)
     if (r.eroare) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: r.eroare }); poz++; continue }
     const inF = r.inF, outF = r.outF
     tokIn += inF; tokOut += outF
@@ -209,6 +245,15 @@ Deno.serve(async (req: Request) => {
     }
     let alePastrate = 0
     const feliaAsta: any[] = []
+    // Un model poate intoarce textul "null"/"N/A" in loc de null-ul JSON. `p[0] ? ...` il
+    // considera adevarat (sir nevid) si l-ar scrie ca atare in coloana — adica exact
+    // cuvantul "null" ca text, care apoi ar grupa fericit cu el insusi in pasul determinist.
+    // Prins la proba gpt-5-mini, care a facut-o la 23 din 25 de randuri verificate.
+    const curat = (v: any, n: number) => {
+      if (v === null || v === undefined) return null
+      const t = String(v).trim()
+      return !t || /^(null|n\/a|nu e cazul|-)$/i.test(t) ? null : t.slice(0, n)
+    }
     for (const p of lista) {
       // [categorie, denumire, um, cantitate, sursa, e_total]
       if (!Array.isArray(p) || !p[1]) continue
@@ -216,9 +261,9 @@ Deno.serve(async (req: Request) => {
       const den = String(p[1]).slice(0, 480)
       feliaAsta.push({
         licitatie_id: licId,
-        categorie: p[0] ? String(p[0]).slice(0, 120) : null,
+        categorie: curat(p[0], 120),
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
-        um: p[2] ? String(p[2]).slice(0, 20) : null,
+        um: curat(p[2], 20),
         // un model poate intoarce "1.234,56" sau text; NaN nu are ce cauta in coloana
         cantitate: Number.isFinite(Number(p[3])) ? Number(p[3]) : null,
         sursa: `${d.nume_original}${p[4] ? ' \u2014 ' + p[4] : ''}`.slice(0, 300),
