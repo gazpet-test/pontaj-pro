@@ -619,6 +619,18 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
     await load()
   }
 
+  // Numele minte. La Potlogi, „2. formular - propunere tehnica.- POTLOGI-GAZE pdf” (spațiu în loc
+  // de punct, greșit tastat de cine l-a pus în SEAP) a fost catalogat „non-PDF” și sărit — formularul
+  // propunerii tehnice a zăcut necitit de la început. Verificăm și semnătura reală a fișierului:
+  // orice PDF începe cu octeții %PDF-. Numele rămâne prima verificare, fiindcă e gratis.
+  const areSemnaturaPdf = async (f) => {
+    if (/\.pdf$/i.test(f.name)) return true
+    try {
+      const c = new Uint8Array(await f.slice(0, 5).arrayBuffer())
+      return c[0] === 0x25 && c[1] === 0x50 && c[2] === 0x44 && c[3] === 0x46 && c[4] === 0x2D
+    } catch { return false }
+  }
+
   const urca = async (fileList) => {
     const files = Array.from(fileList || [])
     if (!files.length) return
@@ -643,7 +655,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       const path = `${licitatie.id}/atribuire/${Date.now().toString(36)}_${safe}`
       const { error: eUp } = await supabase.storage.from('ofertare').upload(path, f)
       if (eUp) { setWarn(`Eroare la „${rel}": ${eUp.message}`); continue }
-      const estePdf = /\.pdf$/i.test(rel)
+      const estePdf = await areSemnaturaPdf(f)
       const randNou = {
         licitatie_id: licitatie.id, fisier_path: path, nume_original: rel,
         tip: ghicesteTip(rel), size_bytes: f.size,
