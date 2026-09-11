@@ -29,10 +29,15 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json',
 }
-// Haiku, nu Opus. Asta e muncă mecanică: copiază cifra din tabel, nu judecă nimic — adunările
-// le face codul în v_ofertare_contradictii. Opus costă $25/milion la IEȘIRE, iar ieșirea e
-// partea grea aici (o listă de cantități are sute de rânduri): o singură felie de probă a
-// costat $0,23 și s-a tăiat la jumătate. Haiku e 5x mai ieftin exact pe partea care doare.
+// gpt-5-mini e alegerea implicită de la 11.09.2026, măsurată pe felia C6 Domnești: aceleași
+// poziții ca Haiku, cifre identice rând cu rând, sursă mai precisă, marchează TOTAL-urile
+// declarate (Haiku le rata) și costă cu 71% mai puțin. Comutatorul rămâne pentru oricine vrea
+// să reia comparația pe date reale în loc să presupună.
+//
+// Ce NU se mai cere niciunui model: CATEGORIA. Pe C6 (coloane: Nr.crt|Cod|U/M|Consumuri|Preț|
+// Val|Greutate|Furnizorul) nu există coloană de categorie — Haiku o completa, adică o inventa,
+// iar Gemini/gpt-5-mini/gpt-5-nano o lăsau goală, corect. Acum o pune un dicționar
+// (fn_categorie_cantitate + trigger), deci iese la fel de fiecare dată și se vede de ce.
 //
 // `furnizor: "gemini"` rulează aceleași felii prin Gemini, ca să comparăm pe date reale în loc
 // să presupunem. Prețuri verificate pe ai.google.dev/gemini-api/docs/pricing la 11.09.2026.
@@ -134,15 +139,14 @@ const PROMPT = (nume: string, tip: string) => `Ești inginer de devize într-o f
 
 Document: "${nume}" (tip: ${tip})
 
-Răspunde EXCLUSIV cu JSON COMPACT, fiecare poziție ca TABLOU de 6 elemente, în ordinea:
-[categorie, denumire, um, cantitate, sursa, e_total]
+Răspunde EXCLUSIV cu JSON COMPACT, fiecare poziție ca TABLOU de 5 elemente, în ordinea:
+[denumire, um, cantitate, sursa, e_total]
 
 {"p":[
- ["<grupa mare: Rețea distribuție / Branșamente / Stație / Tuburi protecție / Terasamente / Armături / ... sau null>",
-  "<denumirea poziției, ca în document, cu diametru/material/tip dacă sunt date>",
+ ["<denumirea poziției, ca în document, cu diametru/material/tip dacă sunt date>",
   "<unitatea EXACTĂ din document: m, ml, mp, mc, buc, kg, to, ore>",
   <număr sau null dacă poziția e cerută dar cantitatea NU e dată>,
-  "<unde anume: F3 poz.12 / memoriu cap.3 / C6 art.4>",
+  "<unde anume, cu tabelul/secțiunea din care vine: 'C6 poz.12' / 'PD03 Tabel hidranti pe strazi, rand 4' / 'F3 006 003 poz.7'>",
   <1 doar dacă rândul e un total sau subtotal declarat, altfel 0>]
 ]}
 
@@ -153,6 +157,7 @@ REGULI, în ordinea importanței:
 4. Păstrează unitatea din document. Dacă scrie "ml" pui "m" doar dacă e clar aceeași; altfel lași "ml".
 5. Nu inventa poziții care nu apar. Mai bine 10 poziții corecte decât 40 din care 15 ghicite.
 6. Sari peste prețuri, valori în lei și coloane de manoperă/utilaj/transport — ne interesează cantitățile fizice.
+7. La sursa, scrie ȘI tabelul sau secțiunea, nu doar numărul rândului: două tabele din același document se însumează separat, iar fără asta se amestecă.
 
 Dacă bucata nu conține poziții cantitative, întoarce {"p":[]}.
 Nu scrie NIMIC în afara JSON-ului — nici explicații, nici comentarii.`
@@ -178,7 +183,7 @@ Deno.serve(async (req: Request) => {
   const dryRun = body.dry_run === true
   const deLa = Number(body.de_la) || 0
   const maxFelii = Number(body.max_felii) || 0   // pentru probe ieftine de calitate
-  const furnizor: Furnizor = (String(body.furnizor) in MODELE ? body.furnizor : 'anthropic') as Furnizor
+  const furnizor: Furnizor = (String(body.furnizor) in MODELE ? body.furnizor : 'openai_mini') as Furnizor
   const M = MODELE[furnizor]
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
   const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
@@ -245,9 +250,9 @@ Deno.serve(async (req: Request) => {
     }
     let alePastrate = 0
     const feliaAsta: any[] = []
-    // Un model poate intoarce textul "null"/"N/A" in loc de null-ul JSON. `p[0] ? ...` il
-    // considera adevarat (sir nevid) si l-ar scrie ca atare in coloana — adica exact
-    // cuvantul "null" ca text, care apoi ar grupa fericit cu el insusi in pasul determinist.
+    // Un model poate intoarce textul "null"/"N/A" in loc de null-ul JSON. Un sir nevid e
+    // adevarat, deci s-ar scrie in coloana cuvantul "null" ca text, care apoi ar grupa
+    // fericit cu el insusi in pasul determinist.
     // Prins la proba gpt-5-mini, care a facut-o la 23 din 25 de randuri verificate.
     const curat = (v: any, n: number) => {
       if (v === null || v === undefined) return null
@@ -255,18 +260,18 @@ Deno.serve(async (req: Request) => {
       return !t || /^(null|n\/a|nu e cazul|-)$/i.test(t) ? null : t.slice(0, n)
     }
     for (const p of lista) {
-      // [categorie, denumire, um, cantitate, sursa, e_total]
-      if (!Array.isArray(p) || !p[1]) continue
-      const eTotal = p[5] === 1 || p[5] === true
-      const den = String(p[1]).slice(0, 480)
+      // [denumire, um, cantitate, sursa, e_total]
+      if (!Array.isArray(p) || !p[0]) continue
+      const eTotal = p[4] === 1 || p[4] === true
+      const den = String(p[0]).slice(0, 480)
       feliaAsta.push({
         licitatie_id: licId,
-        categorie: curat(p[0], 120),
+        // categoria NU mai vine de la model: o pune trigger-ul din dictionar (fn_categorie_cantitate).
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
-        um: curat(p[2], 20),
+        um: curat(p[1], 20),
         // un model poate intoarce "1.234,56" sau text; NaN nu are ce cauta in coloana
-        cantitate: Number.isFinite(Number(p[3])) ? Number(p[3]) : null,
-        sursa: `${d.nume_original}${p[4] ? ' \u2014 ' + p[4] : ''}`.slice(0, 300),
+        cantitate: Number.isFinite(Number(p[2])) ? Number(p[2]) : null,
+        sursa: `${d.nume_original}${p[3] ? ' \u2014 ' + p[3] : ''}`.slice(0, 300),
         status: 'extras',
         extras_de_ai: true,
       })
