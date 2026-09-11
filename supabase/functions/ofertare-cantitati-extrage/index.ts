@@ -153,7 +153,7 @@ Răspunde EXCLUSIV cu JSON COMPACT, fiecare poziție ca TABLOU de 5 elemente, î
 REGULI, în ordinea importanței:
 1. NU calcula nimic. Nu aduna, nu înmulți, nu converti unități. Copiază cifra așa cum e scrisă. Dacă un total e scris în document, îl dai cu ultimul element 1; dacă nu e scris, NU îl inventezi.
 2. Cantitatea se scrie ca număr simplu, cu punct zecimal (1234.56), fără separatori de mii.
-3. O poziție cerută explicit dar fără cantitate în document → cantitate=null. Astea contează cel mai mult: sunt exact golurile pentru care se cere clarificare.
+3. O poziție cerută explicit dar fără cantitate în document → cantitate=null. NU pune 0: zero înseamnă "documentul scrie zero", null înseamnă "documentul nu spune". Astea contează cel mai mult: sunt exact golurile pentru care se cere clarificare.
 4. Păstrează unitatea din document. Dacă scrie "ml" pui "m" doar dacă e clar aceeași; altfel lași "ml".
 5. Nu inventa poziții care nu apar. Mai bine 10 poziții corecte decât 40 din care 15 ghicite.
 6. Sari peste prețuri, valori în lei și coloane de manoperă/utilaj/transport — ne interesează cantitățile fizice.
@@ -259,6 +259,19 @@ Deno.serve(async (req: Request) => {
       const t = String(v).trim()
       return !t || /^(null|n\/a|nu e cazul|-)$/i.test(t) ? null : t.slice(0, n)
     }
+    // Number(null) === 0 SI Number('') === 0, iar Number.isFinite(0) === true. Deci
+    // `Number.isFinite(Number(v)) ? Number(v) : null` scria ZERO exact acolo unde modelul
+    // raspunsese corect "cantitatea nu e data" — iar verificarea cantitate_lipsa cauta NULL,
+    // deci pozitia aceea nu mai aparea NICIODATA ca gol. Adica fix golurile pentru care se
+    // cere clarificare deveneau invizibile, fara nicio eroare. Pe Domnesti: 34 de randuri cu
+    // zero si zero randuri cu NULL, in timp ce la Mostistea (puse cu mana) era exact invers.
+    const numar = (v: any) => {
+      if (v === null || v === undefined) return null
+      const t = String(v).trim()
+      if (!t || /^(null|n\/a|nedeterminat|nu e (dat|precizat)[a\u0103]?|-)$/i.test(t)) return null
+      const n = Number(t)
+      return Number.isFinite(n) ? n : null
+    }
     for (const p of lista) {
       // [denumire, um, cantitate, sursa, e_total]
       if (!Array.isArray(p) || !p[0]) continue
@@ -269,8 +282,7 @@ Deno.serve(async (req: Request) => {
         // categoria NU mai vine de la model: o pune trigger-ul din dictionar (fn_categorie_cantitate).
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
         um: curat(p[1], 20),
-        // un model poate intoarce "1.234,56" sau text; NaN nu are ce cauta in coloana
-        cantitate: Number.isFinite(Number(p[2])) ? Number(p[2]) : null,
+        cantitate: numar(p[2]),
         sursa: `${d.nume_original}${p[3] ? ' \u2014 ' + p[3] : ''}`.slice(0, 300),
         status: 'extras',
         extras_de_ai: true,
@@ -282,7 +294,12 @@ Deno.serve(async (req: Request) => {
     // tăiată de gateway înainte să scrie: munca plătită s-a pierdut integral. Acum o tăiere
     // costă cel mult ultima felie.
     if (!dryRun && feliaAsta.length) {
-      const { data: ins, error: eIns } = await db.from('ofertare_cantitati').insert(feliaAsta).select('id')
+      // upsert, nu insert: feliile se suprapun cu 2.000 de caractere si o reluare reprocesează
+      // felii deja scrise. Fara asta, o reluare dubleaza cantitatile in tacere (24 de randuri
+      // duplicate pe Domnesti, curatate la 11.09.2026). Indexul unic e pe (licitatie, denumire, sursa).
+      const { data: ins, error: eIns } = await db.from('ofertare_cantitati')
+        .upsert(feliaAsta, { onConflict: 'licitatie_id,denumire,sursa', ignoreDuplicates: true })
+        .select('id')
       if (eIns) raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'scriere: ' + eIns.message })
       else scriseTotal += ins?.length || 0
     }

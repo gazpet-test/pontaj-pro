@@ -159,23 +159,42 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     if (z) g.zone.add(z);
     peDiametru.set(t.diametru_mm, g);
   }
-  if (!peDiametru.size) return { adaugate: 0, actualizate: 0, pe_diametre: {} };
+  if (!peDiametru.size) return { adaugate: 0, actualizate: 0, ambigue: [], pe_diametre: {} };
 
   const eticheta = nrPlansa ? `Planșa ${nrPlansa}` : `Planșa „${doc.nume_original}”`;
   const { data: existente } = await supa.from('ofertare_cantitati')
-    .select('id, denumire, categorie, cantitate, status')
+    .select('id, denumire, categorie, um, cantitate, status')
     .eq('licitatie_id', doc.licitatie_id);
-  const retea = (existente || []).filter((r: any) => r.categorie === 'Rețea distribuție');
+  // NU se mai filtreaza dupa numele categoriei. Pana la 11.09.2026 aici scria
+  // `r.categorie === 'Rețea distribuție'`, iar in aceeasi zi categoriile au fost rescrise
+  // dintr-un dictionar determinist: 'Rețea distribuție' a devenit 'Conducte și montaj',
+  // deci lista a ramas GOALA si fiecare diametru din plansa s-ar fi adaugat ca rand nou
+  // in loc sa completeze cantitate_plansa pe pozitia din memoriu — adica exact verificarea
+  // care a gasit cei 7.340 m lipsa la Mostistea. Fara nicio eroare, fara niciun log.
+  // Acum candidatii se aleg dupa CE SUNT (conducta in metri, nu tub de protectie), nu dupa
+  // cum se cheama categoria in luna asta.
+  const eConducta = (r: any) =>
+    (r.um == null || /^(m|ml)$/i.test(String(r.um).trim())) &&
+    !/tub|protec/i.test(faraDiacritice(r.denumire || ''));
+  const retea = (existente || []).filter(eConducta);
 
   let adaugate = 0, actualizate = 0;
+  const ambigue: any[] = [];
   const peDiametreRaport: Record<string, number> = {};
 
   for (const [dn, g] of [...peDiametru.entries()].sort((a, b) => b[0] - a[0])) {
     const m = +g.m.toFixed(1);
     peDiametreRaport[`Dn${dn}`] = m;
-    const potrivit = retea.find((r: any) =>
-      new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || '')) &&
-      !/tub|protec/i.test(faraDiacritice(r.denumire || '')));
+    const candidati = retea.filter((r: any) =>
+      new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || '')));
+    // Daca acelasi diametru apare pe mai multe pozitii (doua localitati, doua loturi, doua
+    // materiale), NU ghicim care e. Pana acum `.find()` lua prima si suprascria tacut — iar
+    // o plansa ulterioara putea suprascrie ce pusese cea dinainte. Ambiguitatea se RAPORTEAZA.
+    if (candidati.length > 1) {
+      ambigue.push({ dn, metri: m, pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
+      continue;
+    }
+    const potrivit = candidati[0];
 
     if (potrivit) {
       const dinMemoriu = potrivit.cantitate === null ? null : Number(potrivit.cantitate);
@@ -193,7 +212,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     } else {
       await supa.from('ofertare_cantitati').insert({
         licitatie_id: doc.licitatie_id,
-        categorie: 'Rețea distribuție',
+        // categoria o pune trigger-ul din dictionar (fn_categorie_cantitate)
         denumire: `Conductă distribuție gaze Dn${dn}`,
         um: 'm', cantitate: m, cantitate_plansa: m,
         status: 'extras', extras_de_ai: true,
@@ -220,7 +239,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     actualizate++;
   }
 
-  return { adaugate, actualizate, total_m: total, pe_diametre: peDiametreRaport };
+  return { adaugate, actualizate, ambigue, total_m: total, pe_diametre: peDiametreRaport };
 }
 
 Deno.serve(async (req: Request) => {
@@ -316,8 +335,19 @@ Deno.serve(async (req: Request) => {
 
   // Cand s-a citit toata plansa, cifrele trec singure in cantitati. Daca pasul asta
   // crapa, citirea (partea scumpa) tot se salveaza — eroarea se raporteaza, nu se arunca.
+  //
+  // DAR numai daca TOATE feliile au fost citite. Pana la 11.09.2026 conditia era doar `gata`:
+  // o felie esuata nu aduce niciun tronson, deci totalul iesea scurt — si era comparat cu
+  // memoriul ca si cum ar fi complet, producand o diferenta FALSA care arata exact ca una
+  // reala. Mai bine nu transferam si spunem de ce, decat sa dam o cifra in care nu se poate
+  // avea incredere. Feliile esuate se pot relua, citirea deja platita nu se pierde.
   let cantitati: unknown = null;
-  if (gata) {
+  if (gata && sumar.erori) {
+    cantitati = { amanat: `${sumar.erori} feli${sumar.erori === 1 ? 'e' : 'i'} n-au putut fi citite — ` +
+      `cifrele NU s-au trecut in cantitati, fiindca totalul ar fi incomplet si ar arata ca o diferenta reala. ` +
+      `Reia felia esuata si transferul se face singur.` };
+    sumar.cantitati = cantitati;
+  } else if (gata) {
     try {
       cantitati = await treciInCantitati(supa, doc, pentruCantitati, nrPlansa);
     } catch (e) {
