@@ -248,15 +248,23 @@ Deno.serve(async (req: Request) => {
     // (b) Campurile scrise de colegi (raspuns la gol, tichet) se pastreaza: pana acum se
     // pierdeau tacut la fiecare re-rulare, iar cerinta oferea din nou butonul de tichet.
     // Cand aceeasi cerinta are MAI MULTE randuri nevalidate (se intampla azi, tabelul n-are
-    // index unic), un simplu set() pastra ultimul venit. Daca ala era gol, raspunsul colegului
-    // din celalalt rand se pierdea la stergere. Castiga randul care chiar are date de om; la
-    // egalitate, cel mai nou (citirea e ordonata dupa id).
-    const areDateDeOm = (v: any) => !!(v.raspuns_coleg || v.raspuns_de || v.raspuns_la || v.tichet_id)
+    // index unic), a alege UN rand pierde datele celuilalt: daca randul A are raspunsul
+    // colegului si randul B doar tichetul, oricare ar castiga, celalalt dispare la stergere.
+    // Deci nu alegem un rand — combinam CAMP cu CAMP, primul nenul castiga (citire ordonata
+    // dupa id). Daca doua randuri au raspunsuri DIFERITE, nu inghitim niciunul: raportam.
+    const CAMPURI_OM = ['raspuns_coleg', 'raspuns_de', 'raspuns_la', 'tichet_id']
     const pastrate = new Map()
+    const conflicteRaspuns = []
     for (const v of (vechi || [])) {
       if (v.verificat_pe_scan) continue
       const ex = pastrate.get(v.cerinta_id)
-      if (!ex || (areDateDeOm(v) && !areDateDeOm(ex)) || (areDateDeOm(v) && areDateDeOm(ex))) pastrate.set(v.cerinta_id, v)
+      if (!ex) { pastrate.set(v.cerinta_id, { ...v }); continue }
+      for (const c of CAMPURI_OM) {
+        if (ex[c] == null) ex[c] = v[c]
+        else if (v[c] != null && v[c] !== ex[c] && (c === 'raspuns_coleg' || c === 'tichet_id')) {
+          conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: c, pastrat: ex[c], pierdut: v[c] })
+        }
+      }
     }
 
     const conflicteVerificate = []
@@ -272,7 +280,7 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({
         ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
         motiv_felie_goala: 'nicio propunere de scris — toate cele primite sunt blocate de o dovada verificata de om',
-        conflicte_verificate: conflicteVerificate,
+        conflicte_verificate: conflicteVerificate, conflicte_raspuns: conflicteRaspuns,
         stop_reason: data.stop_reason || null,
         // Ramura asta nu inseamna ca AI-ul a raspuns la toata felia: poate a raspuns la UNA,
         // deja verificata, iar restul de 54 lipsesc. Fara randurile astea, frontendul nu le
@@ -294,15 +302,35 @@ Deno.serve(async (req: Request) => {
     // `vazute` se stergea si randul nevalidat (cu raspunsul unui coleg) al unei cerinte
     // BLOCATE de o dovada verificata — cerinta pentru care nu am scris nimic in loc.
     const cerinteInlocuite = new Set(deScris.map(r => r.cerinta_id))
-    const idsVechiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && cerinteInlocuite.has(v.cerinta_id)).map(v => v.id)
+    const candidatiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && cerinteInlocuite.has(v.cerinta_id))
     let duplicateRamase = 0
-    if (idsVechiDeSters.length) {
-      // `.eq('verificat_pe_scan', false)` la stergere, nu doar la citire: intre citire si
-      // stergere un coleg poate apasa „verificat" pe exact randul asta, iar noi l-am sterge
-      // dupa id. Filtrul il lasa in viata (ramane un duplicat vizibil, nu munca disparuta).
-      const { error: eDel } = await supabase.from('ofertare_acoperire')
-        .delete().in('id', idsVechiDeSters).eq('verificat_pe_scan', false)
-      if (eDel) duplicateRamase = idsVechiDeSters.length
+    const nesterse = []
+    if (candidatiDeSters.length) {
+      // Intre citirea de mai sus si acum au trecut ~30 de secunde de apel AI. In timpul asta un
+      // coleg poate sa fi apasat „verificat" sau sa fi scris un raspuns pe exact randul pe care
+      // vrem sa-l stergem — iar noi am copiat inainte valorile VECHI. Recitim starea si sarim
+      // peste randurile schimbate: mai bine un duplicat vizibil decat munca omului stearsa.
+      const { data: acum, error: eRe } = await supabase.from('ofertare_acoperire')
+        .select('id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
+        .in('id', candidatiDeSters.map(v => v.id))
+      if (eRe) { duplicateRamase = candidatiDeSters.length }
+      else {
+        const acumMap = new Map((acum || []).map((v: any) => [v.id, v]))
+        const idsVechiDeSters = []
+        for (const v of candidatiDeSters) {
+          const a = acumMap.get(v.id)
+          if (!a) continue   // l-a sters altcineva intre timp
+          const schimbat = a.verificat_pe_scan || CAMPURI_OM.some(c => a[c] !== v[c])
+          if (schimbat) { nesterse.push(v.id); continue }
+          idsVechiDeSters.push(v.id)
+        }
+        duplicateRamase = nesterse.length
+        if (idsVechiDeSters.length) {
+          const { error: eDel } = await supabase.from('ofertare_acoperire')
+            .delete().in('id', idsVechiDeSters).eq('verificat_pe_scan', false)
+          if (eDel) duplicateRamase += idsVechiDeSters.length
+        }
+      }
     }
 
     // Cerintele din felie la care AI-ul NU a raspuns: nu le-am atins, deci acoperirea veche
@@ -318,6 +346,7 @@ Deno.serve(async (req: Request) => {
       propuneri: deScris.length, goluri, firma: deScris.filter(r => r.mod === 'firma').length,
       nu_se_aplica: deScris.filter(r => r.status === 'nu_se_aplica').length,
       conflicte_verificate: conflicteVerificate,
+      conflicte_raspuns: conflicteRaspuns,
       duplicate_ramase: duplicateRamase,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),

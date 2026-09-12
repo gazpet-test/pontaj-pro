@@ -1605,7 +1605,9 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     setWarn(null)
     const conflicte = []      // cerințe cu dovadă verificată de om, neatinse de AI
     let neacoperite = 0       // cerințe rămase neevaluate chiar și după reluare
+    let neconfirmate = 0      // felii căzute la reluare: rezultatul lor e necunoscut, nu „vechi"
     let duplicate = 0         // rânduri vechi pe care ștergerea nu le-a prins
+    const raspunsuriPierdute = []  // aceeași cerință, două răspunsuri de la colegi diferite
     const erori = []          // erorile nu se mai pierd sub nota finală
     // Felii de 55 (v3 cu ids) — registrul întreg nu încape în max_tokens la un singur apel.
     // O felie raportată „trunchiat" se reia la jumătate de mărime (o singură dată).
@@ -1627,6 +1629,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         if (data?.trunchiat || data?.fara_raspuns > 0 || data?.felie_goala) deReluat.push(...(listaOk ? data.cerinte_fara_raspuns : felie))
         if (data?.conflicte_verificate?.length) conflicte.push(...data.conflicte_verificate)
         if (data?.duplicate_ramase > 0) duplicate += data.duplicate_ramase
+        if (data?.conflicte_raspuns?.length) raspunsuriPierdute.push(...data.conflicte_raspuns)
         await load()
       }
       for (let i = 0; i < deReluat.length; i += 27) {
@@ -1636,17 +1639,22 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
           { body: { licitatie_id: licitatie.id, batch, ids: felie } })
         // Eroarea se ADUNĂ, nu se pune direct în warn: nota finală o suprascria, iar o cădere
         // de rețea dispărea de pe ecran, înlocuită de numărul de conflicte.
-        if (error || data?.error) { erori.push(`${batch} (reluare): ${data?.error || error.message}`); neacoperite += deReluat.length - i; break }
+        if (error || data?.error) { erori.push(`${batch} (reluare): ${data?.error || error.message}`); neconfirmate += deReluat.length - i; break }
         // Reluarea își citește la rândul ei starea: dacă și ea s-a tăiat, cerințele rămase
         // păstrează verdictul vechi fără ca nimeni să afle. Le numărăm și le spunem.
         if (data?.conflicte_verificate?.length) conflicte.push(...data.conflicte_verificate)
         if (data?.fara_raspuns > 0) neacoperite += data.fara_raspuns
         if (data?.duplicate_ramase > 0) duplicate += data.duplicate_ramase
+        if (data?.conflicte_raspuns?.length) raspunsuriPierdute.push(...data.conflicte_raspuns)
         await load()
       }
     }
     const note = []
     if (erori.length) note.push(`❌ ${erori.join(' · ')}`)
+    // O felie picată pe timeout poate să fi apucat să scrie: rezultatul ei e NECONFIRMAT,
+    // nu „a rămas verdictul vechi". Sunt două lucruri diferite pentru cine citește tabelul.
+    if (neconfirmate > 0) note.push(`❓ ${neconfirmate} cerințe au rămas cu rezultat neconfirmat (reluarea a căzut) — reia propunerea.`)
+    if (raspunsuriPierdute.length) note.push(`🔀 ${raspunsuriPierdute.length} cerințe aveau două rânduri cu răspunsuri diferite de la colegi — s-a păstrat unul singur. Verifică-le.`)
     if (duplicate > 0) note.push(`⚠️ ${duplicate} rânduri vechi n-au putut fi șterse — pot exista acoperiri duplicate pe aceleași cerințe. Verifică înainte să te bazezi pe tabel.`)
     if (neacoperite > 0) note.push(`⚠️ ${neacoperite} cerințe n-au fost reevaluate nici la reluare — păstrează verdictul din rularea anterioară.`)
     if (conflicte.length) note.push(`🔒 ${conflicte.length} cerințe au dovadă verificată de om: propunerea AI-ului NU le-a suprascris. Verifică-le manual dacă documentul s-a schimbat.`)
