@@ -600,7 +600,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   const load = async () => {
     const [{ data }, { data: c }] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
-        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path')
+        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
     ])
@@ -1147,7 +1147,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
     // spart în „— partea N" se sare (părțile îl înlocuiesc — cazul VOLUM III întreg).
     const { data: docs } = await supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip').eq('licitatie_id', licitatie.id)
-      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta', 'formular'])
+      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'alta', 'formular'])
       .order('id')
     const toateNumele = (docs || []).map(d => d.nume_original || '')
     const deCitit = (docs || []).filter(d => {
@@ -1938,7 +1938,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
-            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
+            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
