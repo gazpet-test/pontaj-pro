@@ -222,6 +222,9 @@ Deno.serve(async (req: Request) => {
         tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       }), { headers: CORS })
     }
+    const PLAFON_RAPORT = 500
+    const fararaspunsDin = (toate: Set<any>, scrise: Set<any>) => Array.from(toate).filter((id: any) => !scrise.has(id)).length
+    const listaFaraRaspuns = (toate: Set<any>, scrise: Set<any>) => Array.from(toate).filter((id: any) => !scrise.has(id)).slice(0, PLAFON_RAPORT)
     // AI-ul poate repeta acelasi cerinta_id; fara dedup s-ar insera doua randuri pentru
     // aceeasi cerinta, iar tabelul n-are index unic care sa opreasca asta.
     const vazute = new Set()
@@ -231,7 +234,7 @@ Deno.serve(async (req: Request) => {
     // Randurile existente ale cerintelor pe care le rescriem. Le citim INAINTE, din doua motive.
     const { data: vechi, error: eVechi } = await supabase.from('ofertare_acoperire')
       .select('id, cerinta_id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
-      .in('cerinta_id', idsDeRescris)
+      .in('cerinta_id', idsDeRescris).order('id')
     if (eVechi) return fail('citire acoperiri existente: ' + eVechi.message)
 
     // (a) BLOCANT reparat: stergerea sarea randurile verificate pe scan de OM, dar insertul
@@ -244,8 +247,17 @@ Deno.serve(async (req: Request) => {
 
     // (b) Campurile scrise de colegi (raspuns la gol, tichet) se pastreaza: pana acum se
     // pierdeau tacut la fiecare re-rulare, iar cerinta oferea din nou butonul de tichet.
+    // Cand aceeasi cerinta are MAI MULTE randuri nevalidate (se intampla azi, tabelul n-are
+    // index unic), un simplu set() pastra ultimul venit. Daca ala era gol, raspunsul colegului
+    // din celalalt rand se pierdea la stergere. Castiga randul care chiar are date de om; la
+    // egalitate, cel mai nou (citirea e ordonata dupa id).
+    const areDateDeOm = (v: any) => !!(v.raspuns_coleg || v.raspuns_de || v.raspuns_la || v.tichet_id)
     const pastrate = new Map()
-    for (const v of (vechi || [])) if (!v.verificat_pe_scan) pastrate.set(v.cerinta_id, v)
+    for (const v of (vechi || [])) {
+      if (v.verificat_pe_scan) continue
+      const ex = pastrate.get(v.cerinta_id)
+      if (!ex || (areDateDeOm(v) && !areDateDeOm(ex)) || (areDateDeOm(v) && areDateDeOm(ex))) pastrate.set(v.cerinta_id, v)
+    }
 
     const conflicteVerificate = []
     const deScris = []
@@ -259,8 +271,14 @@ Deno.serve(async (req: Request) => {
     if (!deScris.length) {
       return new Response(JSON.stringify({
         ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
-        motiv_felie_goala: 'toate cerintele feliei au deja dovada verificata de om — nu s-a atins nimic',
+        motiv_felie_goala: 'nicio propunere de scris — toate cele primite sunt blocate de o dovada verificata de om',
         conflicte_verificate: conflicteVerificate,
+        stop_reason: data.stop_reason || null,
+        // Ramura asta nu inseamna ca AI-ul a raspuns la toata felia: poate a raspuns la UNA,
+        // deja verificata, iar restul de 54 lipsesc. Fara randurile astea, frontendul nu le
+        // numara si lipsurile raman nespuse.
+        fara_raspuns: fararaspunsDin(idsCerinte, vazute), cerinte_fara_raspuns: listaFaraRaspuns(idsCerinte, vazute),
+        lista_fara_raspuns_taiata: fararaspunsDin(idsCerinte, vazute) > PLAFON_RAPORT,
       }), { headers: CORS })
     }
 
@@ -272,10 +290,18 @@ Deno.serve(async (req: Request) => {
     const { error: eIns } = await supabase.from('ofertare_acoperire').insert(deScris)
     if (eIns) return fail('insert acoperire (nu s-a sters nimic): ' + eIns.message)
 
-    const idsVechiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && vazute.has(v.cerinta_id)).map(v => v.id)
+    // Stergem DOAR randurile vechi ale cerintelor pe care chiar le-am inlocuit. Folosind
+    // `vazute` se stergea si randul nevalidat (cu raspunsul unui coleg) al unei cerinte
+    // BLOCATE de o dovada verificata — cerinta pentru care nu am scris nimic in loc.
+    const cerinteInlocuite = new Set(deScris.map(r => r.cerinta_id))
+    const idsVechiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && cerinteInlocuite.has(v.cerinta_id)).map(v => v.id)
     let duplicateRamase = 0
     if (idsVechiDeSters.length) {
-      const { error: eDel } = await supabase.from('ofertare_acoperire').delete().in('id', idsVechiDeSters)
+      // `.eq('verificat_pe_scan', false)` la stergere, nu doar la citire: intre citire si
+      // stergere un coleg poate apasa „verificat" pe exact randul asta, iar noi l-am sterge
+      // dupa id. Filtrul il lasa in viata (ramane un duplicat vizibil, nu munca disparuta).
+      const { error: eDel } = await supabase.from('ofertare_acoperire')
+        .delete().in('id', idsVechiDeSters).eq('verificat_pe_scan', false)
       if (eDel) duplicateRamase = idsVechiDeSters.length
     }
 
@@ -286,7 +312,6 @@ Deno.serve(async (req: Request) => {
     // atins, deci acoperirea veche le ramane. Plafonul de raportare era 50, iar felia trimisa
     // de frontend are 55 — cerintele peste plafon nu mai erau reluate NICIODATA. Ridicat, plus
     // un steag explicit cand lista tot e taiata, ca frontendul sa reia atunci toata felia.
-    const PLAFON_RAPORT = 500
     const fararaspuns = Array.from(idsCerinte).filter((id: any) => !vazute.has(id))
     const goluri = deScris.filter(r => r.status === 'gol').length
     return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null,
