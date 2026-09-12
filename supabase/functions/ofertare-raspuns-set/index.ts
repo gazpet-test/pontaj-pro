@@ -429,18 +429,41 @@ Deno.serve(async (req: Request) => {
 
     const comparate = [...facute, ...lot.map((x: any) => x.disp_id)]
     const raman = toate.filter(x => x.tip === 'efect_posibil' && !comparate.includes(x.disp_id)).length
-    const soldRunda = lot.length - (adaugate.length + (Array.isArray(j.neclare) ? j.neclare.length : 0))
+
+    // Fiecare „neclar" primeste si el disp_id, ca operatiile: altfel nu se poate spune CARE dispozitie
+    // a ramas fara verdict, ci doar cate — iar un numar nu se poate deschide.
+    const neclareRunda = (Array.isArray(j.neclare) ? j.neclare : []).map((n: any) => {
+      const sd = lot.find((x: any) => String(x.nr) === String(n.disp_nr)) || lot.find((x: any) => x.disp_id === n.disp_nr)
+      return { ...n, disp_id: sd?.disp_id || null, doc_nume: sd?.doc_nume || null }
+    })
+    const neclareToate = [...(prop.neclare || []), ...neclareRunda]
+
+    // Acoperirea se masoara pe IDENTITATEA dispozitiei, nu printr-o scadere. O scadere se inchide la zero
+    // si cand doua operatii cad pe aceeasi dispozitie iar alta ramane fara verdict: „sold 0" ar fi spus
+    // „complet" peste o gaura. Acum se numara exact CARE disp_id a primit un verdict si care nu.
+    const cuRezultat = new Set<string>(([
+      ...operatii.map((o: any) => o.disp_id),
+      ...neclareToate.map((n: any) => n.disp_id),
+    ].filter(Boolean)) as string[])
+    const faraRezultat = toate
+      .filter((x: any) => comparate.includes(x.disp_id) && !cuRezultat.has(x.disp_id))
+      .map((x: any) => ({ disp_id: x.disp_id, nr: x.nr, doc_nume: x.doc_nume, rezumat: x.rezumat }))
+
     const propNou = { ...prop, operatii, amprente, dispozitii_comparate: comparate,
-      neclare: [...(prop.neclare || []), ...(Array.isArray(j.neclare) ? j.neclare : [])],
+      neclare: neclareToate,
       // Se persista, ca sa se vada in ecran, nu doar in raspunsul HTTP al rundei.
       aruncate: { ...(prop.aruncate || {}), ...Object.fromEntries(
         Object.entries(aruncate).map(([k, v]) => [k, ((prop.aruncate || {})[k] || 0) + v])) },
-      sold: Number((prop.sold || 0)) + soldRunda }
+      fara_rezultat: faraRezultat, sold: faraRezultat.length }
 
     const { error: eU } = await db.from('ofertare_raspuns_set').update({
       propunere: propNou, propunere_la: new Date().toISOString(), model: MODEL,
       cost_usd: Number(set.cost_usd || 0) + cost,
-      stare: operatii.length ? 'analizat' : (raman ? 'analizat' : 'fara_efect'),
+      // „fara_efect" e o CONCLUZIE si se scrie doar peste o analiza completa: zero operatii cu
+      // dispozitii fara verdict sau cu propuneri respinse nu inseamna „nu schimba nimic",
+      // inseamna „nu stim inca". Altfel starea din baza minte la fel ca ecranul.
+      stare: (operatii.length || raman || faraRezultat.length
+        || Object.keys(propNou.aruncate || {}).length) ? 'analizat' : 'fara_efect',
       updated_at: new Date().toISOString(),
     }).eq('id', setId)
     if (eU) return json({ error: 'salvare propunere: ' + eU.message, cost_usd: cost })
@@ -454,9 +477,10 @@ Deno.serve(async (req: Request) => {
         noua: operatii.filter(o => o.fel === 'noua').length },
       necesita_revizuire: operatii.filter(o => o.necesita_revizuire).length,
       aruncate: Object.keys(aruncate).length ? aruncate : undefined,
-      // Soldul: fiecare dispozitie trimisa la comparare trebuie sa iasa fie ca operatie, fie ca
-      // „neclara". Daca nu da zero, analiza a pierdut ceva pe drum si „fara efect" nu e credibil.
-      sold_runda: soldRunda,
+      // Nu „soldul e zero", ci „18 din 20 de dispozitii au primit verdict" — un contor trebuie sa
+      // masoare exact promisiunea pe care omul o citeste in el, si fiecare restanta sa fie deschizabila.
+      cu_rezultat: `${comparate.length - faraRezultat.length}/${comparate.length}`,
+      fara_rezultat: faraRezultat.length ? faraRezultat.map((x: any) => x.nr || x.disp_id) : undefined,
       // Indicatorul de acoperire: cate dispozitii cu efect posibil au primit verdict.
       acoperire: { dispozitii_total: toate.length,
         efect_posibil: toate.filter(x => x.tip === 'efect_posibil').length,

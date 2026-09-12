@@ -1124,6 +1124,10 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           ['noua', '➕ Cerințe noi', G.teal],
         ]
         const netrecut = ac.some(x => x.acoperit_tot === false)
+        // O analiza e completa doar daca s-a citit tot SI fiecare dispozitie comparata a primit
+        // verdict SI codul n-a respins nimic. Oricare din cele trei lipseste → nu se da concluzie.
+        const analizaIncompleta = netrecut || (setRasp.propunere?.sold > 0)
+          || Object.keys(setRasp.propunere?.aruncate || {}).length > 0
         return (
           <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.purple}55`, background:G.purple + '0D' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:8 }}>
@@ -1148,17 +1152,23 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
             {/* Ce a aruncat codul si ce nu s-a inchis. Fara randurile astea, o analiza care a pierdut
                 jumatate din operatii arata pe ecran exact ca una curata. */}
             {(setRasp.propunere?.sold > 0 || Object.keys(setRasp.propunere?.aruncate || {}).length > 0) && (
-              <div style={{ fontSize:11.5, color:G.orange, marginBottom:10, padding:'6px 9px', borderRadius:7, background:G.orange + '14' }}>
-                {setRasp.propunere?.sold > 0 && <div>⚠ {setRasp.propunere.sold} dispoziții comparate n-au ieșit nici ca schimbare, nici ca „neclar" — analiza a pierdut ceva pe drum.</div>}
+              <div style={{ fontSize:12.5, color:G.orange, marginBottom:10, padding:'8px 10px', borderRadius:7, background:G.orange + '14', border:`1px solid ${G.orange}55` }}>
+                {setRasp.propunere?.sold > 0 && (
+                  <div>⚠ <b>{setRasp.propunere.sold} dispoziții fără verdict</b> — au fost trimise la comparare și n-au ieșit nici ca schimbare, nici ca „neclar":
+                    {' '}{(setRasp.propunere?.fara_rezultat || []).map(x => x.nr || x.disp_id).join(', ')}. Reia analiza înainte să te bazezi pe rezultat.</div>
+                )}
                 {Object.entries(setRasp.propunere?.aruncate || {}).map(([m, n]) => (
                   <div key={m}>⚠ {n} {n === 1 ? 'propunere respinsă' : 'propuneri respinse'} de verificările platformei: {m}.</div>
                 ))}
               </div>
             )}
 
+            {/* „Fara efect" e o CONCLUZIE, si se poate da numai peste o analiza completa. Daca s-au pierdut
+                dispozitii pe drum sau codul a respins propuneri, verdele dispare: la 23 noaptea omul
+                citeste concluzia, nu avertismentul de deasupra ei. */}
             {!ops.length ? (
-              <div style={{ fontSize:12.5, color: netrecut ? G.orange : G.green }}>
-                {netrecut ? 'Nu s-a găsit nicio schimbare, dar citirea e incompletă — reia analiza.'
+              <div style={{ fontSize:12.5, color: analizaIncompleta ? G.orange : G.green, fontWeight: analizaIncompleta ? 700 : 400 }}>
+                {analizaIncompleta ? 'Analiză incompletă — impactul asupra cerințelor e încă nedeterminat. Reia analiza; vezi mai sus ce a rămas nerezolvat.'
                   : 'Nicio schimbare în registru. Răspunsul confirmă documentația existentă.'}
               </div>
             ) : grupe.map(([fel, titlu, culoare]) => {
@@ -1932,28 +1942,38 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     await load()
   }
 
-  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0, naElim: 0, nu_se_aplica: 0 }
+  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0, naElim: 0, nu_se_aplica: 0, reverif: 0, reverifElim: 0 }
   ;(cerinte || []).forEach(c => {
     const a = acoperiri[c.id]
     // marcate „nu se aplică" de om: nu mai sunt goluri, dar rămân numărate separat (nimic nu dispare tăcut)
     const scoasa = c.stare === 'nu_se_aplica'
     if (scoasa) stats.nuSeAplica++
     if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie' && !scoasa) stats.neevaluateElim++; return }
+    // Dovada pusa pe textul VECHI al cerintei nu se numara la ✅ nici aici. Panoul isi face propriile
+    // statistici, separat de KPI-uri: daca regula nu e scrisa in ambele locuri, ecranul se contrazice
+    // exact acolo unde lucreaza omul — sus „de reverificat", jos „acoperit".
+    const acop = a.status === 'acoperit' || a.status === 'acoperit_partener'
+    if (acop && a.reverificare_ceruta) {
+      stats.reverif++
+      if (c.tip === 'eliminatorie' && !scoasa) stats.reverifElim++
+      return
+    }
     stats[a.status] = (stats[a.status] || 0) + 1
     if (a.status === 'gol' && c.tip === 'eliminatorie' && !scoasa) stats.goluriElim++
     // O eliminatorie pe care AI-ul o crede irelevantă rămâne în alarmă până confirmă un om
     // în registru (cerinte.stare). Altfel modelul ar putea stinge singur poarta E3.
     if (a.status === 'nu_se_aplica' && c.tip === 'eliminatorie' && !scoasa) stats.naElim++
   })
-  // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă
-  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim + stats.naElim
+  // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă —
+  // iar o dovadă care așteaptă reverificare NU ține loc de dovadă (view-ul face la fel din 12.09)
+  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim + stats.naElim + stats.reverifElim
   // Legătura cu registrul: ce e bifat sus se vede aici. Cu „doar bifatele" rămân doar
   // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
   const [fDoarBifate, setFDoarBifate] = useState(false)
   const nrBifateAici = (cerinte || []).filter(c => sel.includes(c.id)).length
   useEffect(() => { if (!sel.length) setFDoarBifate(false) }, [sel.length])
   const randuri = (cerinte || [])
-    .filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol')
+    .filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol' || acoperiri[c.id]?.reverificare_ceruta)
     .filter(c => !fDoarBifate || sel.includes(c.id))
 
   return (
@@ -1962,7 +1982,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         <div style={{ fontSize:13, fontWeight:800 }}>🎯 Acoperirea cerințelor</div>
         {cerinte?.length > 0 && (
           <span style={{ fontSize:11.5, color:G.muted }}>
-            ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate
+            ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate{stats.reverif ? <span style={{ color:G.orange, fontWeight:700 }}> · ⟳ {stats.reverif} de reverificat</span> : ''}
             {stats.nu_se_aplica > 0 && <span style={{ color:G.purple }} title="AI-ul le-a clasat ca „nu se aplică”. E o propunere, nu o decizie: cele eliminatorii rămân în alarmă până le confirmi în registru."> · ⊘ {stats.nu_se_aplica} AI: nu se aplică</span>}
             {stats.nuSeAplica > 0 && <span style={{ color:G.purple }} title="Marcate „nu se aplică” în registrul de cerințe — ies din numărătoarea de eliminatorii fără dovadă"> · ⊘ {stats.nuSeAplica} nu se aplică</span>}
             {elimFaraDovada > 0 && (
@@ -1974,7 +1994,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
           <label style={{ fontSize:11.5, color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
-            <input type="checkbox" checked={fDoarGoluri} onChange={e => setFDoarGoluri(e.target.checked)} style={{ accentColor:G.red }} /> doar goluri
+            <input type="checkbox" checked={fDoarGoluri} onChange={e => setFDoarGoluri(e.target.checked)} style={{ accentColor:G.red }} /> de rezolvat (goluri + de reverificat)
           </label>
           {nrBifateAici > 0 && (
             <label title="Cerințele bifate în registrul de mai sus" style={{ fontSize:11.5, color:G.ofertare, fontWeight:700, display:'flex', alignItems:'center', gap:5, cursor:'pointer' }}>
@@ -1993,7 +2013,9 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
           <div style={{ maxHeight:320, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
             {randuri.map(c => {
               const a = acoperiri[c.id]
-              const st = a ? (ACOPERIRE_STATUS[a.status] || ACOPERIRE_STATUS.gol) : null
+              // Randul de reverificat isi ia culoarea si eticheta din starea lui reala, nu din statusul
+              // vechi: altfel bara ramane verde si portocaliul de langa ea pare o nota de subsol.
+              const st = a ? (a.reverificare_ceruta ? { label:'⟳ de reverificat', color:G.orange } : (ACOPERIRE_STATUS[a.status] || ACOPERIRE_STATUS.gol)) : null
               // Acoperirea pe experiență trebuie să spună CU CE lucrare, altfel „acoperit" e o
               // afirmație fără sursă pe ecran. La asociere arătăm cota proprie, nu totalul.
               const titular = a?.experienta
