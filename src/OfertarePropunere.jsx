@@ -45,6 +45,13 @@ const S = {
 // `formular` e null peste tot INTENȚIONAT. În documentul citit apar doar „Formular 11" și
 // „Formular 12", și nici alea legate clar de un capitol anume. Numerele de formular se iau din
 // fișa de date a fiecărei licitații, nu se presupun.
+//
+// ATENȚIE, lista asta NU e „cuprinsul standard". E cuprinsul UNUI formular ANAP, cel folosit la o
+// licitație Transgaz. Opisul propunerii depuse la Contești (distribuție gaze, 1144 pag.) spune
+// negru pe alb: „Propunere Tehnică respecta capitolele din Fisa de date si cap9 pct 9.1". Acolo
+// structura e cu totul alta — Secțiunea A (Cap. I-VI) + Secțiunea B, Planul calității (Cap. I-III)
+// + ~20 de anexe, cu Graficul Gantt ca anexă, depus și PDF și Excel separat. Deci: punct de
+// pornire pentru licitațiile pe formular ANAP, niciodată implicit tăcut pentru restul.
 const CAPITOLE_ANAP = [
   { nr:1,  titlu:'Rezumat', obligatoriu:true, formular:null },
   { nr:2,  titlu:'Metodologia de executarea lucrărilor', obligatoriu:true, formular:null },
@@ -82,7 +89,7 @@ function PoartaPT({ st, onFiltru }) {
     r.push({
       k:'cuprins', titlu:'Cuprinsul propunerii',
       stare: st.capitole > 0 ? 'ok' : 'block',
-      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — apasă „Creează cuprinsul standard"',
+      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — cuprinsul se ia din fișa de date, cap. 9 pct. 9.1',
     })
     r.push({
       k:'fara', titlu:'Cerințe fără capitol',
@@ -269,10 +276,12 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, busy }) {
     return (
       <div style={{ ...S.card, padding:16, textAlign:'center' }}>
         <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>
-          Propunerea n-are încă niciun capitol. Cuprinsul standard are 14 capitole și se poate edita după.
+          Propunerea n-are încă niciun capitol. Cuprinsul NU e același la toate licitațiile: se ia din fișa de
+          date, cap. 9 pct. 9.1. Butonul de mai jos pune formularul ANAP (15 capitole), folosit la Transgaz —
+          la distribuție gaze structura e alta (Secțiuni A/B, capitole cu cifre romane, anexe). Editează după.
         </div>
         <button onClick={onCreeaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .5 : 1 }}>
-          📋 Creează cuprinsul standard (14 capitole)
+          📋 Pornește de la formularul ANAP (15 capitole)
         </button>
       </div>
     )
@@ -398,7 +407,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setBusy(false)
     if (error && error.code !== '23505') { showToast?.('Cuprinsul nu s-a creat: ' + error.message, 'err'); return }
     if (error) showToast?.('Cuprinsul exista deja.', 'ok')
-    else showToast?.('Cuprinsul standard a fost creat (14 capitole).', 'ok')
+    else showToast?.(`Cuprinsul ANAP a fost creat (${CAPITOLE_ANAP.length} capitole). Verifică-l pe fișa de date, cap. 9 pct. 9.1.`, 'ok')
     await load(licId)
   }
 
