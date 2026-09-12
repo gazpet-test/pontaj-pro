@@ -139,7 +139,7 @@ Raspunde EXCLUSIV cu JSON, fara comentarii:
   "document_probant":"<ce dovada se cere, sau null>",
   "cand_se_prezinta":"duae"|"depunere"|"primul_loc"|null,
   "citat":"<pasajul literal din raspuns care justifica operatia>",
-  "motiv":"<1 propozitie: ce se schimba concret>",
+  "motiv":"<1 propozitie: ce face ofertantul altfel dupa raspuns>",
   "incredere":"ridicata"|"medie"|"scazuta",
   "necesita_revizuire":<true daca lotul, referinta sau domeniul sunt incomplete>,
   "loturi":["<loturile vizate de schimbare>"]}],
