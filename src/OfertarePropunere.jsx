@@ -34,24 +34,33 @@ const S = {
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
 
-// Cuprinsul stă în JS, nu în migrare: titlurile variază de la o autoritate la alta
-// (cap. 4 e „fizic și valoric" la Racari, doar „fizic" la unele primării), deci se creează
-// cu un buton și se editează per licitație, nu se toarnă în schemă.
+// Cuprinsul stă în JS, nu în migrare: titlurile variază de la o autoritate la alta și se editează
+// per licitație, fără să ceară migrare.
+//
+// Lista de mai jos e COPIATĂ din formularul real depus de Gazpet — „Formular Propunere tehnica
+// Stefan cel Mare.docx" (SCN1146660, depusă 16.05.2024), din arhiva de pe Drive, la
+// Calificare\model propuneri tehnice. Nu e o listă inventată: e formularul-cadru ANAP așa cum
+// îl completează biroul de ofertare.
+//
+// `formular` e null peste tot INTENȚIONAT. În documentul citit apar doar „Formular 11" și
+// „Formular 12", și nici alea legate clar de un capitol anume. Numerele de formular se iau din
+// fișa de date a fiecărei licitații, nu se presupun.
 const CAPITOLE_ANAP = [
-  { nr:1,  titlu:'Rezumatul propunerii tehnice',                    obligatoriu:true,  formular:null },
-  { nr:2,  titlu:'Metodologia de execuție a lucrărilor',            obligatoriu:true,  formular:null },
-  { nr:3,  titlu:'Organizarea de șantier',                          obligatoriu:true,  formular:null },
-  { nr:4,  titlu:'Graficul de execuție (fizic și valoric)',         obligatoriu:true,  formular:'Formular 8' },
-  { nr:5,  titlu:'Resurse umane alocate',                           obligatoriu:true,  formular:'Formular 10' },
-  { nr:6,  titlu:'Utilaje, echipamente și mijloace de transport',   obligatoriu:true,  formular:'Formular 12' },
-  { nr:7,  titlu:'Materiale: conformitate, agremente, certificate', obligatoriu:true,  formular:null },
-  { nr:8,  titlu:'Controlul calității, verificări și probe',        obligatoriu:true,  formular:null },
-  { nr:9,  titlu:'Securitate și sănătate în muncă (SSM) și PSI',    obligatoriu:true,  formular:null },
-  { nr:10, titlu:'Protecția mediului și gestiunea deșeurilor',      obligatoriu:true,  formular:null },
-  { nr:11, titlu:'Managementul riscurilor pe durata execuției',     obligatoriu:true,  formular:null },
-  { nr:12, titlu:'Garanția lucrărilor și intervenții post-recepție',obligatoriu:true,  formular:null },
-  { nr:13, titlu:'Subcontractanți și asociați (dacă e cazul)',      obligatoriu:false, formular:null },
-  { nr:14, titlu:'Anexe la propunerea tehnică',                     obligatoriu:false, formular:null },
+  { nr:1,  titlu:'Rezumat', obligatoriu:true, formular:null },
+  { nr:2,  titlu:'Metodologia de executarea lucrărilor', obligatoriu:true, formular:null },
+  { nr:3,  titlu:'Planul de management al calității în cadrul Contractului', obligatoriu:true, formular:null },
+  { nr:4,  titlu:'Grafic general de realizare a investiției (fizic)', obligatoriu:true, formular:null },
+  { nr:5,  titlu:'Personalul propus și managementul contractului pentru execuția lucrărilor', obligatoriu:true, formular:null },
+  { nr:6,  titlu:'Infrastructura care va fi utilizată în realizarea activităților în cadrul Contractului', obligatoriu:true, formular:null },
+  { nr:7,  titlu:'Modalitatea de efectuare a înregistrărilor și înregistrările efectuate în legătură cu indicatorii cantitativi și calitativi asociați execuției lucrărilor', obligatoriu:true, formular:null },
+  { nr:8,  titlu:'Măsuri aplicabile de Ofertant pe perioada Contractului pentru asigurarea îndeplinirii obligațiilor din domeniul mediului', obligatoriu:true, formular:null },
+  { nr:9,  titlu:'Măsuri aplicabile de Ofertant pe perioada Contractului pentru asigurarea îndeplinirii obligațiilor din domeniul social și al relațiilor de muncă', obligatoriu:true, formular:null },
+  { nr:10, titlu:'Măsuri aplicate de Ofertant pentru supravegherea lucrărilor în perioada de garanție acordată', obligatoriu:true, formular:null },
+  { nr:11, titlu:'Informații în legătură cu echipamentele incluse în lucrare după expirarea perioadei de garanție', obligatoriu:true, formular:null },
+  { nr:12, titlu:'Adecvarea la constrângerile fizice impuse de amplasamentul lucrării', obligatoriu:true, formular:null },
+  { nr:13, titlu:'Anexe la Propunerea Tehnică', obligatoriu:false, formular:null },
+  { nr:14, titlu:'Orice alte informații relevante pentru demonstrarea conformității propunerii tehnice raportat la Cerințele Beneficiarului', obligatoriu:false, formular:null },
+  { nr:15, titlu:'ASPECTE TEHNICE OFERTATE SUPLIMENTAR FAȚĂ DE CERINȚELE MINIME ALE DOCUMENTAȚIEI DE ATRIBUIRE', obligatoriu:false, formular:null },
 ]
 
 // ATENȚIE: identic, caracter cu caracter, cu regexul din v_ofertare_pt_stare.
@@ -96,9 +105,12 @@ function PoartaPT({ st, onFiltru }) {
     })
     r.push({
       k:'nu_e_cazul', titlu:'„nu este cazul" în capitole',
-      stare: st.capitole_nu_e_cazul > 0 ? 'block' : 'ok',
+      // WARN, nu BLOCK: formularul real depus la Ștefan cel Mare îl folosește de 3 ori. Îl interzice
+      // explicit doar o parte din autorități (ex. Fința). Un block universal ar fi fals și ar învăța
+      // omul să ocolească semaforul.
+      stare: st.capitole_nu_e_cazul > 0 ? 'warn' : 'ok',
       detalii: st.capitole_nu_e_cazul > 0
-        ? `${st.capitole_nu_e_cazul} capitole conțin „nu este cazul" — interzis explicit de formularele de distribuție`
+        ? `${st.capitole_nu_e_cazul} capitole conțin „nu este cazul" — verifică fișa de date: unele autorități îl interzic explicit`
         : '0',
     })
     r.push({
@@ -296,7 +308,7 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, busy }) {
 // ─────────────────────────────────────────────────────────────────
 export function PropunereRezumat({ st, onDeschide }) {
   if (!st) return <div style={{ color:G.muted, fontSize:13, padding:12 }}>Se încarcă…</div>
-  const blocat = st.capitole === 0 || st.fara_capitol > 0 || st.capcane_descoperite > 0 || st.capitole_nu_e_cazul > 0 || st.documente === 0
+  const blocat = st.capitole === 0 || st.fara_capitol > 0 || st.capcane_descoperite > 0 || st.documente === 0
   return (
     <div style={{ padding:'4px 0' }}>
       <div style={{ ...S.card, padding:14, borderColor: blocat ? G.red + '55' : G.green + '55', marginBottom:12 }}>
@@ -421,7 +433,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const { data: proaspat, error: e1 } = await supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', licId).maybeSingle()
     if (e1 || !proaspat) { setBusy(false); showToast?.('Nu s-a putut reciti starea.', 'err'); return }
     const blocat = proaspat.capitole === 0 || proaspat.fara_capitol > 0 || proaspat.capcane_descoperite > 0
-      || proaspat.capitole_nu_e_cazul > 0 || proaspat.documente === 0 || proaspat.capitole_goale > 0
+      || proaspat.documente === 0 || proaspat.capitole_goale > 0
     if (blocat) { setBusy(false); setSt(proaspat); showToast?.('Între timp s-a redeschis un rând roșu. Nu se semnează.', 'err'); return }
     const versiune = (proaspat.pt_versiune || 0) + 1
     const { error } = await supabase.from('ofertare_pt_poarta').insert({
@@ -438,7 +450,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   }
 
   const blocat = !st || st.capitole === 0 || st.fara_capitol > 0 || st.capcane_descoperite > 0
-    || st.capitole_nu_e_cazul > 0 || st.documente === 0 || st.capitole_goale > 0
+    || st.documente === 0 || st.capitole_goale > 0
   const zile = zileRamase(lic?.termen_depunere)
 
   return (
