@@ -28,6 +28,8 @@ REGULI NENEGOCIABILE:
 - O cerință care NU e de capabilitate (garanție de participare, formulare, semnătură, mod de prezentare, preț, termene de plată, vizită amplasament, valabilitatea ofertei) → status "nu_se_aplica".
 - motiv: scurt (≤120 caractere), în română, spune DE CE (cine/ce acoperă sau ce lipsește exact).
 
+IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
+
 Răspunde EXCLUSIV JSON compact:
 {"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica","autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, sau null>,"partener_id":<id sau null>,"motiv":"..."}]}`
 
@@ -137,19 +139,27 @@ Deno.serve(async (req: Request) => {
     const idsPart = new Set(parteneri.map((p: any) => p.id))
     const azi = lic.termen_depunere ? new Date(lic.termen_depunere) : new Date()
 
-    // R-ACOP-1 (constatat 12.09.2026, NEREPARAT în acest commit — fixul vine separat):
-    // ștergerea se face ÎNAINTE de insert și pe TOATE cerințele feliei, nu doar pe cele
-    // pentru care AI-ul chiar a răspuns. Dacă răspunsul e trunchiat (vezi `trunchiat`) sau
-    // insertul pică, acoperirile vechi sunt deja pierdute, iar cerințele rămân fără nimic —
-    // adică arată ca „neanalizate", nu ca „goluri". Același tipar ca la radar: un pas
-    // distructiv necondiționat, pus înaintea unuia care poate să nu reușească.
-    const cerinteIds = Array.from(idsCerinte)
-    await supabase.from('ofertare_acoperire').delete().in('cerinta_id', cerinteIds).eq('verificat_pe_scan', false)
-
+    // R-ACOP-1 (reparat 12.09.2026). Inainte, stergerea rula AICI — inaintea insertului si
+    // pe TOATE cerintele feliei, nu doar pe cele la care AI-ul chiar raspunsese. Daca
+    // raspunsul se taia (`trunchiat`) sau insertul pica, acoperirile vechi erau deja duse,
+    // iar cerintele ramaneau fara niciun rand. Acum se construiesc intai randurile, apoi se
+    // sterge STRICT ce se rescrie, si numai daca chiar avem ce pune la loc.
     const rows: any[] = []
     for (const p of lista) {
       if (!idsCerinte.has(p.cerinta_id)) continue
-      if (p.status === 'nu_se_aplica') continue
+      if (p.status === 'nu_se_aplica') {
+        // R-ACOP-1 partea 2: se scrie, nu se tace. „AI-ul a zis ca nu se aplica" si „AI-ul
+        // n-a raspuns" insemnau amandoua lipsa randului, deci o pierdere de date arata
+        // exact ca o clasare corecta. Decizia OMULUI ramane separata, in
+        // ofertare_cerinte.stare — asta e doar propunerea AI-ului.
+        rows.push({
+          cerinta_id: p.cerinta_id, mod: 'nu_se_aplica',
+          autorizatie_id: null, doc_firma_id: null, partener_id: null,
+          referinta_text: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null),
+          status: 'nu_se_aplica', valabil_la_depunere: null, verificat_pe_scan: false,
+        })
+        continue
+      }
       let docF: any = null
       let aut: any = null
       if (typeof p.autorizatie_id === 'string' && /^F\d+$/.test(p.autorizatie_id)) {
@@ -177,13 +187,29 @@ Deno.serve(async (req: Request) => {
         verificat_pe_scan: false,
       })
     }
-    if (rows.length) {
-      const { error: eIns } = await supabase.from('ofertare_acoperire').insert(rows)
-      if (eIns) return fail('insert acoperire: ' + eIns.message)
+    // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.
+    if (!rows.length) {
+      return new Response(JSON.stringify({
+        ok: false, batch, propuneri: 0, trunchiat,
+        error: 'AI-ul n-a intors nicio acoperire valida — nu s-a sters si nu s-a scris nimic',
+        tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
+      }), { headers: CORS })
     }
+    const idsDeRescris = Array.from(new Set(rows.map(r => r.cerinta_id)))
+    const { error: eDel } = await supabase.from('ofertare_acoperire')
+      .delete().in('cerinta_id', idsDeRescris).eq('verificat_pe_scan', false)
+    if (eDel) return fail('stergere acoperiri vechi: ' + eDel.message)
+    const { error: eIns } = await supabase.from('ofertare_acoperire').insert(rows)
+    if (eIns) return fail('insert acoperire: ' + eIns.message)
 
+    // Cerintele din felie la care AI-ul NU a raspuns: nu le-am atins, deci acoperirea veche
+    // le ramane. Le raportam ca sa se vada ca felia n-a fost acoperita integral — tacerea a
+    // fost chiar problema.
+    const fararaspuns = Array.from(idsCerinte).filter((id: any) => !idsDeRescris.includes(id))
     const goluri = rows.filter(r => r.status === 'gol').length
-    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null, propuneri: rows.length, goluri, firma: rows.filter(r => r.mod === 'firma').length, trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens, cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
+    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null, propuneri: rows.length, goluri, firma: rows.filter(r => r.mod === 'firma').length,
+      nu_se_aplica: rows.filter(r => r.status === 'nu_se_aplica').length,
+      fara_raspuns: fararaspuns.length, cerinte_fara_raspuns: fararaspuns.slice(0, 50), trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens, cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
   }

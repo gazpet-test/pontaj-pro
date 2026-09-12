@@ -1548,6 +1548,9 @@ const ACOPERIRE_STATUS = {
   acoperit:          { label:'✅ acoperit',  color:G.green },
   acoperit_partener: { label:'🤝 partener',  color:G.teal },
   gol:               { label:'🔴 GOL',       color:G.red },
+  // Propunerea AI-ului, nu decizia omului: aia se ia in registru (cerinte.stare) si e
+  // singura care scoate o eliminatorie din numaratoarea de „fara dovada" (vezi mai jos).
+  nu_se_aplica:      { label:'⊘ AI: nu se aplică', color:G.purple },
 }
 
 function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
@@ -1599,7 +1602,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
           { body: { licitatie_id: licitatie.id, batch, ids: felie } })
         if (error || data?.error) { setWarn(`${batch}: ${data?.error || error.message}`); setBusy(null); await load(); onChanged?.(); return }
-        if (data?.trunchiat) deReluat.push(...felie)
+        if (data?.trunchiat || data?.fara_raspuns > 0) deReluat.push(...(data?.cerinte_fara_raspuns?.length ? data.cerinte_fara_raspuns : felie))
         await load()
       }
       for (let i = 0; i < deReluat.length; i += 27) {
@@ -1641,7 +1644,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     await load()
   }
 
-  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0 }
+  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0, naElim: 0, nu_se_aplica: 0 }
   ;(cerinte || []).forEach(c => {
     const a = acoperiri[c.id]
     // marcate „nu se aplică" de om: nu mai sunt goluri, dar rămân numărate separat (nimic nu dispare tăcut)
@@ -1650,9 +1653,12 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie' && !scoasa) stats.neevaluateElim++; return }
     stats[a.status] = (stats[a.status] || 0) + 1
     if (a.status === 'gol' && c.tip === 'eliminatorie' && !scoasa) stats.goluriElim++
+    // O eliminatorie pe care AI-ul o crede irelevantă rămâne în alarmă până confirmă un om
+    // în registru (cerinte.stare). Altfel modelul ar putea stinge singur poarta E3.
+    if (a.status === 'nu_se_aplica' && c.tip === 'eliminatorie' && !scoasa) stats.naElim++
   })
   // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă
-  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim
+  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim + stats.naElim
   // Legătura cu registrul: ce e bifat sus se vede aici. Cu „doar bifatele" rămân doar
   // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
   const [fDoarBifate, setFDoarBifate] = useState(false)
@@ -1669,10 +1675,11 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         {cerinte?.length > 0 && (
           <span style={{ fontSize:11.5, color:G.muted }}>
             ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate
+            {stats.nu_se_aplica > 0 && <span style={{ color:G.purple }} title="AI-ul le-a clasat ca „nu se aplică”. E o propunere, nu o decizie: cele eliminatorii rămân în alarmă până le confirmi în registru."> · ⊘ {stats.nu_se_aplica} AI: nu se aplică</span>}
             {stats.nuSeAplica > 0 && <span style={{ color:G.purple }} title="Marcate „nu se aplică” în registrul de cerințe — ies din numărătoarea de eliminatorii fără dovadă"> · ⊘ {stats.nuSeAplica} nu se aplică</span>}
             {elimFaraDovada > 0 && (
-              <b style={{ color:G.red }} title={`Eliminatorii fără dovadă = goluri (${stats.goluriElim}) + neevaluate (${stats.neevaluateElim}), fără cele marcate „nu se aplică". Aceeași cifră ca în lista de licitații.`}>
-                {' '}· {elimFaraDovada} ELIMINATORII fără dovadă ({stats.goluriElim} goluri + {stats.neevaluateElim} neevaluate)
+              <b style={{ color:G.red }} title={`Eliminatorii fără dovadă = goluri (${stats.goluriElim}) + neevaluate (${stats.neevaluateElim}) + clasate de AI ca „nu se aplică" dar neconfirmate de om (${stats.naElim}). Ies din numărătoare doar cele marcate „nu se aplică" în registru. Aceeași cifră ca în lista de licitații.`}>
+                {' '}· {elimFaraDovada} ELIMINATORII fără dovadă ({stats.goluriElim} goluri + {stats.neevaluateElim} neevaluate{stats.naElim ? ` + ${stats.naElim} AI „nu se aplică" neconfirmate` : ''})
               </b>
             )}
           </span>
@@ -1713,7 +1720,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
                     <span style={{ flex:1, fontSize:12.5, minWidth:200 }}>{c.text_cerinta}</span>
                     <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
-                      {a && a.status !== 'gol' && !a.verificat_pe_scan && (
+                      {a && a.status !== 'gol' && a.status !== 'nu_se_aplica' && !a.verificat_pe_scan && (
                         <button title={a.autorizatie?.fisier_path ? 'Verificat pe scan (R1) — copiază scanul autorizației' : 'Autorizația nu are scan în HR'}
                           onClick={() => verifica(a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66', opacity: a.autorizatie?.fisier_path ? 1 : .45 }}>👁 Verificat</button>
                       )}
