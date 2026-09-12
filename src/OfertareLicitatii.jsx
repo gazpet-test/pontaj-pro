@@ -1586,7 +1586,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
-        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate)')
+        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate), experienta:ofertare_experienta(id, denumire, beneficiar, valoare_lei, valoare_executata_lei, asociere, data_pv)')
         .in('cerinta_id', cs.map(c => c.id)).order('id').limit(5000)
       // O cerință poate avea mai multe rânduri (rândurile verificate pe scan nu se șterg la
       // re-rulare). Fără `.order()` PostgREST le putea întoarce în orice ordine, iar ultimul
@@ -1751,7 +1751,11 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
             {randuri.map(c => {
               const a = acoperiri[c.id]
               const st = a ? (ACOPERIRE_STATUS[a.status] || ACOPERIRE_STATUS.gol) : null
-              const titular = a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume)
+              // Acoperirea pe experiență trebuie să spună CU CE lucrare, altfel „acoperit" e o
+              // afirmație fără sursă pe ecran. La asociere arătăm cota proprie, nu totalul.
+              const titular = a?.experienta
+                ? `${a.experienta.denumire}${a.experienta.asociere ? ' (asociere — cota Gazpet ' + (a.experienta.valoare_executata_lei ? Math.round(a.experienta.valoare_executata_lei / 1000) + ' mii lei' : 'NECUNOSCUTĂ') + ')' : (a.experienta.valoare_lei ? ' (' + Math.round(a.experienta.valoare_lei / 1000) + ' mii lei)' : '')}`
+                : (a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume))
               const bifat = sel.includes(c.id)
               return (
                 <div key={c.id} id={`acop-${c.id}`} style={{ padding:'7px 10px', borderRadius:7, background: bifat ? G.ofertare + '1a' : G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}`, outline: bifat ? `1px solid ${G.ofertare}66` : 'none' }}>
