@@ -79,7 +79,14 @@ const CAPITOLE_ANAP = [
 
 // ATENȚIE: identic, caracter cu caracter, cu regexul din v_ofertare_pt_stare.
 // Dacă cele două diferă, bannerul spune 15 capcane și lista arată 12.
-const RX_CAPCANA = /(respins|neconform|descalific|inacceptabil|sub sanc[tț]iune|f[aă]r[aă] (posibilitatea de a solicita )?clarific|nu se accept)/i
+// Regexul e masurat pe date reale inainte de orice largire (13.09.2026, 2127 cerinte):
+//   `resping` gol         -> +6, dar prinde "respingerea RECEPTIEI", care n-are legatura cu oferta
+//   `exclu(dere|s)`       -> +22, aproape toate "responsabil EXCLUSIV". Zgomot curat, refuzat.
+//   `[iî]ntocmai`         -> +2, din care 1 deja prins. Nu merita clasa de fals pozitive.
+// Varianta pastrata: +4, toate reale ("necriptarea duce la respingerea ofertei"), 0 pierdute.
+// `se considera lipsa` si `indiferent de modul de prezentare` sunt verbatim din documentatia
+// Motru (repetat de 6 ori acolo); 0 potriviri azi fiindca documentele alea nu-s inca ingerate.
+const RX_CAPCANA = /(respins|resping[ăa-z]* (a |la )?(ofert|candidatur)|neconform|descalific|inacceptabil|sub sanc[tț]iune|f[aă]r[aă] (posibilitatea de a solicita )?clarific|nu se accept|se consider[aă] (ca )?lips[aă]|indiferent de modul de prezentare)/i
 
 const fmtZi = d => d ? new Date(d.length === 10 ? d + 'T00:00:00' : d).toLocaleDateString('ro-RO') : '—'
 const zileRamase = t => { if (!t) return null; const ms = new Date(t) - new Date(); return Math.ceil(ms / 86400000) }
