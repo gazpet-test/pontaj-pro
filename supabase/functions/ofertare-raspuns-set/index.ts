@@ -8,9 +8,9 @@
 //
 // Actiuni (body.actiune):
 //   creeaza_set  {licitatie_id, document_ids[], titlu?, lot?, data_raspuns?}
-//   aplica       {set_id, op_ids[], dupa_depunere?, motiv?, idempotency_key?}
-//
-// Analiza cu AI vine separat, dupa ce calea de scriere e probata cu payload facut de mana.
+//   inventar     {set_id}  — faza 1: citeste un document si il desparte in dispozitii (fara registru)
+//   compara      {set_id}  — faza 2: dispozitiile cu efect posibil vs registrul filtrat pe lot
+//   aplica       {set_id, op_ids[], dupa_depunere?, motiv?, idempotency_key?}  — fara AI
 //
 // Auth: DOAR JWT de utilizator + drept efectiv pe modulul Ofertare (is_owner sau user_module_access).
 // Fara ramura pe x-radar-secret: un endpoint care scrie in registrul de cerinte, aparat de un header
@@ -429,11 +429,18 @@ Deno.serve(async (req: Request) => {
       // O cerinta din alta licitatie sau neeligibila pe lot nu are ce cauta aici.
       if (fel !== 'noua' && (!cid || !idsEligibile.has(cid))) continue
       const sursa = lot.find((x: any) => String(x.nr) === String(o.disp_nr)) || lot.find((x: any) => x.disp_id === o.disp_nr)
+      // O operatie fara text nu are ce cauta in propunere: ar ajunge in conflicte abia la aplicare,
+      // dupa ce omul a bifat-o degeaba.
+      const textOp = String(o.text_nou || o.text_cerinta || '').trim()
+      if (fel !== 'anuleaza' && !textOp) continue
       opNoi.push({
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.
         op_id: await hash12(`${setId}|${sursa?.disp_id || o.disp_nr}|${fel}|${cid ?? norm(o.citat)}`),
         fel, cerinta_id: cid,
-        text_nou: fel === 'anuleaza' ? null : String(o.text_nou || '').trim() || null,
+        // RPC-ul citeste text_nou la „modifica" si text_cerinta la „noua". Daca aici s-ar scrie
+        // doar text_nou, fiecare cerinta noua ar fi respinsa cu „cerinta noua fara text".
+        text_nou: fel === 'modifica' ? textOp : null,
+        text_cerinta: fel === 'noua' ? textOp : null,
         tip: ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(o.tip) ? o.tip : 'propunere',
         document_probant: o.document_probant || null,
         cand_se_prezinta: ['duae', 'depunere', 'primul_loc'].includes(o.cand_se_prezinta) ? o.cand_se_prezinta : null,
