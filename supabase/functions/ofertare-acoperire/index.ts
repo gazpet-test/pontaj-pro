@@ -1,4 +1,5 @@
-// ofertare-acoperire v6 (12.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v7 (12.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v7: scriere atomica prin fn_ofertare_acoperire_rescrie + index unic partial.
 // v6: R-ACOP-1 + 12 constatari de revizuire + 3 runde de a doua parere (Codex).
 // v5: catalogul include și DOCUMENTELE FIRMEI (documente_firma — ANRE EDSB/EDIB,
 // ISO, certificate) cu id-uri prefixate F → acoperit cu mod='firma' + doc_firma_id.
@@ -160,7 +161,7 @@ Deno.serve(async (req: Request) => {
     // pe TOATE cerintele feliei, nu doar pe cele la care AI-ul chiar raspunsese. Daca
     // raspunsul se taia (`trunchiat`) sau insertul pica, acoperirile vechi erau deja duse,
     // iar cerintele ramaneau fara niciun rand. Acum se construiesc intai randurile, apoi se
-    // sterge STRICT ce se rescrie, si numai daca chiar avem ce pune la loc.
+    // scriu printr-o singura tranzactie in BD (vezi fn_ofertare_acoperire_rescrie mai jos).
     const rows: any[] = []
     for (const p of lista) {
       if (!idsCerinte.has(p.cerinta_id)) continue
@@ -219,135 +220,40 @@ Deno.serve(async (req: Request) => {
       }), { headers: CORS })
     }
     const PLAFON_RAPORT = 500
-    const fararaspunsDin = (toate: Set<any>, scrise: Set<any>) => Array.from(toate).filter((id: any) => !scrise.has(id)).length
-    const listaFaraRaspuns = (toate: Set<any>, scrise: Set<any>) => Array.from(toate).filter((id: any) => !scrise.has(id)).slice(0, PLAFON_RAPORT)
-    // AI-ul poate repeta acelasi cerinta_id; fara dedup s-ar insera doua randuri pentru
-    // aceeasi cerinta, iar tabelul n-are index unic care sa opreasca asta.
+    // AI-ul poate repeta acelasi cerinta_id. Dedup aici doar ca sa raportam corect ce s-a
+    // cerut si ce n-a raspuns; functia din BD dedupica si ea, e ultima plasa.
     const vazute = new Set()
     const randuriUnice = rows.filter(r => { if (vazute.has(r.cerinta_id)) return false; vazute.add(r.cerinta_id); return true })
-    const idsDeRescris = Array.from(vazute)
 
-    // Randurile existente ale cerintelor pe care le rescriem. Le citim INAINTE, din doua motive.
-    const { data: vechi, error: eVechi } = await supabase.from('ofertare_acoperire')
-      .select('id, cerinta_id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
-      .in('cerinta_id', idsDeRescris).order('id')
-    if (eVechi) return fail('citire acoperiri existente: ' + eVechi.message)
+    // 12.09.2026 — SCRIEREA E ACUM ATOMICA, intr-o singura tranzactie in BD.
+    // Inainte erau patru cereri separate prin PostgREST: citeste randurile vechi, insereaza
+    // cele noi, reciteste ce urmeaza sa stergi, sterge. Netranzactional, deci fiecare pauza
+    // dintre ele era o fereastra in care un coleg putea apasa „verificat" sau scrie un raspuns
+    // pe randul pe care tocmai il stergeam. Plus: doua rulari simultane lasau duplicate.
+    //
+    // `fn_ofertare_acoperire_rescrie` face altceva, nu doar acelasi lucru mai repede:
+    // ACTUALIZEAZA coloanele AI ale randului existent in loc sa-l stearga si sa-l re-creeze.
+    // Campurile omului (raspuns_coleg / raspuns_de / raspuns_la / tichet_id) nu mai sunt nici
+    // macar citite de aici — raman pur si simplu pe rand, deci nu mai pot fi pierdute. Le
+    // trimitem doar coloanele AI; functia ignora orice altceva ar veni in payload.
+    // Impreuna cu indexul unic partial pe (cerinta_id) WHERE verificat_pe_scan = false,
+    // duplicatele nu mai sunt posibile nici macar cand doi colegi apasa butonul deodata.
+    const { data: rez, error: eRpc } = await supabase.rpc('fn_ofertare_acoperire_rescrie', {
+      p_randuri: randuriUnice.map(r => ({
+        cerinta_id: r.cerinta_id, mod: r.mod,
+        autorizatie_id: r.autorizatie_id, doc_firma_id: r.doc_firma_id, partener_id: r.partener_id,
+        referinta_text: r.referinta_text, status: r.status, valabil_la_depunere: r.valabil_la_depunere,
+      })),
+    })
+    if (eRpc) return fail('rescriere acoperiri (tranzactie anulata, nu s-a schimbat nimic): ' + eRpc.message)
 
-    // (a) BLOCANT reparat: stergerea sarea randurile verificate pe scan de OM, dar insertul
-    // adauga oricum randul AI-ului → doua randuri pe aceeasi cerinta. Frontendul indexeaza
-    // cerinta_id -> UN rand, deci afisa unul la intamplare: ori dovada verificata disparea de
-    // pe ecran, ori verdictul nou al AI-ului devenea invizibil. Acum NU mai scriem peste o
-    // cerinta care are dovada verificata de om — o raportam ca sa decida omul.
-    const verificate = new Map()
-    for (const v of (vechi || [])) if (v.verificat_pe_scan) verificate.set(v.cerinta_id, v)
-
-    // (b) Campurile scrise de colegi (raspuns la gol, tichet) se pastreaza: pana acum se
-    // pierdeau tacut la fiecare re-rulare, iar cerinta oferea din nou butonul de tichet.
-    // Cand aceeasi cerinta are MAI MULTE randuri nevalidate (se intampla azi, tabelul n-are
-    // index unic), a alege UN rand pierde datele celuilalt: daca randul A are raspunsul
-    // colegului si randul B doar tichetul, oricare ar castiga, celalalt dispare la stergere.
-    // Raspunsul, autorul si data sunt UN grup: nu combinam raspunsul dintr-un rand cu autorul
-    // din altul. Un rand cu raspuns ramane intreg. Daca doua randuri au raspunsuri (sau tichete)
-    // DIFERITE, nu alegem noi care supravietuieste: lasam cerinta neatinsa si o raportam.
-    const CAMPURI_OM = ['raspuns_coleg', 'raspuns_de', 'raspuns_la', 'tichet_id']
-    const pastrate = new Map()
-    const conflicteRaspuns = []
-    const cerinteBlocateDeConflict = new Set()
-    for (const v of (vechi || [])) {
-      if (v.verificat_pe_scan) continue
-      const ex = pastrate.get(v.cerinta_id)
-      if (!ex) { pastrate.set(v.cerinta_id, { ...v }); continue }
-      // grupul raspuns (coleg + de + la)
-      const areR = (x: any) => x.raspuns_coleg != null
-      if (areR(v) && areR(ex) && v.raspuns_coleg !== ex.raspuns_coleg) {
-        conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: 'raspuns_coleg', a: ex.raspuns_coleg, b: v.raspuns_coleg })
-        cerinteBlocateDeConflict.add(v.cerinta_id)
-      } else if (areR(v) && !areR(ex)) {
-        ex.raspuns_coleg = v.raspuns_coleg; ex.raspuns_de = v.raspuns_de; ex.raspuns_la = v.raspuns_la
-      }
-      // tichetul, separat
-      if (ex.tichet_id == null) ex.tichet_id = v.tichet_id
-      else if (v.tichet_id != null && v.tichet_id !== ex.tichet_id) {
-        conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: 'tichet_id', a: ex.tichet_id, b: v.tichet_id })
-        cerinteBlocateDeConflict.add(v.cerinta_id)
-      }
-    }
-
-    const conflicteVerificate = []
-    const deScris = []
-    for (const r of randuriUnice) {
-      const v = verificate.get(r.cerinta_id)
-      if (v) { conflicteVerificate.push({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text, acoperire_verificata_id: v.id }); continue }
-      // Cerinta cu doua informatii umane incompatibile: nu o rescriem si nu stergem nimic la
-      // ea. Un avertisment nu tine loc de date — originalele raman, omul alege.
-      if (cerinteBlocateDeConflict.has(r.cerinta_id)) continue
-      const p = pastrate.get(r.cerinta_id)
-      deScris.push(p ? { ...r, raspuns_coleg: p.raspuns_coleg ?? null, raspuns_de: p.raspuns_de ?? null, raspuns_la: p.raspuns_la ?? null, tichet_id: p.tichet_id ?? null } : r)
-    }
-
-    if (!deScris.length) {
-      return new Response(JSON.stringify({
-        ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
-        motiv_felie_goala: 'nicio propunere de scris — toate cele primite sunt blocate de o dovada verificata de om',
-        conflicte_verificate: conflicteVerificate, conflicte_raspuns: conflicteRaspuns,
-        stop_reason: data.stop_reason || null,
-        // Ramura asta nu inseamna ca AI-ul a raspuns la toata felia: poate a raspuns la UNA,
-        // deja verificata, iar restul de 54 lipsesc. Fara randurile astea, frontendul nu le
-        // numara si lipsurile raman nespuse.
-        fara_raspuns: fararaspunsDin(idsCerinte, vazute), cerinte_fara_raspuns: listaFaraRaspuns(idsCerinte, vazute),
-        lista_fara_raspuns_taiata: fararaspunsDin(idsCerinte, vazute) > PLAFON_RAPORT,
-      }), { headers: CORS })
-    }
-
-    // (c) INSERT INAINTE de DELETE. Erau doua cereri separate, netranzactionale, iar insertul
-    // e all-or-nothing pe toata felia: daca pica (o cerinta stearsa intre timp de un coleg, un
-    // timeout), stergerea se aplicase deja si ~55 de cerinte ramaneau fara niciun rand. In
-    // ordinea asta, un insert picat nu mai sterge nimic, iar un delete picat lasa duplicate —
-    // vizibile si reparabile, spre deosebire de date disparute.
-    const { error: eIns } = await supabase.from('ofertare_acoperire').insert(deScris)
-    if (eIns) return fail('insert acoperire (nu s-a sters nimic): ' + eIns.message)
-
-    // Stergem DOAR randurile vechi ale cerintelor pe care chiar le-am inlocuit. Folosind
-    // `vazute` se stergea si randul nevalidat (cu raspunsul unui coleg) al unei cerinte
-    // BLOCATE de o dovada verificata — cerinta pentru care nu am scris nimic in loc.
-    const cerinteInlocuite = new Set(deScris.map(r => r.cerinta_id))
-    const candidatiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && cerinteInlocuite.has(v.cerinta_id))
-    let duplicateRamase = 0
-    const nesterse = []
-    if (candidatiDeSters.length) {
-      // Intre citirea de mai sus si acum e doar INSERT-ul, nu si apelul AI (citirea vine dupa
-      // raspunsul modelului) — fereastra e de ordinul sutelor de milisecunde, nu de zeci de
-      // secunde. Nu e zero si nu e atomica: un coleg poate salva chiar intre recitire si DELETE.
-      // Dar esecul cade in directia buna — duplicat vizibil, nu munca omului stearsa.
-      const { data: acum, error: eRe } = await supabase.from('ofertare_acoperire')
-        .select('id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
-        .in('id', candidatiDeSters.map(v => v.id))
-      if (eRe) { duplicateRamase = candidatiDeSters.length }
-      else {
-        const acumMap = new Map((acum || []).map((v: any) => [v.id, v]))
-        const idsVechiDeSters = []
-        for (const v of candidatiDeSters) {
-          const a = acumMap.get(v.id)
-          if (!a) continue   // l-a sters altcineva intre timp
-          const schimbat = a.verificat_pe_scan || CAMPURI_OM.some(c => a[c] !== v[c])
-          if (schimbat) { nesterse.push(v.id); continue }
-          idsVechiDeSters.push(v.id)
-        }
-        duplicateRamase = nesterse.length
-        if (idsVechiDeSters.length) {
-          const { error: eDel } = await supabase.from('ofertare_acoperire')
-            .delete().in('id', idsVechiDeSters).eq('verificat_pe_scan', false)
-          if (eDel) duplicateRamase += idsVechiDeSters.length
-          else {
-            // Numaram ce a RAMAS, nu ce am incercat sa stergem: un rand devenit „verificat"
-            // intre timp scapa de filtru fara eroare, deci ar fi ramas nenumarat.
-            const { data: ramase } = await supabase.from('ofertare_acoperire')
-              .select('id').in('id', idsVechiDeSters)
-            duplicateRamase += (ramase || []).length
-          }
-        }
-      }
-    }
+    const scrise: number[] = rez?.scrise || []
+    const idsConflicte: number[] = rez?.conflicte || []
+    const scriseSet = new Set(scrise)
+    const conflicteVerificate = randuriUnice
+      .filter(r => idsConflicte.includes(r.cerinta_id))
+      .map(r => ({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text }))
+    const deScris = randuriUnice.filter(r => scriseSet.has(r.cerinta_id))
 
     // Cerintele la care AI-ul n-a raspuns si cele blocate de o dovada verificata: nu le-am
     // atins, deci acoperirea veche le ramane. Plafonul de raportare era 50, iar felia trimisa
@@ -359,8 +265,6 @@ Deno.serve(async (req: Request) => {
       propuneri: deScris.length, goluri, firma: deScris.filter(r => r.mod === 'firma').length,
       nu_se_aplica: deScris.filter(r => r.status === 'nu_se_aplica').length,
       conflicte_verificate: conflicteVerificate,
-      conflicte_raspuns: conflicteRaspuns,
-      duplicate_ramase: duplicateRamase,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
       lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,
