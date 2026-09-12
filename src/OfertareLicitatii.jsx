@@ -1654,7 +1654,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     // O felie picată pe timeout poate să fi apucat să scrie: rezultatul ei e NECONFIRMAT,
     // nu „a rămas verdictul vechi". Sunt două lucruri diferite pentru cine citește tabelul.
     if (neconfirmate > 0) note.push(`❓ ${neconfirmate} cerințe au rămas cu rezultat neconfirmat (reluarea a căzut) — reia propunerea.`)
-    if (raspunsuriPierdute.length) note.push(`🔀 ${raspunsuriPierdute.length} cerințe aveau două rânduri cu răspunsuri diferite de la colegi — s-a păstrat unul singur. Verifică-le.`)
+    if (raspunsuriPierdute.length) note.push(`🔀 ${raspunsuriPierdute.length} cerințe au două răspunsuri/tichete diferite de la colegi — le-am lăsat NEATINSE, propunerea AI nu s-a scris la ele. Alege tu care rămâne.`)
     if (duplicate > 0) note.push(`⚠️ ${duplicate} rânduri vechi n-au putut fi șterse — pot exista acoperiri duplicate pe aceleași cerințe. Verifică înainte să te bazezi pe tabel.`)
     if (neacoperite > 0) note.push(`⚠️ ${neacoperite} cerințe n-au fost reevaluate nici la reluare — păstrează verdictul din rularea anterioară.`)
     if (conflicte.length) note.push(`🔒 ${conflicte.length} cerințe au dovadă verificată de om: propunerea AI-ului NU le-a suprascris. Verifică-le manual dacă documentul s-a schimbat.`)

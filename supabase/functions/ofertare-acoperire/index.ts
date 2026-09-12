@@ -252,18 +252,30 @@ Deno.serve(async (req: Request) => {
     // colegului si randul B doar tichetul, oricare ar castiga, celalalt dispare la stergere.
     // Deci nu alegem un rand — combinam CAMP cu CAMP, primul nenul castiga (citire ordonata
     // dupa id). Daca doua randuri au raspunsuri DIFERITE, nu inghitim niciunul: raportam.
+    // Raspunsul, autorul si data sunt UN grup: nu combinam raspunsul dintr-un rand cu autorul
+    // din altul. Un rand cu raspuns ramane intreg. Daca doua randuri au raspunsuri (sau tichete)
+    // DIFERITE, nu alegem noi care supravietuieste: lasam cerinta neatinsa si o raportam.
     const CAMPURI_OM = ['raspuns_coleg', 'raspuns_de', 'raspuns_la', 'tichet_id']
     const pastrate = new Map()
     const conflicteRaspuns = []
+    const cerinteBlocateDeConflict = new Set()
     for (const v of (vechi || [])) {
       if (v.verificat_pe_scan) continue
       const ex = pastrate.get(v.cerinta_id)
       if (!ex) { pastrate.set(v.cerinta_id, { ...v }); continue }
-      for (const c of CAMPURI_OM) {
-        if (ex[c] == null) ex[c] = v[c]
-        else if (v[c] != null && v[c] !== ex[c] && (c === 'raspuns_coleg' || c === 'tichet_id')) {
-          conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: c, pastrat: ex[c], pierdut: v[c] })
-        }
+      // grupul raspuns (coleg + de + la)
+      const areR = (x: any) => x.raspuns_coleg != null
+      if (areR(v) && areR(ex) && v.raspuns_coleg !== ex.raspuns_coleg) {
+        conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: 'raspuns_coleg', a: ex.raspuns_coleg, b: v.raspuns_coleg })
+        cerinteBlocateDeConflict.add(v.cerinta_id)
+      } else if (areR(v) && !areR(ex)) {
+        ex.raspuns_coleg = v.raspuns_coleg; ex.raspuns_de = v.raspuns_de; ex.raspuns_la = v.raspuns_la
+      }
+      // tichetul, separat
+      if (ex.tichet_id == null) ex.tichet_id = v.tichet_id
+      else if (v.tichet_id != null && v.tichet_id !== ex.tichet_id) {
+        conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: 'tichet_id', a: ex.tichet_id, b: v.tichet_id })
+        cerinteBlocateDeConflict.add(v.cerinta_id)
       }
     }
 
@@ -272,6 +284,9 @@ Deno.serve(async (req: Request) => {
     for (const r of randuriUnice) {
       const v = verificate.get(r.cerinta_id)
       if (v) { conflicteVerificate.push({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text, acoperire_verificata_id: v.id }); continue }
+      // Cerinta cu doua informatii umane incompatibile: nu o rescriem si nu stergem nimic la
+      // ea. Un avertisment nu tine loc de date — originalele raman, omul alege.
+      if (cerinteBlocateDeConflict.has(r.cerinta_id)) continue
       const p = pastrate.get(r.cerinta_id)
       deScris.push(p ? { ...r, raspuns_coleg: p.raspuns_coleg ?? null, raspuns_de: p.raspuns_de ?? null, raspuns_la: p.raspuns_la ?? null, tichet_id: p.tichet_id ?? null } : r)
     }
@@ -306,10 +321,10 @@ Deno.serve(async (req: Request) => {
     let duplicateRamase = 0
     const nesterse = []
     if (candidatiDeSters.length) {
-      // Intre citirea de mai sus si acum au trecut ~30 de secunde de apel AI. In timpul asta un
-      // coleg poate sa fi apasat „verificat" sau sa fi scris un raspuns pe exact randul pe care
-      // vrem sa-l stergem — iar noi am copiat inainte valorile VECHI. Recitim starea si sarim
-      // peste randurile schimbate: mai bine un duplicat vizibil decat munca omului stearsa.
+      // Intre citirea de mai sus si acum e doar INSERT-ul, nu si apelul AI (citirea vine dupa
+      // raspunsul modelului) — fereastra e de ordinul sutelor de milisecunde, nu de zeci de
+      // secunde. Nu e zero si nu e atomica: un coleg poate salva chiar intre recitire si DELETE.
+      // Dar esecul cade in directia buna — duplicat vizibil, nu munca omului stearsa.
       const { data: acum, error: eRe } = await supabase.from('ofertare_acoperire')
         .select('id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
         .in('id', candidatiDeSters.map(v => v.id))
@@ -329,6 +344,13 @@ Deno.serve(async (req: Request) => {
           const { error: eDel } = await supabase.from('ofertare_acoperire')
             .delete().in('id', idsVechiDeSters).eq('verificat_pe_scan', false)
           if (eDel) duplicateRamase += idsVechiDeSters.length
+          else {
+            // Numaram ce a RAMAS, nu ce am incercat sa stergem: un rand devenit „verificat"
+            // intre timp scapa de filtru fara eroare, deci ar fi ramas nenumarat.
+            const { data: ramase } = await supabase.from('ofertare_acoperire')
+              .select('id').in('id', idsVechiDeSters)
+            duplicateRamase += (ramase || []).length
+          }
         }
       }
     }
