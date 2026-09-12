@@ -6,18 +6,11 @@
 //   raport_zilnic  (cron 04:30 UTC, x-radar-secret) → pentru fiecare licitație activă: ce s-a mișcat ieri (documente, acoperiri, răspunsuri, clarificări)
 //                                                  → ofertare_raport_zilnic (citit de Claude în rutina zilnică) + reminder mail echipei cu 5 zile înainte de depunere (o dată)
 // Colegii primesc mail DOAR la Etapa 1 și la reminder; răspunsurile lor vin în platformă (ofertare_acoperire.raspuns_coleg, tichete), nu pe mail.
+//
+// ADUSĂ ÎN REPO 12.09.2026. SINGURA modificare față de sursa deployată: secretul de cron nu mai e
+// scris literal în cod, ci se verifică prin Vault (fn_verifica_radar_secret), care acceptă și
+// valoarea precedentă cât ține fereastra de rotire. Calea pe JWT rămâne neatinsă.
 import { createClient } from 'npm:@supabase/supabase-js@2';
-
-// Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
-// accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
-async function secretOk(req: Request): Promise<boolean> {
-  const s = req.headers.get('x-radar-secret')
-  if (!s) return false
-  const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
-  return !error && data === true
-}
-
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -39,10 +32,16 @@ Deno.serve(async (req: Request) => {
   let body: any = {}; try { body = await req.json(); } catch { /* gol */ }
   const actiune = String(body.actiune || 'etapa1');
 
-  // auth: cron cu secret sau utilizator cu JWT
+  // auth: cron cu secret (verificat prin Vault) sau utilizator cu JWT
   let userId: string | null = null; let meNume = 'Platforma Gazpet'; let meMail = OFFICE;
-  if ((await secretOk(req))) { /* cron */ }
-  else {
+  const secCron = req.headers.get('x-radar-secret');
+  let eCron = false;
+  if (secCron) {
+    const { data: okSecret } = await db.rpc('fn_verifica_radar_secret', { p_secret: secCron });
+    if (okSecret === true) eCron = true;
+    else return json({ error: 'secret invalid' }, 401);
+  }
+  if (!eCron) {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
     if (!jwt) return json({ error: 'fără autentificare' }, 401);
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } });
