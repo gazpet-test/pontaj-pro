@@ -45,6 +45,13 @@ const S = {
 // `formular` e null peste tot INTENȚIONAT. În documentul citit apar doar „Formular 11" și
 // „Formular 12", și nici alea legate clar de un capitol anume. Numerele de formular se iau din
 // fișa de date a fiecărei licitații, nu se presupun.
+//
+// ATENȚIE, lista asta NU e „cuprinsul standard". E cuprinsul UNUI formular ANAP, cel folosit la o
+// licitație Transgaz. Opisul propunerii depuse la Contești (distribuție gaze, 1144 pag.) spune
+// negru pe alb: „Propunere Tehnică respecta capitolele din Fisa de date si cap9 pct 9.1". Acolo
+// structura e cu totul alta — Secțiunea A (Cap. I-VI) + Secțiunea B, Planul calității (Cap. I-III)
+// + ~20 de anexe, cu Graficul Gantt ca anexă, depus și PDF și Excel separat. Deci: punct de
+// pornire pentru licitațiile pe formular ANAP, niciodată implicit tăcut pentru restul.
 const CAPITOLE_ANAP = [
   { nr:1,  titlu:'Rezumat', obligatoriu:true, formular:null },
   { nr:2,  titlu:'Metodologia de executarea lucrărilor', obligatoriu:true, formular:null },
@@ -82,7 +89,7 @@ function PoartaPT({ st, onFiltru }) {
     r.push({
       k:'cuprins', titlu:'Cuprinsul propunerii',
       stare: st.capitole > 0 ? 'ok' : 'block',
-      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — apasă „Creează cuprinsul standard"',
+      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — cuprinsul se ia din fișa de date, cap. 9 pct. 9.1',
     })
     r.push({
       k:'fara', titlu:'Cerințe fără capitol',
@@ -264,41 +271,102 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFilt
 // ─────────────────────────────────────────────────────────────────
 // CUPRINSUL — capitolele licitației
 // ─────────────────────────────────────────────────────────────────
-function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, busy }) {
+function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSterge, busy }) {
+  const [nou, setNou] = useState(null)  // null = formularul e închis
+
+  // Formularul de capitol nou. Capitolele NU vin dintr-un șablon: opisul de la Contești spune
+  // „respecta capitolele din Fisa de date si cap9 pct 9.1". Deci trebuie să se poată tasta.
+  const formular = nou && (
+    <div style={{ ...S.card, padding:12, marginTop:10, display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
+      <input placeholder="Secțiune (ex. Secțiunea A, Anexe) — opțional" value={nou.sectiune}
+        onChange={e => setNou({ ...nou, sectiune: e.target.value })}
+        style={{ ...S.input, flex:'1 1 200px' }} />
+      <input placeholder="Etichetă (Cap. I / 4 / Anexa 7)" value={nou.eticheta}
+        onChange={e => setNou({ ...nou, eticheta: e.target.value })}
+        style={{ ...S.input, flex:'0 0 150px' }} />
+      <input placeholder="Titlul capitolului, ca în fișa de date" value={nou.titlu} autoFocus
+        onChange={e => setNou({ ...nou, titlu: e.target.value })}
+        style={{ ...S.input, flex:'2 1 260px' }} />
+      <label style={{ fontSize:12, color:G.muted, display:'flex', gap:5, alignItems:'center' }}>
+        <input type="checkbox" checked={nou.obligatoriu}
+          onChange={e => setNou({ ...nou, obligatoriu: e.target.checked })} />
+        obligatoriu
+      </label>
+      <button disabled={busy || !nou.titlu.trim()}
+        onClick={async () => { if (await onAdauga(nou)) setNou(null) }}
+        style={{ ...S.btnP, opacity: (busy || !nou.titlu.trim()) ? .5 : 1 }}>Adaugă</button>
+      <button onClick={() => setNou(null)} style={S.btn}>Renunță</button>
+    </div>
+  )
+  const btnAdauga = !nou && (
+    <button onClick={() => setNou({ sectiune:'', eticheta:'', titlu:'', obligatoriu:true })}
+      disabled={busy} style={{ ...S.btn, marginTop:10, opacity: busy ? .5 : 1 }}>
+      ➕ Adaugă un capitol din fișa de date
+    </button>
+  )
+
   if (capitole.length === 0) {
     return (
       <div style={{ ...S.card, padding:16, textAlign:'center' }}>
         <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>
-          Propunerea n-are încă niciun capitol. Cuprinsul standard are 14 capitole și se poate edita după.
+          Propunerea n-are încă niciun capitol. Cuprinsul NU e același la toate licitațiile: se ia din fișa de
+          date, cap. 9 pct. 9.1. Butonul de mai jos pune formularul ANAP (15 capitole), folosit la Transgaz —
+          la distribuție gaze structura e alta (Secțiuni A/B, capitole cu cifre romane, anexe). Editează după.
         </div>
         <button onClick={onCreeaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .5 : 1 }}>
-          📋 Creează cuprinsul standard (14 capitole)
+          📋 Pornește de la formularul ANAP (15 capitole)
         </button>
+        <div>{btnAdauga}</div>
+        <div style={{ textAlign:'left' }}>{formular}</div>
       </div>
     )
   }
   return (
-    <div style={{ ...S.card, overflow:'hidden' }}>
-      {capitole.map((c, i) => {
-        const n = numarPeCapitol.get(c.id) || 0
-        const gol = !String(c.continut || '').trim() && !String(c.fisier_path || '').trim()
-        return (
-          <div key={c.id} style={{ display:'flex', gap:10, alignItems:'center', padding:'9px 14px', borderTop: i ? `1px solid ${G.border2}` : 'none' }}>
-            <span style={{ width:24, color:G.dim, fontSize:12 }}>{c.nr}.</span>
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color:G.text }}>
-                {c.titlu}
-                {c.formular && <span style={{ color:G.purple, fontSize:11, marginLeft:6 }}>{c.formular}</span>}
-                {!c.obligatoriu && <span style={{ color:G.dim, fontSize:11, marginLeft:6 }}>opțional</span>}
+    <div>
+      <div style={{ ...S.card, overflow:'hidden' }}>
+        {capitole.map((c, i) => {
+          const n = numarPeCapitol.get(c.id) || 0
+          const gol = !String(c.continut || '').trim() && !String(c.fisier_path || '').trim()
+          // Antet de secțiune doar când secțiunea se schimbă față de capitolul de deasupra.
+          const sect = String(c.sectiune || '').trim()
+          const sectAnt = String(capitole[i - 1]?.sectiune || '').trim()
+          return (
+            <div key={c.id}>
+              {sect && sect !== sectAnt && (
+                <div style={{ padding:'8px 14px 4px', fontSize:11, fontWeight:700, letterSpacing:.4,
+                              color:G.purple, textTransform:'uppercase', borderTop: i ? `1px solid ${G.border2}` : 'none' }}>
+                  {sect}
+                </div>
+              )}
+              <div style={{ display:'flex', gap:10, alignItems:'center', padding:'9px 14px',
+                            borderTop: (i && !(sect && sect !== sectAnt)) ? `1px solid ${G.border2}` : 'none' }}>
+                {/* eticheta reală din opis; nr e doar ordinea, iar „Cap. I" se repetă între secțiuni */}
+                <span style={{ minWidth:24, color:G.dim, fontSize:12 }}>{c.eticheta || `${c.nr}.`}</span>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13, color:G.text }}>
+                    {c.titlu}
+                    {c.formular && <span style={{ color:G.purple, fontSize:11, marginLeft:6 }}>{c.formular}</span>}
+                    {!c.obligatoriu && <span style={{ color:G.dim, fontSize:11, marginLeft:6 }}>opțional</span>}
+                  </div>
+                </div>
+                <span style={{ fontSize:12, color: n ? G.green : G.dim }}>{n} cerințe</span>
+                <span style={{ fontSize:11, color: gol && c.obligatoriu ? G.red : G.dim, width:64, textAlign:'right' }}>
+                  {gol ? 'gol' : 'scris'}
+                </span>
+                {/* Ștergerea e permisă DOAR pe un capitol gol si fara cerinte atribuite: altfel
+                    s-ar pierde tăcut legături din ofertare_pt_legaturi (ON DELETE CASCADE). */}
+                <button
+                  title={n || !gol ? 'Se poate șterge doar un capitol gol, fără cerințe atribuite' : 'Șterge capitolul'}
+                  disabled={busy || n > 0 || !gol}
+                  onClick={() => onSterge(c)}
+                  style={{ ...S.btn, padding:'2px 7px', fontSize:12, opacity: (busy || n > 0 || !gol) ? .25 : 1 }}>🗑</button>
               </div>
             </div>
-            <span style={{ fontSize:12, color: n ? G.green : G.dim }}>{n} cerințe</span>
-            <span style={{ fontSize:11, color: gol && c.obligatoriu ? G.red : G.dim, width:64, textAlign:'right' }}>
-              {gol ? 'gol' : 'scris'}
-            </span>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
+      {btnAdauga}
+      {formular}
     </div>
   )
 }
@@ -398,7 +466,42 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setBusy(false)
     if (error && error.code !== '23505') { showToast?.('Cuprinsul nu s-a creat: ' + error.message, 'err'); return }
     if (error) showToast?.('Cuprinsul exista deja.', 'ok')
-    else showToast?.('Cuprinsul standard a fost creat (14 capitole).', 'ok')
+    else showToast?.(`Cuprinsul ANAP a fost creat (${CAPITOLE_ANAP.length} capitole). Verifică-l pe fișa de date, cap. 9 pct. 9.1.`, 'ok')
+    await load(licId)
+  }
+
+  // Capitol adaugat de mana. `nr` e doar ordinea: il punem la coada, ca sa nu se ciocneasca de
+  // UNIQUE(licitatie_id, nr). Eticheta reala ("Cap. I", "Anexa 7") sta separat, fiindca
+  // numerotarea se repeta intre sectiuni si nu poate fi si cheie de ordine.
+  const adaugaCapitol = async ({ sectiune, eticheta, titlu, obligatoriu }) => {
+    if (!licId || !String(titlu || '').trim()) return false
+    const nr = capitole.reduce((m, c) => Math.max(m, c.nr), 0) + 1
+    if (nr > 40) { showToast?.('Cuprinsul are deja 40 de capitole — limita tabelului.', 'err'); return false }
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_capitole').insert({
+      licitatie_id: licId, nr, titlu: titlu.trim(), obligatoriu: !!obligatoriu,
+      sectiune: String(sectiune || '').trim() || null,
+      eticheta: String(eticheta || '').trim() || null,
+    })
+    setBusy(false)
+    if (error) { showToast?.('Capitolul nu s-a adăugat: ' + error.message, 'err'); return false }
+    showToast?.('Capitol adăugat.', 'ok')
+    await load(licId)
+    return true
+  }
+
+  // Sterge doar capitole goale si fara cerinte: butonul e deja dezactivat altfel, dar verificam
+  // si aici, fiindca ofertare_pt_legaturi are ON DELETE CASCADE si ar taia tacut legaturi.
+  const stergeCapitol = async (c) => {
+    if (!c?.id) return
+    if ((numarPeCapitol.get(c.id) || 0) > 0) { showToast?.('Capitolul are cerințe atribuite. Mută-le întâi.', 'err'); return }
+    if (String(c.continut || '').trim() || String(c.fisier_path || '').trim()) { showToast?.('Capitolul are conținut scris.', 'err'); return }
+    if (!window.confirm(`Ștergi capitolul „${c.titlu}"?`)) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_capitole').delete().eq('id', c.id)
+    setBusy(false)
+    if (error) { showToast?.('Ștergerea a eșuat: ' + error.message, 'err'); return }
+    showToast?.('Capitol șters.', 'ok')
     await load(licId)
   }
 
@@ -478,7 +581,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Cuprinsul propunerii</div>
-        <CuprinsCapitole capitole={capitole} numarPeCapitol={numarPeCapitol} onCreeaza={creeazaCuprins} busy={busy} />
+        <CuprinsCapitole capitole={capitole} numarPeCapitol={numarPeCapitol} onCreeaza={creeazaCuprins}
+          onAdauga={adaugaCapitol} onSterge={stergeCapitol} busy={busy} />
       </div>
 
       <div>
