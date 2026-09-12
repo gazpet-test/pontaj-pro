@@ -927,7 +927,10 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
       const { data: cr, error: eCr } = await inv({
         actiune: 'creeaza_set', licitatie_id: licitatie.id,
         document_ids: alese.map(d => d.id),
-        lot: (licitatie.loturi?.length ? (prompt('Pe ce lot e răspunsul? (gol = toate loturile)') || '') : '') || null,
+        // Lotul rămâne NEDECLARAT în mod deliberat: folderul minte. Documentele din „LOT2" conțin
+        // întrebări „pentru Lot 1, Lot 2, Lot 3", iar un filtru pe lot ar scoate din registru exact
+        // cerințele la care se referă răspunsul. Lotul se pune pe operație, nu pe set.
+        lot: null,
       })
       if (eCr || cr?.error) { setWarn('Creare set: ' + (cr?.error || eCr.message)); setAnBusy(null); return }
       const setId = cr.set.id

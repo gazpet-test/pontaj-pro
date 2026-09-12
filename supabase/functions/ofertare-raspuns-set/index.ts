@@ -63,6 +63,8 @@ Clasifica fiecare dispozitie:
 - "confirmare" — "se mentine documentatia", "nu se accepta", sau echivalent: solicitarea a fost respinsa
   ori raspunsul repeta ce scria deja. NU produce nicio schimbare;
 - "neclar" — raspunsul trimite la alt raspuns sau document pe care nu il ai in fata, ori nu se intelege ce cere.
+- "anexa" — fragmentul NU e intrebare-si-raspuns: e un formular revizuit, un tabel de deviz, o lista de
+  cantitati sau un extras tehnic atasat raspunsului. Nu inventaria dispozitii din el.
 
 REGULI:
 - Intrebarea ofertantului este o SOLICITARE, nu o modificare aprobata. Tipul il dai dupa RASPUNSUL autoritatii.
@@ -70,10 +72,14 @@ REGULI:
 - Daca fragmentul se termina in mijlocul unei dispozitii, NU o inventaria: pune textul ei in "coada_deschisa".
 - Daca ai primit "coada_deschisa" de la fragmentul precedent, lipeste-o la inceputul acestui fragment.
 - Citatul trebuie copiat LITERAL din text, nu rescris.
+- Un document poate fi ANEXA pe toata lungimea lui (formular F3 revizuit, tabel de cantitati). Atunci
+  intoarce lista goala si acoperit_tot=true. Lista goala pe o anexa e raspunsul CORECT, nu un esec.
+- Un raspuns poate viza mai multe loturi deodata ("Intrebare pentru Lot 1, Lot 2, Lot 3"). Trece in
+  "loturi" TOATE loturile mentionate, nu doar pe cel al dosarului din care vine documentul.
 
 Raspunde EXCLUSIV cu JSON, fara comentarii:
 {"dispozitii":[{"nr":"<numarul solicitarii asa cum apare, sau null>",
-  "tip":"efect_posibil"|"confirmare"|"neclar",
+  "tip":"efect_posibil"|"confirmare"|"neclar"|"anexa",
   "rezumat":"<1-2 propozitii: ce s-a cerut si ce a raspuns autoritatea>",
   "citat":"<pasajul literal din RASPUNSUL autoritatii, maximum 400 de caractere>",
   "loturi":["<loturile vizate, asa cum apar in text; [] daca nu se precizeaza>"],
@@ -98,6 +104,11 @@ REGULI (in ordinea importantei):
    de loturi), NU o rescrie global. Intoarce operatia cu necesita_revizuire=true si explica in motiv.
 6. O dispozitie de tip "confirmare" nu produce nicio operatie. Daca toate dispozitiile sunt confirmari,
    intoarce lista goala — asta e un rezultat corect, nu un esec.
+7. CANTITATILE NU SUNT CERINTE. Un raspuns de tipul "anexat transmitem formularul F3 revizuit, s-au
+   adaugat pozitiile nr. 36 ..." schimba lista de cantitati, nu registrul de cerinte. Nu produce nicio
+   operatie pentru el: pune-l in "neclare" cu de_ce="schimbare de cantitati, nu de cerinta".
+8. Registrul primit poate contine deja cerinte extrase CHIAR DIN documentul de raspuns. Daca cerinta
+   existenta spune deja ce spune raspunsul, e o confirmare, nu o modificare.
 
 Raspunde EXCLUSIV cu JSON, fara comentarii:
 {"operatii":[{"disp_nr":"<nr dispozitiei din care iese>",
@@ -319,7 +330,7 @@ Deno.serve(async (req: Request) => {
         // numarul rundei: asa acelasi id iese la fiecare reluare.
         disp_id: await hash12(doc.id + '|' + norm(x.citat)),
         doc_id: doc.id, doc_nume: numeScurt, nr: x.nr ?? null,
-        tip: ['efect_posibil', 'confirmare', 'neclar'].includes(x.tip) ? x.tip : 'neclar',
+        tip: ['efect_posibil', 'confirmare', 'neclar', 'anexa'].includes(x.tip) ? x.tip : 'neclar',
         rezumat: String(x.rezumat || '').slice(0, 600),
         citat: String(x.citat).slice(0, 400),
         loturi: Array.isArray(x.loturi) ? x.loturi.map(String) : [],
