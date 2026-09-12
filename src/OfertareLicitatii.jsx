@@ -1187,7 +1187,8 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
             {ops.length > 0 && (
               <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap' }}>
                 <button style={{ ...S.btnS, padding:'5px 11px', fontSize:11.5 }} disabled={aplBusy}
-                  onClick={() => setOpSel(new Set(ops.map(o => o.op_id)))}>Selectează toate</button>
+                  onClick={() => setOpSel(new Set(ops.filter(o => !o.necesita_revizuire).map(o => o.op_id)))}>
+                  Selectează toate{ops.some(o => o.necesita_revizuire) ? ' (fără cele de revizuit)' : ''}</button>
                 <button style={{ ...S.btnS, padding:'5px 11px', fontSize:11.5 }} disabled={aplBusy}
                   onClick={() => setOpSel(new Set())}>Deselectează</button>
                 <button style={{ ...S.btnP, marginLeft:'auto', opacity: opSel.size && !aplBusy ? 1 : .5 }}
