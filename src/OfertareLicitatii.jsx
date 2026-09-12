@@ -1141,6 +1141,16 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
               {' '}{disp.filter(d => d.tip === 'neclar').length} neclare.
               {netrecut && <span style={{ color:G.orange }}> ⚠ un document nu a fost parcurs integral — rezultatul e incomplet.</span>}
             </div>
+            {/* Ce a aruncat codul si ce nu s-a inchis. Fara randurile astea, o analiza care a pierdut
+                jumatate din operatii arata pe ecran exact ca una curata. */}
+            {(setRasp.propunere?.sold > 0 || Object.keys(setRasp.propunere?.aruncate || {}).length > 0) && (
+              <div style={{ fontSize:11.5, color:G.orange, marginBottom:10, padding:'6px 9px', borderRadius:7, background:G.orange + '14' }}>
+                {setRasp.propunere?.sold > 0 && <div>⚠ {setRasp.propunere.sold} dispoziții comparate n-au ieșit nici ca schimbare, nici ca „neclar" — analiza a pierdut ceva pe drum.</div>}
+                {Object.entries(setRasp.propunere?.aruncate || {}).map(([m, n]) => (
+                  <div key={m}>⚠ {n} {n === 1 ? 'propunere respinsă' : 'propuneri respinse'} de verificările platformei: {m}.</div>
+                ))}
+              </div>
+            )}
 
             {!ops.length ? (
               <div style={{ fontSize:12.5, color: netrecut ? G.orange : G.green }}>

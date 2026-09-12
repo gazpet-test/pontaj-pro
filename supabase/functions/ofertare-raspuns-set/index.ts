@@ -112,6 +112,8 @@ REGULI (in ordinea importantei):
 2. Fiecare operatie trebuie ancorata intr-un CITAT LITERAL din raspuns. Fara citat, nu exista operatia.
 3. Reformularea echivalenta NU este modificare. Modifici doar daca se schimba efectiv ce trebuie sa faca
    ofertantul: continutul cerut, termenul, formatul, dovada, sau pragul.
+3b. text_nou ramane o PROPOZITIE, de lungimea celor din registru (in medie 140 de caractere, rar peste
+   220). Nu scrie un paragraf de caiet de sarcini: registrul trebuie sa ramana uniform si citibil.
 4. Nu clasifica drept "noua" o obligatie doar fiindca nu ai gasit cerinta potrivita in registru. Cauta intai
    in tot registrul primit; daca tot nu gasesti si esti sigur ca e o obligatie noua, abia atunci "noua".
 5. LOTURI: daca schimbarea priveste DOAR un lot, iar cerinta din registru e comuna (lot "toate" sau o lista
@@ -470,18 +472,23 @@ Deno.serve(async (req: Request) => {
 
     const idsEligibile = new Set(eligibile.map((c: any) => c.id))
     const opNoi: any[] = []
+    // Ce arunca codul se NUMARA si se raporteaza. Un `continue` tacut arata pe ecran exact ca un
+    // raspuns curat — e aceeasi capcana ca plafonul de 15 din functia veche, unde 8 modificari
+    // dispareau fara ca cineva sa afle.
+    const aruncate: Record<string, number> = {}
+    const arunca = (motiv: string) => { aruncate[motiv] = (aruncate[motiv] || 0) + 1 }
     for (const o of (Array.isArray(j.operatii) ? j.operatii : [])) {
       const fel = o?.fel
-      if (!['modifica', 'anuleaza', 'noua'].includes(fel)) continue
-      if (!o?.citat) continue                                  // fara ancora nu exista operatia
+      if (!['modifica', 'anuleaza', 'noua'].includes(fel)) { arunca('fel necunoscut'); continue }
+      if (!o?.citat) { arunca('fara citat-ancora'); continue }
       const cid = fel === 'noua' ? null : Number(o.cerinta_id)
       // O cerinta din alta licitatie sau neeligibila pe lot nu are ce cauta aici.
-      if (fel !== 'noua' && (!cid || !idsEligibile.has(cid))) continue
+      if (fel !== 'noua' && (!cid || !idsEligibile.has(cid))) { arunca('id de cerinta inexistent in registru'); continue }
       const sursa = lot.find((x: any) => String(x.nr) === String(o.disp_nr)) || lot.find((x: any) => x.disp_id === o.disp_nr)
       // O operatie fara text nu are ce cauta in propunere: ar ajunge in conflicte abia la aplicare,
       // dupa ce omul a bifat-o degeaba.
       const textOp = String(o.text_nou || o.text_cerinta || '').trim()
-      if (fel !== 'anuleaza' && !textOp) continue
+      if (fel !== 'anuleaza' && !textOp) { arunca('operatie fara text'); continue }
       opNoi.push({
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.
         op_id: await hash12(`${setId}|${sursa?.disp_id || o.disp_nr}|${fel}|${cid ?? norm(o.citat)}`),
@@ -524,8 +531,13 @@ Deno.serve(async (req: Request) => {
 
     const comparate = [...facute, ...lot.map((x: any) => x.disp_id)]
     const raman = toate.filter(x => x.tip === 'efect_posibil' && !comparate.includes(x.disp_id)).length
+    const soldRunda = lot.length - (adaugate.length + (Array.isArray(j.neclare) ? j.neclare.length : 0))
     const propNou = { ...prop, operatii, amprente, dispozitii_comparate: comparate,
-      neclare: [...(prop.neclare || []), ...(Array.isArray(j.neclare) ? j.neclare : [])] }
+      neclare: [...(prop.neclare || []), ...(Array.isArray(j.neclare) ? j.neclare : [])],
+      // Se persista, ca sa se vada in ecran, nu doar in raspunsul HTTP al rundei.
+      aruncate: { ...(prop.aruncate || {}), ...Object.fromEntries(
+        Object.entries(aruncate).map(([k, v]) => [k, ((prop.aruncate || {})[k] || 0) + v])) },
+      sold: Number((prop.sold || 0)) + soldRunda }
 
     const { error: eU } = await db.from('ofertare_raspuns_set').update({
       propunere: propNou, propunere_la: new Date().toISOString(), model: MODEL,
@@ -543,6 +555,10 @@ Deno.serve(async (req: Request) => {
         anuleaza: operatii.filter(o => o.fel === 'anuleaza').length,
         noua: operatii.filter(o => o.fel === 'noua').length },
       necesita_revizuire: operatii.filter(o => o.necesita_revizuire).length,
+      aruncate: Object.keys(aruncate).length ? aruncate : undefined,
+      // Soldul: fiecare dispozitie trimisa la comparare trebuie sa iasa fie ca operatie, fie ca
+      // „neclara". Daca nu da zero, analiza a pierdut ceva pe drum si „fara efect" nu e credibil.
+      sold_runda: soldRunda,
       // Indicatorul de acoperire: cate dispozitii cu efect posibil au primit verdict.
       acoperire: { dispozitii_total: toate.length,
         efect_posibil: toate.filter(x => x.tip === 'efect_posibil').length,
