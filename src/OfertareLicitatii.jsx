@@ -14,6 +14,7 @@ import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
+import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
 
 const G = {
@@ -96,6 +97,7 @@ export default function OfertareLicitatiiTab() {
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
   const [cantLicId, setCantLicId] = useState(null)   // licitația cu care intri în Cantități din fișă (Răzvan 07.09: nu mai alegi din listă)
+  const [ptLicId, setPtLicId] = useState(null)       // idem, pentru Propunere tehnică
   // Intrarea din Clarificări direct în analiza unui document: o „intenție" care coboară până la
   // DocumenteSection și se consumă o singură dată. Numărul de secvență există ca să deosebim două
   // intrări succesive pe aceeași licitație — altfel a doua n-ar mai remonta fișa.
@@ -296,7 +298,7 @@ export default function OfertareLicitatiiTab() {
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
       <div style={{ display:'flex', gap:8, marginBottom:16, alignItems:'center', flexWrap:'wrap' }}>
-        {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
+        {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['propunere', '📑 Propunere tehnică'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
@@ -314,6 +316,9 @@ export default function OfertareLicitatiiTab() {
       {vedere === 'referinte' && <ReferinteFinanciare showToast={showToast} />}
 
       {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
+
+      {vedere === 'propunere' && <PropunerePanel licitatii={rows} showToast={showToast} initialLicId={ptLicId}
+        onInapoi={ptLicId ? () => { const r = rows.find(x => x.id === ptLicId); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={cantLicId}
         onDeschideAnaliza={deschideAnaliza}
@@ -405,7 +410,8 @@ export default function OfertareLicitatiiTab() {
           intrareDocument={intrareDocument} onIntrareConsumata={consumaIntrare} showToast={showToast}
           onClose={() => { setIntrareDocument(null); setSelected(null) }}
           onEdit={() => { setIntrareDocument(null); setEditRow(selected); setSelected(null); setShowForm(true) }}
-          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setIntrareDocument(null); setCantLicId(selected.id); setVedere('cantitati') }} />
+          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setIntrareDocument(null); setCantLicId(selected.id); setVedere('cantitati') }}
+          onGoPropunere={() => { setIntrareDocument(null); setPtLicId(selected.id); setVedere('propunere') }} />
       )}
     </div>
   )
@@ -2134,7 +2140,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
-function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati,
+function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati, onGoPropunere,
   intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
   // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
@@ -2174,6 +2180,13 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     setUltimMail({ trimis_la: new Date().toISOString(), destinatari: [...(data.to || []), ...(data.cc || [])] })
     alert(`✓ Etapa 1 trimisă: ${data.to.join(', ')}${data.cc?.length ? ` (+${data.cc.length} în CC)` : ''} — ${data.sarcini} sarcini.`)
   }
+  const [ptSt, setPtSt] = useState(null)
+  // Starea propunerii tehnice: un rand per licitatie, mereu (si pentru cele fara nicio cerinta).
+  // Nu intra showToast/load in deps — lectia casei cu loop-ul infinit.
+  useEffect(() => {
+    supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', l.id).maybeSingle()
+      .then(({ data }) => setPtSt(data || null))
+  }, [l.id])
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const sx = l._st || {}
@@ -2203,6 +2216,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   )
   const TABS = [
     ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
+    ['propunere', `📑 Propunere tehnică${ptSt ? ` (${ptSt.cu_capitol}/${ptSt.de_raspuns})` : ''}`],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
     ['garantie', `🛡 Garanție${l.garantie_status === 'original' ? ' · ✓' : l.garantie_status ? ' · în curs' : ''}`],
@@ -2267,6 +2281,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
               <GbeLicitatie licitatie={l} profile={profile} accent={G.ofertare} onChanged={onChanged} />
             </>}
+            {tab === 'propunere' && <PropunereRezumat st={ptSt} onDeschide={() => { onClose(); onGoPropunere?.() }} />}
+
             {tab === 'verificari' && <VerificareFinalaSection licitatie={l} />}
             {tab === 'clarificari' && (
               <div style={{ ...S.card, padding:16, background:G.surface }}>
