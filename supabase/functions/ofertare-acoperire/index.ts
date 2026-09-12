@@ -54,7 +54,7 @@ Deno.serve(async (req: Request) => {
     const { data: cerinte } = await q
     if (!cerinte?.length) return new Response(JSON.stringify({ ok: true, batch, propuneri: 0, skip: 'nicio cerinta de tipul asta' }), { headers: CORS })
 
-    const { data: auth } = await supabase.from('hr_autorizatii')
+    const { data: auth, error: eAuth } = await supabase.from('hr_autorizatii')
       .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)')
       .is('deleted_at', null).order('id')   // ordine STABILA: fara ea, prefixul difera intre apeluri si cache-ul nu se potriveste
     const catalog = (auth || []).map((a: any) => ({
@@ -66,7 +66,7 @@ Deno.serve(async (req: Request) => {
       sudura: a.procedeu_sudura || undefined, diam_mm: a.diametru_teava_mm || undefined,
       are_scan: !!a.fisier_path,
     }))
-    const { data: docsF } = await supabase.from('documente_firma')
+    const { data: docsF, error: eDocF } = await supabase.from('documente_firma')
       .select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, pdf_path')
       .eq('activ', true).order('id')
     const catalogFirma = (docsF || []).map((d: any) => ({
@@ -75,8 +75,24 @@ Deno.serve(async (req: Request) => {
       expira: d.fara_expirare ? 'niciodata' : (d.data_valabilitate || 'necunoscut'),
       are_scan: !!d.pdf_path,
     }))
-    const { data: partAll } = await supabase.from('ofertare_parteneri')
+    const { data: partAll, error: ePart } = await supabase.from('ofertare_parteneri')
       .select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('id')
+
+    // BLOCANT reparat 12.09: interogarile de mai sus citeau doar `data`, niciodata `error`.
+    // supabase-js NU arunca la esec — intoarce { data: null, error }. Cu `(auth || [])`,
+    // un timeout devenea tacut CATALOG GOL, iar modelul aplica atunci corect regula R1
+    // („potrivesti DOAR cu ce exista in catalog") si raspundea 'gol' pe TOATE cerintele.
+    // Alea erau randuri valide, deci stergerea pleca si o licitatie cu acoperirile puse
+    // devenea integral „fara dovada" — fara nicio eroare nicaieri.
+    if (eAuth || eDocF || ePart) {
+      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message))
+    }
+    // A doua plasa: un catalog gol nu e o stare normala pentru firma asta. Daca ambele
+    // surse sunt goale, ceva e rupt in amonte — nu propunem nimic si nu stergem nimic.
+    if (!(auth || []).length && !(docsF || []).length) {
+      return fail('catalog gol (0 autorizatii, 0 documente de firma) — refuz sa propun acoperiri')
+    }
+
     const parteneri = (partAll || []).map((p: any) => ({ id: p.id, nume: p.nume, tip_relatie: p.tip_relatie, acopera: (p.observatii || '').slice(0, 400) || undefined }))
 
     // CACHE (12.09.2026): catalogul — autorizatii, documente de firma, parteneri — e IDENTIC
@@ -93,7 +109,12 @@ Deno.serve(async (req: Request) => {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 9000,
+        // Pe claude-opus-5 gandirea e PORNITA implicit cand `thinking` lipseste (spre deosebire
+        // de Opus 4.8/4.7), iar tokenii de gandire se scad din max_tokens. La 9000 se intampla
+        // ca taietura sa cada in blocul de gandire: nu ramane niciun bloc `text`, raspunsul pare
+        // gol si rularea se oprea. O declaram explicit si ii dam loc. `budget_tokens` ar da 400.
+        model: MODEL, max_tokens: 16000,
+        thinking: { type: 'adaptive' },
         system: [{ type: 'text', text: PROMPT }],
         messages: [{ role: 'user', content: [
           { type: 'text', text: stabil, cache_control: { type: 'ephemeral' } },
@@ -188,28 +209,97 @@ Deno.serve(async (req: Request) => {
       })
     }
     // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.
+    // Felie fara niciun rand valid: NU e o eroare a rularii. Raspunsul purta cheia `error`,
+    // iar frontendul face `return` din tot ciclul cand o vede — asa ca o singura felie
+    // nefericita oprea si restul eliminatoriilor, si intreg batch-ul 'propunere'. Acum
+    // raportam felia ca goala si lasam ciclul sa continue; felia intra la reluare.
     if (!rows.length) {
       return new Response(JSON.stringify({
-        ok: false, batch, propuneri: 0, trunchiat,
-        error: 'AI-ul n-a intors nicio acoperire valida — nu s-a sters si nu s-a scris nimic',
+        ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
+        motiv_felie_goala: 'AI-ul n-a intors nicio acoperire valida — nu s-a sters si nu s-a scris nimic',
+        stop_reason: data.stop_reason || null,
+        fara_raspuns: idsCerinte.size, cerinte_fara_raspuns: Array.from(idsCerinte),
         tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       }), { headers: CORS })
     }
-    const idsDeRescris = Array.from(new Set(rows.map(r => r.cerinta_id)))
-    const { error: eDel } = await supabase.from('ofertare_acoperire')
-      .delete().in('cerinta_id', idsDeRescris).eq('verificat_pe_scan', false)
-    if (eDel) return fail('stergere acoperiri vechi: ' + eDel.message)
-    const { error: eIns } = await supabase.from('ofertare_acoperire').insert(rows)
-    if (eIns) return fail('insert acoperire: ' + eIns.message)
+    // AI-ul poate repeta acelasi cerinta_id; fara dedup s-ar insera doua randuri pentru
+    // aceeasi cerinta, iar tabelul n-are index unic care sa opreasca asta.
+    const vazute = new Set()
+    const randuriUnice = rows.filter(r => { if (vazute.has(r.cerinta_id)) return false; vazute.add(r.cerinta_id); return true })
+    const idsDeRescris = Array.from(vazute)
+
+    // Randurile existente ale cerintelor pe care le rescriem. Le citim INAINTE, din doua motive.
+    const { data: vechi, error: eVechi } = await supabase.from('ofertare_acoperire')
+      .select('id, cerinta_id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
+      .in('cerinta_id', idsDeRescris)
+    if (eVechi) return fail('citire acoperiri existente: ' + eVechi.message)
+
+    // (a) BLOCANT reparat: stergerea sarea randurile verificate pe scan de OM, dar insertul
+    // adauga oricum randul AI-ului → doua randuri pe aceeasi cerinta. Frontendul indexeaza
+    // cerinta_id -> UN rand, deci afisa unul la intamplare: ori dovada verificata disparea de
+    // pe ecran, ori verdictul nou al AI-ului devenea invizibil. Acum NU mai scriem peste o
+    // cerinta care are dovada verificata de om — o raportam ca sa decida omul.
+    const verificate = new Map()
+    for (const v of (vechi || [])) if (v.verificat_pe_scan) verificate.set(v.cerinta_id, v)
+
+    // (b) Campurile scrise de colegi (raspuns la gol, tichet) se pastreaza: pana acum se
+    // pierdeau tacut la fiecare re-rulare, iar cerinta oferea din nou butonul de tichet.
+    const pastrate = new Map()
+    for (const v of (vechi || [])) if (!v.verificat_pe_scan) pastrate.set(v.cerinta_id, v)
+
+    const conflicteVerificate = []
+    const deScris = []
+    for (const r of randuriUnice) {
+      const v = verificate.get(r.cerinta_id)
+      if (v) { conflicteVerificate.push({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text, acoperire_verificata_id: v.id }); continue }
+      const p = pastrate.get(r.cerinta_id)
+      deScris.push(p ? { ...r, raspuns_coleg: p.raspuns_coleg ?? null, raspuns_de: p.raspuns_de ?? null, raspuns_la: p.raspuns_la ?? null, tichet_id: p.tichet_id ?? null } : r)
+    }
+
+    if (!deScris.length) {
+      return new Response(JSON.stringify({
+        ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
+        motiv_felie_goala: 'toate cerintele feliei au deja dovada verificata de om — nu s-a atins nimic',
+        conflicte_verificate: conflicteVerificate,
+      }), { headers: CORS })
+    }
+
+    // (c) INSERT INAINTE de DELETE. Erau doua cereri separate, netranzactionale, iar insertul
+    // e all-or-nothing pe toata felia: daca pica (o cerinta stearsa intre timp de un coleg, un
+    // timeout), stergerea se aplicase deja si ~55 de cerinte ramaneau fara niciun rand. In
+    // ordinea asta, un insert picat nu mai sterge nimic, iar un delete picat lasa duplicate —
+    // vizibile si reparabile, spre deosebire de date disparute.
+    const { error: eIns } = await supabase.from('ofertare_acoperire').insert(deScris)
+    if (eIns) return fail('insert acoperire (nu s-a sters nimic): ' + eIns.message)
+
+    const idsVechiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && vazute.has(v.cerinta_id)).map(v => v.id)
+    let duplicateRamase = 0
+    if (idsVechiDeSters.length) {
+      const { error: eDel } = await supabase.from('ofertare_acoperire').delete().in('id', idsVechiDeSters)
+      if (eDel) duplicateRamase = idsVechiDeSters.length
+    }
 
     // Cerintele din felie la care AI-ul NU a raspuns: nu le-am atins, deci acoperirea veche
     // le ramane. Le raportam ca sa se vada ca felia n-a fost acoperita integral — tacerea a
     // fost chiar problema.
-    const fararaspuns = Array.from(idsCerinte).filter((id: any) => !idsDeRescris.includes(id))
-    const goluri = rows.filter(r => r.status === 'gol').length
-    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null, propuneri: rows.length, goluri, firma: rows.filter(r => r.mod === 'firma').length,
-      nu_se_aplica: rows.filter(r => r.status === 'nu_se_aplica').length,
-      fara_raspuns: fararaspuns.length, cerinte_fara_raspuns: fararaspuns.slice(0, 50), trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens, cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
+    // Cerintele la care AI-ul n-a raspuns si cele blocate de o dovada verificata: nu le-am
+    // atins, deci acoperirea veche le ramane. Plafonul de raportare era 50, iar felia trimisa
+    // de frontend are 55 — cerintele peste plafon nu mai erau reluate NICIODATA. Ridicat, plus
+    // un steag explicit cand lista tot e taiata, ca frontendul sa reia atunci toata felia.
+    const PLAFON_RAPORT = 500
+    const fararaspuns = Array.from(idsCerinte).filter((id: any) => !vazute.has(id))
+    const goluri = deScris.filter(r => r.status === 'gol').length
+    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null,
+      propuneri: deScris.length, goluri, firma: deScris.filter(r => r.mod === 'firma').length,
+      nu_se_aplica: deScris.filter(r => r.status === 'nu_se_aplica').length,
+      conflicte_verificate: conflicteVerificate,
+      duplicate_ramase: duplicateRamase,
+      fara_raspuns: fararaspuns.length,
+      cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
+      lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,
+      trunchiat, stop_reason: data.stop_reason || null,
+      tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
+      cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
   }

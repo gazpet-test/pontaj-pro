@@ -122,8 +122,11 @@ export default function OfertareLicitatiiTab() {
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
         const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).limit(20000)
+        // O cerință poate avea mai multe rânduri de acoperire (cele verificate pe scan nu se
+        // șterg la re-rulare). Numărătoarea pe RÂND umfla „acoperite" și putea depăși 100%.
+        const cerinteAcoperite = new Set()
         ;(ac || []).forEach(a => { const lid = cerLic[a.cerinta_id]; const st = stats[lid]; if (!st) return
-          if (a.status === 'acoperit' || a.status === 'acoperit_partener') st.acoperite++
+          if ((a.status === 'acoperit' || a.status === 'acoperit_partener') && !cerinteAcoperite.has(a.cerinta_id)) { cerinteAcoperite.add(a.cerinta_id); st.acoperite++ }
           // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci
           if (a.doc_firma?.se_reemite) { if (reemisUrgent(a.doc_firma, fullMap[lid]?.termen_depunere)) st.rosii++ }
           else if (a.valabil_la_depunere === false) st.rosii++ })
@@ -1579,8 +1582,15 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
         .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate)')
-        .in('cerinta_id', cs.map(c => c.id)).limit(5000)
-      const map = {}; (ac || []).forEach(a => { map[a.cerinta_id] = a })
+        .in('cerinta_id', cs.map(c => c.id)).order('id').limit(5000)
+      // O cerință poate avea mai multe rânduri (rândurile verificate pe scan nu se șterg la
+      // re-rulare). Fără `.order()` PostgREST le putea întoarce în orice ordine, iar ultimul
+      // venit câștiga — deci ecranul arăta ori dovada verificată, ori verdictul AI-ului, la
+      // întâmplare. Acum: ordine stabilă, iar dovada verificată de om are întâietate.
+      const map = {}; (ac || []).forEach(a => {
+        const ex = map[a.cerinta_id]
+        if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) map[a.cerinta_id] = a
+      })
       setAcoperiri(map)
     } else setAcoperiri({})
   }
@@ -1588,6 +1598,8 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
 
   const propune = async () => {
     setWarn(null)
+    const conflicte = []      // cerințe cu dovadă verificată de om, neatinse de AI
+    let neacoperite = 0       // cerințe rămase neevaluate chiar și după reluare
     // Felii de 55 (v3 cu ids) — registrul întreg nu încape în max_tokens la un singur apel.
     // O felie raportată „trunchiat" se reia la jumătate de mărime (o singură dată).
     const FELIE = 55
@@ -1602,7 +1614,11 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
           { body: { licitatie_id: licitatie.id, batch, ids: felie } })
         if (error || data?.error) { setWarn(`${batch}: ${data?.error || error.message}`); setBusy(null); await load(); onChanged?.(); return }
-        if (data?.trunchiat || data?.fara_raspuns > 0) deReluat.push(...(data?.cerinte_fara_raspuns?.length ? data.cerinte_fara_raspuns : felie))
+        // Lista de reluat e tăiată la 500 de funcție; dacă tot nu încape, reluăm toată felia,
+        // altfel cerințele peste plafon n-ar mai fi cerute niciodată.
+        const listaOk = data?.cerinte_fara_raspuns?.length && !data?.lista_fara_raspuns_taiata
+        if (data?.trunchiat || data?.fara_raspuns > 0 || data?.felie_goala) deReluat.push(...(listaOk ? data.cerinte_fara_raspuns : felie))
+        if (data?.conflicte_verificate?.length) conflicte.push(...data.conflicte_verificate)
         await load()
       }
       for (let i = 0; i < deReluat.length; i += 27) {
@@ -1611,9 +1627,17 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
         const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
           { body: { licitatie_id: licitatie.id, batch, ids: felie } })
         if (error || data?.error) { setWarn(`${batch} (reluare): ${data?.error || error.message}`); break }
+        // Reluarea își citește la rândul ei starea: dacă și ea s-a tăiat, cerințele rămase
+        // păstrează verdictul vechi fără ca nimeni să afle. Le numărăm și le spunem.
+        if (data?.conflicte_verificate?.length) conflicte.push(...data.conflicte_verificate)
+        if (data?.fara_raspuns > 0) neacoperite += data.fara_raspuns
         await load()
       }
     }
+    const note = []
+    if (neacoperite > 0) note.push(`⚠️ ${neacoperite} cerințe n-au fost reevaluate nici la reluare — păstrează verdictul din rularea anterioară.`)
+    if (conflicte.length) note.push(`🔒 ${conflicte.length} cerințe au dovadă verificată de om: propunerea AI-ului NU le-a suprascris. Verifică-le manual dacă documentul s-a schimbat.`)
+    if (note.length) setWarn(note.join(' '))
     setBusy(null); await load(); onChanged?.()
   }
 
