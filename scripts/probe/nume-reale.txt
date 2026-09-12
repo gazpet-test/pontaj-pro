@@ -1,0 +1,103 @@
+# Nume de foldere COPIATE EXACT din arhiva de pe Drive (12.09.2026).
+# Formatul liniei:  <categorie>\t<numele folderului>
+# Nu le rescrie, nu le "corecta": greselile de tastare din ele sunt reale si parserul
+# trebuie sa le suporte. Sunt 60 din ~250, alese ca sa acopere toate cazurile grele.
+
+1.TRANSGAZ	100. Punere in sig.Dn800 Butimanu_Brazi_zona STANCESTI depunere 18.07.2023
+1.TRANSGAZ	102. Cond. t.g.n. 4 Loturi PRUNISOR_JUPA asociere depunere 31.07.2023 ANULATA
+1.TRANSGAZ	104. Punere in sig.Dn500 ADJUDUL VECHI termen depunere 11.08.2023
+1.TRANSGAZ	112. Punere in sig. 28_24_20toli Valea Tarsei FERMA depunere 07.12.2023
+1.TRANSGAZ	121.Punere în siguranță cond. g.n. DN 700 și DN 800 loc. FERASTRAU, jud. Bacău depunere 29.01.2024
+1.TRANSGAZ	128.Punere în sig trav.aeriană râu Arieș cu DN500 LUNCANI – Câmpia Turzii, Cluj depunere 12.02.2024
+1.TRANSGAZ	129.Punerea in sig. DN400 Campina-Nedelea si DN 500 Posada-BOBOLIA, PH depunerea 26.01.2024
+1.TRANSGAZ	131. Conductă t.g.n. BENTU DN 500 Siliștea, București – Cotu Ciorii, depunere 15.03.2024
+1.TRANSGAZ	137.Cond. t.g.n. Lot1 Gazpet_Lot4 Moldocor PRUNISOR_JUPA depunere 25.06.2024
+1.TRANSGAZ	140.Punere în sig DN500 Hurezani _STEJARI la trav.aeriană a pârâului Amărăzuia, Gorj
+1.TRANSGAZ	146. Lot 1 Gazpet_Lot 2 Comesad ISALNITA depunere 11.03.2025
+1.TRANSGAZ	146. Lot 1 Gazpet_Lot 2 Comesad TURCENI ISALNITA termen depunere 11.03.2025
+1.TRANSGAZ	147.Punere in sig.cond.Dn700 SECUIENI_C.F.I. Lider termen depunere19.08.2025
+1.TRANSGAZ	148.Cond.Dn600 Mihai Bravu SILISTEA_Petroconst Lider termen depunere 09.05.2025
+1.TRANSGAZ	152. LOT 2 Prunisor-Jupa
+1.TRANSGAZ	156.SRM Craiova Sud_Podari termen depunere 15.07.2025
+1.TRANSGAZ	167.Cond de tgn HUEDIN Lugașu (incl alim cu EE PC si FO) term dep 26.01.2026
+1.TRANSGAZ	168.Segarcea - 26.01.2026
+1.TRANSGAZ	169.NU.Punere in sig.cond.Dn150 Fir1 si Dn250 Fir2_FANTANELE-BISTRITA depunere 14.11.2025
+1.TRANSGAZ	170. NU.Racord si SRMP Petrachioaia_ILFOV termen depunere 12.12.2025
+1.TRANSGAZ	173.CFI Lider_cond.DN700 Isaccea-Sendreni  termen depunere 22.06.2026
+1.TRANSGAZ	174.Comesad Lider Dn700 Inel Bucuresti Tr. LindeGaz_Moara Domneasca termen depunere 27.02.2026
+1.TRANSGAZ	175.NU Preg.cond.Dn400 in cond.godevilabila jud. Covasna termen depunere 09.03.2026
+1.TRANSGAZ	180.Cond.tgn TUZLA_PODISOR termen 30.06.2026
+1.TRANSGAZ	185.NU.Interconectare cond.Dn800 SLOBOZIA Moara jud. Dambovita termen depunere 17.08.2026
+1.TRANSGAZ	63. Cond. Dn500 Plataresti Balaceanca 31.05.2021
+1.TRANSGAZ	80. Punere in sig.Dn500 GOLESTI Valcea ADV1337933 depunere 31.01.2023
+1.TRANSGAZ	93. Inloc.subtrav.Dn700 INEL BUCURESTI 10.05.2023
+1.TRANSGAZ	actualizare Contracte conf.OUG 97
+1.TRANSGAZ	FORAJE
+1.TRANSGAZ	lucrari VECHI_licitatii
+1.TRANSGAZ	Racordare SRM Craiova_Podari termen depunere 27.06.2025
+1.TRANSGAZ	Rest de decontat la 15.11.2023
+
+2.DISTRIBUTIE GAZE	1 SORCHIV_CONTESTI Tert subcontractant Gazpet depunere 10.10.2023
+2.DISTRIBUTIE GAZE	16  Habau  Distributie gaze BRETEA ROMANA
+2.DISTRIBUTIE GAZE	2 HABAU_CJ PRAHOVA Asociat Gazpet depunere 14.02.2024
+2.DISTRIBUTIE GAZE	21.Proiectare si executie com.FINTA jud.Dambovita depunere 13.11.2024
+2.DISTRIBUTIE GAZE	25.ADI Ialomita_Gazpet subcontractant ptr. Habau termen depunere 17.02.2025
+2.DISTRIBUTIE GAZE	27. NU.Pr.si executie infiintare sistem distributie gaze com.BUDILA,Brasov termen 15.07.2025
+2.DISTRIBUTIE GAZE	29.Pr.si ex. Dezvoltarea  retelei inteligente de g.n. Iin satele apartinatoare Or. Jibou Rona, Husia si Ciceu, jud Salaj
+2.DISTRIBUTIE GAZE	3 EUROPAN PROD Valea GEMĂRTĂLUIULUI distributie gaze jud. Olt
+2.DISTRIBUTIE GAZE	30.NU.Modernizare si extindere retea distributie g.n. satul Harsa, comuna Plopu, jud. Prahova depunere 3.12.2025
+2.DISTRIBUTIE GAZE	37.NU Distributie gaze GLODEANU SARAT jud. Buzau termen depunere 02.02.2026 suspendata
+2.DISTRIBUTIE GAZE	38.CN1088848 Distributie gaze BECENI jud.Buzau termen depunere 02.02.2026
+2.DISTRIBUTIE GAZE	39.NU_SCN1172058 Distributie gaze VIISOARA jud. Bacau termen depunere 16.02.2026
+2.DISTRIBUTIE GAZE	4 IMPA Pr_Ex, Pod ce face legatura Com.Iedera, jud.Dambovita SUBCONTRACTANT Gazpet
+2.DISTRIBUTIE GAZE	40.Distributie gaze com.HOGHILAG_Sibiu termen depunere 27.02.2026
+2.DISTRIBUTIE GAZE	43.NU Infiintare sistem de distributie a gazelor nat, com.Sutesti, jud Valcea termen depunere 17.03.2026
+2.DISTRIBUTIE GAZE	46.Proiectare și exec lucrări .Infiintare retea gn com JOSENI, jud. Harghita termen depunere 17.03.2026
+2.DISTRIBUTIE GAZE	49.SORCHIV Lider_Pr.si exec.Distrib.gaze com SMARDAN Galati termen depunere 01.04.2026
+2.DISTRIBUTIE GAZE	51.NU Infiintare sistem de distributie a gazelor nat, com.SUTESTI, jud Valcea termen depunere 14.04.2026 (1)
+2.DISTRIBUTIE GAZE	52. Executie Distributie gaze com CRISTIAN, jud. Brasov termen depunere 18.05.2026
+2.DISTRIBUTIE GAZE	54.Exec.distributie gaze MOTRU jud.Gorj termen depunere 22.06.2026 (1)
+2.DISTRIBUTIE GAZE	56.NU Infiintare sistem distribuitie gaze naturale in com. Rusetu Buzau
+2.DISTRIBUTIE GAZE	58.Distrib gn in com MANASTIREA, JUD CALARASI termen dep 24.09.2026
+2.DISTRIBUTIE GAZE	licitatii vechi si neparticipare
+2.DISTRIBUTIE GAZE	preturi de la diversi executanti
+
+3.ROMGAZ	14. ANULATA Reparatii cond. Secuieni si Roman 2 loturi 04.04.2022 ANULATA
+3.ROMGAZ	19. NU.Refacere subtrav. FRASIN Suceava 12.07.2022
+3.ROMGAZ	1.sonda 21 si 32 caragele-173530
+3.ROMGAZ	30.Inst.tehn.de supraf.Sonda 16 MIRONU termen depunere 12.05.2026
+3.ROMGAZ	3.Gr.12 FILITELNIC 400945 23.03.2017
+3.ROMGAZ	9.Sonda 11 Caragele CN1002802
+3.ROMGAZ	_FIXTURE ERP 2 - licitatii test 27.08.2026
+3.ROMGAZ	romgaz-balda si sanmartin
+
+4.CONPET	17. 3 LOTURI - Izvoru
+4.CONPET	24. Scaiosi jud.Valcea 25.10.2018 ANULATA
+4.CONPET	26. Scaiosi jud. Valcea 04.12.2018 RELUATA
+4.CONPET	42. NU Inloc.cond.20 inch Baraganu Calareti 18000m 07.10.2021
+4.CONPET	7.Teleajen Punere în siguranta 2 loturi Teleajen şi Orleşti.-19.06.2017
+4.CONPET	conpet-ciresu
+4.CONPET	PV receptii Conpet
+
+6.ALIMENTARI CU APA	12.COLEN Extindere și reabilitare sistem alim. apă și canalizare în Satu Mare, Brădești, Târnovița și Dealu depunere 15.05.2026
+6.ALIMENTARI CU APA	5.FONSTER Lider_Extind.retea apa si canaliz.com.SOVEJA,jud.Vrancea depunere 25.02.2026 ANULATA
+6.ALIMENTARI CU APA	3.ROMOIL Lider_Alim.cu apa 2 Loturi Barcanesti_Jilavele depunere17.12.2025
+
+# --- Lucrari EXECUTATE (alt tipar: contract/factura/PV in nume) ---
+# categorie = EXPERIENTA SIMILARA rev.1
+EXPERIENTA	45.Conpet Comisani 4603 F,C,PVRTL din 22.01.2026
+EXPERIENTA	43.Dn800 Butimanu_Brazi_zona STANCESTI, 16153 PVRTL din 10.02.2026
+EXPERIENTA	40.Romgaz Grup 1 Damianca 1930 F, C, DC, PVRTL din 07.11.2024
+EXPERIENTA	26.Romgaz SECUIENI Lot 1 _786 F, C, PVRTL din 06.06.2023
+EXPERIENTA	21.TOTIA 4988 F, C, R, DC PV din 07.09.2021
+EXPERIENTA	13.miraslau 920 F, C, PV din14.10.2020
+EXPERIENTA	30..subtraversare FINTA Ialomita 1076 F, C, PV din 23.08.2023
+EXPERIENTA	9.1.gara vest conpet 1313 F, C, PV din 19.10.2020
+EXPERIENTA	11. BRUA Habau probe Lot 2- 1195 din 27.11.2020 F, C, PV
+EXPERIENTA	22.1.probe pres cis gaz onesti-gheraesti -letcani 2202 F, C, PV din 15.10.2021
+EXPERIENTA	36. Filipesti Platou Cioc 2699 F, C, PVRTL din 18.07 si 28.08.2024
+EXPERIENTA	46.Conpet Cricov 2752, F,C,PVRTL 22_24.09.2025
+EXPERIENTA	47.Bentu 22303167.46 F,C,PVRP 23_14.10.2025
+EXPERIENTA	14.valea danului 1499 F, C, PVR partiala din 18.12.2020
+EXPERIENTA	DEPASITE Contracte _PV
+EXPERIENTA	DOCUMENTE CONSTATOARE SEAP
