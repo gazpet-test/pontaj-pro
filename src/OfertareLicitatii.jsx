@@ -597,10 +597,19 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   const [warn, setWarn] = useState(null)
   const [coada, setCoada] = useState(null)     // rândul din ofertare_ingest_coada (worker server-side)
 
+  // — Impact asupra cerințelor: selecția de documente de răspuns, rularea analizei și propunerea —
+  const [selDoc, setSelDoc] = useState(() => new Set())
+  const [anBusy, setAnBusy] = useState(null)   // text progres analiză
+  const [setRasp, setSetRasp] = useState(null) // setul curent + propunerea
+  const [opSel, setOpSel] = useState(() => new Set())
+  const [cerTinta, setCerTinta] = useState({}) // id → textul CURENT al cerinței (pentru diff)
+  const [aplBusy, setAplBusy] = useState(false)
+  const [rezAplic, setRezAplic] = useState(null)
+
   const load = async () => {
     const [{ data }, { data: c }] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
-        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path')
+        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
     ])
@@ -888,6 +897,86 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
     }
   }
 
+  // Documentele care pot intra într-un set de răspuns: doar cele din care s-a extras text.
+  const potIntra = (d) => ['procesat', 'partial'].includes(d.status_procesare) && !d.fisier_path?.includes('/neincarcat/')
+
+  const incarcaSet = async (setId) => {
+    const { data: st, error } = await supabase.from('ofertare_raspuns_set')
+      .select('id, titlu, lot, stare, propunere, cost_usd, aplicat_la').eq('id', setId).maybeSingle()
+    if (error) { setWarn('Nu pot citi propunerea: ' + error.message); return null }
+    setSetRasp(st)
+    const ids = [...new Set(((st?.propunere?.operatii) || []).map(o => o.cerinta_id).filter(Boolean))]
+    if (ids.length) {
+      const { data: cc } = await supabase.from('ofertare_cerinte').select('id, text_cerinta, lot, tip').in('id', ids)
+      const m = {}; (cc || []).forEach(c => { m[c.id] = c })
+      setCerTinta(m)
+    } else setCerTinta({})
+    // Bifele pornesc NEBIFATE: omul alege ce aplică, nu debifează ce i s-a ales.
+    setOpSel(new Set())
+    setRezAplic(null)
+    return st
+  }
+
+  const ruleazaAnaliza = async () => {
+    const alese = (docs || []).filter(d => selDoc.has(d.id))
+    if (!alese.length) return
+    setWarn(null); setRezAplic(null)
+    try {
+      setAnBusy('pregătesc setul de răspuns…')
+      const inv = async (b) => await supabase.functions.invoke('ofertare-raspuns-set', { body: b })
+      const { data: cr, error: eCr } = await inv({
+        actiune: 'creeaza_set', licitatie_id: licitatie.id,
+        document_ids: alese.map(d => d.id),
+        // Lotul rămâne NEDECLARAT în mod deliberat: folderul minte. Documentele din „LOT2" conțin
+        // întrebări „pentru Lot 1, Lot 2, Lot 3", iar un filtru pe lot ar scoate din registru exact
+        // cerințele la care se referă răspunsul. Lotul se pune pe operație, nu pe set.
+        lot: null,
+      })
+      if (eCr || cr?.error) { setWarn('Creare set: ' + (cr?.error || eCr.message)); setAnBusy(null); return }
+      const setId = cr.set.id
+      if (cr.excluse?.length) setWarn(`${cr.excluse.length} document(e) excluse: ` + cr.excluse.map(x => `${x.nume || x.id} (${x.motiv})`).join('; '))
+
+      // faza 1 — inventar, un document pe rundă
+      for (let i = 0; i < 30; i++) {
+        setAnBusy(`citesc documentul ${i + 1} din ${cr.documente.length}…`)
+        const { data, error } = await inv({ actiune: 'inventar', set_id: setId })
+        if (error || data?.error) { setWarn('Inventar: ' + (data?.error || error.message)); break }
+        if (!data.continua) break
+      }
+      // faza 2 — comparare cu registrul
+      for (let i = 0; i < 20; i++) {
+        setAnBusy(`compar cu registrul de cerințe… (runda ${i + 1})`)
+        const { data, error } = await inv({ actiune: 'compara', set_id: setId })
+        if (error || data?.error) { setWarn('Comparare: ' + (data?.error || error.message)); break }
+        if (!data.continua) break
+      }
+      await incarcaSet(setId)
+    } catch (e) {
+      setWarn('Analiză: ' + e.message)
+    } finally { setAnBusy(null) }
+  }
+
+  const aplicaSelectia = async () => {
+    if (!setRasp || !opSel.size) return
+    const dupaDepunere = licitatie.status === 'depusa'
+    let motiv = null
+    if (dupaDepunere) {
+      motiv = prompt('Licitația e DEPUSĂ. Confirmi actualizarea registrului după depunere și îți asumi reverificarea impactului asupra ofertei?\n\nScrie motivul (obligatoriu):')
+      if (!motiv || !motiv.trim()) { setWarn('Aplicare anulată — pe o licitație depusă motivul e obligatoriu.'); return }
+    }
+    setAplBusy(true); setWarn(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('ofertare-raspuns-set', {
+        body: { actiune: 'aplica', set_id: setRasp.id, op_ids: [...opSel],
+          dupa_depunere: dupaDepunere, motiv, idempotency_key: `${setRasp.id}-${[...opSel].sort().join('.')}` },
+      })
+      if (error || data?.error) { setWarn('Aplicare: ' + (data?.error || error.message)); return }
+      setRezAplic(data)
+      await incarcaSet(setRasp.id)
+      onChanged?.()
+    } finally { setAplBusy(false) }
+  }
+
   return (
     <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
@@ -900,6 +989,12 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
           </span>
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          {selDoc.size > 0 && !anBusy && (
+            <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12, background:G.purple }} onClick={ruleazaAnaliza}
+              title="Citește răspunsul autorității și propune ce se schimbă în registrul de cerințe. Nimic nu se aplică fără bifa ta.">
+              🔍 Analizează impactul ({selDoc.size})
+            </button>
+          )}
           {!seapBusy && (
             <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} disabled={!!upBusy || !!procBusy} onClick={aduDinSeap}
               title="Descarcă singură toată documentația publicată în SEAP (inclusiv planșele de zeci de MB)">
@@ -953,6 +1048,7 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
         <div style={{ fontSize:12, color:G.green, marginBottom:8 }}>☁️ Citire pe server terminată {new Date(coada.terminat_la).toLocaleString('ro-RO')}: {coada.nota}</div>
       )}
       {plansaBusy && <Lucru icon="📐" text={plansaBusy} />}
+      {anBusy && <Lucru icon="🔍" text={`Impact asupra cerințelor: ${anBusy}`} />}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
 
       {docs === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
@@ -968,6 +1064,11 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
               const formularXml = d.status_procesare === 'ignorat' && /\.xml$/i.test(d.nume_original || '')
               return (
                 <div key={d.id} style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, padding:'5px 8px', borderRadius:6, background:G.surface }}>
+                  {/* Bifa pentru setul de răspuns. Deliberat pe TOATE documentele cu text, nu doar pe
+                      cele de tip „raspuns_clarificare": pe licitația 1 un răspuns real stă pe tip „alta". */}
+                  <input type="checkbox" title={potIntra(d) ? 'Include în setul de răspuns de analizat' : 'Fără text extras — nu poate intra în analiză'}
+                    disabled={!potIntra(d) || !!anBusy} checked={selDoc.has(d.id)}
+                    onChange={e => setSelDoc(prev => { const n = new Set(prev); e.target.checked ? n.add(d.id) : n.delete(d.id); return n })} />
                   <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }} title={d.eroare || ''}>{spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : st.label}</span>
                   <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
                     {d.nume_original}
@@ -1002,6 +1103,118 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
             })}
           </div>
         )}
+
+      {/* ── Impact asupra cerințelor ─────────────────────────────────────────────
+          Antetul spune din prima cât se schimbă și câte acoperiri rămân de reverificat.
+          Bifele pornesc NEBIFATE: omul alege ce aplică. Aplicarea trimite ID-uri de
+          operații, nu texte — serverul execută exact ce a generat el însuși. */}
+      {setRasp && (() => {
+        const ops = (setRasp.propunere?.operatii) || []
+        const ac = setRasp.propunere?.acoperire || []
+        const disp = setRasp.propunere?.dispozitii || []
+        const efect = disp.filter(d => d.tip === 'efect_posibil').length
+        const comparate = (setRasp.propunere?.dispozitii_comparate || []).length
+        const grupe = [
+          ['anuleaza', '⛔ Anulări', G.red],
+          ['modifica', '✏️ Modificări', G.orange],
+          ['noua', '➕ Cerințe noi', G.teal],
+        ]
+        const netrecut = ac.some(x => x.acoperit_tot === false)
+        return (
+          <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.purple}55`, background:G.purple + '0D' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:8 }}>
+              <div style={{ fontWeight:800, fontSize:13 }}>🔍 Impact asupra cerințelor — {setRasp.titlu}</div>
+              <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11 }} onClick={() => { setSetRasp(null); setOpSel(new Set()); setRezAplic(null) }}>✕ închide</button>
+              <span style={{ marginLeft:'auto', fontSize:11, color:G.dim }}>
+                {setRasp.lot ? `lot ${setRasp.lot} · ` : ''}{Number(setRasp.cost_usd || 0).toFixed(2)} $
+              </span>
+            </div>
+
+            <div style={{ fontSize:12.5, marginBottom:6 }}>
+              <b>{ops.length}</b> {ops.length === 1 ? 'schimbare propusă' : 'schimbări propuse'}
+              {ops.length > 0 && <> · {grupe.map(([k, lbl]) => ops.filter(o => o.fel === k).length ? <span key={k} style={{ marginRight:8 }}>{lbl.split(' ')[0]} {ops.filter(o => o.fel === k).length}</span> : null)}</>}
+            </div>
+            {/* Indicatorul de acoperire: „fără efect" e credibil doar dacă s-a citit tot. */}
+            <div style={{ fontSize:11.5, color:G.muted, marginBottom:10 }}>
+              Din {disp.length} dispoziții citite: <b style={{ color:G.text }}>{efect}</b> cu efect posibil ({comparate} comparate),
+              {' '}{disp.filter(d => d.tip === 'confirmare').length} confirmări („se menține"),
+              {' '}{disp.filter(d => d.tip === 'neclar').length} neclare.
+              {netrecut && <span style={{ color:G.orange }}> ⚠ un document nu a fost parcurs integral — rezultatul e incomplet.</span>}
+            </div>
+
+            {!ops.length ? (
+              <div style={{ fontSize:12.5, color: netrecut ? G.orange : G.green }}>
+                {netrecut ? 'Nu s-a găsit nicio schimbare, dar citirea e incompletă — reia analiza.'
+                  : 'Nicio schimbare în registru. Răspunsul confirmă documentația existentă.'}
+              </div>
+            ) : grupe.map(([fel, titlu, culoare]) => {
+              const lista = ops.filter(o => o.fel === fel)
+              if (!lista.length) return null
+              return (
+                <div key={fel} style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:11.5, fontWeight:800, color:culoare, marginBottom:4 }}>{titlu} ({lista.length})</div>
+                  {lista.map(o => {
+                    const vechi = cerTinta[o.cerinta_id]
+                    const bifat = opSel.has(o.op_id)
+                    return (
+                      <div key={o.op_id} style={{ display:'flex', gap:9, padding:'8px 10px', marginBottom:5, borderRadius:8,
+                        background:'#1C2430', borderLeft:`3px solid ${o.necesita_revizuire ? G.orange : culoare}` }}>
+                        <input type="checkbox" checked={bifat} disabled={aplBusy}
+                          onChange={e => setOpSel(prev => { const n = new Set(prev); e.target.checked ? n.add(o.op_id) : n.delete(o.op_id); return n })} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:12.5 }}>
+                            {o.cerinta_id ? <b>#{o.cerinta_id}</b> : <b style={{ color:G.teal }}>cerință nouă</b>}
+                            {' '}<span style={{ color:G.muted }}>{o.motiv}</span>
+                          </div>
+                          {vechi && <div style={{ fontSize:12, color:G.dim, marginTop:4, textDecoration: fel === 'anuleaza' ? 'line-through' : 'none' }}>− {vechi.text_cerinta}</div>}
+                          {(o.text_nou || o.text_cerinta) && <div style={{ fontSize:12, color:G.green, marginTop:2 }}>+ {o.text_nou || o.text_cerinta}</div>}
+                          <div style={{ fontSize:11, color:G.muted, marginTop:5, fontStyle:'italic' }}>„{o.sursa_pasaj}"</div>
+                          {o.necesita_revizuire && (
+                            <div style={{ fontSize:11, color:G.orange, marginTop:4 }}>
+                              ⚠ de revizuit: schimbarea pare să privească doar un lot, iar cerința e comună. Verifică înainte de a bifa.
+                            </div>
+                          )}
+                        </div>
+                        <span style={{ fontSize:10.5, fontWeight:800, whiteSpace:'nowrap',
+                          color: o.incredere === 'ridicata' ? G.green : o.incredere === 'medie' ? G.orange : G.red }}>{o.incredere}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+
+            {ops.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:10, flexWrap:'wrap' }}>
+                <button style={{ ...S.btnS, padding:'5px 11px', fontSize:11.5 }} disabled={aplBusy}
+                  onClick={() => setOpSel(new Set(ops.filter(o => !o.necesita_revizuire).map(o => o.op_id)))}>
+                  Selectează toate{ops.some(o => o.necesita_revizuire) ? ' (fără cele de revizuit)' : ''}</button>
+                <button style={{ ...S.btnS, padding:'5px 11px', fontSize:11.5 }} disabled={aplBusy}
+                  onClick={() => setOpSel(new Set())}>Deselectează</button>
+                <button style={{ ...S.btnP, marginLeft:'auto', opacity: opSel.size && !aplBusy ? 1 : .5 }}
+                  disabled={!opSel.size || aplBusy} onClick={aplicaSelectia}>
+                  {aplBusy ? 'Se aplică…' : `✅ Aplică cele ${opSel.size} selectate`}
+                </button>
+              </div>
+            )}
+
+            {rezAplic && (
+              <div style={{ marginTop:10, padding:10, borderRadius:8, background:G.surface, fontSize:12.5 }}>
+                <b>Aplicat:</b> {rezAplic.modificate} modificate · {rezAplic.anulate} anulate · {rezAplic.noi} noi ·
+                {' '}{rezAplic.acoperiri_mutate} acoperiri mutate (de reverificat).
+                {rezAplic.conflicte?.length > 0 && (
+                  <div style={{ color:G.orange, marginTop:6 }}>
+                    {rezAplic.conflicte.length} neaplicate — s-au schimbat între analiză și aprobare:
+                    <ul style={{ margin:'4px 0 0 16px' }}>
+                      {rezAplic.conflicte.map((c, i) => <li key={i}>{c.cerinta_id ? `#${c.cerinta_id}: ` : ''}{c.motiv}</li>)}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }
@@ -1147,7 +1360,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
     // spart în „— partea N" se sare (părțile îl înlocuiesc — cazul VOLUM III întreg).
     const { data: docs } = await supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip').eq('licitatie_id', licitatie.id)
-      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta', 'formular'])
+      .in('status_procesare', ['procesat', 'partial']).in('tip', ['cs_volum', 'raspuns_clarificare', 'alta', 'formular'])
       .order('id')
     const toateNumele = (docs || []).map(d => d.nume_original || '')
     const deCitit = (docs || []).filter(d => {
@@ -1938,7 +2151,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
-            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} />}
+            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
