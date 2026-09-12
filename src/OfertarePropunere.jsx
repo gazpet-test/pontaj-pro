@@ -50,8 +50,15 @@ const S = {
 // licitație Transgaz. Opisul propunerii depuse la Contești (distribuție gaze, 1144 pag.) spune
 // negru pe alb: „Propunere Tehnică respecta capitolele din Fisa de date si cap9 pct 9.1". Acolo
 // structura e cu totul alta — Secțiunea A (Cap. I-VI) + Secțiunea B, Planul calității (Cap. I-III)
-// + ~20 de anexe, cu Graficul Gantt ca anexă, depus și PDF și Excel separat. Deci: punct de
-// pornire pentru licitațiile pe formular ANAP, niciodată implicit tăcut pentru restul.
+// + ~20 de anexe, cu Graficul Gantt ca anexă, depus și PDF și Excel separat.
+//
+// A treia structură, citită la Motru (distribuție gaze): fișa de date, secțiunea IV.4.1 „Modul de
+// prezentare al propunerii tehnice" — 9 capitole numerotate 1-9, repetate identic în caietul de
+// sarcini. Deci variază și lista, și locul din fișa de date unde e scrisă (Contești: cap. 9 pct.
+// 9.1; Motru: IV.4.1). Se caută după TITLU, nu după număr.
+//
+// Trei licitații, trei structuri. Deci: punct de pornire pentru licitațiile pe formular ANAP,
+// niciodată implicit tăcut pentru restul.
 const CAPITOLE_ANAP = [
   { nr:1,  titlu:'Rezumat', obligatoriu:true, formular:null },
   { nr:2,  titlu:'Metodologia de executarea lucrărilor', obligatoriu:true, formular:null },
@@ -72,7 +79,14 @@ const CAPITOLE_ANAP = [
 
 // ATENȚIE: identic, caracter cu caracter, cu regexul din v_ofertare_pt_stare.
 // Dacă cele două diferă, bannerul spune 15 capcane și lista arată 12.
-const RX_CAPCANA = /(respins|neconform|descalific|inacceptabil|sub sanc[tț]iune|f[aă]r[aă] (posibilitatea de a solicita )?clarific|nu se accept)/i
+// Regexul e masurat pe date reale inainte de orice largire (13.09.2026, 2127 cerinte):
+//   `resping` gol         -> +6, dar prinde "respingerea RECEPTIEI", care n-are legatura cu oferta
+//   `exclu(dere|s)`       -> +22, aproape toate "responsabil EXCLUSIV". Zgomot curat, refuzat.
+//   `[iî]ntocmai`         -> +2, din care 1 deja prins. Nu merita clasa de fals pozitive.
+// Varianta pastrata: +4, toate reale ("necriptarea duce la respingerea ofertei"), 0 pierdute.
+// `se considera lipsa` si `indiferent de modul de prezentare` sunt verbatim din documentatia
+// Motru (repetat de 6 ori acolo); 0 potriviri azi fiindca documentele alea nu-s inca ingerate.
+const RX_CAPCANA = /(respins|resping[ăa-z]* (a |la )?(ofert|candidatur)|neconform|descalific|inacceptabil|sub sanc[tț]iune|f[aă]r[aă] (posibilitatea de a solicita )?clarific|nu se accept|se consider[aă] (ca )?lips[aă]|indiferent de modul de prezentare)/i
 
 const fmtZi = d => d ? new Date(d.length === 10 ? d + 'T00:00:00' : d).toLocaleDateString('ro-RO') : '—'
 const zileRamase = t => { if (!t) return null; const ms = new Date(t) - new Date(); return Math.ceil(ms / 86400000) }
@@ -89,7 +103,7 @@ function PoartaPT({ st, onFiltru }) {
     r.push({
       k:'cuprins', titlu:'Cuprinsul propunerii',
       stare: st.capitole > 0 ? 'ok' : 'block',
-      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — cuprinsul se ia din fișa de date, cap. 9 pct. 9.1',
+      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — cuprinsul se ia din fișa de date, de la „Modul de prezentare al propunerii tehnice"',
     })
     r.push({
       k:'fara', titlu:'Cerințe fără capitol',
@@ -275,7 +289,8 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSter
   const [nou, setNou] = useState(null)  // null = formularul e închis
 
   // Formularul de capitol nou. Capitolele NU vin dintr-un șablon: opisul de la Contești spune
-  // „respecta capitolele din Fisa de date si cap9 pct 9.1". Deci trebuie să se poată tasta.
+  // „respecta capitolele din Fisa de date si cap9 pct 9.1" — iar la Motru aceeasi sectiune e la
+  // IV.4.1, cu alte 9 capitole. Variaza si lista, si locul unde e scrisa. Deci trebuie sa se poata tasta.
   const formular = nou && (
     <div style={{ ...S.card, padding:12, marginTop:10, display:'flex', flexWrap:'wrap', gap:8, alignItems:'center' }}>
       <input placeholder="Secțiune (ex. Secțiunea A, Anexe) — opțional" value={nou.sectiune}
@@ -310,8 +325,9 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSter
       <div style={{ ...S.card, padding:16, textAlign:'center' }}>
         <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>
           Propunerea n-are încă niciun capitol. Cuprinsul NU e același la toate licitațiile: se ia din fișa de
-          date, cap. 9 pct. 9.1. Butonul de mai jos pune formularul ANAP (15 capitole), folosit la Transgaz —
-          la distribuție gaze structura e alta (Secțiuni A/B, capitole cu cifre romane, anexe). Editează după.
+          date, din secțiunea „Modul de prezentare al propunerii tehnice". Caut-o după titlu, nu după număr —
+          la Contești e cap. 9 pct. 9.1, la Motru e IV.4.1. Butonul de mai jos pune formularul ANAP
+          (15 capitole), de la Transgaz; la distribuție gaze structura e alta. Editează după.
         </div>
         <button onClick={onCreeaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .5 : 1 }}>
           📋 Pornește de la formularul ANAP (15 capitole)
@@ -466,7 +482,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setBusy(false)
     if (error && error.code !== '23505') { showToast?.('Cuprinsul nu s-a creat: ' + error.message, 'err'); return }
     if (error) showToast?.('Cuprinsul exista deja.', 'ok')
-    else showToast?.(`Cuprinsul ANAP a fost creat (${CAPITOLE_ANAP.length} capitole). Verifică-l pe fișa de date, cap. 9 pct. 9.1.`, 'ok')
+    else showToast?.(`Cuprinsul ANAP a fost creat (${CAPITOLE_ANAP.length} capitole). Verifică-l pe fișa de date, la „Modul de prezentare al propunerii tehnice".`, 'ok')
     await load(licId)
   }
 
