@@ -1,12 +1,8 @@
-// ofertare-acoperire v5 (27.08.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v6 (12.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v6: R-ACOP-1 + 12 constatari de revizuire + 3 runde de a doua parere (Codex).
 // v5: catalogul include și DOCUMENTELE FIRMEI (documente_firma — ANRE EDSB/EDIB,
 // ISO, certificate) cu id-uri prefixate F → acoperit cu mod='firma' + doc_firma_id.
-// Până acum se citeau doar autorizațiile de persoane → fals-goluri (DF1278266).
 // v4: partenerii cu observatii („acopera”). v3: ids[] felii. v2: CORS x-client-info.
-//
-// ADUSĂ ÎN REPO la 12.09.2026, VERBATIM — nicio modificare de cod.
-// E curată din punct de vedere al secretelor: `verify_jwt: true`, fără secret în sursă.
-// ⚠️ Are însă un defect de robustețe — caută „R-ACOP-1” mai jos.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -54,7 +50,7 @@ Deno.serve(async (req: Request) => {
     const { data: cerinte } = await q
     if (!cerinte?.length) return new Response(JSON.stringify({ ok: true, batch, propuneri: 0, skip: 'nicio cerinta de tipul asta' }), { headers: CORS })
 
-    const { data: auth } = await supabase.from('hr_autorizatii')
+    const { data: auth, error: eAuth } = await supabase.from('hr_autorizatii')
       .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)')
       .is('deleted_at', null).order('id')   // ordine STABILA: fara ea, prefixul difera intre apeluri si cache-ul nu se potriveste
     const catalog = (auth || []).map((a: any) => ({
@@ -66,7 +62,7 @@ Deno.serve(async (req: Request) => {
       sudura: a.procedeu_sudura || undefined, diam_mm: a.diametru_teava_mm || undefined,
       are_scan: !!a.fisier_path,
     }))
-    const { data: docsF } = await supabase.from('documente_firma')
+    const { data: docsF, error: eDocF } = await supabase.from('documente_firma')
       .select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, pdf_path')
       .eq('activ', true).order('id')
     const catalogFirma = (docsF || []).map((d: any) => ({
@@ -75,8 +71,24 @@ Deno.serve(async (req: Request) => {
       expira: d.fara_expirare ? 'niciodata' : (d.data_valabilitate || 'necunoscut'),
       are_scan: !!d.pdf_path,
     }))
-    const { data: partAll } = await supabase.from('ofertare_parteneri')
+    const { data: partAll, error: ePart } = await supabase.from('ofertare_parteneri')
       .select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('id')
+
+    // BLOCANT reparat 12.09: interogarile de mai sus citeau doar `data`, niciodata `error`.
+    // supabase-js NU arunca la esec — intoarce { data: null, error }. Cu `(auth || [])`,
+    // un timeout devenea tacut CATALOG GOL, iar modelul aplica atunci corect regula R1
+    // („potrivesti DOAR cu ce exista in catalog") si raspundea 'gol' pe TOATE cerintele.
+    // Alea erau randuri valide, deci stergerea pleca si o licitatie cu acoperirile puse
+    // devenea integral „fara dovada" — fara nicio eroare nicaieri.
+    if (eAuth || eDocF || ePart) {
+      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message))
+    }
+    // A doua plasa: un catalog gol nu e o stare normala pentru firma asta. Daca ambele
+    // surse sunt goale, ceva e rupt in amonte — nu propunem nimic si nu stergem nimic.
+    if (!(auth || []).length && !(docsF || []).length) {
+      return fail('catalog gol (0 autorizatii, 0 documente de firma) — refuz sa propun acoperiri')
+    }
+
     const parteneri = (partAll || []).map((p: any) => ({ id: p.id, nume: p.nume, tip_relatie: p.tip_relatie, acopera: (p.observatii || '').slice(0, 400) || undefined }))
 
     // CACHE (12.09.2026): catalogul — autorizatii, documente de firma, parteneri — e IDENTIC
@@ -93,7 +105,12 @@ Deno.serve(async (req: Request) => {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 9000,
+        // Pe claude-opus-5 gandirea e PORNITA implicit cand `thinking` lipseste (spre deosebire
+        // de Opus 4.8/4.7), iar tokenii de gandire se scad din max_tokens. La 9000 se intampla
+        // ca taietura sa cada in blocul de gandire: nu ramane niciun bloc `text`, raspunsul pare
+        // gol si rularea se oprea. O declaram explicit si ii dam loc. `budget_tokens` ar da 400.
+        model: MODEL, max_tokens: 16000,
+        thinking: { type: 'adaptive' },
         system: [{ type: 'text', text: PROMPT }],
         messages: [{ role: 'user', content: [
           { type: 'text', text: stabil, cache_control: { type: 'ephemeral' } },
@@ -188,28 +205,168 @@ Deno.serve(async (req: Request) => {
       })
     }
     // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.
+    // Felie fara niciun rand valid: NU e o eroare a rularii. Raspunsul purta cheia `error`,
+    // iar frontendul face `return` din tot ciclul cand o vede — asa ca o singura felie
+    // nefericita oprea si restul eliminatoriilor, si intreg batch-ul 'propunere'. Acum
+    // raportam felia ca goala si lasam ciclul sa continue; felia intra la reluare.
     if (!rows.length) {
       return new Response(JSON.stringify({
-        ok: false, batch, propuneri: 0, trunchiat,
-        error: 'AI-ul n-a intors nicio acoperire valida — nu s-a sters si nu s-a scris nimic',
+        ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
+        motiv_felie_goala: 'AI-ul n-a intors nicio acoperire valida — nu s-a sters si nu s-a scris nimic',
+        stop_reason: data.stop_reason || null,
+        fara_raspuns: idsCerinte.size, cerinte_fara_raspuns: Array.from(idsCerinte),
         tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       }), { headers: CORS })
     }
-    const idsDeRescris = Array.from(new Set(rows.map(r => r.cerinta_id)))
-    const { error: eDel } = await supabase.from('ofertare_acoperire')
-      .delete().in('cerinta_id', idsDeRescris).eq('verificat_pe_scan', false)
-    if (eDel) return fail('stergere acoperiri vechi: ' + eDel.message)
-    const { error: eIns } = await supabase.from('ofertare_acoperire').insert(rows)
-    if (eIns) return fail('insert acoperire: ' + eIns.message)
+    const PLAFON_RAPORT = 500
+    const fararaspunsDin = (toate: Set<any>, scrise: Set<any>) => Array.from(toate).filter((id: any) => !scrise.has(id)).length
+    const listaFaraRaspuns = (toate: Set<any>, scrise: Set<any>) => Array.from(toate).filter((id: any) => !scrise.has(id)).slice(0, PLAFON_RAPORT)
+    // AI-ul poate repeta acelasi cerinta_id; fara dedup s-ar insera doua randuri pentru
+    // aceeasi cerinta, iar tabelul n-are index unic care sa opreasca asta.
+    const vazute = new Set()
+    const randuriUnice = rows.filter(r => { if (vazute.has(r.cerinta_id)) return false; vazute.add(r.cerinta_id); return true })
+    const idsDeRescris = Array.from(vazute)
 
-    // Cerintele din felie la care AI-ul NU a raspuns: nu le-am atins, deci acoperirea veche
-    // le ramane. Le raportam ca sa se vada ca felia n-a fost acoperita integral — tacerea a
-    // fost chiar problema.
-    const fararaspuns = Array.from(idsCerinte).filter((id: any) => !idsDeRescris.includes(id))
-    const goluri = rows.filter(r => r.status === 'gol').length
-    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null, propuneri: rows.length, goluri, firma: rows.filter(r => r.mod === 'firma').length,
-      nu_se_aplica: rows.filter(r => r.status === 'nu_se_aplica').length,
-      fara_raspuns: fararaspuns.length, cerinte_fara_raspuns: fararaspuns.slice(0, 50), trunchiat, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens, cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
+    // Randurile existente ale cerintelor pe care le rescriem. Le citim INAINTE, din doua motive.
+    const { data: vechi, error: eVechi } = await supabase.from('ofertare_acoperire')
+      .select('id, cerinta_id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
+      .in('cerinta_id', idsDeRescris).order('id')
+    if (eVechi) return fail('citire acoperiri existente: ' + eVechi.message)
+
+    // (a) BLOCANT reparat: stergerea sarea randurile verificate pe scan de OM, dar insertul
+    // adauga oricum randul AI-ului → doua randuri pe aceeasi cerinta. Frontendul indexeaza
+    // cerinta_id -> UN rand, deci afisa unul la intamplare: ori dovada verificata disparea de
+    // pe ecran, ori verdictul nou al AI-ului devenea invizibil. Acum NU mai scriem peste o
+    // cerinta care are dovada verificata de om — o raportam ca sa decida omul.
+    const verificate = new Map()
+    for (const v of (vechi || [])) if (v.verificat_pe_scan) verificate.set(v.cerinta_id, v)
+
+    // (b) Campurile scrise de colegi (raspuns la gol, tichet) se pastreaza: pana acum se
+    // pierdeau tacut la fiecare re-rulare, iar cerinta oferea din nou butonul de tichet.
+    // Cand aceeasi cerinta are MAI MULTE randuri nevalidate (se intampla azi, tabelul n-are
+    // index unic), a alege UN rand pierde datele celuilalt: daca randul A are raspunsul
+    // colegului si randul B doar tichetul, oricare ar castiga, celalalt dispare la stergere.
+    // Raspunsul, autorul si data sunt UN grup: nu combinam raspunsul dintr-un rand cu autorul
+    // din altul. Un rand cu raspuns ramane intreg. Daca doua randuri au raspunsuri (sau tichete)
+    // DIFERITE, nu alegem noi care supravietuieste: lasam cerinta neatinsa si o raportam.
+    const CAMPURI_OM = ['raspuns_coleg', 'raspuns_de', 'raspuns_la', 'tichet_id']
+    const pastrate = new Map()
+    const conflicteRaspuns = []
+    const cerinteBlocateDeConflict = new Set()
+    for (const v of (vechi || [])) {
+      if (v.verificat_pe_scan) continue
+      const ex = pastrate.get(v.cerinta_id)
+      if (!ex) { pastrate.set(v.cerinta_id, { ...v }); continue }
+      // grupul raspuns (coleg + de + la)
+      const areR = (x: any) => x.raspuns_coleg != null
+      if (areR(v) && areR(ex) && v.raspuns_coleg !== ex.raspuns_coleg) {
+        conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: 'raspuns_coleg', a: ex.raspuns_coleg, b: v.raspuns_coleg })
+        cerinteBlocateDeConflict.add(v.cerinta_id)
+      } else if (areR(v) && !areR(ex)) {
+        ex.raspuns_coleg = v.raspuns_coleg; ex.raspuns_de = v.raspuns_de; ex.raspuns_la = v.raspuns_la
+      }
+      // tichetul, separat
+      if (ex.tichet_id == null) ex.tichet_id = v.tichet_id
+      else if (v.tichet_id != null && v.tichet_id !== ex.tichet_id) {
+        conflicteRaspuns.push({ cerinta_id: v.cerinta_id, camp: 'tichet_id', a: ex.tichet_id, b: v.tichet_id })
+        cerinteBlocateDeConflict.add(v.cerinta_id)
+      }
+    }
+
+    const conflicteVerificate = []
+    const deScris = []
+    for (const r of randuriUnice) {
+      const v = verificate.get(r.cerinta_id)
+      if (v) { conflicteVerificate.push({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text, acoperire_verificata_id: v.id }); continue }
+      // Cerinta cu doua informatii umane incompatibile: nu o rescriem si nu stergem nimic la
+      // ea. Un avertisment nu tine loc de date — originalele raman, omul alege.
+      if (cerinteBlocateDeConflict.has(r.cerinta_id)) continue
+      const p = pastrate.get(r.cerinta_id)
+      deScris.push(p ? { ...r, raspuns_coleg: p.raspuns_coleg ?? null, raspuns_de: p.raspuns_de ?? null, raspuns_la: p.raspuns_la ?? null, tichet_id: p.tichet_id ?? null } : r)
+    }
+
+    if (!deScris.length) {
+      return new Response(JSON.stringify({
+        ok: true, batch, propuneri: 0, felie_goala: true, trunchiat,
+        motiv_felie_goala: 'nicio propunere de scris — toate cele primite sunt blocate de o dovada verificata de om',
+        conflicte_verificate: conflicteVerificate, conflicte_raspuns: conflicteRaspuns,
+        stop_reason: data.stop_reason || null,
+        // Ramura asta nu inseamna ca AI-ul a raspuns la toata felia: poate a raspuns la UNA,
+        // deja verificata, iar restul de 54 lipsesc. Fara randurile astea, frontendul nu le
+        // numara si lipsurile raman nespuse.
+        fara_raspuns: fararaspunsDin(idsCerinte, vazute), cerinte_fara_raspuns: listaFaraRaspuns(idsCerinte, vazute),
+        lista_fara_raspuns_taiata: fararaspunsDin(idsCerinte, vazute) > PLAFON_RAPORT,
+      }), { headers: CORS })
+    }
+
+    // (c) INSERT INAINTE de DELETE. Erau doua cereri separate, netranzactionale, iar insertul
+    // e all-or-nothing pe toata felia: daca pica (o cerinta stearsa intre timp de un coleg, un
+    // timeout), stergerea se aplicase deja si ~55 de cerinte ramaneau fara niciun rand. In
+    // ordinea asta, un insert picat nu mai sterge nimic, iar un delete picat lasa duplicate —
+    // vizibile si reparabile, spre deosebire de date disparute.
+    const { error: eIns } = await supabase.from('ofertare_acoperire').insert(deScris)
+    if (eIns) return fail('insert acoperire (nu s-a sters nimic): ' + eIns.message)
+
+    // Stergem DOAR randurile vechi ale cerintelor pe care chiar le-am inlocuit. Folosind
+    // `vazute` se stergea si randul nevalidat (cu raspunsul unui coleg) al unei cerinte
+    // BLOCATE de o dovada verificata — cerinta pentru care nu am scris nimic in loc.
+    const cerinteInlocuite = new Set(deScris.map(r => r.cerinta_id))
+    const candidatiDeSters = (vechi || []).filter(v => !v.verificat_pe_scan && cerinteInlocuite.has(v.cerinta_id))
+    let duplicateRamase = 0
+    const nesterse = []
+    if (candidatiDeSters.length) {
+      // Intre citirea de mai sus si acum e doar INSERT-ul, nu si apelul AI (citirea vine dupa
+      // raspunsul modelului) — fereastra e de ordinul sutelor de milisecunde, nu de zeci de
+      // secunde. Nu e zero si nu e atomica: un coleg poate salva chiar intre recitire si DELETE.
+      // Dar esecul cade in directia buna — duplicat vizibil, nu munca omului stearsa.
+      const { data: acum, error: eRe } = await supabase.from('ofertare_acoperire')
+        .select('id, verificat_pe_scan, raspuns_coleg, raspuns_de, raspuns_la, tichet_id')
+        .in('id', candidatiDeSters.map(v => v.id))
+      if (eRe) { duplicateRamase = candidatiDeSters.length }
+      else {
+        const acumMap = new Map((acum || []).map((v: any) => [v.id, v]))
+        const idsVechiDeSters = []
+        for (const v of candidatiDeSters) {
+          const a = acumMap.get(v.id)
+          if (!a) continue   // l-a sters altcineva intre timp
+          const schimbat = a.verificat_pe_scan || CAMPURI_OM.some(c => a[c] !== v[c])
+          if (schimbat) { nesterse.push(v.id); continue }
+          idsVechiDeSters.push(v.id)
+        }
+        duplicateRamase = nesterse.length
+        if (idsVechiDeSters.length) {
+          const { error: eDel } = await supabase.from('ofertare_acoperire')
+            .delete().in('id', idsVechiDeSters).eq('verificat_pe_scan', false)
+          if (eDel) duplicateRamase += idsVechiDeSters.length
+          else {
+            // Numaram ce a RAMAS, nu ce am incercat sa stergem: un rand devenit „verificat"
+            // intre timp scapa de filtru fara eroare, deci ar fi ramas nenumarat.
+            const { data: ramase } = await supabase.from('ofertare_acoperire')
+              .select('id').in('id', idsVechiDeSters)
+            duplicateRamase += (ramase || []).length
+          }
+        }
+      }
+    }
+
+    // Cerintele la care AI-ul n-a raspuns si cele blocate de o dovada verificata: nu le-am
+    // atins, deci acoperirea veche le ramane. Plafonul de raportare era 50, iar felia trimisa
+    // de frontend are 55 — cerintele peste plafon nu mai erau reluate NICIODATA. Ridicat, plus
+    // un steag explicit cand lista tot e taiata, ca frontendul sa reia atunci toata felia.
+    const fararaspuns = Array.from(idsCerinte).filter((id: any) => !vazute.has(id))
+    const goluri = deScris.filter(r => r.status === 'gol').length
+    return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null,
+      propuneri: deScris.length, goluri, firma: deScris.filter(r => r.mod === 'firma').length,
+      nu_se_aplica: deScris.filter(r => r.status === 'nu_se_aplica').length,
+      conflicte_verificate: conflicteVerificate,
+      conflicte_raspuns: conflicteRaspuns,
+      duplicate_ramase: duplicateRamase,
+      fara_raspuns: fararaspuns.length,
+      cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
+      lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,
+      trunchiat, stop_reason: data.stop_reason || null,
+      tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
+      cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
   }
