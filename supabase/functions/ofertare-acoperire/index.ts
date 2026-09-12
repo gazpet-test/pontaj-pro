@@ -1,12 +1,8 @@
-// ofertare-acoperire v5 (27.08.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v6 (12.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v6: R-ACOP-1 + 12 constatari de revizuire + 3 runde de a doua parere (Codex).
 // v5: catalogul include și DOCUMENTELE FIRMEI (documente_firma — ANRE EDSB/EDIB,
 // ISO, certificate) cu id-uri prefixate F → acoperit cu mod='firma' + doc_firma_id.
-// Până acum se citeau doar autorizațiile de persoane → fals-goluri (DF1278266).
 // v4: partenerii cu observatii („acopera”). v3: ids[] felii. v2: CORS x-client-info.
-//
-// ADUSĂ ÎN REPO la 12.09.2026, VERBATIM — nicio modificare de cod.
-// E curată din punct de vedere al secretelor: `verify_jwt: true`, fără secret în sursă.
-// ⚠️ Are însă un defect de robustețe — caută „R-ACOP-1” mai jos.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -250,8 +246,6 @@ Deno.serve(async (req: Request) => {
     // Cand aceeasi cerinta are MAI MULTE randuri nevalidate (se intampla azi, tabelul n-are
     // index unic), a alege UN rand pierde datele celuilalt: daca randul A are raspunsul
     // colegului si randul B doar tichetul, oricare ar castiga, celalalt dispare la stergere.
-    // Deci nu alegem un rand — combinam CAMP cu CAMP, primul nenul castiga (citire ordonata
-    // dupa id). Daca doua randuri au raspunsuri DIFERITE, nu inghitim niciunul: raportam.
     // Raspunsul, autorul si data sunt UN grup: nu combinam raspunsul dintr-un rand cu autorul
     // din altul. Un rand cu raspuns ramane intreg. Daca doua randuri au raspunsuri (sau tichete)
     // DIFERITE, nu alegem noi care supravietuieste: lasam cerinta neatinsa si o raportam.
@@ -355,9 +349,6 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Cerintele din felie la care AI-ul NU a raspuns: nu le-am atins, deci acoperirea veche
-    // le ramane. Le raportam ca sa se vada ca felia n-a fost acoperita integral — tacerea a
-    // fost chiar problema.
     // Cerintele la care AI-ul n-a raspuns si cele blocate de o dovada verificata: nu le-am
     // atins, deci acoperirea veche le ramane. Plafonul de raportare era 50, iar felia trimisa
     // de frontend are 55 — cerintele peste plafon nu mai erau reluate NICIODATA. Ridicat, plus
