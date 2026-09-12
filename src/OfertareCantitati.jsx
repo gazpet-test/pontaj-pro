@@ -34,7 +34,7 @@ const CLAR_STATUS = {
   retrasa:   ['⛔ retrasă',   G.dim],
 }
 
-export default function CantitatiPanel({ licitatii, profile, showToast, initialLicId = null, onInapoi = null }) {
+export default function CantitatiPanel({ licitatii, profile, showToast, initialLicId = null, onInapoi = null, onDeschideAnaliza = null }) {
   const active = (licitatii || []).filter(l => !['castigata', 'pierduta', 'abandonata'].includes(l.status))
   const [licId, setLicId] = useState(initialLicId)
   const [cant, setCant] = useState(null)
@@ -53,19 +53,10 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     load()
   }
   const [busy, setBusy] = useState(null)
-  // Răzvan 07.09: răspunsul autorității → „Aplică în registru” (edge fn ofertare-clarificare-aplica, Sonnet 5): modifică/anulează/adaugă
-  // cerințele afectate (versiune nouă + acoperirea copiată), fără să se reia „Propune acoperire” pe tot registrul
-  const [aplicand, setAplicand] = useState(null)
-  const aplicaInRegistru = async (q) => {
-    if (!(q.raspuns || '').trim()) return showToast('Completează întâi răspunsul autorității.', 'err')
-    if (!window.confirm(`Aplic răspunsul la clarificarea nr. ${q.nr} în registrul de cerințe? Cerințele afectate primesc versiune nouă (cele vechi rămân în istoric), acoperirea se copiază pe versiunea nouă.`)) return
-    setAplicand(q.id)
-    const { data, error } = await supabase.functions.invoke('ofertare-clarificare-aplica', { body: { clarificare_id: q.id } })
-    setAplicand(null)
-    if (error || data?.error) return showToast('Aplicare: ' + (data?.error || error?.message), 'err')
-    showToast(data.fara_efect ? `ℹ️ Răspunsul nu schimbă nicio cerință. ${data.rezumat || ''}` : `✓ Registru actualizat: ${data.modificate} modificate, ${data.anulate} anulate, ${data.noi} noi (${data.acoperiri_copiate} acoperiri păstrate). ${data.rezumat || ''}`)
-    load()
-  }
+  // Butonul de aici chema pana pe 12.09 `ofertare-clarificare-aplica`, care aplica ORB: AI-ul modifica,
+  // anula si adauga cerinte, iar omul afla din toast DUPA ce se intamplase. Era ultima usa prin care
+  // registrul se schimba nevazut. Acum duce in fluxul cu revizuire: fisa licitatiei → Documente, cu
+  // documentul de raspuns deja bifat. Analiza o porneste omul acolo, fiindca ea costa bani.
 
   useEffect(() => {
     if (licId == null && active.length) {
@@ -356,11 +347,21 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
                             </select>
                           </div>
                         )}
-                        {(q.raspuns || '').trim() && (
+                        {(q.raspuns_document_id || (q.raspuns || '').trim()) && (
                           <div style={{ marginTop:5 }}>
-                            <button style={{ ...S.btnS, padding:'3px 10px', fontSize:11.5, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={aplicand === q.id}
-                              title="AI-ul compară răspunsul cu registrul de cerințe și modifică/anulează/adaugă doar cerințele afectate" onClick={() => aplicaInRegistru(q)}>
-                              {aplicand === q.id ? '⏳ aplic în registru…' : '📋 Aplică în registru'}</button>
+                            {q.raspuns_document_id ? (
+                              <button style={{ ...S.btnS, padding:'3px 10px', fontSize:11.5, color:G.ofertare, borderColor:G.ofertare + '66' }}
+                                disabled={!onDeschideAnaliza}
+                                title={onDeschideAnaliza ? 'Deschide fișa licitației în Documente, cu acest document bifat. Analiza o pornești tu acolo.' : 'Deschide Clarificările din fișa licitației ca să poți intra în analiză'}
+                                onClick={() => onDeschideAnaliza({ licitatieId: q.licitatie_id, documentId: q.raspuns_document_id })}>
+                                📋 Analizează impactul în registru</button>
+                            ) : (
+                              // Fluxul nou citeste documentul, nu caseta de text: un raspuns scris de mana
+                              // n-are ce inventaria. Spunem exact ce lipseste, nu „nu se poate".
+                              <span style={{ fontSize:11.5, color:G.muted }}>
+                                Pentru analiza în registru, leagă mai sus documentul autorității (PDF-ul din SEAP).
+                              </span>
+                            )}
                           </div>
                         )}
                       </>

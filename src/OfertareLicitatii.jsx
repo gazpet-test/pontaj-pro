@@ -96,6 +96,23 @@ export default function OfertareLicitatiiTab() {
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
   const [cantLicId, setCantLicId] = useState(null)   // licitația cu care intri în Cantități din fișă (Răzvan 07.09: nu mai alegi din listă)
+  // Intrarea din Clarificări direct în analiza unui document: o „intenție" care coboară până la
+  // DocumenteSection și se consumă o singură dată. Numărul de secvență există ca să deosebim două
+  // intrări succesive pe aceeași licitație — altfel a doua n-ar mai remonta fișa.
+  const secventaIntrare = useRef(0)
+  const [intrareDocument, setIntrareDocument] = useState(null)
+  const [cheieFisa, setCheieFisa] = useState(0)
+  const consumaIntrare = (id) => setIntrareDocument(c => (c?.id === id ? null : c))
+  const deschideAnaliza = ({ licitatieId, documentId }) => {
+    const lic = rows.find(r => String(r.id) === String(licitatieId))
+    if (!lic || !documentId) return showToast('Nu pot deschide analiza: licitația sau documentul lipsește.', 'err')
+    const id = ++secventaIntrare.current
+    setIntrareDocument({ id, licitatieId: lic.id, documentId })
+    setCheieFisa(id)
+    setCantLicId(lic.id)
+    setVedere('licitatii')
+    setSelected(lic)
+  }
 
   const showToast = (msg, tip = 'ok') => { setToast({ msg, tip }); setTimeout(() => setToast(null), 4000) }
 
@@ -299,7 +316,8 @@ export default function OfertareLicitatiiTab() {
       {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
 
       {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={cantLicId}
-        onInapoi={cantLicId ? () => { const r = rows.find(x => x.id === cantLicId); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
+        onDeschideAnaliza={deschideAnaliza}
+        onInapoi={cantLicId ? () => { const r = rows.find(x => x.id === cantLicId); setIntrareDocument(null); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'licitatii' && <>
       {/* ── Redesign #40: antet cu contoare + filtre-chip + carduri aerisite (macheta redesign_lista, GO 07.09.2026) ── */}
@@ -383,10 +401,11 @@ export default function OfertareLicitatiiTab() {
         <LicitatieFormModal licitatie={editRow} onClose={() => { setShowForm(false); setEditRow(null) }} onSave={salveaza} />
       )}
       {selected && (
-        <LicitatieDetailModal licitatie={selected} profile={profile} echipa={echipa} onChanged={load}
-          onClose={() => setSelected(null)}
-          onEdit={() => { setEditRow(selected); setSelected(null); setShowForm(true) }}
-          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setCantLicId(selected.id); setVedere('cantitati') }} />
+        <LicitatieDetailModal key={`${selected.id}:${cheieFisa}`} licitatie={selected} profile={profile} echipa={echipa} onChanged={load}
+          intrareDocument={intrareDocument} onIntrareConsumata={consumaIntrare} showToast={showToast}
+          onClose={() => { setIntrareDocument(null); setSelected(null) }}
+          onEdit={() => { setIntrareDocument(null); setEditRow(selected); setSelected(null); setShowForm(true) }}
+          onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setIntrareDocument(null); setCantLicId(selected.id); setVedere('cantitati') }} />
       )}
     </div>
   )
@@ -591,7 +610,7 @@ function Lucru({ icon, text, pct, detaliu }) {
   )
 }
 
-function DocumenteSection({ licitatie, profile, onChanged }) {
+function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   const [docs, setDocs] = useState(null)
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
@@ -610,14 +629,19 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
   const [aplBusy, setAplBusy] = useState(false)
   const [rezAplic, setRezAplic] = useState(null)
 
+  const [eroareDocs, setEroareDocs] = useState(null)
   const load = async () => {
-    const [{ data }, { data: c }] = await Promise.all([
+    const [{ data, error }, { data: c }] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
     ])
-    setDocs(data || []); setCoada(c || null)
+    // Eroarea la citire era inghitita: lista ramanea `null`, ecranul arata „se incarca" la nesfarsit
+    // si nimeni nu afla de ce. Acum se vede, si intrarea din Clarificari stie ca n-are pe ce lucra.
+    if (error) { setEroareDocs(error.message); setWarn('Nu pot incarca documentele: ' + error.message); setDocs([]) }
+    else { setEroareDocs(null); setDocs(data || []) }
+    setCoada(c || null)
   }
   useEffect(() => { load() }, [licitatie.id])
   // Cât timp workerul de pe server citește, reîmprospătăm lista la 20s ca să se vadă progresul
@@ -903,6 +927,26 @@ function DocumenteSection({ licitatie, profile, onChanged }) {
 
   // Documentele care pot intra într-un set de răspuns: doar cele din care s-a extras text.
   const potIntra = (d) => ['procesat', 'partial'].includes(d.status_procesare) && !d.fisier_path?.includes('/neincarcat/')
+
+  // Intrarea din Clarificari: bifeaza documentul cerut si atat — analiza o porneste tot omul, cu
+  // butonul ei, fiindca ea costa bani. Se consuma o SINGURA data (ref, nu state: in StrictMode
+  // efectul ruleaza de doua ori si a doua oara ar rebifa peste ce a schimbat omul intre timp).
+  const intrareTratata = useRef(null)
+  useEffect(() => {
+    const intentie = intrareDocument
+    if (!intentie || intrareTratata.current === intentie.id) return
+    if (String(intentie.licitatieId) !== String(licitatie.id)) return
+    if (docs === null) return                       // inca se incarca lista: asteptam, nu ratam intrarea
+    intrareTratata.current = intentie.id
+    const d = (docs || []).find(x => String(x.id) === String(intentie.documentId))
+    const motiv = eroareDocs ? 'Documentele nu s-au putut incarca: ' + eroareDocs
+      : !d ? 'Documentul legat de clarificare nu mai e in licitatia asta.'
+      : !potIntra(d) ? 'Documentul legat nu are text extras — proceseaza-l intai, apoi bifeaza-l.'
+      : null
+    if (motiv) { setWarn(motiv); showToast?.(motiv, 'err') }
+    else setSelDoc(new Set([d.id]))
+    onIntrareConsumata?.(intentie.id)
+  }, [intrareDocument, licitatie.id, docs, eroareDocs])
 
   const incarcaSet = async (setId) => {
     const { data: st, error } = await supabase.from('ofertare_raspuns_set')
@@ -2090,13 +2134,20 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
-function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati }) {
+function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati,
+  intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
   // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
   const [motivare, setMotivare] = useState(l.decizie_motivare || '')
   const [regim, setRegim] = useState(l.regim_achizitie || '')
   const [resp, setResp] = useState(l.responsabil_id || '')
-  const [tab, setTab] = useState('cerinte')   // cerinte | documente | clarificari | detalii | verificari
+  // Intrarea din Clarificări deschide fișa direct pe Documente; altfel, tabul obișnuit.
+  const [tab, setTab] = useState(() => (intrareDocument ? 'documente' : 'cerinte'))   // cerinte | documente | clarificari | detalii | verificari
+  // Dacă omul pleacă de pe Documente înainte să apuce bifarea, intenția nu mai are ce căuta:
+  // altfel s-ar declanșa mai târziu, peste altceva.
+  useEffect(() => {
+    if (tab !== 'documente' && intrareDocument && onIntrareConsumata) onIntrareConsumata(intrareDocument.id)
+  }, [tab, intrareDocument, onIntrareConsumata])
   // Bifele din registrul de cerințe stau aici, nu în secțiune, ca aceeași selecție să se
   // vadă și în „Acoperirea cerințelor" — altfel omul bifa sus și căuta manual, jos, același
   // număr de ordine. Se golește când schimbi licitația.
@@ -2209,7 +2260,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
-            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged} />}
+            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
+              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
