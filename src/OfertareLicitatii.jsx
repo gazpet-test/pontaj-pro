@@ -109,7 +109,7 @@ export default function OfertareLicitatiiTab() {
     // Redesign #40 (GO Răzvan 07.09.2026): cifrele de pe carduri/KPI — acoperire, dovezi roșii, verdict, clarificări
     const ids = (v || []).map(r => r.id)
     const stats = {}
-    ids.forEach(id => { stats[id] = { cerinte: 0, acoperite: 0, rosii: 0, verdict: null, verdict_la: null, clarificari: 0 } })
+    ids.forEach(id => { stats[id] = { cerinte: 0, acoperite: 0, reverif: 0, rosii: 0, verdict: null, verdict_la: null, clarificari: 0 } })
     if (ids.length) {
       const [{ data: cs }, { data: vf }, { data: cl }] = await Promise.all([
         // .limit explicit: implicit PostgREST întoarce 1.000 de rânduri, iar cerințele active sunt peste 2.000 —
@@ -121,7 +121,7 @@ export default function OfertareLicitatiiTab() {
       const cerLic = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; stats[c.licitatie_id].cerinte++ })
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
-        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, verificat_pe_scan, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
+        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, verificat_pe_scan, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
         // O cerință poate avea mai multe rânduri de acoperire (cele verificate pe scan nu se
         // șterg la re-rulare). Numărătoarea pe RÂND umfla „acoperite" și putea depăși 100%.
         // Mai mult: numărând ORICE rând acoperit, KPI-ul spunea „acoperit" acolo unde ecranul
@@ -131,7 +131,10 @@ export default function OfertareLicitatiiTab() {
         ;(ac || []).forEach(a => { const ex = randCerinta[a.cerinta_id]
           if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) randCerinta[a.cerinta_id] = a })
         Object.values(randCerinta).forEach(a => { const lid = cerLic[a.cerinta_id]; const st = stats[lid]; if (!st) return
-          if (a.status === 'acoperit' || a.status === 'acoperit_partener') st.acoperite++
+          // Dovada mutata de un raspuns al autoritatii pe textul NOU al cerintei nu e inca dovada:
+          // omul n-a vazut noul text. Se numara separat, nu in „acoperite" — altfel ecranul spune
+          // „gata" exact acolo unde cerinta tocmai s-a schimbat sub noi.
+          if (a.status === 'acoperit' || a.status === 'acoperit_partener') { if (a.reverificare_ceruta) st.reverif++; else st.acoperite++ }
           // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci
           if (a.doc_firma?.se_reemite) { if (reemisUrgent(a.doc_firma, fullMap[lid]?.termen_depunere)) st.rosii++ }
           else if (a.valabil_la_depunere === false) st.rosii++ })
@@ -355,6 +358,7 @@ export default function OfertareLicitatiiTab() {
                   <span>💰 <b style={{ color:G.text }}>{fmtMil(l.valoare_estimata)}</b> {l.moneda || 'lei'}</span>
                   <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>
                   {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }} title={'Eliminatorii fără rând de acoperire „acoperit”: goluri + neevaluate'}>🚫 eliminatorii fără dovadă: <b>{l.eliminatorii_neacoperite}</b></span>}
+                  {sx.reverif > 0 && <span style={{ color:G.orange }} title="Dovezi mutate pe textul nou al cerinței de un răspuns al autorității — nimeni nu le-a reconfirmat încă">⟳ de reverificat: <b>{sx.reverif}</b></span>}
                   {sx.rosii > 0 && <span>🔴 dovezi roșii: <b style={{ color:G.red }}>{sx.rosii}</b></span>}
                   {sx.verdict && <span>🔍 verificare: <b style={{ color:(VC[sx.verdict] || [])[1] || G.muted }}>{(VC[sx.verdict] || [sx.verdict])[0]}</b></span>}
                   {sx.clarificari > 0 && <span>❓ clarificări: <b style={{ color:G.text }}>{sx.clarificari}</b></span>}
@@ -1892,6 +1896,22 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     const { error } = await supabase.from('ofertare_acoperire').update({
       verificat_pe_scan: true, fisier_path: scan, verificat_de: profile?.id || null,
       verificat_la: new Date().toISOString(), updated_at: new Date().toISOString(),
+      // omul tocmai s-a uitat pe textul NOU al cerintei: cererea de reverificare se inchide aici,
+      // altfel semnalul ramane aprins pe veci si oamenii invata sa-l ignore
+      reverificare_ceruta: false, reverificare_motiv: null,
+    }).eq('id', a.id)
+    if (error) { setWarn('Eroare: ' + error.message); return }
+    await load(); onChanged?.()
+  }
+
+  // Nu orice dovada are scan de autorizatie (documente de firma, experienta, partener), deci butonul
+  // „Verificat" nu poate stinge semnalul peste tot. Fara asta, „⟳ de reverificat" ar ramane aprins
+  // pe veci pe jumatate din randuri si oamenii ar invata sa-l ignore — semnalul ar muri de uzura.
+  const confirmaReverificare = async (a) => {
+    const { error } = await supabase.from('ofertare_acoperire').update({
+      reverificare_ceruta: false, reverificare_motiv: null,
+      observatii: [a.observatii, `reverificat pe textul nou (${profile?.name || 'coleg'}, ${new Date().toLocaleDateString('ro-RO')})`].filter(Boolean).join(' · '),
+      updated_at: new Date().toISOString(),
     }).eq('id', a.id)
     if (error) { setWarn('Eroare: ' + error.message); return }
     await load(); onChanged?.()
@@ -1992,11 +2012,16 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
                     <span style={{ flex:1, fontSize:12.5, minWidth:200 }}>{c.text_cerinta}</span>
                     <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
-                      {a && a.status !== 'gol' && a.status !== 'nu_se_aplica' && !a.verificat_pe_scan && (
+                      {a?.reverificare_ceruta && (
+                        <button title={(a.reverificare_motiv || 'Textul cerinței s-a schimbat după ce dovada a fost pusă') + ' — apasă după ce ai citit textul nou și dovada ține în continuare'}
+                          onClick={() => confirmaReverificare(a)}
+                          style={{ ...S.btnS, padding:'3px 9px', fontSize:11, fontWeight:800, color:G.orange, borderColor:G.orange + '66', whiteSpace:'nowrap' }}>⟳ de reverificat</button>
+                      )}
+                      {a && a.status !== 'gol' && a.status !== 'nu_se_aplica' && (!a.verificat_pe_scan || a.reverificare_ceruta) && (
                         <button title={a.autorizatie?.fisier_path ? 'Verificat pe scan (R1) — copiază scanul autorizației' : 'Autorizația nu are scan în HR'}
                           onClick={() => verifica(a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66', opacity: a.autorizatie?.fisier_path ? 1 : .45 }}>👁 Verificat</button>
                       )}
-                      {a?.verificat_pe_scan && <span style={{ fontSize:11, color:G.green, fontWeight:700 }} title="Verificat pe scan">✓✓</span>}
+                      {a?.verificat_pe_scan && !a.reverificare_ceruta && <span style={{ fontSize:11, color:G.green, fontWeight:700 }} title="Verificat pe scan">✓✓</span>}
                       {a && a.status === 'gol' && !a.tichet_id && (
                         <button title="Golul devine tichet" onClick={() => creeazaTichet(c, a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>🎫 Tichet</button>
                       )}
@@ -2140,6 +2165,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           <KPI l="Cerințe acoperite" v={sx.cerinte ? `${sx.acoperite || 0}` : '—'} unit={sx.cerinte ? `/${sx.cerinte}` : 'registru negenerat'} color={sx.cerinte && sx.acoperite >= sx.cerinte ? G.green : G.text} />
           <KPI l="Eliminatorii fără dovadă (goluri + neevaluate)" v={l.eliminatorii_neacoperite ?? 0} color={l.eliminatorii_neacoperite > 0 ? G.red : G.green} />
           <KPI l="Dovezi roșii" v={sx.rosii || 0} color={sx.rosii > 0 ? G.red : G.text} />
+          {sx.reverif > 0 && <KPI l="Dovezi de reverificat (cerința s-a schimbat)" v={sx.reverif} color={G.orange} />}
           {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
           <div onClick={() => setTab('garantie')} style={{ cursor:'pointer', display:'contents' }} title="Deschide fluxul garanției (cerere poliță → plată → original)">
             <KPI l="Garanție participare" v={l.garantie_participare || '—'} unit={l.garantie_status === 'original' ? '✓ original' : l.garantie_status ? 'în curs' : ''} color={l.garantie_status === 'original' ? G.green : l.garantie_participare ? G.red : G.text} />
@@ -2244,7 +2270,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <Row k="Segment" v={l.segment && SEGMENTE[l.segment] ? SEGMENTE[l.segment].label : l.segment} last />
               <div style={{ marginTop:14, fontSize:12.5, color:G.muted }}>Acoperire cerințe</div>
               <div style={{ height:10, borderRadius:6, background:G.border, overflow:'hidden', margin:'8px 0 4px' }}><i style={{ display:'block', height:'100%', width:`${pct}%`, background:'linear-gradient(90deg,#D29922,#3FB950)' }} /></div>
-              <div style={{ fontSize:12, color:G.dim }}>{sx.acoperite || 0} acoperite · {Math.max((sx.cerinte || 0) - (sx.acoperite || 0), 0)} rămase · {sx.rosii || 0} dovezi roșii</div>
+              <div style={{ fontSize:12, color:G.dim }}>{sx.acoperite || 0} acoperite · {Math.max((sx.cerinte || 0) - (sx.acoperite || 0), 0)} rămase · {sx.rosii || 0} dovezi roșii{sx.reverif > 0 ? <span style={{ color:G.orange }}> · {sx.reverif} de reverificat</span> : ''}</div>
               <div style={{ display:'flex', alignItems:'center', gap:10, background:'#221c0d', border:`1px solid ${vCol}55`, borderRadius:12, padding:'12px 14px', marginTop:14, cursor:'pointer' }} onClick={() => setTab('verificari')}>
                 <div><b style={{ color:vCol, fontSize:13.5 }}>{vLbl}</b>{sx.verdict_la && <div style={{ fontSize:12, color:G.muted }}>rulată {new Date(sx.verdict_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</div>}</div>
               </div>
