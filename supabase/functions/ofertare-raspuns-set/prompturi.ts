@@ -93,7 +93,8 @@ REGULI (in ordinea importantei):
 10. NU EXISTA PLAFON de operatii. Daca sunt 30 de schimbari reale si ancorate, le scrii pe toate 30.
    Daca trebuie sa scurtezi, scurtezi din explicatii, niciodata din lista de operatii.
 11. FIECARE dispozitie primita trebuie sa iasa undeva: ori ca operatie, ori in "neclare". Nu lasa
-   dispozitii fara raspuns — soldul se verifica automat si o analiza cu sold nenul e considerata incompleta.
+   dispozitii fara raspuns — se verifica automat, pe numarul fiecarei dispozitii, iar cele ramase fara
+   verdict apar pe ecran ca restante, cu numarul lor. O analiza cu restante e considerata incompleta.
 
 Raspunde EXCLUSIV cu JSON, fara comentarii:
 {"operatii":[{"disp_nr":"<nr dispozitiei din care iese>",

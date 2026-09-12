@@ -274,7 +274,9 @@ Deno.serve(async (req: Request) => {
       coada_deschisa: j.coada_deschisa || null,
       acoperire: [...(prop.acoperire || []), {
         doc_id: doc.id, nume: numeScurt, caractere: (doc.text_extras || '').length,
-        dispozitii: adaugate.length, acoperit_tot: j.acoperit_tot !== false,
+        // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
+        // Se scrie asa si in array-ul persistat, nu doar in raspunsul rundei: ecranul citeste de aici.
+        dispozitii: adaugate.length, acoperit_tot: j.acoperit_tot !== false && !taiat,
       }],
     }
     const raman = legaturi.filter((l: any) => !propNou.documente_citite.includes(l.document_id)).length
@@ -296,7 +298,9 @@ Deno.serve(async (req: Request) => {
       total: { dispozitii: t.length,
         efect_posibil: t.filter((x: any) => x.tip === 'efect_posibil').length,
         confirmari: t.filter((x: any) => x.tip === 'confirmare').length,
-        neclare: t.filter((x: any) => x.tip === 'neclar').length },
+        cantitati: t.filter((x: any) => x.tip === 'efect_cantitati').length,
+        neclare: t.filter((x: any) => x.tip === 'neclar').length,
+        anexe: t.filter((x: any) => x.tip === 'anexa').length },
       continua: raman > 0, documente_ramase: raman, cost_usd: Number(cost.toFixed(4)),
     })
   }
@@ -486,7 +490,9 @@ Deno.serve(async (req: Request) => {
         efect_posibil: toate.filter(x => x.tip === 'efect_posibil').length,
         comparate: comparate.length, ramase: raman,
         confirmari: toate.filter(x => x.tip === 'confirmare').length,
-        neclare_inventar: toate.filter(x => x.tip === 'neclar').length },
+        cantitati: toate.filter(x => x.tip === 'efect_cantitati').length,
+        neclare_inventar: toate.filter(x => x.tip === 'neclar').length,
+        anexe: toate.filter(x => x.tip === 'anexa').length },
       cerinte_eligibile: eligibile.length, cerinte_active: (cer || []).length,
       continua: raman > 0, cost_usd: Number(cost.toFixed(4)),
     })
