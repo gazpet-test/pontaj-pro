@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -110,4 +110,28 @@ describe('H6 controlNumereCheie — 372 vs 371 bransamente (Hoghilag)', () => {
   })
   it('conflictul de surse se arata si cand capitolele tac', () =>
     expect(n({ bransamente_in_capitole: null, bransamente_in_cerinte: [371, 372] }).detalii).toMatch(/conflict de surse/))
+})
+
+describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
+  const c = p => controlParticipare(p)
+  it('cazul Hoghilag: HABAU tert, text „asocierii" + „subcontractor" => warn, cu explicatia rolului', () => {
+    const r = c({ participanti: ['tert_sustinator|HABAU'], semnale_asociere: ['asocierii', 'subcontractor'] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/asociere/); expect(r.detalii).toMatch(/subcontractare/)
+    expect(r.detalii).toMatch(/HABAU e terț susținător/)
+  })
+  it('NICIODATA blocant: „subcontractant" poate aparea intr-o clauza conditionala', () => {
+    const r = c({ participanti: [], semnale_asociere: ['subcontracta'] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/clauz[ăa] general/)
+  })
+  it('asociat declarat + text despre asociere => ok', () =>
+    expect(c({ participanti: ['asociat|ATSD'], semnale_asociere: ['asocierii'] }).stare).toBe('ok'))
+  it('nimic declarat, text curat => ok', () =>
+    expect(c({ participanti: null, semnale_asociere: null }).stare).toBe('ok'))
+  it('parteneri declarati fara semnale => ok si ii listeaza pe rol', () => {
+    const r = c({ participanti: ['tert_sustinator|HABAU', 'subcontractant|ULTRAJET (foraje)'], semnale_asociere: [] })
+    expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/terț susținător: HABAU/); expect(r.detalii).toMatch(/ULTRAJET/)
+  })
+  it('rol necunoscut din view nu arunca', () =>
+    expect(c({ participanti: ['inventat|X', 'fara-separator'], semnale_asociere: [] }).stare).toBe('ok'))
 })

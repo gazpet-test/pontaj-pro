@@ -1,0 +1,15 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_participanti_hog08, 13.09.2026).
+-- HOG-08 (cercetarea Hoghilag): ofertant, asociat, subcontractant si tert sustinator NU sunt sinonime.
+-- La Hoghilag participarea era individuala, HABAU = TERT SUSTINATOR, fara asociat si fara
+-- subcontractant declarat, dar textul propunerii vorbea despre „echipa asocierii" si „fiecare
+-- subcontractor" — contaminare de sablon intr-o zona cu consecinte juridice.
+--
+-- DE CE TABEL NOU: ofertare_parteneri.tip_relatie e eticheta GLOBALA a relatiei cu firma (HABAU e
+-- trecut acolo „subcontractant"), nu rolul dintr-o licitatie anume. Rolul e per licitatie.
+--
+-- 1) ofertare_pt_participanti (licitatie_id, partener_id SAU nume, rol, cota_procent, activitati,
+--    stampila) + CHECK ca are identitate + RLS auth.uid() IS NOT NULL.
+-- 2) v_ofertare_pt_stare: + participanti (text[] „rol|nume") si semnale_asociere (text[] cu
+--    cuvintele asocier*/asocia*/subcontract* gasite in capitole).
+-- Verdictul e in JS pur: controlParticipare. NICIODATA blocant — „subcontractant" apare legitim in
+-- clauze conditionale.
