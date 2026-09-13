@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati } from './ofertareControale.js'
+import { controlCantitati, controlGarantie } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -29,4 +29,26 @@ describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   })
   it('grafic fara fronturi => warn "nu se poate face"', () =>
     expect(controlCantitati({ lista_f3_m: 100, grafic_fronturi_m: null }).stare).toBe('warn'))
+})
+
+describe('H4 controlGarantie — luni + momentul de start, aceleasi peste tot', () => {
+  const OK = { garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
+               garantie_confirmata: true, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 3 }
+  const g = p => controlGarantie({ ...OK, ...p })
+  it('totul aliniat => ok', () => expect(g({}).stare).toBe('ok'))
+  it('oferit < cerut => block', () => expect(g({ garantie_oferit_luni: 24 }).stare).toBe('block'))
+  it('moment diferit (Hoghilag: PIF vs receptie) => block, cu ambele momente in clar', () => {
+    const r = g({ garantie_oferit_moment: 'receptie_terminare' })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/recepția la terminarea/); expect(r.detalii).toMatch(/punerea în funcțiune/)
+  })
+  it('un capitol pomeneste alt numar de luni => block', () => expect(g({ garantie_luni_in_capitole: [36, 24] }).stare).toBe('block'))
+  it('neasumata dar ceruta => block; neasumata si neceruta => warn', () => {
+    expect(g({ garantie_oferit_luni: null }).stare).toBe('block')
+    expect(g({ garantie_oferit_luni: null, garantie_cerinte_lucrari: 0 }).stare).toBe('warn')
+  })
+  it('oferita dar cerinta nenotata sau neconfirmata => warn, nu ok', () => {
+    expect(g({ garantie_cerut_luni: null, garantie_cerut_moment: null }).stare).toBe('warn')
+    expect(g({ garantie_confirmata: false }).stare).toBe('warn')
+  })
+  it('oferit peste cerut e in regula', () => expect(g({ garantie_oferit_luni: 48, garantie_luni_in_capitole: [48] }).stare).toBe('ok'))
 })
