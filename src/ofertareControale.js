@@ -82,3 +82,32 @@ export function controlGarantie({ garantie_cerut_luni, garantie_cerut_moment, ga
   const text = `${ol} luni de la ${mom(om)}` + (cl != null ? ` (cerut minim ${cl} de la ${mom(cm)})` : '')
   return { ...base, stare: rez.length ? 'warn' : 'ok', detalii: text + (rez.length ? ' — ' + rez.join('; ') : '') }
 }
+
+/**
+ * H5 — referințele din text trimit la piese care există în dosar. „Vezi Anexa 7" cu Anexa 7 lipsă
+ * din opis e o greșeală de fapt, nu de stil: block. Potrivirea e pe (tip, număr) normalizat, cu
+ * cifre romane acceptate, ca „Cap. III" să fie același lucru cu „capitolul 3".
+ */
+const ROMAN = { i:1, v:5, x:10, l:50, c:100 }
+function romanToInt(r) {
+  let n = 0
+  for (let i = 0; i < r.length; i++) { const a = ROMAN[r[i]], b = ROMAN[r[i + 1]]; n += b && b > a ? -a : a }
+  return n
+}
+export function normalizeazaRef(t = '') {
+  const m = String(t).toLowerCase().match(/^\s*(anex|formular|cap|plan)[a-zăș.]*\s*(?:nr\.?\s*)?([0-9]+[a-z]?|[ivxlc]+)\b/)
+  if (!m) return null
+  const tip = { anex: 'anexa', formular: 'formular', cap: 'cap', plan: 'plansa' }[m[1]]
+  const nr = /^[0-9]/.test(m[2]) ? m[2] : String(romanToInt(m[2]))
+  return `${tip}:${nr}`
+}
+export function controlAnexe({ anexe_referite, anexe_existente }) {
+  const referite = [...new Set((anexe_referite || []).map(normalizeazaRef).filter(Boolean))]
+  const existente = new Set((anexe_existente || []).map(normalizeazaRef).filter(Boolean))
+  const lipsa = referite.filter(r => !existente.has(r))
+  const arata = r => { const [t, n] = r.split(':'); return ({ anexa: 'Anexa', formular: 'Formularul', cap: 'cap.', plansa: 'planșa' })[t] + ' ' + n }
+  if (!referite.length) return { k: 'anexe', stare: 'ok', detalii: 'capitolele nu trimit la nicio anexă / formular / capitol', lipsa: [] }
+  if (lipsa.length) return { k: 'anexe', stare: 'block', lipsa,
+    detalii: `${lipsa.length} din ${referite.length} referințe trimit la piese care nu-s în cuprins: ${lipsa.map(arata).join(', ')} — adaugă-le sau scoate trimiterea` }
+  return { k: 'anexe', stare: 'ok', lipsa: [], detalii: `${referite.length} referințe, toate cu piesa în cuprins` }
+}
