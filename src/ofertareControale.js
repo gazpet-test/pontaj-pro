@@ -104,16 +104,73 @@ export function normalizeazaRef(t = '') {
   const nr = /^[0-9]/.test(m[2]) ? m[2] : String(romanToInt(m[2]))
   return `${tip}:${nr}`
 }
-export function controlAnexe({ anexe_referite, anexe_existente }) {
+// Rolul unei piese, dedus din text. Folosit si pe TITLUL capitolului, si pe FRAZA care trimite la
+// el, ca sa se poata compara ce spune trimiterea cu ce contine piesa. Cheile vin din anexele reale
+// ale unei propuneri depuse (Hoghilag, cuprins p. 4).
+export const ROLURI_PIESA = {
+  plan_calitate: /plan[^.]{0,40}(calit[ăa][țt]ii|calitate)|asigurare a calit|proceduri (tehnice )?de execu/i,
+  grafic:        /grafic[^.]{0,30}(general|realizare|execu|investi)|curba s\b|network diagram|\bpert\b/i,
+  surse_materiale: /surse[^.]{0,20}materiale|formular(ul)? f3\b/i,
+  personal:      /personal|experti|exper[țt]i|organigram/i,
+  infrastructura:/infrastructur|utilaje|echipamente utilizate/i,
+  mediu:         /mediu(lui)?\b|protec[țt]ia mediului/i,
+  ssm:           /\bssm\b|securitate[^.]{0,25}mun|s[ăa]n[ăa]tate[^.]{0,25}mun|protec[țt]ia muncii/i,
+  trafic:        /trafic|circula[țt]i/i,
+  deseuri:       /de[șs]euri|salubr/i,
+}
+export function rolPiesa(text = '') {
+  for (const [rol, rx] of Object.entries(ROLURI_PIESA)) if (rx.test(String(text))) return rol
+  return null
+}
+
+/**
+ * H5 — trimiterile din text. Două verificări, același rând de poartă:
+ *  (a) trimiterea are o piesă în cuprins (prinde „vezi Anexa 7" cu Anexa 7 lipsă);
+ *  (b) piesa la care trimite chiar conține ce spune fraza.
+ *
+ * (b) vine din Hoghilag, pagina 28: „In Anexa 3 este prezentat Planul de management al calitatii",
+ * iar planul calității e Anexa 10. Anexa 3 EXISTA, deci prima verificare tăcea. Rolul piesei se
+ * deduce din titlul capitolului, nu se ține într-o coloană: titlul îl spune deja.
+ *
+ * Când fraza n-are rol recognoscibil, sau când niciun capitol n-are rolul ăla, nu se verifică
+ * nimic. Mai bine tace decât să inventeze o nepotrivire.
+ */
+export function controlAnexe({ anexe_referite, anexe_existente, fraze_anexe, capitole_ref }) {
   const referite = [...new Set((anexe_referite || []).map(normalizeazaRef).filter(Boolean))]
   const existente = new Set((anexe_existente || []).map(normalizeazaRef).filter(Boolean))
   const lipsa = referite.filter(r => !existente.has(r))
   const arata = r => { const [t, n] = r.split(':'); return ({ anexa: 'Anexa', formular: 'Formularul', cap: 'cap.', plansa: 'planșa' })[t] + ' ' + n }
-  if (!referite.length) return { k: 'anexe', stare: 'ok', detalii: 'capitolele nu trimit la nicio anexă / formular / capitol', lipsa: [] }
-  if (lipsa.length) return { k: 'anexe', stare: 'block', lipsa,
+
+  // (b) rolul cerut de frază vs eticheta piesei care chiar are rolul ăla
+  const peRol = new Map()
+  for (const cr of capitole_ref || []) {
+    const i = String(cr).indexOf('|'); if (i < 0) continue
+    const eticheta = String(cr).slice(0, i), titlu = String(cr).slice(i + 1)
+    const rol = rolPiesa(titlu), ref = normalizeazaRef(eticheta)
+    if (rol && ref) { if (!peRol.has(rol)) peRol.set(rol, new Set()); peRol.get(rol).add(ref) }
+  }
+  const gresite = []
+  for (const fraza of fraze_anexe || []) {
+    const t = String(fraza)
+    const refs = [...new Set((t.match(/(anex[aă]|formular(?:ul)?)\s*(?:nr\.?\s*)?[0-9]+/gi) || []).map(normalizeazaRef).filter(Boolean))]
+    if (!refs.length) continue
+    const rol = rolPiesa(t)
+    const tinte = rol && peRol.get(rol)
+    if (!tinte || !tinte.size) continue          // rol necunoscut sau nicio piesă cu rolul ăsta: nu se verifică
+    if (refs.some(r => tinte.has(r))) continue   // trimiterea cade pe piesa corectă
+    gresite.push({ fraza: t.slice(0, 160), refs, rol, corect: [...tinte] })
+  }
+
+  const base = { k: 'anexe', lipsa, gresite }
+  if (gresite.length) return { ...base, stare: 'block',
+    detalii: gresite.map(g => `„${g.fraza.slice(0, 70)}…" trimite la ${g.refs.map(arata).join(' / ')}, dar piesa cu acest conținut e ${g.corect.map(arata).join(' / ')}`).join(' · ')
+      + (lipsa.length ? ` · plus ${lipsa.length} trimiteri către piese inexistente: ${lipsa.map(arata).join(', ')}` : '') }
+  if (!referite.length) return { ...base, stare: 'ok', detalii: 'capitolele nu trimit la nicio anexă / formular / capitol' }
+  if (lipsa.length) return { ...base, stare: 'block',
     detalii: `${lipsa.length} din ${referite.length} referințe trimit la piese care nu-s în cuprins: ${lipsa.map(arata).join(', ')} — adaugă-le sau scoate trimiterea` }
-  return { k: 'anexe', stare: 'ok', lipsa: [], detalii: `${referite.length} referințe, toate cu piesa în cuprins` }
+  return { ...base, stare: 'ok', detalii: `${referite.length} referințe, toate cu piesa în cuprins` + (peRol.size ? ` și cu conținutul potrivit` : '') }
 }
+
 
 /**
  * H1 — identitatea lucrării. Greșeala reală: un capitol copiat de la altă ofertă, cu numele altei

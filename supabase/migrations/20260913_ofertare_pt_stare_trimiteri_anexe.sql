@@ -1,0 +1,9 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_stare_trimiteri_anexe, 13.09.2026).
+-- HOG-07, partea semantica a AttachmentReferenceCheck. Controlul de pana acum prindea doar
+-- trimiterile catre piese INEXISTENTE. Cazul real Hoghilag e altul: pagina 28 spune „In Anexa 3
+-- este prezentat Planul de management al calitatii", iar planul calitatii e Anexa 10. Anexa 3
+-- EXISTA, deci controlul vechi tacea.
+-- v_ofertare_pt_stare: + fraze_anexe (propozitiile cu trimitere la anexa/formular cu numar, max 80)
+--                      + capitole_ref (perechi eticheta|titlu)
+-- Rolul piesei se DEDUCE din titlu, in JS (rolPiesa). Nu s-a adaugat rol_logic pe capitole: titlul
+-- il spune deja, iar o coloana in plus ar cere completare manuala pe fiecare capitol, fara castig.
