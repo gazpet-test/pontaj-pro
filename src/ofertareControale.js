@@ -384,3 +384,76 @@ export function controlTronsoane({ tronsoane_sursa, tronsoane_grafic }) {
     detalii: `${randuri.length} din ${sursa.size} perechi nu se reconciliază · total sursă ${fmt(ts)} m vs grafic ${fmt(tg)} m (${tg - ts > 0 ? '+' : ''}${fmt(tg - ts)}) · `
       + randuri.slice(0, 3).map(r => r.detalii).join(' · ') + (randuri.length > 3 ? ` · și încă ${randuri.length - 3}` : '') }
 }
+
+/**
+ * PRUNIȘOR-JUPA (Transgaz) — completitudinea PACHETULUI DEPUS, nu a conținutului.
+ *
+ * Cazul real: Transgaz a cerut clarificare pentru fișele tehnice 18–21 (redresor protecție catodică,
+ * priză de potențial, eclator, dispozitiv de drenare). Fișele EXISTAU — completate, la subcontractantul
+ * ELCAS — dar n-au ajuns în propunerea depusă, fiindcă PDF-urile lor purtau semnătură digitală și
+ * procesul de unire a picat. Nu a fost lipsă de conținut tehnic; a fost defect de ASAMBLARE.
+ *
+ * De aceea controlul ăsta e DISTINCT de controlAnexe (H5): H5 verifică dacă trimiterile din text cad
+ * pe piese care există în dosar. Aici se verifică dacă piesele din opis au ajuns în fișierele efectiv
+ * urcate în pachetul final. Un dosar poate trece H5 impecabil și tot să se depună fără fișa 18.
+ *
+ * A doua regulă, din aceeași clarificare: UN FIȘIER SEMNAT NU SE MODIFICĂ CA SĂ FIE „UNIT" în alt PDF.
+ * Unirea rupe semnătura. Anexa semnată se depune ca fișier de sine stătător, legată prin opis.
+ *
+ * Se rulează pe pachetul asamblat: cât timp nu există pachet, controlul nu are ce verifica (warn).
+ */
+export function controlPachetComplet({ anexe_asteptate, pachet_stare, pachet_fisiere }) {
+  // Așteptările pot veni ca text simplu („Anexa 18") sau ca obiect, când se știe cine răspunde de piesă.
+  const asteptate = []
+  for (const a of anexe_asteptate || []) {
+    const text = typeof a === 'string' ? a : (a?.ref ?? a?.titlu ?? '')
+    const ref = normalizeazaRef(text)
+    if (ref && !asteptate.some(x => x.ref === ref))
+      asteptate.push({ ref, text: String(text).trim(), responsabil: (typeof a === 'object' && a?.responsabil) || null })
+  }
+  const fisiere = (pachet_fisiere || []).map(f => ({
+    nume: String(f?.nume || ''), rol: f?.rol || null, semnat: !!f?.semnat,
+    unit_in: f?.unit_in || null, sursa_participant: f?.sursa_participant || null,
+    // Piesa pe care o poartă fișierul: declarată explicit, altfel dedusă din numele fișierului.
+    ref: normalizeazaRef(f?.anexa_ref || '') || normalizeazaRef(f?.nume || ''),
+  }))
+  const inPachet = new Set(fisiere.filter(f => f.ref && !f.unit_in).map(f => f.ref))
+  const base = { k: 'pachet', asteptate, fisiere, lipsa: [], semnaturi_rupte: [] }
+
+  // Poarta se semneaza INAINTE de asamblare (pachetul se produce din poarta semnata), deci lipsa
+  // pachetului nu are voie sa insemne rezerva: ar face orice propunere galbena, circular. Randul
+  // devine activ cand exista fisiere.
+  if (!pachet_stare || !fisiere.length) return { ...base, stare: 'ok',
+    detalii: 'pachetul final nu e încă asamblat — completitudinea se verifică pe fișierele urcate, înainte de depunere' }
+
+  // Daca NICIUN fisier nu poarta o piesa, asamblarea anexelor n-a inceput inca: pachetul are doar
+  // documentele generate. Nu e „lipsa", e „nu s-a ajuns acolo" — se spune, nu se blocheaza. Blocant
+  // devine cand asamblarea a inceput si tot lipsesc piese: exact cazul ELCAS, unde 17 anexe erau in
+  // pachet si patru nu.
+  if (asteptate.length && !inPachet.size && !fisiere.some(f => f.semnat || f.unit_in))
+    return { ...base, stare: 'warn',
+      detalii: `pachetul are doar documentele generate — cele ${asteptate.length} piese din opis n-au fișier încărcat` }
+
+  const lipsa = asteptate.filter(a => !inPachet.has(a.ref))
+  // „Unit într-un PDF semnat" e tot lipsă, doar că una care se vede: piesa nu mai e un fișier propriu.
+  const rupte = fisiere.filter(f => f.semnat && f.unit_in)
+  const out = { ...base, lipsa, semnaturi_rupte: rupte }
+  const numeste = a => a.text + (a.responsabil ? ` (răspunde ${a.responsabil})` : '')
+
+  if (rupte.length) return { ...out, stare: 'block', cod: 'SIGNED_DOCUMENT_MERGED',
+    detalii: `${plural(rupte.length, 'fișier semnat digital a fost unit', 'fișiere semnate digital au fost unite')} în alt PDF — unirea rupe semnătura: `
+      + rupte.map(f => `${f.nume} → ${f.unit_in}`).join(', ')
+      + ' · anexa semnată se depune ca fișier de sine stătător, legată prin opis'
+      + (lipsa.length ? ` · în plus lipsesc din pachet: ${lipsa.map(numeste).join(', ')}` : '') }
+
+  if (lipsa.length) return { ...out, stare: 'block', cod: 'REQUIRED_ATTACHMENT_NOT_IN_FINAL_PACKAGE',
+    detalii: `${plural(lipsa.length, 'piesă din opis nu are fișier', 'piese din opis n-au fișier')} în pachetul final: `
+      + lipsa.map(numeste).join(', ')
+      + ' · documentul poate exista la participant și tot să lipsească din ce se depune' }
+
+  if (!asteptate.length) return { ...out, stare: 'warn',
+    detalii: `${plural(fisiere.length, 'fișier', 'fișiere')} în pachet, dar opisul n-are piese numerotate — nu se poate confrunta` }
+
+  return { ...out, stare: 'ok',
+    detalii: `${plural(asteptate.length, 'piesă din opis', 'piese din opis')}, toate cu fișier în pachetul final (${fisiere.length} fișiere)` }
+}

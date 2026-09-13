@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa, controlPachetComplet } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -324,5 +324,57 @@ describe('HOG-02/03 controlTronsoane — perechea de noduri e cheia, nu eticheta
   it('lipsa datelor => warn „nu se poate face", nu ok fals', () => {
     expect(controlTronsoane({ tronsoane_sursa: [], tronsoane_grafic: [] }).stare).toBe('warn')
     expect(controlTronsoane({ tronsoane_sursa: [S('PROD', 1, 2, 180)], tronsoane_grafic: [] }).detalii).toMatch(/activit[ăa][țt]i de tronson/)
+  })
+})
+
+
+// PRUNISOR-JUPA: fisele tehnice 18-21 existau la ELCAS, dar nu erau in pachetul depus.
+describe('controlPachetComplet — piesa poate exista la participant si tot sa lipseasca din pachet', () => {
+  const c = p => controlPachetComplet(p)
+  const F = (nume, o = {}) => ({ nume, ...o })
+
+  it('fara pachet asamblat => ok dormant: poarta se semneaza INAINTE de asamblare', () => {
+    const r = c({ anexe_asteptate: ['Anexa 18'], pachet_stare: null, pachet_fisiere: [] })
+    expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/nu e [îi]nc[ăa] asamblat/)
+  })
+  it('pachet doar cu documentele generate => warn, nu block: asamblarea n-a inceput', () => {
+    const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
+      pachet_fisiere: [F('Propunere_tehnica.docx'), F('Borderou_PT.docx')] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/n-au fi[șs]ier [îi]nc[ăa]rcat/)
+  })
+  it('CAZUL ELCAS: fisa exista la subcontractant, lipseste din pachet => block', () => {
+    const r = c({
+      anexe_asteptate: ['Anexa 17', { ref: 'Anexa 18', responsabil: 'ELCAS PRODIMPEX' }],
+      pachet_stare: 'ciorna', pachet_fisiere: [F('Anexa 17 - plan calitate.pdf')],
+    })
+    expect(r.stare).toBe('block'); expect(r.cod).toBe('REQUIRED_ATTACHMENT_NOT_IN_FINAL_PACKAGE')
+    expect(r.detalii).toMatch(/Anexa 18 \(r[ăa]spunde ELCAS PRODIMPEX\)/)
+    expect(r.lipsa).toHaveLength(1)
+  })
+  it('fisier semnat unit in alt PDF => block: unirea rupe semnatura', () => {
+    const r = c({ anexe_asteptate: ['Anexa 18'], pachet_stare: 'ciorna',
+      pachet_fisiere: [F('Anexa 18.pdf', { semnat: true, unit_in: 'PT_complet.pdf' })] })
+    expect(r.stare).toBe('block'); expect(r.cod).toBe('SIGNED_DOCUMENT_MERGED')
+    expect(r.detalii).toMatch(/de sine st[ăa]t[ăa]tor/)
+  })
+  it('semnat, dar fisier de sine statator => ok: semnatura nu e atinsa', () =>
+    expect(c({ anexe_asteptate: ['Anexa 18'], pachet_stare: 'ciorna',
+      pachet_fisiere: [F('Anexa 18.pdf', { semnat: true })] }).stare).toBe('ok'))
+  it('anexa_ref explicit bate numele fisierului', () => {
+    const r = c({ anexe_asteptate: ['Anexa 21'], pachet_stare: 'ciorna',
+      pachet_fisiere: [F('scan_0042.pdf', { anexa_ref: 'Anexa nr. 21' })] })
+    expect(r.stare).toBe('ok')
+  })
+  it('cifre romane si „nr." se normalizeaza la fel ca la H5', () =>
+    expect(c({ anexe_asteptate: ['Formularul nr. 5'], pachet_stare: 'ciorna',
+      pachet_fisiere: [F('Formular 5.pdf')] }).stare).toBe('ok'))
+  it('pachet cu fisiere dar opis fara piese numerotate => warn, nu ok fals', () => {
+    const r = c({ anexe_asteptate: [], pachet_stare: 'ciorna', pachet_fisiere: [F('propunere.docx')] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/nu se poate confrunta/)
+  })
+  it('toate piesele au fisier => ok, cu numaratoarea', () => {
+    const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
+      pachet_fisiere: [F('Anexa 18.pdf'), F('Anexa 19.pdf'), F('propunere.docx')] })
+    expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/2 piese din opis/)
   })
 })

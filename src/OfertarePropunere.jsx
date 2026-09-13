@@ -1000,7 +1000,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       // Numele celor care au cerut/rezolvat. Fara ele istoricul arata uuid-uri, adica nimic.
       supabase.from('profiles').select('id, name').limit(500),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, revizie, pagini').eq('licitatie_id', id).order('id').limit(500),
-      supabase.from('ofertare_pt_pachet').select('*, fisiere:ofertare_pt_pachet_fisiere(rol, nume, sha256, size_bytes, sursa_versiune)')
+      supabase.from('ofertare_pt_pachet').select('*, fisiere:ofertare_pt_pachet_fisiere(rol, nume, sha256, size_bytes, sursa_versiune, anexa_ref, semnat, sursa_participant, unit_in)')
         .eq('licitatie_id', id).order('versiune', { ascending: false }).limit(50),
       supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_participanti').select('*, partener:ofertare_parteneri(nume)').eq('licitatie_id', id).order('rol'),

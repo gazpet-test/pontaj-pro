@@ -1,0 +1,20 @@
+-- Aplicate prin MCP (apply_migration ofertare_pachet_completitudine_semnatura
+-- + ofertare_pt_stare_pachet_completitudine, 13.09.2026).
+--
+-- PRUNISOR-JUPA (Transgaz, LOT 2): Transgaz a cerut clarificare pentru fisele tehnice 18-21.
+-- Fisele EXISTAU, completate, la subcontractantul ELCAS — dar n-au ajuns in propunerea depusa,
+-- fiindca PDF-urile lor purtau semnatura digitala si unirea a picat. Nu lipsa de continut tehnic:
+-- defect de ASAMBLARE. Controlul e distinct de H5 (controlAnexe): H5 verifica daca trimiterile din
+-- text cad pe piese care exista in dosar; aici se verifica daca piesele din opis au ajuns in
+-- fisierele efectiv urcate in pachetul final.
+--
+-- 1) ofertare_pt_pachet_fisiere: + anexa_ref, semnat, sursa_participant, unit_in.
+--    REGULA: un fisier SEMNAT nu se modifica pentru a fi „unit" in alt PDF — unirea rupe semnatura.
+--    Anexa semnata se depune ca fisier de sine statator, legata prin opis. unit_in completat pe un
+--    fisier semnat => blocant (SIGNED_DOCUMENT_MERGED).
+-- 2) v_ofertare_pt_stare: + anexe_asteptate (etichetele/formularele capitolelor care SUNT anexe),
+--    pachet_stare si pachet_fisiere (jsonb, ultima versiune de pachet).
+--
+-- Verdictul e in JS pur: controlPachetComplet. Poarta se semneaza INAINTE de asamblare, deci lipsa
+-- pachetului = ok dormant; „doar documentele generate" = warn; piese lipsa dupa ce asamblarea a
+-- inceput = block (REQUIRED_ATTACHMENT_NOT_IN_FINAL_PACKAGE).
