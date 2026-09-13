@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -112,33 +112,70 @@ describe('H6 controlNumereCheie — 372 vs 371 bransamente (Hoghilag)', () => {
     expect(n({ bransamente_in_capitole: null, bransamente_in_cerinte: [371, 372] }).detalii).toMatch(/conflict de surse/))
 })
 
+describe('HOG-08 clasificaFrazaParticipare — propozitii REALE din propunerea Hoghilag', () => {
+  const cls = clasificaFrazaParticipare
+  // Cele marcate „operational activ" de cercetare (p. 58-62), verbatim.
+  const OPERATIONALE = [
+    'Subcontractorii vor lucra sub directa coordonare a unui Manager de proiect angajat Gazpet Instal SRL',
+    'Managementul executiei lucrarilor se va realiza de catre Echipa de proiect a asocierii sub conducerea Comitetului de coordonare a executiei proiectului',
+    'Fiecare asociat va avea o echipa de proiect organizata similar cu echipa de proiect a asocierii',
+    'Comitetul de coordonare a executiei proiectului este format din directorii generali ai asociatilor, condus de directorul general al liderului si coordoneaza Echipa de proiect',
+    'Fiecare subcontractor va avea o echipa proprie de proiect, care va raspunde de derularea executiei lucrarilor pe care le are in responsabilitate, condusa de un manager de proiect',
+    'Echipa de proiect a asocierii va prezenta Beneficiarului rapoarte de progres zilnice si lunare pe toata durata de executie a lucrarilor',
+    'Managerul QA/QC sustine directorul de proiect in derularea executiei proiectului si este responsabil cu coordonarea activitatii responsabililor QA/QC de la asociati si de la subcontractori',
+    'Celelalte pozitii din organigrama echipei de proiect a asocierii si a echipelor de proiect ale asociatilor vor avea atributii, obligatii si responsabilitati specifice',
+    'Responsabil cu centralizarea la nivelul asocierii a situatiilor de lucrari si a facturilor de la fiecare asociat si inaintarea lor la beneficiar spre decontare',
+    'Fiecare asociat si subcontractor va identifica zonele sensibile',
+  ]
+  // Cele marcate generic / conditional (p. 11-13, 25-27, 58).
+  const GENERICE = [
+    'Se vor aviza subcontractantii. In cazul asocierilor intre executanti lucrarile se coordoneaza prin grija liderului de asociatie',
+    'Toate cerintele aplicabile CONTRACTORULUI se aplica obligatoriu subcontractantilor si furnizorilor',
+    'Pentru numirea unui Subcontractant propus dupa semnarea Contractului, Gazpet Instal SRL va solicita acordul Beneficiarului',
+    'Nu vom subcontracta lucrari ulterior emiterii ordinului de incepere a lucrarilor fara acceptul autoritatii contractante',
+  ]
+  it.each(OPERATIONALE)('operational: %s', f => expect(cls(f)).toBe('operationala'))
+  it.each(GENERICE)('generic: %s', f => expect(cls(f)).toBe('generica'))
+  it('negarea explicita de la p. 58 se recunoaste ca atare', () =>
+    expect(cls('Pentru realizarea lucrarilor, nu se vor folosi subcontractori')).toBe('negare'))
+  it('fraza fara niciunul din cuvinte e irelevanta', () =>
+    expect(cls('Lucrarile se executa conform proiectului tehnic')).toBe('irelevanta'))
+})
+
 describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
   const c = p => controlParticipare(p)
-  it('cazul Hoghilag: HABAU tert, text „asocierii" + „subcontractor" => warn, cu explicatia rolului', () => {
-    const r = c({ participanti: ['tert_sustinator|HABAU'], semnale_asociere: ['asocierii', 'subcontractor'] })
+  const OP_ASOC = 'Echipa de proiect a asocierii va prezenta Beneficiarului rapoarte de progres zilnice'
+  const OP_SUB = 'Fiecare subcontractor va avea o echipa proprie de proiect condusa de un manager'
+  const GEN = 'In cazul asocierilor intre executanti lucrarile se coordoneaza prin grija liderului'
+  const NEG = 'Pentru realizarea lucrarilor, nu se vor folosi subcontractori'
+
+  it('cazul Hoghilag: HABAU tert, structura de asociere descrisa activ => warn, cu rolul explicat', () => {
+    const r = c({ participanti: ['tert_sustinator|HABAU'], fraze_asociere: [OP_ASOC, OP_SUB] })
     expect(r.stare).toBe('warn')
-    expect(r.detalii).toMatch(/asociere/); expect(r.detalii).toMatch(/subcontractare/)
-    expect(r.detalii).toMatch(/HABAU e terț susținător/)
+    expect(r.detalii).toMatch(/asociere care func[țt]ioneaz/); expect(r.detalii).toMatch(/HABAU e terț susținător/)
   })
-  it('NICIODATA blocant: „subcontractant" poate aparea intr-o clauza conditionala', () => {
-    const r = c({ participanti: [], semnale_asociere: ['subcontracta'] })
-    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/clauz[ăa] general/)
+  it('CONTRADICTIA de la p. 58: neaga si descrie in acelasi timp => se spune explicit', () => {
+    const r = c({ participanti: [], fraze_asociere: [NEG, OP_SUB] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/spune c[ăa] nu se folosesc subcontractori [șs]i, [îi]n alt[ăa] parte, descrie cum lucreaz/)
   })
-  it('asociat declarat + text despre asociere => ok', () =>
-    expect(c({ participanti: ['asociat|ATSD'], semnale_asociere: ['asocierii'] }).stare).toBe('ok'))
+  it('DOAR clauze generale => ok: termenul apare legitim in contracte', () => {
+    const r = c({ participanti: [], fraze_asociere: [GEN] })
+    expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/generale sau condi[țt]ionale/)
+  })
+  it('asociat declarat + structura activa => ok', () =>
+    expect(c({ participanti: ['asociat|ATSD'], fraze_asociere: [OP_ASOC] }).stare).toBe('ok'))
   it('nimic declarat, text curat => ok', () =>
-    expect(c({ participanti: null, semnale_asociere: null }).stare).toBe('ok'))
-  it('parteneri declarati fara semnale => ok si ii listeaza pe rol', () => {
-    const r = c({ participanti: ['tert_sustinator|HABAU', 'subcontractant|ULTRAJET (foraje)'], semnale_asociere: [] })
+    expect(c({ participanti: null, fraze_asociere: null }).stare).toBe('ok'))
+  it('parteneri declarati fara fraze => ok si ii listeaza pe rol', () => {
+    const r = c({ participanti: ['tert_sustinator|HABAU', 'subcontractant|ULTRAJET (foraje)'], fraze_asociere: [] })
     expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/terț susținător: HABAU/); expect(r.detalii).toMatch(/ULTRAJET/)
   })
   it('rol necunoscut din view nu arunca', () =>
-    expect(c({ participanti: ['inventat|X', 'fara-separator'], semnale_asociere: [] }).stare).toBe('ok'))
+    expect(c({ participanti: ['inventat|X', 'fara-separator'], fraze_asociere: [] }).stare).toBe('ok'))
 })
 
-// Fixtures REALE din Hoghilag (cercetare 13.09): memoriu p.70 + planse, vs graficul valoric.
-// Toate cifrele sunt verificate aritmetic: Valchid segmente = tabel montaj pe ambele diametre
-// (Dn63 2.779, Dn90 6.388); Prod planse fara cele 3 lipsa = graficul (8.581); cu ele = memoriul (8.840).
+
 describe('HOG-02/03 controlTronsoane — perechea de noduri e cheia, nu eticheta', () => {
   const S = (localitate, nod_start, nod_end, lungime_m) => ({ localitate, nod_start, nod_end, lungime_m })
   const G = (localitate, id_activitate, nod_start, nod_end, lungime_m) => ({ localitate, id_activitate, nod_start, nod_end, lungime_m })
