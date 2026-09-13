@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -134,4 +134,67 @@ describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
   })
   it('rol necunoscut din view nu arunca', () =>
     expect(c({ participanti: ['inventat|X', 'fara-separator'], semnale_asociere: [] }).stare).toBe('ok'))
+})
+
+// Fixtures REALE din Hoghilag (cercetare 13.09): memoriu p.70 + planse, vs graficul valoric.
+// Toate cifrele sunt verificate aritmetic: Valchid segmente = tabel montaj pe ambele diametre
+// (Dn63 2.779, Dn90 6.388); Prod planse fara cele 3 lipsa = graficul (8.581); cu ele = memoriul (8.840).
+describe('HOG-02/03 controlTronsoane — perechea de noduri e cheia, nu eticheta', () => {
+  const S = (localitate, nod_start, nod_end, lungime_m) => ({ localitate, nod_start, nod_end, lungime_m })
+  const G = (localitate, id_activitate, nod_start, nod_end, lungime_m) => ({ localitate, id_activitate, nod_start, nod_end, lungime_m })
+
+  it('SPARGERE LEGITIMA: doua activitati pe aceeasi pereche, suma = sursa => ok', () => {
+    const r = controlTronsoane({
+      tronsoane_sursa: [S('VALCHID', 1, 2, 2410), S('VALCHID', 2, 3, 1695)],
+      tronsoane_grafic: [G('VALCHID', 86, 1, 2, 1600), G('VALCHID', 108, 1, 2, 810),
+                         G('VALCHID', 109, 2, 3, 800), G('VALCHID', 128, 2, 3, 895)],
+    })
+    expect(r.stare).toBe('ok'); expect(r.randuri).toEqual([])
+  })
+  it('acelasi tipar la Prod: 9-10 = 1600+1435, 10-11 = 200+1530', () => {
+    const r = controlTronsoane({
+      tronsoane_sursa: [S('PROD', 9, 10, 3035), S('PROD', 10, 11, 1730)],
+      tronsoane_grafic: [G('PROD', 35, 9, 10, 1600), G('PROD', 62, 9, 10, 1435),
+                         G('PROD', 63, 10, 11, 200), G('PROD', 75, 10, 11, 1530)],
+    })
+    expect(r.stare).toBe('ok')
+  })
+  it('MISMATCH REAL 15-16: grafic 245+100 = 345 vs sursa 100, iar 15-13 lipseste => block, ambele randuri', () => {
+    const r = controlTronsoane({
+      tronsoane_sursa: [S('VALCHID', 15, 13, 245), S('VALCHID', 15, 16, 100)],
+      tronsoane_grafic: [G('VALCHID', 90, 15, 16, 245), G('VALCHID', 91, 15, 16, 100)],
+    })
+    expect(r.stare).toBe('block')
+    expect(r.randuri.find(x => x.k.endsWith('13-15')).stare).toBe('lipsa_in_grafic')
+    const dif = r.randuri.find(x => x.k.endsWith('15-16'))
+    expect(dif.stare).toBe('cantitate_diferita'); expect(dif.grafic_m).toBe(345); expect(dif.sursa_m).toBe(100)
+  })
+  it('CANTITATE LIPSA 26-28: 155 m in sursa, absent din grafic => block, cu formularea prudenta', () => {
+    const r = controlTronsoane({
+      tronsoane_sursa: [S('VALCHID', 26, 28, 155)], tronsoane_grafic: [G('VALCHID', 9, 26, 30, 180)],
+    })
+    expect(r.stare).toBe('block')
+    expect(r.detalii).toMatch(/graficul nu poart[ăa] cantitatea/)
+    expect(r.detalii).not.toMatch(/omis/)
+  })
+  it('ordinea nodurilor nu conteaza: 15-13 din sursa = 13-15 din grafic', () =>
+    expect(controlTronsoane({ tronsoane_sursa: [S('VALCHID', 15, 13, 245)],
+                              tronsoane_grafic: [G('VALCHID', 1, 13, 15, 245)] }).stare).toBe('ok'))
+  it('noduri cu litera (28A) se normalizeaza', () =>
+    expect(controlTronsoane({ tronsoane_sursa: [S('VALCHID', '28A', 38, 75)],
+                              tronsoane_grafic: [G('VALCHID', 142, '28a', 38, 75)] }).stare).toBe('ok'))
+  it('pereche in grafic fara corespondent in sursa => warn, nu block (poate fi legitima)', () => {
+    const r = controlTronsoane({ tronsoane_sursa: [S('PROD', 1, 2, 180)],
+                                 tronsoane_grafic: [G('PROD', 27, 1, 2, 180), G('PROD', 99, 31, 34, 150)] })
+    expect(r.stare).toBe('warn'); expect(r.randuri[0].stare).toBe('necunoscut_in_sursa')
+  })
+  it('acelasi nod in doua localitati nu se amesteca', () => {
+    const r = controlTronsoane({ tronsoane_sursa: [S('PROD', 1, 2, 180), S('VALCHID', 1, 2, 2410)],
+                                 tronsoane_grafic: [G('PROD', 27, 1, 2, 180), G('VALCHID', 86, 1, 2, 2410)] })
+    expect(r.stare).toBe('ok'); expect(r.total_sursa_m).toBe(2590)
+  })
+  it('lipsa datelor => warn „nu se poate face", nu ok fals', () => {
+    expect(controlTronsoane({ tronsoane_sursa: [], tronsoane_grafic: [] }).stare).toBe('warn')
+    expect(controlTronsoane({ tronsoane_sursa: [S('PROD', 1, 2, 180)], tronsoane_grafic: [] }).detalii).toMatch(/activit[ăa][țt]i de tronson/)
+  })
 })
