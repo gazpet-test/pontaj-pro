@@ -13,7 +13,7 @@ const VERDE = {
   cerinte_neverificate: 0,
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
-  garantie_confirmata: true, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
+  garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
   anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [], bransamente_in_capitole: [372], bransamente_in_cerinte: [372],
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,

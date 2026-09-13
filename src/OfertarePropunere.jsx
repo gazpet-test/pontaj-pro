@@ -820,10 +820,10 @@ function ghicesteMoment(t = '') {
   return ''
 }
 function Garantie({ g, cerinte, onSalveaza, busy, nume }) {
-  const [f, setF] = useState({ cerut_luni: '', cerut_moment: '', cerut_cerinta_id: '', oferit_luni: '', oferit_moment: '', oferit_formular: '' })
+  const [f, setF] = useState({ cerut_luni: '', cerut_moment: '', cerut_cerinta_id: '', oferit_luni: '', oferit_moment: '', oferit_formular: '', oferit_justificare: '' })
   useEffect(() => { setF({
     cerut_luni: g?.cerut_luni ?? '', cerut_moment: g?.cerut_moment ?? '', cerut_cerinta_id: g?.cerut_cerinta_id ?? '',
-    oferit_luni: g?.oferit_luni ?? '', oferit_moment: g?.oferit_moment ?? '', oferit_formular: g?.oferit_formular ?? '',
+    oferit_luni: g?.oferit_luni ?? '', oferit_moment: g?.oferit_moment ?? '', oferit_formular: g?.oferit_formular ?? '', oferit_justificare: g?.oferit_justificare ?? '',
   }) }, [g])
   // Candidate: cerințele care vorbesc de garanția LUCRĂRILOR cu un număr de luni (nu produse, nu participare).
   const candidate = useMemo(() => cerinte.filter(c => /garan[țt]i/i.test(c.text_cerinta || '') && RX_LUNI.test(c.text_cerinta || '')
@@ -868,6 +868,16 @@ function Garantie({ g, cerinte, onSalveaza, busy, nume }) {
           <input value={f.oferit_formular} onChange={e => set('oferit_formular', e.target.value)} placeholder="formularul (ex. Formular 5)" style={{ ...S.input, width:200 }} />
         </div>
       </div>
+      {Number(f.oferit_luni) > Number(f.cerut_luni || 0) && (
+        <div style={{ marginTop:8 }}>
+          <div style={{ fontSize:11, color:G.dim, marginBottom:4 }}>
+            Oferim peste minim — documentația cere justificarea prin metodologie și dovezi de calitate:
+          </div>
+          <textarea value={f.oferit_justificare} onChange={e => set('oferit_justificare', e.target.value)} rows={3}
+            placeholder="de ce putem da mai mult: materiale, proceduri, garanții de la furnizori…"
+            style={{ ...S.input, width:'100%', resize:'vertical' }} />
+        </div>
+      )}
       <div style={{ marginTop:10 }}>
         <button onClick={() => onSalveaza(f)} disabled={busy || !f.oferit_luni || !f.oferit_moment} style={{ ...S.btnP, opacity: (busy || !f.oferit_luni || !f.oferit_moment) ? .5 : 1 }}>
           ✓ Confirm garanția
@@ -985,7 +995,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const { error } = await supabase.from('ofertare_pt_garantie').upsert({
       licitatie_id: licId, cerut_luni: n(f.cerut_luni), cerut_moment: f.cerut_moment || null,
       cerut_cerinta_id: n(f.cerut_cerinta_id), oferit_luni: n(f.oferit_luni), oferit_moment: f.oferit_moment || null,
-      oferit_formular: f.oferit_formular || null, confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
+      oferit_formular: f.oferit_formular || null, oferit_justificare: f.oferit_justificare || null, confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     setBusy(false)

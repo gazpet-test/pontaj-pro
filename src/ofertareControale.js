@@ -57,7 +57,7 @@ export const MOMENTE_GARANTIE = {
   receptie_finala: 'recepția finală', livrare: 'livrare', semnare_contract: 'semnarea contractului',
 }
 export function controlGarantie({ garantie_cerut_luni, garantie_cerut_moment, garantie_oferit_luni, garantie_oferit_moment,
-                                  garantie_confirmata, garantie_luni_in_capitole, garantie_cerinte_lucrari }) {
+                                  garantie_confirmata, garantie_justificata, garantie_luni_in_capitole, garantie_cerinte_lucrari }) {
   const cl = num(garantie_cerut_luni), ol = num(garantie_oferit_luni)
   const cm = garantie_cerut_moment || null, om = garantie_oferit_moment || null
   const inCap = (garantie_luni_in_capitole || []).map(Number).filter(n => !Number.isNaN(n))
@@ -78,6 +78,9 @@ export function controlGarantie({ garantie_cerut_luni, garantie_cerut_moment, ga
   if (probleme.length) return { ...base, stare: 'block', detalii: probleme.join(' · ') }
   const rez = []
   if (cl == null || !cm) rez.push('cerința (luni + moment) nu e notată — nu se poate confrunta cu ce oferim')
+  // H-051: peste minimul cerut, F8 cere justificare prin metodologie și dovezi de calitate.
+  // La Hoghilag s-au declarat 60 de luni fără ca justificarea să fie demonstrată.
+  if (cl != null && ol > cl && !garantie_justificata) rez.push(`oferim ${ol - cl} luni peste minim, fără justificare scrisă (documentația o cere)`)
   if (!garantie_confirmata) rez.push('neconfirmată de un om')
   const text = `${ol} luni de la ${mom(om)}` + (cl != null ? ` (cerut minim ${cl} de la ${mom(cm)})` : '')
   return { ...base, stare: rez.length ? 'warn' : 'ok', detalii: text + (rez.length ? ' — ' + rez.join('; ') : '') }
