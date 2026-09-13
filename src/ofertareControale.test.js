@@ -307,6 +307,34 @@ describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
       declaratii_participare: [DECL('asociere', 'nu_e_cazul')] })
     expect(r.detalii).not.toMatch(/dar niciun asociat nu e declarat/)
   })
+  // Defect gasit de verificarea adversariala: actul care declara rolul se oprea in UI si nu ajungea
+  // niciodata la verdictul portii. Declaratia de forma il purta, rolul nu.
+  const ACT = (rol, nume, o = {}) => ({ rol, nume, ...o })
+  it('actul rolului intra in verdict, nu ramane in panou', () => {
+    const r = c({ participanti: ['subcontractant|HABAU S.R.L.'],
+      participanti_acte: [ACT('subcontractant', 'HABAU S.R.L.',
+        { document_sursa: 'Acord de subcontractare nr. 305', data_document: '2025-06-23', pagina: '171' })],
+      fraze_asociere: [] })
+    expect(r.stare).toBe('ok')
+    expect(r.detalii).toMatch(/HABAU S\.R\.L\. \(Acord de subcontractare nr\. 305, din 2025-06-23, p\. 171\)/)
+    expect(r.fara_act).toHaveLength(0)
+  })
+  it('rol fara act => rezerva: afirmatia e a noastra, nu o trimitere', () => {
+    const r = c({ participanti: ['subcontractant|ELCAS'], participanti_acte: [], fraze_asociere: [] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/1 rol nu trimite la niciun act: ELCAS \(subcontractant\)/)
+  })
+  it('rolul dublu are nevoie de actul LUI pe fiecare rol', () => {
+    const r = c({ participanti: ['subcontractant|HABAU', 'tert_sustinator|HABAU'],
+      participanti_acte: [ACT('subcontractant', 'HABAU', { document_sursa: 'Acord 305' })],
+      fraze_asociere: [] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/HABAU \(terț susținător\)/)       // doar rolul de tert e fara act
+    expect(r.detalii).not.toMatch(/HABAU \(subcontractant\)/)
+  })
+  it('fara participanti_acte deloc, nu se inventeaza rezerva (date vechi)', () =>
+    expect(c({ participanti: ['subcontractant|ELCAS'], fraze_asociere: [] }).stare).toBe('ok'))
+
   // Analiza finala §5: „Asociatului / Subcontractorului / Furnizorului" e loc gol de sablon.
   const SABLON = 'Asociatului / Subcontractorului / Furnizorului i se va comunica programul de lucru'
   it('insiruirea de roluri cu slash = loc gol de sablon, nu declaratie operationala', () =>

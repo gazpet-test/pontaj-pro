@@ -1,0 +1,23 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_stare_participanti_acte, 14.09.2026).
+--
+-- DEFECT gasit de verificarea adversariala pe PR #291, in aceeasi seara in care a fost scris.
+--
+-- ASIMETRIE: declaratia de forma (ofertare_pt_declaratii) ajungea la poarta cu act si pagina, iar
+-- verdictul spunea „propunerea declara ca asocierea nu e cazul (PT §4.5, p. 170)". ROLUL entitatii
+-- NU: view-ul agrega doar `rol || '|' || nume`, deci document_sursa / data_document / pagina /
+-- scop_declarat se opreau in UI. Panoul arata eticheta „fara act", dar poarta — singurul loc care
+-- produce verdictul reproductibil — nu o vedea: un rol fara act trecea VERDE.
+--
+-- Adica exact ce combate analiza 03: fara act, „HABAU e subcontractant" ramane afirmatia noastra,
+-- nu o trimitere la acordul 305/23.06.2025.
+--
+-- v_ofertare_pt_stare: + participanti_acte (jsonb cu rol, nume, document_sursa, data_document,
+-- pagina, scop_declarat). Coloana `participanti` (text[]) ramane — nu se poate schimba tipul unei
+-- coloane existente prin CREATE OR REPLACE VIEW.
+--
+-- controlParticipare scrie acum rolul CU actul lui si ridica REZERVA (niciodata blocant) pentru
+-- rolurile care nu trimit la niciun document.
+--
+-- LECTIE GENERALA: cand se adauga campuri „de provenienta" pe un obiect, se verifica pe loc ca ele
+-- ajung in VIEW si in VERDICT, nu doar in UI. Altfel panoul stie, iar poarta nu — si poarta e cea
+-- care semneaza.
