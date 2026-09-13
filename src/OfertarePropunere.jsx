@@ -221,6 +221,7 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFilt
     return m
   }, [legaturi])
 
+  const versiuneCap = useMemo(() => new Map(capitole.map(c => [c.id, c.versiune || 1])), [capitole])
   const lista = useMemo(() => cerinte.filter(c => {
     const ls = legPe.get(c.id) || []
     const areCap = ls.some(l => l.fel === 'capitol')
@@ -231,11 +232,16 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFilt
     if (filtru === 'forma')   return c.tip === 'forma'
     if (filtru === 'dovada')  return cuDovada && !areCap && !exceptat
     if (filtru === 'gata')    return areCap || exceptat
+    // P0.3: are capitol, dar nimeni n-a verificat raspunsul — sau l-a verificat la o versiune
+    // veche a capitolului. Aceeasi definitie ca `cerinte_neverificate` din view.
+    if (filtru === 'neverificate') return ls.some(l => l.fel === 'capitol'
+      && !(l.stare === 'verificata' && l.verificat_la_versiunea === versiuneCap.get(l.capitol_id)))
     return true
-  }), [cerinte, legPe, dovedite, filtru])
+  }), [cerinte, legPe, dovedite, filtru, versiuneCap])
 
   const CHIPS = [
     ['fara',    'fără capitol'],
+    ['neverificate', '⏳ neverificate'],
     ['capcane', '🚫 capcane'],
     ['forma',   'de formă'],
     ['dovada',  'închise cu dovadă'],
@@ -846,7 +852,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const ids = cer.map(c => c.id)
     if (ids.length) {
       const [rLeg, rAcop] = await Promise.all([
-        supabase.from('ofertare_pt_legaturi').select('id, cerinta_id, capitol_id, fel, motiv').in('cerinta_id', ids).limit(10000),
+        supabase.from('ofertare_pt_legaturi').select('id, cerinta_id, capitol_id, fel, motiv, stare, locator_raspuns, verificat_la_versiunea, confirmat_la').in('cerinta_id', ids).limit(10000),
         supabase.from('ofertare_acoperire').select('cerinta_id').in('cerinta_id', ids).in('status', ['acoperit','acoperit_partener']).limit(10000),
       ])
       if (rLeg.error || rAcop.error) {

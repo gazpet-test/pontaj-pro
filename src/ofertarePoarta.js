@@ -32,6 +32,18 @@ export function evalueazaPoarta(st) {
     filtru: 'fara',
   })
   r.push({
+    // P0.3 — ATRIBUIREA NU E CONFORMITATE. O cerinta cu capitol, dar pe care nimeni n-a
+    // confirmat-o (stare <> 'verificata', sau verificata la o versiune veche a capitolului) NU e
+    // verde. BLOCK: e un fapt (exista/nu exista o verificare cu om si data), iar blocajul se
+    // ridica prin actiunea corecta — cineva citeste raspunsul si il bifeaza.
+    k:'neverificate', titlu:'Cerințe atribuite, dar neverificate de un om',
+    stare: (st.cerinte_neverificate || 0) > 0 ? 'block' : 'ok',
+    detalii: (st.cerinte_neverificate || 0) > 0
+      ? `${st.cerinte_neverificate} din ${st.cu_capitol} au capitol, dar nimeni n-a confirmat că răspunsul satisface cerința (sau textul s-a schimbat de la verificare)`
+      : (st.cu_capitol > 0 ? `toate cele ${st.cu_capitol} cerințe atribuite sunt verificate la versiunea curentă` : '—'),
+    filtru: 'neverificate',
+  })
+  r.push({
     k:'capcane', titlu:'Capcane de respingere descoperite',
     stare: st.capcane_descoperite > 0 ? 'block' : 'ok',
     detalii: st.capcane > 0
