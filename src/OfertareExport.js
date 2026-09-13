@@ -133,6 +133,9 @@ export const numeFisier = (prefix, licitatie) => {
   return `${prefix}_${baza}.docx`
 }
 
+/** Blob-ul DOCX, pentru hash + upload (manifest). Aceiași bytes ca la descărcare. */
+export const blobDocx = doc => Packer.toBlob(doc)
+
 export async function descarcaDocx(doc, nume) {
   const blob = await Packer.toBlob(doc)
   const url = URL.createObjectURL(blob)

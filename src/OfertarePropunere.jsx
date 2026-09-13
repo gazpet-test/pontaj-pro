@@ -22,7 +22,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
-import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx } from './OfertareExport.js'
+import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
+import { sha256Hex, sursaVersiuneCapitole, construiesteManifest } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -820,6 +821,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [pachet, setPachet] = useState([])
   const [echipamente, setEchipamente] = useState([])
   const [documente, setDocumente] = useState([])
+  const [pachete, setPachete] = useState([])
   const [observatii, setObservatii] = useState([])
   const [versiuni, setVersiuni] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
@@ -835,7 +837,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -856,6 +858,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       // Numele celor care au cerut/rezolvat. Fara ele istoricul arata uuid-uri, adica nimic.
       supabase.from('profiles').select('id, name').limit(500),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, revizie, pagini').eq('licitatie_id', id).order('id').limit(500),
+      supabase.from('ofertare_pt_pachet').select('*, fisiere:ofertare_pt_pachet_fisiere(rol, nume, sha256, size_bytes, sursa_versiune)')
+        .eq('licitatie_id', id).order('versiune', { ascending: false }).limit(50),
     ])
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
@@ -864,6 +868,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     setObservatii(rObs.data || [])
     setDocumente(rDoc.data || [])
+    setPachete(rPac.data || [])
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
@@ -1199,6 +1204,53 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     await load(licId)
   }
 
+  // P0.5 — APROBAREA PACHETULUI. Nu ingheata starea (asta o face semnatura portii), ingheata
+  // BYTES-II: genereaza fisierele, le hash-uieste in browser, le urca in bucket, scrie manifestul,
+  // apoi marcheaza pachetul aprobat. De aici, intrebarea "ce a aprobat X la momentul Y" are un
+  // raspuns exact. Manifestul e append-only (RLS): o schimbare = versiune noua.
+  const aprobaPachet = async () => {
+    if (!licId || !capitole.length) return
+    const ev = evalueazaPoarta(st)
+    if (!ev || ev.stare === 'block') { showToast?.('Poarta are rânduri roșii — nu se aprobă un pachet blocat.', 'err'); return }
+    if (!window.confirm(`Aprobi pachetul v${(pachete[0]?.versiune || 0) + 1}?\nSe generează fișierele, se calculează SHA-256 și se scriu în manifest. După aprobare NU se mai pot modifica — o schimbare înseamnă o versiune nouă.`)) return
+    setBusy(true)
+    try {
+      const versiune = (pachete[0]?.versiune || 0) + 1
+      const arg = { licitatie: lic, capitole }
+      const surse = [
+        { rol: 'propunere_docx', nume: numeFisier('Propunere_tehnica', lic), blob: await blobDocx(construiestePropunere(arg)) },
+        { rol: 'borderou_docx',  nume: numeFisier('Borderou_PT', lic),       blob: await blobDocx(construiesteBorderou(arg)) },
+      ]
+      const fisiere = []
+      for (const f of surse) fisiere.push({ ...f, mime: f.blob.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: f.blob.size, sha256: await sha256Hex(f.blob) })
+      const manifest = construiesteManifest({ licitatieId: licId, versiune, fisiere, sursaVersiune: sursaVersiuneCapitole(capitole) })
+
+      // 1. bytes-ii in bucket, EXACT cei hash-uiti
+      for (let i = 0; i < fisiere.length; i++) {
+        const { error } = await supabase.storage.from('ofertare').upload(manifest[i].fisier_path, fisiere[i].blob, { upsert: false, contentType: fisiere[i].mime })
+        if (error) throw new Error(`upload ${fisiere[i].nume}: ${error.message}`)
+      }
+      // 2. pachetul (propus) + manifestul
+      const { data: p, error: e1 } = await supabase.from('ofertare_pt_pachet').insert({
+        licitatie_id: licId, versiune, grafic_versiune: st?.grafic_versiune || null,
+        pt_poarta_id: null, nota: ev.rezerve.length ? `aprobat CU REZERVE: ${ev.rezerve.join(' · ')}` : null,
+      }).select('id').single()
+      if (e1) throw new Error('pachet: ' + e1.message)
+      const { error: e2 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(manifest.map(m => ({ ...m, pachet_id: p.id })))
+      if (e2) throw new Error('manifest: ' + e2.message)
+      // 3. aprobarea — dupa asta RLS nu mai lasa nicio modificare pe fisiere
+      const { data: u } = await supabase.auth.getUser()
+      const { error: e3 } = await supabase.from('ofertare_pt_pachet')
+        .update({ stare: 'aprobat', aprobat_de: u?.user?.id || null, aprobat_la: new Date().toISOString() }).eq('id', p.id)
+      if (e3) throw new Error('aprobare: ' + e3.message)
+      showToast?.(`Pachet v${versiune} aprobat: ${manifest.length} fișiere, SHA-256 în manifest.` + (ev.rezerve.length ? ' Cu rezerve (vezi nota).' : ''), ev.rezerve.length ? 'err' : 'ok')
+    } catch (e) {
+      showToast?.('Aprobarea a eșuat, nimic nu s-a marcat aprobat: ' + (e?.message || e), 'err')
+    }
+    setBusy(false)
+    await load(licId)
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -1282,6 +1334,11 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
           style={{ ...S.btnS, opacity: (busy || !capitole.length) ? .45 : 1 }}>
           📋 Borderoul
         </button>
+        <button onClick={aprobaPachet} disabled={blocat || busy || !capitole.length}
+          title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Generează fișierele, le hash-uiește și îngheață manifestul (versiune nouă)'}
+          style={{ ...S.btnS, opacity: (blocat || busy || !capitole.length) ? .45 : 1 }}>
+          🔏 Aprobă pachetul
+        </button>
         <button onClick={semneaza} disabled={blocat || busy}
           title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Îngheață verdictul porții — verde dacă n-are rezerve, galben dacă are'}
           style={{ ...S.btnP, opacity: blocat || busy ? .45 : 1, cursor: blocat ? 'not-allowed' : 'pointer' }}>
@@ -1301,6 +1358,30 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
           onSalveaza={salveazaCapitol} onBlocheaza={blocheazaCapitol}
           onGenereaza={genereazaCapitol} busy={busy} />
       </div>
+
+      {pachete.length > 0 && (
+        <div>
+          <div style={{ ...S.lbl, marginBottom:8 }}>Pachete aprobate — ce bytes, când, de cine</div>
+          <div style={{ ...S.card, overflow:'hidden' }}>
+            {pachete.map((p, i) => (
+              <div key={p.id} style={{ padding:'8px 14px', borderTop: i ? `1px solid ${G.border2}` : 'none', fontSize:12 }}>
+                <div style={{ display:'flex', gap:10, flexWrap:'wrap', color:G.text }}>
+                  <b>v{p.versiune}</b>
+                  <span style={{ color: p.stare === 'depus' ? G.green : p.stare === 'aprobat' ? G.blue : G.yellow }}>{p.stare}</span>
+                  <span style={{ color:G.muted }}>{p.aprobat_la ? `${nume(p.aprobat_de)} · ${new Date(p.aprobat_la).toLocaleString('ro-RO')}` : '—'}</span>
+                  {p.grafic_versiune && <span style={{ color:G.dim }}>grafic v{p.grafic_versiune}</span>}
+                </div>
+                {p.nota && <div style={{ color:G.orange, marginTop:2 }}>{p.nota}</div>}
+                {(p.fisiere || []).map(f => (
+                  <div key={f.rol + f.nume} style={{ color:G.dim, fontFamily:'ui-monospace, monospace', fontSize:11, marginTop:2 }}>
+                    {f.rol} · {f.nume} · {f.size_bytes} B · {f.sha256.slice(0, 16)}… <span style={{ color:G.dim }}>{f.sursa_versiune}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Observații și revizii</div>
