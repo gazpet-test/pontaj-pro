@@ -205,3 +205,61 @@ export function controlParticipare({ participanti, semnale_asociere }) {
     detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '')
       + ' — poate fi și o clauză generală, citește contextul' }
 }
+
+/**
+ * HOG-02/03 — reconcilierea tronsoanelor: sursa tehnică vs activitățile din grafic.
+ *
+ * REGULA CENTRALĂ, dovedită pe Hoghilag: eticheta NU e cheie, perechea de noduri e. Graficul sparge
+ * legitim un tronson în mai multe activități — Valchid 1-2 apare ca 1.600 + 810 = 2.410, exact cât
+ * dă memoriul, iar Prod 9-10 ca 1.600 + 1.435 = 3.035. Un control care ar semnala „aceeași etichetă
+ * de două ori" ar fi dat fals pozitive pe jumătate din grafic. De aceea se însumează pe pereche
+ * ÎNAINTE de comparație.
+ *
+ * Tocmai de asta Valchid 15-16 e eroare: acolo suma dă 345, iar sursa dă 100, fiindcă cei 245 m
+ * aparțin lui 15-13, care nu apare deloc. Se demonstrează prin cantitate, nu prin nume.
+ *
+ * FORMULARE: „graficul nu poartă cantitatea", niciodată „lucrarea a fost omisă". Controlul vede
+ * documente, nu șantiere.
+ */
+export function perecheNoduri(a, b) {
+  return [String(a).trim().toUpperCase(), String(b).trim().toUpperCase()].sort().join('-')
+}
+export function controlTronsoane({ tronsoane_sursa, tronsoane_grafic }) {
+  const cheie = t => `${String(t.localitate || '').toUpperCase()}|${perecheNoduri(t.nod_start, t.nod_end)}`
+  const sursa = new Map(), grafic = new Map()
+  for (const t of tronsoane_sursa || []) {
+    const k = cheie(t); sursa.set(k, (sursa.get(k) || 0) + Number(t.lungime_m || 0))
+  }
+  for (const t of tronsoane_grafic || []) {
+    const k = cheie(t)
+    const v = grafic.get(k) || { m: 0, acte: [] }
+    v.m += Number(t.lungime_m || 0); if (t.id_activitate != null) v.acte.push(String(t.id_activitate))
+    grafic.set(k, v)
+  }
+  const nume = k => k.split('|')[1] + ' (' + k.split('|')[0].toLowerCase() + ')'
+  const randuri = []
+  for (const [k, m] of sursa) {
+    const g = grafic.get(k)
+    if (!g) randuri.push({ k, stare: 'lipsa_in_grafic', sursa_m: m, grafic_m: 0,
+      detalii: `${nume(k)}: ${m} m în sursă, graficul nu poartă cantitatea` })
+    else if (Math.abs(g.m - m) >= 0.5) randuri.push({ k, stare: 'cantitate_diferita', sursa_m: m, grafic_m: g.m,
+      detalii: `${nume(k)}: sursă ${m} m vs grafic ${g.m} m din ${g.acte.length} ${g.acte.length === 1 ? 'activitate' : 'activități'} (${g.acte.join(', ')})` })
+  }
+  for (const [k, g] of grafic) if (!sursa.has(k))
+    randuri.push({ k, stare: 'necunoscut_in_sursa', sursa_m: 0, grafic_m: g.m,
+      detalii: `${nume(k)}: ${g.m} m în grafic, fără corespondent în sursă` })
+
+  const ts = [...sursa.values()].reduce((a, b) => a + b, 0)
+  const tg = [...grafic.values()].reduce((a, b) => a + b.m, 0)
+  const base = { k: 'tronsoane', randuri, total_sursa_m: ts, total_grafic_m: tg, diferenta_m: tg - ts }
+  if (!sursa.size || !grafic.size) return { ...base, stare: 'warn',
+    detalii: !sursa.size ? 'nu există tronsoane din sursa tehnică în ERP — controlul nu se poate face'
+                         : 'graficul n-are activități de tronson — controlul nu se poate face' }
+  if (!randuri.length) return { ...base, stare: 'ok',
+    detalii: `${sursa.size} perechi de noduri, aceleași cantități în sursă și în grafic (${ts} m)` }
+  const fapte = randuri.filter(r => r.stare !== 'necunoscut_in_sursa')
+  const fmt = n => Math.round(n).toLocaleString('ro-RO')
+  return { ...base, stare: fapte.length ? 'block' : 'warn',
+    detalii: `${randuri.length} din ${sursa.size} perechi nu se reconciliază · total sursă ${fmt(ts)} m vs grafic ${fmt(tg)} m (${tg - ts > 0 ? '+' : ''}${fmt(tg - ts)}) · `
+      + randuri.slice(0, 3).map(r => r.detalii).join(' · ') + (randuri.length > 3 ? ` · și încă ${randuri.length - 3}` : '') }
+}
