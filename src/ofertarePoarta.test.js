@@ -11,6 +11,7 @@ const VERDE = {
   capcane: 0, capcane_descoperite: 0,
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0,
   cerinte_neverificate: 0,
+  cantitati_baza: 'memoriu', cantitati_retea_m: 1000, grafic_fronturi_m: 1000,
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
@@ -34,6 +35,7 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       const ev = cu({ cerinte_neverificate: 1 })
       expect(ev.blocaje).toContain('neverificate'); expect(ev.stare).toBe('block')
     })
+    it('H2: cantitati diferite intre Cantitati si grafic => block', () => expect(cu({ grafic_fronturi_m: 900 }).blocaje).toContain('cantitati'))
     it('capitol obligatoriu gol — randul care LIPSEA din cardul licitatiei', () => expect(cu({ capitole_goale: 1 }).blocaje).toContain('goale'))
     it('capitol scris de AI si necitit de nimeni', () => expect(cu({ capitole_nescrise_de_om: 1 }).blocaje).toContain('nescrise'))
     it('afirmatie blocanta (om inexistent / plecat)', () => expect(cu({ afirmatii_blocante: 1 }).blocaje).toContain('conformitate'))
@@ -62,8 +64,8 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 11 randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 12 randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic'])
+      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati'])
   })
 })
