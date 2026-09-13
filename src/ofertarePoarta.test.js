@@ -39,7 +39,6 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       expect(ev.blocaje).toContain('neverificate'); expect(ev.stare).toBe('block')
     })
     it('H6: capitolele nu confirma niciun numar din cerinte => block', () => expect(cu({ bransamente_in_capitole: [758] }).blocaje).toContain('numere'))
-    it('H1: nume din alta licitatie in capitole => block', () => expect(cu({ identitate_straine: ['Domnesti'] }).blocaje).toContain('identitate'))
     it('H5: trimitere la anexa inexistenta => block', () => expect(cu({ anexe_referite: ['anexa 9'] }).blocaje).toContain('anexe'))
     it('H4: garantie oferita sub cea ceruta => block', () => expect(cu({ garantie_oferit_luni: 24 }).blocaje).toContain('garantie'))
     it('H2: cantitati diferite intre Cantitati si grafic => block', () => expect(cu({ grafic_fronturi_m: 900 }).blocaje).toContain('cantitati'))
@@ -63,6 +62,24 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('rezervele sunt texte gata de pus in mesajul semnaturii', () => {
       const ev = cu({ observatii_deschise: 1 })
       expect(ev.rezerve).toHaveLength(1); expect(ev.rezerve[0]).toMatch(/observa/i)
+    })
+  })
+
+  describe('REZERVE — semnale de citit, nu fapte', () => {
+    // `rezerve` sunt TEXTE (intra in mesajul semnaturii), `blocaje` sunt CHEI. De aia starea
+    // unui rand anume se citeste din `randuri`, nu din `rezerve`.
+    const randul = (ev, k) => ev.randuri.find(x => x.k === k)
+    it('H1: nume din alta licitatie => rezerva, NU blocaj (poate fi experienta similara)', () => {
+      const ev = cu({ identitate_straine: ['Domnesti'] })
+      expect(ev.stare).toBe('warn'); expect(ev.blocaje).toEqual([])
+      expect(randul(ev, 'identitate').stare).toBe('warn')
+      expect(ev.rezerve.join(' ')).toMatch(/Domnesti/)
+    })
+    it('H6: surse care se contrazic intre ele => rezerva, cu ambele numere', () => {
+      const ev = cu({ bransamente_in_cerinte: [371, 372] })
+      expect(ev.blocaje).toEqual([])
+      expect(randul(ev, 'numere').stare).toBe('warn')
+      expect(ev.rezerve.join(' ')).toMatch(/371, 372/)
     })
   })
 

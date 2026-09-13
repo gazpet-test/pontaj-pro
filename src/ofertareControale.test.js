@@ -79,9 +79,10 @@ describe('H5 controlAnexe — trimiterile din text au piesa in cuprins', () => {
 describe('H1 controlIdentitate — numele altei lucrari ramas in text', () => {
   it('niciun nume strain => ok', () => expect(controlIdentitate({ identitate_straine: [] }).stare).toBe('ok'))
   it('null (nicio proba) => ok, nu warn', () => expect(controlIdentitate({ identitate_straine: null }).stare).toBe('ok'))
-  it('un singur nume strain => block si il numeste', () => {
+  it('nume strain => WARN, nu block: experienta similara numeste legitim alte lucrari (Hoghilag)', () => {
     const r = controlIdentitate({ identitate_straine: ['Domnesti', 'Ilfov'] })
-    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/Domnesti, Ilfov/)
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/Domnesti, Ilfov/)
+    expect(r.detalii).toMatch(/experien[țt]/); expect(r.detalii).toMatch(/contaminare/)
   })
   it('dubluri se strang intr-una', () => expect(controlIdentitate({ identitate_straine: ['Racari', 'Racari'] }).straine).toEqual(['Racari']))
 })
@@ -101,4 +102,12 @@ describe('H6 controlNumereCheie — 372 vs 371 bransamente (Hoghilag)', () => {
     expect(n({ bransamente_in_capitole: [371, 372], bransamente_in_cerinte: null }).stare).toBe('warn'))
   it('niciun numar in capitole => ok, nu block', () =>
     expect(n({ bransamente_in_capitole: null, bransamente_in_cerinte: [372] }).stare).toBe('ok'))
+  it('HOG-04: cerintele insele dau 371 SI 372 => conflict de surse aratat, chiar daca un capitol coincide', () => {
+    const r = n({ bransamente_in_capitole: [372], bransamente_in_cerinte: [371, 372] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/conflict de surse/); expect(r.detalii).toMatch(/371, 372/)
+    expect(r.detalii).toMatch(/nu alege singur/)
+  })
+  it('conflictul de surse se arata si cand capitolele tac', () =>
+    expect(n({ bransamente_in_capitole: null, bransamente_in_cerinte: [371, 372] }).detalii).toMatch(/conflict de surse/))
 })
