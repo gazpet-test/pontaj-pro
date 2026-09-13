@@ -208,7 +208,8 @@ function PoartaPT({ st, onFiltru }) {
 // ─────────────────────────────────────────────────────────────────
 // MATRICEA — cerințele, cu filtre și cele două acțiuni în bloc
 // ─────────────────────────────────────────────────────────────────
-function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFiltru, sel, setSel, onAtribuie, onExcepta, busy }) {
+function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, documente = [], filtru, setFiltru, sel, setSel,
+                          onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy }) {
   const [capSel, setCapSel] = useState('')
   const [motiv, setMotiv] = useState('')
 
@@ -304,11 +305,36 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFilt
                   {c.sursa_sectiune && <span style={{ fontSize:11, color:G.dim }}>{c.sursa_sectiune}{c.sursa_pagina ? ` p.${c.sursa_pagina}` : ''}</span>}
                   {capcana && <span style={{ fontSize:11, color:G.red, fontWeight:700 }}>🚫 CAPCANĂ</span>}
                   {dovedite.has(c.id) && !cap && !exc && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
-                  {capNr && <span style={{ fontSize:11, color:G.green, fontWeight:600 }}>→ cap. {capNr.nr}</span>}
+                  {capNr && <span style={{ fontSize:11, color:G.green, fontWeight:600 }}>→ {capNr.eticheta || `cap. ${capNr.nr}`}</span>}
                   {exc && <span style={{ fontSize:11, color:G.orange }} title={exc.motiv}>⊘ exceptată</span>}
+                  {/* P0.3: starea legaturii. Verde DOAR la 'verificata' la versiunea CURENTA a capitolului. */}
+                  {cap && capNr && (() => {
+                    const laZi = cap.stare === 'verificata' && cap.verificat_la_versiunea === (capNr.versiune || 1)
+                    const veche = cap.stare === 'verificata' && !laZi
+                    const cul = laZi ? G.green : cap.stare === 'blocata' ? G.red : veche ? G.orange : G.yellow
+                    const txt = laZi ? `✓ verificată v${cap.verificat_la_versiunea}`
+                      : veche ? `⚠ verificată la v${cap.verificat_la_versiunea}, capitolul e la v${capNr.versiune || 1}`
+                      : cap.stare === 'blocata' ? '⛔ blocată' : `⏳ ${cap.stare}`
+                    return <span style={{ fontSize:11, color:cul, fontWeight:600 }} title={cap.constatare || cap.locator_raspuns || ''}>{txt}</span>
+                  })()}
                 </div>
                 <div style={{ fontSize:13, color:G.text, lineHeight:1.45 }}>{c.text_cerinta}</div>
+                {cap && cap.locator_raspuns && <div style={{ fontSize:11, color:G.dim, marginTop:2 }}>răspunsul: {cap.locator_raspuns}</div>}
+                {cap && cap.constatare && <div style={{ fontSize:11, color:G.red, marginTop:2 }}>constatare: {cap.constatare}</div>}
               </div>
+              {/* Butoanele de verificare. Un om citeste raspunsul din capitol si bifeaza — sau blocheaza
+                  cu constatare. Dovada e optionala aici: multe cerinte de propunere se satisfac prin
+                  text, nu prin document; cele cu document probant primesc 📎. */}
+              {cap && capNr && !(cap.stare === 'verificata' && cap.verificat_la_versiunea === (capNr.versiune || 1)) && (
+                <div style={{ display:'flex', flexDirection:'column', gap:4, flexShrink:0 }}>
+                  <button disabled={busy} onClick={() => onVerifica(cap, capNr)} title="Am citit răspunsul din capitol și satisface cerința"
+                    style={{ ...S.btn, padding:'2px 8px', fontSize:11, color:G.green }}>✓ verific</button>
+                  <button disabled={busy} onClick={() => onDovada(cap, documente)} title="Leagă o dovadă (document + pagină)"
+                    style={{ ...S.btn, padding:'2px 8px', fontSize:11 }}>📎 dovadă</button>
+                  <button disabled={busy} onClick={() => onBlocheaza(cap)} title="Răspunsul NU satisface cerința — scrie de ce"
+                    style={{ ...S.btn, padding:'2px 8px', fontSize:11, color:G.red }}>⛔ blochez</button>
+                </div>
+              )}
             </div>
           )
         })}
@@ -793,6 +819,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [autExterne, setAutExterne] = useState([])
   const [pachet, setPachet] = useState([])
   const [echipamente, setEchipamente] = useState([])
+  const [documente, setDocumente] = useState([])
   const [observatii, setObservatii] = useState([])
   const [versiuni, setVersiuni] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
@@ -808,7 +835,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -828,6 +855,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         .order('cerut_la', { ascending: false }).limit(1000),
       // Numele celor care au cerut/rezolvat. Fara ele istoricul arata uuid-uri, adica nimic.
       supabase.from('profiles').select('id, name').limit(500),
+      supabase.from('ofertare_documente_atribuire').select('id, nume_original, revizie, pagini').eq('licitatie_id', id).order('id').limit(500),
     ])
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
@@ -835,6 +863,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     setObservatii(rObs.data || [])
+    setDocumente(rDoc.data || [])
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
@@ -1109,6 +1138,67 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setBusy(false)
   }
 
+  // P0.3 — verificarea umana. Stampila = confirmat_de (userul curent) + confirmat_la + versiunea
+  // capitolului ACUM. Daca textul se schimba dupa, versiunea creste si cerinta redevine
+  // neverificata (view-ul compara versiunile). Locatorul raspunsului e cerut, nu optional: o
+  // verificare care nu spune UNDE e raspunsul nu poate fi reverificata de altcineva.
+  const verificaLegatura = async (leg, cap) => {
+    if (!leg?.id) return
+    const loc = window.prompt(`Unde în „${cap.titlu}" e răspunsul? (ex. „5.8.4", „paragraful 3", „tabelul de la p. 2")`, leg.locator_raspuns || '')
+    if (loc === null || !loc.trim()) return
+    setBusy(true)
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('ofertare_pt_legaturi').update({
+      stare: 'verificata', locator_raspuns: loc.trim(), constatare: null, severitate: null,
+      confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
+      verificat_la_versiunea: cap.versiune || 1,
+    }).eq('id', leg.id)
+    setBusy(false)
+    if (error) { showToast?.('Verificarea nu s-a salvat: ' + error.message, 'err'); return }
+    showToast?.(`Verificată la v${cap.versiune || 1}.`, 'ok')
+    await load(licId)
+  }
+
+  const blocheazaLegatura = async (leg) => {
+    if (!leg?.id) return
+    const c = window.prompt('De ce NU satisface răspunsul cerința? (constatarea rămâne pe cerință)', leg.constatare || '')
+    if (c === null || !c.trim()) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_legaturi').update({
+      stare: 'blocata', constatare: c.trim(), severitate: 'blocant',
+    }).eq('id', leg.id)
+    setBusy(false)
+    if (error) { showToast?.('Blocarea nu s-a salvat: ' + error.message, 'err'); return }
+    showToast?.('Cerință blocată, cu constatare.', 'ok')
+    await load(licId)
+  }
+
+  // Dovada: document din documentatia de atribuire + locator local (pagina/capitol in document).
+  // Pagina GLOBALA (in dosarul asamblat) nu se cere aici — se stie abia la asamblare (P0.5).
+  const adaugaDovada = async (leg, docs) => {
+    if (!leg?.id) return
+    if (!docs.length) { showToast?.('Licitația n-are documente încărcate din care să legi o dovadă.', 'err'); return }
+    const lista = docs.slice(0, 40).map((d, i) => `${i + 1}. ${d.nume_original}${d.revizie ? ' (rev. ' + d.revizie + ')' : ''}`).join('\n')
+    const ales = window.prompt(`Care document e dovada? Scrie numărul:\n${lista}`)
+    const d = docs[Number(ales) - 1]
+    if (!d) return
+    const loc = window.prompt(`Unde în „${d.nume_original}"? (pagină / capitol / rând)`)
+    if (loc === null || !loc.trim()) return
+    const pg = Number((loc.match(/\d+/) || [])[0]) || null
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_dovezi').insert({
+      legatura_id: leg.id, tip_dovada: 'document_atribuire', document_id: d.id,
+      document_revizie: d.revizie || null, locator_local: loc.trim(), pagina_locala: pg,
+    })
+    if (!error && leg.stare === 'atribuita') {
+      await supabase.from('ofertare_pt_legaturi').update({ stare: 'dovedita' }).eq('id', leg.id)
+    }
+    setBusy(false)
+    if (error) { showToast?.('Dovada nu s-a salvat: ' + error.message, 'err'); return }
+    showToast?.('Dovadă legată. Rămâne de verificat de un om.', 'ok')
+    await load(licId)
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -1241,9 +1331,10 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Matricea de conformitate</div>
         <MatriceCerinte
-          cerinte={cerinte} legaturi={legaturi} capitole={capitole} dovedite={dovedite}
+          cerinte={cerinte} legaturi={legaturi} capitole={capitole} dovedite={dovedite} documente={documente}
           filtru={filtru} setFiltru={setFiltru} sel={sel} setSel={setSel}
-          onAtribuie={atribuie} onExcepta={excepta} busy={busy}
+          onAtribuie={atribuie} onExcepta={excepta}
+          onVerifica={verificaLegatura} onBlocheaza={blocheazaLegatura} onDovada={adaugaDovada} busy={busy}
         />
       </div>
     </div>
