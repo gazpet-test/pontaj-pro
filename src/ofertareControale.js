@@ -180,7 +180,23 @@ export const ROLURI_PARTICIPARE = {
   asociat: 'asociat', subcontractant: 'subcontractant', tert_sustinator: 'terț susținător',
   furnizor: 'furnizor', proiectant: 'proiectant',
 }
-export function controlParticipare({ participanti, semnale_asociere }) {
+// Acordul la numeral: in romana e 1 formulare, dar 2 formulari. Fara asta poarta scria „1 formulări”.
+const plural = (n, unu, multe) => `${n} ${n === 1 ? unu : multe}`
+
+export function clasificaFrazaParticipare(fraza) {
+  const t = String(fraza || '').toLowerCase()
+  if (!/asocier|asocia[țt]|subcontract/.test(t)) return 'irelevanta'
+  // Negare explicită: „Pentru realizarea lucrarilor, nu se vor folosi subcontractori." (p. 58).
+  if (/\bnu\s+(se\s+)?(vor|va)\s+(fi\s+)?(folosi|utiliza|subcontracta)|f[ăa]r[ăa] subcontract/.test(t)) return 'negare'
+  // Condițional / clauză generală: se citește ÎNAINTE de marcajele operaționale, ca „în cazul
+  // asocierilor... prin grija liderului" să nu treacă drept structură activă.
+  if (/[îi]n cazul|dac[ăa][^a-ză]|ulterior|acordul beneficiarului|acordul autorit|propus dup[ăa]|se vor aviza|se aplic[ăa]/.test(t)) return 'generica'
+  // Structură operațională activă: descrie cum FUNCȚIONEAZĂ asocierea, nu ce s-ar întâmpla dacă.
+  if (/echip|comitet|organigram|director|responsabil|factur|centraliz|compartiment|departament|coordon|raport|fiecare (asociat|subcontract)/.test(t)) return 'operationala'
+  return 'generica'
+}
+
+export function controlParticipare({ participanti, fraze_asociere }) {
   const pe = { asociat: [], subcontractant: [], tert_sustinator: [], furnizor: [], proiectant: [] }
   for (const x of participanti || []) {
     const i = String(x).indexOf('|')
@@ -188,22 +204,30 @@ export function controlParticipare({ participanti, semnale_asociere }) {
     const rol = String(x).slice(0, i), nume = String(x).slice(i + 1)
     if (pe[rol]) pe[rol].push(nume)
   }
-  const sem = (semnale_asociere || []).map(x => String(x).toLowerCase())
-  const zice = { asociere: sem.some(x => x.startsWith('asocia') || x.startsWith('asocier')),
-                 subcontract: sem.some(x => x.startsWith('subcontract')) }
-  const base = { k: 'participare', pe, semnale: sem }
+  const fraze = (fraze_asociere || []).map(f => ({ text: String(f), cls: clasificaFrazaParticipare(f) }))
+  const op = fraze.filter(f => f.cls === 'operationala')
+  const neg = fraze.filter(f => f.cls === 'negare')
+  const zice = {
+    asociere: op.some(f => /asocier|asocia[țt]/i.test(f.text)),
+    subcontract: op.some(f => /subcontract/i.test(f.text)),
+  }
+  const base = { k: 'participare', pe, fraze, operationale: op.length, generice: fraze.length - op.length - neg.length }
   const declarat = Object.entries(pe).filter(([, v]) => v.length)
     .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
   const probleme = []
-  if (zice.asociere && !pe.asociat.length) probleme.push('capitolele vorbesc despre asociere, dar niciun asociat nu e declarat')
-  if (zice.subcontract && !pe.subcontractant.length) probleme.push('capitolele vorbesc despre subcontractare, dar niciun subcontractant nu e declarat')
+  if (zice.asociere && !pe.asociat.length) probleme.push('capitolele descriu o asociere care funcționează (echipe, comitet, facturi pe asociat), dar niciun asociat nu e declarat')
+  if (zice.subcontract && !pe.subcontractant.length) probleme.push('capitolele descriu subcontractori care lucrează, dar niciun subcontractant nu e declarat')
+  // Contradicția din pagina 58: aceeași propunere neagă și descrie.
+  if (neg.length && op.some(f => /subcontract/i.test(f.text)))
+    probleme.push('aceeași propunere spune că nu se folosesc subcontractori și, în altă parte, descrie cum lucrează ei')
   if (probleme.length && pe.tert_sustinator.length)
     probleme.push(`${pe.tert_sustinator.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
   if (!probleme.length) return { ...base, stare: 'ok',
-    detalii: declarat.length ? declarat.join(' · ') : 'niciun partener declarat; capitolele nu pomenesc asociere sau subcontractare' }
+    detalii: (declarat.length ? declarat.join(' · ') : 'niciun partener declarat')
+      + (fraze.length ? ` · ${plural(fraze.length, 'formulare', 'formulări')} despre asociere sau subcontractare, toate generale sau condiționale` : ' · capitolele nu pomenesc asociere sau subcontractare') }
   return { ...base, stare: 'warn',
     detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '')
-      + ' — poate fi și o clauză generală, citește contextul' }
+      + ` · ${plural(op.length, 'formulare operațională', 'formulări operaționale')}, ${base.generice} generale — citește contextul` }
 }
 
 /**

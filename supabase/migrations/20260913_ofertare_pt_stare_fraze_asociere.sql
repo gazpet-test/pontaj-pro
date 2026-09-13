@@ -1,0 +1,8 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_stare_fraze_asociere, 13.09.2026).
+-- HOG-08 pasul 2. `semnale_asociere` dadea doar CUVINTELE gasite, deci controlul nu putea distinge
+-- „Echipa de proiect a asocierii va prezenta rapoarte" (structura operationala activa) de
+-- „In cazul asocierilor intre executanti..." (clauza generala). Cercetarea Hoghilag a livrat 22 de
+-- propozitii clasificate; ca sa le pot folosi, view-ul trebuie sa dea FRAZA, nu cuvantul.
+-- v_ofertare_pt_stare: + fraze_asociere (text[], max 60 fraze, 400 caractere fiecare).
+-- `semnale_asociere` ramane in view dar nu mai e citita de controlParticipare (CREATE OR REPLACE
+-- nu poate sterge coloane; se curata la o rescriere completa a view-ului).

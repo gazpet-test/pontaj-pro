@@ -15,7 +15,7 @@ const VERDE = {
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
   anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [], bransamente_in_capitole: [372], bransamente_in_cerinte: [372],
-  participanti: [], semnale_asociere: [],
+  participanti: [], fraze_asociere: [],
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
@@ -77,7 +77,7 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       expect(ev.rezerve.join(' ')).toMatch(/Domnesti/)
     })
     it('HOG-08: textul zice „asocierii\", dar e declarat doar un tert => rezerva, nu blocaj', () => {
-      const ev = cu({ participanti: ['tert_sustinator|HABAU'], semnale_asociere: ['asocierii'] })
+      const ev = cu({ participanti: ['tert_sustinator|HABAU'], fraze_asociere: ['Echipa de proiect a asocierii va prezenta rapoarte de progres'] })
       expect(ev.blocaje).toEqual([])
       expect(ev.randuri.find(x => x.k === 'participare').stare).toBe('warn')
     })
