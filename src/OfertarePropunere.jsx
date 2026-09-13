@@ -23,6 +23,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
 import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx } from './OfertareExport.js'
+import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -172,109 +173,10 @@ const zileRamase = t => { if (!t) return null; const ms = new Date(t) - new Date
 // ─────────────────────────────────────────────────────────────────
 // POARTA — 10 rânduri. Niciunul nu se sare, niciunul nu tace.
 // ─────────────────────────────────────────────────────────────────
-function PoartaPT({ st, afirmatii = [], onFiltru }) {
-  const randuri = useMemo(() => {
-    // st null = încă se încarcă. NU întoarcem array gol: un array gol înseamnă „nimic de blocat",
-    // adică exact verdele fals din care s-a născut regula 2 din antet.
-    if (!st) return null
-    const r = []
-    r.push({
-      k:'cuprins', titlu:'Cuprinsul propunerii',
-      stare: st.capitole > 0 ? 'ok' : 'block',
-      detalii: st.capitole > 0 ? `${st.capitole} capitole` : 'niciun capitol — cuprinsul se ia din fișa de date, de la „Modul de prezentare al propunerii tehnice"',
-    })
-    r.push({
-      k:'fara', titlu:'Cerințe fără capitol',
-      stare: st.fara_capitol > 0 ? 'block' : 'ok',
-      detalii: `${st.fara_capitol} din ${st.de_raspuns}` + (st.inchise_cu_dovada > 0 ? ` · ${st.inchise_cu_dovada} sunt închise cu dovadă în registru, nu cer capitol` : ''),
-      filtru: 'fara',
-    })
-    r.push({
-      k:'capcane', titlu:'Capcane de respingere descoperite',
-      stare: st.capcane_descoperite > 0 ? 'block' : 'ok',
-      detalii: st.capcane > 0
-        ? `${st.capcane_descoperite} din ${st.capcane} cerințe cu clauză de respingere · găsite de regex — verifică textul`
-        : 'nicio clauză de respingere găsită în cerințe',
-      filtru: 'capcane',
-    })
-    r.push({
-      k:'goale', titlu:'Capitole obligatorii goale',
-      stare: st.capitole === 0 ? 'warn' : (st.capitole_goale > 0 ? 'block' : 'ok'),
-      detalii: st.capitole === 0 ? '— (se aprinde după ce creezi cuprinsul)' : `${st.capitole_goale} capitole fără conținut și fără fișier`,
-    })
-    r.push({
-      k:'nu_e_cazul', titlu:'„nu este cazul" în capitole',
-      // WARN, nu BLOCK: formularul real depus la Ștefan cel Mare îl folosește de 3 ori. Îl interzice
-      // explicit doar o parte din autorități (ex. Fința). Un block universal ar fi fals și ar învăța
-      // omul să ocolească semaforul.
-      stare: st.capitole_nu_e_cazul > 0 ? 'warn' : 'ok',
-      detalii: st.capitole_nu_e_cazul > 0
-        ? `${st.capitole_nu_e_cazul} capitole conțin „nu este cazul" — verifică fișa de date: unele autorități îl interzic explicit`
-        : '0',
-    })
-    // Conformitatea: ce AFIRMA propunerea vs ce are firma. Blocant DOAR la om inexistent si om
-    // plecat — decizia lui Razvan, 13.09.2026. Alea doua sunt fapte, fara interpretare, si exact
-    // ele au trecut nevazute la Motru (un sudor lichidat cu 6 zile inainte de depunere, si un nume
-    // care nu exista in firma). Restul verificarilor raman avertismente.
-    // Cand nu s-a incarcat nicio afirmatie, randul spune ca nu s-a verificat — NU 'ok'. Un verde
-    // din lipsa de date e exact greseala pe care o evita regula 2 din antetul migrarii.
-    const blocuri = afirmatii.filter(a => a.verdict === 'block')
-    const averts  = afirmatii.filter(a => a.verdict === 'warn')
-    r.push({
-      k:'conformitate', titlu:'Afirmațiile propunerii, față de firmă',
-      stare: afirmatii.length === 0 ? 'warn' : (blocuri.length > 0 ? 'block' : (averts.length > 0 ? 'warn' : 'ok')),
-      detalii: afirmatii.length === 0
-        ? 'nicio afirmație încărcată — oamenii, utilajele și partenerii din propunere n-au fost confruntați cu ERP-ul'
-        : `${afirmatii.length} afirmații · ${blocuri.length} blocante` + (averts.length ? ` · ${averts.length} de verificat` : ''),
-    })
-    r.push({
-      k:'nescrise', titlu:'Capitole scrise de AI și necitite de nimeni',
-      // BLOCK. Spre deosebire de observații (mai jos), ăsta e un fapt binar, nu o interpretare:
-      // sursa != 'om' înseamnă literalmente că nimeni n-a atins textul după generare. Iar blocajul
-      // se ridică printr-o acțiune corectă și ieftină: omul deschide capitolul, îl citește, îl
-      // salvează → sursa devine 'om'. Când costul de a face lucrul corect e mai mic decât costul
-      // de a ocoli, block-ul e sigur. Identic cu rândul `capitole_nescrise_de_om` din view.
-      stare: st.capitole_nescrise_de_om > 0 ? 'block' : 'ok',
-      detalii: st.capitole_nescrise_de_om > 0
-        ? `${st.capitole_nescrise_de_om} capitole obligatorii au text generat pe care nu l-a revăzut nimeni — deschide-le, citește-le, salvează-le`
-        : '0 — tot ce e scris a trecut prin mâna unui om',
-    })
-    r.push({
-      k:'observatii', titlu:'Observații deschise pe propunere',
-      // WARN, nu block, DELIBERAT. O observație e un canal social, nu un fapt: oricine poate
-      // deschide una și nimeni nu-i obligat s-o închidă. Un block ar însemna că orice coleg poate
-      // opri o depunere cu o propoziție — iar la termen de SEAP asta nu dă o propunere mai bună,
-      // dă un om care marchează observația „respinsă" ca să treacă poarta. De acolo semaforul e
-      // mort. Se depune, dar semnătura rămâne galbenă în istoric.
-      stare: st.observatii_deschise > 0 ? 'warn' : 'ok',
-      detalii: st.observatii_deschise > 0
-        ? `${st.observatii_deschise} cereri de modificare neînchise — se poate depune, dar semnătura rămâne galbenă`
-        : 'nicio cerere de modificare deschisă',
-    })
-    r.push({
-      k:'docs', titlu:'Documentația de atribuire citită integral',
-      stare: st.documente === 0 ? 'block' : (st.documente_necitite > 0 ? 'warn' : 'ok'),
-      detalii: st.documente === 0
-        ? 'niciun document încărcat — cerințele nu pot exista'
-        : `${st.documente} documente` + (st.documente_necitite > 0 ? `, ${st.documente_necitite} necitite sau cu eroare — cerințele pot veni dintr-un corpus incomplet` : ', toate citite'),
-    })
-    r.push({
-      // NU „Cap. 4". La Contești graficul e ANEXĂ, la alte proceduri e cap. 3 sau cap. 8 —
-      // aceeași lecție ca la cuprins: numărul vine din fișa de date, nu din codul nostru.
-      k:'grafic', titlu:'Graficul de execuție — versiune înghețată',
-      // Înainte era 'ok' doar fiindcă EXISTĂ o versiune, fără să se uite la verdictul ei.
-      // O versiune salvată nu e un grafic verificat (constatare Codex, 13.09.2026). Generarea
-      // e blocată când poarta graficului are roșii, deci un 'block' nu poate ajunge în
-      // grafic_versiuni — dar avertismentele da, și alea stăteau ascunse sub un bifat verde.
-      stare: !st.grafic_versiune ? 'warn' : (st.grafic_avertismente > 0 ? 'warn' : 'ok'),
-      detalii: !st.grafic_versiune
-        ? 'nicio versiune generată în grafic_versiuni'
-        : `versiunea ${st.grafic_versiune}` + (st.grafic_avertismente > 0
-            ? ` — înghețată cu ${st.grafic_avertismente} avertismente în poarta graficului, deschide Graficul și uită-te la ele`
-            : ', fără avertismente'),
-    })
-    return r
-  }, [st])
+function PoartaPT({ st, onFiltru }) {
+  // Toate rândurile vin din evalueazaPoarta — NU se mai scrie nicio condiție aici.
+  const ev = useMemo(() => evalueazaPoarta(st), [st])
+  const randuri = ev ? ev.randuri : null
 
   if (!randuri) return <div style={{ color:G.muted, fontSize:13, padding:12 }}>Se încarcă poarta…</div>
 
@@ -595,7 +497,9 @@ function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCap
 // ─────────────────────────────────────────────────────────────────
 export function PropunereRezumat({ st, onDeschide }) {
   if (!st) return <div style={{ color:G.muted, fontSize:13, padding:12 }}>Se încarcă…</div>
-  const blocat = st.capitole === 0 || st.fara_capitol > 0 || st.capcane_descoperite > 0 || st.documente === 0
+  // Același evaluator ca panoul. Copia veche de aici NU avea capitole_goale și
+  // capitole_nescrise_de_om — cardul spunea „deschisă" când panoul bloca (P0.1, 13.09.2026).
+  const blocat = evalueazaPoarta(st).stare === 'block'
   return (
     <div style={{ padding:'4px 0' }}>
       <div style={{ ...S.card, padding:14, borderColor: blocat ? G.red + '55' : G.green + '55', marginBottom:12 }}>
@@ -1229,27 +1133,18 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     // Se recitește starea din BD, nu din state: între încărcare și apăsare se poate schimba.
     const { data: proaspat, error: e1 } = await supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', licId).maybeSingle()
     if (e1 || !proaspat) { setBusy(false); showToast?.('Nu s-a putut reciti starea.', 'err'); return }
-    // IDENTIC cu `blocat` de mai jos. Daca cele doua diverg, butonul e activ dar semnarea cade.
-    const blocat = proaspat.capitole === 0 || proaspat.fara_capitol > 0 || proaspat.capcane_descoperite > 0
-      || proaspat.documente === 0 || proaspat.capitole_goale > 0 || proaspat.capitole_nescrise_de_om > 0
+    // Acelasi evaluator ca butonul si cardul. Daca cele trei ar diverge, butonul ar fi activ
+    // dar semnarea ar cadea — sau invers, mai rau.
+    const ev = evalueazaPoarta(proaspat)
+    const blocat = ev.stare === 'block'
     if (blocat) { setBusy(false); setSt(proaspat); showToast?.('Între timp s-a redeschis un rând roșu. Nu se semnează.', 'err'); return }
     const versiune = (proaspat.pt_versiune || 0) + 1
-    // Motivele pentru care semnătura iese GALBENĂ, nu verde. Se calculează o dată și se
-    // folosesc si la verdict, si la mesaj: pana acum verdictul putea fi 'galben' iar mesajul
-    // spunea in TOATE cazurile „gata de depus" (constatare Codex, 13.09.2026, P0). Un om care
-    // citeste „gata de depus" dupa o aprobare cu rezerve o ia drept finalizare — exact minciuna
-    // pe care modulul asta exista s-o impiedice.
-    const rezerve = [
-      proaspat.documente_necitite > 0 ? `${proaspat.documente_necitite} documente necitite sau cu eroare` : null,
-      !proaspat.grafic_versiune ? 'graficul n-are nicio versiune înghețată' : null,
-      proaspat.grafic_avertismente > 0 ? `graficul are ${proaspat.grafic_avertismente} avertismente` : null,
-      proaspat.observatii_deschise > 0 ? `${proaspat.observatii_deschise} observații deschise` : null,
-      proaspat.capitole_nu_e_cazul > 0 ? `${proaspat.capitole_nu_e_cazul} capitole cu „nu este cazul"` : null,
-    ].filter(Boolean)
+    // Rezervele vin din evaluator: alimenteaza si verdictul, si mesajul (P0.2).
+    const rezerve = ev.rezerve
     const { error } = await supabase.from('ofertare_pt_poarta').insert({
-      licitatie_id: licId, versiune,       // Galben si la observatii deschise: se depune, dar ramane scris in istoric ca s-a depus
-      // peste N cereri de modificare neinchise. Responsabilitate fara drept de veto.
-      verdict: rezerve.length ? 'galben' : 'verde',
+      licitatie_id: licId, versiune,
+      // Galben = se depune, dar ramane scris in istoric cu ce rezerve. Decide verdictSemnatura, nu noi.
+      verdict: verdictSemnatura(ev),
       snapshot: proaspat,
     })
     setBusy(false)
@@ -1264,8 +1159,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     await load(licId)
   }
 
-  const blocat = !st || st.capitole === 0 || st.fara_capitol > 0 || st.capcane_descoperite > 0
-    || st.documente === 0 || st.capitole_goale > 0 || st.capitole_nescrise_de_om > 0
+  // Cât timp st e null, evaluatorul întoarce null și butonul stă blocat: verde din lipsă de date, nu.
+  const evPoarta = evalueazaPoarta(st)
+  const blocat = !evPoarta || evPoarta.stare === 'block'
   const zile = zileRamase(lic?.termen_depunere)
 
   return (
@@ -1299,7 +1195,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       {eroare && <div style={{ ...S.card, padding:12, borderColor:G.red + '55', color:G.red, fontSize:13 }}>{eroare}</div>}
 
-      <PoartaPT st={st} afirmatii={afirmatii} onFiltru={f => { setFiltru(f); setSel(new Set()) }} />
+      <PoartaPT st={st} onFiltru={f => { setFiltru(f); setSel(new Set()) }} />
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Cuprinsul propunerii</div>
