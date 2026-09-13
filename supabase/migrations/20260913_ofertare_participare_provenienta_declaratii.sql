@@ -1,0 +1,34 @@
+-- Aplicate prin MCP (apply_migration ofertare_participare_provenienta_si_declaratii
+-- + ofertare_pt_stare_responsabili_si_declaratii, 13.09.2026).
+--
+-- PRUNISOR-JUPA / analiza 03 (Transgaz, LOT 2). Trei lucruri pe care analiza le-a dovedit din
+-- documente si care lipseau din ERP:
+--
+-- 1) ROLUL ARE NEVOIE DE ACTUL CARE IL DECLARA.
+--    HABAU: acord de subcontractare nr. 305/23.06.2025 (PT §4.6, pagina tiparita 171/1405) pentru
+--    rolul de subcontractant, si angajament de sustinere tehnica (PT §4.12, p. 177) pentru rolul de
+--    tert sustinator. Fara aceste campuri, „HABAU e subcontractant" e afirmatia noastra, nu o
+--    trimitere la un document.
+--    => ofertare_pt_participanti: + document_sursa, data_document, pagina, scop_declarat.
+--
+-- 2) PIESA DIN OPIS ARE UN RESPONSABIL.
+--    Fisele tehnice 18-21 existau la ELCAS si tot au lipsit din pachetul depus. Cand controlul
+--    semnaleaza lipsa, trebuie sa numeasca firma, nu sa spuna „document lipsa".
+--    ATENTIE: ofertare_pt_capitole.responsabil_id e uuid = OM din firma. Asta e alta coloana, care
+--    tine FIRMA participanta.
+--    => ofertare_pt_capitole: + participant_id -> ofertare_pt_participanti(id) ON DELETE SET NULL.
+--
+-- 3) „NU ESTE CAZUL" E O DECLARATIE, NU O ABSENTA DE DATE.
+--    PT §4.5 declara ca asocierea nu e cazul. Daca un capitol scrie „echipa asocierii", contradictia
+--    e fata de o afirmatie formala a propunerii — altceva decat un tabel pe care cineva a uitat sa-l
+--    completeze. La Hoghilag exact asta a fost contaminarea de sablon.
+--    => tabel nou ofertare_pt_declaratii (licitatie_id, forma, stare, document_sursa, pagina, citat)
+--       cu UNIQUE(licitatie_id, forma), RLS auth.uid() IS NOT NULL, GRANT authenticated/service_role.
+--
+-- 4) v_ofertare_pt_stare: + anexe_responsabili (jsonb: textul piesei -> firma) si
+--    declaratii_participare (jsonb). anexe_asteptate ramane text[] — CREATE OR REPLACE VIEW nu poate
+--    schimba tipul unei coloane existente, deci responsabilii vin pe cheie de text, separat.
+--
+-- Verdictul ramane in JS pur: controlParticipare (citeste declaratiile INAINTE de a interpreta
+-- tabelul) si controlPachetComplet (numeste firma responsabila cand lipseste piesa).
+-- NICIODATA blocant pe declaratii: contradictia se spune, omul decide.

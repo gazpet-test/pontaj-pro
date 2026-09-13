@@ -264,6 +264,48 @@ describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
     const r = c({ participanti: ['subcontractant|ELCAS', 'subcontractant| elcas '], fraze_asociere: [] })
     expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/de doua ori in acelasi rol/)
   })
+
+  // Analiza 03 / fixture 5: PT §4.5 „NU ESTE CAZUL" e o declaratie, nu o absenta de date.
+  const DECL = (forma, stare, o = {}) => ({ forma, stare, ...o })
+  it('declaratie „nu e cazul" + text operational despre asociere => contradictie fata de DECLARATIE', () => {
+    const r = c({ participanti: [], fraze_asociere: [OP_ASOC],
+      declaratii_participare: [DECL('asociere', 'nu_e_cazul', { document_sursa: 'PT §4.5', pagina: '170' })] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/declar[ăa] c[ăa] asocierea nu e cazul \(PT §4\.5, p\. 170\)/)
+    expect(r.detalii).toMatch(/capitolele descriu cum func[țt]ioneaz/)
+  })
+  it('declaratie „nu e cazul" dar un asociat e trecut in ERP => contradictie declaratie vs tabel', () => {
+    const r = c({ participanti: ['asociat|ATSD'], fraze_asociere: [],
+      declaratii_participare: [DECL('asociere', 'nu_e_cazul')] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/trecut ATSD ca asociat/)
+  })
+  it('declaratie „declarata" fara niciun participant pe rolul ala => se spune', () => {
+    const r = c({ participanti: [], fraze_asociere: [],
+      declaratii_participare: [DECL('subcontractare', 'declarata', { pagina: '171' })] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/niciun subcontractant nu e trecut/)
+  })
+  it('CAZUL PRUNISOR: asociere nu e cazul, 5 subcontractanti declarati si trecuti => ok', () => {
+    const r = c({
+      participanti: ['subcontractant|HABAU', 'tert_sustinator|HABAU', 'subcontractant|ELCAS',
+                     'subcontractant|OPTOTEL', 'subcontractant|ROCONSULT', 'subcontractant|RAPID COMPLEX'],
+      fraze_asociere: [],
+      declaratii_participare: [DECL('asociere', 'nu_e_cazul', { document_sursa: 'PT §4.5' }),
+                               DECL('subcontractare', 'declarata', { document_sursa: 'PT §4.6' }),
+                               DECL('tert_sustinator', 'declarata', { document_sursa: 'PT §4.12' })],
+    })
+    expect(r.stare).toBe('ok')
+    expect(r.detalii).toMatch(/asocierea nu e cazul/)
+    expect(r.detalii).toMatch(/rol dublu — HABAU/)
+  })
+  it('cu declaratie pe forma respectiva, deducerea din tabel gol nu se mai dubleaza', () => {
+    const r = c({ participanti: [], fraze_asociere: [OP_ASOC],
+      declaratii_participare: [DECL('asociere', 'nu_e_cazul')] })
+    expect(r.detalii).not.toMatch(/dar niciun asociat nu e declarat/)
+  })
+  it('fara declaratii, comportamentul vechi e neschimbat', () => {
+    const r = c({ participanti: [], fraze_asociere: [OP_ASOC] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/niciun asociat nu e declarat/)
+  })
 })
 
 
@@ -372,6 +414,22 @@ describe('controlPachetComplet — piesa poate exista la participant si tot sa l
     const r = c({ anexe_asteptate: [], pachet_stare: 'ciorna', pachet_fisiere: [F('propunere.docx')] })
     expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/nu se poate confrunta/)
   })
+  // Analiza 03: „requirement -> responsible participant" — lipsa unei piese numeste firma.
+  it('responsabilul vine din anexe_responsabili si apare in mesaj', () => {
+    const r = c({ anexe_asteptate: ['Anexa 18'], anexe_responsabili: { 'Anexa nr. 18': 'ELCAS PRODIMPEX' },
+      pachet_stare: 'ciorna', pachet_fisiere: [F('Anexa 17.pdf', { semnat: true })] })
+    expect(r.stare).toBe('block')
+    expect(r.detalii).toMatch(/Anexa 18 \(r[ăa]spunde ELCAS PRODIMPEX\)/)
+  })
+  it('responsabilul dat explicit pe asteptare bate maparea generala', () => {
+    const r = c({ anexe_asteptate: [{ ref: 'Anexa 18', responsabil: 'OPTOTEL' }],
+      anexe_responsabili: { 'Anexa 18': 'ELCAS' },
+      pachet_stare: 'ciorna', pachet_fisiere: [F('Anexa 17.pdf', { semnat: true })] })
+    expect(r.detalii).toMatch(/r[ăa]spunde OPTOTEL/)
+  })
+  it('anexe_responsabili lipsa nu strica nimic', () =>
+    expect(c({ anexe_asteptate: ['Anexa 18'], pachet_stare: 'ciorna',
+      pachet_fisiere: [F('Anexa 18.pdf')] }).stare).toBe('ok'))
   it('toate piesele au fisier => ok, cu numaratoarea', () => {
     const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
       pachet_fisiere: [F('Anexa 18.pdf'), F('Anexa 19.pdf'), F('propunere.docx')] })

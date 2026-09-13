@@ -348,8 +348,8 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, documente = [],
 // ─────────────────────────────────────────────────────────────────
 // CUPRINSUL — capitolele licitației
 // ─────────────────────────────────────────────────────────────────
-function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCapitol, nume,
-                          onCreeaza, onAdauga, onSterge, onSalveaza, onBlocheaza, onGenereaza, busy }) {
+function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCapitol, nume, participanti,
+                          onCreeaza, onAdauga, onSterge, onSalveaza, onBlocheaza, onGenereaza, onResponsabil, busy }) {
   const [nou, setNou] = useState(null)  // null = formularul e închis
   const [deschis, setDeschis] = useState(null)   // capitolul desfăcut (editor + istoric)
   const [editez, setEditez] = useState(null)
@@ -510,6 +510,22 @@ function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCap
                         )}
                       </div>
                     )}
+                  {/* Analiza 03 (Prunisor-Jupa): cand lipseste o fisa din pachet, ERP-ul trebuie sa
+                      spuna CINE raspundea de ea — fisele 18-21 erau la ELCAS, nu „lipsa anonima". */}
+                  <div style={{ padding:'0 14px 10px', display:'flex', gap:8, alignItems:'center', fontSize:12 }}>
+                    <span style={{ color:G.muted }}>Piesa o furnizează:</span>
+                    <select value={c.participant_id || ''} disabled={busy}
+                      onChange={ev => onResponsabil(c, ev.target.value ? Number(ev.target.value) : null)}
+                      style={{ ...S.input, width:'auto', minWidth:220 }}>
+                      <option value="">— Gazpet (noi) —</option>
+                      {(participanti || []).map(pt => (
+                        <option key={pt.id} value={pt.id}>
+                          {(pt.partener?.nume || pt.nume)} · {ROLURI_PARTICIPARE[pt.rol] || pt.rol}
+                        </option>
+                      ))}
+                    </select>
+                    {!participanti?.length && <span style={{ color:G.dim }}>niciun partener declarat pe licitația asta</span>}
+                  </div>
                   <div style={{ padding:'0 14px' }}>
                     <div style={{ ...S.lbl, marginBottom:6 }}>Istoricul capitolului</div>
                     <IstoricCapitol capitol={c} nume={nume} versiuni={versiuniPeCapitol.get(c.id) || []} />
@@ -891,8 +907,57 @@ function Garantie({ g, cerinte, onSalveaza, busy, nume }) {
 // HOG-08 — PARTICIPANȚII: rolul din ACEASTĂ licitație, nu eticheta globală din catalog.
 // La Hoghilag HABAU era terț susținător, deși în catalog figurează ca subcontractant.
 // ─────────────────────────────────────────────────────────────────
+// Analiza 03 (Prunisor-Jupa): PT §4.5 „asociere: NU ESTE CAZUL" e o DECLARATIE, nu o absenta de date.
+// Contradictia fata de o afirmatie formala a propunerii e altceva decat un tabel necompletat — de
+// aceea se noteaza separat, cu actul si pagina.
+const FORME_DECL = {
+  asociere: 'Asociere (§4.5)', subcontractare: 'Subcontractare (§4.6)', tert_sustinator: 'Terț susținător (§4.12)',
+}
+function Declaratii({ randuri, onSalveaza, onSterge, busy }) {
+  const peForma = new Map((randuri || []).map(d => [d.forma, d]))
+  const [ed, setEd] = useState({})
+  const val = (forma, camp) => ed[forma]?.[camp] ?? peForma.get(forma)?.[camp] ?? ''
+  const set = (forma, camp, v) => setEd({ ...ed, [forma]: { ...(ed[forma] || {}), [camp]: v } })
+  return (
+    <div style={{ ...S.card, padding:14 }}>
+      <div style={{ color:G.muted, fontSize:12, lineHeight:1.6, marginBottom:10 }}>
+        Ce <b>declară propunerea</b> despre fiecare formă de participare. „Nu e cazul" scris în propunere
+        e o afirmație care se poate contrazice — nu același lucru cu un tabel necompletat.
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+        {Object.entries(FORME_DECL).map(([forma, eticheta]) => {
+          const d = peForma.get(forma)
+          const stare = val(forma, 'stare')
+          return (
+            <div key={forma} style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', fontSize:12 }}>
+              <span style={{ color:G.ofertare, fontWeight:600, minWidth:170 }}>{eticheta}</span>
+              <select value={stare} onChange={e => set(forma, 'stare', e.target.value)} style={{ ...S.input, width:'auto' }}>
+                <option value="">— nenotat —</option>
+                <option value="nu_e_cazul">nu e cazul</option>
+                <option value="declarata">declarată</option>
+              </select>
+              <input value={val(forma, 'document_sursa')} onChange={e => set(forma, 'document_sursa', e.target.value)}
+                placeholder="unde scrie (PT §4.5)" style={{ ...S.input, width:170 }} />
+              <input value={val(forma, 'pagina')} onChange={e => set(forma, 'pagina', e.target.value)}
+                placeholder="pag." style={{ ...S.input, width:70 }} />
+              <input value={val(forma, 'citat')} onChange={e => set(forma, 'citat', e.target.value)}
+                placeholder="citatul, dacă merită" style={{ ...S.input, width:220 }} />
+              <button onClick={() => { onSalveaza(forma, { stare, document_sursa: val(forma, 'document_sursa'),
+                  pagina: val(forma, 'pagina'), citat: val(forma, 'citat') }); setEd({ ...ed, [forma]: undefined }) }}
+                disabled={busy || !stare} style={{ ...S.btnS, opacity: (busy || !stare) ? .5 : 1 }}>Salvează</button>
+              {d && <button onClick={() => onSterge(d)} disabled={busy} style={{ ...S.btn, padding:'2px 8px' }}>✕</button>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
-  const [nou, setNou] = useState({ partener_id: '', nume: '', rol: 'tert_sustinator', cota_procent: '' })
+  const GOL = { partener_id: '', nume: '', rol: 'tert_sustinator', cota_procent: '',
+    document_sursa: '', data_document: '', pagina: '', scop_declarat: '' }
+  const [nou, setNou] = useState(GOL)
   const numeParten = id => parteneri.find(p => String(p.id) === String(id))?.nume || ''
   const poate = nou.partener_id || nou.nume.trim()
   // Prunisor-Jupa: aceeasi firma poate avea doua roluri (HABAU = subcontractant SI tert sustinator).
@@ -916,6 +981,10 @@ function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
               <span style={{ color:G.ofertare, fontWeight:600, minWidth:120 }}>{ROLURI_PARTICIPARE[r.rol] || r.rol}</span>
               <span style={{ flex:1 }}>{r.partener?.nume || r.nume}</span>
               {areRolDublu(r) && <span style={{ color:G.dim, fontSize:11, border:`1px solid ${G.dim}`, borderRadius:4, padding:'0 5px' }}>rol dublu</span>}
+              {r.scop_declarat && <span style={{ color:G.muted, fontSize:11 }}>{r.scop_declarat}</span>}
+              {r.document_sursa
+                ? <span style={{ color:G.dim, fontSize:11 }}>{r.document_sursa}{r.pagina ? ` · p. ${r.pagina}` : ''}</span>
+                : <span style={{ color:G.yellow, fontSize:11 }} title="Rolul nu trimite la niciun act">fără act</span>}
               {r.cota_procent != null && <span style={{ color:G.dim }}>{r.cota_procent}%</span>}
               <button onClick={() => onSterge(r)} disabled={busy} style={{ ...S.btn, padding:'2px 8px' }}>✕</button>
             </div>
@@ -937,7 +1006,15 @@ function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
         )}
         <input type="number" min="0" max="100" value={nou.cota_procent}
           onChange={e => setNou({ ...nou, cota_procent: e.target.value })} placeholder="cotă %" style={{ ...S.input, width:90 }} />
-        <button onClick={() => { onAdauga({ ...nou, nume: nou.partener_id ? numeParten(nou.partener_id) : nou.nume.trim() }); setNou({ partener_id:'', nume:'', rol:'tert_sustinator', cota_procent:'' }) }}
+        <input value={nou.scop_declarat} onChange={e => setNou({ ...nou, scop_declarat: e.target.value })}
+          placeholder="ce face (sudură automată)" style={{ ...S.input, width:190 }} />
+        <input value={nou.document_sursa} onChange={e => setNou({ ...nou, document_sursa: e.target.value })}
+          placeholder="actul (acord nr. 305)" style={{ ...S.input, width:190 }} />
+        <input type="date" value={nou.data_document} onChange={e => setNou({ ...nou, data_document: e.target.value })}
+          style={{ ...S.input, width:140 }} />
+        <input value={nou.pagina} onChange={e => setNou({ ...nou, pagina: e.target.value })}
+          placeholder="pag." style={{ ...S.input, width:70 }} />
+        <button onClick={() => { onAdauga({ ...nou, nume: nou.partener_id ? numeParten(nou.partener_id) : nou.nume.trim() }); setNou(GOL) }}
           disabled={busy || !poate} style={{ ...S.btnS, opacity: (busy || !poate) ? .5 : 1 }}>+ Adaugă</button>
       </div>
     </div>
@@ -965,6 +1042,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [versiuni, setVersiuni] = useState([])
   const [garantie, setGarantie] = useState(null)
   const [participanti, setParticipanti] = useState([])
+  const [declaratii, setDeclaratii] = useState([])
   const [parteneri, setParteneri] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
   const [filtru, setFiltru] = useState('fara')
@@ -979,7 +1057,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar, rPart, rParteneri] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar, rPart, rParteneri, rDecl] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -1005,6 +1083,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_participanti').select('*, partener:ofertare_parteneri(nume)').eq('licitatie_id', id).order('rol'),
       supabase.from('ofertare_parteneri').select('id, nume').eq('activ', true).order('nume'),
+      supabase.from('ofertare_pt_declaratii').select('*').eq('licitatie_id', id).order('forma'),
     ])
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
@@ -1015,6 +1094,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setDocumente(rDoc.data || [])
     setPachete(rPac.data || [])
     setGarantie(rGar.data || null); setParticipanti(rPart.data || []); setParteneri(rParteneri.data || [])
+    setDeclaratii(rDecl.data || [])
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
@@ -1073,12 +1153,47 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       licitatie_id: licId, partener_id: f.partener_id ? Number(f.partener_id) : null,
       nume: f.partener_id ? null : f.nume, rol: f.rol,
       cota_procent: f.cota_procent === '' ? null : Number(f.cota_procent),
+      // Provenienta rolului: cu ce act e declarat (HABAU: acord subcontractare nr. 305/23.06.2025).
+      document_sursa: f.document_sursa?.trim() || null, data_document: f.data_document || null,
+      pagina: f.pagina?.trim() || null, scop_declarat: f.scop_declarat?.trim() || null,
       confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
     })
     setBusy(false)
     if (error) { showToast?.('Nu s-a adăugat: ' + error.message, 'err'); return }
     load(licId)
   }
+  // Cine furnizeaza piesa. NU e acelasi lucru cu responsabil_id (om din firma): asta e FIRMA.
+  const capitolResponsabil = async (c, participantId) => {
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_capitole')
+      .update({ participant_id: participantId, updated_at: new Date().toISOString() }).eq('id', c.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a salvat: ' + error.message, 'err'); return }
+    load(licId)
+  }
+
+  // Analiza 03: PT §4.5 „NU ESTE CAZUL" e o declaratie verificabila. Se salveaza cu actul si pagina,
+  // ca poarta sa poata spune „propunerea declara X, dar capitolele descriu Y".
+  const salveazaDeclaratie = async (forma, f) => {
+    setBusy(true)
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('ofertare_pt_declaratii').upsert({
+      licitatie_id: licId, forma, stare: f.stare,
+      document_sursa: f.document_sursa || null, pagina: f.pagina || null, citat: f.citat || null,
+      confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
+    }, { onConflict: 'licitatie_id,forma' })
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a salvat declarația: ' + error.message, 'err'); return }
+    load(licId)
+  }
+  const stergeDeclaratie = async (d) => {
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_declaratii').delete().eq('id', d.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a șters: ' + error.message, 'err'); return }
+    load(licId)
+  }
+
   const stergeParticipant = async (r) => {
     setBusy(true)
     const { error } = await supabase.from('ofertare_pt_participanti').delete().eq('id', r.id)
@@ -1542,7 +1657,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
           obsPeCapitol={obsPeCapitol} versiuniPeCapitol={versiuniPeCapitol} nume={nume}
           onAdauga={adaugaCapitol} onSterge={stergeCapitol}
           onSalveaza={salveazaCapitol} onBlocheaza={blocheazaCapitol}
-          onGenereaza={genereazaCapitol} busy={busy} />
+          onGenereaza={genereazaCapitol} participanti={participanti}
+          onResponsabil={capitolResponsabil} busy={busy} />
       </div>
 
       {pachete.length > 0 && (
@@ -1596,6 +1712,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Participanții la procedură</div>
+        <Declaratii randuri={declaratii} busy={busy}
+          onSalveaza={salveazaDeclaratie} onSterge={stergeDeclaratie} />
         <Participanti randuri={participanti} parteneri={parteneri} busy={busy}
           onAdauga={adaugaParticipant} onSterge={stergeParticipant} />
       </div>

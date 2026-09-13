@@ -269,7 +269,18 @@ export function clasificaFrazaParticipare(fraza) {
  *  - acelasi rol de doua ori la aceeasi entitate = dublura de introducere => warn.
  */
 const cheieEntitate = n => String(n).trim().toUpperCase().replace(/\s+/g, ' ')
-export function controlParticipare({ participanti, fraze_asociere }) {
+/**
+ * PT §4.5 „asociere: NU ESTE CAZUL" e o DECLARATIE, nu o absenta de date (analiza 03).
+ * Diferenta conteaza juridic: daca un capitol scrie „echipa asocierii", contradictia e fata de o
+ * afirmatie formala a propunerii, nu fata de un tabel pe care cineva a uitat sa-l completeze.
+ * De aceea declaratiile se citesc INAINTE de a interpreta tabelul de participanti.
+ */
+export const FORME_PARTICIPARE = {
+  asociere: { rol: 'asociat', articulat: 'asocierea', regex: /asocier|asocia[țt]/i },
+  subcontractare: { rol: 'subcontractant', articulat: 'subcontractarea', regex: /subcontract/i },
+  tert_sustinator: { rol: 'tert_sustinator', articulat: 'susținerea unui terț', regex: /ter[țt] sus[țt]in/i },
+}
+export function controlParticipare({ participanti, fraze_asociere, declaratii_participare }) {
   const pe = { asociat: [], subcontractant: [], tert_sustinator: [], furnizor: [], proiectant: [] }
   // Entitatea, nu rolul, e cheia: un rand per firma, cu toate rolurile ei pe licitatia asta.
   const entitati = new Map()
@@ -295,8 +306,11 @@ export function controlParticipare({ participanti, fraze_asociere }) {
     asociere: op.some(f => /asocier|asocia[țt]/i.test(f.text)),
     subcontract: op.some(f => /subcontract/i.test(f.text)),
   }
+  const decl = new Map()
+  for (const d of declaratii_participare || [])
+    if (d?.forma && FORME_PARTICIPARE[d.forma] && d?.stare) decl.set(d.forma, d)
   const base = { k: 'participare', pe, entitati: [...entitati.values()], multi_rol: multiRol,
-    fraze, operationale: op.length, generice: fraze.length - op.length - neg.length }
+    fraze, declaratii: [...decl.values()], operationale: op.length, generice: fraze.length - op.length - neg.length }
   const declarat = Object.entries(pe).filter(([, v]) => v.length)
     .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
   const probleme = []
@@ -307,8 +321,22 @@ export function controlParticipare({ participanti, fraze_asociere }) {
     if (set.has('asociat') && set.has('subcontractant'))
       probleme.push(`${e.nume} e declarat si asociat, si subcontractant — asociatul e parte din ofertant, nu poate fi subcontractant al lui insusi`)
   }
-  if (zice.asociere && !pe.asociat.length) probleme.push('capitolele descriu o asociere care funcționează (echipe, comitet, facturi pe asociat), dar niciun asociat nu e declarat')
-  if (zice.subcontract && !pe.subcontractant.length) probleme.push('capitolele descriu subcontractori care lucrează, dar niciun subcontractant nu e declarat')
+  // Contradictiile fata de o DECLARATIE se spun primele si mai tare decat cele deduse din tabel gol.
+  const unde = d => d.pagina ? ` (${d.document_sursa || 'propunerea'}, p. ${d.pagina})` : (d.document_sursa ? ` (${d.document_sursa})` : '')
+  for (const [forma, d] of decl) {
+    const f = FORME_PARTICIPARE[forma], declarati = pe[f.rol] || []
+    if (d.stare === 'nu_e_cazul') {
+      if (declarati.length)
+        probleme.push(`propunerea declară că ${f.articulat} nu e cazul${unde(d)}, dar în ERP e trecut ${declarati.join(', ')} ca ${ROLURI_PARTICIPARE[f.rol]}`)
+      else if (op.some(x => f.regex.test(x.text)))
+        probleme.push(`propunerea declară că ${f.articulat} nu e cazul${unde(d)}, dar capitolele descriu cum funcționează`)
+    } else if (d.stare === 'declarata' && !declarati.length) {
+      probleme.push(`propunerea declară ${f.articulat}${unde(d)}, dar niciun ${ROLURI_PARTICIPARE[f.rol]} nu e trecut în ERP`)
+    }
+  }
+  // Deducerile din tabel gol raman, dar numai unde NU exista declaratie pe forma aceea.
+  if (zice.asociere && !pe.asociat.length && !decl.has('asociere')) probleme.push('capitolele descriu o asociere care funcționează (echipe, comitet, facturi pe asociat), dar niciun asociat nu e declarat')
+  if (zice.subcontract && !pe.subcontractant.length && !decl.has('subcontractare')) probleme.push('capitolele descriu subcontractori care lucrează, dar niciun subcontractant nu e declarat')
   // Contradicția din pagina 58: aceeași propunere neagă și descrie.
   if (neg.length && op.some(f => /subcontract/i.test(f.text)))
     probleme.push('aceeași propunere spune că nu se folosesc subcontractori și, în altă parte, descrie cum lucrează ei')
@@ -318,7 +346,8 @@ export function controlParticipare({ participanti, fraze_asociere }) {
   if (probleme.length && numaiTert.length)
     probleme.push(`${numaiTert.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
   const cumul = multiRol.map(e => `${e.nume}: ${e.roluri.map(r => ROLURI_PARTICIPARE[r]).join(' + ')}`)
-  const cumulTxt = cumul.length ? ` · rol dublu — ${cumul.join('; ')}` : ''
+  const cumulTxt = (cumul.length ? ` · rol dublu — ${cumul.join('; ')}` : '')
+    + (decl.size ? ` · declarat în propunere: ${[...decl].map(([f, d]) => `${FORME_PARTICIPARE[f].articulat} ${d.stare === 'nu_e_cazul' ? 'nu e cazul' : 'da'}`).join(', ')}` : '')
   if (!probleme.length) return { ...base, stare: 'ok',
     detalii: (declarat.length ? declarat.join(' · ') : 'niciun partener declarat') + cumulTxt
       + (fraze.length ? ` · ${plural(fraze.length, 'formulare', 'formulări')} despre asociere sau subcontractare, toate generale sau condiționale` : ' · capitolele nu pomenesc asociere sau subcontractare') }
@@ -402,14 +431,23 @@ export function controlTronsoane({ tronsoane_sursa, tronsoane_grafic }) {
  *
  * Se rulează pe pachetul asamblat: cât timp nu există pachet, controlul nu are ce verifica (warn).
  */
-export function controlPachetComplet({ anexe_asteptate, pachet_stare, pachet_fisiere }) {
+export function controlPachetComplet({ anexe_asteptate, anexe_responsabili, pachet_stare, pachet_fisiere }) {
+  // Analiza 03: cand lipseste fisa 18, ERP-ul trebuie sa spuna ELCAS, nu „document lipsa". Firma
+  // responsabila vine din capitol (ofertare_pt_capitole.participant_id), pe cheia textului piesei.
+  const resp = anexe_responsabili || {}
+  const respPeRef = new Map()
+  for (const [text, firma] of Object.entries(resp)) {
+    const r = normalizeazaRef(text)
+    if (r && firma && !respPeRef.has(r)) respPeRef.set(r, String(firma))
+  }
   // Așteptările pot veni ca text simplu („Anexa 18") sau ca obiect, când se știe cine răspunde de piesă.
   const asteptate = []
   for (const a of anexe_asteptate || []) {
     const text = typeof a === 'string' ? a : (a?.ref ?? a?.titlu ?? '')
     const ref = normalizeazaRef(text)
     if (ref && !asteptate.some(x => x.ref === ref))
-      asteptate.push({ ref, text: String(text).trim(), responsabil: (typeof a === 'object' && a?.responsabil) || null })
+      asteptate.push({ ref, text: String(text).trim(),
+        responsabil: (typeof a === 'object' && a?.responsabil) || respPeRef.get(ref) || null })
   }
   const fisiere = (pachet_fisiere || []).map(f => ({
     nume: String(f?.nume || ''), rol: f?.rol || null, semnat: !!f?.semnat,
