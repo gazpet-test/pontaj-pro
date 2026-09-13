@@ -124,3 +124,25 @@ export function controlIdentitate({ identitate_straine }) {
   return { k: 'identitate', stare: 'block', straine,
     detalii: `capitolele pomenesc ${straine.join(', ')} — nume din alte licitații ale noastre, semn de text copiat; verifică și înlocuiește` }
 }
+
+/**
+ * H6 — numerele cheie (branșamente / racorduri) trebuie să fie aceleași peste tot. La Hoghilag:
+ * 372 branșamente în obiectiv vs 371 în repartizarea echipelor (Prod 129/110, Valchid 243/261) și
+ * 758 racorduri în Planul de inspecție. Compensarea între localități NU e reconciliere.
+ *
+ * Controlul NU ghicește care număr e totalul: în text stau laolaltă totalul și defalcările, iar o
+ * regulă „mai multe numere = greșeală" ar fi falsă. Fapt (block): cerința spune un număr, iar
+ * capitolele n-au niciunul egal cu el. Restul e rezervă: numerele se arată omului, să le sumeze el.
+ */
+export function controlNumereCheie({ bransamente_in_capitole, bransamente_in_cerinte }) {
+  const cap = [...new Set((bransamente_in_capitole || []).map(Number).filter(n => !Number.isNaN(n)))].sort((a, b) => a - b)
+  const cer = [...new Set((bransamente_in_cerinte || []).map(Number).filter(n => !Number.isNaN(n)))].sort((a, b) => a - b)
+  const base = { k: 'numere', in_capitole: cap, in_cerinte: cer }
+  const lst = a => a.join(', ')
+  if (!cap.length) return { ...base, stare: 'ok', detalii: cer.length ? `capitolele nu pomenesc branșamente sau racorduri (cerințele spun ${lst(cer)})` : 'niciun număr de branșamente sau racorduri în joc' }
+  if (cer.length && !cap.some(n => cer.includes(n))) return { ...base, stare: 'block',
+    detalii: `cerințele spun ${lst(cer)} branșamente / racorduri, capitolele spun ${lst(cap)} — niciun număr nu coincide` }
+  if (cap.length > 1) return { ...base, stare: 'warn',
+    detalii: `capitolele pomenesc ${lst(cap)} branșamente / racorduri — verifică dacă defalcările dau exact totalul (compensarea între localități nu e reconciliere)` }
+  return { ...base, stare: 'ok', detalii: `${cap[0]} branșamente / racorduri, același număr peste tot` }
+}

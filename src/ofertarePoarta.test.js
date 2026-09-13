@@ -14,7 +14,7 @@ const VERDE = {
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
-  anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [],
+  anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [], bransamente_in_capitole: [372], bransamente_in_cerinte: [372],
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
@@ -38,6 +38,7 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       const ev = cu({ cerinte_neverificate: 1 })
       expect(ev.blocaje).toContain('neverificate'); expect(ev.stare).toBe('block')
     })
+    it('H6: capitolele nu confirma niciun numar din cerinte => block', () => expect(cu({ bransamente_in_capitole: [758] }).blocaje).toContain('numere'))
     it('H1: nume din alta licitatie in capitole => block', () => expect(cu({ identitate_straine: ['Domnesti'] }).blocaje).toContain('identitate'))
     it('H5: trimitere la anexa inexistenta => block', () => expect(cu({ anexe_referite: ['anexa 9'] }).blocaje).toContain('anexe'))
     it('H4: garantie oferita sub cea ceruta => block', () => expect(cu({ garantie_oferit_luni: 24 }).blocaje).toContain('garantie'))
@@ -70,8 +71,8 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 15 randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 16 randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate'])
+      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere'])
   })
 })

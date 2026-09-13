@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -79,4 +79,21 @@ describe('H1 controlIdentitate — numele altei lucrari ramas in text', () => {
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/Domnesti, Ilfov/)
   })
   it('dubluri se strang intr-una', () => expect(controlIdentitate({ identitate_straine: ['Racari', 'Racari'] }).straine).toEqual(['Racari']))
+})
+
+describe('H6 controlNumereCheie — 372 vs 371 bransamente (Hoghilag)', () => {
+  const n = p => controlNumereCheie(p)
+  it('acelasi numar peste tot => ok', () => expect(n({ bransamente_in_capitole: [372], bransamente_in_cerinte: [372] }).stare).toBe('ok'))
+  it('capitolele nu confirma niciun numar din cerinte (758 vs 372) => block', () => {
+    const r = n({ bransamente_in_capitole: [758], bransamente_in_cerinte: [372] })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/372/); expect(r.detalii).toMatch(/758/)
+  })
+  it('total plus defalcari => warn, nu block: textul contine legitim si partile', () => {
+    const r = n({ bransamente_in_capitole: [129, 243, 372], bransamente_in_cerinte: [372] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/compensarea/)
+  })
+  it('doua numere, fara cerinta => warn cu ambele', () =>
+    expect(n({ bransamente_in_capitole: [371, 372], bransamente_in_cerinte: null }).stare).toBe('warn'))
+  it('niciun numar in capitole => ok, nu block', () =>
+    expect(n({ bransamente_in_capitole: null, bransamente_in_cerinte: [372] }).stare).toBe('ok'))
 })

@@ -1,0 +1,7 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_stare_h6_numere_cheie, 13.09.2026).
+-- H6 (Hoghilag H-027 / H-030 / H-046 din matricea Jakarinos): acelasi numar cheie scris diferit in
+-- doua locuri. Real: 372 bransamente in obiectiv vs 371 in repartizarea echipelor (Prod 129/110,
+-- Valchid 243/261) si 758 racorduri in Planul de inspectie si testare.
+-- v_ofertare_pt_stare: + bransamente_in_capitole, bransamente_in_cerinte (int[] din regex
+-- „<numar> bransament|racord"). Verdictul e in JS pur: controlNumereCheie.
+-- Adaugate prin surgery pe pg_get_viewdef, cu garda pe ancora „AS identitate_straine".
