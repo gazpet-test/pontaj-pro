@@ -166,3 +166,42 @@ export function controlNumereCheie({ bransamente_in_capitole, bransamente_in_cer
     detalii: `capitolele pomenesc ${lst(cap)} branșamente / racorduri — verifică dacă defalcările dau exact totalul (compensarea între localități nu e reconciliere)` }
   return { ...base, stare: 'ok', detalii: `${cap[0]} branșamente / racorduri, același număr peste tot` }
 }
+
+/**
+ * HOG-08 — ofertant, asociat, subcontractant și terț susținător NU sunt sinonime. La Hoghilag:
+ * participare individuală, HABAU terț susținător, niciun asociat și niciun subcontractant declarat,
+ * dar textul propunerii vorbea despre „echipa asocierii" și „fiecare subcontractor". Contaminare de
+ * șablon într-o zonă unde cuvântul are consecințe juridice.
+ *
+ * NICIODATĂ BLOCANT. Cuvântul „subcontractant" apare legitim în clauze condiționale („dacă se va
+ * subcontracta ulterior, cu acordul autorității"). Poarta arată nepotrivirea, omul o citește.
+ */
+export const ROLURI_PARTICIPARE = {
+  asociat: 'asociat', subcontractant: 'subcontractant', tert_sustinator: 'terț susținător',
+  furnizor: 'furnizor', proiectant: 'proiectant',
+}
+export function controlParticipare({ participanti, semnale_asociere }) {
+  const pe = { asociat: [], subcontractant: [], tert_sustinator: [], furnizor: [], proiectant: [] }
+  for (const x of participanti || []) {
+    const i = String(x).indexOf('|')
+    if (i < 0) continue
+    const rol = String(x).slice(0, i), nume = String(x).slice(i + 1)
+    if (pe[rol]) pe[rol].push(nume)
+  }
+  const sem = (semnale_asociere || []).map(x => String(x).toLowerCase())
+  const zice = { asociere: sem.some(x => x.startsWith('asocia') || x.startsWith('asocier')),
+                 subcontract: sem.some(x => x.startsWith('subcontract')) }
+  const base = { k: 'participare', pe, semnale: sem }
+  const declarat = Object.entries(pe).filter(([, v]) => v.length)
+    .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
+  const probleme = []
+  if (zice.asociere && !pe.asociat.length) probleme.push('capitolele vorbesc despre asociere, dar niciun asociat nu e declarat')
+  if (zice.subcontract && !pe.subcontractant.length) probleme.push('capitolele vorbesc despre subcontractare, dar niciun subcontractant nu e declarat')
+  if (probleme.length && pe.tert_sustinator.length)
+    probleme.push(`${pe.tert_sustinator.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
+  if (!probleme.length) return { ...base, stare: 'ok',
+    detalii: declarat.length ? declarat.join(' · ') : 'niciun partener declarat; capitolele nu pomenesc asociere sau subcontractare' }
+  return { ...base, stare: 'warn',
+    detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '')
+      + ' — poate fi și o clauză generală, citește contextul' }
+}

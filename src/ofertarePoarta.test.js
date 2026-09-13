@@ -15,6 +15,7 @@ const VERDE = {
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
   anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [], bransamente_in_capitole: [372], bransamente_in_cerinte: [372],
+  participanti: [], semnale_asociere: [],
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
@@ -75,6 +76,11 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       expect(randul(ev, 'identitate').stare).toBe('warn')
       expect(ev.rezerve.join(' ')).toMatch(/Domnesti/)
     })
+    it('HOG-08: textul zice „asocierii\", dar e declarat doar un tert => rezerva, nu blocaj', () => {
+      const ev = cu({ participanti: ['tert_sustinator|HABAU'], semnale_asociere: ['asocierii'] })
+      expect(ev.blocaje).toEqual([])
+      expect(ev.randuri.find(x => x.k === 'participare').stare).toBe('warn')
+    })
     it('H6: surse care se contrazic intre ele => rezerva, cu ambele numere', () => {
       const ev = cu({ bransamente_in_cerinte: [371, 372] })
       expect(ev.blocaje).toEqual([])
@@ -88,8 +94,8 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 16 randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 17 randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere'])
+      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare'])
   })
 })

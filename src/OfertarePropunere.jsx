@@ -25,7 +25,7 @@ import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './Ofer
 import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
-import { MOMENTE_GARANTIE } from './ofertareControale.js'
+import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE } from './ofertareControale.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -888,6 +888,54 @@ function Garantie({ g, cerinte, onSalveaza, busy, nume }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// HOG-08 — PARTICIPANȚII: rolul din ACEASTĂ licitație, nu eticheta globală din catalog.
+// La Hoghilag HABAU era terț susținător, deși în catalog figurează ca subcontractant.
+// ─────────────────────────────────────────────────────────────────
+function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
+  const [nou, setNou] = useState({ partener_id: '', nume: '', rol: 'tert_sustinator', cota_procent: '' })
+  const numeParten = id => parteneri.find(p => String(p.id) === String(id))?.nume || ''
+  const poate = nou.partener_id || nou.nume.trim()
+  return (
+    <div style={{ ...S.card, padding:14 }}>
+      <div style={{ color:G.muted, fontSize:12, lineHeight:1.6, marginBottom:10 }}>
+        Ofertant, asociat, subcontractant și terț susținător <b>nu sunt același lucru</b>. Rolul se declară
+        aici, pe licitația asta: în catalogul de parteneri stă doar relația generală cu firma.
+      </div>
+      {randuri.length > 0 && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:10 }}>
+          {randuri.map(r => (
+            <div key={r.id} style={{ display:'flex', gap:8, alignItems:'center', fontSize:12 }}>
+              <span style={{ color:G.ofertare, fontWeight:600, minWidth:120 }}>{ROLURI_PARTICIPARE[r.rol] || r.rol}</span>
+              <span style={{ flex:1 }}>{r.partener?.nume || r.nume}</span>
+              {r.cota_procent != null && <span style={{ color:G.dim }}>{r.cota_procent}%</span>}
+              <button onClick={() => onSterge(r)} disabled={busy} style={{ ...S.btn, padding:'2px 8px' }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+        <select value={nou.rol} onChange={e => setNou({ ...nou, rol: e.target.value })} style={{ ...S.input, width:'auto' }}>
+          {Object.entries(ROLURI_PARTICIPARE).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <select value={nou.partener_id} onChange={e => setNou({ ...nou, partener_id: e.target.value, nume: '' })}
+          style={{ ...S.input, width:'auto', minWidth:200 }}>
+          <option value="">— din catalog —</option>
+          {parteneri.map(p => <option key={p.id} value={p.id}>{p.nume}</option>)}
+        </select>
+        {!nou.partener_id && (
+          <input value={nou.nume} onChange={e => setNou({ ...nou, nume: e.target.value })}
+            placeholder="sau nume scris de mână" style={{ ...S.input, width:200 }} />
+        )}
+        <input type="number" min="0" max="100" value={nou.cota_procent}
+          onChange={e => setNou({ ...nou, cota_procent: e.target.value })} placeholder="cotă %" style={{ ...S.input, width:90 }} />
+        <button onClick={() => { onAdauga({ ...nou, nume: nou.partener_id ? numeParten(nou.partener_id) : nou.nume.trim() }); setNou({ partener_id:'', nume:'', rol:'tert_sustinator', cota_procent:'' }) }}
+          disabled={busy || !poate} style={{ ...S.btnS, opacity: (busy || !poate) ? .5 : 1 }}>+ Adaugă</button>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
 // PANOUL
 // ─────────────────────────────────────────────────────────────────
 export default function PropunerePanel({ licitatii = [], showToast, initialLicId = null, onInapoi = null }) {
@@ -907,6 +955,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [observatii, setObservatii] = useState([])
   const [versiuni, setVersiuni] = useState([])
   const [garantie, setGarantie] = useState(null)
+  const [participanti, setParticipanti] = useState([])
+  const [parteneri, setParteneri] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
@@ -920,7 +970,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar, rPart, rParteneri] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -944,6 +994,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       supabase.from('ofertare_pt_pachet').select('*, fisiere:ofertare_pt_pachet_fisiere(rol, nume, sha256, size_bytes, sursa_versiune)')
         .eq('licitatie_id', id).order('versiune', { ascending: false }).limit(50),
       supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', id).maybeSingle(),
+      supabase.from('ofertare_pt_participanti').select('*, partener:ofertare_parteneri(nume)').eq('licitatie_id', id).order('rol'),
+      supabase.from('ofertare_parteneri').select('id, nume').eq('activ', true).order('nume'),
     ])
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
@@ -953,7 +1005,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setObservatii(rObs.data || [])
     setDocumente(rDoc.data || [])
     setPachete(rPac.data || [])
-    setGarantie(rGar.data || null)
+    setGarantie(rGar.data || null); setParticipanti(rPart.data || []); setParteneri(rParteneri.data || [])
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
@@ -1001,6 +1053,29 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setBusy(false)
     if (error) { showToast?.('Nu s-a salvat garanția: ' + error.message, 'err'); return }
     showToast?.('Garanția e confirmată.', 'ok'); load(licId)
+  }
+
+
+  // HOG-08 — participanții pe licitația asta. Ștampila: cine a declarat rolul și când.
+  const adaugaParticipant = async (f) => {
+    setBusy(true)
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('ofertare_pt_participanti').insert({
+      licitatie_id: licId, partener_id: f.partener_id ? Number(f.partener_id) : null,
+      nume: f.partener_id ? null : f.nume, rol: f.rol,
+      cota_procent: f.cota_procent === '' ? null : Number(f.cota_procent),
+      confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
+    })
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a adăugat: ' + error.message, 'err'); return }
+    load(licId)
+  }
+  const stergeParticipant = async (r) => {
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_participanti').delete().eq('id', r.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a șters: ' + error.message, 'err'); return }
+    load(licId)
   }
 
   const numarPeCapitol = useMemo(() => {
@@ -1508,6 +1583,12 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <PachetPersonal randuri={pachet} busy={busy} showToast={showToast}
           laData={lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null}
           onGenereaza={genereazaPachet} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Participanții la procedură</div>
+        <Participanti randuri={participanti} parteneri={parteneri} busy={busy}
+          onAdauga={adaugaParticipant} onSterge={stergeParticipant} />
       </div>
 
       <div>
