@@ -1,0 +1,8 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_garantie_h4, 13.09.2026).
+-- H4 (Hoghilag): garantia e un OBIECT (luni + momentul de start), nu o propozitie.
+-- 1) ofertare_pt_garantie (licitatie_id PK; cerut_luni/cerut_moment/cerut_cerinta_id/cerut_text;
+--    oferit_luni/oferit_moment/oferit_formular; confirmat_de/confirmat_la) + RLS auth.uid() IS NOT NULL.
+-- 2) v_ofertare_pt_stare: + garantie_cerut_luni, garantie_cerut_moment, garantie_oferit_luni, garantie_oferit_moment,
+--    garantie_confirmata, garantie_luni_in_capitole (int[] din regex „garantie … N luni" in capitole),
+--    garantie_cerinte_lucrari (cerinte cu garantie N luni + lucrari/punere/receptie).
+-- Textul complet al view-ului: in istoricul migrarilor Supabase.

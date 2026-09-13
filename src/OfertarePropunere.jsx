@@ -25,6 +25,7 @@ import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './Ofer
 import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+import { MOMENTE_GARANTIE } from './ofertareControale.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -806,6 +807,77 @@ function PachetPersonal({ randuri, laData, onGenereaza, busy, showToast }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// H4 — GARANȚIA CA OBIECT: luni + momentul de start, cerut vs oferit.
+// La Hoghilag momentul (PIF vs recepție) diferea între formular și capitol.
+// ─────────────────────────────────────────────────────────────────
+const RX_LUNI = /(\d{1,3})\s*(?:de\s*)?luni/i
+function ghicesteMoment(t = '') {
+  if (/punere[a]? [îi]n func|\bPIF\b/i.test(t)) return 'pif'
+  if (/recep[țt]i[ae] final/i.test(t)) return 'receptie_finala'
+  if (/recep[țt]i/i.test(t)) return 'receptie_terminare'
+  if (/livrar/i.test(t)) return 'livrare'
+  if (/semnar/i.test(t)) return 'semnare_contract'
+  return ''
+}
+function Garantie({ g, cerinte, onSalveaza, busy, nume }) {
+  const [f, setF] = useState({ cerut_luni: '', cerut_moment: '', cerut_cerinta_id: '', oferit_luni: '', oferit_moment: '', oferit_formular: '' })
+  useEffect(() => { setF({
+    cerut_luni: g?.cerut_luni ?? '', cerut_moment: g?.cerut_moment ?? '', cerut_cerinta_id: g?.cerut_cerinta_id ?? '',
+    oferit_luni: g?.oferit_luni ?? '', oferit_moment: g?.oferit_moment ?? '', oferit_formular: g?.oferit_formular ?? '',
+  }) }, [g])
+  // Candidate: cerințele care vorbesc de garanția LUCRĂRILOR cu un număr de luni (nu produse, nu participare).
+  const candidate = useMemo(() => cerinte.filter(c => /garan[țt]i/i.test(c.text_cerinta || '') && RX_LUNI.test(c.text_cerinta || '')
+    && /lucr[ăa]ri|punere|recep[țt]i/i.test(c.text_cerinta || '') && !/participare|bun[ăa] execu[țt]ie|supap|filtr|produs/i.test(c.text_cerinta || '')), [cerinte])
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }))
+  const dinCerinta = (c) => setF(x => ({ ...x, cerut_cerinta_id: c.id, cerut_luni: Number((c.text_cerinta.match(RX_LUNI) || [])[1]) || x.cerut_luni, cerut_moment: ghicesteMoment(c.text_cerinta) || x.cerut_moment }))
+  const sel = { ...S.input, width:'auto', minWidth:200 }
+  const Mom = ({ k }) => (
+    <select value={f[k]} onChange={e => set(k, e.target.value)} style={sel}>
+      <option value="">— momentul de start —</option>
+      {Object.entries(MOMENTE_GARANTIE).map(([v, l]) => <option key={v} value={v}>de la {l}</option>)}
+    </select>
+  )
+  return (
+    <div style={{ ...S.card, padding:14 }}>
+      <div style={{ color:G.muted, fontSize:12, lineHeight:1.6, marginBottom:10 }}>
+        Garanția nu e o propoziție, e două numere: <b>câte luni</b> și <b>de când</b>. Ce scrii aici e ce intră în
+        formular și ce verifică poarta în toate capitolele care o pomenesc.
+        {g?.confirmat_la && <span style={{ color:G.green }}> · confirmată de {nume?.(g.confirmat_de) || 'cineva'} la {String(g.confirmat_la).slice(0, 10)}</span>}
+      </div>
+      {candidate.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ fontSize:11, color:G.dim, marginBottom:4 }}>Din cerințe (click = preia luni + moment):</div>
+          {candidate.map(c => (
+            <div key={c.id} onClick={() => dinCerinta(c)} title="preia în „cerut”"
+              style={{ fontSize:12, color: String(f.cerut_cerinta_id) === String(c.id) ? G.ofertare : G.muted, cursor:'pointer', padding:'2px 0' }}>
+              {String(f.cerut_cerinta_id) === String(c.id) ? '● ' : '○ '}{c.text_cerinta}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display:'grid', gridTemplateColumns:'auto 1fr', gap:8, alignItems:'center', fontSize:12 }}>
+        <span style={{ color:G.dim }}>Cerut</span>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          <input type="number" min="0" value={f.cerut_luni} onChange={e => set('cerut_luni', e.target.value)} placeholder="luni" style={{ ...S.input, width:80 }} />
+          <Mom k="cerut_moment" />
+        </div>
+        <span style={{ color:G.dim }}>Oferit</span>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          <input type="number" min="0" value={f.oferit_luni} onChange={e => set('oferit_luni', e.target.value)} placeholder="luni" style={{ ...S.input, width:80 }} />
+          <Mom k="oferit_moment" />
+          <input value={f.oferit_formular} onChange={e => set('oferit_formular', e.target.value)} placeholder="formularul (ex. Formular 5)" style={{ ...S.input, width:200 }} />
+        </div>
+      </div>
+      <div style={{ marginTop:10 }}>
+        <button onClick={() => onSalveaza(f)} disabled={busy || !f.oferit_luni || !f.oferit_moment} style={{ ...S.btnP, opacity: (busy || !f.oferit_luni || !f.oferit_moment) ? .5 : 1 }}>
+          ✓ Confirm garanția
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
 // PANOUL
 // ─────────────────────────────────────────────────────────────────
 export default function PropunerePanel({ licitatii = [], showToast, initialLicId = null, onInapoi = null }) {
@@ -824,6 +896,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [pachete, setPachete] = useState([])
   const [observatii, setObservatii] = useState([])
   const [versiuni, setVersiuni] = useState([])
+  const [garantie, setGarantie] = useState(null)
   const [profiluri, setProfiluri] = useState(new Map())
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
@@ -837,7 +910,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -860,6 +933,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, revizie, pagini').eq('licitatie_id', id).order('id').limit(500),
       supabase.from('ofertare_pt_pachet').select('*, fisiere:ofertare_pt_pachet_fisiere(rol, nume, sha256, size_bytes, sursa_versiune)')
         .eq('licitatie_id', id).order('versiune', { ascending: false }).limit(50),
+      supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', id).maybeSingle(),
     ])
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
@@ -869,6 +943,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setObservatii(rObs.data || [])
     setDocumente(rDoc.data || [])
     setPachete(rPac.data || [])
+    setGarantie(rGar.data || null)
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
@@ -900,6 +975,23 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
   // showToast și load NU intră în deps: lecția casei (useCallback/useEffect cu showToast = loop infinit).
   useEffect(() => { setSel(new Set()); load(licId) }, [licId])
+
+
+  // H4 — upsert-ul garanției; ștampila = userul curent + acum. Reîncărcăm view-ul, că rândul porții vine de acolo.
+  const salveazaGarantie = async (f) => {
+    setBusy(true)
+    const { data: u } = await supabase.auth.getUser()
+    const n = v => (v === '' || v == null) ? null : Number(v)
+    const { error } = await supabase.from('ofertare_pt_garantie').upsert({
+      licitatie_id: licId, cerut_luni: n(f.cerut_luni), cerut_moment: f.cerut_moment || null,
+      cerut_cerinta_id: n(f.cerut_cerinta_id), oferit_luni: n(f.oferit_luni), oferit_moment: f.oferit_moment || null,
+      oferit_formular: f.oferit_formular || null, confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a salvat garanția: ' + error.message, 'err'); return }
+    showToast?.('Garanția e confirmată.', 'ok'); load(licId)
+  }
 
   const numarPeCapitol = useMemo(() => {
     const m = new Map()
@@ -1406,6 +1498,11 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <PachetPersonal randuri={pachet} busy={busy} showToast={showToast}
           laData={lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null}
           onGenereaza={genereazaPachet} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Garanția lucrărilor</div>
+        <Garantie g={garantie} cerinte={cerinte} onSalveaza={salveazaGarantie} busy={busy} nume={nume} />
       </div>
 
       <div>

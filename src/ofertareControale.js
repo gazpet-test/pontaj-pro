@@ -45,3 +45,40 @@ export function controlCantitati({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, 
   if (neclarificate.length) return { ...base, neclarificate, diferenta_m: 0, stare: 'warn', detalii: `${fmt(f3)} m în F3 și în grafic` + notaClar }
   return { ...base, neclarificate, diferenta_m: 0, stare: 'ok', detalii: `${fmt(f3)} m în F3 și în grafic` }
 }
+
+/**
+ * H4 — garanția e un OBIECT (luni + momentul de start), nu o propoziție. La Hoghilag momentul
+ * (PIF vs recepție) diferea între formular și capitol. Fapte (block): oferit < cerut; moment diferit
+ * de cel cerut; capitole care pomenesc alt număr de luni decât cel oferit. Lipsa obiectului e warn
+ * doar când nicio cerință nu vorbește de garanția lucrărilor; altfel e block: s-a cerut, nu s-a asumat.
+ */
+export const MOMENTE_GARANTIE = {
+  pif: 'punerea în funcțiune', receptie_terminare: 'recepția la terminarea lucrărilor',
+  receptie_finala: 'recepția finală', livrare: 'livrare', semnare_contract: 'semnarea contractului',
+}
+export function controlGarantie({ garantie_cerut_luni, garantie_cerut_moment, garantie_oferit_luni, garantie_oferit_moment,
+                                  garantie_confirmata, garantie_luni_in_capitole, garantie_cerinte_lucrari }) {
+  const cl = num(garantie_cerut_luni), ol = num(garantie_oferit_luni)
+  const cm = garantie_cerut_moment || null, om = garantie_oferit_moment || null
+  const inCap = (garantie_luni_in_capitole || []).map(Number).filter(n => !Number.isNaN(n))
+  const nCer = Number(garantie_cerinte_lucrari) || 0
+  const base = { k: 'garantie', cerut_luni: cl, oferit_luni: ol, cerut_moment: cm, oferit_moment: om, luni_in_capitole: inCap }
+  const mom = m => MOMENTE_GARANTIE[m] || m
+  if (ol == null || !om) {
+    return { ...base, stare: nCer > 0 ? 'block' : 'warn',
+      detalii: nCer > 0
+        ? `${nCer} cerințe vorbesc de garanția lucrărilor, dar garanția oferită (luni + momentul de start) nu e asumată în ERP`
+        : 'garanția oferită nu e asumată (luni + momentul de start) — nicio cerință găsită automat, verifică fișa de date' }
+  }
+  const probleme = []
+  if (cl != null && ol < cl) probleme.push(`oferim ${ol} luni, se cer minim ${cl}`)
+  if (cm && om !== cm) probleme.push(`momentul de start diferă: oferit „${mom(om)}", cerut „${mom(cm)}"`)
+  const straine = [...new Set(inCap.filter(n => n !== ol))]
+  if (straine.length) probleme.push(`capitolele pomenesc ${straine.join(', ')} luni, nu ${ol}`)
+  if (probleme.length) return { ...base, stare: 'block', detalii: probleme.join(' · ') }
+  const rez = []
+  if (cl == null || !cm) rez.push('cerința (luni + moment) nu e notată — nu se poate confrunta cu ce oferim')
+  if (!garantie_confirmata) rez.push('neconfirmată de un om')
+  const text = `${ol} luni de la ${mom(om)}` + (cl != null ? ` (cerut minim ${cl} de la ${mom(cm)})` : '')
+  return { ...base, stare: rez.length ? 'warn' : 'ok', detalii: text + (rez.length ? ' — ' + rez.join('; ') : '') }
+}
