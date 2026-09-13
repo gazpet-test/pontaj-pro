@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -74,6 +74,71 @@ describe('H5 controlAnexe — trimiterile din text au piesa in cuprins', () => {
     expect(controlAnexe({ anexe_referite: null, anexe_existente: ['Anexa 1'] }).stare).toBe('ok'))
   it('etichetele existente vin si din nr-ul capitolului (cap. 4)', () =>
     expect(controlAnexe({ anexe_referite: ['capitolul 4'], anexe_existente: ['cap. 4'] }).stare).toBe('ok'))
+})
+
+// Cuprinsul REAL al propunerii Hoghilag, p. 4 (cercetare 13.09).
+const CAPITOLE_HOG = [
+  'Anexa 7|Formular F3 Surse de materiale',
+  'Anexa 9|Contract preluare deseuri si autorizatie de mediu',
+  'Anexa 10|Planul calitatii, lista procedurilor de executie, proceduri de executie si plan de control',
+  'Anexa 11|Grafic de executie',
+  'Anexa 12|Documente suport personal',
+  'Anexa 13|Infrastructura utilizata',
+  'Anexa 14|Plan management mediu',
+  'Anexa 15|Plan SSM si declaratie',
+  'Anexa 16|Plan management trafic',
+]
+const anexe = fraze => controlAnexe({
+  anexe_referite: null, anexe_existente: null, capitole_ref: CAPITOLE_HOG, fraze_anexe: fraze })
+
+describe('H5 verificarea semantica a trimiterilor — cele 15 trimiteri reale din Hoghilag', () => {
+  it('POZITIV p. 28: trimite la Anexa 3 pentru planul calitatii, care e Anexa 10 => block', () => {
+    const r = anexe(['In Anexa 3 este prezentat Planul de management al calitatii pentru acest contract'])
+    expect(r.stare).toBe('block')
+    expect(r.detalii).toMatch(/Anexa 3/); expect(r.detalii).toMatch(/e Anexa 10/)
+    expect(r.gresite[0].rol).toBe('plan_calitate')
+  })
+  // Cele 14 corecte: niciuna nu trebuie semnalata. Fara ele, controlul ar semnala orice.
+  const CORECTE = [
+    ['p. 11 deseuri', 'In Anexa 9 se regaseste contractul de preluare a deseurilor si autorizatia de mediu'],
+    ['p. 31 grafic', 'Graficul de executie a investitiei este prezentat in Anexa 11'],
+    ['p. 32 proceduri', 'Procedurile tehnice de executie si planul calitatii sunt prezentate in Anexa 10'],
+    ['p. 43 proceduri', 'Procedurile tehnice de executie se regasesc in Anexa 10'],
+    ['p. 43 grafic', 'Graficul general de realizare a investitiei este atasat ca Anexa 11'],
+    ['p. 65 plan calitate', 'In Anexa 10 se regaseste planul de asigurare a calitatii, procedurile si planul de control'],
+    ['p. 66 surse', 'Formularul F3 Surse de materiale este prezentat in Anexa 7'],
+    ['p. 69 salubritate', 'Contractul de salubrizare si autorizatia de mediu sunt in Anexa 9'],
+    ['p. 69 grafic+PERT', 'Anexa 11 contine graficul, Network Diagram, analiza PERT, Curba S si graficul de resurse'],
+    ['p. 69 personal', 'Documentele suport pentru personal sunt prezentate in Anexa 12'],
+    ['p. 77 infrastructura', 'Infrastructura utilizata in realizarea activitatilor este descrisa in Anexa 13'],
+    ['p. 77 mediu', 'Planul de management al mediului este prezentat in Anexa 14'],
+    ['p. 77 ssm', 'Planul de securitate si sanatate in munca si declaratia aferenta se regasesc in Anexa 15'],
+    ['p. 80 trafic', 'Planul de management al traficului este prezentat in Anexa 16'],
+  ]
+  it.each(CORECTE)('negativ %s: nu se semnaleaza', (_, fraza) => {
+    const r = anexe([fraza])
+    expect(r.gresite).toEqual([])
+    expect(r.stare).not.toBe('block')
+  })
+  it('toate cele 14 corecte impreuna, plus cea gresita => exact o singura constatare', () => {
+    const r = anexe([...CORECTE.map(c => c[1]), 'In Anexa 3 este prezentat Planul de management al calitatii'])
+    expect(r.gresite).toHaveLength(1); expect(r.gresite[0].refs).toEqual(['anexa:3'])
+  })
+  it('fraza fara rol recognoscibil nu se verifica — mai bine tace decat sa inventeze', () =>
+    expect(anexe(['Detaliile sunt prezentate in Anexa 4']).gresite).toEqual([]))
+  it('rol pentru care nu exista nicio piesa in cuprins nu se verifica', () =>
+    expect(controlAnexe({ anexe_referite: null, anexe_existente: null, capitole_ref: ['Anexa 1|Rezumat'],
+      fraze_anexe: ['Planul calitatii e in Anexa 3'] }).gresite).toEqual([]))
+  it('rolPiesa citeste titlul capitolului la fel ca fraza', () => {
+    expect(rolPiesa('Planul calitatii, lista procedurilor de executie')).toBe('plan_calitate')
+    expect(rolPiesa('Grafic general de realizare a investitiei (fizic)')).toBe('grafic')
+    expect(rolPiesa('Rezumat')).toBeNull()
+  })
+  it('trimiterea la o piesa inexistenta ramane prinsa (verificarea veche)', () => {
+    const r = controlAnexe({ anexe_referite: ['anexa 7', 'formularul nr. 5'], anexe_existente: ['Anexa 7'],
+      fraze_anexe: null, capitole_ref: null })
+    expect(r.stare).toBe('block'); expect(r.lipsa).toEqual(['formular:5'])
+  })
 })
 
 describe('H1 controlIdentitate — numele altei lucrari ramas in text', () => {
