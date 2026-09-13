@@ -94,7 +94,7 @@ const zileRamase = t => { if (!t) return null; const ms = new Date(t) - new Date
 // ─────────────────────────────────────────────────────────────────
 // POARTA — 7 rânduri. Niciunul nu se sare, niciunul nu tace.
 // ─────────────────────────────────────────────────────────────────
-function PoartaPT({ st, onFiltru }) {
+function PoartaPT({ st, afirmatii = [], onFiltru }) {
   const randuri = useMemo(() => {
     // st null = încă se încarcă. NU întoarcem array gol: un array gol înseamnă „nimic de blocat",
     // adică exact verdele fals din care s-a născut regula 2 din antet.
@@ -133,6 +133,21 @@ function PoartaPT({ st, onFiltru }) {
       detalii: st.capitole_nu_e_cazul > 0
         ? `${st.capitole_nu_e_cazul} capitole conțin „nu este cazul" — verifică fișa de date: unele autorități îl interzic explicit`
         : '0',
+    })
+    // Conformitatea: ce AFIRMA propunerea vs ce are firma. Blocant DOAR la om inexistent si om
+    // plecat — decizia lui Razvan, 13.09.2026. Alea doua sunt fapte, fara interpretare, si exact
+    // ele au trecut nevazute la Motru (un sudor lichidat cu 6 zile inainte de depunere, si un nume
+    // care nu exista in firma). Restul verificarilor raman avertismente.
+    // Cand nu s-a incarcat nicio afirmatie, randul spune ca nu s-a verificat — NU 'ok'. Un verde
+    // din lipsa de date e exact greseala pe care o evita regula 2 din antetul migrarii.
+    const blocuri = afirmatii.filter(a => a.verdict === 'block')
+    const averts  = afirmatii.filter(a => a.verdict === 'warn')
+    r.push({
+      k:'conformitate', titlu:'Afirmațiile propunerii, față de firmă',
+      stare: afirmatii.length === 0 ? 'warn' : (blocuri.length > 0 ? 'block' : (averts.length > 0 ? 'warn' : 'ok')),
+      detalii: afirmatii.length === 0
+        ? 'nicio afirmație încărcată — oamenii, utilajele și partenerii din propunere n-au fost confruntați cu ERP-ul'
+        : `${afirmatii.length} afirmații · ${blocuri.length} blocante` + (averts.length ? ` · ${averts.length} de verificat` : ''),
     })
     r.push({
       k:'docs', titlu:'Documentația de atribuire citită integral',
@@ -413,6 +428,118 @@ export function PropunereRezumat({ st, onDeschide }) {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// CONFORMITATEA — ce afirmă propunerea, față de ce are firma
+// ─────────────────────────────────────────────────────────────────
+const CULOARE_VERDICT = { block: G.red, warn: G.yellow, exceptat: G.dim, ok: G.green }
+const ETICHETA_VERDICT = { block: 'BLOCHEAZĂ', warn: 'de verificat', exceptat: 'exceptat', ok: 'ok' }
+// Autorizațiile externilor n-au nume de persoană în bază — doar numele fișierului scanat.
+// Îl arătăm ca atare, ca omul să recunoască documentul pe care îl leagă.
+const etichetaAut = a => (a.fisier_nume || a.observatii || `autorizația #${a.id}`).slice(0, 46)
+
+function Conformitate({ afirmatii, tipuriAut = [], autExterne = [], onExcepta, onSetTip, onSetExtern, busy }) {
+  // Ordonare dupa GRAVITATE. Nu prin .order('verdict') pe server: acolo sortarea e alfabetica
+  // (block, exceptat, ok, warn), deci 'ok' ar urca inaintea lui 'warn' si problemele ar cadea la coada.
+  const RANG = { block: 0, warn: 1, exceptat: 2, ok: 3 }
+  const lista = useMemo(
+    () => [...afirmatii].sort((a, b) => (RANG[a.verdict] ?? 9) - (RANG[b.verdict] ?? 9)),
+    [afirmatii])
+  if (afirmatii.length === 0) {
+    return (
+      <div style={{ ...S.card, padding:16, color:G.muted, fontSize:13, lineHeight:1.6 }}>
+        Nicio afirmație încărcată. Aici intră ce <b>susține</b> propunerea despre firmă — oamenii
+        nominalizați, utilajele, partenerii — ca să se poată confrunta cu ERP-ul înainte de depunere.
+        <div style={{ marginTop:8, color:G.dim }}>
+          La Motru, verificarea asta ar fi prins două lucruri: un sudor lichidat cu șase zile înainte
+          de depunere, și un nume care nu există în firmă.
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={{ ...S.card, overflow:'hidden' }}>
+      {lista.map((a, i) => {
+        const cul = CULOARE_VERDICT[a.verdict] || G.dim
+        const motive = []
+        if (a.om_negasit) motive.push('nu există în firmă sub numele ăsta')
+        if (a.om_plecat)  motive.push(`plecat din firmă înainte de ${a.la_data || 'depunere'}`)
+        if (a.autorizatii_expirate > 0) motive.push(`${a.autorizatii_expirate} autorizații expirate la acea dată`)
+        if (a.extern_fara_disponibilitate) motive.push('extern — lipsește declarația de disponibilitate')
+        if (a.autorizatie_extern_expirata) motive.push('autorizația externului era expirată la acea dată')
+        if (a.calificare_lipsa) motive.push(`n-are ${a.tip_cerut_cod} valabil la acea dată`)
+        if (a.doua_roluri) motive.push('aceeași persoană, două roluri')
+        return (
+          <div key={a.id} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'10px 14px',
+                                   borderTop: i ? `1px solid ${G.border2}` : 'none' }}>
+            <span style={{ fontSize:10, fontWeight:700, color:cul, minWidth:78, paddingTop:2 }}>
+              {ETICHETA_VERDICT[a.verdict] || a.verdict}
+            </span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, color:G.text }}>
+                {/* textul EXACT din propunere — omul trebuie să vadă ce scrie acolo, nu ce-am dedus */}
+                „{a.text_brut}"
+                {a.rol_propus && <span style={{ color:G.muted }}> — {a.rol_propus}</span>}
+                {a.pagina && <span style={{ color:G.dim, fontSize:11 }}> · pag. {a.pagina}</span>}
+              </div>
+              {a.nume_in_erp && (
+                <div style={{ fontSize:11, color:G.dim, marginTop:2 }}>
+                  în ERP: {a.nume_in_erp}{a.functie_in_erp ? ` · ${a.functie_in_erp}` : ''}
+                </div>
+              )}
+              {motive.length > 0 && (
+                <div style={{ fontSize:11, color:cul, marginTop:3 }}>{motive.join(' · ')}</div>
+              )}
+              {a.exceptat && a.exceptat_motiv && (
+                <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>exceptat: {a.exceptat_motiv}</div>
+              )}
+            </div>
+            {/* Persoană care NU e angajat: poate fi un terț legitim. Se leagă de autorizația lui
+                și de declarația de disponibilitate — fișa de date o cere pe a doua. */}
+            {a.fel === 'persoana' && !a.exceptat && !a.employee_id && (
+              <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                <select value={a.autorizatie_id || ''} disabled={busy}
+                  onChange={e => onSetExtern(a, { autorizatie_id: e.target.value ? Number(e.target.value) : null })}
+                  title="Autorizația specialistului extern"
+                  style={{ ...S.input, width:'auto', maxWidth:220, fontSize:11, padding:'3px 6px' }}>
+                  <option value="">— extern: fără autorizație legată —</option>
+                  {autExterne.map(x => <option key={x.id} value={x.id}>{etichetaAut(x)}</option>)}
+                </select>
+                {a.autorizatie_id && (
+                  <select value={a.disponibilitate_id || ''} disabled={busy}
+                    onChange={e => onSetExtern(a, { disponibilitate_id: e.target.value ? Number(e.target.value) : null })}
+                    title="Declarația de disponibilitate a externului"
+                    style={{ ...S.input, width:'auto', maxWidth:220, fontSize:11, padding:'3px 6px' }}>
+                    <option value="">— fără declarație de disponibilitate —</option>
+                    {autExterne.map(x => <option key={x.id} value={x.id}>{etichetaAut(x)}</option>)}
+                  </select>
+                )}
+              </div>
+            )}
+            {a.fel === 'persoana' && !a.exceptat && (
+              /* Calificarea ceruta de rol. Se verifica prin TIPUL autorizatiei
+                 (hr_autorizatii_tipuri.cod), nu prin campurile de detaliu — alea sunt goale
+                 legitim la tipurile care nu le cer. */
+              <select value={a.tip_cerut_cod || ''} disabled={busy}
+                onChange={e => onSetTip(a, e.target.value || null)}
+                title="Ce autorizație cere rolul ăsta"
+                style={{ ...S.input, width:'auto', maxWidth:190, fontSize:11, padding:'3px 6px' }}>
+                <option value="">— calificare necerută —</option>
+                {tipuriAut.map(t => <option key={t.cod} value={t.cod}>{t.cod} · {t.denumire.slice(0, 34)}</option>)}
+              </select>
+            )}
+            {!a.exceptat && a.verdict !== 'ok' && (
+              <button disabled={busy} onClick={() => onExcepta(a)}
+                style={{ ...S.btn, padding:'2px 8px', fontSize:11, opacity: busy ? .5 : 1 }}>
+                exceptează
+              </button>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
 // PANOUL
 // ─────────────────────────────────────────────────────────────────
 export default function PropunerePanel({ licitatii = [], showToast, initialLicId = null, onInapoi = null }) {
@@ -422,6 +549,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [cerinte, setCerinte] = useState([])
   const [legaturi, setLegaturi] = useState([])
   const [dovedite, setDovedite] = useState(new Set())
+  const [afirmatii, setAfirmatii] = useState([])
+  const [tipuriAut, setTipuriAut] = useState([])
+  const [autExterne, setAutExterne] = useState([])
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
   const [busy, setBusy] = useState(false)
@@ -434,7 +564,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -442,11 +572,20 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         .eq('licitatie_id', id).in('tip', ['propunere','forma'])
         .is('inlocuita_de', null).is('duplicat_al', null)
         .order('nr_ordine').limit(5000),
+      supabase.from('v_ofertare_pt_conformitate').select('*').eq('licitatie_id', id)
+        .order('text_brut').limit(2000),
+      supabase.from('hr_autorizatii_tipuri').select('cod, denumire, categorie')
+        .eq('activ', true).order('categorie').order('cod'),
+      // Autorizatiile FARA angajat = specialistii externi (terti sustinatori). Numele lor exista
+      // doar in fisier_nume/observatii, deci legatura o face omul, nu o ghicim noi.
+      supabase.from('hr_autorizatii').select('id, fisier_nume, observatii, data_expirare, tip_id')
+        .is('employee_id', null).is('deleted_at', null).order('id').limit(500),
     ])
-    const err = rSt.error || rCap.error || rCer.error
+    const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
     const cer = rCer.data || []
     setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
+    setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
 
     const ids = cer.map(c => c.id)
     if (ids.length) {
@@ -518,6 +657,40 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setBusy(false)
     if (error) { showToast?.('Ștergerea a eșuat: ' + error.message, 'err'); return }
     showToast?.('Capitol șters.', 'ok')
+    await load(licId)
+  }
+
+  // Exceptarea unei afirmatii. Motivul e OBLIGATORIU si la nivel de baza (CHECK), nu doar aici:
+  // o exceptie fara motiv scris e cum ar fi sa stingi semaforul fara sa spui de ce.
+  const exceptaAfirmatie = async (a) => {
+    if (!a?.id) return
+    const motiv = window.prompt(`De ce se acceptă „${a.text_brut}"?\n(ex. „e Trusu Dorel, greșeală de tastare" / „extern, are contract de prestări servicii")`)
+    if (!motiv || !motiv.trim()) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_afirmatii')
+      .update({ exceptat: true, exceptat_motiv: motiv.trim() }).eq('id', a.id)
+    setBusy(false)
+    if (error) { showToast?.('Excepția n-a fost salvată: ' + error.message, 'err'); return }
+    showToast?.('Afirmație exceptată.', 'ok')
+    await load(licId)
+  }
+
+  const setTipCerut = async (a, cod) => {
+    if (!a?.id) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_afirmatii')
+      .update({ tip_cerut_cod: cod }).eq('id', a.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a salvat calificarea cerută: ' + error.message, 'err'); return }
+    await load(licId)
+  }
+
+  const setExtern = async (a, patch) => {
+    if (!a?.id) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_afirmatii').update(patch).eq('id', a.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a salvat legătura cu externul: ' + error.message, 'err'); return }
     await load(licId)
   }
 
@@ -593,12 +766,18 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       {eroare && <div style={{ ...S.card, padding:12, borderColor:G.red + '55', color:G.red, fontSize:13 }}>{eroare}</div>}
 
-      <PoartaPT st={st} onFiltru={f => { setFiltru(f); setSel(new Set()) }} />
+      <PoartaPT st={st} afirmatii={afirmatii} onFiltru={f => { setFiltru(f); setSel(new Set()) }} />
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Cuprinsul propunerii</div>
         <CuprinsCapitole capitole={capitole} numarPeCapitol={numarPeCapitol} onCreeaza={creeazaCuprins}
           onAdauga={adaugaCapitol} onSterge={stergeCapitol} busy={busy} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Afirmațiile propunerii, față de firmă</div>
+        <Conformitate afirmatii={afirmatii} tipuriAut={tipuriAut} autExterne={autExterne}
+          onExcepta={exceptaAfirmatie} onSetTip={setTipCerut} onSetExtern={setExtern} busy={busy} />
       </div>
 
       <div>
