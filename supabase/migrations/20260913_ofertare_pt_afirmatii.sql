@@ -80,12 +80,13 @@ CREATE TRIGGER trg_pt_afirmatii_upd
 -- altfel o propunere corecta la vremea ei ar iesi rosie peste un an, iar una gresita la vremea ei
 -- ar iesi verde daca omul s-a reangajat intre timp.
 --
--- CE NU POATE VERIFICA INCA: daca autorizatia e pentru ce i se cere (sudor PE, ANRE EGD, 8.4.D).
--- Campurile procedeu_sudura / calitate_material / diametru_teava_mm sunt goale pe autorizatiile
--- din hr_autorizatii — verificat pe Trusu Dorel (id 120): 6 autorizatii valabile, toate cu
--- campurile alea NULL. Pana se completeaza (task #46), poarta prinde om inexistent si om plecat,
--- dar nu si calificare nepotrivita. Randul 'calificare' de mai jos spune asta pe fata, ca sa nu
--- para acoperit ce nu e.
+-- CE VERIFICA SI CE NU (corectat la cateva ore dupa scrierea acestui fisier — vezi migrarea
+-- 20260913_ofertare_pt_afirmatii_calificare.sql):
+-- Aici scrisese initial ca potrivirea calificarii NU se poate verifica. E FALS, si a fost o
+-- generalizare de la un singur om. Calificarea se verifica prin TIPUL autorizatiei
+-- (hr_autorizatii_tipuri.cod: RTE, EGD, RTS, SUDOR_PEHD, SUDOR...), nu prin campurile de detaliu
+-- procedeu_sudura / calitate_material — alea sunt NULL legitim la tipurile care nu le cer.
+-- Masurat: din 468 de autorizatii active, 52 au tip care cere procedeu si ZERO lipsesc.
 CREATE OR REPLACE VIEW public.v_ofertare_pt_conformitate WITH (security_invoker = on) AS
 SELECT
   a.id, a.licitatie_id, a.fel, a.text_brut, a.rol_propus, a.pagina,

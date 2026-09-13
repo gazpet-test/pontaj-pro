@@ -433,7 +433,7 @@ export function PropunereRezumat({ st, onDeschide }) {
 const CULOARE_VERDICT = { block: G.red, warn: G.yellow, exceptat: G.dim, ok: G.green }
 const ETICHETA_VERDICT = { block: 'BLOCHEAZĂ', warn: 'de verificat', exceptat: 'exceptat', ok: 'ok' }
 
-function Conformitate({ afirmatii, onExcepta, busy }) {
+function Conformitate({ afirmatii, tipuriAut = [], onExcepta, onSetTip, busy }) {
   // Ordonare dupa GRAVITATE. Nu prin .order('verdict') pe server: acolo sortarea e alfabetica
   // (block, exceptat, ok, warn), deci 'ok' ar urca inaintea lui 'warn' si problemele ar cadea la coada.
   const RANG = { block: 0, warn: 1, exceptat: 2, ok: 3 }
@@ -460,6 +460,7 @@ function Conformitate({ afirmatii, onExcepta, busy }) {
         if (a.om_negasit) motive.push('nu există în firmă sub numele ăsta')
         if (a.om_plecat)  motive.push(`plecat din firmă înainte de ${a.la_data || 'depunere'}`)
         if (a.autorizatii_expirate > 0) motive.push(`${a.autorizatii_expirate} autorizații expirate la acea dată`)
+        if (a.calificare_lipsa) motive.push(`n-are ${a.tip_cerut_cod} valabil la acea dată`)
         if (a.doua_roluri) motive.push('aceeași persoană, două roluri')
         return (
           <div key={a.id} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'10px 14px',
@@ -486,6 +487,18 @@ function Conformitate({ afirmatii, onExcepta, busy }) {
                 <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>exceptat: {a.exceptat_motiv}</div>
               )}
             </div>
+            {a.fel === 'persoana' && !a.exceptat && (
+              /* Calificarea ceruta de rol. Se verifica prin TIPUL autorizatiei
+                 (hr_autorizatii_tipuri.cod), nu prin campurile de detaliu — alea sunt goale
+                 legitim la tipurile care nu le cer. */
+              <select value={a.tip_cerut_cod || ''} disabled={busy}
+                onChange={e => onSetTip(a, e.target.value || null)}
+                title="Ce autorizație cere rolul ăsta"
+                style={{ ...S.input, width:'auto', maxWidth:190, fontSize:11, padding:'3px 6px' }}>
+                <option value="">— calificare necerută —</option>
+                {tipuriAut.map(t => <option key={t.cod} value={t.cod}>{t.cod} · {t.denumire.slice(0, 34)}</option>)}
+              </select>
+            )}
             {!a.exceptat && a.verdict !== 'ok' && (
               <button disabled={busy} onClick={() => onExcepta(a)}
                 style={{ ...S.btn, padding:'2px 8px', fontSize:11, opacity: busy ? .5 : 1 }}>
@@ -510,6 +523,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [legaturi, setLegaturi] = useState([])
   const [dovedite, setDovedite] = useState(new Set())
   const [afirmatii, setAfirmatii] = useState([])
+  const [tipuriAut, setTipuriAut] = useState([])
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
   const [busy, setBusy] = useState(false)
@@ -522,7 +536,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -532,12 +546,14 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         .order('nr_ordine').limit(5000),
       supabase.from('v_ofertare_pt_conformitate').select('*').eq('licitatie_id', id)
         .order('text_brut').limit(2000),
+      supabase.from('hr_autorizatii_tipuri').select('cod, denumire, categorie')
+        .eq('activ', true).order('categorie').order('cod'),
     ])
-    const err = rSt.error || rCap.error || rCer.error || rAfi.error
+    const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
     const cer = rCer.data || []
     setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
-    setAfirmatii(rAfi.data || [])
+    setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || [])
 
     const ids = cer.map(c => c.id)
     if (ids.length) {
@@ -627,6 +643,16 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     await load(licId)
   }
 
+  const setTipCerut = async (a, cod) => {
+    if (!a?.id) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_afirmatii')
+      .update({ tip_cerut_cod: cod }).eq('id', a.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a salvat calificarea cerută: ' + error.message, 'err'); return }
+    await load(licId)
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -709,7 +735,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Afirmațiile propunerii, față de firmă</div>
-        <Conformitate afirmatii={afirmatii} onExcepta={exceptaAfirmatie} busy={busy} />
+        <Conformitate afirmatii={afirmatii} tipuriAut={tipuriAut}
+          onExcepta={exceptaAfirmatie} onSetTip={setTipCerut} busy={busy} />
       </div>
 
       <div>
