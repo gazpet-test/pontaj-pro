@@ -117,7 +117,7 @@ export function evalueazaPoarta(st) {
 
   // H2 (Sprint 3): cantitățile din Cantități vs fronturile graficului. Sursele vin tot din view.
   const h2 = controlCantitati(st)
-  r.push({ k: h2.k, titlu: 'Cantitățile rețelei — Cantități vs graficul', stare: h2.stare, detalii: h2.detalii })
+  r.push({ k: h2.k, titlu: 'Cantitățile rețelei — lista F3 vs graficul', stare: h2.stare, detalii: h2.detalii })
 
   const blocaje = r.filter(x => x.stare === 'block')
   const rezerve = r.filter(x => x.stare === 'warn')

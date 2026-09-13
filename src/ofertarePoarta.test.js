@@ -11,7 +11,7 @@ const VERDE = {
   capcane: 0, capcane_descoperite: 0,
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0,
   cerinte_neverificate: 0,
-  cantitati_baza: 'memoriu', cantitati_retea_m: 1000, grafic_fronturi_m: 1000,
+  lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
