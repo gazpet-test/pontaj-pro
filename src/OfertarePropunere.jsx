@@ -540,6 +540,60 @@ function Conformitate({ afirmatii, tipuriAut = [], autExterne = [], onExcepta, o
 }
 
 // ─────────────────────────────────────────────────────────────────
+// PACHETUL DE PERSONAL — ce se trimite celui care scrie propunerea
+// ─────────────────────────────────────────────────────────────────
+function PachetPersonal({ randuri, laData, onGenereaza, busy, showToast }) {
+  // Grupat pe tip. ATENȚIE: un om poate avea mai multe autorizații de același tip, deci
+  // numărăm OAMENI (Set de employee_id), nu rânduri. La Motru: 6 sudori PEHD, 18 autorizații.
+  const peTip = useMemo(() => {
+    const m = new Map()
+    for (const r of randuri) {
+      if (!m.has(r.tip_cod)) m.set(r.tip_cod, { denumire: r.tip_denumire, oameni: new Map() })
+      m.get(r.tip_cod).oameni.set(r.employee_id, r.nume)
+    }
+    return [...m.entries()]
+      .map(([cod, v]) => ({ cod, denumire: v.denumire, nume: [...v.oameni.values()].sort() }))
+      .sort((a, b) => b.nume.length - a.nume.length)
+  }, [randuri])
+
+  const copiaza = () => {
+    const text = peTip.map(g => `${g.cod} — ${g.denumire} (${g.nume.length}):\n  ${g.nume.join('\n  ')}`).join('\n\n')
+    navigator.clipboard?.writeText(`Personal cu autorizații valabile la ${laData || 'azi'}\n\n${text}`)
+      .then(() => showToast?.('Pachetul e în clipboard.', 'ok'))
+      .catch(() => showToast?.('Nu s-a putut copia.', 'err'))
+  }
+
+  return (
+    <div style={{ ...S.card, padding:14 }}>
+      <div style={{ color:G.muted, fontSize:12, lineHeight:1.6, marginBottom:10 }}>
+        Cine scrie propunerea cere lista de personal și o primește din fișiere adunate manual.
+        Așa a ajuns la Motru un sudor lichidat cu șase zile înainte de depunere. Lista de aici se
+        face din ERP, <b>la data depunerii</b>{laData ? ` (${laData})` : ''}, deci n-are cum să fie veche.
+      </div>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        <button onClick={onGenereaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .5 : 1 }}>
+          👥 Generează pachetul de personal
+        </button>
+        {randuri.length > 0 && <button onClick={copiaza} style={S.btn}>📋 Copiază</button>}
+      </div>
+      {randuri.length > 0 && (
+        <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:8 }}>
+          {peTip.map(g => (
+            <div key={g.cod}>
+              <div style={{ fontSize:12, color:G.ofertare, fontWeight:600 }}>
+                {g.cod} <span style={{ color:G.dim, fontWeight:400 }}>· {g.denumire}</span>
+                <span style={{ color:G.green, marginLeft:6 }}>{g.nume.length} {g.nume.length === 1 ? 'om' : 'oameni'}</span>
+              </div>
+              <div style={{ fontSize:12, color:G.muted, marginLeft:10 }}>{g.nume.join(' · ')}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
 // PANOUL
 // ─────────────────────────────────────────────────────────────────
 export default function PropunerePanel({ licitatii = [], showToast, initialLicId = null, onInapoi = null }) {
@@ -552,6 +606,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [afirmatii, setAfirmatii] = useState([])
   const [tipuriAut, setTipuriAut] = useState([])
   const [autExterne, setAutExterne] = useState([])
+  const [pachet, setPachet] = useState([])
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
   const [busy, setBusy] = useState(false)
@@ -586,6 +641,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const cer = rCer.data || []
     setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
+    setPachet([])  // pachetul e per licitatie: altfel ar ramane cel de la licitatia precedenta
 
     const ids = cer.map(c => c.id)
     if (ids.length) {
@@ -694,6 +750,18 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     await load(licId)
   }
 
+  const genereazaPachet = async () => {
+    setBusy(true)
+    // la data depunerii, nu "azi": lista trebuie sa fie cea valabila cand se depune
+    const laData = lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null
+    const { data, error } = await supabase.rpc('fn_ofertare_personal_disponibil',
+      laData ? { p_la_data: laData } : {})
+    setBusy(false)
+    if (error) { showToast?.('Pachetul nu s-a generat: ' + error.message, 'err'); return }
+    setPachet(data || [])
+    showToast?.(`${new Set((data || []).map(r => r.employee_id)).size} oameni cu autorizații valabile.`, 'ok')
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -772,6 +840,13 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <div style={{ ...S.lbl, marginBottom:8 }}>Cuprinsul propunerii</div>
         <CuprinsCapitole capitole={capitole} numarPeCapitol={numarPeCapitol} onCreeaza={creeazaCuprins}
           onAdauga={adaugaCapitol} onSterge={stergeCapitol} busy={busy} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Pachetul de personal</div>
+        <PachetPersonal randuri={pachet} busy={busy} showToast={showToast}
+          laData={lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null}
+          onGenereaza={genereazaPachet} />
       </div>
 
       <div>
