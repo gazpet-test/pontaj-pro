@@ -117,15 +117,22 @@ export function controlAnexe({ anexe_referite, anexe_existente }) {
 
 /**
  * H1 — identitatea lucrării. Greșeala reală: un capitol copiat de la altă ofertă, cu numele altei
- * localități rămas în text. View-ul dă deja jetoanele STRĂINE găsite în capitolele licitației
- * (nume proprii din obiectul/autoritatea altor licitații, care nu-s și ale ei). Un singur asemenea
- * nume e block: nu e chestiune de stil, e altă lucrare scrisă în propunerea noastră.
+ * localități rămas în text (la Hoghilag: „Oituz și Sibioara, comuna Lumina" într-un paragraf despre
+ * coordonarea proiectului).
+ *
+ * AVERTISMENT, NU BLOCAJ — corectat 13.09 după cercetarea Hoghilag. Prima versiune bloca pe orice
+ * nume străin, ceea ce e fals: capitolul de experiență similară numește LEGITIM alte lucrări ale
+ * noastre. Un nume străin are patru citiri (contaminare, experiență, referință, document terț) și
+ * numai omul le poate distinge. Poarta îl arată, omul îl clasifică.
+ *
+ * LIMITĂ ȘTIUTĂ: dicționarul e format din licitațiile NOASTRE. Un contract care nu există în ERP
+ * (cazul Oituz–Sibioara) nu e detectat. Pentru el ar trebui și lucrările din execuție.
  */
 export function controlIdentitate({ identitate_straine }) {
   const straine = [...new Set((identitate_straine || []).filter(Boolean))]
   if (!straine.length) return { k: 'identitate', stare: 'ok', straine: [], detalii: 'capitolele nu pomenesc nicio localitate sau entitate din altă licitație' }
-  return { k: 'identitate', stare: 'block', straine,
-    detalii: `capitolele pomenesc ${straine.join(', ')} — nume din alte licitații ale noastre, semn de text copiat; verifică și înlocuiește` }
+  return { k: 'identitate', stare: 'warn', straine,
+    detalii: `capitolele pomenesc ${straine.join(', ')} — nume din alte licitații ale noastre. Citește fiecare: contaminare din copy-paste, experiență similară, referință sau document al unui terț. Doar prima se corectează în text` }
 }
 
 /**
@@ -136,12 +143,22 @@ export function controlIdentitate({ identitate_straine }) {
  * Controlul NU ghicește care număr e totalul: în text stau laolaltă totalul și defalcările, iar o
  * regulă „mai multe numere = greșeală" ar fi falsă. Fapt (block): cerința spune un număr, iar
  * capitolele n-au niciunul egal cu el. Restul e rezervă: numerele se arată omului, să le sumeze el.
+ *
+ * CONFLICTUL DE SURSE SE ARATĂ PRIMUL — adăugat 13.09 după cercetarea Hoghilag. Documentația
+ * autorității conținea ea însăși 371 într-un loc și 372 în altul, posibil pentru obiecte diferite
+ * semantic. Prima versiune verifica doar dacă un capitol coincide cu VREUN număr din cerințe, deci
+ * spunea „în regulă" și ascundea exact conflictul care trebuia ridicat prin clarificare. Nu se alege
+ * automat o valoare, nici cea mai frecventă: sursele care diferă cer rezolvare umană.
  */
 export function controlNumereCheie({ bransamente_in_capitole, bransamente_in_cerinte }) {
   const cap = [...new Set((bransamente_in_capitole || []).map(Number).filter(n => !Number.isNaN(n)))].sort((a, b) => a - b)
   const cer = [...new Set((bransamente_in_cerinte || []).map(Number).filter(n => !Number.isNaN(n)))].sort((a, b) => a - b)
   const base = { k: 'numere', in_capitole: cap, in_cerinte: cer }
   const lst = a => a.join(', ')
+  if (cer.length > 1) return { ...base, stare: 'warn',
+    detalii: `documentația autorității dă numere diferite: ${lst(cer)} branșamente / racorduri`
+      + (cap.length ? ` (capitolele folosesc ${lst(cap)})` : '')
+      + ' — conflict de surse, cere clarificare; nu alege singur o valoare' }
   if (!cap.length) return { ...base, stare: 'ok', detalii: cer.length ? `capitolele nu pomenesc branșamente sau racorduri (cerințele spun ${lst(cer)})` : 'niciun număr de branșamente sau racorduri în joc' }
   if (cer.length && !cap.some(n => cer.includes(n))) return { ...base, stare: 'block',
     detalii: `cerințele spun ${lst(cer)} branșamente / racorduri, capitolele spun ${lst(cap)} — niciun număr nu coincide` }
