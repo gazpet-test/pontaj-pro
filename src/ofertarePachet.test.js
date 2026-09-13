@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sha256Hex, sursaVersiuneCapitole, caleFisierPachet, construiesteManifest, manifesteIdentice } from './ofertarePachet.js'
+import { sha256Hex, sursaVersiuneCapitole, caleFisierPachet, construiesteManifest, manifesteIdentice, pachetDepasit } from './ofertarePachet.js'
 
 const H = 'a'.repeat(64)
 
@@ -48,4 +48,11 @@ describe('manifesteIdentice', () => {
   it('un hash diferit = manifeste diferite', () => {
     expect(manifesteIdentice([{ rol: 'a', sha256: H }], [{ rol: 'a', sha256: 'c'.repeat(64) }])).toBe(false)
   })
+})
+
+describe('pachetDepasit (P0.6: modificare dupa aprobare)', () => {
+  const p = { fisiere: [{ sursa_versiune: 'capitole@{1:v2,2:v1}' }] }
+  it('aceleasi versiuni => nu e depasit', () => expect(pachetDepasit(p, [{ id: 1, versiune: 2 }, { id: 2, versiune: 1 }])).toBe(false))
+  it('un capitol rescris dupa aprobare => depasit (testul 4 din audit)', () => expect(pachetDepasit(p, [{ id: 1, versiune: 3 }, { id: 2, versiune: 1 }])).toBe(true))
+  it('manifest fara amprenta => null, nu un verdict inventat', () => expect(pachetDepasit({ fisiere: [{}] }, [{ id: 1 }])).toBeNull())
 })

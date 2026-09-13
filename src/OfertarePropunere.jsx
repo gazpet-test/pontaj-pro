@@ -23,7 +23,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
 import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
-import { sha256Hex, sursaVersiuneCapitole, construiesteManifest } from './ofertarePachet.js'
+import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1370,6 +1370,11 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
                   <span style={{ color: p.stare === 'depus' ? G.green : p.stare === 'aprobat' ? G.blue : G.yellow }}>{p.stare}</span>
                   <span style={{ color:G.muted }}>{p.aprobat_la ? `${nume(p.aprobat_de)} · ${new Date(p.aprobat_la).toLocaleString('ro-RO')}` : '—'}</span>
                   {p.grafic_versiune && <span style={{ color:G.dim }}>grafic v{p.grafic_versiune}</span>}
+                  {/* P0.6: pachetul ramane istoric imuabil, dar daca vreun capitol s-a rescris de la
+                      aprobare, amprenta nu mai corespunde — si asta trebuie sa se vada, nu sa se stie. */}
+                  {i === 0 && pachetDepasit(p, capitole) === true && (
+                    <span style={{ color:G.red, fontWeight:700 }}>⚠ DEPĂȘIT — un capitol s-a modificat după aprobare; aprobă o versiune nouă</span>
+                  )}
                 </div>
                 {p.nota && <div style={{ color:G.orange, marginTop:2 }}>{p.nota}</div>}
                 {(p.fisiere || []).map(f => (

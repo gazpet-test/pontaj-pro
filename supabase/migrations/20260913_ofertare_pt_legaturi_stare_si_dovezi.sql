@@ -33,9 +33,9 @@ ALTER TABLE public.ofertare_pt_legaturi ADD CONSTRAINT ofertare_pt_legaturi_star
 CREATE TABLE IF NOT EXISTS public.ofertare_pt_dovezi (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   legatura_id bigint NOT NULL REFERENCES public.ofertare_pt_legaturi(id) ON DELETE CASCADE,
-  document_id bigint REFERENCES public.ofertare_documente_atribuire(id) ON DELETE SET NULL,
-  autorizatie_id bigint REFERENCES public.hr_autorizatii(id) ON DELETE SET NULL,
-  doc_firma_id bigint REFERENCES public.documente_firma(id) ON DELETE SET NULL,
+  document_id bigint REFERENCES public.ofertare_documente_atribuire(id) ON DELETE CASCADE,
+  autorizatie_id bigint REFERENCES public.hr_autorizatii(id) ON DELETE CASCADE,
+  doc_firma_id bigint REFERENCES public.documente_firma(id) ON DELETE CASCADE,
   fisier_path text,
   tip_dovada text NOT NULL CHECK (tip_dovada IN ('document_atribuire','autorizatie','document_firma','fisier','capitol')),
   document_revizie text,

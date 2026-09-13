@@ -59,3 +59,14 @@ export function manifesteIdentice(a, b) {
   const cheie = m => [...m].map(f => `${f.rol}|${f.sha256}`).sort().join('\n')
   return cheie(a) === cheie(b)
 }
+
+/**
+ * P0.6 — un pachet aprobat e DEPĂȘIT dacă vreun capitol s-a schimbat de la aprobare: amprenta de
+ * acum (sursaVersiuneCapitole) diferă de cea din manifest. Nu se șterge nimic — pachetul rămâne
+ * istoric imuabil — dar UI-ul trebuie să spună că nu mai reflectă textul curent.
+ */
+export function pachetDepasit(pachet, capitoleAcum) {
+  const amprente = new Set((pachet?.fisiere || []).map(f => f.sursa_versiune).filter(Boolean))
+  if (!amprente.size) return null   // manifest fara amprenta: nu putem sti — nu inventam un verdict
+  return !amprente.has(sursaVersiuneCapitole(capitoleAcum))
+}
