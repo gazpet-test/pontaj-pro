@@ -954,6 +954,63 @@ function Declaratii({ randuri, onSalveaza, onSterge, busy }) {
   )
 }
 
+// Analiza finala Prunisor-Jupa §6.4 — CE DECLARA OFERTA CA A ATASAT.
+// Dosarul n-avea opis tehnic separat, dar F4 (PT p. 1312/1405, coloana „Fisa tehnica atasata")
+// spunea ca fisele 18-21 sunt atasate. Pachetul depus nu le continea. Asta e afirmatia pe care
+// pachetul final o poate infirma — si singura sursa de adevar de care aveam nevoie.
+const SURSE_DECL = { f4: 'F4 (fișă tehnică atașată)', opis: 'opis', manifest: 'manifest', cerinta: 'cerință', alta: 'altundeva' }
+function AnexeAsteptate({ randuri, participanti, onAdauga, onSterge, busy }) {
+  const GOL = { ref: '', denumire: '', sursa_declaratie: 'f4', document_sursa: '', pagina: '', participant_id: '' }
+  const [nou, setNou] = useState(GOL)
+  const numeP = p => p ? (p.partener?.nume || p.nume) : null
+  return (
+    <div style={{ ...S.card, padding:14 }}>
+      <div style={{ color:G.muted, fontSize:12, lineHeight:1.6, marginBottom:10 }}>
+        Piesele pe care <b>oferta declară</b> că le conține. La Prunișor–Jupa F4 spunea „fișa tehnică
+        atașată" pentru fișele 18–21, iar pachetul depus nu le avea — autoritatea a cerut clarificare.
+        Ce se trece aici devine listă de verificat înainte de depunere.
+      </div>
+      {randuri.length > 0 && (
+        <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:10 }}>
+          {randuri.map(a => (
+            <div key={a.id} style={{ display:'flex', gap:8, alignItems:'center', fontSize:12 }}>
+              <span style={{ color:G.ofertare, fontWeight:600, minWidth:140 }}>{a.ref}</span>
+              <span style={{ flex:1, color:G.muted }}>{a.denumire}</span>
+              <span style={{ color:G.dim, fontSize:11 }}>{SURSE_DECL[a.sursa_declaratie] || a.sursa_declaratie}</span>
+              {a.pagina && <span style={{ color:G.dim, fontSize:11 }}>p. {a.pagina}</span>}
+              {numeP(a.participant)
+                ? <span style={{ color:G.purple, fontSize:11 }}>{numeP(a.participant)}</span>
+                : <span style={{ color:G.dim, fontSize:11 }}>Gazpet</span>}
+              <button onClick={() => onSterge(a)} disabled={busy} style={{ ...S.btn, padding:'2px 8px' }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+        <input value={nou.ref} onChange={e => setNou({ ...nou, ref: e.target.value })}
+          placeholder="Fișa tehnică 18" style={{ ...S.input, width:160 }} />
+        <input value={nou.denumire} onChange={e => setNou({ ...nou, denumire: e.target.value })}
+          placeholder="ce e (redresor protecție catodică)" style={{ ...S.input, width:230 }} />
+        <select value={nou.sursa_declaratie} onChange={e => setNou({ ...nou, sursa_declaratie: e.target.value })}
+          style={{ ...S.input, width:'auto' }}>
+          {Object.entries(SURSE_DECL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <input value={nou.document_sursa} onChange={e => setNou({ ...nou, document_sursa: e.target.value })}
+          placeholder="unde (PT F4)" style={{ ...S.input, width:130 }} />
+        <input value={nou.pagina} onChange={e => setNou({ ...nou, pagina: e.target.value })}
+          placeholder="pag." style={{ ...S.input, width:80 }} />
+        <select value={nou.participant_id} onChange={e => setNou({ ...nou, participant_id: e.target.value })}
+          style={{ ...S.input, width:'auto', minWidth:180 }}>
+          <option value="">— o furnizăm noi —</option>
+          {(participanti || []).map(p => <option key={p.id} value={p.id}>{numeP(p)}</option>)}
+        </select>
+        <button onClick={() => { onAdauga(nou); setNou(GOL) }} disabled={busy || !nou.ref.trim()}
+          style={{ ...S.btnS, opacity: (busy || !nou.ref.trim()) ? .5 : 1 }}>+ Adaugă</button>
+      </div>
+    </div>
+  )
+}
+
 function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
   const GOL = { partener_id: '', nume: '', rol: 'tert_sustinator', cota_procent: '',
     document_sursa: '', data_document: '', pagina: '', scop_declarat: '' }
@@ -1043,6 +1100,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [garantie, setGarantie] = useState(null)
   const [participanti, setParticipanti] = useState([])
   const [declaratii, setDeclaratii] = useState([])
+  const [anexeAsteptate, setAnexeAsteptate] = useState([])
   const [parteneri, setParteneri] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
   const [filtru, setFiltru] = useState('fara')
@@ -1057,7 +1115,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar, rPart, rParteneri, rDecl] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar, rPart, rParteneri, rDecl, rAnx] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -1084,6 +1142,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       supabase.from('ofertare_pt_participanti').select('*, partener:ofertare_parteneri(nume)').eq('licitatie_id', id).order('rol'),
       supabase.from('ofertare_parteneri').select('id, nume').eq('activ', true).order('nume'),
       supabase.from('ofertare_pt_declaratii').select('*').eq('licitatie_id', id).order('forma'),
+      supabase.from('ofertare_pt_anexe_asteptate')
+        .select('*, participant:ofertare_pt_participanti(id, nume, rol, partener:ofertare_parteneri(nume))')
+        .eq('licitatie_id', id).order('id'),
     ])
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
@@ -1094,7 +1155,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setDocumente(rDoc.data || [])
     setPachete(rPac.data || [])
     setGarantie(rGar.data || null); setParticipanti(rPart.data || []); setParteneri(rParteneri.data || [])
-    setDeclaratii(rDecl.data || [])
+    setDeclaratii(rDecl.data || []); setAnexeAsteptate(rAnx.data || [])
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
@@ -1162,6 +1223,32 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     if (error) { showToast?.('Nu s-a adăugat: ' + error.message, 'err'); return }
     load(licId)
   }
+  // Analiza finala §6.4: sursa de adevar pentru „ce trebuia sa fie in pachet". La Prunisor-Jupa
+  // n-a existat opis tehnic separat, dar F4 declara ca fisele 18-21 sunt atasate — iar pachetul
+  // depus nu le continea. Aici se noteaza exact ce spune oferta despre propriul continut.
+  const adaugaAnexaAsteptata = async (f) => {
+    if (!f.ref?.trim()) return
+    setBusy(true)
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('ofertare_pt_anexe_asteptate').insert({
+      licitatie_id: licId, ref: f.ref.trim(), denumire: f.denumire?.trim() || null,
+      sursa_declaratie: f.sursa_declaratie || 'f4',
+      document_sursa: f.document_sursa?.trim() || null, pagina: f.pagina?.trim() || null,
+      participant_id: f.participant_id ? Number(f.participant_id) : null,
+      confirmat_de: u?.user?.id || null, confirmat_la: new Date().toISOString(),
+    })
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a adăugat: ' + error.message, 'err'); return }
+    load(licId)
+  }
+  const stergeAnexaAsteptata = async (a) => {
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_anexe_asteptate').delete().eq('id', a.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a șters: ' + error.message, 'err'); return }
+    load(licId)
+  }
+
   // Cine furnizeaza piesa. NU e acelasi lucru cu responsabil_id (om din firma): asta e FIRMA.
   const capitolResponsabil = async (c, participantId) => {
     setBusy(true)
@@ -1712,6 +1799,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Participanții la procedură</div>
+        <AnexeAsteptate randuri={anexeAsteptate} participanti={participanti} busy={busy}
+          onAdauga={adaugaAnexaAsteptata} onSterge={stergeAnexaAsteptata} />
         <Declaratii randuri={declaratii} busy={busy}
           onSalveaza={salveazaDeclaratie} onSterge={stergeDeclaratie} />
         <Participanti randuri={participanti} parteneri={parteneri} busy={busy}

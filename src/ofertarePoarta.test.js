@@ -99,3 +99,69 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet'])
   })
 })
+
+// ════════════════════════════════════════════════════════════════
+// FIXTURE PRUNIȘOR–JUPA / ELCAS — cazul cerut de analiza finală (§13).
+//
+// Lanțul documentat, cap-coadă:
+//   F4 (PT p. 1312/1405) declară „Fișa tehnică 18–21 atașată"
+//   → PT §4.6 spune că lucrările sunt ale ELCAS (acord 306/23.06.2025)
+//   → fișierele existau la ELCAS, semnate electronic
+//   → n-au fost unite în PDF-ul final, deci pachetul depus nu le conține
+//   → Transgaz cere clarificare
+//
+// Ce TREBUIE să spună poarta: piesele lipsesc din pachet și răspunde ELCAS.
+// Ce NU are voie să spună: că documentul tehnic n-ar exista, sau că lucrarea fizică lipsește.
+// ════════════════════════════════════════════════════════════════
+describe('FIXTURE Prunișor–Jupa: fișele 18–21 declarate în F4, absente din pachet', () => {
+  const F4 = n => ({ ref: `Fișa tehnică ${n}`, sursa: 'f4', document_sursa: 'PT F4', pagina: '1312 / 1405',
+    responsabil: 'ELCAS PRODIMPEX SRL' })
+  const stare = {
+    anexe_declarate: [F4(18), F4(19), F4(20), F4(21)],
+    pachet_stare: 'depus',
+    // Pachetul depus: propunerea, borderoul si anexele care AU ajuns. Fisele 18-21 nu sunt aici.
+    pachet_fisiere: [
+      { nume: 'Propunere_tehnica.docx', rol: 'propunere_docx' },
+      { nume: 'Borderou_PT.docx', rol: 'borderou_docx' },
+      { nume: 'Fisa tehnica 17.pdf', semnat: true, sursa_participant: 'ELCAS PRODIMPEX SRL' },
+    ],
+    // Participarea reala: fara asociere, cinci subcontractanti, HABAU si tert sustinator.
+    participanti: ['subcontractant|HABAU S.R.L.', 'tert_sustinator|HABAU S.R.L.',
+      'subcontractant|ELCAS PRODIMPEX SRL', 'subcontractant|OPTOTEL COM SRL',
+      'subcontractant|ROCONSULT TECH SRL', 'subcontractant|RAPID COMPLEX SRL'],
+    declaratii_participare: [
+      { forma: 'asociere', stare: 'nu_e_cazul', document_sursa: 'PT §4.5' },
+      { forma: 'subcontractare', stare: 'declarata', document_sursa: 'PT §4.6' },
+      { forma: 'tert_sustinator', stare: 'declarata', document_sursa: 'PT §4.12' },
+    ],
+    fraze_asociere: ['Asociatului / Subcontractorului / Furnizorului i se va comunica programul'],
+  }
+
+  const ev = evalueazaPoarta(stare)
+  const rand = k => ev.randuri.find(x => x.k === k)
+
+  it('rândul pachetului BLOCHEAZĂ, cu codul de lipsă din pachetul final', () => {
+    const r = rand('pachet')
+    expect(r.stare).toBe('block')
+    expect(ev.blocaje).toContain('pachet')
+  })
+  it('numește toate cele patru fișe', () => {
+    for (const n of [18, 19, 20, 21]) expect(rand('pachet').detalii).toContain(`Fișa tehnică ${n}`)
+  })
+  it('numește firma responsabilă — nu „document lipsă"', () =>
+    expect(rand('pachet').detalii).toMatch(/r[ăa]spunde ELCAS PRODIMPEX SRL/))
+  it('spune de unde vine așteptarea: F4, cu pagina', () =>
+    expect(rand('pachet').detalii).toMatch(/F4 spune c[ăa] e ata[șs]at[ăa], PT F4, p\. 1312 \/ 1405/))
+  it('spune explicit că documentul poate exista la participant', () =>
+    expect(rand('pachet').detalii).toMatch(/poate exista la participant [șs]i tot s[ăa] lipseasc[ăa]/))
+  it('NU pretinde că documentul tehnic nu există sau că lucrarea lipsește', () => {
+    const t = rand('pachet').detalii
+    expect(t).not.toMatch(/nu exist[ăa]|lucrare[a]? (lipse[șs]te|omis)|nerealizat/i)
+  })
+  it('participarea rămâne ok: rol dublu legitim, șablonul nu inventează contradicție', () => {
+    const r = rand('participare')
+    expect(r.stare).toBe('ok')
+    expect(r.detalii).toMatch(/rol dublu — HABAU S\.R\.L\.: subcontractant \+ terț susținător/)
+    expect(r.detalii).toMatch(/asocierea nu e cazul/)
+  })
+})
