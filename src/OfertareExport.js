@@ -20,7 +20,7 @@
 // ════════════════════════════════════════════════════════════════
 import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, PageBreak, AlignmentType,
-  Table, TableRow, TableCell, TableOfContents, WidthType,
+  Table, TableRow, TableCell, TableOfContents, WidthType, Footer, PageNumber,
 } from 'docx'
 
 const FONT = 'Times New Roman'   // documentele oficiale ale casei sunt Times (vezi DeclaratieTehnicaSection)
@@ -31,6 +31,15 @@ const celula = (text, o = {}) => new TableCell({
   width: o.width ? { size: o.width, type: WidthType.PERCENTAGE } : undefined,
   children: [new Paragraph({ alignment: o.align, children: [txt(text, { bold: o.bold, size: 22 })] })],
 })
+
+// H-109 (matricea Hoghilag): documentația cere numerotarea FIECĂREI file. Comentariul de mai sus
+// spunea că „Word face singur numerotarea paginilor" — dar nimeni nu i-o ceruse: documentele ieșeau
+// fără subsol. Câmpurile PAGE / NUMPAGES se recalculează singure în Word, deci numărul rămâne corect
+// și după ce omul mai adaugă un paragraf.
+const subsolPagini = () => new Footer({ children: [new Paragraph({
+  alignment: AlignmentType.CENTER,
+  children: [new TextRun({ font: FONT, size: 18, children: ['Pagina ', PageNumber.CURRENT, ' din ', PageNumber.TOTAL_PAGES] })],
+}) ] })
 
 // Eticheta reală din opis („Cap. I", „Anexa 7"), nu `nr` — `nr` e doar ordinea, iar „Cap. I" se
 // repetă între secțiuni.
@@ -78,7 +87,7 @@ export function construiestePropunere({ licitatie, capitole, firma = 'GAZPET INS
 
   return new Document({
     styles: { default: { document: { run: { font: FONT, size: 24 } } } },
-    sections: [{ children: copii }],
+    sections: [{ footers: { default: subsolPagini() }, children: copii }],
   })
 }
 
@@ -110,7 +119,7 @@ export function construiesteBorderou({ licitatie, capitole, firma = 'GAZPET INST
 
   return new Document({
     styles: { default: { document: { run: { font: FONT, size: 24 } } } },
-    sections: [{ children: [
+    sections: [{ footers: { default: subsolPagini() }, children: [
       p(firma, { bold: true, align: AlignmentType.CENTER, size: 26 }),
       p('BORDEROUL PIESELOR ÎNDOSARIATE', { bold: true, align: AlignmentType.CENTER, size: 30, after: 120 }),
       p('Propunere tehnică', { align: AlignmentType.CENTER, italics: true, after: 120 }),
