@@ -97,8 +97,14 @@ function romanToInt(r) {
   for (let i = 0; i < r.length; i++) { const a = ROMAN[r[i]], b = ROMAN[r[i + 1]]; n += b && b > a ? -a : a }
   return n
 }
+const NR_REF = '([0-9]+[a-z]?|[ivxlc]+)'
 export function normalizeazaRef(t = '') {
-  const m = String(t).toLowerCase().match(/^\s*(anex|formular|cap|plan)[a-zăș.]*\s*(?:nr\.?\s*)?([0-9]+[a-z]?|[ivxlc]+)\b/)
+  const s = String(t).toLowerCase()
+  // „Fișa tehnică 18" — piesa din F4. Are doua cuvinte si diacritice, deci nu intra in tiparul
+  // scurt de mai jos; e citita prima, ca sa nu fie confundata cu nimic.
+  const f = s.match(new RegExp(`^\\s*fi[șs][ăa]?\\s*tehnic[ăa]?\\s*(?:nr\\.?\\s*)?${NR_REF}\\b`))
+  if (f) return `fisa:${/^[0-9]/.test(f[1]) ? f[1] : romanToInt(f[1])}`
+  const m = s.match(new RegExp(`^\\s*(anex|formular|cap|plan)[a-zăș.]*\\s*(?:nr\\.?\\s*)?${NR_REF}\\b`))
   if (!m) return null
   const tip = { anex: 'anexa', formular: 'formular', cap: 'cap', plan: 'plansa' }[m[1]]
   const nr = /^[0-9]/.test(m[2]) ? m[2] : String(romanToInt(m[2]))
@@ -240,11 +246,28 @@ export const ROLURI_PARTICIPARE = {
 // Acordul la numeral: in romana e 1 formulare, dar 2 formulari. Fara asta poarta scria „1 formulări”.
 const plural = (n, unu, multe) => `${n} ${n === 1 ? unu : multe}`
 
+/**
+ * Analiza finala Prunisor-Jupa §5: in PT apar formule de tip
+ * „Asociatului / Subcontractorului / Furnizorului" — insiruiri de roluri din formulare standard si
+ * proceduri generice. Ele NU sunt declaratii operationale si nu au voie sa declanseze contradictie
+ * fata de §4.5 „asociere: NU ESTE CAZUL".
+ *
+ * Semnul dupa care se recunosc, si care se vede in document: doua roluri lipite printr-un slash —
+ * marca locului gol dintr-un sablon, unde se taie ce nu e cazul. O propozitie adevarata despre
+ * lucrarea asta nu se scrie cu bara oblica.
+ *
+ * ATENTIE la limita: contaminarea de la Hoghilag („Echipa de proiect a asocierii va prezenta
+ * rapoarte", „Fiecare subcontractor va avea o echipa proprie") NU are slash si are verb
+ * operational — ramane operationala si trebuie sa se vada in continuare.
+ */
+const ROL_SABLON = /(asocia[țta-zăâîș]*|subcontract[a-zăâîșț]*|furnizor[a-zăâîșț]*|prestator[a-zăâîșț]*|ofertant[a-zăâîșț]*)\s*\/\s*(asocia|subcontract|furnizor|prestator|ofertant)/
 export function clasificaFrazaParticipare(fraza) {
   const t = String(fraza || '').toLowerCase()
   if (!/asocier|asocia[țt]|subcontract/.test(t)) return 'irelevanta'
   // Negare explicită: „Pentru realizarea lucrarilor, nu se vor folosi subcontractori." (p. 58).
   if (/\bnu\s+(se\s+)?(vor|va)\s+(fi\s+)?(folosi|utiliza|subcontracta)|f[ăa]r[ăa] subcontract/.test(t)) return 'negare'
+  // Loc gol de șablon, citit ÎNAINTE de orice altceva: nu spune nimic despre lucrarea asta.
+  if (ROL_SABLON.test(t)) return 'boilerplate'
   // Condițional / clauză generală: se citește ÎNAINTE de marcajele operaționale, ca „în cazul
   // asocierilor... prin grija liderului" să nu treacă drept structură activă.
   if (/[îi]n cazul|dac[ăa][^a-ză]|ulterior|acordul beneficiarului|acordul autorit|propus dup[ăa]|se vor aviza|se aplic[ăa]/.test(t)) return 'generica'
@@ -302,6 +325,7 @@ export function controlParticipare({ participanti, fraze_asociere, declaratii_pa
   const fraze = (fraze_asociere || []).map(f => ({ text: String(f), cls: clasificaFrazaParticipare(f) }))
   const op = fraze.filter(f => f.cls === 'operationala')
   const neg = fraze.filter(f => f.cls === 'negare')
+  const sablon = fraze.filter(f => f.cls === 'boilerplate')
   const zice = {
     asociere: op.some(f => /asocier|asocia[țt]/i.test(f.text)),
     subcontract: op.some(f => /subcontract/i.test(f.text)),
@@ -310,7 +334,8 @@ export function controlParticipare({ participanti, fraze_asociere, declaratii_pa
   for (const d of declaratii_participare || [])
     if (d?.forma && FORME_PARTICIPARE[d.forma] && d?.stare) decl.set(d.forma, d)
   const base = { k: 'participare', pe, entitati: [...entitati.values()], multi_rol: multiRol,
-    fraze, declaratii: [...decl.values()], operationale: op.length, generice: fraze.length - op.length - neg.length }
+    fraze, declaratii: [...decl.values()], operationale: op.length, sablon: sablon.length,
+    generice: fraze.length - op.length - neg.length - sablon.length }
   const declarat = Object.entries(pe).filter(([, v]) => v.length)
     .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
   const probleme = []
@@ -353,7 +378,9 @@ export function controlParticipare({ participanti, fraze_asociere, declaratii_pa
       + (fraze.length ? ` · ${plural(fraze.length, 'formulare', 'formulări')} despre asociere sau subcontractare, toate generale sau condiționale` : ' · capitolele nu pomenesc asociere sau subcontractare') }
   return { ...base, stare: 'warn',
     detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '') + cumulTxt
-      + ` · ${plural(op.length, 'formulare operațională', 'formulări operaționale')}, ${base.generice} generale — citește contextul` }
+      + ` · ${plural(op.length, 'formulare operațională', 'formulări operaționale')}, ${base.generice} generale`
+      + (sablon.length ? `, ${plural(sablon.length, 'loc gol de șablon', 'locuri goale de șablon')} (ignorate)` : '')
+      + ' — citește contextul' }
 }
 
 /**
@@ -431,7 +458,7 @@ export function controlTronsoane({ tronsoane_sursa, tronsoane_grafic }) {
  *
  * Se rulează pe pachetul asamblat: cât timp nu există pachet, controlul nu are ce verifica (warn).
  */
-export function controlPachetComplet({ anexe_asteptate, anexe_responsabili, pachet_stare, pachet_fisiere }) {
+export function controlPachetComplet({ anexe_asteptate, anexe_declarate, anexe_responsabili, pachet_stare, pachet_fisiere }) {
   // Analiza 03: cand lipseste fisa 18, ERP-ul trebuie sa spuna ELCAS, nu „document lipsa". Firma
   // responsabila vine din capitol (ofertare_pt_capitole.participant_id), pe cheia textului piesei.
   const resp = anexe_responsabili || {}
@@ -441,14 +468,29 @@ export function controlPachetComplet({ anexe_asteptate, anexe_responsabili, pach
     if (r && firma && !respPeRef.has(r)) respPeRef.set(r, String(firma))
   }
   // Așteptările pot veni ca text simplu („Anexa 18") sau ca obiect, când se știe cine răspunde de piesă.
+  //
+  // DOUA SURSE, nu una. Analiza finala Prunisor-Jupa §6.4: dosarul n-avea opis tehnic separat, dar
+  // F4 (PT, p. 1312/1405, coloana „Fisa tehnica atasata") DECLARA ca fisele 18-21 sunt atasate.
+  // Adica oferta depusa contine o afirmatie despre propriul continut, pe care pachetul o poate
+  // infirma. Asta bate cuprinsul: cuprinsul e ce voiam sa punem, F4 e ce am spus ca am pus.
   const asteptate = []
-  for (const a of anexe_asteptate || []) {
-    const text = typeof a === 'string' ? a : (a?.ref ?? a?.titlu ?? '')
+  const adauga = (text, responsabil, sursa, unde) => {
     const ref = normalizeazaRef(text)
-    if (ref && !asteptate.some(x => x.ref === ref))
-      asteptate.push({ ref, text: String(text).trim(),
-        responsabil: (typeof a === 'object' && a?.responsabil) || respPeRef.get(ref) || null })
+    if (!ref) return
+    const gasit = asteptate.find(x => x.ref === ref)
+    if (gasit) {   // o piesa declarata bate una dedusa din cuprins: are sursa si pagina
+      if (sursa && !gasit.sursa) { gasit.sursa = sursa; gasit.unde = unde }
+      if (responsabil && !gasit.responsabil) gasit.responsabil = responsabil
+      return
+    }
+    asteptate.push({ ref, text: String(text).trim(), responsabil: responsabil || respPeRef.get(ref) || null, sursa, unde })
   }
+  for (const a of anexe_declarate || [])
+    adauga(a?.ref ?? '', a?.responsabil || null, a?.sursa || 'declarata',
+      [a?.document_sursa, a?.pagina && `p. ${a.pagina}`].filter(Boolean).join(', '))
+  for (const a of anexe_asteptate || [])
+    adauga(typeof a === 'string' ? a : (a?.ref ?? a?.titlu ?? ''),
+      (typeof a === 'object' && a?.responsabil) || null, null, null)
   const fisiere = (pachet_fisiere || []).map(f => ({
     nume: String(f?.nume || ''), rol: f?.rol || null, semnat: !!f?.semnat,
     unit_in: f?.unit_in || null, sursa_participant: f?.sursa_participant || null,
@@ -470,13 +512,17 @@ export function controlPachetComplet({ anexe_asteptate, anexe_responsabili, pach
   // pachet si patru nu.
   if (asteptate.length && !inPachet.size && !fisiere.some(f => f.semnat || f.unit_in))
     return { ...base, stare: 'warn',
-      detalii: `pachetul are doar documentele generate — cele ${asteptate.length} piese din opis n-au fișier încărcat` }
+      detalii: `pachetul are doar documentele generate — ${plural(asteptate.length, 'piesa declarată n-are', 'piese declarate n-au')} fișier încărcat` }
 
   const lipsa = asteptate.filter(a => !inPachet.has(a.ref))
   // „Unit într-un PDF semnat" e tot lipsă, doar că una care se vede: piesa nu mai e un fișier propriu.
   const rupte = fisiere.filter(f => f.semnat && f.unit_in)
   const out = { ...base, lipsa, semnaturi_rupte: rupte }
-  const numeste = a => a.text + (a.responsabil ? ` (răspunde ${a.responsabil})` : '')
+  const CUM_DECLARATA = { f4: 'F4 spune că e atașată', opis: 'opisul o enumeră', manifest: 'manifestul o cere',
+    cerinta: 'o cere documentația', alta: 'e declarată', declarata: 'e declarată' }
+  const numeste = a => a.text
+    + (a.responsabil ? ` (răspunde ${a.responsabil})` : '')
+    + (a.sursa ? ` — ${CUM_DECLARATA[a.sursa] || CUM_DECLARATA.alta}${a.unde ? `, ${a.unde}` : ''}` : '')
 
   if (rupte.length) return { ...out, stare: 'block', cod: 'SIGNED_DOCUMENT_MERGED',
     detalii: `${plural(rupte.length, 'fișier semnat digital a fost unit', 'fișiere semnate digital au fost unite')} în alt PDF — unirea rupe semnătura: `
@@ -485,13 +531,13 @@ export function controlPachetComplet({ anexe_asteptate, anexe_responsabili, pach
       + (lipsa.length ? ` · în plus lipsesc din pachet: ${lipsa.map(numeste).join(', ')}` : '') }
 
   if (lipsa.length) return { ...out, stare: 'block', cod: 'REQUIRED_ATTACHMENT_NOT_IN_FINAL_PACKAGE',
-    detalii: `${plural(lipsa.length, 'piesă din opis nu are fișier', 'piese din opis n-au fișier')} în pachetul final: `
-      + lipsa.map(numeste).join(', ')
+    detalii: `${plural(lipsa.length, 'piesă declarată nu are fișier', 'piese declarate n-au fișier')} în pachetul final: `
+      + lipsa.map(numeste).join(' · ')
       + ' · documentul poate exista la participant și tot să lipsească din ce se depune' }
 
   if (!asteptate.length) return { ...out, stare: 'warn',
-    detalii: `${plural(fisiere.length, 'fișier', 'fișiere')} în pachet, dar opisul n-are piese numerotate — nu se poate confrunta` }
+    detalii: `${plural(fisiere.length, 'fișier', 'fișiere')} în pachet, dar nicio piesă declarată (nici F4, nici opis) — nu se poate confrunta` }
 
   return { ...out, stare: 'ok',
-    detalii: `${plural(asteptate.length, 'piesă din opis', 'piese din opis')}, toate cu fișier în pachetul final (${fisiere.length} fișiere)` }
+    detalii: `${plural(asteptate.length, 'piesă declarată', 'piese declarate')}, toate cu fișier în pachetul final (${fisiere.length} fișiere)` }
 }

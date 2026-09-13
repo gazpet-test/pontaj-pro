@@ -1,0 +1,31 @@
+-- Aplicate prin MCP (apply_migration ofertare_pt_anexe_declarate_f4
+-- + ofertare_pt_stare_anexe_declarate, 13.09.2026).
+--
+-- PRUNISOR-JUPA, analiza finala §6.4 — SURSA DE ADEVAR pentru „ce trebuia sa fie in pachet".
+--
+-- Intrebarea pe care o pusesem in briefingul pentru analiza 04 era: fisele 18-21 apareau in opis
+-- fara fisier, sau lipseau si din opis? Raspunsul cercetarii: in dosar NU exista opis tehnic
+-- separat — dar F4 (PT, pagina tiparita 1312/1405, coloana „Fisa tehnica atasata") DECLARA ca
+-- fisele 18, 19, 20 si 21 sunt atasate.
+--
+-- Consecinta, si motivul acestei migrari: oferta depusa contine o afirmatie verificabila despre
+-- PROPRIUL continut, iar pachetul final o poate infirma. Nu ne mai trebuie un opis ca sa stim ce
+-- se astepta — oferta ne spune singura. Exact asta s-a intamplat: Transgaz a cerut clarificare
+-- pentru fisele 18-21, iar Gazpet a raspuns ca erau la ELCAS (acord 306/23.06.2025) si n-au fost
+-- unite in PDF-ul final din cauza semnaturii electronice.
+--
+-- 1) Tabel nou ofertare_pt_anexe_asteptate (licitatie_id, ref, denumire, sursa_declaratie
+--    ('f4'|'opis'|'manifest'|'cerinta'|'alta'), document_sursa, pagina, participant_id),
+--    UNIQUE(licitatie_id, ref), RLS auth.uid() IS NOT NULL, GRANT authenticated/service_role.
+--    De ce separat de capitole: asteptarea nu vine dintr-un capitol al propunerii, ci dintr-un RAND
+--    al unui formular. Sursa declaratiei se pastreaza, ca mesajul sa poata spune „F4 spune ca e
+--    atasata, PT F4, p. 1312 / 1405", nu doar „lipseste".
+--
+-- 2) v_ofertare_pt_stare: + anexe_declarate (jsonb cu ref, denumire, sursa, pagina, responsabil).
+--
+-- controlPachetComplet imbina acum DOUA surse de asteptari: piesele declarate (F4/opis) si cele
+-- deduse din cuprins. O piesa declarata bate una dedusa — are sursa si pagina.
+--
+-- ANTI-BUG: normalizeazaRef nu cunostea „Fisa tehnica 18" (doua cuvinte + diacritice, alt tipar
+-- decat anexa/formular/cap/plansa), deci fixture-ul ELCAS trecea prin poarta fara sa fie vazut.
+-- Adaugat tipul 'fisa'. Orice sursa noua de piese trebuie verificata intai prin normalizeazaRef.

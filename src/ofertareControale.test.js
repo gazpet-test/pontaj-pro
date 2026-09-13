@@ -62,6 +62,11 @@ describe('H5 controlAnexe — trimiterile din text au piesa in cuprins', () => {
   it('normalizare: Anexa 7 / anexa nr. 7 / ANEXA 7 => anexa:7; Cap. III / capitolul 3 => cap:3; Formularul nr. 5 => formular:5', () => {
     expect(normalizeazaRef('Anexa 7')).toBe('anexa:7'); expect(normalizeazaRef('anexa nr. 7')).toBe('anexa:7')
     expect(normalizeazaRef('Cap. III')).toBe('cap:3'); expect(normalizeazaRef('capitolul 3')).toBe('cap:3')
+    // Piesa din F4 („Fisa tehnica atasata") — doua cuvinte si diacritice, alt tipar decat restul.
+    expect(normalizeazaRef('Fișa tehnică 18')).toBe('fisa:18')
+    expect(normalizeazaRef('Fisa tehnica nr. 21')).toBe('fisa:21')
+    expect(normalizeazaRef('fișă tehnică 19 - priză de potențial')).toBe('fisa:19')
+    expect(normalizeazaRef('Fișa de date')).toBe(null)   // fara numar nu e piesa
     expect(normalizeazaRef('Formularul nr. 5')).toBe('formular:5'); expect(normalizeazaRef('Rezumat')).toBeNull()
   })
   it('toate referintele exista => ok', () =>
@@ -302,6 +307,26 @@ describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
       declaratii_participare: [DECL('asociere', 'nu_e_cazul')] })
     expect(r.detalii).not.toMatch(/dar niciun asociat nu e declarat/)
   })
+  // Analiza finala §5: „Asociatului / Subcontractorului / Furnizorului" e loc gol de sablon.
+  const SABLON = 'Asociatului / Subcontractorului / Furnizorului i se va comunica programul de lucru'
+  it('insiruirea de roluri cu slash = loc gol de sablon, nu declaratie operationala', () =>
+    expect(clasificaFrazaParticipare(SABLON)).toBe('boilerplate'))
+  it('contaminarea de la Hoghilag NU devine sablon: are verb, n-are slash', () => {
+    expect(clasificaFrazaParticipare(OP_ASOC)).toBe('operationala')
+    expect(clasificaFrazaParticipare(OP_SUB)).toBe('operationala')
+  })
+  it('sablonul singur, cu „nu e cazul" declarat => ok: nu se inventeaza contradictie', () => {
+    const r = c({ participanti: [], fraze_asociere: [SABLON],
+      declaratii_participare: [DECL('asociere', 'nu_e_cazul', { document_sursa: 'PT §4.5' })] })
+    expect(r.stare).toBe('ok'); expect(r.sablon).toBe(1)
+  })
+  it('sablonul nu declanseaza nici deducerea din tabel gol', () =>
+    expect(c({ participanti: [], fraze_asociere: [SABLON] }).stare).toBe('ok'))
+  it('sablon + contaminare reala => tot warn, si se spune cate locuri goale s-au ignorat', () => {
+    const r = c({ participanti: [], fraze_asociere: [SABLON, OP_ASOC],
+      declaratii_participare: [DECL('asociere', 'nu_e_cazul')] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/1 loc gol de [șs]ablon \(ignorate\)/)
+  })
   it('fara declaratii, comportamentul vechi e neschimbat', () => {
     const r = c({ participanti: [], fraze_asociere: [OP_ASOC] })
     expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/niciun asociat nu e declarat/)
@@ -382,7 +407,7 @@ describe('controlPachetComplet — piesa poate exista la participant si tot sa l
   it('pachet doar cu documentele generate => warn, nu block: asamblarea n-a inceput', () => {
     const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
       pachet_fisiere: [F('Propunere_tehnica.docx'), F('Borderou_PT.docx')] })
-    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/n-au fi[șs]ier [îi]nc[ăa]rcat/)
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/piese declarate n-au fi[șs]ier [îi]nc[ăa]rcat/)
   })
   it('CAZUL ELCAS: fisa exista la subcontractant, lipseste din pachet => block', () => {
     const r = c({
@@ -433,6 +458,6 @@ describe('controlPachetComplet — piesa poate exista la participant si tot sa l
   it('toate piesele au fisier => ok, cu numaratoarea', () => {
     const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
       pachet_fisiere: [F('Anexa 18.pdf'), F('Anexa 19.pdf'), F('propunere.docx')] })
-    expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/2 piese din opis/)
+    expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/2 piese declarate/)
   })
 })
