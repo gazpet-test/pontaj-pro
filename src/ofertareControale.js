@@ -253,13 +253,40 @@ export function clasificaFrazaParticipare(fraza) {
   return 'generica'
 }
 
+/**
+ * PRUNISOR-JUPA: aceeasi entitate poate avea DOUA roluri in aceeasi licitatie.
+ * HABAU e declarat si subcontractant (sectiunea 4.6 — sudura automata) si tert sustinator
+ * (sectiunea 4.12), in acelasi PT. La Hoghilag era doar tert sustinator. Deci multimile de roluri
+ * NU sunt disjuncte, iar controlul nu are voie sa presupuna asta.
+ *
+ * Consecinte concrete:
+ *  - fraza „X e tert sustinator, ceea ce nu inseamna nici asociat, nici subcontractant" e FALSA
+ *    daca X e declarat si subcontractant. Se spune doar pentru cine e DOAR tert sustinator.
+ *  - cumulul tert sustinator + subcontractant e legitim (imprumuta capacitatea SI executa) — se
+ *    arata, nu se semnaleaza.
+ *  - asociat + subcontractant la aceeasi entitate e contradictie: asociatul e parte din ofertant,
+ *    subcontractantul e tert fata de el. Nu poate fi subcontractantul lui insusi => warn.
+ *  - acelasi rol de doua ori la aceeasi entitate = dublura de introducere => warn.
+ */
+const cheieEntitate = n => String(n).trim().toUpperCase().replace(/\s+/g, ' ')
 export function controlParticipare({ participanti, fraze_asociere }) {
   const pe = { asociat: [], subcontractant: [], tert_sustinator: [], furnizor: [], proiectant: [] }
+  // Entitatea, nu rolul, e cheia: un rand per firma, cu toate rolurile ei pe licitatia asta.
+  const entitati = new Map()
   for (const x of participanti || []) {
     const i = String(x).indexOf('|')
     if (i < 0) continue
     const rol = String(x).slice(0, i), nume = String(x).slice(i + 1)
-    if (pe[rol]) pe[rol].push(nume)
+    if (!pe[rol]) continue
+    pe[rol].push(nume)
+    const k = cheieEntitate(nume)
+    if (!entitati.has(k)) entitati.set(k, { nume, roluri: [] })
+    entitati.get(k).roluri.push(rol)
+  }
+  const multiRol = [...entitati.values()].filter(e => e.roluri.length > 1)
+  const doarTert = n => {
+    const e = entitati.get(cheieEntitate(n))
+    return e && e.roluri.length === 1 && e.roluri[0] === 'tert_sustinator'
   }
   const fraze = (fraze_asociere || []).map(f => ({ text: String(f), cls: clasificaFrazaParticipare(f) }))
   const op = fraze.filter(f => f.cls === 'operationala')
@@ -268,22 +295,35 @@ export function controlParticipare({ participanti, fraze_asociere }) {
     asociere: op.some(f => /asocier|asocia[țt]/i.test(f.text)),
     subcontract: op.some(f => /subcontract/i.test(f.text)),
   }
-  const base = { k: 'participare', pe, fraze, operationale: op.length, generice: fraze.length - op.length - neg.length }
+  const base = { k: 'participare', pe, entitati: [...entitati.values()], multi_rol: multiRol,
+    fraze, operationale: op.length, generice: fraze.length - op.length - neg.length }
   const declarat = Object.entries(pe).filter(([, v]) => v.length)
     .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
   const probleme = []
+  for (const e of multiRol) {
+    const set = new Set(e.roluri)
+    if (set.size !== e.roluri.length)
+      probleme.push(`${e.nume} e trecut de doua ori in acelasi rol — verifica dublura`)
+    if (set.has('asociat') && set.has('subcontractant'))
+      probleme.push(`${e.nume} e declarat si asociat, si subcontractant — asociatul e parte din ofertant, nu poate fi subcontractant al lui insusi`)
+  }
   if (zice.asociere && !pe.asociat.length) probleme.push('capitolele descriu o asociere care funcționează (echipe, comitet, facturi pe asociat), dar niciun asociat nu e declarat')
   if (zice.subcontract && !pe.subcontractant.length) probleme.push('capitolele descriu subcontractori care lucrează, dar niciun subcontractant nu e declarat')
   // Contradicția din pagina 58: aceeași propunere neagă și descrie.
   if (neg.length && op.some(f => /subcontract/i.test(f.text)))
     probleme.push('aceeași propunere spune că nu se folosesc subcontractori și, în altă parte, descrie cum lucrează ei')
-  if (probleme.length && pe.tert_sustinator.length)
-    probleme.push(`${pe.tert_sustinator.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
+  // Doar pentru cine e EXCLUSIV tert sustinator. Pe HABAU-ul de la Prunisor-Jupa (tert + subcontractant)
+  // fraza ar fi minciuna.
+  const numaiTert = pe.tert_sustinator.filter(doarTert)
+  if (probleme.length && numaiTert.length)
+    probleme.push(`${numaiTert.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
+  const cumul = multiRol.map(e => `${e.nume}: ${e.roluri.map(r => ROLURI_PARTICIPARE[r]).join(' + ')}`)
+  const cumulTxt = cumul.length ? ` · rol dublu — ${cumul.join('; ')}` : ''
   if (!probleme.length) return { ...base, stare: 'ok',
-    detalii: (declarat.length ? declarat.join(' · ') : 'niciun partener declarat')
+    detalii: (declarat.length ? declarat.join(' · ') : 'niciun partener declarat') + cumulTxt
       + (fraze.length ? ` · ${plural(fraze.length, 'formulare', 'formulări')} despre asociere sau subcontractare, toate generale sau condiționale` : ' · capitolele nu pomenesc asociere sau subcontractare') }
   return { ...base, stare: 'warn',
-    detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '')
+    detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '') + cumulTxt
       + ` · ${plural(op.length, 'formulare operațională', 'formulări operaționale')}, ${base.generice} generale — citește contextul` }
 }
 
@@ -343,4 +383,77 @@ export function controlTronsoane({ tronsoane_sursa, tronsoane_grafic }) {
   return { ...base, stare: fapte.length ? 'block' : 'warn',
     detalii: `${randuri.length} din ${sursa.size} perechi nu se reconciliază · total sursă ${fmt(ts)} m vs grafic ${fmt(tg)} m (${tg - ts > 0 ? '+' : ''}${fmt(tg - ts)}) · `
       + randuri.slice(0, 3).map(r => r.detalii).join(' · ') + (randuri.length > 3 ? ` · și încă ${randuri.length - 3}` : '') }
+}
+
+/**
+ * PRUNIȘOR-JUPA (Transgaz) — completitudinea PACHETULUI DEPUS, nu a conținutului.
+ *
+ * Cazul real: Transgaz a cerut clarificare pentru fișele tehnice 18–21 (redresor protecție catodică,
+ * priză de potențial, eclator, dispozitiv de drenare). Fișele EXISTAU — completate, la subcontractantul
+ * ELCAS — dar n-au ajuns în propunerea depusă, fiindcă PDF-urile lor purtau semnătură digitală și
+ * procesul de unire a picat. Nu a fost lipsă de conținut tehnic; a fost defect de ASAMBLARE.
+ *
+ * De aceea controlul ăsta e DISTINCT de controlAnexe (H5): H5 verifică dacă trimiterile din text cad
+ * pe piese care există în dosar. Aici se verifică dacă piesele din opis au ajuns în fișierele efectiv
+ * urcate în pachetul final. Un dosar poate trece H5 impecabil și tot să se depună fără fișa 18.
+ *
+ * A doua regulă, din aceeași clarificare: UN FIȘIER SEMNAT NU SE MODIFICĂ CA SĂ FIE „UNIT" în alt PDF.
+ * Unirea rupe semnătura. Anexa semnată se depune ca fișier de sine stătător, legată prin opis.
+ *
+ * Se rulează pe pachetul asamblat: cât timp nu există pachet, controlul nu are ce verifica (warn).
+ */
+export function controlPachetComplet({ anexe_asteptate, pachet_stare, pachet_fisiere }) {
+  // Așteptările pot veni ca text simplu („Anexa 18") sau ca obiect, când se știe cine răspunde de piesă.
+  const asteptate = []
+  for (const a of anexe_asteptate || []) {
+    const text = typeof a === 'string' ? a : (a?.ref ?? a?.titlu ?? '')
+    const ref = normalizeazaRef(text)
+    if (ref && !asteptate.some(x => x.ref === ref))
+      asteptate.push({ ref, text: String(text).trim(), responsabil: (typeof a === 'object' && a?.responsabil) || null })
+  }
+  const fisiere = (pachet_fisiere || []).map(f => ({
+    nume: String(f?.nume || ''), rol: f?.rol || null, semnat: !!f?.semnat,
+    unit_in: f?.unit_in || null, sursa_participant: f?.sursa_participant || null,
+    // Piesa pe care o poartă fișierul: declarată explicit, altfel dedusă din numele fișierului.
+    ref: normalizeazaRef(f?.anexa_ref || '') || normalizeazaRef(f?.nume || ''),
+  }))
+  const inPachet = new Set(fisiere.filter(f => f.ref && !f.unit_in).map(f => f.ref))
+  const base = { k: 'pachet', asteptate, fisiere, lipsa: [], semnaturi_rupte: [] }
+
+  // Poarta se semneaza INAINTE de asamblare (pachetul se produce din poarta semnata), deci lipsa
+  // pachetului nu are voie sa insemne rezerva: ar face orice propunere galbena, circular. Randul
+  // devine activ cand exista fisiere.
+  if (!pachet_stare || !fisiere.length) return { ...base, stare: 'ok',
+    detalii: 'pachetul final nu e încă asamblat — completitudinea se verifică pe fișierele urcate, înainte de depunere' }
+
+  // Daca NICIUN fisier nu poarta o piesa, asamblarea anexelor n-a inceput inca: pachetul are doar
+  // documentele generate. Nu e „lipsa", e „nu s-a ajuns acolo" — se spune, nu se blocheaza. Blocant
+  // devine cand asamblarea a inceput si tot lipsesc piese: exact cazul ELCAS, unde 17 anexe erau in
+  // pachet si patru nu.
+  if (asteptate.length && !inPachet.size && !fisiere.some(f => f.semnat || f.unit_in))
+    return { ...base, stare: 'warn',
+      detalii: `pachetul are doar documentele generate — cele ${asteptate.length} piese din opis n-au fișier încărcat` }
+
+  const lipsa = asteptate.filter(a => !inPachet.has(a.ref))
+  // „Unit într-un PDF semnat" e tot lipsă, doar că una care se vede: piesa nu mai e un fișier propriu.
+  const rupte = fisiere.filter(f => f.semnat && f.unit_in)
+  const out = { ...base, lipsa, semnaturi_rupte: rupte }
+  const numeste = a => a.text + (a.responsabil ? ` (răspunde ${a.responsabil})` : '')
+
+  if (rupte.length) return { ...out, stare: 'block', cod: 'SIGNED_DOCUMENT_MERGED',
+    detalii: `${plural(rupte.length, 'fișier semnat digital a fost unit', 'fișiere semnate digital au fost unite')} în alt PDF — unirea rupe semnătura: `
+      + rupte.map(f => `${f.nume} → ${f.unit_in}`).join(', ')
+      + ' · anexa semnată se depune ca fișier de sine stătător, legată prin opis'
+      + (lipsa.length ? ` · în plus lipsesc din pachet: ${lipsa.map(numeste).join(', ')}` : '') }
+
+  if (lipsa.length) return { ...out, stare: 'block', cod: 'REQUIRED_ATTACHMENT_NOT_IN_FINAL_PACKAGE',
+    detalii: `${plural(lipsa.length, 'piesă din opis nu are fișier', 'piese din opis n-au fișier')} în pachetul final: `
+      + lipsa.map(numeste).join(', ')
+      + ' · documentul poate exista la participant și tot să lipsească din ce se depune' }
+
+  if (!asteptate.length) return { ...out, stare: 'warn',
+    detalii: `${plural(fisiere.length, 'fișier', 'fișiere')} în pachet, dar opisul n-are piese numerotate — nu se poate confrunta` }
+
+  return { ...out, stare: 'ok',
+    detalii: `${plural(asteptate.length, 'piesă din opis', 'piese din opis')}, toate cu fișier în pachetul final (${fisiere.length} fișiere)` }
 }

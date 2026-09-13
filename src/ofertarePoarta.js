@@ -13,7 +13,7 @@
 // Funcție PURĂ, fără React, fără Supabase: se testează cu node, fără runner (vezi jos).
 // ════════════════════════════════════════════════════════════════
 
-import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate, controlNumereCheie, controlParticipare } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate, controlNumereCheie, controlParticipare, controlPachetComplet } from './ofertareControale.js'
 
 // st = un rând din v_ofertare_pt_stare. null = încă se încarcă.
 // Întoarce null cât timp st e null: un array gol de rânduri ar însemna „nimic de blocat",
@@ -133,6 +133,10 @@ export function evalueazaPoarta(st) {
   // HOG-08: asociat, subcontractant și terț susținător nu sunt sinonime.
   const h8 = controlParticipare(st)
   r.push({ k: h8.k, titlu: 'Participanții — rolurile declarate vs textul propunerii', stare: h8.stare, detalii: h8.detalii })
+  // Prunisor-Jupa: piesa poate exista la participant si tot sa lipseasca din pachetul depus.
+  // Distinct de H5: acolo se verifica trimiterile, aici fisierele efectiv urcate.
+  const h9 = controlPachetComplet(st)
+  r.push({ k: h9.k, titlu: 'Pachetul depus — piesele din opis au fișier', stare: h9.stare, detalii: h9.detalii })
 
   const blocaje = r.filter(x => x.stare === 'block')
   const rezerve = r.filter(x => x.stare === 'warn')
