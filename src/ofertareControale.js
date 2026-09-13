@@ -303,7 +303,7 @@ export const FORME_PARTICIPARE = {
   subcontractare: { rol: 'subcontractant', articulat: 'subcontractarea', regex: /subcontract/i },
   tert_sustinator: { rol: 'tert_sustinator', articulat: 'susținerea unui terț', regex: /ter[țt] sus[țt]in/i },
 }
-export function controlParticipare({ participanti, fraze_asociere, declaratii_participare }) {
+export function controlParticipare({ participanti, participanti_acte, fraze_asociere, declaratii_participare }) {
   const pe = { asociat: [], subcontractant: [], tert_sustinator: [], furnizor: [], proiectant: [] }
   // Entitatea, nu rolul, e cheia: un rand per firma, cu toate rolurile ei pe licitatia asta.
   const entitati = new Map()
@@ -317,6 +317,17 @@ export function controlParticipare({ participanti, fraze_asociere, declaratii_pa
     if (!entitati.has(k)) entitati.set(k, { nume, roluri: [] })
     entitati.get(k).roluri.push(rol)
   }
+  // Actul care declara rolul. Declaratia de forma ajungea la poarta cu act si pagina, rolul NU —
+  // se oprea in UI. Un rol fara act trecea verde, desi tocmai asta combate analiza 03: fara act,
+  // „HABAU e subcontractant" e afirmatia noastra, nu o trimitere la acordul 305/23.06.2025.
+  const acte = new Map()
+  for (const a of participanti_acte || []) {
+    if (!a?.rol || !a?.nume) continue
+    acte.set(`${a.rol}|${cheieEntitate(a.nume)}`, a)
+  }
+  const actul = (rol, nume) => acte.get(`${rol}|${cheieEntitate(nume)}`)
+  const scrieAct = a => [a.document_sursa, a.data_document && `din ${a.data_document}`,
+    a.pagina && `p. ${a.pagina}`].filter(Boolean).join(', ')
   const multiRol = [...entitati.values()].filter(e => e.roluri.length > 1)
   const doarTert = n => {
     const e = entitati.get(cheieEntitate(n))
@@ -333,11 +344,20 @@ export function controlParticipare({ participanti, fraze_asociere, declaratii_pa
   const decl = new Map()
   for (const d of declaratii_participare || [])
     if (d?.forma && FORME_PARTICIPARE[d.forma] && d?.stare) decl.set(d.forma, d)
-  const base = { k: 'participare', pe, entitati: [...entitati.values()], multi_rol: multiRol,
+  // In verdict, rolul se scrie CU actul lui: „subcontractant: HABAU (acord nr. 305, p. 171)".
+  const numeCuAct = (rol, nume) => {
+    const a = actul(rol, nume), t = a && scrieAct(a)
+    return nume + (t ? ` (${t})` : '')
+  }
+  const declarat = Object.entries(pe).filter(([, v]) => v.length)
+    .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.map(n => numeCuAct(rol, n)).join(', ')}`)
+  // Rolurile care nu trimit la niciun act. Rezerva, niciodata blocant — participarea nu blocheaza.
+  const faraAct = []
+  for (const [rol, v] of Object.entries(pe))
+    for (const nume of v) if (!actul(rol, nume)?.document_sursa) faraAct.push(`${nume} (${ROLURI_PARTICIPARE[rol]})`)
+  const base = { k: 'participare', pe, entitati: [...entitati.values()], multi_rol: multiRol, fara_act: faraAct,
     fraze, declaratii: [...decl.values()], operationale: op.length, sablon: sablon.length,
     generice: fraze.length - op.length - neg.length - sablon.length }
-  const declarat = Object.entries(pe).filter(([, v]) => v.length)
-    .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
   const probleme = []
   for (const e of multiRol) {
     const set = new Set(e.roluri)
@@ -370,6 +390,8 @@ export function controlParticipare({ participanti, fraze_asociere, declaratii_pa
   const numaiTert = pe.tert_sustinator.filter(doarTert)
   if (probleme.length && numaiTert.length)
     probleme.push(`${numaiTert.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
+  if (faraAct.length && participanti_acte)
+    probleme.push(`${plural(faraAct.length, 'rol nu trimite', 'roluri nu trimit')} la niciun act: ${faraAct.join(', ')}`)
   const cumul = multiRol.map(e => `${e.nume}: ${e.roluri.map(r => ROLURI_PARTICIPARE[r]).join(' + ')}`)
   const cumulTxt = (cumul.length ? ` · rol dublu — ${cumul.join('; ')}` : '')
     + (decl.size ? ` · declarat în propunere: ${[...decl].map(([f, d]) => `${FORME_PARTICIPARE[f].articulat} ${d.stare === 'nu_e_cazul' ? 'nu e cazul' : 'da'}`).join(', ')}` : '')
