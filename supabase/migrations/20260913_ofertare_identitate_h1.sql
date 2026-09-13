@@ -1,0 +1,11 @@
+-- Aplicate prin MCP (13.09.2026): ofertare_identitate_tokens_h1, ofertare_identitate_tokens_h1_vocabular,
+-- ofertare_pt_stare_h1_identitate.
+-- H1 — identitatea lucrarii: capitol copiat de la alta oferta, cu numele altei localitati in text.
+-- 1) v_ofertare_identitate_tokens: cuvintele cu initiala mare din obiect + autoritate, pastrate doar
+--    daca apar la CEL MULT 2 licitatii (o localitate reala) SI nu-s vocabular administrativ/tehnic
+--    (lista in view, comparata fara diacritice si fara majuscule).
+-- 2) v_ofertare_pt_stare: + identitate_straine = jetoanele ALTOR licitatii gasite in capitolele
+--    acesteia si care nu-s si ale ei. Adaugata prin surgery pe pg_get_viewdef (view-ul are ~120 linii),
+--    cu garda ca ancora apare exact o data.
+-- Proba (tranzactionala, rollback): capitol pe Mostistea care zice „Domnesti, judetul Ilfov"
+-- => identitate_straine = {Domnesti, Ilfov}; Manastirea si Chiselet (proprii) NU apar.

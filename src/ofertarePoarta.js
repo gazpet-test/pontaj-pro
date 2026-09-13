@@ -13,7 +13,7 @@
 // Funcție PURĂ, fără React, fără Supabase: se testează cu node, fără runner (vezi jos).
 // ════════════════════════════════════════════════════════════════
 
-import { controlCantitati, controlGarantie, controlAnexe } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate } from './ofertareControale.js'
 
 // st = un rând din v_ofertare_pt_stare. null = încă se încarcă.
 // Întoarce null cât timp st e null: un array gol de rânduri ar însemna „nimic de blocat",
@@ -124,6 +124,9 @@ export function evalueazaPoarta(st) {
   // H5: „vezi Anexa 7" ⇒ Anexa 7 există în cuprins.
   const h5 = controlAnexe(st)
   r.push({ k: h5.k, titlu: 'Trimiterile din text — anexe, formulare, capitole existente', stare: h5.stare, detalii: h5.detalii })
+  // H1: numele altei lucrări rămas în text (copy-paste de la altă ofertă).
+  const h1 = controlIdentitate(st)
+  r.push({ k: h1.k, titlu: 'Identitatea lucrării — nume din alte licitații', stare: h1.stare, detalii: h1.detalii })
 
   const blocaje = r.filter(x => x.stare === 'block')
   const rezerve = r.filter(x => x.stare === 'warn')

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -69,4 +69,14 @@ describe('H5 controlAnexe — trimiterile din text au piesa in cuprins', () => {
     expect(controlAnexe({ anexe_referite: null, anexe_existente: ['Anexa 1'] }).stare).toBe('ok'))
   it('etichetele existente vin si din nr-ul capitolului (cap. 4)', () =>
     expect(controlAnexe({ anexe_referite: ['capitolul 4'], anexe_existente: ['cap. 4'] }).stare).toBe('ok'))
+})
+
+describe('H1 controlIdentitate — numele altei lucrari ramas in text', () => {
+  it('niciun nume strain => ok', () => expect(controlIdentitate({ identitate_straine: [] }).stare).toBe('ok'))
+  it('null (nicio proba) => ok, nu warn', () => expect(controlIdentitate({ identitate_straine: null }).stare).toBe('ok'))
+  it('un singur nume strain => block si il numeste', () => {
+    const r = controlIdentitate({ identitate_straine: ['Domnesti', 'Ilfov'] })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/Domnesti, Ilfov/)
+  })
+  it('dubluri se strang intr-una', () => expect(controlIdentitate({ identitate_straine: ['Racari', 'Racari'] }).straine).toEqual(['Racari']))
 })
