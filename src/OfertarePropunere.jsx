@@ -21,6 +21,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -30,6 +31,7 @@ const S = {
   input: { width:'100%', boxSizing:'border-box', background:G.bg, border:`1px solid ${G.border2}`, borderRadius:6, padding:'8px 12px', color:G.text, fontSize:13, outline:'none' },
   lbl: { display:'block', fontSize:11, color:G.muted, marginBottom:4, fontWeight:600, textTransform:'uppercase', letterSpacing:'.3px' },
   btnP: { padding:'9px 18px', background:G.ofertare, color:'#0D1117', border:'none', borderRadius:7, cursor:'pointer', fontSize:13, fontWeight:700 },
+  btn: { padding:'6px 12px', background:G.surface, color:G.text, border:`1px solid ${G.border2}`, borderRadius:6, cursor:'pointer', fontSize:12 },
   btnS: { padding:'9px 18px', background:G.surface, color:G.text, border:`1px solid ${G.border2}`, borderRadius:7, cursor:'pointer', fontSize:13 },
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
@@ -300,8 +302,11 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFilt
 // ─────────────────────────────────────────────────────────────────
 // CUPRINSUL — capitolele licitației
 // ─────────────────────────────────────────────────────────────────
-function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSterge, busy }) {
+function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCapitol, nume,
+                          onCreeaza, onAdauga, onSterge, onSalveaza, onBlocheaza, busy }) {
   const [nou, setNou] = useState(null)  // null = formularul e închis
+  const [deschis, setDeschis] = useState(null)   // capitolul desfăcut (editor + istoric)
+  const [editez, setEditez] = useState(null)
 
   // Formularul de capitol nou. Capitolele NU vin dintr-un șablon: opisul de la Contești spune
   // „respecta capitolele din Fisa de date si cap9 pct 9.1" — iar la Motru aceeasi sectiune e la
@@ -361,6 +366,9 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSter
           // Antet de secțiune doar când secțiunea se schimbă față de capitolul de deasupra.
           const sect = String(c.sectiune || '').trim()
           const sectAnt = String(capitole[i - 1]?.sectiune || '').trim()
+          const e = deschis === c.id
+          const nObs = obsPeCapitol.get(c.id) || 0
+          const insigna = INSIGNA_SURSA[c.sursa]
           return (
             <div key={c.id}>
               {sect && sect !== sectAnt && (
@@ -381,9 +389,29 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSter
                   </div>
                 </div>
                 <span style={{ fontSize:12, color: n ? G.green : G.dim }}>{n} cerințe</span>
+                {nObs > 0 && (
+                  <span title={`${nObs} observații deschise pe capitolul ăsta`}
+                        style={{ fontSize:11, color:G.orange, fontWeight:700 }}>✎ {nObs}</span>
+                )}
+                {/* Proveniența: se marchează doar ce NU e scris de om. O insignă pe fiecare rând
+                    n-ar mai însemna nimic. */}
+                {insigna && (
+                  <span style={{ fontSize:10, fontWeight:700, color:insigna.c, border:`1px solid ${insigna.c}55`,
+                                 borderRadius:4, padding:'1px 5px' }}>{insigna.t}</span>
+                )}
+                <span title={`versiunea ${c.versiune || 1}`} style={{ fontSize:11, color: (c.versiune || 1) > 1 ? G.blue : G.dim }}>
+                  v{c.versiune || 1}
+                </span>
                 <span style={{ fontSize:11, color: gol && c.obligatoriu ? G.red : G.dim, width:64, textAlign:'right' }}>
                   {gol ? 'gol' : 'scris'}
                 </span>
+                {/* Lacătul: nici o regenerare nu rescrie un capitol blocat, indiferent de sursă. */}
+                <button title={c.blocat ? 'Deblochează (regenerarea îl va putea rescrie)' : 'Blochează: nici o regenerare nu-l mai atinge'}
+                  disabled={busy} onClick={() => onBlocheaza(c, !c.blocat)}
+                  style={{ ...S.btn, padding:'2px 7px', fontSize:12, opacity: busy ? .5 : 1,
+                           color: c.blocat ? G.yellow : G.dim }}>{c.blocat ? '🔒' : '🔓'}</button>
+                <button disabled={busy} onClick={() => { setDeschis(e ? null : c.id); setEditez(null) }}
+                  style={{ ...S.btn, padding:'2px 8px', fontSize:12 }}>{e ? 'închide' : '✎ text'}</button>
                 {/* Ștergerea e permisă DOAR pe un capitol gol si fara cerinte atribuite: altfel
                     s-ar pierde tăcut legături din ofertare_pt_legaturi (ON DELETE CASCADE). */}
                 <button
@@ -392,6 +420,33 @@ function CuprinsCapitole({ capitole, numarPeCapitol, onCreeaza, onAdauga, onSter
                   onClick={() => onSterge(c)}
                   style={{ ...S.btn, padding:'2px 7px', fontSize:12, opacity: (busy || n > 0 || !gol) ? .25 : 1 }}>🗑</button>
               </div>
+              {e && (
+                <div style={{ padding:'0 0 12px' }}>
+                  {editez === c.id
+                    ? <EditorCapitol capitol={c} busy={busy} onSalveaza={onSalveaza} onInchide={() => setEditez(null)} />
+                    : (
+                      <div style={{ padding:'0 14px 8px' }}>
+                        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
+                          <button disabled={busy} onClick={() => setEditez(c.id)} style={S.btn}>
+                            {gol ? '✎ Scrie capitolul' : '✎ Modifică textul'}
+                          </button>
+                          {c.blocat && <span style={{ fontSize:12, color:G.yellow }}>capitol blocat — se poate edita la mână, dar nu se regenerează</span>}
+                        </div>
+                        {!gol && (
+                          <pre style={{ margin:0, maxHeight:200, overflow:'auto', fontSize:12, lineHeight:1.55,
+                                        color:G.muted, whiteSpace:'pre-wrap', wordBreak:'break-word',
+                                        background:G.bg, border:`1px solid ${G.border2}`, borderRadius:6, padding:10 }}>
+                            {c.continut}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  <div style={{ padding:'0 14px' }}>
+                    <div style={{ ...S.lbl, marginBottom:6 }}>Istoricul capitolului</div>
+                    <IstoricCapitol capitol={c} nume={nume} versiuni={versiuniPeCapitol.get(c.id) || []} />
+                  </div>
+                </div>
+              )}
             </div>
           )
         })}
@@ -607,6 +662,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [tipuriAut, setTipuriAut] = useState([])
   const [autExterne, setAutExterne] = useState([])
   const [pachet, setPachet] = useState([])
+  const [observatii, setObservatii] = useState([])
+  const [versiuni, setVersiuni] = useState([])
+  const [profiluri, setProfiluri] = useState(new Map())
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
   const [busy, setBusy] = useState(false)
@@ -619,7 +677,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setEroare(null)
     // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
     // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt] = await Promise.all([
+    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf] = await Promise.all([
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
@@ -635,13 +693,30 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       // doar in fisier_nume/observatii, deci legatura o face omul, nu o ghicim noi.
       supabase.from('hr_autorizatii').select('id, fisier_nume, observatii, data_expirare, tip_id')
         .is('employee_id', null).is('deleted_at', null).order('id').limit(500),
+      supabase.from('ofertare_pt_observatii').select('*').eq('licitatie_id', id)
+        .order('cerut_la', { ascending: false }).limit(1000),
+      // Numele celor care au cerut/rezolvat. Fara ele istoricul arata uuid-uri, adica nimic.
+      supabase.from('profiles').select('id, name').limit(500),
     ])
-    const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error
+    const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
     const cer = rCer.data || []
     setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
+    setObservatii(rObs.data || [])
+    // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
+    setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
     setPachet([])  // pachetul e per licitatie: altfel ar ramane cel de la licitatia precedenta
+
+    // Istoricul, pentru capitolele licitatiei asteia. Se cere dupa capitole fiindca tabelul de
+    // versiuni n-are licitatie_id — atarna de capitol, si asa ramane o singura sursa de adevar.
+    const capIds = (rCap.data || []).map(c => c.id)
+    if (capIds.length) {
+      const rVer = await supabase.from('ofertare_pt_capitole_versiuni')
+        .select('*').in('capitol_id', capIds).order('versiune', { ascending: false }).limit(2000)
+      if (rVer.error) { showToast?.('Istoricul nu s-a putut citi: ' + rVer.error.message, 'err'); setVersiuni([]) }
+      else setVersiuni(rVer.data || [])
+    } else setVersiuni([])
 
     const ids = cer.map(c => c.id)
     if (ids.length) {
@@ -762,6 +837,82 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     showToast?.(`${new Set((data || []).map(r => r.employee_id)).size} oameni cu autorizații valabile.`, 'ok')
   }
 
+  const obsPeCapitol = useMemo(() => {
+    const m = new Map()
+    for (const o of observatii) if (o.stare === 'deschisa' && o.capitol_id) m.set(o.capitol_id, (m.get(o.capitol_id) || 0) + 1)
+    return m
+  }, [observatii])
+
+  const versiuniPeCapitol = useMemo(() => {
+    const m = new Map()
+    for (const v of versiuni) { if (!m.has(v.capitol_id)) m.set(v.capitol_id, []); m.get(v.capitol_id).push(v) }
+    return m
+  }, [versiuni])
+
+  const nume = id => profiluri.get(id) || (id ? 'utilizator necunoscut' : '—')
+
+  // Salvarea textului unui capitol. Versiunea NU se incrementeaza de aici: o face triggerul
+  // trg_pt_capitol_versioneaza, care scrie si textul vechi in istoric. Daca ar face-o UI-ul,
+  // orice scriere din alt loc (import, edge function, fix la mana) ar sari peste istoric.
+  //
+  // sursa: 'om' — scrisul de mana bate proveniența anterioara, iar generatorul nu mai atinge
+  // capitolul. Asta e regula „nu se regenereaza ce a atins un om".
+  const salveazaCapitol = async (c, text) => {
+    if (!c?.id) return false
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_capitole')
+      .update({ continut: text, sursa: 'om' }).eq('id', c.id)
+    setBusy(false)
+    if (error) { showToast?.('Textul nu s-a salvat: ' + error.message, 'err'); return false }
+    showToast?.(`Capitolul „${c.titlu}" salvat ca v${(c.versiune || 1) + 1}.`, 'ok')
+    await load(licId)
+    return true
+  }
+
+  const blocheazaCapitol = async (c, val) => {
+    if (!c?.id) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_capitole').update({ blocat: !!val }).eq('id', c.id)
+    setBusy(false)
+    if (error) { showToast?.('Nu s-a putut schimba lacătul: ' + error.message, 'err'); return }
+    await load(licId)
+  }
+
+  const adaugaObservatie = async ({ capitol_id, text }) => {
+    if (!licId || !String(text || '').trim()) return false
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_observatii').insert({
+      licitatie_id: licId, capitol_id: capitol_id ? Number(capitol_id) : null, text: text.trim(),
+    })
+    setBusy(false)
+    if (error) { showToast?.('Observația nu s-a trimis: ' + error.message, 'err'); return false }
+    showToast?.('Observație trimisă.', 'ok')
+    await load(licId)
+    return true
+  }
+
+  // Inchiderea cere raspuns scris — si aici, si in BD (CHECK). O observatie inchisa tacut
+  // e exact felul in care se pierd modificarile cerute intre doua revizii.
+  // Versiunea notata e cea a capitolului IN MOMENTUL inchiderii: asa se vede in ce revizie
+  // a intrat modificarea, fara sa scrie nimeni un raport de mana.
+  const inchideObservatie = async (o, stare, cap) => {
+    if (!o?.id) return
+    const intrebare = stare === 'rezolvata'
+      ? 'Ce ai schimbat, concret?'
+      : 'De ce nu se face?'
+    const raspuns = window.prompt(intrebare)
+    if (!raspuns || !raspuns.trim()) return
+    setBusy(true)
+    const { error } = await supabase.from('ofertare_pt_observatii').update({
+      stare, raspuns: raspuns.trim(), rezolvat_la: new Date().toISOString(),
+      rezolvat_in_versiunea: stare === 'rezolvata' ? (cap?.versiune ?? null) : null,
+    }).eq('id', o.id)
+    setBusy(false)
+    if (error) { showToast?.('Observația nu s-a închis: ' + error.message, 'err'); return }
+    showToast?.(stare === 'rezolvata' ? 'Observație rezolvată.' : 'Observație respinsă, cu motiv.', 'ok')
+    await load(licId)
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -839,7 +990,15 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Cuprinsul propunerii</div>
         <CuprinsCapitole capitole={capitole} numarPeCapitol={numarPeCapitol} onCreeaza={creeazaCuprins}
-          onAdauga={adaugaCapitol} onSterge={stergeCapitol} busy={busy} />
+          obsPeCapitol={obsPeCapitol} versiuniPeCapitol={versiuniPeCapitol} nume={nume}
+          onAdauga={adaugaCapitol} onSterge={stergeCapitol}
+          onSalveaza={salveazaCapitol} onBlocheaza={blocheazaCapitol} busy={busy} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Observații și revizii</div>
+        <Observatii observatii={observatii} capitole={capitole} nume={nume}
+          onAdauga={adaugaObservatie} onInchide={inchideObservatie} busy={busy} />
       </div>
 
       <div>
