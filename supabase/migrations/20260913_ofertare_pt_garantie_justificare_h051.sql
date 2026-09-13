@@ -1,0 +1,8 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_garantie_justificare_h051, 13.09.2026).
+-- H-051 (matricea Hoghilag): garantia oferita peste minimul cerut trebuie justificata prin
+-- metodologie, metode si dovezi de calitate (F8 o cere explicit). La Hoghilag: 60 de luni declarate,
+-- justificarea nedemonstrata. Rezerva, nu blocaj — se inchide cu text scris de om.
+-- 1) ofertare_pt_garantie.oferit_justificare text
+-- 2) v_ofertare_pt_stare: + garantie_justificata (bool)
+-- ANTI-BUG: CREATE OR REPLACE VIEW adauga coloane DOAR la coada. Ancora surgery-ului trebuie sa fie
+-- ULTIMA coloana a view-ului; altfel Postgres crede ca redenumesti o coloana existenta (eroare 42P16).

@@ -33,7 +33,7 @@ describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
 
 describe('H4 controlGarantie — luni + momentul de start, aceleasi peste tot', () => {
   const OK = { garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
-               garantie_confirmata: true, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 3 }
+               garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 3 }
   const g = p => controlGarantie({ ...OK, ...p })
   it('totul aliniat => ok', () => expect(g({}).stare).toBe('ok'))
   it('oferit < cerut => block', () => expect(g({ garantie_oferit_luni: 24 }).stare).toBe('block'))
@@ -50,7 +50,12 @@ describe('H4 controlGarantie — luni + momentul de start, aceleasi peste tot', 
     expect(g({ garantie_cerut_luni: null, garantie_cerut_moment: null }).stare).toBe('warn')
     expect(g({ garantie_confirmata: false }).stare).toBe('warn')
   })
-  it('oferit peste cerut e in regula', () => expect(g({ garantie_oferit_luni: 48, garantie_luni_in_capitole: [48] }).stare).toBe('ok'))
+  it('H-051: oferit peste cerut fara justificare => warn, nu ok (Hoghilag: 60 luni nejustificate)', () => {
+    const r = g({ garantie_oferit_luni: 60, garantie_luni_in_capitole: [60] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/24 luni peste minim/)
+  })
+  it('oferit peste cerut CU justificare => ok', () =>
+    expect(g({ garantie_oferit_luni: 60, garantie_luni_in_capitole: [60], garantie_justificata: true }).stare).toBe('ok'))
 })
 
 describe('H5 controlAnexe — trimiterile din text au piesa in cuprins', () => {
