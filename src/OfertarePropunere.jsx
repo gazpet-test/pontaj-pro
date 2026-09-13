@@ -80,6 +80,81 @@ const CAPITOLE_ANAP = [
   { nr:15, titlu:'ASPECTE TEHNICE OFERTATE SUPLIMENTAR FAȚĂ DE CERINȚELE MINIME ALE DOCUMENTAȚIEI DE ATRIBUIRE', obligatoriu:false, formular:null },
 ]
 
+// Cuprinsul depus la HOGHILAG (execuție distribuție gaze, 1192 pagini tipărite, dosarul de
+// depunere). Titlurile sunt copiate din cuprinsul real, p. 2-4 al părții 1.
+const CAPITOLE_HOGHILAG = [
+  { nr:1,  titlu:'Abordarea generală și coordonarea activităților privind execuția lucrărilor', obligatoriu:true, formular:null },
+  { nr:2,  titlu:'Metodologia de execuție lucrări', obligatoriu:true, formular:null },
+  { nr:3,  titlu:'Planul de management al calității în cadrul contractului', obligatoriu:true, formular:null },
+  { nr:4,  titlu:'Graficul general propus de realizare a investiției publice', obligatoriu:true, formular:null },
+  { nr:5,  titlu:'Modalitatea de asigurare a accesului la specialiștii necesari pentru realizarea contractului', obligatoriu:true, formular:null },
+  { nr:6,  titlu:'Planul cu măsurile privind protecția mediului', obligatoriu:true, formular:null },
+  { nr:7,  titlu:'Planul privind normele de siguranță și protecție a muncii implementat la nivelul organizației ofertantului', obligatoriu:true, formular:null },
+  { nr:8,  titlu:'Planul privind măsurile de supraveghere a lucrărilor în perioada de garanție acordată', obligatoriu:true, formular:null },
+  { nr:9,  titlu:'Proiectul de management al traficului', obligatoriu:true, formular:null },
+  { nr:10, titlu:'Anexe', obligatoriu:false, formular:null },
+]
+
+// Cuprinsul depus la CRISTIAN (execuție distribuție gaze, 545 pagini, folderul „documente depuse
+// pe SEAP"). ATENȚIE la cap. 3 și 4: acolo graficul e capitolul 3, iar listele de cantități FĂRĂ
+// VALORI au capitol separat — fișa de date (IV.4.1) cere cantități fără valori în propunerea
+// tehnică și grafic CU valori în cea financiară. La Conpet e exact invers: graficul din propunerea
+// tehnică trebuie să aibă valori. „Grafic tehnic" NU înseamnă universal „fără bani".
+const CAPITOLE_CRISTIAN = [
+  { nr:1,  titlu:'Metodologia de executare a lucrărilor, aplicată la lucrare', obligatoriu:true, formular:null },
+  { nr:2,  titlu:'Planul de management al calității aplicat la lucrare', obligatoriu:true, formular:null },
+  { nr:3,  titlu:'Graficul de execuție', obligatoriu:true, formular:null },
+  { nr:4,  titlu:'Listele de cantități — FĂRĂ VALORI', obligatoriu:true, formular:null },
+  { nr:5,  titlu:'Organigrama și modalitatea de asigurare a accesului la personalul necesar și obligatoriu', obligatoriu:true, formular:null },
+  { nr:6,  titlu:'Modalitatea de acces la logistică, utilajele/echipamentele/instalațiile și mijloacele de transport', obligatoriu:true, formular:null },
+  { nr:7,  titlu:'Măsurile aplicate pe perioada contractului pentru îndeplinirea obligațiilor de mediu, sociale și ale relațiilor de muncă', obligatoriu:true, formular:null },
+  { nr:8,  titlu:'Declarație privind termenul de garanție acordat lucrărilor', obligatoriu:true, formular:null },
+  { nr:9,  titlu:'Declarație pe proprie răspundere privind deținerea mașinilor/utilajelor/echipamentelor', obligatoriu:true, formular:null },
+  { nr:10, titlu:'Formularele puse la dispoziție de autoritatea contractantă, completate și asumate prin semnătură', obligatoriu:true, formular:null },
+  { nr:11, titlu:'Centralizatorul procentual aferent fiecărui asociat / subcontractant (după caz)', obligatoriu:true, formular:null },
+  { nr:12, titlu:'Autorizații', obligatoriu:true, formular:null },
+  { nr:13, titlu:'Anexe', obligatoriu:false, formular:null },
+]
+
+// MOTRU, din colecția „PROPUNERI TEHNICE DISTRIBUTIE GAZE". ATENȚIE: poziția într-un folder de
+// modele NU dovedește că exemplarul ăsta s-a depus. Se folosește ca punct de pornire, nu ca
+// referință de conformitate. Capitolul 8 conține deja o matrice cerință / modalitate de
+// îndeplinire / document justificativ — adică fix ce face modulul ăsta, scris de ei la mână.
+const CAPITOLE_MOTRU = [
+  { nr:1,  titlu:'Modul în care ofertantul înțelege să execute categoriile de lucrări, cu resursele materiale și umane alocate și procedurile tehnice de execuție', obligatoriu:true, formular:null },
+  { nr:2,  titlu:'Descrierea lucrărilor ce vor fi executate în cadrul organizării de șantier', obligatoriu:true, formular:null },
+  { nr:3,  titlu:'Planul de management al calității', obligatoriu:true, formular:null },
+  { nr:4,  titlu:'PCCVI — Programul de control al calității, verificări și încercări', obligatoriu:true, formular:null },
+  { nr:5,  titlu:'Planul de securitate și sănătate în muncă (SSM)', obligatoriu:true, formular:null },
+  { nr:6,  titlu:'Planul de management al mediului', obligatoriu:true, formular:null },
+  { nr:7,  titlu:'Managementul riscurilor contractului', obligatoriu:true, formular:null },
+  { nr:8,  titlu:'Matrice de conformitate și grafic general de execuție', obligatoriu:true, formular:null },
+  { nr:9,  titlu:'Descrierea lucrărilor care vor fi executate de asociați și/sau subcontractanți', obligatoriu:true, formular:null },
+  { nr:10, titlu:'Anexe', obligatoriu:false, formular:null },
+]
+
+// Punctele de pornire, nu „șabloanele". Fiecare are scris de unde vine si ce NU dovedeste.
+// Al doilea si al treilea sunt cuprinsuri DEPUSE la licitatii de distributie gaze — tocmai
+// familia la care firma pierde cel mai des, si singura pentru care formularul ANAP e nepotrivit.
+const MODELE_CUPRINS = [
+  { cod:'anap', nume:'Formular ANAP (Transgaz)', domeniu:'transport / formular ANAP',
+    capitole: CAPITOLE_ANAP,
+    sursa: 'Formular Propunere tehnică Ștefan cel Mare (SCN1146660, depus 16.05.2024)',
+    atentie: 'Formular ANAP. La distribuție gaze structura e alta — vezi celelalte două.' },
+  { cod:'hoghilag', nume:'Hoghilag — distribuție gaze', domeniu:'distribuție gaze',
+    capitole: CAPITOLE_HOGHILAG,
+    sursa: 'cuprinsul propunerii depuse la Hoghilag (1192 pag.), p. 2-4',
+    atentie: 'Graficul e cap. 4. Fișa de date cerea grafic EDITABIL (.mpp) — la clarificări ni s-a cerut și a trebuit trimis.' },
+  { cod:'cristian', nume:'Cristian — distribuție gaze', domeniu:'distribuție gaze',
+    capitole: CAPITOLE_CRISTIAN,
+    sursa: 'cuprinsul propunerii depuse la Cristian (545 pag.), p. 2-3',
+    atentie: 'Graficul e cap. 3, iar cantitățile FĂRĂ VALORI au capitol separat (cap. 4). La Conpet e invers: graficul din tehnică trebuie să aibă valori.' },
+  { cod:'motru', nume:'Motru — distribuție gaze', domeniu:'distribuție gaze',
+    capitole: CAPITOLE_MOTRU,
+    sursa: 'colecția de modele „Propuneri tehnice distribuție gaze", cuprins p. 2-4',
+    atentie: 'NU e dovedit că exemplarul ăsta s-a depus — e dintr-un folder de modele. Punct de pornire, nu referință.' },
+]
+
 // ATENȚIE: identic, caracter cu caracter, cu regexul din v_ofertare_pt_stare.
 // Dacă cele două diferă, bannerul spune 15 capcane și lista arată 12.
 // Regexul e masurat pe date reale inainte de orice largire (13.09.2026, 2127 cerinte):
@@ -377,16 +452,28 @@ function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCap
 
   if (capitole.length === 0) {
     return (
-      <div style={{ ...S.card, padding:16, textAlign:'center' }}>
-        <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>
+      <div style={{ ...S.card, padding:16 }}>
+        <div style={{ color:G.muted, fontSize:13, marginBottom:12 }}>
           Propunerea n-are încă niciun capitol. Cuprinsul NU e același la toate licitațiile: se ia din fișa de
           date, din secțiunea „Modul de prezentare al propunerii tehnice". Caut-o după titlu, nu după număr —
-          la Contești e cap. 9 pct. 9.1, la Motru e IV.4.1. Butonul de mai jos pune formularul ANAP
-          (15 capitole), de la Transgaz; la distribuție gaze structura e alta. Editează după.
+          la Contești e cap. 9 pct. 9.1, la Motru e IV.4.1. Modelele de mai jos sunt cuprinsuri REALE din
+          arhiva firmei, ca punct de pornire — niciunul nu e „standardul". Editează după fișa de date.
         </div>
-        <button onClick={onCreeaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .5 : 1 }}>
-          📋 Pornește de la formularul ANAP (15 capitole)
-        </button>
+        {/* Fiecare model isi spune sursa si ce NU dovedeste. Un buton care zice doar „standard" ar
+            invata omul sa nu mai deschida fisa de date — exact greseala care costa licitatii. */}
+        {MODELE_CUPRINS.map(m => (
+          <div key={m.cod} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'9px 0',
+                                    borderTop:`1px solid ${G.border2}`, textAlign:'left' }}>
+            <button onClick={() => onCreeaza(m)} disabled={busy}
+              style={{ ...S.btnP, flex:'0 0 210px', opacity: busy ? .5 : 1, textAlign:'left' }}>
+              📋 {m.nume} ({m.capitole.length})
+            </button>
+            <div style={{ flex:1, fontSize:12, color:G.muted, lineHeight:1.5 }}>
+              <span style={{ color:G.dim }}>{m.sursa}</span>
+              <div style={{ color:G.yellow, marginTop:2 }}>⚠ {m.atentie}</div>
+            </div>
+          </div>
+        ))}
         <div>{btnAdauga}</div>
         <div style={{ textAlign:'left' }}>{formular}</div>
       </div>
@@ -878,15 +965,16 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
   // Crearea cuprinsului e BUTON, nu useEffect: în StrictMode efectul rulează de două ori
   // și ar insera de două ori. UNIQUE(licitatie_id, nr) e plasa de siguranță.
-  const creeazaCuprins = async () => {
-    if (!licId) return
+  const creeazaCuprins = async (model) => {
+    if (!licId || !model?.capitole?.length) return
     setBusy(true)
     const { error } = await supabase.from('ofertare_pt_capitole')
-      .insert(CAPITOLE_ANAP.map(c => ({ ...c, licitatie_id: licId })))
+      .insert(model.capitole.map(c => ({ ...c, licitatie_id: licId, sursa: 'sablon' })))
     setBusy(false)
     if (error && error.code !== '23505') { showToast?.('Cuprinsul nu s-a creat: ' + error.message, 'err'); return }
     if (error) showToast?.('Cuprinsul exista deja.', 'ok')
-    else showToast?.(`Cuprinsul ANAP a fost creat (${CAPITOLE_ANAP.length} capitole). Verifică-l pe fișa de date, la „Modul de prezentare al propunerii tehnice".`, 'ok')
+    else showToast?.(`Cuprins pornit de la „${model.nume}" (${model.capitole.length} capitole). ` +
+      `Confruntă-l ACUM cu fișa de date, la „Modul de prezentare al propunerii tehnice" — modelul e un punct de pornire, nu o regulă.`, 'ok')
     await load(licId)
   }
 
