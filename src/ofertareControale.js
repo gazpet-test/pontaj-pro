@@ -253,13 +253,40 @@ export function clasificaFrazaParticipare(fraza) {
   return 'generica'
 }
 
+/**
+ * PRUNISOR-JUPA: aceeasi entitate poate avea DOUA roluri in aceeasi licitatie.
+ * HABAU e declarat si subcontractant (sectiunea 4.6 — sudura automata) si tert sustinator
+ * (sectiunea 4.12), in acelasi PT. La Hoghilag era doar tert sustinator. Deci multimile de roluri
+ * NU sunt disjuncte, iar controlul nu are voie sa presupuna asta.
+ *
+ * Consecinte concrete:
+ *  - fraza „X e tert sustinator, ceea ce nu inseamna nici asociat, nici subcontractant" e FALSA
+ *    daca X e declarat si subcontractant. Se spune doar pentru cine e DOAR tert sustinator.
+ *  - cumulul tert sustinator + subcontractant e legitim (imprumuta capacitatea SI executa) — se
+ *    arata, nu se semnaleaza.
+ *  - asociat + subcontractant la aceeasi entitate e contradictie: asociatul e parte din ofertant,
+ *    subcontractantul e tert fata de el. Nu poate fi subcontractantul lui insusi => warn.
+ *  - acelasi rol de doua ori la aceeasi entitate = dublura de introducere => warn.
+ */
+const cheieEntitate = n => String(n).trim().toUpperCase().replace(/\s+/g, ' ')
 export function controlParticipare({ participanti, fraze_asociere }) {
   const pe = { asociat: [], subcontractant: [], tert_sustinator: [], furnizor: [], proiectant: [] }
+  // Entitatea, nu rolul, e cheia: un rand per firma, cu toate rolurile ei pe licitatia asta.
+  const entitati = new Map()
   for (const x of participanti || []) {
     const i = String(x).indexOf('|')
     if (i < 0) continue
     const rol = String(x).slice(0, i), nume = String(x).slice(i + 1)
-    if (pe[rol]) pe[rol].push(nume)
+    if (!pe[rol]) continue
+    pe[rol].push(nume)
+    const k = cheieEntitate(nume)
+    if (!entitati.has(k)) entitati.set(k, { nume, roluri: [] })
+    entitati.get(k).roluri.push(rol)
+  }
+  const multiRol = [...entitati.values()].filter(e => e.roluri.length > 1)
+  const doarTert = n => {
+    const e = entitati.get(cheieEntitate(n))
+    return e && e.roluri.length === 1 && e.roluri[0] === 'tert_sustinator'
   }
   const fraze = (fraze_asociere || []).map(f => ({ text: String(f), cls: clasificaFrazaParticipare(f) }))
   const op = fraze.filter(f => f.cls === 'operationala')
@@ -268,22 +295,35 @@ export function controlParticipare({ participanti, fraze_asociere }) {
     asociere: op.some(f => /asocier|asocia[țt]/i.test(f.text)),
     subcontract: op.some(f => /subcontract/i.test(f.text)),
   }
-  const base = { k: 'participare', pe, fraze, operationale: op.length, generice: fraze.length - op.length - neg.length }
+  const base = { k: 'participare', pe, entitati: [...entitati.values()], multi_rol: multiRol,
+    fraze, operationale: op.length, generice: fraze.length - op.length - neg.length }
   const declarat = Object.entries(pe).filter(([, v]) => v.length)
     .map(([rol, v]) => `${ROLURI_PARTICIPARE[rol]}: ${v.join(', ')}`)
   const probleme = []
+  for (const e of multiRol) {
+    const set = new Set(e.roluri)
+    if (set.size !== e.roluri.length)
+      probleme.push(`${e.nume} e trecut de doua ori in acelasi rol — verifica dublura`)
+    if (set.has('asociat') && set.has('subcontractant'))
+      probleme.push(`${e.nume} e declarat si asociat, si subcontractant — asociatul e parte din ofertant, nu poate fi subcontractant al lui insusi`)
+  }
   if (zice.asociere && !pe.asociat.length) probleme.push('capitolele descriu o asociere care funcționează (echipe, comitet, facturi pe asociat), dar niciun asociat nu e declarat')
   if (zice.subcontract && !pe.subcontractant.length) probleme.push('capitolele descriu subcontractori care lucrează, dar niciun subcontractant nu e declarat')
   // Contradicția din pagina 58: aceeași propunere neagă și descrie.
   if (neg.length && op.some(f => /subcontract/i.test(f.text)))
     probleme.push('aceeași propunere spune că nu se folosesc subcontractori și, în altă parte, descrie cum lucrează ei')
-  if (probleme.length && pe.tert_sustinator.length)
-    probleme.push(`${pe.tert_sustinator.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
+  // Doar pentru cine e EXCLUSIV tert sustinator. Pe HABAU-ul de la Prunisor-Jupa (tert + subcontractant)
+  // fraza ar fi minciuna.
+  const numaiTert = pe.tert_sustinator.filter(doarTert)
+  if (probleme.length && numaiTert.length)
+    probleme.push(`${numaiTert.join(', ')} e terț susținător, ceea ce nu înseamnă nici asociat, nici subcontractant`)
+  const cumul = multiRol.map(e => `${e.nume}: ${e.roluri.map(r => ROLURI_PARTICIPARE[r]).join(' + ')}`)
+  const cumulTxt = cumul.length ? ` · rol dublu — ${cumul.join('; ')}` : ''
   if (!probleme.length) return { ...base, stare: 'ok',
-    detalii: (declarat.length ? declarat.join(' · ') : 'niciun partener declarat')
+    detalii: (declarat.length ? declarat.join(' · ') : 'niciun partener declarat') + cumulTxt
       + (fraze.length ? ` · ${plural(fraze.length, 'formulare', 'formulări')} despre asociere sau subcontractare, toate generale sau condiționale` : ' · capitolele nu pomenesc asociere sau subcontractare') }
   return { ...base, stare: 'warn',
-    detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '')
+    detalii: probleme.join(' · ') + (declarat.length ? ` (declarat: ${declarat.join('; ')})` : '') + cumulTxt
       + ` · ${plural(op.length, 'formulare operațională', 'formulări operaționale')}, ${base.generice} generale — citește contextul` }
 }
 

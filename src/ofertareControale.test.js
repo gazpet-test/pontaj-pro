@@ -238,6 +238,32 @@ describe('HOG-08 controlParticipare — rolurile nu sunt sinonime', () => {
   })
   it('rol necunoscut din view nu arunca', () =>
     expect(c({ participanti: ['inventat|X', 'fara-separator'], fraze_asociere: [] }).stare).toBe('ok'))
+
+  // PRUNISOR-JUPA (Transgaz): HABAU e si subcontractant (4.6), si tert sustinator (4.12), in acelasi PT.
+  it('rol dublu legitim: tert sustinator + subcontractant => ok, cu cumulul aratat', () => {
+    const r = c({ participanti: ['subcontractant|HABAU S.R.L.', 'tert_sustinator|HABAU S.R.L.'], fraze_asociere: [] })
+    expect(r.stare).toBe('ok')
+    expect(r.multi_rol).toHaveLength(1)
+    expect(r.detalii).toMatch(/rol dublu — HABAU S\.R\.L\.: subcontractant \+ terț susținător/)
+  })
+  it('cu rol dublu, nu se mai spune ca HABAU „nu e subcontractant" — ar fi fals', () => {
+    const r = c({ participanti: ['subcontractant|HABAU', 'tert_sustinator|HABAU'], fraze_asociere: [OP_ASOC] })
+    expect(r.stare).toBe('warn')                       // asocierea descrisa activ, fara asociat declarat
+    expect(r.detalii).not.toMatch(/nu [îi]nseamn[ăa] nici asociat/)
+  })
+  it('fara rol dublu, fraza despre tert sustinator ramane (cazul Hoghilag)', () => {
+    const r = c({ participanti: ['tert_sustinator|HABAU'], fraze_asociere: [OP_ASOC] })
+    expect(r.detalii).toMatch(/HABAU e terț susținător/)
+  })
+  it('asociat + subcontractant la aceeasi firma => warn, e contradictie', () => {
+    const r = c({ participanti: ['asociat|ATSD', 'subcontractant|ATSD'], fraze_asociere: [] })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/nu poate fi subcontractant al lui [îi]nsu[șs]i/)
+  })
+  it('acelasi rol de doua ori => warn de dublura', () => {
+    const r = c({ participanti: ['subcontractant|ELCAS', 'subcontractant| elcas '], fraze_asociere: [] })
+    expect(r.stare).toBe('warn'); expect(r.detalii).toMatch(/de doua ori in acelasi rol/)
+  })
 })
 
 

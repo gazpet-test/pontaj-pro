@@ -895,11 +895,19 @@ function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
   const [nou, setNou] = useState({ partener_id: '', nume: '', rol: 'tert_sustinator', cota_procent: '' })
   const numeParten = id => parteneri.find(p => String(p.id) === String(id))?.nume || ''
   const poate = nou.partener_id || nou.nume.trim()
+  // Prunisor-Jupa: aceeasi firma poate avea doua roluri (HABAU = subcontractant SI tert sustinator).
+  // Randurile sunt grupate pe rol, deci firma apare de doua ori — se marcheaza, ca sa nu para dublura.
+  const deCateOri = randuri.reduce((m, r) => {
+    const k = String(r.partener?.nume || r.nume || '').trim().toUpperCase().replace(/\s+/g, ' ')
+    return m.set(k, (m.get(k) || 0) + 1)
+  }, new Map())
+  const areRolDublu = r => deCateOri.get(String(r.partener?.nume || r.nume || '').trim().toUpperCase().replace(/\s+/g, ' ')) > 1
   return (
     <div style={{ ...S.card, padding:14 }}>
       <div style={{ color:G.muted, fontSize:12, lineHeight:1.6, marginBottom:10 }}>
         Ofertant, asociat, subcontractant și terț susținător <b>nu sunt același lucru</b>. Rolul se declară
         aici, pe licitația asta: în catalogul de parteneri stă doar relația generală cu firma.
+        O firmă poate avea <b>două roluri deodată</b> (subcontractant și terț susținător) — se declară ca două rânduri.
       </div>
       {randuri.length > 0 && (
         <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:10 }}>
@@ -907,6 +915,7 @@ function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
             <div key={r.id} style={{ display:'flex', gap:8, alignItems:'center', fontSize:12 }}>
               <span style={{ color:G.ofertare, fontWeight:600, minWidth:120 }}>{ROLURI_PARTICIPARE[r.rol] || r.rol}</span>
               <span style={{ flex:1 }}>{r.partener?.nume || r.nume}</span>
+              {areRolDublu(r) && <span style={{ color:G.dim, fontSize:11, border:`1px solid ${G.dim}`, borderRadius:4, padding:'0 5px' }}>rol dublu</span>}
               {r.cota_procent != null && <span style={{ color:G.dim }}>{r.cota_procent}%</span>}
               <button onClick={() => onSterge(r)} disabled={busy} style={{ ...S.btn, padding:'2px 8px' }}>✕</button>
             </div>
