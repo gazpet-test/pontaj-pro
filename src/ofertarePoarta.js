@@ -13,6 +13,8 @@
 // Funcție PURĂ, fără React, fără Supabase: se testează cu node, fără runner (vezi jos).
 // ════════════════════════════════════════════════════════════════
 
+import { controlCantitati } from './ofertareControale.js'
+
 // st = un rând din v_ofertare_pt_stare. null = încă se încarcă.
 // Întoarce null cât timp st e null: un array gol de rânduri ar însemna „nimic de blocat",
 // adică exact verdele fals din care s-a născut regula 2 din antetul modulului.
@@ -112,6 +114,10 @@ export function evalueazaPoarta(st) {
           ? ` — înghețată cu ${st.grafic_avertismente} avertismente în poarta graficului, deschide Graficul și uită-te la ele`
           : ', fără avertismente'),
   })
+
+  // H2 (Sprint 3): cantitățile din Cantități vs fronturile graficului. Sursele vin tot din view.
+  const h2 = controlCantitati(st)
+  r.push({ k: h2.k, titlu: 'Cantitățile rețelei — Cantități vs graficul', stare: h2.stare, detalii: h2.detalii })
 
   const blocaje = r.filter(x => x.stare === 'block')
   const rezerve = r.filter(x => x.stare === 'warn')
