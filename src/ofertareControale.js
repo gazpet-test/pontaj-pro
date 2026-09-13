@@ -111,3 +111,16 @@ export function controlAnexe({ anexe_referite, anexe_existente }) {
     detalii: `${lipsa.length} din ${referite.length} referințe trimit la piese care nu-s în cuprins: ${lipsa.map(arata).join(', ')} — adaugă-le sau scoate trimiterea` }
   return { k: 'anexe', stare: 'ok', lipsa: [], detalii: `${referite.length} referințe, toate cu piesa în cuprins` }
 }
+
+/**
+ * H1 — identitatea lucrării. Greșeala reală: un capitol copiat de la altă ofertă, cu numele altei
+ * localități rămas în text. View-ul dă deja jetoanele STRĂINE găsite în capitolele licitației
+ * (nume proprii din obiectul/autoritatea altor licitații, care nu-s și ale ei). Un singur asemenea
+ * nume e block: nu e chestiune de stil, e altă lucrare scrisă în propunerea noastră.
+ */
+export function controlIdentitate({ identitate_straine }) {
+  const straine = [...new Set((identitate_straine || []).filter(Boolean))]
+  if (!straine.length) return { k: 'identitate', stare: 'ok', straine: [], detalii: 'capitolele nu pomenesc nicio localitate sau entitate din altă licitație' }
+  return { k: 'identitate', stare: 'block', straine,
+    detalii: `capitolele pomenesc ${straine.join(', ')} — nume din alte licitații ale noastre, semn de text copiat; verifică și înlocuiește` }
+}
