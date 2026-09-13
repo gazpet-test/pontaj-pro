@@ -1,0 +1,9 @@
+-- Aplicata prin MCP (apply_migration ofertare_cantitati_tip_sursa_h2_lista, 13.09.2026).
+-- Regula (Razvan): la grafic NU exista "baza memoriu/plansa". Referinta unica e LISTA DE CANTITATI F3
+-- (pe obiecte) — pe ea punem banii si ea se deconteaza. Memoriu / planse / C6 diferite de F3 sunt
+-- DIFERENTE DE REZOLVAT PRIN CLARIFICARE inainte de grafic. Varianta B: suma pe F3, C6 e doar control.
+-- 1) ofertare_cantitati.tip_sursa text CHECK IN ('lista_f3','lista_c6','lista_alt','memoriu','plansa','caiet','alt')
+--    + backfill din textul liber `sursa` + index (licitatie_id, tip_sursa).
+-- 2) v_ofertare_pt_stare: cantitati_baza / cantitati_retea_m -> lista_f3_m, lista_c6_m, memoriu_m, plansa_m
+--    (conducte, um = m, fara totaluri), grafic_fronturi_m neschimbat. Textul complet al view-ului: in
+--    istoricul migrarilor Supabase (supabase_migrations.schema_migrations).

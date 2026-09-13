@@ -8,37 +8,40 @@
 // ════════════════════════════════════════════════════════════════
 
 /**
- * H2 — conservarea cantităților: totalul rețelei din cantități (baza asumată) vs suma fronturilor
- * din grafic. Aceeași cantitate trebuie să fie aceeași în toate reprezentările.
+ * H2 — conservarea cantităților. Regula (Răzvan, 13.09): la grafic NU există „baza memoriu / planșă".
+ * Referința unică e LISTA DE CANTITĂȚI F3 (pe obiecte): pe ea punem banii, ea se decontează. Memoriu,
+ * planșe sau C6 care diferă de F3 sunt diferențe care TREBUIAU rezolvate prin clarificare înainte de
+ * grafic — se afișează ca rezervă, nu se aleg. Varianta B: suma pe F3; C6 e doar control (ΣF3 = C6).
  *
  * Toleranța e pentru ROTUNJIRI (5 m la 30 km = 0,02%), nu pentru compensări: la Hoghilag
- * -19 Prod / +18 Valchid dădeau -1 la total și tot era greșit. De aceea totalul e doar primul
- * control; defalcarea pe obiect se arată alături și se mapează manual (H9: fuzzy ≠ verdict).
+ * -19 Prod / +18 Valchid dădeau -1 la total și tot era greșit.
  */
 export const H2_TOLERANTA_RELATIVA = 0.001   // 0,1 %
 
-export function controlCantitati({ cantitati_baza, cantitati_retea_m, grafic_fronturi_m }) {
-  const src = cantitati_retea_m == null ? null : Number(cantitati_retea_m)
-  const gr  = grafic_fronturi_m == null ? null : Number(grafic_fronturi_m)
-  if (src == null || gr == null) {
-    return { stare: 'warn', k: 'cantitati',
-      detalii: src == null ? 'nicio cantitate de rețea (um = m, conducte) în Cantități — controlul nu se poate face'
-                           : 'graficul n-are fronturi definite — controlul nu se poate face',
-      sursa_m: src, grafic_m: gr, diferenta_m: null }
+const num = v => (v == null || v === '') ? null : Number(v)
+const fmt = n => Math.round(n).toLocaleString('ro-RO')
+const rel = (a, b) => a ? Math.abs(b - a) / a : (b ? Infinity : 0)
+
+export function controlCantitati({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m }) {
+  const f3 = num(lista_f3_m), gr = num(grafic_fronturi_m)
+  const base = { k: 'cantitati', lista_f3_m: f3, grafic_m: gr, diferenta_m: null, neclarificate: [] }
+  if (f3 == null) {
+    const alt = [['memoriu', num(memoriu_m)], ['planșe', num(plansa_m)], ['C6', num(lista_c6_m)]].filter(([, v]) => v != null)
+    return { ...base, stare: 'block',
+      detalii: 'lipsește lista de cantități F3 în ERP — graficul nu are punct de decontat'
+        + (alt.length ? ` (există doar ${alt.map(([n, v]) => `${n} ${fmt(v)} m`).join(', ')})` : '') }
   }
-  if (!cantitati_baza) {
-    return { stare: 'block', k: 'cantitati',
-      detalii: `baza cantităților nu e asumată (memoriu / planșă) — graficul nu poate fi reconciliat cu nimic`,
-      sursa_m: src, grafic_m: gr, diferenta_m: gr - src }
-  }
-  const dif = gr - src
-  const rel = src ? Math.abs(dif) / src : (dif ? Infinity : 0)
-  const fmt = n => Math.round(n).toLocaleString('ro-RO')
-  if (dif === 0) return { stare: 'ok', k: 'cantitati', detalii: `${fmt(src)} m în ambele (${cantitati_baza})`, sursa_m: src, grafic_m: gr, diferenta_m: 0 }
-  if (rel <= H2_TOLERANTA_RELATIVA) return { stare: 'warn', k: 'cantitati',
-    detalii: `${fmt(src)} m (${cantitati_baza}) vs ${fmt(gr)} m în fronturi: ${dif > 0 ? '+' : ''}${fmt(dif)} m, sub 0,1 % — rotunjire, dar spune-o în ofertă`,
-    sursa_m: src, grafic_m: gr, diferenta_m: dif }
-  return { stare: 'block', k: 'cantitati',
-    detalii: `${fmt(src)} m (${cantitati_baza}) vs ${fmt(gr)} m în fronturile graficului: ${dif > 0 ? '+' : ''}${fmt(dif)} m (${(rel * 100).toFixed(1)} %) — aceeași lucrare nu poate avea două lungimi`,
-    sursa_m: src, grafic_m: gr, diferenta_m: dif }
+  // Surse informative care diferă de F3 peste toleranță: de rezolvat prin clarificare, nu de ales.
+  const neclarificate = [['memoriu', num(memoriu_m)], ['planșe', num(plansa_m)], ['C6', num(lista_c6_m)]]
+    .filter(([, v]) => v != null && rel(f3, v) > H2_TOLERANTA_RELATIVA)
+    .map(([n, v]) => `${n} ${fmt(v)} m`)
+  const notaClar = neclarificate.length ? ` — diferență nerezolvată prin clarificare: ${neclarificate.join(', ')} vs F3 ${fmt(f3)} m` : ''
+  if (gr == null) return { ...base, neclarificate, stare: 'warn', detalii: 'graficul n-are fronturi definite — controlul nu se poate face' + notaClar }
+  const dif = gr - f3, r = rel(f3, gr)
+  if (r > H2_TOLERANTA_RELATIVA) return { ...base, neclarificate, diferenta_m: dif, stare: 'block',
+    detalii: `F3 ${fmt(f3)} m vs ${fmt(gr)} m în fronturile graficului: ${dif > 0 ? '+' : ''}${fmt(dif)} m (${(r * 100).toFixed(1)} %) — graficul se face pe cantitățile de decontat` + notaClar }
+  if (dif !== 0) return { ...base, neclarificate, diferenta_m: dif, stare: 'warn',
+    detalii: `F3 ${fmt(f3)} m vs ${fmt(gr)} m în fronturi: ${dif > 0 ? '+' : ''}${fmt(dif)} m, sub 0,1 % — rotunjire, dar spune-o în ofertă` + notaClar }
+  if (neclarificate.length) return { ...base, neclarificate, diferenta_m: 0, stare: 'warn', detalii: `${fmt(f3)} m în F3 și în grafic` + notaClar }
+  return { ...base, neclarificate, diferenta_m: 0, stare: 'ok', detalii: `${fmt(f3)} m în F3 și în grafic` }
 }
