@@ -184,9 +184,19 @@ function PoartaPT({ st, afirmatii = [], onFiltru }) {
         : `${st.documente} documente` + (st.documente_necitite > 0 ? `, ${st.documente_necitite} necitite sau cu eroare — cerințele pot veni dintr-un corpus incomplet` : ', toate citite'),
     })
     r.push({
-      k:'grafic', titlu:'Cap. 4 Grafic — versiune înghețată',
-      stare: st.grafic_versiune ? 'ok' : 'warn',
-      detalii: st.grafic_versiune ? `versiunea ${st.grafic_versiune}` : 'nicio versiune generată în grafic_versiuni',
+      // NU „Cap. 4". La Contești graficul e ANEXĂ, la alte proceduri e cap. 3 sau cap. 8 —
+      // aceeași lecție ca la cuprins: numărul vine din fișa de date, nu din codul nostru.
+      k:'grafic', titlu:'Graficul de execuție — versiune înghețată',
+      // Înainte era 'ok' doar fiindcă EXISTĂ o versiune, fără să se uite la verdictul ei.
+      // O versiune salvată nu e un grafic verificat (constatare Codex, 13.09.2026). Generarea
+      // e blocată când poarta graficului are roșii, deci un 'block' nu poate ajunge în
+      // grafic_versiuni — dar avertismentele da, și alea stăteau ascunse sub un bifat verde.
+      stare: !st.grafic_versiune ? 'warn' : (st.grafic_avertismente > 0 ? 'warn' : 'ok'),
+      detalii: !st.grafic_versiune
+        ? 'nicio versiune generată în grafic_versiuni'
+        : `versiunea ${st.grafic_versiune}` + (st.grafic_avertismente > 0
+            ? ` — înghețată cu ${st.grafic_avertismente} avertismente în poarta graficului, deschide Graficul și uită-te la ele`
+            : ', fără avertismente'),
     })
     return r
   }, [st])
@@ -1136,11 +1146,22 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       || proaspat.documente === 0 || proaspat.capitole_goale > 0 || proaspat.capitole_nescrise_de_om > 0
     if (blocat) { setBusy(false); setSt(proaspat); showToast?.('Între timp s-a redeschis un rând roșu. Nu se semnează.', 'err'); return }
     const versiune = (proaspat.pt_versiune || 0) + 1
+    // Motivele pentru care semnătura iese GALBENĂ, nu verde. Se calculează o dată și se
+    // folosesc si la verdict, si la mesaj: pana acum verdictul putea fi 'galben' iar mesajul
+    // spunea in TOATE cazurile „gata de depus" (constatare Codex, 13.09.2026, P0). Un om care
+    // citeste „gata de depus" dupa o aprobare cu rezerve o ia drept finalizare — exact minciuna
+    // pe care modulul asta exista s-o impiedice.
+    const rezerve = [
+      proaspat.documente_necitite > 0 ? `${proaspat.documente_necitite} documente necitite sau cu eroare` : null,
+      !proaspat.grafic_versiune ? 'graficul n-are nicio versiune înghețată' : null,
+      proaspat.grafic_avertismente > 0 ? `graficul are ${proaspat.grafic_avertismente} avertismente` : null,
+      proaspat.observatii_deschise > 0 ? `${proaspat.observatii_deschise} observații deschise` : null,
+      proaspat.capitole_nu_e_cazul > 0 ? `${proaspat.capitole_nu_e_cazul} capitole cu „nu este cazul"` : null,
+    ].filter(Boolean)
     const { error } = await supabase.from('ofertare_pt_poarta').insert({
       licitatie_id: licId, versiune,       // Galben si la observatii deschise: se depune, dar ramane scris in istoric ca s-a depus
       // peste N cereri de modificare neinchise. Responsabilitate fara drept de veto.
-      verdict: proaspat.documente_necitite > 0 || !proaspat.grafic_versiune
-        || proaspat.observatii_deschise > 0 ? 'galben' : 'verde',
+      verdict: rezerve.length ? 'galben' : 'verde',
       snapshot: proaspat,
     })
     setBusy(false)
@@ -1148,7 +1169,10 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       if (error.code === '23505') { showToast?.('Altcineva a semnat între timp. Reîncarc.', 'err'); await load(licId); return }
       showToast?.('Semnarea a eșuat: ' + error.message, 'err'); return
     }
-    showToast?.(`Propunerea marcată gata de depus (versiunea ${versiune}).`, 'ok')
+    showToast?.(rezerve.length
+      ? `Versiunea ${versiune} semnată CU REZERVE (galben): ${rezerve.join(' · ')}. Nu e „gata de depus" — rezervele rămân scrise în istoric.`
+      : `Propunerea marcată gata de depus (versiunea ${versiune}), fără rezerve.`,
+      rezerve.length ? 'err' : 'ok')
     await load(licId)
   }
 
@@ -1179,9 +1203,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
           📋 Borderoul
         </button>
         <button onClick={semneaza} disabled={blocat || busy}
-          title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Îngheață verdictul porții'}
+          title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Îngheață verdictul porții — verde dacă n-are rezerve, galben dacă are'}
           style={{ ...S.btnP, opacity: blocat || busy ? .45 : 1, cursor: blocat ? 'not-allowed' : 'pointer' }}>
-          📦 Marchează propunerea gata de depus
+          📦 Semnează verdictul porții
         </button>
       </div>
 
