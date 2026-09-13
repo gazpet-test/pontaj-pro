@@ -328,7 +328,7 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, filtru, setFilt
 // CUPRINSUL — capitolele licitației
 // ─────────────────────────────────────────────────────────────────
 function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCapitol, nume,
-                          onCreeaza, onAdauga, onSterge, onSalveaza, onBlocheaza, busy }) {
+                          onCreeaza, onAdauga, onSterge, onSalveaza, onBlocheaza, onGenereaza, busy }) {
   const [nou, setNou] = useState(null)  // null = formularul e închis
   const [deschis, setDeschis] = useState(null)   // capitolul desfăcut (editor + istoric)
   const [editez, setEditez] = useState(null)
@@ -454,6 +454,17 @@ function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCap
                         <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8 }}>
                           <button disabled={busy} onClick={() => setEditez(c.id)} style={S.btn}>
                             {gol ? '✎ Scrie capitolul' : '✎ Modifică textul'}
+                          </button>
+                          {/* Generarea costă bani la fiecare apăsare, deci nu e un buton pe care
+                              îl apeși din curiozitate. Textul iese cu sursa='ai', adică poarta
+                              rămâne roșie până când cineva îl citește și îl salvează. */}
+                          <button disabled={busy || c.blocat || n === 0}
+                            title={c.blocat ? 'Capitol blocat — deblochează-l întâi'
+                              : n === 0 ? 'Atribuie-i întâi cerințe: fără ele iese text generic'
+                              : 'Scrie capitolul pornind de la cerințele atribuite (costă un apel AI)'}
+                            onClick={() => onGenereaza(c)}
+                            style={{ ...S.btn, opacity: (busy || c.blocat || n === 0) ? .4 : 1 }}>
+                            🤖 Generează din cerințe
                           </button>
                           {c.blocat && <span style={{ fontSize:12, color:G.yellow }}>capitol blocat — se poate edita la mână, dar nu se regenerează</span>}
                         </div>
@@ -982,6 +993,38 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     return true
   }
 
+  // Generarea unui capitol. Regula de fond e in edge function, nu aici: textul iese cu
+  // sursa='ai', deci poarta blocheaza depunerea pana cand un om il deschide, il citeste si il
+  // salveaza. Aici doar cerem confirmarea cand s-ar rescrie peste munca unui om — functia
+  // refuza din prima si ne spune ca trebuie confirmare, nu ghicim noi.
+  const genereazaCapitol = async (c, peste_om = false) => {
+    if (!c?.id) return
+    const instructiune = window.prompt(
+      `Ce trebuie să conțină „${c.titlu}", peste cerințele atribuite?
+(lasă gol dacă n-ai nimic special de spus)`)
+    if (instructiune === null) return   // Anulează — nu generăm, nu cheltuim
+    setBusy(true)
+    const { data, error } = await supabase.functions.invoke('ofertare-genereaza-capitol', {
+      body: { capitol_id: c.id, instructiune: instructiune.trim() || null, peste_om },
+    })
+    setBusy(false)
+    if (error) { showToast?.('Generarea a eșuat: ' + error.message, 'err'); return }
+    if (data?.cere_confirmare) {
+      if (window.confirm(`„${c.titlu}" are text scris de om (v${data.versiune}).
+Îl rescrii? Textul de acum rămâne în istoric.`))
+        return genereazaCapitol(c, true)
+      return
+    }
+    if (data?.error) { showToast?.(data.error, 'err'); return }
+    const g = data?.goluri_de_completat || 0
+    showToast?.(
+      `Capitol generat din ${data?.cerinte} cerințe (v${data?.versiune_noua}).` +
+      (g ? ` ${g} locuri marcate [DE COMPLETAT] — alea sunt faptele pe care nu le-a inventat.` : '') +
+      ' Citește-l și salvează-l: până atunci poarta stă roșie.',
+      g ? 'err' : 'ok')
+    await load(licId)
+  }
+
   const blocheazaCapitol = async (c, val) => {
     if (!c?.id) return
     setBusy(true)
@@ -1151,7 +1194,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <CuprinsCapitole capitole={capitole} numarPeCapitol={numarPeCapitol} onCreeaza={creeazaCuprins}
           obsPeCapitol={obsPeCapitol} versiuniPeCapitol={versiuniPeCapitol} nume={nume}
           onAdauga={adaugaCapitol} onSterge={stergeCapitol}
-          onSalveaza={salveazaCapitol} onBlocheaza={blocheazaCapitol} busy={busy} />
+          onSalveaza={salveazaCapitol} onBlocheaza={blocheazaCapitol}
+          onGenereaza={genereazaCapitol} busy={busy} />
       </div>
 
       <div>
