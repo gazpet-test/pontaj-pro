@@ -22,6 +22,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
+import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx } from './OfertareExport.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -94,7 +95,7 @@ const fmtZi = d => d ? new Date(d.length === 10 ? d + 'T00:00:00' : d).toLocaleD
 const zileRamase = t => { if (!t) return null; const ms = new Date(t) - new Date(); return Math.ceil(ms / 86400000) }
 
 // ─────────────────────────────────────────────────────────────────
-// POARTA — 7 rânduri. Niciunul nu se sare, niciunul nu tace.
+// POARTA — 10 rânduri. Niciunul nu se sare, niciunul nu tace.
 // ─────────────────────────────────────────────────────────────────
 function PoartaPT({ st, afirmatii = [], onFiltru }) {
   const randuri = useMemo(() => {
@@ -150,6 +151,30 @@ function PoartaPT({ st, afirmatii = [], onFiltru }) {
       detalii: afirmatii.length === 0
         ? 'nicio afirmație încărcată — oamenii, utilajele și partenerii din propunere n-au fost confruntați cu ERP-ul'
         : `${afirmatii.length} afirmații · ${blocuri.length} blocante` + (averts.length ? ` · ${averts.length} de verificat` : ''),
+    })
+    r.push({
+      k:'nescrise', titlu:'Capitole scrise de AI și necitite de nimeni',
+      // BLOCK. Spre deosebire de observații (mai jos), ăsta e un fapt binar, nu o interpretare:
+      // sursa != 'om' înseamnă literalmente că nimeni n-a atins textul după generare. Iar blocajul
+      // se ridică printr-o acțiune corectă și ieftină: omul deschide capitolul, îl citește, îl
+      // salvează → sursa devine 'om'. Când costul de a face lucrul corect e mai mic decât costul
+      // de a ocoli, block-ul e sigur. Identic cu rândul `capitole_nescrise_de_om` din view.
+      stare: st.capitole_nescrise_de_om > 0 ? 'block' : 'ok',
+      detalii: st.capitole_nescrise_de_om > 0
+        ? `${st.capitole_nescrise_de_om} capitole obligatorii au text generat pe care nu l-a revăzut nimeni — deschide-le, citește-le, salvează-le`
+        : '0 — tot ce e scris a trecut prin mâna unui om',
+    })
+    r.push({
+      k:'observatii', titlu:'Observații deschise pe propunere',
+      // WARN, nu block, DELIBERAT. O observație e un canal social, nu un fapt: oricine poate
+      // deschide una și nimeni nu-i obligat s-o închidă. Un block ar însemna că orice coleg poate
+      // opri o depunere cu o propoziție — iar la termen de SEAP asta nu dă o propunere mai bună,
+      // dă un om care marchează observația „respinsă" ca să treacă poarta. De acolo semaforul e
+      // mort. Se depune, dar semnătura rămâne galbenă în istoric.
+      stare: st.observatii_deschise > 0 ? 'warn' : 'ok',
+      detalii: st.observatii_deschise > 0
+        ? `${st.observatii_deschise} cereri de modificare neînchise — se poate depune, dar semnătura rămâne galbenă`
+        : 'nicio cerere de modificare deschisă',
     })
     r.push({
       k:'docs', titlu:'Documentația de atribuire citită integral',
@@ -595,6 +620,93 @@ function Conformitate({ afirmatii, tipuriAut = [], autExterne = [], onExcepta, o
 }
 
 // ─────────────────────────────────────────────────────────────────
+// PACHETUL DE ECHIPAMENTE — „infrastructura care va fi utilizată"
+//
+// Trei stări, nu două, si asta e decizia care conteaza. Masurat azi pe 288 de active in pool:
+// 197 n-au NICIO scadenta in BD. Un filtru strict „doar valabile" ar lasa 75 si ar face firma
+// sa para ca n-are utilaje. Deci se arata toate trei, bifate implicit doar cele valabile:
+//   valabil     — are dovada si nu-i expirata la data depunerii
+//   expirat     — are dovada, dar a expirat (16 azi, la 01.10.2026) — ASTEA se depun gresit acum
+//   fara_dovezi — n-are nicio scadenta in sistem; nu-i o minciuna, e lista de lucru a Logisticii
+// ─────────────────────────────────────────────────────────────────
+const CULOARE_STATUS = { valabil: G.green, expirat: G.red, fara_dovezi: G.yellow }
+const ETICHETA_STATUS = { valabil: 'valabile', expirat: 'expirate', fara_dovezi: 'fără dovezi în ERP' }
+
+function PachetEchipamente({ randuri, laData, onGenereaza, busy, showToast }) {
+  const [arata, setArata] = useState({ valabil: true, expirat: false, fara_dovezi: false })
+
+  const peStatus = useMemo(() => {
+    const m = { valabil: [], expirat: [], fara_dovezi: [] }
+    for (const r of randuri) (m[r.status] || (m[r.status] = [])).push(r)
+    return m
+  }, [randuri])
+
+  const alese = useMemo(() => randuri.filter(r => arata[r.status]), [randuri, arata])
+
+  const copiaza = () => {
+    const linii = alese.map(r => [
+      r.denumire || '(fără denumire)', r.categorie_sub || r.categorie_tip || '',
+      r.identificator || '(fără identificator)', r.an_fabricatie || '',
+      r.itp_expira ? 'ITP ' + fmtZi(r.itp_expira) : '',
+      r.verificare_expira ? 'verif. ' + fmtZi(r.verificare_expira) : '',
+      r.status === 'fara_dovezi' ? 'FĂRĂ DOVEZI' : '',
+    ].filter(Boolean).join(' · '))
+    navigator.clipboard?.writeText(linii.join('\n'))
+    showToast?.(`${linii.length} echipamente copiate.`, 'ok')
+  }
+
+  if (!randuri.length) {
+    return (
+      <div style={{ ...S.card, padding:14, textAlign:'center' }}>
+        <div style={{ color:G.muted, fontSize:13, marginBottom:10 }}>
+          Lista de echipamente se generează din Logistică, cu scadențele valabile la data depunerii
+          {laData ? ` (${fmtZi(laData)})` : ''} — nu „azi". Ce se depune acum, la mână, e inventarul nefiltrat.
+        </div>
+        <button onClick={onGenereaza} disabled={busy} style={{ ...S.btnP, opacity: busy ? .5 : 1 }}>
+          🚜 Generează lista de echipamente
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div style={{ ...S.card, overflow:'hidden' }}>
+      <div style={{ padding:'10px 14px', display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
+        {['valabil', 'expirat', 'fara_dovezi'].map(k => (
+          <label key={k} style={{ fontSize:12, color:CULOARE_STATUS[k], display:'flex', gap:5, alignItems:'center' }}>
+            <input type="checkbox" checked={!!arata[k]} onChange={e => setArata({ ...arata, [k]: e.target.checked })} />
+            {(peStatus[k] || []).length} {ETICHETA_STATUS[k]}
+          </label>
+        ))}
+        <span style={{ fontSize:12, color:G.muted, marginLeft:'auto' }}>la {fmtZi(laData) || 'azi'}</span>
+        <button onClick={onGenereaza} disabled={busy} style={S.btn}>↻</button>
+        {alese.length > 0 && <button onClick={copiaza} style={S.btn}>📋 Copiază {alese.length}</button>}
+      </div>
+      {(peStatus.expirat || []).length > 0 && !arata.expirat && (
+        <div style={{ padding:'8px 14px', borderTop:`1px solid ${G.border2}`, fontSize:12, color:G.red }}>
+          {peStatus.expirat.length} echipamente au dovada expirată la data depunerii. Bifează „expirate" ca să le vezi —
+          alea se depun greșit dacă lista se face la mână din inventar.
+        </div>
+      )}
+      <div style={{ maxHeight:320, overflow:'auto' }}>
+        {alese.map(r => (
+          <div key={r.activ_id} style={{ display:'flex', gap:10, alignItems:'center', padding:'6px 14px',
+                                         borderTop:`1px solid ${G.border2}`, fontSize:12 }}>
+            <span style={{ width:8, height:8, borderRadius:4, background:CULOARE_STATUS[r.status], flexShrink:0 }} />
+            <span style={{ flex:1, color:G.text }}>{r.denumire || <i style={{ color:G.dim }}>fără denumire</i>}</span>
+            <span style={{ color:G.muted, width:130 }}>{r.categorie_sub || r.categorie_tip || '—'}</span>
+            <span style={{ color:G.muted, width:130 }}>{r.identificator || <i style={{ color:G.red }}>fără identificator</i>}</span>
+            <span style={{ color:G.dim, width:46 }}>{r.an_fabricatie || ''}</span>
+            <span style={{ color: r.status === 'expirat' ? G.red : G.dim, width:96, textAlign:'right' }}>
+              {r.itp_expira ? 'ITP ' + fmtZi(r.itp_expira) : r.verificare_expira ? 'vf. ' + fmtZi(r.verificare_expira) : '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────
 // PACHETUL DE PERSONAL — ce se trimite celui care scrie propunerea
 // ─────────────────────────────────────────────────────────────────
 function PachetPersonal({ randuri, laData, onGenereaza, busy, showToast }) {
@@ -662,6 +774,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [tipuriAut, setTipuriAut] = useState([])
   const [autExterne, setAutExterne] = useState([])
   const [pachet, setPachet] = useState([])
+  const [echipamente, setEchipamente] = useState([])
   const [observatii, setObservatii] = useState([])
   const [versiuni, setVersiuni] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
@@ -706,7 +819,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     setObservatii(rObs.data || [])
     // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
     setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
-    setPachet([])  // pachetul e per licitatie: altfel ar ramane cel de la licitatia precedenta
+    setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
 
     // Istoricul, pentru capitolele licitatiei asteia. Se cere dupa capitole fiindca tabelul de
     // versiuni n-are licitatie_id — atarna de capitol, si asa ramane o singura sursa de adevar.
@@ -913,6 +1026,38 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     await load(licId)
   }
 
+  const genereazaEchipamente = async () => {
+    setBusy(true)
+    const laData = lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null
+    const { data, error } = await supabase.rpc('fn_ofertare_echipamente_disponibile',
+      laData ? { p_la_data: laData } : {})
+    setBusy(false)
+    if (error) { showToast?.('Lista de echipamente nu s-a generat: ' + error.message, 'err'); return }
+    setEchipamente(data || [])
+    const exp = (data || []).filter(r => r.status === 'expirat').length
+    showToast?.(`${(data || []).filter(r => r.status === 'valabil').length} echipamente cu dovezi valabile` +
+      (exp ? `, ${exp} cu dovada EXPIRATĂ la data depunerii.` : '.'), exp ? 'err' : 'ok')
+  }
+
+  // Exportul: doua fisiere, nu unul. Borderoul e piesa separata din dosar, iar propunerea o
+  // deschide omul in Word ca sa puna cuprinsul (F9) si sa verifice inainte de tiparire.
+  const exporta = async (fel) => {
+    if (!capitole.length) { showToast?.('Nu există capitole de exportat.', 'err'); return }
+    setBusy(true)
+    try {
+      const arg = { licitatie: lic, capitole }
+      if (fel === 'borderou') await descarcaDocx(construiesteBorderou(arg), numeFisier('Borderou_PT', lic))
+      else await descarcaDocx(construiestePropunere(arg), numeFisier('Propunere_tehnica', lic))
+      const goale = capitole.filter(c => c.obligatoriu && !String(c.continut || '').trim() && !String(c.fisier_path || '').trim()).length
+      showToast?.(goale
+        ? `Exportat. ATENȚIE: ${goale} capitole obligatorii sunt necompletate și apar marcate roșu în document.`
+        : 'Exportat. Deschide în Word și apasă F9 pe cuprins ca să se numeroteze paginile.', goale ? 'err' : 'ok')
+    } catch (e) {
+      showToast?.('Exportul a eșuat: ' + (e?.message || e), 'err')
+    }
+    setBusy(false)
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -943,12 +1088,16 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     // Se recitește starea din BD, nu din state: între încărcare și apăsare se poate schimba.
     const { data: proaspat, error: e1 } = await supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', licId).maybeSingle()
     if (e1 || !proaspat) { setBusy(false); showToast?.('Nu s-a putut reciti starea.', 'err'); return }
+    // IDENTIC cu `blocat` de mai jos. Daca cele doua diverg, butonul e activ dar semnarea cade.
     const blocat = proaspat.capitole === 0 || proaspat.fara_capitol > 0 || proaspat.capcane_descoperite > 0
-      || proaspat.documente === 0 || proaspat.capitole_goale > 0
+      || proaspat.documente === 0 || proaspat.capitole_goale > 0 || proaspat.capitole_nescrise_de_om > 0
     if (blocat) { setBusy(false); setSt(proaspat); showToast?.('Între timp s-a redeschis un rând roșu. Nu se semnează.', 'err'); return }
     const versiune = (proaspat.pt_versiune || 0) + 1
     const { error } = await supabase.from('ofertare_pt_poarta').insert({
-      licitatie_id: licId, versiune, verdict: proaspat.documente_necitite > 0 || !proaspat.grafic_versiune ? 'galben' : 'verde',
+      licitatie_id: licId, versiune,       // Galben si la observatii deschise: se depune, dar ramane scris in istoric ca s-a depus
+      // peste N cereri de modificare neinchise. Responsabilitate fara drept de veto.
+      verdict: proaspat.documente_necitite > 0 || !proaspat.grafic_versiune
+        || proaspat.observatii_deschise > 0 ? 'galben' : 'verde',
       snapshot: proaspat,
     })
     setBusy(false)
@@ -961,7 +1110,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   }
 
   const blocat = !st || st.capitole === 0 || st.fara_capitol > 0 || st.capcane_descoperite > 0
-    || st.documente === 0 || st.capitole_goale > 0
+    || st.documente === 0 || st.capitole_goale > 0 || st.capitole_nescrise_de_om > 0
   const zile = zileRamase(lic?.termen_depunere)
 
   return (
@@ -976,9 +1125,19 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
             termen {fmtZi(lic.termen_depunere)}{zile != null && zile >= 0 ? ` · ${zile} zile` : ''}
           </span>
         )}
+        <button onClick={() => exporta('propunere')} disabled={busy || !capitole.length}
+          title="Propunerea tehnică în Word: pagină de titlu, cuprins automat, capitolele pe secțiuni"
+          style={{ ...S.btnS, marginLeft:'auto', opacity: (busy || !capitole.length) ? .45 : 1 }}>
+          📄 Propunerea (Word)
+        </button>
+        <button onClick={() => exporta('borderou')} disabled={busy || !capitole.length}
+          title="Borderoul pieselor îndosariate"
+          style={{ ...S.btnS, opacity: (busy || !capitole.length) ? .45 : 1 }}>
+          📋 Borderoul
+        </button>
         <button onClick={semneaza} disabled={blocat || busy}
           title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Îngheață verdictul porții'}
-          style={{ ...S.btnP, marginLeft:'auto', opacity: blocat || busy ? .45 : 1, cursor: blocat ? 'not-allowed' : 'pointer' }}>
+          style={{ ...S.btnP, opacity: blocat || busy ? .45 : 1, cursor: blocat ? 'not-allowed' : 'pointer' }}>
           📦 Marchează propunerea gata de depus
         </button>
       </div>
@@ -999,6 +1158,13 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <div style={{ ...S.lbl, marginBottom:8 }}>Observații și revizii</div>
         <Observatii observatii={observatii} capitole={capitole} nume={nume}
           onAdauga={adaugaObservatie} onInchide={inchideObservatie} busy={busy} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Pachetul de echipamente</div>
+        <PachetEchipamente randuri={echipamente} busy={busy} showToast={showToast}
+          laData={lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null}
+          onGenereaza={genereazaEchipamente} />
       </div>
 
       <div>
