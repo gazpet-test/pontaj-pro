@@ -14,6 +14,7 @@ const VERDE = {
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
+  anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'],
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
@@ -37,6 +38,7 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       const ev = cu({ cerinte_neverificate: 1 })
       expect(ev.blocaje).toContain('neverificate'); expect(ev.stare).toBe('block')
     })
+    it('H5: trimitere la anexa inexistenta => block', () => expect(cu({ anexe_referite: ['anexa 9'] }).blocaje).toContain('anexe'))
     it('H4: garantie oferita sub cea ceruta => block', () => expect(cu({ garantie_oferit_luni: 24 }).blocaje).toContain('garantie'))
     it('H2: cantitati diferite intre Cantitati si grafic => block', () => expect(cu({ grafic_fronturi_m: 900 }).blocaje).toContain('cantitati'))
     it('capitol obligatoriu gol — randul care LIPSEA din cardul licitatiei', () => expect(cu({ capitole_goale: 1 }).blocaje).toContain('goale'))
@@ -67,8 +69,8 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 13 randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 14 randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie'])
+      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe'])
   })
 })

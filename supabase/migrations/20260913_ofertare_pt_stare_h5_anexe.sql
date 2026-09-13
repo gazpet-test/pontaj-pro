@@ -1,0 +1,7 @@
+-- Aplicata prin MCP (apply_migration ofertare_pt_stare_h5_anexe + h5_anexe_regex_word_boundary_fix, 13.09.2026).
+-- H5 (Hoghilag): capitolele trimit la „Anexa 7" / „Formularul nr. 5" / „cap. III" care nu exista in dosar.
+-- v_ofertare_pt_stare: + anexe_referite (text[] din regex peste continutul capitolelor)
+--                      + anexe_existente (text[] din eticheta, formular, titlu si „cap. <nr>")
+-- Potrivirea (normalizare tip:numar, cifre romane) e in JS pur, testat: controlAnexe() din ofertareControale.js.
+-- ANTI-BUG: in regex Postgres (ARE) `\b` e BACKSPACE, granita de cuvant e `\y`. Prima versiune avea
+-- `[IVXLC]+\b` si nu prindea niciodata cifrele romane; corectat in migrarea de fix.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
@@ -51,4 +51,22 @@ describe('H4 controlGarantie — luni + momentul de start, aceleasi peste tot', 
     expect(g({ garantie_confirmata: false }).stare).toBe('warn')
   })
   it('oferit peste cerut e in regula', () => expect(g({ garantie_oferit_luni: 48, garantie_luni_in_capitole: [48] }).stare).toBe('ok'))
+})
+
+describe('H5 controlAnexe — trimiterile din text au piesa in cuprins', () => {
+  it('normalizare: Anexa 7 / anexa nr. 7 / ANEXA 7 => anexa:7; Cap. III / capitolul 3 => cap:3; Formularul nr. 5 => formular:5', () => {
+    expect(normalizeazaRef('Anexa 7')).toBe('anexa:7'); expect(normalizeazaRef('anexa nr. 7')).toBe('anexa:7')
+    expect(normalizeazaRef('Cap. III')).toBe('cap:3'); expect(normalizeazaRef('capitolul 3')).toBe('cap:3')
+    expect(normalizeazaRef('Formularul nr. 5')).toBe('formular:5'); expect(normalizeazaRef('Rezumat')).toBeNull()
+  })
+  it('toate referintele exista => ok', () =>
+    expect(controlAnexe({ anexe_referite: ['anexa 7', 'cap. 3'], anexe_existente: ['Anexa 7', 'Cap. III', 'Metodologia'] }).stare).toBe('ok'))
+  it('o referinta fara piesa => block si o numeste', () => {
+    const r = controlAnexe({ anexe_referite: ['anexa 7', 'formularul nr. 5'], anexe_existente: ['Anexa 7'] })
+    expect(r.stare).toBe('block'); expect(r.lipsa).toEqual(['formular:5']); expect(r.detalii).toMatch(/Formularul 5/)
+  })
+  it('fara referinte => ok (nu warn: nu e obligatoriu sa trimiti la anexe)', () =>
+    expect(controlAnexe({ anexe_referite: null, anexe_existente: ['Anexa 1'] }).stare).toBe('ok'))
+  it('etichetele existente vin si din nr-ul capitolului (cap. 4)', () =>
+    expect(controlAnexe({ anexe_referite: ['capitolul 4'], anexe_existente: ['cap. 4'] }).stare).toBe('ok'))
 })
