@@ -816,6 +816,14 @@ function InvitatiExterni({ invitati, agenda, inchisa, onAdauga, onSterge, vechiT
   const [nume, setNume] = useState('')
   const [firma, setFirma] = useState('')
   const [email, setEmail] = useState('')
+  // TKT-2026-0116 (Kostas): subcontractanții din registrul real (ofertare_parteneri), nu doar
+  // din ședințe anterioare — ca să nu se bată numele diferit de fiecare dată.
+  const [subcontractanti, setSubcontractanti] = useState([])
+  useEffect(() => {
+    supabase.from('ofertare_parteneri').select('nume, tip_relatie').eq('activ', true).eq('abandonat', false)
+      .eq('tip_relatie', 'subcontractant').order('nume')
+      .then(({ data }) => setSubcontractanti(data || []))
+  }, [])
   const sugestii = useMemo(() => {
     const q = nume.trim().toLowerCase()
     if (q.length < 2) return []
@@ -824,6 +832,13 @@ function InvitatiExterni({ invitati, agenda, inchisa, onAdauga, onSterge, vechiT
       ((a.nume || '').toLowerCase().includes(q) || (a.firma || '').toLowerCase().includes(q))
     ).slice(0, 5)
   }, [nume, agenda, invitati])
+  const sugestiiSubcontractanti = useMemo(() => {
+    const q = nume.trim().toLowerCase()
+    if (q.length < 2) return []
+    return subcontractanti.filter(s =>
+      !invitati.some(i => i.nume.toLowerCase() === s.nume.toLowerCase()) && s.nume.toLowerCase().includes(q)
+    ).slice(0, 5)
+  }, [nume, subcontractanti, invitati])
 
   const adauga = () => {
     if (!nume.trim()) return
@@ -872,6 +887,17 @@ function InvitatiExterni({ invitati, agenda, inchisa, onAdauga, onSterge, vechiT
                 <button key={i} onClick={() => { onAdauga(a); setNume(''); setFirma(''); setEmail('') }}
                   style={{ ...S.btn, padding: '3px 9px', fontSize: 11.5, background: 'transparent', color: G.muted, border: `1px solid ${G.border2}` }}>
                   {a.nume}{a.firma ? ` · ${a.firma}` : ''}
+                </button>
+              ))}
+            </div>
+          )}
+          {sugestiiSubcontractanti.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+              <span style={{ fontSize: 11, color: G.dim, alignSelf: 'center' }}>din registrul de subcontractanți:</span>
+              {sugestiiSubcontractanti.map((s, i) => (
+                <button key={i} onClick={() => { onAdauga({ nume: s.nume, firma: '', email: '' }); setNume(''); setFirma(''); setEmail('') }}
+                  style={{ ...S.btn, padding: '3px 9px', fontSize: 11.5, background: 'transparent', color: G.muted, border: `1px solid ${G.border2}` }}>
+                  {s.nume}
                 </button>
               ))}
             </div>
