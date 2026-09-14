@@ -16,6 +16,7 @@ import CantitatiPanel from './OfertareCantitati.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
+import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1537,6 +1538,11 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
 
   const filtrate = (cerinte || []).filter(c => (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
   const neconfirmate = (cerinte || []).filter(c => !c.confirmata_de).length
+  // Regulile de alcatuire a echipei (Domnesti #4090) nu se „acopera" cu un document — se verifica la
+  // propunere. Ca sa nu dispara sub `nu_se_aplica`, se arata aici, in registru, cu aceeasi expresie ca
+  // in view-ul de conformitate (REGEX_INTERZICE_CUMUL).
+  const rxCumul = new RegExp(REGEX_INTERZICE_CUMUL, 'i')
+  const regulaCumul = (cerinte || []).filter(c => !c.duplicat_al && rxCumul.test(c.text_cerinta || ''))
 
   return (
     <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
@@ -1563,6 +1569,14 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
       </div>
       {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
       {warn && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>{warn}</div>}
+      {regulaCumul.length > 0 && (
+        <div style={{ padding:'8px 12px', marginBottom:8, borderRadius:7, border:`1px solid ${G.orange}77`, background:G.surface, fontSize:12.5, color:G.text }}>
+          <b style={{ color:G.orange }}>⚠️ Cerințele interzic cumulul de funcții</b> — regulă de alcătuire a echipei, nu cerință de capabilitate: nu se acoperă cu un document, se verifică la Propunerea tehnică (aceeași persoană cu două roluri = block).
+          <ul style={{ margin:'4px 0 0', paddingLeft:18, color:G.muted }}>
+            {regulaCumul.map(c => <li key={c.id}>#{c.id}{c.nr_ordine ? ` (nr. ${c.nr_ordine})` : ''} · {c.tip}{c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}{c.sursa_pagina ? ` p. ${c.sursa_pagina}` : ''}: „{c.text_cerinta}"</li>)}
+          </ul>
+        </div>
+      )}
 
       {!!filtrate.length && (
         <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap', padding:'6px 8px', background:G.surface, borderRadius:7 }}>
