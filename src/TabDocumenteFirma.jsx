@@ -119,6 +119,7 @@ export default function TabDocumenteFirma() {
 
   const isOwner = profile?.is_owner === true || profile?._adminAccess === true
 
+  const [sortare, setSortare] = useState('expirare')   // 'expirare' | 'alfabetic'
   const filtered = useMemo(() => {
     let list = docs
     if (filterCat !== 'all') list = list.filter(d => d.categorie === filterCat)
@@ -132,8 +133,13 @@ export default function TabDocumenteFirma() {
         (d.numar_document || '').toLowerCase().includes(s)
       )
     }
-    return list
-  }, [docs, filterCat, filterStatus, search])
+    // TKT-2026-0145 (Natalia Udrea): lista venea doar în ordinea expirării, deci ce cauți după nume
+    // se găsea greu. Ordinea implicită rămâne cea după expirare — aia e utilă zi de zi — dar se
+    // poate comuta pe alfabetic. Comparăm cu localeCompare 'ro', altfel Ș și Ț ajung după Z.
+    const cmpNume = (a, b) =>
+      String(a.denumire || a.tip || '').localeCompare(String(b.denumire || b.tip || ''), 'ro', { sensitivity: 'base' })
+    return sortare === 'alfabetic' ? [...list].sort(cmpNume) : list
+  }, [docs, filterCat, filterStatus, search, sortare])
 
   // KPI calc
   const kpi = useMemo(() => {
@@ -245,6 +251,10 @@ export default function TabDocumenteFirma() {
           {Object.entries(CATEGORII).map(([k, v]) => (
             <option key={k} value={k}>{v.icon} {v.label}</option>
           ))}
+        </select>
+        <select value={sortare} onChange={e => setSortare(e.target.value)} style={{...S.input, width:'auto', minWidth:150}}>
+          <option value="expirare">📅 După expirare</option>
+          <option value="alfabetic">🔤 Alfabetic (A-Z)</option>
         </select>
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{...S.input, width:'auto', minWidth:150}}>
           <option value="all">📊 Toate statusurile</option>
