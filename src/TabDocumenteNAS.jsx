@@ -270,7 +270,10 @@ export default function TabDocumenteNAS({ proiectId: proiectIdProp }) {
         .order('categorie').order('denumire')
 
       if (error) throw error
-      setDocumente(data || [])
+      // TKT-0115 (Kostas): când două foldere linkate ale proiectului se suprapun (părinte + subfolder),
+      // același document venea de două ori. Un document = un id_hash.
+      const vaz = new Set()
+      setDocumente((data || []).filter(d => { if (vaz.has(d.id_hash)) return false; vaz.add(d.id_hash); return true }))
     } catch(e) {
       showToast('Eroare: ' + e.message, 'err')
     } finally {

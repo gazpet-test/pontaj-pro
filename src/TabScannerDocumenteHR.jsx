@@ -564,7 +564,7 @@ function ScannerHRModal({ onClose, profile, employees, showToast, onSaved }) {
     // Pentru personale, are_expirare; pentru autorizatii TOATE au expirare (cu exceptia „Fara autorizatie")
     const tipAreExpirare = estePersonal
       ? tipSelectat.are_expirare
-      : (normalize(tipSelectat.denumire) !== 'fara autorizatie')
+      : !(tipSelectat.cod === 'FARA' || ['fara autorizatie', 'declaratie de disponibilitate'].includes(normalize(tipSelectat.denumire)))   // TKT-0168: tipul 54 e acum „Declaratie de disponibilitate"; codul FARA ramane cheia
 
     if (tipAreExpirare && !form.fara_expirare && !form.data_expirare) {
       showToast('Completează data expirării (sau bifează „fără expirare")', 'error')

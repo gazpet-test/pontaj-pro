@@ -32,8 +32,7 @@ export const VERIFICARI = [
   { cheie: 'lipsa:doc_ordin_incepere_path', camp: 'doc_ordin_incepere_path', grup: 'Termene', eticheta: 'Ordinul de începere (PDF) neatașat' },
   // Documente de contract
   { cheie: 'lipsa:doc_caiet_sarcini_path', camp: 'doc_caiet_sarcini_path', grup: 'Documente', eticheta: 'Caiet de sarcini neatașat' },
-  { cheie: 'lipsa:doc_propunere_tehnica_path', camp: 'doc_propunere_tehnica_path', grup: 'Documente', eticheta: 'Propunere tehnică neatașată' },
-  { cheie: 'lipsa:doc_propunere_financiara_path', camp: 'doc_propunere_financiara_path', grup: 'Documente', eticheta: 'Propunere financiară neatașată' },
+  // TKT-0159 (Răzvan, 14.09.2026): propunerea tehnică / financiară NU se mai cer aici — vin din modulul Ofertare.
   { cheie: 'lipsa:doc_itp_pccvi_path', camp: 'doc_itp_pccvi_path', grup: 'Documente', eticheta: 'PCCVI / ITP neatașat' },
 ]
 
