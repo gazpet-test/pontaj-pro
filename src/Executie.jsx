@@ -1119,11 +1119,11 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
 function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onOpen }) {
   const [personnel, setPersonnel] = useState({})
   useEffect(() => {
-    const ids = [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id].filter(Boolean)
+    const ids = [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id, p.responsabil_contracte_externe_id].filter(Boolean)
     if (!ids.length) return
     supabase.from('employees').select('id, name, functie').in('id', ids)
       .then(({ data }) => { const m = {}; (data||[]).forEach(e => { m[e.id] = e }); setPersonnel(m) })
-  }, [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id])
+  }, [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id, p.responsabil_contracte_externe_id])
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', zIndex: 1000,
@@ -1172,7 +1172,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
           </div>
 
           {/* Echipă proiect + ISC */}
-          {(p.mp_employee_id || p.rts_employee_id || p.rte_employee_id || p.coordonator_transgaz || p.isc_faza_determinanta) && (
+          {(p.mp_employee_id || p.rts_employee_id || p.rte_employee_id || p.coordonator_transgaz || p.responsabil_contracte_externe_id || p.isc_faza_determinanta) && (
             <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
               <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10 }}>
                 👥 Echipă proiect
@@ -1183,6 +1183,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
                   { label: 'Resp. Tehnic Execuție (RTE)',   id: p.rte_employee_id },
                   { label: 'Resp. Tehnic Sudură (RTS)',     id: p.rts_employee_id },
                   { label: 'Coordonator beneficiar',          val: p.coordonator_transgaz },
+                  { label: 'Resp. contracte externe',       id: p.responsabil_contracte_externe_id },
                 ].filter(r => r.id || r.val).map((r, i) => (
                   <div key={i} style={{ background: G.card2, borderRadius: 7, padding: '8px 12px' }}>
                     <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 2 }}>{r.label}</div>
@@ -1439,6 +1440,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     rts_employee_id:      proiect.rts_employee_id       || '',
     rte_employee_id:      proiect.rte_employee_id       || '',
     coordonator_transgaz: proiect.coordonator_transgaz  || '',
+    responsabil_contracte_externe_id: proiect.responsabil_contracte_externe_id || '',
     isc_faza_determinanta: proiect.isc_faza_determinanta === true,
   })
   const [employees, setEmployees] = useState([]) // pentru dropdownuri persoane cheie
@@ -1486,7 +1488,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   useEffect(() => {
     if (!proiect?.id) return
     supabase.from('executie_proiecte')
-      .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, isc_faza_determinanta, doc_caiet_sarcini_path, doc_propunere_tehnica_path, doc_propunere_financiara_path, doc_itp_pccvi_path, doc_itp_ai_faze_det, doc_itp_ai_confidence')
+      .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, responsabil_contracte_externe_id, isc_faza_determinanta, doc_caiet_sarcini_path, doc_propunere_tehnica_path, doc_propunere_financiara_path, doc_itp_pccvi_path, doc_itp_ai_faze_det, doc_itp_ai_confidence')
       .eq('id', proiect.id).single()
       .then(({ data }) => {
         if (!data) return
@@ -1495,6 +1497,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           rts_employee_id:      data.rts_employee_id      || '',
           rte_employee_id:      data.rte_employee_id      || '',
           coordonator_transgaz: data.coordonator_transgaz || '',
+          responsabil_contracte_externe_id: data.responsabil_contracte_externe_id || '',
           isc_faza_determinanta: data.isc_faza_determinanta === true,
         }))
         setDocPaths({
@@ -1703,6 +1706,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
         rts_employee_id:      form.rts_employee_id ? parseInt(form.rts_employee_id) : null,
         rte_employee_id:      form.rte_employee_id ? parseInt(form.rte_employee_id) : null,
         coordonator_transgaz: form.coordonator_transgaz.trim() || null,
+        responsabil_contracte_externe_id: form.responsabil_contracte_externe_id ? parseInt(form.responsabil_contracte_externe_id) : null,
         isc_faza_determinanta: form.isc_faza_determinanta,
         updated_at:    new Date().toISOString(),
       }
@@ -2216,6 +2220,15 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
             <div style={{ marginTop:10 }}>
               <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>🏢 Coordonator beneficiar</label>
               <input style={{...fieldStyle,fontSize:12}} placeholder='Nume și prenume (persoana de la beneficiar)' value={form.coordonator_transgaz} onChange={e=>set('coordonator_transgaz',e.target.value)} />
+            </div>
+            <div style={{ marginTop:10 }}>
+              <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>🤝 Responsabil contracte externe (subcontractanți)</label>
+              <select value={form.responsabil_contracte_externe_id||''} onChange={e=>set('responsabil_contracte_externe_id', e.target.value)} style={{...fieldStyle,fontSize:12,padding:'6px 8px'}}>
+                <option value=''>— Neatribuit —</option>
+                {employees.map(emp => (
+                  <option key={emp.id} value={emp.id}>{emp.name}{emp.functie ? ` · ${emp.functie}` : ''}</option>
+                ))}
+              </select>
             </div>
             <div style={{ marginTop:10 }}>
               <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer', padding:'9px 12px', borderRadius:8, background: form.isc_faza_determinanta ? '#EF444418':'#0D1117', border:`1px solid ${form.isc_faza_determinanta?'#EF4444':'#30363D'}` }}>
