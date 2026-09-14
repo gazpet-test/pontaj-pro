@@ -1,3 +1,4 @@
+// #51 14.09.2026: autorizat() — owner/responsabil, service_role, sau anon doar cu ofertare_extragere_coada activă.
 // ofertare-cerinte v9 (10.09.2026) — model din body (Opus implicit, Sonnet pentru test/economie).
 // v8 (10.09.2026) — bucata_max minim 6k (felii de ~2 pagini).
 // v7 (10.09.2026) — bucata_max din body + max_tokens 16000.
@@ -147,6 +148,35 @@ function mapaPozitii(s: string): { n: string; mapa: number[] } {
   return { n: n.trim(), mapa }
 }
 
+// #51 (14.09.2026): poarta pe cheltuială și pe SERVER, nu doar în UI. Cu verify_jwt=true cheia anon trece
+// ca Bearer, deci oricine cu cheia publică putea porni un apel plătit. Reguli:
+//  - service_role: liber (rutine interne);
+//  - JWT de utilizator: doar owner sau responsabilul licitației;
+//  - cheia anon (workerii server din ofertare_*_tick trimit anon JWT din Vault): doar cât coada licitației e activă.
+async function autorizat(req: Request, supabase: any, licId: number, coadaTabel: string | null): Promise<string | null> {
+  const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return 'lipsește Authorization'
+  // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
+  // legacy pe care îl trimit workerii din Vault (verificat 14.09: comparația de string pica).
+  const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') {
+    if (!coadaTabel) return 'apel neautorizat (cheie anon)'
+    const { data: c } = await supabase.from(coadaTabel).select('activ').eq('licitatie_id', licId).maybeSingle()
+    return c?.activ ? null : 'apel neautorizat (cheie anon, coada nu e activă)'
+  }
+  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+  const { data: u } = await anon.auth.getUser()
+  const uid = u?.user?.id
+  if (!uid) return 'sesiune invalidă'
+  const [{ data: prof }, { data: lic }] = await Promise.all([
+    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
+    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
+  ])
+  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
+  return 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).'
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -154,6 +184,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { licitatie_id, sectiune, reset, doc_id, bucata, bucata_max, model } = await req.json()
+    { const na = await autorizat(req, supabase, Number(licitatie_id), 'ofertare_extragere_coada'); if (na) return fail(na) }
     const MODEL = (typeof model === 'string' && MODELE[model]) ? model : MODEL_IMPLICIT
     const PRICE_IN = MODELE[MODEL].in, PRICE_OUT = MODELE[MODEL].out
     // v7: mărimea bucății se poate cere din body (workerul server trimite 40k): bucăți mai mici =

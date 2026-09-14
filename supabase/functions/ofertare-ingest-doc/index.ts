@@ -1,3 +1,5 @@
+// v12 (14.09.2026): thinking disabled pe Sonnet 5 (gândea implicit în bugetul de output).
+// #51 14.09.2026: autorizat() — owner/responsabil, service_role, sau anon doar cu ofertare_ingest_coada activă.
 // ofertare-ingest-doc v11 (10.09.2026) — marcajele pornesc de la pagina_offset+1.
 // v10 (10.09.2026) — Sonnet pe documente critice + renumerotare marcaje.
 // v9 (09.09.2026) — {apeluri:N} din body (workerul server cere 1).
@@ -84,6 +86,35 @@ function asiguraMarcaje(txt: string, s: number, e: number): string {
   return txt.replace(/⟦PAGINA (\d+)⟧/g, (m, p) => { const n = Number(p); return (n >= s + 1 && n <= e) ? m : `⟦PAGINA ${Math.min(Math.max(n, s + 1), e)}⟧` })
 }
 
+// #51 (14.09.2026): poarta pe cheltuială și pe SERVER, nu doar în UI. Cu verify_jwt=true cheia anon trece
+// ca Bearer, deci oricine cu cheia publică putea porni un apel plătit. Reguli:
+//  - service_role: liber (rutine interne);
+//  - JWT de utilizator: doar owner sau responsabilul licitației;
+//  - cheia anon (workerii server din ofertare_*_tick trimit anon JWT din Vault): doar cât coada licitației e activă.
+async function autorizat(req: Request, supabase: any, licId: number, coadaTabel: string | null): Promise<string | null> {
+  const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return 'lipsește Authorization'
+  // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
+  // legacy pe care îl trimit workerii din Vault (verificat 14.09: comparația de string pica).
+  const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') {
+    if (!coadaTabel) return 'apel neautorizat (cheie anon)'
+    const { data: c } = await supabase.from(coadaTabel).select('activ').eq('licitatie_id', licId).maybeSingle()
+    return c?.activ ? null : 'apel neautorizat (cheie anon, coada nu e activă)'
+  }
+  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+  const { data: u } = await anon.auth.getUser()
+  const uid = u?.user?.id
+  if (!uid) return 'sesiune invalidă'
+  const [{ data: prof }, { data: lic }] = await Promise.all([
+    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
+    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
+  ])
+  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
+  return 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).'
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -100,6 +131,9 @@ Deno.serve(async (req: Request) => {
     // iar două felii de scan cu Haiku pot depăși; din browser rămân 2 apeluri.
     const apeluriMax = Math.max(1, Math.min(Number(apeluri) || APELURI_PER_INVOCARE, APELURI_PER_INVOCARE))
     docId = Number(doc_id)
+    { const { data: dl } = await supabase.from('ofertare_documente_atribuire').select('licitatie_id').eq('id', docId).maybeSingle()
+      const na = await autorizat(req, supabase, Number(dl?.licitatie_id), 'ofertare_ingest_coada')
+      if (na) return new Response(JSON.stringify({ error: na }), { status: 200, headers: CORS }) }   // fără marcarea documentului ca eroare
     if (!docId) return new Response(JSON.stringify({ error: 'doc_id required' }), { status: 400, headers: CORS })
 
     const { data: row, error: rErr } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
@@ -164,6 +198,8 @@ Deno.serve(async (req: Request) => {
         headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
         body: JSON.stringify({
           model: MODEL, max_tokens: MAX_OUT,
+          // Sonnet 5 gândește implicit (adaptive) și gândirea intră în max_tokens — la transcriere e inutilă și scumpă.
+          ...(MODEL === MODELE.sonnet.id ? { thinking: { type: 'disabled' } } : {}),
           messages: [{ role: 'user', content: [
             { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(pdfFelie) } },
             { type: 'text', text: primaFelie ? PROMPT_ANTET(sAbs + 1, e - s) : PROMPT_TEXT(sAbs + 1, e - s) },
