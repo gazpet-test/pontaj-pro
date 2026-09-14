@@ -140,6 +140,9 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   const [filterMineType,setFilterMineType]=useState('toate') // 'toate' | 'deschise' | 'asignate'
   const [searchText,setSearchText]=useState('')
   const [openNew,setOpenNew]=useState(false)
+  // TKT-0206: pagina de unde s-a deschis tichetul — la închidere/trimitere ne
+  // întoarcem acolo, nu în dashboard-ul de tichete.
+  const [retUrl,setRetUrl]=useState(null)
   const [nouDep,setNouDep]=useState(null)   // departament presetat la deschiderea unui tichet nou (din card / listă)
   const [nouModul,setNouModul]=useState(null) // modul presetat (din butonul contextual per modul) — tag pe tichet
   const [openDetail,setOpenDetail]=useState(null)
@@ -201,6 +204,10 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       const qModul = params.get('modul')
       if(qDep) { setNouDep(qDep); params.delete('dep') }
       if(qModul) { setNouModul(qModul); params.delete('modul') }
+      // TKT-0206: doar rute interne (încep cu „/" și nu „//"), ca `ret` să nu poată
+      // fi folosit ca redirect spre un site din afară.
+      const qRet = params.get('ret')
+      if(qRet) { if(/^\/(?!\/)/.test(qRet)) setRetUrl(qRet); params.delete('ret') }
       params.delete('action'); consumed = true
     }
     // Activez filtrul "Ale mele" dacă vine din navbar cu ?mine=true
@@ -509,8 +516,8 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           forcedModul={nouModul}
           activeLogistica={activeLogistica}
           employeesList={employeesList}
-          onClose={()=>{ setOpenNew(false); setNouDep(null); setNouModul(null) }}
-          onSaved={()=>{ setOpenNew(false); setNouDep(null); setNouModul(null); loadAll(); show('Tichet creat!', 'success') }}
+          onClose={()=>{ setOpenNew(false); setNouDep(null); setNouModul(null); if(retUrl){ const r=retUrl; setRetUrl(null); nav(r) } }}
+          onSaved={()=>{ setOpenNew(false); setNouDep(null); setNouModul(null); loadAll(); show('Tichet creat!', 'success'); if(retUrl){ const r=retUrl; setRetUrl(null); nav(r) } }}
           show={show}
         />
       )}

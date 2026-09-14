@@ -907,7 +907,7 @@ function Layout({ children }) {
             )}
           </div>
           <button
-            onClick={() => nav('/tichete?action=new')}
+            onClick={() => nav(`/tichete?action=new&ret=${encodeURIComponent(loc.pathname + loc.search)}`)}
             title="Deschide tichet nou rapid (avarie / defecțiune / reclamație)"
             style={{
               display:'flex', alignItems:'center', justifyContent:'center',
