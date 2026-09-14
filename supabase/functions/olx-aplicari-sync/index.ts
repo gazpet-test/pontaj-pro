@@ -1,4 +1,4 @@
-// olx-aplicari-sync v1 (03.09.2026) — trage aplicările/mesajele din contul OLX (Partner API threads/messages)
+// olx-aplicari-sync v5 (14.09.2026: datele de contact din textul mesajului) — v1 03.09.2026 — trage aplicările/mesajele din contul OLX (Partner API threads/messages)
 // pentru anunțurile legate de poziții (hr_recrutare_pozitii.olx_advert_id) → candidat nou (sursa 'olx', sursa_id = thread_id)
 // + CV-urile atașate în bucketul privat recrutare-cv + notă în hr_recrutare_interactiuni + mail Resend la candidat nou.
 // Auth: x-radar-secret (cron pg_cron / Claude). Anti-dublură: olx_mesaje_procesate(message_id).
@@ -39,6 +39,20 @@ async function get(tok: string, path: string) {
   const r = await fetch(`${OLX}${path}`, { headers: H(tok) })
   const d = await r.json().catch(() => ({}))
   return { ok: r.ok, status: r.status, data: d.data ?? d }
+}
+
+// Datele de contact din textul mesajului de aplicare (sablonul OLX). Toate optionale; numele e ce e
+// intre „Datele mele de contact:" si primul rand cu E-mail/telefon, cu majuscule pe fiecare cuvant.
+export function dateContact(text: string): { nume: string, email: string, telefon: string } {
+  const email = (text.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/) || [''])[0]
+  const telefon = ((text.match(/telefon\s*:?\s*([+\d][\d\s.\-]{7,}\d)/i) || [])[1] || '').replace(/[\s.\-]/g, '')
+  let nume = ''
+  const m = text.match(/datele mele de contact\s*:?\s*\n?([^\n]+)/i)
+  if (m) {
+    const l = m[1].trim()
+    if (l && !/@|telefon|e-?mail/i.test(l)) nume = l.split(/\s+/).map(w => w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w).join(' ')
+  }
+  return { nume, email, telefon }
 }
 
 type Fis = { url: string, name?: string, mime?: string }
@@ -104,14 +118,20 @@ Deno.serve(async (req: Request) => {
     let { data: cand } = await sb.from('hr_recrutare_candidati').select('id, nume, telefon, fisier_path').eq('sursa', 'olx').eq('sursa_id', String(t.id)).is('deleted_at', null).maybeSingle()
     let candidatNou = false
     if (!cand) {
-      let nume = ''
-      const ru = await get(tok, `/api/partner/users/${t.interlocutor_id}`)
-      if (ru.ok && ru.data?.name) nume = String(ru.data.name)
+      // v5 14.09.2026 (Duca Valerian): sablonul de aplicare OLX pune datele in TEXT („Datele mele de contact:
+      // <nume> / E-mail: … / Numar de telefon: …"), iar profilul OLX da doar prenumele („Valerian") si m.phone e gol.
+      // Textul bate profilul; profilul ramane rezerva.
+      const dc = dateContact(noi.map((m: any) => String(m.text || '')).join('\n'))
+      let nume = dc.nume
+      if (!nume) {
+        const ru = await get(tok, `/api/partner/users/${t.interlocutor_id}`)
+        if (ru.ok && ru.data?.name) nume = String(ru.data.name)
+      }
       if (!nume) nume = `Candidat OLX #${t.interlocutor_id}`
-      const telefon = noi.map((m: any) => m.phone).find((x: string) => x) || ''
+      const telefon = noi.map((m: any) => m.phone).find((x: string) => x) || dc.telefon || ''
       const retentie = new Date(); retentie.setMonth(retentie.getMonth() + 12)
       const { data: ins, error } = await sb.from('hr_recrutare_candidati').insert({
-        pozitie_id: p.id, nume: nume.slice(0, 120), telefon: telefon.slice(0, 30) || null,
+        pozitie_id: p.id, nume: nume.slice(0, 120), telefon: telefon.slice(0, 30) || null, email: dc.email || null,
         sursa: 'olx', sursa_id: String(t.id), data_aplicare: String(noi[0].created_at).slice(0, 10),
         status: 'nou', consimtamant_pastrare: true, data_retentie_pana: retentie.toISOString().slice(0, 10),
       }).select('id, nume, telefon, fisier_path').single()
