@@ -69,7 +69,9 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   const load = async () => {
     if (!licId) return
     const [{ data: c }, { data: q }, { data: pr }, { data: dr }] = await Promise.all([
-      supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('id'),
+      // .limit explicit: fără el PostgREST taie tăcut la 1000 de rânduri, iar Domnești
+      // are 1069 de poziții — 69 dispăreau din ecran fără niciun semn.
+      supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('id').limit(20000),
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
       supabase.from('profiles').select('id, name'),
       // PDF-urile de raspuns ale autoritatii, ca sa se poata lega de intrebarea careia ii raspund
