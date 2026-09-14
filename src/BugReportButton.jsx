@@ -144,7 +144,7 @@ export default function BugReportButton({ profile }) {
       {/* Buton flotant 🐛 + etichetă — stânga-jos (Nenicu e dreapta-jos) */}
       {!hidden && !open && (
         <div style={{
-          position: 'fixed', bottom: 24, left: 24, zIndex: 9996,
+          position: 'fixed', bottom: 24, left: 24, zIndex: 10500,   // TKT-0214: peste modalele de contract (9998), sub toast-uri (10002 nu contează, sunt în alt colț)
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         }}>
           <div style={{
@@ -171,7 +171,7 @@ export default function BugReportButton({ profile }) {
       {open && !hidden && (
         <div style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 16,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10600, padding: 16,
         }} onClick={e => e.target === e.currentTarget && !saving && close()}>
           <div style={{
             background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14,
