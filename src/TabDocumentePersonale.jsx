@@ -62,6 +62,117 @@ function statusBadge(status, zile) {
   )
 }
 
+// ─── TKT-2026-0146 (HR: legare documente ↔ autorizații) ────────────────────
+// Nu sincronizăm automat TOATE documentele personale în Autorizații (decizie Răzvan,
+// 14.09.2026) — doar cele pe care omul le marchează explicit, cu tipul de autorizație
+// ales de el (prefilled prin potrivire aproximativă pe numele fișierului). Legătura
+// se face prin hr_autorizatii.document_personal_id — fișierul NU se duplică (rămâne
+// în bucket documente-personal; view-ul v_hr_autorizatii_status îl afișează de acolo).
+function normalizeText(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, ' ').trim()
+}
+function ghiceesteTipAutorizatie(numeFisier, tipuriAutorizatii) {
+  const target = normalizeText(numeFisier)
+  if (!target || !tipuriAutorizatii?.length) return null
+  const tokensFisier = target.split(' ').filter(t => t.length >= 4)
+  if (!tokensFisier.length) return null
+  let best = null, bestScore = 0
+  for (const t of tipuriAutorizatii) {
+    if (!t.activ) continue
+    const tokensTip = normalizeText(t.denumire).split(' ').filter(t2 => t2.length >= 4)
+    const common = tokensTip.filter(t2 => tokensFisier.includes(t2))
+    if (common.length > bestScore) { bestScore = common.length; best = t }
+  }
+  return bestScore >= 1 ? best : null
+}
+
+function LinkAutorizatieButton({ doc, tipuriAutorizatii, legatura, onLinked, showToast }) {
+  const [open, setOpen] = useState(false)
+  const sugestie = useMemo(() => ghiceesteTipAutorizatie(doc.fisier_nume, tipuriAutorizatii), [doc.fisier_nume, tipuriAutorizatii])
+  const [tipId, setTipId] = useState('')
+  const [faraExp, setFaraExp] = useState(true)
+  const [dataExp, setDataExp] = useState('')
+  const [numar, setNumar] = useState('')
+  const [emitent, setEmitent] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const deschide = () => { setTipId(sugestie?.id || ''); setOpen(true) }
+
+  const salveaza = async () => {
+    if (!tipId) { showToast('Alege tipul de autorizație', 'warn'); return }
+    setBusy(true)
+    const { data, error } = await supabase.from('hr_autorizatii').insert({
+      employee_id: doc.employee_id, tip_id: Number(tipId), document_personal_id: doc.id,
+      fara_expirare: faraExp, data_expirare: faraExp ? null : (dataExp || null),
+      numar_autorizatie: numar.trim() || null, emitent: emitent.trim() || null,
+    }).select('id, tip_id').single()
+    setBusy(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    const tip = tipuriAutorizatii.find(t => t.id === Number(tipId))
+    onLinked(doc.id, { id: data.id, tip_denumire: tip?.denumire || '?' })
+    showToast(`✓ Legat de autorizația „${tip?.denumire}"`, 'success')
+    setOpen(false)
+  }
+
+  if (legatura) {
+    return (
+      <span title={`Legat de autorizația „${legatura.tip_denumire}" — se vede și în HR → Autorizații`}
+        style={{padding:'3px 8px', fontSize:10.5, borderRadius:4, background:G.greenDim, color:G.green, fontWeight:600, whiteSpace:'nowrap'}}>
+        🔗 {legatura.tip_denumire}
+      </span>
+    )
+  }
+  return (
+    <>
+      <button onClick={(e) => { e.stopPropagation(); deschide() }}
+        style={{padding:'3px 7px', background:G.purple+'22', color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
+        title="Dacă documentul ăsta e de fapt o autorizație/diplomă/atestat, îl legi aici — apare și în HR → Autorizații, fără să duplici fișierul">🔗</button>
+      {open && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20}} onClick={() => setOpen(false)}>
+          <div style={{...S.card, padding:20, maxWidth:400, width:'100%'}} onClick={e => e.stopPropagation()}>
+            <div style={{fontSize:15, fontWeight:800, marginBottom:4}}>🔗 Leagă la Autorizații</div>
+            <div style={{fontSize:12, color:G.muted, marginBottom:14}}>{doc.tip_denumire} · {doc.fisier_nume}</div>
+            <div style={{display:'flex', flexDirection:'column', gap:10}}>
+              <div>
+                <label style={{fontSize:11, color:G.muted}}>Tip autorizație {sugestie && <span style={{color:G.purple}}>(sugerat: {sugestie.denumire})</span>}</label>
+                <select value={tipId} onChange={e => setTipId(e.target.value)} style={S.input}>
+                  <option value="">— alege —</option>
+                  {tipuriAutorizatii.filter(t => t.activ).sort((a,b) => a.denumire.localeCompare(b.denumire, 'ro')).map(t => (
+                    <option key={t.id} value={t.id}>{t.denumire}{t.categorie ? ` (${t.categorie})` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{display:'flex', gap:10}}>
+                <div style={{flex:1}}>
+                  <label style={{fontSize:11, color:G.muted}}>Nr.</label>
+                  <input value={numar} onChange={e => setNumar(e.target.value)} style={S.input} placeholder="opțional" />
+                </div>
+                <div style={{flex:1}}>
+                  <label style={{fontSize:11, color:G.muted}}>Emitent</label>
+                  <input value={emitent} onChange={e => setEmitent(e.target.value)} style={S.input} placeholder="opțional" />
+                </div>
+              </div>
+              <label style={{fontSize:12, display:'flex', alignItems:'center', gap:6, cursor:'pointer'}}>
+                <input type="checkbox" checked={faraExp} onChange={e => setFaraExp(e.target.checked)} /> fără dată de expirare
+              </label>
+              {!faraExp && (
+                <div>
+                  <label style={{fontSize:11, color:G.muted}}>Data expirării</label>
+                  <input type="date" value={dataExp} onChange={e => setDataExp(e.target.value)} style={S.input} />
+                </div>
+              )}
+            </div>
+            <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:18}}>
+              <button onClick={() => setOpen(false)} style={S.btnS}>Anulează</button>
+              <button onClick={salveaza} disabled={!tipId || busy} style={{...S.btnP, background:G.purple, opacity:(!tipId||busy)?.5:1}}>{busy ? 'Se leagă...' : '✓ Leagă'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 async function openDocFirma(path, showToast) {
   if (!path) { showToast('Documentul nu are fișier', 'warn'); return }
   const { data, error } = await supabase.storage.from('documente-firma').createSignedUrl(path, 60)
@@ -615,6 +726,8 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
   const [viewMode, setViewMode] = useState('flat')  // 'flat' | 'grouped'
   const [expandedEmp, setExpandedEmp] = useState(new Set())
   const [docsFirma, setDocsFirma] = useState([])   // TKT-2026-0183: documente firmă marcate „pentru permis de ședere” (link, fără copie)
+  const [tipuriAutorizatii, setTipuriAutorizatii] = useState([])   // TKT-2026-0146: pentru butonul „🔗 Leagă la Autorizații”
+  const [legaturiAutorizatii, setLegaturiAutorizatii] = useState({})   // { document_personal_id: {id, tip_denumire} }
   
   const loadAll = async () => {
     setLoading(true)
@@ -668,6 +781,15 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
     setTipuri(tipuriRes.data || [])
     const { data: df } = await supabase.from('documente_firma').select('id, tip, denumire, categorie, numar_document, data_valabilitate, fara_expirare, pdf_path').eq('pentru_permis_sedere', true).eq('activ', true).order('tip')
     setDocsFirma(df || [])
+    // TKT-2026-0146: tipurile de autorizație (pentru selectul din „🔗 Leagă”) + legăturile deja făcute
+    const [{ data: tAut }, { data: legAut }] = await Promise.all([
+      supabase.from('hr_autorizatii_tipuri').select('id, denumire, categorie, activ').order('denumire'),
+      supabase.from('hr_autorizatii').select('id, document_personal_id, tip:hr_autorizatii_tipuri(denumire)').not('document_personal_id', 'is', null).is('deleted_at', null),
+    ])
+    setTipuriAutorizatii(tAut || [])
+    const legMap = {}
+    ;(legAut || []).forEach(a => { legMap[a.document_personal_id] = { id: a.id, tip_denumire: a.tip?.denumire || '?' } })
+    setLegaturiAutorizatii(legMap)
     setLoading(false)
   }
   
@@ -1097,7 +1219,9 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
                                   </td>
                                   <td style={{padding:'7px 10px'}}>{statusBadge(d.status, d.zile_pana_expirare)}</td>
                                   <td style={{padding:'7px 10px', textAlign:'right'}}>
-                                    <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
+                                    <div style={{display:'flex', gap:4, justifyContent:'flex-end', alignItems:'center'}}>
+                                      <LinkAutorizatieButton doc={d} tipuriAutorizatii={tipuriAutorizatii} legatura={legaturiAutorizatii[d.id]}
+                                        onLinked={(docId, leg) => setLegaturiAutorizatii(prev => ({ ...prev, [docId]: leg }))} showToast={showToast} />
                                       <button onClick={(e) => { e.stopPropagation(); openDocPreview(d.fisier_path, showToast) }} 
                                         style={{padding:'3px 7px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Vizualizează">👁</button>
                                       <button onClick={(e) => { e.stopPropagation(); setEditDoc(d) }} 
@@ -1181,7 +1305,9 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
                     </td>
                     <td style={tdStyle}>{statusBadge(d.status, d.zile_pana_expirare)}</td>
                     <td style={{...tdStyle, textAlign:'right'}}>
-                      <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
+                      <div style={{display:'flex', gap:4, justifyContent:'flex-end', alignItems:'center'}}>
+                        <LinkAutorizatieButton doc={d} tipuriAutorizatii={tipuriAutorizatii} legatura={legaturiAutorizatii[d.id]}
+                          onLinked={(docId, leg) => setLegaturiAutorizatii(prev => ({ ...prev, [docId]: leg }))} showToast={showToast} />
                         <button onClick={() => openDocPreview(d.fisier_path, showToast)} 
                           style={{padding:'4px 8px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} 
                           title="Vizualizează fișier">👁</button>
