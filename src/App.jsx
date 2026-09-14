@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
+import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -1620,6 +1621,9 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
   // ce ar pune sync-ul de mai sus din rec (inclusiv auto-fill-ul pe rând gol).
   const baseCi=rec?.check_in?new Date(rec.check_in).toTimeString().slice(0,5):(rec ? '' : oreDefault.intrare)
   const baseCo=rec?.check_out?new Date(rec.check_out).toTimeString().slice(0,5):(rec ? '' : oreDefault.iesire)
+  // TKT-2026-0136: concediul aprobat se scrie in pontaj in avans. O planificare arata identic cu o
+  // constatare, deci cine face pontajul n-are cum sa stie ce merita verificat. Marcam.
+  const planificata = esteAbsentaPlanificata(rec, selectedDate)
   const isDirty=ci!==baseCi||co!==baseCo||norma!==(rec?.norma||'')||diurna!==(rec?.diurna||false)||supl!==(rec?.meal_supplement||false)
   useEffect(()=>{
     onDirty?.(emp.id,isDirty)
@@ -1675,7 +1679,10 @@ function PontajRow({ emp, rec, sites, selectedDate, onSave, onAllocate, saving, 
 
         {/* Status actual */}
         {hasRec&&!exp&&<div style={{textAlign:'center',minWidth:80}}>
-          {rec?.norma?<span style={{background:G.yellowDim,color:G.yellow,border:`1px solid ${G.yellow}44`,padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700}}>{rec.norma}</span>
+          {rec?.norma?(planificata
+            ? <span title="Absență scrisă în avans, din concediul aprobat — nimeni n-a confirmat-o pentru ziua asta. Dacă omul a lucrat, schimb-o liniștit."
+                    style={{background:'transparent',color:G.yellow,border:`1px dashed ${G.yellow}88`,padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700}}>{rec.norma} · planificat</span>
+            : <span style={{background:G.yellowDim,color:G.yellow,border:`1px solid ${G.yellow}44`,padding:'2px 8px',borderRadius:20,fontSize:11,fontWeight:700}}>{rec.norma}</span>)
           :<>{rec?.check_in&&<div style={{fontSize:11,color:G.green,fontWeight:600}}>⬇ {fmt24(rec.check_in)}</div>}{rec?.check_out&&<div style={{fontSize:11,color:G.red,fontWeight:600}}>⬆ {fmt24(rec.check_out)}</div>}</>}
         </div>}
 
@@ -1915,6 +1922,7 @@ function PontajPage() {
     const md2=!onlyDiurna||recs[e.id]?.diurna
     return ms&&md&&ms2&&md2
   })
+  const nrPlanificate = numaraPlanificate(recs, date)
   const unalloc=emps.filter(e=>!e.site_id)
   return (
     <Layout>
@@ -1962,6 +1970,15 @@ function PontajPage() {
           </div>
         </div>
       )}
+      {/* TKT-2026-0136: absentele scrise in avans arata ca fapte. Se spune cate sunt, ca omul care
+          face pontajul sa stie de la inceput ce merita verificat, nu sa descopere dupa. */}
+      {nrPlanificate>0&&<div style={{background:G.yellowDim,border:`1px dashed ${G.yellow}55`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.yellow}}>
+        <div style={{fontSize:11,fontWeight:700}}>📅 {nrPlanificate} {nrPlanificate===1?'absență este planificată':'absențe sunt planificate'}, nu confirmate pentru ziua asta</div>
+        <div style={{fontSize:11,color:G.text,marginTop:3,lineHeight:1.5}}>
+          Vin din concediile aprobate, scrise în pontaj din timp. Au marcajul <strong>„· planificat"</strong> cu linie punctată.
+          Dacă omul a lucrat totuși, schimbă-i norma — nu contrazici nicio înregistrare, doar o confirmi.
+        </div>
+      </div>}
       {unalloc.length>0&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:9,padding:'8px 12px',marginBottom:12,color:G.red}}>
         <div style={{fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ {unalloc.length} angajați nealocați pe niciun șantier:</div>
         <div style={{fontSize:11,lineHeight:1.7,flexWrap:'wrap',display:'flex',gap:'4px 10px'}}>
