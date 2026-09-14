@@ -24,6 +24,9 @@ const G = {
 const BUCKET = 'rapoarte-zilnice'
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'
 const azi = () => new Date().toISOString().slice(0, 10)
+// TKT-0135: cat de departe in urma se poate face un raport (zile)
+const ZILE_INAPOI = 7
+const minData = () => new Date(Date.now() - ZILE_INAPOI * 86400000).toISOString().slice(0, 10)
 
 const inputStyle = { background: G.bg, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 10, padding: '12px 14px', fontFamily: 'inherit', fontSize: 16, outline: 'none', width: '100%', boxSizing: 'border-box' }
 const labelStyle = { fontSize: 13, color: G.muted, marginBottom: 6, display: 'block', fontWeight: 600 }
@@ -116,6 +119,9 @@ export default function AppMobilManageri() {
 // ── Ecran Raport zilnic ──
 function RaportZilnic({ profile, sites, onBack }) {
   const [siteId, setSiteId] = useState(sites.length === 1 ? sites[0].id : null)
+  // TKT-0135: raportul se poate face si pentru o zi anterioara (max ZILE_INAPOI zile).
+  // Toata incarcarea (raport existent, pontaj, carry-forward utilaje) se face pe data aleasa.
+  const [dataRaport, setDataRaport] = useState(azi())
   const [personal, setPersonal] = useState(null)
   const [utilaje, setUtilaje] = useState([])
   const [lucrari, setLucrari] = useState('')
@@ -138,8 +144,9 @@ function RaportZilnic({ profile, sites, onBack }) {
 
   const siteName = sites.find(s => s.id === siteId)?.name || ''
 
-  const loadSiteData = useCallback(async (sid) => {
+  const loadSiteData = useCallback(async (sid, dataSel) => {
     if (!sid) return
+    const zi = dataSel || azi()
     setLoadingData(true)
     setMsg(null)
     // ── Activitățile proiectului legat de lucrare (Faza 5 pas 3) ──
@@ -161,7 +168,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     setLucrariAct({})
     setUnitateId(null)
     // ── Există deja raport azi pe lucrare? → încarcă pentru editare (anti-dublură) ──
-    const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
+    const { data: existing } = await supabase.from('rapoarte_zilnice').select('*').eq('site_id', sid).eq('data', zi).maybeSingle()
     if (existing) {
       if (acts.length) {
         const { data: rl } = await supabase.from('raport_lucrari').select('activitate_id, cantitate, unitate_id').eq('raport_id', existing.id)
@@ -194,9 +201,9 @@ function RaportZilnic({ profile, sites, onBack }) {
     // ── Raport nou: pre-populare din pontaj + alimentări ──
     setExistingId(null); setPozeExistente([])
     // Personal azi; fallback ieri dacă azi gol
-    let { data: per } = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', azi()).maybeSingle()
+    let { data: per } = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', zi).maybeSingle()
     if (!per) {
-      const ieri = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+      const ieri = new Date(new Date(zi + 'T12:00:00').getTime() - 86400000).toISOString().slice(0, 10)
       const r = await supabase.from('v_pontaj_personal_santier').select('*').eq('site_id', sid).eq('data', ieri).maybeSingle()
       per = r.data
     }
@@ -207,7 +214,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     // (carry-forward — utilajul rămâne cât e pe șantier) + alimentările din
     // ultimele 14 zile (pt. utilaje/mașini nou-venite). Managerul bifează
     // funcțional + alimentat azi și scoate ce a plecat.
-    const azo = azi()
+    const azo = zi
     const { data: prev } = await supabase.from('rapoarte_zilnice').select('data, utilaje_snapshot')
       .eq('site_id', sid).lt('data', azo).order('data', { ascending: false }).limit(1).maybeSingle()
     const { data: ut } = await supabase.from('v_active_santier_recent').select('*').eq('site_id', sid)
@@ -257,7 +264,7 @@ function RaportZilnic({ profile, sites, onBack }) {
     setLoadingData(false)
   }, [])
 
-  useEffect(() => { if (siteId) loadSiteData(siteId) }, [siteId, loadSiteData])
+  useEffect(() => { if (siteId) loadSiteData(siteId, dataRaport) }, [siteId, dataRaport, loadSiteData])
 
   const setPers = (k, v) => setPersonal(p => ({ ...p, [k]: Math.max(0, parseInt(v) || 0) }))
   const setUtil = (idx, patch) => setUtilaje(list => list.map((u, i) => i === idx ? { ...u, ...patch } : u))
@@ -307,17 +314,19 @@ function RaportZilnic({ profile, sites, onBack }) {
       const pozePaths = pozeExistente.map(p => p.path)
       for (const f of poze) {
         const ext = (f.name.split('.').pop() || 'jpg').toLowerCase()
-        const path = `${siteId}/${azi()}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
+        const path = `${siteId}/${dataRaport}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
         const { error } = await supabase.storage.from(BUCKET).upload(path, f, { contentType: f.type || 'image/jpeg', upsert: false })
         if (!error) pozePaths.push(path)
       }
       const totalPers = PERSONAL_CAT.reduce((s, c) => s + (personal?.[c.key] || 0), 0)
       // vremea la momentul raportului (din meteo_cache, Xweather) — dovadă pentru zilele nelucrate pe motive meteo
       let meteoSnap = null
+      // TKT-0135: meteo_cache tine DOAR vremea curenta — pe un raport backdatat ar fi o dovada falsa, deci il sarim.
+      if (dataRaport === azi())
       try { const { data: mc } = await supabase.from('meteo_cache').select('curent, alerte, actualizat_la').eq('site_id', siteId).maybeSingle(); if (mc?.curent) meteoSnap = { ...mc.curent, alerte: (mc.alerte || []).map(a => a.titlu), sursa_la: mc.actualizat_la } } catch { /* fără meteo */ }
       // upsert pe (site_id, data) → 1 raport/lucrare/zi, reintrarea editează
       const { data: rz, error: insErr } = await supabase.from('rapoarte_zilnice').upsert({
-        site_id: siteId, data: azi(),
+        site_id: siteId, data: dataRaport,
         sef_santier: profile?.name || null,
         lucrari_efectuate: lucrari.trim() || null,
         utilaje_snapshot: utilaje.map(u => ({ active_id: u.active_id ?? null, cod: u.cod, inmatriculare: u.inmatriculare || null, nume: u.nume, tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, stare: u.stare, motiv: u.motiv || null, alimentat: !!u.alimentat })),
@@ -371,7 +380,7 @@ function RaportZilnic({ profile, sites, onBack }) {
                 numar_tichet: `TKT-${new Date().getFullYear()}-${String(nrCrt).padStart(4, '0')}`,
                 departament: 'logistica', subcategorie: 'avarie_utilaj',
                 titlu: `Utilaj defect: ${u.cod || u.inmatriculare || u.nume}`.slice(0, 90),
-                descriere: `Raportat NEFUNCȚIONAL în raportul zilnic din ${azi()}${numeSite ? ' — șantier ' + numeSite : ''}.${u.motiv ? '\n\nMotiv: ' + u.motiv : ''}\n\nUtilaj: ${[u.cod, u.inmatriculare, u.nume].filter(Boolean).join(' · ')}`,
+                descriere: `Raportat NEFUNCȚIONAL în raportul zilnic din ${dataRaport}${numeSite ? ' — șantier ' + numeSite : ''}.${u.motiv ? '\n\nMotiv: ' + u.motiv : ''}\n\nUtilaj: ${[u.cod, u.inmatriculare, u.nume].filter(Boolean).join(' · ')}`,
                 urgenta: 'normal',
                 entitate_tip: 'activ', entitate_id: u.active_id,
                 entitate_descriere: [u.cod, u.nume].filter(Boolean).join(' '),
@@ -403,11 +412,11 @@ function RaportZilnic({ profile, sites, onBack }) {
             const motiv = (u.motiv || '').trim()
             if (prMap[u.active_id]) {
               const { data: dejaAzi } = await supabase.from('logistica_probleme_jurnal')
-                .select('id').eq('problema_id', prMap[u.active_id]).eq('data', azi())
+                .select('id').eq('problema_id', prMap[u.active_id]).eq('data', dataRaport)
                 .like('text', 'Semnalat din raportul zilnic%').limit(1)
               if (!dejaAzi?.length) {
                 await supabase.from('logistica_probleme_jurnal').insert({
-                  problema_id: prMap[u.active_id], data: azi(),
+                  problema_id: prMap[u.active_id], data: dataRaport,
                   text: `Semnalat din raportul zilnic${numeSite ? ' — ' + numeSite : ''}${motiv ? ': ' + motiv : ''}`,
                   created_by: user?.id || null,
                 })
@@ -416,7 +425,7 @@ function RaportZilnic({ profile, sites, onBack }) {
               const { error: prErr } = await supabase.from('logistica_probleme').insert({
                 activ_id: u.active_id,
                 titlu: (motiv || `Defect raportat din șantier — ${u.cod || u.nume}`).slice(0, 120),
-                descriere: `Raportat NEFUNCȚIONAL în raportul zilnic din ${azi()}${numeSite ? ' — șantier ' + numeSite : ''}.${motiv ? '\nMotiv: ' + motiv : ''}\nUtilaj: ${[u.cod, u.inmatriculare, u.nume].filter(Boolean).join(' · ')}`,
+                descriere: `Raportat NEFUNCȚIONAL în raportul zilnic din ${dataRaport}${numeSite ? ' — șantier ' + numeSite : ''}.${motiv ? '\nMotiv: ' + motiv : ''}\nUtilaj: ${[u.cod, u.inmatriculare, u.nume].filter(Boolean).join(' · ')}`,
                 status: 'deschisa', severitate: 'major',
                 locatie: numeSite || null, sursa: 'raport',
                 tichet_id: ticheteNoi[u.active_id] || null,
@@ -435,7 +444,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         const aprov = aprovizionare.trim()
         if (aprov && rz?.id) {
           const numeSite = sites.find(s => s.id === siteId)?.name || ''
-          const descr = `Cerere de aprovizionare din raportul zilnic ${azi()}${numeSite ? ' — șantier ' + numeSite : ''} (${profile?.name || '?'}):\n\n${aprov}`
+          const descr = `Cerere de aprovizionare din raportul zilnic ${dataRaport}${numeSite ? ' — șantier ' + numeSite : ''} (${profile?.name || '?'}):\n\n${aprov}`
           const { data: tExist } = await supabase.from('tichete')
             .select('id, status').eq('entitate_tip', 'raport_aprovizionare').eq('entitate_id', rz.id)
             .limit(1).maybeSingle()
@@ -449,7 +458,7 @@ function RaportZilnic({ profile, sites, onBack }) {
             const { data: t, error: tErr } = await supabase.from('tichete').insert({
               numar_tichet: `TKT-${new Date().getFullYear()}-${String(nrCrt).padStart(4, '0')}`,
               departament: 'comercial', subcategorie: 'aprovizionare_santier',
-              titlu: `Aprovizionare materiale${numeSite ? ' — ' + numeSite : ''} (${azi()})`.slice(0, 90),
+              titlu: `Aprovizionare materiale${numeSite ? ' — ' + numeSite : ''} (${dataRaport})`.slice(0, 90),
               descriere: descr, urgenta: 'normal',
               entitate_tip: 'raport_aprovizionare', entitate_id: rz.id,
               entitate_descriere: numeSite || null,
@@ -480,8 +489,21 @@ function RaportZilnic({ profile, sites, onBack }) {
         <button onClick={onBack} style={{ background: G.surface, border: `1px solid ${G.border}`, color: G.text, borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: 'pointer' }}>←</button>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: G.text }}>📋 Raport zilnic</div>
-          <div style={{ fontSize: 13, color: G.muted }}>{fmtDate(azi())}</div>
+          <div style={{ fontSize: 13, color: G.muted }}>{fmtDate(dataRaport)}{dataRaport !== azi() ? ' · zi anterioară' : ''}</div>
         </div>
+      </div>
+
+      {/* TKT-0135: ziua raportului (implicit azi, max ZILE_INAPOI zile în urmă, fără viitor) */}
+      <div style={{ marginBottom: 18 }}>
+        <label style={labelStyle}>Ziua raportului</label>
+        <input type="date" value={dataRaport} min={minData()} max={azi()}
+          onChange={e => setDataRaport(e.target.value || azi())}
+          style={{ ...inputStyle }} />
+        {dataRaport !== azi() && (
+          <div style={{ marginTop: 6, fontSize: 12, color: G.yellow, fontWeight: 600 }}>
+            ⚠️ Completezi raportul pentru {fmtDate(dataRaport)}, nu pentru azi.
+          </div>
+        )}
       </div>
 
       {/* Alege lucrarea */}
@@ -500,7 +522,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         <>
           {existingId && (
             <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 16, background: G.yellow + '22', color: G.yellow, fontSize: 13, fontWeight: 600, textAlign: 'center' }}>
-              ✏️ Ai trimis deja raport azi pentru această lucrare — îl editezi (nu se creează duplicat).
+              {`✏️ Există deja raport pe ${fmtDate(dataRaport)} pentru această lucrare — îl editezi (nu se creează duplicat).`}
             </div>
           )}
           {/* Personal auto din pontaj */}
