@@ -1,4 +1,7 @@
-// ofertare-acoperire v8 (12.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v9 (14.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v9 (TKT-0203, Oana): domeniul ISC al RTE se ia din natura lucrărilor CERUTE, nu din
+//     lucrarea de experiență similară prezentată; cerința de RTE „la general" propune
+//     automat o clarificare către autoritate (status 'de_trimis', idempotent pe `sursa`).
 // v8: experienta similara ca a patra sursa de catalog (id-uri E), pe COTA PROPRIE.
 // v7: scriere atomica prin fn_ofertare_acoperire_rescrie + index unic partial.
 // v6: R-ACOP-1 + 12 constatari de revizuire + 3 runde de a doua parere (Codex).
@@ -20,17 +23,19 @@ Pentru FIECARE cerință decizi cine o acoperă.
 REGULI NENEGOCIABILE:
 - R1: potrivești DOAR cu ce există în catalog. Nu inventa autorizații. Dacă nimic nu se potrivește → status "gol".
 - R6: valabilitatea se judecă pe TERMENUL DE DEPUNERE, nu pe azi. Autorizație/document expirat înainte de depunere = NU acoperă (gol, cu motivul "expiră la <data>"). fara_expirare=true = valabil.
-- R7 (reguli de domeniu): RTE 8.4(T)=transport ≠ 8.4(D)=distribuție; "atestat ANRE tip B" = INSTALAȚII ELECTRICE (Ord.134/2021); INSEMEX pe ACTIVITĂȚI; sudori SR EN ISO 9606-1: diametrul D acoperă ≥ 0,5·D; RTE MECMA (Ordin 364/2010) ≠ RTE ISC.
+- R7 (reguli de domeniu): domeniul/subdomeniul ISC al unui RTE se stabilește EXCLUSIV din natura lucrărilor cerute în ACEASTĂ licitație (obiectul contractului și textul cerinței). NU îl deduci niciodată din lucrarea de experiență similară pe care o prezentăm: faptul că dovedim experiența cu o lucrare de gaze nu face ca RTE-ul cerut pentru alimentări cu apă să fie tot de gaze. O licitație poate cere RTE pe MAI MULTE domenii deodată (ex. rețele apă-canal + drumuri + instalații electrice) — le tratezi separat, cerință cu cerință. O autorizație pe alt domeniu/subdomeniu NU acoperă cerința, oricât de apropiată ar părea: status "gol", cu domeniul lipsă scris explicit în motiv. RTE 8.4(T)=transport ≠ 8.4(D)=distribuție; "atestat ANRE tip B" = INSTALAȚII ELECTRICE (Ord.134/2021); INSEMEX pe ACTIVITĂȚI; sudori SR EN ISO 9606-1: diametrul D acoperă ≥ 0,5·D; RTE MECMA (Ordin 364/2010) ≠ RTE ISC.
 - DOCUMENTELE FIRMEI (id F...): cerințele despre autorizații/certificate ALE SOCIETĂȚII — ANRE tip EDSB/EDIB/EPI/ET (Ord. ANRE 132/2021 pt execuție sisteme distribuție/instalații gaze), certificări ISO 9001/14001/45001, certificat constatator, atestări firmă — se acoperă cu ele: status "acoperit", autorizatie_id: "F<id>". Tipul trebuie să corespundă cerinței (EDSB=execuție sisteme distribuție; EDIB=execuție instalații; EPI=proiectare instalații; ET=execuție transport; nu le încurca).
 - PARTENERI: câmpul "acopera" descrie ce aduce CONCRET fiecare → "acoperit_partener" cu partener_id. Un partener fără specialitatea cerută NU acoperă.
 - O cerință care NU e de capabilitate (garanție de participare, formulare, semnătură, mod de prezentare, preț, termene de plată, vizită amplasament, valabilitatea ofertei) → status "nu_se_aplica".
 - R8 (EXPERIENȚĂ SIMILARĂ, id-uri cu prefix E): cerințele de experiență similară / lucrări duse la bun sfârșit / PV de recepție se acoperă DOAR cu lucrări din lista E: status "acoperit", autorizatie_id: "E<id>". Folosești EXCLUSIV campul valoare_proprie_lei — niciodată valoare_totala_lei, care la o asociere e a asocierii, nu a firmei. O lucrare cu cota_proprie_necunoscuta NU acoperă nicio cerință de valoare: răspunzi "gol" și scrii în motiv că lipsește cota Gazpet. Fereastra "ultimii N ani" se socotește față de TERMENUL DE DEPUNERE (ca la R6), pe data_pv. Dacă cerința cere valoare CUMULATĂ din mai multe contracte, pui în autorizatie_id contractul principal și enumeri în motiv celelalte id-uri E folosite — cumulul îl verifică omul.
 - motiv: scurt (≤120 caractere), în română, spune DE CE (cine/ce acoperă sau ce lipsește exact).
 
+- R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
+
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
 Răspunde EXCLUSIV JSON compact:
-{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica","autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, sau null>,"partener_id":<id sau null>,"motiv":"..."}]}`
+{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica","autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
@@ -43,7 +48,7 @@ Deno.serve(async (req: Request) => {
     if (!licId || !['eliminatorie', 'propunere'].includes(batch)) return fail('licitatie_id + batch (eliminatorie/propunere) obligatorii')
     const idsFelie: number[] | null = Array.isArray(ids) && ids.length ? ids.map(Number).filter(Boolean) : null
 
-    const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, termen_depunere').eq('id', licId).single()
+    const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, termen_depunere, obiect').eq('id', licId).single()
     if (!lic) return fail('licitatie negasita')
 
     let q = supabase.from('ofertare_cerinte')
@@ -128,7 +133,7 @@ Deno.serve(async (req: Request) => {
     // prins nimic. De-asta si `.order('id')` de mai sus: o singura linie mutata in catalog
     // schimba prefixul si rateaza cache-ul.
     const stabil = `CATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}`
-    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
+    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -192,6 +197,7 @@ Deno.serve(async (req: Request) => {
     // iar cerintele ramaneau fara niciun rand. Acum se construiesc intai randurile, apoi se
     // scriu printr-o singura tranzactie in BD (vezi fn_ofertare_acoperire_rescrie mai jos).
     const rows: any[] = []
+    const clarProps: { cerinta_id: number; intrebare: string }[] = []
     for (const p of lista) {
       if (!idsCerinte.has(p.cerinta_id)) continue
       if (p.status === 'nu_se_aplica') {
@@ -249,6 +255,12 @@ Deno.serve(async (req: Request) => {
         valabil_la_depunere: valabil,
         verificat_pe_scan: false,
       })
+      // TKT-0203 (Oana): cand cerinta zice doar „RTE" fara sa spuna domeniul, AI-ul nu mai
+      // ghiceste — propune o clarificare catre autoritate. O retinem doar pentru cerintele
+      // care chiar se scriu (vezi mai jos), ca sa nu propunem clarificari pe randuri respinse.
+      if (typeof p.clarificare === 'string' && p.clarificare.trim().length > 15) {
+        clarProps.push({ cerinta_id: p.cerinta_id, intrebare: p.clarificare.trim().slice(0, 2000) })
+      }
     }
     // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.
     // Felie fara niciun rand valid: NU e o eroare a rularii. Raspunsul purta cheia `error`,
@@ -301,6 +313,38 @@ Deno.serve(async (req: Request) => {
       .map(r => ({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text }))
     const deScris = randuriUnice.filter(r => scriseSet.has(r.cerinta_id))
 
+    // TKT-0203: clarificari propuse automat pentru cerintele de RTE „la general".
+    // Se scriu ca propuneri (status 'de_trimis') — omul le citeste, le ajusteaza si le trimite.
+    // `sursa` e si cheia de idempotenta, si textul pe care il vede omul in lista (se afiseaza
+    // brut in UI), de-asta e o fraza, nu un cod. Fara verificarea de duplicat, fiecare reluare
+    // a acoperirii ar fi adaugat inca un rand — iar acoperirea se reia des, pe felii.
+    // `nr` se completeaza: lista de clarificari il afiseaza ca numar de ordine si se sorteaza
+    // dupa el, deci un rand fara nr ar aparea gol si ultimul.
+    let clarificariNoi = 0
+    try {
+      const propuse = clarProps.filter(c => scriseSet.has(c.cerinta_id))
+      if (propuse.length) {
+        const sursaPt = (id: number) => `cerința #${id} — domeniu RTE neprecizat`
+        const { data: exist } = await supabase.from('ofertare_clarificari')
+          .select('sursa, nr').eq('licitatie_id', licId)
+        const deja = new Set((exist || []).map((r: any) => r.sursa).filter(Boolean))
+        let nr = Math.max(0, ...(exist || []).map((r: any) => Number(r.nr) || 0))
+        const noi = propuse
+          .filter(c => !deja.has(sursaPt(c.cerinta_id)))
+          .map(c => ({
+            licitatie_id: licId, nr: ++nr, intrebare: c.intrebare,
+            sursa: sursaPt(c.cerinta_id), status: 'de_trimis', origine: 'platforma',
+          }))
+        if (noi.length) {
+          const { error: eClar } = await supabase.from('ofertare_clarificari').insert(noi)
+          // O clarificare nescrisa NU invalideaza acoperirea (deja scrisa, tranzactional).
+          // O raportam in raspuns ca sa se vada, nu o inghitim.
+          if (eClar) console.error('clarificari auto:', eClar.message)
+          else clarificariNoi = noi.length
+        }
+      }
+    } catch (e: any) { console.error('clarificari auto (neasteptat):', String(e?.message || e)) }
+
     // Cerintele la care AI-ul n-a raspuns si cele blocate de o dovada verificata: nu le-am
     // atins, deci acoperirea veche le ramane. Plafonul de raportare era 50, iar felia trimisa
     // de frontend are 55 — cerintele peste plafon nu mai erau reluate NICIODATA. Ridicat, plus
@@ -308,7 +352,8 @@ Deno.serve(async (req: Request) => {
     const fararaspuns = Array.from(idsCerinte).filter((id: any) => !vazute.has(id))
     const goluri = deScris.filter(r => r.status === 'gol').length
     return new Response(JSON.stringify({ ok: true, batch, felie: idsFelie ? idsFelie.length : null,
-      propuneri: deScris.length, goluri, firma: deScris.filter(r => r.mod === 'firma').length,
+      propuneri: deScris.length, goluri, clarificari_noi: clarificariNoi,
+      firma: deScris.filter(r => r.mod === 'firma').length,
       nu_se_aplica: deScris.filter(r => r.status === 'nu_se_aplica').length,
       experienta: deScris.filter(r => r.mod === 'experienta').length,
       conflicte_verificate: conflicteVerificate,
