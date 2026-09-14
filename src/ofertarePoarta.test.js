@@ -19,6 +19,8 @@ const VERDE = {
   observatii_deschise: 0,
   documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0,
+  // PR 1 Laza: grafic generat de motor (fara es/ef declarate) => nimic de confruntat, ok
+  grafic_versiune_mod: 'oferta', grafic_activitati_declarate: [{ id: 1, durata_zile: 5, predecesori: [] }],
 }
 const cu = (patch) => evalueazaPoarta({ ...VERDE, ...patch })
 
@@ -94,9 +96,9 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 18 randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 20 de randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet'])
+      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
   })
 })
 

@@ -13,7 +13,7 @@
 // Funcție PURĂ, fără React, fără Supabase: se testează cu node, fără runner (vezi jos).
 // ════════════════════════════════════════════════════════════════
 
-import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate, controlNumereCheie, controlParticipare, controlPachetComplet } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate, controlNumereCheie, controlParticipare, controlPachetComplet, controlRelatiiGrafic, controlGraficSursa } from './ofertareControale.js'
 
 // st = un rând din v_ofertare_pt_stare. null = încă se încarcă.
 // Întoarce null cât timp st e null: un array gol de rânduri ar însemna „nimic de blocat",
@@ -137,6 +137,12 @@ export function evalueazaPoarta(st) {
   // Distinct de H5: acolo se verifica trimiterile, aici fisierele efectiv urcate.
   const h9 = controlPachetComplet(st)
   r.push({ k: h9.k, titlu: 'Pachetul depus — piesele din opis au fișier', stare: h9.stare, detalii: h9.detalii })
+  // Laza: 16 din 66 relații „FS" cu ES(succesor) < EF(predecesor) — graficul scris de mână.
+  // Întâi sursa (vine dintr-o versiune înghețată?), apoi consistența (declarațiile se țin?).
+  const h10 = controlGraficSursa(st)
+  r.push({ k: h10.k, titlu: 'Graficul din pachet — vine dintr-o versiune înghețată', stare: h10.stare, detalii: h10.detalii })
+  const h11 = controlRelatiiGrafic(st)
+  r.push({ k: h11.k, titlu: 'Graficul — relațiile declarate vs datele declarate', stare: h11.stare, detalii: h11.detalii })
 
   const blocaje = r.filter(x => x.stare === 'block')
   const rezerve = r.filter(x => x.stare === 'warn')

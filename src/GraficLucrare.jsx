@@ -12,6 +12,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import PoartaGrafic, { exportMSPDI } from './GraficPoarta.jsx'
+import { calcCPM, predToText, textToPred } from './graficCPM.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -24,64 +25,6 @@ const S = {
   btnP: { padding:'8px 16px', background:G.accent, color:'#0D1117', border:'none', borderRadius:7, cursor:'pointer', fontSize:13, fontWeight:700 },
   btnS: { padding:'8px 16px', background:G.surface, color:G.text, border:`1px solid ${G.border2}`, borderRadius:7, cursor:'pointer', fontSize:13 },
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
-}
-
-// „1FS, 3SS+10" ↔ [{id:1,tip:'FS',lag:0},{id:3,tip:'SS',lag:10}]
-const predToText = (p) => (p || []).map(x => `${x.id}${x.tip || 'FS'}${x.lag ? '+' + x.lag : ''}`).join(', ')
-const textToPred = (t) => (t || '').split(/[,;]+/).map(s => s.trim()).filter(Boolean).map(s => {
-  const m = s.match(/^(\d+)\s*(FS|SS)?\s*(?:\+\s*(\d+))?$/i)
-  return m ? { id: Number(m[1]), tip: (m[2] || 'FS').toUpperCase(), lag: Number(m[3] || 0) } : null
-}).filter(Boolean)
-
-// CPM în zile: ES/EF forward, LS/LF backward, float, critic. Ciclurile se
-// opresc prin plafonul de iterații (graficul rămâne calculabil, nu îngheață UI-ul).
-function calcCPM(rows) {
-  const byId = {}; rows.forEach(r => { byId[r.id] = r })
-  const es = {}, ef = {}
-  const done = new Set()
-  let pass = 0
-  while (done.size < rows.length && pass < rows.length + 5) {
-    pass++
-    for (const r of rows) {
-      if (done.has(r.id)) continue
-      const preds = (r.predecesori || []).filter(p => byId[p.id])
-      if (preds.some(p => !done.has(p.id))) continue
-      let start = 0
-      for (const p of preds) {
-        const cand = p.tip === 'SS' ? es[p.id] + (p.lag || 0) : ef[p.id] + (p.lag || 0)
-        if (cand > start) start = cand
-      }
-      es[r.id] = start
-      ef[r.id] = start + (r.durata_zile || 0)
-      done.add(r.id)
-    }
-  }
-  // rândurile prinse în ciclu rămân la 0 — le marcăm
-  const inCiclu = new Set(rows.filter(r => !done.has(r.id)).map(r => { es[r.id] = 0; ef[r.id] = r.durata_zile || 0; return r.id }))
-
-  const proiectEF = Math.max(0, ...rows.map(r => ef[r.id] || 0))
-  const ls = {}, lf = {}
-  rows.forEach(r => { lf[r.id] = proiectEF; ls[r.id] = proiectEF - (r.durata_zile || 0) })
-  // backward: succesorii impun LF
-  for (let i = 0; i < rows.length + 5; i++) {
-    let schimbat = false
-    for (const r of rows) {
-      for (const p of (r.predecesori || [])) {
-        if (!byId[p.id]) continue
-        const limita = p.tip === 'SS'
-          ? ls[r.id] - (p.lag || 0) + (byId[p.id].durata_zile || 0)   // SS constrânge startul predecesorului
-          : ls[r.id] - (p.lag || 0)
-        if (limita < lf[p.id]) { lf[p.id] = limita; ls[p.id] = limita - (byId[p.id].durata_zile || 0); schimbat = true }
-      }
-    }
-    if (!schimbat) break
-  }
-  const rez = {}
-  rows.forEach(r => {
-    const fl = (ls[r.id] ?? 0) - (es[r.id] ?? 0)
-    rez[r.id] = { es: es[r.id] ?? 0, ef: ef[r.id] ?? 0, float: fl, critic: fl <= 0, ciclu: inCiclu.has(r.id) }
-  })
-  return { rez, total: proiectEF }
 }
 
 const fmtData = (start, plusZile) => {
