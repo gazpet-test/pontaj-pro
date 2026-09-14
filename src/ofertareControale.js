@@ -18,6 +18,11 @@
  */
 export const H2_TOLERANTA_RELATIVA = 0.001   // 0,1 %
 
+// Cerinte care interzic CUMULUL DE FUNCTII (Domnesti #4090: „O persoana nu poate indeplini in mod cumulativ
+// mai multe functii"). ACEEASI expresie ca in v_ofertare_pt_conformitate.interzice_cumul — daca o schimbi
+// aici, schimb-o si in view. Restransa la functii/roluri: simplul „cumulativ" da fals pozitiv (statistica SSM).
+export const REGEX_INTERZICE_CUMUL = String.raw`(cumul\w*\s+(de\s+)?(mai\s+multe\s+)?(func[tț]i|rol|post|pozi[tț]i)|(func[tț]i|rol|post)\w*[^.]{0,40}cumul|nu poate (îndeplini|indeplini)|(o|aceea[sș]i) persoan[aă] nu poate|nu se (admite|accept[aă]) cumul)`
+
 const num = v => (v == null || v === '') ? null : Number(v)
 const fmt = n => Math.round(n).toLocaleString('ro-RO')
 const rel = (a, b) => a ? Math.abs(b - a) / a : (b ? Infinity : 0)
