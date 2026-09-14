@@ -1,4 +1,5 @@
 // ofertare-acoperire v13 (14.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v14: R12 restrâns + gardă în cod (regula_propunere doar pe text de echipă/roluri/cumul/înlocuire).
 // v13 (#65): nomenclatorul ISC RTE (isc_rte_domenii) intră în prompt; domeniile din HR se
 //     normalizează la coduri (8.4 (D) SI 8.5 → 8.4D, 8.5; cifre romane = schema veche MLPAT,
 //     neechivalată); motorul scrie `domeniu_rte` pe acoperire; cerințele-REGULĂ de echipă
@@ -37,7 +38,7 @@ REGULI NENEGOCIABILE:
 
 - R10 (NOMENCLATOR ISC): primești NOMENCLATORUL ISC RTE (Procedura ISC 2016) cu coduri, denumiri și cuvinte-cheie de lucrări. Domeniul cerut se stabilește din OBIECTUL CONTRACTULUI + textul cerinței, pe nomenclator: alimentare cu apă / canalizare / stații de pompare / gospodărie de apă = 9.1 (edilitare) și/sau 8.2 (rețele sanitare); gaze = 8.4 cu varianta D (distribuție) sau T (transport); drumuri = 2.1. Autorizațiile din catalog au câmpul "domenii_isc" (coduri normalizate) — RTE-ul ACOPERĂ cerința dacă "domenii_isc" conține codul cerut (8.4 cerut fără variantă = acoperit de 8.4D sau 8.4T). Cifrele romane din "domenii_vechi" sunt schema veche MLPAT și NU se echivalează automat; dacă doar ele ar acoperi, răspunzi "gol" și spui în motiv că autorizația e pe schema veche, de reconfirmat. Completezi câmpul "domeniu_rte" cu codul cerut (ex. "9.1", "8.4D") la ORICE cerință de RTE, chiar și când e "gol"; la celelalte cerințe e null. Când obiectul contractului cere mai multe domenii (apă + drumuri), fiecare cerință de RTE se judecă pe domeniul ei, iar dacă cerința e generală ("RTE atestat în domeniul contractului") o judeci pe domeniul PRINCIPAL al obiectului și pui celelalte domenii în motiv.
 - R11 (art. 51 lit. g + practica comisiilor): RTE-ul trebuie să aibă autorizația ȘI legitimația ISC valabile la termenul de depunere (R6). Dacă obiectul contractului include refaceri de drumuri / sistem rutier / asfalt, comisiile cer în practică și un RTE pe 2.1 chiar dacă cerința nu-l numește (cazul Laza): dacă avem 2.1 în catalog, îl menționezi în motiv; dacă nu, scrii în motiv "risc: comisia poate cere și RTE 2.1 pentru refacerile de drum" — fără să schimbi statusul cerinței principale.
-- R12 (REGULI DE ECHIPĂ): o cerință care NU cere o capabilitate, ci impune o REGULĂ de alcătuire a echipei — "o persoană nu poate îndeplini cumulativ mai multe funcții", "fiecare rol e ocupat de altă persoană", "personalul nominalizat trebuie să fie același la execuție", "înlocuirea se face doar cu acordul beneficiarului" — primește status "regula_propunere" (NU "nu_se_aplica"): se verifică pe propunerea tehnică, nu se acoperă cu un document. motiv = ce regulă e și unde se verifică.
+- R12 (REGULI DE ECHIPĂ — RESTRÂNS): status "regula_propunere" e DOAR pentru regulile de ALCĂTUIRE A ECHIPEI: interdicția de cumul de funcții, "fiecare rol e ocupat de altă persoană", "personalul nominalizat trebuie să fie același la execuție", "înlocuirea personalului nominalizat doar cu acordul achizitorului", "fiecare asociat își dovedește partea asumată". NU intră aici: obligațiile de execuție din caietul de sarcini (probe de presiune, tranșee, SSM, recepție, remedieri, dotări, instruiri), lucrurile care "se descriu în propunerea tehnică" (structura echipei, atribuții, metodologie, grafic) — ALEA rămân "nu_se_aplica" ca până acum, fiindcă nu sunt capabilități din catalog. Dacă ai dubii, e "nu_se_aplica". motiv = ce regulă e și unde se verifică.
 - R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
 
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
@@ -247,6 +248,12 @@ Deno.serve(async (req: Request) => {
       if (!idsCerinte.has(p.cerinta_id)) continue
       const domeniuRte = (typeof p.domeniu_rte === 'string' && /^\d{1,2}\.\d[DT]?$/i.test(p.domeniu_rte.trim())) ? p.domeniu_rte.trim().toUpperCase() : null
       // #65 varianta A: regula de echipa — se scrie ca atare, ca sa nu dispara sub nu_se_aplica.
+      // Garda in cod (14.09, dupa prima rulare pe Domnesti: 74 din 77 de obligatii tehnice din CS au
+      // primit "regula_propunere"): statusul se accepta DOAR daca textul cerintei vorbeste de echipa/
+      // roluri/cumul/inlocuire/nominalizare. Altfel cade pe nu_se_aplica, cum era inainte de v13.
+      const textC = String((cerinte || []).find((c: any) => c.id === p.cerinta_id)?.text_cerinta || '')
+      const eRegulaEchipa = /cumul|acela[sș]i persoan|aceea[sș]i persoan|o persoan[aă] nu|nu poate (îndeplini|indeplini)|\brol(uri|ul|urile)?\b|func[tț]i[ei]\b.*(distinct|separat|diferit)|înlocui|inlocui|nominaliz|asociat/i.test(textC)
+      if (p.status === 'regula_propunere' && !eRegulaEchipa) p.status = 'nu_se_aplica'
       if (p.status === 'regula_propunere') {
         rows.push({
           cerinta_id: p.cerinta_id, mod: 'regula_propunere',
