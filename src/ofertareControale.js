@@ -97,6 +97,8 @@ function romanToInt(r) {
   for (let i = 0; i < r.length; i++) { const a = ROMAN[r[i]], b = ROMAN[r[i + 1]]; n += b && b > a ? -a : a }
   return n
 }
+import { verificaRelatii } from './graficCPM.js'
+
 const NR_REF = '([0-9]+[a-z]?|[ivxlc]+)'
 export function normalizeazaRef(t = '') {
   const s = String(t).toLowerCase()
@@ -496,9 +498,14 @@ export function controlPachetComplet({ anexe_asteptate, anexe_declarate, anexe_r
   // Adica oferta depusa contine o afirmatie despre propriul continut, pe care pachetul o poate
   // infirma. Asta bate cuprinsul: cuprinsul e ce voiam sa punem, F4 e ce am spus ca am pus.
   const asteptate = []
+  // Laza (14.09.2026, gasit de Jakarinos): „formular profil Pantea" n-are (tip, numar), deci
+  // normalizeazaRef intoarce null si piesa DISPAREA de aici in tacere — controlul ramanea verde
+  // exact pe formularul care a lipsit real. Piesele care nu se pot identifica nu se arunca: se
+  // numara si se spun, ca omul sa le confrunte cu mana.
+  const neidentificate = []
   const adauga = (text, responsabil, sursa, unde) => {
     const ref = normalizeazaRef(text)
-    if (!ref) return
+    if (!ref) { const t = String(text || '').trim(); if (t && !neidentificate.includes(t)) neidentificate.push(t); return }
     const gasit = asteptate.find(x => x.ref === ref)
     if (gasit) {   // o piesa declarata bate una dedusa din cuprins: are sursa si pagina
       if (sursa && !gasit.sursa) { gasit.sursa = sursa; gasit.unde = unde }
@@ -520,7 +527,7 @@ export function controlPachetComplet({ anexe_asteptate, anexe_declarate, anexe_r
     ref: normalizeazaRef(f?.anexa_ref || '') || normalizeazaRef(f?.nume || ''),
   }))
   const inPachet = new Set(fisiere.filter(f => f.ref && !f.unit_in).map(f => f.ref))
-  const base = { k: 'pachet', asteptate, fisiere, lipsa: [], semnaturi_rupte: [] }
+  const base = { k: 'pachet', asteptate, fisiere, lipsa: [], semnaturi_rupte: [], neidentificate }
 
   // Poarta se semneaza INAINTE de asamblare (pachetul se produce din poarta semnata), deci lipsa
   // pachetului nu are voie sa insemne rezerva: ar face orice propunere galbena, circular. Randul
@@ -560,6 +567,90 @@ export function controlPachetComplet({ anexe_asteptate, anexe_declarate, anexe_r
   if (!asteptate.length) return { ...out, stare: 'warn',
     detalii: `${plural(fisiere.length, 'fișier', 'fișiere')} în pachet, dar nicio piesă declarată (nici F4, nici opis) — nu se poate confrunta` }
 
+  if (neidentificate.length) return { ...out, stare: 'warn', cod: 'UNIDENTIFIED_DECLARED_PIECE',
+    detalii: `${plural(asteptate.length, 'piesă identificată are', 'piese identificate au')} fișier, dar ${plural(neidentificate.length, 'piesă declarată nu s-a putut identifica', 'piese declarate nu s-au putut identifica')} (fără tip și număr) și nu se pot confrunta automat: `
+      + neidentificate.slice(0, 6).join(' · ') + (neidentificate.length > 6 ? ` · +${neidentificate.length - 6}` : '')
+      + ' · verifică-le cu mâna în pachet' }
+
   return { ...out, stare: 'ok',
     detalii: `${plural(asteptate.length, 'piesă declarată', 'piese declarate')}, toate cu fișier în pachetul final (${fisiere.length} fișiere)` }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// PR 1 Laza (14.09.2026) — „graficul spune adevărul"
+//
+// La Laza (alimentare cu apă Râșnița) PERT-ul depus avea 16 din 66 relații declarate „FS" cu
+// ES(succesor) < EF(predecesor). Comisia n-a văzut — dar orice desen cu săgeți ar fi expus-o.
+// Cauza reală: graficul a fost scris de mână, în Word, nu calculat. Două controale:
+//   controlRelatiiGrafic — relațiile declarate și datele declarate pot fi amândouă adevărate?
+//   controlGraficSursa   — piesa de grafic din pachetul depus vine dintr-o versiune înghețată?
+// Al doilea e cel ieftin: ar fi prins tot, fără să citească o singură relație.
+// ════════════════════════════════════════════════════════════════
+
+// Snapshot-ul din grafic_versiuni.activitati are două forme: generat de motor
+// ({id, durata_zile, predecesori:[{id,tip,lag}]}, fără es/ef declarate) sau importat dintr-o
+// ofertă ({cod, durata, es, ef, predecesori:[{cod,relatie,lag}]}). Le aducem la aceeași formă.
+export function normalizeazaActivitati(lista) {
+  return (Array.isArray(lista) ? lista : []).map(a => ({
+    cod: String(a?.cod ?? a?.id ?? ''),
+    denumire: a?.denumire || '',
+    durata: a?.durata ?? a?.durata_zile ?? null,
+    es: a?.es ?? null, ef: a?.ef ?? null,
+    predecesori: (a?.predecesori || []).map(p => ({
+      cod: String(p?.cod ?? p?.id ?? ''), relatie: String(p?.relatie ?? p?.tip ?? 'FS').toUpperCase(), lag: Number(p?.lag || 0),
+    })),
+  })).filter(a => a.cod)
+}
+
+export function controlRelatiiGrafic({ grafic_activitati_declarate, grafic_versiune, grafic_versiune_mod }) {
+  const acts = normalizeazaActivitati(grafic_activitati_declarate)
+  const base = { k: 'grafic_relatii', activitati: acts.length, relatii: 0, probleme: [] }
+  // Fără versiune înghețată nu avem ce verifica. NU e „ok": e „nu s-a putut verifica" — verdele
+  // pe gol e exact anti-bug-ul din normalizeazaRef, în altă haină.
+  if (!grafic_versiune || !acts.length) return { ...base, stare: 'warn',
+    detalii: 'nicio versiune înghețată de grafic — consistența relațiilor nu s-a putut verifica' }
+  // Grafic generat de motor: ES/EF nu sunt declarate, sunt calculate din relații — prin construcție
+  // consistente. Se spune explicit, nu se tace.
+  if (!acts.some(a => a.es != null && a.ef != null)) return { ...base, stare: 'ok',
+    detalii: `versiunea ${grafic_versiune} e generată de motor (${acts.length} activități) — datele sunt calculate din relații, nu declarate; nimic de confruntat` }
+
+  const v = verificaRelatii(acts)
+  const out = { ...base, relatii: v.relatii, probleme: v.probleme, conventie: v.conventie }
+  // Date declarate, dar nicio relație: un grafic fără dependențe n-are drum critic și nu poate fi
+  // verificat — e o listă de date, nu o planificare. Se spune, nu trece verde.
+  if (!v.relatii) return { ...out, stare: 'warn', cod: 'NO_RELATIONS_DECLARED',
+    detalii: `${acts.length} activități cu ES/EF declarate, dar nicio relație de precedență — fără dependențe nu există drum critic și nimic de verificat` }
+  const conflicte = v.probleme.filter(p => p.cod === 'RELATION_DATE_CONFLICT')
+  const lipsa = v.probleme.filter(p => p.cod === 'MISSING_PREDECESSOR' || p.cod === 'UNKNOWN_RELATION_TYPE')
+  const faraDate = v.probleme.filter(p => p.cod === 'MISSING_DATES')
+  const numeste = p => `${p.predecesor}→${p.succesor} ${p.relatie}${p.lag ? (p.lag > 0 ? '+' : '') + p.lag : ''}`
+    + (p.suprapunere_zile != null ? ` (începe cu ${p.suprapunere_zile} zile înainte)` : '')
+
+  if (conflicte.length) return { ...out, stare: 'block', cod: 'RELATION_DATE_CONFLICT',
+    detalii: `${conflicte.length} din ${v.relatii} relații declarate se contrazic cu datele declarate (convenție ${v.conventie}): `
+      + conflicte.slice(0, 6).map(numeste).join(' · ') + (conflicte.length > 6 ? ` · +${conflicte.length - 6}` : '')
+      + ' · fie relația e altfel (SS / FS cu lead), fie datele — graficul depus nu poate fi apărat cu un desen cu săgeți'
+      + (lipsa.length ? ` · în plus ${lipsa.length} relații trimit la activități inexistente sau au tip necunoscut` : '') }
+  if (lipsa.length) return { ...out, stare: 'block', cod: lipsa[0].cod,
+    detalii: `${lipsa.length} relații trimit la activități inexistente sau au tip necunoscut: ` + lipsa.slice(0, 6).map(numeste).join(' · ') }
+  if (faraDate.length) return { ...out, stare: 'warn', cod: 'MISSING_DATES',
+    detalii: `${faraDate.length} relații nu s-au putut verifica — activități fără ES/EF declarate` }
+  return { ...out, stare: 'ok',
+    detalii: `${v.relatii} relații declarate pe ${acts.length} activități, toate consistente cu datele (convenție ${v.conventie})` }
+}
+
+// Piesa de tip grafic (Gantt / PERT / drum critic) din pachetul depus trebuie să vină dintr-o
+// versiune înghețată în grafic_versiuni. Dacă nu vine, e un document făcut în afara ERP-ului —
+// și atunci niciun control de consistență nu-l poate atinge. Se verifică pe numele/rolul
+// fișierelor din manifest.
+const PIESA_GRAFIC = /grafic|gantt|pert|drum(ul)?\s*critic|e[șs]alonare|program(ul)?\s+de\s+execu/i
+export function controlGraficSursa({ pachet_fisiere, grafic_versiune, grafic_versiune_mod }) {
+  const fisiere = (pachet_fisiere || []).filter(f => PIESA_GRAFIC.test(String(f?.nume || '')) || PIESA_GRAFIC.test(String(f?.rol || '')))
+  const base = { k: 'grafic_sursa', piese: fisiere.map(f => f.nume) }
+  if (!fisiere.length) return { ...base, stare: 'ok', detalii: 'pachetul nu conține (încă) piese de grafic' }
+  if (!grafic_versiune) return { ...base, stare: 'block', cod: 'SCHEDULE_NOT_FROM_FROZEN_VERSION',
+    detalii: `${plural(fisiere.length, 'piesă de grafic în pachet', 'piese de grafic în pachet')} (${fisiere.map(f => f.nume).join(', ')}), dar nicio versiune înghețată în grafic_versiuni — graficul depus e făcut în afara ERP-ului și nu poate fi verificat` }
+  return { ...base, stare: 'ok',
+    detalii: `${plural(fisiere.length, 'piesă de grafic', 'piese de grafic')} în pachet, versiunea înghețată ${grafic_versiune}${grafic_versiune_mod ? ` (${grafic_versiune_mod})` : ''}` }
 }
