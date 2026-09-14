@@ -17,6 +17,7 @@ import GarantieSection from './OfertareGarantie.jsx'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
 import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
+import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1066,10 +1067,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
             <input type="file" multiple style={{ display:'none' }}
               disabled={!!upBusy} onChange={e => { urca(e.target.files); e.target.value = '' }} />
           </label>
-          {nrDeProcesat > 0 && !procBusy && !coada?.activ && (
+          {/* Poarta pe cheltuială (14.09.2026): citirea integrală o pornește doar ownerul sau responsabilul.
+              Restul echipei face trierea din fișa de date (tab ⚡ Triere) — un apel, nu 40. */}
+          {nrDeProcesat > 0 && !procBusy && !coada?.activ && !poatePorniProcesarea(profile, licitatie) && (
+            <span style={{ fontSize:11.5, color:G.dim, alignSelf:'center' }} title={MOTIV_POARTA}>🔒 {nrDeProcesat} de citit — pornește ownerul / responsabilul</span>
+          )}
+          {nrDeProcesat > 0 && !procBusy && !coada?.activ && poatePorniProcesarea(profile, licitatie) && (
             <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={proceseaza}>🤖 Procesează ({nrDeProcesat})</button>
           )}
-          {nrDeProcesat > 0 && !procBusy && !coada?.activ && (
+          {nrDeProcesat > 0 && !procBusy && !coada?.activ && poatePorniProcesarea(profile, licitatie) && (
             <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={proceseazaPeServer}
               title="Citirea rulează pe server, câte 3 documente pe minut — poți închide tab-ul; primești notificare în clopoțel când se termină">
               ☁️ Pe server
@@ -1146,7 +1152,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={!!plansaBusy} title="PDF peste 20 MB — citirea AI cade pe el; îl sparg în bucăți ≤ 15 MB"
                       onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
                   )}
-                  {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && (
+                  {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={d.analiza?.citire_ai ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
                       onClick={() => citestePlansa(d)}>
@@ -1563,7 +1569,8 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
             <option value="">toate stările</option>
             {Object.entries(STARE_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
-          {!busy && <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={extrage}>🤖 {cerinte?.length ? 'Re-extrage' : 'Extrage cerințele'} (Opus)</button>}
+          {!busy && poatePorniProcesarea(profile, licitatie) && <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={extrage}>🤖 {cerinte?.length ? 'Re-extrage' : 'Extrage cerințele'} (Opus)</button>}
+          {!busy && !poatePorniProcesarea(profile, licitatie) && <span style={{ fontSize:11.5, color:G.dim, alignSelf:'center' }} title={MOTIV_POARTA}>🔒 registrul îl generează ownerul / responsabilul</span>}
           {!busy && neconfirmate > 0 && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={confirmaTot}>✅ Confirmă registrul ({neconfirmate})</button>}
         </div>
       </div>
@@ -2069,7 +2076,8 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
               <input type="checkbox" checked={fDoarBifate} onChange={e => setFDoarBifate(e.target.checked)} style={{ accentColor:G.ofertare }} /> doar bifatele din registru ({nrBifateAici})
             </label>
           )}
-          {!busy && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={propune}>🤖 Propune acoperiri (Opus)</button>}
+          {!busy && poatePorniProcesarea(profile, licitatie) && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={propune}>🤖 Propune acoperiri (Opus)</button>}
+          {!busy && !poatePorniProcesarea(profile, licitatie) && <span style={{ fontSize:11.5, color:G.dim, alignSelf:'center' }} title={MOTIV_POARTA}>🔒 acoperirea o rulează ownerul / responsabilul</span>}
         </div>
       </div>
       {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
@@ -2167,7 +2175,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [regim, setRegim] = useState(l.regim_achizitie || '')
   const [resp, setResp] = useState(l.responsabil_id || '')
   // Intrarea din Clarificări deschide fișa direct pe Documente; altfel, tabul obișnuit.
-  const [tab, setTab] = useState(() => (intrareDocument ? 'documente' : 'cerinte'))   // cerinte | documente | clarificari | detalii | verificari
+  // Etapa 0 (14.09.2026): fără registru generat, fișa se deschide pe ⚡ Triere — decizia vine din fișa de date, nu din 40 de documente citite
+  const [tab, setTab] = useState(() => (intrareDocument ? 'documente' : (l._st?.cerinte || l.nr_cerinte) ? 'cerinte' : 'triere'))   // triere | cerinte | documente | clarificari | detalii | verificari
   // Dacă omul pleacă de pe Documente înainte să apuce bifarea, intenția nu mai are ce căuta:
   // altfel s-ar declanșa mai târziu, peste altceva.
   useEffect(() => {
@@ -2234,6 +2243,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     </div>
   )
   const TABS = [
+    ['triere', '⚡ Triere'],
     ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
     ['propunere', `📑 Propunere tehnică${ptSt ? ` (${ptSt.cu_capitol}/${ptSt.de_raspuns})` : ''}`],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
@@ -2263,6 +2273,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           </div>
         </div>
         <div style={{ fontSize:15, color:G.muted, margin:'6px 0 18px', maxWidth:900 }}>{l.obiect}</div>
+        <div style={{ margin:'-10px 0 12px' }}><CostAI licitatieId={l.id} /></div>
 
         {/* KPI */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(175px, 1fr))', gap:12, marginBottom:18 }}>
@@ -2293,6 +2304,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
+            {tab === 'triere' && <OfertareTriere licitatie={l} profile={profile} showToast={showToast} onChanged={onChanged} onProceseaza={() => setTab('documente')} />}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
               intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} />}
             {tab === 'garantie' && <>
