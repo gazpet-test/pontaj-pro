@@ -198,17 +198,28 @@ function TipBadge({ tip }) {
   return <span style={{display:'inline-block', padding:'3px 10px', borderRadius:12, fontSize:11, fontWeight:700, letterSpacing:'.3px', background: c.color + '22', color: c.color, whiteSpace:'nowrap'}}>{c.label}</span>
 }
 
+// TKT-0152: arătăm TOATE scadențele definite (km + ore + dată), cea mai urgentă
+// prima și colorată. Înainte se afișa una singură, iar dacă exista dată, km-ii
+// dispăreau din coloană — exact reclamația lui Oancea.
+const URM_ICON = { data: '📅', km: '🛣️', ore: '⏱️' }
 function UrmServiceBadge({ u }) {
   if (!u) return <span style={{color:G.dim, fontSize:11}}>—</span>
   const c = urmServiceColor(u)
-  const icon = u.tip === 'data' ? '📅' : u.tip === 'km' ? '🛣️' : '⏱️'
+  const restul = (u.toate || []).slice(1)
   return (
-    <span style={{
-      display:'inline-block', padding:'3px 9px', borderRadius:8,
-      background: c + '22', color: c, fontWeight:700, fontSize:11,
-      whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums'
-    }}>
-      {icon} {u.label}
+    <span style={{display:'inline-flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>
+      <span style={{
+        display:'inline-block', padding:'3px 9px', borderRadius:8,
+        background: c + '22', color: c, fontWeight:700, fontSize:11,
+        whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums'
+      }}>
+        {URM_ICON[u.tip]} {u.label}
+      </span>
+      {restul.map((r, i) => (
+        <span key={i} style={{fontSize:10, color:G.dim, whiteSpace:'nowrap', fontVariantNumeric:'tabular-nums', paddingLeft:3}}>
+          {URM_ICON[r.tip]} {r.label}
+        </span>
+      ))}
     </span>
   )
 }
@@ -1972,6 +1983,10 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
   const [perioadaF, setPerioadaF] = useState('toate')
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
+  // TKT-0152 (Daniel Oancea): interval de KM lângă filtrul de perioadă.
+  // Se aplică pe kilometrajul fișei (km_intrare, cu fallback km_iesire).
+  const [kmMin, setKmMin] = useState('')
+  const [kmMax, setKmMax] = useState('')
 
   const [sortBy, setSortBy] = useState({ col:'data_fisei', dir:'desc' })
   const [scadenteOnly, setScadenteOnly] = useState(false)  // ETAPA 8.6: filtru click-pe-KPI
@@ -2111,6 +2126,14 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       if (statusF !== 'Toate' && f.status !== statusF) return false
       if (dStart && (!f.data_fisei || f.data_fisei < dStart)) return false
       if (dEnd && (!f.data_fisei || f.data_fisei > dEnd)) return false
+      // TKT-0152: interval KM pe kilometrajul fișei. Fișele fără km ies din
+      // rezultat doar dacă filtrul chiar e pus (altfel n-am mai vedea nimic).
+      if (kmMin !== '' || kmMax !== '') {
+        const kmF = f.km_intrare ?? f.km_iesire
+        if (kmF == null) return false
+        if (kmMin !== '' && Number(kmF) < Number(kmMin)) return false
+        if (kmMax !== '' && Number(kmF) > Number(kmMax)) return false
+      }
       if (search) {
         const a = f.logistica_active || {}
         const hay = norm([f.titlu, f.diagnostic_lucrari, f.numar_factura, f.locatie_service, f.observatii,
@@ -2146,7 +2169,9 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
           // Pachet C: folosim km/ore live din view
           const km = kmOreMap[f.activ_id]
           const u = calcUrmService(f, km?.km_live, km?.ore_live)
-          return u ? u.ramas : Number.MAX_SAFE_INTEGER
+          // TKT-0152: sortăm după urgența normalizată, nu după `ramas` brut
+          // (altfel se compară zile cu km și ordinea e falsă).
+          return u ? u.urgenta : Number.MAX_SAFE_INTEGER
         }
         default:              return f.id
       }
@@ -2158,7 +2183,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       return 0
     })
     return r
-  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, sortBy, kmOreMap, scadenteOnly, ultimaFisaPerActiv, activMap])
+  }, [fise, search, catFilter, tipF, statusF, perioadaF, customStart, customEnd, kmMin, kmMax, sortBy, kmOreMap, scadenteOnly, ultimaFisaPerActiv, activMap])
 
   const sumaFiltrata = useMemo(() => filtered.reduce((s, f) => s + Number(f.suma_factura || 0), 0), [filtered])
 
@@ -2211,7 +2236,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
     setPerioadaF('toate'); setCustomStart(''); setCustomEnd('')
     setScadenteOnly(false)  // ETAPA 8.6
   }
-  const haveFiltre = search || catFilter !== 'Toate' || tipF !== 'Toate' || statusF !== 'Toate' || perioadaF !== 'toate' || scadenteOnly
+  const haveFiltre = search || catFilter !== 'Toate' || tipF !== 'Toate' || statusF !== 'Toate' || perioadaF !== 'toate' || kmMin !== '' || kmMax !== '' || scadenteOnly
 
   const scadIcon = kpi.scadDepasite > 0 ? '🚨' : kpi.scadAproape > 0 ? '⚠️' : '✅'
   const scadColor = kpi.scadDepasite > 0 ? G.red : kpi.scadAproape > 0 ? G.yellow : G.green
@@ -2329,6 +2354,17 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
               <span style={{color:G.muted, fontSize:12}}>→</span>
               <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={{...S.input, padding:'6px 10px', fontSize:12, minWidth:140, width:'auto'}} />
             </>
+          )}
+          {/* TKT-0152: interval KM, lângă perioadă */}
+          <span style={{color:G.dim, fontSize:12, marginLeft:6}}>🛣️ KM</span>
+          <input type="number" placeholder="de la" value={kmMin} onChange={e => setKmMin(e.target.value)}
+            style={{...S.input, padding:'6px 10px', fontSize:12, width:90, minWidth:0}} />
+          <span style={{color:G.muted, fontSize:12}}>→</span>
+          <input type="number" placeholder="până la" value={kmMax} onChange={e => setKmMax(e.target.value)}
+            style={{...S.input, padding:'6px 10px', fontSize:12, width:90, minWidth:0}} />
+          {(kmMin !== '' || kmMax !== '') && (
+            <button onClick={() => { setKmMin(''); setKmMax('') }}
+              style={{...S.btnS, padding:'6px 10px', fontSize:12, color:G.muted}}>✕ KM</button>
           )}
         </div>
       </div>

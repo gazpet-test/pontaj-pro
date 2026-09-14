@@ -38,6 +38,7 @@ export function calcUrmService(fisa, kmLive, oreLive) {
     items.push({
       tip: 'data',
       ramas: diffDays,
+      urgenta: diffDays / PRAG_ZILE,
       label: diffDays < 0 ? `${Math.abs(diffDays)} zile depășite` : `${diffDays} zile`,
     })
   }
@@ -46,6 +47,7 @@ export function calcUrmService(fisa, kmLive, oreLive) {
     items.push({
       tip: 'km',
       ramas: diff,
+      urgenta: diff / PRAG_KM,
       label: diff < 0
         ? `${Math.abs(diff).toLocaleString('ro-RO')} km depășiți`
         : `${diff.toLocaleString('ro-RO')} km`,
@@ -56,13 +58,23 @@ export function calcUrmService(fisa, kmLive, oreLive) {
     items.push({
       tip: 'ore',
       ramas: diff,
+      urgenta: diff / PRAG_ORE,
       label: diff < 0 ? `${Math.abs(diff)} h depășite` : `${diff} h`,
     })
   }
 
   if (!items.length) return null
-  items.sort((x, y) => x.ramas - y.ramas)
-  return items[0]
+  // TKT-0152 (Daniel Oancea): înainte sortam după `ramas` brut, adică comparam
+  // ZILE cu KM cu ORE — numere din unități diferite. „30 zile" ieșea mereu
+  // înaintea „5000 km", așa că din clipa în care cineva punea data următoarei
+  // revizii, coloana „URMĂTOR" arăta zile și ascundea kilometrii, deși mașina
+  // ajungea la km cu mult înainte de dată.
+  // Acum comparăm cât de aproape e fiecare scadență de PROPRIUL ei prag
+  // (urgenta = rămas / prag), deci se compară lucruri comparabile.
+  items.sort((x, y) => x.urgenta - y.urgenta)
+  // `toate` = toate scadențele definite, cea mai urgentă prima — badge-ul le
+  // arată pe toate, ca omul să vadă și km și data, nu doar una.
+  return { ...items[0], toate: items }
 }
 
 /**
