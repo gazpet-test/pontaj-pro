@@ -495,7 +495,7 @@ function EchipamenteTab() {
       const [rEch, rAsig, rEmp, rUser, rFurn] = await Promise.all([
         supabase.from('v_magazie_echipamente').select('*').order('denumire'),
         supabase.from('v_magazie_inventar_activ').select('*').is('data_retur', null),
-        supabase.from('employees').select('id, name, functie').order('name'),
+        supabase.from('employees').select('id, name, functie, marime_incaltaminte, marime_imbracaminte').order('name'),
         supabase.auth.getUser(),
         supabase.from('v_echipament_furnizor').select('*'),
       ])
@@ -691,7 +691,8 @@ function EchipamenteTab() {
       </div>
 
       {editModal && <EchipModal initial={editModal} busy={busy} onSave={saveEchip} onClose={() => setEditModal(null)} />}
-      {predaModal && <PredaModal echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)} />}
+      {predaModal && <PredaModal echip={predaModal} employees={employees} busy={busy} onPreda={predaCatre} onClose={() => setPredaModal(null)}
+        onMasuraSalvata={(id, camp, val) => setEmployees(prev => prev.map(e => e.id === id ? { ...e, [camp]: val } : e))} />}
     </>
   )
 }
@@ -739,17 +740,45 @@ function EchipModal({ initial, busy, onSave, onClose }) {
 }
 
 // ── Modal predare către angajat ──
-function PredaModal({ echip, employees, busy, onPreda, onClose }) {
+// TKT-0151 (Amalia): care măsură se arată depinde de tipul de echipament — bocanci/încălțăminte
+// vs salopetă/vestă/îmbrăcăminte. Restul categoriilor (scule etc.) nu au măsură relevantă.
+const MASURA_DIN_DENUMIRE = (denumire) => {
+  const d = normalize(denumire || '')
+  if (/bocanc|incaltamint|ghete|pantof/.test(d)) return 'marime_incaltaminte'
+  if (/salopet|vesta|imbracamint|jacheta|pantalon|geaca|hanorac/.test(d)) return 'marime_imbracaminte'
+  return null
+}
+
+function PredaModal({ echip, employees, busy, onPreda, onClose, onMasuraSalvata }) {
   const [empSearch, setEmpSearch] = useState('')
   const [empId, setEmpId] = useState('')
   const [cant, setCant] = useState(1)
   const [obs, setObs] = useState('')
+  const [sortMasura, setSortMasura] = useState(false)
+  const [salvandMasura, setSalvandMasura] = useState(null)   // employee_id în curs de salvare
+  const campMasura = MASURA_DIN_DENUMIRE(echip.denumire)
   const filtered = useMemo(() => {
-    if (!empSearch) return employees.slice(0, 50)
-    return employees.filter(e => normalize(e.name).includes(normalize(empSearch))).slice(0, 50)
-  }, [employees, empSearch])
+    let list = employees
+    if (empSearch) list = list.filter(e => normalize(e.name).includes(normalize(empSearch)))
+    list = list.slice(0, 50)
+    if (campMasura && sortMasura) {
+      list = [...list].sort((a, b) => {
+        const ma = a[campMasura] || '', mb = b[campMasura] || ''
+        if (!ma && mb) return 1
+        if (ma && !mb) return -1
+        return ma.localeCompare(mb, 'ro', { numeric: true })
+      })
+    }
+    return list
+  }, [employees, empSearch, campMasura, sortMasura])
   const maxim = Number(echip.cantitate_disponibila)
   const valid = empId && Number(cant) > 0 && Number(cant) <= maxim
+  const salveazaMasura = async (empIdRow, valoare) => {
+    setSalvandMasura(empIdRow)
+    const { error } = await supabase.from('employees').update({ [campMasura]: valoare || null }).eq('id', empIdRow)
+    setSalvandMasura(null)
+    if (!error) onMasuraSalvata?.(empIdRow, campMasura, valoare)
+  }
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000, padding:20 }} onClick={onClose}>
       <div style={{ ...S.card, padding:22, maxWidth:460, width:'100%' }} onClick={e => e.stopPropagation()}>
@@ -757,13 +786,27 @@ function PredaModal({ echip, employees, busy, onPreda, onClose }) {
         <div style={{ fontSize:13, color:G.muted, marginBottom:16 }}>{echip.denumire} · disponibil: <b style={{ color:G.green }}>{fmtNr(maxim)} {echip.um}</b></div>
         <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
           <div>
-            <label style={{ fontSize:12, color:G.muted }}>Caută angajat</label>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <label style={{ fontSize:12, color:G.muted }}>Caută angajat</label>
+              {campMasura && (
+                <label style={{ fontSize:11, color:G.muted, display:'flex', alignItems:'center', gap:4, cursor:'pointer' }}>
+                  <input type="checkbox" checked={sortMasura} onChange={e => setSortMasura(e.target.checked)} /> sortează după măsură
+                </label>
+              )}
+            </div>
             <input style={S.input} value={empSearch} onChange={e => { setEmpSearch(e.target.value); setEmpId('') }} placeholder="Nume angajat..." />
-            <div style={{ maxHeight:170, overflowY:'auto', marginTop:6, border:`1px solid ${G.border}`, borderRadius:8 }}>
+            <div style={{ maxHeight:220, overflowY:'auto', marginTop:6, border:`1px solid ${G.border}`, borderRadius:8 }}>
               {filtered.map(e => (
                 <div key={e.id} onClick={() => { setEmpId(e.id); setEmpSearch(e.name) }}
-                  style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, background: empId === e.id ? G.green + '22' : 'transparent', borderBottom:`1px solid ${G.border}` }}>
-                  {empId === e.id ? '✓ ' : ''}{e.name}{e.functie && <span style={{ color:G.dim }}> · {e.functie}</span>}
+                  style={{ padding:'8px 12px', cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', gap:8, background: empId === e.id ? G.green + '22' : 'transparent', borderBottom:`1px solid ${G.border}` }}>
+                  <span style={{ flex:1 }}>{empId === e.id ? '✓ ' : ''}{e.name}{e.functie && <span style={{ color:G.dim }}> · {e.functie}</span>}</span>
+                  {campMasura && (
+                    <input value={e[campMasura] || ''} onClick={ev => ev.stopPropagation()}
+                      onChange={ev => { e[campMasura] = ev.target.value }}
+                      onBlur={ev => salveazaMasura(e.id, ev.target.value)}
+                      placeholder="măsură" title="Mărime — salvată automat la ieșirea din câmp"
+                      style={{ width:56, padding:'3px 6px', fontSize:11.5, background:G.bg, border:`1px solid ${G.border}`, borderRadius:5, color:G.text, opacity: salvandMasura === e.id ? .5 : 1 }} />
+                  )}
                 </div>
               ))}
               {!filtered.length && <div style={{ padding:12, fontSize:12, color:G.muted }}>Niciun angajat găsit.</div>}
