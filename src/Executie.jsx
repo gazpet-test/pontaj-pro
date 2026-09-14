@@ -1182,7 +1182,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
                   { label: 'Manager Proiect (MP)',          id: p.mp_employee_id },
                   { label: 'Resp. Tehnic Execuție (RTE)',   id: p.rte_employee_id },
                   { label: 'Resp. Tehnic Sudură (RTS)',     id: p.rts_employee_id },
-                  { label: 'Coordonator Transgaz',          val: p.coordonator_transgaz },
+                  { label: 'Coordonator beneficiar',          val: p.coordonator_transgaz },
                 ].filter(r => r.id || r.val).map((r, i) => (
                   <div key={i} style={{ background: G.card2, borderRadius: 7, padding: '8px 12px' }}>
                     <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 2 }}>{r.label}</div>
@@ -2214,7 +2214,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
               ))}
             </div>
             <div style={{ marginTop:10 }}>
-              <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>🏢 Coordonator Transgaz</label>
+              <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>🏢 Coordonator beneficiar</label>
               <input style={{...fieldStyle,fontSize:12}} placeholder='Nume și prenume (persoana de la beneficiar)' value={form.coordonator_transgaz} onChange={e=>set('coordonator_transgaz',e.target.value)} />
             </div>
             <div style={{ marginTop:10 }}>
@@ -2786,7 +2786,7 @@ function TabProiectDashboard({ proiectId }) {
     { label: 'Manager Proiect (MP)',        id: extra.mp_employee_id },
     { label: 'Resp. Tehnic Execuție (RTE)', id: extra.rte_employee_id },
     { label: 'Resp. Tehnic Sudură (RTS)',   id: extra.rts_employee_id },
-    { label: 'Coordonator Transgaz',        val: extra.coordonator_transgaz },
+    { label: 'Coordonator beneficiar',        val: extra.coordonator_transgaz },
   ].filter(r => r.id || r.val)
 
   const infoRows = [
@@ -2859,7 +2859,7 @@ function TabProiectDashboard({ proiectId }) {
               </div>
             ))}
             <div>
-              <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 3 }}>Coordonator Transgaz</div>
+              <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 3 }}>Coordonator beneficiar</div>
               <input value={echipaForm.coordonator_transgaz} onChange={e => setEchipaForm(pr => ({ ...pr, coordonator_transgaz: e.target.value }))}
                 placeholder="nume coordonator" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', fontSize: 13, background: G.card2 || G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 7 }} />
             </div>
@@ -2868,7 +2868,7 @@ function TabProiectDashboard({ proiectId }) {
             </div>
           </div>
         ) : echipa.length === 0 ? (
-          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă „✏️ Editează echipa" și completează MP / RTE / RTS / coordonator Transgaz.</div>
+          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă „✏️ Editează echipa" și completează MP / RTE / RTS / coordonator beneficiar.</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
             {echipa.map((r, i) => (
