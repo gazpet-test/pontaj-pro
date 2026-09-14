@@ -26,7 +26,7 @@ import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, 
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 import ClarificariAC from './OfertareClarificariAC.jsx'
-import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE } from './ofertareControale.js'
+import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -1090,6 +1090,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [legaturi, setLegaturi] = useState([])
   const [dovedite, setDovedite] = useState(new Set())
   const [afirmatii, setAfirmatii] = useState([])
+  const [regulaCumul, setRegulaCumul] = useState([])   // cerintele care interzic cumulul de functii (B, 14.09)
   const [tipuriAut, setTipuriAut] = useState([])
   const [autExterne, setAutExterne] = useState([])
   const [pachet, setPachet] = useState([])
@@ -1152,6 +1153,12 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const cer = rCer.data || []
     setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
+    // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
+    // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
+    supabase.from('ofertare_cerinte').select('id, text_cerinta, tip, sursa_sectiune, sursa_pagina')
+      .eq('licitatie_id', id).is('inlocuita_de', null).is('duplicat_al', null)
+      .filter('text_cerinta', 'imatch', REGEX_INTERZICE_CUMUL).limit(20)
+      .then(r => setRegulaCumul(r.error ? [] : (r.data || [])))
     setObservatii(rObs.data || [])
     setDocumente(rDoc.data || [])
     setPachete(rPac.data || [])
@@ -1820,6 +1827,15 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Afirmațiile propunerii, față de firmă</div>
+        {regulaCumul.length > 0 && (
+          <div style={{ ...S.card, padding:'10px 14px', marginBottom:8, borderColor:G.orange + '77', fontSize:13, color:G.text }}>
+            <b style={{ color:G.orange }}>⚠️ Cerințele interzic cumulul de funcții</b> — aceeași persoană cu două roluri e <b>block</b> la conformitate
+            {afirmatii.length === 0 && <span style={{ color:G.muted }}> (încă nu e nicio persoană încărcată din propunere — controlul se aprinde când apar)</span>}
+            <ul style={{ margin:'6px 0 0', paddingLeft:18, color:G.muted, fontSize:12 }}>
+              {regulaCumul.map(c => <li key={c.id}>#{c.id} · {c.tip}{c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}{c.sursa_pagina ? ` p. ${c.sursa_pagina}` : ''}: „{c.text_cerinta}"</li>)}
+            </ul>
+          </div>
+        )}
         <Conformitate afirmatii={afirmatii} tipuriAut={tipuriAut} autExterne={autExterne}
           onExcepta={exceptaAfirmatie} onSetTip={setTipCerut} onSetExtern={setExtern} busy={busy} />
       </div>
