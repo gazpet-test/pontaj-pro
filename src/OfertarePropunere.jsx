@@ -25,6 +25,7 @@ import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './Ofer
 import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+import ClarificariAC from './OfertareClarificariAC.jsx'
 import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE } from './ofertareControale.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1795,6 +1796,11 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <PachetPersonal randuri={pachet} busy={busy} showToast={showToast}
           laData={lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null}
           onGenereaza={genereazaPachet} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>Solicitări de clarificare primite de la autoritate — după depunere</div>
+        <ClarificariAC licId={licId} showToast={showToast} />
       </div>
 
       <div>
