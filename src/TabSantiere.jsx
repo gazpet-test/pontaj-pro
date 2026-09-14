@@ -144,6 +144,22 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
   useEffect(() => { loadAll() }, [loadAll])
   useEffect(() => { loadAlocari() }, [loadAlocari])
 
+  // TKT-2026-0121 (Nica): alertă când aceeași persoană e alocată în paralel și pe alt șantier
+  // (ex. sudor la LOT1 și LOT3 simultan) — pe intervale de dată care se suprapun.
+  const [conflicte, setConflicte] = useState({}) // alocare_id -> listă conflicte
+  useEffect(() => {
+    if (!alocari.length) { setConflicte({}); return }
+    let live = true
+    supabase.from('v_executie_alocari_conflicte').select('*').in('alocare_id', alocari.map(a => a.id))
+      .then(({ data }) => {
+        if (!live) return
+        const map = {}
+        ;(data || []).forEach(c => { (map[c.alocare_id] ||= []).push(c) })
+        setConflicte(map)
+      })
+    return () => { live = false }
+  }, [alocari])
+
   const canWrite = profile?.is_owner || ['superadmin','manager_santier'].includes(profile?.role)
   const isOwner  = profile?.is_owner === true
 
@@ -403,6 +419,12 @@ export default function TabSantiere({ proiectId: proiectIdProp }) {
                     {a.employee_functie}
                     {a.masina_naveta && <span style={{marginLeft:8}}>🚗 {a.masina_naveta}</span>}
                   </div>
+                  {conflicte[a.id] && (
+                    <div title={`Alocat în același interval și pe: ${conflicte[a.id].map(c => c.conflict_proiect_nume).join(', ')}`}
+                      style={{fontSize:9, fontWeight:800, color:G.red, background:G.red+'22', padding:'2px 6px', borderRadius:8, marginTop:3, display:'inline-block'}}>
+                      ⚠️ dublat: {conflicte[a.id].map(c => c.conflict_proiect_nume).join(', ')}
+                    </div>
+                  )}
                 </div>
 
                 {/* Meserie label */}
