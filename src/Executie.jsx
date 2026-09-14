@@ -2512,6 +2512,15 @@ function FazeDeterminanteISC({ proiect }) {
   const [uploading, setUploading] = useState(false)
   const [msg, setMsg] = useState(null)
   const flash = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 4000) }
+  // TKT-0082 (Nica): răspunsul ISC. false = ISC a comunicat că NU participă la nicio fază → fazele
+  // devin interne (E+B+P): se planifică și se încheie cu PV, fără pasul „convoacă ISC".
+  const [iscParticipa, setIscParticipa] = useState(proiect.isc_participa ?? null)
+  const setIsc = async (v) => {
+    const { error } = await supabase.from('executie_proiecte').update({ isc_participa: v }).eq('id', proiect.id)
+    if (error) { flash('Eroare: ' + error.message, true); return }
+    setIscParticipa(v); proiect.isc_participa = v
+  }
+  const iscNu = iscParticipa === false
 
   const load = useCallback(async () => {
     const { data } = await supabase.from('executie_faze_determinante')
@@ -2569,7 +2578,9 @@ function FazeDeterminanteISC({ proiect }) {
   const azi = () => new Date().toISOString().slice(0, 10)
   const NEXT = {
     neplanificata: { label: '📅 Planifică', to: 'planificata', set: { data_planificata: null } },
-    planificata:   { label: '📣 Convoacă ISC', to: 'convocata', set: { data_convocata: null } },
+    planificata:   iscNu
+      ? { label: '✅ PV intern (E+B+P)', to: 'efectuata', set: { data_efectuata: null } }
+      : { label: '📣 Convoacă ISC', to: 'convocata', set: { data_convocata: null } },
     convocata:     { label: '✅ PV efectuat', to: 'efectuata', set: { data_efectuata: null } },
   }
   const advance = async (f) => {
@@ -2622,10 +2633,17 @@ function FazeDeterminanteISC({ proiect }) {
           {collapsed ? '▸' : '▾'} Faze determinante ISC {faze.length > 0 && `(${faze.length})`}
         </div>
         {restante > 0 && (
-          <span style={{ fontSize: 10, fontWeight: 800, color: '#F0883E', padding: '2px 8px', background: '#F0883E22', borderRadius: 8 }}>
-            ⚠️ {restante} de convocat
+          <span style={{ fontSize: 10, fontWeight: 800, color: iscNu ? '#58A6FF' : '#F0883E', padding: '2px 8px', background: (iscNu ? '#58A6FF' : '#F0883E') + '22', borderRadius: 8 }}>
+            {iscNu ? `🏗 ${restante} de efectuat intern` : `⚠️ ${restante} de convocat`}
           </span>
         )}
+        <select value={iscParticipa === null ? '' : iscParticipa ? 'da' : 'nu'} onChange={e => setIsc(e.target.value === '' ? null : e.target.value === 'da')}
+          title={'Răspunsul oficial al ISC la convocare. „Nu participă" = fazele se fac intern (E+B+P), fără convocare.'}
+          style={{ fontSize: 11, padding: '4px 8px', background: G.bg, color: iscNu ? '#58A6FF' : G.text, border: `1px solid ${iscNu ? '#58A6FF66' : G.border}`, borderRadius: 6 }}>
+          <option value="">ISC: răspuns necunoscut</option>
+          <option value="da">ISC: participă la faze</option>
+          <option value="nu">ISC: NU participă (faze interne E+B+P)</option>
+        </select>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <label style={{ padding: '8px 13px', fontSize: 13, fontWeight: 700, background: 'transparent', color: '#58A6FF', border: '1px solid #58A6FF66', borderRadius: 8, cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? .6 : 1 }}
             title={pdfPath ? 'Înlocuiește PCCVI-ul și re-extrage' : 'Încarcă PCCVI-ul și extrage fazele automat'}>
