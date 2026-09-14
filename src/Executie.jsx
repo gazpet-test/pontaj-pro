@@ -1202,6 +1202,10 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
             </div>
           )}
 
+          <div style={{ marginBottom: 16 }}>
+            <ProbePresiune proiect={p} />
+          </div>
+
           {/* Stadiu execuție */}
           <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
             <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 12 }}>
@@ -2736,6 +2740,114 @@ function FazeDeterminanteISC({ proiect }) {
               </div>
             )
           })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// TKT-2026-0122 (Kostas): modul de probe (presiune/rezistență/etanșeitate) — transparență
+// și acces direct la documentele probelor din fișa proiectului, fără să caute prin mail/NAS.
+function ProbePresiune({ proiect }) {
+  const [probe, setProbe] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [collapsed, setCollapsed] = useState(true)
+  const [adding, setAdding] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [denumire, setDenumire] = useState('')
+  const [dataEf, setDataEf] = useState('')
+  const [msg, setMsg] = useState(null)
+  const flash = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 4000) }
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('executie_probe_presiune')
+      .select('*').eq('proiect_id', proiect.id).order('data_efectuare', { ascending: false, nullsFirst: true }).order('id', { ascending: false })
+    setProbe(data || []); setLoading(false)
+  }, [proiect.id])
+  useEffect(() => { load() }, [load])
+
+  const adaugaProba = async (file) => {
+    if (!denumire.trim()) { flash('Completează denumirea probei', true); return }
+    setUploading(true)
+    try {
+      let fisier_path = null, fisier_nume = null
+      if (file) {
+        const path = `probe-presiune/${proiect.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+        const { error: upErr } = await supabase.storage.from('executie-contracte').upload(path, file, { upsert: false })
+        if (upErr) throw new Error('Upload: ' + upErr.message)
+        fisier_path = path; fisier_nume = file.name
+      }
+      const { error } = await supabase.from('executie_probe_presiune').insert({
+        proiect_id: proiect.id, denumire: denumire.trim().slice(0, 250),
+        data_efectuare: dataEf || null, fisier_path, fisier_nume,
+      })
+      if (error) throw new Error(error.message)
+      setDenumire(''); setDataEf(''); setAdding(false); setCollapsed(false)
+      load()
+    } catch (e) { flash('Eroare: ' + e.message, true) }
+    setUploading(false)
+  }
+  const deschide = async (path) => {
+    const { data } = await supabase.storage.from('executie-contracte').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  const remove = async (pr) => {
+    if (!window.confirm(`Șterge proba „${pr.denumire}"?`)) return
+    const { error } = await supabase.from('executie_probe_presiune').delete().eq('id', pr.id)
+    if (error) flash('Eroare: ' + error.message, true); else load()
+  }
+
+  return (
+    <div style={{ marginTop: 10, padding: '12px 14px', background: '#58A6FF10', borderRadius: 8, border: '1px solid #58A6FF33' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 18 }}>🧪</span>
+        <div onClick={() => setCollapsed(c => !c)}
+          style={{ fontSize: 12, fontWeight: 800, color: '#58A6FF', cursor: 'pointer', userSelect: 'none' }}>
+          {collapsed ? '▸' : '▾'} Probe (presiune / rezistență / etanșeitate) {probe.length > 0 && `(${probe.length})`}
+        </div>
+        <button onClick={() => setAdding(a => !a)} style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 12, fontWeight: 700, background: 'transparent', color: '#58A6FF', border: '1px solid #58A6FF66', borderRadius: 8, cursor: 'pointer' }}>
+          {adding ? '✕ Anulează' : '＋ Adaugă probă'}
+        </button>
+      </div>
+      {msg && <div style={{ fontSize: 11, fontWeight: 700, color: msg.err ? '#EF4444' : '#3FB950', marginTop: 8 }}>{msg.m}</div>}
+      {adding && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+          <input value={denumire} onChange={e => setDenumire(e.target.value)} placeholder="denumire probă (ex. probă presiune tronson km 3+200)"
+            style={{ ...S.inp, fontSize: 12.5, maxWidth: 280 }} />
+          <input type="date" value={dataEf} onChange={e => setDataEf(e.target.value)} style={{ ...S.inp, fontSize: 12.5, maxWidth: 150 }} />
+          <label style={{ padding: '7px 12px', fontSize: 12, fontWeight: 700, background: 'transparent', color: '#58A6FF', border: '1px solid #58A6FF66', borderRadius: 8, cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? .6 : 1 }}>
+            {uploading ? '⏳ Se salvează...' : '📎 Salvează + atașează fișier'}
+            <input type="file" style={{ display: 'none' }} disabled={uploading}
+              onChange={e => adaugaProba(e.target.files?.[0])} />
+          </label>
+          <button onClick={() => adaugaProba(null)} disabled={uploading}
+            style={{ padding: '7px 12px', fontSize: 12, fontWeight: 700, background: 'transparent', color: G.muted, border: `1px solid ${G.border}`, borderRadius: 8, cursor: uploading ? 'wait' : 'pointer' }}>
+            Salvează fără fișier
+          </button>
+        </div>
+      )}
+      {collapsed ? null : loading ? (
+        <div style={{ fontSize: 11, color: G.muted, marginTop: 8 }}>⏳ ...</div>
+      ) : probe.length === 0 ? (
+        <div style={{ fontSize: 11, color: G.muted, marginTop: 8 }}>Nicio probă înregistrată încă.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+          {probe.map(pr => (
+            <div key={pr.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: G.bg, borderRadius: 7, border: `1px solid ${G.border}`, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: G.text }}>{pr.denumire}</div>
+                <div style={{ fontSize: 10, color: G.muted }}>{pr.data_efectuare ? `📅 ${pr.data_efectuare}` : 'fără dată'}</div>
+              </div>
+              {pr.fisier_path && (
+                <button onClick={() => deschide(pr.fisier_path)}
+                  style={{ padding: '7px 12px', fontSize: 11.5, fontWeight: 700, background: '#58A6FF22', color: '#58A6FF', border: '1px solid #58A6FF55', borderRadius: 8, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  📂 {pr.fisier_nume || 'Deschide'}
+                </button>
+              )}
+              <button onClick={() => remove(pr)} title="Șterge"
+                style={{ padding: '7px 10px', fontSize: 13, background: 'transparent', color: '#EF4444', border: '1px solid #EF444444', borderRadius: 8, cursor: 'pointer' }}>🗑</button>
+            </div>
+          ))}
         </div>
       )}
     </div>
