@@ -45,7 +45,10 @@ export default function TichetModulButton({ profile }) {
   if (!ctx) return null   // pagini fără modul (acasă, /tichete, /admin, /m, login...)
 
   const open = () => {
-    const p = new URLSearchParams({ action:'new', modul: ctx.modul, dep: ctx.dep })
+    // TKT-0206: ducem cu noi pagina de unde plecăm (cu tot cu query — licitație,
+    // tab, filtre), ca la închiderea/trimiterea tichetului să ne întoarcem exact
+    // acolo, nu pe pagina principală a modulului.
+    const p = new URLSearchParams({ action:'new', modul: ctx.modul, dep: ctx.dep, ret: loc.pathname + loc.search })
     nav(`/tichete?${p.toString()}`)
   }
 
