@@ -1,4 +1,9 @@
-// ofertare-acoperire v9 (14.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v13 (14.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v13 (#65): nomenclatorul ISC RTE (isc_rte_domenii) intră în prompt; domeniile din HR se
+//     normalizează la coduri (8.4 (D) SI 8.5 → 8.4D, 8.5; cifre romane = schema veche MLPAT,
+//     neechivalată); motorul scrie `domeniu_rte` pe acoperire; cerințele-REGULĂ de echipă
+//     (cumul funcții) → status 'regula_propunere' (se verifică la propunere, nu dispar).
+//     Domnești: RTE pe alimentare cu apă = 9.1 (edilitare), pe care îl AVEM — ieșea „gol".
 // v9 (TKT-0203, Oana): domeniul ISC al RTE se ia din natura lucrărilor CERUTE, nu din
 //     lucrarea de experiență similară prezentată; cerința de RTE „la general" propune
 //     automat o clarificare către autoritate (status 'de_trimis', idempotent pe `sursa`).
@@ -30,12 +35,46 @@ REGULI NENEGOCIABILE:
 - R8 (EXPERIENȚĂ SIMILARĂ, id-uri cu prefix E): cerințele de experiență similară / lucrări duse la bun sfârșit / PV de recepție se acoperă DOAR cu lucrări din lista E: status "acoperit", autorizatie_id: "E<id>". Folosești EXCLUSIV campul valoare_proprie_lei — niciodată valoare_totala_lei, care la o asociere e a asocierii, nu a firmei. O lucrare cu cota_proprie_necunoscuta NU acoperă nicio cerință de valoare: răspunzi "gol" și scrii în motiv că lipsește cota Gazpet. Fereastra "ultimii N ani" se socotește față de TERMENUL DE DEPUNERE (ca la R6), pe data_pv. Dacă cerința cere valoare CUMULATĂ din mai multe contracte, pui în autorizatie_id contractul principal și enumeri în motiv celelalte id-uri E folosite — cumulul îl verifică omul.
 - motiv: scurt (≤120 caractere), în română, spune DE CE (cine/ce acoperă sau ce lipsește exact).
 
+- R10 (NOMENCLATOR ISC): primești NOMENCLATORUL ISC RTE (Procedura ISC 2016) cu coduri, denumiri și cuvinte-cheie de lucrări. Domeniul cerut se stabilește din OBIECTUL CONTRACTULUI + textul cerinței, pe nomenclator: alimentare cu apă / canalizare / stații de pompare / gospodărie de apă = 9.1 (edilitare) și/sau 8.2 (rețele sanitare); gaze = 8.4 cu varianta D (distribuție) sau T (transport); drumuri = 2.1. Autorizațiile din catalog au câmpul "domenii_isc" (coduri normalizate) — RTE-ul ACOPERĂ cerința dacă "domenii_isc" conține codul cerut (8.4 cerut fără variantă = acoperit de 8.4D sau 8.4T). Cifrele romane din "domenii_vechi" sunt schema veche MLPAT și NU se echivalează automat; dacă doar ele ar acoperi, răspunzi "gol" și spui în motiv că autorizația e pe schema veche, de reconfirmat. Completezi câmpul "domeniu_rte" cu codul cerut (ex. "9.1", "8.4D") la ORICE cerință de RTE, chiar și când e "gol"; la celelalte cerințe e null. Când obiectul contractului cere mai multe domenii (apă + drumuri), fiecare cerință de RTE se judecă pe domeniul ei, iar dacă cerința e generală ("RTE atestat în domeniul contractului") o judeci pe domeniul PRINCIPAL al obiectului și pui celelalte domenii în motiv.
+- R11 (art. 51 lit. g + practica comisiilor): RTE-ul trebuie să aibă autorizația ȘI legitimația ISC valabile la termenul de depunere (R6). Dacă obiectul contractului include refaceri de drumuri / sistem rutier / asfalt, comisiile cer în practică și un RTE pe 2.1 chiar dacă cerința nu-l numește (cazul Laza): dacă avem 2.1 în catalog, îl menționezi în motiv; dacă nu, scrii în motiv "risc: comisia poate cere și RTE 2.1 pentru refacerile de drum" — fără să schimbi statusul cerinței principale.
+- R12 (REGULI DE ECHIPĂ): o cerință care NU cere o capabilitate, ci impune o REGULĂ de alcătuire a echipei — "o persoană nu poate îndeplini cumulativ mai multe funcții", "fiecare rol e ocupat de altă persoană", "personalul nominalizat trebuie să fie același la execuție", "înlocuirea se face doar cu acordul beneficiarului" — primește status "regula_propunere" (NU "nu_se_aplica"): se verifică pe propunerea tehnică, nu se acoperă cu un document. motiv = ce regulă e și unde se verifică.
 - R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
 
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
 Răspunde EXCLUSIV JSON compact:
-{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica","autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
+{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
+
+// ── Domeniile ISC — COPIE a src/iscRte.js (normalizeazaDomeniiISC). Ține-le sincron. ──
+const ROMAN = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI)(\.\d+)?$/i
+const ETICHETE: [RegExp, string][] = [
+  [/constructii civile|cladir|hala|civile/, '1.1'], [/drum|rutier|strazi/, '2.1'], [/pod(uri)?\b/, '2.3'],
+  [/hidrotehnic/, '5.1'], [/instalatii electrice/, '6.1'], [/instalatii (termice|sanitare)|ventila|climatiz/, '6.2'],
+  [/instalatii( de utilizare)? gaze/, '6.3'], [/retele electrice/, '8.1'],
+  [/retele (termice|sanitare)|apa.?canal|alimentare cu apa|canalizare/, '8.2'], [/telecomunicati/, '8.3'],
+  [/retele (de )?gaze|distributie gaze/, '8.4D'], [/transport gaze/, '8.4T'], [/petrolier|titei/, '8.5'],
+  [/edilitar|gospodarie comunala/, '9.1'], [/fundatii/, '11.1'],
+]
+const faraDiac = (s: unknown) => String(s || '').toLowerCase().replace(/[ăâ]/g, 'a').replace(/î/g, 'i').replace(/[șş]/g, 's').replace(/[țţ]/g, 't')
+function normalizeazaDomeniuISC(fragment: unknown) {
+  const t = faraDiac(fragment).trim()
+  if (!t) return { coduri: [] as string[], vechi: [] as string[] }
+  const coduri: string[] = [], vechi: string[] = []
+  const re84 = /\b8\.4\s*[(\-]?\s*([dt])\s*\)?/gi
+  let m: RegExpExecArray | null
+  while ((m = re84.exec(t))) coduri.push('8.4' + m[1].toUpperCase())
+  const reCod = /\b(1\.[1-4]|2\.[1-4]|3\.1|4\.[12]|5\.1|6\.[1-3]|7\.1|8\.[1-5]|9\.1|11\.1)\b(?!\s*[(\-]?\s*[dt])/gi
+  while ((m = reCod.exec(t))) { const c = m[1]; if (!(c === '8.4' && coduri.some(x => x.startsWith('8.4')))) coduri.push(c) }
+  for (const p of t.split(/[,;\/]|\s+si\s+|\s+&\s+/)) { const s2 = p.trim().toUpperCase(); if (ROMAN.test(s2)) vechi.push(s2) }
+  if (!coduri.length) for (const [re, cod] of ETICHETE) if (re.test(t)) { coduri.push(cod); break }
+  return { coduri: [...new Set(coduri)], vechi: [...new Set(vechi)] }
+}
+function normalizeazaDomeniiISC(lista: unknown) {
+  const out = { coduri: [] as string[], vechi: [] as string[] }
+  for (const f of Array.isArray(lista) ? lista : (lista ? [lista] : [])) { const r = normalizeazaDomeniuISC(f); out.coduri.push(...r.coduri); out.vechi.push(...r.vechi) }
+  out.coduri = [...new Set(out.coduri)]; out.vechi = [...new Set(out.vechi)]
+  return out
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
@@ -67,6 +106,8 @@ Deno.serve(async (req: Request) => {
       numar: a.numar_autorizatie || undefined, emitent: a.emitent || undefined,
       expira: a.fara_expirare ? 'niciodata' : (a.data_expirare || 'necunoscut'),
       domenii: (a.domenii && a.domenii.length) ? a.domenii : undefined,
+      // #65: codurile normalizate din nomenclator + schema veche MLPAT separat (neechivalată)
+      ...(() => { const n = normalizeazaDomeniiISC(a.domenii); return { domenii_isc: n.coduri.length ? n.coduri : undefined, domenii_vechi: n.vechi.length ? n.vechi : undefined } })(),
       sudura: a.procedeu_sudura || undefined, diam_mm: a.diametru_teava_mm || undefined,
       are_scan: !!a.fisier_path,
     }))
@@ -86,6 +127,10 @@ Deno.serve(async (req: Request) => {
     // autorizatii, documente de firma si parteneri, iar cerintele de experienta similara
     // ieseau „gol" cu motivul „nu exista in catalog" — desi firma are 45 de lucrari in
     // `ofertare_experienta`. La Racari, 5 din 11 goluri eliminatorii erau false din asta.
+    // #65: nomenclatorul ISC RTE (23 domenii/subdomenii, Procedura ISC 2016) — parte STABILĂ a promptului.
+    const { data: nomen, error: eNomen } = await supabase.from('isc_rte_domenii')
+      .select('cod, denumire, grup_nume, variante, experienta_ani, cuvinte_cheie_lucrari, autorizatie_anre_ceruta').eq('activ', true).order('cod')
+    const nomenclator = (nomen || []).map((d: any) => ({ cod: d.cod, denumire: d.denumire, grup: d.grup_nume, variante: d.variante || undefined, experienta_ani: d.experienta_ani, lucrari: d.cuvinte_cheie_lucrari || undefined, anre: d.autorizatie_anre_ceruta || undefined }))
     const { data: expAll, error: eExp } = await supabase.from('ofertare_experienta')
       .select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, folder_nas')
       .eq('activ', true).order('id')
@@ -96,8 +141,8 @@ Deno.serve(async (req: Request) => {
     // („potrivesti DOAR cu ce exista in catalog") si raspundea 'gol' pe TOATE cerintele.
     // Alea erau randuri valide, deci stergerea pleca si o licitatie cu acoperirile puse
     // devenea integral „fara dovada" — fara nicio eroare nicaieri.
-    if (eAuth || eDocF || ePart || eExp) {
-      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message || eExp?.message))
+    if (eAuth || eDocF || ePart || eExp || eNomen) {
+      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message || eExp?.message || eNomen?.message))
     }
     // A doua plasa: un catalog gol nu e o stare normala pentru firma asta. Daca ambele
     // surse sunt goale, ceva e rupt in amonte — nu propunem nimic si nu stergem nimic.
@@ -132,7 +177,7 @@ Deno.serve(async (req: Request) => {
     // (licitatia si cerintele primele), deci un `cache_control` pus fara reordonare n-ar fi
     // prins nimic. De-asta si `.order('id')` de mai sus: o singura linie mutata in catalog
     // schimba prefixul si rateaza cache-ul.
-    const stabil = `CATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}`
+    const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}`
     const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -200,6 +245,17 @@ Deno.serve(async (req: Request) => {
     const clarProps: { cerinta_id: number; intrebare: string }[] = []
     for (const p of lista) {
       if (!idsCerinte.has(p.cerinta_id)) continue
+      const domeniuRte = (typeof p.domeniu_rte === 'string' && /^\d{1,2}\.\d[DT]?$/i.test(p.domeniu_rte.trim())) ? p.domeniu_rte.trim().toUpperCase() : null
+      // #65 varianta A: regula de echipa — se scrie ca atare, ca sa nu dispara sub nu_se_aplica.
+      if (p.status === 'regula_propunere') {
+        rows.push({
+          cerinta_id: p.cerinta_id, mod: 'regula_propunere',
+          autorizatie_id: null, doc_firma_id: null, partener_id: null, experienta_id: null,
+          referinta_text: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null),
+          status: 'regula_propunere', valabil_la_depunere: null, verificat_pe_scan: false, domeniu_rte: null,
+        })
+        continue
+      }
       if (p.status === 'nu_se_aplica') {
         // R-ACOP-1 partea 2: se scrie, nu se tace. „AI-ul a zis ca nu se aplica" si „AI-ul
         // n-a raspuns" insemnau amandoua lipsa randului, deci o pierdere de date arata
@@ -209,7 +265,7 @@ Deno.serve(async (req: Request) => {
           cerinta_id: p.cerinta_id, mod: 'nu_se_aplica',
           autorizatie_id: null, doc_firma_id: null, partener_id: null,
           referinta_text: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null),
-          status: 'nu_se_aplica', valabil_la_depunere: null, verificat_pe_scan: false,
+          status: 'nu_se_aplica', valabil_la_depunere: null, verificat_pe_scan: false, domeniu_rte: null,
         })
         continue
       }
@@ -254,6 +310,7 @@ Deno.serve(async (req: Request) => {
         status,
         valabil_la_depunere: valabil,
         verificat_pe_scan: false,
+        domeniu_rte: domeniuRte,
       })
       // TKT-0203 (Oana): cand cerinta zice doar „RTE" fara sa spuna domeniul, AI-ul nu mai
       // ghiceste — propune o clarificare catre autoritate. O retinem doar pentru cerintele
@@ -301,6 +358,7 @@ Deno.serve(async (req: Request) => {
         autorizatie_id: r.autorizatie_id, doc_firma_id: r.doc_firma_id, partener_id: r.partener_id,
         experienta_id: r.experienta_id,
         referinta_text: r.referinta_text, status: r.status, valabil_la_depunere: r.valabil_la_depunere,
+        domeniu_rte: r.domeniu_rte || null,
       })),
     })
     if (eRpc) return fail('rescriere acoperiri (tranzactie anulata, nu s-a schimbat nimic): ' + eRpc.message)
@@ -355,6 +413,8 @@ Deno.serve(async (req: Request) => {
       propuneri: deScris.length, goluri, clarificari_noi: clarificariNoi,
       firma: deScris.filter(r => r.mod === 'firma').length,
       nu_se_aplica: deScris.filter(r => r.status === 'nu_se_aplica').length,
+      regula_propunere: deScris.filter(r => r.status === 'regula_propunere').length,
+      cu_domeniu_rte: deScris.filter(r => r.domeniu_rte).length,
       experienta: deScris.filter(r => r.mod === 'experienta').length,
       conflicte_verificate: conflicteVerificate,
       fara_raspuns: fararaspuns.length,

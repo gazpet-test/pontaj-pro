@@ -1860,6 +1860,9 @@ const ACOPERIRE_STATUS = {
   // Propunerea AI-ului, nu decizia omului: aia se ia in registru (cerinte.stare) si e
   // singura care scoate o eliminatorie din numaratoarea de „fara dovada" (vezi mai jos).
   nu_se_aplica:      { label:'⊘ AI: nu se aplică', color:G.purple },
+  // #65 varianta A: regula de alcatuire a echipei (cumul functii etc.) — nu se acopera cu un document,
+  // se verifica la propunerea tehnica. Distinct de nu_se_aplica ca sa nu dispara.
+  regula_propunere:  { label:'👥 regulă → propunere', color:G.orange },
 }
 
 function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
@@ -2048,6 +2051,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
           <span style={{ fontSize:11.5, color:G.muted }}>
             ✅ {stats.acoperit} · 🤝 {stats.acoperit_partener} · 🔴 {stats.gol} goluri · ⬜ {stats.neevaluate} neevaluate{stats.reverif ? <span style={{ color:G.orange, fontWeight:700 }}> · ⟳ {stats.reverif} de reverificat</span> : ''}
             {stats.nu_se_aplica > 0 && <span style={{ color:G.purple }} title="AI-ul le-a clasat ca „nu se aplică”. E o propunere, nu o decizie: cele eliminatorii rămân în alarmă până le confirmi în registru."> · ⊘ {stats.nu_se_aplica} AI: nu se aplică</span>}
+            {stats.regula_propunere > 0 && <span style={{ color:G.orange }} title="Reguli de alcătuire a echipei (ex. o persoană nu poate cumula funcții) — nu se acoperă cu document, se verifică la Propunerea tehnică."> · 👥 {stats.regula_propunere} reguli → propunere</span>}
             {stats.nuSeAplica > 0 && <span style={{ color:G.purple }} title="Marcate „nu se aplică” în registrul de cerințe — ies din numărătoarea de eliminatorii fără dovadă"> · ⊘ {stats.nuSeAplica} nu se aplică</span>}
             {elimFaraDovada > 0 && (
               <b style={{ color:G.red }} title={`Eliminatorii fără dovadă = goluri (${stats.goluriElim}) + neevaluate (${stats.neevaluateElim}) + clasate de AI ca „nu se aplică" dar neconfirmate de om (${stats.naElim}). Ies din numărătoare doar cele marcate „nu se aplică" în registru. Aceeași cifră ca în lista de licitații.`}>
@@ -2095,6 +2099,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
                     {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}
                     {c.stare === 'blocata' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>⛔ BLOCATĂ</span>}
+                    {a?.domeniu_rte && <span title="Domeniul ISC RTE pe care motorul a judecat cerința (din obiectul contractului + textul cerinței, după nomenclatorul Procedurii ISC)" style={{ fontSize:10, fontWeight:800, color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, padding:'1px 6px', whiteSpace:'nowrap' }}>RTE {a.domeniu_rte}</span>}
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
                     <span style={{ flex:1, fontSize:12.5, minWidth:200 }}>{c.text_cerinta}</span>
                     <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
@@ -2103,7 +2108,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                           onClick={() => confirmaReverificare(a)}
                           style={{ ...S.btnS, padding:'3px 9px', fontSize:11, fontWeight:800, color:G.orange, borderColor:G.orange + '66', whiteSpace:'nowrap' }}>⟳ de reverificat</button>
                       )}
-                      {a && a.status !== 'gol' && a.status !== 'nu_se_aplica' && (!a.verificat_pe_scan || a.reverificare_ceruta) && (
+                      {a && a.status !== 'gol' && a.status !== 'nu_se_aplica' && a.status !== 'regula_propunere' && (!a.verificat_pe_scan || a.reverificare_ceruta) && (
                         <button title={a.autorizatie?.fisier_path ? 'Verificat pe scan (R1) — copiază scanul autorizației' : 'Autorizația nu are scan în HR'}
                           onClick={() => verifica(a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66', opacity: a.autorizatie?.fisier_path ? 1 : .45 }}>👁 Verificat</button>
                       )}
