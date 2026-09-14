@@ -10,3 +10,4 @@ supabase/.temp/
 # config local Claude Code (per masina, fara secrete in repo)
 .mcp.json
 CLAUDE.local.md
+.claude/settings.local.json
