@@ -3,7 +3,7 @@
 // Pagină mobile-first pentru managerii de proiect (rută /m, PWA add-to-home).
 // Launcher cu 4 butoane mari + Raport zilnic de lucrare (hibrid):
 //   - Personal: automat din pontaj (v_pontaj_personal_santier), editabil
-//   - Utilaje: pre-populate din alimentări ieri+azi (v_utilaje_santier_recent), stare bifabilă
+//   - Utilaje: carry-forward din ultimul raport + alimentări noi (raportUtilaje.js), stare bifabilă
 //   - Activități/probleme/plan: text (paste din WhatsApp)
 //   - Poze: din galerie/cameră → bucket rapoarte-zilnice
 // Acces: fiecare manager vede DOAR șantierele lui (profile_sites); owner vede tot.
@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { MeteoBadge } from './Meteo.jsx'
+import { combinaUtilaje } from './raportUtilaje.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -207,31 +208,11 @@ function RaportZilnic({ profile, sites, onBack }) {
     // ultimele 14 zile (pt. utilaje/mașini nou-venite). Managerul bifează
     // funcțional + alimentat azi și scoate ce a plecat.
     const azo = azi()
-    const keyOf = (u) => u.active_id ? 'a' + u.active_id : 'c' + String(u.cod || u.nume || '').toLowerCase().trim()
-    const map = new Map()
-    // 1) carry-forward din ultimul raport anterior
-    // STAREA se moștenește: un utilaj defect ieri e defect și azi până îl trece
-    // managerul înapoi pe funcțional (înainte se reseta silențios la 'functional'
-    // și defectele dispăreau din raport a doua zi — sesizat Razvan 04.08.2026).
-    const { data: prev } = await supabase.from('rapoarte_zilnice').select('utilaje_snapshot').eq('site_id', sid).lt('data', azo).order('data', { ascending: false }).limit(1).maybeSingle()
-    ;(Array.isArray(prev?.utilaje_snapshot) ? prev.utilaje_snapshot : []).forEach(u => {
-      const it = { active_id: u.active_id ?? null, cod: u.cod || '', inmatriculare: u.inmatriculare || '', nume: u.nume || u.cod || '?', tip: u.tip || null, ore: u.ore ?? null, km: u.km ?? null, ultima_alimentare: null, stare: u.stare === 'nefunctional' ? 'nefunctional' : 'functional', motiv: u.stare === 'nefunctional' ? (u.motiv || '') : '', alimentat: false, manual: !u.cod && !u.active_id, dinRaport: true }
-      map.set(keyOf(it), it)
-    })
-    // 2) alimentări 14 zile (îmbogățesc / adaugă)
+    const { data: prev } = await supabase.from('rapoarte_zilnice').select('data, utilaje_snapshot')
+      .eq('site_id', sid).lt('data', azo).order('data', { ascending: false }).limit(1).maybeSingle()
     const { data: ut } = await supabase.from('v_active_santier_recent').select('*').eq('site_id', sid)
-    const dinAlimentariRecente = new Set()
-    ;(ut || []).forEach(u => {
-      dinAlimentariRecente.add(u.active_id)
-      const it = { active_id: u.active_id, cod: u.cod_intern || '', inmatriculare: u.nr_inmatriculare || '', nume: [u.marca, u.model].filter(Boolean).join(' ') || u.cod_intern || u.nr_inmatriculare || '?', tip: u.tip_categorie || null, ore: u.ore_functionare_actuale ?? null, km: u.km_actuali ?? null, ultima_alimentare: u.ultima_alimentare, stare: 'functional', motiv: '', alimentat: u.ultima_alimentare === azo, manual: false }
-      const k = keyOf(it)
-      if (map.has(k)) {
-        const e = map.get(k)
-        e.active_id = e.active_id || it.active_id; e.tip = e.tip || it.tip
-        e.inmatriculare = e.inmatriculare || it.inmatriculare
-        e.ore = e.ore ?? it.ore; e.km = e.km ?? it.km
-        e.ultima_alimentare = it.ultima_alimentare; if (it.alimentat) e.alimentat = true
-      } else map.set(k, it)
+    const { map, dinAlimentariRecente } = combinaUtilaje({
+      prevSnapshot: prev?.utilaje_snapshot, dataPrev: prev?.data || null, alimentari: ut, azi: azo,
     })
     // 3) „a mai fost văzut pe șantier?" — carry-forward-ul nu avea expirare, așa că
     // un utilaj intrat o dată în raport rămânea la infinit dacă nimeni nu-l scotea
