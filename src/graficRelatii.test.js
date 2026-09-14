@@ -121,3 +121,59 @@ describe('poarta — rândurile noi ajung în verdict', () => {
     expect(evalueazaPoarta(st).blocaje).toContain('grafic_relatii')
   })
 })
+
+// ════════════════════════════════════════════════════════════════
+// FIXTURE Laza — graficul DEPUS, din fișierul-sursă (Drive, modificat 10.07.2026 10:38, ziua
+// depunerii): foaia PERT = Anexa 11, foaia Gantt = Anexa 9. 66 activități, 59 relații, toate FS.
+// Constatarea liniei de cercetare (din PDF): 16 din 66 relații FS au ES(succ) < EF(pred).
+// Aici se reproduce independent, din sursă, nu din PDF — dacă numărul se schimbă, cineva a
+// atins fie fixture-ul, fie regula.
+// ════════════════════════════════════════════════════════════════
+const depus = JSON.parse(readFileSync(new URL('../test-fixtures/laza/grafic_pert_depus.json', import.meta.url), 'utf8'))
+describe('FIXTURE Laza — PERT depus: 16 relații FS contrazise de propriile date', () => {
+  const acts = depus.activitati
+  it('66 activități, 59 relații declarate, toate FS, 7 fără predecesor (începuturi de pachet)', () => {
+    expect(acts).toHaveLength(66)
+    const rel = acts.flatMap(a => a.predecesori)
+    expect(rel).toHaveLength(59); expect(rel.every(p => p.relatie === 'FS' && p.lag === 0)).toBe(true)
+    expect(acts.filter(a => !a.predecesori.length)).toHaveLength(7)
+    expect(depus.predecesori_neparsati).toEqual([])
+  })
+  it('convenție inclusivă (EF = ES + D − 1) pe toate rândurile; PERT-ul și Anexa 5 spun același lucru', () => {
+    expect(acts.every(a => a.ef === a.es + a.durata - 1)).toBe(true)
+    const a5 = new Map(anexa5.activitati.map(a => [a.cod, a]))
+    expect(acts.every(a => a5.get(a.cod)?.es === a.es && a5.get(a.cod)?.ef === a.ef)).toBe(true)
+  })
+  it('EXACT 16 conflicte RELATION_DATE_CONFLICT, cu perechile reale', () => {
+    const v = verificaRelatii(acts)
+    expect(v.conventie).toBe('inclusiv'); expect(v.relatii).toBe(59); expect(v.conflicte).toBe(16)
+    expect(v.probleme.every(p => p.cod === 'RELATION_DATE_CONFLICT')).toBe(true)
+    expect(v.probleme.map(p => `${p.predecesor}>${p.succesor}`)).toEqual([
+      '1.1.01>1.1.02', '1.1.02>1.1.03', '1.1.03>1.1.04', '1.2.01>1.2.02', '1.2.06>1.2.07', '1.2.09>1.2.10',
+      '1.3.06>1.3.07', '1.3.14>1.3.15', '1.4.05>1.4.06', '1.5.06>1.5.07', '1.5.07>1.5.08', '1.5.08>1.5.09',
+      '1.6.03>1.6.04', '1.7.02>1.7.03', '1.7.04>1.7.05', '1.7.06>1.7.07'])
+  })
+  it('cea mai mare suprapunere: 1.5.08→1.5.09, 16 zile; cea mai mică: 1.6.03→1.6.04, 3 zile', () => {
+    const v = verificaRelatii(acts)
+    const s = v.probleme.map(p => p.suprapunere_zile)
+    expect(Math.max(...s)).toBe(16); expect(Math.min(...s)).toBe(3)
+  })
+  it('primele 4 conflicte sunt chiar pe drumul critic (marjă 0) — drumul critic declarat nu se ține', () => {
+    const v = verificaRelatii(acts)
+    const byCod = new Map(acts.map(a => [a.cod, a]))
+    const critice = v.probleme.filter(p => byCod.get(p.succesor).critic && byCod.get(p.succesor).marja === 0)
+    expect(critice.length).toBeGreaterThanOrEqual(4)
+    expect(critice.slice(0, 3).map(p => p.succesor)).toEqual(['1.1.02', '1.1.03', '1.1.04'])
+  })
+  it('rândul de poartă blochează pe acest grafic, cu codul și primele perechi în text', () => {
+    const c = controlRelatiiGrafic({ grafic_versiune: 1, grafic_versiune_mod: 'import', grafic_activitati_declarate: acts })
+    expect(c.stare).toBe('block'); expect(c.cod).toBe('RELATION_DATE_CONFLICT')
+    expect(c.detalii).toMatch(/16 din 59 relații/); expect(c.detalii).toMatch(/1\.1\.01→1\.1\.02 FS \(începe cu 5 zile înainte\)/)
+  })
+  it('dacă aceleași suprapuneri ar fi fost declarate FS cu lead, graficul ar fi consistent — controlul nu inventează asta, dar o poate confirma', () => {
+    const v0 = verificaRelatii(acts)
+    const cu = new Map(v0.probleme.map(p => [`${p.predecesor}>${p.succesor}`, p.suprapunere_zile]))
+    const corectat = acts.map(a => ({ ...a, predecesori: a.predecesori.map(p => ({ ...p, lag: -(cu.get(`${p.cod}>${a.cod}`) || 0) })) }))
+    expect(verificaRelatii(corectat).conflicte).toBe(0)
+  })
+})

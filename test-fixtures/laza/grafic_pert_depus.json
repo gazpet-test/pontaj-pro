@@ -1,0 +1,1712 @@
+{
+ "sursa": "Grafic_executie_WBS_nivel_4_analiza_drum_critic mm.xlsx (Drive, modificat 10.07.2026 10:38 — sursa Anexelor 9/10/11 din oferta depusa)",
+ "unitate_timp": "zile",
+ "conventie": "inclusiv (EF = ES + D - 1)",
+ "activitati": [
+  {
+   "cod": "1.1.01",
+   "denumire": "Predare amplasament",
+   "pachet": "1.1",
+   "pachet_nume": "Organizare șantier",
+   "predecesori": [],
+   "durata": 8,
+   "es": 1,
+   "ef": 8,
+   "ls": 1,
+   "lf": 8,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E1 – Management și coordonare",
+   "productivitate": "conform programului",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.1.02",
+   "denumire": "Organizare de șantier și utilități provizorii",
+   "pachet": "1.1",
+   "pachet_nume": "Organizare șantier",
+   "predecesori": [
+    {
+     "cod": "1.1.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 4,
+   "ef": 21,
+   "ls": 4,
+   "lf": 21,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E2 – Organizare șantier",
+   "productivitate": "conform frontului",
+   "predecesor_text": "1.1.01 FS"
+  },
+  {
+   "cod": "1.1.03",
+   "denumire": "Plan SSM, mediu și semnalizare",
+   "pachet": "1.1",
+   "pachet_nume": "Organizare șantier",
+   "predecesori": [
+    {
+     "cod": "1.1.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 7,
+   "ef": 14,
+   "ls": 7,
+   "lf": 14,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E1 – Management, calitate, SSM",
+   "productivitate": "conform programului",
+   "predecesor_text": "1.1.02 FS"
+  },
+  {
+   "cod": "1.1.04",
+   "denumire": "Trasare și identificare utilități",
+   "pachet": "1.1",
+   "pachet_nume": "Organizare șantier",
+   "predecesori": [
+    {
+     "cod": "1.1.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 10,
+   "ef": 21,
+   "ls": 10,
+   "lf": 21,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E1 – Topografie și coordonare",
+   "productivitate": "300–500 ml/zi",
+   "predecesor_text": "1.1.03 FS"
+  },
+  {
+   "cod": "1.2.01",
+   "denumire": "Săpătură mecanizată șanț",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [],
+   "durata": 25,
+   "es": 47,
+   "ef": 71,
+   "ls": 62,
+   "lf": 86,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "25–35 ml/zi/front",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.2.02",
+   "denumire": "Săpătură manuală la interferențe",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 59,
+   "ef": 70,
+   "ls": 74,
+   "lf": 85,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "25–35 ml/zi/front",
+   "predecesor_text": "1.2.01 FS"
+  },
+  {
+   "cod": "1.2.03",
+   "denumire": "Epuismente și sprijiniri locale",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 71,
+   "ef": 78,
+   "ls": 86,
+   "lf": 93,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "conform debitului",
+   "predecesor_text": "1.2.02 FS"
+  },
+  {
+   "cod": "1.2.04",
+   "denumire": "Pat de pozare nisip",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 83,
+   "ef": 92,
+   "ls": 98,
+   "lf": 107,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "60–70 ml/zi",
+   "predecesor_text": "1.2.03 FS"
+  },
+  {
+   "cod": "1.2.05",
+   "denumire": "Pozare conductă PEHD",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.04",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 95,
+   "ef": 102,
+   "ls": 110,
+   "lf": 117,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "20–25 ml/zi/front",
+   "predecesor_text": "1.2.04 FS"
+  },
+  {
+   "cod": "1.2.06",
+   "denumire": "Suduri și îmbinări PEHD",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.05",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 107,
+   "ef": 124,
+   "ls": 122,
+   "lf": 139,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "15–25 îmbinări/zi",
+   "predecesor_text": "1.2.05 FS"
+  },
+  {
+   "cod": "1.2.07",
+   "denumire": "Montaj fitinguri și vane",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.06",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 119,
+   "ef": 126,
+   "ls": 134,
+   "lf": 141,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "3–5 piese/zi",
+   "predecesor_text": "1.2.06 FS"
+  },
+  {
+   "cod": "1.2.08",
+   "denumire": "Montaj cămine vane",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.07",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 131,
+   "ef": 142,
+   "ls": 146,
+   "lf": 157,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "3–5 armături/zi",
+   "predecesor_text": "1.2.07 FS"
+  },
+  {
+   "cod": "1.2.09",
+   "denumire": "Umpluturi în straturi",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.08",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 25,
+   "es": 143,
+   "ef": 167,
+   "ls": 158,
+   "lf": 182,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "30–35 ml/zi",
+   "predecesor_text": "1.2.08 FS"
+  },
+  {
+   "cod": "1.2.10",
+   "denumire": "Compactări și refaceri locale",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.09",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 155,
+   "ef": 166,
+   "ls": 170,
+   "lf": 181,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "30–35 ml/zi",
+   "predecesor_text": "1.2.09 FS"
+  },
+  {
+   "cod": "1.2.11",
+   "denumire": "Probe presiune, spălare și dezinfectare",
+   "pachet": "1.2",
+   "pachet_nume": "Aducțiune",
+   "predecesori": [
+    {
+     "cod": "1.2.10",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 167,
+   "ef": 176,
+   "ls": 182,
+   "lf": 191,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.2.10 FS"
+  },
+  {
+   "cod": "1.3.01",
+   "denumire": "Trasare tronsoane și semnalizare",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [],
+   "durata": 10,
+   "es": 70,
+   "ef": 79,
+   "ls": 70,
+   "lf": 79,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E1 – Topografie și coordonare",
+   "productivitate": "300–500 ml/zi",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.3.02",
+   "denumire": "Săpătură mecanizată șanț front 1",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 88,
+   "ef": 95,
+   "ls": 88,
+   "lf": 95,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "25–35 ml/zi/front",
+   "predecesor_text": "1.3.01 FS"
+  },
+  {
+   "cod": "1.3.03",
+   "denumire": "Săpătură mecanizată șanț front 2",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 106,
+   "ef": 123,
+   "ls": 106,
+   "lf": 123,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "25–35 ml/zi/front",
+   "predecesor_text": "1.3.02 FS"
+  },
+  {
+   "cod": "1.3.04",
+   "denumire": "Săpătură manuală la utilități",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 124,
+   "ef": 131,
+   "ls": 124,
+   "lf": 131,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "25–35 ml/zi/front",
+   "predecesor_text": "1.3.03 FS"
+  },
+  {
+   "cod": "1.3.05",
+   "denumire": "Sprijiniri și epuismente",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.04",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 142,
+   "ef": 153,
+   "ls": 142,
+   "lf": 153,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "conform debitului",
+   "predecesor_text": "1.3.04 FS"
+  },
+  {
+   "cod": "1.3.06",
+   "denumire": "Pat de pozare nisip",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.05",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 25,
+   "es": 160,
+   "ef": 184,
+   "ls": 160,
+   "lf": 184,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "60–70 ml/zi",
+   "predecesor_text": "1.3.05 FS"
+  },
+  {
+   "cod": "1.3.07",
+   "denumire": "Pozare conductă PEHD DN 110",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.06",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 178,
+   "ef": 189,
+   "ls": 178,
+   "lf": 189,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "20–25 ml/zi/front",
+   "predecesor_text": "1.3.06 FS"
+  },
+  {
+   "cod": "1.3.08",
+   "denumire": "Suduri și îmbinări PEHD",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.07",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 196,
+   "ef": 203,
+   "ls": 196,
+   "lf": 203,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "15–25 îmbinări/zi",
+   "predecesor_text": "1.3.07 FS"
+  },
+  {
+   "cod": "1.3.09",
+   "denumire": "Montaj fitinguri și piese speciale",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.08",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 214,
+   "ef": 223,
+   "ls": 214,
+   "lf": 223,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "3–5 piese/zi",
+   "predecesor_text": "1.3.08 FS"
+  },
+  {
+   "cod": "1.3.10",
+   "denumire": "Montaj vane și hidranți",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.09",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 232,
+   "ef": 239,
+   "ls": 232,
+   "lf": 239,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "3–5 armături/zi",
+   "predecesor_text": "1.3.09 FS"
+  },
+  {
+   "cod": "1.3.11",
+   "denumire": "Montaj cămine vane/hidranți",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.10",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 250,
+   "ef": 267,
+   "ls": 250,
+   "lf": 267,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "3–5 armături/zi",
+   "predecesor_text": "1.3.10 FS"
+  },
+  {
+   "cod": "1.3.12",
+   "denumire": "Subtraversări și protecții",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.11",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 268,
+   "ef": 275,
+   "ls": 268,
+   "lf": 275,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E6 – Subtraversări și protecții",
+   "productivitate": "conform soluției",
+   "predecesor_text": "1.3.11 FS"
+  },
+  {
+   "cod": "1.3.13",
+   "denumire": "Umpluturi în straturi",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.12",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 286,
+   "ef": 297,
+   "ls": 286,
+   "lf": 297,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "30–35 ml/zi",
+   "predecesor_text": "1.3.12 FS"
+  },
+  {
+   "cod": "1.3.14",
+   "denumire": "Compactări și verificări densitate",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.13",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 25,
+   "es": 304,
+   "ef": 328,
+   "ls": 304,
+   "lf": 328,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "30–35 ml/zi",
+   "predecesor_text": "1.3.13 FS"
+  },
+  {
+   "cod": "1.3.15",
+   "denumire": "Probe presiune pe tronsoane",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.14",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 322,
+   "ef": 331,
+   "ls": 322,
+   "lf": 331,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.3.14 FS"
+  },
+  {
+   "cod": "1.3.16",
+   "denumire": "Spălare și dezinfectare",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.15",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 340,
+   "ef": 347,
+   "ls": 340,
+   "lf": 347,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "150–250 ml/zi",
+   "predecesor_text": "1.3.15 FS"
+  },
+  {
+   "cod": "1.3.17",
+   "denumire": "Recepție internă rețea",
+   "pachet": "1.3",
+   "pachet_nume": "Rețea distribuție",
+   "predecesori": [
+    {
+     "cod": "1.3.16",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 358,
+   "ef": 367,
+   "ls": 358,
+   "lf": 367,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E13 – Documentație și recepție",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.3.16 FS"
+  },
+  {
+   "cod": "1.4.01",
+   "denumire": "Trasare branșamente",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [],
+   "durata": 8,
+   "es": 280,
+   "ef": 287,
+   "ls": 295,
+   "lf": 302,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E1 – Topografie și coordonare",
+   "productivitate": "300–500 ml/zi",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.4.02",
+   "denumire": "Săpături și pat de pozare",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [
+    {
+     "cod": "1.4.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 298,
+   "ef": 315,
+   "ls": 313,
+   "lf": 330,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "25–35 ml/zi/front",
+   "predecesor_text": "1.4.01 FS"
+  },
+  {
+   "cod": "1.4.03",
+   "denumire": "Montaj conductă branșament",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [
+    {
+     "cod": "1.4.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 316,
+   "ef": 323,
+   "ls": 331,
+   "lf": 338,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E4 – Montaj conducte PEHD",
+   "productivitate": "20–25 ml/zi/front",
+   "predecesor_text": "1.4.02 FS"
+  },
+  {
+   "cod": "1.4.04",
+   "denumire": "Montaj cămine apometru",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [
+    {
+     "cod": "1.4.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 334,
+   "ef": 345,
+   "ls": 349,
+   "lf": 360,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E5 – Cămine și construcții mici",
+   "productivitate": "1–2 cămine/zi",
+   "predecesor_text": "1.4.03 FS"
+  },
+  {
+   "cod": "1.4.05",
+   "denumire": "Montaj armături și contoare",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [
+    {
+     "cod": "1.4.04",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 25,
+   "es": 352,
+   "ef": 376,
+   "ls": 367,
+   "lf": 391,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E1 – Management și coordonare",
+   "productivitate": "conform programului",
+   "predecesor_text": "1.4.04 FS"
+  },
+  {
+   "cod": "1.4.06",
+   "denumire": "Umpluturi și compactări",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [
+    {
+     "cod": "1.4.05",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 370,
+   "ef": 381,
+   "ls": 385,
+   "lf": 396,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E3 – Terasamente și șanțuri",
+   "productivitate": "30–35 ml/zi",
+   "predecesor_text": "1.4.05 FS"
+  },
+  {
+   "cod": "1.4.07",
+   "denumire": "Probe branșamente",
+   "pachet": "1.4",
+   "pachet_nume": "Branșamente",
+   "predecesori": [
+    {
+     "cod": "1.4.06",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 388,
+   "ef": 397,
+   "ls": 403,
+   "lf": 412,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.4.06 FS"
+  },
+  {
+   "cod": "1.5.01",
+   "denumire": "Pregătire amplasament",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [],
+   "durata": 10,
+   "es": 47,
+   "ef": 56,
+   "ls": 47,
+   "lf": 56,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E1 – Management și coordonare",
+   "productivitate": "conform programului",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.5.02",
+   "denumire": "Terasamente și evacuare pământ",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 71,
+   "ef": 78,
+   "ls": 71,
+   "lf": 78,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E7 – Construcții gospodărie apă",
+   "productivitate": "80–120 mc/zi",
+   "predecesor_text": "1.5.01 FS"
+  },
+  {
+   "cod": "1.5.03",
+   "denumire": "Fundații și infrastructură beton",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 95,
+   "ef": 112,
+   "ls": 95,
+   "lf": 112,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E7 – Construcții gospodărie apă",
+   "productivitate": "15–25 mc beton/zi",
+   "predecesor_text": "1.5.02 FS"
+  },
+  {
+   "cod": "1.5.04",
+   "denumire": "Platforme și construcții auxiliare",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 119,
+   "ef": 126,
+   "ls": 119,
+   "lf": 126,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E7 – Construcții gospodărie apă",
+   "productivitate": "30–50 mp/zi",
+   "predecesor_text": "1.5.03 FS"
+  },
+  {
+   "cod": "1.5.05",
+   "denumire": "Împrejmuire și accese",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.04",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 143,
+   "ef": 154,
+   "ls": 143,
+   "lf": 154,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E8 – Împrejmuire și amenajări",
+   "productivitate": "20–30 ml/zi",
+   "predecesor_text": "1.5.04 FS"
+  },
+  {
+   "cod": "1.5.06",
+   "denumire": "Montaj rezervor tampon",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.05",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 30,
+   "es": 167,
+   "ef": 196,
+   "ls": 167,
+   "lf": 196,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E9 – Montaj echipamente tehnologice",
+   "productivitate": "conform planului de montaj",
+   "predecesor_text": "1.5.05 FS"
+  },
+  {
+   "cod": "1.5.07",
+   "denumire": "Montaj rezervor înmagazinare 200 mc",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.06",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 30,
+   "es": 191,
+   "ef": 220,
+   "ls": 191,
+   "lf": 220,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E9 – Montaj echipamente tehnologice",
+   "productivitate": "conform planului de montaj",
+   "predecesor_text": "1.5.06 FS"
+  },
+  {
+   "cod": "1.5.08",
+   "denumire": "Montaj stație tratare 10 mc/h",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.07",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 40,
+   "es": 215,
+   "ef": 254,
+   "ls": 215,
+   "lf": 254,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E9 – Montaj echipamente tehnologice",
+   "productivitate": "1 set / 45 zile",
+   "predecesor_text": "1.5.07 FS"
+  },
+  {
+   "cod": "1.5.09",
+   "denumire": "Conducte tehnologice și armături",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.08",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 239,
+   "ef": 248,
+   "ls": 239,
+   "lf": 248,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E9 – Montaj echipamente tehnologice",
+   "productivitate": "4–6 îmbinări/zi",
+   "predecesor_text": "1.5.08 FS"
+  },
+  {
+   "cod": "1.5.10",
+   "denumire": "Montaj pompe și echipamente",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.09",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 263,
+   "ef": 270,
+   "ls": 263,
+   "lf": 270,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E9 – Montaj echipamente tehnologice",
+   "productivitate": "conform fișei echipamentului",
+   "predecesor_text": "1.5.09 FS"
+  },
+  {
+   "cod": "1.5.11",
+   "denumire": "Probe locale instalații mecanice",
+   "pachet": "1.5",
+   "pachet_nume": "Gospodărie de apă și captare",
+   "predecesori": [
+    {
+     "cod": "1.5.10",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 287,
+   "ef": 296,
+   "ls": 287,
+   "lf": 296,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.5.10 FS"
+  },
+  {
+   "cod": "1.6.01",
+   "denumire": "Trasee cabluri și tubulaturi",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [],
+   "durata": 8,
+   "es": 250,
+   "ef": 257,
+   "ls": 250,
+   "lf": 257,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E10 – Instalații electrice și automatizare",
+   "productivitate": "100–150 ml/zi",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.6.02",
+   "denumire": "Pozare cabluri energie și comandă",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [
+    {
+     "cod": "1.6.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 272,
+   "ef": 283,
+   "ls": 272,
+   "lf": 283,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E10 – Instalații electrice și automatizare",
+   "productivitate": "100–150 ml/zi",
+   "predecesor_text": "1.6.01 FS"
+  },
+  {
+   "cod": "1.6.03",
+   "denumire": "Montaj tablouri electrice",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [
+    {
+     "cod": "1.6.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 25,
+   "es": 294,
+   "ef": 318,
+   "ls": 294,
+   "lf": 318,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E10 – Instalații electrice și automatizare",
+   "productivitate": "1 tablou/3–5 zile",
+   "predecesor_text": "1.6.02 FS"
+  },
+  {
+   "cod": "1.6.04",
+   "denumire": "Prize de pământ și protecție trăsnet",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [
+    {
+     "cod": "1.6.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 316,
+   "ef": 327,
+   "ls": 316,
+   "lf": 327,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E10 – Instalații electrice și automatizare",
+   "productivitate": "1 priză/zi",
+   "predecesor_text": "1.6.03 FS"
+  },
+  {
+   "cod": "1.6.05",
+   "denumire": "Montaj automatizare și teletransmisie",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [
+    {
+     "cod": "1.6.04",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 338,
+   "ef": 345,
+   "ls": 338,
+   "lf": 345,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E10 – Instalații electrice și automatizare",
+   "productivitate": "conform I/O",
+   "predecesor_text": "1.6.04 FS"
+  },
+  {
+   "cod": "1.6.06",
+   "denumire": "Măsurători electrice",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [
+    {
+     "cod": "1.6.05",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 360,
+   "ef": 369,
+   "ls": 360,
+   "lf": 369,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E10 – Instalații electrice și automatizare",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.6.05 FS"
+  },
+  {
+   "cod": "1.6.07",
+   "denumire": "Punere sub tensiune și probe locale",
+   "pachet": "1.6",
+   "pachet_nume": "Instalații electrice și automatizare",
+   "predecesori": [
+    {
+     "cod": "1.6.06",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 8,
+   "es": 382,
+   "ef": 389,
+   "ls": 382,
+   "lf": 389,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.6.06 FS"
+  },
+  {
+   "cod": "1.7.01",
+   "denumire": "Refacere fundații balast",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [],
+   "durata": 18,
+   "es": 440,
+   "ef": 457,
+   "ls": 455,
+   "lf": 472,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E7 – Construcții gospodărie apă",
+   "productivitate": "15–25 mc beton/zi",
+   "predecesor_text": "—"
+  },
+  {
+   "cod": "1.7.02",
+   "denumire": "Refacere carosabil asfaltic",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.01",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 35,
+   "es": 460,
+   "ef": 494,
+   "ls": 475,
+   "lf": 509,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E12 – Refaceri și amenajări finale",
+   "productivitate": "80–120 mp/zi asfalt",
+   "predecesor_text": "1.7.01 FS"
+  },
+  {
+   "cod": "1.7.03",
+   "denumire": "Refacere trotuare/platforme/rigole",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.02",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 12,
+   "es": 480,
+   "ef": 491,
+   "ls": 495,
+   "lf": 506,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E7 – Construcții gospodărie apă",
+   "productivitate": "30–50 mp/zi",
+   "predecesor_text": "1.7.02 FS"
+  },
+  {
+   "cod": "1.7.04",
+   "denumire": "Amenajări spații verzi și curățenie",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.03",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 25,
+   "es": 500,
+   "ef": 524,
+   "ls": 515,
+   "lf": 539,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E12 – Refaceri și amenajări finale",
+   "productivitate": "30–60 mp/zi",
+   "predecesor_text": "1.7.03 FS"
+  },
+  {
+   "cod": "1.7.05",
+   "denumire": "Probe generale și analize apă",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.04",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 520,
+   "ef": 529,
+   "ls": 520,
+   "lf": 529,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E11 – Probe, dezinfectare și PIF",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.7.04 FS"
+  },
+  {
+   "cod": "1.7.06",
+   "denumire": "Punere în funcțiune și monitorizare",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.05",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 30,
+   "es": 540,
+   "ef": 569,
+   "ls": 555,
+   "lf": 584,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E1 – Management și coordonare",
+   "productivitate": "conform programului",
+   "predecesor_text": "1.7.05 FS"
+  },
+  {
+   "cod": "1.7.07",
+   "denumire": "Documentație as-built și cartea construcției",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.06",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 560,
+   "ef": 569,
+   "ls": 575,
+   "lf": 584,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E13 – Documentație și recepție",
+   "productivitate": "conform programului",
+   "predecesor_text": "1.7.06 FS"
+  },
+  {
+   "cod": "1.7.08",
+   "denumire": "Recepție la terminarea lucrărilor",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.07",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 10,
+   "es": 580,
+   "ef": 589,
+   "ls": 580,
+   "lf": 589,
+   "marja": 0,
+   "critic": true,
+   "echipa": "E13 – Documentație și recepție",
+   "productivitate": "conform procedurii",
+   "predecesor_text": "1.7.07 FS"
+  },
+  {
+   "cod": "1.7.09",
+   "denumire": "Demobilizare finală",
+   "pachet": "1.7",
+   "pachet_nume": "Refaceri și recepție",
+   "predecesori": [
+    {
+     "cod": "1.7.08",
+     "relatie": "FS",
+     "lag": 0
+    }
+   ],
+   "durata": 18,
+   "es": 600,
+   "ef": 617,
+   "ls": 615,
+   "lf": 632,
+   "marja": 15,
+   "critic": false,
+   "echipa": "E2 – Organizare șantier",
+   "productivitate": "conform programului",
+   "predecesor_text": "1.7.08 FS"
+  }
+ ],
+ "echipe": [
+  {
+   "cod": "E1",
+   "denumire": "Management, calitate, SSM și topografie",
+   "personal": "manager, șef șantier, RTE, calitate, SSM, topograf",
+   "utilaje": "stație totală, IT, autoturism",
+   "productivitate": "300–500 ml/zi trasare",
+   "activitati": "organizare, trasare, documentație"
+  },
+  {
+   "cod": "E2",
+   "denumire": "Organizare șantier",
+   "personal": "maistru + 6 muncitori",
+   "utilaje": "buldoexcavator, autocamion, generator",
+   "productivitate": "conform frontului",
+   "activitati": "organizare, semnalizare, demobilizare"
+  },
+  {
+   "cod": "E3",
+   "denumire": "Terasamente și șanțuri",
+   "personal": "operator + 5 muncitori",
+   "utilaje": "excavator, autobasculantă, compactor, pompe",
+   "productivitate": "25–35 ml/zi/front",
+   "activitati": "săpături, epuismente, umpluturi, compactări"
+  },
+  {
+   "cod": "E4",
+   "denumire": "Montaj conducte PEHD",
+   "personal": "2 instalatori + 5 muncitori",
+   "utilaje": "aparat sudură PEHD, miniexcavator",
+   "productivitate": "20–25 ml/zi/front",
+   "activitati": "pat pozare, conducte, suduri, fitinguri"
+  },
+  {
+   "cod": "E5",
+   "denumire": "Cămine și construcții mici",
+   "personal": "zidar + 4 muncitori",
+   "utilaje": "miniexcavator, vibrator, scule",
+   "productivitate": "1–2 cămine/zi",
+   "activitati": "cămine vane, hidranți, apometru"
+  },
+  {
+   "cod": "E6",
+   "denumire": "Subtraversări și protecții",
+   "personal": "operator + 5 muncitori",
+   "utilaje": "excavator, echipament special",
+   "productivitate": "conform soluției",
+   "activitati": "subtraversări, protecții"
+  },
+  {
+   "cod": "E7",
+   "denumire": "Construcții gospodărie apă",
+   "personal": "șef echipă + 8 muncitori",
+   "utilaje": "cofraje, vibrator, excavator",
+   "productivitate": "15–25 mc beton/zi",
+   "activitati": "terasamente, fundații, platforme"
+  },
+  {
+   "cod": "E8",
+   "denumire": "Împrejmuire și amenajări",
+   "personal": "4 muncitori",
+   "utilaje": "autoutilitară, scule",
+   "productivitate": "20–30 ml/zi",
+   "activitati": "împrejmuire, accese"
+  },
+  {
+   "cod": "E9",
+   "denumire": "Montaj echipamente tehnologice",
+   "personal": "inginer + 4–6 montatori",
+   "utilaje": "automacara, stivuitor, aparate măsură",
+   "productivitate": "conform planului de montaj",
+   "activitati": "rezervoare, stație, pompe, conducte tehnologice"
+  },
+  {
+   "cod": "E10",
+   "denumire": "Instalații electrice și automatizare",
+   "personal": "2 electricieni + 2 automatiști",
+   "utilaje": "troliu cablu, megohmetru, telurmetru",
+   "productivitate": "100–150 ml cablu/zi",
+   "activitati": "cabluri, tablouri, automatizare"
+  },
+  {
+   "cod": "E11",
+   "denumire": "Probe, dezinfectare și PIF",
+   "personal": "inginer + instalatori + laborant",
+   "utilaje": "pompe probă, manometre, clorinare",
+   "productivitate": "150–250 ml/zi / procedură",
+   "activitati": "probe, analize, PIF"
+  },
+  {
+   "cod": "E12",
+   "denumire": "Refaceri și amenajări finale",
+   "personal": "echipă drumuri + 4 muncitori",
+   "utilaje": "cilindru, placă compactoare, autocamion",
+   "productivitate": "80–120 mp/zi asfalt",
+   "activitati": "balast, carosabil, trotuare, spații verzi"
+  },
+  {
+   "cod": "E13",
+   "denumire": "Documentație și recepție",
+   "personal": "topograf + responsabil documentație",
+   "utilaje": "IT, echipamente topografice",
+   "productivitate": "conform programului",
+   "activitati": "as-built, cartea construcției, recepție"
+  }
+ ],
+ "jaloane": [
+  {
+   "cod": "J1",
+   "denumire": "Ordin de începere, predare amplasament și mobilizare inițială",
+   "ziua": 1,
+   "luna": 1,
+   "conditie": "Proces-verbal predare amplasament; ordin de începere",
+   "obs": "Jalon contractual inițial"
+  },
+  {
+   "cod": "J2",
+   "denumire": "Finalizare verificare documentație, trasare și identificare utilități",
+   "ziua": 45,
+   "luna": 2,
+   "conditie": "Procese-verbale trasare și confirmări utilități",
+   "obs": "Condiție pentru deschiderea fronturilor"
+  },
+  {
+   "cod": "J3",
+   "denumire": "Aprobarea fișelor tehnice și lansarea comenzilor pentru echipamente cu termen lung",
+   "ziua": 60,
+   "luna": 2,
+   "conditie": "Fișe tehnice aprobate; comenzi ferme",
+   "obs": "Rezervor și stație de tratare"
+  },
+  {
+   "cod": "J4",
+   "denumire": "Deschiderea fronturilor de lucru pentru aducțiune și distribuție",
+   "ziua": 75,
+   "luna": 3,
+   "conditie": "Semnalizare, organizare trafic, fronturi predate",
+   "obs": "Lucrări în paralel"
+  },
+  {
+   "cod": "J5",
+   "denumire": "Finalizare lucrări structurale principale gospodărie de apă",
+   "ziua": 210,
+   "luna": 7,
+   "conditie": "Procese-verbale lucrări ascunse și beton",
+   "obs": "Condiție pentru montaj echipamente"
+  },
+  {
+   "cod": "J6",
+   "denumire": "Recepția în șantier a rezervorului și stației de tratare",
+   "ziua": 230,
+   "luna": 8,
+   "conditie": "Avize, certificate, procese-verbale recepție materiale",
+   "obs": "Verificare integritate și conservare"
+  },
+  {
+   "cod": "J7",
+   "denumire": "Finalizare pozare conducte principale distribuție",
+   "ziua": 300,
+   "luna": 10,
+   "conditie": "Procese-verbale pozare și îmbinări",
+   "obs": "Urmează umpluturi/compactări"
+  },
+  {
+   "cod": "J8",
+   "denumire": "Finalizare montaj echipamente tehnologice și instalații mecanice",
+   "ziua": 380,
+   "luna": 13,
+   "conditie": "Procese-verbale montaj; fișe de punere în funcțiune",
+   "obs": "Rezervoare, stație, pompe, armături"
+  },
+  {
+   "cod": "J9",
+   "denumire": "Finalizare rețea distribuție, cămine, hidranți și branșamente",
+   "ziua": 450,
+   "luna": 15,
+   "conditie": "Procese-verbale lucrări ascunse; verificări densitate",
+   "obs": "Pregătire probe pe tronsoane"
+  },
+  {
+   "cod": "J10",
+   "denumire": "Finalizare instalații electrice, automatizare și teletransmisie",
+   "ziua": 470,
+   "luna": 16,
+   "conditie": "Buletine măsurători; scheme actualizate",
+   "obs": "Condiție pentru probe integrate"
+  },
+  {
+   "cod": "J11",
+   "denumire": "Finalizare refaceri carosabil, trotuare și amplasament",
+   "ziua": 520,
+   "luna": 18,
+   "conditie": "Procese-verbale refaceri; recepții locale",
+   "obs": "Se coordonează cu autoritățile locale"
+  },
+  {
+   "cod": "J12",
+   "denumire": "Finalizare probe generale, dezinfectare și analize de calitate a apei",
+   "ziua": 570,
+   "luna": 19,
+   "conditie": "Rapoarte probe; buletine analize apă",
+   "obs": "Condiție pentru PIF"
+  },
+  {
+   "cod": "J13",
+   "denumire": "Punere în funcțiune și monitorizare",
+   "ziua": 610,
+   "luna": 21,
+   "conditie": "Proces-verbal PIF; parametri funcționali",
+   "obs": "Perioadă de monitorizare"
+  },
+  {
+   "cod": "J14",
+   "denumire": "Predare documentație as-built și cartea construcției",
+   "ziua": 640,
+   "luna": 22,
+   "conditie": "Documentație completă predată beneficiarului",
+   "obs": "Condiție pentru recepție"
+  },
+  {
+   "cod": "J15",
+   "denumire": "Recepția la terminarea lucrărilor și închiderea contractului",
+   "ziua": 660,
+   "luna": 22,
+   "conditie": "Proces-verbal recepție; demobilizare",
+   "obs": "Jalon final"
+  }
+ ],
+ "predecesori_neparsati": []
+}
