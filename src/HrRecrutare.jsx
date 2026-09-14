@@ -464,22 +464,33 @@ function OlxPublicaModal({ pozitie, showToast, onClose, onPublicat }) {
   const [f, setF] = useState({
     titlu: `Angajăm ${pozitie.denumire} — Gazpet Instal Ploiești`,
     descriere: `${pozitie.descriere || pozitie.denumire}\n\nGazpet Instal S.R.L. — constructor autorizat de conducte de gaze naturale (Transgaz, Romgaz, Conpet), Ploiești, Prahova. Echipă de 127+ angajați, proiecte în toată țara.\n\nAplică direct cu CV-ul prin butonul OLX. Datele tale sunt prelucrate conform GDPR (retenție 12 luni).`,
-    category_id: '', city_id: '', contact_name: 'Gazpet Instal', contact_phone: '0244435005',
+    category_id: '', city_id: '', district_id: '', contact_name: 'Gazpet Instal', contact_phone: '0244435005',
     salariu_de_la: pozitie.salariu_min ?? '', salariu_pana_la: pozitie.salariu_max ?? '', negociabil: false,
   })
   const [attr, setAttr] = useState({ ...OLX_ATTR_DEFAULT, numar_posturi: String(pozitie.numar_posturi || 1) })
   const [categorii, setCategorii] = useState([])
   const [orase, setOrase] = useState([])
+  const [districte, setDistricte] = useState([])   // sectoarele orasului ales (Bucuresti etc.) — OLX le cere obligatoriu
   const [qOras, setQOras] = useState('Ploiesti')
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
   const setA = (k, v) => setAttr(prev => ({ ...prev, [k]: v }))
 
+  // 14.09.2026: OLX /cities ignora q (intorcea mereu Bucuresti primul) → cautarea se face in
+  // cache-ul olx_orase (13.789 orase), iar orasul se alege dupa NUME exact, nu „primul din lista".
   const cautaOrase = (q) => olxApi({ actiune: 'orase', q: q || 'Ploiesti' }).then(d => {
     const list = d?.data || []
     setOrase(list)
-    if (list[0]?.id && !list.some(o => String(o.id) === f.city_id)) set('city_id', String(list[0].id))
+    const norm = x => String(x || '').toLowerCase().replace(/[ăâ]/g, 'a').replace(/[îi]/g, 'i').replace(/[șş]/g, 's').replace(/[țţ]/g, 't').trim()
+    const exact = list.find(o => norm(o.name) === norm(q || 'Ploiesti')) || list[0]
+    if (exact?.id && !list.some(o => String(o.id) === f.city_id)) alegeOras(String(exact.id))
   })
+  // La schimbarea orasului: intreaba OLX daca are sectoare. Daca da, sectorul devine obligatoriu.
+  const alegeOras = (cityId) => {
+    set('city_id', cityId); set('district_id', ''); setDistricte([])
+    if (!cityId) return
+    olxApi({ actiune: 'districte', city_id: cityId }).then(d => setDistricte(d?.data || []))
+  }
 
   useEffect(() => {
     supabase.from('v_olx_categorii').select('id, path, atribute').eq('is_leaf', true).order('path').then(({ data }) => {
@@ -496,6 +507,7 @@ function OlxPublicaModal({ pozitie, showToast, onClose, onPublicat }) {
 
   const publica = async () => {
     if (!f.category_id || !f.city_id) { showToast?.('Alege categoria și orașul', 'error'); return }
+    if (districte.length && !f.district_id) { showToast?.('Orașul ales are sectoare — OLX cere și sectorul', 'error'); return }
     if (f.titlu.length < 16) { showToast?.('Titlul trebuie să aibă minim 16 caractere', 'error'); return }
     if (f.descriere.length < 80) { showToast?.('Descrierea trebuie să aibă minim 80 caractere', 'error'); return }
     const lipsa = atributeCat.filter(a => a.required && !attr[a.code])
@@ -505,7 +517,7 @@ function OlxPublicaModal({ pozitie, showToast, onClose, onPublicat }) {
     const salary = f.salariu_de_la !== '' ? { value_from: Number(f.salariu_de_la), value_to: f.salariu_pana_la !== '' ? Number(f.salariu_pana_la) : null, currency: 'RON', negotiable: !!f.negociabil, type: 'monthly' } : null
     setBusy(true)
     const d = await olxApi({ actiune: 'publica', pozitie_id: pozitie.id, titlu: f.titlu, descriere: f.descriere,
-      category_id: f.category_id, city_id: f.city_id, contact_name: f.contact_name, contact_phone: f.contact_phone, attributes, salary })
+      category_id: f.category_id, city_id: f.city_id, district_id: f.district_id || null, contact_name: f.contact_name, contact_phone: f.contact_phone, attributes, salary })
     setBusy(false)
     if (d.ok) { showToast?.(`✓ Anunț publicat pe OLX (status: ${d.advert?.status}) — intră în moderare, se activează singur`); onPublicat() }
     else showToast?.((d.eroare || 'Eroare OLX') + (d.detalii?.error?.validation ? ' — ' + d.detalii.error.validation.map(v => `${v.field}: ${v.detail}`).join('; ') : ''), 'error')
@@ -530,10 +542,16 @@ function OlxPublicaModal({ pozitie, showToast, onClose, onPublicat }) {
             <input style={{ ...S.input, flex:1 }} value={qOras} placeholder="caută…" onChange={e => setQOras(e.target.value)} onKeyDown={e => e.key === 'Enter' && cautaOrase(qOras)} />
             <button type="button" style={{ ...S.btnS, padding:'4px 9px' }} onClick={() => cautaOrase(qOras)}>🔍</button>
           </div>
-          <select style={{ ...S.input, marginTop:4 }} value={f.city_id} onChange={e => set('city_id', e.target.value)}>
+          <select style={{ ...S.input, marginTop:4 }} value={f.city_id} onChange={e => alegeOras(e.target.value)}>
             <option value="">— alege —</option>
             {orase.map(o => <option key={o.id} value={o.id}>{o.name}{o.county ? ` (${o.county})` : ''}</option>)}
           </select>
+          {districte.length > 0 && (
+            <select style={{ ...S.input, marginTop:4, borderColor: f.district_id ? undefined : G.red }} value={f.district_id} onChange={e => set('district_id', e.target.value)}>
+              <option value="">— sector (obligatoriu pentru acest oraș) —</option>
+              {districte.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
         </Fld>
         <Fld l="Salariu de la (lei/lună)"><input style={S.input} type="number" value={f.salariu_de_la} onChange={e => set('salariu_de_la', e.target.value)} /></Fld>
         <Fld l="Salariu până la (opțional)">
