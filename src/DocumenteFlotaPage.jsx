@@ -69,6 +69,15 @@ const daysUntilToday = (dateStr) => {
   return Math.round((target - today) / 86400000)
 }
 
+// TKT-0117: perioadele uzuale de valabilitate (rovinietă: 1/7/30/90 zile, 12 luni)
+const PERIOADE_RAPIDE = [
+  { zile: 1,   label: '1 zi' },
+  { zile: 7,   label: '7 zile' },
+  { zile: 30,  label: '30 zile' },
+  { zile: 90,  label: '90 zile' },
+  { zile: 365, label: '12 luni' },
+]
+
 const addDaysISO = (isoStr, days) => {
   if (!isoStr || !days) return ''
   const d = new Date(isoStr)
@@ -475,6 +484,26 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
               )}
             </div>
             <input type="date" value={form.fara_expirare ? '' : form.data_expirare} onChange={e => onChangeExpirare(e.target.value)} disabled={form.fara_expirare} style={{...S.input, opacity: form.fara_expirare ? 0.5 : 1, cursor: form.fara_expirare ? 'not-allowed' : 'auto'}} />
+            {/* TKT-0117 (Cristiana): rovinieta se cumpără și pe 1 zi, 7 zile, 30 sau 90 —
+                nu doar pe an, cum presupunea perioada implicită a tipului. Butoanele
+                calculează expirarea din data emiterii, aceeași convenție ca auto-calc-ul. */}
+            {!form.fara_expirare && (
+              <div style={{display:'flex', gap:6, flexWrap:'wrap', marginTop:7}}>
+                {PERIOADE_RAPIDE.map(pr => (
+                  <button key={pr.zile} type="button"
+                    onClick={() => { setAutoExpirare(false); setField('data_expirare', addDaysISO(form.data_emitere, pr.zile)) }}
+                    disabled={!form.data_emitere}
+                    title={form.data_emitere ? `Expiră pe ${addDaysISO(form.data_emitere, pr.zile)}` : 'Completează întâi data emiterii'}
+                    style={{
+                      ...S.btnS, padding:'4px 10px', fontSize:11, fontWeight:600,
+                      cursor: form.data_emitere ? 'pointer' : 'not-allowed',
+                      opacity: form.data_emitere ? 1 : .45,
+                      background: (form.data_emitere && form.data_expirare === addDaysISO(form.data_emitere, pr.zile)) ? G.logistica + '22' : 'transparent',
+                      color: (form.data_emitere && form.data_expirare === addDaysISO(form.data_emitere, pr.zile)) ? G.logistica : G.muted,
+                    }}>{pr.label}</button>
+                ))}
+              </div>
+            )}
             <label style={{display:'flex', alignItems:'center', gap:7, marginTop:7, fontSize:12, color:G.muted, cursor:'pointer'}}>
               <input type="checkbox" checked={form.fara_expirare} onChange={e => { setField('fara_expirare', e.target.checked); if (e.target.checked) { setAutoExpirare(false); setField('data_expirare', '') } }} />
               📌 Fără expirare (ex: carte de identitate vehicul)
