@@ -1,3 +1,4 @@
+// #51 14.09.2026: autorizat() — owner/responsabil sau service_role; anon respins.
 // ofertare-acoperire v13 (14.09.2026) — E3: confruntarea cerințe ↔ capabilități.
 // v14: R12 restrâns + gardă în cod (regula_propunere doar pe text de echipă/roluri/cumul/înlocuire).
 // v13 (#65): nomenclatorul ISC RTE (isc_rte_domenii) intră în prompt; domeniile din HR se
@@ -77,6 +78,35 @@ function normalizeazaDomeniiISC(lista: unknown) {
   return out
 }
 
+// #51 (14.09.2026): poarta pe cheltuială și pe SERVER, nu doar în UI. Cu verify_jwt=true cheia anon trece
+// ca Bearer, deci oricine cu cheia publică putea porni un apel plătit. Reguli:
+//  - service_role: liber (rutine interne);
+//  - JWT de utilizator: doar owner sau responsabilul licitației;
+//  - cheia anon (workerii server din ofertare_*_tick trimit anon JWT din Vault): doar cât coada licitației e activă.
+async function autorizat(req: Request, supabase: any, licId: number, coadaTabel: string | null): Promise<string | null> {
+  const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return 'lipsește Authorization'
+  // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
+  // legacy pe care îl trimit workerii din Vault (verificat 14.09: comparația de string pica).
+  const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') {
+    if (!coadaTabel) return 'apel neautorizat (cheie anon)'
+    const { data: c } = await supabase.from(coadaTabel).select('activ').eq('licitatie_id', licId).maybeSingle()
+    return c?.activ ? null : 'apel neautorizat (cheie anon, coada nu e activă)'
+  }
+  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+  const { data: u } = await anon.auth.getUser()
+  const uid = u?.user?.id
+  if (!uid) return 'sesiune invalidă'
+  const [{ data: prof }, { data: lic }] = await Promise.all([
+    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
+    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
+  ])
+  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
+  return 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).'
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -86,6 +116,7 @@ Deno.serve(async (req: Request) => {
     const { licitatie_id, batch, ids } = await req.json()
     const licId = Number(licitatie_id)
     if (!licId || !['eliminatorie', 'propunere'].includes(batch)) return fail('licitatie_id + batch (eliminatorie/propunere) obligatorii')
+    { const na = await autorizat(req, supabase, licId, null); if (na) return fail(na) }
     const idsFelie: number[] | null = Array.isArray(ids) && ids.length ? ids.map(Number).filter(Boolean) : null
 
     const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, termen_depunere, obiect').eq('id', licId).single()

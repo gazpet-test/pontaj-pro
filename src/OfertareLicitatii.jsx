@@ -132,14 +132,16 @@ export default function OfertareLicitatiiTab() {
     const stats = {}
     ids.forEach(id => { stats[id] = { cerinte: 0, acoperite: 0, reverif: 0, rosii: 0, verdict: null, verdict_la: null, clarificari: 0 } })
     if (ids.length) {
-      const [{ data: cs }, { data: vf }, { data: cl }] = await Promise.all([
+      const [{ data: cs }, { data: vf }, { data: cl }, { data: tri }] = await Promise.all([
         // .limit explicit: implicit PostgREST întoarce 1.000 de rânduri, iar cerințele active sunt peste 2.000 —
         // Mănăstirea apărea cu 150/419 în loc de 226/655 (auditul 09.09.2026)
         supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null).is('duplicat_al', null).limit(20000),
         supabase.from('ofertare_verificari').select('licitatie_id, verdict, created_at').in('licitatie_id', ids).order('id', { ascending: false }),
         supabase.from('ofertare_clarificari').select('licitatie_id').in('licitatie_id', ids),
+        supabase.from('ofertare_triere').select('licitatie_id, verdict').in('licitatie_id', ids),
       ])
       const cerLic = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; stats[c.licitatie_id].cerinte++ })
+      ;(tri || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].triere = x.verdict })
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
         const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, verificat_pe_scan, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
@@ -370,6 +372,7 @@ export default function OfertareLicitatiiTab() {
           const probl = areProbleme(l)
           const cBord = probl && activa ? G.red : activa && zile != null && zile <= 21 ? G.yellow : l.status === 'depusa' ? G.purple : st.color
           const VC = { verde: ['VERDE', G.green], galben: ['GALBEN', G.yellow], rosu: ['ROȘU', G.red] }
+          const TRIERE_V = { mergem: ['MERGEM', G.green], cu_clarificari: ['CU CLARIFICĂRI', G.yellow], nu_se_poate: ['NU SE POATE', G.red], neclar: ['NECLAR', G.muted] }
           const canalLbl = l.canal ? l.canal.replace('seap_', 'SEAP ').toUpperCase() : (l.tip_procedura || '')
           return (
             <div key={l.id} onClick={() => setSelected(l)} style={{ ...S.card, padding:'16px 22px', cursor:'pointer', borderRadius:14,
@@ -381,6 +384,8 @@ export default function OfertareLicitatiiTab() {
                 <div style={{ fontSize:15.5, fontWeight:700, margin:'3px 0 7px', overflow:'hidden', textOverflow:'ellipsis', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical' }}>{l.obiect}</div>
                 <div style={{ display:'flex', gap:18, fontSize:13, color:G.muted, flexWrap:'wrap' }}>
                   <span>💰 <b style={{ color:G.text }}>{fmtMil(l.valoare_estimata)}</b> {l.moneda || 'lei'}</span>
+                  {sx.triere && <span title="Verdictul trierii din Fișa de date (tab ⚡ Triere)">⚡ triere: <b style={{ color: TRIERE_V[sx.triere]?.[1] || G.muted }}>{TRIERE_V[sx.triere]?.[0] || sx.triere}</b></span>}
+                  {!sx.triere && !sx.cerinte && <span style={{ color:G.dim }} title="Nu s-a rulat trierea din Fișa de date">⚡ netriată</span>}
                   <span>📋 acoperire <b style={{ color:G.text }}>{sx.acoperite || 0}/{sx.cerinte || 0}</b>{!sx.cerinte ? <span style={{ color:G.dim }}> · registru negenerat</span> : ''}</span>
                   {l.eliminatorii_neacoperite > 0 && <span style={{ color:G.red }} title={'Eliminatorii fără rând de acoperire „acoperit”: goluri + neevaluate'}>🚫 eliminatorii fără dovadă: <b>{l.eliminatorii_neacoperite}</b></span>}
                   {sx.reverif > 0 && <span style={{ color:G.orange }} title="Dovezi mutate pe textul nou al cerinței de un răspuns al autorității — nimeni nu le-a reconfirmat încă">⟳ de reverificat: <b>{sx.reverif}</b></span>}

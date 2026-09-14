@@ -1,4 +1,4 @@
-// ofertare-triere v1.1 (14.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
+// ofertare-triere v1.2 (14.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
 //
 // De ce există: colegii descărcau toată documentația (46 fișiere la Simian, planșe de 90 MB la
 // Potlogi) și o citeau integral ÎNAINTE să știe dacă vrem licitația. Facturile de API veneau de
@@ -9,7 +9,7 @@
 // Ce NU face: nu scrie în registrul de cerințe, nu pornește citirea documentelor. Decizia
 // „participăm → procesează tot" e a ownerului / responsabilului, din UI.
 // v1.1: lista de personal filtrată (fără sudori etc.; 85k tokeni la primul test), max_tokens 8000,
-// extragere JSON robustă + stop_reason raportat.
+// extragere JSON robustă + stop_reason raportat. v1.2: thinking disabled (Sonnet 5 gândea implicit în bugetul de output).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -137,6 +137,9 @@ Deno.serve(async (req: Request) => {
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
         model: MODEL, max_tokens: 8000,
+        // Sonnet 5 gândește implicit (adaptive) și gândirea intră în max_tokens: Potlogi a ieșit gol la 8000.
+        // Extragere structurată — nu avem nevoie de gândire.
+        thinking: { type: 'disabled' },
         messages: [{ role: 'user', content: [
           { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
           { type: 'text', text },
