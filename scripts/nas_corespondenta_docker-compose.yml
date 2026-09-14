@@ -9,7 +9,11 @@ services:
   corespondenta-sync:
     image: node:22-alpine
     container_name: gazpet-corespondenta-sync
-    restart: unless-stopped
+    # 14.09.2026: la un restart al NAS-ului, TOS oprește containerele cu `docker stop` → cu
+    # `unless-stopped` rămân „oprite manual" și NU mai pornesc singure (așa au stat 3 zile).
+    # `always` le repornește după orice restart. Trap-ul pe TERM face oprirea curată (exit 0,
+    # nu 137 „Program interrupted"): sh ca PID 1 nu transmite semnalul buclei altfel.
+    restart: always
     user: "root"
     working_dir: /app
 
@@ -34,10 +38,11 @@ services:
       - /Volume1/Licitatii_Executate/Oferte:/data/Oferte:rw
 
     command: >
-      sh -c "npm install --no-save @supabase/supabase-js >/dev/null 2>&1;
+      sh -c "trap 'exit 0' TERM INT;
+             npm install --no-save @supabase/supabase-js >/dev/null 2>&1;
              while true; do
                node nas_sync_corespondenta.js;
-               sleep $${SYNC_INTERVAL_SEC:-600};
+               sleep $${SYNC_INTERVAL_SEC:-600} & wait $$!;
              done"
 
     logging:
