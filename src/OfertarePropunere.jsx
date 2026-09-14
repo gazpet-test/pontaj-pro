@@ -608,7 +608,7 @@ function Conformitate({ afirmatii, tipuriAut = [], autExterne = [], onExcepta, o
         if (a.extern_fara_disponibilitate) motive.push('extern — lipsește declarația de disponibilitate')
         if (a.autorizatie_extern_expirata) motive.push('autorizația externului era expirată la acea dată')
         if (a.calificare_lipsa) motive.push(`n-are ${a.tip_cerut_cod} valabil la acea dată`)
-        if (a.doua_roluri) motive.push('aceeași persoană, două roluri')
+        if (a.doua_roluri) motive.push(a.interzice_cumul ? 'aceeași persoană, două roluri — iar cerințele interzic explicit cumulul de funcții' : 'aceeași persoană, două roluri')
         return (
           <div key={a.id} style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'10px 14px',
                                    borderTop: i ? `1px solid ${G.border2}` : 'none' }}>
