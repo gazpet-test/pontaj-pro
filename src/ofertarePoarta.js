@@ -159,3 +159,100 @@ export function evalueazaPoarta(st) {
 // Verdictul pe care îl primește semnătura din ofertare_pt_poarta. Galben = se poate depune,
 // dar rămâne scris în istoric cu ce rezerve. Un singur loc care decide asta.
 export const verdictSemnatura = ev => ev.stare === 'ok' ? 'verde' : 'galben'
+
+// ════════════════════════════════════════════════════════════════
+// POARTA DE CLARIFICARE (PR 2 Laza, 14.09.2026) — SEPARATĂ de poarta propunerii.
+//
+// De ce separată: view-ul propunerii ia „ultima versiune de pachet"; dacă răspunsul la clarificare
+// ar fi un pachet, verdictul ofertei SEMNATE s-ar recalcula retroactiv pe fișierele răspunsului.
+// Unitatea e PUNCTUL (Laza: 11 puncte), nu anexa. Proveniența anexelor NU se declară — se
+// demonstrează (sha256 identic cu manifestul depus = retrimis; document_date vs depus_la = pre/post).
+//
+// Termenul schimbă regula: la un termen de o zi, un block la ora 20 e descalificare. De aceea
+// poarta are ieșirea „se trimite CU REZERVE": block-urile rămân scrise, dar nu opresc trimiterea
+// când mai sunt mai puțin de ORE_REZERVE ore. Fără termen = nu se știe cât e de urgent → warn.
+//
+// st = un rând din v_ofertare_solicitari_ac_stare. acum = Date (injectat, ca să fie testabil).
+// ════════════════════════════════════════════════════════════════
+
+export const ORE_REZERVE = 12
+
+export function evalueazaPoartaClarificare(st, acum = new Date()) {
+  if (!st) return null
+  const r = []
+  const anexe = Array.isArray(st.anexe) ? st.anexe : []
+  const puncte = Number(st.puncte || 0)
+  const faraRaspuns = Number(st.puncte_fara_raspuns || 0)
+  const faraLocator = Number(st.puncte_fara_locator || 0)
+
+  r.push({
+    k:'puncte', titlu:'Punctele solicitării au răspuns',
+    stare: puncte === 0 ? 'block' : (faraRaspuns > 0 ? 'block' : 'ok'),
+    detalii: puncte === 0 ? 'niciun punct introdus — solicitarea se sparge pe puncte, unul per întrebare a comisiei'
+      : (faraRaspuns > 0 ? `${faraRaspuns} din ${puncte} fără răspuns` : `toate cele ${puncte} puncte au răspuns`),
+  })
+  // Laza: informația EXISTA în ofertă dar nu era localizabilă. Răspunsul trebuie să spună UNDE.
+  r.push({
+    k:'locator', titlu:'Răspunsurile trimit la pagina din oferta depusă',
+    stare: faraLocator > 0 ? 'warn' : 'ok',
+    detalii: faraLocator > 0 ? `${faraLocator} răspunsuri nu spun unde în oferta depusă se află informația` : 'fiecare răspuns arată unde în ofertă e informația',
+  })
+
+  const post = anexe.filter(a => a.provenienta === 'post_depunere')
+  const postNejust = post.filter(a => !a.justificata)
+  const faraData = anexe.filter(a => a.provenienta === 'fara_data')
+  const retrimise = anexe.filter(a => a.provenienta === 'retrimis')
+  const pre = anexe.filter(a => a.provenienta === 'pre_depunere')
+
+  r.push({
+    // ATSD 11.09.2026 la Laza: document de după depunere. Fără justificare = block (nu se poate
+    // completa oferta post-depunere). Cu justificare scrisă = warn: calea onestă rămâne deschisă,
+    // dar rămâne scris că s-a trimis un act post-depunere și de ce.
+    k:'post_depunere', titlu:'Anexe datate DUPĂ depunere',
+    stare: postNejust.length ? 'block' : (post.length ? 'warn' : 'ok'),
+    detalii: postNejust.length
+      ? `${postNejust.length} anexe cu dată după ${fmtData(st.depus_la)} fără justificare: ${postNejust.map(a => a.nume).join(', ')}`
+      : (post.length ? `${post.length} anexe post-depunere, justificate în scris: ${post.map(a => a.nume).join(', ')}` : 'nicio anexă datată după depunere'),
+  })
+  r.push({
+    k:'fara_data', titlu:'Anexe fără data documentului',
+    stare: faraData.length ? 'warn' : 'ok',
+    detalii: faraData.length ? `${faraData.length} anexe fără dată — proveniența nu se poate demonstra: ${faraData.map(a => a.nume).join(', ')}` : '—',
+  })
+  r.push({
+    k:'provenienta', titlu:'Proveniența anexelor',
+    stare: 'ok',
+    detalii: anexe.length ? `${retrimise.length} retrimise (hash identic cu manifestul depus) · ${pre.length} dinainte de depunere · ${post.length} de după` : 'nicio anexă',
+  })
+  if (st.depus_sursa === 'termen_licitatie') r.push({
+    k:'depus_sursa', titlu:'Data depunerii',
+    stare: 'warn',
+    detalii: `nu există pachet depus în ERP — data depunerii e luată din termenul licitației (${fmtData(st.depus_la)})`,
+  })
+
+  const oreRamase = st.termen_raspuns ? (new Date(st.termen_raspuns) - acum) / 36e5 : null
+  r.push({
+    k:'termen', titlu:'Termenul de răspuns',
+    stare: oreRamase == null ? 'warn' : (oreRamase < 0 ? 'block' : (oreRamase <= ORE_REZERVE ? 'warn' : 'ok')),
+    detalii: oreRamase == null ? 'termen necompletat — nu se știe cât e de urgent'
+      : (oreRamase < 0 ? `termen DEPĂȘIT cu ${fmtOre(-oreRamase)}` : `${fmtOre(oreRamase)} rămase`),
+  })
+
+  const blocaje = r.filter(x => x.stare === 'block')
+  const rezerve = r.filter(x => x.stare === 'warn')
+  const stare = blocaje.length ? 'block' : (rezerve.length ? 'warn' : 'ok')
+  // Ieșirea de urgență: sub ORE_REZERVE ore, block-urile devin rezerve scrise — dar NU termenul
+  // depășit și NU „niciun punct": pe alea nu există „cu rezerve", există „prea târziu"/„nimic de trimis".
+  const blocajeDure = blocaje.filter(x => x.k === 'termen' || (x.k === 'puncte' && puncte === 0))
+  const poateCuRezerve = stare === 'block' && oreRamase != null && oreRamase >= 0 && oreRamase <= ORE_REZERVE && blocajeDure.length === 0
+  return {
+    stare, randuri: r,
+    blocaje: blocaje.map(x => x.k),
+    rezerve: [...rezerve, ...blocaje].map(x => `${x.titlu.toLowerCase()}: ${x.detalii}`),
+    ore_ramase: oreRamase,
+    poate_cu_rezerve: poateCuRezerve,
+  }
+}
+
+function fmtData(d) { if (!d) return '?'; const x = new Date(d); return isNaN(x) ? String(d) : x.toLocaleDateString('ro-RO') }
+function fmtOre(h) { return h >= 48 ? `${Math.floor(h / 24)} zile` : `${Math.round(h)} h` }
