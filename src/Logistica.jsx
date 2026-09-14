@@ -313,18 +313,67 @@ function FieldText({ label, value, onChange, required, placeholder, type='text',
   )
 }
 
+// TKT-0076: listele lungi (utilaje, șantiere) primesc automat o căutare deasupra.
+// Opțiunea selectată rămâne mereu în listă, ca select-ul să nu piardă afișarea.
 function FieldSelect({ label, value, onChange, options, required, readonly, placeholder }) {
+  const [q, setQ] = useState('')
+  const opts = options || []
+  const cuCautare = !readonly && opts.length > 12
+  const txt = o => (typeof o === 'object' && o !== null ? String(o.label ?? '') : String(o ?? ''))
+  const val = o => (typeof o === 'object' && o !== null ? String(o.value ?? '') : String(o ?? ''))
+  const vizibile = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!cuCautare || !t) return opts
+    return opts.filter(o => txt(o).toLowerCase().includes(t) || val(o) === String(value || ''))
+  }, [opts, q, cuCautare, value])
   return (
     <div>
       <FieldLabel label={label} required={required} />
+      {cuCautare && (
+        <input
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          placeholder={`🔍 Caută în ${opts.length} opțiuni...`}
+          style={{...S.input, padding:'5px 9px', fontSize:12, marginBottom:4}}
+        />
+      )}
       <select value={value || ''} onChange={e => onChange(e.target.value)} disabled={readonly}
         style={{...S.input, padding: '7px 11px', fontSize: 13, background: readonly ? G.surface : G.bg, color: readonly ? G.muted : G.text, cursor: readonly ? 'default' : 'pointer'}}>
         {placeholder && <option value="">{placeholder}</option>}
-        {options.map((o, i) => (
+        {vizibile.map((o, i) => (
           typeof o === 'object' && o !== null
             ? <option key={`${o.value}-${i}`} value={o.value}>{o.label}</option>
             : <option key={`${o}-${i}`} value={o}>{o || '— niciuna —'}</option>
         ))}
+      </select>
+      {cuCautare && q.trim() && (
+        <div style={{fontSize:10, color:G.muted, marginTop:3}}>{vizibile.length} din {opts.length}</div>
+      )}
+    </div>
+  )
+}
+
+// TKT-0076: select de utilaj cu căutare, pentru rândurile din conținutul transportului.
+function UtilajSelectCautabil({ value, onChange, active }) {
+  const [q, setQ] = useState('')
+  const toate = useMemo(() => (active || []).filter(a => !a.vandut && !a.deep_sleep), [active])
+  const eticheta = a => `${a.cod_intern || a.nr_inmatriculare || `#${a.id}`} · ${a.marca || ''} ${a.model || ''}${a.regim_transport_special ? ' ⚠️ REGIM SPECIAL' : ''}`
+  const vizibile = useMemo(() => {
+    const t = q.trim().toLowerCase()
+    if (!t) return toate
+    return toate.filter(a => eticheta(a).toLowerCase().includes(t) || a.id === value)
+  }, [toate, q, value])
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:4}}>
+      {toate.length > 12 && (
+        <input value={q} onChange={e => setQ(e.target.value)}
+          placeholder={`🔍 Caută în ${toate.length} utilaje...`}
+          style={{...S.input, fontSize:11, padding:'5px 9px'}} />
+      )}
+      <select value={value || ''} onChange={e => onChange(e.target.value ? Number(e.target.value) : null)}
+        style={{...S.input, fontSize:12}}>
+        <option value="">— Selectează utilaj —</option>
+        {vizibile.map(a => <option key={a.id} value={a.id}>{eticheta(a)}</option>)}
       </select>
     </div>
   )
@@ -4712,21 +4761,11 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
                     {/* Conținut rând */}
                     <div style={{flex:1, display:'flex', flexDirection:'column', gap:6}}>
                       {isUtilaj ? (
-                        <select
-                          value={it.active_id || ''}
-                          onChange={e => updateContinutItem(it.tempId, 'active_id', e.target.value ? Number(e.target.value) : null)}
-                          style={{...S.input, fontSize:12}}
-                        >
-                          <option value="">— Selectează utilaj —</option>
-                          {active
-                            .filter(a => !a.vandut && !a.deep_sleep)
-                            .map(a => (
-                              <option key={a.id} value={a.id}>
-                                {(a.cod_intern || a.nr_inmatriculare || `#${a.id}`)} · {a.marca || ''} {a.model || ''}{a.regim_transport_special ? ' ⚠️ REGIM SPECIAL' : ''}
-                              </option>
-                            ))
-                          }
-                        </select>
+                        <UtilajSelectCautabil
+                          value={it.active_id}
+                          onChange={v => updateContinutItem(it.tempId, 'active_id', v)}
+                          active={active}
+                        />
                       ) : it.din_stoc ? (
                         <input
                           type="text"
