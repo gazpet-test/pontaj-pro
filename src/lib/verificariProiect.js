@@ -19,7 +19,7 @@ export const VERIFICARI = [
   { cheie: 'lipsa:mp_employee_id', camp: 'mp_employee_id', grup: 'Echipă', eticheta: 'Manager proiect (MP) nealocat' },
   { cheie: 'lipsa:rte_employee_id', camp: 'rte_employee_id', grup: 'Echipă', eticheta: 'Responsabil tehnic execuție (RTE) nealocat' },
   { cheie: 'lipsa:rts_employee_id', camp: 'rts_employee_id', grup: 'Echipă', eticheta: 'Responsabil tehnic sudură (RTS) nealocat' },
-  { cheie: 'lipsa:coordonator_transgaz', camp: 'coordonator_transgaz', grup: 'Echipă', eticheta: 'Coordonator Transgaz necompletat' },
+  { cheie: 'lipsa:coordonator_transgaz', camp: 'coordonator_transgaz', grup: 'Echipă', eticheta: 'Coordonator beneficiar necompletat' },
   // Contract
   { cheie: 'lipsa:nr_contract', camp: 'nr_contract', grup: 'Contract', eticheta: 'Număr contract necompletat' },
   { cheie: 'lipsa:data_contract', camp: 'data_contract', grup: 'Contract', eticheta: 'Data semnării contractului necompletată' },
