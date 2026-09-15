@@ -282,7 +282,7 @@ export default function HRPage() {
       {load && <div style={{padding:60, textAlign:'center', color:G.muted}}><div className="sp" style={{margin:'0 auto'}}/></div>}
       
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
-      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
+      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} employees={employees} onClickEmp={setEditEmp} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
@@ -456,9 +456,10 @@ function TabPersonal({ employees, autorizatii, onClickEmp, showToast }) {
 // ===========================================================================
 // TAB AUTORIZAȚII — tabel cu toate
 // ===========================================================================
-function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, showToast, onEditAut }) {
+function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAddAut, isAdmin, onReload, showToast, onEditAut }) {
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('Toate')
+  const [tipFilter, setTipFilter] = useState('')  // task #71: filtru pe tipul exact de autorizație (denumire), pt. export calificări
   const [statusFilter, setStatusFilter] = useState('toate')
   const [sortBy, setSortBy] = useState('nume')  // nume | tip | expirare | status
   const [uploadingId, setUploadingId] = useState(null)
@@ -504,6 +505,7 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
   const filtered = useMemo(() => {
     let result = autorizatii.filter(a => {
       if (catFilter !== 'Toate' && a.tip_categorie !== catFilter) return false
+      if (tipFilter && a.tip_denumire !== tipFilter) return false
       if (statusFilter !== 'toate' && a.status !== statusFilter) return false
       if (search.trim()) {
         const s = search.toLowerCase()
@@ -524,7 +526,53 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
       result.sort((a,b) => (order[a.status] ?? 99) - (order[b.status] ?? 99))
     }
     return result
-  }, [autorizatii, catFilter, statusFilter, search, sortBy])
+  }, [autorizatii, catFilter, tipFilter, statusFilter, search, sortBy])
+
+  // Tipurile disponibile în select: doar cele care au măcar o autorizație în categoria curentă
+  const tipuriOptiuni = useMemo(() => {
+    const prezente = new Set(autorizatii.filter(a => catFilter === 'Toate' || a.tip_categorie === catFilter).map(a => a.tip_denumire).filter(Boolean))
+    const dinTipuri = tipuri.map(t => t.denumire).filter(d => prezente.has(d))
+    prezente.forEach(d => { if (!dinTipuri.includes(d)) dinTipuri.push(d) })  // tipuri inactive/vechi rămase pe autorizații
+    return dinTipuri
+  }, [autorizatii, tipuri, catFilter])
+
+  const functieAngajat = (empId) => employees.find(e => e.id === empId)?.functie || ''
+
+  // task #71 (Oana Nica, Ofertare): export XLSX exact cu rândurile filtrate din tabel —
+  // ex. „instalator EGD" → lista tuturor persoanelor cu autorizația respectivă
+  const statusExportLabel = (a) => {
+    if (a.fara_expirare) return 'valabil (fără expirare)'
+    if (!a.data_expirare) return 'fără dată'
+    const zile = Math.ceil((new Date(a.data_expirare) - new Date()) / 86400000)
+    if (zile < 0) return 'expirat'
+    if (zile <= 30) return `expiră în ${zile} zile`
+    return 'valabil'
+  }
+  const exportFiltrateXlsx = () => {
+    if (!filtered.length) { showToast('Nimic de exportat — tabelul e gol', 'warning'); return }
+    const rows = filtered.map(a => ({
+      'Angajat': a.employee_name || '—',
+      'Funcție': functieAngajat(a.employee_id) || '—',
+      'Tip autorizație': a.tip_denumire || '—',
+      'Categorie': a.tip_categorie || '—',
+      'Nr. autorizație': a.numar_autorizatie || '—',
+      'Domenii': (a.domenii || []).join(', ') || a.subcategorie || '—',
+      'Emitent': a.emitent || '—',
+      'Data expirare': a.fara_expirare ? 'fără expirare' : (a.data_expirare ? fmtDataRo(a.data_expirare) : '—'),
+      'Status': statusExportLabel(a),
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    ws['!cols'] = [{wch:30},{wch:22},{wch:34},{wch:16},{wch:18},{wch:30},{wch:16},{wch:14},{wch:18}]
+    // antet bold (xlsx-js-style)
+    Object.keys(rows[0]).forEach((_, i) => {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: i })]
+      if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: 'E8EEF7' } } }
+    })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Autorizatii')
+    XLSX.writeFile(wb, `autorizatii_${tipFilter ? numeFisier(tipFilter) : 'toate'}_${new Date().toISOString().slice(0,10)}.xlsx`)
+    showToast(`${rows.length} rânduri exportate`, 'success')
+  }
   
   // Etapa 13: soft delete → mutare în Coș (păstrat 30 zile, apoi cleanup automat prin pg_cron)
   const handleDelete = async (a) => {
@@ -700,6 +748,11 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
           <option value="expirare">📅 Sortare: Data expirare</option>
           <option value="status">🚦 Sortare: Status (expirate sus)</option>
         </select>
+        <select value={tipuriOptiuni.includes(tipFilter) ? tipFilter : ''} onChange={e => setTipFilter(e.target.value)}
+          title="Filtrează pe tipul exact de autorizație / calificare" style={{...S.input, width:'auto', minWidth:200, maxWidth:320}}>
+          <option value="">🎓 Toate tipurile</option>
+          {tipuriOptiuni.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{...S.input, width:'auto', minWidth:140}}>
           <option value="toate">Toate statusurile</option>
           <option value="valid">✓ Valide</option>
@@ -708,6 +761,11 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
           <option value="expirat">🚨 EXPIRATE</option>
           <option value="fara_exp">∞ Fără expirare</option>
         </select>
+        <button onClick={exportFiltrateXlsx} disabled={!filtered.length}
+          title="Exportă în Excel exact rândurile afișate (după filtrele curente)"
+          style={{padding:'8px 13px', background:G.green, color:'#fff', border:'none', borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:filtered.length ? 1 : .5, whiteSpace:'nowrap'}}>
+          ⬇ Export Excel ({filtered.length})
+        </button>
       </div>
       
       {/* Input file global pentru upload autorizatii — o singura instanta, nu in bucla map */}
@@ -734,7 +792,13 @@ function TabAutorizatii({ autorizatii, tipuri, onAddAut, isAdmin, onReload, show
             <tbody>
               {filtered.map(a => (
                 <tr key={a.id} style={{borderTop:`1px solid ${G.border}`}}>
-                  <td style={{...tdStyle, fontWeight:600}}>{a.employee_name}</td>
+                  <td style={{...tdStyle, fontWeight:600}}>
+                    {(() => { const emp = employees.find(e => e.id === a.employee_id); return emp && onClickEmp ? (
+                      <span onClick={() => onClickEmp(emp)} title="👤 Fișă personal: studii, certificări, calificări"
+                        style={{cursor:'pointer', color:G.blue, textDecoration:'underline dotted'}}>{a.employee_name}</span>
+                    ) : a.employee_name })()}
+                    {functieAngajat(a.employee_id) && <div style={{fontSize:10, color:G.muted, fontWeight:400}}>{functieAngajat(a.employee_id)}</div>}
+                  </td>
                   <td style={tdStyle}>
                     <div style={{fontWeight:600}}>{a.tip_denumire}</div>
                     <div style={{fontSize:10, color:G.muted}}>{a.tip_categorie}</div>
