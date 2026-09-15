@@ -2408,6 +2408,107 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
 // ════════════════════════════════════════════════════════════════
 // MODAL: DETALII + ACȚIUNI (pipeline + decizia GO/NO-GO)
 // ════════════════════════════════════════════════════════════════
+// ── „Documente noi din SEAP” (Răzvan 15.09.2026) ─────────────────────────────────────────
+// Documentele apărute în SEAP DUPĂ importul inițial (aparut_ulterior=true, marcate de
+// ofertare-seap-veghe v4): răspunsuri la clarificări, erate, planșe noi. Se văd separat, în
+// tab-ul Clarificări, cu citire AI dedicată (edge fn ofertare-document-nou-citeste →
+// analiza.citire_noi). Placeholder-ele (/neincarcat/) se pot doar semnala — fișierul se urcă
+// din Documente. showToast vine din modal; fără el, mesajul rămâne inline.
+const TIP_NOU = {
+  raspuns_clarificare: ['🟠 răspuns clarificare', G.orange],
+  erata: ['🔴 erată', G.red],
+  document_nou: ['⚪ alt document', G.muted],
+  altul: ['⚪ alt document', G.muted],
+}
+const estePlaceholderDoc = d => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
+const fmtDataScurt = d => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
+function DocumenteNoiSection({ licitatie: l, showToast = null }) {
+  const [docs, setDocs] = useState(null)
+  const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
+  const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
+  const load = async () => {
+    const { data } = await supabase.from('ofertare_documente_atribuire')
+      .select('id, nume_original, tip, fisier_path, created_at, analiza, analiza_la, eroare')
+      .eq('licitatie_id', l.id).eq('aparut_ulterior', true).order('created_at', { ascending: false })
+    setDocs(data || [])
+  }
+  useEffect(() => { load() }, [l.id])   // eslint-disable-line react-hooks/exhaustive-deps
+  const anunta = (t, tip = 'ok') => { if (showToast) showToast(t, tip); else setMsg({ t, tip }) }
+  const deschide = async d => {
+    const { data, error } = await supabase.storage.from('ofertare').createSignedUrl(d.fisier_path, 600)
+    if (error || !data?.signedUrl) return anunta('Nu pot deschide fișierul: ' + (error?.message || 'URL lipsă'), 'err')
+    window.open(data.signedUrl, '_blank')
+  }
+  const citeste = async d => {
+    setBusy(d.id); setMsg(null)
+    const { data, error } = await supabase.functions.invoke('ofertare-document-nou-citeste', { body: { document_id: d.id } })
+    setBusy(null)
+    if (error || data?.error) return anunta('Citirea a eșuat: ' + (data?.error || error?.message), 'err')
+    anunta(`🤖 Citit: ${d.nume_original}`)
+    load()
+  }
+  const badgeTip = d => {
+    const t = d.analiza?.citire_noi?.tip || d.tip
+    const [lbl, col] = TIP_NOU[t] || TIP_NOU.altul
+    return <span style={{ fontSize:11, fontWeight:800, color:col, border:`1px solid ${col}55`, borderRadius:6, padding:'1px 7px', whiteSpace:'nowrap' }}>{lbl}</span>
+  }
+  return (
+    <div style={{ ...S.card, padding:16, background:G.surface, marginBottom:14 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+        <div style={{ fontWeight:800, fontSize:14 }}>📂 Documente noi din SEAP ({docs?.length ?? '…'})</div>
+        <span style={{ fontSize:11.5, color:G.dim }}>apărute după importul inițial — răspunsuri, erate, planșe noi</span>
+      </div>
+      {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : G.green, marginBottom:8 }}>{msg.t}</div>}
+      {docs === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
+        : !docs.length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
+        : docs.map(d => {
+          const ph = estePlaceholderDoc(d)
+          const c = d.analiza?.citire_noi
+          return (
+            <div key={d.id} style={{ padding:'11px 13px', borderRadius:11, marginBottom:8, background:'#1C2430', borderLeft:`3px solid ${(TIP_NOU[c?.tip || d.tip] || TIP_NOU.altul)[1]}` }}>
+              <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+                <div style={{ flex:1, minWidth:180, fontSize:13.5, fontWeight:600, wordBreak:'break-word' }}>{d.nume_original}</div>
+                {badgeTip(d)}
+                <span style={{ fontSize:11.5, color:G.dim, whiteSpace:'nowrap' }} title="data apariției în platformă">📅 {fmtDataScurt(d.created_at)}</span>
+              </div>
+              <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginTop:7 }}>
+                {ph
+                  ? <span style={{ fontSize:11.5, color:G.yellow }} title={d.eroare || ''}>⚠ neadus automat — urcă-l din Documente</span>
+                  : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschide(d)}>📎 deschide</button>}
+                <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1, cursor: ph || busy ? 'default' : 'pointer' }}
+                  disabled={ph || !!busy} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
+                  {busy === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 Citește cu AI'}
+                </button>
+                {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtDataScurt(c.citit_la)}</span>}
+                {c?.termen_nou && <span style={{ fontSize:11.5, fontWeight:800, color:G.red }}>⏰ termen nou: {fmtZi(c.termen_nou)}</span>}
+              </div>
+              {c && (
+                <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
+                  <div style={{ whiteSpace:'pre-wrap', color:G.text }}>{c.rezumat || '(fără rezumat)'}</div>
+                  {Array.isArray(c.modificari) && c.modificari.length > 0 && (
+                    <details style={{ marginTop:6 }}>
+                      <summary style={{ cursor:'pointer', fontWeight:700, color:G.orange }}>✏️ Modificări ({c.modificari.length})</summary>
+                      <ul style={{ margin:'6px 0 0', paddingLeft:18 }}>
+                        {c.modificari.map((m, i) => <li key={i} style={{ marginBottom:4 }}><b>{m.ce_se_schimba}</b>{m.unde ? <span style={{ color:G.muted }}> — {m.unde}</span> : null}{m.impact_oferta ? <div style={{ color:G.yellow, fontSize:12 }}>↳ {m.impact_oferta}</div> : null}</li>)}
+                      </ul>
+                    </details>
+                  )}
+                  {Array.isArray(c.intrebari_raspunse) && c.intrebari_raspunse.length > 0 && (
+                    <details style={{ marginTop:6 }}>
+                      <summary style={{ cursor:'pointer', fontWeight:700, color:G.blue }}>❓ Întrebări răspunse ({c.intrebari_raspunse.length})</summary>
+                      <ul style={{ margin:'6px 0 0', paddingLeft:18 }}>
+                        {c.intrebari_raspunse.map((q, i) => <li key={i} style={{ marginBottom:4 }}><span style={{ color:G.muted }}>Î:</span> {q.intrebare_scurt}<div style={{ color:G.green, fontSize:12 }}>R: {q.raspuns_scurt}</div></li>)}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>)
+        })}
+    </div>
+  )
+}
+
 function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati, onGoPropunere,
   intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
@@ -2558,6 +2659,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {tab === 'propunere' && <PropunereRezumat st={ptSt} onDeschide={() => { onClose(); onGoPropunere?.() }} />}
 
             {tab === 'verificari' && <VerificareFinalaSection licitatie={l} />}
+            {tab === 'clarificari' && <DocumenteNoiSection licitatie={l} showToast={showToast} />}
             {tab === 'clarificari' && (
               <div style={{ ...S.card, padding:16, background:G.surface }}>
                 <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
