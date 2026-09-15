@@ -91,34 +91,43 @@ function asiguraMarcaje(txt: string, s: number, e: number): string {
 //  - service_role: liber (rutine interne);
 //  - JWT de utilizator: doar owner sau responsabilul licitației;
 //  - cheia anon (workerii server din ofertare_*_tick trimit anon JWT din Vault): doar cât coada licitației e activă.
-async function autorizat(req: Request, supabase: any, licId: number, coadaTabel: string | null): Promise<string | null> {
+// Intoarce {eroare, uid}: uid = cine a pornit citirea, pentru procesat_de. NU se ia niciodata
+// din corpul cererii - clientul ar putea trimite orice; vine din JWT-ul verificat sau, pe calea
+// de server, din ofertare_ingest_coada.cerut_de (cine a apasat "Pe server").
+async function autorizat(req: Request, supabase: any, licId: number, coadaTabel: string | null): Promise<{ eroare: string | null; uid: string | null }> {
+  const cerutDeCoada = async () => {
+    if (!coadaTabel) return null
+    const { data } = await supabase.from(coadaTabel).select('cerut_de').eq('licitatie_id', licId).maybeSingle()
+    return data?.cerut_de || null
+  }
   const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
-  if (!jwt) return 'lipsește Authorization'
+  if (!jwt) return { eroare: 'lipsește Authorization', uid: null }
   // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
   // legacy pe care îl trimit workerii din Vault (verificat 14.09: comparația de string pica).
   const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
-  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return { eroare: null, uid: await cerutDeCoada() }
   if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') {
-    if (!coadaTabel) return 'apel neautorizat (cheie anon)'
-    const { data: c } = await supabase.from(coadaTabel).select('activ').eq('licitatie_id', licId).maybeSingle()
-    return c?.activ ? null : 'apel neautorizat (cheie anon, coada nu e activă)'
+    if (!coadaTabel) return { eroare: 'apel neautorizat (cheie anon)', uid: null }
+    const { data: c } = await supabase.from(coadaTabel).select('activ, cerut_de').eq('licitatie_id', licId).maybeSingle()
+    return c?.activ ? { eroare: null, uid: c.cerut_de || null } : { eroare: 'apel neautorizat (cheie anon, coada nu e activă)', uid: null }
   }
   const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
-  if (!uid) return 'sesiune invalidă'
+  if (!uid) return { eroare: 'sesiune invalidă', uid: null }
   const [{ data: prof }, { data: lic }] = await Promise.all([
     supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
     supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
   ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
-  return 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).'
+  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return { eroare: null, uid }
+  return { eroare: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).', uid: null }
 }
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   let docId: number | null = null
+  let pornitDe: string | null = null   // cine a pornit citirea (procesat_de)
 
   const fail = async (msg: string) => {
     if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
@@ -133,7 +142,8 @@ Deno.serve(async (req: Request) => {
     docId = Number(doc_id)
     { const { data: dl } = await supabase.from('ofertare_documente_atribuire').select('licitatie_id').eq('id', docId).maybeSingle()
       const na = await autorizat(req, supabase, Number(dl?.licitatie_id), 'ofertare_ingest_coada')
-      if (na) return new Response(JSON.stringify({ error: na }), { status: 200, headers: CORS }) }   // fără marcarea documentului ca eroare
+      if (na.eroare) return new Response(JSON.stringify({ error: na.eroare }), { status: 200, headers: CORS })   // fără marcarea documentului ca eroare
+      pornitDe = na.uid }
     if (!docId) return new Response(JSON.stringify({ error: 'doc_id required' }), { status: 400, headers: CORS })
 
     const { data: row, error: rErr } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
@@ -148,7 +158,9 @@ Deno.serve(async (req: Request) => {
       await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'ignorat', eroare: 'doar PDF se proceseaza in M1 (docx/xls/dwg raman ca fisiere)' }).eq('id', docId)
       return new Response(JSON.stringify({ ok: true, skip: 'non-pdf', continua: false }), { headers: CORS })
     }
-    await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: null }).eq('id', docId)
+    await supabase.from('ofertare_documente_atribuire')
+      .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
+      .eq('id', docId)
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
     const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
 

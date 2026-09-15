@@ -257,7 +257,8 @@ export default function OfertareLicitatiiTab() {
     if (form.fisa_path && licId) {
       const { error: eDoc } = await supabase.from('ofertare_documente_atribuire').insert({
         licitatie_id: licId, fisier_path: form.fisa_path, nume_original: form.fisa_nume || 'fisa_date.pdf',
-        tip: 'fisa_date', procesat_la: new Date().toISOString(),
+        // fișa a fost deja citită cu AI (E0 autofill) de cel care a completat formularul
+        tip: 'fisa_date', procesat_la: new Date().toISOString(), procesat_de: profile?.id || null,
       })
       if (eDoc) showToast('Licitația s-a salvat, dar fișa nu s-a atașat: ' + eDoc.message, 'warn')
     }
@@ -656,7 +657,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const load = async () => {
     const [{ data, error }, { data: c }] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
-        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza')
+        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name)')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
     ])
@@ -1145,13 +1146,22 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                   <input type="checkbox" title={potIntra(d) ? 'Include în setul de răspuns de analizat' : 'Fără text extras — nu poate intra în analiză'}
                     disabled={!potIntra(d) || !!anBusy} checked={selDoc.has(d.id)}
                     onChange={e => setSelDoc(prev => { const n = new Set(prev); e.target.checked ? n.add(d.id) : n.delete(d.id); return n })} />
-                  <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }} title={d.eroare || ''}>{spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : st.label}</span>
+                  {/* Trasabilitate pe cheltuială (15.09.2026): la „cine a pornit procesarea pe asta?" nu exista
+                      răspuns nicăieri. procesat_de se scrie în ofertare-ingest-doc din identitatea verificată acolo.
+                      Documentele citite înainte de 15.09.2026 au NULL — de aceea eticheta cade pe eroare/gol. */}
+                  <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }}
+                    title={d.pornit?.name ? `Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}` : (d.eroare || '')}>
+                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : st.label}
+                  </span>
                   <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
                     {d.nume_original}
                     {spart && <span style={{ color:G.muted, fontStyle:'italic' }}> — prea mare, s-a spart în {spart[1]} bucăți; se citesc bucățile, fișierul acesta NU intră în analiză</span>}
                     {formularXml && <span style={{ color:G.muted, fontStyle:'italic' }}> — DUAE/formular SEAP: se completează la depunere, nu se citește</span>}
                   </span>
-                  <span style={{ color:G.dim, whiteSpace:'nowrap' }}>{d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}</span>
+                  <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
+                    {d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}
+                    {d.pornit?.name && <span title={`Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}`}> · 👤 {d.pornit.name.split(' ')[0]}</span>}
+                  </span>
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.status_procesare === 'in_lucru' && d.pagini ? `${d.pagini_procesate}/${d.pagini} pag` : d.pagini ? `${d.pagini} pag` : fmtMB(d.size_bytes)}
                     {d.status_procesare === 'partial' && d.pagini_necitite?.length > 0 && (
