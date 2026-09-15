@@ -828,7 +828,8 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
         return d.employee_name?.toLowerCase().includes(s) ||
                d.tip_denumire?.toLowerCase().includes(s) ||
                (d.numar_document || '').toLowerCase().includes(s) ||
-               (d.emitent || '').toLowerCase().includes(s)
+               (d.emitent || '').toLowerCase().includes(s) ||
+               (d.fisier_nume || '').toLowerCase().includes(s)
       }
       return true
     })
@@ -1207,6 +1208,11 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
                                   <td style={{padding:'7px 10px'}}>
                                     <span style={{marginRight:5}}>{meta.emoji}</span>
                                     <span style={{fontWeight:600}}>{d.tip_denumire}</span>
+                                    {d.fisier_nume && (
+                                      <div title={d.fisier_nume} style={{fontSize:11, color:G.text, marginTop:2, maxWidth:300, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                                        📎 {d.fisier_nume}
+                                      </div>
+                                    )}
                                   </td>
                                   <td style={{padding:'7px 10px', fontFamily:'monospace', fontSize:11, color:G.muted}}>
                                     {d.numar_document || '—'}
@@ -1291,6 +1297,11 @@ export default function TabDocumentePersonale({ employees, canAccessPersonal, sh
                     </td>
                     <td style={tdStyle}>
                       <div style={{fontWeight:600}}>{d.tip_denumire}</div>
+                      {d.fisier_nume && (
+                        <div title={d.fisier_nume} style={{fontSize:11, color:G.text, marginTop:2, maxWidth:300, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                          📎 {d.fisier_nume}
+                        </div>
+                      )}
                       <div style={{fontSize:10, color:G.muted, marginTop:2}}>{meta.emoji} {meta.label}</div>
                     </td>
                     <td style={{...tdStyle, fontFamily:'monospace', fontSize:11}}>
