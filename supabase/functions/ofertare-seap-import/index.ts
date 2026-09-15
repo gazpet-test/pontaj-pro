@@ -71,6 +71,16 @@ const PRAG_MARE = 20e6;   // peste asta: lasam fisierul pe seama functiei de pe 
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)/i;
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
 
+// ANTI-BUG 15.09.2026 (Clinceni): SEAP normalizeaza numele in API (scoate virgulele,
+// pune spatii duble, schimba "(2)" in " 2", strecoara spatiu inainte de extensie), iar
+// in arhiva numele sunt cele originale. Compararea pe nume exact producea placeholdere
+// fantoma si duplicate ale aceluiasi fisier. Cheia scoate TOATE spatiile, nu doar le
+// comprima - altfel "planse .pdf" si "planse.pdf" raman doua fisiere diferite.
+// COPIE identica in ofertare-seap-veghe (edge functions nu pot importa cod una din alta).
+// Cheia e DOAR pentru comparatie - in BD se scrie tot numele real (nume_original).
+const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
+  .replace(/[,()]/g, '').replace(/\s+/g, '');
+
 // Semnatura reala a unui PDF: %PDF- la inceputul fisierului. Numele e doar un indiciu.
 const areSemnaturaPdf = (b: Uint8Array) =>
   b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 && b[4] === 0x2D;
@@ -326,11 +336,11 @@ Deno.serve(async (req: Request) => {
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
-  const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => d.nume_original));
-  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [d.nume_original, d.id]));
+  const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
+  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieNume(d.nume_original), d.id]));
 
   const scrie = async (rand: any, nume: string) => {
-    const idPh = placeholders.get(nume);
+    const idPh = placeholders.get(cheieNume(nume));
     const { error } = idPh
       ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
       : await supa.from('ofertare_documente_atribuire').insert(rand);
@@ -356,7 +366,7 @@ Deno.serve(async (req: Request) => {
       eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
       sursa: 'seap',
     }, numeFinal);
-    urcate.add(numeFinal);
+    urcate.add(cheieNume(numeFinal));
     urcatiOcteti += buf.length;
     return true;
   };
@@ -399,8 +409,8 @@ Deno.serve(async (req: Request) => {
     for (const doc of documente) {
       if (i < deLaIndex) { i++; continue; }
       const numeCurat = doc.nume.replace(/\.p7s$/i, '');
-      if (urcate.has(numeCurat) || JUNK_RE.test(doc.nume)) {
-        if (urcate.has(numeCurat)) raport.sarite_existente++;
+      if (urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(doc.nume)) {
+        if (urcate.has(cheieNume(numeCurat))) raport.sarite_existente++;
         i++;
         continue;
       }
@@ -427,7 +437,7 @@ Deno.serve(async (req: Request) => {
             (h) => {
               const nc = h.nume.replace(/\.p7s$/i, '');
               if (JUNK_RE.test(h.nume)) return false;
-              if (urcate.has(nc)) { raport.sarite_existente++; return false; }
+              if (urcate.has(cheieNume(nc))) { raport.sarite_existente++; return false; }
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
               return true;
             },
@@ -476,10 +486,10 @@ Deno.serve(async (req: Request) => {
           (h) => {
             const numeCurat = h.nume.replace(/\.p7s$/i, '');
             const preaMare = h.usize > PRAG_MARE;
-            const sarim = iArh < deLaIndexArhiva || urcate.has(numeCurat) || JUNK_RE.test(h.nume) || preaMare;
+            const sarim = iArh < deLaIndexArhiva || urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(h.nume) || preaMare;
             if (sarim) {
               if (iArh >= deLaIndexArhiva) {
-                if (urcate.has(numeCurat)) raport.sarite_existente++;
+                if (urcate.has(cheieNume(numeCurat))) raport.sarite_existente++;
                 else if (preaMare) raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`);
               }
               iArh++;
