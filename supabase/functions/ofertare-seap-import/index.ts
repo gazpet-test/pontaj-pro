@@ -3,10 +3,33 @@
 // 11.09.2026: functia rula in productie FARA sa fie in repo. Adusa aici cu doua modificari
 // (vezi mai jos), ca sa nu mai fie cod care exista doar pe server.
 //
-// De ce arhiva si nu fisier cu fisier: endpoint-ul per document
-// (api-pub/files/noticedoc/<hash>) da 500 din exterior, inclusiv cu cookie de sesiune;
-// arhiva (NoticeCommon/DownloadArchive/) e publica, dar NU suporta Range. ZIP-ul SEAP
-// tine dimensiunile in local file header, deci se poate parcurge streaming.
+// 15.09.2026 - FISIER CU FISIER (calea principala de azi). De ce s-a schimbat ordinea:
+// bugetul unei rulari se consuma pe OCTETII PARCURSI din arhiva, asa ca documentele de la
+// coada arhivelor mari nu mai intrau deloc - ramaneau 8 randuri placeholder /neincarcat/,
+// dintre care 6 pe SCN1179776 (Clinceni).
+// DESCOPERIRE (verificata experimental de pe un IP curat, Domnesti notice 100244241,
+// sysNoticeTypeId 17): GET NoticeCommon/GetDfNoticeSectionFiles/ - endpointul pe care il
+// foloseam DEJA doar pentru nume - intoarce pentru FIECARE document si un link propriu
+// (noticeDocumentUrl = api-pub/files/noticedoc/<hash>), in listele dfNoticeDocs,
+// contractingStrategyDocs, duaeDocs, decisionDocs, exAnteDocs.
+// Doua capcane, ambele platite:
+//   a) linkul e TOKEN TEMPORAR LEGAT DE SESIUNE: se schimba la fiecare apel si descarcarea
+//      merge DOAR daca trimiti inapoi cookie-urile primite la apelul care l-a produs. Deno
+//      nu pastreaza cookie-uri la fetch -> se culeg din resp.headers.getSetCookie() (fallback
+//      pe get('set-cookie')), se pastreaza doar perechile nume=valoare si se dau ca antet
+//      Cookie. Linkul NU se salveaza NICIODATA in BD (expira).
+//   b) fisierele vin ca .p7s (container CMS) -> desfaSemnatura; iar ce iese poate fi la randul
+//      lui un ZIP (semnatura PK\x03\x04), despachetat cu ACEEASI logica si aceleasi reguli de
+//      denumire ca la arhiva (nume cu prefix de folder) - altfel se rup legaturile si dedup-ul.
+// Implementare de referinta, functionala in productie: ofertare-seap-veghe (cookieDin,
+// raspunsuriNotice). Edge functions nu pot importa cod una din alta - cookieDin e copie 1:1.
+//
+// Calea VECHE (arhiva) ramane REZERVA, nu se sterge: daca lista esueaza / vine goala / un
+// document nu se descarca per fisier, se incearca arhiva ca pana acum.
+// De ce mergea doar arhiva inainte: endpointul per document dadea 500 din exterior - acum
+// merge, cu cookie-ul de sesiune de la apelul de lista. Arhiva (NoticeCommon/DownloadArchive/)
+// e publica, dar NU suporta Range; ZIP-ul SEAP tine dimensiunile in local file header, deci
+// se poate parcurge streaming.
 //
 // IMPARTIREA MUNCII: aici se aduc doar fisierele MICI. Bugetul unei rulari se consuma
 // pe octetii de arhiva parcursi, iar desfacerea corecta a semnaturii cere fisierul
@@ -196,6 +219,70 @@ function dezumfla(comprimat: Uint8Array, metoda: number): Promise<Uint8Array> {
   })();
 }
 
+// Cookie-urile de sesiune: COPIE 1:1 din ofertare-seap-veghe (edge functions nu impart cod).
+// Deno nu pastreaza cookie-uri intre fetch-uri; tokenul din noticeDocumentUrl e legat de
+// sesiunea care l-a emis, deci trebuie trimise inapoi manual la descarcare.
+function cookieDin(r: Response): string {
+  let brute: string[] = [];
+  try { brute = (r.headers as any).getSetCookie?.() || []; } catch (_) { /* runtime vechi */ }
+  if (!brute.length) {
+    const unul = r.headers.get('set-cookie');
+    if (unul) brute = [unul];
+  }
+  const perechi: string[] = [];
+  for (const c of brute) {
+    const pereche = String(c).split(';')[0].trim();
+    if (pereche.includes('=')) perechi.push(pereche);
+  }
+  return perechi.join('; ');
+}
+
+const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
+
+// Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
+// fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
+// cu tot cu prefixul de folder) si acelasi dedup in ambele cai.
+// vrea(h) decide daca intrarea se citeste; primeste(h, brut) intoarce 'stop' ca sa opreasca.
+// Intoarce false daca fluxul s-a intrerupt in mijlocul unei intrari.
+type IntrareZip = { nume: string; metoda: number; csize: number; usize: number };
+async function parcurgeZip(
+  flux: Flux,
+  vrea: (h: IntrareZip) => boolean,
+  primeste: (h: IntrareZip, brut: Uint8Array) => Promise<'stop' | 'continua'>,
+  eroare: (nume: string, msg: string) => void,
+): Promise<boolean> {
+  while (true) {
+    const head = await flux.exact(30);
+    if (!head) return true;
+    const dv = new DataView(head.buffer, head.byteOffset, 30);
+    if (dv.getUint32(0, true) !== 0x04034b50) return true;
+    // anti-bug 1: csize la 18, usize la 22 (de la 20 ies valori aberante)
+    const h: IntrareZip = { metoda: dv.getUint16(8, true), csize: dv.getUint32(18, true), usize: dv.getUint32(22, true), nume: '' };
+    const nl = dv.getUint16(26, true), el = dv.getUint16(28, true);
+    const numeBuf = await flux.exact(nl); if (!numeBuf) return false;
+    h.nume = new TextDecoder().decode(numeBuf);
+    if (el && !(await flux.sari(el))) return false;
+
+    if (!vrea(h)) {
+      if (!(await flux.sari(h.csize))) return false;
+      continue;
+    }
+    let brut: Uint8Array;
+    try {
+      const comprimat = await flux.exact(h.csize);
+      if (!comprimat) { eroare(h.nume, 'flux intrerupt'); return false; }
+      brut = await dezumfla(comprimat, h.metoda);
+    } catch (e) {
+      eroare(h.nume, String((e as Error)?.message || e));
+      continue;
+    }
+    if ((await primeste(h, brut)) === 'stop') return true;
+  }
+}
+
+// Flux peste un buffer deja in memorie (ZIP-ul dinauntrul unui document adus per fisier).
+const fluxDinBuf = (b: Uint8Array) => new Flux(new Blob([b]).stream().getReader() as ReadableStreamDefaultReader<Uint8Array>);
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const json = (b: unknown, status = 200) =>
@@ -229,7 +316,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const t0 = Date.now();
-  const raport = { adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex };
+  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex };
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
@@ -245,73 +332,172 @@ Deno.serve(async (req: Request) => {
     if (idPh) raport.completate++; else raport.adaugate++;
   };
 
-  const url = `${SEAP}/NoticeCommon/DownloadArchive/?initNoticeId=${lic.c_notice_id}&sysNoticeTypeId=${lic.sys_notice_type_id}`;
-  const res = await fetch(url, { headers: SEAP_HDR });
-  if (!res.ok || !res.body) return json({ error: `SEAP HTTP ${res.status}` }, 502);
+  // Urcarea unui fisier (deja desfacut din semnatura) + randul in BD. Aceleasi reguli
+  // in ambele cai: ghicesteTip, calea de storage, status_procesare, sursa:'seap', size_bytes.
+  let urcatiOcteti = 0;
+  const urcaFisier = async (numeFinal: string, buf: Uint8Array) => {
+    // numele SAU semnatura reala - vezi anti-bug 6
+    const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
+    const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
+    const path = `${licitatieId}/atribuire/${Date.now().toString(36)}_${safe}`;
+    const { error: eUp } = await supa.storage.from('ofertare')
+      .upload(path, buf, { contentType: estePdf ? 'application/pdf' : 'application/octet-stream' });
+    if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); return false; }
+    await scrie({
+      licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
+      tip: ghicesteTip(numeFinal), size_bytes: buf.length,
+      status_procesare: estePdf ? 'neprocesat' : 'ignorat',
+      eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+      sursa: 'seap',
+    }, numeFinal);
+    urcate.add(numeFinal);
+    urcatiOcteti += buf.length;
+    return true;
+  };
 
-  const flux = new Flux(res.body.getReader());
-  let index = 0, continua = false, urcatiOcteti = 0;
+  const bugetDepasit = () => urcatiOcteti > BUGET_OCTETI || Date.now() - t0 > BUGET_MS;
+  let continua = false;
+  let index = deLaIndex;
+
+  // -- CALEA PRINCIPALA: fisier cu fisier (15.09.2026) ----------------------------
+  const qs = `initNoticeId=${lic.c_notice_id}&sysNoticeTypeId=${lic.sys_notice_type_id}`;
+  const CHEI_LISTE = ['dfNoticeDocs', 'contractingStrategyDocs', 'duaeDocs', 'decisionDocs', 'exAnteDocs'];
+  let documente: { nume: string; url: string }[] = [];
+  let cookie = '';
+  let perFisierOk = false;
+  let motivRezerva = '';
 
   try {
-    while (true) {
-      const head = await flux.exact(30);
-      if (!head) break;
-      const dv = new DataView(head.buffer, head.byteOffset, 30);
-      if (dv.getUint32(0, true) !== 0x04034b50) break;
-      const metoda = dv.getUint16(8, true);
-      const csize = dv.getUint32(18, true);
-      const usize = dv.getUint32(22, true);
-      const nl = dv.getUint16(26, true), el = dv.getUint16(28, true);
-      const numeBuf = await flux.exact(nl); if (!numeBuf) break;
-      const nume = new TextDecoder().decode(numeBuf);
-      if (el && !(await flux.sari(el))) break;
-
-      const numeCurat = nume.replace(/\.p7s$/i, '');
-      const preaMare = usize > PRAG_MARE;
-      const sarim = index < deLaIndex || urcate.has(numeCurat) || JUNK_RE.test(nume) || preaMare;
-
-      if (sarim) {
-        if (index >= deLaIndex) {
-          if (urcate.has(numeCurat)) raport.sarite_existente++;
-          else if (preaMare) raport.lasate_pentru_vercel.push(`${numeCurat} (${(usize / 1e6).toFixed(0)}MB)`);
+    const rl = await fetch(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?${qs}`, { headers: SEAP_HDR });
+    if (!rl.ok) motivRezerva = `GetDfNoticeSectionFiles HTTP ${rl.status}`;
+    else {
+      cookie = cookieDin(rl);   // tokenul din noticeDocumentUrl e legat de ACEASTA sesiune
+      const d = await rl.json();
+      for (const cheie of CHEI_LISTE) {
+        for (const f of (d?.[cheie] || [])) {
+          const nume = String(f?.noticeDocumentName || '');
+          const link = String(f?.noticeDocumentUrl || '');
+          if (nume && link) documente.push({ nume, url: link });
         }
-        if (!(await flux.sari(csize))) break;
-        index++;
-        continue;
       }
-
-      try {
-        const comprimat = await flux.exact(csize);
-        if (!comprimat) { raport.erori.push(`${numeCurat}: flux intrerupt`); break; }
-        const brut = await dezumfla(comprimat, metoda);
-        const { buf, nume: numeFinal } = desfaSemnatura(brut, nume);
-        // numele SAU semnatura reala - vezi anti-bug 6
-        const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
-        const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
-        const path = `${licitatieId}/atribuire/${Date.now().toString(36)}_${safe}`;
-        const { error: eUp } = await supa.storage.from('ofertare')
-          .upload(path, buf, { contentType: estePdf ? 'application/pdf' : 'application/octet-stream' });
-        if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); index++; continue; }
-        await scrie({
-          licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
-          tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-          status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-          eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
-          sursa: 'seap',
-        }, numeFinal);
-        urcate.add(numeFinal);
-        urcatiOcteti += buf.length;
-      } catch (e) {
-        raport.erori.push(`${numeCurat}: ${String((e as Error)?.message || e)}`);
-      }
-
-      index++;
-      if (urcatiOcteti > BUGET_OCTETI || Date.now() - t0 > BUGET_MS) { continua = true; break; }
+      if (!documente.length) motivRezerva = 'lista de documente goala';
     }
   } catch (e) {
-    raport.erori.push('flux: ' + String((e as Error)?.message || e));
-  } finally {
-    try { await res.body?.cancel(); } catch (_) { /* deja inchis */ }
+    motivRezerva = 'GetDfNoticeSectionFiles: ' + String((e as Error)?.message || e);
+  }
+
+  if (documente.length) {
+    perFisierOk = true;
+    const antetDesc = cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR;
+    let i = 0;
+    for (const doc of documente) {
+      if (i < deLaIndex) { i++; continue; }
+      const numeCurat = doc.nume.replace(/\.p7s$/i, '');
+      if (urcate.has(numeCurat) || JUNK_RE.test(doc.nume)) {
+        if (urcate.has(numeCurat)) raport.sarite_existente++;
+        i++;
+        continue;
+      }
+      try {
+        const link = doc.url.startsWith('http') ? doc.url : `https://e-licitatie.ro/${doc.url.replace(/^\/+/, '')}`;
+        const rd = await fetch(link, { headers: antetDesc });
+        if (!rd.ok) { raport.erori.push(`${numeCurat}: descarcare HTTP ${rd.status}`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
+        const cl = Number(rd.headers.get('content-length') || 0);
+        if (cl > PRAG_MARE) {
+          // la fel ca la arhiva: fisierele mari le duce /api/seap-import (Vercel)
+          raport.lasate_pentru_vercel.push(`${numeCurat} (${(cl / 1e6).toFixed(0)}MB)`);
+          try { await rd.body?.cancel(); } catch (_) { /* deja inchis */ }
+          i++;
+          continue;
+        }
+        const brutP7s = new Uint8Array(await rd.arrayBuffer());
+        const { buf, nume: numeFinal } = desfaSemnatura(brutP7s, doc.nume);
+        if (!buf.length) { raport.erori.push(`${numeCurat}: fisier gol`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
+
+        if (esteZip(buf)) {
+          // ZIP in interiorul documentului: ACEEASI despachetare si aceleasi nume ca la arhiva
+          const ok = await parcurgeZip(
+            fluxDinBuf(buf),
+            (h) => {
+              const nc = h.nume.replace(/\.p7s$/i, '');
+              if (JUNK_RE.test(h.nume)) return false;
+              if (urcate.has(nc)) { raport.sarite_existente++; return false; }
+              if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
+              return true;
+            },
+            async (h, brut) => {
+              const r = desfaSemnatura(brut, h.nume);
+              await urcaFisier(r.nume, r.buf);
+              return 'continua';
+            },
+            (n, m) => raport.erori.push(`${n}: ${m}`),
+          );
+          if (!ok) raport.erori.push(`${numeCurat}: ZIP interior incomplet`);
+        } else {
+          await urcaFisier(numeFinal, buf);
+        }
+      } catch (e) {
+        raport.erori.push(`${numeCurat}: ${String((e as Error)?.message || e)}`);
+        motivRezerva ||= 'descarcari per fisier esuate';
+      }
+      i++;
+      if (bugetDepasit() && i < documente.length) { continua = true; break; }
+    }
+    index = i;
+  }
+
+  // -- CALEA VECHE, REZERVA: arhiva intreaga (DownloadArchive) --------------------
+  // Se incearca doar daca lista a esuat / a venit goala / un document nu s-a putut aduce.
+  const nevoieDeArhiva = !continua && (!perFisierOk || !!motivRezerva);
+  if (nevoieDeArhiva) {
+    if (!perFisierOk) { raport.metoda = 'arhiva'; index = deLaIndex; }
+    raport.rezerva_arhiva = true;
+    raport.erori.push(`rezerva arhiva: ${motivRezerva || 'lista indisponibila'}`);
+    const deLaIndexArhiva = perFisierOk ? 0 : deLaIndex;   // pe rezerva partiala parcurgem tot, dedup-ul taie ce avem
+
+    const url = `${SEAP}/NoticeCommon/DownloadArchive/?${qs}`;
+    let res: Response | null = null;
+    try { res = await fetch(url, { headers: SEAP_HDR }); } catch (e) { raport.erori.push('arhiva: ' + String((e as Error)?.message || e)); }
+    if (!res || !res.ok || !res.body) {
+      if (!perFisierOk) return json({ ...raport, error: `SEAP HTTP ${res?.status ?? 'fetch esuat'}` }, 502);
+      raport.erori.push(`arhiva: HTTP ${res?.status ?? 'fetch esuat'}`);
+    } else {
+      const flux = new Flux(res.body.getReader());
+      let iArh = 0;
+      try {
+        const intreg = await parcurgeZip(
+          flux,
+          (h) => {
+            const numeCurat = h.nume.replace(/\.p7s$/i, '');
+            const preaMare = h.usize > PRAG_MARE;
+            const sarim = iArh < deLaIndexArhiva || urcate.has(numeCurat) || JUNK_RE.test(h.nume) || preaMare;
+            if (sarim) {
+              if (iArh >= deLaIndexArhiva) {
+                if (urcate.has(numeCurat)) raport.sarite_existente++;
+                else if (preaMare) raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`);
+              }
+              iArh++;
+              return false;
+            }
+            return true;
+          },
+          async (h, brut) => {
+            const r = desfaSemnatura(brut, h.nume);
+            await urcaFisier(r.nume, r.buf);
+            iArh++;
+            if (bugetDepasit()) { continua = true; return 'stop'; }
+            return 'continua';
+          },
+          (n, m) => raport.erori.push(`${n.replace(/\.p7s$/i, '')}: ${m}`),
+        );
+        if (!intreg) raport.erori.push('arhiva: flux intrerupt');
+      } catch (e) {
+        raport.erori.push('flux: ' + String((e as Error)?.message || e));
+      } finally {
+        try { await res.body?.cancel(); } catch (_) { /* deja inchis */ }
+      }
+      if (!perFisierOk) index = iArh;
+    }
   }
 
   if (!continua) {
