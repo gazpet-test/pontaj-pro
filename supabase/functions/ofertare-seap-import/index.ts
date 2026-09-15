@@ -238,6 +238,12 @@ function cookieDin(r: Response): string {
 }
 
 const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
+// ANTI-BUG 15.09.2026, prins la prima rulare pe SCN1179776: .docx/.xlsx/.pptx SUNT arhive ZIP.
+// Cu decizia luata doar pe semnatura PK, un formular Word a fost "despachetat" in bucatile lui
+// interne si au intrat 24 de randuri gunoi (word/styles.xml, docProps/app.xml, [Content_Types].xml).
+// Se despacheteaza DOAR ce e arhiva adevarata dupa nume; formatele Office raman fisiere intregi.
+const eArhivaAdevarata = (nume: string, b: Uint8Array) =>
+  esteZip(b) && /\.zip$/i.test(String(nume || '').replace(/\.p7s$/i, ''));
 
 // Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
 // fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
@@ -414,7 +420,7 @@ Deno.serve(async (req: Request) => {
         const { buf, nume: numeFinal } = desfaSemnatura(brutP7s, doc.nume);
         if (!buf.length) { raport.erori.push(`${numeCurat}: fisier gol`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
 
-        if (esteZip(buf)) {
+        if (eArhivaAdevarata(doc.nume, buf)) {
           // ZIP in interiorul documentului: ACEEASI despachetare si aceleasi nume ca la arhiva
           const ok = await parcurgeZip(
             fluxDinBuf(buf),
