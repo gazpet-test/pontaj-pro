@@ -52,7 +52,7 @@ REGULI NENEGOCIABILE:
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
 Răspunde EXCLUSIV JSON compact:
-{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
+{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, "R<id>" pentru recomandarea unei persoane, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
 
 // ── Domeniile ISC — COPIE a src/iscRte.js (normalizeazaDomeniiISC). Ține-le sincron. ──
 const ROMAN = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI)(\.\d+)?$/i
