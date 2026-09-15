@@ -15,7 +15,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const PAROLA = 'gz-hr-digest-2026-mNb4Xp';
 // #69: adresa Oanei Nica (Ofertare) nu e in repo — de completat inainte de deploy.
-const OANA_EMAIL = '<de completat>';
+const OANA_EMAIL = 'oana.nica@gazpet.ro';
 const DESTINATARI = ['natalia.udrea@gazpet.ro', 'marilena.tudorache@gazpet.ro', 'razvan.trusu@gazpet.ro',
   ...(OANA_EMAIL.includes('@') ? [OANA_EMAIL] : [])];
 
