@@ -21,7 +21,7 @@ Scop: proiectele active din Execuție să nu mai aibă date lipsă pe care nu le
 5. **Cifre / persoane** → `INSERT executie_completari_propuse {proiect_id, camp, valoare (brută: employee_id / număr / dată ISO), valoare_afisata, sursa (nas|drive|mail), sursa_detaliu (calea sau subiectul), dovada_path, confidenta, motiv (o propoziție cu citatul din document)}`. Persoane: caută în `employees` după `name` („NUME PRENUME”); dacă angajatul nu există, nu propune.
 6. **Coordonator Transgaz** = dirigintele cu autorizația „Rețele de gaze naturale (9.4)” din ordinul de începere; ceilalți diriginți în `motiv`.
 7. **Ședințe** — liniile `sedinte_linii` deschise cu `cheie_verificare = 'lipsa:<camp>'` ale proiectului se închid (`status='rezolvat'`) doar pentru documentele atașate efectiv; cele propuse rămân deschise până la ✓.
-8. **Final** — rând în `claude_docs.handoff_activ`, secțiunea „🌙 Tura de noapte”: documente atașate, propuneri, negăsite, >50 MB. Fără mail (rutina de dimineață pune un rând în recap). Șterge orice script temporar.
+8. **Final** — rând în `claude_docs.handoff_activ`, secțiunea „🌙 Tura de noapte”: documente atașate, propuneri, negăsite, >50 MB. Fără mail (rutina de dimineață pune un rând în recap). Șterge DOAR scripturile temporare pe care le-ai creat tu în această rulare (ex. PowerShell-ul de upload). **NU șterge niciodată** launcherul turei (`gazpet-tura\tura_v2.ps1` pe laptop / scriptul de sub systemd pe Pi), task-ul programat, logurile din `gazpet-tura\log` sau orice fișier pe care nu l-ai creat tu acum.
 
 ## Limite
 Nu atinge SalariiPage, RPC-uri, schema. Nu scrie direct în `executie_proiecte` în afara `doc_*_path`. Nu citi mailuri personale. Nu urca fișiere >50 MB. Variabile PowerShell: nu folosi `$pid` (rezervat).
