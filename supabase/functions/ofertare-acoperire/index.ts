@@ -1,5 +1,7 @@
 // #51 14.09.2026: autorizat() — owner/responsabil sau service_role; anon respins.
-// ofertare-acoperire v15 (15.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v16 (15.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v16 (#73, Silviu 15.09): a CINCEA sursă de catalog — RECOMANDĂRILE persoanelor (hr_recomandari, id-uri R):
+//     experiența managerului / șefului de șantier / RTE se dovedește cu ele; R14 în prompt, mod='recomandare'.
 // v15 (#75, Silviu 15.09): R13 — CQ/CTC nu se mai atestă la ISC (prevedere abrogată; numire prin
 //     decizie internă) → se acoperă cu Manager SMC / auditor calitate din HR sau decizie de numire (F);
 //     cerințele cu alternativă („X / Y", „X sau Y") sunt acoperite de ORICARE variantă.
@@ -44,12 +46,13 @@ REGULI NENEGOCIABILE:
 - R11 (art. 51 lit. g + practica comisiilor): RTE-ul trebuie să aibă autorizația ȘI legitimația ISC valabile la termenul de depunere (R6). Dacă obiectul contractului include refaceri de drumuri / sistem rutier / asfalt, comisiile cer în practică și un RTE pe 2.1 chiar dacă cerința nu-l numește (cazul Laza): dacă avem 2.1 în catalog, îl menționezi în motiv; dacă nu, scrii în motiv "risc: comisia poate cere și RTE 2.1 pentru refacerile de drum" — fără să schimbi statusul cerinței principale.
 - R12 (REGULI DE ECHIPĂ — RESTRÂNS): status "regula_propunere" e DOAR pentru regulile de ALCĂTUIRE A ECHIPEI: interdicția de cumul de funcții, "fiecare rol e ocupat de altă persoană", "personalul nominalizat trebuie să fie același la execuție", "înlocuirea personalului nominalizat doar cu acordul achizitorului", "fiecare asociat își dovedește partea asumată". NU intră aici: obligațiile de execuție din caietul de sarcini (probe de presiune, tranșee, SSM, recepție, remedieri, dotări, instruiri), lucrurile care "se descriu în propunerea tehnică" (structura echipei, atribuții, metodologie, grafic) — ALEA rămân "nu_se_aplica" ca până acum, fiindcă nu sunt capabilități din catalog. Dacă ai dubii, e "nu_se_aplica". motiv = ce regulă e și unde se verifică.
 - R13 (CALITATE — CQ/CTC): controlorul tehnic cu calitatea (CQ/CTC/„responsabil control calitate") NU se mai atestă la ISC — prevederea e abrogată, CQ/CTC se numește prin DECIZIE INTERNĂ a firmei. O cerință de „CQ autorizat ISC" / „controlor tehnic cu calitatea" / „responsabil cu calitatea" se acoperă cu: (a) o persoană din catalog cu cod MANAGER_SMC, AUDITOR_INTERN sau MANAGER_RISCURI_TSC (autorizatie_id numeric), sau (b) un document de firmă de tip decizie de numire CQ/CTC (F<id>), dacă există. NU dai "gol" pentru lipsa unui atestat ISC de CQ — el nu există; scrii în motiv „numire prin decizie internă; atestarea ISC a CTC nu mai e în vigoare". Cerințele formulate ca alternativă („Manager SMC / Responsabil control calitate", „X sau Y") sunt acoperite de ORICARE dintre variante — nu cere ambele.
+- R14 (RECOMANDĂRI — experiența PERSOANELOR, id-uri cu prefix R): cerințele de „experiență în poziție similară / proiect similar" ale unei PERSOANE (manager de contract, șef de șantier, RTE, inginer execuție, responsabil calitate) se acoperă DOAR cu recomandări din lista R ale acelei persoane: status "acoperit", autorizatie_id: "R<id>". Recomandarea trebuie să se potrivească pe ROL (rolul cerut ≈ rolul din recomandare) și pe NATURA lucrării (domeniile cerute vs. domenii/obiect_lucrare; „fluide"/„rețele edilitare" acoperă și gaze, și apă-canal). Pentru RTE: o recomandare ca RTE pe lucrare similară acoperă experiența ca RTE; experiența GENERALĂ „minim N ani în construcții" e altă cerință — nu o confunda și nu o acoperi cu o singură recomandare dacă durata din recomandări nu ajunge la N ani (spune în motiv câți ani rezultă). O recomandare cu verificat=false acoperă, dar scrii în motiv „neverificată în HR". Autorizația (atestatul) persoanei NU dovedește experiență; recomandarea NU dovedește atestat — sunt cerințe separate.
 - R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
 
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
 Răspunde EXCLUSIV JSON compact:
-{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
+{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, "R<id>" pentru recomandarea unei persoane, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
 
 // ── Domeniile ISC — COPIE a src/iscRte.js (normalizeazaDomeniiISC). Ține-le sincron. ──
 const ROMAN = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI)(\.\d+)?$/i
@@ -167,6 +170,10 @@ Deno.serve(async (req: Request) => {
     const { data: nomen, error: eNomen } = await supabase.from('isc_rte_domenii')
       .select('cod, denumire, grup_nume, variante, experienta_ani, cuvinte_cheie_lucrari, autorizatie_anre_ceruta').eq('activ', true).order('cod')
     const nomenclator = (nomen || []).map((d: any) => ({ cod: d.cod, denumire: d.denumire, grup: d.grup_nume, variante: d.variante || undefined, experienta_ani: d.experienta_ani, lucrari: d.cuvinte_cheie_lucrari || undefined, anre: d.autorizatie_anre_ceruta || undefined }))
+    // #73: a CINCEA sursă — recomandările persoanelor (experiență pe roluri), id-uri R
+    const { data: recAll, error: eRec } = await supabase.from('hr_recomandari')
+      .select('id, employee_id, extern_id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, ai_confidenta, emp:employees(name), ext:hr_personal_extern(nume)')
+      .eq('activ', true).order('id')
     const { data: expAll, error: eExp } = await supabase.from('ofertare_experienta')
       .select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, folder_nas')
       .eq('activ', true).order('id')
@@ -177,8 +184,8 @@ Deno.serve(async (req: Request) => {
     // („potrivesti DOAR cu ce exista in catalog") si raspundea 'gol' pe TOATE cerintele.
     // Alea erau randuri valide, deci stergerea pleca si o licitatie cu acoperirile puse
     // devenea integral „fara dovada" — fara nicio eroare nicaieri.
-    if (eAuth || eDocF || ePart || eExp || eNomen) {
-      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message || eExp?.message || eNomen?.message))
+    if (eAuth || eDocF || ePart || eExp || eNomen || eRec) {
+      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message || eExp?.message || eNomen?.message || eRec?.message))
     }
     // A doua plasa: un catalog gol nu e o stare normala pentru firma asta. Daca ambele
     // surse sunt goale, ceva e rupt in amonte — nu propunem nimic si nu stergem nimic.
@@ -213,7 +220,14 @@ Deno.serve(async (req: Request) => {
     // (licitatia si cerintele primele), deci un `cache_control` pus fara reordonare n-ar fi
     // prins nimic. De-asta si `.order('id')` de mai sus: o singura linie mutata in catalog
     // schimba prefixul si rateaza cache-ul.
-    const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}`
+    const catalogRec = (recAll || []).map((r: any) => ({
+      id: 'R' + r.id, titular: r.emp?.name || r.ext?.nume || '?', extern: !!r.ext, rol: r.rol || undefined,
+      beneficiar: r.beneficiar || undefined, lucrare: r.obiect_lucrare || undefined,
+      perioada: [r.perioada_start, r.perioada_end].filter(Boolean).join(' → ') || undefined,
+      valoare_lei: r.valoare_lei ?? undefined, domenii: (r.domenii && r.domenii.length) ? r.domenii : undefined,
+      verificat: !!r.verificat, incredere_ai: r.ai_confidenta ?? undefined,
+    }))
+    const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}\n\nRECOMANDARI — experienta PERSOANELOR pe roluri (${catalogRec.length}, id-uri cu prefix R):\n${JSON.stringify(catalogRec)}`
     const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -270,6 +284,7 @@ Deno.serve(async (req: Request) => {
     const idsDocF = new Map((docsF || []).map((d: any) => [d.id, d]))
     const idsPart = new Set(parteneri.map((p: any) => p.id))
     const idsExp = new Map((expAll || []).map((e: any) => [e.id, e]))
+    const idsRec = new Map((recAll || []).map((r: any) => [r.id, r]))
     const azi = lic.termen_depunere ? new Date(lic.termen_depunere) : new Date()
 
     // R-ACOP-1 (reparat 12.09.2026). Inainte, stergerea rula AICI — inaintea insertului si
@@ -314,8 +329,12 @@ Deno.serve(async (req: Request) => {
       let docF: any = null
       let aut: any = null
       let exp: any = null
+      let rec: any = null
       let motivBlocat: string | null = null
-      if (typeof p.autorizatie_id === 'string' && /^F\d+$/.test(p.autorizatie_id)) {
+      if (typeof p.autorizatie_id === 'string' && /^R\d+$/.test(p.autorizatie_id)) {
+        const rid = Number(p.autorizatie_id.slice(1))
+        if (idsRec.has(rid)) rec = idsRec.get(rid)
+      } else if (typeof p.autorizatie_id === 'string' && /^F\d+$/.test(p.autorizatie_id)) {
         const fid = Number(p.autorizatie_id.slice(1))
         if (idsDocF.has(fid)) docF = idsDocF.get(fid)
       } else if (typeof p.autorizatie_id === 'string' && /^E\d+$/.test(p.autorizatie_id)) {
@@ -332,8 +351,8 @@ Deno.serve(async (req: Request) => {
       }
       const part = p.partener_id && idsPart.has(p.partener_id) ? p.partener_id : null
       let status = ['acoperit', 'acoperit_partener', 'gol'].includes(p.status) ? p.status : 'gol'
-      if (status === 'acoperit' && !aut && !docF && !exp) status = 'gol'
-      if (status === 'acoperit_partener' && !part && !aut && !docF && !exp) status = 'gol'
+      if (status === 'acoperit' && !aut && !docF && !exp && !rec) status = 'gol'
+      if (status === 'acoperit_partener' && !part && !aut && !docF && !exp && !rec) status = 'gol'
       if (motivBlocat) status = 'gol'
       let valabil: boolean | null = null
       if (aut) valabil = aut.expira === 'niciodata' ? true : (aut.expira !== 'necunoscut' && new Date(aut.expira) >= azi)
@@ -341,13 +360,15 @@ Deno.serve(async (req: Request) => {
       // La experienta nu exista „expirare": lucrarea e receptionata sau nu. Fereastra de ani
       // tine de cerinta, nu de document, deci lasam null si nu inventam un verdict.
       if (exp) valabil = null
+      if (rec) valabil = null   // o recomandare nu expiră; fereastra de ani e a cerinței
       rows.push({
         cerinta_id: p.cerinta_id,
-        mod: status === 'gol' ? 'gol' : (exp ? 'experienta' : (docF ? 'firma' : (aut ? (aut.extern ? 'partener' : 'personal') : 'partener'))),
+        mod: status === 'gol' ? 'gol' : (rec ? 'recomandare' : (exp ? 'experienta' : (docF ? 'firma' : (aut ? (aut.extern ? 'partener' : 'personal') : 'partener')))),
         autorizatie_id: aut ? aut.id : null,
         doc_firma_id: docF ? docF.id : null,
         partener_id: part,
         experienta_id: exp ? exp.id : null,
+        recomandare_id: rec ? rec.id : null,
         referinta_text: (motivBlocat || (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null)),
         status,
         valabil_la_depunere: valabil,
@@ -398,7 +419,7 @@ Deno.serve(async (req: Request) => {
       p_randuri: randuriUnice.map(r => ({
         cerinta_id: r.cerinta_id, mod: r.mod,
         autorizatie_id: r.autorizatie_id, doc_firma_id: r.doc_firma_id, partener_id: r.partener_id,
-        experienta_id: r.experienta_id,
+        experienta_id: r.experienta_id, recomandare_id: r.recomandare_id || null,
         referinta_text: r.referinta_text, status: r.status, valabil_la_depunere: r.valabil_la_depunere,
         domeniu_rte: r.domeniu_rte || null,
       })),
@@ -458,6 +479,7 @@ Deno.serve(async (req: Request) => {
       regula_propunere: deScris.filter(r => r.status === 'regula_propunere').length,
       cu_domeniu_rte: deScris.filter(r => r.domeniu_rte).length,
       experienta: deScris.filter(r => r.mod === 'experienta').length,
+      recomandari: deScris.filter(r => r.mod === 'recomandare').length,
       conflicte_verificate: conflicteVerificate,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),

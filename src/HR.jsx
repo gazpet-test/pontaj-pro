@@ -20,6 +20,7 @@ import HrRecrutare from './HrRecrutare.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 import DomeniiPicker from './HrDomeniiPicker.jsx'
 import HrPersonalExtern from './HrPersonalExtern.jsx'
+import HrRecomandari from './HrRecomandari.jsx'
 
 // Theme
 const G = {
@@ -203,6 +204,7 @@ export default function HRPage() {
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z + stats.viza_expirat },
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
+    { key: 'recomandari', icon: '📜', label: 'Recomandări' },
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'adeverinte',  icon: '📄', label: 'Adeverințe legători', personalOnly: true },
     { key: 'concedii',    icon: '🌴', label: 'Concedii' },
@@ -285,6 +287,7 @@ export default function HRPage() {
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
+      {!load && tab === 'recomandari' && <HrRecomandari profile={profile} employees={employees} canEdit={canAccessPersonal || isAdmin || canUseScanner} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'adeverinte' && canAccessPersonal && <AdeverinteLegator profile={profile} showToast={showToast} />}
       {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
