@@ -839,8 +839,29 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     return !continua
   }
 
+  // ANTI-BUG 15.09.2026 (prins de Răzvan pe DF1278266 + Clinceni): la „Procesează" intrau
+  // două categorii de fișiere care n-aveau ce căuta acolo, fiecare cu zeci de MB citiți degeaba:
+  //  1. PLANȘELE — au calea lor („📐 citește", ofertare-plansa-citeste); o scanare A0 citită ca
+  //     PDF obișnuit nu dă text util, rămâne agățată pe „în lucru" și se reia la fiecare trecere.
+  //  2. FIȘIERELE DEJA SPARTE — originalul de 84 MB, citit peste bucățile lui deja procesate:
+  //     cost dublu, dar mai grav e că textul ar intra DE DOUĂ ORI în registrul de cerințe.
+  // Marcajul „spart în N bucăți" trăia doar în textul din `eroare` și se pierdea la re-import
+  // (veghea readuce fișierul ca rând nou, curat). De aceea regula se deduce din REALITATE:
+  // dacă există bucăți pe numele lui, fișierul e spart — indiferent ce scrie în `eroare`.
+  const areBucati = (d, toate) => {
+    const baza = String(d.nume_original || '').replace(/\.pdf$/i, '')
+    if (!baza) return false
+    return (toate || []).some(x => x.id !== d.id &&
+      new RegExp('^' + baza.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' — p\\d+_pag[\\d-]+\\.pdf$', 'i').test(x.nume_original || ''))
+  }
+  const deCititCaPdf = (ds) => (ds || []).filter(d =>
+    ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) &&
+    /\.pdf$/i.test(d.nume_original || '') &&
+    d.tip !== 'plansa' &&
+    !areBucati(d, ds))
+
   const proceseaza = async () => {
-    const listaPdf = (ds) => (ds || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original))
+    const listaPdf = deCititCaPdf
     let deRulat = listaPdf(docs)
     if (!deRulat.length) return
     // întâi sparg PDF-urile mari (altfel ingestia cade tăcut pe ele)
@@ -890,7 +911,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     await load(); onChanged?.()
   }
 
-  const nrDeProcesat = (docs || []).filter(d => ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) && /\.pdf$/i.test(d.nume_original)).length
+  const nrDeProcesat = deCititCaPdf(docs).length
   const fmtMB = b => b ? (b / 1e6).toFixed(1) + ' MB' : ''
 
   // Planșele mari nu se pot citi dintr-o bucată (o scanare A0 are ~140 de milioane de
@@ -911,7 +932,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     } catch (e) { setWarn(`Spargere eșuată: ${e.message}`); return null }
     finally { setPlansaBusy(null) }
   }
-  const eMare = d => /\.pdf$/i.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
+  // `areBucati` e plasa de siguranță: marcajul din `eroare` se pierde la re-import, bucățile nu.
+  const eMare = d => /\.pdf$/i.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && !areBucati(d, docs) && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
 
   const citestePlansa = async (d) => {
     setWarn(null); setPlansaBusy(`${d.nume_original}: pregătesc feliile...`)
@@ -1137,7 +1159,12 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
             {docs.map(d => {
               const st = DOC_STATUS[d.status_procesare] || DOC_STATUS.neprocesat
-              const spart = d.status_procesare === 'ignorat' && /spart .*în (\d+) bucăți/i.exec(d.eroare || '')
+              // Eticheta „🔀 spart în N": întâi din realitate (câte bucăți există), apoi din textul
+              // din `eroare` — textul se pierde la re-import, bucățile nu (anti-bug 15.09.2026).
+              const nrBucati = areBucati(d, docs)
+                ? docs.filter(x => new RegExp('^' + String(d.nume_original || '').replace(/\.pdf$/i, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' — p\\d+_pag[\\d-]+\\.pdf$', 'i').test(x.nume_original || '')).length
+                : 0
+              const spart = nrBucati ? [null, String(nrBucati)] : (d.status_procesare === 'ignorat' && /spart .*în (\d+) bucăți/i.exec(d.eroare || ''))
               const formularXml = d.status_procesare === 'ignorat' && /\.xml$/i.test(d.nume_original || '')
               return (
                 <div key={d.id} style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, padding:'5px 8px', borderRadius:6, background:G.surface }}>
