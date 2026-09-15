@@ -34,6 +34,23 @@
 // din tab-ul Clarificari al fisei, cu citire AI dedicata (ofertare-document-nou-citeste).
 // Fara marcaj, un raspuns la clarificari se pierdea printre cele 40 de planse din Documente.
 //
+// v5 (15.09.2026): veghea aduce SINGURA raspunsurile la clarificari publicate de autoritate.
+// Descoperit experimental pe Domnesti (notice 100244241, sysNoticeTypeId 17): raspunsurile
+// consolidate ale primariei NU apar DELOC in GetDfNoticeSectionFiles - adica exact documentele
+// care conteaza cel mai mult erau ratate complet de veghe. Ele stau in alt endpoint:
+//   POST /api-pub/NoticeDocument/GetAll/ (JSON, aceleasi anteturi ca SEAP_HDR - fara Referer
+//   raspunde "Referrer cannot be null"), filtrat pe initNoticeId + sysNoticeTypeId.
+// Doua capcane:
+//   a) `noticeDocumentUrl` (api-pub/files/noticedoc/<hash>) e TOKEN TEMPORAR legat de SESIUNE:
+//      se schimba la fiecare apel si descarcarea merge doar daca trimiti inapoi cookie-urile
+//      primite la GetAll. Deno nu pastreaza cookie-uri la fetch -> le culegem manual din
+//      resp.headers.getSetCookie() si le dam ca antet Cookie. Linkul NU se salveaza niciodata.
+//   b) fisierul e container CMS/PKCS#7 (.p7s) - se desface cu desfaSemnatura (copiata din
+//      ofertare-seap-import, edge functions nu impart cod).
+// O singura cerere GetAll per licitatie per rulare: SEAP blocheaza IP-ul la trafic automat.
+// Citirea AI NU porneste automat (costa) - documentele apar in "Documente noi din SEAP" si in
+// ecranul Clarificari, cu buton manual.
+//
 // notifications.modul are CHECK pe lista fixa de module - pentru ofertare valoarea
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -57,6 +74,96 @@ const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).incl
 // Numele sub care autoritatile publica raspunsurile si modificarile documentatiei.
 const esteRaspuns = (n: string) => /clarific|r[aă]spuns|erat[aă]|errata|completare|modificare|addendum|notificare/i.test(n);
 const esc = (s: string) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
+
+// -- Desfacerea semnaturii electronice (.p7s / CMS) ------------------------------
+// COPIE 1:1 din supabase/functions/ofertare-seap-import/index.ts (edge functions nu pot
+// importa cod una din alta). Daca se corecteaza acolo, se corecteaza si aici.
+// Continutul semnat sta intr-un OCTET STRING ASN.1 care, la fisierele mari, e taiat
+// in bucati de ~64KB, fiecare cu propriul antet. Se parcurge structura si se lipesc
+// bucatile in ordine; altfel antetele raman in mijlocul fisierului si il strica.
+function antet(b: Uint8Array, i: number) {
+  const tip = b[i]; i += 1;
+  let lung = b[i]; i += 1;
+  if (lung === 0x80) return { tip, lung: null as number | null, start: i };
+  if (lung & 0x80) {
+    const n = lung & 0x7f;
+    lung = 0;
+    for (let k = 0; k < n; k++) lung = lung * 256 + b[i + k];
+    i += n;
+  }
+  return { tip, lung: lung as number | null, start: i };
+}
+
+function lipeste(b: Uint8Array, start: number, capat: number): Uint8Array {
+  const bucati: Uint8Array[] = [];
+  let i = start;
+  while (i < capat && i < b.length) {
+    const a = antet(b, i);
+    if (a.tip === 0x00) break;
+    if (a.lung === null) { bucati.push(lipeste(b, a.start, capat)); break; }
+    if (a.tip === 0x04) bucati.push(b.subarray(a.start, a.start + a.lung));
+    else if (a.tip === 0x24) bucati.push(lipeste(b, a.start, a.start + a.lung));
+    i = a.start + a.lung;
+  }
+  const total = bucati.reduce((s, x) => s + x.length, 0);
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const x of bucati) { out.set(x, p); p += x.length; }
+  return out;
+}
+
+const OID_DATA = new Uint8Array([0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01]);
+
+function cautaSecventa(hay: Uint8Array, ac: Uint8Array): number {
+  for (let i = 0; i <= hay.length - ac.length; i++) {
+    let ok = true;
+    for (let j = 0; j < ac.length; j++) if (hay[i + j] !== ac[j]) { ok = false; break; }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+function desfaSemnatura(buf: Uint8Array, nume: string): { buf: Uint8Array; nume: string } {
+  if (!/\.p7s$/i.test(nume)) return { buf, nume };
+  const numeReal = nume.replace(/\.p7s$/i, '');
+  const poz = cautaSecventa(buf, OID_DATA);
+  if (poz < 0) return { buf, nume: numeReal };
+  const dupaOid = antet(buf, poz + OID_DATA.length);
+  if (dupaOid.tip !== 0xa0) return { buf, nume: numeReal };
+  const capat = dupaOid.lung === null ? buf.length : dupaOid.start + dupaOid.lung;
+  const c = antet(buf, dupaOid.start);
+  if (c.tip === 0x04 && c.lung !== null) return { buf: buf.subarray(c.start, c.start + c.lung), nume: numeReal };
+  if (c.tip === 0x24 || c.lung === null) {
+    const sfarsit = c.lung === null ? capat : c.start + c.lung;
+    const out = lipeste(buf, c.start, sfarsit);
+    if (out.length) return { buf: out, nume: numeReal };
+  }
+  return { buf, nume: numeReal };
+}
+
+const arePdf = (b: Uint8Array) => b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
+const faraDiacritice = (s: string) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+// 31 = "Raspuns consolidat la solicitarile de clarificare"; restul se ghiceste din text.
+const eRaspunsSeap = (it: any) =>
+  Number(it?.sysNoticeDocumentTypeId) === 31 ||
+  /clarific|erat|raspuns/i.test(faraDiacritice(`${it?.sysNoticeDocumentType?.text ?? it?.sysNoticeDocumentType ?? ''} ${it?.noticeDocumentName ?? ''}`));
+
+// Cookie-urile din raspunsul GetAll, pregatite pentru antetul Cookie al descarcarii.
+// `fetch` din Deno NU le pastreaza singur, iar tokenul de fisier e legat de sesiune.
+function cookieDin(r: Response): string {
+  let brute: string[] = [];
+  try { brute = (r.headers as any).getSetCookie?.() || []; } catch (_) { /* runtime vechi */ }
+  if (!brute.length) {
+    const unul = r.headers.get('set-cookie');
+    if (unul) brute = [unul];
+  }
+  const perechi: string[] = [];
+  for (const c of brute) {
+    const pereche = String(c).split(';')[0].trim();
+    if (pereche.includes('=')) perechi.push(pereche);
+  }
+  return perechi.join('; ');
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
@@ -98,6 +205,78 @@ Deno.serve(async (req: Request) => {
 
   const raport: any[] = [];
 
+  // v5: raspunsurile la clarificari, din NoticeDocument/GetAll (nu apar in GetDfNoticeSectionFiles).
+  // O SINGURA cerere pe licitatie pe rulare. Nu arunca niciodata: erorile se raporteaza.
+  async function raspunsuriNotice(lic: any): Promise<{ adusi: string[]; eroare: string | null }> {
+    const adusi: string[] = [];
+    let lista: any[] = [];
+    let cookie = '';
+    try {
+      const r = await fetch(`${SEAP}/NoticeDocument/GetAll/`, {
+        method: 'POST',
+        headers: { ...SEAP_HDR, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sortProperty: 'transmissionDate', pageSize: 50, pageIndex: 0,
+          initNoticeId: String(lic.c_notice_id), sysNoticeTypeId: String(lic.sys_notice_type_id),
+          procedureId: null, sysNoticeDocumentState: null, sysNoticeDocumentType: null,
+          sysValidationDocType: null, noticeDocumentPostDateFrom: null, noticeDocumentPostDateTo: null,
+          sortProperties: null, sadId: null,
+        }),
+      });
+      if (!r.ok) return { adusi, eroare: `GetAll HTTP ${r.status}` };
+      cookie = cookieDin(r);
+      const txt = await r.text();
+      let d: any = null;
+      try { d = JSON.parse(txt); } catch (_) { return { adusi, eroare: 'GetAll: raspuns non-JSON' }; }
+      lista = Array.isArray(d?.items) ? d.items : [];
+    } catch (e) {
+      return { adusi, eroare: 'GetAll: ' + String((e as Error)?.message || e) };
+    }
+    if (!lista.length) return { adusi, eroare: null };
+
+    const { data: aveamDeja } = await supa.from('ofertare_documente_atribuire')
+      .select('nume_original').eq('licitatie_id', lic.id);
+    const cunoscute = new Set((aveamDeja || []).map((d: any) => d.nume_original));
+    const erori: string[] = [];
+
+    for (const it of lista) {
+      const nume = String(it?.documentName || it?.noticeDocumentName || '').replace(/\.p7s$/i, '');
+      if (!nume || cunoscute.has(nume)) continue;   // idempotent: ruleaza de 2x/zi
+      const url = String(it?.noticeDocumentUrl || '');
+      if (!url) { erori.push(`${nume}: fara noticeDocumentUrl`); continue; }
+      try {
+        // tokenul e temporar SI legat de sesiune -> trimitem inapoi cookie-urile de la GetAll
+        const rd = await fetch(url.startsWith('http') ? url : `https://e-licitatie.ro/${url.replace(/^\/+/, '')}`, {
+          headers: cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR,
+        });
+        if (!rd.ok) { erori.push(`${nume}: descarcare HTTP ${rd.status}`); continue; }
+        const brut = new Uint8Array(await rd.arrayBuffer());
+        const { buf } = desfaSemnatura(brut, String(it?.documentName || nume));
+        if (!buf.length) { erori.push(`${nume}: fisier gol`); continue; }
+        const safe = nume.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
+        const path = `${lic.id}/atribuire/raspunsuri/${safe}`;
+        const { error: eUp } = await supa.storage.from('ofertare')
+          .upload(path, buf, {
+            upsert: true,
+            contentType: arePdf(buf) || /\.pdf$/i.test(nume) ? 'application/pdf' : 'application/octet-stream',
+          });
+        if (eUp) { erori.push(`${nume}: upload ${eUp.message}`); continue; }
+        const { error: eIns } = await supa.from('ofertare_documente_atribuire').insert({
+          licitatie_id: lic.id, fisier_path: path, nume_original: nume,
+          tip: eRaspunsSeap(it) ? 'raspuns_clarificare' : 'alta',
+          sursa: 'seap', aparut_ulterior: true, status_procesare: 'neprocesat',
+          size_bytes: buf.length,
+        });
+        if (eIns) { erori.push(`${nume}: insert ${eIns.message}`); continue; }
+        cunoscute.add(nume);
+        adusi.push(nume);
+      } catch (e) {
+        erori.push(`${nume}: ${String((e as Error)?.message || e)}`);
+      }
+    }
+    return { adusi, eroare: erori.length ? erori.join(' | ') : null };
+  }
+
   for (const lic of licitatii || []) {
     const qs = `initNoticeId=${lic.c_notice_id}&sysNoticeTypeId=${lic.sys_notice_type_id}`;
     const laSeap: string[] = [];
@@ -121,10 +300,17 @@ Deno.serve(async (req: Request) => {
     const cunoscute = new Set((aveam || []).map((d: any) => d.nume_original));
     const noi = [...new Set(laSeap)].filter((n) => !cunoscute.has(n));
 
-    if (!noi.length) { raport.push({ licitatie: lic.nr_anunt, noi: 0 }); continue; }
+    // v5: raspunsurile publicate de autoritate stau in alt endpoint - se aduc oricum,
+    // chiar daca lista de documente a anuntului nu s-a schimbat.
+    const { adusi: raspunsuriAduse, eroare: raspunsuriEroare } = await raspunsuriNotice(lic);
 
-    // treapta 1: importul rapid din Supabase
-    for (let i = 0; i < RUNDE_IMPORT; i++) {
+    if (!noi.length && !raspunsuriAduse.length) {
+      raport.push({ licitatie: lic.nr_anunt, noi: 0, raspunsuri_aduse: 0, raspunsuri_eroare: raspunsuriEroare });
+      continue;
+    }
+
+    // treapta 1: importul rapid din Supabase (doar daca s-au vazut documente noi in anunt)
+    for (let i = 0; i < (noi.length ? RUNDE_IMPORT : 0); i++) {
       try {
         const r = await fetch(`${SUPA_URL}/functions/v1/ofertare-seap-import`, {
           method: 'POST',
@@ -195,12 +381,13 @@ Deno.serve(async (req: Request) => {
     const nume = (l: string[]) => l.slice(0, 4).join(', ') + (l.length > 4 ? ` (+${l.length - 4})` : '');
 
     // v2: raspunsurile autoritatii se anunta separat, ca sa nu se piarda printre planse.
-    const raspunsuri = noi.filter(esteRaspuns);
-    const restul = noi.filter((n) => !esteRaspuns(n));
+    const raspunsuri = [...new Set([...noi.filter(esteRaspuns), ...raspunsuriAduse])];
+    const restul = noi.filter((n) => !esteRaspuns(n) && !raspunsuriAduse.includes(n));
 
     const mesaje: { type: string; title: string; message: string }[] = [];
     if (raspunsuri.length) {
       const parti = [`Autoritatea a publicat ${raspunsuri.length} document(e) care par raspuns la clarificari sau modificare a documentatiei: ${nume(raspunsuri)}.`];
+      if (raspunsuriAduse.length) parti.push(`Dintre ele, ${raspunsuriAduse.length} sunt raspunsuri publicate de autoritate, aduse automat din SEAP: ${nume(raspunsuriAduse)}. Se citesc din Ofertare -> Clarificari.`);
       const intrate = raspunsuri.filter((n) => urcate.has(n));
       if (intrate.length < raspunsuri.length) parti.push('ATENTIE: nu toate au putut fi aduse automat - urca-le din "Urca fisiere".');
       parti.push('Citeste-le si treci intrebarea si raspunsul in Clarificari. Daca raspunsul schimba o cerinta, cerinta din registru trebuie actualizata.');
@@ -251,6 +438,7 @@ Deno.serve(async (req: Request) => {
           <p><b>Licitatie:</b> ${esc(lic.nr_anunt || '')} — ${esc(lic.obiect || '')}<br>
              <b>Termen depunere:</b> ${lic.termen_depunere ? new Date(lic.termen_depunere).toLocaleString('ro-RO') : '—'}</p>
           <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(n)}${urcate.has(n) ? '' : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
+          ${raspunsuriAduse.length ? `<p><b>${raspunsuriAduse.length}</b> dintre ele sunt <b>raspunsuri publicate de autoritate</b>, aduse automat din SEAP. Se citesc din <b>Ofertare &rarr; &#10067; Clarificari</b>.</p>` : ''}
           ${neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>
           <p><a href="https://pontaj-pro-sooty.vercel.app/ofertare">Deschide modulul Ofertare</a></p>`;
@@ -270,7 +458,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    raport.push({ licitatie: lic.nr_anunt, noi: noi.length, raspunsuri: raspunsuri.length, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, nume: noi.slice(0, 10) });
+    raport.push({ licitatie: lic.nr_anunt, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, nume: noi.slice(0, 10) });
   }
 
   return json({ verificate: (licitatii || []).length, raport });
