@@ -52,13 +52,15 @@ Extrage din fiecare `<w:t>` linia și prinde articolele cu un regex care accept�
 
 Structura unei poziții: `NR SIMBOL [varianta] UM CANTITATE`, urmată de linia cu denumirea, apoi materialele aferente cu același NR.
 
+**Numerele se citesc pe paragraf întreg, nu pe bucăți (lecția Răcari, 11.09.2026).** Doclib rupe frecvent o cantitate în mai multe `<w:t>` din același `<w:p>` („1,50" + „6"). Regexul se aplică DOAR după ce ai concatenat toate `<w:t>` ale paragrafului; altfel citești 1,500 în loc de 1,506 și raportezi Oanei o „rotunjire" care nu există. Orice cantitate care iese „rotundă" (x,500 / x,750 / x,000) acolo unde SEAP are zecimale se reverifică pe textul brut al paragrafului înainte de a intra în raport.
+
 ## 5. Comparația
 
 Confruntă fiecare deviz, poziție cu poziție. Ies trei categorii:
 
 **a) Diferențe la noi — se corectează.** Instrucțiunile pentru ofertanți interzic modificarea cantităților din listele de cantități; orice abatere e motiv de respingere, indiferent cât de mică e valoric. Include aici și rotunjirile (1,500 în loc de 1,506).
 
-**b) Indici de variantă `[n]` diferiți.** Programul nostru de devize își atribuie propriii indici. Trebuie aliniați la cei din SEAP înainte de depunere, de regulă după ce primim rețetele cerute la clarificări.
+**b) Indici de variantă `[n]` diferiți — NU sunt erori.** Doclib își ordonează singur variantele de rețetă, deci indicii diferă SISTEMATIC de cei din SEAP. Când simbolul articolului și cantitatea coincid, diferența de indice nu se raportează ca „diferență de corectat" și nu intră în mailul către Oana ca problemă; cel mult o listă informativă, separată, „indici de aliniat la final". Alinierea o face Oana înainte de depunere, după ce primim rețetele cerute la clarificări (Răcari, 11.09.2026).
 
 **c) Erori ale proiectantului în favoarea noastră — NU se corectează și NU se semnalează.** Cantitatea din listele de cantități e obligatorie; dacă proiectantul a pus de zece ori mai mult transport de pământ decât e cazul, o preiei ca atare. Notează în raport, ca să nu o „corecteze" cineva din echipă.
 
@@ -78,7 +80,8 @@ Din PTh, citește memoriul tehnic și planșele de detalii (de obicei ultimele 5
 2. `VERIFICARE scheme montaj vs F3 - <data>.md`, tot acolo.
 3. Solicitarea de clarificări ca .docx, generată cu `docx` (npm) în container, în formatul clarificărilor anterioare din folderul `clarificari`: antet către autoritatea contractantă, referință la anunțul SEAP, puncte numerotate, semnătura S.C. GAZPET INSTAL S.R.L.
 4. Handoff-ul proiectului actualizat în Project.
-5. Mail către Oana Nica (`oana.nica@gazpet.ro`) cu documentul atașat (base64 în `create_draft`), care să conțină explicit: ce se corectează în F3, de ce intră fiecare punct în clarificare, unde sunt rapoartele și ce NU se semnalează.
+5. Clarificările se depun în SEAP DOAR cu semnătură electronică. Dacă semnatarul nu e disponibil în ziua planificată, pleacă în următoarea zi lucrătoare (Răcari: pregătite vineri, depuse luni, tardive). Planifică depunerea cu o zi de rezervă față de termenul din Fișa de date și spune explicit în mail cine semnează și când.
+6. Mail către Oana Nica (`oana.nica@gazpet.ro`) cu documentul atașat (base64 în `create_draft`), care să conțină explicit: ce se corectează în F3, de ce intră fiecare punct în clarificare, unde sunt rapoartele și ce NU se semnalează.
 
 ## 8. Ce intră și ce nu intră în clarificare
 
