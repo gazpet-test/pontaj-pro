@@ -26,6 +26,7 @@ import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, 
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 import ClarificariAC from './OfertareClarificariAC.jsx'
+import OrganigramaSection from './OfertareOrganigrama.jsx'
 import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1082,7 +1083,7 @@ function Participanti({ randuri, parteneri, onAdauga, onSterge, busy }) {
 // ─────────────────────────────────────────────────────────────────
 // PANOUL
 // ─────────────────────────────────────────────────────────────────
-export default function PropunerePanel({ licitatii = [], showToast, initialLicId = null, onInapoi = null }) {
+export default function PropunerePanel({ licitatii = [], showToast, initialLicId = null, onInapoi = null, profile = null }) {
   const [licId, setLicId] = useState(initialLicId || (licitatii[0] && licitatii[0].id) || null)
   const [st, setSt] = useState(null)
   const [capitole, setCapitole] = useState([])
@@ -1803,6 +1804,11 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
         <PachetPersonal randuri={pachet} busy={busy} showToast={showToast}
           laData={lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null}
           onGenereaza={genereazaPachet} />
+      </div>
+
+      <div>
+        <div style={{ ...S.lbl, marginBottom:8 }}>🏗 Organigramă (#80)</div>
+        <OrganigramaSection licitatie={lic} profile={profile} participanti={participanti} parteneri={parteneri} showToast={showToast} />
       </div>
 
       <div>
