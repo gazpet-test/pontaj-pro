@@ -1,5 +1,8 @@
 // #51 14.09.2026: autorizat() — owner/responsabil sau service_role; anon respins.
-// ofertare-acoperire v16 (15.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v17 (15.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v17 (#72, Silviu 15.09): R15 — cerințele care se prezintă DOAR de ofertantul de pe locul I / se declară în DUAE
+//     (cand_se_prezinta) nu cer documentul valabil la depunere: certificatul de 30 zile (ONRC, fiscal) acoperă, se
+//     reemite atunci. La Conpet („depunere") rămâne ca înainte. Gardă în cod: valabil_la_depunere=null pe ele.
 // v16 (#73, Silviu 15.09): a CINCEA sursă de catalog — RECOMANDĂRILE persoanelor (hr_recomandari, id-uri R):
 //     experiența managerului / șefului de șantier / RTE se dovedește cu ele; R14 în prompt, mod='recomandare'.
 // v15 (#75, Silviu 15.09): R13 — CQ/CTC nu se mai atestă la ISC (prevedere abrogată; numire prin
@@ -46,6 +49,7 @@ REGULI NENEGOCIABILE:
 - R11 (art. 51 lit. g + practica comisiilor): RTE-ul trebuie să aibă autorizația ȘI legitimația ISC valabile la termenul de depunere (R6). Dacă obiectul contractului include refaceri de drumuri / sistem rutier / asfalt, comisiile cer în practică și un RTE pe 2.1 chiar dacă cerința nu-l numește (cazul Laza): dacă avem 2.1 în catalog, îl menționezi în motiv; dacă nu, scrii în motiv "risc: comisia poate cere și RTE 2.1 pentru refacerile de drum" — fără să schimbi statusul cerinței principale.
 - R12 (REGULI DE ECHIPĂ — RESTRÂNS): status "regula_propunere" e DOAR pentru regulile de ALCĂTUIRE A ECHIPEI: interdicția de cumul de funcții, "fiecare rol e ocupat de altă persoană", "personalul nominalizat trebuie să fie același la execuție", "înlocuirea personalului nominalizat doar cu acordul achizitorului", "fiecare asociat își dovedește partea asumată". NU intră aici: obligațiile de execuție din caietul de sarcini (probe de presiune, tranșee, SSM, recepție, remedieri, dotări, instruiri), lucrurile care "se descriu în propunerea tehnică" (structura echipei, atribuții, metodologie, grafic) — ALEA rămân "nu_se_aplica" ca până acum, fiindcă nu sunt capabilități din catalog. Dacă ai dubii, e "nu_se_aplica". motiv = ce regulă e și unde se verifică.
 - R13 (CALITATE — CQ/CTC): controlorul tehnic cu calitatea (CQ/CTC/„responsabil control calitate") NU se mai atestă la ISC — prevederea e abrogată, CQ/CTC se numește prin DECIZIE INTERNĂ a firmei. O cerință de „CQ autorizat ISC" / „controlor tehnic cu calitatea" / „responsabil cu calitatea" se acoperă cu: (a) o persoană din catalog cu cod MANAGER_SMC, AUDITOR_INTERN sau MANAGER_RISCURI_TSC (autorizatie_id numeric), sau (b) un document de firmă de tip decizie de numire CQ/CTC (F<id>), dacă există. NU dai "gol" pentru lipsa unui atestat ISC de CQ — el nu există; scrii în motiv „numire prin decizie internă; atestarea ISC a CTC nu mai e în vigoare". Cerințele formulate ca alternativă („Manager SMC / Responsabil control calitate", „X sau Y") sunt acoperite de ORICARE dintre variante — nu cere ambele.
+- R15 (CÂND SE PREZINTĂ): fiecare cerință are câmpul "cand_se_prezinta": "depunere" (documentul se depune cu oferta), "duae" (la depunere se DECLARĂ în DUAE, documentul se cere ulterior), "primul_loc" (se prezintă doar de ofertantul clasat pe locul I, la solicitarea autorității) sau null. Pentru "duae" și "primul_loc", un document de firmă care există în catalog dar EXPIRĂ înainte de termenul de depunere (tipic certificatul constatator ONRC, certificatele fiscale — valabile 30 de zile) ACOPERĂ cerința: status "acoperit" cu F<id>, motiv „se prezintă doar la locul I / în DUAE — se reemite atunci". NU dai "gol" pe motiv de expirare la aceste cerințe. Pentru "depunere" (ex. Conpet cere ONRC odată cu oferta) și null se aplică R6 ca până acum.
 - R14 (RECOMANDĂRI — experiența PERSOANELOR, id-uri cu prefix R): cerințele de „experiență în poziție similară / proiect similar" ale unei PERSOANE (manager de contract, șef de șantier, RTE, inginer execuție, responsabil calitate) se acoperă DOAR cu recomandări din lista R ale acelei persoane: status "acoperit", autorizatie_id: "R<id>". Recomandarea trebuie să se potrivească pe ROL (rolul cerut ≈ rolul din recomandare) și pe NATURA lucrării (domeniile cerute vs. domenii/obiect_lucrare; „fluide"/„rețele edilitare" acoperă și gaze, și apă-canal). Pentru RTE: o recomandare ca RTE pe lucrare similară acoperă experiența ca RTE; experiența GENERALĂ „minim N ani în construcții" e altă cerință — nu o confunda și nu o acoperi cu o singură recomandare dacă durata din recomandări nu ajunge la N ani (spune în motiv câți ani rezultă). O recomandare cu verificat=false acoperă, dar scrii în motiv „neverificată în HR". Autorizația (atestatul) persoanei NU dovedește experiență; recomandarea NU dovedește atestat — sunt cerințe separate.
 - R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
 
@@ -130,7 +134,7 @@ Deno.serve(async (req: Request) => {
     if (!lic) return fail('licitatie negasita')
 
     let q = supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, lot, document_probant')
+      .select('id, sursa_sectiune, text_cerinta, lot, document_probant, cand_se_prezinta')
       .eq('licitatie_id', licId).eq('tip', batch).is('inlocuita_de', null).order('id')
     if (idsFelie) q = q.in('id', idsFelie)
     const { data: cerinte } = await q
@@ -357,6 +361,12 @@ Deno.serve(async (req: Request) => {
       let valabil: boolean | null = null
       if (aut) valabil = aut.expira === 'niciodata' ? true : (aut.expira !== 'necunoscut' && new Date(aut.expira) >= azi)
       if (docF) valabil = docF.fara_expirare ? true : (docF.data_valabilitate ? new Date(docF.data_valabilitate) >= azi : null)
+      // #72 R15 în cod: la „primul_loc"/„duae" valabilitatea la depunere nu e criteriu — documentul se reemite atunci.
+      const candC = (cerinte || []).find((c: any) => c.id === p.cerinta_id)?.cand_se_prezinta
+      if (docF && ['primul_loc', 'duae'].includes(candC)) {
+        valabil = null
+        if (status === 'gol') { status = 'acoperit'; p.motiv = `${String(p.motiv || '').slice(0, 160)} — se prezintă ${candC === 'duae' ? 'în DUAE' : 'doar la locul I'}, se reemite atunci (R15)` }
+      }
       // La experienta nu exista „expirare": lucrarea e receptionata sau nu. Fereastra de ani
       // tine de cerinta, nu de document, deci lasam null si nu inventam un verdict.
       if (exp) valabil = null
