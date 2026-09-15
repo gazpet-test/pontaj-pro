@@ -8,7 +8,7 @@
 // Fișier separat de Ofertare.jsx ca tab-urile vechi (calitate/probe) să rămână
 // neatinse; componentele stau la nivel de modul (lecția #105 — remount).
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
@@ -1895,6 +1895,49 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const TKT_DEPARTAMENTE = [['hr','👥 HR'],['comercial','🛒 Comercial'],['logistica','🚜 Logistica'],['administrativ','🏢 Administrativ'],['financiar','💰 Financiar'],['it','💻 IT']]
   const [profiles, setProfiles] = useState({})
   useEffect(() => { supabase.from('profiles').select('id, name').then(({ data }) => { const m = {}; (data || []).forEach(p => { m[p.id] = p.name }); setProfiles(m) }) }, [])
+  // #68 varianta B (Oana): „🔍 Cine poate acoperi" — candidați din BD potriviți lexical, FĂRĂ AI, cu
+  // alegere manuală. Catalogul se încarcă o dată per licitație (lazy, la prima deschidere) și se refolosește.
+  const [candCerinta, setCandCerinta] = useState(null)   // cerința cu panoul deschis
+  const [catalog, setCatalog] = useState(null)           // candidați normalizați (toate sursele)
+  const [catalogBusy, setCatalogBusy] = useState(false)
+  useEffect(() => { setCatalog(null); setCandCerinta(null) }, [licitatie.id])
+  const deschideCandidati = async (c) => {
+    setCandCerinta(c)
+    if (catalog || catalogBusy) return
+    setCatalogBusy(true)
+    try { setCatalog(await incarcaCatalogAcoperire()) }
+    catch (e) { setWarn('Nu s-a putut încărca catalogul: ' + (e?.message || e)); setCandCerinta(null) }
+    setCatalogBusy(false)
+  }
+  const alegeCandidat = async (c, cand) => {
+    const a = acoperiri[c.id]
+    if (a?.verificat_pe_scan) { setWarn('⚠️ Cerința are deja o dovadă verificată pe scan — nu o suprascriu. Dacă documentul s-a schimbat, verifică manual în HR.'); return }
+    const termen = licitatie.termen_depunere ? new Date(String(licitatie.termen_depunere).slice(0, 10)) : null
+    // valabil_la_depunere doar unde există „expirare" (autorizație / doc firmă); experiență, recomandare, partener → null
+    let valabil = null
+    if ((cand.sursa === 'autorizatie' || cand.sursa === 'firma') && termen) valabil = cand.expira === 'niciodata' ? true : (cand.expira ? new Date(cand.expira) >= termen : null)
+    const mod = cand.sursa === 'autorizatie' ? (cand.extern ? 'partener' : 'personal') : cand.sursa === 'firma' ? 'firma' : cand.sursa
+    const payload = {
+      mod, status: cand.sursa === 'partener' ? 'acoperit_partener' : 'acoperit',
+      autorizatie_id: cand.sursa === 'autorizatie' ? cand.id : null,
+      doc_firma_id: cand.sursa === 'firma' ? cand.id : null,
+      partener_id: cand.sursa === 'partener' ? cand.id : null,
+      experienta_id: cand.sursa === 'experienta' ? cand.id : null,
+      recomandare_id: cand.sursa === 'recomandare' ? cand.id : null,
+      referinta_text: `ales manual de ${profile?.name || 'coleg'} · ${cand.titlu}${cand.sub ? ' — ' + cand.sub : ''}`.slice(0, 300),
+      valabil_la_depunere: valabil,
+      // omul tocmai a ales pe textul curent al cerinței → cererea de reverificare se închide (ca la „Verificat")
+      reverificare_ceruta: false, reverificare_motiv: null,
+      updated_at: new Date().toISOString(),
+    }
+    const { error } = a
+      ? await supabase.from('ofertare_acoperire').update(payload).eq('id', a.id)
+      : await supabase.from('ofertare_acoperire').insert({ cerinta_id: c.id, verificat_pe_scan: false, domeniu_rte: null, ...payload })
+    if (error) { setWarn('Nu s-a salvat acoperirea: ' + error.message); return }
+    setCandCerinta(null)
+    setWarn(`✅ #${c.nr_ordine}: acoperire aleasă manual — ${cand.titlu}.`)
+    await load(); onChanged?.()
+  }
   const salveazaRaspuns = async (a, text) => {
     const { error } = await supabase.from('ofertare_acoperire').update({ raspuns_coleg: text.trim() || null, raspuns_de: profile?.id || null, raspuns_la: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', a.id)
     if (error) return setWarn('Nu s-a salvat răspunsul: ' + error.message)
@@ -2135,6 +2178,9 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
                     <span style={{ flex:1, fontSize:12.5, minWidth:200 }}>{c.text_cerinta}</span>
                     <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
+                      <button title="Cine poate acoperi cerința: candidați din BD (autorizații, documente firmă, parteneri, experiență, recomandări) potriviți pe cuvinte-cheie — fără AI, gratuit. Alegi manual."
+                        onClick={() => deschideCandidati(c)}
+                        style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '66', whiteSpace:'nowrap', opacity: a?.verificat_pe_scan ? .55 : 1 }}>🔍 Cine poate acoperi</button>
                       {a?.reverificare_ceruta && (
                         <button title={(a.reverificare_motiv || 'Textul cerinței s-a schimbat după ce dovada a fost pusă') + ' — apasă după ce ai citit textul nou și dovada ține în continuare'}
                           onClick={() => confirmaReverificare(a)}
@@ -2202,6 +2248,159 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
             })}
           </div>
         )}
+      {candCerinta && (
+        <CandidatiAcoperirePanel cerinta={candCerinta} acoperire={acoperiri[candCerinta.id]} catalog={catalog} busy={catalogBusy}
+          termen={licitatie.termen_depunere} onAlege={cand => alegeCandidat(candCerinta, cand)} onClose={() => setCandCerinta(null)} />
+      )}
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// #68 varianta B: „Cine poate acoperi" — potrivire LEXICALĂ (fără AI) între textul cerinței și
+// catalogul din BD. Sugestii brute, sortate după nr. de cuvinte-cheie comune; omul alege.
+// ════════════════════════════════════════════════════════════════
+// cuvinte frecvente în cerințe care nu spun nimic despre CE document trebuie (peste STOP_CUVINTE)
+const STOP_CERINTE = new Set(['ofertantul','ofertantii','ofertanti','ofertant','trebuie','prezinta','prezenta','prezentarea','dovada','dovedeasca','document','documente','documentul','documentele','minim','minimum','copie','copii','conform','conformitate','cerinta','cerinte','care','sunt','este','fiecare','catre','poate','prin','vor','fi','sa','se','ca','sau','ori','dupa','fara','intre','asupra','precum','respectiv','astfel','urmatoarele','declaratie','declaratia','formular','formularul','anexa','solicita','solicitat','solicitata','autoritatea','contractanta','contractant','contractului','contract','acord','cadru','obiectul','achizitie','achizitiei','oferta','ofertei','valabil','valabila','valabilitate','termen','termenul','data','depunere','depunerii','operatorul','operatorului','economic','economici','operatori','nivel','nivelul','cerut','ceruta','necesar','necesara','obligatoriu','indeplinire','indeplinirea','conditii','conditiile','cazul','caz','aceasta','acest','aceste','acestea','celor','unei','unui','unor','fost','avea','face','tuturi','toate','toti','orice','oricare','exista','existenta','forma','original','legalizata','legalizat','emis','emise','emisa','emitent','persoana','persoanele','persoanei','persoane'])
+const cuvinteCerinta = (text) => [...cuvinteCheie(text)].filter(w => !STOP_CERINTE.has(w))
+// potrivire pe cuvânt: egal sau același prefix de 6 litere (sudori/sudorilor, autorizat/autorizatie) — „brut", nu verdict
+const potriveste = (w, tokens) => tokens.some(t => t === w || (w.length >= 6 && t.length >= 6 && t.slice(0, 6) === w.slice(0, 6)))
+const scorCandidat = (cuvinte, cand) => cuvinte.filter(w => potriveste(w, cand.tokens))
+const SURSE_CAND = {
+  autorizatie: { icon:'🪪', label:'Autorizații personal (HR)', color:G.green },
+  firma:       { icon:'🏢', label:'Documente firmă', color:G.blue },
+  partener:    { icon:'🤝', label:'Parteneri', color:G.teal },
+  experienta:  { icon:'🏗', label:'Experiență similară', color:G.orange },
+  recomandare: { icon:'📜', label:'Recomandări (persoane)', color:G.purple },
+}
+// Aceleași filtre ca motorul AI (ofertare-acoperire): deleted_at null / activ / abandonat=false.
+async function incarcaCatalogAcoperire() {
+  const [aut, docs, part, exp, rec] = await Promise.all([
+    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)').is('deleted_at', null).order('id').limit(5000),
+    supabase.from('documente_firma').select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, se_reemite').eq('activ', true).order('id').limit(5000),
+    supabase.from('ofertare_parteneri').select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('nume').limit(2000),
+    supabase.from('ofertare_experienta').select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, piese, observatii').eq('activ', true).order('id').limit(5000),
+    supabase.from('hr_recomandari').select('id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, emp:employees(name), ext:hr_personal_extern(nume)').eq('activ', true).order('id').limit(5000),
+  ])
+  const err = [aut, docs, part, exp, rec].find(r => r.error)?.error
+  if (err) throw err
+  const arr = (x) => Array.isArray(x) ? x.join(' ') : (x || '')
+  const mk = (sursa, id, titlu, sub, text, extra = {}) => ({ sursa, id, titlu, sub, tokens: normText(text).split(' ').filter(Boolean), ...extra })
+  const out = []
+  ;(aut.data || []).forEach(a => {
+    const titular = a.emp?.name || a.ext?.nume || '?'
+    const tip = a.tip?.denumire || 'autorizație'
+    out.push(mk('autorizatie', a.id, `${titular} — ${tip}`,
+      [a.numar_autorizatie ? `nr. ${a.numar_autorizatie}` : null, a.emitent, arr(a.domenii), a.procedeu_sudura, a.diametru_teava_mm ? `Ø${a.diametru_teava_mm}` : null, a.ext ? 'EXTERN' : null].filter(Boolean).join(' · '),
+      `${tip} ${a.tip?.cod || ''} ${titular} ${a.emitent || ''} ${arr(a.domenii)} ${a.procedeu_sudura || ''} ${a.observatii || ''}`,
+      { extern: !!a.ext, expira: a.fara_expirare ? 'niciodata' : (a.data_expirare || null), are_scan: !!a.fisier_path }))
+  })
+  ;(docs.data || []).forEach(d => {
+    out.push(mk('firma', d.id, `${d.tip || 'document'}${d.denumire ? ' — ' + d.denumire : ''}`,
+      [d.numar_document ? `nr. ${d.numar_document}` : null, d.categorie, d.autoritate_emitenta, d.se_reemite ? 'se reemite la depunere' : null].filter(Boolean).join(' · '),
+      `${d.tip || ''} ${d.denumire || ''} ${d.categorie || ''} ${d.autoritate_emitenta || ''}`,
+      { expira: d.fara_expirare ? 'niciodata' : (d.data_valabilitate || null), se_reemite: !!d.se_reemite }))
+  })
+  ;(part.data || []).forEach(p => {
+    out.push(mk('partener', p.id, p.nume, [p.tip_relatie, p.observatii ? p.observatii.slice(0, 90) : null].filter(Boolean).join(' · '), `${p.nume} ${p.tip_relatie || ''} ${p.observatii || ''}`))
+  })
+  ;(exp.data || []).forEach(e => {
+    const val = e.asociere ? (e.valoare_executata_lei ? `cota Gazpet ${Math.round(e.valoare_executata_lei / 1000)} mii lei` : 'asociere, cotă necunoscută') : (e.valoare_lei ? `${Math.round(e.valoare_lei / 1000)} mii lei` : null)
+    out.push(mk('experienta', e.id, e.denumire, [e.beneficiar, val, e.data_pv ? `PV ${fmtZi(e.data_pv)}` : null, e.piese].filter(Boolean).join(' · '), `${e.denumire} ${e.beneficiar || ''} ${e.tip_pv || ''} ${e.piese || ''} ${e.observatii || ''}`))
+  })
+  ;(rec.data || []).forEach(r => {
+    const cine = r.emp?.name || r.ext?.nume || '?'
+    out.push(mk('recomandare', r.id, `${cine} — ${r.rol || 'rol nespecificat'}`,
+      [r.beneficiar, r.obiect_lucrare ? r.obiect_lucrare.slice(0, 80) : null, r.perioada_start ? `${String(r.perioada_start).slice(0, 4)}–${r.perioada_end ? String(r.perioada_end).slice(0, 4) : '…'}` : null, r.verificat ? null : 'NEVERIFICATĂ în HR'].filter(Boolean).join(' · '),
+      `${cine} ${r.rol || ''} ${r.beneficiar || ''} ${r.obiect_lucrare || ''} ${arr(r.domenii)}`))
+  })
+  return out
+}
+function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, onAlege, onClose }) {
+  const [cauta, setCauta] = useState('')
+  const [scriu, setScriu] = useState(null)
+  const cuvinte = useMemo(() => cuvinteCerinta(cerinta.text_cerinta), [cerinta.text_cerinta])
+  const termenD = termen ? new Date(String(termen).slice(0, 10)) : null
+  const q = normText(cauta)
+  const { cuScor, restul } = useMemo(() => {
+    const cuScor = [], restul = []
+    ;(catalog || []).forEach(cand => {
+      if (q && !normText(cand.titlu + ' ' + cand.sub).includes(q)) return
+      const hits = scorCandidat(cuvinte, cand)
+      ;(hits.length ? cuScor : restul).push({ ...cand, scor: hits.length, hits })
+    })
+    cuScor.sort((x, y) => y.scor - x.scor || x.titlu.localeCompare(y.titlu))
+    restul.sort((x, y) => x.sursa.localeCompare(y.sursa) || x.titlu.localeCompare(y.titlu))
+    return { cuScor, restul }
+  }, [catalog, cuvinte, q])
+  const blocat = !!acoperire?.verificat_pe_scan
+  // marcaj valabilitate față de termenul de depunere (doar surse cu expirare)
+  const valab = (cand) => {
+    if (cand.sursa !== 'autorizatie' && cand.sursa !== 'firma') return null
+    if (cand.expira === 'niciodata') return { t:'∞ fără expirare', c:G.green }
+    if (!cand.expira) return { t:'expirare necunoscută', c:G.dim }
+    const ok = termenD ? new Date(cand.expira) >= termenD : new Date(cand.expira) >= new Date()
+    return { t:`${ok ? 'valabil' : 'EXPIRĂ'} · ${fmtZi(cand.expira)}`, c: ok ? G.green : G.red }
+  }
+  const alege = async (cand) => { setScriu(cand.sursa + cand.id); try { await onAlege(cand) } finally { setScriu(null) } }
+  const Rand = ({ cand }) => {
+    const s = SURSE_CAND[cand.sursa], v = valab(cand)
+    return (
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderRadius:6, background:G.surface, borderLeft:`3px solid ${s.color}` }}>
+        <span title={s.label} style={{ fontSize:14 }}>{s.icon}</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:12.5, fontWeight:700, color:G.text }}>{cand.titlu}
+            {cand.extern && <span style={{ marginLeft:6, fontSize:10, color:G.teal, fontWeight:800 }}>EXTERN → partener</span>}
+            {cand.sursa === 'autorizatie' && !cand.are_scan && <span style={{ marginLeft:6, fontSize:10, color:G.orange }} title="Fără scan în HR — nu se va putea „verifica pe scan” (R1)">fără scan</span>}
+          </div>
+          {cand.sub && <div style={{ fontSize:11, color:G.muted }}>{cand.sub}</div>}
+          {cand.hits?.length > 0 && <div style={{ fontSize:10.5, color:G.dim }}>potrivit pe: {cand.hits.join(', ')}</div>}
+        </div>
+        {v && <span style={{ fontSize:10.5, fontWeight:700, color:v.c, whiteSpace:'nowrap' }}>{v.t}</span>}
+        {cand.scor > 0 && <span style={{ fontSize:10.5, fontWeight:800, color:G.ofertare, border:`1px solid ${G.ofertare}66`, borderRadius:8, padding:'1px 6px' }} title="Număr de cuvinte-cheie comune (scor brut)">{cand.scor}</span>}
+        <button disabled={blocat || !!scriu} onClick={() => alege(cand)}
+          title={blocat ? 'Cerința are dovadă verificată pe scan — nu se suprascrie' : 'Scrie acoperirea manual pe această cerință'}
+          style={{ ...S.btnP, padding:'4px 10px', fontSize:11.5, opacity: (blocat || scriu) ? .5 : 1, cursor: blocat ? 'not-allowed' : 'pointer' }}>{scriu === cand.sursa + cand.id ? '…' : 'Alege'}</button>
+      </div>
+    )
+  }
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.7)', zIndex:1100, display:'flex', alignItems:'flex-start', justifyContent:'center', overflowY:'auto', padding:'30px 14px' }} onClick={onClose}>
+      <div style={{ ...S.card, width:'100%', maxWidth:820, padding:16, display:'flex', flexDirection:'column', gap:10, maxHeight:'calc(100vh - 60px)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:14, fontWeight:800 }}>🔍 Cine poate acoperi cerința #{cerinta.nr_ordine}</div>
+            <div style={{ fontSize:12, color:G.text, marginTop:4 }}>{cerinta.text_cerinta}</div>
+            <div style={{ fontSize:11, color:G.orange, marginTop:4, fontWeight:700 }}>⚠️ Sugestii brute (potrivire pe cuvinte, fără AI), nu verdict — verifică documentul înainte să alegi.</div>
+            <div style={{ fontSize:10.5, color:G.dim, marginTop:2 }}>cuvinte-cheie: {cuvinte.length ? cuvinte.join(', ') : '— (niciunul; vezi „restul")'}{termenD ? ` · valabilitate față de depunere ${fmtZi(String(termen).slice(0, 10))}` : ' · fără termen de depunere: valabilitatea se judecă la azi'}</div>
+            {blocat && <div style={{ fontSize:11.5, color:G.red, marginTop:4, fontWeight:700 }}>🔒 Cerința are dovadă verificată pe scan — panoul e doar de consultat, „Alege" nu scrie.</div>}
+            {acoperire && !blocat && <div style={{ fontSize:11, color:G.muted, marginTop:4 }}>Acoperirea actuală ({ACOPERIRE_STATUS[acoperire.status]?.label || acoperire.status}) se înlocuiește la „Alege".</div>}
+          </div>
+          <button style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }} onClick={onClose}>✕</button>
+        </div>
+        <input style={{ ...S.input, fontSize:12, padding:'6px 10px' }} placeholder="filtrează după nume / tip / beneficiar…" value={cauta} onChange={e => setCauta(e.target.value)} />
+        <div style={{ overflowY:'auto', display:'flex', flexDirection:'column', gap:4, minHeight:80 }}>
+          {busy || !catalog ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă catalogul (autorizații, documente firmă, parteneri, experiență, recomandări)…</div> : (
+            <>
+              {!cuScor.length && <div style={{ fontSize:12, color:G.dim }}>Niciun candidat cu cuvinte comune. Caută mai jos în „restul" sau folosește filtrul.</div>}
+              {Object.keys(SURSE_CAND).map(k => {
+                const grup = cuScor.filter(x => x.sursa === k)
+                if (!grup.length) return null
+                return (
+                  <div key={k}>
+                    <div style={{ fontSize:11, fontWeight:800, color:SURSE_CAND[k].color, margin:'6px 0 3px' }}>{SURSE_CAND[k].icon} {SURSE_CAND[k].label} ({grup.length})</div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:3 }}>{grup.map(cand => <Rand key={k + cand.id} cand={cand} />)}</div>
+                  </div>
+                )
+              })}
+              <details style={{ marginTop:8 }}>
+                <summary style={{ fontSize:11.5, color:G.muted, cursor:'pointer', fontWeight:700 }}>restul catalogului — fără cuvinte comune ({restul.length})</summary>
+                <div style={{ display:'flex', flexDirection:'column', gap:3, marginTop:4 }}>{restul.map(cand => <Rand key={cand.sursa + cand.id} cand={cand} />)}</div>
+              </details>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
