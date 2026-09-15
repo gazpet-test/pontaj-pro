@@ -1885,6 +1885,11 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const [fDoarGoluri, setFDoarGoluri] = useState(false)
   // răspunsul colegilor la goluri / dovezi roșii — se citește de platformă (raport zilnic), nu pe mail (Răzvan 07.09)
   const [raspEdit, setRaspEdit] = useState(null)
+  // Tichet din cerință (TKT-0220 Pantea + mail Silviu 15.09): pe ORICE cerință, cu departament + persoană alese pe loc,
+  // nu doar pe goluri cu departament „hr" bătut în cuie. tktEdit = id-ul cerinței cu formularul deschis.
+  const [tktEdit, setTktEdit] = useState(null)
+  const [tktForm, setTktForm] = useState({ departament: 'hr', persoana: '' })
+  const TKT_DEPARTAMENTE = [['hr','👥 HR'],['comercial','🛒 Comercial'],['logistica','🚜 Logistica'],['administrativ','🏢 Administrativ'],['financiar','💰 Financiar'],['it','💻 IT']]
   const [profiles, setProfiles] = useState({})
   useEffect(() => { supabase.from('profiles').select('id, name').then(({ data }) => { const m = {}; (data || []).forEach(p => { m[p.id] = p.name }); setProfiles(m) }) }, [])
   const salveazaRaspuns = async (a, text) => {
@@ -2008,16 +2013,24 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
 
   const creeazaTichet = async (c, a) => {
     const eElim = c.tip === 'eliminatorie'
+    const persoana = tktForm.persoana || null
     const { data: tkt, error } = await supabase.from('tichete').insert({
-      departament: 'hr', subcategorie: 'altele',
-      titlu: `${eElim ? '🚫 ELIMINATORIE — ' : ''}Gol ofertare: ${c.text_cerinta.slice(0, 80)}`,
+      departament: tktForm.departament || 'hr', subcategorie: 'altele',
+      // Cu persoană aleasă tichetul pleacă direct „atribuit" (același contract ca formularul din Tichete.jsx)
+      ...(persoana ? { persoana_responsabila: persoana, atribuit_de: profile?.id || null, data_atribuire: new Date().toISOString(), asignat_la: 'intern' } : {}),
+      titlu: `${eElim ? '🚫 ELIMINATORIE — ' : ''}${a?.status === 'gol' ? 'Gol' : 'Cerință'} ofertare: ${c.text_cerinta.slice(0, 80)}`,
       descriere: `Cerință neacoperită la licitația ${licitatie.nr_anunt} (${licitatie.autoritate}), sursa ${c.sursa_sectiune}:\n\n„${c.text_cerinta}"\n\nMotiv AI: ${a?.referinta_text || '—'}\n\nGenerat din modulul Ofertare (E3).`,
-      urgenta: 'normal', status: 'deschis', deschis_de: profile?.id || null,
+      urgenta: 'normal', status: persoana ? 'atribuit' : 'deschis', deschis_de: profile?.id || null,
       entitate_tip: 'altele', entitate_descriere: `Licitație ${licitatie.nr_anunt}`,
     }).select('id, numar_tichet').single()
     if (error) { setWarn('Tichet: ' + error.message); return }
+    if (persoana) {
+      const { error: eAsg } = await supabase.from('tichete_asignati').insert({ tichet_id: tkt.id, profile_id: persoana, asignat_de: profile?.id || null })
+      if (eAsg) console.warn('tichete_asignati insert:', eAsg.message)
+    }
     if (a) await supabase.from('ofertare_acoperire').update({ tichet_id: tkt.id, updated_at: new Date().toISOString() }).eq('id', a.id)
-    setWarn(`🎫 ${tkt.numar_tichet} creat pentru gol.`)
+    setTktEdit(null)
+    setWarn(`🎫 ${tkt.numar_tichet} creat${persoana ? ' și atribuit lui ' + (profiles[persoana] || 'coleg') : ''}${a ? '' : ' (cerința nu are încă evaluare, tichetul nu e legat de un rând de acoperire)'}.`)
     await load()
   }
 
@@ -2126,16 +2139,30 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                           onClick={() => verifica(a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66', opacity: a.autorizatie?.fisier_path ? 1 : .45 }}>👁 Verificat</button>
                       )}
                       {a?.verificat_pe_scan && !a.reverificare_ceruta && <span style={{ fontSize:11, color:G.green, fontWeight:700 }} title="Verificat pe scan">✓✓</span>}
-                      {a && a.status === 'gol' && !a.tichet_id && (
-                        <button title="Golul devine tichet" onClick={() => creeazaTichet(c, a)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>🎫 Tichet</button>
+                      {!a?.tichet_id && c.stare !== 'nu_se_aplica' && (
+                        <button title="Deschide tichet pe cerința asta către un departament / o persoană (nu doar pe goluri)" onClick={() => { setTktEdit(tktEdit === c.id ? null : c.id); setTktForm({ departament: 'hr', persoana: '' }) }}
+                          style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66', background: tktEdit === c.id ? G.orange + '22' : undefined }}>🎫 Tichet</button>
                       )}
-                      {a?.tichet_id && <span style={{ fontSize:11, color:G.orange, fontWeight:700 }} title="Are tichet deschis">🎫</span>}
+                      {a?.tichet_id && <span style={{ fontSize:11, color:G.orange, fontWeight:700 }} title={`Are tichet deschis (id ${a.tichet_id})`}>🎫</span>}
                       {a && (a.status === 'gol' || a.valabil_la_depunere === false) && (
                         <button title="Răspunsul tău pentru platformă: ce ai găsit / ce ai făcut / până când rezolvi" onClick={() => setRaspEdit(raspEdit === a.id ? null : a.id)}
                           style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color: a.raspuns_coleg ? G.green : G.blue, borderColor: (a.raspuns_coleg ? G.green : G.blue) + '66' }}>{a.raspuns_coleg ? '💬 răspuns ✓' : '💬 răspunde'}</button>
                       )}
                     </span>
                   </div>
+                  {tktEdit === c.id && (
+                    <div style={{ marginTop:6, display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+                      <select value={tktForm.departament} onChange={e => setTktForm(f => ({ ...f, departament: e.target.value }))} style={{ ...S.input, fontSize:12, padding:'4px 8px', width:'auto' }}>
+                        {TKT_DEPARTAMENTE.map(([cod, nume]) => <option key={cod} value={cod}>{nume}</option>)}
+                      </select>
+                      <select value={tktForm.persoana} onChange={e => setTktForm(f => ({ ...f, persoana: e.target.value }))} style={{ ...S.input, fontSize:12, padding:'4px 8px', width:'auto', maxWidth:260 }}>
+                        <option value="">— fără persoană (rămâne „deschis" pe departament) —</option>
+                        {Object.entries(profiles).sort((x, y) => (x[1] || '').localeCompare(y[1] || '')).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                      </select>
+                      <button style={{ ...S.btnP, padding:'5px 12px', fontSize:12 }} onClick={() => creeazaTichet(c, a)}>Creează tichetul</button>
+                      <button style={{ ...S.btnS, padding:'5px 10px', fontSize:12 }} onClick={() => setTktEdit(null)}>Renunț</button>
+                    </div>
+                  )}
                   {a && raspEdit === a.id && (
                     <div style={{ marginTop:6, display:'flex', gap:6 }}>
                       <textarea autoFocus defaultValue={a.raspuns_coleg || ''} id={`rasp-${a.id}`} placeholder="ex: am cerut constatatorul la ONRC, vine joi / documentul e la Mirela / nu avem, propun partener X" style={{ ...S.input, minHeight:52, fontSize:12 }} />
