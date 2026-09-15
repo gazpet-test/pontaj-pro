@@ -71,6 +71,15 @@ const SEAP_HDR: Record<string, string> = {
 };
 const RUNDE_IMPORT = 4;
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
+
+// ANTI-BUG 15.09.2026 (Clinceni): SEAP normalizeaza numele in API (scoate virgulele,
+// pune spatii duble, schimba "(2)" in " 2", strecoara spatiu inainte de extensie), iar
+// in arhiva numele sunt cele originale. Cheia scoate TOATE spatiile, nu doar le comprima.
+// Compararea pe nume exact producea placeholdere si duplicate ale aceluiasi fisier.
+// COPIE identica in ofertare-seap-import (edge functions nu pot importa cod una din alta).
+// Cheia e DOAR pentru comparatie - in BD se scrie tot numele real (nume_original).
+const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
+  .replace(/[,()]/g, '').replace(/\s+/g, '');
 // Numele sub care autoritatile publica raspunsurile si modificarile documentatiei.
 const esteRaspuns = (n: string) => /clarific|r[aă]spuns|erat[aă]|errata|completare|modificare|addendum|notificare/i.test(n);
 const esc = (s: string) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
@@ -236,12 +245,12 @@ Deno.serve(async (req: Request) => {
 
     const { data: aveamDeja } = await supa.from('ofertare_documente_atribuire')
       .select('nume_original').eq('licitatie_id', lic.id);
-    const cunoscute = new Set((aveamDeja || []).map((d: any) => d.nume_original));
+    const cunoscute = new Set((aveamDeja || []).map((d: any) => cheieNume(d.nume_original)));
     const erori: string[] = [];
 
     for (const it of lista) {
       const nume = String(it?.documentName || it?.noticeDocumentName || '').replace(/\.p7s$/i, '');
-      if (!nume || cunoscute.has(nume)) continue;   // idempotent: ruleaza de 2x/zi
+      if (!nume || cunoscute.has(cheieNume(nume))) continue;   // idempotent: ruleaza de 2x/zi
       const url = String(it?.noticeDocumentUrl || '');
       if (!url) { erori.push(`${nume}: fara noticeDocumentUrl`); continue; }
       try {
@@ -268,7 +277,7 @@ Deno.serve(async (req: Request) => {
           size_bytes: buf.length,
         });
         if (eIns) { erori.push(`${nume}: insert ${eIns.message}`); continue; }
-        cunoscute.add(nume);
+        cunoscute.add(cheieNume(nume));
         adusi.push(nume);
       } catch (e) {
         erori.push(`${nume}: ${String((e as Error)?.message || e)}`);
@@ -297,8 +306,17 @@ Deno.serve(async (req: Request) => {
 
     const { data: aveam } = await supa.from('ofertare_documente_atribuire')
       .select('id, nume_original, fisier_path').eq('licitatie_id', lic.id);
-    const cunoscute = new Set((aveam || []).map((d: any) => d.nume_original));
-    const noi = [...new Set(laSeap)].filter((n) => !cunoscute.has(n));
+    const cunoscute = new Set((aveam || []).map((d: any) => cheieNume(d.nume_original)));
+    // `noi` pastreaza numele BRUTE din SEAP (se scriu ca nume_original la placeholdere),
+    // dar atat deduplicarea cat si comparatia cu ce avem se fac pe cheie.
+    const noi: string[] = [];
+    const vazute = new Set<string>();
+    for (const n of laSeap) {
+      const k = cheieNume(n);
+      if (vazute.has(k) || cunoscute.has(k)) continue;
+      vazute.add(k);
+      noi.push(n);
+    }
 
     // v5: raspunsurile publicate de autoritate stau in alt endpoint - se aduc oricum,
     // chiar daca lista de documente a anuntului nu s-a schimbat.
@@ -325,9 +343,9 @@ Deno.serve(async (req: Request) => {
     // treapta 2: ce a ramas trece prin Vercel, unde arhiva se parcurge integral
     const { data: dupaEdge } = await supa.from('ofertare_documente_atribuire')
       .select('nume_original, fisier_path').eq('licitatie_id', lic.id);
-    const urcateAcum = new Set((dupaEdge || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => d.nume_original));
+    const urcateAcum = new Set((dupaEdge || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
     let vercel: string | null = null;
-    if (noi.some((n) => !urcateAcum.has(n))) {
+    if (noi.some((n) => !urcateAcum.has(cheieNume(n)))) {
       if (!IMPORT_SECRET) {
         vercel = 'sarit: lipseste SEAP_IMPORT_SECRET din variabilele de mediu';
       } else {
@@ -348,23 +366,29 @@ Deno.serve(async (req: Request) => {
     // Adevarul se citeste din BD: care dintre documentele NOI au acum fisier real
     const { data: acum } = await supa.from('ofertare_documente_atribuire')
       .select('nume_original, fisier_path').eq('licitatie_id', lic.id);
-    const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => d.nume_original));
-    const toateCunoscute = new Set((acum || []).map((d: any) => d.nume_original));
-    const auIntrat = noi.filter((n) => urcate.has(n));
-    const ramase = noi.filter((n) => !urcate.has(n));
+    const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
+    const toateCunoscute = new Set((acum || []).map((d: any) => cheieNume(d.nume_original)));
+    const auIntrat = noi.filter((n) => urcate.has(cheieNume(n)));
+    const ramase = noi.filter((n) => !urcate.has(cheieNume(n)));
 
-    // v4: tot ce e nou (urcat sau nu) se marcheaza ca aparut ulterior importului initial
+    // v4: tot ce e nou (urcat sau nu) se marcheaza ca aparut ulterior importului initial.
+    // Filtrarea „ce e nou" e pe cheie, dar interogarea BD cere numele BRUTE asa cum stau in
+    // nume_original - deci se iau din randurile din BD, nu din numele normalizate de SEAP.
     let marcate = 0;
-    if (noi.length) {
+    const cheiNoi = new Set(noi.map(cheieNume));
+    const numeDeMarcat = [...new Set(
+      (acum || []).filter((d: any) => cheiNoi.has(cheieNume(d.nume_original))).map((d: any) => d.nume_original as string),
+    )];
+    if (numeDeMarcat.length) {
       const { data: m, error: eM } = await supa.from('ofertare_documente_atribuire')
         .update({ aparut_ulterior: true })
-        .eq('licitatie_id', lic.id).in('nume_original', noi).select('id');
+        .eq('licitatie_id', lic.id).in('nume_original', numeDeMarcat).select('id');
       if (eM) raport.push({ licitatie: lic.nr_anunt, marcare_esuata: eM.message });
       marcate = (m || []).length;
     }
 
     for (const n of ramase) {
-      if (toateCunoscute.has(n)) continue;
+      if (toateCunoscute.has(cheieNume(n))) continue;
       const safe = n.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
       await supa.from('ofertare_documente_atribuire').insert({
         licitatie_id: lic.id,
@@ -381,14 +405,22 @@ Deno.serve(async (req: Request) => {
     const nume = (l: string[]) => l.slice(0, 4).join(', ') + (l.length > 4 ? ` (+${l.length - 4})` : '');
 
     // v2: raspunsurile autoritatii se anunta separat, ca sa nu se piarda printre planse.
-    const raspunsuri = [...new Set([...noi.filter(esteRaspuns), ...raspunsuriAduse])];
-    const restul = noi.filter((n) => !esteRaspuns(n) && !raspunsuriAduse.includes(n));
+    const cheiRaspunsuriAduse = new Set(raspunsuriAduse.map(cheieNume));
+    const raspunsuri: string[] = [];
+    const vazuteR = new Set<string>();
+    for (const n of [...noi.filter(esteRaspuns), ...raspunsuriAduse]) {
+      const k = cheieNume(n);
+      if (vazuteR.has(k)) continue;
+      vazuteR.add(k);
+      raspunsuri.push(n);
+    }
+    const restul = noi.filter((n) => !esteRaspuns(n) && !cheiRaspunsuriAduse.has(cheieNume(n)));
 
     const mesaje: { type: string; title: string; message: string }[] = [];
     if (raspunsuri.length) {
       const parti = [`Autoritatea a publicat ${raspunsuri.length} document(e) care par raspuns la clarificari sau modificare a documentatiei: ${nume(raspunsuri)}.`];
       if (raspunsuriAduse.length) parti.push(`Dintre ele, ${raspunsuriAduse.length} sunt raspunsuri publicate de autoritate, aduse automat din SEAP: ${nume(raspunsuriAduse)}. Se citesc din Ofertare -> Clarificari.`);
-      const intrate = raspunsuri.filter((n) => urcate.has(n));
+      const intrate = raspunsuri.filter((n) => urcate.has(cheieNume(n)));
       if (intrate.length < raspunsuri.length) parti.push('ATENTIE: nu toate au putut fi aduse automat - urca-le din "Urca fisiere".');
       parti.push('Citeste-le si treci intrebarea si raspunsul in Clarificari. Daca raspunsul schimba o cerinta, cerinta din registru trebuie actualizata.');
       mesaje.push({
@@ -399,8 +431,8 @@ Deno.serve(async (req: Request) => {
     }
     if (restul.length) {
       const parti: string[] = [];
-      const intrate = restul.filter((n) => urcate.has(n));
-      const lipsa = restul.filter((n) => !urcate.has(n));
+      const intrate = restul.filter((n) => urcate.has(cheieNume(n)));
+      const lipsa = restul.filter((n) => !urcate.has(cheieNume(n)));
       if (intrate.length) parti.push(`Aduse in platforma: ${nume(intrate)}.`);
       if (lipsa.length) parti.push(`Raman de urcat manual: ${nume(lipsa)}.`);
       mesaje.push({
@@ -432,12 +464,12 @@ Deno.serve(async (req: Request) => {
           const { data: resp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle();
           if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
         }
-        const neaduse = raspunsuri.filter((n) => !urcate.has(n));
+        const neaduse = raspunsuri.filter((n) => !urcate.has(cheieNume(n)));
         const html = `
           <p>Autoritatea a publicat <b>${raspunsuri.length} document(e)</b> care par raspuns la clarificari sau modificare a documentatiei.</p>
           <p><b>Licitatie:</b> ${esc(lic.nr_anunt || '')} — ${esc(lic.obiect || '')}<br>
              <b>Termen depunere:</b> ${lic.termen_depunere ? new Date(lic.termen_depunere).toLocaleString('ro-RO') : '—'}</p>
-          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(n)}${urcate.has(n) ? '' : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
+          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(n)}${urcate.has(cheieNume(n)) ? '' : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
           ${raspunsuriAduse.length ? `<p><b>${raspunsuriAduse.length}</b> dintre ele sunt <b>raspunsuri publicate de autoritate</b>, aduse automat din SEAP. Se citesc din <b>Ofertare &rarr; &#10067; Clarificari</b>.</p>` : ''}
           ${neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>
