@@ -13,6 +13,7 @@ import { supabase } from './lib/supabase.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
+import ClarificariPanel from './OfertareClarificari.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
@@ -99,6 +100,7 @@ export default function OfertareLicitatiiTab() {
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
   const [cantLicId, setCantLicId] = useState(null)   // licitația cu care intri în Cantități din fișă (Răzvan 07.09: nu mai alegi din listă)
+  const [clarLicId, setClarLicId] = useState(null)   // idem, pentru ❓ Clarificări (ecran separat din 15.09)
   const [ptLicId, setPtLicId] = useState(null)       // idem, pentru Propunere tehnică
   // Intrarea din Clarificări direct în analiza unui document: o „intenție" care coboară până la
   // DocumenteSection și se consumă o singură dată. Numărul de secvență există ca să deosebim două
@@ -113,7 +115,7 @@ export default function OfertareLicitatiiTab() {
     const id = ++secventaIntrare.current
     setIntrareDocument({ id, licitatieId: lic.id, documentId })
     setCheieFisa(id)
-    setCantLicId(lic.id)
+    setCantLicId(lic.id); setClarLicId(lic.id)
     setVedere('licitatii')
     setSelected(lic)
   }
@@ -305,7 +307,7 @@ export default function OfertareLicitatiiTab() {
 
       {/* Comutator: pipeline-ul de licitații / catalogul de experiență similară */}
       <div style={{ display:'flex', gap:8, marginBottom:16, alignItems:'center', flexWrap:'wrap' }}>
-        {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['propunere', '📑 Propunere tehnică'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
+        {[['licitatii', '🏛 Licitații'], ['cantitati', '📋 Cantități'], ['clarificari', '❓ Clarificări'], ['propunere', '📑 Propunere tehnică'], ['rfq', '🛒 Cereri ofertă'], ['experienta', '📚 Experiență similară'], ['radar', '📡 Radar'], ['referinte', '💰 Referințe']].map(([k, lbl]) => (
           <button key={k} onClick={() => setVedere(k)} style={{ ...S.btnS, padding:'7px 16px', fontSize:12.5, fontWeight:700,
             ...(vedere === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
         ))}
@@ -328,8 +330,12 @@ export default function OfertareLicitatiiTab() {
         onInapoi={ptLicId ? () => { const r = rows.find(x => x.id === ptLicId); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={cantLicId}
-        onDeschideAnaliza={deschideAnaliza}
+        onGoClarificari={(id) => { setIntrareDocument(null); setClarLicId(id); setVedere('clarificari') }}
         onInapoi={cantLicId ? () => { const r = rows.find(x => x.id === cantLicId); setIntrareDocument(null); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
+
+      {vedere === 'clarificari' && <ClarificariPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={clarLicId}
+        onDeschideAnaliza={deschideAnaliza}
+        onInapoi={clarLicId ? () => { const r = rows.find(x => x.id === clarLicId); setIntrareDocument(null); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'licitatii' && <>
       {/* ── Redesign #40: antet cu contoare + filtre-chip + carduri aerisite (macheta redesign_lista, GO 07.09.2026) ── */}
@@ -421,6 +427,7 @@ export default function OfertareLicitatiiTab() {
           onClose={() => { setIntrareDocument(null); setSelected(null) }}
           onEdit={() => { setIntrareDocument(null); setEditRow(selected); setSelected(null); setShowForm(true) }}
           onStatus={schimbaStatus} onDecide={decide} onDelete={sterge} onGoCantitati={() => { setIntrareDocument(null); setCantLicId(selected.id); setVedere('cantitati') }}
+          onGoClarificari={() => { setIntrareDocument(null); setClarLicId(selected.id); setVedere('clarificari') }}
           onGoPropunere={() => { setIntrareDocument(null); setPtLicId(selected.id); setVedere('propunere') }} />
       )}
     </div>
@@ -2509,7 +2516,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   )
 }
 
-function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati, onGoPropunere,
+function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, onClose, onEdit, onStatus, onDecide, onDelete, onGoCantitati, onGoPropunere, onGoClarificari,
   intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
   // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
@@ -2664,10 +2671,10 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <div style={{ ...S.card, padding:16, background:G.surface }}>
                 <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
                   <div style={{ fontWeight:800, fontSize:14 }}>❓ Clarificări către autoritate ({clar?.length ?? '…'})</div>
-                  <button style={{ ...S.btnP, marginLeft:'auto', padding:'6px 13px', fontSize:12 }} onClick={() => { onClose(); onGoCantitati?.() }}>✏️ Editează / adaugă în 📋 Cantități</button>
+                  <button style={{ ...S.btnP, marginLeft:'auto', padding:'6px 13px', fontSize:12 }} onClick={() => { onClose(); onGoClarificari?.() }}>✏️ Editează / adaugă în ❓ Clarificări</button>
                 </div>
                 {clar === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
-                  : !clar.length ? <div style={{ color:G.dim, fontSize:13 }}>Nicio clarificare. Se generează din diferențele de cantități sau se adaugă manual în 📋 Cantități.</div>
+                  : !clar.length ? <div style={{ color:G.dim, fontSize:13 }}>Nicio clarificare. Se generează din diferențele de cantități sau se adaugă manual în ❓ Clarificări.</div>
                   : clar.map(q => { const [lbl, col] = CL_ST[q.status] || CL_ST.de_trimis; return (
                     <div key={q.id} style={{ display:'flex', gap:12, padding:'11px 13px', borderRadius:11, marginBottom:8, background:'#1C2430', borderLeft:`3px solid ${col}`, alignItems:'flex-start' }}>
                       <span style={{ fontWeight:800, color:G.muted }}>{q.nr}.</span>
