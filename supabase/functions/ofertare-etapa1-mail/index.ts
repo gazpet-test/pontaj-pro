@@ -89,8 +89,8 @@ Deno.serve(async (req: Request) => {
     let neevaluate = 0;
     for (const c of cer || []) {
       const a = acMap[c.id];
-      if (!a) { neevaluate++; continue; }
-      if (c.stare === 'nu_se_aplica') continue;   // scoasă de om în registru — nu mai e sarcină (la fel ca „ELIMINATORII fără dovadă” de pe ecran)   // fără rând de acoperire = încă nerulat „Propune acoperire”, nu sarcină pentru colegi
+      if (!a) { neevaluate++; continue; }   // fără rând de acoperire = încă nerulat „Propune acoperire”, nu sarcină pentru colegi
+      if (c.stare === 'nu_se_aplica') continue;   // scoasă de om în registru — nu mai e sarcină (la fel ca pe ecran)
       if (a.status === 'gol') sarcini.push({ tip: 'gol', cerinta: c, a });
       else if (a.doc_firma?.se_reemite) { if (termen && (zile ?? 99) <= 10 && !(a.doc_firma.data_valabilitate && new Date(a.doc_firma.data_valabilitate) >= new Date(termen.slice(0, 10)))) sarcini.push({ tip: 'reemis', cerinta: c, a }); }
       else if (a.valabil_la_depunere === false) sarcini.push({ tip: 'rosu', cerinta: c, a });
