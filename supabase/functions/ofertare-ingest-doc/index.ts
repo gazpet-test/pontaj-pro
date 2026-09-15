@@ -154,9 +154,27 @@ Deno.serve(async (req: Request) => {
     if (row.status_procesare === 'procesat' || (row.status_procesare === 'partial' && !reiaDeLaZero)) {
       return new Response(JSON.stringify({ ok: true, skip: 'deja ' + row.status_procesare, continua: false, pagini_necitite: row.pagini_necitite || [] }), { headers: CORS })
     }
-    if (!/\.pdf$/i.test(row.nume_original || row.fisier_path)) {
+    // ANTI-BUG 15.09.2026: testul era `\.pdf$`, deci sarea tacut fisierele pe care SEAP le
+    // normalizeaza cu sufix numeric ("Caiet de sarcini-LA PT(2).pdf" -> "Caiet de sarcini-LA PT.pdf 2").
+    // Alea erau marcate 'ignorat' ca non-PDF si nu se citeau NICIODATA, fara ca cineva sa afle.
+    if (!/\.pdf\s*\d*$/i.test(row.nume_original || row.fisier_path)) {
       await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'ignorat', eroare: 'doar PDF se proceseaza in M1 (docx/xls/dwg raman ca fisiere)' }).eq('id', docId)
       return new Response(JSON.stringify({ ok: true, skip: 'non-pdf', continua: false }), { headers: CORS })
+    }
+    // Plansele au calea lor (ofertare-plansa-citeste): citite ca PDF obisnuit, o scanare A0 nu da
+    // text util si ramane agatata pe 'in_lucru'. Fisierele deja sparte se citesc prin bucatile lor.
+    // Poarta principala e la selectie (UI + ofertare_ingest_tick); asta e plasa de siguranta, ca un
+    // apel direct cu doc_id sa nu ocoleasca regula. NU se marcheaza 'ignorat' — starea lor e corecta.
+    if (row.tip === 'plansa') {
+      return new Response(JSON.stringify({ ok: true, skip: 'plansa - se citeste cu ofertare-plansa-citeste', continua: false }), { headers: CORS })
+    }
+    {
+      const { data: spart } = await supabase.rpc('ofertare_doc_are_bucati', {
+        p_licitatie_id: row.licitatie_id, p_doc_id: row.id, p_nume: row.nume_original,
+      })
+      if (spart === true) {
+        return new Response(JSON.stringify({ ok: true, skip: 'spart in bucati - se citesc bucatile', continua: false }), { headers: CORS })
+      }
     }
     await supabase.from('ofertare_documente_atribuire')
       .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
