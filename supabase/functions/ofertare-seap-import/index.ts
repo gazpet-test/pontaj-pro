@@ -299,6 +299,34 @@ async function parcurgeZip(
 // Flux peste un buffer deja in memorie (ZIP-ul dinauntrul unui document adus per fisier).
 const fluxDinBuf = (b: Uint8Array) => new Flux(new Blob([b]).stream().getReader() as ReadableStreamDefaultReader<Uint8Array>);
 
+// -- Curatenie: obiecte ramase in bucket fara rand in BD --------------------------
+// Un import intrerupt, un rand sters ca duplicat sau un fisier explodat gresit lasa
+// in urma obiecte orfane care ocupa spatiu si nu se mai vad nicaieri in platforma.
+// Se sterg DOAR obiectele din prefixul licitatiei curente care nu sunt referite de
+// niciun rand din ofertare_documente_atribuire - deci nimic ce se vede in interfata.
+// Ruleaza doar la finalul unui import dus pana la capat (nu pe rulari partiale, unde
+// randurile inca nu sunt toate scrise si am sterge fisiere bune).
+async function curataOrfani(supa: any, licitatieId: number): Promise<string[]> {
+  try {
+    const prefix = `${licitatieId}/atribuire`;
+    const { data: obiecte, error: eLista } = await supa.storage.from('ofertare')
+      .list(prefix, { limit: 1000 });
+    if (eLista || !obiecte?.length) return [];
+    const { data: randuri } = await supa.from('ofertare_documente_atribuire')
+      .select('fisier_path').eq('licitatie_id', licitatieId);
+    const folosite = new Set((randuri || []).map((r: any) => String(r.fisier_path || '')));
+    const orfani = obiecte
+      .filter((o: any) => o?.name && o?.id)   // id null = subfolder, nu fisier
+      .map((o: any) => `${prefix}/${o.name}`)
+      .filter((cale: string) => !folosite.has(cale));
+    if (!orfani.length) return [];
+    const { error } = await supa.storage.from('ofertare').remove(orfani);
+    return error ? [] : orfani;
+  } catch (_) {
+    return [];   // curatenia nu are voie sa strice importul
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const json = (b: unknown, status = 200) =>
@@ -332,7 +360,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const t0 = Date.now();
-  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex };
+  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[] };
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
@@ -518,6 +546,7 @@ Deno.serve(async (req: Request) => {
 
   if (!continua) {
     await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
+    raport.orfani_stersi = await curataOrfani(supa, licitatieId);
   }
   raport.index = index;
   return json({ ...raport, continua, next_index: continua ? index : null });
