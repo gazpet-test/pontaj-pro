@@ -5,6 +5,10 @@
 //   previzualizare {licitatie_id} auth JWT user  → același HTML, fără trimitere
 //   raport_zilnic  (cron 04:30 UTC, x-radar-secret) → pentru fiecare licitație activă: ce s-a mișcat ieri (documente, acoperiri, răspunsuri, clarificări)
 //                                                  → ofertare_raport_zilnic (citit de Claude în rutina zilnică) + reminder mail echipei cu 5 zile înainte de depunere (o dată)
+// #77 (Silviu 15.09.2026): lista de sarcini din mail e IDENTICĂ cu ecranul „Cerințe & acoperire” filtrat pe „de rezolvat”:
+//   aceleași rânduri (fără duplicate, fără înlocuite, fără cele marcate de om „nu se aplică”), aceeași ordine (tip → nr_ordine),
+//   fiecare rând cu #nr_ordine ca pe ecran, numărul din subiect = rândurile listate, iar aceeași alegere a rândului de acoperire
+//   (dovada verificată pe scan are întâietate). Înainte: 11 „sarcini” în subiect, 8 în corp, ordine aleatoare.
 // Colegii primesc mail DOAR la Etapa 1 și la reminder; răspunsurile lor vin în platformă (ofertare_acoperire.raspuns_coleg, tichete), nu pe mail.
 //
 // ADUSĂ ÎN REPO 12.09.2026. SINGURA modificare față de sursa deployată: secretul de cron nu mai e
@@ -65,14 +69,16 @@ Deno.serve(async (req: Request) => {
     const [{ data: l }, { data: docs }, { data: cer }, { data: cl }, { data: g }] = await Promise.all([
       db.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, garantie_participare, responsabil_id, status, decizie_go').eq('id', lid).maybeSingle(),
       db.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini, eroare, created_at').eq('licitatie_id', lid),
-      db.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, confirmata_de, document_probant').eq('licitatie_id', lid).is('inlocuita_de', null),
+      db.from('ofertare_cerinte').select('id, nr_ordine, tip, text_cerinta, sursa_sectiune, confirmata_de, document_probant, stare').eq('licitatie_id', lid).is('inlocuita_de', null).is('duplicat_al', null).order('tip').order('nr_ordine'),
       db.from('ofertare_clarificari').select('id, nr, status, origine, raspuns, citita_la, intrebare, updated_at').eq('licitatie_id', lid),
       db.from('ofertare_garantii').select('status, valoare, moneda').eq('licitatie_id', lid).neq('status', 'anulata').order('id', { ascending: false }).limit(1).maybeSingle(),
     ]);
     if (!l) return null;
     const cIds = (cer || []).map((c: any) => c.id);
-    const { data: ac } = cIds.length ? await db.from('ofertare_acoperire').select('cerinta_id, status, valabil_la_depunere, tichet_id, raspuns_coleg, raspuns_la, updated_at, doc_firma:documente_firma(tip, se_reemite, data_valabilitate)').in('cerinta_id', cIds) : { data: [] };
-    const acMap: Record<number, any> = {}; (ac || []).forEach((a: any) => { acMap[a.cerinta_id] = a; });
+    const { data: ac } = cIds.length ? await db.from('ofertare_acoperire').select('id, cerinta_id, status, valabil_la_depunere, verificat_pe_scan, tichet_id, raspuns_coleg, raspuns_la, updated_at, doc_firma:documente_firma(tip, se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id') : { data: [] };
+    // O cerință poate avea mai multe rânduri de acoperire; aceeași regulă ca pe ecran: ordine stabilă pe id,
+    // dovada verificată pe scan are întâietate. Altfel mailul și ecranul alegeau rânduri diferite.
+    const acMap: Record<number, any> = {}; (ac || []).forEach((a: any) => { const ex = acMap[a.cerinta_id]; if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) acMap[a.cerinta_id] = a; });
     let resp: any = null;
     if (l.responsabil_id) { const { data } = await db.from('profiles').select('id, name, email').eq('id', l.responsabil_id).maybeSingle(); resp = data; }
     const pdf = (docs || []).filter((d: any) => /\.pdf$/i.test(d.nume_original || ''));
@@ -83,7 +89,8 @@ Deno.serve(async (req: Request) => {
     let neevaluate = 0;
     for (const c of cer || []) {
       const a = acMap[c.id];
-      if (!a) { neevaluate++; continue; }   // fără rând de acoperire = încă nerulat „Propune acoperire”, nu sarcină pentru colegi
+      if (!a) { neevaluate++; continue; }
+      if (c.stare === 'nu_se_aplica') continue;   // scoasă de om în registru — nu mai e sarcină (la fel ca „ELIMINATORII fără dovadă” de pe ecran)   // fără rând de acoperire = încă nerulat „Propune acoperire”, nu sarcină pentru colegi
       if (a.status === 'gol') sarcini.push({ tip: 'gol', cerinta: c, a });
       else if (a.doc_firma?.se_reemite) { if (termen && (zile ?? 99) <= 10 && !(a.doc_firma.data_valabilitate && new Date(a.doc_firma.data_valabilitate) >= new Date(termen.slice(0, 10)))) sarcini.push({ tip: 'reemis', cerinta: c, a }); }
       else if (a.valabil_la_depunere === false) sarcini.push({ tip: 'rosu', cerinta: c, a });
@@ -108,8 +115,9 @@ Deno.serve(async (req: Request) => {
       const items = sarcini.filter((x: any) => x.tip === tip);
       if (!items.length) return '';
       const rest = items.length > 40 ? `<p style="color:#5a6b7b;font-size:13px">… și încă ${items.length - 40} în platformă.</p>` : '';
-      return `<h3 style="margin:14px 0 4px;color:${culoare};font-size:14px">${titlu} (${items.length})</h3><ol style="margin:0;padding-left:20px">` +
-        items.slice(0, 40).map((x: any) => `<li style="margin:3px 0"><span style="color:#5a6b7b">${esc(x.cerinta.sursa_sectiune || '')}${x.cerinta.tip === 'eliminatorie' ? ' · <b style="color:#c0392b">ELIMINATORIE</b>' : ''}</span><br>${esc(x.cerinta.text_cerinta)}${x.cerinta.document_probant ? `<br><i style="color:#5a6b7b">dovadă: ${esc(x.cerinta.document_probant)}</i>` : ''}${x.a?.doc_firma?.tip ? `<br><i style="color:#5a6b7b">document firmă: ${esc(x.a.doc_firma.tip)} (valabil până ${fmtZi(x.a.doc_firma.data_valabilitate)})</i>` : ''}</li>`).join('') + '</ol>' + rest;
+      // un rând per cerință, cu #nr_ordine ca pe ecran — nu se comasează cerințe asemănătoare
+      return `<h3 style="margin:14px 0 4px;color:${culoare};font-size:14px">${titlu} (${items.length})</h3><ol style="margin:0;padding-left:20px;list-style:none">` +
+        items.slice(0, 40).map((x: any) => `<li style="margin:3px 0"><b style="color:#1a232c">#${esc(x.cerinta.nr_ordine ?? '?')}</b> <span style="color:#5a6b7b">${esc(x.cerinta.sursa_sectiune || '')}${x.cerinta.tip === 'eliminatorie' ? ' · <b style="color:#c0392b">ELIMINATORIE</b>' : ''}</span><br>${esc(x.cerinta.text_cerinta)}${x.cerinta.document_probant ? `<br><i style="color:#5a6b7b">dovadă: ${esc(x.cerinta.document_probant)}</i>` : ''}${x.a?.doc_firma?.tip ? `<br><i style="color:#5a6b7b">document firmă: ${esc(x.a.doc_firma.tip)} (valabil până ${fmtZi(x.a.doc_firma.data_valabilitate)})</i>` : ''}</li>`).join('') + '</ol>' + rest;
     };
     const cine = resp ? `<b>${esc(resp.name)}</b>` : `<b style="color:#c0392b">— responsabil nesetat — (se alege din fișa licitației)</b>`;
     return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:820px">` +
@@ -125,11 +133,11 @@ Deno.serve(async (req: Request) => {
       td('Clarificări', `${clarificari.total} (${clarificari.de_trimis} de trimis, ${clarificari.trimise} trimise, ${clarificari.raspunse} răspunse)`) +
       td('Garanție participare', `${esc(l.garantie_participare || '—')}${garantie ? ` · poliță: <b>${esc(garantie.status)}</b>` : ' · <span style="color:#b7791f">cerere de poliță nepornită</span>'}`) +
       `</table>` +
-      (sarcini.length ? `<h2 style="margin:16px 0 4px;font-size:16px">✅ Sarcini — ${cine}</h2>` : `<p style="color:#0b7a3b"><b>Nu sunt goluri sau dovezi roșii.</b></p>`) +
+      (sarcini.length ? `<h2 style="margin:16px 0 4px;font-size:16px">✅ ${sarcini.length} sarcini — ${cine}</h2><p style="margin:0 0 6px;color:#5a6b7b;font-size:13px">Aceleași rânduri și aceeași ordine ca în platformă: Ofertare → ${esc(l.nr_anunt)} → Cerințe &amp; acoperire → filtrul „de rezolvat” (numărul # e cel din registru).</p>` : `<p style="color:#0b7a3b"><b>Nu sunt goluri sau dovezi roșii.</b></p>`) +
       lista('gol', '🚫 Goluri — cerințe fără dovadă (de găsit documentul, partener sau clarificare)', '#c0392b') +
       lista('rosu', '🔴 Dovezi care expiră înainte de depunere — de reînnoit', '#c0392b') +
       lista('reemis', '🔄 Certificate de 30 zile — de cerut proaspete (constatator, atestare fiscală, cazier)', '#b7791f') +
-      `<p style="margin:14px 0 4px"><a href="${APP}/ofertare" style="background:#0b4f8a;color:#fff;padding:9px 16px;border-radius:7px;text-decoration:none;font-weight:700">Deschide licitația în platformă</a></p>` +
+      `<p style="margin:14px 0 4px"><a href="${APP}/ofertare" style="background:#0b4f8a;color:#fff;padding:9px 16px;border-radius:7px;text-decoration:none;font-weight:700">Deschide licitația în platformă</a> <span style="color:#5a6b7b;font-size:12px">(Ofertare → ${esc(l.nr_anunt)} → Cerințe &amp; acoperire)</span></p>` +
       `<p style="color:#5a6b7b;font-size:12px;margin-top:14px">Trimis de ${esc(meNume)} din Gazpet ERP către: ${echipaL.map((p: any) => esc(p.name)).join(', ')}. Răspunsurile pe mail nu ajung în platformă.</p></div>`;
   };
 

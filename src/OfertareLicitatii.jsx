@@ -2231,6 +2231,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   useEffect(() => { setSelCerinte([]) }, [l.id])
   const [clar, setClar] = useState(null)
   // Răzvan 07.09 (varianta C): mail „Etapa 1” către echipa Ofertare — previzualizare → confirmare → trimitere (edge fn ofertare-etapa1-mail)
+  // #77 (15.09): lista de sarcini din mail se construiește în edge fn (stare() + htmlEtapa1) cu ACELEAȘI rânduri și aceeași ordine
+  //   ca secțiunea „Cerințe & acoperire” filtrată „de rezolvat” (tip → nr_ordine, #nr_ordine pe rând); r.sarcini = rândurile listate.
   const [ultimMail, setUltimMail] = useState(null)
   const [etapa1Busy, setEtapa1Busy] = useState(false)
   useEffect(() => { supabase.from('ofertare_mailuri').select('id, tip, trimis_la, destinatari').eq('licitatie_id', l.id).eq('tip', 'etapa1').order('id', { ascending: false }).limit(1).maybeSingle().then(({ data }) => setUltimMail(data || null)) }, [l.id])
