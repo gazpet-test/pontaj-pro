@@ -1,5 +1,8 @@
 // #51 14.09.2026: autorizat() — owner/responsabil sau service_role; anon respins.
-// ofertare-acoperire v17 (15.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v18 (15.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// v18 (#74, Silviu 15.09): R9 extins — clarificare propusă și când o cerință de EXPERIENȚĂ a persoanei e ambiguă
+//     (experiență CA RTE pe proiect similar vs. experiență generală de N ani; „proiect similar" nedefinit),
+//     ca întrebarea să plece la începutul analizei, nu după ce trece termenul de clarificări.
 // v17 (#72, Silviu 15.09): R15 — cerințele care se prezintă DOAR de ofertantul de pe locul I / se declară în DUAE
 //     (cand_se_prezinta) nu cer documentul valabil la depunere: certificatul de 30 zile (ONRC, fiscal) acoperă, se
 //     reemite atunci. La Conpet („depunere") rămâne ca înainte. Gardă în cod: valabil_la_depunere=null pe ele.
@@ -51,7 +54,7 @@ REGULI NENEGOCIABILE:
 - R13 (CALITATE — CQ/CTC): controlorul tehnic cu calitatea (CQ/CTC/„responsabil control calitate") NU se mai atestă la ISC — prevederea e abrogată, CQ/CTC se numește prin DECIZIE INTERNĂ a firmei. O cerință de „CQ autorizat ISC" / „controlor tehnic cu calitatea" / „responsabil cu calitatea" se acoperă cu: (a) o persoană din catalog cu cod MANAGER_SMC, AUDITOR_INTERN sau MANAGER_RISCURI_TSC (autorizatie_id numeric), sau (b) un document de firmă de tip decizie de numire CQ/CTC (F<id>), dacă există. NU dai "gol" pentru lipsa unui atestat ISC de CQ — el nu există; scrii în motiv „numire prin decizie internă; atestarea ISC a CTC nu mai e în vigoare". Cerințele formulate ca alternativă („Manager SMC / Responsabil control calitate", „X sau Y") sunt acoperite de ORICARE dintre variante — nu cere ambele.
 - R15 (CÂND SE PREZINTĂ): fiecare cerință are câmpul "cand_se_prezinta": "depunere" (documentul se depune cu oferta), "duae" (la depunere se DECLARĂ în DUAE, documentul se cere ulterior), "primul_loc" (se prezintă doar de ofertantul clasat pe locul I, la solicitarea autorității) sau null. Pentru "duae" și "primul_loc", un document de firmă care există în catalog dar EXPIRĂ înainte de termenul de depunere (tipic certificatul constatator ONRC, certificatele fiscale — valabile 30 de zile) ACOPERĂ cerința: status "acoperit" cu F<id>, motiv „se prezintă doar la locul I / în DUAE — se reemite atunci". NU dai "gol" pe motiv de expirare la aceste cerințe. Pentru "depunere" (ex. Conpet cere ONRC odată cu oferta) și null se aplică R6 ca până acum.
 - R14 (RECOMANDĂRI — experiența PERSOANELOR, id-uri cu prefix R): cerințele de „experiență în poziție similară / proiect similar" ale unei PERSOANE (manager de contract, șef de șantier, RTE, inginer execuție, responsabil calitate) se acoperă DOAR cu recomandări din lista R ale acelei persoane: status "acoperit", autorizatie_id: "R<id>". Recomandarea trebuie să se potrivească pe ROL (rolul cerut ≈ rolul din recomandare) și pe NATURA lucrării (domeniile cerute vs. domenii/obiect_lucrare; „fluide"/„rețele edilitare" acoperă și gaze, și apă-canal). Pentru RTE: o recomandare ca RTE pe lucrare similară acoperă experiența ca RTE; experiența GENERALĂ „minim N ani în construcții" e altă cerință — nu o confunda și nu o acoperi cu o singură recomandare dacă durata din recomandări nu ajunge la N ani (spune în motiv câți ani rezultă). O recomandare cu verificat=false acoperă, dar scrii în motiv „neverificată în HR". Autorizația (atestatul) persoanei NU dovedește experiență; recomandarea NU dovedește atestat — sunt cerințe separate.
-- R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
+- R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Tot clarificare (R9b, Silviu 15.09) propui când o cerință de EXPERIENȚĂ a unei persoane e ambiguă și ambiguitatea schimbă cine o poate ocupa: (a) nu e clar dacă se cere experiență ÎN ROLUL respectiv (ex. ca RTE) pe un proiect similar sau experiență profesională GENERALĂ de N ani; (b) „proiect similar" nu e definit (natura lucrării, valoare, prag); (c) nu e clar dacă N ani se socotesc pe rol sau pe carieră. Întrebarea citează cerința și cere autorității să precizeze exact ce dovadă acceptă (recomandare pe rol? CV? adeverință de vechime?). Statusul rămâne cel rezultat din catalog (acoperit/gol) — clarificarea e în plus, nu în locul evaluării. Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
 
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
@@ -455,13 +458,15 @@ Deno.serve(async (req: Request) => {
     try {
       const propuse = clarProps.filter(c => scriseSet.has(c.cerinta_id))
       if (propuse.length) {
-        const sursaPt = (id: number) => `cerința #${id} — domeniu RTE neprecizat`
+        // #74: sursa e generică (domeniu RTE SAU experiență ambiguă) — rămâne cheia de idempotență per cerință
+        const sursaPt = (id: number) => `cerința #${id} — de clarificat cu autoritatea (domeniu RTE / experiență)`
         const { data: exist } = await supabase.from('ofertare_clarificari')
           .select('sursa, nr').eq('licitatie_id', licId)
         const deja = new Set((exist || []).map((r: any) => r.sursa).filter(Boolean))
         let nr = Math.max(0, ...(exist || []).map((r: any) => Number(r.nr) || 0))
+        const sursaVeche = (id: number) => `cerința #${id} — domeniu RTE neprecizat`   // cheia dinainte de v18 — nu dublăm
         const noi = propuse
-          .filter(c => !deja.has(sursaPt(c.cerinta_id)))
+          .filter(c => !deja.has(sursaPt(c.cerinta_id)) && !deja.has(sursaVeche(c.cerinta_id)))
           .map(c => ({
             licitatie_id: licId, nr: ++nr, intrebare: c.intrebare,
             sursa: sursaPt(c.cerinta_id), status: 'de_trimis', origine: 'platforma',
