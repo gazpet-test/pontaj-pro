@@ -8,10 +8,16 @@
 // AUTENTIFICARE: antet propriu, ca la ofertare-radar — secretul sta si in cron.job,
 // care oricum e vizibil doar din baza. De mutat pe env cand se face curatenia
 // secretelor (claude_context id 955).
+//
+// v2 (15.09.2026, task #69 Oana Nica / Ofertare): sectiune "Calificari noi in ultimele
+// 7 zile" + Oana printre destinatari — ofertarea vede ce autorizatii/atestate au intrat in HR.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const PAROLA = 'gz-hr-digest-2026-mNb4Xp';
-const DESTINATARI = ['natalia.udrea@gazpet.ro', 'marilena.tudorache@gazpet.ro', 'razvan.trusu@gazpet.ro'];
+// #69: adresa Oanei Nica (Ofertare) nu e in repo — de completat inainte de deploy.
+const OANA_EMAIL = '<de completat>';
+const DESTINATARI = ['natalia.udrea@gazpet.ro', 'marilena.tudorache@gazpet.ro', 'razvan.trusu@gazpet.ro',
+  ...(OANA_EMAIL.includes('@') ? [OANA_EMAIL] : [])];
 
 const json = (b: unknown, status = 200) =>
   new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
@@ -38,7 +44,7 @@ Deno.serve(async (req: Request) => {
   const acum7 = new Date(Date.now() - 7 * 864e5).toISOString();
 
   // Toate citirile, in paralel. Fiecare e mica; impreuna dau tot tabloul.
-  const [fise, expira, expirate, neclas, aduse] = await Promise.all([
+  const [fise, expira, expirate, neclas, aduse, noi] = await Promise.all([
     // 1. angajati activi fara fisa de aptitudini (tipul AVIZ_MEDICAL, redenumit in UI)
     supa.from('hr_autorizatii')
       .select('id, employees!inner(name, active), hr_autorizatii_tipuri!inner(cod)')
@@ -68,6 +74,12 @@ Deno.serve(async (req: Request) => {
       .select('id', { count: 'exact', head: true })
       .eq('activ', true).is('deleted_at', null)
       .not('drive_file_id', 'is', null).gte('uploadat_la', acum7),
+    // 6. (#69) calificari noi intrate in ultimele 7 zile — angajati SAU externi, fara medicale
+    supa.from('hr_autorizatii')
+      .select('numar_autorizatie, emitent, data_expirare, fara_expirare, created_at, employees(name), hr_personal_extern(nume), hr_autorizatii_tipuri!inner(cod, denumire)')
+      .is('deleted_at', null).gte('created_at', acum7)
+      .neq('hr_autorizatii_tipuri.cod', 'AVIZ_MEDICAL')
+      .order('created_at', { ascending: false }),
   ]);
 
   const fiseLipsa = (fise.data || []).map((r: any) => r.employees.name).sort();
@@ -83,6 +95,14 @@ Deno.serve(async (req: Request) => {
     `<td style="padding:4px 10px 4px 0">${esc(r.hr_autorizatii_tipuri.denumire)}</td>` +
     `<td style="padding:4px 10px 4px 0">${esc(r.numar_autorizatie || '—')}</td>` +
     `<td style="padding:4px 0"><b>${esc(r.data_expirare)}</b></td></tr>`).join('');
+
+  const rN = (noi.data || []) as any[];
+  const randuriNoi = rN.map((r) =>
+    `<tr><td style="padding:4px 10px 4px 0">${esc(r.employees?.name || (r.hr_personal_extern?.nume ? r.hr_personal_extern.nume + ' (extern)' : '—'))}</td>` +
+    `<td style="padding:4px 10px 4px 0">${esc(r.hr_autorizatii_tipuri.denumire)}</td>` +
+    `<td style="padding:4px 10px 4px 0">${esc(r.numar_autorizatie || '—')}</td>` +
+    `<td style="padding:4px 10px 4px 0">${esc(r.emitent || '—')}</td>` +
+    `<td style="padding:4px 0">${esc(r.fara_expirare ? 'fără expirare' : (r.data_expirare || '—'))}</td></tr>`).join('');
 
   const html =
     `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:640px">` +
@@ -102,6 +122,12 @@ Deno.serve(async (req: Request) => {
     `<p style="margin:0 0 6px;color:#5a6975">Se văd în HR → Documente, filtrul „Neclasificat".</p>` +
 
     `<h3 style="margin:18px 0 6px">📥 Intrate automat săptămâna trecută: ${aduse.count ?? 0} documente</h3>` +
+
+    `<h3 style="margin:18px 0 6px">🎓 Calificări noi în ultimele 7 zile: ${rN.length}</h3>` +
+    (rN.length
+      ? `<table style="border-collapse:collapse;font-size:13px"><tr style="color:#5a6975"><th align="left" style="padding:2px 10px 2px 0">Angajat</th><th align="left" style="padding:2px 10px 2px 0">Tip</th><th align="left" style="padding:2px 10px 2px 0">Nr.</th><th align="left" style="padding:2px 10px 2px 0">Emitent</th><th align="left">Expiră</th></tr>${randuriNoi}</table>` +
+        `<p style="margin:6px 0 0;color:#5a6975">Pentru Ofertare: calificări noi de folosit la licitații (HR → Autorizații).</p>`
+      : '<p style="margin:0;color:#5a6975">Nicio autorizație/atestat nou încărcat.</p>') +
 
     `<p style="margin:18px 0 0"><a href="https://pontaj-pro-sooty.vercel.app/hr">Deschide modulul HR</a></p>` +
     `<p style="color:#c0392b;font-size:12px;margin-top:16px"><b>⚠️ Nu răspunde la acest email</b> — e trimis automat, căsuța nu e citită. Întrebări: Razvan sau office@gazpet.ro.</p>` +
@@ -123,7 +149,7 @@ Deno.serve(async (req: Request) => {
     ok: true, azi,
     expirate: rX.length, expira_45_zile: rE.length,
     fara_fisa_aptitudini: fiseLipsa.length,
-    neclasificate: neclas.count, aduse_saptamana: aduse.count,
+    neclasificate: neclas.count, aduse_saptamana: aduse.count, calificari_noi: rN.length,
     destinatari: catre, test,
   });
 });
