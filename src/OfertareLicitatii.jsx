@@ -324,7 +324,7 @@ export default function OfertareLicitatiiTab() {
 
       {vedere === 'rfq' && <RFQPanel licitatii={rows} profile={profile} showToast={showToast} />}
 
-      {vedere === 'propunere' && <PropunerePanel licitatii={rows} showToast={showToast} initialLicId={ptLicId}
+      {vedere === 'propunere' && <PropunerePanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={ptLicId}
         onInapoi={ptLicId ? () => { const r = rows.find(x => x.id === ptLicId); setVedere('licitatii'); if (r) setSelected(r) } : null} />}
 
       {vedere === 'cantitati' && <CantitatiPanel licitatii={rows} profile={profile} showToast={showToast} initialLicId={cantLicId}
