@@ -848,6 +848,11 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // Marcajul „spart în N bucăți" trăia doar în textul din `eroare` și se pierdea la re-import
   // (veghea readuce fișierul ca rând nou, curat). De aceea regula se deduce din REALITATE:
   // dacă există bucăți pe numele lui, fișierul e spart — indiferent ce scrie în `eroare`.
+  // Numele minte, partea a doua: SEAP normalizeaza "(2)" in " 2", deci extensia nu mai e la final
+  // („Caiet de sarcini-LA PT.pdf 2"). Cu `\.pdf$` fisierele alea erau sarite TACUT si nu se citeau
+  // niciodata. Acelasi tipar in ofertare_doc_de_citit (SQL) si in ofertare-ingest-doc.
+  const E_PDF = /\.pdf *\d*$/i
+
   const areBucati = (d, toate) => {
     const baza = String(d.nume_original || '').replace(/\.pdf$/i, '')
     if (!baza) return false
@@ -856,7 +861,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   }
   const deCititCaPdf = (ds) => (ds || []).filter(d =>
     ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) &&
-    /\.pdf$/i.test(d.nume_original || '') &&
+    E_PDF.test(d.nume_original || '') &&
     d.tip !== 'plansa' &&
     !areBucati(d, ds))
 
@@ -933,7 +938,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     finally { setPlansaBusy(null) }
   }
   // `areBucati` e plasa de siguranță: marcajul din `eroare` se pierde la re-import, bucățile nu.
-  const eMare = d => /\.pdf$/i.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && !areBucati(d, docs) && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
+  const eMare = d => E_PDF.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && !areBucati(d, docs) && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
 
   const citestePlansa = async (d) => {
     setWarn(null); setPlansaBusy(`${d.nume_original}: pregătesc feliile...`)
@@ -1130,14 +1135,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       {seapBusy && <Lucru icon="⬇️" text={`SEAP: ${seapBusy}`} />}
       {upBusy && <Lucru icon="⬆️" text={`Se urcă… ${upBusy}`} />}
       {procBusy && (() => {
-        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
+        const rel = (docs || []).filter(d => E_PDF.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
         const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
         const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : d.status_procesare === 'partial' ? Math.max(0, (d.pagini || 0) - (d.pagini_necitite?.length || 0)) : (d.pagini_procesate || 0)), 0)
         const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
         return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={tot ? Math.round(100 * done / tot) : null} detaliu={tot ? `${done}/${tot} pagini citite · ${ramase} documente rămase` : `${ramase} documente rămase`} />
       })()}
       {coada?.activ && !procBusy && (() => {
-        const rel = (docs || []).filter(d => /\.pdf$/i.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
+        const rel = (docs || []).filter(d => E_PDF.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
         const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
         const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : d.status_procesare === 'partial' ? Math.max(0, (d.pagini || 0) - (d.pagini_necitite?.length || 0)) : (d.pagini_procesate || 0)), 0)
         const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
