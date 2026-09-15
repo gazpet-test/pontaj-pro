@@ -14,6 +14,7 @@ import { supabase } from './lib/supabase.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { GbeTabel } from './GbeEvidenta.jsx'
+import GarantiiRegistru from './GarantiiRegistru.jsx'
 import { norm } from './lib/diacritice.js'
 import * as XLSX from 'xlsx-js-style'
 
@@ -1255,7 +1256,7 @@ export default function FinanciarPage() {
   // Deep-link din notificări: /financiar?tab=consumuri deschide direct tab-ul
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('tab')
-    if (t && ['emise','furnizori','consumuri','contab','gbe'].includes(t)) setTab(t)
+    if (t && ['emise','furnizori','consumuri','contab','gbe','garantii'].includes(t)) setTab(t)
   }, [])
   const { show: showToast, Toast }  = useToast()
 
@@ -1372,7 +1373,7 @@ export default function FinanciarPage() {
           <div style={{width:30,height:30,background:`linear-gradient(135deg,${G.financiar},#2DD4BF)`,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>💰</div>
           <div style={{fontSize:14,fontWeight:700}}>Financiar</div>
           <div style={{marginLeft:10,display:'flex',gap:6}}>
-            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri'],['contab','📊 Contabilitate'],['gbe','🔐 Garanții GBE']].map(([k,l]) => (
+            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri'],['contab','📊 Contabilitate'],['gbe','🔐 Garanții GBE'],['garantii','🏛 Registru garanții']].map(([k,l]) => (
               <button key={k} onClick={()=>setTab(k)} style={{
                 padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:8,
                 background: tab===k ? G.financiar+'22' : 'transparent',
@@ -1404,6 +1405,7 @@ export default function FinanciarPage() {
 
         {/* GBE — garanțiile de bună execuție pe toate contractele (09.09.2026): bani blocați, termene de eliberare, alerte */}
         {tab === 'gbe' && <GbeTabel accent={G.financiar} canEdit={canWrite} />}
+        {tab === 'garantii' && <GarantiiRegistru canEdit={canWrite} showToast={showToast} />}
 
         {tab === 'consumuri' && <ConsumuriBonuriTab mode="financiar" />}
 
