@@ -135,12 +135,12 @@ export default function OfertareLicitatiiTab() {
       const [{ data: cs }, { data: vf }, { data: cl }, { data: tri }] = await Promise.all([
         // .limit explicit: implicit PostgREST întoarce 1.000 de rânduri, iar cerințele active sunt peste 2.000 —
         // Mănăstirea apărea cu 150/419 în loc de 226/655 (auditul 09.09.2026)
-        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip').in('licitatie_id', ids).is('inlocuita_de', null).is('duplicat_al', null).limit(20000),
+        supabase.from('ofertare_cerinte').select('id, licitatie_id, tip, cand_se_prezinta').in('licitatie_id', ids).is('inlocuita_de', null).is('duplicat_al', null).limit(20000),
         supabase.from('ofertare_verificari').select('licitatie_id, verdict, created_at').in('licitatie_id', ids).order('id', { ascending: false }),
         supabase.from('ofertare_clarificari').select('licitatie_id').in('licitatie_id', ids),
         supabase.from('ofertare_triere').select('licitatie_id, verdict').in('licitatie_id', ids),
       ])
-      const cerLic = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; stats[c.licitatie_id].cerinte++ })
+      const cerLic = {}, cerCand = {}; (cs || []).forEach(c => { cerLic[c.id] = c.licitatie_id; cerCand[c.id] = c.cand_se_prezinta; stats[c.licitatie_id].cerinte++ })
       ;(tri || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].triere = x.verdict })
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
@@ -158,9 +158,12 @@ export default function OfertareLicitatiiTab() {
           // omul n-a vazut noul text. Se numara separat, nu in „acoperite" — altfel ecranul spune
           // „gata" exact acolo unde cerinta tocmai s-a schimbat sub noi.
           if (a.status === 'acoperit' || a.status === 'acoperit_partener') { if (a.reverificare_ceruta) st.reverif++; else st.acoperite++ }
-          // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci
-          if (a.doc_firma?.se_reemite) { if (reemisUrgent(a.doc_firma, fullMap[lid]?.termen_depunere)) st.rosii++ }
-          else if (a.valabil_la_depunere === false) st.rosii++ })
+          // certificatele de 30 zile (se_reemite) se cer proaspete la depunere → roșii doar când depunerea e aproape și nu-s valabile atunci.
+          // #72 (Silviu 15.09): dacă cerința se prezintă DOAR de ofertantul de pe locul I / se declară în DUAE, documentul
+          // nu trebuie să fie valabil la depunere — nu e roșu (ONRC la Domnești/Răcari; la Conpet e „depunere" și rămâne roșu).
+          const laDepunere = !['primul_loc', 'duae'].includes(cerCand[a.cerinta_id])
+          if (a.doc_firma?.se_reemite) { if (laDepunere && reemisUrgent(a.doc_firma, fullMap[lid]?.termen_depunere)) st.rosii++ }
+          else if (a.valabil_la_depunere === false && laDepunere) st.rosii++ })
       }
       ;(vf || []).forEach(x => { const st = stats[x.licitatie_id]; if (st && !st.verdict) { st.verdict = x.verdict; st.verdict_la = x.created_at } })
       ;(cl || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].clarificari++ })
@@ -1901,7 +1904,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
 
   const load = async () => {
     const { data: cs } = await supabase.from('ofertare_cerinte')
-      .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv')
+      .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv, cand_se_prezinta')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
       .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
     setCerinte(cs || [])
@@ -2183,10 +2186,14 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                       {a.autorizatie?.tip?.denumire && <> · {a.autorizatie.tip.denumire}{a.autorizatie.numar_autorizatie ? ` nr. ${a.autorizatie.numar_autorizatie}` : ''}</>}
                       {a.doc_firma && <> · {a.doc_firma.tip}{a.doc_firma.numar_document ? ` nr. ${a.doc_firma.numar_document}` : ''}</>}
                       {a.doc_firma?.se_reemite
-                        ? (reemisUrgent(a.doc_firma, licitatie.termen_depunere)
-                            ? <b style={{ color:G.red }}> · 🔄 DE REEMIS ACUM — certificat de 30 zile, nu e valabil la depunere!</b>
-                            : <b style={{ color:G.orange }}> · 🔄 se emite proaspăt la depunere (valabil 30 zile){a.doc_firma.data_valabilitate ? ` — actualul până la ${fmtZi(a.doc_firma.data_valabilitate)}` : ''}</b>)
-                        : a.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>}
+                        ? (['primul_loc', 'duae'].includes(c.cand_se_prezinta)
+                            ? <b style={{ color:G.blue }}> · 🔄 {c.cand_se_prezinta === 'duae' ? 'se declară în DUAE' : 'se prezintă doar de ofertantul de pe locul I'} — certificatul se emite atunci (30 zile), nu la depunere</b>
+                            : reemisUrgent(a.doc_firma, licitatie.termen_depunere)
+                              ? <b style={{ color:G.red }}> · 🔄 DE REEMIS ACUM — certificat de 30 zile, nu e valabil la depunere!</b>
+                              : <b style={{ color:G.orange }}> · 🔄 se emite proaspăt la depunere (valabil 30 zile){a.doc_firma.data_valabilitate ? ` — actualul până la ${fmtZi(a.doc_firma.data_valabilitate)}` : ''}</b>)
+                        : a.valabil_la_depunere === false && (['primul_loc', 'duae'].includes(c.cand_se_prezinta)
+                            ? <b style={{ color:G.orange }}> · expiră înainte de depunere, dar se cere {c.cand_se_prezinta === 'duae' ? 'în DUAE' : 'doar la locul I'} — de reînnoit până atunci</b>
+                            : <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>)}
                       {a.referinta_text && <> — {a.referinta_text}</>}
                     </div>
                   )}
