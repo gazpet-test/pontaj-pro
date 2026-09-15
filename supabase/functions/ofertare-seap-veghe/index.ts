@@ -28,6 +28,12 @@
 //    si valoarea de rezerva a lui SEAP_IMPORT_SECRET: scrisa in cod, ea facea ca
 //    verificarea sa treaca chiar si cand variabila de mediu lipsea.
 //
+// v4 (15.09.2026): documentele noi se MARCHEAZA in BD (aparut_ulterior=true) pe randurile
+// licitatiei al caror nume e in `noi` - si cele urcate, si placeholder-ele. Motivul: Razvan
+// vrea sa le vada SEPARAT de documentatia initiala, in sectiunea „Documente noi din SEAP”
+// din tab-ul Clarificari al fisei, cu citire AI dedicata (ofertare-document-nou-citeste).
+// Fara marcaj, un raspuns la clarificari se pierdea printre cele 40 de planse din Documente.
+//
 // notifications.modul are CHECK pe lista fixa de module - pentru ofertare valoarea
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -161,13 +167,23 @@ Deno.serve(async (req: Request) => {
     const auIntrat = noi.filter((n) => urcate.has(n));
     const ramase = noi.filter((n) => !urcate.has(n));
 
+    // v4: tot ce e nou (urcat sau nu) se marcheaza ca aparut ulterior importului initial
+    let marcate = 0;
+    if (noi.length) {
+      const { data: m, error: eM } = await supa.from('ofertare_documente_atribuire')
+        .update({ aparut_ulterior: true })
+        .eq('licitatie_id', lic.id).in('nume_original', noi).select('id');
+      if (eM) raport.push({ licitatie: lic.nr_anunt, marcare_esuata: eM.message });
+      marcate = (m || []).length;
+    }
+
     for (const n of ramase) {
       if (toateCunoscute.has(n)) continue;
       const safe = n.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
       await supa.from('ofertare_documente_atribuire').insert({
         licitatie_id: lic.id,
         fisier_path: `${lic.id}/atribuire/neincarcat/${safe}`,
-        nume_original: n, tip: 'alta', status_procesare: 'ignorat', sursa: 'seap',
+        nume_original: n, tip: 'alta', status_procesare: 'ignorat', sursa: 'seap', aparut_ulterior: true,
         eroare: 'Aparut nou in SEAP, dar nu a putut fi adus automat - urca-l din "Urca fisiere".',
       });
     }
@@ -254,7 +270,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    raport.push({ licitatie: lic.nr_anunt, noi: noi.length, raspunsuri: raspunsuri.length, aduse: auIntrat.length, ramase: ramase.length, vercel, mail, nume: noi.slice(0, 10) });
+    raport.push({ licitatie: lic.nr_anunt, noi: noi.length, raspunsuri: raspunsuri.length, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, nume: noi.slice(0, 10) });
   }
 
   return json({ verificate: (licitatii || []).length, raport });
