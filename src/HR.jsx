@@ -205,6 +205,7 @@ export default function HRPage() {
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'recomandari', icon: '📜', label: 'Recomandări' },
+    { key: 'peste_cim',   icon: '📑', label: 'Calificare > CIM', pesteCimOnly: true },  // task #70
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'adeverinte',  icon: '📄', label: 'Adeverințe legători', personalOnly: true },
     { key: 'concedii',    icon: '🌴', label: 'Concedii' },
@@ -217,6 +218,7 @@ export default function HRPage() {
     if (t.superOnly && !isSuperAdmin) return false
     if (t.scannerOnly && !canUseScanner) return false
     if (t.personalOnly && !canAccessPersonal) return false
+    if (t.pesteCimOnly && !(canAccessPersonal || isAdmin)) return false
     return true
   })
 
@@ -227,7 +229,7 @@ export default function HRPage() {
   useEffect(() => {
     const t = new URLSearchParams(loc.search).get('tab')
     if (t && tabs.some(x => x.key === t)) setTab(t)
-  }, [loc.search, isSuperAdmin, canUseScanner, canAccessPersonal])
+  }, [loc.search, isSuperAdmin, canUseScanner, canAccessPersonal, isAdmin])
   
   return (
     <div style={S.page}>
@@ -289,6 +291,7 @@ export default function HRPage() {
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'recomandari' && <HrRecomandari profile={profile} employees={employees} canEdit={canAccessPersonal || isAdmin || canUseScanner} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
+      {!load && tab === 'peste_cim' && (canAccessPersonal || isAdmin) && <TabCalificarePesteCim showToast={showToast} onClickEmp={(id) => { const e = employees.find(x => x.id === id); if (e) setEditEmp(e) }} />}
       {!load && tab === 'adeverinte' && canAccessPersonal && <AdeverinteLegator profile={profile} showToast={showToast} />}
       {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'recrutare' && canAccessPersonal && <HrRecrutare profile={profile} showToast={showToast} />}
@@ -463,6 +466,7 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
   const [statusFilter, setStatusFilter] = useState('toate')
   const [sortBy, setSortBy] = useState('nume')  // nume | tip | expirare | status
   const [uploadingId, setUploadingId] = useState(null)
+  const [showTipuri, setShowTipuri] = useState(false)  // task #70: editor inline tipuri (calificare + cod COR)
   const uploadRefGlobal = useRef(null)
   const uploadTargetRef = useRef(null) // { id, employee_id }
 
@@ -766,7 +770,17 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
           style={{padding:'8px 13px', background:G.green, color:'#fff', border:'none', borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:filtered.length ? 1 : .5, whiteSpace:'nowrap'}}>
           ⬇ Export Excel ({filtered.length})
         </button>
+        {isAdmin && (
+          <button onClick={() => setShowTipuri(v => !v)}
+            title="Tipuri de autorizații: calificare atestată + cod COR (pt. raportul Calificare > CIM)"
+            style={{...S.btnS, padding:'8px 13px', fontSize:12, fontWeight:700, whiteSpace:'nowrap',
+                    background: showTipuri ? G.hr + '33' : S.btnS.background, color: showTipuri ? G.hr : G.text}}>
+            ⚙ Tipuri
+          </button>
+        )}
       </div>
+
+      {isAdmin && showTipuri && <TipuriAutorizatiiEditor tipuri={tipuri} onReload={onReload} showToast={showToast} />}
       
       {/* Input file global pentru upload autorizatii — o singura instanta, nu in bucla map */}
       {isAdmin && (
@@ -855,6 +869,190 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
 // ===========================================================================
 // TAB ALERTE — Doar autorizațiile cu probleme (expirate + curand)
 // ===========================================================================
+// task #70: editor inline pentru hr_autorizatii_tipuri — doar calificare_denumire + cod_cor.
+// Alte câmpuri ale tipului (denumire, categorie, flag-uri) NU se ating de aici.
+function TipuriAutorizatiiEditor({ tipuri, onReload, showToast }) {
+  const [draft, setDraft] = useState({})   // { [tipId]: { calificare_denumire, cod_cor } }
+  const [saving, setSaving] = useState(null)
+
+  const val = (t, k) => (draft[t.id]?.[k] !== undefined ? draft[t.id][k] : (t[k] || ''))
+  const dirty = (t) => !!draft[t.id] && (val(t,'calificare_denumire') !== (t.calificare_denumire || '') || val(t,'cod_cor') !== (t.cod_cor || ''))
+  const setVal = (t, k, v) => setDraft(d => ({ ...d, [t.id]: { calificare_denumire: val(t,'calificare_denumire'), cod_cor: val(t,'cod_cor'), ...d[t.id], [k]: v } }))
+
+  const saveTip = async (t) => {
+    setSaving(t.id)
+    const { error } = await supabase.from('hr_autorizatii_tipuri').update({
+      calificare_denumire: val(t,'calificare_denumire').trim() || null,
+      cod_cor: val(t,'cod_cor').trim() || null,
+    }).eq('id', t.id)
+    setSaving(null)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    setDraft(d => { const n = { ...d }; delete n[t.id]; return n })
+    showToast(`✓ Tip actualizat: ${t.denumire}`)
+    onReload()
+  }
+
+  return (
+    <div style={{...S.card, padding:14, marginBottom:14, borderColor: G.hr + '66'}}>
+      <div style={{fontSize:13, fontWeight:700, color:G.hr, marginBottom:4}}>⚙ Tipuri de autorizații — calificare atestată și cod COR</div>
+      <div style={{fontSize:11, color:G.muted, marginBottom:10}}>
+        Completează cod COR doar pe tipurile care atestă o calificare/ocupație. Tipurile fără cod COR nu intră în raportul „📑 Calificare &gt; CIM".
+      </div>
+      <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+          <thead style={{background:G.bg}}>
+            <tr>
+              <th style={thStyle}>Tip autorizație</th>
+              <th style={thStyle}>Categorie</th>
+              <th style={thStyle}>Calificare (denumire)</th>
+              <th style={{...thStyle, width:120}}>Cod COR</th>
+              <th style={{...thStyle, width:90}}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {tipuri.map(t => (
+              <tr key={t.id} style={{borderTop:`1px solid ${G.border2}`}}>
+                <td style={{...tdStyle, fontWeight:600}}>{t.denumire}</td>
+                <td style={{...tdStyle, color:G.muted}}>{t.categorie || '—'}</td>
+                <td style={tdStyle}>
+                  <input value={val(t,'calificare_denumire')} onChange={e => setVal(t, 'calificare_denumire', e.target.value)}
+                    placeholder="ex: Sudor" style={{...S.input, padding:'6px 10px'}} />
+                </td>
+                <td style={tdStyle}>
+                  <input value={val(t,'cod_cor')} onChange={e => setVal(t, 'cod_cor', e.target.value)}
+                    placeholder="ex: 721208" style={{...S.input, padding:'6px 10px'}} />
+                </td>
+                <td style={{...tdStyle, textAlign:'right'}}>
+                  <button onClick={() => saveTip(t)} disabled={!dirty(t) || saving === t.id}
+                    style={{padding:'6px 10px', background: dirty(t) ? G.green : G.surface, color: dirty(t) ? '#fff' : G.muted,
+                            border:`1px solid ${dirty(t) ? G.green : G.border}`, borderRadius:6, cursor: dirty(t) ? 'pointer' : 'default', fontSize:12, fontWeight:700}}>
+                    {saving === t.id ? '…' : '💾 Salvează'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// task #70 (varianta A): raport read-only din v_hr_calificare_peste_cim.
+function TabCalificarePesteCim({ showToast, onClickEmp }) {
+  const [rows, setRows] = useState([])
+  const [load, setLoad] = useState(true)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    (async () => {
+      setLoad(true)
+      const { data, error } = await supabase.from('v_hr_calificare_peste_cim').select('*')
+        .order('employee_name').order('tip_denumire')
+      if (error) showToast('Eroare încărcare raport: ' + error.message, 'error')
+      setRows(data || [])
+      setLoad(false)
+    })()
+  }, [])
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter(r => [r.employee_name, r.functie, r.cod_cor_cim, r.tip_denumire, r.calificare_denumire, r.cod_cor_calificare, r.numar_autorizatie]
+      .some(v => String(v || '').toLowerCase().includes(q)))
+  }, [rows, search])
+
+  const nrAngajati = useMemo(() => new Set(filtered.map(r => r.employee_id)).size, [filtered])
+
+  const exportXlsx = () => {
+    if (!filtered.length) { showToast('Nimic de exportat — tabelul e gol', 'warning'); return }
+    const out = filtered.map(r => ({
+      'Angajat': r.employee_name || '—',
+      'Funcție': r.functie || '—',
+      'Cod COR CIM': r.cod_cor_cim || '— lipsă',
+      'Tip autorizație': r.tip_denumire || '—',
+      'Calificare': r.calificare_denumire || '—',
+      'Cod COR calificare': r.cod_cor_calificare || '—',
+      'Nr. autorizație': r.numar_autorizatie || '—',
+      'Data obținerii': r.data_obtinerii ? fmtDataRo(r.data_obtinerii) : '—',
+      'Data expirare': r.data_expirare ? fmtDataRo(r.data_expirare) : 'fără expirare',
+    }))
+    const ws = XLSX.utils.json_to_sheet(out)
+    ws['!cols'] = [{wch:30},{wch:22},{wch:14},{wch:34},{wch:24},{wch:18},{wch:18},{wch:14},{wch:14}]
+    Object.keys(out[0]).forEach((_, i) => {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: i })]
+      if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: 'E8EEF7' } } }
+    })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Calificare peste CIM')
+    XLSX.writeFile(wb, `calificare_peste_cim_${new Date().toISOString().slice(0,10)}.xlsx`)
+    showToast(`${out.length} rânduri exportate`, 'success')
+  }
+
+  return (
+    <div>
+      <div style={{...S.card, padding:'12px 16px', marginBottom:14, borderColor: G.yellow + '66', fontSize:13, color:G.text}}>
+        <b style={{color:G.yellow}}>Listă orientativă:</b> apare când codul COR al calificării deținute diferă de codul COR din CIM.
+        HR completează cod COR pe tipurile de autorizații (📋 Autorizații → ⚙ Tipuri) și pe angajat (fișa angajatului → „Cod COR (CIM)").
+        Decizia de act adițional e a HR.
+      </div>
+
+      <div style={{display:'flex', gap:10, marginBottom:14, flexWrap:'wrap', alignItems:'center'}}>
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="🔍 Caută după nume, funcție, tip, cod COR..." style={{...S.input, flex:1, minWidth:280}}/>
+        <span style={{fontSize:12, color:G.muted, whiteSpace:'nowrap'}}>{nrAngajati} angajați · {filtered.length} rânduri</span>
+        <button onClick={exportXlsx} disabled={!filtered.length}
+          style={{padding:'8px 13px', background:G.green, color:'#fff', border:'none', borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:filtered.length ? 1 : .5, whiteSpace:'nowrap'}}>
+          ⬇ Export Excel ({filtered.length})
+        </button>
+      </div>
+
+      {load && <div style={{padding:40, textAlign:'center', color:G.muted}}><div className="sp" style={{margin:'0 auto'}}/></div>}
+      {!load && (
+        <div style={{...S.card, overflow:'hidden'}}>
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+              <thead style={{background:G.bg}}>
+                <tr>
+                  <th style={thStyle}>Angajat</th>
+                  <th style={thStyle}>Funcție</th>
+                  <th style={thStyle}>COR CIM</th>
+                  <th style={thStyle}>Tip autorizație</th>
+                  <th style={thStyle}>Calificare</th>
+                  <th style={thStyle}>COR calificare</th>
+                  <th style={thStyle}>Nr.</th>
+                  <th style={thStyle}>Obținută</th>
+                  <th style={thStyle}>Expiră</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 && (
+                  <tr><td colSpan={9} style={{...tdStyle, textAlign:'center', color:G.muted, padding:30}}>
+                    Nicio diferență găsită. Dacă lista e goală și te aștepți la rezultate, verifică dacă tipurile de autorizații au cod COR completat.
+                  </td></tr>
+                )}
+                {filtered.map(r => (
+                  <tr key={`${r.employee_id}-${r.autorizatie_id}`} style={{borderTop:`1px solid ${G.border2}`}}>
+                    <td style={{...tdStyle, fontWeight:600, cursor:'pointer', color:G.hr}} onClick={() => onClickEmp?.(r.employee_id)} title="Deschide fișa angajatului">{r.employee_name}</td>
+                    <td style={tdStyle}>{r.functie || <span style={{color:G.muted}}>—</span>}</td>
+                    <td style={tdStyle}>{r.cod_cor_cim || <span style={{color:G.orange, fontWeight:600}} title="Cod COR din CIM necompletat pe angajat">lipsă</span>}</td>
+                    <td style={tdStyle}>{r.tip_denumire}</td>
+                    <td style={tdStyle}>{r.calificare_denumire || <span style={{color:G.muted}}>—</span>}</td>
+                    <td style={{...tdStyle, fontWeight:700, color:G.yellow}}>{r.cod_cor_calificare}</td>
+                    <td style={{...tdStyle, color:G.muted}}>{r.numar_autorizatie || '—'}</td>
+                    <td style={{...tdStyle, color:G.muted}}>{r.data_obtinerii ? fmtDataRo(r.data_obtinerii) : '—'}</td>
+                    <td style={tdStyle}>{r.data_expirare ? fmtDataRo(r.data_expirare) : <span style={{color:G.muted}}>∞</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
   const [tipFilter, setTipFilter] = useState(null)  // null = toate, string = nume categorie
   const [vizaOnly, setVizaOnly] = useState(false)   // mod „doar vize RTS scadente”
@@ -1070,6 +1268,9 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   // TKT-2026-0042: funcția editabilă din HR (pt. angajați noi fără funcție setată)
   const [editingFunctie, setEditingFunctie] = useState(false)
   const [functieVal, setFunctieVal] = useState(employee.functie || '')
+  // task #70: cod COR din CIM, editabil din HR (pt. raportul Calificare > CIM)
+  const [editingCor, setEditingCor] = useState(false)
+  const [corVal, setCorVal] = useState(employee.cod_cor || '')
   const [uploadingId, setUploadingId] = useState(null)
   const uploadRef = useRef(null)
   const uploadTarget = useRef(null)
@@ -1142,6 +1343,16 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
     showToast('✓ Funcție actualizată')
     onReload()
   }
+
+  // task #70: salvează codul COR din CIM
+  const saveCor = async () => {
+    const val = corVal.trim()
+    const { error } = await supabase.from('employees').update({ cod_cor: val || null }).eq('id', employee.id)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    setEditingCor(false)
+    showToast('✓ Cod COR actualizat')
+    onReload()
+  }
   
   return (
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
@@ -1197,6 +1408,29 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
                     display:'flex', justifyContent:'space-between', alignItems:'center'
                   }}>
                     <span>{employee.functie || 'Fără funcție'}</span>
+                    {isAdmin && <span style={{fontSize:10, color:G.muted, fontWeight:400}}>✏️ click pentru editare</span>}
+                  </div>
+                )}
+              </div>
+              {/* Cod COR (CIM) — task #70 */}
+              <div>
+                <div style={{fontSize:10, color:G.muted, fontWeight:700, textTransform:'uppercase', letterSpacing:.6, marginBottom:4}}>Cod COR (CIM)</div>
+                {editingCor && isAdmin ? (
+                  <div style={{display:'flex', gap:6}}>
+                    <input autoFocus value={corVal} onChange={e => setCorVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveCor(); if (e.key === 'Escape') { setEditingCor(false); setCorVal(employee.cod_cor || '') } }}
+                      placeholder="ex: 712614" style={{...S.input, flex:1}} />
+                    <button onClick={saveCor} style={{padding:'8px 10px', background:G.green, color:'#fff', border:'none', borderRadius:6, cursor:'pointer', fontSize:13, fontWeight:600}}>✓</button>
+                    <button onClick={() => { setEditingCor(false); setCorVal(employee.cod_cor || '') }} style={{...S.btnS, padding:'8px 10px'}}>×</button>
+                  </div>
+                ) : (
+                  <div onClick={() => isAdmin && setEditingCor(true)} style={{
+                    fontSize:13, color: employee.cod_cor ? G.text : G.muted, padding:'8px 10px', background:G.bg,
+                    border:`1px solid ${G.border}`, borderRadius:6, minHeight:32,
+                    cursor: isAdmin ? 'pointer' : 'default', fontWeight:600,
+                    display:'flex', justifyContent:'space-between', alignItems:'center'
+                  }}>
+                    <span>{employee.cod_cor || 'Necompletat'}</span>
                     {isAdmin && <span style={{fontSize:10, color:G.muted, fontWeight:400}}>✏️ click pentru editare</span>}
                   </div>
                 )}
