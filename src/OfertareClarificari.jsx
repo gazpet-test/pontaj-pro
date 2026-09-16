@@ -79,8 +79,13 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
       supabase.from('profiles').select('id, name'),
       // PDF-urile de raspuns ale autoritatii, ca sa se poata lega de intrebarea careia ii raspund
-      supabase.from('ofertare_documente_atribuire').select('id, nume_original, text_extras, fisier_path, created_at, analiza, analiza_la, status_procesare, eroare')
-        .eq('licitatie_id', licId).eq('tip', 'raspuns_clarificare').order('id'),
+      // 16.09.2026 (Racari SCN1179379): filtrul era `tip = raspuns_clarificare`, deci un CAIET DE
+      // SARCINI revizuit, publicat de autoritate tot pe canalul de clarificari, nu aparea aici -
+      // el ramane documentatie (tip cs_volum) ca sa nu iasa din motorul de acoperire. Oana l-a
+      // cautat exact in ecranul asta. Acum se arata tot ce a aparut DUPA importul initial, iar
+      // documentatia revizuita e marcata ca atare in lista.
+      supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, antet, text_extras, fisier_path, created_at, analiza, analiza_la, status_procesare, eroare')
+        .eq('licitatie_id', licId).eq('aparut_ulterior', true).order('id'),
     ])
     setClar(q || []); setProfiles(pr || []); setDocRasp(dr || [])
   }
@@ -272,8 +277,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       <div style={{ ...S.card, padding:14, marginBottom:12 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:8 }}>
           <div>
-            <div style={{ fontWeight:800, fontSize:13.5 }}>📥 Răspunsuri primite ({docRasp.length})</div>
-            <div style={{ fontSize:11.5, color:G.dim }}>documentele de tip „răspuns la clarificări” ale licitației — aduse de veghe sau urcate aici</div>
+            <div style={{ fontWeight:800, fontSize:13.5 }}>📥 Primite de la autoritate ({docRasp.length})</div>
+            <div style={{ fontSize:11.5, color:G.dim }}>tot ce a publicat autoritatea DUPĂ documentația inițială — răspunsuri, erate și documentație revizuită</div>
           </div>
           {/* răspunsul consolidat publicat în SEAP, pe care veghea nu-l vede — se urcă manual */}
           <label style={{ ...S.btnP, padding:'5px 14px', fontSize:12, cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 }} title="Urcă PDF-ul cu răspunsul autorității (consolidat, din SEAP): îl citesc cu AI și îți propun la ce întrebări răspunde">
@@ -281,7 +286,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
             <input type="file" accept=".pdf" style={{ display:'none' }} disabled={!!busy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; urcaRaspuns(f) }} />
           </label>
         </div>
-        {!docRasp.length && <div style={{ color:G.dim, fontSize:12.5, padding:'8px 0 4px', textAlign:'center' }}>Niciun răspuns primit încă. Când autoritatea publică răspunsul în SEAP, urcă PDF-ul aici.</div>}
+        {!docRasp.length && <div style={{ color:G.dim, fontSize:12.5, padding:'8px 0 4px', textAlign:'center' }}>Nimic nou de la autoritate încă. Când publică ceva în SEAP, veghea îl aduce singură; dacă nu, urcă PDF-ul aici.</div>}
         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
           {docRasp.map(d => {
             const c = d.analiza?.citire_noi
@@ -292,7 +297,15 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
             return (
               <div key={d.id} style={{ padding:'10px 12px', background:G.bg, borderRadius:8, border:`1px solid ${G.border2}`, borderLeft:`3px solid ${G.orange}` }}>
                 <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
-                  <div style={{ flex:1, minWidth:180, fontSize:13, fontWeight:600, wordBreak:'break-word' }}>{d.nume_original}</div>
+                  <div style={{ flex:1, minWidth:180, fontSize:13, fontWeight:600, wordBreak:'break-word' }}>
+                    {d.nume_original}
+                    {d.antet?.inlocuieste && (
+                      <span style={{ marginLeft:8, fontSize:10.5, fontWeight:700, color:G.orange, border:`1px solid ${G.orange}`, borderRadius:5, padding:'1px 6px', whiteSpace:'nowrap' }}
+                        title={`Versiune nouă a documentului „${d.antet.inlocuieste}”. Documentația veche NU mai e cea în vigoare.`}>
+                        ♻ DOCUMENTAȚIE REVIZUITĂ
+                      </span>
+                    )}
+                  </div>
                   <span style={{ fontSize:11.5, color:G.dim, whiteSpace:'nowrap' }} title="data apariției în platformă">📅 {fmtData(d.created_at)}</span>
                 </div>
                 <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginTop:6 }}>
