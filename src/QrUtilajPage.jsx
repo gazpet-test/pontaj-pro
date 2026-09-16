@@ -22,6 +22,15 @@ const P = {
   oscar: '#3B82F6', rompetrol: '#F59E0B', benzinarie: '#8B5CF6',
 }
 
+// Numele complet al santierului, curatat de prefixul de firma, ca soferul sa recunoasca locul.
+// „GAzpet - Punere in siguranta subtraversare rau Doamnei ... - Transgaz" -> „Punere in siguranta subtraversare rau Doamnei ..."
+function scurteazaNume(nume) {
+  let n = String(nume || '').trim()
+  n = n.replace(/^ga?zpet\s*[-–]\s*/i, '')
+  if (n.length > 90) n = n.slice(0, 89).trimEnd() + '…'
+  return n
+}
+
 async function fetchUtilajInfo(id) {
   const res = await fetch(`${SUPABASE_URL}/functions/v1/qr-utilaj-info?id=${id}`, {
     method: 'GET',
@@ -492,7 +501,15 @@ export default function QrUtilajPage() {
                 {(s.id === OSCAR_LOT1_SITE_ID || s.id === OSCAR_LOT2_SITE_ID) && (
                   <div style={{ fontSize: 16, marginBottom: 4 }}>💧</div>
                 )}
-                {s.denumire_qr || s.name}
+                <div>{s.denumire_qr || s.name}</div>
+                {s.denumire_qr && s.name && s.denumire_qr !== s.name && (
+                  <div style={{
+                    fontSize: 10, fontWeight: 500, marginTop: 5, opacity: .8,
+                    lineHeight: 1.25, whiteSpace: 'normal', wordBreak: 'break-word',
+                  }}>
+                    {scurteazaNume(s.name)}
+                  </div>
+                )}
               </button>
             ))}
           </div>
