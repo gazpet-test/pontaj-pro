@@ -34,6 +34,9 @@
 // din tab-ul Clarificari al fisei, cu citire AI dedicata (ofertare-document-nou-citeste).
 // Fara marcaj, un raspuns la clarificari se pierdea printre cele 40 de planse din Documente.
 //
+// v8 (16.09.2026): termenul de depunere se reciteste din GetSection4View la fiecare rulare si
+//   se actualizeaza in platforma cand autoritatea il muta prin erata (vezi comentariul de la
+//   `let termen`). Un termen vechi opreste insasi veghea, nu doar induce omul in eroare.
 // v7 (16.09.2026): un document din canalul de clarificari e identificat prin
 //   `noticeDocumentCode`, nu prin numele fisierului. Autoritatea republica documentatia
 //   revizuita sub ACELASI nume ca originalul (Racari: „Caiet de sarcini revizuit" =
@@ -99,6 +102,23 @@ async function fetchSeap(url: string, init?: RequestInit, incercari = 4): Promis
     await asteapta(700 * (i + 1));   // 0,7s / 1,4s / 2,1s
   }
   return ultim!;
+}
+// v8 (16.09.2026): termenul de depunere se reciteste din SEAP la fiecare rulare.
+// SEAP il da ca 'DD.MM.YYYY HH:mm' in ora Romaniei; il ducem la UTC tinand cont de
+// EET/EEST (nu putem lipi '+02:00' fix - in octombrie tara e inca pe +03:00).
+function dinOraRomaniei(s: string): string | null {
+  const m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[\s,]+(\d{1,2}):(\d{2}))?$/.exec(String(s || '').trim());
+  if (!m) return null;
+  const [, zi, luna, an, ora = '0', min = '0'] = m;
+  const naiv = Date.UTC(+an, +luna - 1, +zi, +ora, +min);
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Bucharest', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const p: Record<string, string> = {};
+  for (const x of f.formatToParts(new Date(naiv))) p[x.type] = x.value;
+  const caLocal = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+  return new Date(naiv - (caLocal - naiv)).toISOString();
 }
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
 
@@ -381,12 +401,34 @@ Deno.serve(async (req: Request) => {
       noi.push(n);
     }
 
+    // v8: TERMENUL. Pana acum se scria o singura data, la importul initial, si nu se mai
+    // recitea niciodata. Cand autoritatea prelungea prin erata (Racari: 25.09 -> 12.10),
+    // platforma ramanea pe data veche - iar veghea insasi filtreaza pe `termen_depunere >=
+    // ieri`, deci dupa 25.09 ar fi incetat sa mai urmareasca anuntul, fix in perioada cu cele
+    // mai multe clarificari. Un termen vechi nu e doar o data gresita pe ecran: opreste veghea.
+    let termen: any = null;
+    try {
+      const rt = await fetchSeap(`${SEAP}/NoticeCommon/GetSection4View/?${qs}`, { headers: SEAP_HDR });
+      if (rt.ok) {
+        const d4 = await rt.json();
+        const iso = dinOraRomaniei(d4?.tenderReceiptDeadline || '');
+        if (iso && (!lic.termen_depunere || Math.abs(new Date(iso).getTime() - new Date(lic.termen_depunere).getTime()) > 60000)) {
+          const { error: eT } = await supa.from('ofertare_licitatii')
+            .update({ termen_depunere: iso }).eq('id', lic.id);
+          termen = eT ? { eroare: eT.message } : { vechi: lic.termen_depunere, nou: iso };
+          if (!eT) lic.termen_depunere = iso;
+        }
+      } else termen = { eroare: `GetSection4View HTTP ${rt.status}` };
+    } catch (e) {
+      termen = { eroare: 'GetSection4View: ' + String((e as Error)?.message || e) };
+    }
+
     // v5: raspunsurile publicate de autoritate stau in alt endpoint - se aduc oricum,
     // chiar daca lista de documente a anuntului nu s-a schimbat.
     const { adusi: raspunsuriAduse, eroare: raspunsuriEroare } = await raspunsuriNotice(lic);
 
-    if (!noi.length && !raspunsuriAduse.length) {
-      raport.push({ licitatie: lic.nr_anunt, noi: 0, raspunsuri_aduse: 0, raspunsuri_eroare: raspunsuriEroare });
+    if (!noi.length && !raspunsuriAduse.length && !termen?.nou) {
+      raport.push({ licitatie: lic.nr_anunt, noi: 0, raspunsuri_aduse: 0, raspunsuri_eroare: raspunsuriEroare, termen });
       continue;
     }
 
@@ -480,6 +522,14 @@ Deno.serve(async (req: Request) => {
     const restul = noi.filter((n) => !esteRaspuns(n) && !cheiRaspunsuriAduse.has(cheieNume(n)));
 
     const mesaje: { type: string; title: string; message: string }[] = [];
+    if (termen?.nou) {
+      const ro = (x: string) => new Date(x).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest' });
+      mesaje.push({
+        type: 'warning',
+        title: `SEAP: TERMEN MUTAT la ${lic.nr_anunt}`,
+        message: `Autoritatea a schimbat termenul de depunere: ${termen.vechi ? ro(termen.vechi) : '(nesetat)'} -> ${ro(termen.nou)}. Data din platforma a fost actualizata automat din anuntul SEAP. Verifica graficul de lucru si valabilitatea garantiei de participare.`,
+      });
+    }
     if (raspunsuri.length) {
       const parti = [`Autoritatea a publicat ${raspunsuri.length} document(e) care par raspuns la clarificari sau modificare a documentatiei: ${nume(raspunsuri)}.`];
       if (raspunsuriAduse.length) parti.push(`Dintre ele, ${raspunsuriAduse.length} sunt raspunsuri publicate de autoritate, aduse automat din SEAP: ${nume(raspunsuriAduse)}. Se citesc din Ofertare -> Clarificari.`);
@@ -553,7 +603,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    raport.push({ licitatie: lic.nr_anunt, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, nume: noi.slice(0, 10) });
+    raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, nume: noi.slice(0, 10) });
   }
 
   return json({ verificate: (licitatii || []).length, raport });
