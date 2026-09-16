@@ -2475,6 +2475,8 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
+  const [veghe, setVeghe] = useState(null)    // raportul ultimei verificări manuale
+  const [verific, setVerific] = useState(false)
   const load = async () => {
     const { data } = await supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip, fisier_path, created_at, analiza, analiza_la, eroare')
@@ -2496,6 +2498,21 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     anunta(`🤖 Citit: ${d.nume_original}`)
     load()
   }
+  // Verificare la cerere. Pana acum veghea rula DOAR din cron (2x/zi), deci cand
+  // autoritatea publica un raspuns dimineata, el aparea abia la pranz - si nu aveai
+  // cum sa afli daca lipseste ceva sau doar n-a rulat inca.
+  const verificaAcum = async () => {
+    setVerific(true); setMsg(null); setVeghe(null)
+    const { data, error } = await supabase.functions.invoke('ofertare-seap-veghe', { body: { licitatie_id: l.id } })
+    setVerific(false)
+    if (error || data?.error) return anunta('Verificarea a eșuat: ' + (data?.error || error?.message), 'err')
+    const r = Array.isArray(data?.raport) ? data.raport.find(x => x.licitatie === l.nr_anunt) || data.raport[0] : data
+    setVeghe(r || { info: 'SEAP nu a întors nimic pentru anunțul ăsta.' })
+    const noi = (r?.adusi?.length || 0) + (r?.raspunsuri_aduse?.length || 0)
+    anunta(noi ? `📂 ${noi} document(e) noi aduse din SEAP` : 'Nimic nou în SEAP acum.')
+    load()
+  }
+
   const badgeTip = d => {
     const t = d.analiza?.citire_noi?.tip || d.tip
     const [lbl, col] = TIP_NOU[t] || TIP_NOU.altul
@@ -2506,7 +2523,22 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
         <div style={{ fontWeight:800, fontSize:14 }}>📂 Documente noi din SEAP ({docs?.length ?? '…'})</div>
         <span style={{ fontSize:11.5, color:G.dim }}>apărute după importul inițial — răspunsuri, erate, planșe noi</span>
+        <button style={{ ...S.btnS, marginLeft:'auto', padding:'4px 11px', fontSize:12, color:G.ofertare, borderColor:G.ofertare+'66', cursor: verific ? 'default' : 'pointer', opacity: verific ? .6 : 1 }}
+          disabled={verific} onClick={verificaAcum}
+          title="Întreabă SEAP acum dacă a apărut ceva nou pe anunțul ăsta. Altfel verificarea automată rulează de două ori pe zi.">
+          {verific ? '⏳ verific SEAP…' : '🔄 Verifică SEAP acum'}
+        </button>
       </div>
+      {veghe && (
+        <div style={{ marginBottom:10, padding:'9px 11px', background:G.bg, borderRadius:9, border:`1px solid ${G.border2}`, fontSize:12 }}>
+          <div style={{ fontWeight:700, marginBottom:4 }}>Ce a răspuns SEAP</div>
+          {veghe.eroare && <div style={{ color:G.red, marginBottom:4 }}>⚠ {veghe.eroare}</div>}
+          {veghe.info && <div style={{ color:G.muted, marginBottom:4 }}>{veghe.info}</div>}
+          <pre style={{ margin:0, whiteSpace:'pre-wrap', wordBreak:'break-word', color:G.muted, fontSize:11.5, maxHeight:220, overflow:'auto' }}>
+            {JSON.stringify(veghe, null, 2)}
+          </pre>
+        </div>
+      )}
       {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : G.green, marginBottom:8 }}>{msg.t}</div>}
       {docs === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
         : !docs.length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
