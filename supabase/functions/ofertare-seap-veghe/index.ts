@@ -34,6 +34,8 @@
 // din tab-ul Clarificari al fisei, cu citire AI dedicata (ofertare-document-nou-citeste).
 // Fara marcaj, un raspuns la clarificari se pierdea printre cele 40 de planse din Documente.
 //
+// v6 (16.09.2026): toate apelurile catre SEAP se reincearca la 403/429/5xx - SEAP
+//   refuza intermitent, iar un singur refuz sarea licitatia in tacere (vezi ANTI-BUG mai jos).
 // v5 (15.09.2026): veghea aduce SINGURA raspunsurile la clarificari publicate de autoritate.
 // Descoperit experimental pe Domnesti (notice 100244241, sysNoticeTypeId 17): raspunsurile
 // consolidate ale primariei NU apar DELOC in GetDfNoticeSectionFiles - adica exact documentele
@@ -70,6 +72,29 @@ const SEAP_HDR: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
 };
 const RUNDE_IMPORT = 4;
+
+// ANTI-BUG 16.09.2026 (tichet TKT-2026-0258, Oana): SEAP intoarce 403 INTERMITENT,
+// pe acelasi URL, cu aceleasi anteturi, la o secunda distanta. Masurat: 403,403,200 pe
+// GetDfNoticeSectionFiles si 200,403,200,200,403 pe NoticeDocument/GetAll. Nu e blocare
+// de IP si nu e ceva ce facem noi gresit - e limitarea lor.
+// Pana acum un singur 403 insemna ca licitatia era sarita complet pe rularea aia, in
+// tacere: cronul ruleaza de 2x/zi, deci un document publicat intr-o fereastra in care
+// ambele rulari au luat 403 nu intra NICIODATA in platforma.
+// Reincercam de 4 ori, cu pauza crescatoare. NU reincercam la 4xx care nu-s 403/429 -
+// alea sunt erori reale (anunt inexistent, parametri gresiti) si merita raportate.
+const asteapta = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function fetchSeap(url: string, init?: RequestInit, incercari = 4): Promise<Response> {
+  let ultim: Response | null = null;
+  for (let i = 0; i < incercari; i++) {
+    const r = await fetch(url, init);
+    if (r.ok) return r;
+    ultim = r;
+    const merita = r.status === 403 || r.status === 429 || r.status >= 500;
+    if (!merita || i === incercari - 1) return r;
+    await asteapta(700 * (i + 1));   // 0,7s / 1,4s / 2,1s
+  }
+  return ultim!;
+}
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
 
 // ANTI-BUG 15.09.2026 (Clinceni): SEAP normalizeaza numele in API (scoate virgulele,
@@ -221,7 +246,7 @@ Deno.serve(async (req: Request) => {
     let lista: any[] = [];
     let cookie = '';
     try {
-      const r = await fetch(`${SEAP}/NoticeDocument/GetAll/`, {
+      const r = await fetchSeap(`${SEAP}/NoticeDocument/GetAll/`, {
         method: 'POST',
         headers: { ...SEAP_HDR, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -255,7 +280,7 @@ Deno.serve(async (req: Request) => {
       if (!url) { erori.push(`${nume}: fara noticeDocumentUrl`); continue; }
       try {
         // tokenul e temporar SI legat de sesiune -> trimitem inapoi cookie-urile de la GetAll
-        const rd = await fetch(url.startsWith('http') ? url : `https://e-licitatie.ro/${url.replace(/^\/+/, '')}`, {
+        const rd = await fetchSeap(url.startsWith('http') ? url : `https://e-licitatie.ro/${url.replace(/^\/+/, '')}`, {
           headers: cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR,
         });
         if (!rd.ok) { erori.push(`${nume}: descarcare HTTP ${rd.status}`); continue; }
@@ -290,8 +315,16 @@ Deno.serve(async (req: Request) => {
     const qs = `initNoticeId=${lic.c_notice_id}&sysNoticeTypeId=${lic.sys_notice_type_id}`;
     const laSeap: string[] = [];
     try {
-      const r = await fetch(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?${qs}`, { headers: SEAP_HDR });
-      if (!r.ok) { raport.push({ licitatie: lic.nr_anunt, eroare: `SEAP HTTP ${r.status}` }); continue; }
+      const r = await fetchSeap(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?${qs}`, { headers: SEAP_HDR });
+      if (!r.ok) {
+        raport.push({
+          licitatie: lic.nr_anunt,
+          eroare: `SEAP HTTP ${r.status}` + (r.status === 403
+            ? ' — SEAP a refuzat si dupa 4 incercari. Limitarea lor, nu a noastra; reincearca peste cateva minute.'
+            : ''),
+        });
+        continue;
+      }
       const d = await r.json();
       for (const cheie of ['dfNoticeDocs', 'duaeDocs', 'decisionDocs', 'contractingStrategyDocs', 'exAnteDocs']) {
         for (const f of (d?.[cheie] || [])) {
