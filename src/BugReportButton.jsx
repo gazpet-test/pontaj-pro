@@ -22,6 +22,19 @@ const G = {
 
 const MIN_DESC = 30
 
+// Bucket-ul `tichete-atasamente` acceptă exact tipurile astea (vezi storage.buckets).
+// Dacă adaugi aici, adaugă și în bucket, altfel upload-ul e respins tăcut.
+const TIPURI_DOC = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'text/csv',
+  'text/plain',
+]
+const ACCEPT_ATASAMENT = 'image/*,.pdf,.xlsx,.xls,.docx,.doc,.csv,.txt'
+
 export default function BugReportButton({ profile }) {
   const [open, setOpen] = useState(false)
   const [tip, setTip] = useState('bug')          // 'bug' | 'feature'
@@ -72,19 +85,26 @@ export default function BugReportButton({ profile }) {
 
   function handleUpload(file) {
     if (!file) return
-    if (!file.type.startsWith('image/')) { setErr('Doar imagini.'); return }
-    if (file.size > 12 * 1024 * 1024) { setErr('Imagine prea mare (max 12MB).'); return }
+    const eImagine = file.type.startsWith('image/')
+    if (!eImagine && !TIPURI_DOC.includes(file.type)) {
+      setErr('Se acceptă imagini, PDF, Excel, Word, CSV sau text.'); return
+    }
+    if (file.size > 10 * 1024 * 1024) { setErr('Fișier prea mare (max 10MB).'); return }
     setErr('')
     setPozaFile(file)
-    const reader = new FileReader()
-    reader.onload = () => setPozaPreview(reader.result)
-    reader.readAsDataURL(file)
+    if (eImagine) {
+      const reader = new FileReader()
+      reader.onload = () => setPozaPreview(reader.result)
+      reader.readAsDataURL(file)
+    } else {
+      setPozaPreview('')   // documentele nu au previzualizare, se afiseaza doar numele
+    }
   }
 
   async function handleSubmit() {
     const d = desc.trim()
     if (d.length < MIN_DESC) { setErr(`Descrierea trebuie să aibă minim ${MIN_DESC} caractere (acum ${d.length}).`); return }
-    if (!pozaFile) { setErr('Poza e obligatorie — capturează ecranul sau încarcă o imagine.'); return }
+    if (!pozaFile) { setErr('Atașamentul e obligatoriu — capturează ecranul sau încarcă un fișier.'); return }
     setSaving(true); setErr('')
     try {
       const pagina = window.location.pathname + (window.location.search || '')
@@ -119,14 +139,15 @@ export default function BugReportButton({ profile }) {
       //   de pe telefon sau mime-uri neacceptate erau respinse silent → tichet fără poză.
       let toUpload = pozaFile
       try { toUpload = await compressFileBeforeUpload(pozaFile) } catch (_) { toUpload = pozaFile }
-      const ext = (toUpload.name.split('.').pop() || 'jpg').toLowerCase()
+      const eImg = (toUpload.type || '').startsWith('image/')
+      const ext = (toUpload.name.split('.').pop() || (eImg ? 'jpg' : 'bin')).toLowerCase()
       const path = `${tk.id}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
-      const { error: upErr } = await supabase.storage.from('tichete-atasamente').upload(path, toUpload, { contentType: toUpload.type || 'image/jpeg' })
+      const { error: upErr } = await supabase.storage.from('tichete-atasamente').upload(path, toUpload, { contentType: toUpload.type || (eImg ? 'image/jpeg' : 'application/octet-stream') })
       if (upErr) {
         // tichetul s-a creat, dar poza nu — eroare VIZIBILĂ ca să poată reîncerca
         console.error('Upload poză bug:', upErr)
-        setErr(`Tichetul ${tk.numar_tichet || '#' + tk.id} a fost creat, DAR poza nu s-a încărcat: ${upErr.message || 'eroare necunoscută'}. Deschide tichetul și reîncarcă poza, sau încearcă din nou cu altă imagine.`)
-        setDoneNr((tk.numar_tichet || '#' + tk.id) + ' (⚠️ fără poză — vezi eroarea de sus)')
+        setErr(`Tichetul ${tk.numar_tichet || '#' + tk.id} a fost creat, DAR fișierul nu s-a încărcat: ${upErr.message || 'eroare necunoscută'}. Deschide tichetul și reîncarcă fișierul, sau încearcă din nou.`)
+        setDoneNr((tk.numar_tichet || '#' + tk.id) + ' (⚠️ fără atașament — vezi eroarea de sus)')
       } else {
         await supabase.from('tichete').update({ poze_paths: [path] }).eq('id', tk.id)
         setDoneNr(tk.numar_tichet || '#' + tk.id)
@@ -222,11 +243,18 @@ export default function BugReportButton({ profile }) {
                   {descLen < MIN_DESC ? `Încă ${MIN_DESC - descLen} caractere` : `✓ ${descLen} caractere`}
                 </div>
 
-                <label style={{ fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, display: 'block', marginBottom: 6 }}>Poză * (obligatorie)</label>
-                {pozaPreview ? (
+                <label style={{ fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, display: 'block', marginBottom: 6 }}>Dovadă * (obligatorie) — poză, PDF, Excel, Word</label>
+                {pozaFile ? (
                   <div style={{ marginBottom: 12 }}>
-                    <img src={pozaPreview} alt="captură" style={{ width: '100%', maxHeight: 180, objectFit: 'contain', borderRadius: 8, border: `1px solid ${G.border}`, background: G.bg }} />
-                    <button onClick={() => { setPozaFile(null); setPozaPreview('') }} style={{ marginTop: 6, padding: '4px 10px', background: 'transparent', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>🗑 Șterge poza</button>
+                    {pozaPreview ? (
+                      <img src={pozaPreview} alt="captură" style={{ width: '100%', maxHeight: 180, objectFit: 'contain', borderRadius: 8, border: `1px solid ${G.border}`, background: G.bg }} />
+                    ) : (
+                      <div style={{ padding: '14px 12px', borderRadius: 8, border: `1px solid ${G.border}`, background: G.bg, fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 18 }}>📎</span>
+                        <span style={{ wordBreak: 'break-all' }}>{pozaFile.name}</span>
+                      </div>
+                    )}
+                    <button onClick={() => { setPozaFile(null); setPozaPreview('') }} style={{ marginTop: 6, padding: '4px 10px', background: 'transparent', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>🗑 Șterge</button>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -234,8 +262,8 @@ export default function BugReportButton({ profile }) {
                       {capturing ? '⏳ Se capturează...' : '📸 Capturează ecranul'}
                     </button>
                     <label style={{ flex: 1, minWidth: 150, padding: '10px 12px', background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, cursor: 'pointer', fontSize: 12.5, fontWeight: 700, textAlign: 'center' }}>
-                      📷 Încarcă / Fă poză
-                      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => handleUpload(e.target.files?.[0])} />
+                      📎 Încarcă fișier / Fă poză
+                      <input type="file" accept={ACCEPT_ATASAMENT} style={{ display: 'none' }} onChange={e => handleUpload(e.target.files?.[0])} />
                     </label>
                   </div>
                 )}
