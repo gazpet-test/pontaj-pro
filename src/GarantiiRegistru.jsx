@@ -106,11 +106,15 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
   useEffect(() => { load() }, [load])
 
   const marcheazaReceptie = async (r) => {
-    const d = prompt(`Data recepției pentru „${r.lucrare || r.beneficiar}" (ZZ.LL.AAAA):`)
+    const preData = r.data_receptie ? fmtZi(r.data_receptie) : ''
+    const d = prompt(
+      `Data recepției pentru „${r.lucrare || r.beneficiar}" (ZZ.LL.AAAA):` +
+      (r.document_receptie ? `\n\nGăsit în arhivă: ${r.document_receptie}` : ''),
+      preData)
     if (!d) return
     const m = d.match(/^(\d{2})\.(\d{2})\.(\d{4})$/)
     if (!m) { showToast?.('Format greșit. Scrie ZZ.LL.AAAA', 'err'); return }
-    const doc = prompt('Documentul de recepție (ex. PVRTL nr. 8 din 24.06.2021):') || null
+    const doc = prompt('Documentul de recepție (ex. PVRTL nr. 8 din 24.06.2021):', r.document_receptie || '') || null
     const { error } = await supabase.from('garantii')
       .update({ lucrare_receptionata:true, data_receptie:`${m[3]}-${m[2]}-${m[1]}`, document_receptie:doc, updated_at:new Date().toISOString() })
       .eq('id', r.id)
@@ -120,7 +124,9 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
 
   const vizibile = doarActive ? randuri.filter(r => r.stare === 'activa') : randuri
   const totalBlocat = vizibile.reduce((s, r) => s + Number(r.valoare || 0), 0)
-  const recuperabil = vizibile.filter(r => r.lucrare_receptionata).reduce((s, r) => s + Number(r.valoare || 0), 0)
+  const recuperabil = vizibile.filter(r => r.lucrare_receptionata && !r.blocat_litigiu).reduce((s, r) => s + Number(r.valoare || 0), 0)
+  const dePregatit  = vizibile.filter(r => !r.lucrare_receptionata && r.data_receptie && !r.blocat_litigiu).reduce((s, r) => s + Number(r.valoare || 0), 0)
+  const inLitigiu   = vizibile.filter(r => r.blocat_litigiu).reduce((s, r) => s + Number(r.valoare || 0), 0)
 
   if (loading) return <div style={{color:G.muted,fontSize:13,padding:20}}>Se încarcă registrul…</div>
 
@@ -132,6 +138,8 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
           ['Garanții active', vizibile.length, G.blue],
           ['Bani blocați', fmtLei(totalBlocat), G.orange],
           ['Recuperabil acum', fmtLei(recuperabil), recuperabil > 0 ? G.green : G.dim],
+          ['PV găsit, de bifat', fmtLei(dePregatit), dePregatit > 0 ? G.yellow : G.dim],
+          ...(inLitigiu > 0 ? [['Blocat de litigiu', fmtLei(inLitigiu), G.red]] : []),
         ].map(([l, v, c]) => (
           <div key={l} style={{background:G.card,border:`1px solid ${G.border2}`,borderRadius:10,padding:'12px 14px'}}>
             <div style={{fontSize:10.5,color:G.muted,fontWeight:600,textTransform:'uppercase',letterSpacing:'.3px'}}>{l}</div>
@@ -200,9 +208,16 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
                     background:(STARE[r.stare]?.c || G.dim)+'22', color:STARE[r.stare]?.c || G.dim}}>
                     {STARE[r.stare]?.l || r.stare}
                   </span>
-                  {r.lucrare_receptionata && (
-                    <div style={{fontSize:10.5,color:G.green,marginTop:3,fontWeight:600}}>✓ recepționată</div>
+                  {r.blocat_litigiu && (
+                    <div title={r.litigiu_detalii || 'Litigiu în curs'} style={{fontSize:10.5,color:G.red,marginTop:3,fontWeight:700}}>⛔ litigiu</div>
                   )}
+                  {r.lucrare_receptionata ? (
+                    <div style={{fontSize:10.5,color:G.green,marginTop:3,fontWeight:600}}>✓ recepționată</div>
+                  ) : r.data_receptie ? (
+                    <div title={r.document_receptie || ''} style={{fontSize:10.5,color:G.yellow,marginTop:3,fontWeight:600}}>
+                      📄 PV găsit — de bifat
+                    </div>
+                  ) : null}
                 </td>
                 <td style={{padding:'9px 12px',fontSize:11.5,color:r.de_facut?.startsWith('EXPIRATA') ? G.red : G.yellow,maxWidth:230}}>
                   {r.de_facut || <span style={{color:G.dim}}>—</span>}
@@ -211,7 +226,13 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
                   {canEdit && !r.lucrare_receptionata && (
                     <button onClick={() => marcheazaReceptie(r)} style={{...S.btnS,marginRight:5}} title="Marchează lucrarea ca recepționată (PVR)">✓ Recepție</button>
                   )}
-                  <button onClick={() => setAdresa(r)} style={{...S.btnS,background:G.blue+'18',color:G.blue,border:`1px solid ${G.blue}55`}}>
+                  <button onClick={() => setAdresa(r)} disabled={r.blocat_litigiu}
+                    title={r.blocat_litigiu ? 'Blocată de litigiu — nu se cere eliberarea' : 'Generează adresa către emitent'}
+                    style={{...S.btnS,
+                      background: r.blocat_litigiu ? 'transparent' : G.blue+'18',
+                      color: r.blocat_litigiu ? G.dim : G.blue,
+                      border:`1px solid ${r.blocat_litigiu ? G.border2 : G.blue+'55'}`,
+                      cursor: r.blocat_litigiu ? 'not-allowed' : 'pointer'}}>
                     ✉️ Adresă
                   </button>
                 </td>
