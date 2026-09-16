@@ -34,6 +34,9 @@
 // din tab-ul Clarificari al fisei, cu citire AI dedicata (ofertare-document-nou-citeste).
 // Fara marcaj, un raspuns la clarificari se pierdea printre cele 40 de planse din Documente.
 //
+// v9 (16.09.2026): codul SEAP a iesit din `antet` in coloana proprie `seap_cod`, cu index
+//   unic partial pe (licitatie_id, seap_cod). `antet` era deja folosit de citirea AI pentru
+//   antetul documentului, deci prima citire stergea codul si veghea aducea documentul din nou.
 // v8 (16.09.2026): termenul de depunere se reciteste din GetSection4View la fiecare rulare si
 //   se actualizeaza in platforma cand autoritatea il muta prin erata (vezi comentariul de la
 //   `let termen`). Un termen vechi opreste insasi veghea, nu doar induce omul in eroare.
@@ -294,15 +297,24 @@ Deno.serve(async (req: Request) => {
     if (!lista.length) return { adusi, eroare: null };
 
     const { data: aveamDeja } = await supa.from('ofertare_documente_atribuire')
-      .select('nume_original, tip, antet').eq('licitatie_id', lic.id);
+      .select('nume_original, tip, seap_cod').eq('licitatie_id', lic.id);
     // ANTI-BUG 16.09.2026 (tichet Oana, Racari SCN1179379): identitatea unui document din
     // canalul de clarificari e `noticeDocumentCode` (ex. SCN1179379/00020), NU numele
     // fisierului. Autoritatea republica documentatia revizuita sub ACELASI nume de fisier
     // ca originalul - dedus pe nume, caietul de sarcini revizuit era sarit in tacere, si
     // ofertantul lucra mai departe pe varianta veche. Codurile deja vazute se tin in
-    // `antet->>seap_cod`; numele ramane doar pentru randurile vechi, fara cod.
+    // coloana `seap_cod`; numele ramane doar pentru randurile vechi, fara cod.
+    //
+    // ANTI-BUG 16.09.2026, partea a doua: codul a stat initial in `antet`. Gresit - `antet`
+    // e campul in care citirea AI scrie ANTETUL documentului (obiectiv, beneficiar,
+    // proiect_nr, revizie), deci prima citire il suprascria, veghea nu mai recunostea
+    // documentul si il aducea a doua oara ca nou. Trei perechi de duplicate in cateva ore,
+    // plus riscul ca cineva sa plateasca o a doua citire AI pe un caiet de 27 de pagini.
+    // Acum codul are coloana lui, iar un index unic partial pe (licitatie_id, seap_cod)
+    // face duplicatele imposibile structural: daca logica de aici greseste din nou,
+    // insertul pica in loc sa treaca tacut.
     const coduriCunoscute = new Set(
-      (aveamDeja || []).map((d: any) => d?.antet?.seap_cod).filter(Boolean).map(String),
+      (aveamDeja || []).map((d: any) => d?.seap_cod).filter(Boolean).map(String),
     );
     const numeCunoscute = new Map<string, any>(
       (aveamDeja || []).map((d: any) => [cheieNume(d.nume_original), d]),
@@ -347,8 +359,10 @@ Deno.serve(async (req: Request) => {
           tip: inlocuit?.tip || (eRaspunsSeap(it) ? 'raspuns_clarificare' : 'alta'),
           sursa: 'seap', aparut_ulterior: true, status_procesare: 'neprocesat',
           size_bytes: buf.length,
-          antet: { seap_cod: cod || null, seap_titlu: titlu || null, seap_publicat: it?.publicationDate || null,
-                   inlocuieste: inlocuit ? inlocuit.nume_original : null },
+          seap_cod: cod || null,
+          // metadatele descriptive stau separat de `antet`, ca sa nu se bata cu citirea AI
+          seap_meta: { titlu: titlu || null, publicat: it?.publicationDate || null,
+                       inlocuieste: inlocuit ? inlocuit.nume_original : null },
         });
         if (eIns) { erori.push(`${nume}: insert ${eIns.message}`); continue; }
         if (cod) coduriCunoscute.add(cod);

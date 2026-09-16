@@ -84,7 +84,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       // el ramane documentatie (tip cs_volum) ca sa nu iasa din motorul de acoperire. Oana l-a
       // cautat exact in ecranul asta. Acum se arata tot ce a aparut DUPA importul initial, iar
       // documentatia revizuita e marcata ca atare in lista.
-      supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, antet, text_extras, fisier_path, created_at, analiza, analiza_la, status_procesare, eroare')
+      supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, seap_meta, text_extras, fisier_path, created_at, analiza, analiza_la, status_procesare, eroare')
         .eq('licitatie_id', licId).eq('aparut_ulterior', true).order('id'),
     ])
     setClar(q || []); setProfiles(pr || []); setDocRasp(dr || [])
@@ -299,9 +299,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                 <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
                   <div style={{ flex:1, minWidth:180, fontSize:13, fontWeight:600, wordBreak:'break-word' }}>
                     {d.nume_original}
-                    {d.antet?.inlocuieste && (
+                    {d.seap_meta?.inlocuieste && (
                       <span style={{ marginLeft:8, fontSize:10.5, fontWeight:700, color:G.orange, border:`1px solid ${G.orange}`, borderRadius:5, padding:'1px 6px', whiteSpace:'nowrap' }}
-                        title={`Versiune nouă a documentului „${d.antet.inlocuieste}”. Documentația veche NU mai e cea în vigoare.`}>
+                        title={`Versiune nouă a documentului „${d.seap_meta.inlocuieste}”. Documentația veche NU mai e cea în vigoare.`}>
                         ♻ DOCUMENTAȚIE REVIZUITĂ
                       </span>
                     )}
