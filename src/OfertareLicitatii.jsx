@@ -1435,8 +1435,12 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
   // 6-8 ori; fără asta, omul bifează de șase ori aceeași acoperire.
   const [repetari, setRepetari] = useState({})   // id reprezentant → [repetări]
   const [aratRepetari, setAratRepetari] = useState(false)
+  // Registrul în care trăiește cerința. Implicit se arată doar capabilitățile —
+  // alea se dovedesc cu documente și alea decid dacă oferta trece. Restul se
+  // vede la cerere, nu dispare.
+  const [fRegistru, setFRegistru] = useState('capabilitate')
   const load = async () => {
-    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
+    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, registru, registru_sursa, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
     const { data, error } = await supabase.from('ofertare_cerinte')
       .select(camp)
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
@@ -1599,7 +1603,15 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
     setSelC([]); onChanged?.()
   }
 
-  const filtrate = (cerinte || []).filter(c => (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
+  const potrivesteRegistru = (c) => {
+    if (fRegistru === 'toate') return true
+    if (fRegistru === 'capabilitate') return !c.registru || c.registru === 'capabilitate'
+    return c.registru === fRegistru
+  }
+  const filtrate = (cerinte || []).filter(c => potrivesteRegistru(c) && (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
+  const nrPeRegistru = (cerinte || []).reduce((m, c) => {
+    const k = c.registru || 'capabilitate'; m[k] = (m[k] || 0) + 1; return m
+  }, {})
   const neconfirmate = (cerinte || []).filter(c => !c.confirmata_de).length
   // Regulile de alcatuire a echipei (Domnesti #4090) nu se „acopera" cu un document — se verifica la
   // propunere. Ca sa nu dispara sub `nu_se_aplica`, se arata aici, in registru, cu aceeasi expresie ca
@@ -1618,6 +1630,14 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
           </button>
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12, borderColor: fRegistru === 'capabilitate' ? G.ofertare : G.border2 }}
+            value={fRegistru} onChange={e => setFRegistru(e.target.value)}
+            title="Capabilități = se dovedesc cu documente din catalog și decid calificarea. De depunere = garanție, formulare, acorduri — se fac la întocmirea ofertei. Informări pentru execuție = obligații de șantier (SSM, deșeuri, probe), se predau la câștigare.">
+            <option value="capabilitate">🎯 capabilități ({nrPeRegistru.capabilitate || 0})</option>
+            <option value="depunere">📎 de depunere ({nrPeRegistru.depunere || 0})</option>
+            <option value="executie">🏗️ informări pentru execuție ({nrPeRegistru.executie || 0})</option>
+            <option value="toate">toate registrele ({(cerinte || []).length})</option>
+          </select>
           <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12 }} value={fTip} onChange={e => setFTip(e.target.value)}>
             <option value="">toate tipurile</option>
             {Object.entries(TIP_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -1995,9 +2015,17 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   }
 
   const load = async () => {
+    // Acoperirea se uită DOAR la registrul de capabilități. Cerințele mutate în
+    // „de depunere" (garanție, formulare, acorduri) și „informări pentru execuție"
+    // (SSM, deșeuri, probe) nu se dovedesc din catalogul HR — le rula degeaba și
+    // înecau ecranul: la Răcari, 629 din 697 de rânduri erau „nu se aplică", iar
+    // cele trei probleme reale se pierdeau printre ele.
+    // `registru IS NULL` rămâne inclus: o licitație neclasificată încă se comportă
+    // exact ca înainte, deci nimic existent nu se strică.
     const { data: cs } = await supabase.from('ofertare_cerinte')
-      .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv, cand_se_prezinta')
+      .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv, cand_se_prezinta, registru')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
+      .or('registru.is.null,registru.eq.capabilitate')
       .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
     setCerinte(cs || [])
     if (cs?.length) {
@@ -2158,6 +2186,38 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
   const [fDoarBifate, setFDoarBifate] = useState(false)
   const nrBifateAici = (cerinte || []).filter(c => sel.includes(c.id)).length
+
+  // ── Reviziile acoperirii ───────────────────────────────────────────────
+  // 16.09.2026: acoperirea de la Răcari a trecut de la 195 „acoperit" la 57 după
+  // o re-rulare, și n-a existat nicio cale de a spune ce s-a schimbat — a fost
+  // nevoie de o oră de săpat în date ca să se stabilească că nu era regresie, ci
+  // reclasificare. Fiecare rulare completă îngheață o revizie; aici se vede diferența.
+  const [revizii, setRevizii] = useState([])
+  const [diff, setDiff] = useState(null)
+  const [diffBusy, setDiffBusy] = useState(false)
+  const incarcaRevizii = async () => {
+    const { data } = await supabase.from('ofertare_acoperire_revizii')
+      .select('id, revizie, creat_la, motiv, nr_randuri, sumar, doc:ofertare_documente_atribuire(nume_original)')
+      .eq('licitatie_id', licitatie.id).order('revizie', { ascending: false }).limit(20)
+    setRevizii(data || [])
+  }
+  useEffect(() => { incarcaRevizii() }, [licitatie.id])
+  const comparaRevizii = async (panaLa) => {
+    setDiffBusy(true); setDiff(null)
+    const { data, error } = await supabase.rpc('fn_ofertare_diff_revizii',
+      { p_licitatie_id: licitatie.id, p_pana_la: panaLa, p_de_la: null })
+    setDiffBusy(false)
+    if (error) return setWarn('Nu s-a putut compara: ' + error.message)
+    setDiff({ panaLa, randuri: data || [] })
+  }
+  const FEL_DIFF = {
+    regresie:     { et:'🔴 avea dovadă, nu mai are', c:G.red },
+    progres:      { et:'🟢 acum are dovadă',          c:G.green },
+    reclasificat: { et:'🟣 reclasificat',             c:G.purple },
+    schimbat:     { et:'🔵 altă sursă de dovadă',     c:G.ofertare },
+    nou:          { et:'🆕 cerință nouă',             c:G.orange },
+    disparut:     { et:'⬜ a dispărut',               c:G.dim },
+  }
   useEffect(() => { if (!sel.length) setFDoarBifate(false) }, [sel.length])
   const randuri = (cerinte || [])
     .filter(c => !fDoarGoluri || acoperiri[c.id]?.status === 'gol' || acoperiri[c.id]?.reverificare_ceruta)
@@ -2195,6 +2255,55 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       </div>
       {busy && <div style={{ fontSize:12, color:G.ofertare, fontWeight:700, marginBottom:8 }}>🤖 {busy}</div>}
       {warn && <div style={{ fontSize:12, color:G.orange, marginBottom:8 }}>{warn}</div>}
+
+      {revizii.length > 0 && (
+        <div style={{ marginBottom:8, padding:'7px 10px', borderRadius:7, background:G.surface, border:`1px solid ${G.border2}` }}>
+          <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+            <span style={{ fontSize:11.5, fontWeight:700, color:G.muted }}>📚 Revizii:</span>
+            {revizii.map(r => (
+              <button key={r.id} onClick={() => comparaRevizii(r.revizie)} disabled={r.revizie === 1}
+                title={`${r.motiv || 'fără motiv notat'}${r.doc?.nume_original ? ' · declanșată de: ' + r.doc.nume_original : ''} · ${r.nr_randuri} rânduri`}
+                style={{ ...S.btnS, padding:'3px 8px', fontSize:11,
+                  opacity: r.revizie === 1 ? 0.55 : 1,
+                  cursor: r.revizie === 1 ? 'default' : 'pointer',
+                  borderColor: diff?.panaLa === r.revizie ? G.ofertare : G.border2 }}>
+                v{r.revizie} · {new Date(r.creat_la).toLocaleDateString('ro-RO')}
+                {r.revizie > 1 && ' · compară'}
+              </button>
+            ))}
+            {diffBusy && <span style={{ fontSize:11, color:G.ofertare }}>se compară…</span>}
+            {diff && <button onClick={() => setDiff(null)} style={{ ...S.btnS, padding:'3px 8px', fontSize:11, marginLeft:'auto' }}>închide</button>}
+          </div>
+          {diff && (
+            <div style={{ marginTop:7, maxHeight:210, overflowY:'auto' }}>
+              {!diff.randuri.length
+                ? <div style={{ fontSize:11.5, color:G.green }}>Nimic nu s-a schimbat față de revizia anterioară.</div>
+                : <>
+                    <div style={{ fontSize:11.5, color:G.muted, marginBottom:5 }}>
+                      {diff.randuri.length} cerințe s-au schimbat față de revizia anterioară
+                      {diff.randuri.filter(d => d.fel === 'regresie').length > 0 &&
+                        <b style={{ color:G.red }}> · {diff.randuri.filter(d => d.fel === 'regresie').length} au pierdut dovada</b>}
+                    </div>
+                    {diff.randuri.map(d => {
+                      const f = FEL_DIFF[d.fel] || FEL_DIFF.schimbat
+                      return (
+                        <div key={d.cerinta_id} style={{ fontSize:11.5, padding:'4px 7px', marginBottom:3, borderRadius:5,
+                          background:G.bg, borderLeft:`3px solid ${f.c}` }}>
+                          <b style={{ color:f.c }}>{f.et}</b>
+                          <span style={{ color:G.dim }}> · #{d.cerinta_id}{d.sectiune ? ' · ' + d.sectiune : ''}{d.tip === 'eliminatorie' ? ' · ELIMINATORIE' : ''}</span>
+                          <div style={{ color:G.text, marginTop:2 }}>{d.text_cerinta}</div>
+                          <div style={{ color:G.muted, marginTop:2 }}>
+                            {d.status_vechi || '—'} → {d.status_nou || '—'}
+                            {d.motiv_nou ? ` · ${d.motiv_nou}` : ''}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </>}
+            </div>
+          )}
+        </div>
+      )}
 
       {cerinte === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !cerinte.length ? <div style={{ fontSize:12, color:G.dim }}>Întâi extrage registrul de cerințe (secțiunea de mai sus) — apoi aici Opus îl confruntă cu autorizațiile din HR și partenerii.</div> :
