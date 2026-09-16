@@ -34,6 +34,11 @@
 // din tab-ul Clarificari al fisei, cu citire AI dedicata (ofertare-document-nou-citeste).
 // Fara marcaj, un raspuns la clarificari se pierdea printre cele 40 de planse din Documente.
 //
+// v7 (16.09.2026): un document din canalul de clarificari e identificat prin
+//   `noticeDocumentCode`, nu prin numele fisierului. Autoritatea republica documentatia
+//   revizuita sub ACELASI nume ca originalul (Racari: „Caiet de sarcini revizuit" =
+//   SCN1179379/00020, fisier identic cu SCN1179379/00002) - deduplicarea pe nume il sarea
+//   in tacere si ofertantul lucra pe varianta veche. Vezi ANTI-BUG in raspunsuriNotice.
 // v6 (16.09.2026): toate apelurile catre SEAP se reincearca la 403/429/5xx - SEAP
 //   refuza intermitent, iar un singur refuz sarea licitatia in tacere (vezi ANTI-BUG mai jos).
 // v5 (15.09.2026): veghea aduce SINGURA raspunsurile la clarificari publicate de autoritate.
@@ -106,7 +111,7 @@ const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).incl
 const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
   .replace(/[,()]/g, '').replace(/\s+/g, '');
 // Numele sub care autoritatile publica raspunsurile si modificarile documentatiei.
-const esteRaspuns = (n: string) => /clarific|r[aă]spuns|erat[aă]|errata|completare|modificare|addendum|notificare/i.test(n);
+const esteRaspuns = (n: string) => /clarific|r[aă]spuns|erat[aă]|errata|completare|modificare|revizuit|revizie|addendum|notificare/i.test(n);
 const esc = (s: string) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
 
 // -- Desfacerea semnaturii electronice (.p7s / CMS) ------------------------------
@@ -269,13 +274,34 @@ Deno.serve(async (req: Request) => {
     if (!lista.length) return { adusi, eroare: null };
 
     const { data: aveamDeja } = await supa.from('ofertare_documente_atribuire')
-      .select('nume_original').eq('licitatie_id', lic.id);
-    const cunoscute = new Set((aveamDeja || []).map((d: any) => cheieNume(d.nume_original)));
+      .select('nume_original, tip, antet').eq('licitatie_id', lic.id);
+    // ANTI-BUG 16.09.2026 (tichet Oana, Racari SCN1179379): identitatea unui document din
+    // canalul de clarificari e `noticeDocumentCode` (ex. SCN1179379/00020), NU numele
+    // fisierului. Autoritatea republica documentatia revizuita sub ACELASI nume de fisier
+    // ca originalul - dedus pe nume, caietul de sarcini revizuit era sarit in tacere, si
+    // ofertantul lucra mai departe pe varianta veche. Codurile deja vazute se tin in
+    // `antet->>seap_cod`; numele ramane doar pentru randurile vechi, fara cod.
+    const coduriCunoscute = new Set(
+      (aveamDeja || []).map((d: any) => d?.antet?.seap_cod).filter(Boolean).map(String),
+    );
+    const numeCunoscute = new Map<string, any>(
+      (aveamDeja || []).map((d: any) => [cheieNume(d.nume_original), d]),
+    );
     const erori: string[] = [];
 
     for (const it of lista) {
-      const nume = String(it?.documentName || it?.noticeDocumentName || '').replace(/\.p7s$/i, '');
-      if (!nume || cunoscute.has(cheieNume(nume))) continue;   // idempotent: ruleaza de 2x/zi
+      const cod = String(it?.noticeDocumentCode || '');
+      const fisier = String(it?.documentName || it?.noticeDocumentName || '').replace(/\.p7s$/i, '');
+      const titlu = String(it?.noticeDocumentName || '').trim();
+      if (!fisier) continue;
+      // idempotent (ruleaza de 2x/zi): codul e cheia. Fara cod, cadem pe vechea regula.
+      if (cod ? coduriCunoscute.has(cod) : numeCunoscute.has(cheieNume(fisier))) continue;
+      // Republicare: acelasi nume de fisier ca un document pe care deja il avem => e o
+      // VERSIUNE NOUA a lui. Se aduce oricum, sub un nume care o deosebeste, si mosteneste
+      // tipul documentului inlocuit (un caiet de sarcini revizuit ramane caiet de sarcini,
+      // nu devine „raspuns la clarificari" - altfel iese din motorul de acoperire).
+      const inlocuit = numeCunoscute.get(cheieNume(fisier));
+      const nume = inlocuit && titlu && titlu !== fisier ? `${titlu} — ${fisier}` : fisier;
       const url = String(it?.noticeDocumentUrl || '');
       if (!url) { erori.push(`${nume}: fara noticeDocumentUrl`); continue; }
       try {
@@ -288,7 +314,8 @@ Deno.serve(async (req: Request) => {
         const { buf } = desfaSemnatura(brut, String(it?.documentName || nume));
         if (!buf.length) { erori.push(`${nume}: fisier gol`); continue; }
         const safe = nume.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
-        const path = `${lic.id}/atribuire/raspunsuri/${safe}`;
+        // codul intra in cale: doua versiuni ale aceluiasi fisier nu se mai suprascriu
+        const path = `${lic.id}/atribuire/raspunsuri/${cod ? cod.replace(/[^a-zA-Z0-9]+/g, '_') + '_' : ''}${safe}`;
         const { error: eUp } = await supa.storage.from('ofertare')
           .upload(path, buf, {
             upsert: true,
@@ -297,13 +324,16 @@ Deno.serve(async (req: Request) => {
         if (eUp) { erori.push(`${nume}: upload ${eUp.message}`); continue; }
         const { error: eIns } = await supa.from('ofertare_documente_atribuire').insert({
           licitatie_id: lic.id, fisier_path: path, nume_original: nume,
-          tip: eRaspunsSeap(it) ? 'raspuns_clarificare' : 'alta',
+          tip: inlocuit?.tip || (eRaspunsSeap(it) ? 'raspuns_clarificare' : 'alta'),
           sursa: 'seap', aparut_ulterior: true, status_procesare: 'neprocesat',
           size_bytes: buf.length,
+          antet: { seap_cod: cod || null, seap_titlu: titlu || null, seap_publicat: it?.publicationDate || null,
+                   inlocuieste: inlocuit ? inlocuit.nume_original : null },
         });
         if (eIns) { erori.push(`${nume}: insert ${eIns.message}`); continue; }
-        cunoscute.add(cheieNume(nume));
-        adusi.push(nume);
+        if (cod) coduriCunoscute.add(cod);
+        numeCunoscute.set(cheieNume(nume), { nume_original: nume, tip: inlocuit?.tip });
+        adusi.push(inlocuit ? `${nume} (INLOCUIESTE versiunea veche)` : nume);
       } catch (e) {
         erori.push(`${nume}: ${String((e as Error)?.message || e)}`);
       }
