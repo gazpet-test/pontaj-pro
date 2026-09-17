@@ -21,6 +21,7 @@ import { compressFileBeforeUpload } from './utils/compressFile'
 import DomeniiPicker from './HrDomeniiPicker.jsx'
 import HrPersonalExtern from './HrPersonalExtern.jsx'
 import HrRecomandari from './HrRecomandari.jsx'
+import HrAutorizatiiCitire from './HrAutorizatiiCitire.jsx'
 
 // Theme
 const G = {
@@ -205,6 +206,7 @@ export default function HRPage() {
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
     { key: 'recomandari', icon: '📜', label: 'Recomandări' },
+    { key: 'citire_aut',  icon: '🤖', label: 'Citire autorizații', personalOnly: true },
     { key: 'peste_cim',   icon: '📑', label: 'Calificare > CIM', pesteCimOnly: true },  // task #70
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'adeverinte',  icon: '📄', label: 'Adeverințe legători', personalOnly: true },
@@ -290,6 +292,7 @@ export default function HRPage() {
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'recomandari' && <HrRecomandari profile={profile} employees={employees} canEdit={canAccessPersonal || isAdmin || canUseScanner} showToast={showToast} />}
+      {!load && tab === 'citire_aut' && canAccessPersonal && <HrAutorizatiiCitire profile={profile} canEdit={canAccessPersonal || isAdmin} showToast={showToast} />}
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'peste_cim' && (canAccessPersonal || isAdmin) && <TabCalificarePesteCim showToast={showToast} onClickEmp={(id) => { const e = employees.find(x => x.id === id); if (e) setEditEmp(e) }} />}
       {!load && tab === 'adeverinte' && canAccessPersonal && <AdeverinteLegator profile={profile} showToast={showToast} />}
