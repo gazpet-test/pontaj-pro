@@ -28,8 +28,11 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
-const MODEL = 'claude-opus-5'
-const PRICE_IN = 5 / 1e6, PRICE_OUT = 25 / 1e6
+// 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
+// 2m53s). Sonnet 5 scrie același capitol în jumătate din timp; generarea în fundal (fără limită)
+// rămâne de făcut — vezi task.
+const MODEL = 'claude-sonnet-5'
+const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
@@ -239,7 +242,7 @@ Deno.serve(async (req: Request) => {
       body: JSON.stringify({
         // Pe claude-opus-5 gandirea e pornita implicit si tokenii ei se scad din max_tokens;
         // o declaram explicit si ii dam loc, ca taietura sa nu cada in blocul de gandire.
-        model: MODEL, max_tokens: 16000,
+        model: MODEL, max_tokens: 12000,
         thinking: { type: 'adaptive' },
         // Promptul e partea stabila (identica la fiecare capitol) -> intra in cache.
         system: [{ type: 'text', text: PROMPT, cache_control: { type: 'ephemeral' } }],
