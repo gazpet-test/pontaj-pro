@@ -4,7 +4,8 @@
 //     garanția stăteau în ERP, legate pe licitație. Acum funcția le adună singură (pachetFapte) și
 //     le pune în prompt înaintea cerințelor: modelul scrie cu numele și numerele reale și marchează
 //     [DE COMPLETAT] doar ce chiar nu e în ERP. Tot v2: numerele de formular vin DOAR din cerințe
-//     (a inventat un „Formular 25" care nu exista în setul autorității).
+//     (a inventat un „Formular 25" care nu exista în setul autorității). Documentele firmei doar cu
+//     utilizabil=true: rândul-santinelă „INSEMEX de firmă — NU EXISTĂ" nu are ce căuta în prompt.
 //
 // De ce e ultimul lucru construit din modul, nu primul: un generator fără poartă e o mașină de
 // produs text plauzibil pentru un document depus la SEAP. Poarta există acum (rândul
@@ -77,7 +78,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
     supabase.from('ofertare_pt_declaratii').select('forma, stare, citat').eq('licitatie_id', licId).limit(20),
     supabase.from('ofertare_clarificari').select('nr, intrebare, raspuns, raspuns_la').eq('licitatie_id', licId).eq('status', 'raspunsa').order('nr').limit(20),
     supabase.from('ofertare_pt_capitole').select('id, nr, titlu, continut').eq('licitatie_id', licId).order('nr').limit(40),
-    supabase.from('documente_firma').select('id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare').eq('activ', true).in('categorie', ['iso', 'autorizatie']).order('id').limit(80),
+    supabase.from('documente_firma').select('id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare').eq('activ', true).eq('utilizabil', true).in('categorie', ['iso', 'autorizatie']).order('id').limit(80),
     supabase.from('ofertare_pt_afirmatii').select('*').eq('licitatie_id', licId).limit(100),
   ])
   for (const [nume, r] of [['acoperiri', acop], ['grafic', graf], ['garanție', gar], ['participanți', part], ['declarații', decl], ['clarificări', clar], ['capitole', caps], ['documente firmă', docF], ['afirmații', afirm]] as [string, any][]) {
