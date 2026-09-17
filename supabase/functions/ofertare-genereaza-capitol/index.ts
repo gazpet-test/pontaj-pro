@@ -58,6 +58,7 @@ CE NU FACI:
 - Nu scrii "nu este cazul" decât dacă ești sigur din cerințe — unele autorități îl interzic explicit și descalifică pentru el.
 - Nu promiți nimic peste ce cer cerințele (fiecare promisiune în plus devine obligație contractuală).
 - Nu copiezi cerința ca răspuns la ea însăși.
+- NICIUN ELEMENT DE PREȚ AL OFERTEI în propunerea tehnică: nicio valoare în lei a lucrării, niciun total pe activități, niciun tarif — nici măcar „încadrat în valoarea estimată". Prețul stă exclusiv în propunerea financiară; o cifră de preț în PT e motiv de respingere a ofertei. (Valorile contractelor anterioare, la experiența similară, sunt permise.)
 
 PACHETUL DE FAPTE (v2): primești, înaintea cerințelor, FAPTELE din ERP legate de licitația asta — echipa nominalizată cu autorizațiile ei, experiența similară, partenerii cu contracte, documentele firmei, graficul, garanția, participanții, răspunsurile autorității la clarificări. Astea SUNT faptele pe care ai voie să le scrii: nume, numere de autorizație, date, valori, exact cum apar acolo. Nu le rotunji, nu le „îmbunătățești". Ce NU e în pachet rămâne [DE COMPLETAT]. Când o cerință e închisă printr-un răspuns la clarificare (ex. „proiectarea nu se cere", „subcontractantul nu e obligatoriu"), spui asta cu trimitere la numărul răspunsului, nu inventezi documente.
 FORMULARE: numerele de formulare (Formular 9, F14, Anexa 3) le scrii DOAR dacă apar în textul cerințelor sau în pachet. Nu presupui existența unui formular „standard" — la Domnești nu există Formular 25, deși pare firesc.
@@ -75,7 +76,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
     supabase.from('ofertare_acoperire')
       .select('id, status, mod, domeniu_rte, referinta_text, cerinta:ofertare_cerinte!inner(id, licitatie_id, tip, text_cerinta), autorizatie:hr_autorizatii(id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare, domenii, subcategorie, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name, functie), ext:hr_personal_extern(nume, functie, firma)), recomandare:hr_recomandari(id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, nr_document, data_document, emp:employees(name), ext:hr_personal_extern(nume)), studii:hr_documente_personale(id, numar_document, emitent, data_emitere, observatii, tip:hr_documente_personale_tipuri(denumire), emp:employees(name)), partener:ofertare_parteneri(id, nume, cui, tip_relatie, observatii), doc_firma:documente_firma(id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare), experienta:ofertare_experienta(id, denumire, beneficiar, valoare_lei, valoare_executata_lei, asociere, data_pv, tip_pv, observatii)')
       .eq('cerinta.licitatie_id', licId).in('status', ['acoperit', 'acoperit_partener', 'in_lucru']).order('id').limit(400),
-    supabase.from('grafic_activitati').select('ordine, denumire, durata_zile, jalon, resurse, valoare_lei').eq('licitatie_id', licId).order('ordine').limit(200),
+    supabase.from('grafic_activitati').select('ordine, denumire, durata_zile, jalon, resurse').eq('licitatie_id', licId).order('ordine').limit(200),
     supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', licId).maybeSingle(),
     supabase.from('ofertare_pt_participanti').select('rol, nume, cota_procent, activitati, scop_declarat, partener:ofertare_parteneri(nume)').eq('licitatie_id', licId).limit(50),
     supabase.from('ofertare_pt_declaratii').select('forma, stare, citat').eq('licitatie_id', licId).limit(20),
@@ -137,9 +138,10 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
 
   const g = graf?.data || []
   if (g.length) {
-    const total = g.reduce((s: number, r: any) => s + (Number(r.valoare_lei) || 0), 0)
-    parti.push(`GRAFICUL DE EXECUȚIE (${g.length} activități; valoarea însumată pe activități ${total ? total.toFixed(2) + ' lei fără TVA' : 'necompletată'}):\n` +
-      g.map((r: any) => `- ${r.ordine}. ${r.denumire} — ${r.jalon ? 'jalon' : r.durata_zile + ' zile'}${r.resurse ? '; resurse: ' + scurt(r.resurse, 80) : ''}${r.valoare_lei ? '; ' + r.valoare_lei + ' lei' : ''}`).join('\n'))
+    // FĂRĂ valori: prețul stă doar în propunerea financiară. La Domnești cap. 2 a scris „2.711.507,16 lei"
+    // (suma pe activități) — element de preț în PT = motiv de respingere. Graficul dă doar durate/resurse.
+    parti.push(`GRAFICUL DE EXECUȚIE (${g.length} activități):\n` +
+      g.map((r: any) => `- ${r.ordine}. ${r.denumire} — ${r.jalon ? 'jalon' : r.durata_zile + ' zile'}${r.resurse ? '; resurse: ' + scurt(r.resurse, 80) : ''}`).join('\n'))
   } else parti.push('GRAFICUL DE EXECUȚIE: nu există încă activități în ERP — duratele și eșalonarea rămân [DE COMPLETAT].')
 
   if (gar?.data) parti.push(`GARANȚIA LUCRĂRILOR (confirmată în ERP): ${scurt(JSON.stringify(gar.data), 400)}`)
