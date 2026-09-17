@@ -186,15 +186,24 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
   // singur clic, așa că: spune exact câte și cât înainte, merge una câte una (nu în paralel —
   // ar lovi rate limit-ul și n-ai ști care a picat), se poate opri din mers, iar la final
   // raportează pe bune ce-a ieșit. Nu bifează nimic „verificat": aia rămâne mâna omului.
-  const citesteToate = async () => {
-    const deCitit = filtrate.filter(r => r.fisier_path && !r.ai_citit_la)
+  // „Necitit" nu inseamna doar `ai_citit_la IS NULL`: o incercare esuata SCRIE data citirii si un
+  // avertisment, deci randul ramanea in afara filtrului si nu mai era reluat niciodata. De citit =
+  // n-a fost citit vreodata SAU a fost, dar n-a iesit nimic din el.
+  const nuAreNimic = (r) => !r.rol && !r.beneficiar && !r.obiect_lucrare
+  const deCititAcum = (r) => r.fisier_path && (!r.ai_citit_la || nuAreNimic(r))
+
+  const citesteToate = async (tot = false) => {
+    const deCitit = filtrate.filter(r => r.fisier_path && (tot || deCititAcum(r)))
     if (!deCitit.length) { showToast('Nimic de citit — toate cele afișate au fost deja citite', 'warn'); return }
     const cost = (deCitit.length * 0.04).toFixed(2)
     if (!window.confirm(
-      `Citesc cu AI ${deCitit.length} recomandări necitite din cele afișate acum.\n\n` +
+      (tot
+        ? `RECITESC cu AI toate cele ${deCitit.length} recomandări afișate, inclusiv pe cele deja citite.\n\n`
+        : `Citesc cu AI ${deCitit.length} recomandări necitite sau eșuate din cele afișate acum.\n\n`) +
       `Costă aproximativ ${cost} $ (o citire ≈ 0,04 $). Merge una câte una și poți opri pe parcurs.\n\n` +
+      `Un fișier poate conține mai multe scrisori: cele în plus apar ca rânduri noi, legate de acesta.\n` +
       `Câmpurile completate de AI rămân NEVERIFICATE — tot tu bifezi ✓ la final.`)) return
-    let facute = 0, erori = 0, slabe = 0
+    let facute = 0, erori = 0, slabe = 0, dinPachete = 0
     opresc.current = false
     setToate({ facute: 0, din: deCitit.length })
     for (const r of deCitit) {
@@ -202,7 +211,7 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
       try {
         const { data, error } = await supabase.functions.invoke('hr-recomandare-citeste', { body: { recomandare_id: r.id } })
         if (error || data?.error || data?.eroare) erori++
-        else { facute++; if ((data.incredere ?? 0) < 60 || data.avertisment) slabe++ }
+        else { facute++; dinPachete += (data.randuri_noi || 0); if ((data.incredere ?? 0) < 60 || data.avertisment) slabe++ }
       } catch (e) { erori++ }
       setToate(t => t ? { ...t, facute: facute + erori } : t)
     }
@@ -211,7 +220,7 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
     setToate(null)
     await reload()
     showToast(
-      `Citite ${facute} din ${deCitit.length}` + (oprit ? ' (oprit de tine)' : '') + (erori ? ` · ${erori} cu eroare` : '') +
+      `Citite ${facute} din ${deCitit.length}` + (oprit ? ' (oprit de tine)' : '') + (dinPachete ? ` · +${dinPachete} scrisori găsite în aceleași fișiere` : '') + (erori ? ` · ${erori} cu eroare` : '') +
       (slabe ? ` · ${slabe} de verificat cu ochiul (încredere mică sau avertisment)` : ''),
       erori || slabe ? 'warn' : 'success')
   }
@@ -241,10 +250,16 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
               <span style={{ fontSize:12, color:G.yellow, fontWeight:700 }}>🤖 citesc… {toate.facute}/{toate.din}</span>
               <button onClick={() => { opresc.current = true }} style={{ ...S.btnS, color:G.orange, borderColor:G.orange+'55' }}>Oprește</button>
             </>
-          : <button onClick={citesteToate} style={{ ...S.btnS, color:G.purple, borderColor:G.purple+'55', fontWeight:600 }}
-              title="AI citește, una câte una, recomandările afișate care n-au fost încă citite. Costă — îți spune câte și cât înainte.">
-              🤖 Citește toate necitite ({filtrate.filter(r => r.fisier_path && !r.ai_citit_la).length})
-            </button>)}
+          : <>
+              <button onClick={() => citesteToate(false)} style={{ ...S.btnS, color:G.purple, borderColor:G.purple+'55', fontWeight:600 }}
+                title="AI citește, una câte una, recomandările afișate care n-au fost citite sau la care citirea n-a scos nimic. Costă — îți spune câte și cât înainte.">
+                🤖 Citește necitite ({filtrate.filter(deCititAcum).length})
+              </button>
+              <button onClick={() => citesteToate(true)} style={{ ...S.btnS, color:G.dim, fontSize:12 }}
+                title="Recitește TOT ce e afișat, inclusiv ce a fost deja citit — util după ce cititorul a fost îmbunătățit. Costă de fiecare dată.">
+                ↻ recitește tot ({filtrate.filter(r => r.fisier_path).length})
+              </button>
+            </>)}
         {canEdit && <button onClick={() => setModal('nou')} style={S.btnP} disabled={!!toate}>+ Recomandare</button>}
       </div>
       <div style={{ fontSize:11.5, color:G.dim, marginBottom:10 }}>
@@ -265,7 +280,7 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
                   <td style={{ ...td, whiteSpace:'nowrap' }}>{fmtZi(r.perioada_start)} → {fmtZi(r.perioada_end)}</td>
                   <td style={{ ...td, whiteSpace:'nowrap' }}>{fmtLei(r.valoare_lei)}</td>
                   <td style={td}>{(r.domenii || []).map(d => <span key={d} style={{ fontSize:10.5, border:`1px solid ${G.border}`, borderRadius:8, padding:'1px 6px', marginRight:4 }}>{d}</span>)}</td>
-                  <td style={{ ...td, whiteSpace:'nowrap' }}>{r.ai_citit_la ? <span title={`citit ${new Date(r.ai_citit_la).toLocaleString('ro-RO')}`} style={{ color: (r.ai_confidenta || 0) >= 80 ? G.green : G.orange, fontWeight:700 }}>🤖 {r.ai_confidenta ?? '?'}</span> : <span style={{ color:G.dim }}>necitit</span>}</td>
+                  <td style={{ ...td, whiteSpace:'nowrap' }}>{r.parinte_id ? <span title={r.observatii || 'extrasă dintr-un fișier cu mai multe scrisori'} style={{ fontSize:10, fontWeight:800, color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, padding:'1px 5px', marginRight:5 }}>📎 din pachet</span> : null}{r.ai_citit_la ? <span title={`citit ${new Date(r.ai_citit_la).toLocaleString('ro-RO')}`} style={{ color: (r.ai_confidenta || 0) >= 80 ? G.green : G.orange, fontWeight:700 }}>🤖 {r.ai_confidenta ?? '?'}</span> : <span style={{ color:G.dim }}>necitit</span>}</td>
                   <td style={td}><button onClick={() => canEdit && verifica(r)} title={r.verificat ? `verificat ${fmtZi(r.verificat_la)} — click pentru a anula` : 'bifează după ce ai comparat câmpurile cu documentul'} style={{ ...S.btnS, padding:'3px 8px', fontSize:12, color: r.verificat ? G.green : G.muted, borderColor: r.verificat ? G.green + '66' : G.border }}>{r.verificat ? '✓ verificat' : '○ neverificat'}</button></td>
                   <td style={{ ...td, whiteSpace:'nowrap' }}>
                     <button onClick={() => deschide(r)} disabled={!r.fisier_path} style={{ ...S.btnS, padding:'3px 8px', fontSize:12, marginRight:4 }} title={r.fisier_nume || ''}>📎</button>
