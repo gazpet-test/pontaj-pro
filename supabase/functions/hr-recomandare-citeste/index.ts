@@ -64,14 +64,20 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 1500, system: SYS,
+    // 17.09.2026 — acelasi anti-bug ca in ofertare-acoperire (CLAUDE.md): pe claude-opus-5 gandirea
+    // e PORNITA implicit cand `thinking` lipseste, iar tokenii de gandire se scad din max_tokens. La
+    // 1500 taietura cadea in blocul de gandire pe documentele mai lungi: nu mai ramanea niciun bloc
+    // `text`, iar functia raporta „fara text (stop max_tokens)" — adica o recomandare perfect lizibila
+    // aparea ca necitibila. S-a intamplat pe 2 din primele 11 (Dadulescu distributie gaze, Pantea
+    // Conpet). O declaram explicit si ii dam loc. `budget_tokens` ar da 400 pe modelul asta.
+    body: JSON.stringify({ model: MODEL, max_tokens: 8000, thinking: { type: 'adaptive' }, system: SYS,
       messages: [{ role: 'user', content: [continut, { type: 'text', text: 'Ce scrie în această recomandare?' }] }] }),
   });
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
   const txt = (Array.isArray(j?.content) ? j.content : []).filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
   const m = txt.match(/\{[\s\S]*\}/);
-  if (!m) return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason})`).slice(0, 200), _tin: tin, _tout: tout };
+  if (!m) return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason}${j?.stop_reason === 'max_tokens' ? ' — raspunsul s-a taiat; documentul e probabil lung, se poate reincerca' : ''})`).slice(0, 200), _tin: tin, _tout: tout };
   try { return { ...JSON.parse(m[0]), _tin: tin, _tout: tout }; }
   catch (e) { return { eroare: 'JSON invalid: ' + String((e as Error)?.message).slice(0, 100), _tin: tin, _tout: tout }; }
 }
