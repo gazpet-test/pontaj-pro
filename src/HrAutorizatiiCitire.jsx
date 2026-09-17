@@ -29,6 +29,7 @@ const th = { padding:'9px 10px', textAlign:'left', fontSize:11, fontWeight:700, 
 const td = { padding:'9px 10px', verticalAlign:'top', fontSize:12.5 }
 const BUCKET = 'documente-personal'
 const fmtZi = (d) => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
+const MODELE = [['claude-opus-5', 'Opus 5 (~0,07 $/doc)'], ['claude-haiku-4-5', 'Haiku 4.5 (~0,014 $/doc)']]
 
 // Sita STRICTĂ, cea măsurată: descrierea citită la import spune, de regulă, ce e documentul.
 // Astea sunt cele ~181 care chiar arată a autorizație.
@@ -49,6 +50,10 @@ export default function HrAutorizatiiCitire({ profile, canEdit, showToast }) {
   const [q, setQ] = useState('')
   const [vedere, setVedere] = useState('propuneri')   // propuneri | necitite | respinse
   const [larg, setLarg] = useState(false)
+  // Opus implicit: greseste mai rar pe scanuri proaste, iar o data de expirare gresita intra in
+  // alertele de expirare si arata „in regula". Haiku e de 5 ori mai ieftin — de probat pe un lot
+  // mic, comparat cu Opus pe aceleasi documente, inainte de a-l pune pe tot.
+  const [model, setModel] = useState('claude-opus-5')
   const [toate, setToate] = useState(null)
   const opresc = useRef(false)
 
@@ -94,11 +99,15 @@ export default function HrAutorizatiiCitire({ profile, canEdit, showToast }) {
 
   const citeste = async (lista) => {
     if (!lista.length) { showToast?.('Nimic de citit', 'warn'); return }
-    // 0,07 $ e media MĂSURATĂ pe primele 25 de citiri reale ale recomandărilor (1,74 $ / 25).
-    const cost = (lista.length * 0.07).toFixed(2)
+    // 0,07 $/document e media MĂSURATĂ pe Opus, pe primele 25 de citiri reale ale recomandărilor
+    // (1,74 $ / 25). Haiku 4.5 costă a cincea parte pe token (1/5 $ vs 5/25 $ pe milion), deci
+    // estimarea se scalează la fel — rămâne o estimare până o măsurăm și pe ea.
+    const perDoc = model === 'claude-haiku-4-5' ? 0.014 : 0.07
+    const cost = (lista.length * perDoc).toFixed(2)
     if (!window.confirm(
       `Citesc cu AI ${lista.length} documente din dosarele de personal, ca să văd care sunt autorizații.\n\n` +
-      `Costă aproximativ ${cost} $ (media măsurată: 0,07 $ pe document). Merge unul câte unul și poți opri pe parcurs.\n\n` +
+      `Model: ${MODELE.find(m => m[0] === model)?.[1] || model}.\n` +
+      `Costă aproximativ ${cost} $ (${perDoc} $ pe document). Merge unul câte unul și poți opri pe parcurs.\n\n` +
       `NIMIC nu intră singur în Autorizații: fiecare citire devine o PROPUNERE pe care o accepți tu, rând cu rând.`)) return
     let ok = 0, erori = 0, aut = 0
     opresc.current = false
@@ -106,7 +115,7 @@ export default function HrAutorizatiiCitire({ profile, canEdit, showToast }) {
     for (const d of lista) {
       if (opresc.current) break
       try {
-        const { data, error } = await supabase.functions.invoke('hr-autorizatie-citeste', { body: { document_id: d.id } })
+        const { data, error } = await supabase.functions.invoke('hr-autorizatie-citeste', { body: { document_id: d.id, model } })
         if (error || data?.error || data?.eroare) erori++
         else { ok++; if (data.este_autorizatie) aut++ }
       } catch (e) { erori++ }
@@ -160,6 +169,13 @@ export default function HrAutorizatiiCitire({ profile, canEdit, showToast }) {
           și cele încadrate generic (+{inPlusLarg})
         </label>
         <span style={{ flex:1 }} />
+        {canEdit && !toate && (
+          <select value={model} onChange={e => setModel(e.target.value)}
+            title="Haiku e de 5 ori mai ieftin, dar citește mai slab scanurile proaste. Probează-l pe câteva documente și compară cu Opus înainte de a-l pune pe tot lotul."
+            style={{ ...S.input, width:'auto', padding:'7px 10px', fontSize:12 }}>
+            {MODELE.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        )}
         {canEdit && (toate
           ? <>
               <span style={{ fontSize:12, color:G.yellow, fontWeight:700 }}>🤖 citesc… {toate.facute}/{toate.din}</span>
@@ -211,6 +227,7 @@ export default function HrAutorizatiiCitire({ profile, canEdit, showToast }) {
                       {p.este_autorizatie ? `${p.tip_cod}` : (p.ai_json?.ce_este || 'nu e autorizație')}
                     </span>
                     {p.incredere != null && <span style={{ marginLeft:8, fontSize:11, color: p.incredere >= 60 ? G.dim : G.orange }}>încredere {p.incredere}</span>}
+                    {p.model && <span style={{ marginLeft:8, fontSize:10.5, color:G.dim }}>{p.model.replace('claude-', '')}</span>}
                   </div>
                   <div style={{ fontSize:12, color:G.muted, marginTop:3 }}>
                     {[p.numar_autorizatie && `nr. ${p.numar_autorizatie}`, p.emitent, p.data_emitere && `emis ${fmtZi(p.data_emitere)}`,

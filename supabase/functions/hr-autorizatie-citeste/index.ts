@@ -1,4 +1,4 @@
-// hr-autorizatie-citeste v1 (17.09.2026) — citeste un document din hr_documente_personale si
+// hr-autorizatie-citeste v2 (17.09.2026) — citeste un document din hr_documente_personale si
 // spune daca e o AUTORIZATIE profesionala, care anume, cu ce numar si ce valabilitate.
 //
 // De ce exista: 480 de autorizatii in platforma, doar 21 legate de un document; 181 de documente
@@ -27,9 +27,21 @@ const CORS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
-const MODEL = 'claude-opus-5';
-const PRET_IN = 5 / 1e6, PRET_OUT = 25 / 1e6;
+// Doua modele, alese din UI. Opus e implicit fiindca el greseste mai rar pe scanuri proaste,
+// iar o data de expirare gresita ajunge in alertele de expirare. Haiku e de 5 ori mai ieftin
+// (1/5 $ vs 5/25 $ pe milionul de tokeni) si merita incercat pe un lot mic, comparat cu Opus
+// pe aceleasi documente, inainte de a-l pune pe tot.
+// ATENTIE la gandire: Haiku 4.5 NU accepta `thinking: {type:'adaptive'}` (aia e pe generatia
+// noua), iar Opus 5 da 400 la `budget_tokens`. Configuratia difera per model — vezi `gandire()`.
+const MODELE: Record<string, { in: number; out: number }> = {
+  'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 },
+  'claude-haiku-4-5': { in: 1 / 1e6, out: 5 / 1e6 },
+};
+const MODEL_IMPLICIT = 'claude-opus-5';
 const BUCKET = 'documente-personal';
+const gandire = (model: string) => model.startsWith('claude-haiku')
+  ? { thinking: { type: 'enabled', budget_tokens: 2000 } }
+  : { thinking: { type: 'adaptive' } };
 
 function b64(buf: Uint8Array) {
   let s = '';
@@ -79,7 +91,7 @@ REGULI:
 - "incredere" = cat de sigur esti pe tip, numar si titular impreuna.`;
 }
 
-async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: string) {
+async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: string, model: string) {
   let continut: any;
   if (mime === 'application/pdf') continut = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bin) } };
   else if (mime.startsWith('image/')) continut = { type: 'image', source: { type: 'base64', media_type: mime, data: b64(bin) } };
@@ -90,7 +102,7 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array, sys: strin
     // Anti-bug CLAUDE.md: pe claude-opus-5 gandirea e PORNITA implicit cand `thinking` lipseste, iar
     // tokenii de gandire se scad din max_tokens — taietura cadea in blocul de gandire si raspunsul
     // parea gol. O declaram explicit. `budget_tokens` ar da 400 pe modelul asta.
-    body: JSON.stringify({ model: MODEL, max_tokens: 8000, thinking: { type: 'adaptive' }, system: sys,
+    body: JSON.stringify({ model, max_tokens: 8000, ...gandire(model), system: sys,
       messages: [{ role: 'user', content: [continut, { type: 'text', text: 'Ce este acest document?' }] }] }),
   });
   const j = await r.json();
@@ -152,6 +164,9 @@ Deno.serve(async (req: Request) => {
   try { body = await req.json(); } catch (_) { /* gol */ }
   const id = Number(body?.document_id);
   if (!id) return json({ error: 'document_id lipsa' }, 400);
+  // Lista alba: modelul vine din UI, deci nu se ia ca atare. Un nume necunoscut cade pe implicit.
+  const model = (typeof body?.model === 'string' && MODELE[body.model]) ? body.model : MODEL_IMPLICIT;
+  const pret = MODELE[model];
 
   const { data: doc, error: eDoc } = await supa.from('hr_documente_personale')
     .select('id, employee_id, fisier_path, fisier_mime, observatii, tip:hr_documente_personale_tipuri(cod, denumire), emp:employees(name)')
@@ -175,11 +190,11 @@ Deno.serve(async (req: Request) => {
   if (buf.length > 20 * 1024 * 1024) return json({ error: 'fisier peste 20 MB' }, 400);
   const mime = doc.fisier_mime || (doc.fisier_path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
 
-  const rez: any = await citeste(API_KEY, mime, buf, sistem(tipuri, alePersoanei));
+  const rez: any = await citeste(API_KEY, mime, buf, sistem(tipuri, alePersoanei), model);
   try {
-    await supa.from('ai_usage_log').insert({ function_name: 'hr-autorizatie-citeste', model: MODEL,
+    await supa.from('ai_usage_log').insert({ function_name: 'hr-autorizatie-citeste', model,
       tokens_in: rez?._tin || 0, tokens_out: rez?._tout || 0,
-      cost_usd: (rez?._tin || 0) * PRET_IN + (rez?._tout || 0) * PRET_OUT,
+      cost_usd: (rez?._tin || 0) * pret.in + (rez?._tout || 0) * pret.out,
       ref_table: 'hr_documente_personale', ref_id: id });
   } catch (_) { /* logul nu blocheaza */ }
   // Eroare de BUSINESS: se intoarce, NU se arunca (anti-bug Edge din CLAUDE.md).
@@ -225,12 +240,12 @@ Deno.serve(async (req: Request) => {
     nume_se_potriveste: numeOk,
     incredere, citat: r.citat ? String(r.citat).slice(0, 500) : null,
     avertisment: avert.length ? avert.join(' · ') : null,
-    ai_json: r, model: MODEL, status: 'propus',
+    ai_json: r, model, status: 'propus',
   };
   const { data: ins, error: eIns } = await supa.from('hr_autorizatii_propuneri').insert(rand).select('id').maybeSingle();
   if (eIns) return json({ ok: false, document_id: id, eroare: 'scriere propunere: ' + eIns.message });
 
-  return json({ ok: true, document_id: id, propunere_id: ins?.id, este_autorizatie: esteAut,
+  return json({ ok: true, document_id: id, propunere_id: ins?.id, model, este_autorizatie: esteAut,
     ce_este: r.ce_este || null, actiune, tip_cod: tipCod, autorizatie_potrivita_id: tinta,
     incredere, avertisment: rand.avertisment });
 });
