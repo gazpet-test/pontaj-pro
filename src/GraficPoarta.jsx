@@ -25,6 +25,33 @@ const S = {
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
 
+// ── Rândurile care reprezintă FRONTURILE de lucru (tronsoane cu lungime) ──────
+// 17.09.2026, Domnești: generatorul căuta `categorie ~ /rețea/`, nomenclatura de la
+// GAZE. La o licitație de APĂ categoriile se cheamă „Conducte și montaj" și
+// „TITLU SECȚIUNE", deci poarta găsea 0 rânduri de rețea și butonul rămânea
+// blocat pe o licitație cu datele complete în platformă (11 străzi, 5.455 m,
+// verificate față de fișa de date).
+//
+// Ordinea contează și NU e o preferință de stil:
+//   1. rândurile de TITLU SECȚIUNE („Extindere rețele ... - Făgului") sunt
+//      LUNGIMILE REALE pe stradă — exact ce trebuie unui front;
+//   2. categoriile de conducte sunt articole de DEVIZ: fiecare articol are metrii
+//      lui, iar suma lor (39.772 m la Domnești) e de 7 ori lungimea reală a
+//      rețelei. Folosite ca fronturi, ar produce un grafic de șapte ori mai lung.
+// De aceea titlurile de secțiune câștigă când există, și nu se amestecă niciodată
+// cele două surse.
+const rxFrontTitlu = /re[țt]ea|conduct|extindere/i
+const rxFrontCateg = /re[țt]ea|conduct/i
+function randuriFront(cantitati, baza = 'cantitate') {
+  const cuMetri = (cantitati || []).filter(c =>
+    String(c.um || '').toLowerCase() === 'm' &&
+    !/total/i.test(c.obiect || '') &&
+    Number(c[baza] ?? c.cantitate) > 0)
+  const titluri = cuMetri.filter(c => /titlu/i.test(c.categorie || '') && rxFrontTitlu.test(c.denumire || ''))
+  if (titluri.length) return titluri
+  return cuMetri.filter(c => rxFrontCateg.test(c.categorie || ''))
+}
+
 const PARAM_DEFAULT = {
   tip_lucrare: 'retea_pehd',
   mod: 'oferta',                 // oferta | intern
@@ -233,8 +260,18 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   // fronturi propuse din cantități (rândurile de rețea cu metri, fără „total")
   const propuneFronturi = () => {
     const baza = p.cantitati_asumate === 'plansa' ? 'cantitate_plansa' : 'cantitate'
-    const fr = cantitati.filter(c => c.um === 'm' && /re[țt]ea/i.test(c.categorie || '') && !/total/i.test(c.obiect || '') && Number(c[baza]) > 0)
-      .map(c => ({ nume: (c.denumire || '').replace(/Țeavă\s+PE\d+\s+SDR\d+\s*/i, '').split('—')[1]?.trim() || (c.denumire || '').slice(0, 40), lungime_m: Math.round(Number(c[baza])), dn: ((c.denumire || '').match(/Dn\s*(\d{2,3})/i) || [])[1] || '', echipe: 1 }))
+    const fr = randuriFront(cantitati, baza)
+      .map(c => {
+        // numele frontului = ce e după liniuță („… - Făgului"), cu em-dash sau minus
+        const d = (c.denumire || '').replace(/Țeavă\s+PE\d+\s+SDR\d+\s*/i, '')
+        const dupaLiniuta = d.split(/\s[—–-]\s/).slice(1).join(' - ').trim()
+        return {
+          nume: dupaLiniuta || d.slice(0, 40),
+          lungime_m: Math.round(Number(c[baza] ?? c.cantitate)),
+          dn: ((c.denumire || '').match(/D[ne]?\s*(\d{2,3})/i) || [])[1] || '',
+          echipe: 1,
+        }
+      })
     setParam('fronturi', fr)
   }
 
@@ -251,7 +288,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
     if (!p) return []
     const out = []
     const totalRetea = cantitati.find(c => /total/i.test(c.obiect || '') && c.um === 'm')
-    const reteaRows = cantitati.filter(c => c.um === 'm' && /re[țt]ea/i.test(c.categorie || '') && !/total/i.test(c.obiect || ''))
+    const reteaRows = randuriFront(cantitati, p.cantitati_asumate === 'plansa' ? 'cantitate_plansa' : 'cantitate')
     const cuDif = reteaRows.filter(c => c.status === 'diferenta')
     out.push({ k: 'cant', titlu: 'Cantități rețea în platformă', stare: !reteaRows.length ? 'block' : (cuDif.length && !p.cantitati_asumate) ? 'block' : cuDif.length ? 'warn' : 'ok',
       detalii: !reteaRows.length ? 'niciun rând de rețea în Cantități' : `${reteaRows.length} rânduri rețea${totalRetea ? `, total declarat ${Number(totalRetea.cantitate).toLocaleString('ro-RO')} m` : ''}${cuDif.length ? ` · ${cuDif.length} cu diferență memoriu/planșă → alege baza (memoriu / planșă)` : ''}` })
