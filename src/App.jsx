@@ -42,6 +42,9 @@ import PopoverBara from './PopoverBara.jsx'
 // ════════════ PROVIZORIU: corecții registru imobilizări ↔ inventar (24.08.2026) ════════════
 // Se scoate (ruta + fișierul InventarCorectii.jsx) când proiectul de aliniere e încheiat.
 import InventarCorectii from './InventarCorectii.jsx'
+// PROVIZORIU (17.09.2026): propuneri pentru organigrama firmei. Se scoate (ruta + fișierul
+// + tabelul organigrama_propuneri) când organigrama propriu-zisă e gata.
+import OrganigramaPropuneri from './OrganigramaPropuneri.jsx'
 import GraficLucrare from './GraficLucrare.jsx'
 import { MeteoSediu } from './Meteo.jsx'
 import Integrari from './Integrari.jsx'
@@ -129,6 +132,13 @@ function ConsumabileRoute() {
 function InventarCorectiiRoute() {
   const { profile } = useAuth()
   return <InventarCorectii profile={profile} />
+}
+
+// PROVIZORIU (17.09.2026): oricine e logat vede și propune — așa a fost cerut, ca să adune
+// varianta bună de la toată lumea. Deciziile le dă doar ownerul, iar RLS ține regula pe server.
+function OrganigramaPropuneriRoute() {
+  const { profile } = useAuth()
+  return <OrganigramaPropuneri profile={profile} />
 }
 
 // Graficul de execuție (Gantt + drum critic) al unei lucrări — /grafic/proiect/25
@@ -989,6 +999,8 @@ function HomeDashboard() {
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
     { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
+    // TEMPORAR (17.09.2026): se șterge cu tot cu rută când organigrama propriu-zisă e gata
+    { path:'/organigrama-propuneri', icon:'🧩', label:'Organigramă (propuneri)', color:'#56D4DD', desc:'Departamente · funcții · rol la licitații · PROVIZORIU', active:true },
     // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
     { path:'/inventar-corectii', icon:'🏷️', label:'Inventar Corecții', color:'#D29922', desc:'Registru ↔ BD · VECHI→NOU · TEMPORAR', active:true, emailsAllow:['m.alexandru@gazpet.ro','daniel.oancea@gazpet.ro','marilena.tudorache@gazpet.ro'] },
   ]
@@ -8542,6 +8554,7 @@ export default function App() {
         <Route path="/consumabile" element={<ProtectedRoute><Layout><DoarIntern><ConsumabileRoute/></DoarIntern></Layout></ProtectedRoute>}/>
         {/* PROVIZORIU: corecții registru imobilizări (se scoate la finalul proiectului) */}
         <Route path="/inventar-corectii" element={<ProtectedRoute><Layout><InventarCorectiiRoute/></Layout></ProtectedRoute>}/>
+        <Route path="/organigrama-propuneri" element={<ProtectedRoute><Layout><OrganigramaPropuneriRoute/></Layout></ProtectedRoute>}/>
         <Route path="/grafic/:tip/:id" element={<ProtectedRoute><GraficLucrareRoute/></ProtectedRoute>}/>
         {/* ════════════ Etapa 15 Faza 1: Routes module Comercial ════════════ */}
         <Route path="/comercial" element={<ProtectedRoute requireModule="comercial"><Layout><ComercialPage/></Layout></ProtectedRoute>}/>
