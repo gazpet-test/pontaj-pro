@@ -2443,7 +2443,7 @@ const SURSE_CAND = {
 // Aceleași filtre ca motorul AI (ofertare-acoperire): deleted_at null / activ / abandonat=false.
 async function incarcaCatalogAcoperire() {
   const [aut, docs, part, exp, rec, stud, vech] = await Promise.all([
-    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)').is('deleted_at', null).order('id').limit(5000),
+    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, document_personal_id, doc:hr_documente_personale(fisier_path), tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)').is('deleted_at', null).order('id').limit(5000),
     supabase.from('documente_firma').select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, se_reemite').eq('activ', true).order('id').limit(5000),
     supabase.from('ofertare_parteneri').select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('nume').limit(2000),
     supabase.from('ofertare_experienta').select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, piese, observatii').eq('activ', true).order('id').limit(5000),
@@ -2467,7 +2467,12 @@ async function incarcaCatalogAcoperire() {
     out.push(mk('autorizatie', a.id, `${titular} — ${tip}`,
       [a.numar_autorizatie ? `nr. ${a.numar_autorizatie}` : null, a.emitent, arr(a.domenii), a.procedeu_sudura, a.diametru_teava_mm ? `Ø${a.diametru_teava_mm}` : null, a.ext ? 'EXTERN' : null].filter(Boolean).join(' · '),
       `${tip} ${a.tip?.cod || ''} ${titular} ${a.emitent || ''} ${arr(a.domenii)} ${a.procedeu_sudura || ''} ${a.observatii || ''}`,
-      { extern: !!a.ext, expira: a.fara_expirare ? 'niciodata' : (a.data_expirare || null), are_scan: !!a.fisier_path }))
+      // 17.09.2026: scanul poate sta pe documentul personal LEGAT, nu pe autorizatie. Toate cele 21
+      // de autorizatii legate erau tocmai alea fara `fisier_path` propriu — deci raportul „fara scan"
+      // le numara pe toate 44, desi 21 aveau scanul la un click distanta. Aici e doar steagul
+      // informativ; butonul „Verificat pe scan" ramane pe fisier_path, fiindca el copiaza calea si
+      // cele doua scanuri stau in bucket-uri diferite (autorizatii vs documente-personal).
+      { extern: !!a.ext, expira: a.fara_expirare ? 'niciodata' : (a.data_expirare || null), are_scan: !!(a.fisier_path || a.doc?.fisier_path) }))
   })
   ;(docs.data || []).forEach(d => {
     out.push(mk('firma', d.id, `${d.tip || 'document'}${d.denumire ? ' — ' + d.denumire : ''}`,
