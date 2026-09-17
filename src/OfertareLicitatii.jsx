@@ -1993,7 +1993,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       partener_id: cand.sursa === 'partener' ? cand.id : null,
       experienta_id: cand.sursa === 'experienta' ? cand.id : null,
       recomandare_id: cand.sursa === 'recomandare' ? cand.id : null,
-      document_personal_id: cand.sursa === 'studii' ? cand.id : null,
+      document_personal_id: (cand.sursa === 'studii' || cand.sursa === 'vechime') ? cand.id : null,
       referinta_text: `ales manual de ${profile?.name || 'coleg'} · ${cand.titlu}${cand.sub ? ' — ' + cand.sub : ''}`.slice(0, 300),
       valabil_la_depunere: valabil,
       // omul tocmai a ales pe textul curent al cerinței → cererea de reverificare se închide (ca la „Verificat")
@@ -2320,8 +2320,10 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
               // #73: recomandarea (experiența PERSOANEI) — se spune cine, ce rol, la cine, pe ce lucrare
               // 17.09.2026: dovada de studii spune CINE și CU CE diplomă — altfel „acoperit" e o
               // afirmație fără sursă pe ecran, exact ca la experiență și la recomandare.
+              // `studii` e embed-ul pe document_personal_id, deci vine și pentru mod='vechime':
+              // acolo denumirea tipului (CV / adeverință REGES) e mai lămuritoare decât observațiile.
               const titular = a?.studii
-                ? `${a.studii.emp?.name || '?'} — ${a.studii.observatii ? a.studii.observatii.slice(0, 70) : (a.studii.tip?.denumire || 'diplomă')}${a.studii.emitent ? ' · ' + a.studii.emitent.slice(0, 50) : ''}`
+                ? `${a.studii.emp?.name || '?'} — ${a.mod === 'vechime' ? (a.studii.tip?.denumire || 'dovadă de vechime') : (a.studii.observatii ? a.studii.observatii.slice(0, 70) : (a.studii.tip?.denumire || 'diplomă'))}${a.studii.emitent ? ' · ' + a.studii.emitent.slice(0, 50) : ''}`
                 : a?.recomandare
                 ? `${a.recomandare.emp?.name || a.recomandare.ext?.nume || '?'} — ${a.recomandare.rol || 'rol nespecificat'} la ${a.recomandare.beneficiar || '?'}${a.recomandare.obiect_lucrare ? ' („' + a.recomandare.obiect_lucrare.slice(0, 70) + '")' : ''}${a.recomandare.verificat ? '' : ' · recomandare NEVERIFICATĂ în HR'}`
                 : a?.experienta
@@ -2436,11 +2438,12 @@ const SURSE_CAND = {
   experienta:  { icon:'🏗', label:'Experiență similară', color:G.orange },
   recomandare: { icon:'📜', label:'Recomandări (persoane)', color:G.purple },
   studii:      { icon:'🎓', label:'Diplome și calificări', color:G.ofertare },
+  vechime:     { icon:'📆', label:'Vechime (CV, REGES, adeverințe)', color:G.blue },
 }
 // Aceleași filtre ca motorul AI (ofertare-acoperire): deleted_at null / activ / abandonat=false.
 async function incarcaCatalogAcoperire() {
-  const [aut, docs, part, exp, rec, stud] = await Promise.all([
-    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)').is('deleted_at', null).order('id').limit(5000),
+  const [aut, docs, part, exp, rec, stud, vech] = await Promise.all([
+    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, document_personal_id, doc:hr_documente_personale(fisier_path), tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)').is('deleted_at', null).order('id').limit(5000),
     supabase.from('documente_firma').select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, se_reemite').eq('activ', true).order('id').limit(5000),
     supabase.from('ofertare_parteneri').select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('nume').limit(2000),
     supabase.from('ofertare_experienta').select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, piese, observatii').eq('activ', true).order('id').limit(5000),
@@ -2448,8 +2451,12 @@ async function incarcaCatalogAcoperire() {
     // 17.09.2026: diplomele și calificările (categoria 'studii'). Restul dosarului de personal nu intră
     // aici — CI, cazier, extras de cont n-au ce dovedi în fața autorității și sunt date personale.
     supabase.from('hr_documente_personale').select('id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)').eq('tip.categorie', 'studii').eq('activ', true).is('deleted_at', null).order('id').limit(5000),
+    // 17.09.2026: dovezile de vechime de la angajatori anteriori (CV, extras REGES, adeverințe
+    // de încetare, anexa 7). Acoperă cerințele de „minimum N ani experiență", pe care
+    // recomandările nu le acoperă când perioadele din ele nu ajung la N.
+    supabase.from('hr_documente_personale').select('id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)').eq('tip.categorie', 'angajator_anterior').eq('activ', true).is('deleted_at', null).order('id').limit(5000),
   ])
-  const err = [aut, docs, part, exp, rec, stud].find(r => r.error)?.error
+  const err = [aut, docs, part, exp, rec, stud, vech].find(r => r.error)?.error
   if (err) throw err
   const arr = (x) => Array.isArray(x) ? x.join(' ') : (x || '')
   const mk = (sursa, id, titlu, sub, text, extra = {}) => ({ sursa, id, titlu, sub, tokens: normText(text).split(' ').filter(Boolean), ...extra })
@@ -2460,7 +2467,12 @@ async function incarcaCatalogAcoperire() {
     out.push(mk('autorizatie', a.id, `${titular} — ${tip}`,
       [a.numar_autorizatie ? `nr. ${a.numar_autorizatie}` : null, a.emitent, arr(a.domenii), a.procedeu_sudura, a.diametru_teava_mm ? `Ø${a.diametru_teava_mm}` : null, a.ext ? 'EXTERN' : null].filter(Boolean).join(' · '),
       `${tip} ${a.tip?.cod || ''} ${titular} ${a.emitent || ''} ${arr(a.domenii)} ${a.procedeu_sudura || ''} ${a.observatii || ''}`,
-      { extern: !!a.ext, expira: a.fara_expirare ? 'niciodata' : (a.data_expirare || null), are_scan: !!a.fisier_path }))
+      // 17.09.2026: scanul poate sta pe documentul personal LEGAT, nu pe autorizatie. Toate cele 21
+      // de autorizatii legate erau tocmai alea fara `fisier_path` propriu — deci raportul „fara scan"
+      // le numara pe toate 44, desi 21 aveau scanul la un click distanta. Aici e doar steagul
+      // informativ; butonul „Verificat pe scan" ramane pe fisier_path, fiindca el copiaza calea si
+      // cele doua scanuri stau in bucket-uri diferite (autorizatii vs documente-personal).
+      { extern: !!a.ext, expira: a.fara_expirare ? 'niciodata' : (a.data_expirare || null), are_scan: !!(a.fisier_path || a.doc?.fisier_path) }))
   })
   ;(docs.data || []).forEach(d => {
     out.push(mk('firma', d.id, `${d.tip || 'document'}${d.denumire ? ' — ' + d.denumire : ''}`,
@@ -2487,6 +2499,16 @@ async function incarcaCatalogAcoperire() {
     out.push(mk('studii', d.id, `${cine} — ${fel}`,
       [d.observatii ? d.observatii.slice(0, 90) : null, d.emitent, d.numar_document ? `nr. ${d.numar_document}` : null, d.data_emitere ? String(d.data_emitere).slice(0, 4) : null].filter(Boolean).join(' · '),
       `${cine} ${fel} ${d.tip?.cod || ''} ${d.observatii || ''} ${d.emitent || ''}`,
+      { expira: 'niciodata', are_scan: !!d.fisier_path }))
+  })
+  ;(vech.data || []).forEach(d => {
+    const cine = d.emp?.name || '?'
+    const fel = d.tip?.denumire || 'dovadă de vechime'
+    // Un CV e declarat de om, nu emis de un terț: se poate alege, dar scrie pe el ce e.
+    const declarat = d.tip?.cod === 'cv'
+    out.push(mk('vechime', d.id, `${cine} — ${fel}${declarat ? ' (declarat, nu probant)' : ''}`,
+      [d.observatii ? d.observatii.slice(0, 90) : null, d.emitent, d.numar_document ? `nr. ${d.numar_document}` : null, d.data_emitere ? String(d.data_emitere).slice(0, 4) : null].filter(Boolean).join(' · '),
+      `${cine} ${fel} ${d.tip?.cod || ''} vechime experienta ani ${d.observatii || ''} ${d.emitent || ''}`,
       { expira: 'niciodata', are_scan: !!d.fisier_path }))
   })
   return out

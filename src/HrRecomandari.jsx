@@ -195,12 +195,14 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
   const citesteToate = async (tot = false) => {
     const deCitit = filtrate.filter(r => r.fisier_path && (tot || deCititAcum(r)))
     if (!deCitit.length) { showToast('Nimic de citit — toate cele afișate au fost deja citite', 'warn'); return }
-    const cost = (deCitit.length * 0.04).toFixed(2)
+    // 0,07 $ e media MASURATA pe primele 25 de citiri reale (1,74 $ / 25), nu o estimare din burta.
+    // Documentele groase trag media in sus: un pachet de 11 pagini costa de cateva ori cat unul de o pagina.
+    const cost = (deCitit.length * 0.07).toFixed(2)
     if (!window.confirm(
       (tot
         ? `RECITESC cu AI toate cele ${deCitit.length} recomandări afișate, inclusiv pe cele deja citite.\n\n`
         : `Citesc cu AI ${deCitit.length} recomandări necitite sau eșuate din cele afișate acum.\n\n`) +
-      `Costă aproximativ ${cost} $ (o citire ≈ 0,04 $). Merge una câte una și poți opri pe parcurs.\n\n` +
+      `Costă aproximativ ${cost} $ (media măsurată: 0,07 $ pe document; un pachet gros costă mai mult). Merge una câte una și poți opri pe parcurs.\n\n` +
       `Un fișier poate conține mai multe scrisori: cele în plus apar ca rânduri noi, legate de acesta.\n` +
       `Câmpurile completate de AI rămân NEVERIFICATE — tot tu bifezi ✓ la final.`)) return
     let facute = 0, erori = 0, slabe = 0, dinPachete = 0

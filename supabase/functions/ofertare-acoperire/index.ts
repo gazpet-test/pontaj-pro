@@ -1,8 +1,10 @@
 // #51 14.09.2026: autorizat() — owner/responsabil sau service_role; anon respins.
-// ofertare-acoperire v20 (17.09.2026) — E3: confruntarea cerințe ↔ capabilități.
+// ofertare-acoperire v23 (17.09.2026) — E3: confruntarea cerințe ↔ capabilități.
 // v20 (17.09.2026, Domnești): a ȘASEA sursă de catalog — DOCUMENTELE DE STUDII ale persoanelor
 //     (hr_documente_personale, categoria 'studii': diplome de licență, școală profesională, liceu,
-//     certificate de calificare), id-uri cu prefix D, regula R17. Până acum motorul nu citea deloc
+//     certificate de calificare), id-uri cu prefix D, regula R17, si a SAPTEA — dovezile de vechime
+//     de la angajatori anteriori (CV, extras REGES, adeverinte de incetare), id-uri V, regula R18.
+//     Până acum motorul nu citea deloc
 //     tabelul ăsta: 524 de documente ale 114 persoane, toate cu scan, erau invizibile. Efectul era
 //     o respectare CORECTĂ a lui R1 („doar ce e în catalog") peste un catalog incomplet — cerința
 //     eliminatorie #4058 de la Domnești („șef de șantier, inginer cu diplomă de licență Facultatea
@@ -68,13 +70,14 @@ REGULI NENEGOCIABILE:
 - R16 (PROIECTARE prin PARTENER): cerințele de PROIECTARE — „nominalizarea persoanelor responsabile de proiectare pe specialități (diplome, CV, recomandări)", „proiect tehnic de execuție elaborat de ofertant", „verificator de proiecte atestat", „șef de proiect / proiectant de specialitate" — se acoperă cu un PARTENER care face proiectare: status "acoperit_partener" cu partener_id, dacă în "acopera" sau "tip_relatie" scrie proiectare pe SPECIALITATEA cerută (instalații edilitare / apă-canal / gaze / drumuri; „proiectare rețele edilitare" acoperă apă-canal și gaze). Un contract de proiectare cu un proiectant le acoperă pe TOATE specialitățile pe care le are — NU ceri persoane distincte din catalog per specialitate și NU dai "gol" pentru că lipsesc diplome/CV-uri nominale: acelea vin de la partener la depunere (scrie în motiv „prin contract proiectare cu <partener>; CV/diplome de cerut partenerului"). Dacă niciun partener nu face proiectare pe specialitatea cerută → "gol" cu motiv „lipsă contract proiectant pe <specialitate>". Verificatorul de proiecte atestat MDLPA e tot cerință de proiectare (partener sau persoană din catalog cu atestat de verificator, dacă există).
 - R14 (RECOMANDĂRI — experiența PERSOANELOR, id-uri cu prefix R): cerințele de „experiență în poziție similară / proiect similar" ale unei PERSOANE (manager de contract, șef de șantier, RTE, inginer execuție, responsabil calitate) se acoperă DOAR cu recomandări din lista R ale acelei persoane: status "acoperit", autorizatie_id: "R<id>". Recomandarea trebuie să se potrivească pe ROL (rolul cerut ≈ rolul din recomandare) și pe NATURA lucrării (domeniile cerute vs. domenii/obiect_lucrare; „fluide"/„rețele edilitare" acoperă și gaze, și apă-canal). Pentru RTE: o recomandare ca RTE pe lucrare similară acoperă experiența ca RTE; experiența GENERALĂ „minim N ani în construcții" e altă cerință — nu o confunda și nu o acoperi cu o singură recomandare dacă durata din recomandări nu ajunge la N ani (spune în motiv câți ani rezultă). O recomandare cu verificat=false acoperă, dar scrii în motiv „neverificată în HR". Autorizația (atestatul) persoanei NU dovedește experiență; recomandarea NU dovedește atestat — sunt cerințe separate.
 - R17 (STUDII — diplomele persoanelor, id-uri cu prefix D): cerințele care cer o CALIFICARE DE STUDII a unei persoane — „inginer cu diplomă de licență Facultatea de Instalații pentru construcții / Hidrotehnică / Construcții civile / Drumuri", „studii superioare de specialitate", „absolvent al facultății de ...", „calificare de sudor / instalator / lăcătuș" — se acoperă DOAR cu documente din lista D: status "acoperit", autorizatie_id: "D<id>". Potrivirea se face pe SPECIALITATEA scrisă în câmpurile denumire / emitent / descriere ale documentului, nu pe titulatura postului: „Facultatea de Instalații" (UTCB) acoperă „instalații pentru construcții" și „instalații edilitare"; „construcții civile industriale și agricole" NU acoperă „instalații" și invers; „inginerie mecanică" / „petrol și gaze" / „forajul sondelor" NU acoperă o cerință de instalații sau de hidrotehnică, oricât ar fi omul de vechi în firmă. Dacă specialitatea cerută nu se regăsește, e "gol" și scrii în motiv ce diplome AVEM și de ce nu se potrivesc — ajută la decizia de a merge pe subcontractant. O diplomă nu expiră: valabil_la_depunere rămâne null, R6 nu se aplică.
+- R18 (VECHIME — dovezile de la angajatori anteriori, id-uri cu prefix V): cerințele care cer ANI DE EXPERIENȚĂ ai unei persoane — „experiență profesională generală de minimum 5 ani în execuția de rețele de canalizare / alimentare cu apă", „vechime în specialitate", „minimum N ani în domeniu" — se acoperă cu documente din lista V: status "acoperit", autorizatie_id: "V<id>". NU confunda cu R14: o recomandare dovedește o LUCRARE anume (un rol, un beneficiar, o perioadă); dovada de vechime acoperă PARCURSUL, adică tocmai bucata pe care recomandările n-o acoperă când însumate dau mai puțin decât cere cerința. Ierarhia probantă, respect-o în motiv: un extras REGES / adeverință de vechime / adeverință de încetare / anexa 7 e emis de un TERȚ și e dovadă; un CV e DECLARAT de persoană și NU e dovadă în fața autorității — dacă singurul document potrivit e un CV, pui tot "acoperit" cu V<id> (e pista corectă), dar scrii explicit în motiv „doar CV — se cere adeverință de vechime de la angajatorul anterior ca document probant". Dacă din documentele V nu iese numărul de ani cerut, e "gol" și scrii câți ani ies și din ce. O adeverință nu expiră: valabil_la_depunere rămâne null, R6 nu se aplică.
   DELIMITAREA față de celelalte surse, ca să nu se acopere unele cu altele: diploma dovedește STUDIILE și atât. NU dovedește experiența (aia e R14, recomandări R) și NU dovedește atestarea (aia e autorizația din catalogul personal sau documentul de firmă). O cerință compusă („inginer instalații CU diplomă ȘI minim 5 ani experiență pe lucrări similare") se acoperă numai dacă ai și D-ul, și R-ul: pui în autorizatie_id documentul principal cerut și scrii explicit în motiv ce mai lipsește. Invers: nu da "gol" pe lipsa diplomei la o cerință care cere doar atestat ISC.
 - R9 (CLARIFICĂRI): dacă cerința spune doar "RTE" / "responsabil tehnic cu execuția" / "personal de specialitate atestat" FĂRĂ să numească domeniul sau subdomeniul ISC, nu ghici care e. Dai status "gol" și completezi câmpul "clarificare" cu întrebarea către autoritatea contractantă, formulată scurt și la obiect, citând cerința și cerând să precizeze domeniul/subdomeniul exact (cu trimitere la obiectul contractului, când ajută). Tot clarificare (R9b, Silviu 15.09) propui când o cerință de EXPERIENȚĂ a unei persoane e ambiguă și ambiguitatea schimbă cine o poate ocupa: (a) nu e clar dacă se cere experiență ÎN ROLUL respectiv (ex. ca RTE) pe un proiect similar sau experiență profesională GENERALĂ de N ani; (b) „proiect similar" nu e definit (natura lucrării, valoare, prag); (c) nu e clar dacă N ani se socotesc pe rol sau pe carieră. Întrebarea citează cerința și cere autorității să precizeze exact ce dovadă acceptă (recomandare pe rol? CV? adeverință de vechime?). Statusul rămâne cel rezultat din catalog (acoperit/gol) — clarificarea e în plus, nu în locul evaluării. Pentru orice altă cerință "clarificare" e null. O singură clarificare per cerință.
 
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
 Răspunde EXCLUSIV JSON compact:
-{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, "R<id>" pentru recomandarea unei persoane, "D<id>" pentru diploma/calificarea unei persoane, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
+{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, "R<id>" pentru recomandarea unei persoane, "D<id>" pentru diploma/calificarea unei persoane, "V<id>" pentru o dovada de vechime de la un angajator anterior, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
 
 // ── Domeniile ISC — COPIE a src/iscRte.js (normalizeazaDomeniiISC). Ține-le sincron. ──
 const ROMAN = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI)(\.\d+)?$/i
@@ -199,6 +202,13 @@ Deno.serve(async (req: Request) => {
     const { data: studiiAll, error: eStudii } = await supabase.from('hr_documente_personale')
       .select('id, numar_document, emitent, data_emitere, fisier_path, observatii, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)')
       .eq('tip.categorie', 'studii').eq('activ', true).is('deleted_at', null).order('id')
+    // 17.09.2026: a ȘAPTEA sursă — dovezile de VECHIME de la angajatorii anteriori, id-uri V.
+    // Categoria 'angajator_anterior': CV, extras REGES / adeverință de vechime, adeverință și
+    // decizie de încetare, anexa 7 de cotizare. Astea acoperă exact felul de cerință pe care
+    // recomandările NU-l acoperă: „experiență profesională generală minimum N ani în ...".
+    const { data: vechAll, error: eVech } = await supabase.from('hr_documente_personale')
+      .select('id, numar_document, emitent, data_emitere, fisier_path, observatii, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)')
+      .eq('tip.categorie', 'angajator_anterior').eq('activ', true).is('deleted_at', null).order('id')
     // #73: a CINCEA sursă — recomandările persoanelor (experiență pe roluri), id-uri R
     const { data: recAll, error: eRec } = await supabase.from('hr_recomandari')
       .select('id, employee_id, extern_id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, ai_confidenta, emp:employees(name), ext:hr_personal_extern(nume)')
@@ -213,8 +223,8 @@ Deno.serve(async (req: Request) => {
     // („potrivesti DOAR cu ce exista in catalog") si raspundea 'gol' pe TOATE cerintele.
     // Alea erau randuri valide, deci stergerea pleca si o licitatie cu acoperirile puse
     // devenea integral „fara dovada" — fara nicio eroare nicaieri.
-    if (eAuth || eDocF || ePart || eExp || eNomen || eRec || eStudii) {
-      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message || eExp?.message || eNomen?.message || eRec?.message || eStudii?.message))
+    if (eAuth || eDocF || ePart || eExp || eNomen || eRec || eStudii || eVech) {
+      return fail('catalog indisponibil: ' + (eAuth?.message || eDocF?.message || ePart?.message || eExp?.message || eNomen?.message || eRec?.message || eStudii?.message || eVech?.message))
     }
     // A doua plasa: un catalog gol nu e o stare normala pentru firma asta. Daca ambele
     // surse sunt goale, ceva e rupt in amonte — nu propunem nimic si nu stergem nimic.
@@ -267,7 +277,17 @@ Deno.serve(async (req: Request) => {
       an: d.data_emitere ? String(d.data_emitere).slice(0, 4) : undefined,
       are_scan: !!d.fisier_path,
     }))
-    const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}\n\nRECOMANDARI — experienta PERSOANELOR pe roluri (${catalogRec.length}, id-uri cu prefix R):\n${JSON.stringify(catalogRec)}\n\nSTUDII — diplome si calificari ale persoanelor (${catalogStudii.length}, id-uri cu prefix D):\n${JSON.stringify(catalogStudii)}`
+    // Aceleași câmpuri ca la studii + `fel` care spune CE E documentul: diferența dintre un CV
+    // (declarat de om) și un extras REGES (emis de stat) e toată diferența dintre o pistă și o
+    // dovadă — regula R18 din prompt se sprijină pe câmpul ăsta.
+    const catalogVechime = (vechAll || []).map((d: any) => ({
+      id: 'V' + d.id, titular: d.emp?.name || '?', fel: d.tip?.denumire, cod: d.tip?.cod,
+      descriere: (d.observatii || '').slice(0, 200) || undefined,
+      emitent: d.emitent || undefined, numar: d.numar_document || undefined,
+      an: d.data_emitere ? String(d.data_emitere).slice(0, 4) : undefined,
+      are_scan: !!d.fisier_path,
+    }))
+    const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}\n\nRECOMANDARI — experienta PERSOANELOR pe roluri (${catalogRec.length}, id-uri cu prefix R):\n${JSON.stringify(catalogRec)}\n\nSTUDII — diplome si calificari ale persoanelor (${catalogStudii.length}, id-uri cu prefix D):\n${JSON.stringify(catalogStudii)}\n\nVECHIME — dovezi de la angajatori anteriori (${catalogVechime.length}, id-uri cu prefix V):\n${JSON.stringify(catalogVechime)}`
     const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -326,6 +346,7 @@ Deno.serve(async (req: Request) => {
     const idsExp = new Map((expAll || []).map((e: any) => [e.id, e]))
     const idsRec = new Map((recAll || []).map((r: any) => [r.id, r]))
     const idsStudii = new Map((studiiAll || []).map((d: any) => [d.id, d]))
+    const idsVech = new Map((vechAll || []).map((d: any) => [d.id, d]))
     const azi = lic.termen_depunere ? new Date(lic.termen_depunere) : new Date()
 
     // R-ACOP-1 (reparat 12.09.2026). Inainte, stergerea rula AICI — inaintea insertului si
@@ -372,8 +393,12 @@ Deno.serve(async (req: Request) => {
       let exp: any = null
       let rec: any = null
       let stud: any = null
+      let vech: any = null
       let motivBlocat: string | null = null
-      if (typeof p.autorizatie_id === 'string' && /^D\d+$/.test(p.autorizatie_id)) {
+      if (typeof p.autorizatie_id === 'string' && /^V\d+$/.test(p.autorizatie_id)) {
+        const vid = Number(p.autorizatie_id.slice(1))
+        if (idsVech.has(vid)) vech = idsVech.get(vid)
+      } else if (typeof p.autorizatie_id === 'string' && /^D\d+$/.test(p.autorizatie_id)) {
         const did = Number(p.autorizatie_id.slice(1))
         if (idsStudii.has(did)) stud = idsStudii.get(did)
       } else if (typeof p.autorizatie_id === 'string' && /^R\d+$/.test(p.autorizatie_id)) {
@@ -396,8 +421,8 @@ Deno.serve(async (req: Request) => {
       }
       const part = p.partener_id && idsPart.has(p.partener_id) ? p.partener_id : null
       let status = ['acoperit', 'acoperit_partener', 'gol'].includes(p.status) ? p.status : 'gol'
-      if (status === 'acoperit' && !aut && !docF && !exp && !rec && !stud) status = 'gol'
-      if (status === 'acoperit_partener' && !part && !aut && !docF && !exp && !rec && !stud) status = 'gol'
+      if (status === 'acoperit' && !aut && !docF && !exp && !rec && !stud && !vech) status = 'gol'
+      if (status === 'acoperit_partener' && !part && !aut && !docF && !exp && !rec && !stud && !vech) status = 'gol'
       if (motivBlocat) status = 'gol'
       let valabil: boolean | null = null
       if (aut) valabil = aut.expira === 'niciodata' ? true : (aut.expira !== 'necunoscut' && new Date(aut.expira) >= azi)
@@ -413,15 +438,16 @@ Deno.serve(async (req: Request) => {
       if (exp) valabil = null
       if (rec) valabil = null   // o recomandare nu expiră; fereastra de ani e a cerinței
       if (stud) valabil = null  // o diplomă nu expiră (R17)
+      if (vech) valabil = null  // o adeverință de vechime nu expiră (R18)
       rows.push({
         cerinta_id: p.cerinta_id,
-        mod: status === 'gol' ? 'gol' : (stud ? 'studii' : (rec ? 'recomandare' : (exp ? 'experienta' : (docF ? 'firma' : (aut ? (aut.extern ? 'partener' : 'personal') : 'partener'))))),
+        mod: status === 'gol' ? 'gol' : (vech ? 'vechime' : (stud ? 'studii' : (rec ? 'recomandare' : (exp ? 'experienta' : (docF ? 'firma' : (aut ? (aut.extern ? 'partener' : 'personal') : 'partener')))))),
         autorizatie_id: aut ? aut.id : null,
         doc_firma_id: docF ? docF.id : null,
         partener_id: part,
         experienta_id: exp ? exp.id : null,
         recomandare_id: rec ? rec.id : null,
-        document_personal_id: stud ? stud.id : null,
+        document_personal_id: stud ? stud.id : (vech ? vech.id : null),
         referinta_text: (motivBlocat || (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null)),
         status,
         valabil_la_depunere: valabil,
@@ -537,6 +563,7 @@ Deno.serve(async (req: Request) => {
       experienta: deScris.filter(r => r.mod === 'experienta').length,
       recomandari: deScris.filter(r => r.mod === 'recomandare').length,
       studii: deScris.filter(r => r.mod === 'studii').length,
+      vechime: deScris.filter(r => r.mod === 'vechime').length,
       conflicte_verificate: conflicteVerificate,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
