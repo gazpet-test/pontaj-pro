@@ -162,9 +162,12 @@ Deno.serve(async (req: Request) => {
     if (!cerinte?.length) return new Response(JSON.stringify({ ok: true, batch, propuneri: 0, skip: 'nicio cerinta de tipul asta' }), { headers: CORS })
 
     const { data: auth, error: eAuth } = await supabase.from('hr_autorizatii')
-      .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)')
+      .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
       .is('deleted_at', null).order('id')   // ordine STABILA: fara ea, prefixul difera intre apeluri si cache-ul nu se potriveste
-    const catalog = (auth || []).map((a: any) => ({
+    // 17.09.2026: titularii cu contract închis (employees.active=false) sau externii dezactivați nu
+    // intră în catalog — o autorizație a unui om plecat nu poate acoperi nimic în fața autorității.
+    const titularActiv = (r: any) => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
+    const catalog = (auth || []).filter(titularActiv).map((a: any) => ({
       id: a.id, tip: a.tip?.denumire, cod: a.tip?.cod || undefined,
       titular: a.emp?.name || a.ext?.nume || '?', extern: !!a.ext,
       numar: a.numar_autorizatie || undefined, emitent: a.emitent || undefined,
@@ -200,18 +203,18 @@ Deno.serve(async (req: Request) => {
     // (CI, pașaport, cazier, fișa postului, extras de cont) n-are ce căuta într-un prompt de
     // ofertare — sunt date personale care nu dovedesc nicio capabilitate față de autoritate.
     const { data: studiiAll, error: eStudii } = await supabase.from('hr_documente_personale')
-      .select('id, numar_document, emitent, data_emitere, fisier_path, observatii, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)')
+      .select('id, numar_document, emitent, data_emitere, fisier_path, observatii, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name, active)')
       .eq('tip.categorie', 'studii').eq('activ', true).is('deleted_at', null).order('id')
     // 17.09.2026: a ȘAPTEA sursă — dovezile de VECHIME de la angajatorii anteriori, id-uri V.
     // Categoria 'angajator_anterior': CV, extras REGES / adeverință de vechime, adeverință și
     // decizie de încetare, anexa 7 de cotizare. Astea acoperă exact felul de cerință pe care
     // recomandările NU-l acoperă: „experiență profesională generală minimum N ani în ...".
     const { data: vechAll, error: eVech } = await supabase.from('hr_documente_personale')
-      .select('id, numar_document, emitent, data_emitere, fisier_path, observatii, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)')
+      .select('id, numar_document, emitent, data_emitere, fisier_path, observatii, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name, active)')
       .eq('tip.categorie', 'angajator_anterior').eq('activ', true).is('deleted_at', null).order('id')
     // #73: a CINCEA sursă — recomandările persoanelor (experiență pe roluri), id-uri R
     const { data: recAll, error: eRec } = await supabase.from('hr_recomandari')
-      .select('id, employee_id, extern_id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, ai_confidenta, emp:employees(name), ext:hr_personal_extern(nume)')
+      .select('id, employee_id, extern_id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, ai_confidenta, emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
       .eq('activ', true).order('id')
     const { data: expAll, error: eExp } = await supabase.from('ofertare_experienta')
       .select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, folder_nas')
@@ -261,7 +264,7 @@ Deno.serve(async (req: Request) => {
     // (licitatia si cerintele primele), deci un `cache_control` pus fara reordonare n-ar fi
     // prins nimic. De-asta si `.order('id')` de mai sus: o singura linie mutata in catalog
     // schimba prefixul si rateaza cache-ul.
-    const catalogRec = (recAll || []).map((r: any) => ({
+    const catalogRec = (recAll || []).filter(titularActiv).map((r: any) => ({
       id: 'R' + r.id, titular: r.emp?.name || r.ext?.nume || '?', extern: !!r.ext, rol: r.rol || undefined,
       beneficiar: r.beneficiar || undefined, lucrare: r.obiect_lucrare || undefined,
       perioada: [r.perioada_start, r.perioada_end].filter(Boolean).join(' → ') || undefined,
@@ -270,7 +273,7 @@ Deno.serve(async (req: Request) => {
     }))
     // Compactăm: doar ce contează pentru potrivirea pe specialitate. `observatii` poartă descrierea
     // citită de AI la încărcare („Diplomă de Inginer, Instalații") — de-aia e câmpul cel mai util aici.
-    const catalogStudii = (studiiAll || []).map((d: any) => ({
+    const catalogStudii = (studiiAll || []).filter(titularActiv).map((d: any) => ({
       id: 'D' + d.id, titular: d.emp?.name || '?', fel: d.tip?.denumire,
       descriere: (d.observatii || '').slice(0, 200) || undefined,
       emitent: d.emitent || undefined, numar: d.numar_document || undefined,
@@ -280,7 +283,7 @@ Deno.serve(async (req: Request) => {
     // Aceleași câmpuri ca la studii + `fel` care spune CE E documentul: diferența dintre un CV
     // (declarat de om) și un extras REGES (emis de stat) e toată diferența dintre o pistă și o
     // dovadă — regula R18 din prompt se sprijină pe câmpul ăsta.
-    const catalogVechime = (vechAll || []).map((d: any) => ({
+    const catalogVechime = (vechAll || []).filter(titularActiv).map((d: any) => ({
       id: 'V' + d.id, titular: d.emp?.name || '?', fel: d.tip?.denumire, cod: d.tip?.cod,
       descriere: (d.observatii || '').slice(0, 200) || undefined,
       emitent: d.emitent || undefined, numar: d.numar_document || undefined,
