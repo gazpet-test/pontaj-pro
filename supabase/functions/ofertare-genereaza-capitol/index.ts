@@ -221,7 +221,7 @@ Deno.serve(async (req: Request) => {
     // un capitol mare se scrie pe PĂRȚI, în paralel (Promise.all): fiecare parte primește tot
     // pachetul de fapte și doar felia ei de cerințe, numerotate în continuare, iar textele se lipesc.
     // Timpul total ≈ o singură parte.
-    const PE_PARTE = 30
+    const PE_PARTE = 20   // cap. 5 (o parte) a scos 10.124 tokeni; 30 cerințe/parte ar atinge iar plafonul
     const nParti = Math.max(1, Math.ceil(cerinte.length / PE_PARTE))
     const marime = Math.ceil(cerinte.length / nParti)
     const parti: any[][] = []
