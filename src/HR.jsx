@@ -589,6 +589,99 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
     else { showToast(`🗑 Mutată în Coș: ${a.tip_denumire}`); onReload() }
   }
 
+  // === Inventar personal pentru ORGANIGRAMĂ (17.09.2026, cerut de Silviu prin Răzvan) ===
+  // Provizoriu, până la organigrama propriu-zisă: scoate pe hârtie TOT ce știe platforma despre
+  // fiecare om — autorizații, diplome, cum e încadrat acum — plus coloane GOALE în care
+  // departamentul completează varianta bună (departament, subdepartament, funcție de organigramă,
+  // rol la licitații). Fișierul se întoarce completat și de acolo se preia structura finală.
+  // Nu decide nimic singur: doar arată starea de fapt și lasă loc de propuneri.
+  const exportInventarOrganigrama = async () => {
+    setExporting('inventar')
+    try {
+      const { data: studii, error: eS } = await supabase.from('hr_documente_personale')
+        .select('id, employee_id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie)')
+        .eq('tip.categorie', 'studii').eq('activ', true).is('deleted_at', null).limit(5000)
+      if (eS) throw eS
+      const vii = (employees || []).filter(e => e.active !== false)
+      const dinAut = new Map(), dinStud = new Map()
+      ;(autorizatii || []).filter(a => !a.deleted_at).forEach(a => {
+        if (!dinAut.has(a.employee_id)) dinAut.set(a.employee_id, [])
+        dinAut.get(a.employee_id).push(a)
+      })
+      ;(studii || []).forEach(d => {
+        if (!dinStud.has(d.employee_id)) dinStud.set(d.employee_id, [])
+        dinStud.get(d.employee_id).push(d)
+      })
+      // Doar oamenii care au CEVA de arătat: altfel foaia are 127 de rânduri din care 60 goale.
+      const persoane = vii.filter(e => dinAut.has(e.id) || dinStud.has(e.id))
+      if (!persoane.length) { showToast('Nimeni cu autorizații sau diplome — nimic de exportat', 'warning'); setExporting(null); return }
+      const scurt = (d) => (d.observatii || d.tip?.denumire || 'document').slice(0, 60)
+      const rowsP = persoane.map(e => {
+        const au = dinAut.get(e.id) || [], st = dinStud.get(e.id) || []
+        return {
+          'Nume': e.name || '—',
+          'Funcție (platformă)': e.functie || e.position || '—',
+          'Funcție CIM': e.functie_cim || '—',
+          'Cod COR': e.cod_cor || '—',
+          'Departament (platformă)': e.departament_hr || e.department || '—',
+          'Rol în firmă': e.rol_in_firma || '—',
+          'Nr. autorizații': au.length,
+          'Nr. diplome/calificări': st.length,
+          'Autorizații (pe scurt)': au.map(a => a.tip_denumire || '?').join(' | ') || '—',
+          'Studii (pe scurt)': st.map(scurt).join(' | ') || '—',
+          'DEPARTAMENT propus': '',
+          'SUBDEPARTAMENT propus': '',
+          'FUNCȚIE propusă (organigramă)': '',
+          'Rol la licitații (RTE / CQ / șef șantier / …)': '',
+          'TESA? (da/nu)': '',
+          'Observații': '',
+        }
+      }).sort((a, b) => String(a.Nume).localeCompare(String(b.Nume), 'ro'))
+      // A doua foaie: documentul cu documentul, ca să se vadă ce hârtie stă în spatele fiecărei
+      // linii din prima foaie — și care are scan (aia se poate pune în propunerea tehnică).
+      const numeDupaId = new Map(vii.map(e => [e.id, e.name]))
+      const rowsD = [
+        ...(autorizatii || []).filter(a => !a.deleted_at && numeDupaId.has(a.employee_id)).map(a => ({
+          'Nume': numeDupaId.get(a.employee_id) || '—', 'Fel': 'AUTORIZAȚIE',
+          'Document': a.tip_denumire || '—', 'Număr': a.numar_autorizatie || '—',
+          'Domenii': (a.domenii || []).join(', ') || a.subcategorie || '—',
+          'Emitent': a.emitent || '—',
+          'Expiră': a.fara_expirare ? 'fără expirare' : (a.data_expirare ? fmtDataRo(a.data_expirare) : 'FĂRĂ DATĂ'),
+          'Are scan': a.fisier_path ? 'da' : 'NU',
+        })),
+        ...(studii || []).filter(d => numeDupaId.has(d.employee_id)).map(d => ({
+          'Nume': numeDupaId.get(d.employee_id) || '—', 'Fel': 'STUDII',
+          'Document': d.tip?.denumire || '—', 'Număr': d.numar_document || '—',
+          'Domenii': scurt(d), 'Emitent': d.emitent || '—',
+          'Expiră': 'nu expiră',
+          'Are scan': d.fisier_path ? 'da' : 'NU',
+        })),
+      ].sort((a, b) => String(a.Nume).localeCompare(String(b.Nume), 'ro') || String(a.Fel).localeCompare(String(b.Fel)))
+
+      const wb = XLSX.utils.book_new()
+      const antet = (ws, cheie) => {
+        Object.keys(cheie).forEach((_, i) => {
+          const cell = ws[XLSX.utils.encode_cell({ r: 0, c: i })]
+          if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: 'E8EEF7' } } }
+        })
+      }
+      const wsP = XLSX.utils.json_to_sheet(rowsP)
+      wsP['!cols'] = [{wch:30},{wch:24},{wch:24},{wch:10},{wch:22},{wch:18},{wch:12},{wch:14},{wch:50},{wch:50},{wch:22},{wch:22},{wch:28},{wch:30},{wch:12},{wch:30}]
+      antet(wsP, rowsP[0])
+      XLSX.utils.book_append_sheet(wb, wsP, 'Persoane')
+      if (rowsD.length) {
+        const wsD = XLSX.utils.json_to_sheet(rowsD)
+        wsD['!cols'] = [{wch:30},{wch:12},{wch:38},{wch:20},{wch:38},{wch:26},{wch:16},{wch:9}]
+        antet(wsD, rowsD[0])
+        XLSX.utils.book_append_sheet(wb, wsD, 'Documente')
+      }
+      XLSX.writeFile(wb, `inventar_personal_organigrama_${new Date().toISOString().slice(0, 10)}.xlsx`)
+      showToast(`${rowsP.length} persoane, ${rowsD.length} documente — completați coloanele propuse și trimiteți fișierul înapoi`, 'success')
+    } catch (e) {
+      showToast('Eroare la export: ' + (e?.message || e), 'error')
+    } finally { setExporting(null) }
+  }
+
   // === Export sudori pentru propuneri tehnice (tabel XLSX + scan-uri ZIP) ===
   // Sursa: v_sudori_pentru_oferte — aceeași pe care o interoghează și instanța
   // Claude care lucrează propunerea; exportul de aici e varianta „de mână".
@@ -681,6 +774,11 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
         <button onClick={exportSudoriZip} disabled={!!exporting}
           style={{padding:'7px 13px', background:'transparent', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
           {exporting === 'zip' ? 'Se adună…' : '🗂'} Scan-uri sudori (ZIP)
+        </button>
+        <button onClick={exportInventarOrganigrama} disabled={!!exporting}
+          title="Toți angajații cu autorizații și/sau diplome, cu încadrarea actuală + coloane goale pentru departament/funcție propuse — baza organigramei"
+          style={{padding:'7px 13px', background:'transparent', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
+          {exporting === 'inventar' ? 'Se adună…' : '🗃'} Inventar personal (organigramă)
         </button>
         <button onClick={exportAnexaPdf} disabled={!!exporting}
           title="Un singur PDF: opis + toate scan-urile autorizațiilor valide — anexa propunerii tehnice"
