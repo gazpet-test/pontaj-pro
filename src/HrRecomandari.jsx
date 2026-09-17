@@ -6,7 +6,7 @@
 // a cincea sursă de catalog (id-uri R) pentru cerințele de „experiență în proiect similar".
 // Bucket: documente-personal, cale recomandari/<emp-<id>|ext-<id>>/<data>_<uuid>.<ext>
 // ===========================================================================
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import { compressFileBeforeUpload } from './utils/compressFile'
 
@@ -148,6 +148,8 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
   const [doarNeverif, setDoarNeverif] = useState(false)
   const [modal, setModal] = useState(null) // null | 'nou' | rec
   const [busy, setBusy] = useState(null)
+  const [toate, setToate] = useState(null)   // {facute, din} cât rulează citirea în serie
+  const opresc = useRef(false)              // „Oprește" — ref, ca să fie citit sigur între două citiri
 
   const reload = async () => {
     setLoad(true)
@@ -180,6 +182,40 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
     showToast(`AI: ${data.extras?.rol || '?'} · ${data.extras?.beneficiar || '?'} (încredere ${data.incredere})${data.avertisment ? ' — ' + data.avertisment : ''}`, data.avertisment ? 'warn' : 'success')
     await reload()
   }
+  // 17.09.2026: citirea în serie a celor necitite. E un buton care CHELTUIE de N ori dintr-un
+  // singur clic, așa că: spune exact câte și cât înainte, merge una câte una (nu în paralel —
+  // ar lovi rate limit-ul și n-ai ști care a picat), se poate opri din mers, iar la final
+  // raportează pe bune ce-a ieșit. Nu bifează nimic „verificat": aia rămâne mâna omului.
+  const citesteToate = async () => {
+    const deCitit = filtrate.filter(r => r.fisier_path && !r.ai_citit_la)
+    if (!deCitit.length) { showToast('Nimic de citit — toate cele afișate au fost deja citite', 'warn'); return }
+    const cost = (deCitit.length * 0.04).toFixed(2)
+    if (!window.confirm(
+      `Citesc cu AI ${deCitit.length} recomandări necitite din cele afișate acum.\n\n` +
+      `Costă aproximativ ${cost} $ (o citire ≈ 0,04 $). Merge una câte una și poți opri pe parcurs.\n\n` +
+      `Câmpurile completate de AI rămân NEVERIFICATE — tot tu bifezi ✓ la final.`)) return
+    let facute = 0, erori = 0, slabe = 0
+    opresc.current = false
+    setToate({ facute: 0, din: deCitit.length })
+    for (const r of deCitit) {
+      if (opresc.current) break
+      try {
+        const { data, error } = await supabase.functions.invoke('hr-recomandare-citeste', { body: { recomandare_id: r.id } })
+        if (error || data?.error || data?.eroare) erori++
+        else { facute++; if ((data.incredere ?? 0) < 60 || data.avertisment) slabe++ }
+      } catch (e) { erori++ }
+      setToate(t => t ? { ...t, facute: facute + erori } : t)
+    }
+    const oprit = opresc.current
+    opresc.current = false
+    setToate(null)
+    await reload()
+    showToast(
+      `Citite ${facute} din ${deCitit.length}` + (oprit ? ' (oprit de tine)' : '') + (erori ? ` · ${erori} cu eroare` : '') +
+      (slabe ? ` · ${slabe} de verificat cu ochiul (încredere mică sau avertisment)` : ''),
+      erori || slabe ? 'warn' : 'success')
+  }
+
   const verifica = async (r) => {
     const { error } = await supabase.from('hr_recomandari').update({ verificat: !r.verificat, verificat_de: r.verificat ? null : (profile?.id || null), verificat_la: r.verificat ? null : new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', r.id)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
@@ -200,7 +236,16 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
         <label style={{ fontSize:12, color:G.muted, display:'flex', gap:6, alignItems:'center' }}><input type="checkbox" checked={doarNeverif} onChange={e => setDoarNeverif(e.target.checked)} /> doar neverificate ({nrNeverif})</label>
         <span style={{ fontSize:12, color:G.dim }}>{filtrate.length} din {lista.length}</span>
         <span style={{ flex:1 }} />
-        {canEdit && <button onClick={() => setModal('nou')} style={S.btnP}>+ Recomandare</button>}
+        {canEdit && (toate
+          ? <>
+              <span style={{ fontSize:12, color:G.yellow, fontWeight:700 }}>🤖 citesc… {toate.facute}/{toate.din}</span>
+              <button onClick={() => { opresc.current = true }} style={{ ...S.btnS, color:G.orange, borderColor:G.orange+'55' }}>Oprește</button>
+            </>
+          : <button onClick={citesteToate} style={{ ...S.btnS, color:G.purple, borderColor:G.purple+'55', fontWeight:600 }}
+              title="AI citește, una câte una, recomandările afișate care n-au fost încă citite. Costă — îți spune câte și cât înainte.">
+              🤖 Citește toate necitite ({filtrate.filter(r => r.fisier_path && !r.ai_citit_la).length})
+            </button>)}
+        {canEdit && <button onClick={() => setModal('nou')} style={S.btnP} disabled={!!toate}>+ Recomandare</button>}
       </div>
       <div style={{ fontSize:11.5, color:G.dim, marginBottom:10 }}>
         Recomandările sunt dovada de <b>experiență a persoanei</b> (manager de contract, șef de șantier, RTE…) cerută la licitații. Le urci aici, AI le citește, tu le verifici ✓ — motorul din Ofertare le propune singur pe cerințele de „experiență în proiect similar".
