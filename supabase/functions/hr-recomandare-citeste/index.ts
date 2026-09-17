@@ -1,8 +1,13 @@
-// hr-recomandare-citeste v1 (15.09.2026, task #73 — mail Silviu): citește o RECOMANDARE (document de
-// experiență al unei persoane: manager de contract, șef de șantier, RTE, inginer) urcată în hr_recomandari
-// și completează câmpurile structurate pe care motorul de acoperire le confruntă cu cerințele de
-// „experiență în proiect similar". Nimic nu ajunge automat într-o ofertă: rândul rămâne `verificat=false`
-// până îl bifează un om; motorul îl vede oricum, dar UI-ul arată clar „necitit/neverificat".
+// hr-recomandare-citeste v2 (17.09.2026) — citește o RECOMANDARE (document de experiență al unei
+// persoane: manager de contract, șef de șantier, RTE, inginer) urcată în hr_recomandari și completează
+// câmpurile structurate pe care motorul de acoperire le confruntă cu cerințele de „experiență în proiect
+// similar". Nimic nu ajunge automat într-o ofertă: rândul rămâne `verificat=false` până îl bifează un om;
+// motorul îl vede oricum, dar UI-ul arată clar „necitit/neverificat".
+//
+// v2 (17.09.2026, după primele 18 citiri reale): trei feluri în care un document perfect lizibil apărea
+// ca „necitibil" sau suspect — bugetul mâncat de gândire, parsarea lacomă a JSON-ului și formularea
+// „confirmăm că <beneficiarul> a realizat prin <executantul>", pe care modelul o citea ca pe o
+// contradicție și dădea încredere 0. Vezi comentariile de la SYS și `citeste()`.
 //
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 //  (a) citește conținut EXTERN: documentul scanat (text scris de un beneficiar/terț) — se tratează ca DATE,
@@ -54,7 +59,7 @@ const SYS = `Citești o RECOMANDARE / referință / adeverință de experiență
 Răspunde NUMAI cu JSON, fără text în jur:
 {"nume_persoana":"<numele persoanei recomandate, așa cum apare>","rol":"<funcția/rolul persoanei în lucrare, ex. manager de contract, șef de șantier, responsabil tehnic cu execuția (RTE), inginer execuție>","beneficiar":"<cine emite recomandarea: firma/autoritatea>","obiect_lucrare":"<denumirea lucrării/contractului, scurt>","domenii":["<apa-canal|gaze|drumuri|instalatii|constructii civile|hidrotehnice|altele>"],"perioada_start":"<DD.MM.YYYY sau MM.YYYY sau YYYY sau null>","perioada_end":"<la fel sau null>","valoare_lei":<număr sau null>,"nr_document":"<nr. de înregistrare sau null>","data_document":"<DD.MM.YYYY sau null>","semnatar":"<nume și funcție, sau null>","calificativ":"<ex. foarte bine / corespunzător, sau null>","incredere":<0-100>,"citat":"<o propoziție din document care spune rolul și lucrarea>"}
 
-Reguli: câmp nevăzut = null. Valoarea doar dacă e scrisă explicit (număr, fără separatori). Dacă documentul NU e o recomandare (e CV, diplomă, contract), pui incredere sub 40 și scrii în "citat" ce e de fapt. "incredere" = cât de sigur ești că ai citit corect persoana, rolul și lucrarea.`;
+Reguli: câmp nevăzut = null. Valoarea doar dacă e scrisă explicit (număr, fără separatori). Dacă documentul NU e o recomandare (e CV, diplomă, contract), pui incredere sub 40 și scrii în "citat" ce e de fapt. "incredere" = cât de sigur ești că ai citit corect persoana, rolul și lucrarea. ATENȚIE la formularea uzuală „confirmăm că <BENEFICIARUL> a realizat prin <EXECUTANTUL> lucrarea...": acolo beneficiarul e cel care emite, iar persoana recomandată a lucrat de partea executantului — nu e un motiv de încredere scăzută.`;
 
 async function citeste(apiKey: string, mime: string, bin: Uint8Array) {
   let continut: any;
@@ -76,10 +81,37 @@ async function citeste(apiKey: string, mime: string, bin: Uint8Array) {
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
   const txt = (Array.isArray(j?.content) ? j.content : []).filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
-  const m = txt.match(/\{[\s\S]*\}/);
-  if (!m) return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason}${j?.stop_reason === 'max_tokens' ? ' — raspunsul s-a taiat; documentul e probabil lung, se poate reincerca' : ''})`).slice(0, 200), _tin: tin, _tout: tout };
-  try { return { ...JSON.parse(m[0]), _tin: tin, _tout: tout }; }
-  catch (e) { return { eroare: 'JSON invalid: ' + String((e as Error)?.message).slice(0, 100), _tin: tin, _tout: tout }; }
+  // 17.09.2026: parsare pe ACOLADE ECHILIBRATE, nu pe lacomie. `/\{[\s\S]*\}/` ia de la prima
+  // acolada pana la ULTIMA din tot textul, asa ca o singura fraza scrisa dupa JSON (sau un al
+  // doilea obiect) facea rezultatul neparsabil si recomandarea „necitibila". S-a intamplat pe
+  // recomandarea de alimentare cu apa a lui Pantea — exact documentul care conta cel mai mult.
+  // Acum luam pe rand fiecare obiect complet din text si il pastram pe primul care se parseaza
+  // si chiar arata a raspuns (are macar unul din campurile asteptate).
+  const obiecte: string[] = [];
+  let adanc = 0, start = -1, inSir = false, escapat = false;
+  for (let i = 0; i < txt.length; i++) {
+    const c = txt[i];
+    if (inSir) {
+      if (escapat) escapat = false;
+      else if (c === '\\') escapat = true;
+      else if (c === '"') inSir = false;
+      continue;
+    }
+    if (c === '"') { inSir = true; continue; }
+    if (c === '{') { if (adanc === 0) start = i; adanc++; continue; }
+    if (c === '}') { adanc--; if (adanc === 0 && start >= 0) { obiecte.push(txt.slice(start, i + 1)); start = -1; } if (adanc < 0) adanc = 0; }
+  }
+  if (!obiecte.length) return { eroare: (j?.error?.message || `fara text (http ${r.status}, stop ${j?.stop_reason}${j?.stop_reason === 'max_tokens' ? ' — raspunsul s-a taiat; documentul e probabil lung, se poate reincerca' : ''})`).slice(0, 200), _tin: tin, _tout: tout };
+  let ultimaEroare = 'niciun obiect JSON valid in raspuns';
+  for (const cand of obiecte) {
+    try {
+      const parsat = JSON.parse(cand);
+      if (parsat && typeof parsat === 'object' && ['nume_persoana', 'rol', 'beneficiar', 'obiect_lucrare', 'incredere'].some(k => k in parsat)) {
+        return { ...parsat, _tin: tin, _tout: tout };
+      }
+    } catch (e) { ultimaEroare = 'JSON invalid: ' + String((e as Error)?.message).slice(0, 100); }
+  }
+  return { eroare: ultimaEroare, _tin: tin, _tout: tout };
 }
 
 Deno.serve(async (req: Request) => {
