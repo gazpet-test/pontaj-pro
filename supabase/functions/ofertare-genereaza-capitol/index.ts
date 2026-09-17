@@ -1,4 +1,4 @@
-// ofertare-genereaza-capitol v2 (17.09.2026) — scrie UN capitol din propunerea tehnică.
+// ofertare-genereaza-capitol v2.1 (17.09.2026) — scrie UN capitol din propunerea tehnică.
 // v2 (Domnești, Răzvan): PACHETUL DE FAPTE. v1 primea doar cerințele și lăsa 37 de [DE COMPLETAT]
 //     pe un capitol de personal, deși echipa, autorizațiile, experiența, partenerii, graficul și
 //     garanția stăteau în ERP, legate pe licitație. Acum funcția le adună singură (pachetFapte) și
@@ -215,7 +215,19 @@ Deno.serve(async (req: Request) => {
 
     const pachet = await pachetFapte(supabase, cap.licitatie_id, capId)
 
-    const context = [
+    // v2.1 (17.09 seara, Domnești cap. 2 — 92 cerințe): un singur apel lovea plafonul de 12.000
+    // tokeni de ieșire (stop_reason=max_tokens) și funcția refuza corect textul tăiat — dar de două
+    // ori, la 0,24 $ bucata. Un plafon mai mare nu încape în limita de ~150 s a apelului edge. Așa că
+    // un capitol mare se scrie pe PĂRȚI, în paralel (Promise.all): fiecare parte primește tot
+    // pachetul de fapte și doar felia ei de cerințe, numerotate în continuare, iar textele se lipesc.
+    // Timpul total ≈ o singură parte.
+    const PE_PARTE = 30
+    const nParti = Math.max(1, Math.ceil(cerinte.length / PE_PARTE))
+    const marime = Math.ceil(cerinte.length / nParti)
+    const parti: any[][] = []
+    for (let i = 0; i < cerinte.length; i += marime) parti.push(cerinte.slice(i, i + marime))
+
+    const antet = [
       `LICITAȚIA: ${lic?.obiect || '(fără obiect)'}`,
       lic?.autoritate ? `AUTORITATEA CONTRACTANTĂ: ${lic.autoritate}` : '',
       lic?.nr_anunt ? `ANUNȚ: ${lic.nr_anunt}` : '',
@@ -228,50 +240,79 @@ Deno.serve(async (req: Request) => {
       `═══ PACHETUL DE FAPTE DIN ERP (singurele fapte pe care ai voie să le scrii) ═══`,
       pachet || '(ERP-ul n-are nimic legat pe licitația asta — tot ce e fapt rămâne [DE COMPLETAT])',
       '',
-      `CERINȚELE ATRIBUITE CAPITOLULUI (${cerinte.length}) — la fiecare trebuie să se poată bifa un răspuns în text:`,
-      ...cerinte.map((c: any, i: number) =>
-        `${i + 1}. [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}` +
-        (c.document_probant ? `\n   (document probant cerut: ${c.document_probant})` : '')),
-      (obs || []).length ? `\nMODIFICĂRI CERUTE DE COLEGI, de respectat:\n${(obs || []).map((o: any, i: number) => `- ${o.text}`).join('\n')}` : '',
-      instructiune ? `\nINSTRUCȚIUNE SUPLIMENTARĂ DE LA REDACTOR:\n${String(instructiune).slice(0, 2000)}` : '',
-    ].filter(Boolean).join('\n')
+    ]
+    const contextParte = (k: number) => {
+      const felie = parti[k]
+      const dela = parti.slice(0, k).reduce((a, p) => a + p.length, 0)
+      const instrParte = nParti > 1 ? [
+        '',
+        `ATENȚIE — CAPITOLUL SE SCRIE ÎN ${nParti} PĂRȚI, generate separat și lipite în ordine. Aceasta este PARTEA ${k + 1} din ${nParti}.`,
+        `Scrii DOAR subpunctele care răspund cerințelor ${dela + 1}–${dela + felie.length} de mai jos (numerotarea continuă din capitol: începe subpunctele de la ${dela + 1}).`,
+        k === 0 ? 'Fiind prima parte, poți deschide cu 1–2 fraze de cadru, fără introduceri goale.' : 'NU scrii introducere, nu reiei ce s-a spus în părțile anterioare, intri direct în primul subpunct.',
+        k === nParti - 1 ? 'Fiind ultima parte, poți închide cu o frază de angajament general.' : 'NU scrii concluzie sau frază de încheiere — capitolul continuă.',
+      ] : []
+      return [
+        ...antet,
+        `CERINȚELE ATRIBUITE ${nParti > 1 ? `ACESTEI PĂRȚI (${felie.length} din ${cerinte.length})` : `CAPITOLULUI (${cerinte.length})`} — la fiecare trebuie să se poată bifa un răspuns în text:`,
+        ...felie.map((c: any, i: number) =>
+          `${dela + i + 1}. [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}` +
+          (c.document_probant ? `\n   (document probant cerut: ${c.document_probant})` : '')),
+        ...instrParte,
+        (obs || []).length ? `\nMODIFICĂRI CERUTE DE COLEGI, de respectat:\n${(obs || []).map((o: any) => `- ${o.text}`).join('\n')}` : '',
+        instructiune ? `\nINSTRUCȚIUNE SUPLIMENTARĂ DE LA REDACTOR:\n${String(instructiune).slice(0, 2000)}` : '',
+      ].filter(Boolean).join('\n')
+    }
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        // Pe claude-opus-5 gandirea e pornita implicit si tokenii ei se scad din max_tokens;
-        // o declaram explicit si ii dam loc, ca taietura sa nu cada in blocul de gandire.
-        model: MODEL, max_tokens: 12000,
-        thinking: { type: 'adaptive' },
-        // Promptul e partea stabila (identica la fiecare capitol) -> intra in cache.
-        system: [{ type: 'text', text: PROMPT, cache_control: { type: 'ephemeral' } }],
-        messages: [{ role: 'user', content: [{ type: 'text', text: context }] }],
-      }),
-    })
-    const data = await resp.json()
-    if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
+    const apel = async (k: number) => {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: MODEL, max_tokens: 12000,
+          thinking: { type: 'adaptive' },
+          // Promptul e partea stabila (identica la fiecare capitol) -> intra in cache.
+          system: [{ type: 'text', text: PROMPT, cache_control: { type: 'ephemeral' } }],
+          messages: [{ role: 'user', content: [{ type: 'text', text: contextParte(k) }] }],
+        }),
+      })
+      const data = await resp.json()
+      return { ok: resp.ok, status: resp.status, data }
+    }
+    const rezultate = await Promise.all(parti.map((_, k) => apel(k)))
 
+    // Costul se scrie o singura data, insumat pe parti.
     try {
-      const u = data.usage || {}
-      const cacheW = u.cache_creation_input_tokens || 0
-      const cacheR = u.cache_read_input_tokens || 0
+      let tin = 0, tout = 0, cost = 0
+      for (const r of rezultate) {
+        const u = r.data?.usage || {}
+        const cacheW = u.cache_creation_input_tokens || 0, cacheR = u.cache_read_input_tokens || 0
+        tin += (u.input_tokens || 0) + cacheW + cacheR
+        tout += u.output_tokens || 0
+        cost += (u.input_tokens || 0) * PRICE_IN + cacheW * PRICE_IN * 1.25 + cacheR * PRICE_IN * 0.1 + (u.output_tokens || 0) * PRICE_OUT
+      }
       await supabase.from('ai_usage_log').insert({
         function_name: 'ofertare-genereaza-capitol', model: MODEL,
-        tokens_in: (u.input_tokens || 0) + cacheW + cacheR,
-        tokens_out: u.output_tokens || 0,
-        cost_usd: (u.input_tokens || 0) * PRICE_IN + cacheW * PRICE_IN * 1.25 + cacheR * PRICE_IN * 0.1 + (u.output_tokens || 0) * PRICE_OUT,
+        tokens_in: tin, tokens_out: tout, cost_usd: cost,
         ref_table: 'ofertare_pt_capitole', ref_id: capId,
       })
     } catch (_) {}
 
-    const text = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('').trim()
-    if (!text) return fail('Modelul n-a intors text.', { stop_reason: data.stop_reason || null })
-    // Text taiat la jumatate nu se scrie: ar naste o versiune si ar arata ca un capitol scris.
-    if (data.stop_reason === 'max_tokens') {
-      return fail('Raspunsul s-a taiat la limita de tokeni — nu s-a scris nimic. Imparte capitolul sau redu cerintele atribuite.',
-        { trunchiat: true })
+    const stricat = rezultate.find(r => !r.ok)
+    if (stricat) return fail('Claude: ' + (stricat.data?.error?.message || stricat.status))
+
+    const bucati: string[] = []
+    for (const r of rezultate) {
+      const t = (r.data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('').trim()
+      if (!t) return fail('Modelul n-a intors text.', { stop_reason: r.data.stop_reason || null })
+      // Text taiat la jumatate nu se scrie: ar naste o versiune si ar arata ca un capitol scris.
+      if (r.data.stop_reason === 'max_tokens') {
+        return fail('Raspunsul s-a taiat la limita de tokeni — nu s-a scris nimic. Imparte capitolul sau redu cerintele atribuite.',
+          { trunchiat: true, parti: nParti })
+      }
+      bucati.push(t)
     }
+    const text = bucati.join('\n\n')
+    const data = rezultate[0].data
 
     // INTERDICȚIA 3 — sursa='ai' mereu. De aici incolo poarta tine capitolul blocat pana cand
     // un om il deschide, il citeste si il salveaza (UI-ul pune atunci sursa='om').
@@ -286,7 +327,7 @@ Deno.serve(async (req: Request) => {
       versiune_noua: (cap.versiune || 1) + 1,
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cache_citit: data.usage?.cache_read_input_tokens || 0,
-      pachet_caractere: pachet.length,
+      pachet_caractere: pachet.length, parti: nParti,
     }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
