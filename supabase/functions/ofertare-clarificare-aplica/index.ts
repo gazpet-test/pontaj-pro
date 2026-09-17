@@ -1,9 +1,15 @@
-// ofertare-clarificare-aplica — „Aplică în registru” (Răzvan 07.09.2026): răspunsul autorității la o clarificare
-// modifică registrul de cerințe fără să se reia „Propune acoperire” pe tot: AI-ul (Sonnet 5) compară întrebarea + răspunsul
-// cu cerințele active ale licitației și propune: modifica (text nou), anuleaza, noua. Aplicare: cerința veche primește
-// inlocuita_de → rând nou (versiune+1, raspuns_clarificare_id), acoperirea existentă se copiază pe rândul nou (nu se pierde
-// munca de acoperire). Cerințele noi intră neevaluate. Clarificarea trece pe status 'raspunsa'.
-// Auth: JWT user SAU x-radar-secret. Body {clarificare_id, doar_propunere?: true} → cu doar_propunere întoarce planul fără să aplice.
+// ofertare-clarificare-aplica — generator de PROPUNERI pe raspunsul autoritatii la o clarificare.
+// Istoric: pana pe 12.09.2026 aplica direct in registru (de-aici numele „-aplica"). Nu mai face asta.
+// ── 17.09.2026 — DOAR PROPUNERE. Functia nu mai scrie NIMIC in registru. ──────────────────────
+// Auditul independent din 17.09 (R01): fluxul asta a fost inlocuit pe 12.09 de `ofertare-raspuns-set`
+// + `fn_ofertare_raspuns_set_aplica`, unde omul bifeaza fiecare operatie si scrierea e tranzactionala,
+// cu lock-uri si amprente. UI-ul nu-l mai cheama de atunci — dar functia a ramas publicata si ACTIVA,
+// cu o poarta care cere doar un JWT de utilizator valid, fara nicio verificare de modul sau rol.
+// Adica: orice cont logat putea rescrie registrul de cerinte al unei licitatii, ocolind complet
+// selectia umana. Doua mecanisme cu garantii diferite produceau acelasi „adevar oficial".
+// S-a scos partea de APLICARE, nu doar s-a pus un steag: un steag se poate uita nesetat, codul sters
+// nu se mai poate apela. Ce ramane e un generator de propuneri, inofensiv.
+// Auth: JWT user SAU x-radar-secret. Body {clarificare_id} → intoarce planul. Nu exista cale de scriere.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 // Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
@@ -83,53 +89,11 @@ Reguli: modifică DOAR cerințele pe care răspunsul le schimbă efectiv (relaxa
 
   const modificari = (Array.isArray(j.modificari) ? j.modificari : []).filter((m: any) => cer.some(c => c.id === Number(m.cerinta_id))).slice(0, 15)
   const noi = (Array.isArray(j.noi) ? j.noi : []).filter((n: any) => n?.text_cerinta).slice(0, 15)
-  if (body.doar_propunere) return json({ ok: true, propunere: { modificari, noi, fara_efect: !!j.fara_efect, rezumat: j.rezumat } })
-
-  // aplicare
-  const now = new Date().toISOString()
-  const rezultat = { modificate: 0, anulate: 0, noi: 0, acoperiri_copiate: 0 }
-  for (const m of modificari) {
-    const c = cer.find(x => x.id === Number(m.cerinta_id))!
-    const anul = m.actiune === 'anuleaza'
-    const textNou = anul ? `[ANULATĂ prin răspunsul la clarificarea nr. ${cl.nr}] ${c.text_cerinta}` : String(m.text_nou || '').trim()
-    if (!textNou) continue
-    const { data: ins, error: eI } = await db.from('ofertare_cerinte').insert({
-      licitatie_id: cl.licitatie_id, sursa_document_id: c.sursa_document_id, sursa_sectiune: c.sursa_sectiune, text_cerinta: textNou, tip: c.tip, lot: c.lot,
-      document_probant: anul ? null : c.document_probant, cand_se_prezinta: c.cand_se_prezinta, versiune: (c.versiune || 1) + 1,
-      raspuns_clarificare_id: id, extras_de_ai: true, confirmata_de: null,
-      // starea de lucru pusa de om (inclusiv „nu se aplica" cu motivul ei) se muta pe versiunea noua —
-      // altfel un raspuns al autoritatii resetase tacit decizia si cerinta reaparea ca eliminatorie fara dovada
-      stare: c.stare || 'de_analizat', stare_motiv: c.stare_motiv, stare_de: c.stare_de, stare_la: c.stare_la,
-    }).select('id').single()
-    if (eI || !ins) continue
-    await db.from('ofertare_cerinte').update({ inlocuita_de: ins.id, updated_at: now }).eq('id', c.id)
-    if (anul) rezultat.anulate++; else {
-      rezultat.modificate++
-      // acoperirea de pe cerința veche se mută pe cea nouă (rămâne de reverificat de om, dar nu se pierde)
-      // .maybeSingle() da eroare (si data null) cand o cerinta are mai multe randuri de acoperire —
-      // exista astfel de cazuri in BD, iar efectul era ca acoperirea NU se copia, tacut. Se copiaza toate.
-      const { data: acs } = await db.from('ofertare_acoperire').select('*').eq('cerinta_id', c.id).order('id')
-      for (const ac of (acs || [])) {
-        const { id: _i, created_at: _c, updated_at: _u, ...rest } = ac
-        // Cerința s-a schimbat, deci verificarea pe scan NU mai e valabilă: se resetează
-        // explicit, nu doar cu o notă în observații (auditul 09.09: marcajul supraviețuia
-        // prin ...rest și cerința nouă părea verificată fără să fi văzut-o nimeni).
-        const { error: eA } = await db.from('ofertare_acoperire').insert({
-          ...rest, cerinta_id: ins.id,
-          verificat_pe_scan: false, verificat_de: null, verificat_la: null,
-          observatii: [ac.observatii, `copiată de la cerința #${c.id} după clarificarea nr. ${cl.nr} — de reverificat`].filter(Boolean).join(' · '),
-        })
-        if (!eA) rezultat.acoperiri_copiate++
-      }
-    }
-  }
-  for (const n of noi) {
-    const tip = ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(n.tip) ? n.tip : 'propunere'
-    const csp = ['duae', 'depunere', 'primul_loc'].includes(n.cand_se_prezinta) ? n.cand_se_prezinta : null
-    const { error } = await db.from('ofertare_cerinte').insert({ licitatie_id: cl.licitatie_id, sursa_sectiune: n.sursa_sectiune || `Răspuns clarificare nr. ${cl.nr}`, text_cerinta: String(n.text_cerinta).trim(), tip,
-      document_probant: n.document_probant || null, cand_se_prezinta: csp, versiune: 1, raspuns_clarificare_id: id, extras_de_ai: true })
-    if (!error) rezultat.noi++
-  }
-  await db.from('ofertare_clarificari').update({ status: 'raspunsa', raspuns_la: cl.raspuns_la || now, updated_at: now }).eq('id', id)
-  return json({ ok: true, ...rezultat, fara_efect: !!j.fara_efect, rezumat: j.rezumat, aplicat_de: userId })
+  // Singura iesire: propunerea. Statusul clarificarii NU se mai schimba de aici — trecerea pe
+  // „raspunsa" o face omul din ecranul de clarificari, unde vede si documentul.
+  return json({
+    ok: true, doar_propunere: true,
+    propunere: { modificari, noi, fara_efect: !!j.fara_efect, rezumat: j.rezumat },
+    nota: 'Functia propune, nu aplica. Aplicarea in registru se face din ecranul Licitatii, prin setul de raspuns (selectie umana pe fiecare operatie).',
+  })
 })
