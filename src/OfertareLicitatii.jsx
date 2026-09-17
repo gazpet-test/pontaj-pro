@@ -2443,21 +2443,26 @@ const SURSE_CAND = {
 // Aceleași filtre ca motorul AI (ofertare-acoperire): deleted_at null / activ / abandonat=false.
 async function incarcaCatalogAcoperire() {
   const [aut, docs, part, exp, rec, stud, vech] = await Promise.all([
-    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, document_personal_id, doc:hr_documente_personale(fisier_path), tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name), ext:hr_personal_extern(nume)').is('deleted_at', null).order('id').limit(5000),
+    supabase.from('hr_autorizatii').select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, observatii, fisier_path, document_personal_id, doc:hr_documente_personale(fisier_path), tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name, active), ext:hr_personal_extern(nume, activ)').is('deleted_at', null).order('id').limit(5000),
     supabase.from('documente_firma').select('id, tip, denumire, categorie, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare, se_reemite').eq('activ', true).order('id').limit(5000),
     supabase.from('ofertare_parteneri').select('id, nume, tip_relatie, observatii').eq('activ', true).eq('abandonat', false).order('nume').limit(2000),
     supabase.from('ofertare_experienta').select('id, denumire, beneficiar, valoare_lei, valoare_executata_lei, data_pv, tip_pv, asociere, piese, observatii').eq('activ', true).order('id').limit(5000),
-    supabase.from('hr_recomandari').select('id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, emp:employees(name), ext:hr_personal_extern(nume)').eq('activ', true).order('id').limit(5000),
+    supabase.from('hr_recomandari').select('id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, valoare_lei, domenii, verificat, emp:employees(name, active), ext:hr_personal_extern(nume, activ)').eq('activ', true).order('id').limit(5000),
     // 17.09.2026: diplomele și calificările (categoria 'studii'). Restul dosarului de personal nu intră
     // aici — CI, cazier, extras de cont n-au ce dovedi în fața autorității și sunt date personale.
-    supabase.from('hr_documente_personale').select('id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)').eq('tip.categorie', 'studii').eq('activ', true).is('deleted_at', null).order('id').limit(5000),
+    supabase.from('hr_documente_personale').select('id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name, active)').eq('tip.categorie', 'studii').eq('activ', true).is('deleted_at', null).order('id').limit(5000),
     // 17.09.2026: dovezile de vechime de la angajatori anteriori (CV, extras REGES, adeverințe
     // de încetare, anexa 7). Acoperă cerințele de „minimum N ani experiență", pe care
     // recomandările nu le acoperă când perioadele din ele nu ajung la N.
-    supabase.from('hr_documente_personale').select('id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name)').eq('tip.categorie', 'angajator_anterior').eq('activ', true).is('deleted_at', null).order('id').limit(5000),
+    supabase.from('hr_documente_personale').select('id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri!inner(cod, denumire, categorie), emp:employees(name, active)').eq('tip.categorie', 'angajator_anterior').eq('activ', true).is('deleted_at', null).order('id').limit(5000),
   ])
   const err = [aut, docs, part, exp, rec, stud, vech].find(r => r.error)?.error
   if (err) throw err
+  // 17.09.2026 (Răzvan): persoanele cu contract închis (employees.active=false) sau externii dezactivați
+  // nu mai apar între candidați — Nicu Iosif Cătălin cu 4 autorizații apărea la „Cine poate acoperi”
+  // deși nu mai e în firmă. Documentele lor rămân în HR, doar nu se mai propun la ofertare.
+  const titularActiv = r => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
+  for (const r of [aut, rec, stud, vech]) r.data = (r.data || []).filter(titularActiv)
   const arr = (x) => Array.isArray(x) ? x.join(' ') : (x || '')
   const mk = (sursa, id, titlu, sub, text, extra = {}) => ({ sursa, id, titlu, sub, tokens: normText(text).split(' ').filter(Boolean), ...extra })
   const out = []
