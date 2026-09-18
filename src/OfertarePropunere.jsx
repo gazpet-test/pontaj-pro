@@ -22,7 +22,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
-import { construiestePropunere, construiesteBorderou, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
+import { construiestePropunere, construiesteBorderou, construiesteF23, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 import ClarificariAC from './OfertareClarificariAC.jsx'
@@ -1521,12 +1521,47 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       (exp ? `, ${exp} cu dovada EXPIRATĂ la data depunerii.` : '.'), exp ? 'err' : 'ok')
   }
 
+  // FORMULARUL 23 — lista de utilaje, instalații și echipamente tehnice.
+  // Vine din `v_ofertare_dotari`, adică din evidența reală a firmei, NU dintr-o listă scrisă de
+  // mână pentru fiecare licitație. La Domnești lista manuală avea utilaje pe care baza nu le
+  // știa, îi lipseau altele pe care firma le are, iar forma de deținere era declarată altfel
+  // decât în evidență. Ce intră în listă decide regula din `logistica_categorii.in_f23`, cu
+  // excepții pe activ — nu se alege aici, la export.
+  //
+  // Se agregă pe denumire: în formularul depus utilajele identice stau pe un rând cu cantitatea
+  // („Excavator Hitachi ZX210 — 4 buc"), nu pe câte un rând fiecare. Se grupează separat pe forma
+  // de deținere, fiindcă aceea e o coloană distinctă în formular: aceleași pompe, unele proprii
+  // și altele în chirie, se declară pe două rânduri, nu pe unul.
+  const exportaF23 = async () => {
+    const { data, error } = await supabase.from('v_ofertare_dotari')
+      .select('denumire, um, cantitate, detinere')
+      .eq('propus_f23', true).order('categorie').order('denumire')
+    if (error) { showToast?.('Lista de dotări nu s-a putut citi: ' + error.message, 'err'); return }
+    if (!data?.length) { showToast?.('Nu există dotări marcate pentru F23. Verifică regula pe categorii în Logistică.', 'err'); return }
+
+    const grupe = new Map()
+    for (const d of data) {
+      const fel = d.detinere === 'proprietate' ? 'proprietate'
+        : d.detinere === 'contract servicii' ? 'contract' : 'chirie'
+      const cheie = `${d.denumire}|${d.um}|${fel}`
+      const g = grupe.get(cheie) || { denumire: d.denumire, um: d.um, proprietate: 0, chirie: 0, contract: 0 }
+      g[fel] += Number(d.cantitate) || 1
+      grupe.set(cheie, g)
+    }
+    const dotari = [...grupe.values()].sort((a, b) => String(a.denumire).localeCompare(String(b.denumire), 'ro'))
+    await descarcaDocx(construiesteF23({ licitatie: lic, dotari }), numeFisier('Formular_23_dotari', lic))
+    showToast?.(`Formularul 23 exportat: ${dotari.length} poziții, ${data.length} bucăți. Verifică sediul autorității în declarație.`, 'ok')
+  }
+
   // Exportul: doua fisiere, nu unul. Borderoul e piesa separata din dosar, iar propunerea o
   // deschide omul in Word ca sa puna cuprinsul (F9) si sa verifice inainte de tiparire.
   const exporta = async (fel) => {
     if (!capitole.length) { showToast?.('Nu există capitole de exportat.', 'err'); return }
     setBusy(true)
     try {
+      // Formularul 23 nu depinde de capitole: lista de dotări vine din evidența firmei, nu din
+      // textul propunerii. De-aia iese pe ramura lui, înaintea verificării de capitole goale.
+      if (fel === 'f23') { await exportaF23(); setBusy(false); return }
       const arg = { licitatie: lic, capitole }
       if (fel === 'borderou') await descarcaDocx(construiesteBorderou(arg), numeFisier('Borderou_PT', lic))
       else await descarcaDocx(construiestePropunere(arg), numeFisier('Propunere_tehnica', lic))
@@ -1730,6 +1765,12 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
           title="Borderoul pieselor îndosariate"
           style={{ ...S.btnS, opacity: (busy || !capitole.length) ? .45 : 1 }}>
           📋 Borderoul
+        </button>
+        {/* Nu depinde de capitole: lista vine din evidența de utilaje, nu din textul propunerii. */}
+        <button onClick={() => exporta('f23')} disabled={busy}
+          title="Formularul 23 — declarația privind utilajele, cu lista generată din evidența firmei"
+          style={{ ...S.btnS, opacity: busy ? .45 : 1 }}>
+          🚜 Formular 23
         </button>
         <button onClick={aprobaPachet} disabled={blocat || busy || !capitole.length}
           title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Generează fișierele, le hash-uiește și îngheață manifestul (versiune nouă)'}
