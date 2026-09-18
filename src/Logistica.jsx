@@ -18,6 +18,7 @@ import ServiceTab from './ServiceTab.jsx'
 import DocumenteFlotaPage, { DocumenteUtilajList } from './DocumenteFlotaPage.jsx'
 import CarteTehnicaSearch from './CarteTehnicaSearch.jsx'
 import FisaActivExport from './FisaActivExport.jsx'
+import { construiesteF23, numeFisier, descarcaDocx } from './OfertareExport.js'
 import ImportEvoGPSModal from './ImportEvoGPSModal.jsx'
 import ImportRompetrolModal from './ImportRompetrolModal.jsx'
 import Tichete from './Tichete.jsx'
@@ -11263,6 +11264,35 @@ export default function LogisticaPage() {
   
   const handleSaved = () => { loadAll(); setModal(null) }
   
+  // ─── Formularul 23 (lista de dotări) ───────────────────────────────────────
+  // Același formular ca în Ofertare, dar fără licitație: aici se scoate pentru orice client
+  // care cere dovada dotării. Autoritatea și sediul rămân [DE COMPLETAT] — nu le inventăm.
+  const [busyF23, setBusyF23] = useState(false)
+  const exportF23 = async () => {
+    setBusyF23(true)
+    try {
+      const { data, error } = await supabase.from('v_ofertare_dotari')
+        .select('denumire, um, cantitate, detinere')
+        .eq('propus_f23', true).order('categorie').order('denumire')
+      if (error) { showToast('Lista de dotări nu s-a putut citi: ' + error.message, 'err'); return }
+      if (!data?.length) { showToast('Nu există dotări marcate pentru F23 (vezi regula pe categorii).', 'err'); return }
+      const grupe = new Map()
+      for (const d of data) {
+        const fel = d.detinere === 'proprietate' ? 'proprietate'
+          : d.detinere === 'contract servicii' ? 'contract' : 'chirie'
+        const cheie = `${d.denumire}|${d.um}|${fel}`
+        const g = grupe.get(cheie) || { denumire: d.denumire, um: d.um, proprietate: 0, chirie: 0, contract: 0 }
+        g[fel] += Number(d.cantitate) || 1
+        grupe.set(cheie, g)
+      }
+      const dotari = [...grupe.values()].sort((a, b) => String(a.denumire).localeCompare(String(b.denumire), 'ro'))
+      await descarcaDocx(construiesteF23({ licitatie: null, dotari }), numeFisier('Formular_23_dotari', { obiect: 'general' }))
+      showToast(`Formularul 23 exportat: ${dotari.length} poziții, ${data.length} bucăți. Completează autoritatea și sediul în declarație.`, 'ok')
+    } catch (e) {
+      showToast('Exportul F23 a eșuat: ' + (e?.message || e), 'err')
+    } finally { setBusyF23(false) }
+  }
+
   // ─── Export Excel ──────────────────────────────────────────────────────────
   const exportExcel = () => {
     const header = ['Nr crt', 'Cod intern', 'Nr inventar', 'Plăcuță', 'Marcă', 'Model', 'Tip', 'Subcategorie', 'An', 'Stare', 'Carburant', 'Normă consum', 'Unitate', 'Firmă', 'Mentenanță următoare', 'Zile până la scadență', 'Observații']
@@ -12517,6 +12547,9 @@ export default function LogisticaPage() {
           )}
           <button onClick={exportExcel} disabled={filtered.length === 0} style={{...S.btnS, fontSize: 12, color: G.green, borderColor: G.green + '55', opacity: filtered.length === 0 ? .4 : 1}}>
             📥 Excel
+          </button>
+          <button onClick={exportF23} disabled={busyF23} style={{...S.btnS, fontSize: 12, color: G.orange, borderColor: G.orange + '55', opacity: busyF23 ? .5 : 1}} title="Declarația privind utilajele (Formular 23) — pentru orice client care cere dovada dotării">
+            {busyF23 ? '⏳ Se generează…' : '🚜 Formular 23'}
           </button>
           {canEdit && (
             <button onClick={() => setModal({ mode: 'create', activ: null })} style={{...S.btnP, background: G.logistica, color: '#000'}}>
