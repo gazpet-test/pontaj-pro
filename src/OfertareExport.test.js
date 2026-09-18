@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
 import { Packer } from 'docx'
-import { construiestePropunere, construiesteBorderou, construiesteF23, numeFisier, etichetaCapitol } from './OfertareExport.js'
+import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, etichetaCapitol } from './OfertareExport.js'
 
 const LIC = { obiect: 'Extindere retea gaze', nr_anunt: 'CN1054321' }
 const CAP = [
@@ -84,5 +84,51 @@ describe('Formularul 23 — declarația privind utilajele', () => {
   it('lista goala nu arunca — iese formularul fara randuri, nu o eroare', async () => {
     const t = await xml(construiesteF23({ licitatie: LIC, dotari: [] }))
     expect(t).toMatch(/LISTĂ UTILAJE, INSTALAȚII ȘI ECHIPAMENTE TEHNICE/)
+  })
+})
+
+// Formularul 9 — personalul. Spre deosebire de F23, aici lista e o ALOCARE pe licitație, iar
+// ciorna trebuie să se vadă că e ciornă: un document de lucru scăpat la depunere e o problemă.
+describe('Formularul 9 — declarația privind personalul', () => {
+  const PERS = [
+    { nume: 'DADULESCU COSMIN GRIGORAS', functie: 'Inginer', roluri: 'RTE; Diriginte de șantier', autorizatii: '12345', relatie: 'angajat propriu' },
+    { nume: 'TATARU MARIAN', functie: 'Inginer execuție', roluri: 'Șef punct de lucru', autorizatii: '', relatie: 'SORCHIV GAZ' },
+  ]
+  const xml = async (doc) => {
+    const zip = await JSZip.loadAsync(await Packer.toBuffer(doc))
+    return zip.file('word/document.xml').async('string')
+  }
+
+  it('omul apare cu toate rolurile lui, nu doar cu primul', async () => {
+    const t = await xml(construiesteF9({ licitatie: LIC, personal: PERS }))
+    expect(t).toMatch(/RTE; Diriginte de șantier/)
+    expect(t).toMatch(/Poziția propusă în contract/)
+  })
+
+  it('externul se vede ca extern — relația cu ofertantul nu se pierde', async () => {
+    const t = await xml(construiesteF9({ licitatie: LIC, personal: PERS }))
+    expect(t).toMatch(/SORCHIV GAZ/)
+    expect(t).toMatch(/angajat propriu/)
+  })
+
+  it('ciorna se marchează în document, si pe pagina de tabel, nu doar pe prima', async () => {
+    const t = await xml(construiesteF9({ licitatie: LIC, personal: PERS, ciorna: true }))
+    expect(t.match(/CIORNĂ/g)?.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('finalul NU poarta mentiunea de ciorna', async () => {
+    const t = await xml(construiesteF9({ licitatie: LIC, personal: PERS }))
+    expect(t).not.toMatch(/CIORNĂ/)
+  })
+
+  it('sediul autoritatii nu se inventeaza, ca la F23', async () => {
+    const t = await xml(construiesteF9({ licitatie: LIC, personal: [] }))
+    expect(t).toMatch(/DE COMPLETAT: sediul autorității contractante/)
+    expect(t).toMatch(/LISTA PERSONALULUI DE SPECIALITATE PROPUS/)
+  })
+
+  it('are subsolul cu numerotarea filelor', async () => {
+    const tot = (await subsoluri(construiesteF9({ licitatie: LIC, personal: PERS }))).join('')
+    expect(tot).toMatch(/\bPAGE\b/); expect(tot).toMatch(/NUMPAGES/)
   })
 })

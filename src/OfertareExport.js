@@ -215,6 +215,83 @@ export function construiesteF23({
   })
 }
 
+/**
+ * Formularul 9 — declarația privind personalul de specialitate propus pentru lucrare.
+ *
+ * DE CE NU E CA F23: utilajele sunt un INVENTAR (ce ai în curte, ai), personalul e o ALOCARE.
+ * Aceiași oameni apar pe mai multe licitații, iar unul poate ține mai multe roluri. De-aia
+ * lista vine din `v_ofertare_pt_echipa` (echipa asumată pe licitația asta), nu din `employees`.
+ *
+ * `ciorna` marchează vizibil documentul, pe fiecare pagină: ciorna iese oricând, chiar cu
+ * blocaje, ca omul să poată lucra în ziua depunerii; finalul se dă doar cu poarta trecută.
+ */
+export function construiesteF9({
+  licitatie, personal, ciorna = false,
+  firma = 'GAZPET INSTAL S.R.L.',
+  sediu = 'str. Fluturilor, nr. 34, loc. Ploiești, jud. Prahova',
+  reprezentant = 'Trușu Răzvan Mihail',
+  functie = 'Administrator',
+  dataCompletarii = new Date().toLocaleDateString('ro-RO'),
+}) {
+  const autoritate = String(licitatie?.autoritate || '[DE COMPLETAT: autoritatea contractantă]').trim()
+  const sediuAutoritate = String(licitatie?.autoritate_sediu || '').trim() || '[DE COMPLETAT: sediul autorității contractante]'
+  const obiect = String(licitatie?.obiect || '[DE COMPLETAT: obiectul procedurii]').trim()
+
+  const cap = [new TableRow({ children: [
+    celula('Nr. crt.', { bold: true, width: 6, align: AlignmentType.CENTER }),
+    celula('Numele și prenumele', { bold: true, width: 24 }),
+    celula('Funcția', { bold: true, width: 18 }),
+    celula('Poziția propusă în contract', { bold: true, width: 22 }),
+    celula('Calificare / autorizații', { bold: true, width: 18 }),
+    celula('Relația cu ofertantul', { bold: true, width: 12 }),
+  ] })]
+
+  const randuri = (personal || []).map((o, i) => new TableRow({ children: [
+    celula(String(i + 1), { align: AlignmentType.CENTER }),
+    celula(o.nume || ''),
+    celula(o.functie || ''),
+    celula(o.roluri || ''),
+    celula(o.autorizatii || ''),
+    celula(o.relatie || ''),
+  ] }))
+
+  const antet = ciorna
+    ? [p('CIORNĂ — document de lucru, NU pentru depunere', { bold: true, align: AlignmentType.CENTER, color: 'C00000', after: 240 })]
+    : []
+
+  return new Document({
+    styles: { default: { document: { run: { font: FONT, size: 24 } } } },
+    sections: [{ footers: { default: subsolPagini() }, children: [
+      ...antet,
+      p('Formularul nr. 9', { align: AlignmentType.RIGHT, after: 240 }),
+      p(`Operator economic ${firma}`, { bold: true }),
+      p('(denumirea/numele)', { italics: true, size: 20, after: 240 }),
+      p('DECLARAȚIE', { bold: true, align: AlignmentType.CENTER, size: 30 }),
+      p('Privind personalul de specialitate propus pentru îndeplinirea contractului', { bold: true, align: AlignmentType.CENTER, after: 300 }),
+      p(`Subsemnatul ${reprezentant}, ${functie}, reprezentant împuternicit al ${firma}, cu sediul în ${sediu}, declar pe propria răspundere, sub sancțiunile aplicabile faptei de fals în acte publice, că datele prezentate în tabelul anexat sunt reale.`, { after: 200 }),
+      p(`Procedura de atribuire: „${obiect}".`, { after: 200 }),
+      p('Anexez prezentei declarații lista personalului de specialitate propus, împreună cu documentele care atestă calificarea și autorizarea acestuia.', { after: 200 }),
+      p(`Subsemnatul autorizez prin prezenta orice instituție, societate comercială, bancă, alte persoane juridice să furnizeze informații reprezentanților autorizați ai ${autoritate}, cu sediul în ${sediuAutoritate}, cu privire la orice aspect tehnic și financiar în legătură cu activitatea noastră.`, { after: 300 }),
+      p(`Data completării: ${dataCompletarii}`, { after: 360 }),
+      p('Operator economic,', { align: AlignmentType.RIGHT }),
+      p(firma, { bold: true, align: AlignmentType.RIGHT }),
+      p(`${reprezentant} - ${functie}`, { align: AlignmentType.RIGHT }),
+      p('........................................', { align: AlignmentType.RIGHT }),
+      p('(semnătură autorizată)', { italics: true, size: 20, align: AlignmentType.RIGHT }),
+      new Paragraph({ children: [new PageBreak()] }),
+      ...antet,
+      p('Anexa 1 la Formularul nr. 9', { bold: true, align: AlignmentType.CENTER }),
+      p('LISTA PERSONALULUI DE SPECIALITATE PROPUS', { bold: true, align: AlignmentType.CENTER, size: 26 }),
+      p(firma, { bold: true, align: AlignmentType.CENTER, after: 240 }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [...cap, ...randuri] }),
+      p('', { after: 360 }),
+      p('Operator economic,', { align: AlignmentType.RIGHT }),
+      p(firma, { bold: true, align: AlignmentType.RIGHT }),
+      p(`${reprezentant} - ${functie}`, { align: AlignmentType.RIGHT }),
+    ] }],
+  })
+}
+
 // Numele fișierului: fără diacritice și fără caractere care sparg Windows Explorer.
 export const numeFisier = (prefix, licitatie) => {
   const baza = String(licitatie?.nr_anunt || licitatie?.obiect || 'licitatie')

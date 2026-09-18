@@ -22,7 +22,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
-import { construiestePropunere, construiesteBorderou, construiesteF23, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
+import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 import ClarificariAC from './OfertareClarificariAC.jsx'
@@ -177,6 +177,76 @@ const zileRamase = t => { if (!t) return null; const ms = new Date(t) - new Date
 // ─────────────────────────────────────────────────────────────────
 // POARTA — 10 rânduri. Niciunul nu se sare, niciunul nu tace.
 // ─────────────────────────────────────────────────────────────────
+// Echipa propusă pentru lucrare (Formularul 9). Personalul nu e inventar ca utilajele: e o
+// ALOCARE pe licitația asta. Blocajele se arată AICI, la completare, nu abia la export.
+function EchipaF9({ echipa, blocaje, busy, onImporta, onScoate, onConfirma }) {
+  const [deschis, setDeschis] = useState(false)
+  const fara = echipa.filter(o => !o.disponibil_confirmat_la).length
+  return (
+    <div style={{ ...S.card, padding:12 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+        <button onClick={() => setDeschis(v => !v)} style={{ ...S.btnS, fontSize:12 }}>{deschis ? '▾' : '▸'} Echipa propusă (F9)</button>
+        <span style={{ fontSize:13, color:G.muted }}>
+          {echipa.length} persoane{fara ? ` · ${fara} fără disponibilitate confirmată` : ''}
+        </span>
+        {blocaje.length > 0 && (
+          <span style={{ fontSize:12, color:G.red }}>⛔ {blocaje.length} motiv(e) blochează F9-ul final</span>
+        )}
+        <div style={{ flex:1 }} />
+        <button onClick={onImporta} disabled={busy} style={{ ...S.btnS, fontSize:12, opacity: busy ? .45 : 1 }}
+          title="Pornește echipa din acoperirile de personal ale licitației. Se poate rula de mai multe ori — nu dublează.">
+          ⬇ Pornește din acoperiri
+        </button>
+      </div>
+
+      {blocaje.length > 0 && deschis && (
+        <ul style={{ margin:'10px 0 0', paddingLeft:20, fontSize:12, color:G.red }}>
+          {blocaje.map((b, i) => <li key={i} style={{ marginBottom:3 }}>{b.motiv}</li>)}
+        </ul>
+      )}
+
+      {deschis && (echipa.length ? (
+        <table style={{ width:'100%', marginTop:10, fontSize:12, borderCollapse:'collapse' }}>
+          <thead><tr style={{ color:G.muted, textAlign:'left' }}>
+            <th style={{ padding:'4px 6px' }}>Nume</th>
+            <th style={{ padding:'4px 6px' }}>Funcția</th>
+            <th style={{ padding:'4px 6px' }}>Poziția propusă</th>
+            <th style={{ padding:'4px 6px' }}>Autorizații</th>
+            <th style={{ padding:'4px 6px' }}>Relația</th>
+            <th style={{ padding:'4px 6px' }}>Disponibil</th>
+            <th/>
+          </tr></thead>
+          <tbody>
+            {echipa.map(o => (
+              <tr key={o.id} style={{ borderTop:`1px solid ${G.border2}` }}>
+                <td style={{ padding:'4px 6px' }}>{o.nume}</td>
+                <td style={{ padding:'4px 6px', color:G.muted }}>{o.functie || '—'}</td>
+                <td style={{ padding:'4px 6px' }}>{o.roluri || <span style={{ color:G.red }}>fără rol</span>}</td>
+                <td style={{ padding:'4px 6px', color:G.muted }}>{o.autorizatii || '—'}</td>
+                <td style={{ padding:'4px 6px', color:G.muted }}>{o.relatie}</td>
+                <td style={{ padding:'4px 6px' }}>
+                  {o.disponibil_confirmat_la
+                    ? <span style={{ color:G.green }}>✓</span>
+                    : <button onClick={() => onConfirma(o)} style={{ ...S.btnS, fontSize:11, padding:'1px 6px' }}
+                        title="Autorizația îl face eligibil, nu și liber în perioada de execuție. Confirmi că e disponibil?">confirmă</button>}
+                </td>
+                <td style={{ padding:'4px 6px', textAlign:'right' }}>
+                  <button onClick={() => onScoate(o)} style={{ ...S.btnS, fontSize:11, padding:'1px 6px', color:G.red }}>scoate</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div style={{ marginTop:10, fontSize:12, color:G.muted }}>
+          Nimeni încă. „Pornește din acoperiri" aduce oamenii care răspund cerințelor din documentație;
+          restul echipei (sudori, SSM, șefi de punct de lucru) se adaugă manual.
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function PoartaPT({ st, onFiltru }) {
   // Toate rândurile vin din evalueazaPoarta — NU se mai scrie nicio condiție aici.
   const ev = useMemo(() => evalueazaPoarta(st), [st])
@@ -1106,6 +1176,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [anexeAsteptate, setAnexeAsteptate] = useState([])
   const [parteneri, setParteneri] = useState([])
   const [profiluri, setProfiluri] = useState(new Map())
+  const [echipa, setEchipa] = useState([])
+  const [blocajeF9, setBlocajeF9] = useState([])
   const [filtru, setFiltru] = useState('fara')
   const [sel, setSel] = useState(new Set())
   const [busy, setBusy] = useState(false)
@@ -1192,6 +1264,17 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       setLegaturi(rLeg.data || [])
       setDovedite(new Set((rAcop.data || []).map(a => a.cerinta_id)))
     } else { setLegaturi([]); setDovedite(new Set()) }
+    await loadEchipa(id)
+  }
+
+  // Echipa propusa (F9) si poarta ei. Blocajele vin din BD, nu din UI: altfel se ocolesc.
+  const loadEchipa = async (id) => {
+    const [rE, rB] = await Promise.all([
+      supabase.from('v_ofertare_pt_echipa').select('*').eq('licitatie_id', id).order('ordine', { nullsFirst: false }).order('nume').limit(500),
+      supabase.from('v_ofertare_pt_echipa_blocaje').select('*').eq('licitatie_id', id).limit(200),
+    ])
+    if (rE.error || rB.error) { showToast?.('Echipa nu s-a putut citi: ' + (rE.error || rB.error).message, 'err'); return }
+    setEchipa(rE.data || []); setBlocajeF9(rB.data || [])
   }
 
   // showToast și load NU intră în deps: lecția casei (useCallback/useEffect cu showToast = loop infinit).
@@ -1739,6 +1822,85 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     await load(licId)
   }
 
+  // ─── Formularul 9: echipa propusă ────────────────────────────────────────────
+  // Stratul 1: acoperirile de personal ale licitației devin echipă. Importul e IDEMPOTENT —
+  // 10 acoperiri pe 4 oameni fac 4 rânduri, nu 10, iar a doua rulare nu mai adaugă nimic.
+  const importaEchipa = async () => {
+    if (!licId) return
+    setBusy(true)
+    try {
+      const { data: ac, error } = await supabase.from('ofertare_acoperire')
+        .select('cerinta_id, autorizatie_id, cerinta:ofertare_cerinte!inner(licitatie_id), autorizatie:hr_autorizatii(id, employee_id, extern_id, tip:hr_autorizatii_tipuri(cod, denumire))')
+        .eq('mod', 'personal').eq('cerinta.licitatie_id', licId).limit(2000)
+      if (error) { showToast?.('Acoperirile nu s-au putut citi: ' + error.message, 'err'); return }
+      const cu = (ac || []).filter(a => a.autorizatie?.employee_id || a.autorizatie?.extern_id)
+      if (!cu.length) { showToast?.('Licitația nu are acoperiri de personal din care să pornim echipa.', 'err'); return }
+
+      // o persoană = un rând, oricâte acoperiri ar avea
+      const pers = new Map()
+      for (const a of cu) {
+        const au = a.autorizatie
+        const cheie = au.employee_id ? `e${au.employee_id}` : `x${au.extern_id}`
+        if (!pers.has(cheie)) pers.set(cheie, { licitatie_id: licId, employee_id: au.employee_id || null, extern_id: au.extern_id || null })
+      }
+      const { data: exist } = await supabase.from('ofertare_pt_echipa').select('id, employee_id, extern_id').eq('licitatie_id', licId)
+      const idPers = new Map((exist || []).map(r => [r.employee_id ? `e${r.employee_id}` : `x${r.extern_id}`, r.id]))
+      const noi = [...pers.entries()].filter(([k]) => !idPers.has(k)).map(([, v]) => v)
+      if (noi.length) {
+        const { data: ins, error: eIns } = await supabase.from('ofertare_pt_echipa').insert(noi).select('id, employee_id, extern_id')
+        if (eIns) { showToast?.('Echipa nu s-a putut scrie: ' + eIns.message, 'err'); return }
+        for (const r of ins || []) idPers.set(r.employee_id ? `e${r.employee_id}` : `x${r.extern_id}`, r.id)
+      }
+
+      // rolurile: unicitatea (echipa, cerință, rol) e în BD, deci re-rularea nu dublează
+      const roluri = cu.map(a => {
+        const au = a.autorizatie
+        const cheie = au.employee_id ? `e${au.employee_id}` : `x${au.extern_id}`
+        return {
+          echipa_id: idPers.get(cheie), rol_cod: au.tip?.cod || null,
+          rol_denumire: au.tip?.denumire || 'Specialist', autorizatie_id: au.id,
+          cerinta_id: a.cerinta_id, sursa: 'acoperire',
+        }
+      }).filter(r => r.echipa_id)
+      const { error: eRol } = await supabase.from('ofertare_pt_echipa_roluri')
+        .upsert(roluri, { onConflict: 'echipa_id,cerinta_id,rol_denumire', ignoreDuplicates: true })
+      if (eRol) { showToast?.('Rolurile nu s-au putut scrie: ' + eRol.message, 'err'); return }
+      await loadEchipa(licId)
+      showToast?.(`Echipa pornită din acoperiri: ${pers.size} persoane, ${roluri.length} roluri. Completeaz-o manual cu restul (sudori, SSM, șefi de punct de lucru).`, 'ok')
+    } finally { setBusy(false) }
+  }
+
+  const scoateDinEchipa = async (rand) => {
+    if (rand.roluri_din_cerinte > 0 && !window.confirm(`${rand.nume} acoperă ${rand.roluri_din_cerinte} cerință(e) din documentație. Dacă îl scoți, cerințele rămân descoperite și F9-ul final se blochează. Continui?`)) return
+    const { error } = await supabase.from('ofertare_pt_echipa').delete().eq('id', rand.id)
+    if (error) { showToast?.('Nu s-a putut șterge: ' + error.message, 'err'); return }
+    await loadEchipa(licId)
+  }
+
+  const confirmaDisponibil = async (rand) => {
+    const { data: u } = await supabase.auth.getUser()
+    const { error } = await supabase.from('ofertare_pt_echipa')
+      .update({ disponibil_confirmat_de: u?.user?.id || null, disponibil_confirmat_la: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', rand.id)
+    if (error) { showToast?.('Confirmarea nu s-a salvat: ' + error.message, 'err'); return }
+    await loadEchipa(licId)
+  }
+
+  // Ciorna iese oricând, marcată vizibil. Finalul trece prin poartă: blocajele vin din BD.
+  const exportaF9 = async (ciorna) => {
+    if (!echipa.length) { showToast?.('Nu e nimeni în echipa propusă. Pornește-o din acoperiri și completeaz-o.', 'err'); return }
+    if (!ciorna && blocajeF9.length) {
+      showToast?.(`F9 final blocat, ${blocajeF9.length} motiv(e): ${blocajeF9.slice(0, 3).map(b => b.motiv).join(' · ')}${blocajeF9.length > 3 ? ' …' : ''}`, 'err')
+      return
+    }
+    setBusy(true)
+    try {
+      await descarcaDocx(construiesteF9({ licitatie: lic, personal: echipa, ciorna }), numeFisier(ciorna ? 'Formular_9_CIORNA' : 'Formular_9_personal', lic))
+      showToast?.(ciorna ? 'Ciorna F9 exportată — scrie pe ea că e ciornă, nu o depune.' : `Formularul 9 exportat: ${echipa.length} persoane.`, 'ok')
+    } catch (e) { showToast?.('Exportul a eșuat: ' + (e?.message || e), 'err') }
+    setBusy(false)
+  }
+
   // Cât timp st e null, evaluatorul întoarce null și butonul stă blocat: verde din lipsă de date, nu.
   const evPoarta = evalueazaPoarta(st)
   const blocat = !evPoarta || evPoarta.stare === 'block'
@@ -1772,6 +1934,13 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
           style={{ ...S.btnS, opacity: busy ? .45 : 1 }}>
           🚜 Formular 23
         </button>
+        <button onClick={() => exportaF9(blocajeF9.length > 0)} disabled={busy || !echipa.length}
+          title={!echipa.length ? 'Pornește întâi echipa din acoperiri'
+            : blocajeF9.length ? `Iese CIORNĂ: ${blocajeF9.length} motiv(e) blochează finalul` : 'Formularul 9 — personalul propus'}
+          style={{ ...S.btnS, opacity: (busy || !echipa.length) ? .45 : 1,
+            color: blocajeF9.length ? G.orange : undefined, borderColor: blocajeF9.length ? G.orange + '55' : undefined }}>
+          {blocajeF9.length ? '👷 Formular 9 (ciornă)' : '👷 Formular 9'}
+        </button>
         <button onClick={aprobaPachet} disabled={blocat || busy || !capitole.length}
           title={blocat ? 'Inactiv până se închid rândurile roșii' : 'Generează fișierele, le hash-uiește și îngheață manifestul (versiune nouă)'}
           style={{ ...S.btnS, opacity: (blocat || busy || !capitole.length) ? .45 : 1 }}>
@@ -1787,6 +1956,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       {eroare && <div style={{ ...S.card, padding:12, borderColor:G.red + '55', color:G.red, fontSize:13 }}>{eroare}</div>}
 
       <PoartaPT st={st} onFiltru={f => { setFiltru(f); setSel(new Set()) }} />
+
+      <EchipaF9 echipa={echipa} blocaje={blocajeF9} busy={busy} onImporta={importaEchipa}
+        onScoate={scoateDinEchipa} onConfirma={confirmaDisponibil} />
 
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Cuprinsul propunerii</div>
