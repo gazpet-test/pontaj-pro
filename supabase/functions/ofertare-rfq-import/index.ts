@@ -2,8 +2,11 @@
 // prețurile pe materialele cererii de ofertă (RFQ). AI propune, omul verifică
 // în comparativ. Pattern: ofertare-e0-autofill (document base64 → Claude → JSON).
 //
-// ADUSĂ ÎN REPO la 12.09.2026, VERBATIM — nicio modificare. E curată: `verify_jwt: true`,
-// fără secret în sursă. E apelată de ofertare-rfq-inbox cu service role.
+// ADUSĂ ÎN REPO la 12.09.2026, VERBATIM. Nota de atunci („e curată: verify_jwt: true") era
+// GREȘITĂ și s-a corectat la 18.09.2026: `verify_jwt` nu e o poartă — cheia anon e un JWT
+// valid, publicată în frontend. Funcția rulează pe service_role (sare peste RLS), citește un
+// PDF cu Claude (costă) și rescrie prețurile unei oferte. Fără verificare de ROL, oricine avea
+// cheia publică putea porni citiri plătite și strica prețurile. Aceeași gaură ca în PR #318.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -21,6 +24,32 @@ function fileToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+// Poarta de rol. Rolul se ia din payload-ul JWT, nu prin comparație de string: env-ul funcției
+// poate avea alt format de cheie decât JWT-ul legacy trimis de workeri (lecția din 14.09).
+// service_role trece liber — așa o apelează ofertare-rfq-inbox. Omul: doar ownerul sau
+// responsabilul licitației de care ține cererea de ofertă (poarta pe cheltuială).
+async function autorizat(req: Request, supabase: any, rfqId: number | null): Promise<string | null> {
+  const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return 'lipsește Authorization'
+  const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') return 'apel neautorizat (cheie anon)'
+  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+  const { data: u } = await anon.auth.getUser()
+  const uid = u?.user?.id
+  if (!uid) return 'sesiune invalidă'
+  const { data: prof } = await supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle()
+  if (prof?.is_owner) return null
+  if (rfqId) {
+    const { data: rfq } = await supabase.from('ofertare_rfq').select('licitatie_id').eq('id', rfqId).maybeSingle()
+    if (rfq?.licitatie_id) {
+      const { data: lic } = await supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', rfq.licitatie_id).maybeSingle()
+      if (lic?.responsabil_id && lic.responsabil_id === uid) return null
+    }
+  }
+  return 'Citirea ofertelor o pornește doar ownerul sau responsabilul licitației (costă).'
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -32,6 +61,8 @@ Deno.serve(async (req: Request) => {
 
     const { data: of } = await supabase.from('ofertare_rfq_oferte').select('id, rfq_id, furnizor, fisier_path').eq('id', oferta_id).single()
     if (!of) return fail('Oferta nu există.')
+    // INTERDICȚIA 0: înaintea oricărui apel plătit și a oricărei scrieri.
+    { const na = await autorizat(req, supabase, of.rfq_id); if (na) return fail(na) }
     if (!of.fisier_path) return fail('Oferta nu are PDF atașat.')
 
     const { data: mats } = await supabase.from('ofertare_rfq_materiale').select('id, denumire, um, cantitate, specificatii').eq('rfq_id', of.rfq_id).order('ordine')
@@ -83,10 +114,16 @@ Deno.serve(async (req: Request) => {
         note: typeof p.note === 'string' ? p.note.slice(0, 300) : null,
       }))
 
+    // Ștergerea și inserarea nu sunt o tranzacție: dacă inserarea pică după ștergere, prețurile
+    // vechi sunt pierdute și nu le mai aduce nimeni înapoi. Le ținem deoparte și le punem la loc.
+    const { data: vechi } = await supabase.from('ofertare_rfq_preturi').select('*').eq('oferta_id', of.id)
     await supabase.from('ofertare_rfq_preturi').delete().eq('oferta_id', of.id)
     if (preturi.length) {
       const { error: insErr } = await supabase.from('ofertare_rfq_preturi').insert(preturi)
-      if (insErr) return fail('Eroare la salvarea prețurilor: ' + insErr.message)
+      if (insErr) {
+        if (vechi?.length) await supabase.from('ofertare_rfq_preturi').insert(vechi)
+        return fail('Eroare la salvarea prețurilor (cele vechi au rămas neatinse): ' + insErr.message)
+      }
     }
     await supabase.from('ofertare_rfq_oferte').update({
       furnizor: typeof parsed.furnizor === 'string' && parsed.furnizor.trim() ? parsed.furnizor.trim().slice(0, 200) : of.furnizor,
