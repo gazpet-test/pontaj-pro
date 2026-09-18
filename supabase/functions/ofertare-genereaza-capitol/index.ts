@@ -1,4 +1,4 @@
-// ofertare-genereaza-capitol v2.1 (17.09.2026) — scrie UN capitol din propunerea tehnică.
+// ofertare-genereaza-capitol v2.2 (18.09.2026) — scrie UN capitol din propunerea tehnică.
 // v2 (Domnești, Răzvan): PACHETUL DE FAPTE. v1 primea doar cerințele și lăsa 37 de [DE COMPLETAT]
 //     pe un capitol de personal, deși echipa, autorizațiile, experiența, partenerii, graficul și
 //     garanția stăteau în ERP, legate pe licitație. Acum funcția le adună singură (pachetFapte) și
@@ -12,8 +12,10 @@
 // `capitole_nescrise_de_om` din v_ofertare_pt_stare BLOCHEAZĂ depunerea până când un om
 // deschide capitolul, îl citește și îl salvează), deci generatorul poate exista.
 //
-// TREI INTERDICȚII ÎN COD, nu doar în prompt. Regulile din prompt sunt rugăminți către model;
+// PATRU INTERDICȚII ÎN COD, nu doar în prompt. Regulile din prompt sunt rugăminți către model;
 // astea sunt bariere:
+//   0. (v2.2, 18.09.2026) Apelantul trebuie să fie owner, responsabilul licitației sau service_role.
+//      `verify_jwt` singur nu e poartă: cheia anon e un JWT valid și publică în browser.
 //   1. Capitol BLOCAT → refuz. Lacătul înseamnă lacăt.
 //   2. Capitol cu sursa='om' și text scris → refuz, dacă nu vine explicit `peste_om: true`
 //      din UI (unde omul confirmă). Altfel un click greșit șterge munca cuiva; textul vechi
@@ -166,6 +168,36 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
   return parti.join('\n\n')
 }
 
+// POARTA DE ROL (18.09.2026) — a patra interdicție, și singura care privește CINE apelează.
+// Până acum funcția avea doar verify_jwt=true, ceea ce NU e o poartă: cheia anon e un JWT valid și
+// e publică în bundle-ul din browser, deci oricine o citea din Network putea porni generări plătite
+// pe orice capitol al oricărei licitații (aceeași gaură reparată în PR #318 la celelalte funcții).
+// Reguli, ca în ofertare-acoperire:
+//   - service_role: liber (rutine interne de pe server);
+//   - JWT de utilizator: doar ownerul sau responsabilul licitației — ei răspund de ce se depune;
+//   - cheia anon: RESPINSĂ. Generarea se pornește din UI de un om logat; nu există worker de coadă
+//     pentru capitole (când se face #110, generarea în fundal, poarta pentru el se adaugă AICI,
+//     pe tiparul cu coadă activă din ofertare-cerinte, nu prin relaxarea regulii).
+async function autorizat(req: Request, supabase: any, licId: number): Promise<string | null> {
+  const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
+  if (!jwt) return 'lipsește Authorization'
+  // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
+  // legacy pe care îl trimit workerii (verificat 14.09: comparația de string pica).
+  const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
+  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return null
+  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') return 'apel neautorizat (cheie anon)'
+  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+  const { data: u } = await anon.auth.getUser()
+  const uid = u?.user?.id
+  if (!uid) return 'sesiune invalidă'
+  const [{ data: prof }, { data: lic }] = await Promise.all([
+    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
+    supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
+  ])
+  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return null
+  return 'Capitolele le scrie doar ownerul sau responsabilul licitației (costă).'
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -183,6 +215,13 @@ Deno.serve(async (req: Request) => {
       .select('id, licitatie_id, nr, sectiune, eticheta, titlu, obligatoriu, continut, sursa, blocat, versiune')
       .eq('id', capId).single()
     if (eCap || !cap) return fail('capitolul nu a fost gasit: ' + (eCap?.message || capId))
+
+    // INTERDICȚIA 0 — cine apelează. Înaintea oricărei citiri grele și a oricărui apel plătit;
+    // citirea capitolului de mai sus e o singură interogare și e nevoie de ea ca să știm licitația.
+    // Refuzul iese ca 200 cu `error`, ca la ofertare-acoperire / ofertare-cerinte: pe status non-2xx
+    // `supabase.functions.invoke` aruncă FunctionsHttpError cu mesaj generic, iar omul din UI ar
+    // vedea „a eșuat" în loc de motivul real.
+    { const na = await autorizat(req, supabase, cap.licitatie_id); if (na) return fail(na) }
 
     // INTERDICȚIA 1 — lacătul
     if (cap.blocat) return fail('Capitolul e blocat. Deblochează-l întâi, dacă chiar vrei să-l rescrii.')
