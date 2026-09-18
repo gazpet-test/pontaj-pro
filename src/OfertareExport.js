@@ -134,6 +134,87 @@ export function construiesteBorderou({ licitatie, capitole, firma = 'GAZPET INST
   })
 }
 
+/**
+ * FORMULARUL 23 — declarația privind utilajele, instalațiile și echipamentele tehnice,
+ * plus Anexa 1 cu lista lor. Structura e copiată după formularul depus la Domnești
+ * (14.09.2026): pagina de declarație, apoi tabelul pe pagină nouă.
+ *
+ * DE CE E GENERAT, NU SCRIS DE MÂNA: la Domnești lista a fost întocmită manual și avea
+ * utilaje pe care baza nu le știa, îi lipseau utilaje pe care firma le are, iar forma de
+ * deținere era declarată altfel decât în evidență. Lista vine acum din `v_ofertare_dotari`,
+ * deci nu mai poate rămâne în urmă și nu mai poate să difere de la o ofertă la alta.
+ *
+ * Coloanele de deținere sunt trei, ca în formularul depus: proprietate, în chirie, contract
+ * de prestări servicii. Cantitatea se pune pe coloana potrivită, nu se repetă pe toate.
+ *
+ * Ce NU inventează: sediul autorității contractante. Dacă lipsește din licitație, rămâne
+ * marcat [DE COMPLETAT] — un gol vizibil, nu o adresă plauzibilă într-o declarație pe
+ * propria răspundere.
+ */
+export function construiesteF23({
+  licitatie, dotari,
+  firma = 'GAZPET INSTAL S.R.L.',
+  sediu = 'str. Fluturilor, nr. 34, loc. Ploiești, jud. Prahova',
+  reprezentant = 'Trușu Răzvan Mihail',
+  functie = 'Administrator',
+  dataCompletarii = new Date().toLocaleDateString('ro-RO'),
+}) {
+  const autoritate = String(licitatie?.autoritate || '[DE COMPLETAT: autoritatea contractantă]').trim()
+  const sediuAutoritate = String(licitatie?.autoritate_sediu || '').trim() || '[DE COMPLETAT: sediul autorității contractante]'
+  const obiect = String(licitatie?.obiect || '[DE COMPLETAT: obiectul procedurii]').trim()
+
+  const cap = [new TableRow({ children: [
+    celula('Nr. crt.', { bold: true, width: 6, align: AlignmentType.CENTER }),
+    celula('Denumire utilaj/echipament/instalație', { bold: true, width: 46 }),
+    celula('U.M.', { bold: true, width: 8, align: AlignmentType.CENTER }),
+    celula('Cant.', { bold: true, width: 8, align: AlignmentType.CENTER }),
+    celula('Proprietate', { bold: true, width: 10, align: AlignmentType.CENTER }),
+    celula('În chirie', { bold: true, width: 10, align: AlignmentType.CENTER }),
+    celula('Contract prestări servicii / Angajament de punere la dispoziție', { bold: true, width: 12, align: AlignmentType.CENTER }),
+  ] })]
+
+  const randuri = (dotari || []).map((d, i) => new TableRow({ children: [
+    celula(String(i + 1), { align: AlignmentType.CENTER }),
+    celula(d.denumire || ''),
+    celula(d.um || 'buc', { align: AlignmentType.CENTER }),
+    celula(String((Number(d.proprietate) || 0) + (Number(d.chirie) || 0) + (Number(d.contract) || 0)), { align: AlignmentType.CENTER }),
+    celula(d.proprietate ? String(d.proprietate) : '', { align: AlignmentType.CENTER }),
+    celula(d.chirie ? String(d.chirie) : '', { align: AlignmentType.CENTER }),
+    celula(d.contract ? String(d.contract) : '', { align: AlignmentType.CENTER }),
+  ] }))
+
+  return new Document({
+    styles: { default: { document: { run: { font: FONT, size: 24 } } } },
+    sections: [{ footers: { default: subsolPagini() }, children: [
+      p('Formularul nr. 23', { align: AlignmentType.RIGHT, after: 240 }),
+      p(`Operator economic ${firma}`, { bold: true }),
+      p('(denumirea/numele)', { italics: true, size: 20, after: 240 }),
+      p('DECLARAȚIE', { bold: true, align: AlignmentType.CENTER, size: 30 }),
+      p('Privind utilajele, instalațiile, echipamentele tehnice', { bold: true, align: AlignmentType.CENTER, after: 300 }),
+      p(`Subsemnatul ${reprezentant}, ${functie}, reprezentant împuternicit al ${firma}, cu sediul în ${sediu}, declar pe propria răspundere, sub sancțiunile aplicabile faptei de fals în acte publice, că datele prezentate în tabelul anexat sunt reale.`, { after: 200 }),
+      p('Anexa 1: Lista utilajelor, instalațiilor și echipamentelor tehnice.', { after: 200 }),
+      p(`Procedura de atribuire: „${obiect}".`, { after: 200 }),
+      p('Subsemnatul declar că informațiile furnizate sunt complete și corecte în fiecare detaliu și înțeleg că autoritatea contractantă are dreptul de a solicita, în scopul verificării și confirmării declarațiilor, situațiilor și documentelor care însoțesc oferta, orice informații suplimentare în scopul verificării datelor din prezenta declarație.', { after: 200 }),
+      p(`Subsemnatul autorizez prin prezenta orice instituție, societate comercială, bancă, alte persoane juridice să furnizeze informații reprezentanților autorizați ai ${autoritate}, cu sediul în ${sediuAutoritate}, cu privire la orice aspect tehnic și financiar în legătură cu activitatea noastră.`, { after: 300 }),
+      p(`Data completării: ${dataCompletarii}`, { after: 360 }),
+      p('Operator economic,', { align: AlignmentType.RIGHT }),
+      p(firma, { bold: true, align: AlignmentType.RIGHT }),
+      p(`${reprezentant} - ${functie}`, { align: AlignmentType.RIGHT }),
+      p('........................................', { align: AlignmentType.RIGHT }),
+      p('(semnătură autorizată)', { italics: true, size: 20, align: AlignmentType.RIGHT }),
+      new Paragraph({ children: [new PageBreak()] }),
+      p('Anexa 1 la Formularul nr. 23', { bold: true, align: AlignmentType.CENTER }),
+      p('LISTĂ UTILAJE, INSTALAȚII ȘI ECHIPAMENTE TEHNICE', { bold: true, align: AlignmentType.CENTER, size: 26 }),
+      p(firma, { bold: true, align: AlignmentType.CENTER, after: 240 }),
+      new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [...cap, ...randuri] }),
+      p('', { after: 360 }),
+      p('Operator economic,', { align: AlignmentType.RIGHT }),
+      p(firma, { bold: true, align: AlignmentType.RIGHT }),
+      p(`${reprezentant} - ${functie}`, { align: AlignmentType.RIGHT }),
+    ] }],
+  })
+}
+
 // Numele fișierului: fără diacritice și fără caractere care sparg Windows Explorer.
 export const numeFisier = (prefix, licitatie) => {
   const baza = String(licitatie?.nr_anunt || licitatie?.obiect || 'licitatie')
