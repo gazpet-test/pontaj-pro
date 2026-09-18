@@ -431,10 +431,17 @@ Deno.serve(async (req: Request) => {
       if (aut) valabil = aut.expira === 'niciodata' ? true : (aut.expira !== 'necunoscut' && new Date(aut.expira) >= azi)
       if (docF) valabil = docF.fara_expirare ? true : (docF.data_valabilitate ? new Date(docF.data_valabilitate) >= azi : null)
       // #72 R15 în cod: la „primul_loc"/„duae" valabilitatea la depunere nu e criteriu — documentul se reemite atunci.
+      // 18.09.2026 — FALS POZITIV REPARAT (găsit de o recenzie independentă): excepția ridica la
+      // „acoperit" ORICE rând gol care avea un document de firmă atașat, indiferent de motiv. Dar
+      // „gol" cu document înseamnă, de regulă, că documentul NU răspunde cerinței — iar un document
+      // nepotrivit nu devine potrivit fiindcă se reemite la DUAE. Excepția are voie să acopere un
+      // singur motiv: documentul e bun, doar expirat. Altfel platforma declara verde o cerință
+      // neacoperită, exact în ecranul pe care se sprijină depunerea.
       const candC = (cerinte || []).find((c: any) => c.id === p.cerinta_id)?.cand_se_prezinta
       if (docF && ['primul_loc', 'duae'].includes(candC)) {
+        const doarExpirat = valabil === false   // fara_expirare → true, fara data → null; false = chiar expirat
         valabil = null
-        if (status === 'gol') { status = 'acoperit'; p.motiv = `${String(p.motiv || '').slice(0, 160)} — se prezintă ${candC === 'duae' ? 'în DUAE' : 'doar la locul I'}, se reemite atunci (R15)` }
+        if (status === 'gol' && doarExpirat) { status = 'acoperit'; p.motiv = `${String(p.motiv || '').slice(0, 160)} — se prezintă ${candC === 'duae' ? 'în DUAE' : 'doar la locul I'}, se reemite atunci (R15)` }
       }
       // La experienta nu exista „expirare": lucrarea e receptionata sau nu. Fereastra de ani
       // tine de cerinta, nu de document, deci lasam null si nu inventam un verdict.
