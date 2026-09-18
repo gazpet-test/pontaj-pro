@@ -18,6 +18,7 @@ import GarantieSection from './OfertareGarantie.jsx'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
 import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
+import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 
 const G = {
@@ -2823,6 +2824,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const TABS = [
     ['triere', '⚡ Triere'],
     ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
+    ['perechi', '🔗 Cerință ↔ dovadă'],
     ['propunere', `📑 Propunere tehnică${ptSt ? ` (${ptSt.cu_capitol}/${ptSt.de_raspuns})` : ''}`],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
@@ -2882,6 +2884,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
+            {/* Pasul 1 din reproiectare: aceleași date, dar cerința și dovada pe același rând, cu
+                proveniența pe ambele părți. Stă ca tab separat cât se compară cu vederea veche. */}
+            {tab === 'perechi' && <CerinteAcoperirePerechi licitatie={l} />}
             {tab === 'triere' && <OfertareTriere licitatie={l} profile={profile} showToast={showToast} onChanged={onChanged} onProceseaza={() => setTab('documente')} />}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
               intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} />}
