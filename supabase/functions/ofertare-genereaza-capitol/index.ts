@@ -357,9 +357,17 @@ Deno.serve(async (req: Request) => {
 
     // INTERDICȚIA 3 — sursa='ai' mereu. De aici incolo poarta tine capitolul blocat pana cand
     // un om il deschide, il citeste si il salveaza (UI-ul pune atunci sursa='om').
-    const { error: eUpd } = await supabase.from('ofertare_pt_capitole')
-      .update({ continut: text, sursa: 'ai' }).eq('id', capId)
+    // INTERDICȚIA 4 (18.09.2026, gasita de o recenzie independenta) — scrierea e conditionata de
+    // VERSIUNEA citita la inceput. Verificarile de mai sus (lacat, text de om) se fac inainte de
+    // apelurile la model, care dureaza minute: daca intre timp un om a editat capitolul, scrierea
+    // dupa `id` ii stergea munca fara sa se vada. Acum, daca versiunea s-a schimbat, nu scriem.
+    const { data: scris, error: eUpd } = await supabase.from('ofertare_pt_capitole')
+      .update({ continut: text, sursa: 'ai' }).eq('id', capId).eq('versiune', cap.versiune || 1)
+      .select('id')
     if (eUpd) return fail('textul nu s-a salvat: ' + eUpd.message)
+    if (!scris?.length) return fail(
+      'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.',
+      { conflict: true, versiune_asteptata: cap.versiune || 1 })
 
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length
     return new Response(JSON.stringify({

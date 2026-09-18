@@ -1729,6 +1729,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     if (!ev || ev.stare === 'block') { showToast?.('Poarta are rânduri roșii — nu se aprobă un pachet blocat.', 'err'); return }
     if (!window.confirm(`Aprobi pachetul v${(pachete[0]?.versiune || 0) + 1}?\nSe generează fișierele, se calculează SHA-256 și se scriu în manifest. După aprobare NU se mai pot modifica — o schimbare înseamnă o versiune nouă.`)) return
     setBusy(true)
+    let pachetNou = null   // randul rezervat; daca pica ceva dupa, il stergem (e al nostru, neaprobat)
     try {
       const versiune = (pachete[0]?.versiune || 0) + 1
       const arg = { licitatie: lic, capitole }
@@ -1740,26 +1741,40 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       for (const f of surse) fisiere.push({ ...f, mime: f.blob.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: f.blob.size, sha256: await sha256Hex(f.blob) })
       const manifest = construiesteManifest({ licitatieId: licId, versiune, fisiere, sursaVersiune: sursaVersiuneCapitole(capitole) })
 
-      // 1. bytes-ii in bucket, EXACT cei hash-uiti
-      for (let i = 0; i < fisiere.length; i++) {
-        const { error } = await supabase.storage.from('ofertare').upload(manifest[i].fisier_path, fisiere[i].blob, { upsert: false, contentType: fisiere[i].mime })
-        if (error) throw new Error(`upload ${fisiere[i].nume}: ${error.message}`)
-      }
-      // 2. pachetul (propus) + manifestul
+      // 1. INTAI randul de pachet (stare 'propus'), ca sa REZERVE versiunea. Ordinea inversa
+      // (fisiere, apoi randul) avea un blocaj: cai derivate din versiune + upsert:false, deci daca
+      // upload-ul reusea si pasul urmator pica, randul nu se crea, reincercarea refolosea aceeasi
+      // versiune si se lovea de fisierul deja existent — la zece minute de termen, blocaj curat.
+      // Cu randul intai, constrangerea UNIQUE(licitatie_id, versiune) da rezervarea, iar o
+      // incercare esuata consuma o versiune (numar sarit), nu blocheaza urmatoarea.
       const { data: p, error: e1 } = await supabase.from('ofertare_pt_pachet').insert({
         licitatie_id: licId, versiune, grafic_versiune: st?.grafic_versiune || null,
         pt_poarta_id: null, nota: ev.rezerve.length ? `aprobat CU REZERVE: ${ev.rezerve.join(' · ')}` : null,
       }).select('id').single()
-      if (e1) throw new Error('pachet: ' + e1.message)
+      if (e1) throw new Error(e1.code === '23505'
+        ? `versiunea ${versiune} tocmai a fost luata de altcineva — reincarca pagina si incearca din nou`
+        : 'pachet: ' + e1.message)
+      pachetNou = p.id
+      // 2. bytes-ii in bucket, EXACT cei hash-uiti. Versiunea e a noastra (abia rezervata), deci
+      // un fisier care exista deja pe calea asta e resturi de la o incercare picata inainte de
+      // reparatia de mai sus — se suprascrie, nu blocheaza. Nu poate fi pachetul altcuiva.
+      for (let i = 0; i < fisiere.length; i++) {
+        let { error } = await supabase.storage.from('ofertare').upload(manifest[i].fisier_path, fisiere[i].blob, { upsert: false, contentType: fisiere[i].mime })
+        if (error) ({ error } = await supabase.storage.from('ofertare').upload(manifest[i].fisier_path, fisiere[i].blob, { upsert: true, contentType: fisiere[i].mime }))
+        if (error) throw new Error(`upload ${fisiere[i].nume}: ${error.message}`)
+      }
+      // 3. manifestul
       const { error: e2 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(manifest.map(m => ({ ...m, pachet_id: p.id })))
       if (e2) throw new Error('manifest: ' + e2.message)
-      // 3. aprobarea — dupa asta RLS nu mai lasa nicio modificare pe fisiere
+      // 4. aprobarea — dupa asta RLS nu mai lasa nicio modificare pe fisiere
       const { data: u } = await supabase.auth.getUser()
       const { error: e3 } = await supabase.from('ofertare_pt_pachet')
         .update({ stare: 'aprobat', aprobat_de: u?.user?.id || null, aprobat_la: new Date().toISOString() }).eq('id', p.id)
       if (e3) throw new Error('aprobare: ' + e3.message)
       showToast?.(`Pachet v${versiune} aprobat: ${manifest.length} fișiere, SHA-256 în manifest.` + (ev.rezerve.length ? ' Cu rezerve (vezi nota).' : ''), ev.rezerve.length ? 'err' : 'ok')
     } catch (e) {
+      // randul rezervat nu are ce cauta in istoric daca n-a ajuns pachet: e 'propus', al nostru.
+      if (pachetNou) await supabase.from('ofertare_pt_pachet').delete().eq('id', pachetNou).eq('stare', 'propus')
       showToast?.('Aprobarea a eșuat, nimic nu s-a marcat aprobat: ' + (e?.message || e), 'err')
     }
     setBusy(false)
