@@ -2334,6 +2334,13 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         {mode === 'view' && alimentari.length >= 2 && activ?.norma_consum && (() => {
           const window = alimentari.slice(0, 5)  // ultimele 5 (deja sortate desc)
           const totalLitri = window.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
+          // 19.09.2026 — REPARAT umflarea de ~25%. La metoda plin-la-plin (ore de bord) orele
+          // acopera intervalul dintre PRIMA si ULTIMA citire, adica 4 intervale pentru 5
+          // alimentari — dar litrii erau adunati de la toate 5. Un utilaj care face cinstit
+          // 50 L la 10 ore iesea 6,25 L/h in loc de 5, destul cat sa apara „posibil furt" pe
+          // un om corect. Motorina consumata INTRE cele doua citiri = alimentarile de dupa
+          // prima, deci cea mai veche nu se numara.
+          const litriIntreCitiri = window.slice(0, -1).reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
           const oreEfectiveSum = window.reduce((s, a) => s + Number(a.ore_lucrate_efectiv || 0), 0)
           // „ore lucrate efectiv" e utilizabilă DOAR dacă e completată pe toate alimentările
           // din fereastră — altfel litrii acoperă 5 alimentări dar orele doar câteva, iar
@@ -2347,6 +2354,10 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
 
           const oreReale = oreEfectiveComplete ? oreEfectiveSum : (oreBordDif ?? (oreEfectiveSum > 0 ? oreEfectiveSum : null))
           const sursaOre = oreEfectiveComplete ? 'raport șantier' : (oreBordDif != null ? 'citire bord' : 'raport șantier (parțial)')
+          // Litrii trebuie sa acopere ACEEASI fereastra ca orele: pe ore efective (insumate pe
+          // toate cele 5 alimentari) se iau toti litrii; pe ore de bord (interval intre citiri)
+          // se iau doar litrii de dupa prima alimentare. Altfel se compara mere cu pere.
+          const litriComparabili = (!oreEfectiveComplete && oreBordDif != null) ? litriIntreCitiri : totalLitri
           
           if (!oreReale) return (
             <div style={{padding: 12, background: G.surface, border: `1px dashed ${G.border2}`, borderRadius: 10, marginBottom: 14, fontSize: 12, color: G.muted}}>
@@ -2356,7 +2367,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           
           const norma = Number(activ.norma_consum)
           const consumTeoretic = oreReale * norma  // L
-          const diferenta = totalLitri - consumTeoretic
+          const diferenta = litriComparabili - consumTeoretic
           const procentDif = consumTeoretic > 0 ? (diferenta / consumTeoretic) * 100 : 0
           const prag = Number(activ.prag_alerta_consum) || 10
           const isSuspect = Math.abs(procentDif) > prag
@@ -2367,7 +2378,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
           
           // Roșu = DOAR supra-consum critic (furt/scurgere). Sub-consumul nu-i suspect —
           // aproape mereu norma e setată prea sus → galben + cerem ajustare manuală a normei.
-          const consumRealLH = oreReale > 0 ? totalLitri / oreReale : null
+          const consumRealLH = oreReale > 0 ? litriComparabili / oreReale : null
           let bg, color, emoji, status
           if (!isSuspect) {
             bg = G.greenDim; color = G.green; emoji = '✅'
@@ -2402,10 +2413,19 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
               
               <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 10}}>
                 <div>
-                  <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>Total alimentat</div>
-                  <div style={{fontSize: 18, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
-                    {totalLitri.toFixed(1)} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>L</span>
+                  {/* Se arata litrii pe care ii JUDECA verdictul, nu alti litri — altfel omul
+                      vede o cifra si i se calculeaza cu alta. Pe ore de bord, prima alimentare
+                      din fereastra umple rezervorul la momentul primei citiri; ce s-a consumat
+                      INTRE citiri sunt alimentarile de dupa ea. */}
+                  <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>
+                    {litriComparabili === totalLitri ? 'Total alimentat' : 'Alimentat între citiri'}
                   </div>
+                  <div style={{fontSize: 18, fontWeight: 800, color: G.text, fontVariantNumeric: 'tabular-nums'}}>
+                    {litriComparabili.toFixed(1)} <span style={{fontSize: 11, color: G.muted, fontWeight: 600}}>L</span>
+                  </div>
+                  {litriComparabili !== totalLitri && (
+                    <div style={{fontSize: 10, color: G.muted}}>din {totalLitri.toFixed(1)} L alimentați în total</div>
+                  )}
                 </div>
                 <div>
                   <div style={{fontSize: 10, color: G.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.4px'}}>Ore reale lucrate</div>

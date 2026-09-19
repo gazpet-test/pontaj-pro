@@ -140,11 +140,19 @@ export default function HRPage() {
       if (user) {
         const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
         setProfile(p)
-        if (!['admin', 'superadmin'].includes(p?.role) && p?.department !== 'HR') {
-          // Verifică access HR
-          const { data: ma } = await supabase.from('user_module_access')
-            .select('module').eq('profile_id', user.id).eq('module', 'HR').maybeSingle()
-          if (!ma) { showToast('Acces refuzat la modul HR', 'error'); setTimeout(() => nav('/'), 2000); return }
+        if (!p?.is_owner && !['admin', 'superadmin'].includes(p?.role) && p?.department !== 'HR') {
+          // 19.09.2026 — REPARAT: verifica `module = 'HR'` (majuscule), dar cheile din BD sunt
+          // lowercase ('hr'), ca peste tot in platforma (anti-bug-ul din CLAUDE.md). Verificarea
+          // nu se potrivea NICIODATA, deci sase oameni carora Razvan le daduse acces explicit
+          // erau dati afara: Mioara si Silviu (Ofertare, au nevoie de autorizatii la licitatii),
+          // Mirela Popescu, Mitrache, Razvan Toma, contul IT.
+          // Citim TOATE modulele si folosim aceeasi regula ca hasModuleAccess din App.jsx
+          // (cheia exacta sau un sub-modul 'hr.xxx'), ca sa nu mai poata diverge cele doua.
+          const { data: ma, error: eMa } = await supabase.from('user_module_access')
+            .select('module').eq('profile_id', user.id)
+          if (eMa) { showToast('Nu s-au putut verifica drepturile: ' + eMa.message, 'error'); setTimeout(() => nav('/'), 2500); return }
+          const areHr = (ma || []).some(m => m.module === 'hr' || String(m.module || '').startsWith('hr.'))
+          if (!areHr) { showToast('Acces refuzat la modul HR', 'error'); setTimeout(() => nav('/'), 2000); return }
         }
       }
       loadAll()
