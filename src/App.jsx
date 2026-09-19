@@ -6583,19 +6583,39 @@ function AdminPage() {
     }
     const {error}=await supabase.from('profiles').update(updates).eq('id',editMgr.id)
     if(!error){
+      // 19.09.2026 — DELETE + INSERT nu sunt o tranzactie. Pana acum nicio eroare nu era
+      // verificata, iar ecranul spunea „Manager actualizat" oricum: daca INSERT-ul pica dupa
+      // DELETE, omul ramanea FARA SANTIERE si FARA NICIUN MODUL, si nu afla nimeni.
+      // Acum: pastram randurile vechi, iar daca rescrierea pica le punem la loc si spunem.
+      const problemeSalvare = []
+
       // Update sites in profile_sites table — doar pentru rolurile care au șantiere alocate
-      await supabase.from('profile_sites').delete().eq('profile_id',editMgr.id)
-      if(ROLES_WITH_SITES.includes(editMgr.role) && editMgr.site_ids?.length>0){
-        await supabase.from('profile_sites').insert(editMgr.site_ids.map(sid=>({profile_id:editMgr.id,site_id:sid})))
+      const { data: siteVechi } = await supabase.from('profile_sites').select('profile_id, site_id').eq('profile_id', editMgr.id)
+      const { error: eSiteDel } = await supabase.from('profile_sites').delete().eq('profile_id',editMgr.id)
+      if (eSiteDel) problemeSalvare.push('șantierele nu s-au putut rescrie: ' + eSiteDel.message)
+      else if(ROLES_WITH_SITES.includes(editMgr.role) && editMgr.site_ids?.length>0){
+        const { error: eSiteIns } = await supabase.from('profile_sites').insert(editMgr.site_ids.map(sid=>({profile_id:editMgr.id,site_id:sid})))
+        if (eSiteIns) {
+          if (siteVechi?.length) await supabase.from('profile_sites').insert(siteVechi)
+          problemeSalvare.push('șantierele nu s-au salvat (cele vechi au fost puse la loc): ' + eSiteIns.message)
+        }
       }
       // ════ Sync user_module_access — doar Owner (DELETE all + re-INSERT selectate) ════
       if (profile?.is_owner === true) {
-        await supabase.from('user_module_access').delete().eq('profile_id', editMgr.id)
-        const selectedMods = Object.entries(editMgrModules).filter(([,v])=>v).map(([k])=>k)
-        if (selectedMods.length > 0) {
-          await supabase.from('user_module_access').insert(
-            selectedMods.map(mod => ({ profile_id: editMgr.id, module: mod, access_level: editMgrModuleLevels[mod] || 'editor' }))
-          )
+        const { data: modVechi } = await supabase.from('user_module_access').select('profile_id, module, access_level').eq('profile_id', editMgr.id)
+        const { error: eModDel } = await supabase.from('user_module_access').delete().eq('profile_id', editMgr.id)
+        if (eModDel) problemeSalvare.push('drepturile pe module nu s-au putut rescrie: ' + eModDel.message)
+        else {
+          const selectedMods = Object.entries(editMgrModules).filter(([,v])=>v).map(([k])=>k)
+          if (selectedMods.length > 0) {
+            const { error: eModIns } = await supabase.from('user_module_access').insert(
+              selectedMods.map(mod => ({ profile_id: editMgr.id, module: mod, access_level: editMgrModuleLevels[mod] || 'editor' }))
+            )
+            if (eModIns) {
+              if (modVechi?.length) await supabase.from('user_module_access').insert(modVechi)
+              problemeSalvare.push('drepturile pe module nu s-au salvat (cele vechi au fost puse la loc): ' + eModIns.message)
+            }
+          }
         }
       }
       // Update email și în auth.users (dacă schimbat) — via RPC
@@ -6603,7 +6623,11 @@ function AdminPage() {
         const {error: aErr} = await supabase.rpc('update_user_email_by_admin', { user_id: editMgr.id, new_email: updates.email })
         if (aErr) showToast(`Profil ok dar auth email nu s-a actualizat: ${aErr.message}`, 'warn')
       }
-      showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll()
+      // Succesul se anunta DOAR daca a reusit tot. Altfel omul vede exact ce n-a mers.
+      if (problemeSalvare.length) {
+        showToast(`Profilul lui ${editMgr.name} s-a salvat, DAR: ${problemeSalvare.join(' · ')}`, 'error')
+        loadAll()
+      } else { showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll() }
     } else showToast('Eroare: '+error.message,'error')
   }
   const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
