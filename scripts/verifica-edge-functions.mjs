@@ -22,7 +22,9 @@
 //
 // CE NU PRINDE, spus pe față:
 //   · o modificare doar de comentariu apare ca „nepublicată" (fals pozitiv, inofensiv);
-//   · dacă cineva deployează de pe o copie locală cu modificări necomise, aici pare la zi.
+//   · dacă cineva deployează de pe o copie locală cu modificări necomise, aici pare la zi;
+//   · un commit masiv care atinge multe funcții deodată (o trecere de lint, o redenumire)
+//     le marchează pe toate ca nepublicate, deși codul lor nu s-a schimbat în fond.
 // Pentru amândouă, semnalul rămâne util: spune unde să te uiți, nu ce să crezi.
 
 import { readdir } from 'node:fs/promises'
@@ -35,6 +37,11 @@ const execFileP = promisify(execFile)
 const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'dxczwkbciseqniprspcu'
 const TOKEN = process.env.SUPABASE_ACCESS_TOKEN
 const DIR = 'supabase/functions'
+
+// Toleranță: fluxul normal e „deployez, apoi comit", deci commit-ul cade cu un minut-două
+// după deploy fără ca producția să fie în urmă. Sub prag nu e semnal. Peste — la Domnești
+// decalajul real a fost de trei zile, deci pragul nu îneacă niciodată cazul care contează.
+const TOLERANTA_MIN = Number(process.env.TOLERANTA_MIN || 120)
 
 if (!TOKEN) {
   console.error('Lipsește SUPABASE_ACCESS_TOKEN (Settings → Secrets → Actions, sau `gh secret set` de pe laptop).')
@@ -72,13 +79,15 @@ for (const d of (await readdir(DIR, { withFileTypes: true })).sort((a, b) => a.n
   const commit = await ultimaModificare(slug)
   if (!commit) { faraIstoric.push(slug); continue }
   const rec = { slug, v: meta.version, commit: Date.parse(commit), deploy: Number(meta.updated_at) }
-  ;(rec.commit > rec.deploy ? nepublicate : laZi).push(rec)
+  rec.intarziereMin = Math.round((rec.commit - rec.deploy) / 60000)
+  ;(rec.intarziereMin > TOLERANTA_MIN ? nepublicate : laZi).push(rec)
 }
 
-const linie = x => `  ${x.slug.padEnd(32)} v${String(x.v).padEnd(4)} commit ${data(x.commit)} · deploy ${data(x.deploy)}`
+const zile = m => m >= 1440 ? `${Math.round(m / 1440)} zile` : m >= 60 ? `${Math.round(m / 60)} ore` : `${m} min`
+const linie = x => `  ${x.slug.padEnd(32)} v${String(x.v).padEnd(4)} commit ${data(x.commit)} · deploy ${data(x.deploy)} · în urmă cu ${zile(x.intarziereMin)}`
 
 console.log(`\nEdge functions din ${DIR}, față de proiectul ${PROJECT_REF}\n`)
-console.log(`✅ publicate după ultima modificare: ${laZi.length}`)
+console.log(`✅ publicate după ultima modificare: ${laZi.length}   (toleranță ${TOLERANTA_MIN} min)`)
 
 if (nepublicate.length) {
   nepublicate.sort((a, b) => a.commit - b.commit)
