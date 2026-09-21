@@ -159,11 +159,13 @@ function felDocument(nume) {
   return null
 }
 
-function Rand({ c, a, ingust }) {
+function Rand({ c, a, lista = [], ingust, onAlege }) {
   const v = verdictRand(a)
   const d = dovada(a)
   const V = VERDICT[v]
   const fel = felDocument(c.doc?.nume_original)
+  // Candidații pe care nu i-am ales. Până acum nu existau: motorul putea scrie unul singur.
+  const altii = lista.filter(x => x.id !== a?.id)
   const stanga = (
     <div style={{ minWidth:0 }}>
       <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', marginBottom:4 }}>
@@ -217,6 +219,32 @@ function Rand({ c, a, ingust }) {
       {a?.raspuns_coleg && (
         <div style={{ fontSize:11, color:G.yellow, marginTop:4 }}>💬 {a.raspuns_coleg}</div>
       )}
+      {altii.length > 0 && (
+        <div style={{ marginTop:8, paddingTop:7, borderTop:`1px dashed ${G.border2}` }}>
+          <div style={{ fontSize:10.5, color:G.muted, fontWeight:700, marginBottom:5 }}>
+            ALTE VARIANTE ({altii.length})
+          </div>
+          {altii.map(x => {
+            const dx = dovada(x)
+            return (
+              <div key={x.id} style={{ display:'flex', gap:8, alignItems:'flex-start', marginBottom:5 }}>
+                <button onClick={() => onAlege?.(c.id, x.id)} title="Alege varianta asta în locul celei curente"
+                  style={{ ...S.btnS, padding:'2px 9px', fontSize:10.5, whiteSpace:'nowrap', color:G.ofertare, borderColor:G.ofertare + '66' }}>
+                  alege
+                </button>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:12, color:G.text }}>
+                    {dx?.titlu || x.referinta_text || 'variantă fără descriere'}
+                    {x.scor != null && <span style={{ color:G.dim, marginLeft:6, fontVariantNumeric:'tabular-nums' }}>· potrivire {x.scor}</span>}
+                  </div>
+                  {x.motiv && <div style={{ fontSize:11, color:G.muted, marginTop:1 }}>{x.motiv}</div>}
+                  {!x.motiv && dx?.detaliu && <div style={{ fontSize:11, color:G.muted, marginTop:1 }}>{dx.detaliu}</div>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
   return (
@@ -264,20 +292,50 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
         .in('cerinta_id', cs.map(c => c.id)).order('id').limit(5000)
       if (!viu) return
       if (e2) { setEroare(e2.message); return }
-      // Aceeași regulă de departajare ca în ecranul vechi: dovada verificată de om bate verdictul
-      // AI-ului. (Pasul 3 va arăta toate dovezile, nu una singură.)
+      // Păstrăm TOȚI candidații pe cerință, nu doar unul. Până azi nici nu puteau exista mai
+      // mulți: un index unic în BD interzicea a doua propunere nevalidată, de-aia platforma
+      // „alegea singură" mereu aceeași persoană. Ordinea: aleasa prima, apoi după scor.
       const m = {}
-      ;(ac || []).forEach(a => {
-        const ex = m[a.cerinta_id]
-        if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) m[a.cerinta_id] = a
-      })
+      ;(ac || []).forEach(a => (m[a.cerinta_id] ||= []).push(a))
+      Object.values(m).forEach(lista => lista.sort((x, y) =>
+        (y.ales ? 1 : 0) - (x.ales ? 1 : 0) ||
+        (y.scor ?? -1) - (x.scor ?? -1) ||
+        (y.verificat_pe_scan ? 1 : 0) - (x.verificat_pe_scan ? 1 : 0) ||
+        x.id - y.id))
       setAcoperiri(m)
     }
     load()
     return () => { viu = false }
   }, [licitatie.id])
 
-  const randuri = useMemo(() => (cerinte || []).map(c => ({ c, a: acoperiri[c.id] || null, v: verdictRand(acoperiri[c.id] || null) })), [cerinte, acoperiri])
+  const randuri = useMemo(() => (cerinte || []).map(c => {
+    const lista = acoperiri[c.id] || []
+    const a = lista.find(x => x.ales) || lista[0] || null
+    return { c, a, lista, v: verdictRand(a) }
+  }), [cerinte, acoperiri])
+
+  // Alegerea unui alt candidat. Indexul unic `(cerinta_id) WHERE ales` cere ca vechea
+  // variantă să fie scoasă ÎNAINTE de a o pune pe cea nouă — deci sunt două scrieri, iar
+  // între ele cerința rămâne o clipă fără aleasă. Dacă a doua cade, o punem pe cea veche
+  // înapoi: mai bine rămâne ce era decât să rămână cerința descoperită fără ca omul să știe.
+  const alegeCandidat = async (cerintaId, idNou) => {
+    const lista = acoperiri[cerintaId] || []
+    const vechea = lista.find(x => x.ales)
+    if (vechea?.id === idNou) return
+    setAcoperiri(prev => ({ ...prev, [cerintaId]: (prev[cerintaId] || [])
+      .map(x => ({ ...x, ales: x.id === idNou })) }))
+    if (vechea) {
+      const { error } = await supabase.from('ofertare_acoperire').update({ ales: false }).eq('id', vechea.id)
+      if (error) { setEroare('Nu s-a putut schimba varianta aleasă: ' + error.message); return }
+    }
+    const { error } = await supabase.from('ofertare_acoperire').update({ ales: true }).eq('id', idNou)
+    if (error) {
+      if (vechea) await supabase.from('ofertare_acoperire').update({ ales: true }).eq('id', vechea.id)
+      setAcoperiri(prev => ({ ...prev, [cerintaId]: (prev[cerintaId] || [])
+        .map(x => ({ ...x, ales: x.id === vechea?.id })) }))
+      setEroare('Nu s-a putut schimba varianta aleasă: ' + error.message)
+    }
+  }
 
   const numarate = useMemo(() => {
     const n = { toate: randuri.length, de_rezolvat: 0, eliminatorii: 0, neevaluate: 0, acoperite: 0 }
@@ -341,7 +399,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
 
       {felie.length === 0 ? (
         <div style={{ padding:16, color:G.muted, fontSize:12.5 }}>Niciun rând pe filtrul ăsta.</div>
-      ) : felie.map(r => <Rand key={r.c.id} c={r.c} a={r.a} ingust={ingust} />)}
+      ) : felie.map(r => <Rand key={r.c.id} c={r.c} a={r.a} lista={r.lista} ingust={ingust} onAlege={alegeCandidat} />)}
 
       {nPagini > 1 && (
         <div style={{ padding:'10px 12px', borderTop:`1px solid ${G.border}`, display:'flex', gap:8, alignItems:'center', justifyContent:'center' }}>
