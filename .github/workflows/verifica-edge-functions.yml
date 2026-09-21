@@ -51,4 +51,5 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: dxczwkbciseqniprspcu
+          VERIFICA_DEBUG: ${{ vars.VERIFICA_DEBUG }}
         run: node scripts/verifica-edge-functions.mjs

@@ -75,7 +75,19 @@ for (const { slug, sursa } of locale) {
       { env: { ...process.env, SUPABASE_ACCESS_TOKEN: TOKEN }, timeout: 120_000 })
     const live = await readFile(join(DIR, slug, 'index.ts'), 'utf8')
     const rec = { slug, v: meta.version, repo: sha(sursa), live: sha(live) }
-    ;(norm(live) === norm(sursa) ? identice : diferite).push(rec)
+    const egale = norm(live) === norm(sursa)
+    // Diagnostic: la prima diferenta arata exact unde si ce, ca sa nu ghicim de ce difera.
+    if (!egale && process.env.VERIFICA_DEBUG && !diferite.length) {
+      const a = norm(sursa).split('\n'), b = norm(live).split('\n')
+      const i = a.findIndex((l, k) => l !== b[k])
+      console.log(`\n--- diagnostic ${slug}: repo ${a.length} linii, live ${b.length} linii, prima diferenta la linia ${i + 1}`)
+      for (let k = Math.max(0, i - 2); k < Math.min(Math.max(a.length, b.length), i + 4); k++) {
+        console.log(`  repo[${k + 1}] ${JSON.stringify(a[k] ?? '<lipseste>')}`)
+        console.log(`  live[${k + 1}] ${JSON.stringify(b[k] ?? '<lipseste>')}`)
+      }
+      console.log('---\n')
+    }
+    ;(egale ? identice : diferite).push(rec)
   } catch (e) {
     necitite.push(`${slug} — ${String(e.message || e).split('\n')[0]}`)
   }
