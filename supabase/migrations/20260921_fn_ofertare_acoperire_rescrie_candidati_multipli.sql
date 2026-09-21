@@ -58,7 +58,17 @@ BEGIN
 
   v_conflicte := v_pe_scan || v_alese_om;
 
+  -- Identitatea unui candidat = ce anume propune, nu unde stă în listă. Se calculează aici,
+  -- în CREATE TABLE AS, nu printr-un UPDATE ulterior: rolul prin care intră Edge Function-ul
+  -- rulează cu `safeupdate` pornit, iar Postgres refuză UPDATE/DELETE fără WHERE. Prin MCP
+  -- (alt rol) trecea, deci n-a ieșit la teste — prima rulare reală a picat cu
+  -- „UPDATE requires a WHERE clause", tranzacția s-a anulat și felia de AI s-a plătit degeaba.
   CREATE TEMP TABLE _noi ON COMMIT DROP AS
+  SELECT t.*, concat_ws('|', t.mod,
+           coalesce(t.autorizatie_id::text,''), coalesce(t.doc_firma_id::text,''),
+           coalesce(t.partener_id::text,''), coalesce(t.experienta_id::text,''),
+           coalesce(t.recomandare_id::text,''), coalesce(t.document_personal_id::text,'')) AS cheie
+  FROM (
   SELECT (x->>'cerinta_id')::bigint                       AS cerinta_id,
          x->>'mod'                                        AS mod,
          NULLIF(x->>'autorizatie_id','')::bigint          AS autorizatie_id,
@@ -74,21 +84,15 @@ BEGIN
          NULLIF(x->>'scor','')::smallint                  AS scor,
          x->>'motiv'                                      AS motiv,
          row_number() OVER (PARTITION BY (x->>'cerinta_id')::bigint ORDER BY ordinalitate) AS rang
-    FROM jsonb_array_elements(p_randuri) WITH ORDINALITY AS t(x, ordinalitate)
+    FROM jsonb_array_elements(p_randuri) WITH ORDINALITY AS e(x, ordinalitate)
    WHERE x->>'cerinta_id' IS NOT NULL
-     AND NOT ((x->>'cerinta_id')::bigint = ANY(v_conflicte));
+     AND NOT ((x->>'cerinta_id')::bigint = ANY(v_conflicte))
+  ) t;
 
   -- Cel mult 3 candidați per cerință. Plafonul stă AICI, nu doar în prompt: promptul e o
   -- rugăminte către model, asta e o limită. Fără ea, un răspuns scăpat de sub control ar
   -- putea umple ecranul omului cu zeci de variante.
   DELETE FROM _noi WHERE rang > 3;
-
-  -- Identitatea unui candidat = ce anume propune, nu unde stă în listă.
-  ALTER TABLE _noi ADD COLUMN cheie text;
-  UPDATE _noi SET cheie = concat_ws('|', mod,
-    coalesce(autorizatie_id::text,''), coalesce(doc_firma_id::text,''),
-    coalesce(partener_id::text,''), coalesce(experienta_id::text,''),
-    coalesce(recomandare_id::text,''), coalesce(document_personal_id::text,''));
 
   -- Același candidat propus de două ori în aceeași felie: păstrăm prima apariție.
   DELETE FROM _noi a USING _noi b
