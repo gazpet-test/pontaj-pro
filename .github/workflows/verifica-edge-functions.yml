@@ -1,0 +1,46 @@
+name: Edge functions — repo vs producție
+
+# De ce: pe 18.09.2026 `ofertare-acoperire` avea în main filtrul de titular activ și fix-ul
+# DUAE, dar producția rula o versiune veche. Trei zile motorul a propus la licitații oameni
+# cu contract închis, fără ca nimic să semnaleze diferența. Verificarea asta face zgomot.
+
+on:
+  push:
+    branches: [main]
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', '.github/workflows/verifica-edge-functions.yml']
+  pull_request:
+    paths: ['supabase/functions/**']
+  schedule:
+    - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
+  workflow_dispatch:
+
+jobs:
+  verifica:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Fără token nu se poate întreba API-ul Supabase. Nu picăm verificarea din lipsa
+      # secretului — spunem clar ce lipsește și de unde se pune.
+      - name: Verifică dacă există secretul
+        id: secret
+        env:
+          TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "are_token=nu" >> "$GITHUB_OUTPUT"
+            echo "::warning::Lipsește secretul SUPABASE_ACCESS_TOKEN — verificarea a fost sărită. Se adaugă din Settings → Secrets and variables → Actions, cu un token generat din supabase.com/dashboard/account/tokens."
+          else
+            echo "are_token=da" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compară fiecare funcție cu producția
+        if: steps.secret.outputs.are_token == 'da'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: dxczwkbciseqniprspcu
+        run: node scripts/verifica-edge-functions.mjs
