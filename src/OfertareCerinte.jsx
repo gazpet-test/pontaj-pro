@@ -159,11 +159,159 @@ function felDocument(nume) {
   return null
 }
 
-function Rand({ c, a, ingust }) {
+
+// ── Căutarea manuală în registrul firmei ────────────────────────────────────────────
+//
+// Cererea lui Mari, repetată în 9 tichete: „ar trebui ca platforma să dea o listă cu toți
+// RTE ai societății (angajați sau externi) și noi să îi putem stabili pe cei necesari".
+// Motorul propune; omul caută. Fără limită de 3 aici: plafonul e pentru recomandările AI,
+// nu pentru accesul la ce avem în firmă.
+//
+// Se încarcă o singură dată per sesiune de ecran, la prima deschidere — ~600 de rânduri.
+let _registruCache = null
+async function incarcaRegistru() {
+  if (_registruCache) return _registruCache
+  const [au, pa, df] = await Promise.all([
+    supabase.from('hr_autorizatii')
+      .select('id, numar_autorizatie, emitent, data_expirare, fara_expirare, domenii, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)')
+      .is('deleted_at', null).limit(2000),
+    supabase.from('ofertare_parteneri').select('id, nume, cui, tip_relatie, observatii, activ, abandonat').limit(500),
+    supabase.from('documente_firma').select('id, tip, denumire, numar_document, data_valabilitate, pdf_path').limit(500),
+  ])
+  const azi = new Date().toISOString().slice(0, 10)
+  const valabil = x => x.fara_expirare || !x.data_expirare || x.data_expirare >= azi
+  _registruCache = [
+    ...(au.data || []).map(x => ({
+      fel: 'persoana', id: x.id,
+      nume: x.emp?.name || x.ext?.nume || 'persoană necunoscută',
+      detaliu: [x.tip?.denumire, x.numar_autorizatie && `nr. ${x.numar_autorizatie}`, x.emitent].filter(Boolean).join(' · '),
+      domenii: Array.isArray(x.domenii) ? x.domenii.join(' ') : (x.domenii || ''),
+      valabil: valabil(x),
+      expira: x.fara_expirare ? 'fără expirare' : (x.data_expirare || 'fără dată'),
+      extern: !x.emp?.name,
+      areScan: !!x.fisier_path,
+      legatura: { mod: 'personal', autorizatie_id: x.id },
+    })),
+    // Partenerii abandonați rămân în listă, dar marcați: uneori vrei să vezi de ce nu mai
+    // lucrăm cu cineva, nu să dispară fără urmă.
+    ...(pa.data || []).map(x => ({
+      fel: 'partener', id: x.id, nume: x.nume,
+      detaliu: [x.tip_relatie, x.cui && `CUI ${x.cui}`, x.observatii].filter(Boolean).join(' · '),
+      domenii: [x.tip_relatie, x.observatii].filter(Boolean).join(' '),
+      valabil: x.activ !== false && !x.abandonat,
+      expira: x.abandonat ? 'abandonat' : 'inactiv',
+      extern: true, areScan: false,
+      legatura: { mod: 'partener', partener_id: x.id },
+    })),
+    ...(df.data || []).map(x => ({
+      fel: 'document', id: x.id, nume: x.denumire || x.tip || 'document',
+      detaliu: [x.tip, x.numar_document && `nr. ${x.numar_document}`].filter(Boolean).join(' · '),
+      domenii: '',
+      valabil: !x.data_valabilitate || x.data_valabilitate >= azi,
+      expira: x.data_valabilitate || 'fără dată',
+      extern: false, areScan: !!x.pdf_path,
+      legatura: { mod: 'firma', doc_firma_id: x.id },
+    })),
+  ]
+  return _registruCache
+}
+
+const FELURI = [['toate', 'toate'], ['persoana', '👤 persoane'], ['partener', '🤝 parteneri'], ['document', '📄 documente firmă']]
+
+function CautareInFirma({ cerinta, onAles, onInchide }) {
+  const [registru, setRegistru] = useState(null)
+  const [q, setQ] = useState('')
+  const [fel, setFel] = useState('toate')
+  const [doarValabile, setDoarValabile] = useState(true)
+  const [salvez, setSalvez] = useState(null)
+  const [eroare, setEroare] = useState(null)
+
+  useEffect(() => { incarcaRegistru().then(setRegistru).catch(e => setEroare(e.message)) }, [])
+
+  const norm = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const qn = norm(q).trim()
+  const gasite = useMemo(() => {
+    if (!registru) return []
+    return registru.filter(x =>
+      (fel === 'toate' || x.fel === fel) &&
+      (!doarValabile || x.valabil) &&
+      (!qn || norm(x.nume + ' ' + x.detaliu + ' ' + x.domenii).includes(qn))
+    ).slice(0, 120)
+  }, [registru, qn, fel, doarValabile])
+
+  const foloseste = async (x) => {
+    setSalvez(x.fel + x.id); setEroare(null)
+    const { data, error } = await supabase.from('ofertare_acoperire').insert({
+      cerinta_id: cerinta.id, status: 'acoperit', verificat_pe_scan: false,
+      referinta_text: `${x.nume}${x.detaliu ? ' — ' + x.detaliu : ''}`,
+      motiv: 'ales manual din registrul firmei',
+      ...x.legatura,
+    }).select('id').single()
+    if (error) { setEroare(error.message); setSalvez(null); return }
+    const { error: e2 } = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: data.id })
+    setSalvez(null)
+    if (e2) { setEroare(e2.message); return }
+    onAles?.()
+  }
+
+  return (
+    <div style={{ marginTop:8, padding:'10px 12px', background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8 }}>
+      <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', marginBottom:8 }}>
+        <input autoFocus style={{ ...S.input, flex:1, minWidth:180 }} value={q} onChange={e => setQ(e.target.value)}
+          placeholder="caută după nume, tip de autorizație, domeniu…" />
+        <button onClick={onInchide} style={{ ...S.btnS, padding:'6px 10px', fontSize:11.5 }}>închide</button>
+      </div>
+      <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:8, alignItems:'center' }}>
+        {FELURI.map(([k, lbl]) => (
+          <button key={k} onClick={() => setFel(k)} style={{ ...S.btnS, padding:'3px 10px', fontSize:11,
+            color: fel === k ? G.ofertare : G.muted, borderColor: fel === k ? G.ofertare + '77' : G.border2 }}>{lbl}</button>
+        ))}
+        <label style={{ fontSize:11, color:G.muted, display:'flex', gap:4, alignItems:'center', marginLeft:6, cursor:'pointer' }}>
+          <input type="checkbox" checked={doarValabile} onChange={e => setDoarValabile(e.target.checked)} style={{ accentColor:G.ofertare }} />
+          doar valabile azi
+        </label>
+      </div>
+      {eroare && <div style={{ fontSize:11.5, color:G.red, marginBottom:6 }}>{eroare}</div>}
+      {!registru ? <div style={{ fontSize:12, color:G.muted }}>se încarcă registrul firmei…</div> : (
+        <div style={{ maxHeight:260, overflowY:'auto' }}>
+          {!gasite.length && <div style={{ fontSize:12, color:G.dim }}>Nimic pe căutarea asta. Scoate bifa „doar valabile" dacă documentul e expirat dar îl vrei totuși.</div>}
+          {gasite.map(x => (
+            <div key={x.fel + x.id} style={{ display:'flex', gap:8, alignItems:'flex-start', padding:'5px 0', borderBottom:`1px solid ${G.border2}` }}>
+              <button disabled={salvez === x.fel + x.id} onClick={() => foloseste(x)}
+                style={{ ...S.btnS, padding:'2px 9px', fontSize:10.5, whiteSpace:'nowrap', color:G.green, borderColor:G.green + '66' }}>
+                {salvez === x.fel + x.id ? '…' : 'folosește'}
+              </button>
+              <div style={{ minWidth:0, flex:1 }}>
+                <div style={{ fontSize:12, color:G.text }}>
+                  {x.nume}
+                  {x.extern && x.fel === 'persoana' && <span style={{ color:G.yellow, marginLeft:6, fontSize:10.5 }}>extern</span>}
+                  {!x.valabil && <span style={{ color:G.red, marginLeft:6, fontSize:10.5 }}>
+                    {x.fel === 'partener' ? x.expira : `expirat ${x.expira}`}</span>}
+                  {x.fel === 'persoana' && !x.areScan && <span style={{ color:G.dim, marginLeft:6, fontSize:10.5 }}>fără scan</span>}
+                </div>
+                {x.detaliu && <div style={{ fontSize:11, color:G.muted }}>{x.detaliu}</div>}
+              </div>
+            </div>
+          ))}
+          {registru.length > gasite.length && qn === '' && (
+            <div style={{ fontSize:11, color:G.dim, paddingTop:6 }}>
+              se arată primele {gasite.length} din {registru.length} — caută ca să reduci lista
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Rand({ c, a, lista = [], ingust, onAlege, onReincarca }) {
+  const [cautaFirma, setCautaFirma] = useState(false)
   const v = verdictRand(a)
   const d = dovada(a)
   const V = VERDICT[v]
   const fel = felDocument(c.doc?.nume_original)
+  // Candidații pe care nu i-am ales. Până acum nu existau: motorul putea scrie unul singur.
+  const altii = lista.filter(x => x.id !== a?.id)
   const stanga = (
     <div style={{ minWidth:0 }}>
       <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', marginBottom:4 }}>
@@ -217,6 +365,43 @@ function Rand({ c, a, ingust }) {
       {a?.raspuns_coleg && (
         <div style={{ fontSize:11, color:G.yellow, marginTop:4 }}>💬 {a.raspuns_coleg}</div>
       )}
+      <div style={{ marginTop:8 }}>
+        <button onClick={() => setCautaFirma(v => !v)}
+          title="Caută tu în tot ce are firma — angajați, externi, parteneri, documente"
+          style={{ ...S.btnS, padding:'3px 10px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '55' }}>
+          {cautaFirma ? '× renunț' : '🔍 caut eu în firmă'}
+        </button>
+      </div>
+      {cautaFirma && (
+        <CautareInFirma cerinta={c} onInchide={() => setCautaFirma(false)}
+          onAles={() => { setCautaFirma(false); onReincarca?.() }} />
+      )}
+      {altii.length > 0 && (
+        <div style={{ marginTop:8, paddingTop:7, borderTop:`1px dashed ${G.border2}` }}>
+          <div style={{ fontSize:10.5, color:G.muted, fontWeight:700, marginBottom:5 }}>
+            ALTE VARIANTE ({altii.length})
+          </div>
+          {altii.map(x => {
+            const dx = dovada(x)
+            return (
+              <div key={x.id} style={{ display:'flex', gap:8, alignItems:'flex-start', marginBottom:5 }}>
+                <button onClick={() => onAlege?.(c.id, x.id)} title="Alege varianta asta în locul celei curente"
+                  style={{ ...S.btnS, padding:'2px 9px', fontSize:10.5, whiteSpace:'nowrap', color:G.ofertare, borderColor:G.ofertare + '66' }}>
+                  alege
+                </button>
+                <div style={{ minWidth:0, flex:1 }}>
+                  <div style={{ fontSize:12, color:G.text }}>
+                    {dx?.titlu || x.referinta_text || 'variantă fără descriere'}
+                    {x.scor != null && <span style={{ color:G.dim, marginLeft:6, fontVariantNumeric:'tabular-nums' }}>· potrivire {x.scor}</span>}
+                  </div>
+                  {x.motiv && <div style={{ fontSize:11, color:G.muted, marginTop:1 }}>{x.motiv}</div>}
+                  {!x.motiv && dx?.detaliu && <div style={{ fontSize:11, color:G.muted, marginTop:1 }}>{dx.detaliu}</div>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
   return (
@@ -236,6 +421,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
   const [cauta, setCauta] = useState('')
   const [filtru, setFiltru] = useState('toate')
   const [pagina, setPagina] = useState(0)
+  const [reincarca, setReincarca] = useState(0)   // crește când s-a ales manual ceva nou
   // Pe telefon perechea se așază vertical, în același card — fără derulare orizontală.
   const [ingust, setIngust] = useState(typeof window !== 'undefined' && window.innerWidth < 900)
   useEffect(() => {
@@ -247,7 +433,10 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
   useEffect(() => {
     let viu = true
     const load = async () => {
-      setCerinte(null); setEroare(null); setPagina(0)
+      setCerinte(null); setEroare(null)
+      // La reîncărcarea de după o alegere manuală NU sărim înapoi la prima pagină:
+      // omul tocmai a lucrat pe pagina 3 și ar pierde locul.
+      if (!reincarca) setPagina(0)
       // Aceleași filtre ca în vederea veche: doar registrul de capabilități, fără repetări.
       // Dacă ar diferi, cele două ecrane ar număra altceva și n-ar mai fi comparabile.
       const { data: cs, error } = await supabase.from('ofertare_cerinte')
@@ -264,20 +453,45 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
         .in('cerinta_id', cs.map(c => c.id)).order('id').limit(5000)
       if (!viu) return
       if (e2) { setEroare(e2.message); return }
-      // Aceeași regulă de departajare ca în ecranul vechi: dovada verificată de om bate verdictul
-      // AI-ului. (Pasul 3 va arăta toate dovezile, nu una singură.)
+      // Păstrăm TOȚI candidații pe cerință, nu doar unul. Până azi nici nu puteau exista mai
+      // mulți: un index unic în BD interzicea a doua propunere nevalidată, de-aia platforma
+      // „alegea singură" mereu aceeași persoană. Ordinea: aleasa prima, apoi după scor.
       const m = {}
-      ;(ac || []).forEach(a => {
-        const ex = m[a.cerinta_id]
-        if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) m[a.cerinta_id] = a
-      })
+      ;(ac || []).forEach(a => (m[a.cerinta_id] ||= []).push(a))
+      Object.values(m).forEach(lista => lista.sort((x, y) =>
+        (y.ales ? 1 : 0) - (x.ales ? 1 : 0) ||
+        (y.scor ?? -1) - (x.scor ?? -1) ||
+        (y.verificat_pe_scan ? 1 : 0) - (x.verificat_pe_scan ? 1 : 0) ||
+        x.id - y.id))
       setAcoperiri(m)
     }
     load()
     return () => { viu = false }
-  }, [licitatie.id])
+  }, [licitatie.id, reincarca])
 
-  const randuri = useMemo(() => (cerinte || []).map(c => ({ c, a: acoperiri[c.id] || null, v: verdictRand(acoperiri[c.id] || null) })), [cerinte, acoperiri])
+  const randuri = useMemo(() => (cerinte || []).map(c => {
+    const lista = acoperiri[c.id] || []
+    const a = lista.find(x => x.ales) || lista[0] || null
+    return { c, a, lista, v: verdictRand(a) }
+  }), [cerinte, acoperiri])
+
+  // Alegerea unui alt candidat, printr-o singură tranzacție pe server
+  // (`fn_ofertare_alege_acoperire`). Din client ar fi fost două scrieri — scoate vechea, pune
+  // noua, fiindcă indexul unic nu tolerează două alese — iar între ele cerința rămânea fără
+  // nicio variantă. Dacă a doua cădea, cerința rămânea descoperită fără ca omul să afle.
+  const alegeCandidat = async (cerintaId, idNou) => {
+    const lista = acoperiri[cerintaId] || []
+    const vechea = lista.find(x => x.ales)
+    if (vechea?.id === idNou) return
+    setAcoperiri(prev => ({ ...prev, [cerintaId]: (prev[cerintaId] || [])
+      .map(x => ({ ...x, ales: x.id === idNou })) }))
+    const { error } = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: idNou })
+    if (error) {
+      setAcoperiri(prev => ({ ...prev, [cerintaId]: (prev[cerintaId] || [])
+        .map(x => ({ ...x, ales: x.id === vechea?.id })) }))
+      setEroare('Nu s-a putut schimba varianta aleasă: ' + error.message)
+    }
+  }
 
   const numarate = useMemo(() => {
     const n = { toate: randuri.length, de_rezolvat: 0, eliminatorii: 0, neevaluate: 0, acoperite: 0 }
@@ -341,7 +555,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
 
       {felie.length === 0 ? (
         <div style={{ padding:16, color:G.muted, fontSize:12.5 }}>Niciun rând pe filtrul ăsta.</div>
-      ) : felie.map(r => <Rand key={r.c.id} c={r.c} a={r.a} ingust={ingust} />)}
+      ) : felie.map(r => <Rand key={r.c.id} c={r.c} a={r.a} lista={r.lista} ingust={ingust} onAlege={alegeCandidat} onReincarca={() => setReincarca(n => n + 1)} />)}
 
       {nPagini > 1 && (
         <div style={{ padding:'10px 12px', borderTop:`1px solid ${G.border}`, display:'flex', gap:8, alignItems:'center', justifyContent:'center' }}>
