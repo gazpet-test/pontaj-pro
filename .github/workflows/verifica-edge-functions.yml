@@ -40,9 +40,26 @@ jobs:
             echo "are_token=da" >> "$GITHUB_OUTPUT"
           fi
 
+      # Sursa publicată se ia cu CLI-ul Supabase: endpointul /body din Management API
+      # întoarce bundle-ul deployat (eszip), nu fișierul scris de noi.
+      - name: Instalează Supabase CLI
+        if: steps.secret.outputs.are_token == 'da'
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # `deno fmt` e terenul comun: la deploy sursa trece prin formatarea Deno, deci
+      # fișierul nostru și cel publicat nu sunt identice pe text decât după formatare.
+      - name: Instalează Deno (pentru formatarea canonică)
+        if: steps.secret.outputs.are_token == 'da'
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Compară fiecare funcție cu producția
         if: steps.secret.outputs.are_token == 'da'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: dxczwkbciseqniprspcu
+          VERIFICA_DEBUG: ${{ vars.VERIFICA_DEBUG }}
         run: node scripts/verifica-edge-functions.mjs
