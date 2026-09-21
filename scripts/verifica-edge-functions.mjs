@@ -48,6 +48,10 @@ async function functiiDinRepo(radacina) {
   return out.sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
+// CLI-ul se instaleaza o singura data. Cu `npx supabase@latest` la fiecare functie,
+// rezolvarea pachetului se repeta de 43 de ori si rularea dureaza minute in loc de secunde.
+const CLI = process.env.SUPABASE_CLI || 'supabase'
+
 // Punem deoparte sursele din repo: `supabase functions download` scrie exact peste ele.
 await rm(COPIE, { recursive: true, force: true })
 await mkdir(COPIE, { recursive: true })
@@ -67,7 +71,7 @@ for (const { slug, sursa } of locale) {
   const meta = publicate.get(slug)
   if (!meta) { nepublicate.push(slug); continue }
   try {
-    await execFileP('npx', ['--yes', 'supabase@latest', 'functions', 'download', slug, '--project-ref', PROJECT_REF],
+    await execFileP(CLI, ['functions', 'download', slug, '--project-ref', PROJECT_REF],
       { env: { ...process.env, SUPABASE_ACCESS_TOKEN: TOKEN }, timeout: 120_000 })
     const live = await readFile(join(DIR, slug, 'index.ts'), 'utf8')
     const rec = { slug, v: meta.version, repo: sha(sursa), live: sha(live) }
