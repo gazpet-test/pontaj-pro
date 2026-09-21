@@ -22,7 +22,7 @@
 // A treia capcană, minoră: un checkout pe Windows adaugă \r la fiecare linie și schimbă
 // sha256 fără să schimbe o virgulă. `deno fmt` o rezolvă și pe asta.
 
-import { readFile, readdir, mkdir, rm, cp } from 'node:fs/promises'
+import { readFile, writeFile, readdir, mkdir, rm, cp } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -33,7 +33,8 @@ const execFileP = promisify(execFile)
 const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'dxczwkbciseqniprspcu'
 const TOKEN = process.env.SUPABASE_ACCESS_TOKEN
 const DIR = 'supabase/functions'
-const COPIE = '.verificare-repo'   // copia intactă a repo-ului, ca CLI-ul să poată scrie peste original
+const COPIE = '.verificare-repo'
+const TEMP = '.verificare-temp'   // fișiere de lucru pentru `deno fmt`   // copia intactă a repo-ului, ca CLI-ul să poată scrie peste original
 
 if (!TOKEN) {
   console.error('Lipsește SUPABASE_ACCESS_TOKEN (Settings → Secrets → Actions, sau `gh secret set` de pe laptop).')
@@ -43,9 +44,18 @@ if (!TOKEN) {
 const sha = s => createHash('sha256').update(s).digest('hex').slice(0, 12)
 
 // Formatare canonică: singurul teren pe care sursa noastră și cea publicată sunt comparabile.
+//
+// Se scrie într-un fișier temporar și se formatează pe loc. NU prin stdin: `execFile` nu are
+// opțiunea `input` (aia e la `execFileSync`), iar `deno fmt -` rămâne blocat așteptând date
+// care nu vin niciodată. M-a costat o rulare de 14 minute care nu s-a terminat.
+let nrFmt = 0
 async function fmt(text) {
-  const { stdout } = await execFileP('deno', ['fmt', '--ext=ts', '-'], { input: text, maxBuffer: 32 << 20 })
-  return stdout.replace(/\s+$/, '')
+  const f = join(TEMP, `f${nrFmt++}.ts`)
+  await writeFile(f, text, 'utf8')
+  await execFileP('deno', ['fmt', '--quiet', f], { timeout: 60_000 })
+  const out = await readFile(f, 'utf8')
+  await rm(f, { force: true })
+  return out.replace(/\s+$/, '')
 }
 
 async function functiiDinRepo(radacina) {
@@ -65,7 +75,9 @@ const CLI = process.env.SUPABASE_CLI || 'supabase'
 
 // Punem deoparte sursele din repo: `supabase functions download` scrie exact peste ele.
 await rm(COPIE, { recursive: true, force: true })
+await rm(TEMP, { recursive: true, force: true })
 await mkdir(COPIE, { recursive: true })
+await mkdir(TEMP, { recursive: true })
 await cp(DIR, COPIE, { recursive: true })
 const locale = await functiiDinRepo(COPIE)
 

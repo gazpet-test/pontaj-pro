@@ -14,3 +14,4 @@ CLAUDE.local.md
 
 # copia temporara a surselor, facuta de scripts/verifica-edge-functions.mjs
 .verificare-repo/
+.verificare-temp/
