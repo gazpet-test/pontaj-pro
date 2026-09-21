@@ -218,7 +218,7 @@ async function incarcaRegistru() {
 
 const FELURI = [['toate', 'toate'], ['persoana', '👤 persoane'], ['partener', '🤝 parteneri'], ['document', '📄 documente firmă']]
 
-function CautareInFirma({ cerinta, onAles, onInchide }) {
+function CautareInFirma({ cerinta, pozitieId = null, onAles, onInchide }) {
   const [registru, setRegistru] = useState(null)
   const [q, setQ] = useState('')
   const [fel, setFel] = useState('toate')
@@ -242,7 +242,7 @@ function CautareInFirma({ cerinta, onAles, onInchide }) {
   const foloseste = async (x) => {
     setSalvez(x.fel + x.id); setEroare(null)
     const { data, error } = await supabase.from('ofertare_acoperire').insert({
-      cerinta_id: cerinta.id, status: 'acoperit', verificat_pe_scan: false,
+      cerinta_id: cerinta.id, pozitie_id: pozitieId, status: 'acoperit', verificat_pe_scan: false,
       referinta_text: `${x.nume}${x.detaliu ? ' — ' + x.detaliu : ''}`,
       motiv: 'ales manual din registrul firmei',
       ...x.legatura,
@@ -304,14 +304,109 @@ function CautareInFirma({ cerinta, onAles, onInchide }) {
   )
 }
 
-function Rand({ c, a, lista = [], ingust, onAlege, onReincarca }) {
+
+// ── Poziții pe o cerință cumulativă ────────────────────────────────────────────────────
+//
+// „Doi RTE", „RTE gaze + RTE drumuri", „trei sudori". Până acum o cerință se acoperea cu o
+// singură persoană — exact plângerea lui Mari de la cerința 8: „platforma trebuie să
+// identifice toate categoriile de lucrări și să stabilească toate categoriile de personal".
+// O cerință fără poziții rămâne exact cum era; pozițiile se adaugă doar unde chiar trebuie.
+function PozitiiCerinta({ cerinta, pozitii, acoperiri, onSchimbat }) {
+  const [adaug, setAdaug] = useState(false)
+  const [denumire, setDenumire] = useState('')
+  const [cautPentru, setCautPentru] = useState(null)
+  const [eroare, setEroare] = useState(null)
+  const [lucrez, setLucrez] = useState(false)
+
+  const adaugaPozitie = async () => {
+    const d = denumire.trim()
+    if (!d) return
+    setLucrez(true); setEroare(null)
+    const { error } = await supabase.from('ofertare_cerinte_pozitii')
+      .insert({ cerinta_id: cerinta.id, nr: (pozitii.at(-1)?.nr || 0) + 1, denumire: d })
+    setLucrez(false)
+    if (error) { setEroare(error.message); return }
+    setDenumire(''); setAdaug(false); onSchimbat?.()
+  }
+
+  // Ștergem poziția doar dacă nu are nimic ales pe ea. Altfel omul ar pierde o alegere
+  // făcută, fără să-și dea seama — legătura din BD s-ar șterge tăcut (ON DELETE SET NULL).
+  const stergePozitie = async (poz) => {
+    if ((acoperiri || []).some(a => a.pozitie_id === poz.id)) {
+      setEroare(`„${poz.denumire}" are deja o variantă aleasă. Schimb-o sau scoate-o întâi.`)
+      return
+    }
+    const { error } = await supabase.from('ofertare_cerinte_pozitii').delete().eq('id', poz.id)
+    if (error) { setEroare(error.message); return }
+    onSchimbat?.()
+  }
+
+  const alesPe = (pozId) => (acoperiri || []).find(a => a.ales && a.pozitie_id === pozId)
+
+  return (
+    <div style={{ marginTop:8, paddingTop:7, borderTop:`1px dashed ${G.border2}` }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:5 }}>
+        <span style={{ fontSize:10.5, color:G.muted, fontWeight:700 }}>
+          {pozitii.length ? `POZIȚII DE ACOPERIT (${pozitii.length})` : 'CERINȚĂ CUMULATIVĂ?'}
+        </span>
+        <button onClick={() => setAdaug(v => !v)}
+          title='Când cerința cere mai multe persoane: „doi RTE”, „RTE gaze și RTE drumuri”'
+          style={{ ...S.btnS, padding:'2px 9px', fontSize:10.5, color:G.ofertare, borderColor:G.ofertare + '55' }}>
+          {adaug ? '× renunț' : '＋ adaugă poziție'}
+        </button>
+      </div>
+      {adaug && (
+        <div style={{ display:'flex', gap:6, marginBottom:6 }}>
+          <input autoFocus style={{ ...S.input, flex:1, fontSize:12 }} value={denumire}
+            onChange={e => setDenumire(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && adaugaPozitie()}
+            placeholder="cum se numește poziția: „RTE instalații gaze”, „sudor 2”…" />
+          <button disabled={lucrez || !denumire.trim()} onClick={adaugaPozitie}
+            style={{ ...S.btnS, padding:'4px 12px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }}>adaug</button>
+        </div>
+      )}
+      {eroare && <div style={{ fontSize:11.5, color:G.red, marginBottom:5 }}>{eroare}</div>}
+      {pozitii.map(poz => {
+        const a = alesPe(poz.id)
+        const d = a ? dovada(a) : null
+        return (
+          <div key={poz.id} style={{ padding:'5px 0', borderBottom:`1px solid ${G.border2}` }}>
+            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <span style={{ fontSize:11.5, fontWeight:700, color:G.text }}>{poz.nr}. {poz.denumire}</span>
+              {a ? (
+                <span style={{ fontSize:11.5, color:G.green }}>✓ {d?.titlu || a.referinta_text || 'acoperit'}</span>
+              ) : (
+                <span style={{ fontSize:11.5, color:G.red }}>neacoperit</span>
+              )}
+              <span style={{ marginLeft:'auto', display:'flex', gap:5 }}>
+                <button onClick={() => setCautPentru(cautPentru === poz.id ? null : poz.id)}
+                  style={{ ...S.btnS, padding:'2px 9px', fontSize:10.5, color:G.ofertare, borderColor:G.ofertare + '55' }}>
+                  {cautPentru === poz.id ? '× renunț' : (a ? 'schimb' : '🔍 caut')}
+                </button>
+                <button onClick={() => stergePozitie(poz)} title="Șterge poziția"
+                  style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5, color:G.red, borderColor:G.red + '55' }}>✕</button>
+              </span>
+            </div>
+            {cautPentru === poz.id && (
+              <CautareInFirma cerinta={cerinta} pozitieId={poz.id}
+                onInchide={() => setCautPentru(null)}
+                onAles={() => { setCautPentru(null); onSchimbat?.() }} />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function Rand({ c, a, lista = [], pozitii = [], ingust, onAlege, onReincarca }) {
   const [cautaFirma, setCautaFirma] = useState(false)
   const v = verdictRand(a)
   const d = dovada(a)
   const V = VERDICT[v]
   const fel = felDocument(c.doc?.nume_original)
   // Candidații pe care nu i-am ales. Până acum nu existau: motorul putea scrie unul singur.
-  const altii = lista.filter(x => x.id !== a?.id)
+  const altii = lista.filter(x => x.id !== a?.id && !x.pozitie_id)
   const stanga = (
     <div style={{ minWidth:0 }}>
       <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', marginBottom:4 }}>
@@ -365,13 +460,14 @@ function Rand({ c, a, lista = [], ingust, onAlege, onReincarca }) {
       {a?.raspuns_coleg && (
         <div style={{ fontSize:11, color:G.yellow, marginTop:4 }}>💬 {a.raspuns_coleg}</div>
       )}
-      <div style={{ marginTop:8 }}>
+      <PozitiiCerinta cerinta={c} pozitii={pozitii} acoperiri={lista} onSchimbat={onReincarca} />
+      {!pozitii.length && <div style={{ marginTop:8 }}>
         <button onClick={() => setCautaFirma(v => !v)}
           title="Caută tu în tot ce are firma — angajați, externi, parteneri, documente"
           style={{ ...S.btnS, padding:'3px 10px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '55' }}>
           {cautaFirma ? '× renunț' : '🔍 caut eu în firmă'}
         </button>
-      </div>
+      </div>}
       {cautaFirma && (
         <CautareInFirma cerinta={c} onInchide={() => setCautaFirma(false)}
           onAles={() => { setCautaFirma(false); onReincarca?.() }} />
@@ -417,6 +513,7 @@ function Rand({ c, a, lista = [], ingust, onAlege, onReincarca }) {
 export default function CerinteAcoperirePerechi({ licitatie }) {
   const [cerinte, setCerinte] = useState(null)
   const [acoperiri, setAcoperiri] = useState({})
+  const [pozitii, setPozitii] = useState({})       // cerinta_id → pozițiile ei, la cerințele cumulative
   const [eroare, setEroare] = useState(null)
   const [cauta, setCauta] = useState('')
   const [filtru, setFiltru] = useState('toate')
@@ -447,9 +544,16 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
       if (!viu) return
       if (error) { setEroare(error.message); setCerinte([]); return }
       setCerinte(cs || [])
-      if (!cs?.length) { setAcoperiri({}); return }
+      if (!cs?.length) { setAcoperiri({}); setPozitii({}); return }
+
+      const { data: pz } = await supabase.from('ofertare_cerinte_pozitii')
+        .select('id, cerinta_id, nr, denumire').in('cerinta_id', cs.map(c => c.id)).order('nr').limit(2000)
+      if (!viu) return
+      const mp = {}
+      ;(pz || []).forEach(x => (mp[x.cerinta_id] ||= []).push(x))
+      setPozitii(mp)
       const { data: ac, error: e2 } = await supabase.from('ofertare_acoperire')
-        .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, data_valabilitate), experienta:ofertare_experienta(id, denumire, beneficiar, asociere, data_pv), recomandare:hr_recomandari(id, rol, beneficiar, verificat, emp:employees(name), ext:hr_personal_extern(nume)), studii:hr_documente_personale(id, numar_document, emitent, fisier_path, tip:hr_documente_personale_tipuri(denumire), emp:employees(name))')
+        .select('*, pozitie_id, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, data_valabilitate), experienta:ofertare_experienta(id, denumire, beneficiar, asociere, data_pv), recomandare:hr_recomandari(id, rol, beneficiar, verificat, emp:employees(name), ext:hr_personal_extern(nume)), studii:hr_documente_personale(id, numar_document, emitent, fisier_path, tip:hr_documente_personale_tipuri(denumire), emp:employees(name))')
         .in('cerinta_id', cs.map(c => c.id)).order('id').limit(5000)
       if (!viu) return
       if (e2) { setEroare(e2.message); return }
@@ -471,9 +575,15 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
 
   const randuri = useMemo(() => (cerinte || []).map(c => {
     const lista = acoperiri[c.id] || []
-    const a = lista.find(x => x.ales) || lista[0] || null
-    return { c, a, lista, v: verdictRand(a) }
-  }), [cerinte, acoperiri])
+    const poz = pozitii[c.id] || []
+    // La o cerință cu poziții, verdictul de sus îl dă poziția cea mai slabă: o cerință care
+    // cere doi RTE și are unul singur NU e acoperită, chiar dacă primul e în regulă.
+    const a = poz.length
+      ? (poz.map(p => lista.find(x => x.ales && x.pozitie_id === p.id) || null)
+           .sort((x, y) => (x ? 1 : 0) - (y ? 1 : 0))[0] ?? null)
+      : (lista.find(x => x.ales && !x.pozitie_id) || lista.find(x => x.ales) || lista[0] || null)
+    return { c, a, lista, pozitii: poz, v: verdictRand(a) }
+  }), [cerinte, acoperiri, pozitii])
 
   // Alegerea unui alt candidat, printr-o singură tranzacție pe server
   // (`fn_ofertare_alege_acoperire`). Din client ar fi fost două scrieri — scoate vechea, pune
@@ -555,7 +665,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
 
       {felie.length === 0 ? (
         <div style={{ padding:16, color:G.muted, fontSize:12.5 }}>Niciun rând pe filtrul ăsta.</div>
-      ) : felie.map(r => <Rand key={r.c.id} c={r.c} a={r.a} lista={r.lista} ingust={ingust} onAlege={alegeCandidat} onReincarca={() => setReincarca(n => n + 1)} />)}
+      ) : felie.map(r => <Rand key={r.c.id} c={r.c} a={r.a} lista={r.lista} pozitii={r.pozitii} ingust={ingust} onAlege={alegeCandidat} onReincarca={() => setReincarca(n => n + 1)} />)}
 
       {nPagini > 1 && (
         <div style={{ padding:'10px 12px', borderTop:`1px solid ${G.border}`, display:'flex', gap:8, alignItems:'center', justifyContent:'center' }}>
