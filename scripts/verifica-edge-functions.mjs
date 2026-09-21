@@ -1,29 +1,33 @@
 #!/usr/bin/env node
-// Compară fiecare edge function din supabase/functions/ cu sursa PUBLICATĂ în proiect.
+// Spune ce edge functions au fost modificate în repo DUPĂ ultimul lor deploy.
 //
-// De ce există: pe 18.09.2026 `ofertare-acoperire` avea în main filtrul de titular activ
-// și fix-ul DUAE, dar producția rula o versiune mai veche. Nimic nu semnala diferența —
-// motorul propunea la licitații oameni cu contract închis, trei zile la rând.
+// De ce există: pe 18.09.2026 `ofertare-acoperire` avea în main filtrul de titular activ și
+// fix-ul DUAE, dar producția rula o versiune mai veche. Trei zile motorul a propus la licitații
+// oameni cu contract închis, fără ca nimic să semnaleze diferența.
 //
 // Rulare:  SUPABASE_ACCESS_TOKEN=sbp_... node scripts/verifica-edge-functions.mjs
-// Ieșire:  cod 0 dacă tot ce e în repo e identic cu producția, 1 dacă diferă ceva.
+// Ieșire:  cod 1 dacă vreo funcție are modificări nepublicate, 0 altfel.
 //
-// ATENȚIE, două lecții plătite cu alarme false de 43/43 pe 21.09.2026:
+// DE CE NU COMPARĂM CODUL. Patru încercări pe 21.09.2026, toate cu „43 din 43 diferite":
+//   1. `/functions/{slug}/body` din Management API întoarce bundle-ul eszip, nu sursa.
+//   2. `supabase functions download` despachetează bundle-ul, dar sursa iese trecută prin
+//      formatarea Deno: alte ghilimele, punct-și-virgulă adăugate, array-uri desfăcute.
+//   3. `deno fmt` pe ambele părți aliniază ghilimelele și punctul-și-virgula, dar NU și
+//      array-urile: formatarea păstrează desfacerea scrisă de autor și adaugă virgulă la final.
+//      Nu există o formă canonică la care să ajungă ambele.
+//   4. Concluzia: transformarea de la deploy nu e reversibilă la un text comparabil.
 //
-// 1. Endpointul `/functions/{slug}/body` din Management API NU întoarce sursa, ci
-//    bundle-ul deployat (eszip). Sursa se ia doar cu `supabase functions download`.
+// Data commit-ului față de data deploy-ului răspunde exact la întrebarea care ne interesa —
+// „s-a publicat ce e în main?" — fără niciun artefact de formatare, dintr-o singură cerere.
 //
-// 2. Nici sursa descărcată nu e identică pe text cu fișierul nostru: la deploy trece
-//    prin formatarea Deno. Același cod ajunge cu punct-și-virgulă adăugate și array-uri
-//    desfăcute pe linii — 61 de linii în repo, 95 la descărcare, cod identic.
-//    De aceea trecem AMBELE părți prin `deno fmt` înainte să comparăm. Comparăm ce face
-//    codul, nu cum e scris.
-//
-// A treia capcană, minoră: un checkout pe Windows adaugă \r la fiecare linie și schimbă
-// sha256 fără să schimbe o virgulă. `deno fmt` o rezolvă și pe asta.
+// CE NU PRINDE, spus pe față:
+//   · o modificare doar de comentariu apare ca „nepublicată" (fals pozitiv, inofensiv);
+//   · dacă cineva deployează de pe o copie locală cu modificări necomise, aici pare la zi;
+//   · un commit masiv care atinge multe funcții deodată (o trecere de lint, o redenumire)
+//     le marchează pe toate ca nepublicate, deși codul lor nu s-a schimbat în fond.
+// Pentru amândouă, semnalul rămâne util: spune unde să te uiți, nu ce să crezi.
 
-import { readFile, readdir, mkdir, rm, cp } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { readdir } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -33,103 +37,75 @@ const execFileP = promisify(execFile)
 const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'dxczwkbciseqniprspcu'
 const TOKEN = process.env.SUPABASE_ACCESS_TOKEN
 const DIR = 'supabase/functions'
-const COPIE = '.verificare-repo'   // copia intactă a repo-ului, ca CLI-ul să poată scrie peste original
+
+// Toleranță: fluxul normal e „deployez, apoi comit", deci commit-ul cade cu un minut-două
+// după deploy fără ca producția să fie în urmă. Sub prag nu e semnal. Peste — la Domnești
+// decalajul real a fost de trei zile, deci pragul nu îneacă niciodată cazul care contează.
+const TOLERANTA_MIN = Number(process.env.TOLERANTA_MIN || 120)
 
 if (!TOKEN) {
   console.error('Lipsește SUPABASE_ACCESS_TOKEN (Settings → Secrets → Actions, sau `gh secret set` de pe laptop).')
   process.exit(2)
 }
 
-const sha = s => createHash('sha256').update(s).digest('hex').slice(0, 12)
+const data = t => new Date(t).toISOString().slice(0, 16).replace('T', ' ')
 
-// Formatare canonică: singurul teren pe care sursa noastră și cea publicată sunt comparabile.
-async function fmt(text) {
-  const { stdout } = await execFileP('deno', ['fmt', '--ext=ts', '-'], { input: text, maxBuffer: 32 << 20 })
-  return stdout.replace(/\s+$/, '')
+// Data ultimei modificări din git a fișierului funcției. NU ora fișierului de pe disc:
+// checkout-ul din CI le pune pe toate la ora clonării.
+async function ultimaModificare(slug) {
+  const { stdout } = await execFileP('git',
+    ['log', '-1', '--format=%cI', '--', join(DIR, slug, 'index.ts')], { maxBuffer: 1 << 20 })
+  return stdout.trim() || null
 }
 
-async function functiiDinRepo(radacina) {
-  const out = []
-  for (const d of await readdir(radacina, { withFileTypes: true })) {
-    if (!d.isDirectory()) continue
-    try {
-      out.push({ slug: d.name, sursa: await readFile(join(radacina, d.name, 'index.ts'), 'utf8') })
-    } catch { /* folder fără index.ts — nu e funcție */ }
-  }
-  return out.sort((a, b) => a.slug.localeCompare(b.slug))
+const r = await fetch(`https://api.supabase.com/v1/projects/${PROJECT_REF}/functions`, {
+  headers: { Authorization: `Bearer ${TOKEN}` },
+})
+if (!r.ok) {
+  console.error(`Nu pot lista funcțiile publicate: HTTP ${r.status} ${await r.text().catch(() => '')}`)
+  process.exit(2)
 }
+const publicate = new Map((await r.json()).map(f => [f.slug, f]))
 
-// CLI-ul se instaleaza o singura data. Cu `npx supabase@latest` la fiecare functie,
-// rezolvarea pachetului se repeta de 43 de ori si rularea dureaza minute in loc de secunde.
-const CLI = process.env.SUPABASE_CLI || 'supabase'
+const nepublicate = [], laZi = [], niciodataPublicate = [], faraIstoric = []
+const inRepo = new Set()
 
-// Punem deoparte sursele din repo: `supabase functions download` scrie exact peste ele.
-await rm(COPIE, { recursive: true, force: true })
-await mkdir(COPIE, { recursive: true })
-await cp(DIR, COPIE, { recursive: true })
-const locale = await functiiDinRepo(COPIE)
-
-const publicate = new Map(
-  (await (await fetch(`https://api.supabase.com/v1/projects/${PROJECT_REF}/functions`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  }).then(r => r.ok ? r : Promise.reject(new Error(`listare funcții → HTTP ${r.status}`)))).json())
-    .map(f => [f.slug, f])
-)
-
-const diferite = [], nepublicate = [], necitite = [], identice = []
-
-for (const { slug, sursa } of locale) {
+for (const d of (await readdir(DIR, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+  if (!d.isDirectory()) continue
+  const slug = d.name
+  inRepo.add(slug)
   const meta = publicate.get(slug)
-  if (!meta) { nepublicate.push(slug); continue }
-  try {
-    await execFileP(CLI, ['functions', 'download', slug, '--project-ref', PROJECT_REF],
-      { env: { ...process.env, SUPABASE_ACCESS_TOKEN: TOKEN }, timeout: 120_000 })
-    const [a, b] = await Promise.all([fmt(sursa), fmt(await readFile(join(DIR, slug, 'index.ts'), 'utf8'))])
-    const rec = { slug, v: meta.version, repo: sha(a), live: sha(b) }
-    const egale = a === b
-    // Diagnostic: la prima diferenta arata exact unde si ce, ca sa nu ghicim de ce difera.
-    if (!egale && process.env.VERIFICA_DEBUG && !diferite.length) {
-      const [ra, rb] = [a.split('\n'), b.split('\n')]
-      const i = ra.findIndex((l, k) => l !== rb[k])
-      console.log(`\n--- diagnostic ${slug}: repo ${ra.length} linii, live ${rb.length} linii, prima diferență la linia ${i + 1}`)
-      for (let k = Math.max(0, i - 2); k < Math.min(Math.max(ra.length, rb.length), i + 4); k++) {
-        console.log(`  repo[${k + 1}] ${JSON.stringify(ra[k] ?? '<lipsește>')}`)
-        console.log(`  live[${k + 1}] ${JSON.stringify(rb[k] ?? '<lipsește>')}`)
-      }
-      console.log('---\n')
-    }
-    ;(egale ? identice : diferite).push(rec)
-  } catch (e) {
-    necitite.push(`${slug} — ${String(e.message || e).split('\n')[0]}`)
-  }
+  if (!meta) { niciodataPublicate.push(slug); continue }
+  const commit = await ultimaModificare(slug)
+  if (!commit) { faraIstoric.push(slug); continue }
+  const rec = { slug, v: meta.version, commit: Date.parse(commit), deploy: Number(meta.updated_at) }
+  rec.intarziereMin = Math.round((rec.commit - rec.deploy) / 60000)
+  ;(rec.intarziereMin > TOLERANTA_MIN ? nepublicate : laZi).push(rec)
 }
 
-const linie = r => `  ${r.slug.padEnd(34)} v${String(r.v).padEnd(4)} repo ${r.repo} · live ${r.live}`
+const zile = m => m >= 1440 ? `${Math.round(m / 1440)} zile` : m >= 60 ? `${Math.round(m / 60)} ore` : `${m} min`
+const linie = x => `  ${x.slug.padEnd(32)} v${String(x.v).padEnd(4)} commit ${data(x.commit)} · deploy ${data(x.deploy)} · în urmă cu ${zile(x.intarziereMin)}`
 
-console.log(`\nVerificate ${locale.length} funcții din ${DIR} față de proiectul ${PROJECT_REF}\n`)
-console.log(`✅ identice cu producția: ${identice.length}`)
+console.log(`\nEdge functions din ${DIR}, față de proiectul ${PROJECT_REF}\n`)
+console.log(`✅ publicate după ultima modificare: ${laZi.length}   (toleranță ${TOLERANTA_MIN} min)`)
 
-if (diferite.length) {
-  console.log(`\n❌ DIFERITE de producție (${diferite.length}) — main are altceva decât rulează live:`)
-  diferite.forEach(r => console.log(linie(r)))
-  console.log(`\n   Deploy:  supabase functions deploy <slug> --project-ref ${PROJECT_REF}`)
-}
 if (nepublicate.length) {
-  console.log(`\n⚠️  în repo dar nepublicate (${nepublicate.length}): ${nepublicate.join(', ')}`)
+  nepublicate.sort((a, b) => a.commit - b.commit)
+  console.log(`\n❌ MODIFICATE ÎN REPO DUPĂ ULTIMUL DEPLOY (${nepublicate.length}) — producția rulează cod vechi:`)
+  nepublicate.forEach(x => console.log(linie(x)))
+  console.log(`\n   Deploy:  supabase functions deploy <slug> --project-ref ${PROJECT_REF}`)
+  console.log('   Dacă modificarea era doar un comentariu, un deploy o liniștește oricum.')
 }
-if (necitite.length) {
-  console.log(`\n⚠️  nu s-a putut descărca sursa publicată (${necitite.length}):`)
-  necitite.forEach(s => console.log('  ' + s))
+if (niciodataPublicate.length) {
+  console.log(`\n⚠️  în repo dar nepublicate niciodată (${niciodataPublicate.length}): ${niciodataPublicate.join(', ')}`)
+}
+if (faraIstoric.length) {
+  console.log(`\n⚠️  fără istoric git (${faraIstoric.length}): ${faraIstoric.join(', ')} — clonă superficială?`)
 }
 
-// Funcțiile publicate dar lipsă din repo sunt ~90 de experimente și unelte temporare vechi.
-// Nu le listăm nominal la fiecare rulare — doar numărul, ca să nu îngropăm ce contează.
-const doarLive = [...publicate.keys()].filter(s => !locale.some(l => l.slug === s))
-if (doarLive.length) {
-  console.log(`\nℹ️  publicate dar lipsă din repo: ${doarLive.length} (experimente și unelte tmp vechi)`)
-}
+// Cele ~90 de funcții publicate dar lipsă din repo sunt experimente și unelte tmp vechi.
+// Doar numărul, ca să nu îngroape ce contează.
+const doarLive = [...publicate.keys()].filter(s => !inRepo.has(s))
+if (doarLive.length) console.log(`\nℹ️  publicate dar lipsă din repo: ${doarLive.length} (experimente și unelte tmp vechi)`)
 
-// Nepublicatele și cele necitite nu pică verificarea: prima categorie e adesea lucru în curs,
-// a doua poate fi un hopa de rețea. Diferența reală între main și producție e singurul lucru
-// care justifică oprirea unei depuneri.
-process.exit(diferite.length ? 1 : 0)
+process.exit(nepublicate.length ? 1 : 0)
