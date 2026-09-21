@@ -519,9 +519,18 @@ Deno.serve(async (req: Request) => {
     const scrise: number[] = rez?.scrise || []
     const idsConflicte: number[] = rez?.conflicte || []
     const scriseSet = new Set(scrise)
-    const conflicteVerificate = randuriUnice
-      .filter(r => idsConflicte.includes(r.cerinta_id))
+    // Doua motive diferite de a NU scrie, cu acelasi efect dar cu alt mesaj pentru om:
+    // cerinta are o dovada verificata pe scan, sau un coleg a ales deja el un candidat
+    // (`ales_de` non-NULL). Pana pe 21.09.2026 exista doar primul motiv; al doilea nu exista
+    // deloc — rerularea calca peste alegerea colegului fara sa spuna nimic.
+    const idsPeScan: number[] = rez?.pe_scan || []
+    const idsAleseDeOm: number[] = rez?.alese_de_om || []
+    const dePropus = (ids: number[]) => randuriUnice
+      .filter(r => ids.includes(r.cerinta_id))
       .map(r => ({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text }))
+    // `pe_scan` lipseste doar daca RPC-ul e o versiune veche; atunci `conflicte` e tot ce avem.
+    const conflicteVerificate = dePropus(rez?.pe_scan ? idsPeScan : idsConflicte)
+    const conflicteAlesDeOm = dePropus(idsAleseDeOm)
     const deScris = randuriUnice.filter(r => scriseSet.has(r.cerinta_id))
 
     // TKT-0203: clarificari propuse automat pentru cerintele de RTE „la general".
@@ -575,6 +584,7 @@ Deno.serve(async (req: Request) => {
       studii: deScris.filter(r => r.mod === 'studii').length,
       vechime: deScris.filter(r => r.mod === 'vechime').length,
       conflicte_verificate: conflicteVerificate,
+      conflicte_ales_de_om: conflicteAlesDeOm,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
       lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,
