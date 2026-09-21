@@ -10,10 +10,8 @@ on:
     paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', '.github/workflows/verifica-edge-functions.yml']
   pull_request:
     paths: ['supabase/functions/**']
-  # Programarea săptămânală (luni 08:00 RO, în Pulsul ERP) e OPRITĂ până verificatorul e
-  # dovedit corect: pe 21.09 a raportat 43 din 43 de funcții ca diferite, inclusiv una
-  # verificată manual ca identică. Un verificator în care nu ai încredere e mai rău decât
-  # niciunul — se reactivează abia după o rulare curată. Până atunci, manual și la PR-uri.
+  schedule:
+    - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
   workflow_dispatch:
 
 jobs:
