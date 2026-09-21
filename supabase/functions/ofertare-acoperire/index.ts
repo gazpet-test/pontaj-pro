@@ -558,6 +558,15 @@ Deno.serve(async (req: Request) => {
     })
     if (eRpc) return fail('rescriere acoperiri (tranzactie anulata, nu s-a schimbat nimic): ' + eRpc.message)
 
+    // Gaura lui `ales_de`: poarta protejează INTENȚIA omului, nu corectitudinea ei. Dacă
+    // autorizația aleasă expiră înainte de termen, motorul n-are voie s-o schimbe — dar
+    // are voie să-l anunțe. Nu atinge alegerea; îi cere reverificare, cu motivul scris.
+    const { data: rev, error: eRev } = await supabase.rpc('fn_ofertare_acoperire_reverifica_alese', {
+      p_cerinte: Array.from(idsCerinte),
+    })
+    if (eRev) console.error('reverificare alese (neblocant):', eRev.message)
+    const aleseExpirate: number[] = rev?.reverificate || []
+
     const scrise: number[] = rez?.scrise || []
     const idsConflicte: number[] = rez?.conflicte || []
     const scriseSet = new Set(scrise)
@@ -627,6 +636,7 @@ Deno.serve(async (req: Request) => {
       vechime: deScris.filter(r => r.mod === 'vechime').length,
       conflicte_verificate: conflicteVerificate,
       conflicte_ales_de_om: conflicteAlesDeOm,
+      alese_de_om_expirate: aleseExpirate,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
       lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,
