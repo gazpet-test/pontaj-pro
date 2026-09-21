@@ -126,10 +126,44 @@ function Eticheta({ text, col, titlu }) {
     borderRadius:5, padding:'1px 6px', whiteSpace:'nowrap' }}>{text}</span>
 }
 
+// Numele fișierelor din SEAP sunt lungi; păstrăm coada, unde stă partea distinctivă.
+const scurtNume = (n, max = 42) => {
+  const s = String(n || '').replace(/\.(pdf|docx?|xlsx?)$/i, '')
+  return s.length <= max ? s : '…' + s.slice(-max)
+}
+
+// TKT-2026-0254: clic pe document îl deschide la pagina pe care stă cerința. Fragmentul
+// `#page=N` e înțeles de vizualizatoarele PDF din browser; la Word nu are efect, dar nici nu
+// strică. Link semnat, valabil 10 minute, ca peste tot în Ofertare.
+async function deschideSursa(c) {
+  const path = c.doc?.fisier_path
+  if (!path) return
+  const { data, error } = await supabase.storage.from('ofertare').createSignedUrl(path, 600)
+  if (error || !data?.signedUrl) return
+  window.open(data.signedUrl + (c.sursa_pagina ? `#page=${c.sursa_pagina}` : ''), '_blank', 'noopener')
+}
+
+// TKT-2026-0234: Mari cerea să se vadă din ce fel de document vine cerința, nu doar numele
+// fișierului. Numele real e adesea lung și nu spune nimic la o privire rapidă.
+const FEL_DOC = [
+  [/fis[aă]\s*de\s*date|\bfd\b|df[i]?\b/i, 'FD', 'fișa de date'],
+  [/caiet\s*de\s*sarcini|\bcs\b/i, 'CS', 'caiet de sarcini'],
+  [/proiect\s*tehnic|\bpth?\b|memoriu/i, 'PT', 'proiect tehnic'],
+  [/clarific|r[aă]spuns/i, 'CLR', 'clarificare / răspuns'],
+  [/formular/i, 'FORM', 'set de formulare'],
+  [/contract|acord/i, 'CTR', 'model de contract'],
+  [/deviz|cantit|list[aă]/i, 'LC', 'liste de cantități'],
+]
+function felDocument(nume) {
+  for (const [re, scurt, lung] of FEL_DOC) if (re.test(nume || '')) return { scurt, lung }
+  return null
+}
+
 function Rand({ c, a, ingust }) {
   const v = verdictRand(a)
   const d = dovada(a)
   const V = VERDICT[v]
+  const fel = felDocument(c.doc?.nume_original)
   const stanga = (
     <div style={{ minWidth:0 }}>
       <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', marginBottom:4 }}>
@@ -140,9 +174,19 @@ function Rand({ c, a, ingust }) {
             titlu="Documentul nu se depune cu oferta — se declară acum și se prezintă ulterior" />}
       </div>
       <div style={{ fontSize:12.5, lineHeight:1.45, color:G.text }}>{c.text_cerinta}</div>
-      <div style={{ fontSize:11, color:G.muted, marginTop:5 }}>
-        📄 {c.sursa_sectiune || 'secțiune neindicată'}
-        {c.sursa_pagina ? ` · p. ${c.sursa_pagina}` : ' · pagină neindicată'}
+      <div style={{ fontSize:11, color:G.muted, marginTop:5, display:'flex', gap:5, alignItems:'center', flexWrap:'wrap' }}>
+        <span>📄</span>
+        {fel && <Eticheta text={fel.scurt} col={G.blue} titlu={fel.lung} />}
+        {c.doc?.nume_original ? (
+          c.doc.fisier_path ? (
+            <span onClick={() => deschideSursa(c)} title={`Deschide „${c.doc.nume_original}”${c.sursa_pagina ? ` la pagina ${c.sursa_pagina}` : ''}`}
+              style={{ color:G.blue, cursor:'pointer', textDecoration:'underline', textUnderlineOffset:2 }}>
+              {scurtNume(c.doc.nume_original)}
+            </span>
+          ) : <span title={c.doc.nume_original}>{scurtNume(c.doc.nume_original)}</span>
+        ) : <span style={{ color:G.dim }}>document scos din licitație</span>}
+        <span>· {c.sursa_sectiune || 'secțiune neindicată'}</span>
+        <span>{c.sursa_pagina ? `· p. ${c.sursa_pagina}` : '· pagină neindicată'}</span>
       </div>
       {c.document_probant && (
         <div style={{ fontSize:11, color:G.dim, marginTop:2 }}>se dovedește cu: {c.document_probant}</div>
@@ -207,7 +251,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
       // Aceleași filtre ca în vederea veche: doar registrul de capabilități, fără repetări.
       // Dacă ar diferi, cele două ecrane ar număra altceva și n-ar mai fi comparabile.
       const { data: cs, error } = await supabase.from('ofertare_cerinte')
-        .select('id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, cand_se_prezinta, document_probant, registru')
+        .select('id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, cand_se_prezinta, document_probant, registru, sursa_document_id, doc:ofertare_documente_atribuire(id, nume_original, fisier_path)')
         .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
         .or('registru.is.null,registru.eq.capabilitate')
         .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
