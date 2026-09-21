@@ -97,6 +97,7 @@ export default function OfertareLicitatiiTab() {
   const [fStatus, setFStatus] = useState('active')
   const [fSegment, setFSegment] = useState('')
   const [fResp, setFResp] = useState('')          // filtru responsabil (profile id)
+  const [cauta, setCauta] = useState('')          // TKT-2026-0260: căutare în listă, în loc de Ctrl+F
   const [echipa, setEchipa] = useState([])         // colegii cu acces la modulul Ofertare — candidați la „responsabil”
   const [toast, setToast] = useState(null)
   const [vedere, setVedere] = useState('licitatii')   // licitatii | experienta | radar
@@ -193,13 +194,18 @@ export default function OfertareLicitatiiTab() {
 
   const FINALE = ['castigata', 'pierduta', 'abandonata']
   const areProbleme = r => (r.eliminatorii_neacoperite > 0) || (r._st?.rosii > 0) || r._st?.verdict === 'rosu'
+  // căutarea ignoră diacriticele și majusculele — „Domnesti" găsește „Domnești"
+  const normText = v => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const cautaN = normText(cauta).trim()
   const filtrate = rows.filter(r => (fStatus === 'active' ? !FINALE.includes(r.status)
     : fStatus === 'finale' ? FINALE.includes(r.status)
     : fStatus === 'in_lucru' ? ['go', 'in_lucru', 'analiza'].includes(r.status)
     : fStatus === 'depuse' ? r.status === 'depusa'
     : fStatus === 'radar' ? /^Radar/i.test(r.observatii || '') && !FINALE.includes(r.status)
     : fStatus === 'probleme' ? areProbleme(r) && !FINALE.includes(r.status) : true)
-    && (!fSegment || r.segment === fSegment) && (!fResp || r.responsabil_id === fResp))
+    && (!fSegment || r.segment === fSegment) && (!fResp || r.responsabil_id === fResp)
+    && (!cautaN || [r.obiect, r.autoritate, r.nr_anunt, r.responsabil_nume, r.observatii]
+      .some(v => normText(v).includes(cautaN))))
   // contor pe responsabil: în lucru acum + total pe anul curent (cine ce are și câte face pe an)
   const anCurent = new Date().getFullYear()
   const perResp = {}
@@ -347,6 +353,12 @@ export default function OfertareLicitatiiTab() {
         <span style={{ background:'#2a2211', color:G.yellow, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>{nrDepuse} depuse</span>
         <span style={{ background:G.surface, color:G.muted, borderRadius:999, padding:'4px 14px', fontSize:12.5, fontWeight:800 }}>arhivă {nrArhiva}</span>
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+          <div style={{ position:'relative' }}>
+            <input style={{ ...S.input, width:230, paddingRight:cauta ? 28 : undefined }} value={cauta} onChange={e => setCauta(e.target.value)}
+              placeholder="🔍 caută lucrare, autoritate, nr. anunț" title="Caută în obiect, autoritate, nr. anunț, responsabil și observații" />
+            {!!cauta && <button onClick={() => setCauta('')} title="Șterge căutarea"
+              style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:G.muted, cursor:'pointer', fontSize:15, lineHeight:1, padding:2 }}>×</button>}
+          </div>
           <select style={{ ...S.input, width:'auto' }} value={fResp} onChange={e => setFResp(e.target.value)} title="Filtru după responsabil">
             <option value="">Toți responsabilii</option>
             {echipa.map(p => <option key={p.id} value={p.id}>{p.name}{perResp[p.id] ? ` (${perResp[p.id].in_lucru} în lucru · ${perResp[p.id].an} în ${anCurent})` : ''}</option>)}
@@ -368,7 +380,7 @@ export default function OfertareLicitatiiTab() {
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă licitațiile...</div>}
       {!loading && !filtrate.length && (
         <div style={{ ...S.card, padding:40, textAlign:'center', color:G.dim, fontSize:14 }}>
-          {rows.length ? 'Nimic pe filtrul curent.' : 'Nicio licitație încă. Apasă „＋ Licitație nouă" — primul pas e anunțul SEAP + termenul de depunere.'}
+          {cautaN ? `Nicio lucrare pentru „${cauta}" pe filtrul curent.` : rows.length ? 'Nimic pe filtrul curent.' : 'Nicio licitație încă. Apasă „＋ Licitație nouă" — primul pas e anunțul SEAP + termenul de depunere.'}
         </div>
       )}
 
