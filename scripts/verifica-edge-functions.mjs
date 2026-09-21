@@ -8,13 +8,19 @@
 // Rulare:  SUPABASE_ACCESS_TOKEN=sbp_... node scripts/verifica-edge-functions.mjs
 // Ieșire:  cod 0 dacă tot ce e în repo e identic cu producția, 1 dacă diferă ceva.
 //
-// ATENȚIE, lecție plătită: endpointul `/functions/{slug}/body` din Management API NU
-// întoarce sursa, ci bundle-ul deployat (eszip). Comparat cu fișierul din repo dădea
-// „43 din 43 diferite" — alarmă falsă pe toată linia. Singurul drum corect e
-// `supabase functions download`, care despachetează bundle-ul înapoi în sursă.
+// ATENȚIE, două lecții plătite cu alarme false de 43/43 pe 21.09.2026:
 //
-// A doua capcană: un checkout pe Windows adaugă \r la fiecare linie, ceea ce schimbă
-// sha256 fără să schimbe o virgulă din cod. De aceea comparăm text normalizat.
+// 1. Endpointul `/functions/{slug}/body` din Management API NU întoarce sursa, ci
+//    bundle-ul deployat (eszip). Sursa se ia doar cu `supabase functions download`.
+//
+// 2. Nici sursa descărcată nu e identică pe text cu fișierul nostru: la deploy trece
+//    prin formatarea Deno. Același cod ajunge cu punct-și-virgulă adăugate și array-uri
+//    desfăcute pe linii — 61 de linii în repo, 95 la descărcare, cod identic.
+//    De aceea trecem AMBELE părți prin `deno fmt` înainte să comparăm. Comparăm ce face
+//    codul, nu cum e scris.
+//
+// A treia capcană, minoră: un checkout pe Windows adaugă \r la fiecare linie și schimbă
+// sha256 fără să schimbe o virgulă. `deno fmt` o rezolvă și pe asta.
 
 import { readFile, readdir, mkdir, rm, cp } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -34,8 +40,13 @@ if (!TOKEN) {
   process.exit(2)
 }
 
-const norm = s => s.replace(/\r\n/g, '\n').replace(/\s+$/, '')
-const sha = s => createHash('sha256').update(norm(s)).digest('hex').slice(0, 12)
+const sha = s => createHash('sha256').update(s).digest('hex').slice(0, 12)
+
+// Formatare canonică: singurul teren pe care sursa noastră și cea publicată sunt comparabile.
+async function fmt(text) {
+  const { stdout } = await execFileP('deno', ['fmt', '--ext=ts', '-'], { input: text, maxBuffer: 32 << 20 })
+  return stdout.replace(/\s+$/, '')
+}
 
 async function functiiDinRepo(radacina) {
   const out = []
@@ -73,17 +84,17 @@ for (const { slug, sursa } of locale) {
   try {
     await execFileP(CLI, ['functions', 'download', slug, '--project-ref', PROJECT_REF],
       { env: { ...process.env, SUPABASE_ACCESS_TOKEN: TOKEN }, timeout: 120_000 })
-    const live = await readFile(join(DIR, slug, 'index.ts'), 'utf8')
-    const rec = { slug, v: meta.version, repo: sha(sursa), live: sha(live) }
-    const egale = norm(live) === norm(sursa)
+    const [a, b] = await Promise.all([fmt(sursa), fmt(await readFile(join(DIR, slug, 'index.ts'), 'utf8'))])
+    const rec = { slug, v: meta.version, repo: sha(a), live: sha(b) }
+    const egale = a === b
     // Diagnostic: la prima diferenta arata exact unde si ce, ca sa nu ghicim de ce difera.
     if (!egale && process.env.VERIFICA_DEBUG && !diferite.length) {
-      const a = norm(sursa).split('\n'), b = norm(live).split('\n')
-      const i = a.findIndex((l, k) => l !== b[k])
-      console.log(`\n--- diagnostic ${slug}: repo ${a.length} linii, live ${b.length} linii, prima diferenta la linia ${i + 1}`)
-      for (let k = Math.max(0, i - 2); k < Math.min(Math.max(a.length, b.length), i + 4); k++) {
-        console.log(`  repo[${k + 1}] ${JSON.stringify(a[k] ?? '<lipseste>')}`)
-        console.log(`  live[${k + 1}] ${JSON.stringify(b[k] ?? '<lipseste>')}`)
+      const [ra, rb] = [a.split('\n'), b.split('\n')]
+      const i = ra.findIndex((l, k) => l !== rb[k])
+      console.log(`\n--- diagnostic ${slug}: repo ${ra.length} linii, live ${rb.length} linii, prima diferență la linia ${i + 1}`)
+      for (let k = Math.max(0, i - 2); k < Math.min(Math.max(ra.length, rb.length), i + 4); k++) {
+        console.log(`  repo[${k + 1}] ${JSON.stringify(ra[k] ?? '<lipsește>')}`)
+        console.log(`  live[${k + 1}] ${JSON.stringify(rb[k] ?? '<lipsește>')}`)
       }
       console.log('---\n')
     }
