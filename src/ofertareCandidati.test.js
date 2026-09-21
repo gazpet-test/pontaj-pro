@@ -73,3 +73,54 @@ describe('turtesteCandidati — ce NU are voie sa strice', () => {
     expect(turtesteCandidati(undefined)).toEqual([])
   })
 })
+
+import { marcheazaSudoriNepotriviti, AVERTISMENT_PEHD } from '../supabase/functions/ofertare-acoperire/candidati.ts'
+
+// R20 în cod. Pe 21.09.2026 motorul a propus la Răcari (rețea de DISTRIBUȚIE, deci PEHD)
+// un sudor de oțel pe cerința NTPEE art. 236/239. Regula scrisă în prompt a ținut la două
+// rerulări — dar „a ținut de două ori" e un test trecut, nu o constrângere.
+const TIPURI = { 1: 'Sudor PEHD', 2: 'Sudor electric autorizat', 3: 'Responsabil Tehnic cu Execuția (RTE)' }
+const tip = id => TIPURI[id] || ''
+const CERINTE = {
+  10: 'Îmbinările sudate se execută numai de sudori autorizați, cu aparate de sudură agrementate tehnic.',
+  20: 'Ofertantul trebuie să dispună de Responsabil Tehnic cu Execuția atestat ISC.',
+}
+const text = id => CERINTE[id] || ''
+const rand = (cerinta_id, autorizatie_id, scor = 90) => ({ cerinta_id, autorizatie_id, scor, motiv: 'motiv', referinta_text: 'ref' })
+
+describe('marcheazaSudoriNepotriviti — R20 ca verificare, nu ca rugăminte', () => {
+  it('toți sudorii de oțel pe distribuție => marcați, scor tăiat', () => {
+    const rows = [rand(10, 2, 92), rand(10, 2, 88)]
+    expect(marcheazaSudoriNepotriviti(rows, 'Extindere retea DISTRIBUTIE gaze', text, tip)).toBe(2)
+    expect(rows[0].motiv).toContain(AVERTISMENT_PEHD)
+    expect(rows[0].referinta_text.startsWith('⚠️')).toBe(true)
+    expect(rows.every(r => r.scor <= 40)).toBe(true)
+  })
+
+  it('dacă există măcar un PEHD, nimeni nu se marchează — oțelul e legitim pe racorduri', () => {
+    const rows = [rand(10, 1, 93), rand(10, 2, 72)]
+    expect(marcheazaSudoriNepotriviti(rows, 'Extindere retea distributie gaze', text, tip)).toBe(0)
+    expect(rows[1].scor).toBe(72)
+  })
+
+  it('licitație de TRANSPORT => nu se atinge nimic (acolo oțelul e materialul)', () =>
+    expect(marcheazaSudoriNepotriviti([rand(10, 2)], 'Conducta de TRANSPORT gaze Dn800', text, tip)).toBe(0))
+
+  it('cerință care nu e de sudură => nu se atinge nimic', () =>
+    expect(marcheazaSudoriNepotriviti([rand(20, 2)], 'retea distributie', text, tip)).toBe(0))
+
+  it('candidat care nu e sudor (RTE) pe cerință de sudură => nu se atinge', () =>
+    expect(marcheazaSudoriNepotriviti([rand(10, 3)], 'retea distributie', text, tip)).toBe(0))
+
+  it('marchează per cerință, nu global', () => {
+    const rows = [rand(10, 2), rand(20, 2)]
+    expect(marcheazaSudoriNepotriviti(rows, 'retea distributie', text, tip)).toBe(1)
+    expect(rows[1].motiv).toBe('motiv')
+  })
+
+  it('rânduri fără autorizație (doc de firmă, gol) nu darâmă funcția', () =>
+    expect(marcheazaSudoriNepotriviti([{ cerinta_id: 10, autorizatie_id: null, motiv: null }], 'retea distributie', text, tip)).toBe(0))
+
+  it('lista goală => zero', () =>
+    expect(marcheazaSudoriNepotriviti([], 'retea distributie', text, tip)).toBe(0))
+})

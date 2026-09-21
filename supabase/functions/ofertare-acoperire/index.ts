@@ -41,7 +41,7 @@
 // ISO, certificate) cu id-uri prefixate F → acoperit cu mod='firma' + doc_firma_id.
 // v4: partenerii cu observatii („acopera”). v3: ids[] felii. v2: CORS x-client-info.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { turtesteCandidati } from './candidati.ts'
+import { turtesteCandidati, marcheazaSudoriNepotriviti } from './candidati.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
@@ -498,6 +498,13 @@ Deno.serve(async (req: Request) => {
         clarProps.push({ cerinta_id: p.cerinta_id, intrebare: p.clarificare.trim().slice(0, 2000) })
       }
     }
+    // R20 în cod (vezi candidati.ts pentru de ce, și src/ofertareCandidati.test.js pentru teste).
+    marcheazaSudoriNepotriviti(
+      rows, String(lic.obiect || ''),
+      (cid: number) => String((cerinte || []).find((c: any) => c.id === cid)?.text_cerinta || ''),
+      (id: any) => String((idsAuth.get(Number(id)) || {}).tip || ''),
+    )
+
     // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.
     // Felie fara niciun rand valid: NU e o eroare a rularii. Raspunsul purta cheia `error`,
     // iar frontendul face `return` din tot ciclul cand o vede — asa ca o singura felie
