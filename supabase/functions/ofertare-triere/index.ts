@@ -1,4 +1,4 @@
-// ofertare-triere v1.2 (14.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
+// ofertare-triere v1.3 (22.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
 //
 // De ce există: colegii descărcau toată documentația (46 fișiere la Simian, planșe de 90 MB la
 // Potlogi) și o citeau integral ÎNAINTE să știe dacă vrem licitația. Facturile de API veneau de
@@ -10,6 +10,7 @@
 // „participăm → procesează tot" e a ownerului / responsabilului, din UI.
 // v1.1: lista de personal filtrată (fără sudori etc.; 85k tokeni la primul test), max_tokens 8000,
 // extragere JSON robustă + stop_reason raportat. v1.2: thinking disabled (Sonnet 5 gândea implicit în bugetul de output).
+// v1.3: tip_lucrare_gaze (TKT-2026-0268) + praguri/punctaje citate, nu rezumate (TKT-2026-0271).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
