@@ -2013,10 +2013,16 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       reverificare_ceruta: false, reverificare_motiv: null,
       updated_at: new Date().toISOString(),
     }
-    const { error } = a
-      ? await supabase.from('ofertare_acoperire').update(payload).eq('id', a.id)
-      : await supabase.from('ofertare_acoperire').insert({ cerinta_id: c.id, verificat_pe_scan: false, domeniu_rte: null, ...payload })
+    // Scriem rândul, apoi îl trecem prin `fn_ofertare_alege_acoperire`. Ecranul ăsta punea
+    // doar `referinta_text: "ales manual de ..."` — text liber, singura urmă că un om a ales.
+    // La rerularea motorului alegerea se pierdea fără zgomot. RPC-ul semneaza cu `auth.uid()`
+    // în `ales_de`, iar rerularea nu mai atinge rândurile semnate.
+    const { data: rand, error } = a
+      ? await supabase.from('ofertare_acoperire').update(payload).eq('id', a.id).select('id').single()
+      : await supabase.from('ofertare_acoperire').insert({ cerinta_id: c.id, verificat_pe_scan: false, domeniu_rte: null, ...payload }).select('id').single()
     if (error) { setWarn('Nu s-a salvat acoperirea: ' + error.message); return }
+    const { error: eAles } = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: rand.id })
+    if (eAles) { setWarn('Acoperirea s-a salvat, dar nu s-a marcat ca aleasă: ' + eAles.message); return }
     setCandCerinta(null)
     setWarn(`✅ #${c.nr_ordine}: acoperire aleasă manual — ${cand.titlu}.`)
     await load(); onChanged?.()

@@ -41,6 +41,7 @@
 // ISO, certificate) cu id-uri prefixate F → acoperit cu mod='firma' + doc_firma_id.
 // v4: partenerii cu observatii („acopera”). v3: ids[] felii. v2: CORS x-client-info.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
+import { turtesteCandidati, marcheazaSudoriNepotriviti } from './candidati.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
@@ -76,8 +77,16 @@ REGULI NENEGOCIABILE:
 
 IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". Daca nu incapi, e mai bine sa scurtezi motivele decat sa omiti cerinte — o cerinta lipsa din raspuns nu poate fi deosebita de una pe care n-ai apucat s-o citesti.
 
+- R20 (SUDURĂ — materialul conductei decide calificarea): catalogul are tipuri DISTINCTE de sudor — „Sudor PEHD" (polietilenă) și „Sudor electric autorizat" (oțel), plus câmpurile "procedeu_sudura" și "diametru_teava_mm". Materialul se ia din OBIECTUL CONTRACTULUI și din textul cerinței: rețea de DISTRIBUȚIE gaze = predominant PEHD; conductă de TRANSPORT / racorduri / stații = oțel. Un sudor de oțel NU acoperă îmbinări de polietilenă și invers — e aceeași greșeală ca un RTE pe alt domeniu (R10) sau o diplomă pe altă specialitate (R17). Dacă lucrarea are ambele materiale, spui în motiv că sunt acoperite ambele și cu cine. Dacă lipsește calificarea pe materialul cerut, e "gol" — nu o înlocuiești cu cealaltă.
+  Cerințele de sudură din NTPEE (art. 236, 239) și similare cer DOUĂ lucruri: sudori autorizați ȘI aparate de sudură agrementate tehnic. Aparatele sunt documente de firmă (F<id>), de tip „revizie tehnică aparat sudură prin electrofuziune" / „cap la cap" (PE) — le cauți în catalogul de documente și le numești în motiv. Aparatele de electrofuziune/cap-la-cap sunt pentru PE; nu le invoca la sudură de oțel.
+- R19 (ALTERNATIVE — între 0 și 3): la cerințele cu status "acoperit" sau "acoperit_partener", pui în "candidati" variantele care ACOPERĂ cerința, cea mai bună prima. NUMĂRUL NU E O ȚINTĂ. Fiecare variantă trebuie să îndeplinească INDEPENDENT toate condițiile obligatorii ale cerinței — domeniul cerut, valabilitatea la termen, specialitatea. O încălcare nu se compensează prin scor și nu se scuză prin „e singura alternativă". Dacă o singură persoană sau un singur document îndeplinește cerința, întorci UN candidat; asta e răspunsul corect, nu o lipsă. Nu relaxa nicio regulă (R6, R8, R10, R14, R17, R18) ca să ajungi la trei.
+  "gol" ÎNSEAMNĂ GOL: dacă nimic din catalog nu acoperă cerința, "candidati" e [] și scrii în "motiv" al cerinței CE anume lipsește, concret („niciun RTE cu domeniul 9.1; avem 8.4D și 2.1", „nicio diplomă pe hidrotehnică"). NU pune în "candidati" variante respinse ca să pară că ai căutat — omul are nevoie să vadă golul, nu o listă de nepotriviri.
+  ATENȚIE, capcana cea mai deasă: diploma, recomandarea și dovada de vechime ale ACELEIAȘI persoane NU sunt trei alternative — sunt un DOSAR care se adună. Alternative sunt persoane sau documente DIFERITE, fiecare capabil singur să țină cerința. Dacă cerința compusă are nevoie de D + R + V de la același om, e UN candidat, iar ce lipsește se scrie în motivul lui.
+  COMPLETITUDINE, NU LUNGIME: la primul candidat începi cu denumirea exactă a lucrării/persoanei și datele probante (număr, valabilitate, domeniu, material, valoare). Dacă cerința conține mai multe obligații CUMULATIVE — „sudori autorizați ȘI aparate agrementate", „diplomă ȘI minim N ani" — indici pentru FIECARE dovada concretă disponibilă sau explicit ce lipsește. NU declari acoperire integrală dacă o obligație rămâne nedovedită. Explicații adaugi doar când legătura nu e evidentă. La candidații 2-3 păstrezi identificarea, diferența față de primul și eventualele lipsuri, fără să repeți explicațiile comune. La cerințe simple, o propoziție ajunge.
+  "scor" (0-100) e încrederea ta în candidatul ăla, nu ordinea lui.
+
 Răspunde EXCLUSIV JSON compact:
-{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, "R<id>" pentru recomandarea unei persoane, "D<id>" pentru diploma/calificarea unei persoane, "V<id>" pentru o dovada de vechime de la un angajator anterior, sau null>,"partener_id":<id sau null>,"motiv":"...","clarificare":<text intrebare catre autoritate sau null>}]}`
+{"acoperiri":[{"cerinta_id":123,"status":"acoperit"|"acoperit_partener"|"gol"|"nu_se_aplica"|"regula_propunere","domeniu_rte":<cod din nomenclator sau null>,"clarificare":<text intrebare catre autoritate sau null>,"motiv":"<de ce e gol / nu se aplica — la cerintele acoperite motivul sta pe fiecare candidat>","candidati":[{"status":"acoperit"|"acoperit_partener","autorizatie_id":<id numeric din catalog personal, "F<id>" pentru document de firmă, "E<id>" pentru lucrare din experiența similară, "R<id>" pentru recomandarea unei persoane, "D<id>" pentru diploma/calificarea unei persoane, "V<id>" pentru o dovada de vechime de la un angajator anterior, sau null>,"partener_id":<id sau null>,"scor":<0-100>,"motiv":"..."}]}]}`
 
 // ── Domeniile ISC — COPIE a src/iscRte.js (normalizeazaDomeniiISC). Ține-le sincron. ──
 const ROMAN = /^(I|II|III|IV|V|VI|VII|VIII|IX|X|XI)(\.\d+)?$/i
@@ -336,10 +345,16 @@ Deno.serve(async (req: Request) => {
       const m = clean.match(/\{[\s\S]*\}/)
       lista = JSON.parse(m ? m[0] : '{}').acoperiri || []
     } catch (_) {
-      const dupa = clean.slice(clean.indexOf('"acoperiri"'))
-      for (const o of (dupa.match(/\{[^{}]*\}/g) || [])) { try { lista.push(JSON.parse(o)) } catch (_) {} }
-      trunchiat = true
-      if (!lista.length) return fail('AI a răspuns într-un format neașteptat.')
+      // 21.09.2026 — plasa de regex a fost SCOASA, nu reparata. Culegea obiecte `{...}` fara
+      // acolade interioare; de cand o cerinta are `candidati: [{...}]`, alea sunt candidatii,
+      // nu cerintele. Ar fi intors obiecte fara `cerinta_id`, pe care filtrul de mai jos le
+      // arunca in tacere: felia ar fi aparut „fara raspuns" in loc de „netransat".
+      //
+      // Mai grav: un raspuns taiat la mijloc ar fi dat o LISTA PARTIALA de candidati aratand
+      // ca una completa. Omul ar fi vazut doua variante si ar fi crezut ca alea sunt toate.
+      // Mai bine nu scriem nimic si reluam felia mai mica — cerintele raman cum erau.
+      return fail('Răspunsul AI nu e JSON valid' + (trunchiat ? ' (s-a tăiat la limita de tokeni)' : '') +
+        ' — nu s-a scris nimic. Reia felia cu mai puține cerințe.')
     }
 
     const idsCerinte = new Set((cerinte || []).map((c: any) => c.id))
@@ -359,7 +374,13 @@ Deno.serve(async (req: Request) => {
     // scriu printr-o singura tranzactie in BD (vezi fn_ofertare_acoperire_rescrie mai jos).
     const rows: any[] = []
     const clarProps: { cerinta_id: number; intrebare: string }[] = []
-    for (const p of lista) {
+
+    // 21.09.2026 — CANDIDATI MULTIPLI. AI-ul intoarce un obiect per CERINTA, cu `candidati: []`
+    // (0-3). `turtesteCandidati` il aduce inapoi la un obiect per CANDIDAT, ca toata logica de
+    // mai jos sa ramana neatinsa. Vezi comentariile si testele din candidati.ts.
+    const lista1 = turtesteCandidati(lista)
+
+    for (const p of lista1) {
       if (!idsCerinte.has(p.cerinta_id)) continue
       const domeniuRte = (typeof p.domeniu_rte === 'string' && /^\d{1,2}\.\d[DT]?$/i.test(p.domeniu_rte.trim())) ? p.domeniu_rte.trim().toUpperCase() : null
       // #65 varianta A: regula de echipa — se scrie ca atare, ca sa nu dispara sub nu_se_aplica.
@@ -375,6 +396,7 @@ Deno.serve(async (req: Request) => {
           autorizatie_id: null, doc_firma_id: null, partener_id: null, experienta_id: null,
           referinta_text: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null),
           status: 'regula_propunere', valabil_la_depunere: null, verificat_pe_scan: false, domeniu_rte: null,
+          motiv: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null), scor: null,
         })
         continue
       }
@@ -388,6 +410,7 @@ Deno.serve(async (req: Request) => {
           autorizatie_id: null, doc_firma_id: null, partener_id: null,
           referinta_text: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null),
           status: 'nu_se_aplica', valabil_la_depunere: null, verificat_pe_scan: false, domeniu_rte: null,
+          motiv: (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null), scor: null,
         })
         continue
       }
@@ -463,6 +486,10 @@ Deno.serve(async (req: Request) => {
         valabil_la_depunere: valabil,
         verificat_pe_scan: false,
         domeniu_rte: domeniuRte,
+        // `motiv` e textul de sub fiecare candidat in ecran; `scor` da ordinea intre ei.
+        // `referinta_text` ramane ce era — il citesc ecranele vechi si exporturile.
+        motiv: (motivBlocat || (typeof p.motiv === 'string' ? p.motiv.slice(0, 300) : null)),
+        scor: (typeof p.scor === 'number' && p.scor >= 0 && p.scor <= 100) ? Math.round(p.scor) : null,
       })
       // TKT-0203 (Oana): cand cerinta zice doar „RTE" fara sa spuna domeniul, AI-ul nu mai
       // ghiceste — propune o clarificare catre autoritate. O retinem doar pentru cerintele
@@ -471,6 +498,13 @@ Deno.serve(async (req: Request) => {
         clarProps.push({ cerinta_id: p.cerinta_id, intrebare: p.clarificare.trim().slice(0, 2000) })
       }
     }
+    // R20 în cod (vezi candidati.ts pentru de ce, și src/ofertareCandidati.test.js pentru teste).
+    marcheazaSudoriNepotriviti(
+      rows, String(lic.obiect || ''),
+      (cid: number) => String((cerinte || []).find((c: any) => c.id === cid)?.text_cerinta || ''),
+      (id: any) => String((idsAuth.get(Number(id)) || {}).tip || ''),
+    )
+
     // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.
     // Felie fara niciun rand valid: NU e o eroare a rularii. Raspunsul purta cheia `error`,
     // iar frontendul face `return` din tot ciclul cand o vede — asa ca o singura felie
@@ -486,8 +520,13 @@ Deno.serve(async (req: Request) => {
       }), { headers: CORS })
     }
     const PLAFON_RAPORT = 500
-    // AI-ul poate repeta acelasi cerinta_id. Dedup aici doar ca sa raportam corect ce s-a
-    // cerut si ce n-a raspuns; functia din BD dedupica si ea, e ultima plasa.
+    // 21.09.2026 — ZIDUL INTAI, DARAMAT. Randurile plecau de aici deduplicate pe `cerinta_id`,
+    // deci candidatii 2 si 3 mureau in Edge, inainte sa ajunga la BD. Era prima din cele doua
+    // opriri care faceau ecranul sa arate mereu o singura varianta (a doua era `DISTINCT ON`
+    // din RPC). Acum pleaca toate; RPC-ul le reconciliaza dupa identitatea candidatului.
+    //
+    // `randuriUnice` ramane, dar doar pentru RAPORT: „la ce cerinte a raspuns AI-ul" e o
+    // intrebare pe cerinte, nu pe randuri, si nu vrem o cerinta numarata de trei ori.
     const vazute = new Set()
     const randuriUnice = rows.filter(r => { if (vazute.has(r.cerinta_id)) return false; vazute.add(r.cerinta_id); return true })
 
@@ -505,23 +544,44 @@ Deno.serve(async (req: Request) => {
     // Impreuna cu indexul unic partial pe (cerinta_id) WHERE verificat_pe_scan = false,
     // duplicatele nu mai sunt posibile nici macar cand doi colegi apasa butonul deodata.
     const { data: rez, error: eRpc } = await supabase.rpc('fn_ofertare_acoperire_rescrie', {
-      p_randuri: randuriUnice.map(r => ({
+      // `rows`, nu `randuriUnice`: aici se pierdeau candidatii 2 si 3. Ordinea conteaza —
+      // RPC-ul taie la primii 3 pe cerinta in ordinea in care ii primeste.
+      p_randuri: rows.map(r => ({
         cerinta_id: r.cerinta_id, mod: r.mod,
         autorizatie_id: r.autorizatie_id, doc_firma_id: r.doc_firma_id, partener_id: r.partener_id,
         experienta_id: r.experienta_id, recomandare_id: r.recomandare_id || null,
         document_personal_id: r.document_personal_id || null,
         referinta_text: r.referinta_text, status: r.status, valabil_la_depunere: r.valabil_la_depunere,
         domeniu_rte: r.domeniu_rte || null,
+        motiv: r.motiv ?? null, scor: r.scor ?? null,
       })),
     })
     if (eRpc) return fail('rescriere acoperiri (tranzactie anulata, nu s-a schimbat nimic): ' + eRpc.message)
 
+    // Gaura lui `ales_de`: poarta protejează INTENȚIA omului, nu corectitudinea ei. Dacă
+    // autorizația aleasă expiră înainte de termen, motorul n-are voie s-o schimbe — dar
+    // are voie să-l anunțe. Nu atinge alegerea; îi cere reverificare, cu motivul scris.
+    const { data: rev, error: eRev } = await supabase.rpc('fn_ofertare_acoperire_reverifica_alese', {
+      p_cerinte: Array.from(idsCerinte),
+    })
+    if (eRev) console.error('reverificare alese (neblocant):', eRev.message)
+    const aleseExpirate: number[] = rev?.reverificate || []
+
     const scrise: number[] = rez?.scrise || []
     const idsConflicte: number[] = rez?.conflicte || []
     const scriseSet = new Set(scrise)
-    const conflicteVerificate = randuriUnice
-      .filter(r => idsConflicte.includes(r.cerinta_id))
+    // Doua motive diferite de a NU scrie, cu acelasi efect dar cu alt mesaj pentru om:
+    // cerinta are o dovada verificata pe scan, sau un coleg a ales deja el un candidat
+    // (`ales_de` non-NULL). Pana pe 21.09.2026 exista doar primul motiv; al doilea nu exista
+    // deloc — rerularea calca peste alegerea colegului fara sa spuna nimic.
+    const idsPeScan: number[] = rez?.pe_scan || []
+    const idsAleseDeOm: number[] = rez?.alese_de_om || []
+    const dePropus = (ids: number[]) => randuriUnice
+      .filter(r => ids.includes(r.cerinta_id))
       .map(r => ({ cerinta_id: r.cerinta_id, propus: r.status, motiv: r.referinta_text }))
+    // `pe_scan` lipseste doar daca RPC-ul e o versiune veche; atunci `conflicte` e tot ce avem.
+    const conflicteVerificate = dePropus(rez?.pe_scan ? idsPeScan : idsConflicte)
+    const conflicteAlesDeOm = dePropus(idsAleseDeOm)
     const deScris = randuriUnice.filter(r => scriseSet.has(r.cerinta_id))
 
     // TKT-0203: clarificari propuse automat pentru cerintele de RTE „la general".
@@ -575,6 +635,8 @@ Deno.serve(async (req: Request) => {
       studii: deScris.filter(r => r.mod === 'studii').length,
       vechime: deScris.filter(r => r.mod === 'vechime').length,
       conflicte_verificate: conflicteVerificate,
+      conflicte_ales_de_om: conflicteAlesDeOm,
+      alese_de_om_expirate: aleseExpirate,
       fara_raspuns: fararaspuns.length,
       cerinte_fara_raspuns: fararaspuns.slice(0, PLAFON_RAPORT),
       lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,

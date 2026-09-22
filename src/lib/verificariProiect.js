@@ -124,16 +124,30 @@ export async function consemneazaLipsuri(sedintaId, proiectId, { termenZile = 7,
   const v = await verificaProiect(proiectId)
   if (!v || !v.lipsuri.length) return { adaugate: 0, existente: 0 }
 
+  // 21.09.2026 — DOUĂ BUG-URI ÎNTR-UNUL, găsite de tura de noapte.
+  //
+  // 1. `proiectId` intra în funcție, se folosea la calculul lipsurilor, și NU se scria în rând.
+  //    Liniile rămâneau fără proiect, iar pasul 7 din tura de noapte („închide liniile
+  //    `lipsa:<camp>` ale proiectului") era inexecutabil: pe ședințele GENERALE, care acoperă
+  //    mai multe proiecte, `sedinte.proiect_id` e NULL și nu exista altă cale de atribuire.
+  //    193 de linii deschise, din care 61 rămân nerecuperabile — textul nu numește proiectul.
+  //
+  // 2. Deduplicarea se făcea pe `cheie_verificare` per ȘEDINȚĂ. Într-o ședință generală pe
+  //    trei proiecte, al doilea „lipsa:rte_employee_id" era tăiat ca duplicat deși era alt
+  //    proiect — deci lipsurile a două proiecte din trei nu apăreau deloc. Acum perechea
+  //    (cheie, proiect) e cea care deduplică.
   const { data: exist } = await supabase.from('sedinte_linii')
-    .select('cheie_verificare').eq('sedinta_id', sedintaId).not('cheie_verificare', 'is', null)
-  const deja = new Set((exist || []).map(x => x.cheie_verificare))
+    .select('cheie_verificare, proiect_id').eq('sedinta_id', sedintaId).not('cheie_verificare', 'is', null)
+  const deja = new Set((exist || [])
+    .filter(x => x.proiect_id == null || x.proiect_id === proiectId)
+    .map(x => x.cheie_verificare))
 
   const noi = v.lipsuri.filter(l => !deja.has(l.cheie))
   if (!noi.length) return { adaugate: 0, existente: deja.size }
 
   const t = new Date(); t.setDate(t.getDate() + termenZile)
   const rows = noi.map((l, i) => ({
-    sedinta_id: sedintaId, ordine: ordineStart + i, tip: 'actiune',
+    sedinta_id: sedintaId, proiect_id: proiectId, ordine: ordineStart + i, tip: 'actiune',
     text: `[date proiect] ${l.eticheta}`,
     termen: t.toISOString().slice(0, 10),
     status: 'deschis', cheie_verificare: l.cheie, auto_generata: true,

@@ -10,7 +10,7 @@
 //   Spec: claude_context „Buton Bug Report 🐛 integrat în Tichete IT" (11.06 + review 12.06)
 // ===========================================================================
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import html2canvas from 'html2canvas'
 import { compressFileBeforeUpload } from './compressFile.js'
@@ -46,11 +46,33 @@ export default function BugReportButton({ profile }) {
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
   const [doneNr, setDoneNr] = useState('')
+  // TKT-2026-0197: responsabil opțional direct din alerta rapidă (formularul mare o face deja)
+  const [responsabili, setResponsabili] = useState([])
+  const [respId, setRespId] = useState('')
+  const [defaultIt, setDefaultIt] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [{ data: profs }, { data: defs }] = await Promise.all([
+          supabase.from('profiles').select('id, email, name, is_owner, receive_tichete_it').order('email'),
+          supabase.from('tichete_default_responsabili').select('profile_id').eq('departament', 'it'),
+        ])
+        if (cancelled) return
+        const lista = (profs || []).filter(p => p.receive_tichete_it || p.is_owner)
+        setResponsabili(lista)
+        const def = defs?.[0]?.profile_id || ''
+        if (def && lista.some(p => p.id === def)) { setDefaultIt(def); setRespId(def) }
+      } catch (e) { console.warn('BugReport responsabili:', e?.message) }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   if (!profile) return null
 
   function reset() {
-    setDesc(''); setPozaFile(null); setPozaPreview(''); setErr(''); setDoneNr(''); setTip('bug')
+    setDesc(''); setPozaFile(null); setPozaPreview(''); setErr(''); setDoneNr(''); setTip('bug'); setRespId(defaultIt)
   }
   function close() { setOpen(false); reset() }
 
@@ -115,7 +137,7 @@ export default function BugReportButton({ profile }) {
         titlu: ((eFeature ? '💡 ' : '🐛 ') + d.split('\n')[0]).slice(0, 90),
         descriere: d + `\n\n— ${eFeature ? 'Cerere îmbunătățire' : 'Bug'} raportat(ă) automat din pagina: ${pagina}`,
         urgenta: 'normal',
-        status: 'deschis',
+        status: respId ? 'atribuit' : 'deschis',
         deschis_de: profile?.id,
         entitate_tip: 'pagina_app',
         entitate_descriere: pagina,
@@ -130,8 +152,21 @@ export default function BugReportButton({ profile }) {
           raportat_la: new Date().toISOString(),
         },
       }
+      if (respId) {
+        payload.persoana_responsabila = respId
+        payload.atribuit_de = profile?.id
+        payload.data_atribuire = new Date().toISOString()
+        payload.asignat_la = 'intern'
+      }
       const { data: tk, error } = await supabase.from('tichete').insert(payload).select().single()
       if (error) throw error
+
+      // lead-ul intră și în echipa tichetului (ca în formularul complet) — trigger-ul îl notifică
+      if (respId) {
+        const { error: eAsig } = await supabase.from('tichete_asignati')
+          .insert({ tichet_id: tk.id, profile_id: respId, asignat_de: profile?.id })
+        if (eAsig) console.warn('Asignare bug report:', eAsig.message)
+      }
 
       // upload poza → bucket tichete-atasamente (același ca în Tichete.jsx)
       // FIX 16.06.2026: comprimă/normalizează ca JPEG ≤2048px ÎNAINTE de upload.
@@ -242,6 +277,19 @@ export default function BugReportButton({ profile }) {
                 <div style={{ fontSize: 11, color: descLen < MIN_DESC ? G.yellow : G.green, marginTop: 3, marginBottom: 14 }}>
                   {descLen < MIN_DESC ? `Încă ${MIN_DESC - descLen} caractere` : `✓ ${descLen} caractere`}
                 </div>
+
+                {responsabili.length > 0 && (
+                  <>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, display: 'block', marginBottom: 4 }}>👤 Responsabil (opțional)</label>
+                    <select value={respId} onChange={e => setRespId(e.target.value)}
+                      style={{ width: '100%', padding: '9px 12px', background: G.bg, color: G.text, border: `1px solid ${G.border}`, borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 14, colorScheme: 'dark' }}>
+                      <option value="">— Nimeni (rămâne disponibil pentru preluare) —</option>
+                      {responsabili.map(p => (
+                        <option key={p.id} value={p.id}>{p.name || p.email}{p.id === defaultIt ? ' · default' : ''}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
 
                 <label style={{ fontSize: 11, fontWeight: 700, color: G.muted, textTransform: 'uppercase', letterSpacing: 0.4, display: 'block', marginBottom: 6 }}>Dovadă * (obligatorie) — poză, PDF, Excel, Word</label>
                 {pozaFile ? (
