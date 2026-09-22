@@ -251,6 +251,9 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
       // se dă prin env ANTHROPIC_WORKSPACE_ID (workerul de pe NAS). Cheile create într-un workspace nu au nevoie de el.
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', ...(Deno.env.get('ANTHROPIC_WORKSPACE_ID') ? { 'anthropic-workspace-id': Deno.env.get('ANTHROPIC_WORKSPACE_ID')! } : {}) },
       body: JSON.stringify({ model: MODEL, max_tokens: 16000, system: sys, messages: [{ role: 'user', content: userMsg }] }),
+      // 22.09.2026: pe NAS nu există limita gateway-ului (150 s) — fără plafon propriu, o conexiune agățată ar bloca
+      // workerul pe felia asta la nesfârșit. 10 minute acoperă și un răspuns de 16.000 de tokeni pe Opus.
+      signal: AbortSignal.timeout(10 * 60_000),
     })
     const data = await resp.json()
     if (!resp.ok) return fail('Claude: ' + (data.error?.message || resp.status))
