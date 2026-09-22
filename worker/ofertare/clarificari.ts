@@ -22,7 +22,8 @@ export async function proceseazaClarificari(supabase: any, licId: number, stare:
     stare(`apel ${inc}`)
     r = await propuneClarificari(supabase, { licitatie_id: licId, model: c.model || undefined })
     costTotal += Number(r?.cost_usd || 0)
-    if (!r?.error || r?.salvare_esuata || /obligatoriu|negasita|registrul/.test(r.error)) break   // eroarea de salvare nu se repară reapelând modelul
+    // eroarea de salvare și tăierea la max_tokens sunt deterministe: reapelarea identică e risipă (Mânăstirea: 3×3 apeluri pierdute)
+    if (!r?.error || r?.salvare_esuata || /obligatoriu|negasita|registrul|tăiat|taiat/i.test(r.error)) break
     log(`#${licId}: încercarea ${inc} a picat (${String(r.error).slice(0, 150)}) — pauză ${20 * inc} s`)
     await sleep(20_000 * inc)
   }
