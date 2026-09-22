@@ -8,7 +8,7 @@
 // PDF cu Claude (costă) și rescrie prețurile unei oferte. Fără verificare de ROL, oricine avea
 // cheia publică putea porni citiri plătite și strica prețurile. Aceeași gaură ca în PR #318.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'

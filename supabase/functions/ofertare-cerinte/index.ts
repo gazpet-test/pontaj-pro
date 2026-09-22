@@ -13,7 +13,7 @@
 // v5: mod {doc_id} pe caiete/clarificări. v4: CORS. v3: ancore regex. Model: OPUS.
 // Insert cu confirmata_de NULL — poarta E2 = Razvan în UI.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // v9: modelul se poate cere din body. Implicit Opus (cum a fost dintotdeauna); Sonnet costa
