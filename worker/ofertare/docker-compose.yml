@@ -6,6 +6,8 @@ services:
     build: .
     container_name: gazpet-ofertare-worker
     restart: always
+    # docker stop așteaptă felia AI curentă (până la 10 min pe apel) înainte de SIGKILL — altfel pierdem apelul plătit
+    stop_grace_period: 12m
     env_file: .env
     environment:
       REPO_URL: https://github.com/gazpet-test/pontaj-pro.git
