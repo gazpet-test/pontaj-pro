@@ -121,7 +121,7 @@ async function comitNou(): Promise<boolean> {
   if (SHA === '?') return false
   try {
     await new Deno.Command('git', { args: ['-C', '/app', 'fetch', '-q', 'origin', BRANCH] }).output()
-    const out = await new Deno.Command('git', { args: ['-C', '/app', 'rev-parse', '--short', `origin/${BRANCH}`] }).output()
+    const out = await new Deno.Command('git', { args: ['-C', '/app', 'rev-parse', '--short', 'FETCH_HEAD'] }).output()  // clona e single-branch: origin/<ramură> poate lipsi
     const remote = new TextDecoder().decode(out.stdout).trim()
     return !!remote && remote !== SHA
   } catch (e) { log('verificare git:', (e as Error)?.message ?? e); return false }
