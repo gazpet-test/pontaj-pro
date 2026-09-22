@@ -8,11 +8,17 @@ if [ ! -d /app/.git ]; then
   git clone -q --depth 1 -b "$BRANCH" "$REPO_URL" /app || { echo "[entrypoint] clonarea a picat"; sleep 60; exit 1; }
 fi
 git config --global --add safe.directory /app
+OPRIRE=0
+trap 'OPRIRE=1; [ -n "$COPIL" ] && kill -TERM "$COPIL" 2>/dev/null' TERM INT
 while true; do
   git -C /app fetch -q --depth 1 origin "$BRANCH" && git -C /app reset -q --hard "origin/$BRANCH"
   SHA="$(git -C /app rev-parse --short HEAD 2>/dev/null || echo '?')"
   echo "[entrypoint] pornesc workerul la commit $SHA ($BRANCH)"
-  WORKER_GIT_SHA="$SHA" REPO_BRANCH="$BRANCH" deno run --allow-net --allow-env --allow-read=/app,/deno-dir --allow-write=/deno-dir --allow-run=git /app/worker/ofertare/main.ts
-  echo "[entrypoint] workerul s-a oprit (cod $?), repornesc în 15 s"
+  # sh e PID 1 și nu transmite SIGTERM copilului (docker stop ar aștepta 10 s și ar da kill): îl transmitem noi
+  WORKER_GIT_SHA="$SHA" REPO_BRANCH="$BRANCH" deno run --allow-net --allow-env --allow-read=/app,/deno-dir --allow-write=/deno-dir --allow-run=git /app/worker/ofertare/main.ts &
+  COPIL=$!
+  wait "$COPIL"; COD=$?
+  if [ "$OPRIRE" = "1" ]; then echo "[entrypoint] oprit la cerere (cod $COD)"; exit 0; fi
+  echo "[entrypoint] workerul s-a oprit (cod $COD), repornesc în 15 s"
   sleep 15
 done
