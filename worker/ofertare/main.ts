@@ -11,6 +11,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
+import { proceseazaClarificari } from './clarificari.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -132,7 +133,7 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 let ultimHb = Date.now(), ultimGit = Date.now()
-let ingestInLucru = false, acoperireInLucru = false
+let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false
 while (!oprire) {
   try {
     if (inLucru.size < PARALEL) {
@@ -164,6 +165,18 @@ while (!oprire) {
         proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`))
           .catch(e => log('acoperire:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-1_000_000 - lid); acoperireInLucru = false })
+      }
+    }
+    if (!clarificariInLucru) {
+      const { data: cl } = await supabase.from('ofertare_clarificari_coada').select('licitatie_id').eq('activ', true).order('cerut_la').limit(1)
+      const lid = cl?.[0]?.licitatie_id
+      if (lid) {
+        clarificariInLucru = true
+        inLucru.set(-2_000_000 - lid, 'clarificări')
+        log(`#${lid}: propun clarificări (coada)`)
+        proceseazaClarificari(supabase, lid, s => inLucru.set(-2_000_000 - lid, `clarificări: ${s}`))
+          .catch(e => log('clarificari:', (e as Error)?.message ?? e))
+          .finally(() => { inLucru.delete(-2_000_000 - lid); clarificariInLucru = false })
       }
     }
     if (Date.now() - ultimHb >= HEARTBEAT_MS) { await heartbeat(); ultimHb = Date.now() }
