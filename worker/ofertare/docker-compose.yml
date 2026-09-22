@@ -1,5 +1,6 @@
 # NAS Terra: /Volume1/docker/gazpet-ofertare-worker/ — `docker-compose -p gazpet-ofertare-worker up -d --build`
 # Secretele stau DOAR în .env (chmod 600), niciodată aici. Vezi .env.example și README.md.
+version: "3.8"
 services:
   ofertare-worker:
     build: .
