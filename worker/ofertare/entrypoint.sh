@@ -18,7 +18,9 @@ while true; do
   WORKER_GIT_SHA="$SHA" REPO_BRANCH="$BRANCH" deno run --allow-net --allow-env --allow-read=/app,/deno-dir,/tmp --allow-write=/deno-dir,/tmp --allow-run=git,pdftotext,pdfinfo /app/worker/ofertare/main.ts &
   COPIL=$!
   wait "$COPIL"; COD=$?
-  if [ "$OPRIRE" = "1" ]; then echo "[entrypoint] oprit la cerere (cod $COD)"; exit 0; fi
+  # la SIGTERM primul wait se întrerupe imediat (cod 143) cât timp copilul încă termină felia curentă;
+  # al doilea wait chiar așteaptă ieșirea lui — altfel sh (PID 1) iese și containerul omoară workerul mid-apel
+  if [ "$OPRIRE" = "1" ]; then wait "$COPIL"; COD=$?; echo "[entrypoint] oprit la cerere (cod $COD)"; exit 0; fi
   echo "[entrypoint] workerul s-a oprit (cod $COD), repornesc în 15 s"
   sleep 15
 done
