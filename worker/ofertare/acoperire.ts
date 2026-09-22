@@ -13,6 +13,26 @@ async function felie(supabase: any, licId: number, batch: string, ids: number[])
   for (let inc = 1; inc <= MAX_INCERCARI; inc++) {
     const r = await propuneAcoperiri(supabase, { licitatie_id: licId, batch, ids })
     if (!r?.error) return r
+    // răspuns tăiat la max_tokens: e determinist pe aceeași felie (Jilava 22.09: de 3 ori la rând pe 55) —
+    // nu se repetă, se sparge felia în două și se rulează jumătățile (până la 10 cerințe)
+    if (/tăiat|taiat|trunchiat/i.test(r.error)) {
+      if (ids.length <= 10) return r
+      const j = Math.ceil(ids.length / 2)
+      log(`#${licId} ${batch}: felie de ${ids.length} tăiată la max_tokens → o sparg în ${j} + ${ids.length - j}`)
+      const a = await felie(supabase, licId, batch, ids.slice(0, j))
+      const b = await felie(supabase, licId, batch, ids.slice(j))
+      if (a?.error && b?.error) return { error: `${a.error} | ${b.error}` }
+      const suma = (k: string) => (a?.[k] || 0) + (b?.[k] || 0)
+      const lista = (k: string) => [...(a?.[k] || []), ...(b?.[k] || [])]
+      return {
+        ok: true, batch, felie: ids.length, propuneri: suma('propuneri'), goluri: suma('goluri'),
+        tokens_in: suma('tokens_in'), tokens_out: suma('tokens_out'), trunchiat: !!(a?.trunchiat || b?.trunchiat),
+        fara_raspuns: suma('fara_raspuns') + (a?.error ? j : 0) + (b?.error ? ids.length - j : 0),
+        cerinte_fara_raspuns: [...lista('cerinte_fara_raspuns'), ...(a?.error ? ids.slice(0, j) : []), ...(b?.error ? ids.slice(j) : [])],
+        conflicte_verificate: lista('conflicte_verificate'), conflicte_raspuns: lista('conflicte_raspuns'),
+        duplicate_ramase: suma('duplicate_ramase'), eroare_partiala: a?.error || b?.error || undefined,
+      }
+    }
     // erorile de catalog / autorizare nu se repară prin reîncercare; cele de rețea/AI da
     if (/catalog|obligatorii|negasita/.test(r.error) || inc === MAX_INCERCARI) return r
     log(`#${licId} ${batch}: încercarea ${inc} a picat (${r.error.slice(0, 120)}) — pauză ${20 * inc} s`)
@@ -31,7 +51,10 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
   const tick = async (extra: Record<string, unknown> = {}) =>
     supabase.from('ofertare_acoperire_coada').update({ ultimul_tick: new Date().toISOString(), jurnal, stare: { propuneri, goluri, felii, cost_usd: Number(cost.toFixed(4)), ...extra } }).eq('licitatie_id', licId)
 
-  const { data: cerinte } = await supabase.from('ofertare_cerinte').select('id, tip').eq('licitatie_id', licId).is('inlocuita_de', null).order('id')
+  let qc = supabase.from('ofertare_cerinte').select('id, tip').eq('licitatie_id', licId).is('inlocuita_de', null).order('id')
+  // cerinte_ids: reluare doar pe o listă (ex. felia rămasă fără răspuns), nu pe tot registrul
+  if (Array.isArray(c.cerinte_ids) && c.cerinte_ids.length) qc = qc.in('id', c.cerinte_ids)
+  const { data: cerinte } = await qc
   const batchuri = (c.batchuri as string[] | null)?.length ? (c.batchuri as string[]) : ['eliminatorie', 'propunere']
   for (const batch of batchuri) {
     if (esteOprire()) break
@@ -59,7 +82,8 @@ export async function proceseazaAcoperire(supabase: any, licId: number, esteOpri
       if (r.conflicte_verificate?.length) conflicte.push(...r.conflicte_verificate)
       if (r.duplicate_ramase > 0) duplicate += r.duplicate_ramase
       if (r.conflicte_raspuns?.length) raspunsuriPierdute.push(...r.conflicte_raspuns)
-      jurnal.push({ la: new Date().toISOString(), batch, felie: f.length, propuneri: r.propuneri, goluri: r.goluri, fara_raspuns: r.fara_raspuns, trunchiat: !!r.trunchiat, ms })
+      if (r.eroare_partiala) erori.push(`${batch} (jumătate de felie): ${r.eroare_partiala}`)
+      jurnal.push({ la: new Date().toISOString(), batch, felie: f.length, propuneri: r.propuneri, goluri: r.goluri, fara_raspuns: r.fara_raspuns, trunchiat: !!r.trunchiat, eroare_partiala: r.eroare_partiala, ms })
       log(`#${licId} ${batch} felia ${i / FELIE + 1}: ${r.propuneri ?? 0} propuneri, ${r.goluri ?? 0} goluri, ${r.fara_raspuns ?? 0} fără răspuns${r.trunchiat ? ' (TĂIAT)' : ''} · ${ms} ms`)
       await tick()
     }
