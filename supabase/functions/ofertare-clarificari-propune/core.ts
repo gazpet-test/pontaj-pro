@@ -151,7 +151,8 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     if (noi.length && body?.dry_run !== true) {
       // inserare idempotentă: cheia e unică pe licitație (index parțial) — o reluare nu dublează, nu suprascrie textul editat de om
       const { data: ins, error: eIns } = await supabase.from('ofertare_clarificari').upsert(noi, { onConflict: 'licitatie_id,cheie', ignoreDuplicates: true }).select('id')
-      if (eIns) return { error: 'scriere clarificări: ' + eIns.message, salvare_esuata: true }
+      // propunerile se întorc și la eroare de salvare: apelul e plătit, omul (sau o reluare) le poate scrie de mână
+      if (eIns) return { error: 'scriere clarificări: ' + eIns.message, salvare_esuata: true, clarificari: acceptate, sarite, cost_usd: Number(cost.toFixed(4)) }
       scrise = (ins || []).length
     }
     return { ok: true, propuse: parsed.clarificari.length, scrise, sarite, clarificari: acceptate, model: MODEL, ms: Date.now() - t0, tokens_in: u.input_tokens, tokens_out: u.output_tokens, cost_usd: Number(cost.toFixed(4)), trunchiat: data.stop_reason === 'max_tokens' }
