@@ -2431,6 +2431,10 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                             ? <b style={{ color:G.orange }}> · expiră înainte de depunere, dar se cere {c.cand_se_prezinta === 'duae' ? 'în DUAE' : 'doar la locul I'} — de reînnoit până atunci</b>
                             : <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>)}
                       {a.referinta_text && <> — {a.referinta_text}</>}
+                      {scorNumeric(a.scor) !== null && (
+                        <span title="Scorul dat de motor acestui candidat"
+                          style={{ marginLeft:6, fontWeight:800, color:G.muted }}>{scorNumeric(a.scor)}</span>
+                      )}
                       {a.la_egalitate > 0 && (
                         <span title="Motorul a dat același scor mai multor candidați. Ordinea dintre ei nu e o preferință — alege tu."
                           style={{ marginLeft:6, padding:'1px 6px', borderRadius:8, fontSize:10, fontWeight:800,
@@ -2438,6 +2442,21 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                           ⚖️ la egalitate cu încă {a.la_egalitate}
                         </span>
                       )}
+                    </div>
+                  )}
+                  {a?.motiv && (
+                    // Avertismentele motorului (garda PEHD: „sudor de oțel la rețea de
+                    // DISTRIBUȚIE") se scriu în `motiv`. Până azi `motiv` se vedea doar la
+                    // candidații alternativi, deci exact la cel pe care îl ia omul putea
+                    // lipsi explicația. Semnalat de Jakarinos, 22.09.2026.
+                    <div style={{ fontSize:11, color: /ATEN[ȚT]IE|⚠/.test(a.motiv) ? G.orange : G.dim, marginTop:2 }}>
+                      {a.motiv}
+                    </div>
+                  )}
+                  {a?.alte_pozitii > 0 && (
+                    <div style={{ fontSize:11, color:G.blue, marginTop:2 }}
+                      title="Cerință cumulativă: are mai multe poziții, fiecare cu dovada ei. Nu sunt variante între care alegi — se adună.">
+                      📎 cerință cumulativă — încă {a.alte_pozitii} poziți{a.alte_pozitii === 1 ? 'e' : 'i'} cu dovadă proprie
                     </div>
                   )}
                   {a?.alternative?.length > 0 && (
@@ -2452,7 +2471,12 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                           )}
                           {numeTitular(alt) && <b style={{ color:G.text }}>{numeTitular(alt)}</b>}
                           {alt.referinta_text && <> — {alt.referinta_text}</>}
-                          {alt.motiv && <div style={{ fontSize:10.5, opacity:.8, marginLeft:2 }}>{alt.motiv}</div>}
+                          {alt.verificat_pe_scan && <span style={{ color:G.green, fontWeight:700 }} title="Verificat pe scan"> ✓✓</span>}
+                          {alt.valabil_la_depunere === false && <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere</b>}
+                          {alt.reverificare_ceruta && <b style={{ color:G.orange }}> · ⟳ de reverificat</b>}
+                          {alt.motiv && (
+                            <div style={{ fontSize:10.5, marginLeft:2, color: /ATEN[ȚT]IE|⚠/.test(alt.motiv) ? G.orange : G.dim }}>{alt.motiv}</div>
+                          )}
                         </div>
                       ))}
                     </div>

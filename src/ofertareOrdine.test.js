@@ -63,20 +63,25 @@ describe('grupeazaAcoperiri', () => {
     expect(out[1].la_egalitate).toBe(0)
   })
 
-  it('nu raportează egalitate când primul e verificat pe scan', () => {
+  // „Verificat pe scan" NU e o alegere între variante: e o dovadă confirmată. Pot exista
+  // în continuare alte variante la fel de bine punctate, iar omul are dreptul să le vadă.
+  it('raportează egalitatea chiar dacă primul e verificat pe scan', () => {
     const out = grupeazaAcoperiri([
       r({ id: 1, scor: 80, verificat_pe_scan: true }), r({ id: 2, scor: 80 }),
     ])
-    expect(out[1].la_egalitate).toBe(0)
+    expect(out[1].id).toBe(1)
+    expect(out[1].la_egalitate).toBe(1)
   })
 
-  it('un candidat verificat pe scan nu intră la numărătoarea de egalitate', () => {
-    const out = grupeazaAcoperiri([
+  it('doar alegerea omului oprește semnalul de egalitate', () => {
+    const cuAlegere = grupeazaAcoperiri([
+      r({ id: 1, scor: 80, ales_de: 'uuid' }), r({ id: 2, scor: 80 }),
+    ])
+    const doarVerificat = grupeazaAcoperiri([
       r({ id: 1, scor: 80 }), r({ id: 2, scor: 80, verificat_pe_scan: true }),
     ])
-    // rândul 2 e decizie, deci urcă primul; nu mai există egalitate de raportat
-    expect(out[1].id).toBe(2)
-    expect(out[1].la_egalitate).toBe(0)
+    expect(cuAlegere[1].la_egalitate).toBe(0)
+    expect(doarVerificat[1].la_egalitate).toBe(1)
   })
 
   it('separă cerințele între ele', () => {
@@ -127,5 +132,46 @@ describe('scorNumeric — ce înseamnă „fără scor"', () => {
       { cerinta_id: 1, id: 1, scor: null }, { cerinta_id: 1, id: 2, scor: '  ' },
     ])
     expect(out[1].la_egalitate).toBe(0)
+  })
+})
+
+describe('cerințe cumulative — pozițiile NU sunt alternative', () => {
+  // Distincția din AGENTS.md: diploma + vechimea aceleiași persoane sunt un dosar care se
+  // ADUNĂ. Alternative sunt dovezi diferite, fiecare capabilă singură să acopere cerința.
+  it('două poziții ale aceleiași cerințe nu ajung „alți candidați propuși"', () => {
+    const out = grupeazaAcoperiri([
+      { cerinta_id: 5, pozitie_id: 1, id: 10, scor: 90, mod: 'studii' },
+      { cerinta_id: 5, pozitie_id: 2, id: 11, scor: 80, mod: 'vechime' },
+    ])
+    expect(out[5].alternative).toEqual([])
+    expect(out[5].alte_pozitii).toBe(1)
+  })
+
+  it('alternativele se numără doar în interiorul aceleiași poziții', () => {
+    const out = grupeazaAcoperiri([
+      { cerinta_id: 5, pozitie_id: 1, id: 10, scor: 90 },
+      { cerinta_id: 5, pozitie_id: 1, id: 11, scor: 70 },
+      { cerinta_id: 5, pozitie_id: 2, id: 12, scor: 95 },
+    ])
+    // poziția 2 are cel mai bun candidat, deci ea se afișează prima
+    expect(out[5].id).toBe(12)
+    expect(out[5].alternative).toEqual([])
+    expect(out[5].alte_pozitii).toBe(1)
+  })
+
+  it('egalitatea nu se calculează între poziții diferite', () => {
+    const out = grupeazaAcoperiri([
+      { cerinta_id: 5, pozitie_id: 1, id: 10, scor: 80 },
+      { cerinta_id: 5, pozitie_id: 2, id: 11, scor: 80 },
+    ])
+    expect(out[5].la_egalitate).toBe(0)
+  })
+
+  it('fără pozitie_id (cazul de azi din producție) totul rămâne ca înainte', () => {
+    const out = grupeazaAcoperiri([
+      r({ id: 1, scor: 90 }), r({ id: 2, scor: 70 }),
+    ])
+    expect(out[1].alternative.map(x => x.id)).toEqual([2])
+    expect(out[1].alte_pozitii).toBe(0)
   })
 })

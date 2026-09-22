@@ -156,6 +156,13 @@ const peDate = laZi.length + difera.length - peContinut
 console.log(`✅ la zi: ${laZi.length}   ·   verificate pe conținut: ${peContinut}` +
   (peDate ? `, pe date: ${peDate} (toleranță ${TOLERANTA_MIN} min)` : ''))
 
+// Funcțiile căzute pe metoda veche se NUMESC, nu doar se numără: altfel un „la zi" obținut
+// cu verdictul slab arată identic cu unul obținut pe conținut. Semnalat de Jakarinos.
+const caz = laZi.filter(x => x.metoda === 'date')
+if (caz.length) {
+  console.log(`\n⚠️  verdict pe DATE (sursa publicată nu a putut fi citită) — mai slab: ${caz.map(x => x.slug).join(', ')}`)
+}
+
 if (difera.length) {
   difera.sort((a, b) => a.slug.localeCompare(b.slug))
   console.log(`\n❌ PRODUCȚIA NU RULEAZĂ CE E ÎN REPO (${difera.length}):`)

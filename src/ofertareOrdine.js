@@ -45,30 +45,59 @@ export const inainte = (x, y) => {
   return 0
 }
 
-// O decizie (aleasă de om sau verificată pe scan) nu e „la egalitate" cu nimic:
-// acolo nu mai are ce să aleagă omul, s-a ales deja.
-const eDecizie = r => Boolean(r?.ales_de || r?.verificat_pe_scan)
+// Doar ALEGEREA omului închide discuția despre egalitate. `verificat_pe_scan` NU e o
+// alegere între variante — e o dovadă confirmată pe scan; pot exista în continuare alte
+// variante la fel de bine punctate, iar omul are dreptul să le vadă.
+// (Corectat 22.09.2026 după observația lui Jakarinos: prima variantă le confunda.)
+const eAlesDeOm = r => Boolean(r?.ales_de)
+
+// Cheia de grupare: PERECHEA cerință + poziție, nu doar cerința.
+// O cerință CUMULATIVĂ are mai multe poziții, fiecare cu dovada ei (diplomă pe o poziție,
+// adeverință de vechime pe alta). Alea NU sunt alternative — sunt un dosar care se adună.
+// Gruparea doar pe `cerinta_id` le-ar fi pus pe toate sub „alți candidați propuși", adică
+// exact distincția din AGENTS.md pe care nu avem voie s-o pierdem. Azi `pozitie_id` e NULL
+// pe toate cele 2253 de rânduri din producție, deci greșeala e latentă, nu vizibilă — dar
+// devine vizibilă în ziua în care motorul începe să completeze poziții.
+const cheiePozitie = a => `${a.cerinta_id}|${a.pozitie_id ?? ''}`
 
 /**
- * Grupează rândurile de acoperire pe cerință și întoarce, pentru fiecare, candidatul de pe
- * primul loc, îmbogățit cu:
- *   · `alternative`  — ceilalți candidați, în aceeași ordine deterministă;
- *   · `la_egalitate` — câți dintre ei au exact scorul primului (0 dacă primul e o decizie).
+ * Grupează rândurile de acoperire și întoarce, per CERINȚĂ, candidatul de pe primul loc,
+ * îmbogățit cu:
+ *   · `alternative`   — ceilalți candidați DE PE ACEEAȘI POZIȚIE, în ordine deterministă;
+ *   · `la_egalitate`  — câți dintre ei au exact scorul primului (0 dacă primul e ales de om);
+ *   · `alte_pozitii`  — câte alte poziții ale aceleiași cerințe mai au acoperire. Alea sunt
+ *                       obligații care se adună, nu variante — de aceea sunt numărate
+ *                       separat și nu intră niciodată în `alternative`.
  */
 export function grupeazaAcoperiri(randuri) {
-  const peCerinta = {}
+  const pePozitie = {}
   for (const a of (randuri || [])) {
     if (!a || a.cerinta_id == null) continue
-    ;(peCerinta[a.cerinta_id] ||= []).push(a)
+    ;(pePozitie[cheiePozitie(a)] ||= []).push(a)
   }
+
+  // Pozițiile regrupate pe cerință, ca să știm câte obligații distincte are fiecare.
+  const peCerinta = {}
+  for (const lista of Object.values(pePozitie)) {
+    const ordonate = [...lista].sort(inainte)
+    ;(peCerinta[ordonate[0].cerinta_id] ||= []).push(ordonate)
+  }
+
   const out = {}
-  for (const [cid, lista] of Object.entries(peCerinta)) {
-    const [primul, ...restul] = [...lista].sort(inainte)
-    const laEgalitate = eDecizie(primul) ? 0
-      : restul.filter(r => !eDecizie(r)
+  for (const [cid, pozitii] of Object.entries(peCerinta)) {
+    // Poziția afișată prima: cea cu cel mai bun candidat, după aceeași regulă de ordine.
+    pozitii.sort((p, q) => inainte(p[0], q[0]))
+    const [primul, ...restul] = pozitii[0]
+    const laEgalitate = eAlesDeOm(primul) ? 0
+      : restul.filter(r => !eAlesDeOm(r)
           && scorNumeric(r.scor) !== null
           && scorNumeric(r.scor) === scorNumeric(primul.scor)).length
-    out[cid] = { ...primul, alternative: restul, la_egalitate: laEgalitate }
+    out[cid] = {
+      ...primul,
+      alternative: restul,
+      la_egalitate: laEgalitate,
+      alte_pozitii: pozitii.length - 1,
+    }
   }
   return out
 }
