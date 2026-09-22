@@ -72,7 +72,7 @@ const data = t => new Date(t).toISOString().slice(0, 16).replace('T', ' ')
 // checkout-ul din CI le pune pe toate la ora clonării.
 async function ultimaModificare(slug) {
   const { stdout } = await execFileP('git',
-    ['log', '-1', '--format=%cI', '--', join(DIR, slug, 'index.ts')], { maxBuffer: 1 << 20 })
+    ['log', '-1', '--format=%cI', '--', join(DIR, slug)], { maxBuffer: 1 << 20 })
   return stdout.trim() || null
 }
 

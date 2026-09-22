@@ -1,0 +1,21 @@
+# NAS Terra: /Volume1/docker/gazpet-ofertare-worker/ — `docker-compose -p gazpet-ofertare-worker up -d --build`
+# Secretele stau DOAR în .env (chmod 600), niciodată aici. Vezi .env.example și README.md.
+services:
+  ofertare-worker:
+    build: .
+    container_name: gazpet-ofertare-worker
+    restart: always
+    env_file: .env
+    environment:
+      REPO_URL: https://github.com/gazpet-test/pontaj-pro.git
+      REPO_BRANCH: ${REPO_BRANCH:-main}
+      WORKER_PARALEL: ${WORKER_PARALEL:-2}
+      WORKER_BUCATA_MAX: ${WORKER_BUCATA_MAX:-20000}
+    volumes:
+      - ./repo:/app
+      - ./deno-dir:/deno-dir
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
