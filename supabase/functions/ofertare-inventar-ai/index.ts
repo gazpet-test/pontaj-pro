@@ -5,7 +5,7 @@
 // Body: { doc_id, furnizor: 'gemini'|'openai', model?, pagini?: [de_la, pana_la], versiune? }
 // Scrie în ofertare_inventar_ai. NU atinge ofertare_cerinte (registrul de producție).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 
 const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY') || ''

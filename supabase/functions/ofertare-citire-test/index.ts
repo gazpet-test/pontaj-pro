@@ -4,7 +4,7 @@
 // ingest-ul de producție (transcriere fidelă + marcaje ⟦PAGINA N⟧), ca să comparăm doar modelul.
 // Apelat de worker-ul SQL prin pg_net cu JWT service role; răspunde { continua, urmatoarea }.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''

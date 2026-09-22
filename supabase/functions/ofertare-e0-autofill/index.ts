@@ -6,7 +6,7 @@
 // ADUSĂ ÎN REPO la 12.09.2026, fără nicio modificare de cod: rula neversionată,
 // ca 105 din cele 129 de funcții. Nu poți face code review pe ce nu vezi.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'

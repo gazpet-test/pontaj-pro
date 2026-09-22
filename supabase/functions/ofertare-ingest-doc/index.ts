@@ -16,7 +16,7 @@
 // 130–132 la Mânăstirea aveau 39 de caractere și status verde).
 // v7: CORS complet cu x-client-info. v6: felia persistată. v5: 2 apeluri/invocare.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
@@ -123,6 +123,8 @@ async function autorizat(req: Request, supabase: any, licId: number, coadaTabel:
   return { eroare: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).', uid: null }
 }
 
+const JUNK_RE = /(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)Thumbs\.db$|(^|\/)desktop\.ini$/i
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -148,6 +150,13 @@ Deno.serve(async (req: Request) => {
 
     const { data: row, error: rErr } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
     if (rErr || !row) return new Response(JSON.stringify({ error: 'document negasit' }), { status: 404, headers: CORS })
+    // 22.09.2026 (Jilava): resturile de arhiva macOS (__MACOSX/._X.pdf = resource fork AppleDouble, .DS_Store)
+    // nu sunt documente — 212-268 bytes fara antet PDF. Cazute pe 'eroare', se reluau la fiecare Procesare.
+    // Se marcheaza 'ignorat' inainte de orice download/parsare, ca sa iasa din coada (UI + ofertare_ingest_tick).
+    if (JUNK_RE.test(row.nume_original || '') || JUNK_RE.test(row.fisier_path || '')) {
+      await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'ignorat', eroare: 'fisier de sistem (macOS __MACOSX/._* sau .DS_Store) — nu e document, nu se citeste' }).eq('id', docId)
+      return new Response(JSON.stringify({ ok: true, skip: 'fisier de sistem', continua: false }), { headers: CORS })
+    }
     // 'partial' se poate relua de la zero cu {reia:true} (ex. după ce s-a mărit plafonul);
     // 'procesat' nu se reia — ar dubla costul fără motiv.
     const reiaDeLaZero = reia === true && row.status_procesare === 'partial'
