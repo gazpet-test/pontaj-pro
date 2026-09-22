@@ -1,4 +1,4 @@
-// ofertare-triere v1.4 (22.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
+// ofertare-triere v1.5 (22.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
 //
 // De ce există: colegii descărcau toată documentația (46 fișiere la Simian, planșe de 90 MB la
 // Potlogi) și o citeau integral ÎNAINTE să știe dacă vrem licitația. Facturile de API veneau de
@@ -12,6 +12,7 @@
 // extragere JSON robustă + stop_reason raportat. v1.2: thinking disabled (Sonnet 5 gândea implicit în bugetul de output).
 // v1.3: tip_lucrare_gaze (TKT-2026-0268) + praguri/punctaje citate, nu rezumate (TKT-2026-0271).
 // v1.4: propunerea de personal se face pe RECOMANDĂRI, nu pe titulatură sau certificate de curs (TKT-2026-0270).
+// v1.5: o persoană = un rol, repartizare pe punctaj total, cu matricea persoană × rol scoasă în JSON înainte de alegere.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 // Versiune FIXATĂ intenționat (22.09.2026): cu `@2` flotant, bundlerul Supabase a cerut
 // varianta denonext a lui 2.117.0, pe care esm.sh nu o are publicată (auth-js dă 404), și
@@ -38,6 +39,7 @@ REGULI:
   (3) Punctaj doar pe recomandări verificate. Una neverificată se poate propune, dar spui în motiv câte proiecte ies din verificate și câte din neverificate, plus „de confirmat în HR".
   (4) Dacă nimeni nu are recomandare potrivită, propui pe cine are funcția și autorizația potrivite, DAR scrii în motiv „fără dovadă de experiență în platformă — de completat cu recomandare / document constatator". Un certificat de curs (ex. „Manager proiect 240h") e o calificare, nu experiență, și nu se invocă drept experiență.
   (5) O PERSOANĂ, UN ROL (Răzvan, 22.09.2026, Jilava): când fișa cere mai multe roluri de experți cheie, nu propui aceeași persoană pe două roluri. Repartizezi persoanele pe roluri astfel încât punctajul TOTAL să fie maxim — nu rolul cu rolul, ci echipa întreagă: dacă A ar lua 5 puncte pe oricare rol, iar B ia 5 puncte doar pe rolul X, atunci B merge pe X și A pe celălalt. Aceeași persoană pe două roluri doar când nimeni altcineva nu trece pragul de punctaj pe al doilea rol — și atunci scrii în motiv că e cumul și propui clarificare cu autoritatea.
+  (6) ÎNTÂI MATRICEA, APOI REPARTIZAREA. Înainte să alegi, completezi câmpul "matrice_experti": pentru FIECARE persoană care are măcar o recomandare potrivită ca natură a lucrării și pentru FIECARE rol punctat, câte proiecte dovedite are pe rolul ăla și din ce recomandări (beneficiar + nr./dată sau „fără nr."). Numeri TOATE recomandările persoanei pe rol — o recomandare fără număr sau dată de document contează exact la fel ca una cu număr; nu o sări. Un rând pe (persoană, rol), inclusiv cu proiecte=0 dacă persoana n-are recomandare pe rolul respectiv. Repartizarea de la (5) se face DOAR din matricea asta, iar motivul fiecărei propuneri citează cifra din matrice. La Jilava (22.09) lipsa acestui pas a făcut ca o recomandare de Manager Proiect cu 9 obiective, fără număr de document, să fie ignorată, iar echipa a ieșit cu 3 puncte în minus.
   NU scrie niciodată „poate demonstra experiență" sau „se va documenta experiența" — dacă dovada nu e în listă, spui că lipsește. Nu invoca drept sprijin o autorizație pe alt domeniu decât cel al lucrării (ex. EGD/PGD = distribuție pe o lucrare de transport): dacă o menționezi, spui explicit că e pe alt domeniu.
 - cumul_functii_interzis = true DOAR dacă fișa spune explicit că o persoană nu poate îndeplini mai multe funcții/roluri.
 - clarificari_propuse: întrebări scurte pe care le-am trimite autorității când o cerință e ambiguă, contradictorie sau exagerată (ex. experiență similară definită prea îngust, RTE pe domeniu greșit, personal de proiectare într-un contract de execuție).
@@ -60,6 +62,7 @@ Răspunde EXCLUSIV JSON, fără markdown:
   "criteriu": "<criteriul de atribuire>",
   "experienta_similara": { "cerinta": "<textul cerinței de experiență similară, cu valoare/număr contracte/ani>", "lucrari_acceptate": "<ce lucrări se acceptă ca similare>" },
   "cumul_functii_interzis": true|false,
+  "matrice_experti": [ { "persoana": "<NUME>", "rol": "<rolul punctat din fișă>", "proiecte": <număr întreg>, "surse": "<beneficiar + nr./dată document sau „fără nr.", câte una per recomandare>", "verificate": <câte din proiecte vin din recomandări verificate în HR> } ],
   "roluri": [ { "rol": "<denumirea rolului>", "cerinte": "<studii/atestări/experiență cerute>", "documente": "<ce documente se depun>", "propunere": "<NUME din lista Gazpet sau null>", "motiv": "<de ce persoana asta / de ce nimeni>" } ],
   "atestari": "<atestări/autorizații de firmă cerute (ANRE, ISC, ISO...), sau null>",
   "sursa_finantare": "<sau null>",
