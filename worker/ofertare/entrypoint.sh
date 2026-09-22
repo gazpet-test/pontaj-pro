@@ -11,7 +11,8 @@ git config --global --add safe.directory /app
 OPRIRE=0
 trap 'OPRIRE=1; [ -n "$COPIL" ] && kill -TERM "$COPIL" 2>/dev/null' TERM INT
 while true; do
-  git -C /app fetch -q --depth 1 origin "$BRANCH" && git -C /app reset -q --hard "origin/$BRANCH"
+  # clona e single-branch (clone -b): origin/<altă ramură> nu există după schimbarea REPO_BRANCH → folosim FETCH_HEAD
+  git -C /app fetch -q --depth 1 origin "$BRANCH" && git -C /app reset -q --hard FETCH_HEAD
   SHA="$(git -C /app rev-parse --short HEAD 2>/dev/null || echo '?')"
   echo "[entrypoint] pornesc workerul la commit $SHA ($BRANCH)"
   # sh e PID 1 și nu transmite SIGTERM copilului (docker stop ar aștepta 10 s și ar da kill): îl transmitem noi
