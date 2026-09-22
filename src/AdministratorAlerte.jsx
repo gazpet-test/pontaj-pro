@@ -3,16 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { ADMIN_ALERTE_KEY, SURSE_ADMIN, areAccesAdministrator, incarcaSursaAdmin, sorteazaAlerte } from './adminAlerte.js'
 
-const G = { bg: '#0D1117', surface: '#161B22', border: '#30363D', text: '#E6EDF3', muted: '#8B949E', blue: '#58A6FF', green: '#3FB950', red: '#F85149', yellow: '#D29922' }
+const G = { bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8EF', text: '#263642', muted: '#617282', blue: '#24778B', green: '#38765A', red: '#B74D55', yellow: '#946B20' }
 const S = {
-  panel: { background: G.surface, border: `1px solid ${G.border}`, borderRadius: 12, padding: 18 },
-  button: { background: G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 7, padding: '9px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 },
+  panel: { background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10, padding: 16 },
+  button: { background: G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 7, padding: '9px 12px', minHeight: 40, cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 },
   small: { color: G.muted, fontSize: 12, lineHeight: 1.6 },
   row: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 },
 }
 const PRIORITATI = { critical: ['Critică', G.red], week: ['În 7 zile', G.yellow], attention: ['De urmărit', G.blue], missing: ['Date lipsă', G.muted] }
 const STARI = { idle: 'Neevaluată', loading: 'Se evaluează', ok: 'Evaluată', denied: 'Acces insuficient', error: 'Eroare de citire' }
 const initial = () => Object.fromEntries(SURSE_ADMIN.map(s => [s.id, { state: 'idle', rows: [] }]))
+const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 'vehiculul', firma: 'documentul', gbe: 'garanția' }
 const sourceById = Object.fromEntries(SURSE_ADMIN.map(s => [s.id, s]))
 const fmtDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ro-RO') : 'Necunoscut'
 const fmtTime = value => value ? new Date(value).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' }) : '—'
@@ -26,20 +27,20 @@ function RandAlerta({ item, evaluatedAt, openSource }) {
   const [expanded, setExpanded] = useState(false)
   const [label, color] = PRIORITATI[item.priority]
   const source = sourceById[item.source]
-  return <article style={{ padding: 18, borderBottom: `1px solid ${G.border}` }}>
+  return <article className="admin-alert" style={{ padding: '14px 16px', borderBottom: `1px solid ${G.border}` }}>
     <div style={{ ...S.row, justifyContent: 'space-between' }}>
       <div style={S.row}><Badge color={color}>{label}</Badge><span style={S.small}>{source.label}</span></div>
       <span style={S.small}>{item.estimated ? 'Estimare' : 'Termen'} · {item.timestamp ? new Date(item.timestamp).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' }) : fmtDate(item.date)}</span>
     </div>
-    <h3 style={{ fontSize: 15, margin: '11px 0 5px' }}>{item.title}</h3>
+    <h3 style={{ fontSize: 15, margin: '8px 0 4px' }}>{item.title}</h3>
     {item.reference && <div style={S.small}>{item.reference}</div>}
-    <p style={{ fontSize: 13, lineHeight: 1.6, margin: '8px 0' }}>{item.impact}</p>
+    <p style={{ fontSize: 13, lineHeight: 1.6, margin: '6px 0' }}>{item.impact}</p>
     {item.amount != null && <div style={{ fontWeight: 700, marginBottom: 9 }}>{money(item)} · sold rămas</div>}
     <div style={S.small}>Responsabil: {item.owner}</div>
-    <div style={{ ...S.row, justifyContent: 'space-between', marginTop: 12 }}>
+    <div style={{ ...S.row, justifyContent: 'space-between', marginTop: 8 }}>
       <div style={S.row}>
-        <button type="button" style={{ ...S.button, color: G.blue }} onClick={() => openSource(source.path)}>Deschide {source.label} ↗</button>
-        <button type="button" style={S.button} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? 'Închide detaliile' : 'De ce apare'}</button>
+        <button type="button" style={{ ...S.button, color: G.blue, border: 'none', background: 'transparent', padding: '8px 0' }} onClick={() => openSource(source.path)}>Deschide {SOURCE_LINK_LABELS[item.source] || source.label} ↗</button>
+        <button type="button" style={{ ...S.button, color: G.blue, border: 'none', background: 'transparent' }} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? 'Închide detaliile' : 'De ce apare'}</button>
       </div>
       <span style={S.small}>Evaluată · {fmtTime(evaluatedAt)}</span>
     </div>
@@ -114,25 +115,43 @@ export default function AdministratorAlerte({ profile }) {
   const currentPage = Math.min(page, pageCount)
   const allApprovalsOk = SURSE_ADMIN.filter(s => s.approval).every(s => sources[s.id].state === 'ok')
 
-  return <main style={{ padding: '24px clamp(12px, 3vw, 36px)', color: G.text, background: G.bg, minHeight: 'calc(100vh - 56px)', overflowWrap: 'anywhere' }}>
+  return <main className="admin-dashboard" style={{ fontFamily: 'Arial, sans-serif', colorScheme: 'light', width: '100%', maxWidth: '100%', boxSizing: 'border-box', padding: '24px clamp(12px, 3vw, 36px)', color: G.text, background: G.bg, minHeight: 'calc(100vh - 56px)', overflowWrap: 'anywhere' }}>
+    <style>{`
+      .admin-dashboard * { box-sizing: border-box; }
+      .admin-dashboard button:focus-visible, .admin-dashboard select:focus-visible { outline: 2px solid #24778B; outline-offset: 3px; }
+      .admin-dashboard button:disabled { cursor: default; opacity: .55; }
+      .admin-dashboard .admin-columns { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(260px, 1fr); gap: 20px; align-items: start; }
+      .admin-dashboard .admin-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+      .admin-dashboard .admin-metric { padding: 16px; }
+      .admin-dashboard .admin-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+      @media (max-width: 760px) {
+        .admin-dashboard .admin-columns { grid-template-columns: minmax(0, 1fr); }
+        .admin-dashboard .admin-metrics { gap: 8px; }
+        .admin-dashboard .admin-metric { padding: 12px 9px; }
+        .admin-dashboard .admin-metric-label { font-size: 11px; }
+        .admin-dashboard .admin-alert { padding: 12px !important; }
+        .admin-dashboard h1 { font-size: 23px !important; }
+      }
+    `}</style>
     <header style={{ ...S.row, justifyContent: 'space-between', marginBottom: 22 }}>
-      <div><div style={S.small}>GAZPET ERP · Conducere</div><h1 style={{ fontSize: 26, margin: '6px 0' }}>Modulul Administratorului</h1><p style={S.small}>Priorități, termene și aprobări · numai citire</p></div>
-      <button type="button" style={{ ...S.button, opacity: busy ? .6 : 1 }} disabled={busy || !allowed} onClick={load}>{busy ? 'Se evaluează…' : '↻ Reîmprospătează'}</button>
+      <div><div style={{ ...S.small, textTransform: 'uppercase', letterSpacing: '.5px' }}>{new Date().toLocaleDateString('ro-RO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Bucharest' })}</div><h1 style={{ fontSize: 26, margin: '6px 0' }}>Modulul Administratorului</h1><p style={S.small}>Priorități, termene și aprobări · numai citire</p></div>
+
     </header>
     {accessMessage && <div role="alert" style={{ ...S.panel, color: G.yellow, marginBottom: 18 }}>{accessMessage}</div>}
-    <section aria-label="Situații din sursele evaluate" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+    <section aria-label="Situații din sursele evaluate" className="admin-metrics" style={{ marginBottom: 14 }}>
       {[
-        ['Critice identificate', alerts.filter(a => a.priority === 'critical').length, G.red],
-        ['Următoarele 7 zile', alerts.filter(a => a.priority === 'week').length, G.yellow],
-        ['Așteaptă aprobarea ta', approvals.length, G.blue],
-      ].map(([label, value, color]) => <div key={label} style={{ ...S.panel, flex: '1 1 180px' }}><div style={{ fontSize: 28, fontWeight: 700, color }}>{evaluated ? value : '—'}</div><div style={S.small}>{label}</div></div>)}
+        ['Critice identificate', alerts.filter(a => a.priority === 'critical').length],
+        ['Următoarele 7 zile', alerts.filter(a => a.priority === 'week').length],
+        ['Așteaptă aprobarea ta', approvals.length],
+      ].map(([label, value]) => <div key={label} className="admin-metric" style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 10 }}><div style={{ fontSize: 26, fontWeight: 700, color: G.text }}>{evaluated ? value : '—'}</div><div className="admin-metric-label" style={S.small}>{label}</div></div>)}
     </section>
-    <div style={{ ...S.row, justifyContent: 'space-between', padding: '12px 0 20px' }}>
-      <span style={{ ...S.small, color: incomplete ? G.yellow : G.muted }} aria-live="polite">{evaluated}/{SURSE_ADMIN.length} surse evaluate · cifre numai din datele vizibile{incomplete ? ' · situație incompletă' : ''}</span>
+    <div style={{ ...S.row, justifyContent: 'space-between', padding: 14, marginBottom: 18, borderRadius: 9, background: incomplete || alerts.some(a => a.priority === 'missing') ? '#FFF6DF' : '#E9F1F5' }}>
+      <span style={{ ...S.small, color: incomplete ? G.yellow : G.muted }} aria-live="polite">{evaluated}/{SURSE_ADMIN.length} surse evaluate · cifre numai din datele vizibile{incomplete ? ' · situație incompletă' : ''}{alerts.some(a => a.priority === 'missing') ? ` · ${alerts.filter(a => a.priority === 'missing').length} ${alerts.filter(a => a.priority === 'missing').length === 1 ? 'alertă' : 'alerte'} cu date lipsă` : ''}</span>
       <button type="button" style={S.button} aria-expanded={showSources} onClick={() => setShowSources(v => !v)}>{showSources ? 'Ascunde sursele' : 'Vezi starea surselor'}</button>
     </div>
-    <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-      <section aria-label="Alerte importante" style={{ flex: '3 1 540px', minWidth: 0 }}>
+    <div className="admin-toolbar"><span style={S.small}>Numai citire · evaluare {fmtTime(Object.values(sources).map(s => s.evaluatedAt).filter(Boolean).sort().at(-1))}</span>      <button type="button" style={{ ...S.button, opacity: busy ? .6 : 1 }} disabled={busy || !allowed} onClick={load}>{busy ? 'Se evaluează…' : '↻ Reîmprospătează'}</button></div>
+    <div className="admin-columns">
+      <section aria-label="Alerte importante" style={{ minWidth: 0 }}>
         <h2 style={{ fontSize: 18, marginBottom: 14 }}>Necesită atenție</h2>
         <div style={{ ...S.row, marginBottom: 14 }}>
           {[['all', 'Toate'], ...Object.entries(PRIORITATI).map(([key, [label]]) => [key, label])].map(([key, label]) => <button key={key} type="button" aria-pressed={priority === key} onClick={() => setPriority(key)} style={{ ...S.button, color: priority === key ? G.blue : G.muted, borderColor: priority === key ? G.blue : G.border }}>{label}</button>)}
@@ -143,9 +162,9 @@ export default function AdministratorAlerte({ profile }) {
           {filtered.slice((currentPage - 1) * 25, currentPage * 25).map(item => <RandAlerta key={item.id} item={item} evaluatedAt={sources[item.source].evaluatedAt} openSource={nav} />)}
           {!filtered.length && <p style={{ padding: 24, ...S.small }}>{busy ? 'Se evaluează sursele…' : incomplete ? 'Nu sunt alerte în selecție. Sursele neevaluate nu confirmă absența problemelor.' : 'Nu sunt alerte în selecția curentă, în datele vizibile.'}</p>}
         </div>
-        {pageCount > 1 && <div style={{ ...S.row, marginTop: 12 }}><button type="button" style={S.button} disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Înapoi</button><span style={S.small}>Pagina {currentPage}/{pageCount}</span><button type="button" style={S.button} disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Înainte</button></div>}
+        {pageCount > 1 && <div style={{ ...S.row, marginTop: 8 }}><button type="button" style={S.button} disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Înapoi</button><span style={S.small}>Pagina {currentPage}/{pageCount}</span><button type="button" style={S.button} disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Înainte</button></div>}
       </section>
-      <aside style={{ flex: '1 1 270px', minWidth: 0 }}>
+      <aside style={{ minWidth: 0 }}>
         <section style={S.panel}><h2 style={{ fontSize: 17, marginBottom: 6 }}>Așteaptă decizia mea</h2><p style={S.small}>Aprobări din fluxurile existente</p>
           {approvals.map(row => <article key={row.id} style={{ padding: '18px 0', borderBottom: `1px solid ${G.border}` }}><Badge>{sourceById[row.source].label}</Badge><h3 style={{ fontSize: 15, margin: '10px 0' }}>{row.title}</h3>{row.amount != null && <div style={{ fontWeight: 700 }}>{money(row)}</div>}{row.date && <div>{fmtDate(row.date)}</div>}<p style={{ ...S.small, margin: '8px 0 12px' }}>{row.impact}</p><button type="button" style={S.button} onClick={() => nav(row.path)}>Deschide în modulul sursă ↗</button></article>)}
           {!approvals.length && <p style={{ ...S.small, marginTop: 16 }}>{busy ? 'Se verifică aprobările…' : allApprovalsOk ? 'Nicio aprobare în așteptare pentru tine.' : 'Aprobările nu au putut fi evaluate integral.'}</p>}
