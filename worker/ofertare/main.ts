@@ -10,6 +10,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
 import { proceseazaIngest } from './ingest.ts'
+import { proceseazaAcoperire } from './acoperire.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -131,7 +132,7 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 let ultimHb = Date.now(), ultimGit = Date.now()
-let ingestInLucru = false
+let ingestInLucru = false, acoperireInLucru = false
 while (!oprire) {
   try {
     if (inLucru.size < PARALEL) {
@@ -151,6 +152,18 @@ while (!oprire) {
         proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`))
           .catch(e => log('ingest:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-lid); ingestInLucru = false })
+      }
+    }
+    if (!acoperireInLucru) {
+      const { data: ac } = await supabase.from('ofertare_acoperire_coada').select('licitatie_id').eq('activ', true).order('cerut_la').limit(1)
+      const lid = ac?.[0]?.licitatie_id
+      if (lid) {
+        acoperireInLucru = true
+        inLucru.set(-1_000_000 - lid, 'acoperire')
+        log(`#${lid}: propun acoperiri (coada)`)
+        proceseazaAcoperire(supabase, lid, () => oprire, s => inLucru.set(-1_000_000 - lid, `acoperire: ${s}`))
+          .catch(e => log('acoperire:', (e as Error)?.message ?? e))
+          .finally(() => { inLucru.delete(-1_000_000 - lid); acoperireInLucru = false })
       }
     }
     if (Date.now() - ultimHb >= HEARTBEAT_MS) { await heartbeat(); ultimHb = Date.now() }

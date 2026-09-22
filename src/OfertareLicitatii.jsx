@@ -2081,64 +2081,28 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   }
   useEffect(() => { load() }, [licitatie.id])
 
+  // 22.09.2026 (varianta A): propunerea rulează pe workerul NAS (worker/ofertare/acoperire.ts), cu ACELAȘI cod
+  // ca edge function-ul (ofertare-acoperire/core.ts), dar fără limita de 150 s a gateway-ului — batch-ul
+  // „eliminatorie” de 51 cerințe (Jilava) cădea acolo. UI-ul doar pune rândul în coadă și urmărește starea.
   const propune = async () => {
     setWarn(null)
-    const conflicte = []      // cerințe cu dovadă verificată de om, neatinse de AI
-    let neacoperite = 0       // cerințe rămase neevaluate chiar și după reluare
-    let neconfirmate = 0      // felii căzute la reluare: rezultatul lor e necunoscut, nu „vechi"
-    let duplicate = 0         // rânduri vechi pe care ștergerea nu le-a prins
-    const raspunsuriPierdute = []  // aceeași cerință, două răspunsuri de la colegi diferite
-    const erori = []          // erorile nu se mai pierd sub nota finală
-    // Felii de 55 (v3 cu ids) — registrul întreg nu încape în max_tokens la un singur apel.
-    // O felie raportată „trunchiat" se reia la jumătate de mărime (o singură dată).
-    const FELIE = 55
-    for (const batch of ['eliminatorie', 'propunere']) {
-      const ids = (cerinte || []).filter(c => c.tip === batch).map(c => c.id)
-      if (!ids.length) continue
-      const eticheta = batch === 'eliminatorie' ? 'eliminatoriile' : 'propunerile'
-      const deReluat = []
-      for (let i = 0; i < ids.length; i += FELIE) {
-        const felie = ids.slice(i, i + FELIE)
-        setBusy(`Opus confruntă ${eticheta} cu catalogul HR: ${Math.min(i + FELIE, ids.length)}/${ids.length}...`)
-        const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
-          { body: { licitatie_id: licitatie.id, batch, ids: felie } })
-        if (error || data?.error) { setWarn(`${batch}: ${data?.error || error.message}`); setBusy(null); await load(); onChanged?.(); return }
-        // Lista de reluat e tăiată la 500 de funcție; dacă tot nu încape, reluăm toată felia,
-        // altfel cerințele peste plafon n-ar mai fi cerute niciodată.
-        const listaOk = data?.cerinte_fara_raspuns?.length && !data?.lista_fara_raspuns_taiata
-        if (data?.trunchiat || data?.fara_raspuns > 0 || data?.felie_goala) deReluat.push(...(listaOk ? data.cerinte_fara_raspuns : felie))
-        if (data?.conflicte_verificate?.length) conflicte.push(...data.conflicte_verificate)
-        if (data?.duplicate_ramase > 0) duplicate += data.duplicate_ramase
-        if (data?.conflicte_raspuns?.length) raspunsuriPierdute.push(...data.conflicte_raspuns)
-        await load()
-      }
-      for (let i = 0; i < deReluat.length; i += 27) {
-        const felie = deReluat.slice(i, i + 27)
-        setBusy(`Reluare felii trunchiate (${eticheta}): ${Math.min(i + 27, deReluat.length)}/${deReluat.length}...`)
-        const { data, error } = await supabase.functions.invoke('ofertare-acoperire',
-          { body: { licitatie_id: licitatie.id, batch, ids: felie } })
-        // Eroarea se ADUNĂ, nu se pune direct în warn: nota finală o suprascria, iar o cădere
-        // de rețea dispărea de pe ecran, înlocuită de numărul de conflicte.
-        if (error || data?.error) { erori.push(`${batch} (reluare): ${data?.error || error.message}`); neconfirmate += deReluat.length - i; break }
-        // Reluarea își citește la rândul ei starea: dacă și ea s-a tăiat, cerințele rămase
-        // păstrează verdictul vechi fără ca nimeni să afle. Le numărăm și le spunem.
-        if (data?.conflicte_verificate?.length) conflicte.push(...data.conflicte_verificate)
-        if (data?.fara_raspuns > 0) neacoperite += data.fara_raspuns
-        if (data?.duplicate_ramase > 0) duplicate += data.duplicate_ramase
-        if (data?.conflicte_raspuns?.length) raspunsuriPierdute.push(...data.conflicte_raspuns)
-        await load()
-      }
+    const { error } = await supabase.from('ofertare_acoperire_coada').upsert({
+      licitatie_id: licitatie.id, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(),
+      terminat_la: null, nota: null, stare: null, jurnal: [],
+    }, { onConflict: 'licitatie_id' })
+    if (error) { setWarn('Nu s-a putut porni: ' + error.message); return }
+    setBusy('Opus confruntă cerințele cu catalogul HR, pe server — poți închide tab-ul; primești notificare în clopoțel...')
+    // urmărim rândul din coadă: workerul scrie stare/jurnal la fiecare felie și nota la final
+    for (let i = 0; i < 720; i++) {
+      await new Promise(r => setTimeout(r, 5000))
+      const { data: q } = await supabase.from('ofertare_acoperire_coada').select('activ, stare, nota, ultimul_tick').eq('licitatie_id', licitatie.id).maybeSingle()
+      if (!q) break
+      if (!q.activ) { if (q.nota) setWarn(q.nota); break }
+      const st = q.stare || {}
+      const vechi = q.ultimul_tick ? (Date.now() - new Date(q.ultimul_tick).getTime()) / 60000 : null
+      setBusy(`Pe server: ${st.felii || 0} felii, ${st.propuneri || 0} propuneri, ${st.goluri || 0} goluri${vechi != null && vechi > 12 ? ' · ⚠️ workerul NAS nu a mai scris de ' + Math.round(vechi) + ' min' : ''}...`)
+      if (i % 6 === 5) await load()
     }
-    const note = []
-    if (erori.length) note.push(`❌ ${erori.join(' · ')}`)
-    // O felie picată pe timeout poate să fi apucat să scrie: rezultatul ei e NECONFIRMAT,
-    // nu „a rămas verdictul vechi". Sunt două lucruri diferite pentru cine citește tabelul.
-    if (neconfirmate > 0) note.push(`❓ ${neconfirmate} cerințe au rămas cu rezultat neconfirmat (reluarea a căzut) — reia propunerea.`)
-    if (raspunsuriPierdute.length) note.push(`🔀 ${raspunsuriPierdute.length} cerințe au două răspunsuri/tichete diferite de la colegi — le-am lăsat NEATINSE, propunerea AI nu s-a scris la ele. Alege tu care rămâne.`)
-    if (duplicate > 0) note.push(`⚠️ ${duplicate} rânduri vechi n-au putut fi șterse — pot exista acoperiri duplicate pe aceleași cerințe. Verifică înainte să te bazezi pe tabel.`)
-    if (neacoperite > 0) note.push(`⚠️ ${neacoperite} cerințe n-au fost reevaluate nici la reluare — păstrează verdictul din rularea anterioară.`)
-    if (conflicte.length) note.push(`🔒 ${conflicte.length} cerințe au dovadă verificată de om: propunerea AI-ului NU le-a suprascris. Verifică-le manual dacă documentul s-a schimbat.`)
-    if (note.length) setWarn(note.join(' '))
     setBusy(null); await load(); onChanged?.()
   }
 
@@ -2285,7 +2249,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
               <input type="checkbox" checked={fDoarBifate} onChange={e => setFDoarBifate(e.target.checked)} style={{ accentColor:G.ofertare }} /> doar bifatele din registru ({nrBifateAici})
             </label>
           )}
-          {!busy && poatePorniProcesarea(profile, licitatie) && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={propune}>🤖 Propune acoperiri (Opus)</button>}
+          {!busy && poatePorniProcesarea(profile, licitatie) && <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={propune} title="Rulează pe workerul NAS, fără limita de 150 s; notificare în clopoțel la final">☁️ Propune acoperiri (Opus, pe server)</button>}
           {!busy && !poatePorniProcesarea(profile, licitatie) && <span style={{ fontSize:11.5, color:G.dim, alignSelf:'center' }} title={MOTIV_POARTA}>🔒 acoperirea o rulează ownerul / responsabilul</span>}
         </div>
       </div>
