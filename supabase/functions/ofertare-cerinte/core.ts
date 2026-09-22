@@ -247,7 +247,9 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
       : `FRAGMENTUL DIN FIȘA DE DATE${etichetaBucata}${etichetaPag} (${lic.nr_anunt}, ${lic.autoritate}):\n\n${slice}`
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      // 22.09.2026: o cheie creată la nivel de organizație (nu într-un workspace) cere antetul anthropic-workspace-id;
+      // se dă prin env ANTHROPIC_WORKSPACE_ID (workerul de pe NAS). Cheile create într-un workspace nu au nevoie de el.
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', ...(Deno.env.get('ANTHROPIC_WORKSPACE_ID') ? { 'anthropic-workspace-id': Deno.env.get('ANTHROPIC_WORKSPACE_ID')! } : {}) },
       body: JSON.stringify({ model: MODEL, max_tokens: 16000, system: sys, messages: [{ role: 'user', content: userMsg }] }),
     })
     const data = await resp.json()
