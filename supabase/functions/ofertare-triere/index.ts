@@ -87,6 +87,70 @@ function b64(bytes: Uint8Array): string {
   return btoa(s)
 }
 
+
+// Repartizare DETERMINISTĂ a experților pe roluri, din matrice (Răzvan, 22.09.2026, Jilava):
+// modelul fără gândire a ales de 3 ori o repartizare sub-optimă deși matricea era corectă.
+// Baremul se citește din textul cerinței rolului („2 proiecte = 1 punct; 3-4 proiecte = 3 puncte; 5 sau mai multe = 5 puncte").
+// Se maximizează punctajul TOTAL al echipei, o persoană pe un singur rol; la egalitate câștigă marja minimă mai mare
+// (câte proiecte peste prag), apoi totalul de proiecte. Dacă baremul nu se poate citi, propunerea AI rămâne neschimbată.
+function citesteBarem(text: string): Array<{ prag: number; puncte: number }> {
+  const out: Array<{ prag: number; puncte: number }> = []
+  const re = /(\d+)\s*(?:-\s*\d+|\s*sau\s+mai\s+multe|\+)?\s*(?:de\s+)?proiecte?[^=;:.]{0,40}?[=:]\s*(\d+(?:[.,]\d+)?)\s*punct/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text || ''))) out.push({ prag: Number(m[1]), puncte: Number(m[2].replace(',', '.')) })
+  return out.sort((a, b) => a.prag - b.prag)
+}
+function puncteBarem(barem: Array<{ prag: number; puncte: number }>, n: number) {
+  let p = 0, prag = 0
+  for (const b of barem) if (n >= b.prag && b.puncte >= p) { p = b.puncte; prag = b.prag }
+  return { puncte: p, marja: p > 0 ? n - prag : -1 }
+}
+function repartizeazaDinMatrice(parsed: any) {
+  const roluri: any[] = parsed.roluri, mat: any[] = parsed.matrice_experti
+  if (!roluri?.length || !mat?.length) return
+  const norm = (s: any) => String(s || '').toLowerCase().replace(/[șş]/g, 's').replace(/[țţ]/g, 't').replace(/[ăâ]/g, 'a').replace(/î/g, 'i').replace(/\s+/g, ' ').trim()
+  const rolIdx: number[] = [], bareme: Array<Array<{ prag: number; puncte: number }>> = []
+  roluri.forEach((r, i) => {
+    const b = citesteBarem(String(r.cerinte || '') + ' ' + String(r.motiv || ''))
+    const areMat = mat.some(x => norm(x.rol) === norm(r.rol))
+    if (b.length && areMat) { rolIdx.push(i); bareme.push(b) }
+  })
+  if (rolIdx.length < 2) return
+  const persoane = [...new Set(mat.map(x => String(x.persoana || '').trim()).filter(Boolean))]
+  const proiecte = (p: string, rol: string) => Number(mat.find(x => String(x.persoana || '').trim() === p && norm(x.rol) === norm(rol))?.proiecte || 0)
+  const verif = (p: string, rol: string) => Number(mat.find(x => String(x.persoana || '').trim() === p && norm(x.rol) === norm(rol))?.verificate || 0)
+  let best: { total: number; marja: number; proj: number; alocare: (string | null)[] } | null = null
+  const cauta = (k: number, folosite: Set<string>, alocare: (string | null)[]) => {
+    if (k === rolIdx.length) {
+      let total = 0, marja = Infinity, proj = 0
+      alocare.forEach((p, j) => {
+        if (!p) { marja = Math.min(marja, -1); return }
+        const n = proiecte(p, roluri[rolIdx[j]].rol), s = puncteBarem(bareme[j], n)
+        total += s.puncte; marja = Math.min(marja, s.marja); proj += n
+      })
+      if (!best || total > best.total || (total === best.total && (marja > best.marja || (marja === best.marja && proj > best.proj))))
+        best = { total, marja, proj, alocare: [...alocare] }
+      return
+    }
+    const rol = roluri[rolIdx[k]].rol
+    for (const p of persoane) if (!folosite.has(p) && proiecte(p, rol) > 0) { folosite.add(p); cauta(k + 1, folosite, [...alocare, p]); folosite.delete(p) }
+    cauta(k + 1, folosite, [...alocare, null])
+  }
+  cauta(0, new Set(), [])
+  if (!best || best.total <= 0) return
+  const rezumat = persoane.map(p => p + ': ' + rolIdx.map(i => roluri[i].rol + '=' + proiecte(p, roluri[i].rol)).join('/')).join('; ')
+  rolIdx.forEach((i, j) => {
+    const p = best!.alocare[j], r = roluri[i]
+    if (!p) return
+    const n = proiecte(p, r.rol), s = puncteBarem(bareme[j], n), v = verif(p, r.rol)
+    const schimbat = norm(r.propunere) !== norm(p)
+    r.propunere = p
+    r.motiv = `[Repartizare calculată din matrice] ${p}: ${n} proiecte pe ${r.rol} → ${s.puncte} puncte (marjă ${s.marja} peste prag; ${v} din recomandări verificate în HR). Echipa: ${best!.total} puncte total. Matrice: ${rezumat}.` +
+      (schimbat ? ' Propunerea AI inițială a fost înlocuită.' : '') + (r.motiv ? ' — ' + String(r.motiv) : '')
+  })
+  parsed.repartizare_calculata = { total_puncte: best.total, alocare: rolIdx.map((i, j) => ({ rol: roluri[i].rol, persoana: best!.alocare[j] })) }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -205,6 +269,8 @@ Deno.serve(async (req: Request) => {
     const verdict = ['mergem', 'cu_clarificari', 'nu_se_poate', 'neclar'].includes(parsed.verdict) ? parsed.verdict : 'neclar'
     parsed.verdict = verdict
     parsed.roluri = Array.isArray(parsed.roluri) ? parsed.roluri.slice(0, 40) : []
+    parsed.matrice_experti = Array.isArray(parsed.matrice_experti) ? parsed.matrice_experti.slice(0, 60) : []
+    repartizeazaDinMatrice(parsed)
     parsed.clarificari_propuse = Array.isArray(parsed.clarificari_propuse) ? parsed.clarificari_propuse.slice(0, 20) : []
     parsed.alte_cerinte = Array.isArray(parsed.alte_cerinte) ? parsed.alte_cerinte.slice(0, 30) : []
     parsed.sursa = { doc_id: doc.id, nume: doc.nume_original, pagini: doc.pagini }
