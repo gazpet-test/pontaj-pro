@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { grupeazaAcoperiri } from './ofertareOrdine.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -149,14 +150,14 @@ export default function OfertareLicitatiiTab() {
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
         const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, verificat_pe_scan, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
-        // O cerință poate avea mai multe rânduri de acoperire (cele verificate pe scan nu se
-        // șterg la re-rulare). Numărătoarea pe RÂND umfla „acoperite" și putea depăși 100%.
-        // Mai mult: numărând ORICE rând acoperit, KPI-ul spunea „acoperit" acolo unde ecranul
-        // de detaliu arăta „gol" (acolo câștigă rândul verificat de om). Aceeași regulă în
-        // ambele locuri — un singur rând per cerință, cel verificat are întâietate.
-        const randCerinta = {}
-        ;(ac || []).forEach(a => { const ex = randCerinta[a.cerinta_id]
-          if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) randCerinta[a.cerinta_id] = a })
+        // O cerință poate avea mai multe rânduri de acoperire (motorul propune până la 3
+        // candidați, iar cele verificate pe scan nu se șterg la re-rulare). Numărătoarea pe
+        // RÂND umfla „acoperite" și putea depăși 100%; numărând ORICE rând acoperit, KPI-ul
+        // spunea „acoperit" acolo unde ecranul de detaliu arăta „gol".
+        // Aceeași funcție ca în ecranul de detaliu (`grupeazaAcoperiri`), ca KPI-ul și
+        // detaliul să nu mai poată ajunge la verdicte diferite pe același rând: regula
+        // scrisă de două ori e regulă care divergă la prima modificare.
+        const randCerinta = grupeazaAcoperiri(ac || [])
         Object.values(randCerinta).forEach(a => { const lid = cerLic[a.cerinta_id]; const st = stats[lid]; if (!st) return
           // Dovada mutata de un raspuns al autoritatii pe textul NOU al cerintei nu e inca dovada:
           // omul n-a vazut noul text. Se numara separat, nu in „acoperite" — altfel ecranul spune
@@ -2052,14 +2053,15 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
         .select('*, autorizatie:hr_autorizatii(id, numar_autorizatie, fisier_path, tip:hr_autorizatii_tipuri(denumire), emp:employees(name), ext:hr_personal_extern(nume)), partener:ofertare_parteneri(nume), doc_firma:documente_firma(id, tip, denumire, numar_document, pdf_path, se_reemite, data_valabilitate), experienta:ofertare_experienta(id, denumire, beneficiar, valoare_lei, valoare_executata_lei, asociere, data_pv), recomandare:hr_recomandari(id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, verificat, emp:employees(name), ext:hr_personal_extern(nume)), studii:hr_documente_personale(id, numar_document, emitent, data_emitere, observatii, fisier_path, tip:hr_documente_personale_tipuri(denumire), emp:employees(name))')
         .in('cerinta_id', cs.map(c => c.id)).order('id').limit(5000)
-      // O cerință poate avea mai multe rânduri (rândurile verificate pe scan nu se șterg la
-      // re-rulare). Fără `.order()` PostgREST le putea întoarce în orice ordine, iar ultimul
-      // venit câștiga — deci ecranul arăta ori dovada verificată, ori verdictul AI-ului, la
-      // întâmplare. Acum: ordine stabilă, iar dovada verificată de om are întâietate.
-      const map = {}; (ac || []).forEach(a => {
-        const ex = map[a.cerinta_id]
-        if (!ex || (a.verificat_pe_scan && !ex.verificat_pe_scan)) map[a.cerinta_id] = a
-      })
+      // O cerință poate avea mai multe rânduri: motorul propune până la 3 candidați, iar
+      // rândurile verificate pe scan nu se șterg la re-rulare. Fără o ordine explicită
+      // PostgREST le întorcea în orice ordine și ultimul venit câștiga — deci ecranul arăta
+      // ori dovada verificată, ori verdictul AI-ului, la întâmplare.
+      //
+      // Regula de ordonare stă în `src/ofertareOrdine.js`, cu teste: e o regulă de
+      // corectitudine (cine apare primul în fața unui coleg la o licitație reală), nu o
+      // preferință de afișare. Un test a și prins-o greșită la prima scriere.
+      const map = grupeazaAcoperiri(ac || [])
       setAcoperiri(map)
     } else setAcoperiri({})
   }
@@ -2341,13 +2343,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
               // afirmație fără sursă pe ecran, exact ca la experiență și la recomandare.
               // `studii` e embed-ul pe document_personal_id, deci vine și pentru mod='vechime':
               // acolo denumirea tipului (CV / adeverință REGES) e mai lămuritoare decât observațiile.
-              const titular = a?.studii
-                ? `${a.studii.emp?.name || '?'} — ${a.mod === 'vechime' ? (a.studii.tip?.denumire || 'dovadă de vechime') : (a.studii.observatii ? a.studii.observatii.slice(0, 70) : (a.studii.tip?.denumire || 'diplomă'))}${a.studii.emitent ? ' · ' + a.studii.emitent.slice(0, 50) : ''}`
-                : a?.recomandare
-                ? `${a.recomandare.emp?.name || a.recomandare.ext?.nume || '?'} — ${a.recomandare.rol || 'rol nespecificat'} la ${a.recomandare.beneficiar || '?'}${a.recomandare.obiect_lucrare ? ' („' + a.recomandare.obiect_lucrare.slice(0, 70) + '")' : ''}${a.recomandare.verificat ? '' : ' · recomandare NEVERIFICATĂ în HR'}`
-                : a?.experienta
-                ? `${a.experienta.denumire}${a.experienta.asociere ? ' (asociere — cota Gazpet ' + (a.experienta.valoare_executata_lei ? Math.round(a.experienta.valoare_executata_lei / 1000) + ' mii lei' : 'NECUNOSCUTĂ') + ')' : (a.experienta.valoare_lei ? ' (' + Math.round(a.experienta.valoare_lei / 1000) + ' mii lei)' : '')}`
-                : (a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume))
+              const titular = numeTitular(a)
               const bifat = sel.includes(c.id)
               return (
                 <div key={c.id} id={`acop-${c.id}`} style={{ padding:'7px 10px', borderRadius:7, background: bifat ? G.ofertare + '1a' : G.surface, borderLeft:`3px solid ${a ? st.color : G.border2}`, outline: bifat ? `1px solid ${G.ofertare}66` : 'none' }}>
@@ -2425,6 +2421,30 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                             ? <b style={{ color:G.orange }}> · expiră înainte de depunere, dar se cere {c.cand_se_prezinta === 'duae' ? 'în DUAE' : 'doar la locul I'} — de reînnoit până atunci</b>
                             : <b style={{ color:G.red }}> · EXPIRĂ înainte de depunere!</b>)}
                       {a.referinta_text && <> — {a.referinta_text}</>}
+                      {a.la_egalitate > 0 && (
+                        <span title="Motorul a dat același scor mai multor candidați. Ordinea dintre ei nu e o preferință — alege tu."
+                          style={{ marginLeft:6, padding:'1px 6px', borderRadius:8, fontSize:10, fontWeight:800,
+                                   color:G.yellow, border:`1px solid ${G.yellow}66` }}>
+                          ⚖️ la egalitate cu încă {a.la_egalitate}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {a?.alternative?.length > 0 && (
+                    <div style={{ marginTop:5, paddingLeft:10, borderLeft:`2px solid ${G.border}` }}>
+                      <div style={{ fontSize:10, color:G.dim, textTransform:'uppercase', letterSpacing:0.4, marginBottom:2 }}>
+                        alți candidați propuși ({a.alternative.length})
+                      </div>
+                      {a.alternative.map(alt => (
+                        <div key={alt.id} style={{ fontSize:11, color:G.dim, marginTop:2 }}>
+                          {Number.isFinite(Number(alt.scor)) && (
+                            <span style={{ fontWeight:800, color:G.muted, marginRight:5 }}>{alt.scor}</span>
+                          )}
+                          {numeTitular(alt) && <b style={{ color:G.text }}>{numeTitular(alt)}</b>}
+                          {alt.referinta_text && <> — {alt.referinta_text}</>}
+                          {alt.motiv && <div style={{ fontSize:10.5, opacity:.8, marginLeft:2 }}>{alt.motiv}</div>}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -2480,7 +2500,17 @@ async function incarcaCatalogAcoperire() {
   // 17.09.2026 (Răzvan): persoanele cu contract închis (employees.active=false) sau externii dezactivați
   // nu mai apar între candidați — Nicu Iosif Cătălin cu 4 autorizații apărea la „Cine poate acoperi”
   // deși nu mai e în firmă. Documentele lor rămân în HR, doar nu se mai propun la ofertare.
-  const titularActiv = r => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
+  // Numele „titularului" unei acoperiri: cine/ce anume acoperă cerința. Scos din JSX ca să
+// poată fi folosit și pentru candidații alternativi, nu doar pentru cel de pe primul loc.
+const numeTitular = a => a?.studii
+  ? `${a.studii.emp?.name || '?'} — ${a.mod === 'vechime' ? (a.studii.tip?.denumire || 'dovadă de vechime') : (a.studii.observatii ? a.studii.observatii.slice(0, 70) : (a.studii.tip?.denumire || 'diplomă'))}${a.studii.emitent ? ' · ' + a.studii.emitent.slice(0, 50) : ''}`
+  : a?.recomandare
+  ? `${a.recomandare.emp?.name || a.recomandare.ext?.nume || '?'} — ${a.recomandare.rol || 'rol nespecificat'} la ${a.recomandare.beneficiar || '?'}${a.recomandare.obiect_lucrare ? ' („' + a.recomandare.obiect_lucrare.slice(0, 70) + '")' : ''}${a.recomandare.verificat ? '' : ' · recomandare NEVERIFICATĂ în HR'}`
+  : a?.experienta
+  ? `${a.experienta.denumire}${a.experienta.asociere ? ' (asociere — cota Gazpet ' + (a.experienta.valoare_executata_lei ? Math.round(a.experienta.valoare_executata_lei / 1000) + ' mii lei' : 'NECUNOSCUTĂ') + ')' : (a.experienta.valoare_lei ? ' (' + Math.round(a.experienta.valoare_lei / 1000) + ' mii lei)' : '')}`
+  : (a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume))
+
+const titularActiv = r => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
   for (const r of [aut, rec, stud, vech]) r.data = (r.data || []).filter(titularActiv)
   const arr = (x) => Array.isArray(x) ? x.join(' ') : (x || '')
   const mk = (sursa, id, titlu, sub, text, extra = {}) => ({ sursa, id, titlu, sub, tokens: normText(text).split(' ').filter(Boolean), ...extra })
