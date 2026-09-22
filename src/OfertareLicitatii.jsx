@@ -589,7 +589,10 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
 // - procesarea AI: un document pe rând, cu continuare (pagini_procesate) —
 //   edge fn ofertare-ingest-doc, felii mici sub IDLE_TIMEOUT-ul gateway-ului
 // ════════════════════════════════════════════════════════════════
-const JUNK_RE = /(^|\/)~\$|\.log$|_Claude_|\.db$|\.tmp$|(^|\/)Thumbs\.db$/i
+// 22.09.2026 (Jilava, SCN1179907): 52 de fișiere „__MACOSX/._X.pdf" și „.DS_Store" au intrat prin „Urcă folder" —
+// resturi lăsate de Windows la dezarhivarea unui zip făcut pe Mac (resource fork AppleDouble, 212-268 bytes, fără antet PDF).
+// 41 au picat pe „PDF corupt" și se reluau la fiecare Procesează. Nu sunt documente: se sar la urcare și la procesare.
+const JUNK_RE = /(^|\/)~\$|\.log$|_Claude_|\.db$|\.tmp$|(^|\/)Thumbs\.db$|(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)desktop\.ini$/i
 const ARHIVA_RE = /\.(7z|rar|zip|z\d{2}|\d{3})$|\.part\d+\.rar$/i
 const DOC_STATUS = {
   neprocesat: { label:'neprocesat', color:G.muted },
@@ -876,6 +879,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const deCititCaPdf = (ds) => (ds || []).filter(d =>
     ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) &&
     E_PDF.test(d.nume_original || '') &&
+    !JUNK_RE.test(d.nume_original || '') &&
     d.tip !== 'plansa' &&
     !areBucati(d, ds))
 
