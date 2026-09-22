@@ -104,6 +104,23 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     }).eq('id', q.id)
     await load()
   }
+  // 22.09.2026: „Propune clarificări” — generatorul rulează pe workerul NAS (ofertare_clarificari_coada):
+  // goluri din acoperire + ambiguități din registru + diferențe de cantități + răspunsuri primite → propuneri de_trimis.
+  const propuneServer = async () => {
+    if (!licId) return
+    if (!(profile?.is_owner || licitatii?.find(l => l.id === licId)?.responsabil_id === profile?.id)) { showToast('Propunerea de clarificări o pornește ownerul sau responsabilul licitației (costă).', 'err'); return }
+    const { error } = await supabase.from('ofertare_clarificari_coada').upsert({ licitatie_id: licId, activ: true, cerut_de: profile?.id || null, cerut_la: new Date().toISOString(), terminat_la: null, nota: null, rezultat: null }, { onConflict: 'licitatie_id' })
+    if (error) { showToast('Nu s-a putut porni: ' + error.message, 'err'); return }
+    setBusy('Sonnet citește registrul, golurile, cantitățile și răspunsurile primite, pe server (1-3 min)...')
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 5000))
+      const { data: q } = await supabase.from('ofertare_clarificari_coada').select('activ, nota, ultimul_tick').eq('licitatie_id', licId).maybeSingle()
+      if (!q || !q.activ) { if (q?.nota) showToast(q.nota, q.nota.startsWith('❌') ? 'err' : 'ok'); break }
+      const vechi = q.ultimul_tick ? (Date.now() - new Date(q.ultimul_tick).getTime()) / 60000 : (i * 5) / 60
+      if (vechi > 12) { showToast('⚠️ workerul NAS nu a mai scris de ' + Math.round(vechi) + ' min — verifică heartbeat-ul', 'err'); break }
+    }
+    setBusy(null); await load()
+  }
   const addQ = async () => {
     const nr = (clar?.length ? Math.max(...clar.map(q => q.nr || 0)) : 0) + 1
     const { error } = await supabase.from('ofertare_clarificari').insert({ licitatie_id: licId, nr, intrebare: '', status: 'de_trimis' })
@@ -403,6 +420,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                 if (ins?.id) citesteClarificare({ id: ins.id })
               }} />
             </label>
+            <button style={{ ...S.btnS, padding:'5px 14px', fontSize:12 }} onClick={propuneServer} disabled={!!busy} title="Generatorul rulează pe workerul NAS: goluri din acoperire, ambiguități din registru, diferențe de cantități, răspunsuri primite — propuneri de_trimis, le verifici tu">☁️ Propune clarificări (Sonnet)</button>
             <button style={{ ...S.btnP, padding:'5px 14px', fontSize:12 }} onClick={genereazaAdresa} disabled={!!busy}>📄 Generează adresa</button>
           </div>
         </div>
