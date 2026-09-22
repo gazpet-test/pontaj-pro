@@ -16,7 +16,7 @@
 // 130–132 la Mânăstirea aveau 39 de caractere și status verde).
 // v7: CORS complet cu x-client-info. v6: felia persistată. v5: 2 apeluri/invocare.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
