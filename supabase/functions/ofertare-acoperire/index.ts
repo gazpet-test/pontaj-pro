@@ -42,7 +42,10 @@
 // v4: partenerii cu observatii („acopera”). v3: ids[] felii. v2: CORS x-client-info.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { turtesteCandidati, marcheazaSudoriNepotriviti } from './candidati.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+// Versiune FIXATĂ intenționat (22.09.2026): cu `@2` flotant, bundlerul Supabase a cerut
+// varianta denonext a lui 2.117.0, pe care esm.sh nu o are publicată (auth-js dă 404), și
+// deployul a picat cu „Module not found". 2.116.0 are build denonext complet.
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-opus-5'
