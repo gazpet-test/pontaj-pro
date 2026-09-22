@@ -15,10 +15,18 @@
 // ATENȚIE la `Number(null) === 0` (anti-bug consemnat 11.09.2026): fără verificarea
 // explicită de null/'' de mai jos, un candidat FĂRĂ scor era citit ca „scor 0" și urca
 // înaintea unuia cu scor 0 real, după id. Prins de test, nu de citirea codului.
-const scorNumeric = v => {
-  if (v === null || v === undefined || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
+// Acceptă DOAR un număr, sau un șir care conține un număr. Orice altceva (null, undefined,
+// '', '   ', false, [], {}) înseamnă „fără scor", nu zero.
+// Jakarinos a măsurat, pe 22.09.2026, că varianta precedentă (`v === ''`) lăsa să treacă
+// `'   '`, `false` și `[]` drept scor 0 — `Number()` le transformă pe toate în 0. Un candidat
+// fără scor urca astfel înaintea unuia cu scor 0 real.
+export const scorNumeric = v => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
 }
 
 export const cheieOrdine = a => {

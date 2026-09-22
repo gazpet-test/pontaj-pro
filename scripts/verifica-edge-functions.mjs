@@ -27,7 +27,9 @@
 // CE NU PRINDE, spus pe față:
 //   · dacă `include_files` nu răspunde, funcția aia cade pe comparația de date, cu toate
 //     limitele ei — marcată explicit în ieșire, ca să se vadă că verdictul e mai slab;
-//   · o diferență doar de spațiu la final de linie e ignorată intenționat (normalizăm);
+//   · normalizăm DOAR CRLF → LF și liniile goale finale; un spațiu în plus la capăt de
+//     linie rămâne o diferență raportată, pentru că altfel s-ar putea ascunde o diferență
+//     reală dintr-un literal de text (verificat cu un contraexemplu, 22.09.2026);
 //   · dacă cineva deployează de pe o copie locală cu modificări necomise, conținutul live
 //     diferă de repo și apare corect ca nepublicat — asta metoda pe date NU o prindea.
 
@@ -54,9 +56,16 @@ if (!TOKEN) {
 
 const data = t => new Date(t).toISOString().slice(0, 16).replace('T', ' ')
 
-// Normalizare minimă: CRLF → LF, spațiile de la capăt de linie, linia goală finală.
-// NU atingem ghilimele, punct-și-virgulă sau indentare — acolo ar începe să mintă comparația.
-const normalizeaza = t => String(t).replace(/\r\n/g, '\n').split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n').replace(/\n+$/, '')
+// Normalizare minimă de tot: DOAR CRLF → LF și liniile goale de la finalul fișierului.
+// Atât și nimic mai mult.
+//
+// Prima variantă tăia și spațiile de la capătul FIECĂREI linii. Jakarinos a arătat pe
+// 22.09.2026 de ce e greșit: un literal care conține `"A \n B"` cu spațiu înainte de
+// newline devine, după tăiere, identic cu `"A\nB"` — două programe DIFERITE ies „identice".
+// Într-o verificare de siguranță, falsul negativ („nu e nicio diferență") e exact eroarea
+// care nu trebuie făcută: ascunde tocmai cazul pentru care există verificarea.
+// Spațiul la capăt de linie în cod mort e un fals pozitiv inofensiv — se rezolvă cu un deploy.
+const normalizeaza = t => String(t).replace(/\r\n/g, '\n').replace(/\n+$/, '')
 
 // Sursa publicată, aşa cum a fost urcată. Întoarce Map(nume → conținut) sau null dacă
 // endpointul nu o dă (atunci funcția aia cade pe comparația de date).

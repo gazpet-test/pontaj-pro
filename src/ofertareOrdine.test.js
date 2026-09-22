@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { inainte, grupeazaAcoperiri } from './ofertareOrdine.js'
+import { inainte, grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 
 const r = (o) => ({ cerinta_id: 1, id: 1, scor: null, ales_de: null, verificat_pe_scan: false, ...o })
 
@@ -96,6 +96,36 @@ describe('grupeazaAcoperiri', () => {
   it('un singur candidat nu are alternative și nu e la egalitate', () => {
     const out = grupeazaAcoperiri([r({ id: 1, scor: 70 })])
     expect(out[1].alternative).toEqual([])
+    expect(out[1].la_egalitate).toBe(0)
+  })
+})
+
+describe('scorNumeric — ce înseamnă „fără scor"', () => {
+  it('numerele trec', () => {
+    expect(scorNumeric(0)).toBe(0)
+    expect(scorNumeric(80)).toBe(80)
+    expect(scorNumeric(-3)).toBe(-3)
+  })
+
+  it('șirurile numerice trec', () => {
+    expect(scorNumeric('42')).toBe(42)
+    expect(scorNumeric(' 42 ')).toBe(42)
+  })
+
+  // Toate astea dau 0 prin `Number()` și urcau candidatul înaintea unuia cu scor 0 real.
+  it.each([null, undefined, '', '   ', false, true, [], {}, 'abc', NaN, Infinity])(
+    'valoarea %p înseamnă „fără scor", nu 0', v => { expect(scorNumeric(v)).toBe(null) })
+
+  it('un candidat cu scor „   " cade tot ultimul, ca unul fără scor', () => {
+    const gol = { cerinta_id: 1, id: 1, scor: '   ' }
+    const zero = { cerinta_id: 1, id: 9, scor: 0 }
+    expect([gol, zero].sort(inainte).map(x => x.id)).toEqual([9, 1])
+  })
+
+  it('doi candidați „fără scor" scriși diferit nu sunt la egalitate', () => {
+    const out = grupeazaAcoperiri([
+      { cerinta_id: 1, id: 1, scor: null }, { cerinta_id: 1, id: 2, scor: '  ' },
+    ])
     expect(out[1].la_egalitate).toBe(0)
   })
 })

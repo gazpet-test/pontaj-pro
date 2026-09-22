@@ -10,7 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
-import { grupeazaAcoperiri } from './ofertareOrdine.js'
+import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -149,7 +149,7 @@ export default function OfertareLicitatiiTab() {
       ;(tri || []).forEach(x => { if (stats[x.licitatie_id]) stats[x.licitatie_id].triere = x.verdict })
       const cIds = Object.keys(cerLic)
       if (cIds.length) {
-        const { data: ac } = await supabase.from('ofertare_acoperire').select('cerinta_id, status, verificat_pe_scan, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
+        const { data: ac } = await supabase.from('ofertare_acoperire').select('id, cerinta_id, status, verificat_pe_scan, ales_de, scor, reverificare_ceruta, valabil_la_depunere, doc_firma:documente_firma(se_reemite, data_valabilitate)').in('cerinta_id', cIds).order('id').limit(20000)
         // O cerință poate avea mai multe rânduri de acoperire (motorul propune până la 3
         // candidați, iar cele verificate pe scan nu se șterg la re-rulare). Numărătoarea pe
         // RÂND umfla „acoperite" și putea depăși 100%; numărând ORICE rând acoperit, KPI-ul
@@ -1951,6 +1951,16 @@ function InventarIndependentSection({ licitatie, profile, onChanged }) {
 // pe scan (R1 — CHECK în BD: verificat cere fișier; scanul vine din autorizație).
 // Golurile devin tichete (modelul TKT-2026-0139). Poarta E3: zero eliminatorii GOL.
 // ════════════════════════════════════════════════════════════════
+// Numele „titularului" unei acoperiri: cine/ce anume acoperă cerința. Scos din JSX ca să
+// poată fi folosit și pentru candidații alternativi, nu doar pentru cel de pe primul loc.
+const numeTitular = a => a?.studii
+  ? `${a.studii.emp?.name || '?'} — ${a.mod === 'vechime' ? (a.studii.tip?.denumire || 'dovadă de vechime') : (a.studii.observatii ? a.studii.observatii.slice(0, 70) : (a.studii.tip?.denumire || 'diplomă'))}${a.studii.emitent ? ' · ' + a.studii.emitent.slice(0, 50) : ''}`
+  : a?.recomandare
+  ? `${a.recomandare.emp?.name || a.recomandare.ext?.nume || '?'} — ${a.recomandare.rol || 'rol nespecificat'} la ${a.recomandare.beneficiar || '?'}${a.recomandare.obiect_lucrare ? ' („' + a.recomandare.obiect_lucrare.slice(0, 70) + '")' : ''}${a.recomandare.verificat ? '' : ' · recomandare NEVERIFICATĂ în HR'}`
+  : a?.experienta
+  ? `${a.experienta.denumire}${a.experienta.asociere ? ' (asociere — cota Gazpet ' + (a.experienta.valoare_executata_lei ? Math.round(a.experienta.valoare_executata_lei / 1000) + ' mii lei' : 'NECUNOSCUTĂ') + ')' : (a.experienta.valoare_lei ? ' (' + Math.round(a.experienta.valoare_lei / 1000) + ' mii lei)' : '')}`
+  : (a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume))
+
 const ACOPERIRE_STATUS = {
   acoperit:          { label:'✅ acoperit',  color:G.green },
   acoperit_partener: { label:'🤝 partener',  color:G.teal },
@@ -2437,8 +2447,8 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                       </div>
                       {a.alternative.map(alt => (
                         <div key={alt.id} style={{ fontSize:11, color:G.dim, marginTop:2 }}>
-                          {Number.isFinite(Number(alt.scor)) && (
-                            <span style={{ fontWeight:800, color:G.muted, marginRight:5 }}>{alt.scor}</span>
+                          {scorNumeric(alt.scor) !== null && (
+                            <span style={{ fontWeight:800, color:G.muted, marginRight:5 }}>{scorNumeric(alt.scor)}</span>
                           )}
                           {numeTitular(alt) && <b style={{ color:G.text }}>{numeTitular(alt)}</b>}
                           {alt.referinta_text && <> — {alt.referinta_text}</>}
@@ -2500,17 +2510,7 @@ async function incarcaCatalogAcoperire() {
   // 17.09.2026 (Răzvan): persoanele cu contract închis (employees.active=false) sau externii dezactivați
   // nu mai apar între candidați — Nicu Iosif Cătălin cu 4 autorizații apărea la „Cine poate acoperi”
   // deși nu mai e în firmă. Documentele lor rămân în HR, doar nu se mai propun la ofertare.
-  // Numele „titularului" unei acoperiri: cine/ce anume acoperă cerința. Scos din JSX ca să
-// poată fi folosit și pentru candidații alternativi, nu doar pentru cel de pe primul loc.
-const numeTitular = a => a?.studii
-  ? `${a.studii.emp?.name || '?'} — ${a.mod === 'vechime' ? (a.studii.tip?.denumire || 'dovadă de vechime') : (a.studii.observatii ? a.studii.observatii.slice(0, 70) : (a.studii.tip?.denumire || 'diplomă'))}${a.studii.emitent ? ' · ' + a.studii.emitent.slice(0, 50) : ''}`
-  : a?.recomandare
-  ? `${a.recomandare.emp?.name || a.recomandare.ext?.nume || '?'} — ${a.recomandare.rol || 'rol nespecificat'} la ${a.recomandare.beneficiar || '?'}${a.recomandare.obiect_lucrare ? ' („' + a.recomandare.obiect_lucrare.slice(0, 70) + '")' : ''}${a.recomandare.verificat ? '' : ' · recomandare NEVERIFICATĂ în HR'}`
-  : a?.experienta
-  ? `${a.experienta.denumire}${a.experienta.asociere ? ' (asociere — cota Gazpet ' + (a.experienta.valoare_executata_lei ? Math.round(a.experienta.valoare_executata_lei / 1000) + ' mii lei' : 'NECUNOSCUTĂ') + ')' : (a.experienta.valoare_lei ? ' (' + Math.round(a.experienta.valoare_lei / 1000) + ' mii lei)' : '')}`
-  : (a?.doc_firma ? 'GAZPET INSTAL (firmă)' : (a?.autorizatie ? (a.autorizatie.emp?.name || a.autorizatie.ext?.nume) : a?.partener?.nume))
-
-const titularActiv = r => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
+  const titularActiv = r => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
   for (const r of [aut, rec, stud, vech]) r.data = (r.data || []).filter(titularActiv)
   const arr = (x) => Array.isArray(x) ? x.join(' ') : (x || '')
   const mk = (sursa, id, titlu, sub, text, extra = {}) => ({ sursa, id, titlu, sub, tokens: normText(text).split(' ').filter(Boolean), ...extra })
