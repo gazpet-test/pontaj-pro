@@ -35,7 +35,8 @@ async function textLocal(caleaPdf: string): Promise<{ pagini: string[]; nPag: nu
   const parti = r.out.split('\f')
   if (parti.length && parti[parti.length - 1].trim() === '') parti.pop()
   while (parti.length < nPag) parti.push('')
-  const pagini = parti.slice(0, nPag).map(t => t.split('\n').map(l => l.replace(/\s+$/, '')).join('\n').replace(/\n{3,}/g, '\n\n').trim())
+  // -layout păstrează coloanele tabelelor, dar umflă textul cu spații (fișa SEAP: ~4,6k car./pagină); rulăm 2+ spații într-unul dublu
+  const pagini = parti.slice(0, nPag).map(t => t.split('\n').map(l => l.replace(/\s+$/, '').replace(/[ \t]{2,}/g, '  ')).join('\n').replace(/\n{3,}/g, '\n\n').trim())
   return { pagini, nPag }
 }
 
