@@ -92,7 +92,8 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', ...(Deno.env.get('ANTHROPIC_WORKSPACE_ID') ? { 'anthropic-workspace-id': Deno.env.get('ANTHROPIC_WORKSPACE_ID')! } : {}) },
-      body: JSON.stringify({ model: MODEL, max_tokens: 8000, thinking: { type: 'adaptive' }, system: [{ type: 'text', text: PROMPT }], messages: [{ role: 'user', content: contextul }] }),
+      // 16000, nu 8000: cu thinking adaptive tokenii de gândire se scad din max_tokens (Mânăstirea 22.09: răspuns tăiat la 8000)
+      body: JSON.stringify({ model: MODEL, max_tokens: 16000, thinking: { type: 'adaptive' }, system: [{ type: 'text', text: PROMPT }], messages: [{ role: 'user', content: contextul }] }),
       signal: AbortSignal.timeout(8 * 60_000),
     })
     const data = await resp.json()
