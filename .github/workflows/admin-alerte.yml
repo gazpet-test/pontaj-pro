@@ -1,0 +1,29 @@
+name: Modul Administrator — teste și build
+
+on:
+  pull_request:
+    paths:
+      - 'src/AdministratorAlerte.jsx'
+      - 'src/adminAlerte*'
+      - 'src/App.jsx'
+      - '.github/workflows/admin-alerte.yml'
+      - 'package*.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verificare:
+    runs-on: ubuntu-latest
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run build

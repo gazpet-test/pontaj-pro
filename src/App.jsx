@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext, useRef } from 'react'
+import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
@@ -34,6 +34,7 @@ import RsvpSedintaPage from './RsvpSedintaPage.jsx'
 import AplicaPublic from './AplicaPublic.jsx'
 import ConcediuMobilPage from './ConcediuMobilPage.jsx'
 import HomeScada from './HomeScada.jsx'
+import { ADMIN_ALERTE_KEY, areAccesAdministrator } from './adminAlerte.js'
 // ════════════ Buton global „De aprobat" în navbar (12.06.2026) ════════════
 import DeAprobatButton from './DeAprobatButton.jsx'
 // Meniurile din bara de sus se randează prin portal — bara are overflow-x:auto
@@ -50,6 +51,7 @@ import { MeteoSediu } from './Meteo.jsx'
 import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
 
+const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -103,6 +105,8 @@ function AuthProvider({ children }) {
 // SAU conține orice sub-modul de tipul "<cheia>.xxx" (ex: 'pontajpro.pontaj' => are acces la 'pontajpro')
 function hasModuleAccess(profile, moduleName) {
   if (!profile) return false
+  // Vedere transversală: acord explicit inclusiv pentru owner; fără moștenire de la HR.
+  if (moduleName === ADMIN_ALERTE_KEY) return areAccesAdministrator(profile)
   if (profile.is_owner === true) return true
   const ma = profile.module_access || []
   return ma.some(m => m === moduleName || m.startsWith(moduleName + '.'))
@@ -125,6 +129,11 @@ function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, req
 function ConsumabileRoute() {
   const { profile } = useAuth()
   return <Consumabile profile={profile} />
+}
+
+function AdministratorAlerteRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}><AdministratorAlerte profile={profile} /></Suspense>
 }
 
 // PROVIZORIU (24.08.2026): corecții registru imobilizări. Gate-ul pe persoane
@@ -754,6 +763,7 @@ function Layout({ children }) {
       { p:'/consumabile', i:'🛒', l:'Consumabile' },
     ]),
     ...(hasSalaryAccess?[{p:'/salarii',i:'💵',l:'Salarii'}]:[]),
+    ...(hasModuleAccess(profile, ADMIN_ALERTE_KEY) ? [{p:'/administrator',i:'🔔',l:'Administrator'}] : []),
     ...(isSuperAdmin || profile?.can_modify_employees === true ? [{p:'/admin',i:'⚙️',l:'Admin'}] : []),
   ]
   return (
@@ -982,6 +992,7 @@ function HomeDashboard() {
   const hasSalaryAccess = profile?.can_access_salarii === true || profile?.is_owner === true
 
   const allModules = [
+    { path:'/administrator', icon:'🔔', label:'Administrator', color:'#58A6FF', desc:'Alerte importante · Termene · Aprobări', active:true, requireModule:ADMIN_ALERTE_KEY },
     { path:'/panou',    icon:'⏱',  label:'PontajPRO',   color:'#1F6FEB', desc:'Pontaj · Diurne · Salarii · ITM', active:true, requireModule:'pontajpro' },
     { path:'/financiar', icon:'💰', label:'Financiar',   color:'#2EA043', desc:'Facturi emise · Generator · Email · NAS', active:true, requireModule:'financiar' },
     { path:'/logistica', icon:'🚛', label:'Logistică',   color:'#E3B341', desc:'Flotă · Combustibil · Trasee',     active:true, requireModule:'logistica' },
@@ -8588,6 +8599,7 @@ export default function App() {
         <Route path="/magazie" element={<ProtectedRoute requireModule="magazie"><Layout><MagaziePage/></Layout></ProtectedRoute>}/>
         <Route path="/rapoarte" element={<ProtectedRoute requireModule="pontajpro"><ReportsPage/></ProtectedRoute>}/>
         <Route path="/salarii" element={<ProtectedRoute salaryAccess><SalariiPage/></ProtectedRoute>}/>
+        <Route path="/administrator" element={<ProtectedRoute requireModule={ADMIN_ALERTE_KEY}><Layout><AdministratorAlerteRoute/></Layout></ProtectedRoute>}/>
         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminPage/></ProtectedRoute>}/>
         <Route path="/m" element={<ProtectedRoute><AppMobilManageri/></ProtectedRoute>}/>
         <Route path="/rapoarte-santier" element={<ProtectedRoute><RapoarteSantierPage/></ProtectedRoute>}/>
