@@ -66,7 +66,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const [{ data: cerinte }, { data: acop }, { data: cant }, { data: verif }, { data: docs }, { data: clarLic }] = await Promise.all([
       supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa').eq('licitatie_id', licId).not('diferenta_nota', 'is', null).limit(60),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa').eq('licitatie_id', licId).not('diferenta_nota', 'is', null).limit(40),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
       supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
@@ -86,13 +86,14 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const registru = (cerinte || []).map((c: any) => ({
       id: c.id, tip: c.tip, sectiune: c.sursa_sectiune || undefined, pagina: c.sursa_pagina || undefined, lot: c.lot || undefined,
       cand: c.cand_se_prezinta || undefined, doc: c.document_probant ? String(c.document_probant).slice(0, 120) : undefined,
-      text: String(c.text_cerinta || '').slice(0, 400),
+      // cerințele fără semnal (nu sunt goluri, nu-s eliminatorii) intră scurt — Mânăstirea: 786 cerințe × 400 car. = 131k tokens de intrare
+      text: String(c.text_cerinta || '').slice(0, (golMap.has(c.id) || c.tip === 'eliminatorie') ? 400 : 220),
       ...(golMap.has(c.id) ? { GOL: { status: golMap.get(c.id).status, motiv: String(golMap.get(c.id).motiv || '').slice(0, 300) } } : {}),
     }))
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}):\n${JSON.stringify((cant || []).map((r: any) => ({ id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um, lista: r.cantitate, plansa: r.cantitate_plansa, nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa })))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 3000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}):\n${JSON.stringify((cant || []).map((r: any) => ({ id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um, lista: r.cantitate, plansa: r.cantitate_plansa, nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa })))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
       `INVENTARUL DOCUMENTELOR IMPORTATE (${(docs || []).length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify((docs || []).map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
       `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,
@@ -102,8 +103,8 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', ...(Deno.env.get('ANTHROPIC_WORKSPACE_ID') ? { 'anthropic-workspace-id': Deno.env.get('ANTHROPIC_WORKSPACE_ID')! } : {}) },
-      // 16000, nu 8000: cu thinking adaptive tokenii de gândire se scad din max_tokens (Mânăstirea 22.09: răspuns tăiat la 8000)
-      body: JSON.stringify({ model: MODEL, max_tokens: 16000, thinking: { type: 'adaptive' }, system: [{ type: 'text', text: PROMPT }], messages: [{ role: 'user', content: contextul }] }),
+      // 32000: cu thinking adaptive tokenii de gândire se scad din max_tokens — Mânăstirea 22.09 a tăiat și la 8000 și la 16000 (registru mare: 13 clarificări existente + 1.000 de cantități)
+      body: JSON.stringify({ model: MODEL, max_tokens: 32000, thinking: { type: 'adaptive' }, system: [{ type: 'text', text: PROMPT }], messages: [{ role: 'user', content: contextul }] }),
       signal: AbortSignal.timeout(8 * 60_000),
     })
     const data = await resp.json()
