@@ -17,6 +17,24 @@
 //      Nu există o formă canonică la care să ajungă ambele.
 //   4. Concluzia: transformarea de la deploy nu e reversibilă la un text comparabil.
 //
+// ÎNCERCARE EȘUATĂ, 22.09.2026 — ca să nu se repete. `?include_files=true` pe
+// `/v1/projects/{ref}/functions/{slug}` PARE să întoarcă fișierele sursă: prin serverul MCP
+// de Supabase chiar le-am citit, pentru cinci funcții, și am putut compara caracter cu
+// caracter. Am scris verificarea pe conținut pe baza asta. În CI, cu tokenul real:
+// „verificate pe conținut: 0, pe date: 43" — parametrul nu face nimic pe ruta REST.
+// Deci MCP-ul obține sursa altfel decât printr-un query param. Până se află cum, rămâne
+// metoda pe date: e slabă, dar e ADEVĂRATĂ. Un verificator care tace nu e mai bun decât unul
+// care face zgomot degeaba — e mai rău, pentru că pare că verifică.
+//
+// CE S-A VERIFICAT MANUAL în 22.09.2026, prin MCP, ca să nu se refacă munca:
+// `ofertare-citire-test`, `ofertare-e0-autofill`, `ofertare-inventar-ai` și
+// `ofertare-fisier-semnat` sunt IDENTICE cu producția — apar aici doar pentru că au fost
+// aduse în repo pe 12.09 (PR #245) fără modificare de cod, deci commit-ul e mai nou decât
+// deploy-ul. `ofertare-rfq-inbox` diferă REAL: repo-ul citește `RFQ_INBOX_SECRET` din Edge
+// Secrets, producția are încă secretul scris literal în sursă. Deployul ei rupe intrarea
+// ofertelor pe oferte@gazpet.ro până când secretul e pus ȘI antetul din Apps Script e
+// actualizat (task #51).
+//
 // Data commit-ului față de data deploy-ului răspunde exact la întrebarea care ne interesa —
 // „s-a publicat ce e în main?" — fără niciun artefact de formatare, dintr-o singură cerere.
 //
@@ -95,6 +113,8 @@ if (nepublicate.length) {
   nepublicate.forEach(x => console.log(linie(x)))
   console.log(`\n   Deploy:  supabase functions deploy <slug> --project-ref ${PROJECT_REF}`)
   console.log('   Dacă modificarea era doar un comentariu, un deploy o liniștește oricum.')
+  console.log('   Verifică ÎNTÂI ce cere funcția: dacă versiunea din repo citește un secret nou')
+  console.log('   din Edge Secrets, deployul fără secretul pus rupe apelantul (vezi ofertare-rfq-inbox).')
 }
 if (niciodataPublicate.length) {
   console.log(`\n⚠️  în repo dar nepublicate niciodată (${niciodataPublicate.length}): ${niciodataPublicate.join(', ')}`)
