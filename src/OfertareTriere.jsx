@@ -46,6 +46,15 @@ const RANDURI = [
   ['Termen răspuns AC la clarificări', r => r.termen_raspuns_ac],
   ['Amplasamentul lucrării', r => r.amplasament],
   ['Descrierea pe scurt', r => r.descriere],
+  // TKT-2026-0268: tipul lucrării se deduce din obiect și date tehnice, nu din tipul autorității.
+  // Badge-ul „Segment" rămâne separat — acolo nu există încă valoarea „transport".
+  ['Tip lucrare gaze', r => {
+    const t = r.tip_lucrare_gaze
+    if (!t || !t.tip) return null
+    const etichete = { transport: '🔴 TRANSPORT gaze', distributie: '🟢 Distribuție gaze', mixt: '🟠 Mixt (transport + distribuție)', neclar: '⚠️ Neclar', nu_e_gaze: 'Nu e lucrare de gaze' }
+    const detalii = [t.presiune, t.diametru].filter(Boolean).join(' · ')
+    return [etichete[t.tip] || t.tip, detalii, t.motiv].filter(Boolean).join(' — ')
+  }],
   ['Valoare estimată', r => r.valoare_estimata],
   ['Termen de execuție', r => r.termen_executie],
   ['Criteriu de atribuire', r => r.criteriu],
