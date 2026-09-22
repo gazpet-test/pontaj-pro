@@ -1,5 +1,5 @@
 FROM denoland/deno:alpine
-RUN apk add --no-cache git ca-certificates
+RUN apk add --no-cache git ca-certificates poppler-utils
 ENV DENO_DIR=/deno-dir
 WORKDIR /app
 COPY entrypoint.sh /entrypoint.sh

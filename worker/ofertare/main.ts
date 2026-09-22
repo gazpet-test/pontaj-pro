@@ -5,8 +5,11 @@
 // Heartbeat în worker_heartbeat: cât e proaspăt (< 10 min), tick-ul din Supabase nu lansează nimic; dacă workerul
 // cade, tick-ul reia singur (failover). Doar conexiuni de IEȘIRE (Supabase + Anthropic); nimic nu intră spre NAS.
 // Deploy: entrypoint.sh face git pull din repo și repornește procesul când apare un commit nou pe ramură.
+// 22.09.2026 seara: consumă și ofertare_ingest_coada (citirea documentelor) — vezi ingest.ts: text gratuit cu pdftotext
+// pentru PDF-urile cu strat de text, AI (edge function) doar pentru scanuri.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.ts'
+import { proceseazaIngest } from './ingest.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -18,6 +21,10 @@ const NUME = env('WORKER_NUME', 'ofertare-worker')
 const PARALEL = Math.max(1, Number(env('WORKER_PARALEL', '2')) || 2)          // licitații lucrate simultan
 const BUCATA_MAX = Math.max(6_000, Number(env('WORKER_BUCATA_MAX', '20000')) || 20_000)  // caractere per apel AI
 const SHA = env('WORKER_GIT_SHA', '?'), BRANCH = env('REPO_BRANCH', 'main')
+// Decizie Răzvan 22.09.2026 („2"): documentele din corpus (caiete, memorii, PT, formulare) se citesc cu Sonnet (5x mai ieftin);
+// fișa de date și clarificările rămân pe modelul cozii (Opus implicit), cum a recomandat și Jakarinos.
+const MODEL_CORPUS = env('WORKER_MODEL_CORPUS', 'claude-sonnet-5')
+const TIPURI_OPUS = new Set(['clarificare', 'raspuns_clarificare'])
 const PAUZA_MS = 15_000, HEARTBEAT_MS = 30_000, VERIFICA_GIT_MS = 5 * 60_000
 const MAX_INCERCARI = 3, LEASE_TICK_MS = 4 * 60_000
 
@@ -66,7 +73,11 @@ async function proceseazaLicitatie(id: number) {
       }
       const pas = pasi[c.poz] ?? {}
       const body: Record<string, unknown> = { licitatie_id: id, bucata: c.bucata, bucata_max: BUCATA_MAX, model: c.model || 'claude-opus-5' }
-      if (pas.doc_id != null) body.doc_id = Number(pas.doc_id)
+      if (pas.doc_id != null) {
+        body.doc_id = Number(pas.doc_id)
+        const { data: dd } = await supabase.from('ofertare_documente_atribuire').select('tip').eq('id', Number(pas.doc_id)).maybeSingle()
+        if (!TIPURI_OPUS.has(String(dd?.tip ?? ''))) body.model = MODEL_CORPUS
+      }
       else { body.sectiune = pas.sectiune; if (pas.reset === true && c.bucata === 0) body.reset = true }
       const eticheta = pas.doc_id != null ? `doc ${pas.doc_id}` : `secțiunea ${pas.sectiune}`
       inLucru.set(id, `${eticheta} · bucata ${c.bucata + 1} (pas ${c.poz + 1}/${pasi.length})`)
@@ -99,7 +110,7 @@ async function proceseazaLicitatie(id: number) {
         cerinte_noi: c.cerinte_noi + cer, bucata: continua ? (r.bucata_urmatoare ?? c.bucata + 1) : 0,
         poz: continua ? c.poz : c.poz + 1, incercari: 0, ultimul_tick: acum, jurnal: [...(c.jurnal ?? []), intrare],
       }).eq('licitatie_id', id)
-      log(`#${id}: ${eticheta} bucata ${c.bucata + 1}/${r.bucati ?? '?'} → ${cer} cerințe${r.trunchiat ? ' (TĂIAT la max_tokens!)' : ''}${r.skip ? ' · ' + r.skip : ''} · ${ms} ms · ${r.cost_usd ?? '?'} USD`)
+      log(`#${id}: ${eticheta} bucata ${c.bucata + 1}/${r.bucati ?? '?'} [${String(body.model).replace('claude-', '')}] → ${cer} cerințe${r.trunchiat ? ' (TĂIAT la max_tokens!)' : ''}${r.skip ? ' · ' + r.skip : ''} · ${ms} ms · ${r.cost_usd ?? '?'} USD`)
     }
   } catch (e) {
     log(`#${id}: excepție neașteptată:`, (e as Error)?.message ?? e)
@@ -120,6 +131,7 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 let ultimHb = Date.now(), ultimGit = Date.now()
+let ingestInLucru = false
 while (!oprire) {
   try {
     if (inLucru.size < PARALEL) {
@@ -128,6 +140,17 @@ while (!oprire) {
       for (const r of rows ?? []) {
         if (inLucru.size >= PARALEL) break
         if (!inLucru.has(r.licitatie_id)) { log(`#${r.licitatie_id}: preiau din coadă`); proceseazaLicitatie(r.licitatie_id) }
+      }
+    }
+    if (!ingestInLucru) {
+      const { data: ing } = await supabase.from('ofertare_ingest_coada').select('licitatie_id').eq('activ', true).order('cerut_la').limit(1)
+      const lid = ing?.[0]?.licitatie_id
+      if (lid) {
+        ingestInLucru = true
+        inLucru.set(-lid, 'citire documente')
+        proceseazaIngest(supabase, lid, () => oprire, s => inLucru.set(-lid, `citire: ${s}`))
+          .catch(e => log('ingest:', (e as Error)?.message ?? e))
+          .finally(() => { inLucru.delete(-lid); ingestInLucru = false })
       }
     }
     if (Date.now() - ultimHb >= HEARTBEAT_MS) { await heartbeat(); ultimHb = Date.now() }
