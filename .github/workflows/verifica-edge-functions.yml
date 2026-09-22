@@ -9,7 +9,10 @@ on:
     branches: [main]
     paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', '.github/workflows/verifica-edge-functions.yml']
   pull_request:
-    paths: ['supabase/functions/**']
+    # Și căile verificatorului, nu doar ale funcțiilor: altfel o modificare A VERIFICATORULUI
+    # nu e rulată pe PR-ul care o aduce, ci abia după merge, direct pe main. Adică exact
+    # unealta care există ca să prindă derive ajungea în producție neverificată (22.09.2026).
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', '.github/workflows/verifica-edge-functions.yml']
   schedule:
     - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
   workflow_dispatch:
