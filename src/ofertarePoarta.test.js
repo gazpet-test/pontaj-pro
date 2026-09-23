@@ -11,6 +11,7 @@ const VERDE = {
   capcane: 0, capcane_descoperite: 0,
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0,
   cerinte_neverificate: 0,
+  cerinte_neconfirmate_cu_capitol: 0,
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
@@ -45,10 +46,16 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
       const ev = cu({ capitole_nescrise_de_om: 0, cerinte_neverificate: 0, cerinte_neconfirmate_cu_capitol: 2 })
       expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['neconfirmate'])
     })
-    it('coloana lipsa (view neaplicat) = poarta veche neschimbata: nu blocheaza', () => {
-      const { cerinte_neconfirmate_cu_capitol: _x, ...fara } = { ...VERDE, cerinte_neconfirmate_cu_capitol: undefined }
-      expect(evalueazaPoarta(fara).blocaje).toEqual([])
+    it('control INDISPONIBIL (view lipsa / eroare / rezultat invalid) = block cu „nu putem verifica”, NU zero (Copilot 24.09)', () => {
+      const { cerinte_neconfirmate_cu_capitol: _x, ...fara } = VERDE
+      for (const st of [fara, { ...VERDE, cerinte_neconfirmate_cu_capitol: null }, { ...VERDE, cerinte_neconfirmate_cu_capitol: 'x' }, { ...VERDE, cerinte_neconfirmate_cu_capitol: -1 }]) {
+        const ev = evalueazaPoarta(st)
+        expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['neconfirmate'])
+        expect(ev.randuri.find(r => r.k === 'neconfirmate').detalii).toMatch(/Nu putem verifica/)
+        expect(ev.randuri.find(r => r.k === 'neconfirmate').detalii).not.toMatch(/cerințe cu capitol nu sunt confirmate/)
+      }
     })
+    it('control disponibil si 0 neconfirmate → trece', () => expect(cu({ cerinte_neconfirmate_cu_capitol: 0 }).blocaje).toEqual([]))
     it('cerinta doar ATRIBUITA unui capitol nu e verificata -> block (P0.3: atribuirea nu e conformitate)', () => {
       const ev = cu({ cerinte_neverificate: 1 })
       expect(ev.blocaje).toContain('neverificate'); expect(ev.stare).toBe('block')

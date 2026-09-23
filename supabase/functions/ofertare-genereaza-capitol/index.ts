@@ -404,13 +404,13 @@ Deno.serve(async (req: Request) => {
     let obsId: number | null = null
     if (neconfirmate.length) {
       const amprente = await Promise.all(neconfirmate.map(async (c: any) => {
-        // Web Crypto n-are MD5; SHA-256 trunchiat la 12 hex e suficient ca amprentă a textului trimis modelului.
+        // SHA-256 COMPLET (Copilot 24.09: identificarea exactă a intrării folosite; Web Crypto n-are MD5).
         const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(c.text_cerinta || '')))
-        return `#${c.id}:${Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 12)}`
+        return `#${c.id}:sha256:${Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('')}`
       }))
       const { data: obsRow, error: eObs } = await supabase.from('ofertare_pt_observatii').insert({
         licitatie_id: cap.licitatie_id, capitol_id: capId, cerut_de: actorUid, stare: 'deschisa',
-        text: `⚠️ Generare v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2), confirmată explicit de ${actorUid || 'service_role'}: ${amprente.join(', ')} (id:sha256[0:12] al textului trimis). ` +
+        text: `⚠️ Generare v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2), confirmată explicit de ${actorUid || 'service_role'}: ${amprente.join(', ')} (id:sha256 al textului trimis modelului). ` +
               'Răspunsurile la ele nu sunt bază verificată: confirmă cerințele în registru (sau exceptează-le) și regenerează / corectează textul înainte de depunere.',
       }).select('id').single()
       if (eObs || !obsRow?.id) return fail('Urma pentru cerințele neconfirmate nu s-a putut scrie (' + (eObs?.message || '?') + ') — textul generat NU s-a salvat.', { fara_urma: true })
