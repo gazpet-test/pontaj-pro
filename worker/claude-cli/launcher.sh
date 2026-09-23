@@ -20,7 +20,7 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL 2>/dev/null
 [ -f "$PROMPT_F" ] || { J "prompt necunoscut: $TASK"; final 2 prompt_lipsa; }
 [ -d /data ] || { J "/data nu e montat"; final 2 fara_date; }
 command -v claude >/dev/null || { J "claude CLI lipsește din imagine"; final 2 fara_cli; }
-J "START task=$TASK cli=$(claude --version 2>/dev/null | head -1) model=${TASK_MODEL:-sonnet} effort=${TASK_EFFORT:-medium} timeout=${TASK_TIMEOUT_MIN:-15}m max_turns=${TASK_MAX_TURNS:-20}"
+J "START task=$TASK cli=$(claude --version 2>/dev/null | head -1) model=${TASK_MODEL:-sonnet} effort=${TASK_EFFORT:-medium} timeout=${TASK_TIMEOUT_MIN:-15}m max_turns=${TASK_MAX_TURNS:-20} lic_id=${LIC_ID:-} nr_anunt=${LIC_NR_ANUNT:-}"
 
 # 2. pre-extragere text (agentul nu are Bash): PDF → text cu marcaje ⟦PAGINA n⟧ (același format ca ingest-ul Deno), DOCX → text brut.
 mkdir -p /work/text
@@ -102,11 +102,21 @@ fi
 #    pack-ul validat merge la worker (B2), care e singurul care scrie în BD. Rezultatul brut rămâne în .md pentru diagnoză.
 if [ "$TASK" = "source_pack" ]; then
   PACK="/out/${STAMP}_source_pack.pack.json"
-  node /usr/local/bin/verifica_pack.mjs "$OUT_MD" /work/text "$PACK" > /work/.valid 2>&1; VC=$?
+  # identitatea pack-ului vine de la om/ERP (LIC_ID, LIC_NR_ANUNT din run_pilot), nu de la model; fără LIC_ID pack-ul e
+  # marcat cu problemă de schemă și workerul îl respinge. "rulare" = metadatele rulării (model, ture, cost estimat, durată).
+  [ -n "${LIC_ID:-}" ] || J "ATENȚIE: LIC_ID lipsește — pack-ul nu va avea licitatie_id (workerul îl respinge)"
+  RULARE=$(node -e '
+    const fs=require("fs"); let j={}; try { j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); } catch(e) {}
+    const u=j.usage||{}; process.stdout.write(JSON.stringify({ stamp:process.argv[2], fisier:process.argv[3], sursa:"cli", cli:process.argv[4]||null,
+      model:process.argv[5], effort:process.argv[6], ture:j.num_turns??null, cost_usd_estimat:j.total_cost_usd??null, durata_s:Number(process.argv[7])||null,
+      tokeni:{in:u.input_tokens??null,out:u.output_tokens??null,cache_read:u.cache_read_input_tokens??null,cache_create:u.cache_creation_input_tokens??null},
+      motiv_oprire:j.subtype??null, is_error:j.is_error??null }));
+  ' "$OUT_JSON" "$STAMP" "${STAMP}_source_pack.pack.json" "$(claude --version 2>/dev/null | head -1)" "${TASK_MODEL:-sonnet}" "${TASK_EFFORT:-medium}" "$(( $(date +%s) - START ))")
+  node /usr/local/bin/verifica_pack.mjs "$OUT_MD" /work/text "$PACK" --licitatie-id "${LIC_ID:-}" --nr-anunt "${LIC_NR_ANUNT:-}" --data-dir /data --rulare "$RULARE" > /work/.valid 2>&1; VC=$?
   while IFS= read -r l; do J "pack $l"; done < /work/.valid
   [ "$VC" -eq 4 ] && final 6 pack_json_invalid
-  [ "$VC" -eq 3 ] && J "ATENȚIE: pack cu probleme de schemă — importul îl va respinge"
-  J "PACK=$PACK"
+  [ "$VC" -eq 3 ] && J "ATENȚIE: pack cu probleme de schemă — workerul îl va respinge (stare=respins, motiv în nota)"
+  J "PACK=$PACK sha256=$(sha256sum "$PACK" | cut -c1-64) size=$(stat -c %s "$PACK")"
   final 0 ok
 fi
 grep -q "⟦PAGINA\|text/\|/data/" "$OUT_MD" || J "ATENȚIE: raportul nu citează niciun fișier/pagină — de tratat ca nevalidat"

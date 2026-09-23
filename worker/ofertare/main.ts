@@ -12,6 +12,7 @@ import { extrageCerinte } from '../../supabase/functions/ofertare-cerinte/core.t
 import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
 import { proceseazaClarificari } from './clarificari.ts'
+import { proceseazaSourcePacks } from './source_pack.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -133,7 +134,7 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 let ultimHb = Date.now(), ultimGit = Date.now()
-let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false
+let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false
 while (!oprire) {
   try {
     if (inLucru.size < PARALEL) {
@@ -178,6 +179,12 @@ while (!oprire) {
           .catch(e => log('clarificari:', (e as Error)?.message ?? e))
           .finally(() => { inLucru.delete(-2_000_000 - lid); clarificariInLucru = false })
       }
+    }
+    if (!packInLucru) {   // P0b: pack-urile validate de CLI (/packs = out/ al containerului claude-cli) → ofertare_source_pack, atât
+      packInLucru = true
+      proceseazaSourcePacks(supabase, s => inLucru.set(-3_000_000, `source_pack: ${s}`))
+        .catch(e => log('source_pack:', (e as Error)?.message ?? e))
+        .finally(() => { inLucru.delete(-3_000_000); packInLucru = false })
     }
     if (Date.now() - ultimHb >= HEARTBEAT_MS) { await heartbeat(); ultimHb = Date.now() }
     if (inLucru.size === 0 && Date.now() - ultimGit >= VERIFICA_GIT_MS) {
