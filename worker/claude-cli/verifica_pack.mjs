@@ -8,8 +8,9 @@
 // (3) cerințele fără excerpt regăsit ies din "cerinte" și intră în "nereusite" (motiv) — nu se corectează, nu se parafrazează;
 // (4) identitatea pack-ului (licitatie_id, nr_anunt) vine de la launcher (argumente), NU de la model; (5) pentru fiecare
 // document din pack se scriu sha256 + size_bytes ale fișierului din /data (dovada „ce s-a citit”); (6) raport pe stdout.
-// Marcajele de pagină acceptate: ⟦PAGINA n⟧ și ⟦PAGINA a-b⟧. Un interval dovedește DOAR intervalul (locator.pagina_interval),
-// niciodată o pagină exactă: verificat='document', pagina=null, pagina_declarata=ce a zis modelul (regula Copilot, P0b closeout).
+// Marcajele de pagină acceptate: ⟦PAGINA n⟧ și ⟦PAGINA a-b⟧. verificat = 'pagina' (segment de o pagină = cea declarată) |
+// 'interval' (excerptul stă într-un segment ⟦PAGINA a-b⟧: pagina=null, pagina_interval=[a,b]) | 'document' (găsit literal, dar fără
+// pagină/interval demonstrabil, sau pagina corectată din marcaj). pagina_declarata = ce a zis modelul, NU devine fapt verificat (P0c-prep).
 // Conținutul pack-ului e extern (scris de model din documente scrise de autoritate): aici e doar verificat, nu executat.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -81,7 +82,7 @@ export function verificaLocator(loc) {
   // Dacă e un interval ⟦PAGINA a-b⟧ → se afirmă DOAR intervalul; pagina exactă NU se inventează (nici cea declarată de model).
   const s = gasite[0]
   if (s.de_la === s.pana_la) return { ok: true, nivel: 'document', pagina_reala: s.de_la, interval: null }
-  return { ok: true, nivel: 'document', pagina_reala: null, interval: [s.de_la, s.pana_la] }
+  return { ok: true, nivel: 'interval', pagina_reala: null, interval: [s.de_la, s.pana_la] }
 }
 // verdictul intră în locator (P0a: importul citește locator.verificat / pagina_declarata / pagina_validata / pagina)
 function aplicaVerdict(loc, v) {
@@ -89,17 +90,17 @@ function aplicaVerdict(loc, v) {
   if (v.nivel === 'pagina') { loc.pagina_validata = loc.pagina; return }
   if (Number.isInteger(loc.pagina)) loc.pagina_declarata = loc.pagina
   if (v.pagina_reala) { loc.pagina_validata = v.pagina_reala; loc.pagina = v.pagina_reala; return }
-  // interval sau fără segmente: pagina exactă e nedovedită → pagina = null (importul P0a pune sursa_pagina NULL, pagina_declarata rămâne)
+  // interval sau fără segmente: pagina exactă e nedovedită → pagina = null; intervalul dovedit merge în pagina_interval [start, end]
   loc.pagina = null
   if (v.interval) loc.pagina_interval = v.interval
 }
 
-let okPag = 0, okDoc = 0, cazute = 0
+let okPag = 0, okInt = 0, okDoc = 0, cazute = 0
 const cerinteOk = []
 for (const c of pack.cerinte) {
   delete c.verificat; delete c.pagina_declarata   // formatul vechi (top-level) nu mai există
   const v = verificaLocator(c.locator)
-  if (v.ok) { aplicaVerdict(c.locator, v); v.nivel === 'pagina' ? okPag++ : okDoc++; cerinteOk.push(c) }
+  if (v.ok) { aplicaVerdict(c.locator, v); v.nivel === 'pagina' ? okPag++ : v.nivel === 'interval' ? okInt++ : okDoc++; cerinteOk.push(c) }
   else {
     cazute++
     pack.nereusite.push({ nume_fisier: c.locator?.nume_fisier || null, pagini: Number.isInteger(c.locator?.pagina) ? [c.locator.pagina] : null, motiv: `cerință ${c.ref || '?'} respinsă de validator: ${v.motiv}`, text_respins: String(c.text || '').slice(0, 300) })
@@ -123,7 +124,7 @@ if (dataDir) for (const d of pack.documente) {
 }
 if (opt.rulare) { try { pack.rulare = JSON.parse(opt.rulare) } catch { probleme.push('rulare: JSON invalid') } }
 
-pack.validare = { la: new Date().toISOString(), validator: 'verifica_pack.mjs/2', cerinte_ok_pagina: okPag, cerinte_ok_document: okDoc, cerinte_respinse: cazute, documente_cu_sha256: docsHash, probleme_schema: probleme }
+pack.validare = { la: new Date().toISOString(), validator: 'verifica_pack.mjs/3', cerinte_ok_pagina: okPag, cerinte_ok_interval: okInt, cerinte_ok_document: okDoc, cerinte_respinse: cazute, documente_cu_sha256: docsHash, probleme_schema: probleme }
 fs.writeFileSync(outF, JSON.stringify(pack, null, 1))
-console.log(`VALIDARE licitatie_id=${pack.licitatie.licitatie_id ?? 'null'} nr_anunt=${pack.licitatie.nr_anunt ?? 'null'} cerinte=${cerinteOk.length} (pagina=${okPag} document=${okDoc}) respinse=${cazute} nereusite=${pack.nereusite.length} solicitari=${pack.solicitari.length} erate=${pack.erate.length} sha256=${docsHash}/${pack.documente.length} probleme=${probleme.length ? probleme.join('; ') : 'niciuna'}`)
+console.log(`VALIDARE licitatie_id=${pack.licitatie.licitatie_id ?? 'null'} nr_anunt=${pack.licitatie.nr_anunt ?? 'null'} cerinte=${cerinteOk.length} (pagina=${okPag} interval=${okInt} document=${okDoc}) respinse=${cazute} nereusite=${pack.nereusite.length} solicitari=${pack.solicitari.length} erate=${pack.erate.length} sha256=${docsHash}/${pack.documente.length} probleme=${probleme.length ? probleme.join('; ') : 'niciuna'}`)
 process.exit(probleme.length ? 3 : 0)

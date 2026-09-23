@@ -36,7 +36,7 @@ function verifica(pack: any): string[] {
       if (refs.has(c.ref)) { m.push(`ref duplicat în pack: ${c.ref}`); break }
       refs.add(c.ref)
       if (!c.locator || typeof c.locator.nume_fisier !== 'string') { m.push(`${c.ref}: locator fără nume_fisier`); break }
-      if (c.locator.verificat !== 'pagina' && c.locator.verificat !== 'document') { m.push(`${c.ref}: locator.verificat lipsă (validator vechi?)`); break }
+      if (!['pagina', 'interval', 'document'].includes(c.locator.verificat)) { m.push(`${c.ref}: locator.verificat lipsă (validator vechi?)`); break }
     }
   }
   return m
