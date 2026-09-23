@@ -236,7 +236,9 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
       : ''
 
     if (reset && nrBucata === 0) {
-      await supabase.from('ofertare_cerinte').delete().eq('licitatie_id', licId).eq('extras_de_ai', true).is('confirmata_de', null)
+      // P0b (23.09.2026): reset-ul extractorului vechi șterge doar cerințele lui (extras_de_ai, neconfirmate) —
+      // cerințele importate din Source Pack (sursa_pack_id IS NOT NULL) au proveniență proprie și NU se ating.
+      await supabase.from('ofertare_cerinte').delete().eq('licitatie_id', licId).eq('extras_de_ai', true).is('confirmata_de', null).is('sursa_pack_id', null)
     }
 
     const sys = modCorpus ? (tipDoc === 'formular' ? PROMPT_FORM(numeDoc) : PROMPT_CS(numeDoc, fewshot)) : PROMPT(sectiune, fewshot)

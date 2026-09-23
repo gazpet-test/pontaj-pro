@@ -17,6 +17,9 @@ services:
     volumes:
       - ./repo:/app
       - ./deno-dir:/deno-dir
+      # P0b: pack-urile validate de containerul claude-cli (out/) — workerul le citește și scrie DOAR în ofertare_source_pack;
+      # marchează fișierul procesat cu un sidecar .importat / .respins (de aceea montat rw)
+      - ${PACKS_DIR_HOST:-/Volume1/docker/gazpet-claude-cli/out}:/packs
     logging:
       driver: json-file
       options:
