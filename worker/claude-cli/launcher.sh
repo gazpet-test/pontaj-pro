@@ -47,6 +47,8 @@ done
 find /data -type f ! \( -iname '*.pdf' -o -iname '*.docx' \) | sort | sed 's#^/data/#| #; s#$# | - | - | alt format (necitit) |#' >> /work/INVENTAR.md
 TOTAL_FIS=$(find /data -type f | wc -l); TXT=$(find /work/text -type f | wc -l)
 J "inventar: $TOTAL_FIS fișiere în /data, $TXT texte extrase (limită $MAX_FISIERE fișiere, $MAX_MB MB/fișier)"
+[ "$TOTAL_FIS" -gt 0 ] || { J "STOP: /data e gol — LIC_FOLDER greșit? (docker creează un folder gol dacă ruta nu există)"; final 3 fara_fisiere; }
+[ "$TXT" -gt 0 ] || { J "STOP: niciun text extras (doar scanări?)"; final 3 fara_text; }
 if [ -d /context ] && [ -n "$(ls -A /context 2>/dev/null)" ]; then echo "" >> /work/INVENTAR.md; echo "Context suplimentar în /context: $(ls /context | tr '\n' ' ')" >> /work/INVENTAR.md; fi
 
 # 3. rularea agentului: doar Read/Glob/Grep, fără prompturi (dontAsk = orice ar cere aprobare e refuzat), fără subagenți, fără sesiune pe disc.
