@@ -8,7 +8,8 @@
 // (3) cerințele fără excerpt regăsit ies din "cerinte" și intră în "nereusite" (motiv) — nu se corectează, nu se parafrazează;
 // (4) identitatea pack-ului (licitatie_id, nr_anunt) vine de la launcher (argumente), NU de la model; (5) pentru fiecare
 // document din pack se scriu sha256 + size_bytes ale fișierului din /data (dovada „ce s-a citit”); (6) raport pe stdout.
-// Marcajele de pagină acceptate: ⟦PAGINA n⟧ și ⟦PAGINA a-b⟧ (interval; textul aparține fiecărei pagini din interval).
+// Marcajele de pagină acceptate: ⟦PAGINA n⟧ și ⟦PAGINA a-b⟧. Un interval dovedește DOAR intervalul (locator.pagina_interval),
+// niciodată o pagină exactă: verificat='document', pagina=null, pagina_declarata=ce a zis modelul (regula Copilot, P0b closeout).
 // Conținutul pack-ului e extern (scris de model din documente scrise de autoritate): aici e doar verificat, nu executat.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -71,22 +72,26 @@ export function verificaLocator(loc) {
   if (ex.length < 20) return { ok: false, motiv: 'excerpt lipsă sau sub 20 caractere' }
   if (!cacheSeg.has(loc.nume_fisier)) cacheSeg.set(loc.nume_fisier, segmente(t))
   const seg = cacheSeg.get(loc.nume_fisier)
-  const inPag = Number.isInteger(loc.pagina) && norm(textPagina(seg, loc.pagina)).includes(ex)
-  if (inPag) return { ok: true, nivel: 'pagina' }
-  if (norm(t).includes(ex)) {
-    const s = seg.find(s => norm(s.text).includes(ex))
-    return { ok: true, nivel: 'document', pagina_reala: s ? s.de_la : null, interval: s && s.pana_la !== s.de_la ? [s.de_la, s.pana_la] : null }
-  }
-  return { ok: false, motiv: 'excerpt negăsit literal în text' }
+  const gasite = seg.filter(s => norm(s.text).includes(ex))
+  if (!gasite.length) return norm(t).includes(ex) ? { ok: true, nivel: 'document', pagina_reala: null, interval: null } : { ok: false, motiv: 'excerpt negăsit literal în text' }
+  // 'pagina' = dovadă EXACTĂ: excerptul stă într-un segment de o singură pagină, egală cu cea declarată.
+  const exact = gasite.find(s => s.de_la === s.pana_la)
+  if (exact && Number.isInteger(loc.pagina) && exact.de_la === loc.pagina) return { ok: true, nivel: 'pagina' }
+  // altfel: 'document'. Dacă primul segment găsit e o singură pagină → pagina reală e din marcaj (dovedită).
+  // Dacă e un interval ⟦PAGINA a-b⟧ → se afirmă DOAR intervalul; pagina exactă NU se inventează (nici cea declarată de model).
+  const s = gasite[0]
+  if (s.de_la === s.pana_la) return { ok: true, nivel: 'document', pagina_reala: s.de_la, interval: null }
+  return { ok: true, nivel: 'document', pagina_reala: null, interval: [s.de_la, s.pana_la] }
 }
-// verdictul intră în locator (P0a: importul citește locator.verificat / pagina_declarata / pagina_validata)
+// verdictul intră în locator (P0a: importul citește locator.verificat / pagina_declarata / pagina_validata / pagina)
 function aplicaVerdict(loc, v) {
   loc.verificat = v.nivel
-  if (v.nivel === 'document') {
-    if (Number.isInteger(loc.pagina)) loc.pagina_declarata = loc.pagina
-    if (v.pagina_reala) { loc.pagina_validata = v.pagina_reala; loc.pagina = v.pagina_reala }
-    if (v.interval) loc.pagina_interval = v.interval
-  } else loc.pagina_validata = loc.pagina
+  if (v.nivel === 'pagina') { loc.pagina_validata = loc.pagina; return }
+  if (Number.isInteger(loc.pagina)) loc.pagina_declarata = loc.pagina
+  if (v.pagina_reala) { loc.pagina_validata = v.pagina_reala; loc.pagina = v.pagina_reala; return }
+  // interval sau fără segmente: pagina exactă e nedovedită → pagina = null (importul P0a pune sursa_pagina NULL, pagina_declarata rămâne)
+  loc.pagina = null
+  if (v.interval) loc.pagina_interval = v.interval
 }
 
 let okPag = 0, okDoc = 0, cazute = 0
