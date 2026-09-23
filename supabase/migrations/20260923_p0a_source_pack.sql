@@ -5,7 +5,7 @@
 --   1. ofertare_source_pack — pack-ul integral, imuabil (trigger, nu doar RLS: service_role sare peste RLS).
 --   2. ofertare_source_pack_importuri — istoric append-only al fiecărei selecții umane de import.
 --   3. ofertare_cerinte — 8 coloane nullable de proveniență + CHECK cand_se_prezinta extins + trigger
---      care protejează proveniența (textul rămâne editabil, dar ștampilat).
+--      care protejează proveniența (textul rămâne editabil, dar ștampilat) + RLS RESTRICTIVE: INSERT direct ⇒ sursa_pack_id IS NULL.
 --   4. fn_ofertare_source_pack_preview (SECURITY INVOKER, STABLE, nu scrie) și
 --      fn_ofertare_source_pack_import (SECURITY DEFINER, actor = auth.uid(), owner/responsabil).
 --   5. v_ofertare_source_pack_nereusite (security_invoker).
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS public.ofertare_source_pack (
   nr_cerinte     integer,
   nr_nereusite   integer,
   nr_erate       integer,
-  -- preview-ul NU schimbă starea; 'importat' doar când toate cerințele importabile sunt în registru
+  -- preview-ul NU schimbă starea; 'importat' doar când TOATE cerințele din pack sunt mapate ȘI importate (altfel importat_partial)
   stare          text NOT NULL DEFAULT 'primit' CHECK (stare IN ('primit','importat_partial','importat','respins')),
   ultim_import_la timestamptz,
   nota           text,
@@ -126,11 +126,16 @@ ALTER TABLE public.ofertare_cerinte ADD CONSTRAINT ofertare_cerinte_cand_se_prez
   CHECK (cand_se_prezinta = ANY (ARRAY['duae','depunere','primul_loc','executie','la_solicitare']));
 
 -- Proveniența unei cerințe din pack nu se editează; sursa_pack_id se poate seta doar din RPC-ul de import.
+-- Poarta 1 (RLS RESTRICTIVE, mai jos): authenticated/anon pot insera DOAR sursa_pack_id IS NULL.
+-- Poarta 2 (trigger, SECURITY INVOKER): sursa_pack_id se acceptă doar când current_user = ownerul tabelului,
+--   adică din interiorul unei funcții SECURITY DEFINER (fn_ofertare_source_pack_import). Nu depinde de niciun GUC.
+--   service_role sare peste RLS, dar current_user = service_role → tot refuzat.
 CREATE OR REPLACE FUNCTION public.fn_ofertare_cerinte_pack_protejeaza()
-RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp AS $fn$
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    IF NEW.sursa_pack_id IS NOT NULL AND COALESCE(current_setting('ofertare.import_pack', true), '') <> 'on' THEN
+    IF NEW.sursa_pack_id IS NOT NULL
+       AND current_user <> (SELECT pg_get_userbyid(c.relowner) FROM pg_class c WHERE c.oid = TG_RELID) THEN
       RAISE EXCEPTION 'ofertare_cerinte: sursa_pack_id se setează doar prin fn_ofertare_source_pack_import';
     END IF;
     RETURN NEW;
@@ -158,6 +163,13 @@ DROP TRIGGER IF EXISTS trg_ofertare_cerinte_pack_protejeaza ON public.ofertare_c
 CREATE TRIGGER trg_ofertare_cerinte_pack_protejeaza
   BEFORE INSERT OR UPDATE ON public.ofertare_cerinte
   FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_cerinte_pack_protejeaza();
+
+-- RLS RESTRICTIVE (se combină cu AND peste politicile permisive existente ofertare_cerinte_insert etc.):
+-- un INSERT direct din API (authenticated/anon) poate crea numai rânduri cu sursa_pack_id IS NULL.
+-- Fluxurile vechi (extragere AI, adăugare manuală) nu setează sursa_pack_id → neafectate.
+DROP POLICY IF EXISTS ofertare_cerinte_fara_pack_direct ON public.ofertare_cerinte;
+CREATE POLICY ofertare_cerinte_fara_pack_direct ON public.ofertare_cerinte
+  AS RESTRICTIVE FOR INSERT TO authenticated, anon WITH CHECK (sursa_pack_id IS NULL);
 
 -- ───────────────────────── 4. mapare nume_fisier → document ERP ─────────────────────────
 -- Întoarce (document_id, sursa_mapare). Ordinea: id din context (pack.documente[].id) > seap_cod > nume exact > nume normalizat.
@@ -265,7 +277,7 @@ DECLARE
   v_c jsonb;
   v_doc bigint; v_map text; v_id bigint;
   v_inserate bigint[] := '{}'; v_sarite text[] := '{}'; v_nemapate text[] := '{}'; v_refuzate text[] := '{}';
-  v_importabile int; v_importate int; v_stare text; v_hist bigint;
+  v_importabile int; v_nemapate_total int; v_importate int; v_stare text; v_hist bigint;
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'import: fără sesiune (auth.uid() NULL)'; END IF;
   SELECT * INTO v_pack FROM public.ofertare_source_pack WHERE id = p_pack_id FOR UPDATE;
@@ -284,7 +296,7 @@ BEGIN
   END IF;
   IF p_refs IS NULL OR array_length(p_refs, 1) IS NULL THEN RAISE EXCEPTION 'import: niciun ref selectat'; END IF;
 
-  PERFORM set_config('ofertare.import_pack', 'on', true);
+  -- INSERT-urile de mai jos rulează ca ownerul funcției (SECURITY DEFINER) → trec de RLS-ul restrictiv și de trigger.
   FOREACH v_ref IN ARRAY p_refs LOOP
     SELECT x INTO v_c FROM jsonb_array_elements(v_pack.pack->'cerinte') x WHERE x->>'ref' = v_ref LIMIT 1;
     IF v_c IS NULL THEN v_refuzate := v_refuzate || v_ref; CONTINUE; END IF;
@@ -315,21 +327,24 @@ BEGIN
     RETURNING id INTO v_id;
     v_inserate := v_inserate || v_id;
   END LOOP;
-  PERFORM set_config('ofertare.import_pack', 'off', true);
 
   -- istoric append-only: fiecare selecție umană rămâne
   INSERT INTO public.ofertare_source_pack_importuri (pack_id, actor, refs_cerute, inserate, sarite, nemapate, refuzate)
   VALUES (p_pack_id, v_actor, p_refs, v_inserate, v_sarite, v_nemapate, v_refuzate) RETURNING id INTO v_hist;
 
-  -- stare: importat doar când toate cerințele IMPORTABILE (mapabile) sunt în registru
-  SELECT count(*) INTO v_importabile FROM public.fn_ofertare_source_pack_preview(p_pack_id) pv WHERE pv.importabil;
+  -- stare: 'importat' NUMAI dacă TOATE cerințele acceptate din pack.cerinte[] sunt mapate la un document ERP
+  -- ȘI toate sunt importate. O singură cerință nemapată (sursa_mapare='niciuna') ⇒ 'importat_partial',
+  -- chiar dacă toate cele mapabile au intrat. nereusite[] nu condiționează starea (P0).
+  SELECT count(*) FILTER (WHERE pv.importabil), count(*) FILTER (WHERE NOT pv.importabil)
+    INTO v_importabile, v_nemapate_total FROM public.fn_ofertare_source_pack_preview(p_pack_id) pv;
   SELECT count(*) INTO v_importate FROM public.ofertare_cerinte WHERE sursa_pack_id = p_pack_id;
-  v_stare := CASE WHEN v_importabile > 0 AND v_importate >= v_importabile THEN 'importat' ELSE 'importat_partial' END;
+  v_stare := CASE WHEN v_nemapate_total = 0 AND v_importabile > 0 AND v_importate >= v_importabile
+                  THEN 'importat' ELSE 'importat_partial' END;
   UPDATE public.ofertare_source_pack SET stare = v_stare, ultim_import_la = now() WHERE id = p_pack_id;
 
   RETURN jsonb_build_object('import_id', v_hist, 'stare', v_stare, 'actor', v_actor,
     'inserate', to_jsonb(v_inserate), 'sarite', to_jsonb(v_sarite), 'nemapate', to_jsonb(v_nemapate), 'refuzate', to_jsonb(v_refuzate),
-    'importabile', v_importabile, 'importate_total', v_importate);
+    'importabile', v_importabile, 'nemapate_total', v_nemapate_total, 'importate_total', v_importate);
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_source_pack_import(bigint, text[]) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_ofertare_source_pack_import(bigint, text[]) TO authenticated;

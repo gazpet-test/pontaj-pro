@@ -1265,6 +1265,21 @@ BEGIN
   PERFORM set_config('request.jwt.claims', '{"sub":"43901570-047c-4fc7-9772-08c62ba119ed","role":"authenticated"}', true);
   BEGIN INSERT INTO public.ofertare_cerinte (licitatie_id, text_cerinta, sursa_pack_id, sursa_ref) VALUES (3, 'fals', pid, 'REQ-999'); r := r || jsonb_build_object('SEC7_insert_direct_cu_pack','A TRECUT (RAU)');
   EXCEPTION WHEN OTHERS THEN r := r || jsonb_build_object('SEC7_insert_direct_cu_pack','refuzat: '||SQLERRM); END;
+  -- SEC7b: user authenticated CU acces Ofertare (responsabilul), încearcă sursa_pack_id direct, chiar cu vechiul GUC setat pe 'on' → BLOCAT
+  PERFORM set_config('ofertare.import_pack', 'on', true);
+  BEGIN INSERT INTO public.ofertare_cerinte (licitatie_id, text_cerinta, sursa_pack_id, sursa_ref) VALUES (3, 'fals cu guc', pid, 'REQ-998'); r := r || jsonb_build_object('SEC7b_cu_acces_si_guc_on','A TRECUT (RAU)');
+  EXCEPTION WHEN OTHERS THEN r := r || jsonb_build_object('SEC7b_cu_acces_si_guc_on','refuzat: '||SQLERRM); END;
+  PERFORM set_config('ofertare.import_pack', '', true);
+  -- SEC7c: același user, INSERT normal (fără pack) → merge ca înainte (fluxurile vechi neafectate)
+  BEGIN INSERT INTO public.ofertare_cerinte (licitatie_id, text_cerinta) VALUES (3, 'cerinta manuala test') RETURNING id INTO x;
+    r := r || jsonb_build_object('SEC7c_insert_normal_authenticated', 'ok id '||x);
+  EXCEPTION WHEN OTHERS THEN r := r || jsonb_build_object('SEC7c_insert_normal_authenticated','EROARE: '||SQLERRM); END;
+  -- SEC7d: service_role (sare peste RLS) încearcă sursa_pack_id direct → blocat de trigger (current_user ≠ owner)
+  EXECUTE 'SET LOCAL ROLE service_role';
+  BEGIN INSERT INTO public.ofertare_cerinte (licitatie_id, text_cerinta, sursa_pack_id, sursa_ref) VALUES (3, 'fals service', pid, 'REQ-997'); r := r || jsonb_build_object('SEC7d_service_role_direct','A TRECUT (RAU)');
+  EXCEPTION WHEN OTHERS THEN r := r || jsonb_build_object('SEC7d_service_role_direct','refuzat: '||SQLERRM); END;
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  SELECT jsonb_agg(policyname||'|'||permissive) INTO v FROM pg_policies WHERE tablename='ofertare_cerinte' AND cmd='INSERT'; r := r || jsonb_build_object('SEC7_policies_insert', v);
   SELECT count(*) INTO n FROM public.ofertare_source_pack; r := r || jsonb_build_object('SEC2_responsabil_vede', n);
   -- SEC4 import: fara sesiune / fara rol / responsabil
   PERFORM set_config('request.jwt.claims', '', true);
@@ -1324,13 +1339,14 @@ BEGIN
   SELECT public.fn_ofertare_source_pack_import(sid, ARRAY['REQ-001','REQ-003','REQ-NU-EXISTA']) INTO res;
   r := r || jsonb_build_object('IMP3_partial', res - 'inserate' || jsonb_build_object('nr_inserate', jsonb_array_length(res->'inserate')));
   SELECT public.fn_ofertare_source_pack_import(sid, ARRAY['REQ-002']) INTO res;
-  r := r || jsonb_build_object('IMP3b_completare', res - 'inserate' || jsonb_build_object('nr_inserate', jsonb_array_length(res->'inserate')));
+  r := r || jsonb_build_object('IMP3b_completare_asteptat_importat_partial', res - 'inserate' || jsonb_build_object('nr_inserate', jsonb_array_length(res->'inserate')));
   SELECT jsonb_agg(jsonb_build_object('ref',sursa_ref,'cand',cand_se_prezinta,'loc',locator_verificat,'pag',sursa_pagina,'pag_decl',pagina_declarata,'pasaj_v',pasaj_verificat,'incert',incertitudine)) INTO v FROM public.ofertare_cerinte WHERE sursa_pack_id=sid; r := r || jsonb_build_object('IMP3_randuri', v);
   SELECT count(*) INTO n FROM public.ofertare_source_pack_importuri WHERE pack_id=sid; r := r || jsonb_build_object('IMP3_istoric', n);
   -- nereusite view
   SELECT count(*), count(document_id) INTO n, n2 FROM public.v_ofertare_source_pack_nereusite WHERE pack_id=pid; r := r || jsonb_build_object('NER_view_randuri', n, 'NER_view_mapate', n2);
   -- ROLLBACK demonstrat: DELETE pe inserate
   EXECUTE 'RESET ROLE';
+  DELETE FROM public.ofertare_cerinte WHERE licitatie_id=3 AND sursa_pack_id IS NULL AND text_cerinta='cerinta manuala test';
   DELETE FROM public.ofertare_cerinte WHERE id = ANY (SELECT jsonb_array_elements_text(inserate)::bigint FROM (SELECT jsonb_agg(i) inserate FROM (SELECT unnest(inserate) i FROM public.ofertare_source_pack_importuri) q) z);
   SELECT count(*) INTO c1 FROM public.ofertare_cerinte; r := r || jsonb_build_object('RB_cerinte_total_dupa_delete', c1, 'RB_egal_baseline', c1 = c0);
   RAISE EXCEPTION 'P0A_DRYRUN %', r::text;

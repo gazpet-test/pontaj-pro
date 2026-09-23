@@ -14,6 +14,48 @@ Fișiere:
 - `test-fixtures/manastirea/p0a_checks.sql` — checklist-ul executabil (fixture real B1 Mânăstirea + pack sintetic)
 - `test-fixtures/manastirea/p0a_checks_rezultat_2026-09-23.json` — rezultatul brut al rulării
 
+
+## 0. Revizia v2 (23.09, seara) — cele 2 patch-uri cerute de Copilot, rerulate
+
+**Rezultat v2: toate verificările vechi trec identic + 5 verificări noi trec. 0 modificări persistate în producție** (verificat după rulare: 0 obiecte, 0 coloane, 0 policy, 0 funcții rămase; `ofertare_cerinte` = 4283). Rezultat brut: `test-fixtures/manastirea/p0a_checks_rezultat_2026-09-23_v2.json`.
+
+### Patch 1 — fără GUC; INSERT direct ⇒ `sursa_pack_id IS NULL`
+Politici live verificate înainte: `ofertare_cerinte` are RLS on (force=false), 4 politici PERMISSIVE pentru authenticated (select `auth.uid() IS NOT NULL`; insert/update/delete pe `fn_are_acces_ofertare()`), owner `postgres` (bypassrls). Nicio politică existentă nu a fost modificată.
+
+| | Înainte | După |
+|---|---|---|
+| Poarta 1 (nouă) | — | policy **RESTRICTIVE** `ofertare_cerinte_fara_pack_direct` FOR INSERT TO authenticated, anon `WITH CHECK (sursa_pack_id IS NULL)` — se combină cu AND peste permisivele existente |
+| Poarta 2 (trigger) | SECURITY DEFINER, accepta `sursa_pack_id` dacă GUC `ofertare.import_pack='on'` | SECURITY **INVOKER**, acceptă `sursa_pack_id` doar când `current_user` = ownerul tabelului (adică din interiorul RPC-ului DEFINER). Fără GUC. service_role (sare peste RLS) → `current_user=service_role` → refuzat |
+| RPC import | `set_config('ofertare.import_pack','on')` … `'off'` | eliminat; INSERT-urile rulează ca owner (DEFINER) și trec ambele porți |
+
+Teste noi:
+| # | Test | Obținut | ✔ |
+|---|---|---|---|
+| SEC7b | **user authenticated CU acces Ofertare (responsabilul lic. 3)**, INSERT cu `sursa_pack_id`, cu GUC-ul vechi setat explicit pe `'on'` | refuzat | ✔ |
+| SEC7c | același user, INSERT normal (fără pack) | ok (id 6283, șters la rollback) — fluxurile vechi neafectate | ✔ |
+| SEC7d | `service_role` INSERT direct cu `sursa_pack_id` | refuzat de trigger | ✔ |
+| SEC7 | user authenticated fără GUC | refuzat | ✔ |
+| — | politici INSERT pe `ofertare_cerinte` după migrare | `ofertare_cerinte_fara_pack_direct` RESTRICTIVE + `ofertare_cerinte_insert` PERMISSIVE | ✔ |
+
+Notă: mesajul de refuz vine de la trigger (BEFORE INSERT rulează înaintea verificării RLS WITH CHECK). Dacă triggerul ar lipsi, RLS-ul restrictiv ar refuza singur („new row violates row-level security policy”). Sunt două porți independente, niciuna nu depinde de vreun GUC.
+
+### Patch 2 — stare pack
+`importat` NUMAI dacă `nemapate_total = 0` (nicio cerință acceptată cu `sursa_mapare='niciuna'`) ȘI toate cele importabile sunt importate; altfel `importat_partial`. `nereusite[]` nu intră în calcul. Răspunsul RPC-ului expune acum și `nemapate_total`.
+
+| # | Test | Înainte (v1) | După (v2) | ✔ |
+|---|---|---|---|---|
+| IMP3 | sintetic: import REQ-001 + REQ-003 (nemapat) + ref inexistent | importat_partial | importat_partial (nemapate_total 1) | ✔ |
+| IMP3b | apoi import REQ-002 → toate cele mapabile importate, REQ-003 rămâne nemapat | **importat (greșit)** | **importat_partial** (importate 2/2 mapabile, nemapate_total 1) | ✔ |
+| IMP1 | Mânăstirea real: 51/51 mapate și importate | importat | importat (nemapate_total 0) | ✔ |
+
+### Diff SQL față de v1 (rezumat; complet în commit-ul 2 al PR #410)
+- `fn_ofertare_cerinte_pack_protejeaza`: `SECURITY DEFINER` → `SECURITY INVOKER`; condiția INSERT `current_setting('ofertare.import_pack')` → `current_user <> pg_get_userbyid(relowner)`.
+- + `CREATE POLICY ofertare_cerinte_fara_pack_direct … AS RESTRICTIVE FOR INSERT TO authenticated, anon WITH CHECK (sursa_pack_id IS NULL)`.
+- `fn_ofertare_source_pack_import`: − 2× `set_config(...)`; + `v_nemapate_total`; `v_stare := CASE WHEN v_nemapate_total = 0 AND v_importabile > 0 AND v_importate >= v_importabile THEN 'importat' ELSE 'importat_partial' END`; răspuns + `nemapate_total`.
+- Nimic altceva schimbat.
+
+Notă P0c (acceptată): `respinge = DELETE` pe cerințele din pack pierde audit trail — se rezolvă înainte de UI-ul Source Pack (marcare `stare='respinsa'` în loc de DELETE; FK RESTRICT pe pack rămâne).
+
 ## 1. Checklist P0a (PLAN_TEHNIC_P0_v2 + cele 4 ajustări) — rezultate
 
 | # | Criteriu | Așteptat | Obținut | ✔ |
@@ -53,7 +95,7 @@ Fișiere:
 | NER | View nereușite: 27 rânduri, 23 mapate la documente | 27 / 23 | 27 / 23 | ✔ |
 | RB | După ștergerea rândurilor inserate: total = baseline | 4283 | 4283, `RB_egal_baseline=true` | ✔ |
 
-**Toate cele 33 de verificări au trecut. Nimic nu a persistat.**
+**Toate cele 33 de verificări au trecut (v1). Vezi secțiunea 0 pentru v2. Nimic nu a persistat.**
 
 ## 2. Diff RPC / trigger / RLS (ce adaugă migrarea)
 
