@@ -197,7 +197,11 @@ function acelasiRol(a: string, b: string) {
   const cod = (s: string) => (/^([a-z]?\d+)\s*[:.)]/.exec(s) || [])[1]
   const ca = cod(na), cb = cod(nb)
   if (ca && cb) return ca === cb
-  return (na.length >= 4 && nb.length >= 4) && (na.startsWith(nb) || nb.startsWith(na))
+  // doar unul are cod („E1: Manager de Proiect" vs „Manager de Proiect") → se compară fără cod
+  const fara = (s: string) => s.replace(/^[a-z]?\d+\s*[:.)]\s*/, '')
+  const fa = fara(na), fb = fara(nb)
+  if (fa === fb) return true
+  return (fa.length >= 4 && fb.length >= 4) && (fa.startsWith(fb) || fb.startsWith(fa))
 }
 function indexeazaMatrice(mat: any[]) {
   const idx = new Map<string, RandMat>(), nume = new Map<string, string>(), roluriMat: string[] = []
@@ -387,9 +391,13 @@ function matriceDinBD(parsed: any, recs: any[]) {
       if (!ob.length) continue
       const cine = x.emp?.name || x.ext?.nume; if (!cine) continue
       const acc = perPers.get(cine) || { proiecte: new Set(), verificate: new Set(), cond: new Set(), verifCond: new Set(), surse: [] }
-      let nS = 0, nC = 0, nEx = 0
+      let nS = 0, nC = 0, nEx = 0, idx = 0
       for (const o of ob) {
-        const k = norm(o.denumire).slice(0, 60); if (!k) continue
+        // cheia de dedup: denumire + an + beneficiar final — între recomandări diferite; în aceeași recomandare, fiecare element
+        // se numără (o listă „punere în siguranță ×15" ar fi devenit 1). Sufixul cu id-ul recomandării ține elementele ei distincte
+        // când n-au an/beneficiar (nu se pot deosebi de altele decât prin poziție).
+        const baza = norm(o.denumire); if (!baza) continue
+        const k = (o.an || o.beneficiar_final) ? `${baza}|${o.an || ''}|${norm(o.beneficiar_final || '')}` : `${baza}|r${x.id}#${idx++}`
         const nat = String(o.natura || 'altele')
         const strict = r.natura_ceruta === 'gaze_orice' ? (nat === 'transport' || nat === 'distributie') : nat === r.natura_ceruta
         const cond = !strict && r.natura_ceruta === 'distributie' && nat === 'transport' && !r.exclude_transport
@@ -454,7 +462,7 @@ Deno.serve(async (req: Request) => {
         .or('position.ilike.%inginer%,position.ilike.%manager%,position.ilike.%sef%,position.ilike.%șef%,position.ilike.%responsabil%,position.ilike.%director%,position.ilike.%proiect%,position.ilike.%calitate%,position.ilike.%ssm%,position.ilike.%mediu%')
         .order('name').limit(120),
       supabase.from('hr_recomandari')
-        .select('rol, beneficiar, obiect_lucrare, obiective, domenii, verificat, nr_document, data_document, calificativ, emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
+        .select('id, rol, beneficiar, obiect_lucrare, obiective, domenii, verificat, nr_document, data_document, calificativ, emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
         .eq('activ', true).order('id'),
     ])
     // supabase-js nu aruncă la eșec: fără verificarea asta, un timeout ar deveni „nu avem pe nimeni".
