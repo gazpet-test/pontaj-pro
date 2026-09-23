@@ -1,71 +1,85 @@
 # P0C_PILOT_REVIEW — verificarea de conținut a celor 3 rânduri importate (Mânăstirea, pack #2)
 
-Data: 24.09.2026 · sesiune `session_01TYQw97aZXVXAoHSf25q68z` · sursa primară = `ofertare_documente_atribuire.text_extras` (textul extras al documentelor din licitație, cu marcaje `⟦PAGINA n⟧`), citit literal. Nicio modificare de date, nicio confirmare E2. Fără research general, fără redesign.
+Data: 24.09.2026 (v2, ~03:00 RO; v1 ~02:10) · sesiune `session_01TYQw97aZXVXAoHSf25q68z` · nicio modificare de date, nicio confirmare E2, fără redesign, fără extinderea importului.
 
-## 1. REQ-021 / id 6354 — NECONFIRMAT, cu corecție propusă
+## 0. Sursa verificării — v2 = ORIGINALELE, nu `text_extras`
+
+| Document | Original citit | Cum | SHA256 original (NAS) | SHA256 în pack #2 | Identic |
+|---|---|---|---|---|---|
+| Fișa de date (doc 63) | `Z:\Oferte\2.DISTRIBUTIE GAZE\58.Distrib gn in com MANASTIREA, JUD CALARASI termen dep 24.09.2026\documentatie SEAP\Instructiuni_ofertanti_FisaDate_DF1278266.pdf` (23 p., 292.352 B) | `pdftotext -layout -f 13 -l 13` pe Terra (imaginea CLI, poppler), pe o copie din staging; subsolul paginii extrase spune „Pagina 13" | `fd04dcaa…b0f0be` | `fd04dcaa7df1dc5d…` | ✅ |
+| Factorii de evaluare (doc 80) | `…\documentatie SEAP\Factorii de evaluare - detaliere.pdf` (10 p., 383.293 B) | Desktop Commander `read_file` PDF (extracție proprie), pagina 1 „Cod document: SC Pagina 1 din 10" | `9e1e29c1…e5ded` | `9e1e29c161f5b347…` | ✅ |
+| Formulare (doc 99) | `…\documentatie SEAP\Formulare_conf_ANAP.docx` (62.290 B) | dezarhivat `word/document.xml`, tag-uri eliminate; poziția notei = 15.508 din 48.152 caractere, între „Formularul nr. 7" (13.231) și „Formularul nr. 8" (15.548) | `d9749d61…75c99` | `d9749d6167282fe7…` | ✅ |
+
+Versiunea identificată a documentelor = fișierele din folderul licitației pe NAS (ACL birou, root pe Terra), identice bit cu bit cu ce a citit CLI-ul la producerea pack-ului. `text_extras` din BD (v1) e concordant cu originalele pe toate cele trei pasaje.
+
+## 1. REQ-021 / id 6354 — asociere probatorie incompletă (NU informație inventată)
 
 | | |
 |---|---|
-| `text_cerinta` (actual) | „Finanțarea Contractului se asigură din bugetul de stat, prin Programul Național de Investiții „Anghel Saligny”, și din bugetele locale... Nu se acordă avans." |
-| `sursa_pasaj` (actual, excerptul din pack) | „Nu se acordă avans. Plățile se efectuează pentru lucrările executate, pe baza Situațiilor de Lucrări" |
-| document | id 63 · `Instructiuni_ofertanti_FisaDate_DF1278266.pdf` (Fișa de date, 23 p.) |
-| locator | `sursa_pagina = 13`, `locator_verificat = pagina`, secțiunea III.1.7 — **corect**: marcajul `⟦PAGINA 13⟧` precede paragraful în `text_extras` (marcaje 1…13 înaintea lui). |
-| pasajul integral relevant (III.1.7, p. 13) | „III.1.7) Principalele condiții de finanțare și modalități de plată și/sau trimitere la dispozițiile relevante care le reglementează: **Finanțarea Contractului se asigură din bugetul de stat, prin Programul Național de Investiții „Anghel Saligny", și din bugetele locale, în limita creditelor bugetare aprobate. Nu se acordă avans. Plățile se efectuează pentru lucrările executate, pe baza Situațiilor de Lucrări întocmite de Antreprenor, verificate de Supervizor și certificate prin Certificate de Plată, în condițiile Contractului**, plata sumelor certificate fiind efectuată de Beneficiar. Prețul Contractului se ajustează în condițiile clauzelor 48.3, 48.4 și, după caz, 48.8 din Condițiile generale…" |
+| `text_cerinta` | „Finanțarea Contractului se asigură din bugetul de stat, prin Programul Național de Investiții „Anghel Saligny”, și din bugetele locale... Nu se acordă avans." |
+| `sursa_pasaj` (excerptul din pack, literal, `pasaj_verificat = true` — rămâne true) | „Nu se acordă avans. Plățile se efectuează pentru lucrările executate, pe baza Situațiilor de Lucrări" |
+| locator | doc 63 · **pagina 13** (confirmat pe original: subsolul „Pagina 13") · III.1.7 |
+| **pasajul exact din original (p. 13, III.1.7)** | „Finanțarea Contractului se asigură din bugetul de stat, prin Programul Național de Investiții „Anghel Saligny”, și din bugetele locale, în limita creditelor bugetare aprobate. Nu se acordă avans. Plățile se efectuează pentru lucrările executate, pe baza Situațiilor de Lucrări întocmite de Antreprenor, verificate de Supervizor și certificate prin Certificate de Plată, în condițiile Contractului, plata sumelor certificate fiind efectuată de Beneficiar." |
 
-**Verdict de conținut**: afirmația din `text_cerinta` este susținută integral de paragraful III.1.7 (aceeași pagină, același paragraf), dar **nu de excerptul înregistrat**, care e doar a doua propoziție a paragrafului. Excerptul literal e valid, rezumatul e corect, legătura dintre ele e incompletă. Exact distincția cerută: un excerpt literal valid nu dovedește singur rezumatul. **REQ-021 rămâne fixture negativ** pentru regula „verificarea privește susținerea sensului integral, nu egalitatea literală".
+**Concluzie**: afirmația e susținută integral de paragraful de pe pagina 13; excerptul înregistrat susține doar partea „nu se acordă avans". Fixture negativ „excerpt literal valid ≠ rezumat susținut". Fără schimbare de date: pack-ul, excerptul și proveniența rămân neatinse (trigger neatins).
 
-**Corecție propusă (neexecutată)**:
-- valoarea actuală: `sursa_pasaj` = a doua propoziție (98 caractere);
-- valoarea propusă: `sursa_pasaj` = paragraful integral III.1.7 de mai sus (bold), verificat literal în `text_extras` p. 13;
-- locator: neschimbat (doc 63, pagina 13, III.1.7);
-- operațiunea necesară: `sursa_pasaj` e câmp de proveniență **blocat de trigger** pe rândurile din pack (`fn_ofertare_cerinte_pack_protejeaza`) și nu se editează din UI. Variante: (a) se lasă excerptul din pack așa cum e (e ce a citit validatorul) și la confirmarea E2 se notează în `stare_motiv`/observații că susținerea e paragraful integral p. 13; (b) o operație explicită de owner, prin SQL cu dezactivarea temporară a triggerului pe acest rând, cu decizia lui Răzvan. Recomand (a): nu rescriem proveniența unui pack; pack-ul original rămâne neatins în orice variantă.
-- cauza din amonte: modelul a ales ca excerpt un fragment de 98 de caractere din mijlocul paragrafului; validatorul (fără AI) a verificat literal doar fragmentul. Nu e o eroare de import și nu se corectează retroactiv în pack #2.
-
-## 2. REQ-032 / id 6352 — conținut VERIFICAT (E2 neefectuată)
+## 2. REQ-032 / id 6352 — aceeași limită, tratată simetric
 
 | | |
 |---|---|
 | `text_cerinta` | „factorul „Preț” are o pondere de 65% în totalul criteriului de atribuire, căruia îi corespunde un maximum de 65 puncte [...] factorul „Experiența profesională a Managerului de proiect” are o pondere de 5%." |
-| `sursa_pasaj` | „factorul „Preț” are o pondere de 65% în totalul criteriului de atribuire, căruia îi corespunde un maximum de 65 puncte" |
-| document aplicabil | id 80 · `Factorii de evaluare - detaliere.pdf` (10 p.) — documentul CURENT (Anexa 1, id 64, cu 30%, e înlocuită conform eratei din pack; Fișa de date II.2.5 confirmă 65%). |
-| locator | pagina 1, `locator_verificat = pagina`, secțiunea „Factori de evaluare" — corect. |
-| pasajul integral relevant (p. 1) | „Factorii de evaluare utilizați pentru aplicarea criteriului cel mai bun raport calitate preț sunt: 1. factorul „Preț" are o pondere de 65% … maximum de 65 puncte, 2. factorul „Gradul de adecvare al graficului general…" 15% (15 p.), 3. factorul „Demonstrarea unei metodologii corespunzătoare pentru asigurarea calității…" 5% (5 p.), 4. factorul „Experiența profesională a Managerului de proiect" 5% (5 p.), 5. factorul „Măsuri suplimentare de protecție a mediului…" 10% (10 p.). … O ofertă poate obține un număr maxim de 100 de puncte." |
+| `sursa_pasaj` (literal, rămâne) | „factorul „Preț” are o pondere de 65% în totalul criteriului de atribuire, căruia îi corespunde un maximum de 65 puncte" |
+| locator | doc 80 · pagina 1 · „Factori de evaluare" — confirmat pe original |
+| **fragment exact 65% (original p. 1)** | „1. factorul „Preț” are o pondere de 65% în totalul criteriului de atribuire, căruia îi corespunde un maximum de 65 puncte," |
+| **fragment exact 5% (original p. 1)** | „4. factorul „Experiența profesională a Managerului de proiect” are o pondere de 5% în totalul criteriului de atribuire, căruia îi corespunde un maximum de 5 puncte," |
+| concordanță cu Fișa de date | II.2.5 (original p. 3–5): „Pretul ofertei … 65% Punctaj maxim factor: 65"; „FACTORUL „Experiența profesională a Managerului de proiect” … 5% Punctaj maxim factor: 5". |
 
-**Verdict**: ambele afirmații din `text_cerinta` (preț 65% / manager 5%) sunt susținute de pasajul integral. Excerptul acoperă prima; a doua e în același paragraf. Observație: rândul e mai degrabă informație de evaluare decât obligație a ofertantului (tip `propunere`); tipul îl decide omul la E2.
+**Concluzie**: ambele componente sunt susținute de pagina 1 a documentului aplicabil (și de Fișa de date II.2.5); excerptul acoperă doar 65%. Componenta „5%" are dovada suplimentară de mai sus, fără elipse. Fără schimbare de date.
 
-## 3. REQ-035 / id 6353 — conținut VERIFICAT (E2 neefectuată), cu rezervă de aplicabilitate
+## 3. REQ-035 / id 6353 — clauza confirmată; tipul rămâne de decis
 
 | | |
 |---|---|
-| `text_cerinta` | „Este interzisă subcontractarea totală a contractului." |
-| `sursa_pasaj` | identic |
-| document | id 99 · `Formulare_conf_ANAP.docx` (26 p.) — text fără marcaje de pagină (docx), de aceea `locator_verificat = document`, `sursa_pagina = NULL`; secțiunea „Formularul nr. 7". |
-| pasajul integral relevant | Nota de sub modelul de Acord de subcontractare (Formularul nr. 7): „Note: Prezentul acord constituie un model orientativ şi se va completa în funcţie de cerinţele specifice ale obiectului contractului/contractelor. În cazul în care oferta va fi declarată câștigătoare, se va încheia un contract de subcontractare în aceleaşi condiţii în care contractorul a semnat contractul cu autoritatea contractantă. **Este interzisă subcontractarea totală a contractului.**" — urmat imediat de „Formularul nr. 8 … PROPUNERE TEHNICĂ". |
+| `text_cerinta` = `sursa_pasaj` | „Este interzisă subcontractarea totală a contractului." |
+| document | doc 99 `Formulare_conf_ANAP.docx` (fără paginație fixă → `locator_verificat = document`, `sursa_pagina = NULL`), secțiunea „Formularul nr. 7" |
+| **pasajul exact din originalul DOCX** (nota de sub modelul „Acord de subcontractare", imediat înainte de „Formularul nr. 8 … PROPUNERE TEHNICĂ") | „Note: Prezentul acord constituie un model orientativ si se va completa în functie de cerintele specifice ale obiectului contractului/contractelor. In cazul în care oferta va fi declarata câștigatoare, se va încheia un contract de subcontractare în aceleasi conditii în care contractorul a semnat contractul cu autoritatea contractanta. Este interzisa subcontractarea totala a contractului." |
 
-**Verdict**: afirmația e susținută literal și integral. Rezervă pentru E2: sursa e o notă dintr-un model de formular, nu Fișa de date; interdicția subcontractării totale există și în lege (art. 218 L98/2016), deci e aplicabilă, dar la confirmare se decide dacă rândul rămâne `eliminatorie` sau devine `forma`/`contractuala`. Nu am făcut research pe Fișa de date pentru asta (în afara scopului).
+**Concluzie**: clauza există literal în formular. **Tipul**: propun `contractuala` (sau `forma`), nu `eliminatorie` — textul e o notă la modelul de acord de subcontractare (obligație la contractare), nu un criteriu de calificare cu sancțiune de respingere formulată în Fișa de date; nu am verificat aplicabilitatea în Fișa de date III.1 (în afara scopului) și **nu folosesc trimiterea la art. 218 L98/2016 ca probă** (textul legal nu e reprodus, nu e verificat aici). Decizia de tip o dă Răzvan la E2; schimbarea de tip e câmp editabil (nu proveniență).
 
-## 4. Rândurile neconfirmate nu sunt fapte aprobate — verificat punctual
+## 4. Dovada suplimentară — mecanismul existent NU o poate ține legată de cerință (limită semnalată înainte de E2)
 
-- **`ofertare-verificare-finala`**: citește toate cerințele licitației, numără explicit `neconfirmate` (`!confirmata_de`) și trimite modelului fiecare rând cu câmpul `confirmata: false/true` — rândurile neconfirmate sunt vizibile ca „de verificat", nu ca fapte aprobate. Nu sunt scoase din flux.
-- **`ofertare-genereaza-capitol`**: folosește doar cerințele **atribuite explicit unui capitol** (`ofertare_pt_legaturi`). Rândurile 6352/6353/6354 nu sunt atribuite niciunui capitol (0 legături) → nu intră în generare. Atenție: funcția nu filtrează după `confirmata_de`; dacă un om atribuie un rând neconfirmat unui capitol, el va fi folosit. Regula rămâne umană: se atribuie doar după E2.
-- **`ofertare-acoperire`**: rulează pe toate cerințele de un tip, fără filtru `confirmata_de`; pentru cele 3 rânduri nu există nicio acoperire (0 rânduri în `ofertare_acoperire`; ultima rulare pe licitația 3 = 15.09.2026, înainte de import).
-- **`ofertare-etapa1-mail`**: raportează contorul de neconfirmate; informativ.
-- UI (`CerinteSection`): rândurile apar cu badge 📦 pack, neconfirmate, `stare=de_analizat`; „confirmă tot" (poarta E2) NU s-a apăsat.
+Inventarul locurilor existente, per cerință:
+- `ai_feedback` (ref_table='ofertare_cerinte', ref_id): `verdict` e limitat prin CHECK la `neverificat | confirmat | corectat | respins`, iar `output_corectat` e gândit pentru textul corectat — o „dovadă suplimentară" ar trebui înregistrată ca `confirmat` (= confirmare generică, exact ce nu vrem) sau ca `corectat` (fals).
+- `ofertare_cerinte.stare_motiv`: text liber pe rând, dar semantic legat de stările `nu_se_aplica`/`blocata`; fără structură, fără verificator/dată proprii.
+- `ofertare_pt_observatii`: per capitol PT, nu per cerință. `ofertare_verificari`: per licitație (raport arbitru). `ofertare_acoperire_revizii`: per acoperire.
+- `ofertare_source_pack_decizii`: per (pack, ref), append-only, cu actor/timp/motiv — cel mai apropiat, dar decizia curentă e deja `IMPORT` și un rând nou cu `motiv` lung ar suprascrie semantic „decizia curentă" (rămâne IMPORT, dar amestecă decizia cu dovada).
 
-Concluzie: cele 3 rânduri sunt în fluxul de lucru ca **candidați neconfirmați**, nu ca fapte; singurul loc unde un rând neconfirmat ar deveni „fapt" e atribuirea manuală la un capitol PT, care nu s-a făcut.
+**Limita**: nu există un loc structurat, per cerință, pentru {document_id, versiune (sha256), locator, pasaj exact, concluzie, verificator, dată}. Nu înlocuiesc cu o confirmare generică. Până la decizie, dovada stă în acest fișier (repo, main) și în `claude_docs.handoff_activ`. **Propunere minimă (neexecutată, cere GO)**: tabel append-only `ofertare_cerinte_dovezi` (cerinta_id, document_id, sha256, locator jsonb, pasaj text, concluzie text, verificat_de uuid, verificat_la) + RLS ca la decizii; UI: listă sub rândul din registru. Alternativ, fără schemă: un rând `ofertare_source_pack_decizii` cu decizie `IMPORT` repetată și `motiv` = dovada structurată în text — funcțional, dar amestecă semanticile; nu recomand.
 
-## 5. Trasabilitatea accesului
+## 5. Drepturile — sfera exactă și cererea de confirmare
 
-| Moment | Stare |
-|---|---|
-| Test „cont fără drepturi" (P0C_REVIEW_READY, 23.09 ~22:30 RO) | poarta RPC = owner SAU responsabil; contul `claude@gazpet.ro` (profil `10c105d3-…`, `manager_santier`, `is_owner=false`, `ofertare:admin`) NU putea decide/importa; UI ascundea butoanele. 8/8 PASS, 0 scrieri. |
-| **Aprobarea** | Răzvan, în chat, 24.09.2026 ~00:45 RO: „pune-ți acces full pe ofertare și verifică tu din contul tău". |
-| **Schimbarea de drepturi** | NU s-a modificat `user_module_access` (contul avea deja `ofertare:admin`). S-a extins **condiția server-side**: migrarea `p0c_source_pack_gate_ofertare_admin` → funcția `fn_ofertare_source_pack_poate_decide(p_licitatie_id)` = `is_owner` SAU `responsabil_id = auth.uid()` SAU `user_module_access(module='ofertare', access_level='admin')`; folosită de `fn_ofertare_source_pack_decide` și `fn_ofertare_source_pack_import`. UI aliniat (#417). Consemnat în `registru_automatizari`. |
-| Test „cu drepturi" (~01:15 RO) | 9/9 PASS, 0 scrieri; butoanele vizibile pentru contul Claude. |
-| **Aprobarea importului** | Răzvan, în chat: „GO import pe REQ-032, REQ-035, REQ-021". |
-| **Actorul tehnic înregistrat** | `ofertare_source_pack_decizii` #46/#47/#48 și `ofertare_source_pack_importuri` #6/#7: `actor = 10c105d3-536d-4ca6-b943-803592626909` (contul Claude), `motiv = „GO Răzvan în chat, 24.09.2026 (pilot lot 1: …)"`. Aprobarea (Răzvan) și actorul (Claude) sunt distincte și ambele consemnate. |
+Regula server-side (`fn_ofertare_source_pack_poate_decide`) autorizează, pe lângă owner și responsabil, **orice cont cu `user_module_access(module='ofertare', access_level='admin')`**. Sfera reală la 24.09.2026:
 
-## 6. Rezultat
-- REQ-032 și REQ-035: conținut verificat pe sursa primară; pot merge la E2 (decizia lui Răzvan), cu rezerva de tip/aplicabilitate notată la REQ-035.
-- REQ-021: neconfirmat; rămâne fixture negativ; corecția propusă la §1 (recomandare: varianta (a), fără rescrierea proveniența).
-- Nicio modificare de date, nicio confirmare E2, restul de 39 nedeciși, P1 neînceput.
+| Cont | Nivel Ofertare | Poate decide/importa |
+|---|---|---|
+| Razvan Trusu, Tudorache Marilena Claudia | owner | da (dinainte) |
+| responsabilul fiecărei licitații | — | da, doar pe licitația lui (dinainte) |
+| **Claude** (`claude@gazpet.ro`) | **admin** (15.09.2026) | **da — singurul admin** |
+| Cristina Dumitrescu, Kostas T, Madalina Tanase, Mioara Olaru, Mirela Popescu, Mirela Rosu, Oana Nica, Silviu Stanescu | editor | nu |
+
+Deci astăzi regula afectează un singur cont, dar orice viitor `ofertare:admin` va primi automat dreptul. **Răzvan: confirmi păstrarea politicii „admin Ofertare = poate decide/importa" (opțiunea A), sau o restrângem explicit la contul Claude / la owner+responsabil (opțiunea B)?** Nimic nu se schimbă până nu răspunzi.
+
+## 6. Protecția generatorului — remediere DESCHISĂ, nu închisă
+
+- Faptic acum: cele 3 rânduri nu au legături PT (0 în `ofertare_pt_legaturi`) și nu au acoperiri (0) → nu intră în generare. Rămân neatribuite până la E2.
+- NU e demonstrată o interdicție tehnică generală: `ofertare-genereaza-capitol` folosește orice cerință atribuită unui capitol, indiferent de `confirmata_de`; `ofertare-acoperire` rulează pe toate cerințele unui tip; `ofertare-verificare-finala` le marchează `confirmata:false` (bine). Remediere înregistrată ca todo: filtrare / semantică explicită a cerințelor neconfirmate în generator (blocare la atribuire sau marcaj „NECONFIRMATĂ" în prompt), de decis în P1.
+
+## 7. Concluzia finală pe cele trei rânduri
+
+| Rând | Conținut | Schimbare de date propusă | Gata de E2 (aprobare nominală Răzvan, fără „confirmă tot") |
+|---|---|---|---|
+| REQ-032 / 6352 | susținut integral (65% + 5%) pe originalul p. 1 | niciuna; dovada suplimentară pentru „5%" = §2 | da, ca `propunere` (informație de evaluare) — tipul îl confirmă Răzvan |
+| REQ-035 / 6353 | clauza confirmată literal în DOCX | tip: `eliminatorie` → propun `contractuala` (câmp editabil, la E2) | da, după decizia de tip |
+| REQ-021 / 6354 | susținut integral de paragraful III.1.7 p. 13; excerptul e parțial | niciuna pe proveniență; dovada = §1 | da, cu dovada suplimentară persistată (vezi limita §4) — sau rămâne fixture negativ neconfirmat până se decide §4 |
+
+Restul de 39 de candidați: neatinși. P1: neînceput. După închiderea §4 (decizie) și §5 (confirmare) putem închide pilotul P0c fără a pretinde că documentația Mânăstirea a fost extrasă exhaustiv.
