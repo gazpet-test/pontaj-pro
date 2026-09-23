@@ -1,6 +1,6 @@
 # PR-P0a — Source Pack → registru: rezultate checklist (23.09.2026)
 
-**Stare: NEAPLICAT în producție.** Migrarea a fost verificată prin *dry-run cu rollback* pe proiectul de producție
+**Stare: v2 aprobată de Copilot (23.09 seara), aplicată în producție prin `apply_migration` — vezi POST-APPLY CHECK în secțiunea 4.** Istoric: verificată întâi prin dry-run cu rollback. Migrarea a fost verificată prin *dry-run cu rollback* pe proiectul de producție
 (`dxczwkbciseqniprspcu`): migrare + checklist într-o singură tranzacție, terminată cu `RAISE EXCEPTION`, deci nimic
 nu a persistat (verificat după: 0 obiecte rămase, 0 coloane noi, 0 funcții, `ofertare_cerinte` = 4283 rânduri, ca înainte).
 
@@ -82,7 +82,7 @@ Notă P0c (acceptată): `respinge = DELETE` pe cerințele din pack pierde audit 
 | SEC7 | INSERT direct în `ofertare_cerinte` cu `sursa_pack_id` (fără RPC) → refuzat | refuzat | `sursa_pack_id se setează doar prin fn_ofertare_source_pack_import` | ✔ |
 | MAP | Mapare pack→documente pe Mânăstirea: 51/51 `nume_exact`, 0 nemapate | 51 | 51 nume_exact, 0 nemapate | ✔ |
 | MAP | Preview NU schimbă starea pack-ului | primit | primit | ✔ |
-| IMP1 | Import integral 51 refs: 51 inserate, `confirmata_de` NULL, `extras_de_ai` true, `stare='de_analizat'`, `nr_ordine` continuă după 927 | 51 | 51; cand {depunere 27, executie 16, duae 7, la_solicitare 1}; tip {elim 16, prop 16, contr 13, forma 6}; ordine 928–978 | ✔ |
+| IMP1 | Import integral 51 refs: 51 inserate, `confirmata_de` NULL, `extras_de_ai` true, `stare='de_analizat'`, `nr_ordine` unice și toate > baseline (927); intervalul exact nu e criteriu (testele suplimentare pot consuma numere) | 51 | 51; cand {depunere 27, executie 16, duae 7, la_solicitare 1}; tip {elim 16, prop 16, contr 13, forma 6}; v1: 928–978, v2: 929–979, ambele unice și > 927 | ✔ |
 | IMP1 | Dashboard lic 3: 927 → 978 | 978 | 978 | ✔ |
 | IMP2 | Re-import aceleași refs: 0 inserate, 51 sărite (idempotent) | 0 / 51 | 0 / 51 | ✔ |
 | IMP | Istoric: 2 rânduri după 2 importuri | 2 | 2 | ✔ |
@@ -109,11 +109,12 @@ Obiecte NOI (nu modifică niciun RPC existent):
 | `trg_ofertare_source_pack_importuri_ro` | trigger BEFORE UPDATE/DELETE | DEFINER | append-only |
 | `ofertare_cerinte` +8 coloane | ALTER | — | `sursa_pack_id, sursa_ref, locator_verificat, pagina_declarata, incertitudine, sursa_mapare, text_editat_la, text_editat_de` — toate NULL pe rândurile vechi |
 | `ofertare_cerinte_cand_se_prezinta_check` | CHECK înlocuit | — | + `la_solicitare` (restul identic) |
-| `trg_ofertare_cerinte_pack_protejeaza` | trigger BEFORE INSERT/UPDATE | DEFINER | INSERT cu `sursa_pack_id` doar cu flagul de sesiune al RPC-ului; pe rândurile din pack blochează proveniența, ștampilează editarea textului. **Rândurile fără pack: comportament neschimbat.** |
+| `trg_ofertare_cerinte_pack_protejeaza` | trigger BEFORE INSERT/UPDATE | **INVOKER** (v2) | INSERT cu `sursa_pack_id` acceptat doar când `current_user` = ownerul tabelului (adică din interiorul RPC-ului DEFINER), fără GUC; pe rândurile din pack blochează proveniența, ștampilează editarea textului. **Rândurile fără pack: comportament neschimbat.** |
+| `ofertare_cerinte_fara_pack_direct` | policy RESTRICTIVE INSERT (v2) | authenticated, anon | `WITH CHECK (sursa_pack_id IS NULL)` — INSERT direct din API nu poate crea rânduri din pack |
 | `fn_ofertare_source_pack_mapeaza_doc` | fn STABLE | INVOKER | id_context > seap_cod > nume exact > nume normalizat > niciuna |
 | `fn_ofertare_source_pack_cand` | fn IMMUTABLE | — | DUAE→duae, la_depunere→depunere, in_executie→executie, la_solicitare→la_solicitare |
 | `fn_ofertare_source_pack_preview` | fn STABLE | **INVOKER** (trece prin RLS) | tabelul de preview per cerință + „seamănă cu” (pg_trgm, prag 0.45) + `deja_importat` + `importabil` |
-| `fn_ofertare_source_pack_import` | fn | **DEFINER** — justificare: trebuie să scrie în `ofertare_cerinte` și `importuri` peste RLS; poarta e în cod: `auth.uid()` obligatoriu + owner sau responsabil + identitate pack↔licitație | singurul drum prin care apar rânduri cu `sursa_pack_id` |
+| `fn_ofertare_source_pack_import` | fn | **DEFINER** — justificare: trebuie să scrie în `ofertare_cerinte` și `importuri` peste RLS; poarta e în cod: `auth.uid()` obligatoriu + owner sau responsabil + identitate pack↔licitație | singurul drum prin care apar rânduri cu `sursa_pack_id`; stare `importat` doar când toate cerințele sunt mapate și importate (v2) |
 | `v_ofertare_source_pack_nereusite` | view | security_invoker | lista documentelor necitite/respinse din pack |
 
 Ce NU se schimbă: niciun RPC existent, nicio policy existentă, `fn_gate_depunere`, generatorul, `core.ts`. Rândurile vechi din `ofertare_cerinte` nu se ating (verificat S2).
@@ -123,3 +124,24 @@ Ce NU se schimbă: niciun RPC existent, nicio policy existentă, `fn_gate_depune
 - Validatorul CLI (`verifica_pack.mjs`) nu emite încă `locator.verificat` per cerință → pe pack-urile reale totul intră cu `pasaj_verificat=false`. Corect după regula EXTRACTED ≠ VALIDATED, dar P0b trebuie să emită verdictul per item ca importul să-l poată prelua.
 - `core.ts:239` (`reset` șterge `extras_de_ai ∧ confirmata_de IS NULL`) ar șterge și rândurile din pack → în P0b, reset-ul trebuie să excludă `sursa_pack_id IS NOT NULL` (sau să treacă prin RESTRICT-ul FK).
 - UI de preview/import (butonul „Importă”) = P0c.
+
+## 4. POST-APPLY CHECK (23.09.2026, ~18:02 UTC) — producție `dxczwkbciseqniprspcu`
+
+Aplicat cu `apply_migration` exact fișierul din PR #410 (commit 595e7a0 + doc fix; migrare md5 `8043d3ff07637d31f0da56254eb94559`, 25.420 bytes), urmat de 3 migrări mici de post-apply (în repo: `20260923_p0a_source_pack_post_apply.sql`).
+
+| # | Verificare | Rezultat | ✔ |
+|---|---|---|---|
+| 1 | migrare prezentă | `supabase_migrations.schema_migrations`: `20260923180149 p0a_source_pack` (+ `p0a_source_pack_grants_strict`, `p0a_source_pack_cand_search_path`, `p0a_source_pack_indexuri_fk`); migrare = fișierul din repo, md5 `8043d3ff…` | ✔ |
+| 2 | `ofertare_cerinte` = baseline, nemodificat | înainte: 4283 rânduri, max_id 6224, max_updated 2026-09-22 17:07:49, amprentă md5(id|text|stare) `e8ad1a32…`; după: identic (4283 / 6224 / aceeași dată / `e8ad1a32…`) | ✔ |
+| 3 | 8 coloane noi, NULL pe istoric | toate 8 `is_nullable=YES`; rânduri istorice cu vreo valoare: 0 | ✔ |
+| 4 | `ofertare_source_pack` | 0 rânduri | ✔ |
+| 5 | `ofertare_source_pack_importuri` | 0 rânduri | ✔ |
+| 6 | RLS/policies exact v2 | RLS on pe toate 3 tabelele. `ofertare_cerinte`: cele 4 permisive vechi neatinse + `ofertare_cerinte_fara_pack_direct` RESTRICTIVE INSERT `{anon,authenticated}` CHECK `(sursa_pack_id IS NULL)`. `source_pack`/`importuri`: doar SELECT permisiv pe `fn_are_acces_ofertare()`. **Corecție post-apply**: Supabase acordase implicit `anon`=ALL și `service_role`=ALL pe tabelele noi (RLS le bloca, dar nu era „exact v2”) → revocate; acum: authenticated=SELECT, service_role=INSERT,SELECT,UPDATE (pack) / INSERT,SELECT (importuri), anon=nimic (test: `permission denied`) | ✔ |
+| 7 | RPC preview = INVOKER | `prosecdef=false`, STABLE, `search_path=public, pg_temp` (la fel `mapeaza_doc`, trigger `pack_protejeaza`) | ✔ |
+| 8 | RPC import = DEFINER + search_path fix | `prosecdef=true`, `search_path=public, pg_temp`; EXECUTE doar authenticated (+service_role) | ✔ |
+| 9 | INSERT direct authenticated cu `sursa_pack_id` | tranzacție anulată, ca responsabilul lic. 3: **BLOCK** (`sursa_pack_id se setează doar prin fn_ofertare_source_pack_import`) | ✔ |
+| 10 | INSERT/UPDATE normal, fluxul vechi | INSERT fără pack: ok (rând 6339, vizibil, anulat la rollback); UPDATE pe rând vechi: 1 rând, ok | ✔ |
+| 11 | get_advisors | Security: 2 semnale noi → `fn_ofertare_source_pack_cand` search_path mutabil (**reparat**, ALTER FUNCTION SET search_path); `fn_ofertare_source_pack_import` DEFINER apelabil de authenticated = intenționat (poarta de import cu verificare de rol în cod; aceeași clasă ca celelalte 49 RPC-uri listate). Performance: 4 INFO noi „unindexed FK” → **reparate** (4 indexuri). Restul semnalelor preexistă P0a. | ✔ |
+| 12 | build/tests repo | `npx vite build` ✓ (20 s); checklist-ul DB (v2) 100% trecut înainte de apply | ✔ |
+
+Niciun pack real în registrul live (0 rânduri). P0b nu a început.
