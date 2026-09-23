@@ -94,7 +94,15 @@ export default function SourcePackSection({ licitatie, profile, onImported }) {
   const [deschis, setDeschis] = useState(true)
 
   const pack = useMemo(() => (packs || []).find(p => p.id === packId) || null, [packs, packId])
-  const poateDecide = !!(profile?.is_owner || (licitatie?.responsabil_id && licitatie.responsabil_id === profile?.id))
+  // 24.09.2026 (Răzvan): poate decide/importa = owner SAU responsabilul licitației SAU admin pe modulul Ofertare —
+  // aceeași poartă ca fn_ofertare_source_pack_poate_decide din RPC-uri (UI-ul doar arată/ascunde; RPC-ul verifică oricum).
+  const [adminOfertare, setAdminOfertare] = useState(false)
+  useEffect(() => {
+    if (!profile?.id) return
+    supabase.from('user_module_access').select('access_level').eq('profile_id', profile.id).eq('module', 'ofertare').eq('access_level', 'admin').limit(1)
+      .then(({ data }) => setAdminOfertare(!!(data && data.length)))
+  }, [profile?.id])
+  const poateDecide = !!(profile?.is_owner || adminOfertare || (licitatie?.responsabil_id && licitatie.responsabil_id === profile?.id))
 
   const loadPacks = async () => {
     const { data, error } = await supabase.from('ofertare_source_pack')
@@ -410,7 +418,7 @@ export default function SourcePackSection({ licitatie, profile, onImported }) {
               title="Intră DOAR candidații cu decizia curentă IMPORT și neimportați încă. Bifele nu importă nimic.">
               ⬇ Importă {stats.importDeFacut} cu decizia IMPORT
             </button>
-          ) : <span style={{ fontSize:11.5, color:G.dim }}>Deciziile și importul le dă ownerul sau responsabilul licitației.</span>}
+          ) : <span style={{ fontSize:11.5, color:G.dim }}>Deciziile și importul le dă ownerul, responsabilul licitației sau un admin Ofertare.</span>}
           {busy && <span style={{ fontSize:12, color:G.ofertare }}>{busy}</span>}
           {rezultat && (
             <span style={{ fontSize:11.5, color:G.muted }}>
