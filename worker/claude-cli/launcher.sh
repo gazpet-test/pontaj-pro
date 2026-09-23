@@ -78,7 +78,7 @@ if [ -d /context ] && [ -n "$(ls -A /context 2>/dev/null)" ]; then echo "" >> /w
 # 3. rularea agentului: doar Read/Glob/Grep, fără prompturi (dontAsk = orice ar cere aprobare e refuzat), fără subagenți, fără sesiune pe disc.
 PROMPT="$(cat "$PROMPT_F")
 
-Directoare: textele extrase sunt în /work/text (oglinda lui /data, cu ⟦PAGINA n⟧), originalele în /data (doar citire), inventarul în /work/INVENTAR.md, contextul opțional în /context."
+Directoare: textele extrase sunt în /work/text (oglinda lui /data, cu ⟦PAGINA n⟧), originalele în /data (doar citire), inventarul în /work/INVENTAR.md, contextul opțional în /context$( [ -f /context/documente.json ] && echo " (documente.json = lista documentelor din ERP cu id, seap_cod, tip)" )."
 cd /work || final 2 fara_work
 timeout -s TERM "$(( ${TASK_TIMEOUT_MIN:-15} * 60 ))" claude -p "$PROMPT" \
   --model "${TASK_MODEL:-sonnet}" --effort "${TASK_EFFORT:-medium}" \
@@ -98,5 +98,16 @@ fi
 [ "$COD" -eq 124 ] && final 124 timeout
 [ "$COD" -ne 0 ] && final "$COD" claude_exit_$COD
 [ -s "$OUT_MD" ] || final 5 raport_gol
+# 5. source_pack: rezultatul e JSON, nu raport → validator fără AI (excerpt-urile se caută literal în /work/text);
+#    pack-ul validat merge la worker (B2), care e singurul care scrie în BD. Rezultatul brut rămâne în .md pentru diagnoză.
+if [ "$TASK" = "source_pack" ]; then
+  PACK="/out/${STAMP}_source_pack.pack.json"
+  node /usr/local/bin/verifica_pack.mjs "$OUT_MD" /work/text "$PACK" > /work/.valid 2>&1; VC=$?
+  while IFS= read -r l; do J "pack $l"; done < /work/.valid
+  [ "$VC" -eq 4 ] && final 6 pack_json_invalid
+  [ "$VC" -eq 3 ] && J "ATENȚIE: pack cu probleme de schemă — importul îl va respinge"
+  J "PACK=$PACK"
+  final 0 ok
+fi
 grep -q "⟦PAGINA\|text/\|/data/" "$OUT_MD" || J "ATENȚIE: raportul nu citează niciun fișier/pagină — de tratat ca nevalidat"
 final 0 ok

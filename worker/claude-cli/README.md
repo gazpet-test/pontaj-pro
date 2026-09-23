@@ -47,3 +47,14 @@ constatări corecte / greșite și minute de verificare. Comparație cu workerul
 ## Ce NU face (și nu se adaugă fără o a doua părere)
 Nu scrie în Supabase, nu urcă fișiere, nu trimite mail, nu rulează comenzi, nu are cheie API, nu are `service_role`,
 nu execută cereri ale altor utilizatori din platformă.
+
+
+## Sarcina `source_pack` (B1, 23.09.2026) — CLI citește, workerul scrie
+
+`sh run_pilot.sh "<folder licitație>" source_pack` → agentul (Sonnet, fără scriere) produce un **Source Pack v1**
+(`claude_docs.source_pack_ofertare_v1`): cerințe verbatim cu `nume_fisier` + `pagina` + `excerpt`, `nereusite` obligatoriu.
+Răspunsul brut rămâne în `out/<stamp>_source_pack.md`; `verifica_pack.mjs` (fără AI) caută fiecare `excerpt` LITERAL în
+`/work/text` — întâi pe pagina declarată, apoi în tot documentul (corectează pagina) — și scoate cerințele negăsite în
+`nereusite`. Rezultatul validat: `out/<stamp>_source_pack.pack.json` (jurnal: `pack VALIDARE …`, `PACK=…`).
+Opțional `context/documente.json` (lista documentelor din ERP: id, nume_fisier, seap_cod, tip, pagini) — de acolo ia
+agentul `seap_cod`. Containerul NU are chei: importul în BD îl face doar workerul (B2), din pack-ul validat.
