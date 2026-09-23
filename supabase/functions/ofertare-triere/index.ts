@@ -376,7 +376,7 @@ function marcheazaRiscTransport(parsed: any) {
 // Rândurile modelului rămân rezervă pentru recomandările fără obiective structurate.
 const ROL_CANONIC: Array<[RegExp, string]> = [
   [/responsabil tehnic|\brte\b/i, 'rte'], [/sef.*santier|site manager|șef.*șantier/i, 'sef_santier'],
-  [/manager|director.*proiect|project manager|coordonator.*contract|manager.*contract/i, 'manager_proiect'],
+  [/(manager|director|coordonator|sef|șef)\s*(de\s+|al\s+)?(proiect|project|contract)|project manager/i, 'manager_proiect'],
   [/\bcq\b|calitate|ctc/i, 'cq'], [/\bssm\b|securitate/i, 'ssm'], [/inginer/i, 'inginer'],
 ]
 const rolCanonicDin = (rol: string) => { const n = norm(rol); for (const [re, c] of ROL_CANONIC) if (re.test(n)) return c; return 'altul' }
