@@ -31,6 +31,8 @@ text_real() { sed "s/⟦PAGINA [0-9]*⟧//g" "$1" | tr -d "[:space:]" | wc -c; }
 # OCR pentru PDF scanat: pdftoppm 200 dpi gri + tesseract ron; un singur OCR per conținut identic (md5); plafon total de pagini
 ocr_pdf() { # $1 pdf  $2 dest
   md=$(md5sum "$1" | cut -c1-32); if grep -q "$md" /work/.ocr_md5; then echo "dup"; return; fi
+  # cache OCR pe /out (persistă între rulări): a treia rulare pe Mânăstirea a refăcut 434 pagini OCR (29 min) degeaba
+  mkdir -p /out/.ocr_cache 2>/dev/null; if [ -s "/out/.ocr_cache/$md.txt" ]; then cp "/out/.ocr_cache/$md.txt" "$2"; echo "$md" >> /work/.ocr_md5; echo "ocr:cache"; return; fi
   fac=$(cat /work/.ocr_pag); rest=$((OCR_MAX_PAG - fac)); [ "$rest" -gt 0 ] || { echo "plafon"; return; }
   n=$OCR_PAG_FISIER; [ "$n" -gt "$rest" ] && n=$rest
   tot=$(pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2}'); [ -n "$tot" ] || tot=0; [ "$n" -gt "$tot" ] && n=$tot
@@ -39,7 +41,7 @@ ocr_pdf() { # $1 pdf  $2 dest
     pdftoppm -r 200 -gray -f "$k" -l "$k" -singlefile "$1" "$d/p" 2>/dev/null
     printf "\n⟦PAGINA %d⟧\n" "$k" >> "$2"; [ -f "$d/p.pgm" ] && tesseract "$d/p.pgm" - -l ron+eng --psm 1 2>/dev/null >> "$2"; rm -f "$d/p.pgm"
   done
-  rm -rf "$d"; echo $((fac + k)) > /work/.ocr_pag; echo "$md" >> /work/.ocr_md5; echo "ocr:$k"; }
+  rm -rf "$d"; echo $((fac + k)) > /work/.ocr_pag; echo "$md" >> /work/.ocr_md5; [ "$k" -gt 0 ] && cp "$2" "/out/.ocr_cache/$md.txt" 2>/dev/null; echo "ocr:$k"; }
 : > /work/INVENTAR.md
 echo "# Inventar /data (generat de launcher, $STAMP)" >> /work/INVENTAR.md
 echo "" >> /work/INVENTAR.md
@@ -55,7 +57,7 @@ find /data -type f \( -iname '*.pdf' -o -iname '*.docx' \) | sort | head -n "$MA
         if [ "$(text_real "$dest")" -lt 200 ]; then
           r=$(ocr_pdf "$f" "$dest")
           case "$r" in
-            ocr:*) if [ "$(text_real "$dest")" -ge 200 ]; then echo "| $rel | $mb | $pg | text/$rel.txt (OCR ${r#ocr:} pag.) |" >> /work/INVENTAR.md; else echo "| $rel | $mb | $pg | scanat, OCR fără rezultat |" >> /work/INVENTAR.md; rm -f "$dest"; fi ;;
+            ocr:*) if [ "$(text_real "$dest")" -ge 200 ]; then echo "| $rel | $mb | $pg | text/$rel.txt (OCR ${r#ocr:}) |" >> /work/INVENTAR.md; else echo "| $rel | $mb | $pg | scanat, OCR fără rezultat |" >> /work/INVENTAR.md; rm -f "$dest"; fi ;;
             dup) echo "| $rel | $mb | $pg | scanat, identic cu un fișier deja citit prin OCR |" >> /work/INVENTAR.md; rm -f "$dest" ;;
             *) echo "| $rel | $mb | $pg | scanat, necitit (plafon OCR $OCR_MAX_PAG pag.) |" >> /work/INVENTAR.md; rm -f "$dest" ;;
           esac
