@@ -1,4 +1,6 @@
-// ofertare-genereaza-capitol v2.2 (18.09.2026) — scrie UN capitol din propunerea tehnică.
+// ofertare-genereaza-capitol v2.3 (24.09.2026) — scrie UN capitol din propunerea tehnică.
+// v2.3 (noaptea Claude ↔ Copilot, după pilotul P0c Mânăstirea): INTERDICȚIA 5 — cerințele NECONFIRMATE (confirmata_de
+//     NULL, adică fără E2 de om) nu devin bază de redactare pe tăcute. Vezi lista interdicțiilor mai jos.
 // v2 (Domnești, Răzvan): PACHETUL DE FAPTE. v1 primea doar cerințele și lăsa 37 de [DE COMPLETAT]
 //     pe un capitol de personal, deși echipa, autorizațiile, experiența, partenerii, graficul și
 //     garanția stăteau în ERP, legate pe licitație. Acum funcția le adună singură (pachetFapte) și
@@ -12,7 +14,7 @@
 // `capitole_nescrise_de_om` din v_ofertare_pt_stare BLOCHEAZĂ depunerea până când un om
 // deschide capitolul, îl citește și îl salvează), deci generatorul poate exista.
 //
-// PATRU INTERDICȚII ÎN COD, nu doar în prompt. Regulile din prompt sunt rugăminți către model;
+// INTERDICȚII ÎN COD (0–5; a 4-a e la scriere, mai jos), nu doar în prompt. Regulile din prompt sunt rugăminți către model;
 // astea sunt bariere:
 //   0. (v2.2, 18.09.2026) Apelantul trebuie să fie owner, responsabilul licitației sau service_role.
 //      `verify_jwt` singur nu e poartă: cheia anon e un JWT valid și publică în browser.
@@ -22,6 +24,16 @@
 //      ajunge în istoric, dar tot e o zi pierdută.
 //   3. Scrie ÎNTOTDEAUNA sursa='ai'. Generatorul nu poate să-și dea singur aviz de om.
 //      Versiunea o incrementează triggerul trg_pt_capitol_versioneaza, nu functia asta.
+//   5. (v2.3, 24.09.2026) Cerințe ATRIBUITE dar NECONFIRMATE de om (confirmata_de NULL) → refuz controlat, ZERO cost,
+//      cu lista lor (id, nr, text scurt), dacă apelul nu vine explicit cu `cu_neconfirmate: true` din UI (unde omul
+//      vede lista și confirmă — același tipar ca `peste_om`). Atribuirea unei cerințe unui capitol e organizare
+//      („aici răspundem la asta"), NU aprobarea conținutului ei; 60% din registru e neconfirmat, deci un refuz fără
+//      cale înainte ar împinge spre „confirmă tot" — fix anti-tiparul. Când omul confirmă: fiecare cerință neconfirmată
+//      e marcată în prompt, iar după scriere rămâne o OBSERVAȚIE DESCHISĂ pe capitol (ofertare_pt_observatii) cu id-urile
+//      lor — urmă persistentă, vizibilă în UI și reintrodusă în promptul generării următoare; capitolul rămâne sursa='ai',
+//      deci poarta de depunere îl ține blocat până îl citește și îl salvează un om. Nimic nu se elimină în tăcere.
+//      Limită cunoscută: dacă o cerință se confirmă/modifică ÎN TIMPUL generării, nu se detectează (nu există verificare
+//      de versiune pe cerință aici; INTERDICȚIA 4 acoperă doar capitolul).
 //
 // Regula de fond a promptului: NU inventează fapte despre firmă. Unde lipsește un fapt (cifre,
 // nume, utilaje, termene), scrie [DE COMPLETAT: ce anume] — un gol vizibil, nu o propoziție
@@ -207,7 +219,7 @@ Deno.serve(async (req: Request) => {
     new Response(JSON.stringify({ error: msg, ...extra }), { status: 200, headers: CORS })
 
   try {
-    const { capitol_id, instructiune, peste_om } = await req.json()
+    const { capitol_id, instructiune, peste_om, cu_neconfirmate } = await req.json()
     const capId = Number(capitol_id)
     if (!capId) return fail('capitol_id obligatoriu')
 
@@ -244,10 +256,18 @@ Deno.serve(async (req: Request) => {
     if (!ids.length) return fail('Capitolul n-are nicio cerință atribuită. Atribuie-i cerințele întâi — altfel iese text generic.')
 
     const { data: cerinte, error: eCer } = await supabase.from('ofertare_cerinte')
-      .select('id, text_cerinta, tip, sursa_sectiune, document_probant')
+      .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, document_probant, confirmata_de')
       .in('id', ids).is('inlocuita_de', null).order('id')
     if (eCer) return fail('cerintele nu s-au putut citi: ' + eCer.message)
     if (!cerinte?.length) return fail('Cerintele atribuite nu mai exista (inlocuite?). Reatribuie capitolul.')
+
+    // INTERDICȚIA 5 — cerințe neconfirmate de om. Refuzul vine ÎNAINTE de orice apel plătit și de pachetul de fapte.
+    const neconfirmate = cerinte.filter((c: any) => !c.confirmata_de)
+    if (neconfirmate.length && cu_neconfirmate !== true) {
+      return fail(
+        `${neconfirmate.length} din ${cerinte.length} cerințe atribuite NU sunt confirmate de om (E2). Confirmă-le în registru sau confirmă explicit generarea cu ele marcate „NECONFIRMATĂ".`,
+        { cere_confirmare_neconfirmate: true, neconfirmate: neconfirmate.map((c: any) => ({ id: c.id, nr: c.nr_ordine, text: String(c.text_cerinta || '').slice(0, 160) })) })
+    }
 
     // Observatiile deschise pe capitol: daca un om a cerut deja o modificare, generatorul
     // trebuie s-o stie, altfel prima lui iesire o ignora si omul o cere a doua oara.
@@ -296,7 +316,7 @@ Deno.serve(async (req: Request) => {
         ...antet,
         `CERINȚELE ATRIBUITE ${nParti > 1 ? `ACESTEI PĂRȚI (${felie.length} din ${cerinte.length})` : `CAPITOLULUI (${cerinte.length})`} — la fiecare trebuie să se poată bifa un răspuns în text:`,
         ...felie.map((c: any, i: number) =>
-          `${dela + i + 1}. [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}` +
+          `${dela + i + 1}. [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}]${c.confirmata_de ? '' : ' [NECONFIRMATĂ – nevalidată de om; răspunde fără afirmații ferme despre ce cere autoritatea]'} ${c.text_cerinta}` +
           (c.document_probant ? `\n   (document probant cerut: ${c.document_probant})` : '')),
         ...instrParte,
         (obs || []).length ? `\nMODIFICĂRI CERUTE DE COLEGI, de respectat:\n${(obs || []).map((o: any) => `- ${o.text}`).join('\n')}` : '',
@@ -369,10 +389,23 @@ Deno.serve(async (req: Request) => {
       'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.',
       { conflict: true, versiune_asteptata: cap.versiune || 1 })
 
+    // INTERDICȚIA 5, urma persistentă: observație DESCHISĂ pe capitol cu cerințele neconfirmate folosite. Nu e în try/catch
+    // silențios: dacă nu se scrie, răspunsul spune (urma_neconfirmate=false) — omul vede în toast, nu rămâne fără urmă neștiut.
+    let urmaNeconfirmate: boolean | null = null
+    if (neconfirmate.length) {
+      const { error: eObs } = await supabase.from('ofertare_pt_observatii').insert({
+        licitatie_id: cap.licitatie_id, capitol_id: capId, cerut_de: null, stare: 'deschisa',
+        text: `⚠️ Generat v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2): ${neconfirmate.map((c: any) => '#' + c.id).join(', ')}. ` +
+              'Răspunsurile la ele nu sunt bază verificată: confirmă cerințele în registru (sau exceptează-le) și regenerează / corectează textul înainte de depunere.',
+      })
+      urmaNeconfirmate = !eObs
+    }
+
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length
     return new Response(JSON.stringify({
       ok: true, capitol_id: capId, caractere: text.length, cerinte: cerinte.length,
       goluri_de_completat: goluri,
+      neconfirmate: neconfirmate.length, urma_neconfirmate: urmaNeconfirmate,
       versiune_noua: (cap.versiune || 1) + 1,
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cache_citit: data.usage?.cache_read_input_tokens || 0,

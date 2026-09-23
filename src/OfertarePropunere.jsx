@@ -1519,31 +1519,48 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   // sursa='ai', deci poarta blocheaza depunerea pana cand un om il deschide, il citeste si il
   // salveaza. Aici doar cerem confirmarea cand s-ar rescrie peste munca unui om — functia
   // refuza din prima si ne spune ca trebuie confirmare, nu ghicim noi.
-  const genereazaCapitol = async (c, peste_om = false) => {
+  // v2.3 (24.09.2026): funcția refuză și când capitolul are cerințe NECONFIRMATE de om — arată lista, omul confirmă
+  // explicit (cu_neconfirmate), cerințele apar marcate în prompt și rămâne o observație deschisă pe capitol.
+  const genereazaCapitol = async (c, peste_om = false, cu_neconfirmate = false, instructiuneData = undefined) => {
     if (!c?.id) return
-    const instructiune = window.prompt(
+    const instructiune = instructiuneData !== undefined ? instructiuneData : window.prompt(
       `Ce trebuie să conțină „${c.titlu}", peste cerințele atribuite?
 (lasă gol dacă n-ai nimic special de spus)`)
     if (instructiune === null) return   // Anulează — nu generăm, nu cheltuim
     setBusy(true)
     const { data, error } = await supabase.functions.invoke('ofertare-genereaza-capitol', {
-      body: { capitol_id: c.id, instructiune: instructiune.trim() || null, peste_om },
+      body: { capitol_id: c.id, instructiune: (instructiune || '').trim() || null, peste_om, cu_neconfirmate },
     })
     setBusy(false)
     if (error) { showToast?.('Generarea a eșuat: ' + error.message, 'err'); return }
     if (data?.cere_confirmare) {
       if (window.confirm(`„${c.titlu}" are text scris de om (v${data.versiune}).
 Îl rescrii? Textul de acum rămâne în istoric.`))
-        return genereazaCapitol(c, true)
+        return genereazaCapitol(c, true, cu_neconfirmate, instructiune)
+      return
+    }
+    if (data?.cere_confirmare_neconfirmate) {
+      const lista = (data.neconfirmate || []).slice(0, 12)
+        .map(n => `  • #${n.id}${n.nr ? ' (nr ' + n.nr + ')' : ''}: ${n.text}`).join('\n')
+      const rest = (data.neconfirmate || []).length - lista.split('\n').filter(Boolean).length
+      if (window.confirm(`${data.error}
+
+Cerințe neconfirmate:
+${lista}${rest > 0 ? `\n  … și încă ${rest}` : ''}
+
+Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capitol rămâne o observație deschisă — textul nu poate trece drept verificat.`))
+        return genereazaCapitol(c, peste_om, true, instructiune)
       return
     }
     if (data?.error) { showToast?.(data.error, 'err'); return }
     const g = data?.goluri_de_completat || 0
+    const nc = data?.neconfirmate || 0
     showToast?.(
       `Capitol generat din ${data?.cerinte} cerințe (v${data?.versiune_noua}).` +
       (g ? ` ${g} locuri marcate [DE COMPLETAT] — alea sunt faptele pe care nu le-a inventat.` : '') +
+      (nc ? ` ${nc} cerințe NECONFIRMATE folosite${data?.urma_neconfirmate === false ? ' — ATENȚIE: observația de urmă NU s-a putut scrie' : ' (observație deschisă pe capitol)'}.` : '') +
       ' Citește-l și salvează-l: până atunci poarta stă roșie.',
-      g ? 'err' : 'ok')
+      (g || nc) ? 'err' : 'ok')
     await load(licId)
   }
 
