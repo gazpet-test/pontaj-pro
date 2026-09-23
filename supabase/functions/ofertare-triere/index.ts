@@ -121,23 +121,25 @@ function citesteBarem(text: string): { trepte: Barem; minim: number } {
   // v1.7.1: „peste 5 proiecte" = prag 6, „între 2 și 3 proiecte" = prag 2, „maxim 5 proiecte" e plafon (nu se ia drept minim)
   const re = new RegExp(String.raw`(?:(peste|mai\s+mult\s+de|maxim(?:um)?)\s+)?(\d+)\s*(?:-\s*\d+|\s*[șs]i\s+\d+|\s*sau\s+mai\s+multe|\+)?\s*(?:de\s+)?${UNIT}([^=;:.]{0,40}?)[=:]\s*(\d+(?:[.,]\d+)?)\s*(?:p(?:unct|ct)|p\b)`, 'gi')
   let m: RegExpExecArray | null
+  const explicit = citesteMinim(text)
   const intregi: Array<{ idx: number; supl: boolean }> = []
   while ((m = re.exec(text || ''))) {
     const supl = /suplimentar/i.test(m[3] || ''), plafon = /maxim/i.test(m[1] || ''), peste = /peste|mai/i.test(m[1] || '')
     intregi.push({ idx: m.index, supl }); brut.push({ prag: Number(m[2]) + (peste ? 1 : 0), puncte: Number(m[4].replace(',', '.')), supl, plafon })
   }
-  // treptele prescurtate („4-5 = 7 pct", „6+ = 10 pct") — DOAR dacă baremul a avut deja o treaptă cu unitate, nu pe ani/lei/%;
-  // continuă seria treptei întregi dinaintea lor (dacă aia era „suplimentare", și ele sunt)
-  if (intregi.length) {
-    const reScurt = new RegExp(String.raw`(\d+)\s*(-\s*\d+|\s*sau\s+mai\s+multe|\+)\s*([^=;:.\d]{0,40}?)[=:]\s*(\d+(?:[.,]\d+)?)\s*(?:p(?:unct|ct)|p\b)`, 'gi')
+  // treptele prescurtate („4-5 = 7 pct", „6+ = 10 pct", „2-3 suplimentare=4pct") — DOAR dacă unitatea e stabilită deja (o treaptă
+  // cu unitate sau „minim N proiecte" în text — Grădiștea E2 avea numai forma asta), nu pe ani/lei/%; continuă seria treptei
+  // întregi dinaintea lor (dacă aia era „suplimentare", și ele sunt)
+  if (intregi.length || explicit !== null) {
+    // fără interval („6 suplimentare=10pct") se acceptă doar cu „suplimentar" lângă cifră — altfel orice „5 = 3 pct" ar fi treaptă
+    const reScurt = new RegExp(String.raw`(\d+)\s*(-\s*\d+|\s*sau\s+mai\s+multe|\+)?\s*([^=;:.\d]{0,40}?)[=:]\s*(\d+(?:[.,]\d+)?)\s*(?:p(?:unct|ct)|p\b)`, 'gi')
     while ((m = reScurt.exec(text || ''))) {
+      if (!m[2] && !/suplimentar/i.test(m[3] || '')) continue
       if (intregi.some(t => t.idx === m!.index || (t.idx < m!.index && m!.index - t.idx <= 14 && /^(peste|mai\s+mult\s+de|maxim(?:um)?)\s+$/i.test(text.slice(t.idx, m!.index)))) || /\b(ani|luni|lei|euro)\b|%/i.test(m[3] || '')) continue
       const anterioara = intregi.filter(t => t.idx < m!.index).pop()
-      if (!anterioara) continue
-      brut.push({ prag: Number(m[1]), puncte: Number(m[4].replace(',', '.')), supl: anterioara.supl || /suplimentar/i.test(m[3] || '') })
+      brut.push({ prag: Number(m[1]), puncte: Number(m[4].replace(',', '.')), supl: !!anterioara?.supl || /suplimentar/i.test(m[3] || '') })
     }
   }
-  const explicit = citesteMinim(text)
   // baza peste care se adună „suplimentare": minimul scris, altfel primul prag nesuplimentar, altfel 1
   const baza = explicit ?? brut.find(b => !b.supl && !b.plafon)?.prag ?? 1
   const trepte = brut.map(b => ({ prag: b.supl ? b.prag + baza : b.prag, puncte: b.puncte })).sort((a, b) => a.prag - b.prag)
@@ -164,19 +166,34 @@ type RandMat = { persoana: string; proiecte: number; verificate: number; proiect
 // scris de două ori sau cu diacritice/majuscule diferite) se contopesc pe MAXIM — nu pe sumă, ca o dublare din greșeală a modelului
 // să nu umfle punctajul. Înainte mat.find lua doar primul rând, iar „TRUSU RAZVAN" și „Trusu Razvan" ieșeau două persoane distincte
 // (aceeași persoană pe două roluri, fără notă de cumul).
+// v1.7.1 (Grădiștea, rulare reală): modelul scurtează rolul în matrice („E3: RTE" față de „E3: RTE (Responsabil Tehnic cu Executia)"
+// din roluri) → rolul ieșea din repartizare. Potrivire: exact, apoi pe codul din față („E3:", „2.")," apoi prefix (min. 4 caractere).
+function acelasiRol(a: string, b: string) {
+  const na = norm(a), nb = norm(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  const cod = (s: string) => (/^([a-z]?\d+)\s*[:.)]/.exec(s) || [])[1]
+  const ca = cod(na), cb = cod(nb)
+  if (ca && cb) return ca === cb
+  return (na.length >= 4 && nb.length >= 4) && (na.startsWith(nb) || nb.startsWith(na))
+}
 function indexeazaMatrice(mat: any[]) {
-  const idx = new Map<string, RandMat>(), nume = new Map<string, string>()
+  const idx = new Map<string, RandMat>(), nume = new Map<string, string>(), roluriMat: string[] = []
+  const rolCheie = (rol: string) => { const n = norm(rol); if (roluriMat.includes(n)) return n; return roluriMat.find(r => acelasiRol(r, n)) }
   for (const x of mat) {
     const p = String(x?.persoana || '').trim(); if (!p) continue
     if (!nume.has(norm(p))) nume.set(norm(p), p)
-    const k = norm(p) + '|' + norm(x.rol)
+    // rolul din rând se leagă de un rol deja văzut dacă e același (scris altfel), ca să nu apară două chei pentru un rol
+    const rn = rolCheie(x.rol) ?? norm(x.rol)
+    if (!roluriMat.includes(rn)) roluriMat.push(rn)
+    const k = norm(p) + '|' + rn
     const cur = idx.get(k) || { persoana: nume.get(norm(p))!, proiecte: 0, verificate: 0, proiecte_conditionate: 0, verificate_conditionate: 0 }
     cur.proiecte = Math.max(cur.proiecte, num(x.proiecte)); cur.verificate = Math.max(cur.verificate, num(x.verificate))
     cur.proiecte_conditionate = Math.max(cur.proiecte_conditionate, num(x.proiecte_conditionate)); cur.verificate_conditionate = Math.max(cur.verificate_conditionate, num(x.verificate_conditionate))
     idx.set(k, cur)
   }
-  const rand = (p: string, rol: string) => idx.get(norm(p) + '|' + norm(rol))
-  const areRol = (rol: string) => { const s = '|' + norm(rol); for (const k of idx.keys()) if (k.endsWith(s)) return true; return false }
+  const rand = (p: string, rol: string) => { const rn = rolCheie(rol); return rn === undefined ? undefined : idx.get(norm(p) + '|' + rn) }
+  const areRol = (rol: string) => rolCheie(rol) !== undefined
   return { persoane: [...nume.values()], rand, areRol }
 }
 function repartizeazaDinMatrice(parsed: any) {
