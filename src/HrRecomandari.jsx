@@ -35,6 +35,10 @@ function caleStorage(persKey, fileName) {
   return `recomandari/${persKey}/${today}_${uuid}.${ext}`
 }
 
+// #1399: natura obiectivului — decide ce se numără la o cerință pe distribuție / transport (regula transport→distribuție din triere)
+const NATURI = ['transport', 'distributie', 'titei', 'apa_canal', 'altele']
+const NATURA_ET = { transport: 'transport gaze', distributie: 'distribuție gaze', titei: 'țiței', apa_canal: 'apă-canal', altele: 'altele' }
+const NATURA_SCURT = { transport: 'T', distributie: 'D', titei: 'Ț', apa_canal: 'A', altele: '?' }
 function Lbl({ children }) { return <div style={{ fontSize:11, color:G.muted, fontWeight:700, marginBottom:3, textTransform:'uppercase', letterSpacing:.4 }}>{children}</div> }
 
 // ─── Modal adăugare / editare ──────────────────────────────────────────────
@@ -47,6 +51,9 @@ function ModalRecomandare({ rec, employees, externi, canEdit, onClose, onSaved, 
     domenii: (rec?.domenii || []).join(', '), nr_document: rec?.nr_document || '', data_document: rec?.data_document || '',
     semnatar: rec?.semnatar || '', calificativ: rec?.calificativ || '', observatii: rec?.observatii || '',
   })
+  // #1399: obiectivele structurate — câte un rând per obiectiv/contract; de aici numără trierea/acoperirea
+  const [ob, setOb] = useState(Array.isArray(rec?.obiective) ? rec.obiective.map(o => ({ denumire: o.denumire || '', an: o.an ?? '', natura: o.natura || 'altele', beneficiar_final: o.beneficiar_final || '' })) : [])
+  const setObRand = (i, k) => (e) => setOb(x => x.map((o, j) => j === i ? { ...o, [k]: e.target.value } : o))
   const [file, setFile] = useState(null)
   const [citesteAI, setCitesteAI] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -67,6 +74,9 @@ function ModalRecomandare({ rec, employees, externi, canEdit, onClose, onSaved, 
       domenii: f.domenii ? f.domenii.split(',').map(s => s.trim()).filter(Boolean) : null,
       nr_document: f.nr_document || null, data_document: f.data_document || null,
       semnatar: f.semnatar || null, calificativ: f.calificativ || null, observatii: f.observatii || null,
+      obiective: ob.filter(o => o.denumire.trim()).length
+        ? ob.filter(o => o.denumire.trim()).map(o => ({ denumire: o.denumire.trim().slice(0, 200), an: o.an === '' ? null : (Number(o.an) || null), natura: NATURI.includes(o.natura) ? o.natura : 'altele', beneficiar_final: o.beneficiar_final.trim() || null }))
+        : null,
       updated_at: new Date().toISOString(),
     }
     if (file) {
@@ -113,6 +123,20 @@ function ModalRecomandare({ rec, employees, externi, canEdit, onClose, onSaved, 
           <div><Lbl>Rolul în lucrare</Lbl><input list="roluri-rec" value={f.rol} onChange={set('rol')} placeholder="ex. șef de șantier" style={S.input} /><datalist id="roluri-rec">{ROLURI.map(r => <option key={r} value={r} />)}</datalist></div>
           <div><Lbl>Beneficiar (cine recomandă)</Lbl><input value={f.beneficiar} onChange={set('beneficiar')} style={S.input} /></div>
           <div style={{ gridColumn:'1 / -1' }}><Lbl>Lucrarea / contractul</Lbl><input value={f.obiect_lucrare} onChange={set('obiect_lucrare')} style={S.input} /></div>
+          <div style={{ gridColumn:'1 / -1' }}>
+            <Lbl>Obiective enumerate ({ob.length}) — câte unul pe rând; de aici numără trierea punctajul</Lbl>
+            {ob.map((o, i) => (
+              <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 130px 80px 1fr 28px', gap:6, marginBottom:4 }}>
+                <input value={o.denumire} onChange={setObRand(i, 'denumire')} placeholder="obiectivul / contractul" style={S.input} />
+                <select value={o.natura} onChange={setObRand(i, 'natura')} style={S.input}>{NATURI.map(n => <option key={n} value={n}>{NATURA_ET[n]}</option>)}</select>
+                <input value={o.an} onChange={setObRand(i, 'an')} placeholder="an" style={S.input} />
+                <input value={o.beneficiar_final} onChange={setObRand(i, 'beneficiar_final')} placeholder="beneficiar final (dacă diferă)" style={S.input} />
+                <button type="button" onClick={() => setOb(x => x.filter((_, j) => j !== i))} style={{ ...S.btnS, padding:'2px 6px', color:G.red }} title="scoate rândul">✕</button>
+              </div>
+            ))}
+            <button type="button" onClick={() => setOb(x => [...x, { denumire:'', an:'', natura:'altele', beneficiar_final:'' }])} style={{ ...S.btnS, fontSize:12 }}>+ obiectiv</button>
+            {!ob.length && <span style={{ fontSize:11, color:G.dim, marginLeft:8 }}>gol = trierea numără din textul lucrării (mai puțin sigur)</span>}
+          </div>
           <div><Lbl>Perioada — de la</Lbl><input type="date" value={f.perioada_start} onChange={set('perioada_start')} style={S.input} /></div>
           <div><Lbl>Perioada — până la</Lbl><input type="date" value={f.perioada_end} onChange={set('perioada_end')} style={S.input} /></div>
           <div><Lbl>Valoare lucrare (lei)</Lbl><input value={f.valoare_lei} onChange={set('valoare_lei')} placeholder="doar dacă scrie în document" style={S.input} /></div>
@@ -227,6 +251,26 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
       erori || slabe ? 'warn' : 'success')
   }
 
+  // #1399: structurează obiectivele din textul deja citit (fără fișier — apel mic, ~0,01 $/rând); omul corectează după
+  const structureaza = async (tot = false) => {
+    const deFacut = filtrate.filter(r => (r.obiect_lucrare || r.text_extras) && (tot || !(Array.isArray(r.obiective) && r.obiective.length)))
+    if (!deFacut.length) { showToast('Toate cele afișate au deja obiectivele structurate', 'warn'); return }
+    if (!window.confirm(`Structurez obiectivele (câte un rând per obiectiv, cu natura transport/distribuție) pentru ${deFacut.length} recomandări${tot ? ' — inclusiv cele deja structurate' : ''}, din textul citit deja. Cost ~${(deFacut.length * 0.01).toFixed(2)} $. Rămân de verificat de om.`)) return
+    let ok = 0, erori = 0
+    opresc.current = false
+    setToate({ facute: 0, din: deFacut.length })
+    for (const r of deFacut) {
+      if (opresc.current) break
+      try {
+        const { data, error } = await supabase.functions.invoke('hr-recomandare-citeste', { body: { recomandare_id: r.id, doar_obiective: true } })
+        if (error || data?.error || data?.eroare) erori++; else ok++
+      } catch (e) { erori++ }
+      setToate(t => t ? { ...t, facute: ok + erori } : t)
+    }
+    opresc.current = false; setToate(null); await reload()
+    showToast(`Obiective structurate: ${ok} din ${deFacut.length}` + (erori ? ` · ${erori} cu eroare` : ''), erori ? 'warn' : 'success')
+  }
+
   const verifica = async (r) => {
     const { error } = await supabase.from('hr_recomandari').update({ verificat: !r.verificat, verificat_de: r.verificat ? null : (profile?.id || null), verificat_la: r.verificat ? null : new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', r.id)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
@@ -262,6 +306,9 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
                 ↻ recitește tot ({filtrate.filter(r => r.fisier_path).length})
               </button>
             </>)}
+        {canEdit && !toate && <button onClick={() => structureaza(false)} style={{ ...S.btnS, color:G.dim, fontSize:12 }} title="Din textul citit deja, fără fișier: câte un rând per obiectiv, cu natura (transport / distribuție). Ieftin. Tu verifici după.">
+          ⊞ structurează obiectivele ({filtrate.filter(r => (r.obiect_lucrare || r.text_extras) && !(Array.isArray(r.obiective) && r.obiective.length)).length})
+        </button>}
         {canEdit && <button onClick={() => setModal('nou')} style={S.btnP} disabled={!!toate}>+ Recomandare</button>}
       </div>
       <div style={{ fontSize:11.5, color:G.dim, marginBottom:10 }}>
@@ -278,7 +325,7 @@ export default function HrRecomandari({ profile, employees = [], canEdit, showTo
                 <tr key={r.id} style={{ borderBottom:`1px solid ${G.border2}`, background: r.ai_avertisment ? G.red + '12' : undefined }}>
                   <td style={td}><b>{numePers(r)}</b><div style={{ fontSize:11, color:G.dim }}>{r.emp?.functie || r.ext?.functie || ''}{r.ext ? ' · extern' : ''}</div></td>
                   <td style={td}>{r.rol || <span style={{ color:G.dim }}>—</span>}</td>
-                  <td style={td}><div>{r.beneficiar || <span style={{ color:G.dim }}>—</span>}</div><div style={{ fontSize:11.5, color:G.muted }}>{r.obiect_lucrare}</div>{r.ai_avertisment && <div style={{ fontSize:11, color:G.red, marginTop:2 }}>⚠ {r.ai_avertisment}</div>}</td>
+                  <td style={td}><div>{r.beneficiar || <span style={{ color:G.dim }}>—</span>}</div><div style={{ fontSize:11.5, color:G.muted }}>{r.obiect_lucrare}</div>{Array.isArray(r.obiective) && r.obiective.length > 0 && (() => { const n = {}; r.obiective.forEach(o => { n[o.natura] = (n[o.natura] || 0) + 1 }); return <div style={{ fontSize:11, color:G.green, marginTop:2 }} title={r.obiective.map((o, i) => `${i + 1}. ${o.denumire}${o.an ? ' ' + o.an : ''} [${NATURA_ET[o.natura] || o.natura}]`).join('\n')}>⊞ {r.obiective.length} obiective · {Object.entries(n).map(([k, v]) => `${NATURA_SCURT[k] || '?'}${v}`).join(' ')}</div> })()}{r.ai_avertisment && <div style={{ fontSize:11, color:G.red, marginTop:2 }}>⚠ {r.ai_avertisment}</div>}</td>
                   <td style={{ ...td, whiteSpace:'nowrap' }}>{fmtZi(r.perioada_start)} → {fmtZi(r.perioada_end)}</td>
                   <td style={{ ...td, whiteSpace:'nowrap' }}>{fmtLei(r.valoare_lei)}</td>
                   <td style={td}>{(r.domenii || []).map(d => <span key={d} style={{ fontSize:10.5, border:`1px solid ${G.border}`, borderRadius:8, padding:'1px 6px', marginRight:4 }}>{d}</span>)}</td>
