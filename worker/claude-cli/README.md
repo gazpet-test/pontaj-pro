@@ -29,7 +29,7 @@ docker-compose -p gazpet-claude-cli build
 ```
 Rulare de probă (Mânăstirea, lic. 3):
 ```
-docker-compose -p gazpet-claude-cli run --rm claude-cli lectura_licitatie
+sh run_pilot.sh "/Volume1/Licitatii_Executate/Oferte/2.DISTRIBUTIE GAZE/58.Distrib gn in com MANASTIREA, JUD CALARASI termen dep 24.09.2026"
 tail -n 20 out/jurnal.log; ls -la out/
 ```
 `LIC_FOLDER` (din `.env`) e folderul licitației pe NAS. Opțional, în `context/` se pune un `.md` cu clarificările deja
