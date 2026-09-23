@@ -164,7 +164,9 @@ export default function SourcePackSection({ licitatie, profile, onImported }) {
     : (!r.decizie && !r.deja_importat)), [rows, filtru, existente, fisiereErata])
   const bifabil = (r) => !r.deja_importat
   const toggle = (ref, on) => setSel(v => on ? [...new Set([...v, ref])] : v.filter(x => x !== ref))
-  // selecția implicită: DOAR candidați curați — fără avertisment, sigur, fără erată, nedecis
+  // selecția implicită: DOAR candidați curați — fără avertisment, sigur, fără erată, nedecis.
+  // Bifarea e DOAR stare de UI (setSel): nu scrie nicio decizie și nu importă nimic — deciziile intră doar prin decide()/decideBifate()
+  // (click explicit + confirm → RPC), importul doar prin importa() pe rândurile cu decizia curentă IMPORT.
   const bifeazaFaraAvertisment = () => setSel(vizibile.filter(r => bifabil(r) && !r.decizie && r.incertitudine === 'sigur' && avertismente(r).length === 0).map(r => r.ref))
   const bifeazaToate = () => setSel(vizibile.filter(bifabil).map(r => r.ref))
 
@@ -240,11 +242,11 @@ export default function SourcePackSection({ licitatie, profile, onImported }) {
         {pack && <span style={pill(st.color)}>{st.label}</span>}
         {/* revizie ≠ import: două fapte separate */}
         {revizie && (
-          <span style={pill(rv.revizuit ? G.teal : G.dim)} title="PACK_REVIEWED = toate candidaturile au o decizie umană. Nu înseamnă importat și nu înseamnă registru complet.">
-            {rv.revizuit ? '✓ revizuit' : 'nerevizuit'} · decise {rv.decise}/{rv.nr_cerinte} · importate {rv.importate}
+          <span style={pill(rv.rezolvat ? G.teal : rv.revizuit ? G.orange : G.dim)} title="revizuit = toate au o decizie (DEFER inclus — pack-ul NU e închis). rezolvat = toate au decizie finală și DEFER = 0. Niciunul nu înseamnă importat și nu înseamnă registru complet.">
+            {rv.rezolvat ? '✓ rezolvat (fără DEFER)' : rv.revizuit ? `revizuit, ${rv.decise_defer} în așteptare (DEFER) — neînchis` : 'nerevizuit'} · decise {rv.decise}/{rv.nr_cerinte} · importate {rv.importate}
           </span>)}
         <span style={{ marginLeft:'auto', fontSize:11, color:G.dim }} title="Un pack revizuit sau importat nu înseamnă registru complet: documentele necitite și nereușitele rămân de acoperit.">
-          revizuit ≠ importat ≠ registru complet
+          revizuit ≠ rezolvat ≠ importat ≠ registru complet
         </span>
       </div>
       {warn && <div style={{ marginTop:8, fontSize:12, color:G.red }}>{warn} <button style={mini(G.dim)} onClick={() => setWarn(null)}>ok</button></div>}
