@@ -190,7 +190,10 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
 //   - cheia anon: RESPINSĂ. Generarea se pornește din UI de un om logat; nu există worker de coadă
 //     pentru capitole (când se face #110, generarea în fundal, poarta pentru el se adaugă AICI,
 //     pe tiparul cu coadă activă din ofertare-cerinte, nu prin relaxarea regulii).
+// v2.3: întoarce și uid-ul apelantului (null pentru service_role) — urma INTERDICȚIEI 5 trebuie să spună CINE a confirmat.
+let actorUid: string | null = null
 async function autorizat(req: Request, supabase: any, licId: number): Promise<string | null> {
+  actorUid = null
   const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
   if (!jwt) return 'lipsește Authorization'
   // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
@@ -202,6 +205,7 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
+  actorUid = uid
   const [{ data: prof }, { data: lic }] = await Promise.all([
     supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
     supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
@@ -384,28 +388,40 @@ Deno.serve(async (req: Request) => {
     const { data: scris, error: eUpd } = await supabase.from('ofertare_pt_capitole')
       .update({ continut: text, sursa: 'ai' }).eq('id', capId).eq('versiune', cap.versiune || 1)
       .select('id')
+    if (eUpd || !scris?.length) {
+      // urma nu descrie nicio versiune scrisă → o închidem, ca să nu rămână o observație despre un text inexistent
+      if (obsId) await supabase.from('ofertare_pt_observatii').update({ stare: 'rezolvata', raspuns: 'generarea nu s-a salvat (conflict de versiune / eroare la scriere)' }).eq('id', obsId)
+    }
     if (eUpd) return fail('textul nu s-a salvat: ' + eUpd.message)
     if (!scris?.length) return fail(
       'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.',
       { conflict: true, versiune_asteptata: cap.versiune || 1 })
 
-    // INTERDICȚIA 5, urma persistentă: observație DESCHISĂ pe capitol cu cerințele neconfirmate folosite. Nu e în try/catch
-    // silențios: dacă nu se scrie, răspunsul spune (urma_neconfirmate=false) — omul vede în toast, nu rămâne fără urmă neștiut.
-    let urmaNeconfirmate: boolean | null = null
+    // INTERDICȚIA 5, urma persistentă — ÎNAINTE de scrierea textului: observație DESCHISĂ pe capitol cu actorul care a
+    // confirmat, id-urile cerințelor neconfirmate și amprenta (MD5) textelor trimise modelului. Dacă urma nu se poate scrie,
+    // textul NU se salvează (refuz) — flagul cu_neconfirmate nu înlocuiește urma. Costul modelului e deja plătit; e prețul
+    // corect față de un capitol „generat complet" fără urmă.
+    let obsId: number | null = null
     if (neconfirmate.length) {
-      const { error: eObs } = await supabase.from('ofertare_pt_observatii').insert({
-        licitatie_id: cap.licitatie_id, capitol_id: capId, cerut_de: null, stare: 'deschisa',
-        text: `⚠️ Generat v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2): ${neconfirmate.map((c: any) => '#' + c.id).join(', ')}. ` +
+      const amprente = await Promise.all(neconfirmate.map(async (c: any) => {
+        // Web Crypto n-are MD5; SHA-256 trunchiat la 12 hex e suficient ca amprentă a textului trimis modelului.
+        const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(c.text_cerinta || '')))
+        return `#${c.id}:${Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 12)}`
+      }))
+      const { data: obsRow, error: eObs } = await supabase.from('ofertare_pt_observatii').insert({
+        licitatie_id: cap.licitatie_id, capitol_id: capId, cerut_de: actorUid, stare: 'deschisa',
+        text: `⚠️ Generare v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2), confirmată explicit de ${actorUid || 'service_role'}: ${amprente.join(', ')} (id:sha256[0:12] al textului trimis). ` +
               'Răspunsurile la ele nu sunt bază verificată: confirmă cerințele în registru (sau exceptează-le) și regenerează / corectează textul înainte de depunere.',
-      })
-      urmaNeconfirmate = !eObs
+      }).select('id').single()
+      if (eObs || !obsRow?.id) return fail('Urma pentru cerințele neconfirmate nu s-a putut scrie (' + (eObs?.message || '?') + ') — textul generat NU s-a salvat.', { fara_urma: true })
+      obsId = obsRow.id
     }
 
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length
     return new Response(JSON.stringify({
       ok: true, capitol_id: capId, caractere: text.length, cerinte: cerinte.length,
       goluri_de_completat: goluri,
-      neconfirmate: neconfirmate.length, urma_neconfirmate: urmaNeconfirmate,
+      neconfirmate: neconfirmate.length, urma_observatie_id: obsId,
       versiune_noua: (cap.versiune || 1) + 1,
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cache_citit: data.usage?.cache_read_input_tokens || 0,

@@ -37,6 +37,18 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('fara cuprins', () => expect(cu({ capitole: 0 }).blocaje).toContain('cuprins'))
     it('cerinta fara capitol', () => expect(cu({ fara_capitol: 1 }).blocaje).toContain('fara'))
     it('capcana de respingere nedescoperita', () => expect(cu({ capcane: 2, capcane_descoperite: 1 }).blocaje).toContain('capcane'))
+    it('cerinta atribuita dar NECONFIRMATA in registru (E2) -> block, chiar daca totul altfel e verde (P0c, 24.09.2026)', () => {
+      const ev = cu({ cerinte_neconfirmate_cu_capitol: 1 })
+      expect(ev.stare).toBe('block'); expect(ev.blocaje).toContain('neconfirmate')
+    })
+    it('testul decisiv Copilot: generare cu override -> salvare umana (sursa=om, capitole_nescrise_de_om 0, legaturi verificate) -> E2 inca lipsa -> tot block', () => {
+      const ev = cu({ capitole_nescrise_de_om: 0, cerinte_neverificate: 0, cerinte_neconfirmate_cu_capitol: 2 })
+      expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['neconfirmate'])
+    })
+    it('coloana lipsa (view neaplicat) = poarta veche neschimbata: nu blocheaza', () => {
+      const { cerinte_neconfirmate_cu_capitol: _x, ...fara } = { ...VERDE, cerinte_neconfirmate_cu_capitol: undefined }
+      expect(evalueazaPoarta(fara).blocaje).toEqual([])
+    })
     it('cerinta doar ATRIBUITA unui capitol nu e verificata -> block (P0.3: atribuirea nu e conformitate)', () => {
       const ev = cu({ cerinte_neverificate: 1 })
       expect(ev.blocaje).toContain('neverificate'); expect(ev.stare).toBe('block')
@@ -96,9 +108,9 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 20 de randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 21 de randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
+      ['cuprins','fara','neverificate','neconfirmate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
   })
 })
 

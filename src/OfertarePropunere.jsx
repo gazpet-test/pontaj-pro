@@ -307,6 +307,8 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, documente = [],
     if (filtru === 'forma')   return c.tip === 'forma'
     if (filtru === 'dovada')  return cuDovada && !areCap && !exceptat
     if (filtru === 'gata')    return areCap || exceptat
+    // P0c: are capitol, dar nu e confirmată de om în registru (E2) — rândul de poartă „neconfirmate”.
+    if (filtru === 'neconfirmate') return areCap && !c.confirmata_de
     // P0.3: are capitol, dar nimeni n-a verificat raspunsul — sau l-a verificat la o versiune
     // veche a capitolului. Aceeasi definitie ca `cerinte_neverificate` din view.
     if (filtru === 'neverificate') return ls.some(l => l.fel === 'capitol'
@@ -1194,7 +1196,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
       supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
       supabase.from('ofertare_cerinte')
-        .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, sursa_pagina')
+        .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, sursa_pagina, confirmata_de')
         .eq('licitatie_id', id).in('tip', ['propunere','forma'])
         .is('inlocuita_de', null).is('duplicat_al', null)
         .order('nr_ordine').limit(5000),
@@ -1224,7 +1226,9 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
     if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
     const cer = rCer.data || []
-    setSt(rSt.data || null); setCapitole(rCap.data || []); setCerinte(cer)
+    // P0c: rândul de poartă „neconfirmate” vine dintr-un view separat (poate lipsi până la aplicarea migrării → poarta veche).
+    const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', id).maybeSingle()
+    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}) } : null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
     // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
@@ -1558,7 +1562,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     showToast?.(
       `Capitol generat din ${data?.cerinte} cerințe (v${data?.versiune_noua}).` +
       (g ? ` ${g} locuri marcate [DE COMPLETAT] — alea sunt faptele pe care nu le-a inventat.` : '') +
-      (nc ? ` ${nc} cerințe NECONFIRMATE folosite${data?.urma_neconfirmate === false ? ' — ATENȚIE: observația de urmă NU s-a putut scrie' : ' (observație deschisă pe capitol)'}.` : '') +
+      (nc ? ` ${nc} cerințe NECONFIRMATE folosite — observație deschisă #${data?.urma_observatie_id} pe capitol; nu trece drept verificat.` : '') +
       ' Citește-l și salvează-l: până atunci poarta stă roșie.',
       (g || nc) ? 'err' : 'ok')
     await load(licId)
@@ -1828,6 +1832,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     // Se recitește starea din BD, nu din state: între încărcare și apăsare se poate schimba.
     const { data: proaspat, error: e1 } = await supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', licId).maybeSingle()
     if (e1 || !proaspat) { setBusy(false); showToast?.('Nu s-a putut reciti starea.', 'err'); return }
+    { const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', licId).maybeSingle(); if (!rNc.error && rNc.data) Object.assign(proaspat, rNc.data) }
     // Acelasi evaluator ca butonul si cardul. Daca cele trei ar diverge, butonul ar fi activ
     // dar semnarea ar cadea — sau invers, mai rau.
     const ev = evalueazaPoarta(proaspat)

@@ -46,6 +46,19 @@ export function evalueazaPoarta(st) {
     filtru: 'neverificate',
   })
   r.push({
+    // P0c / INTERDICȚIA 5 a generatorului (24.09.2026): o cerință ATRIBUITĂ unui capitol, dar NECONFIRMATĂ de om în
+    // registru (E2, confirmata_de NULL) ține poarta închisă INDIFERENT de sursa capitolului — nici generarea cu
+    // „cu_neconfirmate", nici salvarea ulterioară a textului ca text de om nu ridică blocajul. Se ridică prin
+    // confirmarea (sau excepția / nu-se-aplică) cerinței în registru. Coloana vine din v_ofertare_pt_cerinte_neconfirmate
+    // (migrare 20260924_p0c_pt_stare_neconfirmate); lipsă (view neaplicat) = 0, ca poarta veche să nu se schimbe singură.
+    k:'neconfirmate', titlu:'Cerințe atribuite, dar neconfirmate în registru (E2)',
+    stare: (st.cerinte_neconfirmate_cu_capitol || 0) > 0 ? 'block' : 'ok',
+    detalii: (st.cerinte_neconfirmate_cu_capitol || 0) > 0
+      ? `${st.cerinte_neconfirmate_cu_capitol} cerințe cu capitol nu sunt confirmate de un om în registru — textul scris pe ele nu e bază verificată; confirmă-le (✓) sau exceptează-le`
+      : (st.cerinte_neconfirmate_cu_capitol === 0 ? 'toate cerințele atribuite sunt confirmate în registru' : '— (se aprinde după aplicarea view-ului v_ofertare_pt_cerinte_neconfirmate)'),
+    filtru: 'neconfirmate',
+  })
+  r.push({
     k:'capcane', titlu:'Capcane de respingere descoperite',
     stare: st.capcane_descoperite > 0 ? 'block' : 'ok',
     detalii: st.capcane > 0

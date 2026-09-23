@@ -1474,6 +1474,7 @@ function DoveziRand({ c, lista, activ, licitatieId, onAdaugat }) {
       p_cerinta_id: c.id, p_pasaj: pasaj, p_explicatie: expl,
       p_document_id: f.document_id ? Number(f.document_id) : null, p_locator: locator,
       p_fisier_sha256: f.sha.trim() || null,
+      p_text_vazut: c.text_cerinta,   // dacă textul s-a editat între afișare și salvare, RPC-ul refuză
     })
     setBusy(false)
     if (error) return setErr('Nu s-a salvat: ' + error.message)
@@ -1517,7 +1518,7 @@ function DoveziRand({ c, lista, activ, licitatieId, onAdaugat }) {
           </div>
           <textarea placeholder="Pasajul EXACT din document, copiat literal (fără „…” în locul textului)" value={f.pasaj} onChange={e => setF(v => ({ ...v, pasaj: e.target.value }))} rows={3} style={{ ...S.input, fontSize:11.5, padding:'4px 6px', fontFamily:'inherit' }} />
           <input placeholder="Ce parte a cerinței susține pasajul (ex. „componenta 5% manager de proiect”)" value={f.explicatie} onChange={e => setF(v => ({ ...v, explicatie: e.target.value }))} style={{ ...S.input, fontSize:11, padding:'3px 6px' }} />
-          <input placeholder="SHA-256 al fișierului original (opțional, 64 hex)" value={f.sha} onChange={e => setF(v => ({ ...v, sha: e.target.value }))} style={{ ...S.input, fontSize:11, padding:'3px 6px', fontFamily:'monospace' }} />
+          <input placeholder="SHA-256 al fișierului original, declarat de tine (opțional, 64 hex)" value={f.sha} onChange={e => setF(v => ({ ...v, sha: e.target.value }))} style={{ ...S.input, fontSize:11, padding:'3px 6px', fontFamily:'monospace' }} />
           {err && <div style={{ color:G.red, fontWeight:700 }}>{err}</div>}
           <div style={{ display:'flex', gap:6 }}>
             <button disabled={busy} onClick={trimite} style={{ ...S.btnP, padding:'3px 10px', fontSize:11 }}>{busy ? '…' : 'salvează dovada'}</button>
