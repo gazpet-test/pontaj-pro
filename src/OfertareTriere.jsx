@@ -76,9 +76,11 @@ export function exportTriereXlsx(licitatie, rez) {
   for (const [k, f] of RANDURI) rows.push([k, f(rez) || '', ''])
   rows.push(['Personal minim / roluri solicitate', rez.cumul_functii_interzis ? 'O persoană nu poate îndeplini în mod cumulativ mai multe funcții' : '', ''])
   for (const r of rez.roluri || []) {
-    rows.push([r.rol || '', r.cerinte || '', r.propunere || 'NIMENI'])
+    rows.push([r.rol || '', r.cerinte || '', (r.propunere || 'NIMENI') + (r.depinde_de_transport ? (r.risc_eliminare ? ' — RISC: cerința minimă depinde de acceptarea transportului' : ' — punctaj condiționat de acceptarea transportului') : '')])
     if (r.documente) rows.push(['', r.documente, r.propunere ? '' : (r.motiv || '')])
   }
+  const rc = rez.repartizare_calculata
+  if (rc?.conditionat && rc.scenariu_propus === 'conditionat') rows.push(['Punctaj echipă (scenarii)', `${rc.conditionat.total_puncte} pct dacă autoritatea acceptă transportul ca experiență similară; ${rc.aceeasi_echipa_fara_transport?.total_puncte ?? 0} pct aceeași echipă fără transport; cea mai bună echipă fără transport: ${rc.conservator?.total_puncte ?? 0} pct`, ''])
   for (const a of rez.alte_cerinte || []) rows.push(['Altă cerință', a, ''])
   ;(rez.clarificari_propuse || []).forEach((c, i) => rows.push([`Solicitare de clarificare nr.${i + 1}`, c, '']))
   rows.push(['Verdict triere', `${(VERDICT[rez.verdict] || VERDICT.neclar).t} — ${rez.motiv_verdict || ''}`, ''])
@@ -204,11 +206,43 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
                   <td style={{ padding:'6px 8px' }}>{r.cerinte}{r.documente ? <div style={{ color:G.muted, fontSize:11.5, marginTop:3 }}>📎 {r.documente}</div> : null}</td>
                   <td style={{ padding:'6px 8px' }}>
                     <div style={{ fontWeight:800, color: r.propunere ? G.green : G.red }}>{r.propunere || 'NIMENI'}</div>
+                    {r.depinde_de_transport && (
+                      <div style={{ fontSize:11.5, fontWeight:700, color: r.risc_eliminare ? G.red : G.orange, marginTop:2 }}>
+                        {r.risc_eliminare ? '⛔ cerința minimă depinde de acceptarea transportului' : '⚠️ punctaj condiționat de acceptarea transportului'}
+                        {Number.isFinite(r.puncte_conditionat) ? ` · ${r.puncte_conditionat} pct cu transport / ${r.puncte_conservator} fără${Number.isFinite(r.puncte_doar_verificate) ? ` / ${r.puncte_doar_verificate} doar pe verificate` : ''}` : ''}
+                      </div>
+                    )}
+                    {r.cumul_cu && <div style={{ fontSize:11.5, fontWeight:700, color:G.orange, marginTop:2 }}>⚠️ cumul: aceeași persoană e repartizată pe „{r.cumul_cu}"</div>}
                     {r.motiv && <div style={{ color:G.muted, fontSize:11.5 }}>{r.motiv}</div>}
                   </td>
                 </tr>))}
               </tbody>
             </table>
+          )}
+
+          {/* v1.7: două scenarii de punctaj (Jakarinos, 23.09.2026) — transport la cerință de distribuție e o ipoteză, nu o certitudine */}
+          {rez.repartizare_calculata?.conditionat && rez.repartizare_calculata.scenariu_propus === 'conditionat' && (() => {
+            const rc = rez.repartizare_calculata
+            const echipa = a => (a || []).filter(x => x.persoana).map(x => `${x.persoana} (${x.rol})`).join(', ') || 'nimeni'
+            const risc = rc.roluri_cu_risc_eliminare || []
+            return (
+              <div style={{ marginTop:10, padding:'10px 12px', borderRadius:10, background: risc.length ? G.red + '15' : G.orange + '15', border:`1px solid ${risc.length ? G.red : G.orange}66`, fontSize:12.5 }}>
+                <div style={{ fontWeight:800, color: risc.length ? G.red : G.orange, marginBottom:4 }}>
+                  {risc.length ? '⛔' : '⚠️'} {rc.depinde_de_transport ? 'Punctajul echipei depinde de acceptarea experienței pe TRANSPORT gaze la o cerință de DISTRIBUȚIE' : 'Echipa propusă folosește experiență pe TRANSPORT gaze la o cerință de DISTRIBUȚIE (punctajul nu se schimbă, dar cerința e condiționată)'}
+                </div>
+                <div>Echipa propusă: <b>{rc.conditionat.total_puncte} pct</b> dacă autoritatea acceptă transportul · <b>{rc.aceeasi_echipa_fara_transport?.total_puncte ?? 0} pct</b> aceeași echipă dacă îl refuză · doar pe recomandări verificate în HR: {rc.conditionat.total_doar_verificate ?? 0} pct</div>
+                <div style={{ color:G.muted, marginTop:3 }}>Cea mai bună echipă FĂRĂ transport: {rc.conservator?.total_puncte ?? 0} pct — {echipa(rc.conservator?.alocare)}</div>
+                {risc.length > 0 && <div style={{ color:G.red, fontWeight:700, marginTop:4 }}>La {risc.join(', ')} chiar cerința minimă se îndeplinește doar cu transportul: la refuz, oferta poate fi respinsă, nu doar depunctată.</div>}
+                <div style={{ color:G.dim, fontSize:11.5, marginTop:4 }}>Clarificarea către autoritate e propusă automat mai jos — trimite-o din tab-ul „Clarificări" înainte de a miza pe punctajul condiționat.</div>
+              </div>
+            )
+          })()}
+
+          {!(rez.repartizare_calculata?.conditionat && rez.repartizare_calculata.scenariu_propus === 'conditionat') && (rez.risc_transport?.roluri_cu_risc_eliminare || []).length > 0 && (
+            <div style={{ marginTop:10, padding:'10px 12px', borderRadius:10, background: G.red + '15', border:`1px solid ${G.red}66`, fontSize:12.5 }}>
+              <div style={{ fontWeight:800, color:G.red, marginBottom:4 }}>⛔ La {rez.risc_transport.roluri_cu_risc_eliminare.join(', ')} cerința minimă se îndeplinește doar cu experiență pe TRANSPORT la o cerință de DISTRIBUȚIE</div>
+              <div style={{ color:G.dim, fontSize:11.5 }}>La refuzul autorității oferta poate fi respinsă, nu doar depunctată. Clarificarea e propusă automat mai jos — trimite-o din tab-ul „Clarificări" înainte de a miza pe ea.</div>
+            </div>
           )}
 
           {(rez.alte_cerinte || []).length > 0 && (
