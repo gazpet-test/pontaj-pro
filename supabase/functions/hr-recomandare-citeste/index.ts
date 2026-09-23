@@ -154,7 +154,18 @@ Deno.serve(async (req: Request) => {
   // (d) poarta de ROL, nu doar JWT valid (cheia anon e un JWT valid — PR #318)
   const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
   let uid: string | null = null;
-  if (jwt !== SERVICE) {
+  // Workerul de pe NAS (Terra) are cheia service_role în format JWT clasic, care nu e egală string cu cea injectată în
+  // funcție; o acceptăm doar dacă (1) payload-ul zice role=service_role și (2) PostgREST o validează (semnătura se verifică
+  // pe server — un JWT „scris de mână" pică aici). Fără (2), oricine ar putea pune role în payload.
+  const esteServiceJwt = async (t: string) => {
+    try {
+      const p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      if (p?.role !== 'service_role') return false;
+      const probe = await fetch(SUPA_URL + '/rest/v1/profiles?select=id&limit=1', { headers: { apikey: t, Authorization: 'Bearer ' + t } });
+      return probe.ok;
+    } catch (_) { return false; }
+  };
+  if (jwt !== SERVICE && !(jwt.split('.').length === 3 && await esteServiceJwt(jwt))) {
     if (!jwt) return json({ error: 'unauthorized' }, 401);
     const anon = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!);
     const { data: u } = await anon.auth.getUser(jwt);
