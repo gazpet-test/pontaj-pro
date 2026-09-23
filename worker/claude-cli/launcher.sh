@@ -24,7 +24,22 @@ J "START task=$TASK cli=$(claude --version 2>/dev/null | head -1) model=${TASK_M
 
 # 2. pre-extragere text (agentul nu are Bash): PDF → text cu marcaje ⟦PAGINA n⟧ (același format ca ingest-ul Deno), DOCX → text brut.
 mkdir -p /work/text
-N_PDF=0; N_DOCX=0; N_SARIT=0; MAX_FISIERE=300; MAX_MB=60
+N_PDF=0; N_DOCX=0; N_SARIT=0; MAX_FISIERE=300; MAX_MB=150
+OCR_MAX_PAG=${OCR_MAX_PAG:-250}; OCR_PAG_FISIER=${OCR_PAG_FISIER:-60}; echo 0 > /work/.ocr_pag; : > /work/.ocr_md5
+# text real = fără marcajele ⟦PAGINA n⟧ și fără spații
+text_real() { sed "s/⟦PAGINA [0-9]*⟧//g" "$1" | tr -d "[:space:]" | wc -c; }
+# OCR pentru PDF scanat: pdftoppm 200 dpi gri + tesseract ron; un singur OCR per conținut identic (md5); plafon total de pagini
+ocr_pdf() { # $1 pdf  $2 dest
+  md=$(md5sum "$1" | cut -c1-32); if grep -q "$md" /work/.ocr_md5; then echo "dup"; return; fi
+  fac=$(cat /work/.ocr_pag); rest=$((OCR_MAX_PAG - fac)); [ "$rest" -gt 0 ] || { echo "plafon"; return; }
+  n=$OCR_PAG_FISIER; [ "$n" -gt "$rest" ] && n=$rest
+  tot=$(pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2}'); [ -n "$tot" ] || tot=0; [ "$n" -gt "$tot" ] && n=$tot
+  d=$(mktemp -d /tmp/ocr.XXXX); : > "$2"; k=0
+  while [ "$k" -lt "$n" ]; do k=$((k+1))   # pagină cu pagină: /tmp e tmpfs mic
+    pdftoppm -r 200 -gray -f "$k" -l "$k" -singlefile "$1" "$d/p" 2>/dev/null
+    printf "\n⟦PAGINA %d⟧\n" "$k" >> "$2"; [ -f "$d/p.pgm" ] && tesseract "$d/p.pgm" - -l ron+eng --psm 1 2>/dev/null >> "$2"; rm -f "$d/p.pgm"
+  done
+  rm -rf "$d"; echo $((fac + k)) > /work/.ocr_pag; echo "$md" >> /work/.ocr_md5; echo "ocr:$k"; }
 : > /work/INVENTAR.md
 echo "# Inventar /data (generat de launcher, $STAMP)" >> /work/INVENTAR.md
 echo "" >> /work/INVENTAR.md
@@ -37,7 +52,14 @@ find /data -type f \( -iname '*.pdf' -o -iname '*.docx' \) | sort | head -n "$MA
     *.pdf|*.PDF)
       pg=$(pdfinfo "$f" 2>/dev/null | awk '/^Pages:/{print $2}'); [ -n "$pg" ] || pg='?'
       if pdftotext -layout "$f" - 2>/dev/null | awk 'BEGIN{p=1; printf "⟦PAGINA 1⟧\n"} { n=split($0, a, "\f"); for(i=1;i<=n;i++){ if(i>1){p++; printf "\n⟦PAGINA %d⟧\n", p} printf "%s", a[i] } printf "\n" }' > "$dest"; then
-        car=$(wc -c < "$dest"); if [ "$car" -lt 200 ]; then echo "| $rel | $mb | $pg | fără text (scanat?) |" >> /work/INVENTAR.md; else echo "| $rel | $mb | $pg | text/$rel.txt |" >> /work/INVENTAR.md; fi
+        if [ "$(text_real "$dest")" -lt 200 ]; then
+          r=$(ocr_pdf "$f" "$dest")
+          case "$r" in
+            ocr:*) if [ "$(text_real "$dest")" -ge 200 ]; then echo "| $rel | $mb | $pg | text/$rel.txt (OCR ${r#ocr:} pag.) |" >> /work/INVENTAR.md; else echo "| $rel | $mb | $pg | scanat, OCR fără rezultat |" >> /work/INVENTAR.md; rm -f "$dest"; fi ;;
+            dup) echo "| $rel | $mb | $pg | scanat, identic cu un fișier deja citit prin OCR |" >> /work/INVENTAR.md; rm -f "$dest" ;;
+            *) echo "| $rel | $mb | $pg | scanat, necitit (plafon OCR $OCR_MAX_PAG pag.) |" >> /work/INVENTAR.md; rm -f "$dest" ;;
+          esac
+        else echo "| $rel | $mb | $pg | text/$rel.txt |" >> /work/INVENTAR.md; fi
       else echo "| $rel | $mb | $pg | eroare pdftotext |" >> /work/INVENTAR.md; fi ;;
     *.docx|*.DOCX)
       if unzip -p "$f" word/document.xml 2>/dev/null | sed -e 's#</w:p>#\n#g' -e 's#<w:tab/>#\t#g' -e 's#<[^>]*>##g' > "$dest" && [ "$(wc -c < "$dest")" -gt 50 ]; then
@@ -46,7 +68,7 @@ find /data -type f \( -iname '*.pdf' -o -iname '*.docx' \) | sort | head -n "$MA
 done
 find /data -type f ! \( -iname '*.pdf' -o -iname '*.docx' \) | sort | sed 's#^/data/#| #; s#$# | - | - | alt format (necitit) |#' >> /work/INVENTAR.md
 TOTAL_FIS=$(find /data -type f | wc -l); TXT=$(find /work/text -type f | wc -l)
-J "inventar: $TOTAL_FIS fișiere în /data, $TXT texte extrase (limită $MAX_FISIERE fișiere, $MAX_MB MB/fișier)"
+J "inventar: $TOTAL_FIS fișiere în /data, $TXT texte extrase, OCR $(cat /work/.ocr_pag) pag. (limită $MAX_FISIERE fișiere, $MAX_MB MB/fișier)"
 [ "$TOTAL_FIS" -gt 0 ] || { J "STOP: /data e gol — LIC_FOLDER greșit? (docker creează un folder gol dacă ruta nu există)"; final 3 fara_fisiere; }
 [ "$TXT" -gt 0 ] || { J "STOP: niciun text extras (doar scanări?)"; final 3 fara_text; }
 if [ -d /context ] && [ -n "$(ls -A /context 2>/dev/null)" ]; then echo "" >> /work/INVENTAR.md; echo "Context suplimentar în /context: $(ls /context | tr '\n' ' ')" >> /work/INVENTAR.md; fi

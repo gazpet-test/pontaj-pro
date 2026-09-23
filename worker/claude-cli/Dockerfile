@@ -1,7 +1,7 @@
 # gazpet-claude-cli — Claude Code CLI pe NAS Terra, pilot READ-ONLY (decizie Răzvan 22.09.2026, condiții Jakarinos).
 # Agentul citește un folder de licitație montat :ro și scrie UN raport în /out. Fără Bash, fără BD, fără mail.
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates poppler-utils unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates poppler-utils unzip tesseract-ocr tesseract-ocr-ron \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @anthropic-ai/claude-code@latest && npm cache clean --force \
  && useradd -m -u 1000 -s /bin/sh agent 2>/dev/null || true
