@@ -201,7 +201,10 @@ function acelasiRol(a: string, b: string) {
   const fara = (s: string) => s.replace(/^[a-z]?\d+\s*[:.)]\s*/, '')
   const fa = fara(na), fb = fara(nb)
   if (fa === fb) return true
-  return (fa.length >= 4 && fb.length >= 4) && (fa.startsWith(fb) || fb.startsWith(fa))
+  if ((fa.length >= 4 && fb.length >= 4) && (fa.startsWith(fb) || fb.startsWith(fa))) return true
+  // „Șef Șantier" ↔ „Șef de Șantier" ↔ „site manager": același rol canonic (sinonimele din ROL_CANONIC)
+  const c1 = rolCanonicDin(fa), c2 = rolCanonicDin(fb)
+  return c1 !== 'altul' && c1 === c2
 }
 function indexeazaMatrice(mat: any[]) {
   const idx = new Map<string, RandMat>(), nume = new Map<string, string>(), roluriMat: string[] = []
