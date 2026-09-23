@@ -1,4 +1,4 @@
-// ofertare-triere v1.7.1 (23.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
+// ofertare-triere v1.8 (23.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
 //
 // De ce există: colegii descărcau toată documentația (46 fișiere la Simian, planșe de 90 MB la
 // Potlogi) și o citeau integral ÎNAINTE să știe dacă vrem licitația. Facturile de API veneau de
@@ -23,6 +23,8 @@
 //   („peste N", „între N și M", trepte prescurtate „4-5 = 7 pct"), matricea se indexează pe (persoană, rol) normalizate,
 //   cumulul pe rolurile lăsate pe propunerea AI e marcat + clarificat, filtrul de dubluri nu mai șterge întrebările despre atestate,
 //   scenariul e „condiționat" doar dacă echipa propusă chiar folosește transport; punctajele se calculează o dată (12×5: 15 s → 0,1 s).
+// v1.8 (23.09.2026, Răzvan): MATRICEA CALCULATĂ DE COD din BD (recomandare × rol canonic × natură, din obiectivele structurate #1399);
+//   modelul dă doar rol_canonic / natura_ceruta / exclude_transport pe rol; rândurile lui rămân rezervă pentru recomandările fără listă.
 // v1.5: o persoană = un rol, repartizare pe punctaj total, cu matricea persoană × rol scoasă în JSON înainte de alegere.
 // v1.6: la egalitate de punctaj total, câștigă repartizarea cu cea mai mare marjă peste prag.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
@@ -51,7 +53,7 @@ REGULI:
   (3) Punctajul echipei îl calculează CODUL din matrice, pe TOATE proiectele (verificate + neverificate), și afișează separat cifra doar-pe-verificate; tu nu scrii cifre de punctaj în motiv. Completezi corect "verificate" în matrice; când propui pe cineva cu recomandări neverificate, spui în motiv câte proiecte ies din verificate și câte din neverificate, plus „de confirmat în HR înainte de depunere".
   (4) Dacă nimeni nu are recomandare potrivită, propui pe cine are funcția și autorizația potrivite, DAR scrii în motiv „fără dovadă de experiență în platformă — de completat cu recomandare / document constatator". Un certificat de curs (ex. „Manager proiect 240h") e o calificare, nu experiență, și nu se invocă drept experiență.
   (5) O PERSOANĂ, UN ROL (Răzvan, 22.09.2026, Jilava): când fișa cere mai multe roluri de experți cheie, nu propui aceeași persoană pe două roluri. Repartizezi persoanele pe roluri astfel încât punctajul TOTAL să fie maxim — nu rolul cu rolul, ci echipa întreagă: dacă A ar lua 5 puncte pe oricare rol, iar B ia 5 puncte doar pe rolul X, atunci B merge pe X și A pe celălalt. Aceeași persoană pe două roluri doar când nimeni altcineva nu trece pragul de punctaj pe al doilea rol — și atunci scrii în motiv că e cumul și propui clarificare cu autoritatea.
-  (6) ÎNTÂI MATRICEA, APOI REPARTIZAREA. Înainte să alegi, completezi câmpul "matrice_experti": pentru FIECARE persoană care are măcar o recomandare potrivită ca natură a lucrării și pentru FIECARE rol punctat, câte proiecte dovedite are pe rolul ăla și din ce recomandări (beneficiar + nr./dată sau „fără nr."). Numeri TOATE recomandările persoanei pe rol — o recomandare fără număr sau dată de document contează exact la fel ca una cu număr; nu o sări. Un rând pe (persoană, rol), inclusiv cu proiecte=0 dacă persoana n-are recomandare pe rolul respectiv. În "proiecte" pui DOAR obiectivele care trec regula (2) STRICT — pe natura cerută; cele pe TRANSPORT la o cerință de distribuție merg în "proiecte_conditionate" (un obiectiv stă ORI în "proiecte", ORI în "proiecte_conditionate", niciodată în ambele); pe cele excluse (țiței, apă-canal, distribuție când se cere transport) le notezi în "surse" ca „excluse: N (țiței)" și NU le aduni nicăieri (Jilava 22.09: 13 în loc de 9, cu 4 pe țiței adunate). Persoana care are DOAR recomandări pe transport la o cerință de distribuție INTRĂ în matrice (rând cu proiecte=0 și proiecte_conditionate=N) — dacă lipsește din matrice, codul n-o poate propune și nu pune clarificarea (Grădiștea: Trușu, 21 obiective pe transport). "rol" din matrice e EXACT denumirea din "roluri" (nu creezi rânduri separate pe beneficiar, ex. „Manager Proiect (Romgaz)" — se adună la rolul din fișă). Repartizarea de la (5) se face DOAR din matricea asta, iar motivul fiecărei propuneri citează cifra din matrice. La Jilava (22.09) lipsa acestui pas a făcut ca o recomandare de Manager Proiect cu 9 obiective, fără număr de document, să fie ignorată, iar echipa a ieșit cu 3 puncte în minus. UNITATEA DE NUMĂRARE e cea din barem: dacă baremul spune „contracte", o recomandare cu 15 obiective într-un singur contract = 1; dacă spune „proiecte/obiective/lucrări", numeri obiectivele. Un obiectiv care apare în două recomandări (același beneficiar + aceeași lucrare) se numără O SINGURĂ dată, oriunde ar apărea. Dacă recomandarea are „OBIECTIVE STRUCTURATE", numeri EXACT elementele de acolo (natura fiecăruia e în paranteză: transport / distributie / titei / apa_canal) — nu reciți proza; proza contează doar la recomandările fără listă structurată.
+  (6) ÎNTÂI MATRICEA, APOI REPARTIZAREA. Pentru rolurile la care completezi "rol_canonic" și "natura_ceruta", MATRICEA O CALCULEAZĂ CODUL din obiectivele structurate ale recomandărilor din BD (aceleași reguli: strict = natura cerută, condiționat = transport la distribuție, țiței/apă excluse, un obiectiv o singură dată) și o înlocuiește pe a ta — tu o completezi oricum, ca rezervă pentru recomandările fără obiective structurate. Înainte să alegi, completezi câmpul "matrice_experti": pentru FIECARE persoană care are măcar o recomandare potrivită ca natură a lucrării și pentru FIECARE rol punctat, câte proiecte dovedite are pe rolul ăla și din ce recomandări (beneficiar + nr./dată sau „fără nr."). Numeri TOATE recomandările persoanei pe rol — o recomandare fără număr sau dată de document contează exact la fel ca una cu număr; nu o sări. Un rând pe (persoană, rol), inclusiv cu proiecte=0 dacă persoana n-are recomandare pe rolul respectiv. În "proiecte" pui DOAR obiectivele care trec regula (2) STRICT — pe natura cerută; cele pe TRANSPORT la o cerință de distribuție merg în "proiecte_conditionate" (un obiectiv stă ORI în "proiecte", ORI în "proiecte_conditionate", niciodată în ambele); pe cele excluse (țiței, apă-canal, distribuție când se cere transport) le notezi în "surse" ca „excluse: N (țiței)" și NU le aduni nicăieri (Jilava 22.09: 13 în loc de 9, cu 4 pe țiței adunate). Persoana care are DOAR recomandări pe transport la o cerință de distribuție INTRĂ în matrice (rând cu proiecte=0 și proiecte_conditionate=N) — dacă lipsește din matrice, codul n-o poate propune și nu pune clarificarea (Grădiștea: Trușu, 21 obiective pe transport). "rol" din matrice e EXACT denumirea din "roluri" (nu creezi rânduri separate pe beneficiar, ex. „Manager Proiect (Romgaz)" — se adună la rolul din fișă). Repartizarea de la (5) se face DOAR din matricea asta, iar motivul fiecărei propuneri citează cifra din matrice. La Jilava (22.09) lipsa acestui pas a făcut ca o recomandare de Manager Proiect cu 9 obiective, fără număr de document, să fie ignorată, iar echipa a ieșit cu 3 puncte în minus. UNITATEA DE NUMĂRARE e cea din barem: dacă baremul spune „contracte", o recomandare cu 15 obiective într-un singur contract = 1; dacă spune „proiecte/obiective/lucrări", numeri obiectivele. Un obiectiv care apare în două recomandări (același beneficiar + aceeași lucrare) se numără O SINGURĂ dată, oriunde ar apărea. Dacă recomandarea are „OBIECTIVE STRUCTURATE", numeri EXACT elementele de acolo (natura fiecăruia e în paranteză: transport / distributie / titei / apa_canal) — nu reciți proza; proza contează doar la recomandările fără listă structurată.
   (7) LA EGALITATE, MARJA DECIDE (Răzvan, 22.09.2026). Dacă două repartizări dau același punctaj total, alegi pe cea în care fiecare persoană trece pragul cu cea mai mare marjă — concret, maximizezi cel mai MIC număr de proiecte peste prag din echipă. O dovadă care trece pragul „la limită" sau doar dacă o comisie acceptă o interpretare (ex. conducte colectoare la o cerință pe transport) e mai slabă decât una care îl depășește cu mai multe obiective clare. Spui în motiv că a fost egalitate și de ce a câștigat varianta aleasă. Exemplu: A are 15 pe rolul X și 14 pe Y; B are 9 pe X și 6 pe Y (din care 2 interpretabile); ambele repartizări dau 5+5 — alegi B pe X (9, marjă clară) și A pe Y (14), nu B pe Y (6, la limită).
   (8) RISC DE ELIMINARE (Jakarinos, 23.09.2026): dacă pentru un rol CERINȚA MINIMĂ obligatorie (ex. „minim 1 proiect similar") se îndeplinește DOAR prin proiecte condiționate (transport la cerință de distribuție), scrii în motivul rolului „RISC: cerința minimă depinde de acceptarea transportului — la refuz oferta poate fi respinsă, nu doar depunctată" și verdictul nu poate fi „mergem" (cel mult „cu_clarificari"). Codul adaugă singur clarificarea către autoritate pentru fiecare rol care are în matrice proiecte condiționate și marchează riscul citind cerința minimă din textul rolului — de aceea în "cerinte" copiezi EXACT din fișă cerința minimă („minim N proiecte/contracte/lucrări") și baremul (pragurile cu „pct"/„puncte"), în unitatea din fișă. Tu doar completezi matricea, "cerinte" și "barem" corect — "barem" e STRUCTURAT (minim + trepte cu "de_la" = numărul TOTAL de proiecte, nu cele suplimentare) și e sursa din care codul calculează punctajele; pentru un rol nepunctat, "barem": null.
   NU scrie niciodată „poate demonstra experiență" sau „se va documenta experiența" — dacă dovada nu e în listă, spui că lipsește. Nu invoca drept sprijin o autorizație pe alt domeniu decât cel al lucrării (ex. EGD/PGD = distribuție pe o lucrare de transport): dacă o menționezi, spui explicit că e pe alt domeniu.
@@ -77,7 +79,7 @@ Răspunde EXCLUSIV JSON, fără markdown:
   "experienta_similara": { "cerinta": "<textul cerinței de experiență similară, cu valoare/număr contracte/ani>", "lucrari_acceptate": "<ce lucrări se acceptă ca similare>" },
   "cumul_functii_interzis": true|false,
   "matrice_experti": [ { "persoana": "<NUME>", "rol": "<rolul punctat din fișă>", "proiecte": <număr întreg — DOAR pe natura cerută, necondiționate>, "verificate": <câte din "proiecte" vin din recomandări verificate în HR>, "proiecte_conditionate": <număr întreg — pe TRANSPORT la o cerință de distribuție; 0 dacă nu e cazul>, "verificate_conditionate": <câte din "proiecte_conditionate" vin din recomandări verificate>, "surse": "<beneficiar + nr./dată document sau „fără nr.", câte una per recomandare; cele condiționate marcate „transport — condiționat"; cele excluse marcate „excluse: N (țiței/apă-canal)">" } ],
-  "roluri": [ { "rol": "<denumirea rolului>", "cerinte": "<studii/atestări/experiență cerute — cu baremul citat exact>", "barem": { "minim": <număr întreg — cerința minimă obligatorie de proiecte/contracte, sau null>, "unitate": "<proiecte|contracte|lucrari|obiective>", "trepte": [ { "de_la": <numărul TOTAL de proiecte de la care se acordă punctele — dacă fișa spune „2-3 proiecte suplimentare" peste minimul de 1, de_la = 3>, "puncte": <număr> } ] } | null, "documente": "<ce documente se depun>", "propunere": "<NUME din lista Gazpet sau null>", "motiv": "<de ce persoana asta / de ce nimeni>" } ],
+  "roluri": [ { "rol": "<denumirea rolului>", "rol_canonic": "<manager_proiect|sef_santier|rte|cq|ssm|inginer|altul — rolul cerut, normalizat>", "natura_ceruta": "<distributie|transport|gaze_orice|alta — natura lucrării cerute la experiența rolului: distributie = rețele de distribuție / edilitare gaze / „rețele de gaze" fără precizare; transport = conducte de transport; gaze_orice = fișa acceptă explicit ambele; alta = nu e gaze>", "exclude_transport": <true dacă cerința exclude explicit transportul („exclusiv/numai distribuție"), altfel false>, "cerinte": "<studii/atestări/experiență cerute — cu baremul citat exact>", "barem": { "minim": <număr întreg — cerința minimă obligatorie de proiecte/contracte, sau null>, "unitate": "<proiecte|contracte|lucrari|obiective>", "trepte": [ { "de_la": <numărul TOTAL de proiecte de la care se acordă punctele — dacă fișa spune „2-3 proiecte suplimentare" peste minimul de 1, de_la = 3>, "puncte": <număr> } ] } | null, "documente": "<ce documente se depun>", "propunere": "<NUME din lista Gazpet sau null>", "motiv": "<de ce persoana asta / de ce nimeni>" } ],
   "atestari": "<atestări/autorizații de firmă cerute (ANRE, ISC, ISO...), sau null>",
   "sursa_finantare": "<sau null>",
   "garantie_participare": "<cuantum + formă, sau null>",
@@ -195,7 +197,14 @@ function acelasiRol(a: string, b: string) {
   const cod = (s: string) => (/^([a-z]?\d+)\s*[:.)]/.exec(s) || [])[1]
   const ca = cod(na), cb = cod(nb)
   if (ca && cb) return ca === cb
-  return (na.length >= 4 && nb.length >= 4) && (na.startsWith(nb) || nb.startsWith(na))
+  // doar unul are cod („E1: Manager de Proiect" vs „Manager de Proiect") → se compară fără cod
+  const fara = (s: string) => s.replace(/^[a-z]?\d+\s*[:.)]\s*/, '')
+  const fa = fara(na), fb = fara(nb)
+  if (fa === fb) return true
+  if ((fa.length >= 4 && fb.length >= 4) && (fa.startsWith(fb) || fb.startsWith(fa))) return true
+  // „Șef Șantier" ↔ „Șef de Șantier" ↔ „site manager": același rol canonic (sinonimele din ROL_CANONIC)
+  const c1 = rolCanonicDin(fa), c2 = rolCanonicDin(fb)
+  return c1 !== 'altul' && c1 === c2
 }
 function indexeazaMatrice(mat: any[]) {
   const idx = new Map<string, RandMat>(), nume = new Map<string, string>(), roluriMat: string[] = []
@@ -362,6 +371,56 @@ function marcheazaRiscTransport(parsed: any) {
   if (parsed.repartizare_calculata) parsed.repartizare_calculata.roluri_cu_risc_eliminare = roluriCuRisc
 }
 
+// v1.8 (Răzvan, 23.09.2026): MATRICEA CALCULATĂ DE COD din BD — recomandare × rol × natură, din obiectivele structurate (#1399).
+// Modelul spune doar ce rol canonic și ce natură cere fișa; numărătoarea e deterministă (aceleași cifre la fiecare rulare).
+// Rândurile modelului rămân rezervă pentru recomandările fără obiective structurate.
+const ROL_CANONIC: Array<[RegExp, string]> = [
+  [/responsabil tehnic|\brte\b/i, 'rte'], [/sef.*santier|site manager|șef.*șantier/i, 'sef_santier'],
+  [/(manager|director|coordonator|sef|șef)\s*(de\s+|al\s+)?(proiect|project|contract)|project manager/i, 'manager_proiect'],
+  [/\bcq\b|calitate|ctc/i, 'cq'], [/\bssm\b|securitate/i, 'ssm'], [/inginer/i, 'inginer'],
+]
+const rolCanonicDin = (rol: string) => { const n = norm(rol); for (const [re, c] of ROL_CANONIC) if (re.test(n)) return c; return 'altul' }
+function matriceDinBD(parsed: any, recs: any[]) {
+  const roluri: any[] = Array.isArray(parsed.roluri) ? parsed.roluri : []
+  const NAT = ['distributie', 'transport', 'gaze_orice']
+  const calculate = roluri.filter(r => r.rol_canonic && r.rol_canonic !== 'altul' && NAT.includes(String(r.natura_ceruta || '')))
+  if (!calculate.length) return
+  const randuri: any[] = []
+  for (const r of calculate) {
+    const perPers = new Map<string, { proiecte: Set<string>; verificate: Set<string>; cond: Set<string>; verifCond: Set<string>; surse: string[] }>()
+    for (const x of recs) {
+      if (rolCanonicDin(String(x.rol || '')) !== r.rol_canonic) continue
+      const ob: any[] = Array.isArray(x.obiective) ? x.obiective : []
+      if (!ob.length) continue
+      const cine = x.emp?.name || x.ext?.nume; if (!cine) continue
+      const acc = perPers.get(cine) || { proiecte: new Set(), verificate: new Set(), cond: new Set(), verifCond: new Set(), surse: [] }
+      let nS = 0, nC = 0, nEx = 0, idx = 0
+      for (const o of ob) {
+        // cheia de dedup: denumire + an + beneficiar final — între recomandări diferite; în aceeași recomandare, fiecare element
+        // se numără (o listă „punere în siguranță ×15" ar fi devenit 1). Sufixul cu id-ul recomandării ține elementele ei distincte
+        // când n-au an/beneficiar (nu se pot deosebi de altele decât prin poziție).
+        const baza = norm(o.denumire); if (!baza) continue
+        const k = (o.an || o.beneficiar_final) ? `${baza}|${o.an || ''}|${norm(o.beneficiar_final || '')}` : `${baza}|r${x.id}#${idx++}`
+        const nat = String(o.natura || 'altele')
+        const strict = r.natura_ceruta === 'gaze_orice' ? (nat === 'transport' || nat === 'distributie') : nat === r.natura_ceruta
+        const cond = !strict && r.natura_ceruta === 'distributie' && nat === 'transport' && !r.exclude_transport
+        if (strict) { acc.proiecte.add(k); if (x.verificat) acc.verificate.add(k); nS++ }
+        else if (cond) { acc.cond.add(k); if (x.verificat) acc.verifCond.add(k); nC++ }
+        else nEx++
+      }
+      acc.surse.push(`${x.beneficiar || '?'}${x.nr_document ? ' nr. ' + x.nr_document : ' fără nr.'}: ${nS} pe natura cerută${nC ? `, ${nC} transport — condiționat` : ''}${nEx ? `, excluse: ${nEx}` : ''}${x.verificat ? '' : ' [neverificată]'}`)
+      perPers.set(cine, acc)
+    }
+    for (const [p, a] of perPers) randuri.push({ persoana: p, rol: r.rol, proiecte: a.proiecte.size, verificate: a.verificate.size, proiecte_conditionate: a.cond.size, verificate_conditionate: a.verifCond.size, surse: a.surse.join('; '), sursa_matrice: 'cod' })
+  }
+  // rândurile modelului rămân doar pentru rolurile necalculate și pentru persoanele fără niciun rând calculat pe rolul respectiv
+  const modelRows: any[] = Array.isArray(parsed.matrice_experti) ? parsed.matrice_experti : []
+  const areCod = (rol: string, p: string) => randuri.some(x => acelasiRol(x.rol, rol) && norm(x.persoana) === norm(p))
+  const pastrate = modelRows.filter(m => !calculate.some(r => acelasiRol(m.rol, r.rol)) || !areCod(m.rol, m.persoana))
+  parsed.matrice_experti = [...randuri, ...pastrate.map(m => ({ ...m, sursa_matrice: m.sursa_matrice || 'model' }))].slice(0, 80)
+  parsed.matrice_sursa = { roluri_calculate: calculate.map(r => r.rol), randuri_cod: randuri.length, randuri_model: pastrate.length }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -406,7 +465,7 @@ Deno.serve(async (req: Request) => {
         .or('position.ilike.%inginer%,position.ilike.%manager%,position.ilike.%sef%,position.ilike.%șef%,position.ilike.%responsabil%,position.ilike.%director%,position.ilike.%proiect%,position.ilike.%calitate%,position.ilike.%ssm%,position.ilike.%mediu%')
         .order('name').limit(120),
       supabase.from('hr_recomandari')
-        .select('rol, beneficiar, obiect_lucrare, obiective, domenii, verificat, nr_document, data_document, calificativ, emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
+        .select('id, rol, beneficiar, obiect_lucrare, obiective, domenii, verificat, nr_document, data_document, calificativ, emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
         .eq('activ', true).order('id'),
     ])
     // supabase-js nu aruncă la eșec: fără verificarea asta, un timeout ar deveni „nu avem pe nimeni".
@@ -487,6 +546,7 @@ Deno.serve(async (req: Request) => {
     parsed.verdict = verdict
     parsed.roluri = Array.isArray(parsed.roluri) ? parsed.roluri.slice(0, 40) : []
     parsed.matrice_experti = Array.isArray(parsed.matrice_experti) ? parsed.matrice_experti.slice(0, 60) : []
+    matriceDinBD(parsed, ((rec || []) as any[]).filter(r => (r.emp ? r.emp.active !== false : r.ext ? r.ext.activ !== false : false)))
     repartizeazaDinMatrice(parsed)
     marcheazaRiscTransport(parsed)
     // v1.7: clarificarea „transport acceptat ca similar?" e garantată din cod, per rol, PRIMA în listă (nu poate dispărea prin
