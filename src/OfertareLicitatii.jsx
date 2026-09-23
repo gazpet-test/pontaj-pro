@@ -1577,12 +1577,11 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
     // P0c: rândurile venite din Source Pack NU se șterg fizic — proveniența lor e dovadă (pack + ref +
     // excerpt) și istoricul importului trebuie să rămână verificabil. Respingerea = stare „nu se aplică"
     // cu motiv scris; rândul iese din calcul, dar rămâne în registru.
+    // P0c review semantics: „nu se aplică" NU e sinonim cu „respinsă" — starea de lucru o alege omul din select
+    // (cu motiv), iar respingerea unui candidat se dă ÎNAINTE de import, în Source Pack (REJECT/DUPLICATE…).
     if (c.sursa_pack_id) {
-      if (!window.confirm('Respingi cerința venită din Source Pack? (nu se șterge: trece pe „nu se aplică” cu motivul „respinsă la revizuire”, ca proveniența să rămână verificabilă)')) return
-      await feedback(c, 'respins')
-      const { error } = await supabase.from('ofertare_cerinte').update({ stare:'nu_se_aplica', stare_motiv:`respinsă la revizuire (Source Pack #${c.sursa_pack_id} · ${c.sursa_ref || '?'})`, stare_de: profile?.id || null, stare_la: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', c.id)
-      if (error) setWarn('Nu s-a respins: ' + error.message)
-      await load(); onChanged?.(); return
+      window.alert(`Rândul vine din Source Pack #${c.sursa_pack_id} (${c.sursa_ref || '?'}) și nu se șterge fizic: proveniența e dovadă.\n\nDacă nu e o cerință reală, pune-i starea de lucru potrivită din listă (cu motiv). Respingerile de candidați se dau în secțiunea „📦 Source Packs”, înainte de import.`)
+      return
     }
     if (!window.confirm('Respingi cerința? (dispare din registru; respingerea se ține minte ca feedback)')) return
     await feedback(c, 'respins')
