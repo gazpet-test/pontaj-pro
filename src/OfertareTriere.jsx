@@ -209,9 +209,10 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
                     {r.depinde_de_transport && (
                       <div style={{ fontSize:11.5, fontWeight:700, color: r.risc_eliminare ? G.red : G.orange, marginTop:2 }}>
                         {r.risc_eliminare ? '⛔ cerința minimă depinde de acceptarea transportului' : '⚠️ punctaj condiționat de acceptarea transportului'}
-                        {' · '}{r.puncte_conditionat} pct cu transport / {r.puncte_conservator} fără{Number.isFinite(r.puncte_doar_verificate) ? ` / ${r.puncte_doar_verificate} doar pe verificate` : ''}
+                        {Number.isFinite(r.puncte_conditionat) ? ` · ${r.puncte_conditionat} pct cu transport / ${r.puncte_conservator} fără${Number.isFinite(r.puncte_doar_verificate) ? ` / ${r.puncte_doar_verificate} doar pe verificate` : ''}` : ''}
                       </div>
                     )}
+                    {r.cumul_cu && <div style={{ fontSize:11.5, fontWeight:700, color:G.orange, marginTop:2 }}>⚠️ cumul: aceeași persoană e repartizată pe „{r.cumul_cu}"</div>}
                     {r.motiv && <div style={{ color:G.muted, fontSize:11.5 }}>{r.motiv}</div>}
                   </td>
                 </tr>))}
@@ -227,7 +228,7 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
             return (
               <div style={{ marginTop:10, padding:'10px 12px', borderRadius:10, background: risc.length ? G.red + '15' : G.orange + '15', border:`1px solid ${risc.length ? G.red : G.orange}66`, fontSize:12.5 }}>
                 <div style={{ fontWeight:800, color: risc.length ? G.red : G.orange, marginBottom:4 }}>
-                  {risc.length ? '⛔' : '⚠️'} Punctajul echipei depinde de acceptarea experienței pe TRANSPORT gaze la o cerință de DISTRIBUȚIE
+                  {risc.length ? '⛔' : '⚠️'} {rc.depinde_de_transport ? 'Punctajul echipei depinde de acceptarea experienței pe TRANSPORT gaze la o cerință de DISTRIBUȚIE' : 'Echipa propusă folosește experiență pe TRANSPORT gaze la o cerință de DISTRIBUȚIE (punctajul nu se schimbă, dar cerința e condiționată)'}
                 </div>
                 <div>Echipa propusă: <b>{rc.conditionat.total_puncte} pct</b> dacă autoritatea acceptă transportul · <b>{rc.aceeasi_echipa_fara_transport?.total_puncte ?? 0} pct</b> aceeași echipă dacă îl refuză · doar pe recomandări verificate în HR: {rc.conditionat.total_doar_verificate ?? 0} pct</div>
                 <div style={{ color:G.muted, marginTop:3 }}>Cea mai bună echipă FĂRĂ transport: {rc.conservator?.total_puncte ?? 0} pct — {echipa(rc.conservator?.alocare)}</div>
@@ -236,6 +237,13 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
               </div>
             )
           })()}
+
+          {!(rez.repartizare_calculata?.conditionat && rez.repartizare_calculata.scenariu_propus === 'conditionat') && (rez.risc_transport?.roluri_cu_risc_eliminare || []).length > 0 && (
+            <div style={{ marginTop:10, padding:'10px 12px', borderRadius:10, background: G.red + '15', border:`1px solid ${G.red}66`, fontSize:12.5 }}>
+              <div style={{ fontWeight:800, color:G.red, marginBottom:4 }}>⛔ La {rez.risc_transport.roluri_cu_risc_eliminare.join(', ')} cerința minimă se îndeplinește doar cu experiență pe TRANSPORT la o cerință de DISTRIBUȚIE</div>
+              <div style={{ color:G.dim, fontSize:11.5 }}>La refuzul autorității oferta poate fi respinsă, nu doar depunctată. Clarificarea e propusă automat mai jos — trimite-o din tab-ul „Clarificări" înainte de a miza pe ea.</div>
+            </div>
+          )}
 
           {(rez.alte_cerinte || []).length > 0 && (
             <>

@@ -1,4 +1,4 @@
-// ofertare-triere v1.7 (23.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
+// ofertare-triere v1.7.1 (23.09.2026) — ETAPA 0: triere ieftină, DOAR din Fișa de date.
 //
 // De ce există: colegii descărcau toată documentația (46 fișiere la Simian, planșe de 90 MB la
 // Potlogi) și o citeau integral ÎNAINTE să știe dacă vrem licitația. Facturile de API veneau de
@@ -17,6 +17,12 @@
 //   echipă și echipa conservatoare alternativă), clarificarea către autoritate e garantată din cod (cu rolul + cerința exactă),
 //   verdictul nu poate fi „mergem" când echipa depinde de transport, punctajul doar-pe-verificate e afișat separat,
 //   lucrarea din recomandare nu se mai taie la 700 caractere, obiectivele duplicate/unitatea baremului se numără o dată.
+// v1.7.1 (23.09.2026, recenzie adversarială pe v1.7 — 18 constatări, 3 recenzori): pragul de RISC = cerința minimă SCRISĂ (nu
+//   primul prag punctat), clarificarea + riscul se marchează pentru fiecare rol chiar fără barem / cu echipă la 0 puncte,
+//   verdictul se escaladează și pe risc fără diferență de puncte, baremul se citește în proiecte/contracte/lucrări/obiective
+//   („peste N", „între N și M", trepte prescurtate „4-5 = 7 pct"), matricea se indexează pe (persoană, rol) normalizate,
+//   cumulul pe rolurile lăsate pe propunerea AI e marcat + clarificat, filtrul de dubluri nu mai șterge întrebările despre atestate,
+//   scenariul e „condiționat" doar dacă echipa propusă chiar folosește transport; punctajele se calculează o dată (12×5: 15 s → 0,1 s).
 // v1.5: o persoană = un rol, repartizare pe punctaj total, cu matricea persoană × rol scoasă în JSON înainte de alegere.
 // v1.6: la egalitate de punctaj total, câștigă repartizarea cu cea mai mare marjă peste prag.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
@@ -42,12 +48,12 @@ REGULI:
 - PROPUNEREA DE PERSONAL SE FACE PE DOVEZI, ÎN ORDINEA ASTA (TKT-2026-0270, Silviu + Răzvan, 22.09.2026). Primești și lista RECOMANDĂRI — experiența dovedită a persoanelor, cu rolul, beneficiarul, lucrarea și dacă e verificată în HR.
   (1) Dacă rolul cerut are experiență punctată sau „proiecte similare", propui persoana cu cele mai multe PROIECTE dovedite în recomandări pe rolul și pe natura lucrării cerute. Numeri obiectivele enumerate în lucrare, nu numărul de recomandări: o singură recomandare poate atesta mai multe contracte. În motiv citezi dovada: beneficiar, numărul și data documentului, câte obiective, calificativul.
   (2) Natura se judecă strict, ca la tipul lucrării: o cerință pe conducte de GAZE nu se acoperă cu lucrări de apă-canal sau cu conducte de ȚIȚEI, oricât de asemănătoare ar fi ca execuție. TRANSPORT ↔ DISTRIBUȚIE, ÎNTR-UN SINGUR SENS (Răzvan, 23.09.2026, Grădiștea; a doua părere Jakarinos): când cerința de experiență a rolului cere TRANSPORT, o recomandare pe distribuție nu se numără. Când cerința cere DISTRIBUȚIE (sau „rețele edilitare gaze", „rețele de gaze" fără precizare), lucrările pe conducte de TRANSPORT gaze naturale NU se aruncă: intră în SCENARIUL CONDIȚIONAT de acceptarea lor de către autoritate ca experiență similară/superioară — nu e o certitudine, e o ipoteză pe care o verificăm prin clarificare. Le pui în matrice SEPARAT, în "proiecte_conditionate" (NU în "proiecte"), cu sursele marcate „transport — condiționat". Judeci pe TEXTUL CERINȚEI DE EXPERIENȚĂ AL FIECĂRUI ROL, nu doar pe obiectul contractului. Excepție: dacă cerința exclude transportul — explicit sau prin formulări restrictive ca „exclusiv rețele de distribuție", „numai lucrări de distribuție" — nu se numără deloc (proiecte_conditionate=0 și spui în surse de ce). Țițeiul și apa-canal rămân excluse în ambele sensuri. ROLUL din recomandare trebuie să fie același cu rolul cerut: o recomandare pe RTE (responsabil tehnic cu execuția) NU dovedește experiență de Șef de șantier sau de Manager de proiect, și invers — chiar dacă e aceeași persoană și aceleași lucrări. Echivalente acceptate doar când sunt evident același rol: „șef de șantier" = „șef șantier" = „site manager"; „manager de proiect" = „project manager" = „director de proiect". Persoana cu recomandări doar pe alte roluri intră în matrice cu proiecte=0 pe rolul cerut (Jilava 22.09: un RTE cu 10 obiective apăruse cu 10 proiecte la Șef de șantier).
-  (3) Punctaj doar pe recomandări verificate. Una neverificată se poate propune, dar spui în motiv câte proiecte ies din verificate și câte din neverificate, plus „de confirmat în HR".
+  (3) Punctajul echipei îl calculează CODUL din matrice, pe TOATE proiectele (verificate + neverificate), și afișează separat cifra doar-pe-verificate; tu nu scrii cifre de punctaj în motiv. Completezi corect "verificate" în matrice; când propui pe cineva cu recomandări neverificate, spui în motiv câte proiecte ies din verificate și câte din neverificate, plus „de confirmat în HR înainte de depunere".
   (4) Dacă nimeni nu are recomandare potrivită, propui pe cine are funcția și autorizația potrivite, DAR scrii în motiv „fără dovadă de experiență în platformă — de completat cu recomandare / document constatator". Un certificat de curs (ex. „Manager proiect 240h") e o calificare, nu experiență, și nu se invocă drept experiență.
   (5) O PERSOANĂ, UN ROL (Răzvan, 22.09.2026, Jilava): când fișa cere mai multe roluri de experți cheie, nu propui aceeași persoană pe două roluri. Repartizezi persoanele pe roluri astfel încât punctajul TOTAL să fie maxim — nu rolul cu rolul, ci echipa întreagă: dacă A ar lua 5 puncte pe oricare rol, iar B ia 5 puncte doar pe rolul X, atunci B merge pe X și A pe celălalt. Aceeași persoană pe două roluri doar când nimeni altcineva nu trece pragul de punctaj pe al doilea rol — și atunci scrii în motiv că e cumul și propui clarificare cu autoritatea.
-  (6) ÎNTÂI MATRICEA, APOI REPARTIZAREA. Înainte să alegi, completezi câmpul "matrice_experti": pentru FIECARE persoană care are măcar o recomandare potrivită ca natură a lucrării și pentru FIECARE rol punctat, câte proiecte dovedite are pe rolul ăla și din ce recomandări (beneficiar + nr./dată sau „fără nr."). Numeri TOATE recomandările persoanei pe rol — o recomandare fără număr sau dată de document contează exact la fel ca una cu număr; nu o sări. Un rând pe (persoană, rol), inclusiv cu proiecte=0 dacă persoana n-are recomandare pe rolul respectiv. În "proiecte" pui DOAR obiectivele care trec regula (2) — pe natura cerută; pe cele excluse (țiței, apă-canal, distribuție când se cere transport) le notezi în "surse" ca „excluse: N (țiței)" și NU le aduni în "proiecte" (Jilava 22.09: 13 în loc de 9, cu 4 pe țiței adunate). "rol" din matrice e EXACT denumirea din "roluri" (nu creezi rânduri separate pe beneficiar, ex. „Manager Proiect (Romgaz)" — se adună la rolul din fișă). Repartizarea de la (5) se face DOAR din matricea asta, iar motivul fiecărei propuneri citează cifra din matrice. La Jilava (22.09) lipsa acestui pas a făcut ca o recomandare de Manager Proiect cu 9 obiective, fără număr de document, să fie ignorată, iar echipa a ieșit cu 3 puncte în minus. UNITATEA DE NUMĂRARE e cea din barem: dacă baremul spune „contracte", o recomandare cu 15 obiective într-un singur contract = 1; dacă spune „proiecte/obiective/lucrări", numeri obiectivele. Un obiectiv care apare în două recomandări (același beneficiar + aceeași lucrare) se numără O SINGURĂ dată, oriunde ar apărea.
+  (6) ÎNTÂI MATRICEA, APOI REPARTIZAREA. Înainte să alegi, completezi câmpul "matrice_experti": pentru FIECARE persoană care are măcar o recomandare potrivită ca natură a lucrării și pentru FIECARE rol punctat, câte proiecte dovedite are pe rolul ăla și din ce recomandări (beneficiar + nr./dată sau „fără nr."). Numeri TOATE recomandările persoanei pe rol — o recomandare fără număr sau dată de document contează exact la fel ca una cu număr; nu o sări. Un rând pe (persoană, rol), inclusiv cu proiecte=0 dacă persoana n-are recomandare pe rolul respectiv. În "proiecte" pui DOAR obiectivele care trec regula (2) STRICT — pe natura cerută; cele pe TRANSPORT la o cerință de distribuție merg în "proiecte_conditionate" (un obiectiv stă ORI în "proiecte", ORI în "proiecte_conditionate", niciodată în ambele); pe cele excluse (țiței, apă-canal, distribuție când se cere transport) le notezi în "surse" ca „excluse: N (țiței)" și NU le aduni nicăieri (Jilava 22.09: 13 în loc de 9, cu 4 pe țiței adunate). Persoana care are DOAR recomandări pe transport la o cerință de distribuție INTRĂ în matrice (rând cu proiecte=0 și proiecte_conditionate=N) — dacă lipsește din matrice, codul n-o poate propune și nu pune clarificarea (Grădiștea: Trușu, 21 obiective pe transport). "rol" din matrice e EXACT denumirea din "roluri" (nu creezi rânduri separate pe beneficiar, ex. „Manager Proiect (Romgaz)" — se adună la rolul din fișă). Repartizarea de la (5) se face DOAR din matricea asta, iar motivul fiecărei propuneri citează cifra din matrice. La Jilava (22.09) lipsa acestui pas a făcut ca o recomandare de Manager Proiect cu 9 obiective, fără număr de document, să fie ignorată, iar echipa a ieșit cu 3 puncte în minus. UNITATEA DE NUMĂRARE e cea din barem: dacă baremul spune „contracte", o recomandare cu 15 obiective într-un singur contract = 1; dacă spune „proiecte/obiective/lucrări", numeri obiectivele. Un obiectiv care apare în două recomandări (același beneficiar + aceeași lucrare) se numără O SINGURĂ dată, oriunde ar apărea.
   (7) LA EGALITATE, MARJA DECIDE (Răzvan, 22.09.2026). Dacă două repartizări dau același punctaj total, alegi pe cea în care fiecare persoană trece pragul cu cea mai mare marjă — concret, maximizezi cel mai MIC număr de proiecte peste prag din echipă. O dovadă care trece pragul „la limită" sau doar dacă o comisie acceptă o interpretare (ex. conducte colectoare la o cerință pe transport) e mai slabă decât una care îl depășește cu mai multe obiective clare. Spui în motiv că a fost egalitate și de ce a câștigat varianta aleasă. Exemplu: A are 15 pe rolul X și 14 pe Y; B are 9 pe X și 6 pe Y (din care 2 interpretabile); ambele repartizări dau 5+5 — alegi B pe X (9, marjă clară) și A pe Y (14), nu B pe Y (6, la limită).
-  (8) RISC DE ELIMINARE (Jakarinos, 23.09.2026): dacă pentru un rol CERINȚA MINIMĂ obligatorie (ex. „minim 1 proiect similar") se îndeplinește DOAR prin proiecte condiționate (transport la cerință de distribuție), scrii în motivul rolului „RISC: cerința minimă depinde de acceptarea transportului — la refuz oferta poate fi respinsă, nu doar depunctată" și verdictul nu poate fi „mergem" (cel mult „cu_clarificari"). Codul adaugă singur clarificarea către autoritate pentru fiecare rol care folosește proiecte condiționate — tu doar completezi matricea corect.
+  (8) RISC DE ELIMINARE (Jakarinos, 23.09.2026): dacă pentru un rol CERINȚA MINIMĂ obligatorie (ex. „minim 1 proiect similar") se îndeplinește DOAR prin proiecte condiționate (transport la cerință de distribuție), scrii în motivul rolului „RISC: cerința minimă depinde de acceptarea transportului — la refuz oferta poate fi respinsă, nu doar depunctată" și verdictul nu poate fi „mergem" (cel mult „cu_clarificari"). Codul adaugă singur clarificarea către autoritate pentru fiecare rol care are în matrice proiecte condiționate și marchează riscul citind cerința minimă din textul rolului — de aceea în "cerinte" copiezi EXACT din fișă cerința minimă („minim N proiecte/contracte/lucrări") și baremul (pragurile cu „pct"/„puncte"), în unitatea din fișă. Tu doar completezi matricea și "cerinte" corect.
   NU scrie niciodată „poate demonstra experiență" sau „se va documenta experiența" — dacă dovada nu e în listă, spui că lipsește. Nu invoca drept sprijin o autorizație pe alt domeniu decât cel al lucrării (ex. EGD/PGD = distribuție pe o lucrare de transport): dacă o menționezi, spui explicit că e pe alt domeniu.
 - cumul_functii_interzis = true DOAR dacă fișa spune explicit că o persoană nu poate îndeplini mai multe funcții/roluri.
 - clarificari_propuse: întrebări scurte pe care le-am trimite autorității când o cerință e ambiguă, contradictorie sau exagerată (ex. experiență similară definită prea îngust, RTE pe domeniu greșit, personal de proiectare într-un contract de execuție).
@@ -99,85 +105,145 @@ function b64(bytes: Uint8Array): string {
 // Baremul se citește din textul cerinței rolului („2 proiecte = 1 punct; 3-4 proiecte = 3 puncte; 5 sau mai multe = 5 puncte").
 // Se maximizează punctajul TOTAL al echipei, o persoană pe un singur rol; la egalitate câștigă marja minimă mai mare
 // (câte proiecte peste prag), apoi totalul de proiecte. Dacă baremul nu se poate citi, propunerea AI rămâne neschimbată.
-function citesteBarem(text: string): Array<{ prag: number; puncte: number }> {
+type Barem = Array<{ prag: number; puncte: number }>
+// v1.7.1 (recenzie 23.09): unitatea din barem e cea din regula (6) — proiecte / contracte / lucrări / obiective. Doar „proiecte"
+// făcea ca un barem în contracte să nu se citească deloc, deci scenariile, riscul și clarificarea din cod erau sărite.
+const UNIT = String.raw`(?:proiecte?|contracte?|lucr[aă]r[ie]|obiective?)`
+// cerința minimă OBLIGATORIE scrisă în text („minim 1 proiect similar", „cel puțin 2 contracte"); null dacă nu e scrisă
+function citesteMinim(text: string): number | null {
+  const m = new RegExp(String.raw`(?:minim(?:um)?|cel\s+pu[țt]in)\s*(?:de\s+)?(\d+)\s*(?:\([^)]{0,40}\)\s*)?(?:de\s+)?${UNIT}`, 'i').exec(text || '')
+  return m ? Number(m[1]) : null
+}
+function citesteBarem(text: string): { trepte: Barem; minim: number } {
   // v1.7: acceptă și „pct"/„p." nu doar „puncte" (Grădiștea: „2-3 proiecte suplimentare=4pct" nu se citea deloc → repartizarea
   // nu rula), iar „proiecte SUPLIMENTARE" se numără peste minimul obligatoriu (1 proiect minim + 2-3 suplimentare = prag 3).
-  const brut: Array<{ prag: number; puncte: number; supl: boolean }> = []
-  const re = /(\d+)\s*(?:-\s*\d+|\s*sau\s+mai\s+multe|\+)?\s*(?:de\s+)?proiecte?([^=;:.]{0,40}?)[=:]\s*(\d+(?:[.,]\d+)?)\s*(?:p(?:unct|ct)|p\b)/gi
+  const brut: Array<{ prag: number; puncte: number; supl: boolean; plafon?: boolean }> = []
+  // v1.7.1: „peste 5 proiecte" = prag 6, „între 2 și 3 proiecte" = prag 2, „maxim 5 proiecte" e plafon (nu se ia drept minim)
+  const re = new RegExp(String.raw`(?:(peste|mai\s+mult\s+de|maxim(?:um)?)\s+)?(\d+)\s*(?:-\s*\d+|\s*[șs]i\s+\d+|\s*sau\s+mai\s+multe|\+)?\s*(?:de\s+)?${UNIT}([^=;:.]{0,40}?)[=:]\s*(\d+(?:[.,]\d+)?)\s*(?:p(?:unct|ct)|p\b)`, 'gi')
   let m: RegExpExecArray | null
-  while ((m = re.exec(text || ''))) brut.push({ prag: Number(m[1]), puncte: Number(m[3].replace(',', '.')), supl: /suplimentar/i.test(m[2] || '') })
-  const minim = brut.find(b => !b.supl)?.prag ?? 1
-  const out = brut.map(b => ({ prag: b.supl ? b.prag + minim : b.prag, puncte: b.puncte }))
-  return out.sort((a, b) => a.prag - b.prag)
+  const intregi: Array<{ idx: number; supl: boolean }> = []
+  while ((m = re.exec(text || ''))) {
+    const supl = /suplimentar/i.test(m[3] || ''), plafon = /maxim/i.test(m[1] || ''), peste = /peste|mai/i.test(m[1] || '')
+    intregi.push({ idx: m.index, supl }); brut.push({ prag: Number(m[2]) + (peste ? 1 : 0), puncte: Number(m[4].replace(',', '.')), supl, plafon })
+  }
+  // treptele prescurtate („4-5 = 7 pct", „6+ = 10 pct") — DOAR dacă baremul a avut deja o treaptă cu unitate, nu pe ani/lei/%;
+  // continuă seria treptei întregi dinaintea lor (dacă aia era „suplimentare", și ele sunt)
+  if (intregi.length) {
+    const reScurt = new RegExp(String.raw`(\d+)\s*(-\s*\d+|\s*sau\s+mai\s+multe|\+)\s*([^=;:.\d]{0,40}?)[=:]\s*(\d+(?:[.,]\d+)?)\s*(?:p(?:unct|ct)|p\b)`, 'gi')
+    while ((m = reScurt.exec(text || ''))) {
+      if (intregi.some(t => t.idx === m!.index || (t.idx < m!.index && m!.index - t.idx <= 14 && /^(peste|mai\s+mult\s+de|maxim(?:um)?)\s+$/i.test(text.slice(t.idx, m!.index)))) || /\b(ani|luni|lei|euro)\b|%/i.test(m[3] || '')) continue
+      const anterioara = intregi.filter(t => t.idx < m!.index).pop()
+      if (!anterioara) continue
+      brut.push({ prag: Number(m[1]), puncte: Number(m[4].replace(',', '.')), supl: anterioara.supl || /suplimentar/i.test(m[3] || '') })
+    }
+  }
+  const explicit = citesteMinim(text)
+  // baza peste care se adună „suplimentare": minimul scris, altfel primul prag nesuplimentar, altfel 1
+  const baza = explicit ?? brut.find(b => !b.supl && !b.plafon)?.prag ?? 1
+  const trepte = brut.map(b => ({ prag: b.supl ? b.prag + baza : b.prag, puncte: b.puncte })).sort((a, b) => a.prag - b.prag)
+  // v1.7.1 (recenzie): pragul de RISC (regula 8) NU e primul prag PUNCTAT — la Grădiștea ar fi ieșit 3, cu minimul real 1 — ci
+  // minimul scris în cerință; fără el, o treaptă nepunctată (0 pct) e minimul; altfel 1 (orice proiect strict scoate rolul din risc)
+  const minim = explicit ?? brut.find(b => !b.supl && !b.plafon && b.puncte === 0)?.prag ?? 1
+  return { trepte, minim }
 }
 function puncteBarem(barem: Array<{ prag: number; puncte: number }>, n: number) {
   let p = 0, prag = 0
   for (const b of barem) if (n >= b.prag && b.puncte >= p) { p = b.puncte; prag = b.prag }
   return { puncte: p, marja: p > 0 ? n - prag : -1 }
 }
-type Barem = Array<{ prag: number; puncte: number }>
-type Scenariu = { total: number; totalVerif: number; marja: number; proj: number; alocare: (string | null)[] }
+type Scenariu = { total: number; totalStrict: number; totalVerif: number; marja: number; proj: number; alocare: (string | null)[] }
 // v1.7: două scenarii (Jakarinos, 23.09.2026). „conservator" = doar proiectele necondiționate (natura cerută, strict);
 // „conditionat" = + proiectele pe transport la o cerință de distribuție, care depind de acceptarea autorității.
 // Echipa propusă e cea optimă în scenariul condiționat (decizia lui Răzvan, varianta A), dar se afișează ȘI punctajul
 // ACELEIAȘI echipe dacă transportul e respins, plus cea mai bună echipă pur conservatoare — două maxime obținute cu
 // echipe diferite ar ascunde riscul alegerii. La egalitate pe totalul condiționat câștigă totalul conservator, apoi marja.
+const norm = (s: any) => String(s || '').toLowerCase().replace(/[șş]/g, 's').replace(/[țţ]/g, 't').replace(/[ăâ]/g, 'a').replace(/î/g, 'i').replace(/\s+/g, ' ').trim()
+const num = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0 }
+type RandMat = { persoana: string; proiecte: number; verificate: number; proiecte_conditionate: number; verificate_conditionate: number }
+// v1.7.1 (recenzie 23.09): matricea se indexează O DATĂ pe (persoană, rol) normalizate. Rândurile dublate (același om pe același rol,
+// scris de două ori sau cu diacritice/majuscule diferite) se contopesc pe MAXIM — nu pe sumă, ca o dublare din greșeală a modelului
+// să nu umfle punctajul. Înainte mat.find lua doar primul rând, iar „TRUSU RAZVAN" și „Trusu Razvan" ieșeau două persoane distincte
+// (aceeași persoană pe două roluri, fără notă de cumul).
+function indexeazaMatrice(mat: any[]) {
+  const idx = new Map<string, RandMat>(), nume = new Map<string, string>()
+  for (const x of mat) {
+    const p = String(x?.persoana || '').trim(); if (!p) continue
+    if (!nume.has(norm(p))) nume.set(norm(p), p)
+    const k = norm(p) + '|' + norm(x.rol)
+    const cur = idx.get(k) || { persoana: nume.get(norm(p))!, proiecte: 0, verificate: 0, proiecte_conditionate: 0, verificate_conditionate: 0 }
+    cur.proiecte = Math.max(cur.proiecte, num(x.proiecte)); cur.verificate = Math.max(cur.verificate, num(x.verificate))
+    cur.proiecte_conditionate = Math.max(cur.proiecte_conditionate, num(x.proiecte_conditionate)); cur.verificate_conditionate = Math.max(cur.verificate_conditionate, num(x.verificate_conditionate))
+    idx.set(k, cur)
+  }
+  const rand = (p: string, rol: string) => idx.get(norm(p) + '|' + norm(rol))
+  const areRol = (rol: string) => { const s = '|' + norm(rol); for (const k of idx.keys()) if (k.endsWith(s)) return true; return false }
+  return { persoane: [...nume.values()], rand, areRol }
+}
 function repartizeazaDinMatrice(parsed: any) {
   const roluri: any[] = parsed.roluri, mat: any[] = parsed.matrice_experti
   if (!roluri?.length || !mat?.length) return
-  const norm = (s: any) => String(s || '').toLowerCase().replace(/[șş]/g, 's').replace(/[țţ]/g, 't').replace(/[ăâ]/g, 'a').replace(/î/g, 'i').replace(/\s+/g, ' ').trim()
+  const { persoane, rand, areRol } = indexeazaMatrice(mat)
   const rolIdx: number[] = [], bareme: Barem[] = []
   roluri.forEach((r, i) => {
     const b = citesteBarem(String(r.cerinte || '') + ' ' + String(r.motiv || ''))
-    const areMat = mat.some(x => norm(x.rol) === norm(r.rol))
-    if (b.length && areMat) { rolIdx.push(i); bareme.push(b) }
+    if (b.trepte.length && areRol(r.rol)) { rolIdx.push(i); bareme.push(b.trepte) }
   })
   if (!rolIdx.length) return
-  const persoane = [...new Set(mat.map(x => String(x.persoana || '').trim()).filter(Boolean))]
-  const rand = (p: string, rol: string) => mat.find(x => String(x.persoana || '').trim() === p && norm(x.rol) === norm(rol))
-  const num = (v: any) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0 }
   // strict = necondiționat; cond = strict + transport condiționat. Verificatele nu pot depăși proiectele.
-  const nStrict = (p: string, rol: string) => num(rand(p, rol)?.proiecte)
-  const nCondSuplim = (p: string, rol: string) => num(rand(p, rol)?.proiecte_conditionate)
+  const nStrict = (p: string, rol: string) => rand(p, rol)?.proiecte ?? 0
+  const nCondSuplim = (p: string, rol: string) => rand(p, rol)?.proiecte_conditionate ?? 0
   const nCond = (p: string, rol: string) => nStrict(p, rol) + nCondSuplim(p, rol)
-  const vStrict = (p: string, rol: string) => Math.min(nStrict(p, rol), num(rand(p, rol)?.verificate))
-  const vCond = (p: string, rol: string) => vStrict(p, rol) + Math.min(nCondSuplim(p, rol), num(rand(p, rol)?.verificate_conditionate))
+  const vStrict = (p: string, rol: string) => Math.min(nStrict(p, rol), rand(p, rol)?.verificate ?? 0)
+  const vCond = (p: string, rol: string) => vStrict(p, rol) + Math.min(nCondSuplim(p, rol), rand(p, rol)?.verificate_conditionate ?? 0)
   const existaConditionate = persoane.some(p => rolIdx.some(i => nCondSuplim(p, roluri[i].rol) > 0))
 
-  // evaluarea unei alocări într-un scenariu dat (n = funcția de numărare, v = cea de verificate)
-  const evalueaza = (alocare: (string | null)[], n: (p: string, rol: string) => number, v: (p: string, rol: string) => number): Scenariu => {
-    let total = 0, totalVerif = 0, marja = Infinity, proj = 0
+  // v1.7.1 (recenzie, performanță): punctajele fiecărei (persoană, rol) în ambele scenarii se calculează O DATĂ, într-un tabel;
+  // căutarea exhaustivă doar adună — înainte evalua baremul la fiecare frunză și încă o dată la fiecare comparație (12×5 → 15 s,
+  // după apelul plătit; un kill pe CPU nu mai ajungea la fail())
+  type Cel = { kStrict: number; kCond: number; pStrict: number; mStrict: number; pCond: number; mCond: number; pvStrict: number; pvCond: number }
+  const tab = new Map<string, Cel[]>()
+  for (const p of persoane) tab.set(p, rolIdx.map((i, j) => {
+    const rol = roluri[i].rol, kS = nStrict(p, rol), kC = nCond(p, rol), sS = puncteBarem(bareme[j], kS), sC = puncteBarem(bareme[j], kC)
+    return { kStrict: kS, kCond: kC, pStrict: sS.puncte, mStrict: sS.marja, pCond: sC.puncte, mCond: sC.marja, pvStrict: puncteBarem(bareme[j], vStrict(p, rol)).puncte, pvCond: puncteBarem(bareme[j], vCond(p, rol)).puncte }
+  }))
+  // evaluarea unei alocări într-un scenariu (cond = cu transport); totalul STRICT al aceleiași alocări iese în aceeași trecere
+  const evalueaza = (alocare: (string | null)[], cond: boolean): Scenariu => {
+    let total = 0, totalStrict = 0, totalVerif = 0, marja = Infinity, proj = 0
     alocare.forEach((p, j) => {
       if (!p) { marja = Math.min(marja, -1); return }
-      const rol = roluri[rolIdx[j]].rol, k = n(p, rol), s = puncteBarem(bareme[j], k)
-      total += s.puncte; totalVerif += puncteBarem(bareme[j], v(p, rol)).puncte; marja = Math.min(marja, s.marja); proj += k
+      const c = tab.get(p)![j]
+      total += cond ? c.pCond : c.pStrict; totalStrict += c.pStrict; totalVerif += cond ? c.pvCond : c.pvStrict
+      marja = Math.min(marja, cond ? c.mCond : c.mStrict); proj += cond ? c.kCond : c.kStrict
     })
-    return { total, totalVerif, marja, proj, alocare: [...alocare] }
+    return { total, totalStrict, totalVerif, marja, proj, alocare: [...alocare] }
   }
   // căutare exhaustivă (roluri puține, persoane puține): o persoană pe un singur rol, rolul poate rămâne gol
-  const cauta = (n: (p: string, rol: string) => number, maiBun: (a: Scenariu, b: Scenariu | null) => boolean, v: (p: string, rol: string) => number): Scenariu | null => {
+  const cauta = (cond: boolean, maiBun: (a: Scenariu, b: Scenariu | null) => boolean): Scenariu | null => {
     let best: Scenariu | null = null
     const rec = (k: number, folosite: Set<string>, alocare: (string | null)[]) => {
-      if (k === rolIdx.length) { const sc = evalueaza(alocare, n, v); if (maiBun(sc, best)) best = sc; return }
-      const rol = roluri[rolIdx[k]].rol
-      for (const p of persoane) if (!folosite.has(p) && n(p, rol) > 0) { folosite.add(p); rec(k + 1, folosite, [...alocare, p]); folosite.delete(p) }
+      if (k === rolIdx.length) { const sc = evalueaza(alocare, cond); if (maiBun(sc, best)) best = sc; return }
+      for (const p of persoane) {
+        const c = tab.get(p)![k]
+        if (!folosite.has(p) && (cond ? c.kCond : c.kStrict) > 0) { folosite.add(p); rec(k + 1, folosite, [...alocare, p]); folosite.delete(p) }
+      }
       rec(k + 1, folosite, [...alocare, null])
     }
     rec(0, new Set(), [])
     return best
   }
   // conservator: maxim total strict; la egalitate marja, apoi proiecte
-  const conservator = cauta(nStrict, (a, b) => !b || a.total > b.total || (a.total === b.total && (a.marja > b.marja || (a.marja === b.marja && a.proj > b.proj))), vStrict)
+  const conservator = cauta(false, (a, b) => !b || a.total > b.total || (a.total === b.total && (a.marja > b.marja || (a.marja === b.marja && a.proj > b.proj))))
   // condiționat: maxim total cu transport; la egalitate câștigă totalul CONSERVATOR al aceleiași alocări (Jakarinos), apoi marja, apoi proiecte
-  const consAl = (al: (string | null)[]) => evalueaza(al, nStrict, vStrict).total
-  const conditionat = cauta(nCond, (a, b) => !b || a.total > b.total || (a.total === b.total && (consAl(a.alocare) > consAl(b.alocare) || (consAl(a.alocare) === consAl(b.alocare) && (a.marja > b.marja || (a.marja === b.marja && a.proj > b.proj))))), vCond)
+  const conditionat = cauta(true, (a, b) => !b || a.total > b.total || (a.total === b.total && (a.totalStrict > b.totalStrict || (a.totalStrict === b.totalStrict && (a.marja > b.marja || (a.marja === b.marja && a.proj > b.proj))))))
   const propus = existaConditionate ? conditionat : conservator
   if (!propus || propus.total <= 0) return
-  const aceeasiEchipaConservator = evalueaza(propus.alocare, nStrict, vStrict)
+  const aceeasiEchipaConservator = evalueaza(propus.alocare, false)
+  // echipa propusă chiar folosește proiecte pe transport? (la egalitate câștigă conservatorul, deci poate să nu — atunci nu e „condiționată")
+  const folosesteTransport = rolIdx.some((i, j) => !!propus.alocare[j] && nCondSuplim(propus.alocare[j]!, roluri[i].rol) > 0)
 
   const rezumat = persoane.map(p => p + ': ' + rolIdx.map(i => { const r = roluri[i].rol, a = nStrict(p, r), b = nCondSuplim(p, r); return r + '=' + a + (b ? '+' + b + 'T' : '') }).join('/')).join('; ')
-  const clarificariCod: string[] = []
-  const roluriCuRisc: string[] = []
+  const alocati = new Map<string, string>(), alocatIdx = new Set<number>()
+  propus.alocare.forEach((p, j) => { if (p) { alocati.set(norm(p), roluri[rolIdx[j]].rol); alocatIdx.add(rolIdx[j]) } })
   rolIdx.forEach((i, j) => {
     const p = propus.alocare[j], r = roluri[i]
     if (!p) return
@@ -192,29 +258,70 @@ function repartizeazaDinMatrice(parsed: any) {
       ` → ${sCond.puncte} puncte (marjă ${sCond.marja} peste prag)`
     if (kSup) {
       m += `; fără transport: ${kStrict} proiecte → ${sStrict.puncte} puncte`
-      r.depinde_de_transport = true
-      // cerința minimă (primul prag din barem) trece DOAR cu transportul → risc de respingere, nu doar depunctare (regula 8)
-      const pragMin = bareme[j][0]?.prag ?? 1
-      if (kStrict < pragMin && kCond >= pragMin) { r.risc_eliminare = true; roluriCuRisc.push(r.rol); m += `. RISC: cerința minimă (${pragMin} proiect${pragMin > 1 ? 'e' : ''}) depinde de acceptarea transportului — la refuz oferta poate fi respinsă, nu doar depunctată` }
-      const cer = String(r.cerinte || '').replace(/\s+/g, ' ').trim().slice(0, 260)
-      clarificariCod.push(`Referitor la rolul „${r.rol}"${cer ? ` (cerința: „${cer}${String(r.cerinte || '').trim().length > 260 ? '…' : ''}")` : ''}: vă rugăm să confirmați dacă experiența dobândită în execuția de conducte de transport gaze naturale (presiune înaltă) este acceptată ca experiență similară/superioară pentru cerința privind rețelele de distribuție gaze naturale, atât la îndeplinirea cerinței minime, cât și la punctarea factorului de evaluare.`)
+      r.depinde_de_transport = true   // riscul de eliminare + clarificarea: marcheazaRiscTransport (regula 8)
     }
     m += `. Verificate în HR: ${vc} (punctaj doar pe verificate: ${sVerif.puncte}${vc < kCond ? ' — de confirmat în HR înainte de depunere' : ''}). Echipa: ${propus.total} puncte` +
-      (existaConditionate ? ` cu transport / ${aceeasiEchipaConservator.total} fără` : '') + `. Matrice: ${rezumat}.`
+      (folosesteTransport ? ` cu transport / ${aceeasiEchipaConservator.total} fără` : '') + `. Matrice: ${rezumat}.`
     r.motiv = m + (schimbat ? ' Propunerea AI inițială a fost înlocuită.' : '') + (r.motiv ? ' — ' + String(r.motiv) : '')
   })
+  // v1.7.1 (recenzie): rolurile pe care codul nu a pus pe nimeni rămân pe propunerea AI — dar dacă acea persoană a fost repartizată
+  // din matrice pe ALT rol, e cumul (regula 5): se spune în motiv și se pune clarificarea de cumul; înainte ieșea aceeași persoană
+  // pe două roluri fără nicio notă
+  const clarCumul: string[] = []
+  roluri.forEach((r, i) => {
+    if (alocatIdx.has(i) || !r.propunere) return
+    const alt = alocati.get(norm(r.propunere))
+    if (!alt || norm(alt) === norm(r.rol)) return
+    r.cumul_cu = alt
+    r.motiv = `CUMUL: ${r.propunere} e repartizat(ă) din matrice pe „${alt}", iar pe „${r.rol}" nu are proiecte dovedite în matrice — propunerea rămâne doar ca punct de plecare, cu clarificare de cumul către autoritate (regula 5). ` + String(r.motiv || '')
+    clarCumul.push(`Referitor la rolurile „${alt}" și „${r.rol}": vă rugăm să precizați dacă aceeași persoană poate ocupa ambele poziții (cumul de funcții) sau dacă se solicită persoane distincte pentru fiecare rol.`)
+  })
+  parsed.clarificari_cumul = clarCumul
   const aloc = (sc: Scenariu | null) => sc ? rolIdx.map((i, j) => ({ rol: roluri[i].rol, persoana: sc.alocare[j] })) : []
   parsed.repartizare_calculata = {
-    scenariu_propus: existaConditionate ? 'conditionat' : 'conservator',
-    depinde_de_transport: existaConditionate && aceeasiEchipaConservator.total < propus.total,
-    roluri_cu_risc_eliminare: roluriCuRisc,
+    scenariu_propus: folosesteTransport ? 'conditionat' : 'conservator',
+    depinde_de_transport: folosesteTransport && aceeasiEchipaConservator.total < propus.total,
+    roluri_cu_risc_eliminare: [] as string[],   // completat de marcheazaRiscTransport
     conditionat: { total_puncte: propus.total, total_doar_verificate: propus.totalVerif, alocare: aloc(propus) },
     aceeasi_echipa_fara_transport: { total_puncte: aceeasiEchipaConservator.total, total_doar_verificate: aceeasiEchipaConservator.totalVerif },
     conservator: { total_puncte: conservator?.total ?? 0, total_doar_verificate: conservator?.totalVerif ?? 0, alocare: aloc(conservator) },
     // compatibilitate cu UI-ul vechi
     total_puncte: propus.total, alocare: aloc(propus),
   }
-  parsed.clarificari_cod = clarificariCod
+}
+// v1.7.1 (recenzie 23.09): clarificarea „transport acceptat ca similar?" și RISCUL DE ELIMINARE (regula 8) se marchează AICI,
+// pentru FIECARE rol — indiferent dacă baremul s-a putut citi sau dacă echipa a ieșit cu 0 puncte. Înainte stăteau în bucla
+// de repartizare, deci un rol cu cerință minimă nepunctată („minim 1 proiect similar în distribuție") sau o echipă cu total 0
+// ieșeau fără clarificare, fără risc și cu verdict „mergem" — exact ce promptul îi spune modelului că „face codul singur".
+function marcheazaRiscTransport(parsed: any) {
+  const roluri: any[] = Array.isArray(parsed.roluri) ? parsed.roluri : [], mat: any[] = Array.isArray(parsed.matrice_experti) ? parsed.matrice_experti : []
+  const { persoane, rand } = indexeazaMatrice(mat)
+  const clar: string[] = [], roluriCuRisc: string[] = [], roluriCond: string[] = []
+  for (const r of roluri) {
+    const randuri = persoane.map(p => rand(p, r.rol)).filter(Boolean) as RandMat[]
+    if (!randuri.some(x => x.proiecte_conditionate > 0)) continue
+    // există candidați cu proiecte pe transport la rolul ăsta → întrebarea către autoritate e obligatorie, chiar dacă propusul e altcineva
+    roluriCond.push(r.rol)
+    const cer = String(r.cerinte || '').replace(/\s+/g, ' ').trim().slice(0, 260)
+    clar.push(`Referitor la rolul „${r.rol}"${cer ? ` (cerința: „${cer}${String(r.cerinte || '').trim().length > 260 ? '…' : ''}")` : ''}: vă rugăm să confirmați dacă experiența dobândită în execuția de conducte de transport gaze naturale (presiune înaltă) este acceptată ca experiență similară/superioară pentru cerința privind rețelele de distribuție gaze naturale, atât la îndeplinirea cerinței minime, cât și la punctarea factorului de evaluare.`)
+    const rp = r.propunere ? rand(String(r.propunere), r.rol) : undefined
+    const kSup = rp?.proiecte_conditionate ?? 0
+    if (!rp || !kSup) continue
+    const kStrict = rp.proiecte, kCond = kStrict + kSup
+    r.depinde_de_transport = true
+    if (!Number.isFinite(r.proiecte_conditionate)) { r.proiecte_conditionate = kSup; r.proiecte_neconditionate = kStrict }
+    // cerința minimă: cea scrisă în text („minim N proiecte/contracte"), altfel treapta nepunctată din barem, altfel 1
+    const pragMin = citesteBarem(String(r.cerinte || '') + ' ' + String(r.motiv || '')).minim
+    if (kStrict < pragMin && kCond >= pragMin) {
+      r.risc_eliminare = true; roluriCuRisc.push(r.rol)
+      const txt = `RISC: cerința minimă (${pragMin} proiect${pragMin > 1 ? 'e' : ''}) depinde de acceptarea transportului — la refuz oferta poate fi respinsă, nu doar depunctată.`
+      if (!String(r.motiv || '').includes('RISC: cerința minimă')) r.motiv = txt + (r.motiv ? ' ' + String(r.motiv) : '')
+    }
+  }
+  parsed.clarificari_cod = [...clar, ...(Array.isArray(parsed.clarificari_cumul) ? parsed.clarificari_cumul : [])]
+  delete parsed.clarificari_cumul
+  parsed.risc_transport = { roluri_conditionate: roluriCond, roluri_cu_risc_eliminare: roluriCuRisc }
+  if (parsed.repartizare_calculata) parsed.repartizare_calculata.roluri_cu_risc_eliminare = roluriCuRisc
 }
 
 Deno.serve(async (req: Request) => {
@@ -339,17 +446,23 @@ Deno.serve(async (req: Request) => {
     parsed.roluri = Array.isArray(parsed.roluri) ? parsed.roluri.slice(0, 40) : []
     parsed.matrice_experti = Array.isArray(parsed.matrice_experti) ? parsed.matrice_experti.slice(0, 60) : []
     repartizeazaDinMatrice(parsed)
+    marcheazaRiscTransport(parsed)
     // v1.7: clarificarea „transport acceptat ca similar?" e garantată din cod, per rol, PRIMA în listă (nu poate dispărea prin
     // slice și nu depinde de model); întrebările generice ale modelului pe același subiect se elimină ca dubluri.
     const dinCod: string[] = Array.isArray(parsed.clarificari_cod) ? parsed.clarificari_cod : []
     const aleModelului = (Array.isArray(parsed.clarificari_propuse) ? parsed.clarificari_propuse : []).filter((c: any) => typeof c === 'string' && c.trim())
-      .filter((c: string) => !(dinCod.length && /transport/i.test(c) && /distribu/i.test(c)))
+      // dublură = aceeași întrebare (experiență/recomandări pe transport vs distribuție); una despre atestate 8.4T/8.4D e alt subiect (R7/R10)
+      .filter((c: string) => !(dinCod.length && /transport/i.test(c) && /distribu/i.test(c) && /experien|similar|recomand|proiect|lucr[aă]r/i.test(c)))
     parsed.clarificari_propuse = [...dinCod, ...aleModelului].slice(0, 20)
     delete parsed.clarificari_cod
-    if (parsed.repartizare_calculata?.depinde_de_transport && parsed.verdict === 'mergem') {
+    // v1.7.1: escaladarea și când punctele sunt egale dar cerința MINIMĂ a unui rol trece doar cu transportul (regula 8)
+    const rc = parsed.repartizare_calculata, roluriRisc: string[] = parsed.risc_transport?.roluri_cu_risc_eliminare || []
+    if ((rc?.depinde_de_transport || roluriRisc.length) && parsed.verdict === 'mergem') {
       parsed.verdict = 'cu_clarificari'
-      parsed.motiv_verdict = `Punctajul echipei depinde de acceptarea experienței pe transport gaze la o cerință de distribuție (${parsed.repartizare_calculata.conditionat?.total_puncte} puncte cu transport / ${parsed.repartizare_calculata.aceeasi_echipa_fara_transport?.total_puncte} fără)` +
-        (parsed.repartizare_calculata.roluri_cu_risc_eliminare?.length ? `; la ${parsed.repartizare_calculata.roluri_cu_risc_eliminare.join(', ')} chiar cerința minimă depinde de asta — risc de respingere` : '') + '. ' + String(parsed.motiv_verdict || '')
+      parsed.motiv_verdict = (rc?.depinde_de_transport
+        ? `Punctajul echipei depinde de acceptarea experienței pe transport gaze la o cerință de distribuție (${rc.conditionat?.total_puncte} puncte cu transport / ${rc.aceeasi_echipa_fara_transport?.total_puncte} fără)`
+        : 'Echipa propusă se sprijină pe experiență pe transport gaze la o cerință de distribuție') +
+        (roluriRisc.length ? `; la ${roluriRisc.join(', ')} chiar cerința minimă depinde de asta — risc de respingere` : '') + '. ' + String(parsed.motiv_verdict || '')
     }
     parsed.alte_cerinte = Array.isArray(parsed.alte_cerinte) ? parsed.alte_cerinte.slice(0, 30) : []
     parsed.sursa = { doc_id: doc.id, nume: doc.nume_original, pagini: doc.pagini }
