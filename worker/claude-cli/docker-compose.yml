@@ -1,0 +1,35 @@
+# NAS Terra: /Volume1/docker/gazpet-claude-cli/ — pilot Claude Code CLI, read-only. Vezi README.md.
+# Rulare la cerere (NU restart: always — o rulare = un raport):
+#   LIC_FOLDER="/Volume1/Licitatii_Executate/Proiecte/58. Infiintare ... MANASTIREA, JUD CALARASI" \
+#   docker-compose -p gazpet-claude-cli run --rm claude-cli lectura_licitatie
+# Secretul (CLAUDE_CODE_OAUTH_TOKEN) stă DOAR în .env (chmod 600). Niciodată ANTHROPIC_API_KEY aici sau în .env.
+version: "3.8"
+services:
+  claude-cli:
+    build: .
+    container_name: gazpet-claude-cli
+    restart: "no"
+    env_file: .env
+    environment:
+      TASK_TIMEOUT_MIN: ${TASK_TIMEOUT_MIN:-15}
+      TASK_MAX_TURNS: ${TASK_MAX_TURNS:-20}
+      TASK_MODEL: ${TASK_MODEL:-sonnet}
+      TASK_EFFORT: ${TASK_EFFORT:-medium}
+    volumes:
+      - "${LIC_FOLDER:?LIC_FOLDER lipsește (folderul licitației pe NAS)}:/data:ro"
+      - ./context:/context:ro
+      - ./out:/out
+      - ./claude-home:/home/agent/.claude
+    read_only: true
+    tmpfs:
+      - /work:size=512m,uid=1000,gid=1000
+      - /tmp:size=256m,uid=1000,gid=1000
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
