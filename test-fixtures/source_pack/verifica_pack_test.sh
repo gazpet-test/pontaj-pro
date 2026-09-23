@@ -25,12 +25,12 @@ const ok=(cond,msg)=>{ if(!cond){ console.error("FAIL: "+msg); process.exit(1) }
 ok(p.licitatie.licitatie_id===3 && p.licitatie.nr_anunt==="DF1278266" && p.licitatie.nr_anunt_model==="ALT-NR","identitatea vine din argumente; ce a zis modelul rămâne ca nr_anunt_model")
 ok(L["REQ-001"].verificat==="pagina" && L["REQ-001"].pagina_validata===1,"REQ-001 găsit pe pagina declarată")
 ok(L["REQ-002"].verificat==="document" && L["REQ-002"].pagina_declarata===9 && L["REQ-002"].pagina===2 && L["REQ-002"].pagina_validata===2,"REQ-002 pagina corectată 9→2, pagina_declarata păstrată")
-ok(L["REQ-003"].verificat==="document" && L["REQ-003"].pagina===null && L["REQ-003"].pagina_declarata===4 && !("pagina_validata" in L["REQ-003"]) && JSON.stringify(L["REQ-003"].pagina_interval)==="[3,5]","REQ-003 declarat 4 în ⟦PAGINA 3-5⟧: doar intervalul e dovedit, pagina exactă NU se afirmă")
-ok(L["REQ-004"].verificat==="document" && L["REQ-004"].pagina===null && L["REQ-004"].pagina_declarata===1 && JSON.stringify(L["REQ-004"].pagina_interval)==="[3,5]","REQ-004 declarat 1, găsit în intervalul 3-5: pagina_declarata păstrată, pagina null")
+ok(L["REQ-003"].verificat==="interval" && L["REQ-003"].pagina===null && L["REQ-003"].pagina_declarata===4 && !("pagina_validata" in L["REQ-003"]) && JSON.stringify(L["REQ-003"].pagina_interval)==="[3,5]","REQ-003 declarat 4 în ⟦PAGINA 3-5⟧: verificat=interval, pagina null, pagina_interval [3,5]")
+ok(L["REQ-004"].verificat==="interval" && L["REQ-004"].pagina===null && L["REQ-004"].pagina_declarata===1 && JSON.stringify(L["REQ-004"].pagina_interval)==="[3,5]","REQ-004 declarat 1, găsit în intervalul 3-5: pagina_declarata păstrată, pagina null")
 ok(!p.cerinte.find(c=>c.ref==="REQ-005") && p.nereusite.some(n=>/REQ-005/.test(n.motiv)),"REQ-005 respins → nereusite")
 ok(!p.cerinte.some(c=>"verificat" in c || "pagina_declarata" in c),"fără câmpuri top-level vechi")
 ok(p.documente[0].sha256 && p.documente[0].size_bytes===14 && p.documente[1].lipsa_in_data===true,"sha256 + size_bytes pe /data; fișier lipsă marcat")
-ok(p.rulare.ture===5 && p.validare.validator==="verifica_pack.mjs/2" && p.validare.probleme_schema.length===0,"rulare + validare")
+ok(p.rulare.ture===5 && p.validare.validator==="verifica_pack.mjs/3" && p.validare.cerinte_ok_interval===2 && p.validare.probleme_schema.length===0,"rulare + validare")
 ' "$T/out.json"
 [ "$C" -eq 0 ] || { echo "FAIL: exit $C"; exit 1; }
 C2=0; node worker/claude-cli/verifica_pack.mjs "$T/pack.md" "$T/text" "$T/out2.json" --licitatie-id "" > /dev/null || C2=$?

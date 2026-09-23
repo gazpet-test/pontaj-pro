@@ -21,6 +21,7 @@ import { GbeLicitatie } from './GbeEvidenta.jsx'
 import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
 import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
+import SourcePackSection from './OfertareSourcePack.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1400,7 +1401,10 @@ const right60 = (n) => (n || '').length > 58 ? '…' + n.slice(-58) : n
 // pentru tipul documentului, și nu mai raportăm ca lipsă ceea ce e citare corectă.
 const E_WORD = (n) => /\.(docx?|odt)$/i.test(n || '')
 const locProvenienta = (c) => {
-  if (c.sursa_pagina) return ` · pagina ${c.sursa_pagina}${c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}`
+  // P0c: rând din Source Pack cu locator dovedit pe interval ⟦PAGINA a-b⟧ — se afirmă intervalul, nu o pagină
+  if (c.locator_verificat === 'interval' && c.pagina_interval_start) return ` · paginile ${c.pagina_interval_start}–${c.pagina_interval_end}${c.pagina_declarata ? ` (model a zis p.${c.pagina_declarata})` : ''}${c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}`
+  if (c.sursa_pagina) return ` · pagina ${c.sursa_pagina}${c.locator_verificat === 'document' && c.pagina_declarata && c.pagina_declarata !== c.sursa_pagina ? ` (corectată; model a zis p.${c.pagina_declarata})` : ''}${c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}`
+  if (c.locator_verificat === 'document') return ` · găsită în document, fără pagină demonstrabilă${c.pagina_declarata ? ` (model a zis p.${c.pagina_declarata})` : ''}${c.sursa_sectiune ? ` · ${c.sursa_sectiune}` : ''}`
   if (c.sursa_sectiune) return ` · ${c.sursa_sectiune}`
   if (E_WORD(c.doc?.nume_original)) return ' · document Word, fără paginație fixă'
   return ' · pagină necunoscută (document citit înainte de marcaje)'
@@ -1431,7 +1435,7 @@ const suprapunere = (a, b) => {
 const contextCheie = (autoritate) =>
   `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
 
-function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
+function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey }) {
   const [cerinte, setCerinte] = useState(null)
   const [busy, setBusy] = useState(null)      // text progres extragere
   const [editId, setEditId] = useState(null)  // rând în editare
@@ -1458,7 +1462,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
   // vede la cerere, nu dispare.
   const [fRegistru, setFRegistru] = useState('capabilitate')
   const load = async () => {
-    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, registru, registru_sursa, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
+    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, registru, registru_sursa, sursa_pack_id, sursa_ref, locator_verificat, pagina_declarata, pagina_interval_start, pagina_interval_end, incertitudine, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
     const { data, error } = await supabase.from('ofertare_cerinte')
       .select(camp)
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
@@ -1480,7 +1484,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
     if (error) return setWarn('Nu s-a desfăcut: ' + error.message)
     load()
   }
-  useEffect(() => { load() }, [licitatie.id])
+  useEffect(() => { load() }, [licitatie.id, reloadKey])
 
   const extrage = async () => {
     // Plasa dinainte de cheltuială (10.09): la Răcari toate documentele fuseseră citite înainte să
@@ -1570,6 +1574,15 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
     setEditId(null); await load(); onChanged?.()
   }
   const respinge = async (c) => {
+    // P0c: rândurile venite din Source Pack NU se șterg fizic — proveniența lor e dovadă (pack + ref +
+    // excerpt) și istoricul importului trebuie să rămână verificabil. Respingerea = stare „nu se aplică"
+    // cu motiv scris; rândul iese din calcul, dar rămâne în registru.
+    // P0c review semantics: „nu se aplică" NU e sinonim cu „respinsă" — starea de lucru o alege omul din select
+    // (cu motiv), iar respingerea unui candidat se dă ÎNAINTE de import, în Source Pack (REJECT/DUPLICATE…).
+    if (c.sursa_pack_id) {
+      window.alert(`Rândul vine din Source Pack #${c.sursa_pack_id} (${c.sursa_ref || '?'}) și nu se șterge fizic: proveniența e dovadă.\n\nDacă nu e o cerință reală, pune-i starea de lucru potrivită din listă (cu motiv). Respingerile de candidați se dau în secțiunea „📦 Source Packs”, înainte de import.`)
+      return
+    }
     if (!window.confirm('Respingi cerința? (dispare din registru; respingerea se ține minte ca feedback)')) return
     await feedback(c, 'respins')
     await supabase.from('ofertare_cerinte').delete().eq('id', c.id)
@@ -1721,6 +1734,8 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel }) {
                       }}
                       style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums', cursor:'pointer' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
+                    {c.sursa_pack_id && <span title={`Din Source Pack #${c.sursa_pack_id} (${c.sursa_ref || '?'}) — locator dovedit de validator: ${c.locator_verificat || '?'}; proveniența e blocată la editare`}
+                      style={{ fontSize:10.5, fontWeight:800, color:G.teal, background:G.teal + '18', border:`1px solid ${G.teal}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>📦 pack{c.incertitudine ? ` · ${c.incertitudine}` : ''}</span>}
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
                     {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
                     {!inEdit && (
@@ -2803,6 +2818,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   // vadă și în „Acoperirea cerințelor" — altfel omul bifa sus și căuta manual, jos, același
   // număr de ordine. Se golește când schimbi licitația.
   const [selCerinte, setSelCerinte] = useState([])
+  const [packImportKey, setPackImportKey] = useState(0)   // P0c: după import din Source Pack, registrul se reîncarcă
   useEffect(() => { setSelCerinte([]) }, [l.id])
   const [clar, setClar] = useState(null)
   // Răzvan 07.09 (varianta C): mail „Etapa 1” către echipa Ofertare — previzualizare → confirmare → trimitere (edge fn ofertare-etapa1-mail)
@@ -2920,7 +2936,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
         <div style={{ display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(260px, 1fr)', gap:18 }}>
           <div style={{ minWidth:0 }}>
             {tab === 'cerinte' && <>
-              <CerinteSection licitatie={l} profile={profile} sel={selCerinte} setSel={setSelCerinte} />
+              <CerinteSection licitatie={l} profile={profile} sel={selCerinte} setSel={setSelCerinte} reloadKey={packImportKey} />
+              <SourcePackSection licitatie={l} profile={profile} onImported={() => { setPackImportKey(k => k + 1); onChanged?.() }} />
               <InventarIndependentSection licitatie={l} profile={profile} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
