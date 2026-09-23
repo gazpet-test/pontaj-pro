@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && useradd -m -u 1000 -s /bin/sh agent 2>/dev/null || true
 COPY launcher.sh /usr/local/bin/launcher
 COPY prompts /opt/prompts
-RUN chmod +x /usr/local/bin/launcher && mkdir -p /work /out /home/agent/.claude && chown -R 1000:1000 /work /out /home/agent
+RUN chmod 755 /usr/local/bin/launcher && chmod -R a+rX /opt/prompts && mkdir -p /work /out /home/agent/.claude && chown -R 1000:1000 /work /out /home/agent
 USER 1000
 ENV HOME=/home/agent CLAUDE_CONFIG_DIR=/home/agent/.claude DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 WORKDIR /work
