@@ -4,6 +4,7 @@
 // ofertare-ingest-doc; doar antetul (obiectiv/beneficiar/proiectant/revizie) se citește cu Haiku din primele pagini
 // (~0,001 USD). Scanurile (fără strat de text) merg pe drumul vechi: edge function-ul ofertare-ingest-doc, cu AI.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import JSZip from 'https://esm.sh/jszip@3.10.1'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY'), ANTHROPIC_KEY = env('ANTHROPIC_API_KEY')
@@ -144,9 +145,51 @@ async function candidati(supabase: Supa, licId: number): Promise<any[]> {
   return out
 }
 
+// 24.09: .docx-urile (formularul de propunere tehnică, acordul contractual…) rămâneau „ignorat" — edge-ul
+// ofertare-word-text există, dar nu-l apela nimeni. Aceeași logică, aici: docx = zip cu word/document.xml.
+// .doc binar vechi rămâne pe edge (word-extractor); fișierele-lacăt Office (~$…) nu sunt documente.
+const ENTITATI: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+function xmlToText(xml: string): string {
+  return xml
+    .replace(/<w:tab\b[^>]*\/?>/g, '\t').replace(/<w:br\b[^>]*\/?>/g, '\n')
+    .replace(/<\/w:p>/g, '\n').replace(/<\/w:tc>/g, ' | ').replace(/<\/w:tr>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(amp|lt|gt|quot|apos);/g, (_m, e) => ENTITATI[e])
+    .replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(Number(n)))
+    .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/ \| (?=\n)/g, '').trim()
+}
+async function citesteWordLicitatie(supabase: Supa, licId: number): Promise<number> {
+  const { data: docs } = await supabase.from('ofertare_documente_atribuire')
+    .select('id, nume_original, fisier_path').eq('licitatie_id', licId).eq('status_procesare', 'ignorat').is('text_extras', null)
+    .ilike('nume_original', '%.docx')
+  let n = 0
+  for (const d of docs ?? []) {
+    if (!d.fisier_path || /(^|\/)~\$/.test(d.nume_original || '')) continue
+    try {
+      const { data: blob, error } = await supabase.storage.from(BUCKET).download(d.fisier_path)
+      if (error || !blob) { log(`#${licId} word ${d.id}: download ${error?.message ?? 'lipsă'}`); continue }
+      const zip = await JSZip.loadAsync(new Uint8Array(await blob.arrayBuffer()))
+      const nume = Object.keys(zip.files).filter(x => x === 'word/document.xml' || /^word\/(header|footer)\d*\.xml$/.test(x))
+      nume.sort((a, b) => (a === 'word/document.xml' ? -1 : b === 'word/document.xml' ? 1 : a.localeCompare(b)))
+      const bucati: string[] = []
+      for (const x of nume) { const t = xmlToText(await zip.file(x)!.async('string')); if (t) bucati.push(t) }
+      const text = bucati.join('\n\n')
+      if (text.length < 50) { log(`#${licId} word ${d.id}: doar ${text.length} caractere — probabil scan în Word`); continue }
+      const { error: upErr } = await supabase.from('ofertare_documente_atribuire').update({
+        text_extras: text.slice(0, MAX_TEXT), status_procesare: 'procesat', pagini_procesate: 0, procesat_la: new Date().toISOString(),
+        eroare: `text extras din .docx pe worker (${bucati.length} părți, ${text.length} caractere) — fără paginație fixă`,
+      }).eq('id', d.id).eq('status_procesare', 'ignorat')
+      if (upErr) log(`#${licId} word ${d.id}: update ${upErr.message}`); else n++
+    } catch (e) { log(`#${licId} word ${d.id}:`, (e as Error)?.message ?? e) }
+  }
+  if (n) log(`#${licId}: ${n} fișiere Word citite`)
+  return n
+}
+
 export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void) {
   const { data: c } = await supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
+  try { await citesteWordLicitatie(supabase, licId) } catch (e) { log('word:', (e as Error)?.message ?? e) }
   const esuate = new Set<number>()
   let citite = 0
   const t0Tura = Date.now()
