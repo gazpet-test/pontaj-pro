@@ -16,7 +16,7 @@ while true; do
   SHA="$(git -C /app rev-parse --short HEAD 2>/dev/null || echo '?')"
   echo "[entrypoint] pornesc workerul la commit $SHA ($BRANCH)"
   # sh e PID 1 și nu transmite SIGTERM copilului (docker stop ar aștepta 10 s și ar da kill): îl transmitem noi
-  WORKER_GIT_SHA="$SHA" REPO_BRANCH="$BRANCH" deno run --allow-net --allow-env --allow-read=/app,/deno-dir,/tmp,/packs --allow-write=/deno-dir,/tmp,/packs --allow-run=git,pdftotext,pdfinfo /app/worker/ofertare/main.ts &
+  WORKER_GIT_SHA="$SHA" REPO_BRANCH="$BRANCH" deno run --allow-net --allow-env --allow-read=/app,/deno-dir,/tmp,/packs --allow-write=/deno-dir,/tmp,/packs --allow-run=git,pdftotext,pdfinfo,7z /app/worker/ofertare/main.ts &
   COPIL=$!
   wait "$COPIL"; COD=$?
   # la SIGTERM primul wait se întrerupe imediat (cod 143) cât timp copilul încă termină felia curentă;
