@@ -13,6 +13,7 @@ import { proceseazaIngest } from './ingest.ts'
 import { proceseazaAcoperire } from './acoperire.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
+import { proceseazaSeap } from './seap.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -134,7 +135,7 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 let ultimHb = Date.now(), ultimGit = Date.now()
-let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false
+let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false, seapInLucru = false
 while (!oprire) {
   try {
     if (inLucru.size < PARALEL) {
@@ -185,6 +186,12 @@ while (!oprire) {
       proceseazaSourcePacks(supabase, s => inLucru.set(-3_000_000, `source_pack: ${s}`))
         .catch(e => log('source_pack:', (e as Error)?.message ?? e))
         .finally(() => { inLucru.delete(-3_000_000); packInLucru = false })
+    }
+    if (!seapInLucru) {   // 24.09.2026: documentația din SEAP (arhive mari, RAR multi-volum, .p7s) — vezi seap.ts
+      seapInLucru = true
+      proceseazaSeap(supabase, () => oprire, s => inLucru.set(-4_000_000, `seap: ${s}`))
+        .catch(e => log('seap:', (e as Error)?.message ?? e))
+        .finally(() => { inLucru.delete(-4_000_000); seapInLucru = false })
     }
     if (Date.now() - ultimHb >= HEARTBEAT_MS) { await heartbeat(); ultimHb = Date.now() }
     if (inLucru.size === 0 && Date.now() - ultimGit >= VERIFICA_GIT_MS) {
