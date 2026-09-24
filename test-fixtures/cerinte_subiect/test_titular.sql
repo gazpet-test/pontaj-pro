@@ -39,6 +39,32 @@ SELECT public.fn_ofertare_cerinta_titular_seteaza((SELECT id FROM public.ofertar
 SELECT pg_temp.ca('33333333-3333-3333-3333-333333333333');
 SELECT pg_temp.t('T9 fără modul Ofertare: 0 rânduri vizibile', (SELECT count(*) FROM public.ofertare_cerinte_titular) = 0);
 RESET ROLE;
+-- T11–T15: poarta pe acoperire (Z2b), rulată ca superuser (RLS pe acoperire nu e obiectul testului)
+DO $$ DECLARE v_c bigint := (SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 38); BEGIN
+  INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status, autorizatie_id, ales) VALUES (v_c, 'personal', 'acoperit', 900, true);
+  PERFORM pg_temp.t('T11 fără decizie salvată: persoana se poate alege (poarta e doar pe decizia omului)', true);
+EXCEPTION WHEN check_violation THEN PERFORM pg_temp.t('T11 fără decizie salvată: persoana se poate alege (poarta e doar pe decizia omului)', false); END $$;
+SELECT set_config('request.jwt.claims', json_build_object('sub', '22222222-2222-2222-2222-222222222222', 'role', 'authenticated')::text, false);
+DO $$ DECLARE j jsonb := public.fn_ofertare_cerinta_titular_seteaza((SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 38), 'operator_economic'); BEGIN
+  PERFORM pg_temp.t('T12 decizia „operator" peste o persoană deja aleasă → avertisment, nimic șters',
+    j->>'avertisment' IS NOT NULL AND (SELECT count(*) FROM public.ofertare_acoperire WHERE ales) = 1, j::text);
+END $$;
+DO $$ BEGIN
+  INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status, recomandare_id, ales) VALUES ((SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 38), 'recomandare', 'acoperit', 7, true);
+  PERFORM pg_temp.t('T13 alegerea unei recomandări pe cerință de operator e refuzată', false);
+EXCEPTION WHEN check_violation THEN PERFORM pg_temp.t('T13 alegerea unei recomandări pe cerință de operator e refuzată', true); END $$;
+DO $$ BEGIN
+  INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status, recomandare_id, ales) VALUES ((SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 38), 'recomandare', 'acoperit', 8, false);
+  PERFORM pg_temp.t('T14 propunerea motorului (ales = false) nu e blocată', true);
+EXCEPTION WHEN check_violation THEN PERFORM pg_temp.t('T14 propunerea motorului (ales = false) nu e blocată', false); END $$;
+DO $$ BEGIN
+  UPDATE public.ofertare_acoperire SET ales = true WHERE recomandare_id = 8;
+  PERFORM pg_temp.t('T15 marcarea ca aleasă a propunerii-persoană e refuzată', false);
+EXCEPTION WHEN check_violation THEN PERFORM pg_temp.t('T15 marcarea ca aleasă a propunerii-persoană e refuzată', true); END $$;
+DO $$ BEGIN
+  INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status, doc_firma_id, ales) VALUES ((SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 38), 'firma', 'acoperit', 13, true);
+  PERFORM pg_temp.t('T16 documentul firmei se alege normal', true);
+EXCEPTION WHEN check_violation THEN PERFORM pg_temp.t('T16 documentul firmei se alege normal', false); END $$;
 SELECT pg_temp.t('T10 ofertare_cerinte neatins', (SELECT md5(string_agg(c::text, '|' ORDER BY id)) FROM public.ofertare_cerinte c) = (SELECT h FROM amprenta));
 
 \set QUIET off

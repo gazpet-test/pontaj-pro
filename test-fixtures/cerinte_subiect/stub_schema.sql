@@ -21,6 +21,12 @@ CREATE TABLE public.ofertare_cerinte (
   inlocuita_de bigint REFERENCES public.ofertare_cerinte(id), duplicat_al bigint,
   confirmata_de uuid
 );
+CREATE TABLE public.ofertare_acoperire (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  cerinta_id bigint NOT NULL REFERENCES public.ofertare_cerinte(id) ON DELETE CASCADE,
+  mod text, status text, autorizatie_id bigint, doc_firma_id bigint, partener_id bigint,
+  recomandare_id bigint, document_personal_id bigint, ales boolean, ales_de uuid
+);
 CREATE OR REPLACE FUNCTION public.fn_are_acces_ofertare() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   SELECT auth.uid() IS NOT NULL AND (
     EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner)
