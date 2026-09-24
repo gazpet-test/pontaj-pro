@@ -1,5 +1,11 @@
 # P0C_PROPUNERI_39 — propunere de decizii pentru cei 39 de candidați rămași (Mânăstirea, pack #2)
 
+> **EXECUTAT 24.09.2026 ~07:00 RO, cu GO explicit Răzvan („go la toate și merge”).** Rezultat: 42/42 decise, pack `rezolvat`.
+> IMPORT 14 (cei 8 din §A + REQ-007 / REQ-008 / REQ-040, care aduc cuantumuri și penalități absente din rândurile existente, + cele 3 din pilot) ·
+> DUPLICATE 26 (toți cei din §B, §C și §D, comparați text cu text: parafraze ale unor rânduri deja confirmate; REQ-007/008/040 au ieșit din §C/§D spre IMPORT) ·
+> SUPERSEDED 2 (REQ-031; REQ-030 — verificat în doc 63/80: factorul „experți cheie” 50% din Anexa 1 nu mai există, a rămas doar „Managerul de proiect” 5%).
+> Importuri #8 (id 6355–6362) și #9 (6363–6365). Rândurile noi sunt `de_analizat`, neconfirmate — E2 rămâne la Răzvan. Textul de mai jos e propunerea de noapte, păstrată ca istoric.
+
 Data: 24.09.2026 ~01:30 RO (noaptea Claude ↔ Copilot). **Nicio decizie luată, nicio scriere în BD.** Sursa: `fn_ofertare_source_pack_preview(2)` (42 candidați = REQ-001…043 fără REQ-029, care e în „nereușite”; 3 importate: REQ-021/032/035). Deciziile le dă Răzvan nominal, în UI (secțiunea 📦 Source Packs), rând cu rând; DUPLICATE cere id-ul rândului existent; similaritatea e avertisment, nu verdict.
 
 ## A. IMPORT propus — 8 (fără similaritate, incertitudine „sigur", document nemodificat de erată = exact „bifează fără avertisment" minus cele 3 deja importate)
