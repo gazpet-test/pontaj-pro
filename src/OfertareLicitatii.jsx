@@ -15,6 +15,7 @@ import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
+import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel from './OfertareClarificari.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
@@ -3819,7 +3820,7 @@ function ReferinteFinanciare({ showToast }) {
           <div style={{ fontSize:12, color:G.muted }}>Cu ce coeficienți s-a mers istoric, pe segmente — plus prețuri unitare și materiale din ofertele depuse</div>
         </div>
         <div style={{ display:'flex', gap:8 }}>
-          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['participari', `🛰️ Participări SEAP (${particip.length})`], ['sezonier', '📅 Sezonier'], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS']].map(([k, lbl]) => (
+          {[['calibrari', `⚙️ Calibrări (${cal.length})`], ['participari', `🛰️ Participări SEAP (${particip.length})`], ['sezonier', '📅 Sezonier'], ['preturi', `🔧 Prețuri unitare (${pu.length})`], ['materiale', `🧱 Materiale (${mat.length})`], ['normative', `📜 Normative (${norme.length})`], ['parteneri', `🤝 Parteneri (${part.length})`], ['documente', '🗂 Documente NAS'], ['nomenclatoare', '📚 Nomenclatoare']].map(([k, lbl]) => (
             <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, padding:'6px 13px', fontSize:12, fontWeight:700,
               ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{lbl}</button>
           ))}
@@ -3929,6 +3930,7 @@ function ReferinteFinanciare({ showToast }) {
       )}
 
       {!loading && tab === 'documente' && <DocumenteNasCauta />}
+      {!loading && tab === 'nomenclatoare' && <OfertareNomenclatoare showToast={showToast} />}
 
       {!loading && (tab === 'preturi' || tab === 'materiale') && (
         <>
