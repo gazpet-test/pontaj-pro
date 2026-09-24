@@ -436,6 +436,7 @@ export default function SourcePackSection({ licitatie, profile, onImported }) {
           <span style={{ cursor:'pointer', color:G.muted }} onClick={() => setArat(a => ({ ...a, decizii: !a.decizii }))}>{arat.decizii ? '▾' : '▸'} 🧑‍⚖️ audit decizii ({decizii.length}, append-only)</span>
           {arat.decizii && (
             <div style={{ marginTop:3, maxHeight:200, overflowY:'auto' }}>
+              {!decizii.length && <div style={{ fontSize:11, color:G.dim, marginTop:2 }}>nicio decizie încă — prima apare la primul „decide" pe un candidat</div>}
               {decizii.map(d => (
                 <div key={d.id} style={{ fontSize:11, color:G.dim, marginTop:2 }}>
                   #{d.id} · {fmtData(d.creat_la)} · {profiles[d.actor] || d.actor} · <b style={{ color:DECIZII[d.decizie]?.color }}>{d.sursa_ref} → {d.decizie}</b>{d.cerinta_existenta_id ? ` (→ cerința #${existente[d.cerinta_existenta_id]?.nr_ordine ?? d.cerinta_existenta_id})` : ''}{d.motiv ? ` · ${d.motiv}` : ''}
@@ -445,6 +446,7 @@ export default function SourcePackSection({ licitatie, profile, onImported }) {
         {/* istoric importuri — append-only */}
         <div style={{ marginTop:6, fontSize:11.5 }}>
           <span style={{ cursor:'pointer', color:G.muted }} onClick={() => setArat(a => ({ ...a, istoric: !a.istoric }))}>{arat.istoric ? '▾' : '▸'} 🕓 istoric importuri ({istoric.length})</span>
+          {arat.istoric && !istoric.length && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>niciun import încă — pack-ul n-a trimis nimic în registru</div>}
           {arat.istoric && istoric.map(h => (
             <div key={h.id} style={{ fontSize:11, color:G.dim, marginTop:3 }}>
               #{h.id} · {fmtData(h.creat_la)} · {profiles[h.actor] || h.actor} · cerute {(h.refs_cerute || []).length} → inserate {(h.inserate || []).length}

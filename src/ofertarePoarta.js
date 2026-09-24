@@ -46,6 +46,26 @@ export function evalueazaPoarta(st) {
     filtru: 'neverificate',
   })
   r.push({
+    // P0c / INTERDICȚIA 5 a generatorului (24.09.2026): o cerință ATRIBUITĂ unui capitol, dar NECONFIRMATĂ de om în
+    // registru (E2, confirmata_de NULL) ține poarta închisă INDIFERENT de sursa capitolului — nici generarea cu
+    // „cu_neconfirmate", nici salvarea ulterioară a textului ca text de om nu ridică blocajul. Se ridică prin
+    // confirmarea (sau excepția / nu-se-aplică) cerinței în registru. Coloana vine din v_ofertare_pt_cerinte_neconfirmate
+    // (migrare 20260924_p0c_pt_stare_neconfirmate); lipsă / eroare = control INDISPONIBIL = block (vezi mai jos), nu zero.
+    // Copilot 24.09: „control indisponibil ≠ zero”. Dacă view-ul lipsește / dă eroare / întoarce ceva invalid, NU știm dacă
+    // există cerințe neconfirmate → poarta finală rămâne închisă cu mesajul „nu putem verifica”, nu „există neconfirmate”.
+    // Lucrul pe draft (editare capitole) nu trece prin poartă, deci nu e afectat. Consecință practică: migrarea
+    // p0c_pt_stare_neconfirmate se aplică ÎNAINTE (sau odată cu) publicarea acestui cod, altfel poarta e roșie peste tot.
+    k:'neconfirmate', titlu:'Cerințe atribuite, dar neconfirmate în registru (E2)',
+    stare: !Number.isInteger(st.cerinte_neconfirmate_cu_capitol) || st.cerinte_neconfirmate_cu_capitol < 0 ? 'block'
+         : (st.cerinte_neconfirmate_cu_capitol > 0 ? 'block' : 'ok'),
+    detalii: !Number.isInteger(st.cerinte_neconfirmate_cu_capitol) || st.cerinte_neconfirmate_cu_capitol < 0
+      ? 'Nu putem verifica confirmarea cerințelor (controlul e indisponibil: view-ul v_ofertare_pt_cerinte_neconfirmate lipsește, a dat eroare sau un rezultat invalid) — nu înseamnă că există neconfirmate, înseamnă că nu știm'
+      : (st.cerinte_neconfirmate_cu_capitol > 0
+        ? `${st.cerinte_neconfirmate_cu_capitol} cerințe cu capitol nu sunt confirmate de un om în registru — textul scris pe ele nu e bază verificată; confirmă-le (✓) sau exceptează-le`
+        : 'toate cerințele atribuite sunt confirmate în registru'),
+    filtru: 'neconfirmate',
+  })
+  r.push({
     k:'capcane', titlu:'Capcane de respingere descoperite',
     stare: st.capcane_descoperite > 0 ? 'block' : 'ok',
     detalii: st.capcane > 0

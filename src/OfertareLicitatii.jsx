@@ -1435,6 +1435,102 @@ const suprapunere = (a, b) => {
 const contextCheie = (autoritate) =>
   `ofertare-cerinte|fisa_date|${/romgaz/i.test(autoritate||'') ? 'romgaz' : /transgaz/i.test(autoritate||'') ? 'transgaz' : /conpet/i.test(autoritate||'') ? 'conpet' : 'alta'}`
 
+// ── Dovezi suplimentare / observații de verificare pe cerință (P0c, 24.09.2026) ──────────────────
+// Ce pasaj EXACT din documentația autorității susține interpretarea cerinței (document + locator + pasaj +
+// explicație + cine/când). NU e confirmarea E2 și NU e dovada firmei (aia e la acoperire). Append-only prin RPC
+// `fn_ofertare_cerinte_dovada_adauga`; o corecție = rând nou. Tolerant: dacă migrarea nu e aplicată încă
+// (view-ul lipsește), secțiunea nu apare și registrul merge ca înainte.
+function DoveziRand({ c, lista, activ, licitatieId, onAdaugat }) {
+  const [deschis, setDeschis] = useState(false)
+  const [formular, setFormular] = useState(false)
+  const [docs, setDocs] = useState(null)
+  const [f, setF] = useState({ document_id: '', pagina: '', sectiune: '', pasaj: '', explicatie: '', sha: '' })
+  const [err, setErr] = useState(null)
+  const [busy, setBusy] = useState(false)
+  if (!activ) return null
+  const n = lista.length
+  const deschideFormular = async () => {
+    setFormular(true); setErr(null)
+    if (docs === null) {
+      const { data } = await supabase.from('ofertare_documente_atribuire').select('id, nume_original').eq('licitatie_id', licitatieId).order('nume_original').limit(500)
+      setDocs(data || [])
+      if (c.sursa_document_id) setF(v => ({ ...v, document_id: String(c.sursa_document_id) }))
+    }
+  }
+  const trimite = async () => {
+    const pasaj = f.pasaj.trim(), expl = f.explicatie.trim()
+    if (pasaj.length < 10) return setErr('Pasajul trebuie să fie fragmentul exact din document (minim 10 caractere), fără elipse care înlocuiesc text.')
+    if (expl.length < 5) return setErr('Spune ce parte a cerinței susține pasajul.')
+    const locator = {}
+    if (f.pagina.trim()) {
+      const m = f.pagina.trim().match(/^(\d+)\s*[-–]\s*(\d+)$/)
+      if (m) locator.interval = [Number(m[1]), Number(m[2])]
+      else if (/^\d+$/.test(f.pagina.trim())) locator.pagina = Number(f.pagina.trim())
+      else return setErr('Pagina: un număr (13) sau un interval (3-5).')
+    } else locator.verificat = 'document'
+    if (f.sectiune.trim()) locator.sectiune = f.sectiune.trim()
+    setBusy(true); setErr(null)
+    const { error } = await supabase.rpc('fn_ofertare_cerinte_dovada_adauga', {
+      p_cerinta_id: c.id, p_pasaj: pasaj, p_explicatie: expl,
+      p_document_id: f.document_id ? Number(f.document_id) : null, p_locator: locator,
+      p_fisier_sha256: f.sha.trim() || null,
+      p_text_vazut: c.text_cerinta,   // dacă textul s-a editat între afișare și salvare, RPC-ul refuză
+    })
+    setBusy(false)
+    if (error) return setErr('Nu s-a salvat: ' + error.message)
+    setF({ document_id: f.document_id, pagina: '', sectiune: '', pasaj: '', explicatie: '', sha: '' }); setFormular(false); setDeschis(true)
+    onAdaugat?.()
+  }
+  const loc = (l) => l?.pagina ? `p.${l.pagina}` : l?.interval ? `p.${l.interval[0]}–${l.interval[1]}` : 'document întreg'
+  return (
+    <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>
+      <span style={{ cursor:'pointer', fontWeight: n ? 700 : 500, color: n ? G.teal : G.dim }} onClick={() => setDeschis(v => !v)}
+        title="Dovezi suplimentare de verificare: ce pasaj exact din documentația autorității susține cerința. Nu e confirmarea E2 și nu e dovada firmei.">
+        🧾 {n ? `${n} ${n === 1 ? 'dovadă' : 'dovezi'} de verificare` : 'fără dovezi de verificare'} {deschis ? '▾' : '▸'}
+      </span>
+      {!formular && <button onClick={deschideFormular} style={{ ...S.btnS, padding:'0 6px', fontSize:10, marginLeft:6 }}>+ pasaj din document</button>}
+      {deschis && n > 0 && (
+        <div style={{ marginTop:4, display:'grid', gap:4 }}>
+          {lista.map(d => (
+            <div key={d.id} style={{ padding:'5px 8px', borderRadius:6, background:G.bg, borderLeft:`2px solid ${d.inlocuita ? G.muted : d.pentru_textul_curent ? G.teal : G.orange}`, opacity: d.inlocuita ? 0.6 : 1 }}>
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+                <span style={{ fontWeight:700, color:G.text }}>{right60(d.document_nume || 'fără document')}</span>
+                <span>· {loc(d.locator)}{d.locator?.sectiune ? ` · ${d.locator.sectiune}` : ''}</span>
+                {d.inlocuita && <span style={{ color:G.muted, fontWeight:700 }}>înlocuită de o corecție</span>}
+                {!d.pentru_textul_curent && !d.inlocuita && <span style={{ color:G.orange, fontWeight:700 }} title="Textul cerinței a fost editat după verificare — dovada rămâne în istoric, dar nu verifică formularea curentă">⚠ pentru un text anterior</span>}
+                <span style={{ marginLeft:'auto', color:G.muted }}>{d.verificat_de_nume || '—'} · {d.verificat_la ? new Date(d.verificat_la).toLocaleString('ro-RO', { dateStyle:'short', timeStyle:'short' }) : ''}</span>
+              </div>
+              <div style={{ fontStyle:'italic', color:G.text, marginTop:2 }}>„{d.pasaj}”</div>
+              <div style={{ marginTop:2 }}>{d.explicatie}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {formular && (
+        <div style={{ marginTop:5, padding:8, borderRadius:6, border:`1px dashed ${G.teal}66`, display:'grid', gap:5 }}>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            <select value={f.document_id} onChange={e => setF(v => ({ ...v, document_id: e.target.value }))} style={{ ...S.input, width:'auto', maxWidth:320, fontSize:11, padding:'3px 6px' }}>
+              <option value="">— documentul sursă —</option>
+              {(docs || []).map(d => <option key={d.id} value={d.id}>{right60(d.nume_original)}</option>)}
+            </select>
+            <input placeholder="pagina (13) sau interval (3-5); gol = document" value={f.pagina} onChange={e => setF(v => ({ ...v, pagina: e.target.value }))} style={{ ...S.input, width:230, fontSize:11, padding:'3px 6px' }} />
+            <input placeholder="secțiunea (ex. III.1.7)" value={f.sectiune} onChange={e => setF(v => ({ ...v, sectiune: e.target.value }))} style={{ ...S.input, width:150, fontSize:11, padding:'3px 6px' }} />
+          </div>
+          <textarea placeholder="Pasajul EXACT din document, copiat literal (fără „…” în locul textului)" value={f.pasaj} onChange={e => setF(v => ({ ...v, pasaj: e.target.value }))} rows={3} style={{ ...S.input, fontSize:11.5, padding:'4px 6px', fontFamily:'inherit' }} />
+          <input placeholder="Ce parte a cerinței susține pasajul (ex. „componenta 5% manager de proiect”)" value={f.explicatie} onChange={e => setF(v => ({ ...v, explicatie: e.target.value }))} style={{ ...S.input, fontSize:11, padding:'3px 6px' }} />
+          <input placeholder="SHA-256 al fișierului original, declarat de tine (opțional, 64 hex)" value={f.sha} onChange={e => setF(v => ({ ...v, sha: e.target.value }))} style={{ ...S.input, fontSize:11, padding:'3px 6px', fontFamily:'monospace' }} />
+          {err && <div style={{ color:G.red, fontWeight:700 }}>{err}</div>}
+          <div style={{ display:'flex', gap:6 }}>
+            <button disabled={busy} onClick={trimite} style={{ ...S.btnP, padding:'3px 10px', fontSize:11 }}>{busy ? '…' : 'salvează dovada'}</button>
+            <button disabled={busy} onClick={() => { setFormular(false); setErr(null) }} style={{ ...S.btnS, padding:'3px 10px', fontSize:11 }}>renunț</button>
+            <span style={{ alignSelf:'center', color:G.muted }}>nu confirmă cerința (E2 rămâne separat) și nu atinge proveniența</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey }) {
   const [cerinte, setCerinte] = useState(null)
   const [busy, setBusy] = useState(null)      // text progres extragere
@@ -1462,7 +1558,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
   // vede la cerere, nu dispare.
   const [fRegistru, setFRegistru] = useState('capabilitate')
   const load = async () => {
-    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, registru, registru_sursa, sursa_pack_id, sursa_ref, locator_verificat, pagina_declarata, pagina_interval_start, pagina_interval_end, incertitudine, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
+    const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, sursa_document_id, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, registru, registru_sursa, sursa_pack_id, sursa_ref, locator_verificat, pagina_declarata, pagina_interval_start, pagina_interval_end, incertitudine, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
     const { data, error } = await supabase.from('ofertare_cerinte')
       .select(camp)
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
@@ -1476,6 +1572,18 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
       .order('nr_ordine').limit(5000)
     const m = {}; (dup || []).forEach(d => { (m[d.duplicat_al] ||= []).push(d) })
     setRepetari(m)
+    loadDovezi()
+  }
+  // Dovezile de verificare (P0c). View-ul poate lipsi până se aplică migrarea → secțiunea pur și simplu nu apare.
+  const [dovezi, setDovezi] = useState({})
+  const [doveziActiv, setDoveziActiv] = useState(false)
+  const loadDovezi = async () => {
+    const { data, error } = await supabase.from('v_ofertare_cerinte_dovezi')
+      .select('id, cerinta_id, document_nume, locator, pasaj, explicatie, corecteaza_id, inlocuita, pentru_textul_curent, verificat_de_nume, verificat_la')
+      .eq('licitatie_id', licitatie.id).order('id').limit(5000)
+    if (error) { setDoveziActiv(false); setDovezi({}); return }
+    const m = {}; (data || []).forEach(d => { (m[d.cerinta_id] ||= []).push(d) })
+    setDovezi(m); setDoveziActiv(true)
   }
   const nrRepetari = Object.values(repetari).reduce((n, l) => n + l.length, 0)
   // Desface o repetare: cerința redevine de sine stătătoare în registru.
@@ -1760,6 +1868,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
                       {locProvenienta(c)}
                     </div>
                   )}
+                  {!inEdit && <DoveziRand c={c} lista={dovezi[c.id] || []} activ={doveziActiv} licitatieId={licitatie.id} onAdaugat={loadDovezi} />}
                   {!inEdit && repetari[c.id]?.length > 0 && (
                     <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="Aceeași obligație, repetată în alte felii ale documentației — se bifează o singură dată">
                       🔁 se repetă de {repetari[c.id].length} ori

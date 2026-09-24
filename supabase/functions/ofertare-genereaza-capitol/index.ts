@@ -1,4 +1,6 @@
-// ofertare-genereaza-capitol v2.2 (18.09.2026) — scrie UN capitol din propunerea tehnică.
+// ofertare-genereaza-capitol v2.3 (24.09.2026) — scrie UN capitol din propunerea tehnică.
+// v2.3 (noaptea Claude ↔ Copilot, după pilotul P0c Mânăstirea): INTERDICȚIA 5 — cerințele NECONFIRMATE (confirmata_de
+//     NULL, adică fără E2 de om) nu devin bază de redactare pe tăcute. Vezi lista interdicțiilor mai jos.
 // v2 (Domnești, Răzvan): PACHETUL DE FAPTE. v1 primea doar cerințele și lăsa 37 de [DE COMPLETAT]
 //     pe un capitol de personal, deși echipa, autorizațiile, experiența, partenerii, graficul și
 //     garanția stăteau în ERP, legate pe licitație. Acum funcția le adună singură (pachetFapte) și
@@ -12,7 +14,7 @@
 // `capitole_nescrise_de_om` din v_ofertare_pt_stare BLOCHEAZĂ depunerea până când un om
 // deschide capitolul, îl citește și îl salvează), deci generatorul poate exista.
 //
-// PATRU INTERDICȚII ÎN COD, nu doar în prompt. Regulile din prompt sunt rugăminți către model;
+// INTERDICȚII ÎN COD (0–5; a 4-a e la scriere, mai jos), nu doar în prompt. Regulile din prompt sunt rugăminți către model;
 // astea sunt bariere:
 //   0. (v2.2, 18.09.2026) Apelantul trebuie să fie owner, responsabilul licitației sau service_role.
 //      `verify_jwt` singur nu e poartă: cheia anon e un JWT valid și publică în browser.
@@ -22,6 +24,16 @@
 //      ajunge în istoric, dar tot e o zi pierdută.
 //   3. Scrie ÎNTOTDEAUNA sursa='ai'. Generatorul nu poate să-și dea singur aviz de om.
 //      Versiunea o incrementează triggerul trg_pt_capitol_versioneaza, nu functia asta.
+//   5. (v2.3, 24.09.2026) Cerințe ATRIBUITE dar NECONFIRMATE de om (confirmata_de NULL) → refuz controlat, ZERO cost,
+//      cu lista lor (id, nr, text scurt), dacă apelul nu vine explicit cu `cu_neconfirmate: true` din UI (unde omul
+//      vede lista și confirmă — același tipar ca `peste_om`). Atribuirea unei cerințe unui capitol e organizare
+//      („aici răspundem la asta"), NU aprobarea conținutului ei; 60% din registru e neconfirmat, deci un refuz fără
+//      cale înainte ar împinge spre „confirmă tot" — fix anti-tiparul. Când omul confirmă: fiecare cerință neconfirmată
+//      e marcată în prompt, iar după scriere rămâne o OBSERVAȚIE DESCHISĂ pe capitol (ofertare_pt_observatii) cu id-urile
+//      lor — urmă persistentă, vizibilă în UI și reintrodusă în promptul generării următoare; capitolul rămâne sursa='ai',
+//      deci poarta de depunere îl ține blocat până îl citește și îl salvează un om. Nimic nu se elimină în tăcere.
+//      Limită cunoscută: dacă o cerință se confirmă/modifică ÎN TIMPUL generării, nu se detectează (nu există verificare
+//      de versiune pe cerință aici; INTERDICȚIA 4 acoperă doar capitolul).
 //
 // Regula de fond a promptului: NU inventează fapte despre firmă. Unde lipsește un fapt (cifre,
 // nume, utilaje, termene), scrie [DE COMPLETAT: ce anume] — un gol vizibil, nu o propoziție
@@ -178,7 +190,10 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
 //   - cheia anon: RESPINSĂ. Generarea se pornește din UI de un om logat; nu există worker de coadă
 //     pentru capitole (când se face #110, generarea în fundal, poarta pentru el se adaugă AICI,
 //     pe tiparul cu coadă activă din ofertare-cerinte, nu prin relaxarea regulii).
+// v2.3: întoarce și uid-ul apelantului (null pentru service_role) — urma INTERDICȚIEI 5 trebuie să spună CINE a confirmat.
+let actorUid: string | null = null
 async function autorizat(req: Request, supabase: any, licId: number): Promise<string | null> {
+  actorUid = null
   const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
   if (!jwt) return 'lipsește Authorization'
   // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
@@ -190,6 +205,7 @@ async function autorizat(req: Request, supabase: any, licId: number): Promise<st
   const { data: u } = await anon.auth.getUser()
   const uid = u?.user?.id
   if (!uid) return 'sesiune invalidă'
+  actorUid = uid
   const [{ data: prof }, { data: lic }] = await Promise.all([
     supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
     supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
@@ -207,7 +223,7 @@ Deno.serve(async (req: Request) => {
     new Response(JSON.stringify({ error: msg, ...extra }), { status: 200, headers: CORS })
 
   try {
-    const { capitol_id, instructiune, peste_om } = await req.json()
+    const { capitol_id, instructiune, peste_om, cu_neconfirmate } = await req.json()
     const capId = Number(capitol_id)
     if (!capId) return fail('capitol_id obligatoriu')
 
@@ -244,10 +260,18 @@ Deno.serve(async (req: Request) => {
     if (!ids.length) return fail('Capitolul n-are nicio cerință atribuită. Atribuie-i cerințele întâi — altfel iese text generic.')
 
     const { data: cerinte, error: eCer } = await supabase.from('ofertare_cerinte')
-      .select('id, text_cerinta, tip, sursa_sectiune, document_probant')
+      .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, document_probant, confirmata_de')
       .in('id', ids).is('inlocuita_de', null).order('id')
     if (eCer) return fail('cerintele nu s-au putut citi: ' + eCer.message)
     if (!cerinte?.length) return fail('Cerintele atribuite nu mai exista (inlocuite?). Reatribuie capitolul.')
+
+    // INTERDICȚIA 5 — cerințe neconfirmate de om. Refuzul vine ÎNAINTE de orice apel plătit și de pachetul de fapte.
+    const neconfirmate = cerinte.filter((c: any) => !c.confirmata_de)
+    if (neconfirmate.length && cu_neconfirmate !== true) {
+      return fail(
+        `${neconfirmate.length} din ${cerinte.length} cerințe atribuite NU sunt confirmate de om (E2). Confirmă-le în registru sau confirmă explicit generarea cu ele marcate „NECONFIRMATĂ".`,
+        { cere_confirmare_neconfirmate: true, neconfirmate: neconfirmate.map((c: any) => ({ id: c.id, nr: c.nr_ordine, text: String(c.text_cerinta || '').slice(0, 160) })) })
+    }
 
     // Observatiile deschise pe capitol: daca un om a cerut deja o modificare, generatorul
     // trebuie s-o stie, altfel prima lui iesire o ignora si omul o cere a doua oara.
@@ -296,7 +320,7 @@ Deno.serve(async (req: Request) => {
         ...antet,
         `CERINȚELE ATRIBUITE ${nParti > 1 ? `ACESTEI PĂRȚI (${felie.length} din ${cerinte.length})` : `CAPITOLULUI (${cerinte.length})`} — la fiecare trebuie să se poată bifa un răspuns în text:`,
         ...felie.map((c: any, i: number) =>
-          `${dela + i + 1}. [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}` +
+          `${dela + i + 1}. [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}]${c.confirmata_de ? '' : ' [NECONFIRMATĂ – nevalidată de om; răspunde fără afirmații ferme despre ce cere autoritatea]'} ${c.text_cerinta}` +
           (c.document_probant ? `\n   (document probant cerut: ${c.document_probant})` : '')),
         ...instrParte,
         (obs || []).length ? `\nMODIFICĂRI CERUTE DE COLEGI, de respectat:\n${(obs || []).map((o: any) => `- ${o.text}`).join('\n')}` : '',
@@ -364,15 +388,40 @@ Deno.serve(async (req: Request) => {
     const { data: scris, error: eUpd } = await supabase.from('ofertare_pt_capitole')
       .update({ continut: text, sursa: 'ai' }).eq('id', capId).eq('versiune', cap.versiune || 1)
       .select('id')
+    if (eUpd || !scris?.length) {
+      // urma nu descrie nicio versiune scrisă → o închidem, ca să nu rămână o observație despre un text inexistent
+      if (obsId) await supabase.from('ofertare_pt_observatii').update({ stare: 'rezolvata', raspuns: 'generarea nu s-a salvat (conflict de versiune / eroare la scriere)' }).eq('id', obsId)
+    }
     if (eUpd) return fail('textul nu s-a salvat: ' + eUpd.message)
     if (!scris?.length) return fail(
       'Capitolul a fost modificat de altcineva cat timp se genera — textul generat NU s-a scris, ca sa nu se piarda munca lui. Reincarca si porneste din nou daca mai e nevoie.',
       { conflict: true, versiune_asteptata: cap.versiune || 1 })
 
+    // INTERDICȚIA 5, urma persistentă — ÎNAINTE de scrierea textului: observație DESCHISĂ pe capitol cu actorul care a
+    // confirmat, id-urile cerințelor neconfirmate și amprenta (MD5) textelor trimise modelului. Dacă urma nu se poate scrie,
+    // textul NU se salvează (refuz) — flagul cu_neconfirmate nu înlocuiește urma. Costul modelului e deja plătit; e prețul
+    // corect față de un capitol „generat complet" fără urmă.
+    let obsId: number | null = null
+    if (neconfirmate.length) {
+      const amprente = await Promise.all(neconfirmate.map(async (c: any) => {
+        // SHA-256 COMPLET (Copilot 24.09: identificarea exactă a intrării folosite; Web Crypto n-are MD5).
+        const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(c.text_cerinta || '')))
+        return `#${c.id}:sha256:${Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('')}`
+      }))
+      const { data: obsRow, error: eObs } = await supabase.from('ofertare_pt_observatii').insert({
+        licitatie_id: cap.licitatie_id, capitol_id: capId, cerut_de: actorUid, stare: 'deschisa',
+        text: `⚠️ Generare v${(cap.versiune || 1) + 1} cu ${neconfirmate.length} cerințe NECONFIRMATE de om (fără E2), confirmată explicit de ${actorUid || 'service_role'}: ${amprente.join(', ')} (id:sha256 al textului trimis modelului). ` +
+              'Răspunsurile la ele nu sunt bază verificată: confirmă cerințele în registru (sau exceptează-le) și regenerează / corectează textul înainte de depunere.',
+      }).select('id').single()
+      if (eObs || !obsRow?.id) return fail('Urma pentru cerințele neconfirmate nu s-a putut scrie (' + (eObs?.message || '?') + ') — textul generat NU s-a salvat.', { fara_urma: true })
+      obsId = obsRow.id
+    }
+
     const goluri = (text.match(/\[DE COMPLETAT:/g) || []).length
     return new Response(JSON.stringify({
       ok: true, capitol_id: capId, caractere: text.length, cerinte: cerinte.length,
       goluri_de_completat: goluri,
+      neconfirmate: neconfirmate.length, urma_observatie_id: obsId,
       versiune_noua: (cap.versiune || 1) + 1,
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cache_citit: data.usage?.cache_read_input_tokens || 0,
