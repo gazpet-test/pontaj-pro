@@ -66,6 +66,17 @@ export function evalueazaPoarta(st) {
     filtru: 'neconfirmate',
   })
   r.push({
+    // P0 pas 2 (Copilot, 24.09.2026): documentația de atribuire COMPLETĂ și CITITĂ. Vine din v_ofertare_seap_completitudine
+    // (enumerare SEAP, fișiere nerecuperate, caiete/PT, esențiale necitite) — același view pe care îl verifică și triggerul de pe
+    // ofertare_pt_pachet, deci serverul refuză aprobarea chiar dacă UI-ul e ocolit. View lipsă / eroare = „nu putem verifica”
+    // = block (control indisponibil ≠ zero). „Enumerarea SEAP a eșuat” ≠ „nu lipsește nimic”; „încărcat” ≠ „citit”.
+    k:'documentatie', titlu:'Documentația de atribuire — completă și citită',
+    stare: st.documentatie_verificata !== true || st.documentatie_blocaj ? 'block' : 'ok',
+    detalii: st.documentatie_verificata !== true
+      ? 'nu putem verifica completitudinea documentației (controlul nu a răspuns)'
+      : (st.documentatie_blocaj || `toate documentele esențiale citite${st.documentatie_esentiale ? ` (${st.documentatie_esentiale})` : ''}`),
+  })
+  r.push({
     k:'capcane', titlu:'Capcane de respingere descoperite',
     stare: st.capcane_descoperite > 0 ? 'block' : 'ok',
     detalii: st.capcane > 0
