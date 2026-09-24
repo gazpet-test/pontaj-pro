@@ -1897,6 +1897,19 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
   const [calitateMat, setCalitateMat] = useState(autorizatie.calitate_material || '')
   const [domenii, setDomenii] = useState(autorizatie.domenii || [])
   const [observatii, setObservatii] = useState(autorizatie.observatii || '')
+  // 24.09 (audit Ofertare pct. 8): bifa „verificat pe scan" — Ofertare o folosește la acoperirea cerințelor;
+  // v_hr_autorizatii_status n-o expune, deci se citește direct din tabel la deschiderea modalului
+  const [verifScan, setVerifScan] = useState(null)   // null = se încarcă
+  useEffect(() => {
+    // fără embed: verificat_pe_scan_de n-are FK spre profiles; numele se ia separat
+    ;(async () => {
+      const { data, error } = await supabase.from('hr_autorizatii').select('verificat_pe_scan, verificat_pe_scan_la, verificat_pe_scan_de').eq('id', autorizatie.id).maybeSingle()
+      if (error) { showToast('Nu pot citi bifa „verificat pe scan": ' + error.message, 'error'); return }   // rămâne dezactivată
+      let de = null
+      if (data?.verificat_pe_scan_de) de = (await supabase.from('profiles').select('name').eq('id', data.verificat_pe_scan_de).maybeSingle()).data?.name
+      setVerifScan({ v: !!data?.verificat_pe_scan, la: data?.verificat_pe_scan_la, de, initial: !!data?.verificat_pe_scan })
+    })()
+  }, [autorizatie.id])
   const [saving, setSaving] = useState(false)
   // Viză RTS (intern „rsvti”) — confirmare la 6 luni pentru autorizațiile de sudori
   const [vizaBusy, setVizaBusy] = useState(false)
@@ -1955,6 +1968,12 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
       domenii: domenii.length > 0 ? domenii : null,
       observatii: observatii.trim() || null,
       modificat_la: new Date().toISOString(),
+    }
+    if (verifScan && verifScan.v !== verifScan.initial) {
+      const { data: u } = await supabase.auth.getUser()
+      Object.assign(payload, verifScan.v
+        ? { verificat_pe_scan: true, verificat_pe_scan_la: new Date().toISOString(), verificat_pe_scan_de: u?.user?.id || null }
+        : { verificat_pe_scan: false, verificat_pe_scan_la: null, verificat_pe_scan_de: null })
     }
     
     const { error } = await supabase.from('hr_autorizatii').update(payload).eq('id', autorizatie.id)
@@ -2116,6 +2135,12 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
         
         <Lbl>Observații</Lbl>
         <textarea value={observatii} onChange={e => setObservatii(e.target.value)} style={{...S.input, minHeight:60, resize:'vertical', marginBottom:14, fontFamily:'inherit'}}/>
+        <label style={{display:'flex', alignItems:'center', gap:8, fontSize:12, color:G.text, marginBottom:14, cursor: verifScan ? 'pointer' : 'wait'}}
+          title="Bifezi după ce ai comparat numărul, titularul și datele de mai sus cu scanul autorizației. Ofertarea folosește bifa ca dovadă verificată.">
+          <input type="checkbox" disabled={!verifScan} checked={!!verifScan?.v} onChange={e => setVerifScan(v => ({ ...v, v: e.target.checked }))} />
+          ✔ Verificat pe scan (număr, titular, date conforme cu documentul)
+          {verifScan?.initial && verifScan?.la && <span style={{color:G.muted, fontSize:11}}>· {verifScan.de || '?'}, {new Date(verifScan.la).toLocaleDateString('ro-RO')}</span>}
+        </label>
         
         <div style={{display:'flex', gap:10, justifyContent:'flex-end', paddingTop:12, borderTop:`1px solid ${G.border}`}}>
           <button onClick={onClose} style={S.btnS}>Anulează</button>
