@@ -35,3 +35,23 @@ export function ordoneazaPeTitular(candidati, titular) {
   const rang = (s) => { const i = ORDINE_SURSE_FIRMA.indexOf(s); return i < 0 ? 99 : i }
   return [...(candidati || [])].sort((a, b) => rang(a.sursa) - rang(b.sursa))
 }
+
+// Sursele din „Cine poate acoperi" care sunt ale unei PERSOANE (atestat, recomandare, diplomă, vechime).
+export const SURSE_PERSOANA = new Set(['autorizatie', 'recomandare', 'studii', 'vechime'])
+
+// Ținta efectivă: decizia omului (salvată pe cerință) bate deducerea automată din text.
+// `decizie` = rândul din ofertare_cerinte_titular sau null. 'nedeterminat' salvat de om rămâne null.
+export function titularEfectiv(text, decizie) {
+  if (decizie?.tip_titular) return decizie.tip_titular === 'nedeterminat' ? null : decizie.tip_titular
+  return titularVizat(text)
+}
+
+// Regula de rutare (Copilot, 24.09): când obligația e a operatorului economic, o autorizație personală
+// NU e substitut — „Alege" e blocat pe candidații-persoană. Omul schimbă ținta dacă deducerea e greșită.
+// → { ok: true } sau { ok: false, motiv }
+export function permiteAlegerea(cand, titular) {
+  if (titular === 'operator_economic' && SURSE_PERSOANA.has(cand?.sursa)) {
+    return { ok: false, motiv: 'Obligația e a operatorului economic: atestatul unei persoane nu ține loc de autorizarea firmei. Dacă ținta e greșită, schimb-o mai sus.' }
+  }
+  return { ok: true }
+}

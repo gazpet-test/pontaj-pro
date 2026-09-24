@@ -12,7 +12,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
-import { titularVizat, ordoneazaPeTitular } from './ofertareTitular.js'
+import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -2777,8 +2777,31 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
   const [cauta, setCauta] = useState('')
   const [scriu, setScriu] = useState(null)
   const cuvinte = useMemo(() => cuvinteCerinta(cerinta.text_cerinta), [cerinta.text_cerinta])
-  // TKT-2026-0275: cine trebuie să dețină dovada — firma sau o persoană — dedus din text, corectabil aici.
-  const [titular, setTitular] = useState(() => titularVizat(cerinta.text_cerinta))
+  // TKT-2026-0275: cine trebuie să dețină dovada — operatorul economic sau o persoană. Ținta e a CERINȚEI:
+  // dedusă din text (titularVizat), iar decizia omului se salvează în ofertare_cerinte_titular și bate deducerea.
+  const [decizieTitular, setDecizieTitular] = useState(null)   // rândul salvat sau null
+  const [titularErr, setTitularErr] = useState(null)
+  useEffect(() => {
+    let viu = true
+    supabase.from('ofertare_cerinte_titular').select('tip_titular, calitate, setat_la').eq('cerinta_id', cerinta.id).maybeSingle()
+      .then(({ data }) => { if (viu) setDecizieTitular(data || null) })
+    return () => { viu = false }
+  }, [cerinta.id])
+  const titular = titularEfectiv(cerinta.text_cerinta, decizieTitular)
+  const titularDedus = titularVizat(cerinta.text_cerinta)
+  const setTitular = async (k) => {
+    setTitularErr(null)
+    // Alegerea care coincide cu deducerea automată nu se salvează: ștergem decizia (înapoi la regulă).
+    const tip = k === titularDedus && !decizieTitular ? null : (k === null ? 'nedeterminat' : k)
+    const { data, error } = await supabase.rpc('fn_ofertare_cerinta_titular_seteaza', { p_cerinta_id: cerinta.id, p_tip: tip, p_calitate: null })
+    if (error) return setTitularErr('Nu s-a salvat ținta: ' + error.message)
+    setDecizieTitular(data?.tip_titular ? { tip_titular: data.tip_titular } : null)
+  }
+  const revinoLaRegula = async () => {
+    const { error } = await supabase.rpc('fn_ofertare_cerinta_titular_seteaza', { p_cerinta_id: cerinta.id, p_tip: null, p_calitate: null })
+    if (error) return setTitularErr('Nu s-a salvat: ' + error.message)
+    setDecizieTitular(null)
+  }
   const termenD = termen ? new Date(String(termen).slice(0, 10)) : null
   const q = normText(cauta)
   const { cuScor, restul } = useMemo(() => {
@@ -2818,9 +2841,14 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
         </div>
         {v && <span style={{ fontSize:10.5, fontWeight:700, color:v.c, whiteSpace:'nowrap' }}>{v.t}</span>}
         {cand.scor > 0 && <span style={{ fontSize:10.5, fontWeight:800, color:G.ofertare, border:`1px solid ${G.ofertare}66`, borderRadius:8, padding:'1px 6px' }} title="Număr de cuvinte-cheie comune (scor brut)">{cand.scor}</span>}
-        <button disabled={blocat || !!scriu} onClick={() => alege(cand)}
-          title={blocat ? 'Cerința are dovadă verificată pe scan — nu se suprascrie' : 'Scrie acoperirea manual pe această cerință'}
-          style={{ ...S.btnP, padding:'4px 10px', fontSize:11.5, opacity: (blocat || scriu) ? .5 : 1, cursor: blocat ? 'not-allowed' : 'pointer' }}>{scriu === cand.sursa + cand.id ? '…' : 'Alege'}</button>
+        {(() => {
+          const rut = permiteAlegerea(cand, titular)
+          return (
+            <button disabled={blocat || !!scriu || !rut.ok} onClick={() => alege(cand)}
+              title={blocat ? 'Cerința are dovadă verificată pe scan — nu se suprascrie' : !rut.ok ? rut.motiv : 'Scrie acoperirea manual pe această cerință'}
+              style={{ ...S.btnP, padding:'4px 10px', fontSize:11.5, opacity: (blocat || scriu || !rut.ok) ? .5 : 1, cursor: (blocat || !rut.ok) ? 'not-allowed' : 'pointer' }}>{scriu === cand.sursa + cand.id ? '…' : 'Alege'}</button>
+          )
+        })()}
       </div>
     )
   }
@@ -2838,7 +2866,13 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
                 <button key={String(k)} onClick={() => setTitular(k)}
                   style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color: titular === k ? G.ofertare : G.dim, borderColor: titular === k ? G.ofertare : G.border2, fontWeight: titular === k ? 800 : 500 }}>{l}</button>
               ))}
+              <span style={{ fontSize:10.5, color: decizieTitular ? G.ofertare : G.dim }}>
+                {decizieTitular ? '· decis de om, salvat pe cerință' : '· dedus din text'}
+              </span>
+              {decizieTitular && <button onClick={revinoLaRegula} title="Șterge decizia și revino la deducerea din text"
+                style={{ ...S.btnS, padding:'1px 6px', fontSize:10.5 }}>↺ după text</button>}
             </div>
+            {titularErr && <div style={{ fontSize:11, color:G.red, marginTop:3 }}>{titularErr}</div>}
             {titular === 'operator_economic' && <div style={{ fontSize:11, color:G.blue, marginTop:3 }}>Obligația e a operatorului economic: documentele firmei sunt primele, apoi partenerii (un asociat poate fi titularul). Atestatul unei persoane NU ține loc de autorizarea firmei — dacă firma n-o are, e gol explicit, nu se acoperă cu o persoană. Verifică titularul, domeniul și valabilitatea înainte să alegi.</div>}
             <div style={{ fontSize:10.5, color:G.dim, marginTop:2 }}>cuvinte-cheie: {cuvinte.length ? cuvinte.join(', ') : '— (niciunul; vezi „restul")'}{termenD ? ` · valabilitate față de depunere ${fmtZi(String(termen).slice(0, 10))}` : ' · fără termen de depunere: valabilitatea se judecă la azi'}</div>
             {blocat && <div style={{ fontSize:11.5, color:G.red, marginTop:4, fontWeight:700 }}>🔒 Cerința are dovadă verificată pe scan — panoul e doar de consultat, „Alege" nu scrie.</div>}
