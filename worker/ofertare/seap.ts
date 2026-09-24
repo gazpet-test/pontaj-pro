@@ -91,14 +91,22 @@ export function continutP7s(b: Uint8Array): Uint8Array {
 
 // -- Arhive ----------------------------------------------------------------------------------------------
 export const esteArhiva = (nume: string) => /\.(zip|rar|7z)$/i.test(nume)
-/** „X.part03.rar" → { baza: "X", nr: 3 } — volumele aceleiași arhive se despachetează împreună. */
+/** „X.part03.rar" / „X.part03-semnat.rar" (Huedin, 24.09) → { baza: "X", nr: 3 } — volumele aceleiași arhive
+ *  se despachetează împreună. Pe disc le scriem cu numele CANONIC (numeVolum), altfel 7z nu găsește volumul următor. */
 export function volumRar(nume: string): { baza: string; nr: number } | null {
-  const m = nume.match(/^(.*)\.part(\d+)\.rar$/i)
+  const m = nume.match(/^(.*)\.part(\d+)[^./\\]*\.rar$/i)
   return m ? { baza: m[1], nr: Number(m[2]) } : null
 }
+export const numeVolum = (v: { baza: string; nr: number }, cifre: number) => `${v.baza}.part${String(v.nr).padStart(cifre, '0')}.rar`
 
+// 7z rulează FĂRĂ mediul workerului (fără SUPABASE_SERVICE_ROLE_KEY / ANTHROPIC_API_KEY — review Copilot 24.09),
+// cu argumente separate (fără shell) și cu limită de timp. Izolarea completă într-un container separat, fără rețea,
+// e pasul următor (vezi docs); până atunci conținutul arhivei nu vede nicio cheie.
+const TIMP_7Z_MS = 20 * 60_000
 async function ruleaza(cmd: string, args: string[]) {
-  const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped' }).output()
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), TIMP_7Z_MS)
+  const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped', clearEnv: true, env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' }, signal: ac.signal }).output()
+    .finally(() => clearTimeout(t))
   const dec = new TextDecoder()
   return { code: p.code, out: dec.decode(p.stdout), err: dec.decode(p.stderr) }
 }
@@ -190,13 +198,14 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
 // -- O licitație ------------------------------------------------------------------------------------
 type Raport = { seap: number; deja: number; adusi: number; fisiere_urcate: number; erori: string[]; sarite: number }
 
-async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'ok' | 'eroare' | 'sarit'; motiv?: string; marime?: number; sha?: string; extrase?: number }) {
+async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'ok' | 'eroare' | 'sarit'; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
   const cheie = cheieNume(nume)
   const { data: vechi } = await supa.from('ofertare_seap_fisiere').select('id, incercari').eq('licitatie_id', licId).eq('cheie', cheie).maybeSingle()
   const rand = {
     licitatie_id: licId, nume_seap: nume, cheie, stare: rez.stare, motiv: rez.motiv ?? null, marime: rez.marime ?? null,
     sha256: rez.sha ?? null, fisiere_extrase: rez.extrase ?? null, procesat_la: new Date().toISOString(),
-    incercari: rez.stare === 'eroare' ? (vechi?.incercari ?? 0) + 1 : (vechi?.incercari ?? 1),
+    // respinsă de controalele de securitate → nu se reîncearcă automat (rămâne vizibilă cu motivul, nu „ignorată")
+    incercari: rez.faraReincercare ? MAX_INCERCARI : rez.stare === 'eroare' ? (vechi?.incercari ?? 0) + 1 : (vechi?.incercari ?? 1),
   }
   const { error } = vechi
     ? await supa.from('ofertare_seap_fisiere').update(rand).eq('id', vechi.id)
@@ -249,14 +258,18 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       await Deno.mkdir(`${dir}/in`, { recursive: true })
       const locale: { doc: DocSeap; nume: string; cale: string; marime: number; sha: string }[] = []
       let esec: string | null = null
-      for (const doc of grup.sort((a, b) => a.nume.localeCompare(b.nume))) {
+      // cifrele numărului de volum din SEAP (part01 → 2) — numele canonic trebuie să le păstreze
+      const cifre = Math.max(1, ...grup.map(d => d.nume.match(/\.part(\d+)/i)?.[1].length ?? 1))
+      grup.sort((a, b) => (volumRar(a.nume.replace(/\.p7s$/i, ''))?.nr ?? 0) - (volumRar(b.nume.replace(/\.p7s$/i, ''))?.nr ?? 0))
+      for (const doc of grup) {
         try {
           const brut = `${dir}/in/descarcat.bin`
           await descarca(doc, cookie, brut)
           let buf = await Deno.readFile(brut)
           let nume = doc.nume
           if (/\.p7s$/i.test(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7s$/i, '') }
-          const cale = `${dir}/in/${nume.replace(/[\\/]/g, '_')}`
+          const vol = cheieGrup.startsWith('rar:') ? volumRar(nume) : null
+          const cale = `${dir}/in/${(vol ? numeVolum(vol, cifre) : nume).replace(/[\\/]/g, '_')}`
           await Deno.writeFile(cale, buf)
           await Deno.remove(brut)
           locale.push({ doc, nume, cale, marime: buf.length, sha: await sha256(buf) })
@@ -275,7 +288,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         const v = lst.code === 0 ? verificaListare(lst.out) : { ok: false as const, motiv: `7z l: ${(lst.err || lst.out).slice(-300)}` }
         if (!v.ok) {
           raport.erori.push(`${eticheta}: ${v.motiv}`)
-          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv: v.motiv, marime: l.marime, sha: l.sha })
+          const deSecuritate = lst.code === 0   // listarea a mers, dar conținutul a fost respins de controale
+          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv: (deSecuritate ? 'RESPINS de controalele de siguranță: ' : '') + v.motiv, marime: l.marime, sha: l.sha, faraReincercare: deSecuritate })
           continue
         }
         stare(`despachetez ${eticheta} (${v.intrari} fișiere, ${Math.round(v.total / 2 ** 20)} MB)`)

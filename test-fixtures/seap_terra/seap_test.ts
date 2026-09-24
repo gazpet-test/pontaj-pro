@@ -1,6 +1,6 @@
 // Teste locale pentru worker/ofertare/seap.ts (fără rețea, fără Supabase): p7s, volume RAR, verificarea arhivelor.
 // Rulare: bash test-fixtures/seap_terra/run.sh (are nevoie de openssl + 7z + rar opțional)
-import { continutP7s, volumRar, verificaListare, cheieNume, esteArhiva } from '../../worker/ofertare/seap.ts'
+import { continutP7s, volumRar, numeVolum, verificaListare, cheieNume, esteArhiva } from '../../worker/ofertare/seap.ts'
 const dir = Deno.args[0]
 let ok = 0, fail = 0
 const t = (nume: string, cond: boolean, info = '') => { if (cond) { ok++; console.log('PASS', nume) } else { fail++; console.log('FAIL', nume, info) } }
@@ -19,6 +19,8 @@ t('05 fișier care nu e p7s → eroare', arunca)
 
 // 6-8. nume
 t('06 volum RAR recunoscut', JSON.stringify(volumRar('PT Dezvoltare SNT Botosani.part03.rar')) === JSON.stringify({ baza: 'PT Dezvoltare SNT Botosani', nr: 3 }))
+const vs = volumRar('Documentatie tehnica HUEDIN Lot 1.part02-semnat.rar')
+t('06b volum cu sufix „-semnat" (Huedin) → aceeași bază, nume canonic pentru 7z', vs?.nr === 2 && numeVolum(vs!, 2) === 'Documentatie tehnica HUEDIN Lot 1.part02.rar', JSON.stringify(vs))
 t('07 RAR simplu nu e volum', volumRar('PT.rar') === null && esteArhiva('PT.rar') && esteArhiva('x.ZIP') && !esteArhiva('Formular.docx'))
 t('08 cheieNume ca în import (fără .p7s, spații, virgule)', cheieNume('PT Dezvoltare, SNT (1).zip.p7s') === 'ptdezvoltaresnt1.zip')
 
