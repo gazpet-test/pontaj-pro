@@ -39,6 +39,7 @@ const CATEGORII = {
   hr:               { label:'HR',                 icon:'👥', color:G.pink },
   sudura_otel:      { label:'Sudură Oțel',        icon:'🔥', color:G.red  },
   sudura_pehd:      { label:'Sudură PEHD',        icon:'🔵', color:G.cyan || G.blue },
+  etalonare:        { label:'Etalonări aparate',  icon:'📏', color:G.cyan || G.blue },  // BD o acceptă deja (5 înregistrări importate); lipsea din UI
   altele:           { label:'Altele',             icon:'📄', color:G.dim },
 }
 
