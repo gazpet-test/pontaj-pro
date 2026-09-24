@@ -88,6 +88,15 @@ SET ROLE authenticated;
 DO $$ DECLARE j jsonb := public.fn_ofertare_subiecte_aplica(900, true); BEGIN
   PERFORM pg_temp.t('23 versiunea nouă moștenește mutarea omului', pg_temp.subiect(38) = 'experienta_similara/om' AND (j->'actiuni'->>'mostenit')::int = 1, j::text);
 END $$;
+SELECT pg_temp.t('23b moștenirea e marcată (mostenit_de_la = cerința veche)',
+  (SELECT s.mostenit_de_la FROM public.ofertare_cerinte_subiect s JOIN public.ofertare_cerinte c ON c.id = s.cerinta_id WHERE c.nr_ordine = 38)
+  = (SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 37));
+DO $$ DECLARE j jsonb := public.fn_ofertare_subiecte_aplica(900, false); BEGIN
+  PERFORM pg_temp.t('23c moștenita intră la „de verificat"', (j->>'de_verificat')::int >= 1, j::text);
+END $$;
+SELECT public.fn_ofertare_subiect_muta((SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 38), 'autorizare_anre');
+SELECT pg_temp.t('23d mutarea pe textul nou șterge marcajul de moștenire',
+  (SELECT s.mostenit_de_la IS NULL AND s.sursa = 'om' FROM public.ofertare_cerinte_subiect s JOIN public.ofertare_cerinte c ON c.id = s.cerinta_id WHERE c.nr_ordine = 38));
 DO $$ BEGIN PERFORM public.fn_ofertare_subiect_muta((SELECT id FROM public.ofertare_cerinte WHERE nr_ordine = 37), 'ssm'); PERFORM pg_temp.t('24 cerința înlocuită nu se mai mută', false);
 EXCEPTION WHEN raise_exception THEN PERFORM pg_temp.t('24 cerința înlocuită nu se mai mută', true); END $$;
 RESET ROLE;

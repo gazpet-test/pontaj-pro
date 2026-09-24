@@ -7,7 +7,7 @@ export const NECLASIFICAT = { cheie: 'neclasificat', eticheta: '❔ Neclasificat
 // cerinte: rândurile deja filtrate (registru/tip/stare) — contoarele se fac pe TOT setul filtrat.
 // subiecte: { [cerinta_id]: { subiect, sursa, alternative } }
 // reguli:   [{ cheie, eticheta, ordine }]
-// → [{ cheie, eticheta, total, confirmate, deVerificat, randuri: [{ c, numar, info }] }]
+// → [{ cheie, eticheta, total, confirmate, deVerificat, siAici, randuri: [{ c, numar, info }] }]
 export function grupeazaPeSubiect(cerinte, subiecte, reguli) {
   const dupaCheie = new Map((reguli || []).map(r => [r.cheie, r]))
   const grupuri = new Map()
@@ -16,13 +16,19 @@ export function grupeazaPeSubiect(cerinte, subiecte, reguli) {
     const cheie = info && dupaCheie.has(info.subiect) ? info.subiect : 'neclasificat'
     if (!grupuri.has(cheie)) {
       const r = cheie === 'neclasificat' ? NECLASIFICAT : dupaCheie.get(cheie)
-      grupuri.set(cheie, { cheie, eticheta: r.eticheta, ordine: r.ordine, total: 0, confirmate: 0, deVerificat: 0, randuri: [] })
+      grupuri.set(cheie, { cheie, eticheta: r.eticheta, ordine: r.ordine, total: 0, confirmate: 0, deVerificat: 0, siAici: 0, randuri: [] })
     }
     const g = grupuri.get(cheie)
     g.total++
     if (c.confirmata_de) g.confirmate++
     if (esteDeVerificat(info)) g.deVerificat++
     g.randuri.push({ c, info })
+  }
+  // Rândurile transversale („managerul întocmește graficul") stau o singură dată, în grupul principal;
+  // în grupurile alternative doar se numără, ca să nu se dubleze contoarele.
+  for (const c of cerinte || []) {
+    const alt = subiecte?.[c.id]?.alternative
+    if (Array.isArray(alt)) alt.forEach(k => { if (grupuri.has(k)) grupuri.get(k).siAici++ })
   }
   const lista = [...grupuri.values()].sort((a, b) => a.ordine - b.ordine)
   lista.forEach((g, gi) => {
@@ -32,7 +38,10 @@ export function grupeazaPeSubiect(cerinte, subiecte, reguli) {
   return lista
 }
 
-// Regula a găsit și alte subiecte, iar omul n-a decis încă → merită o privire.
+// Merită o privire: regula a găsit și alte subiecte și omul n-a decis încă, SAU subiectul a fost
+// moștenit de pe versiunea veche a cerinței (decizia omului nu s-a luat pe textul nou — Copilot, 24.09).
 export function esteDeVerificat(info) {
-  return !!info && info.sursa === 'auto' && Array.isArray(info.alternative) && info.alternative.length > 0
+  if (!info) return false
+  if (info.mostenit_de_la) return true
+  return info.sursa === 'auto' && Array.isArray(info.alternative) && info.alternative.length > 0
 }

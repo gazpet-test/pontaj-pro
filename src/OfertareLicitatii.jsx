@@ -12,6 +12,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
+import { titularVizat, ordoneazaPeTitular } from './ofertareTitular.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -1572,7 +1573,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
     if (eAp) setWarn('Gruparea pe subiecte nu a rulat: ' + eAp.message)
     const [{ data: rg }, { data: sb, error: eSb }] = await Promise.all([
       supabase.from('ofertare_subiecte_regula').select('versiune, cheie, eticheta, ordine').order('versiune', { ascending: false }).order('ordine'),
-      supabase.from('ofertare_cerinte_subiect').select('cerinta_id, subiect, sursa, alternative').eq('licitatie_id', licitatie.id).limit(10000),
+      supabase.from('ofertare_cerinte_subiect').select('cerinta_id, subiect, sursa, alternative, mostenit_de_la').eq('licitatie_id', licitatie.id).limit(10000),
     ])
     const vMax = (rg || [])[0]?.versiune
     setReguli((rg || []).filter(r => r.versiune === vMax))
@@ -1587,7 +1588,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
   const mutaSubiect = async (c, cheie) => {
     const { data, error } = await supabase.rpc('fn_ofertare_subiect_muta', { p_cerinta_id: c.id, p_subiect: cheie === '__auto' ? null : cheie })
     if (error) return setWarn('Nu s-a mutat: ' + error.message)
-    setSubiecte(m => ({ ...m, [c.id]: { cerinta_id: c.id, subiect: data.subiect, sursa: data.sursa, alternative: data.sursa === 'om' ? [] : (m[c.id]?.alternative || []) } }))
+    setSubiecte(m => ({ ...m, [c.id]: { cerinta_id: c.id, subiect: data.subiect, sursa: data.sursa, mostenit_de_la: null, alternative: data.sursa === 'om' ? [] : (m[c.id]?.alternative || []) } }))
     if (data.sursa === 'auto') loadSubiecte()   // alternativele se recalculează în BD
   }
   const load = async () => {
@@ -1844,7 +1845,8 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
         {!inEdit && <DoveziRand c={c} lista={dovezi[c.id] || []} activ={doveziActiv} licitatieId={licitatie.id} onAdaugat={loadDovezi} />}
         {!inEdit && grupat && (
           <div style={{ fontSize:11, color:G.dim, marginTop:3, display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
-            <span title={info?.sursa === 'om' ? 'Mutată de om — regula automată nu o mai schimbă' : 'Pusă de regula automată'}>🗂️ {info?.sursa === 'om' ? 'mutată manual' : 'automat'}:</span>
+            <span title={info?.mostenit_de_la ? 'Subiectul a fost ales de om pe versiunea veche a cerinței; textul s-a schimbat — confirmă sau mută' : info?.sursa === 'om' ? 'Mutată de om — regula automată nu o mai schimbă' : 'Pusă de regula automată'}
+            style={{ color: info?.mostenit_de_la ? G.orange : undefined }}>🗂️ {info?.mostenit_de_la ? 'moștenită — de reverificat' : info?.sursa === 'om' ? 'mutată manual' : 'automat'}:</span>
             <select value={info?.subiect && etichetaSubiect[info.subiect] ? info.subiect : 'neclasificat'} onChange={e => mutaSubiect(c, e.target.value)}
               title="Mută cerința în alt subiect. „↺ regula automată” anulează mutarea."
               style={{ ...S.input, width:'auto', padding:'1px 5px', fontSize:10.5 }}>
@@ -1852,6 +1854,10 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
               <option value="neclasificat">❔ Neclasificată</option>
               {info?.sursa === 'om' && <option value="__auto">↺ regula automată</option>}
             </select>
+            {info?.mostenit_de_la && (
+              <button onClick={() => mutaSubiect(c, info.subiect)} title="Subiectul e bun și pentru textul nou — îl confirm"
+                style={{ ...S.btnS, padding:'0 6px', fontSize:10.5, color:G.green, borderColor:G.green + '66' }}>✓ păstrez</button>
+            )}
             {esteDeVerificat(info) && (
               <span style={{ color:G.orange }} title="Regula a găsit și aceste subiecte — dacă alegerea e greșită, mut-o">
                 se potrivește și cu: {info.alternative.map(a => etichetaSubiect[a] || a).join(', ')}
@@ -1979,6 +1985,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
                       <span>{g.eticheta}</span>
                       <span style={{ fontSize:11.5, color:G.muted, fontWeight:700 }}>{g.total} {g.total === 1 ? 'cerință' : 'cerințe'} · {g.confirmate} confirmate</span>
                       {g.deVerificat > 0 && <span style={{ fontSize:11, color:G.orange, fontWeight:700 }}>{g.deVerificat} de verificat</span>}
+                      {g.siAici > 0 && <span style={{ fontSize:11, color:G.dim, fontWeight:600 }} title="Cerințe puse în alt grup (subiectul lor principal), dar care se referă și la acesta — le vezi cu „doar de verificat”">+{g.siAici} din alte grupuri se referă și la asta</span>}
                     </div>
                     {g.randuri.map(r => randRegistru(r.c, r.numar, r.info))}
                   </div>
@@ -2770,6 +2777,8 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
   const [cauta, setCauta] = useState('')
   const [scriu, setScriu] = useState(null)
   const cuvinte = useMemo(() => cuvinteCerinta(cerinta.text_cerinta), [cerinta.text_cerinta])
+  // TKT-2026-0275: cine trebuie să dețină dovada — firma sau o persoană — dedus din text, corectabil aici.
+  const [titular, setTitular] = useState(() => titularVizat(cerinta.text_cerinta))
   const termenD = termen ? new Date(String(termen).slice(0, 10)) : null
   const q = normText(cauta)
   const { cuScor, restul } = useMemo(() => {
@@ -2781,8 +2790,9 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
     })
     cuScor.sort((x, y) => y.scor - x.scor || x.titlu.localeCompare(y.titlu))
     restul.sort((x, y) => x.sursa.localeCompare(y.sursa) || x.titlu.localeCompare(y.titlu))
-    return { cuScor, restul }
-  }, [catalog, cuvinte, q])
+    // Cerință a FIRMEI (EDSB, ISO…): documentele firmei urcă primele, oricât scor lexical ar avea o persoană.
+    return { cuScor: ordoneazaPeTitular(cuScor, titular), restul: ordoneazaPeTitular(restul, titular) }
+  }, [catalog, cuvinte, q, titular])
   const blocat = !!acoperire?.verificat_pe_scan
   // marcaj valabilitate față de termenul de depunere (doar surse cu expirare)
   const valab = (cand) => {
@@ -2822,6 +2832,14 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
             <div style={{ fontSize:14, fontWeight:800 }}>🔍 Cine poate acoperi cerința #{cerinta.nr_ordine}</div>
             <div style={{ fontSize:12, color:G.text, marginTop:4 }}>{cerinta.text_cerinta}</div>
             <div style={{ fontSize:11, color:G.orange, marginTop:4, fontWeight:700 }}>⚠️ Sugestii brute (potrivire pe cuvinte, fără AI), nu verdict — verifică documentul înainte să alegi.</div>
+            <div style={{ fontSize:11.5, marginTop:5, display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+              <span style={{ color:G.muted }}>Cine trebuie să dețină dovada:</span>
+              {[['operator_economic', '🏢 operatorul economic (firma / asociatul)'], ['persoana_fizica', '👤 o persoană nominalizată'], [null, 'nedeterminat']].map(([k, l]) => (
+                <button key={String(k)} onClick={() => setTitular(k)}
+                  style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color: titular === k ? G.ofertare : G.dim, borderColor: titular === k ? G.ofertare : G.border2, fontWeight: titular === k ? 800 : 500 }}>{l}</button>
+              ))}
+            </div>
+            {titular === 'operator_economic' && <div style={{ fontSize:11, color:G.blue, marginTop:3 }}>Obligația e a operatorului economic: documentele firmei sunt primele, apoi partenerii (un asociat poate fi titularul). Atestatul unei persoane NU ține loc de autorizarea firmei — dacă firma n-o are, e gol explicit, nu se acoperă cu o persoană. Verifică titularul, domeniul și valabilitatea înainte să alegi.</div>}
             <div style={{ fontSize:10.5, color:G.dim, marginTop:2 }}>cuvinte-cheie: {cuvinte.length ? cuvinte.join(', ') : '— (niciunul; vezi „restul")'}{termenD ? ` · valabilitate față de depunere ${fmtZi(String(termen).slice(0, 10))}` : ' · fără termen de depunere: valabilitatea se judecă la azi'}</div>
             {blocat && <div style={{ fontSize:11.5, color:G.red, marginTop:4, fontWeight:700 }}>🔒 Cerința are dovadă verificată pe scan — panoul e doar de consultat, „Alege" nu scrie.</div>}
             {acoperire && !blocat && <div style={{ fontSize:11, color:G.muted, marginTop:4 }}>Acoperirea actuală ({ACOPERIRE_STATUS[acoperire.status]?.label || acoperire.status}) se înlocuiește la „Alege".</div>}

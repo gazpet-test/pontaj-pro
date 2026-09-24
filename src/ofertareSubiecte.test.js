@@ -42,6 +42,11 @@ describe('grupeazaPeSubiect', () => {
     expect(g[2].randuri.map(r => r.c.id).sort()).toEqual([5, 6])
     expect(g.reduce((n, x) => n + x.total, 0)).toBe(cer.length)
   })
+  it('rândurile transversale se numără în grupul alternativ, fără dublare', () => {
+    expect(g.find(x => x.cheie === 'personal_manager_proiect').total).toBe(1)
+    const gg = grupeazaPeSubiect([...cer, { id: 7, nr_ordine: 600 }], { ...sub, 7: { subiect: 'grafic_executie', sursa: 'auto', alternative: [] } }, reguli)
+    expect(gg.find(x => x.cheie === 'grafic_executie')).toMatchObject({ total: 1, siAici: 1 })
+  })
   it('listă goală', () => {
     expect(grupeazaPeSubiect([], {}, reguli)).toEqual([])
     expect(grupeazaPeSubiect(null, null, null)).toEqual([])
@@ -54,5 +59,8 @@ describe('esteDeVerificat', () => {
     expect(esteDeVerificat({ sursa: 'om', alternative: ['x'] })).toBe(false)
     expect(esteDeVerificat({ sursa: 'auto', alternative: [] })).toBe(false)
     expect(esteDeVerificat(null)).toBe(false)
+  })
+  it('moștenită de pe versiunea veche → de verificat, chiar dacă e a omului', () => {
+    expect(esteDeVerificat({ sursa: 'om', alternative: [], mostenit_de_la: 37 })).toBe(true)
   })
 })

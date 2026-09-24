@@ -8,4 +8,6 @@ $PSQL "createdb z1_subiect_test"
 $PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/test-fixtures/cerinte_subiect/stub_schema.sql"
 $PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z1_cerinte_subiect.sql"
 $PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z1_cerinte_subiect.sql"   # idempotență
+$PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z1b_subiect_mostenit.sql"
+$PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z1b_subiect_mostenit.sql"   # idempotență
 $PSQL "psql -d z1_subiect_test -f $PWD/test-fixtures/cerinte_subiect/test_local.sql" | grep -E 'PASS|FAIL|TOTAL|ERROR'
