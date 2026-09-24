@@ -99,18 +99,47 @@ export function volumRar(nume: string): { baza: string; nr: number } | null {
 }
 export const numeVolum = (v: { baza: string; nr: number }, cifre: number) => `${v.baza}.part${String(v.nr).padStart(cifre, '0')}.rar`
 
-// 7z rulează FĂRĂ mediul workerului (fără SUPABASE_SERVICE_ROLE_KEY / ANTHROPIC_API_KEY — review Copilot 24.09),
-// cu argumente separate (fără shell) și cu limită de timp. Izolarea completă într-un container separat, fără rețea,
-// e pasul următor (vezi docs); până atunci conținutul arhivei nu vede nicio cheie.
-const TIMP_7Z_MS = 20 * 60_000
-// binarul oficial 7-Zip (7zz) — cel din Alpine nu are RAR; local (teste) se poate folosi 7z prin SEVENZIP=7z
-const SEVENZIP = Deno.env.get('SEVENZIP') ?? '7zz'
-async function ruleaza(cmd: string, args: string[]) {
-  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), TIMP_7Z_MS)
-  const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped', clearEnv: true, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' }, signal: ac.signal }).output()
-    .finally(() => clearTimeout(t))
-  const dec = new TextDecoder()
-  return { code: p.code, out: dec.decode(p.stdout), err: dec.decode(p.stderr) }
+// 7-Zip NU mai rulează în worker (24.09.2026, P0 Copilot): arhivele merg la containerul izolat seap-extractor
+// (fără rețea, chei, .env sau alte foldere NAS; non-root, FS read-only). Comunicăm prin folderul comun LUCRU,
+// cu protocolul din extractor/extractor.sh: workerul cere listarea, O VERIFICĂ el (verificaListare), apoi cere
+// extragerea; extractorul impune limitele efective în timpul extragerii. Extractor oprit = eroare, nu ocolire.
+const LUCRU = Deno.env.get('SEAP_LUCRU') ?? '/seap-work'
+const TIMP_LISTARE_MS = 3 * 60_000, TIMP_EXTRAGERE_MS = 25 * 60_000
+const scrieAtomic = async (cale: string, text: string) => { await Deno.writeTextFile(`${cale}.tmp`, text); await Deno.rename(`${cale}.tmp`, cale) }
+async function asteapta(cale: string, ms: number, pasMs = 1000): Promise<boolean> {
+  const pana = Date.now() + ms
+  while (Date.now() < pana) {
+    try { await Deno.stat(cale); return true } catch { /* încă nu */ }
+    await new Promise(r => setTimeout(r, pasMs))
+  }
+  return false
+}
+/** Listarea arhivei, făcută de extractor. `dir` = folderul jobului (conține in/<prima>). */
+export async function listeazaIzolat(dir: string, prima: string, ms = TIMP_LISTARE_MS): Promise<{ code: number; out: string; err: string }> {
+  await Deno.writeTextFile(`${dir}/prima`, prima)
+  await scrieAtomic(`${dir}/cerere`, 'l')
+  if (!await asteapta(`${dir}/listare.gata`, ms)) return { code: -1, out: '', err: 'extractorul izolat (gazpet-seap-extractor) nu a răspuns la listare — e pornit?' }
+  const code = Number((await Deno.readTextFile(`${dir}/listare.cod`)).trim())
+  const out = await Deno.readTextFile(`${dir}/listare.txt`)
+  const err = await Deno.readTextFile(`${dir}/listare.err`).catch(() => '')
+  return { code, out, err }
+}
+/** Extragerea în <dir>/out, făcută de extractor DUPĂ ce listarea a fost aprobată. Cod ≠ 0 → motivul extractorului. */
+export async function extrageIzolat(dir: string, ms = TIMP_EXTRAGERE_MS): Promise<{ code: number; motiv: string }> {
+  await scrieAtomic(`${dir}/cerere`, 'x')
+  if (!await asteapta(`${dir}/rezultat`, ms)) return { code: -1, motiv: 'extractorul izolat nu a terminat în timp util' }
+  const [cod, ...rest] = (await Deno.readTextFile(`${dir}/rezultat`)).split('\n')
+  return { code: Number(cod), motiv: rest.join(' ').trim() }
+}
+
+/** Setul de volume RAR trebuie să fie complet (1..N, fără goluri), altfel nu-l trimitem la extragere. */
+export function verificaVolume(nr: number[]): string | null {
+  const s = [...new Set(nr)].sort((a, b) => a - b)
+  if (!s.length) return 'niciun volum'
+  if (s.length !== nr.length) return 'volum duplicat în SEAP'
+  const lipsa = []
+  for (let i = 1; i <= s[s.length - 1]; i++) if (!s.includes(i)) lipsa.push(i)
+  return lipsa.length ? `set RAR incomplet: lipsește volumul ${lipsa.join(', ')} din ${s[s.length - 1]}` : null
 }
 
 /** Verificare ÎNAINTE de extragere: căi sigure, număr de intrări, dimensiune totală (anti zip-bomb). */
@@ -251,13 +280,16 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     grupuri.set(k, toate)
   }
 
-  const tmp = await Deno.makeTempDir({ prefix: `seap_${licId}_` })
+  await Deno.mkdir(LUCRU, { recursive: true })
+  const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_${licId}_` })
+  await Deno.chmod(tmp, 0o755)
   try {
     for (const [cheieGrup, grup] of grupuri) {
       const eticheta = grup.length > 1 ? `${grup[0].nume.replace(/\.part\d+\.rar(\.p7s)?$/i, '')} (${grup.length} volume)` : grup[0].nume
       stare(`aduc ${eticheta}`)
       const dir = `${tmp}/${raport.adusi++}`
       await Deno.mkdir(`${dir}/in`, { recursive: true })
+      await Deno.chmod(dir, 0o777)                     // extractorul (uid 10001) scrie listarea și out/ aici
       const locale: { doc: DocSeap; nume: string; cale: string; marime: number; sha: string }[] = []
       let esec: string | null = null
       // cifrele numărului de volum din SEAP (part01 → 2) — numele canonic trebuie să le păstreze
@@ -277,6 +309,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           locale.push({ doc, nume, cale, marime: buf.length, sha: await sha256(buf) })
         } catch (e) { esec = `${doc.nume}: ${(e as Error)?.message ?? e}`; break }
       }
+      if (!esec && cheieGrup.startsWith('rar:')) esec = verificaVolume(locale.map(l => volumRar(l.nume)?.nr ?? 0))
       if (esec) {
         raport.erori.push(esec)
         for (const doc of grup) await inregistreaza(supa, licId, doc.nume, { stare: 'eroare', motiv: esec })
@@ -285,8 +318,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 
       if (cheieGrup.startsWith('rar:') || (locale.length === 1 && esteArhiva(locale[0].nume))) {
         // ARHIVĂ: listăm, verificăm, extragem, urcăm fiecare fișier
-        const prima = locale[0].cale
-        const lst = await ruleaza(SEVENZIP, ['l', '-slt', '-ba', prima])
+        const prima = locale[0].cale.split('/').pop()!
+        const lst = await listeazaIzolat(dir, prima)
         const v = lst.code === 0 ? verificaListare(lst.out) : { ok: false as const, motiv: `7z l: ${(lst.err || lst.out).slice(-300)}` }
         if (!v.ok) {
           raport.erori.push(`${eticheta}: ${v.motiv}`)
@@ -296,11 +329,12 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         }
         stare(`despachetez ${eticheta} (${v.intrari} fișiere, ${Math.round(v.total / 2 ** 20)} MB)`)
         const out = `${dir}/out`
-        const x = await ruleaza(SEVENZIP, ['x', '-y', '-bd', `-o${out}`, prima])
+        const x = await extrageIzolat(dir)
         if (x.code !== 0) {
-          const motiv = `7z x cod ${x.code}: ${(x.err || x.out).slice(-300)}`
+          const motiv = `extragere izolată cod ${x.code}: ${x.motiv.slice(0, 300)}`
           raport.erori.push(`${eticheta}: ${motiv}`)
-          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv, marime: l.marime, sha: l.sha })
+          const limita = /^(LIMITĂ|RESPINS)/.test(x.motiv)   // depășire / conținut periculos → nu se reîncearcă singur
+          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv, marime: l.marime, sha: l.sha, faraReincercare: limita })
           continue
         }
         for (const l of locale) await Deno.remove(l.cale)          // eliberăm discul înainte de urcare
@@ -343,7 +377,13 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 
 // -- Bucla: cereri + reconciliere orară ---------------------------------------------------------------
 let ultimaReconciliere = 0
+let lucruCuratat = false
 export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (s: string) => void) {
+  // joburi rămase dintr-o oprire bruscă (restart în mijlocul extragerii) — nu le lăsăm să ocupe discul
+  if (!lucruCuratat) {
+    lucruCuratat = true
+    try { for await (const e of Deno.readDir(LUCRU)) if (e.name.startsWith('seap_')) await Deno.remove(`${LUCRU}/${e.name}`, { recursive: true }).catch(() => {}) } catch { /* nu există încă */ }
+  }
   // reconcilierea: licitațiile GO cu termen în viitor intră în coadă o dată pe oră (doar dacă n-au cerere mai nouă)
   if (Date.now() - ultimaReconciliere >= RECONCILIERE_MS) {
     ultimaReconciliere = Date.now()
