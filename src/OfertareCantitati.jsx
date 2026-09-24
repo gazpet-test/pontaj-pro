@@ -47,7 +47,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     const [{ data: c }, { count: nq }] = await Promise.all([
       // .limit explicit: fără el PostgREST taie tăcut la 1000 de rânduri, iar Domnești
       // are 1069 de poziții — 69 dispăreau din ecran fără niciun semn.
-      supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('id').limit(20000),
+      supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('ordine', { nullsFirst: false }).order('id').limit(20000),
       supabase.from('ofertare_clarificari').select('id', { count: 'exact', head: true }).eq('licitatie_id', licId),
     ])
     setCant(c || []); setNrClar(nq ?? 0)
@@ -83,6 +83,26 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     await load()
   }
 
+  // 🤖 extragerea din documentație (ofertare-cantitati-extrage): funcția lucrează cu buget de timp
+  // și întoarce `continua` + `urmator` — o reluăm până termină. Costă (model AI), deci cu confirmare.
+  const [extrag, setExtrag] = useState(null)
+  const extrage = async () => {
+    if (!licId || extrag) return
+    if (!window.confirm('Extrag cantitățile din documentația licitației cu AI (cost de ordinul centimilor)? Rândurile existente nu se șterg.')) return
+    let deLa = 0, pas = 0, scrise = 0
+    try {
+      while (pas < 40) {
+        pas++; setExtrag(`felia ${deLa + 1}…`)
+        const { data, error } = await supabase.functions.invoke('ofertare-cantitati-extrage', { body: { licitatie_id: licId, de_la: deLa } })
+        if (error || data?.error) { showToast('Extragere: ' + (data?.error || error.message), 'err'); break }
+        scrise += data?.scrise || 0
+        if (!data?.continua) break
+        deLa = data?.urmatorul ?? deLa + 1
+      }
+      showToast(`Extragere terminată: ${scrise} rânduri noi`, 'ok')
+    } finally { setExtrag(null); await load() }
+  }
+
   const fmtNr = v => (v || v === 0) ? new Intl.NumberFormat('ro-RO').format(v) : '—'
   const nrDif = (cant || []).filter(c => c.status === 'diferenta').length
 
@@ -108,12 +128,16 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
             🧮 Cantități ({cant?.length ?? '...'})
             {nrDif > 0 && <span style={{ color:G.red, marginLeft:10, fontSize:12 }}>⚠ {nrDif} cu diferențe</span>}
           </div>
-          <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={addC}>＋ rând</button>
+          <div style={{ display:'flex', gap:8 }}>
+            <button style={{ ...S.btnP, padding:'5px 12px', fontSize:12, opacity: extrag ? 0.6 : 1 }} disabled={!!extrag} onClick={extrage}
+              title="Citește lista de cantități / caietele deja importate și scrie pozițiile (F3 pe obiecte, cu cod articol)">{extrag ? '⏳ ' + extrag : '🤖 Extrage din documentație'}</button>
+            <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={addC}>＋ rând</button>
+          </div>
         </div>
         <div style={{ overflowX:'auto' }}>
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12, minWidth:860 }}>
             <thead><tr style={{ color:G.muted, fontSize:10.5, textTransform:'uppercase', textAlign:'left' }}>
-              {['Status', 'Denumire', 'UM', 'Cantitate', 'Specificații', 'Sursă', '', ''].map((h, i) => <th key={i} style={{ padding:'5px 7px', borderBottom:`1px solid ${G.border}` }}>{h}</th>)}
+              {['Status', 'Obiect', 'Cod', 'Denumire', 'UM', 'Cantitate', 'Specificații', 'Sursă', '', ''].map((h, i) => <th key={i} style={{ padding:'5px 7px', borderBottom:`1px solid ${G.border}` }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {(cant || []).map(c => {
@@ -124,6 +148,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
                       <span style={{ color:col, fontWeight:700, fontSize:11.5 }}>{lbl}</span>
                       {c.diferenta_nota && <span style={{ color:G.red }}> *</span>}
                     </td>
+                    <td style={{ padding:'4px 7px', color:G.muted, fontSize:11, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={c.obiect || ''}>{c.obiect || '—'}</td>
+                    <td style={{ padding:'4px 7px', color:G.muted, fontSize:11, whiteSpace:'nowrap' }}>{c.cod_articol || '—'}</td>
                     <td style={{ padding:'4px 7px', minWidth:260 }}>
                       <input style={S.input} value={c.denumire || ''} onChange={e => setC(c.id, 'denumire', e.target.value)} onBlur={() => saveC(c)} title={c.diferenta_nota || ''} /></td>
                     <td style={{ padding:'4px 7px', width:60 }}>
