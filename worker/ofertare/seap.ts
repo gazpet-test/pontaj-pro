@@ -114,21 +114,32 @@ async function asteapta(cale: string, ms: number, pasMs = 1000): Promise<boolean
   }
   return false
 }
-/** Listarea arhivei, făcută de extractor. `dir` = folderul jobului (conține in/<prima>). */
+const UID_EXTRACTOR = Number(Deno.env.get('SEAP_EXTRACTOR_UID') ?? 10001)
+/** Folderul unui job: al workerului (root, 755) — extractorul NU poate scrie în in/, cerere, prima sau în alte joburi
+ *  ale workerului; poate scrie DOAR în out/ și rasp/ (ale lui, 700). Local (teste, fără root) chown-ul se sare. */
+export async function pregatesteJob(dir: string) {
+  await Deno.mkdir(`${dir}/in`, { recursive: true })
+  for (const d of ['out', 'rasp']) {
+    await Deno.mkdir(`${dir}/${d}`, { recursive: true })
+    try { await Deno.chown(`${dir}/${d}`, UID_EXTRACTOR, UID_EXTRACTOR); await Deno.chmod(`${dir}/${d}`, 0o700) } catch { await Deno.chmod(`${dir}/${d}`, 0o777) }
+  }
+  await Deno.chmod(dir, 0o755); await Deno.chmod(`${dir}/in`, 0o755)
+}
+/** Listarea arhivei, făcută de extractor. `dir` = folderul jobului (pregatesteJob + in/<prima>). */
 export async function listeazaIzolat(dir: string, prima: string, ms = TIMP_LISTARE_MS): Promise<{ code: number; out: string; err: string }> {
   await Deno.writeTextFile(`${dir}/prima`, prima)
   await scrieAtomic(`${dir}/cerere`, 'l')
-  if (!await asteapta(`${dir}/listare.gata`, ms)) return { code: -1, out: '', err: 'extractorul izolat (gazpet-seap-extractor) nu a răspuns la listare — e pornit?' }
-  const code = Number((await Deno.readTextFile(`${dir}/listare.cod`)).trim())
-  const out = await Deno.readTextFile(`${dir}/listare.txt`)
-  const err = await Deno.readTextFile(`${dir}/listare.err`).catch(() => '')
+  if (!await asteapta(`${dir}/rasp/listare.gata`, ms)) return { code: -1, out: '', err: 'extractorul izolat (gazpet-seap-extractor) nu a răspuns la listare — e pornit?' }
+  const code = Number((await Deno.readTextFile(`${dir}/rasp/listare.cod`)).trim())
+  const out = await Deno.readTextFile(`${dir}/rasp/listare.txt`)
+  const err = await Deno.readTextFile(`${dir}/rasp/listare.err`).catch(() => '')
   return { code, out, err }
 }
 /** Extragerea în <dir>/out, făcută de extractor DUPĂ ce listarea a fost aprobată. Cod ≠ 0 → motivul extractorului. */
 export async function extrageIzolat(dir: string, ms = TIMP_EXTRAGERE_MS): Promise<{ code: number; motiv: string }> {
   await scrieAtomic(`${dir}/cerere`, 'x')
-  if (!await asteapta(`${dir}/rezultat`, ms)) return { code: -1, motiv: 'extractorul izolat nu a terminat în timp util' }
-  const [cod, ...rest] = (await Deno.readTextFile(`${dir}/rezultat`)).split('\n')
+  if (!await asteapta(`${dir}/rasp/rezultat`, ms)) return { code: -1, motiv: 'extractorul izolat nu a terminat în timp util' }
+  const [cod, ...rest] = (await Deno.readTextFile(`${dir}/rasp/rezultat`)).split('\n')
   return { code: Number(cod), motiv: rest.join(' ').trim() }
 }
 
@@ -151,6 +162,9 @@ export function verificaListare(slt: string): { ok: true; intrari: number; total
     if (!/^Size = /m.test(bloc)) continue
     const c = cale.replace(/\\/g, '/')
     if (c.startsWith('/') || /^[a-z]:/i.test(c) || c.split('/').includes('..')) return { ok: false, motiv: `cale nesigură în arhivă: ${c.slice(0, 120)}` }
+    // legături (symlink/hardlink) respinse DIN LISTARE, înainte de extragere — verificarea de după e a doua barieră
+    const link = bloc.match(/^(?:Symbolic|Hard) Link = (.+)$/m)?.[1]?.trim()
+    if (link || /^Attributes = .*\sl[rwx-]{9}/m.test(bloc)) return { ok: false, motiv: `legătură în arhivă (nu se extrage): ${c.slice(0, 120)}${link ? ' → ' + link.slice(0, 80) : ''}` }
     intrari++
     total += Number(bloc.match(/^Size = (\d+)$/m)?.[1] ?? 0)
     if (intrari > MAX_INTRARI) return { ok: false, motiv: `prea multe intrări (> ${MAX_INTRARI})` }
@@ -178,7 +192,7 @@ function cookieDin(r: Response): string {
 }
 
 type DocSeap = { nume: string; url: string }
-async function listaSeap(cNotice: number, tip: number): Promise<{ docs: DocSeap[]; cookie: string }> {
+export async function listaSeap(cNotice: number, tip: number): Promise<{ docs: DocSeap[]; cookie: string }> {
   const r = await fetch(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?initNoticeId=${cNotice}&sysNoticeTypeId=${tip}`, { headers: SEAP_HDR })
   if (!r.ok) throw new Error(`lista SEAP HTTP ${r.status}`)
   const cookie = cookieDin(r)
@@ -193,7 +207,7 @@ async function listaSeap(cNotice: number, tip: number): Promise<{ docs: DocSeap[
   return { docs, cookie }
 }
 
-async function descarca(doc: DocSeap, cookie: string, tinta: string): Promise<number> {
+export async function descarca(doc: DocSeap, cookie: string, tinta: string): Promise<number> {
   const link = doc.url.startsWith('http') ? doc.url : `https://e-licitatie.ro/${doc.url.replace(/^\/+/, '')}`
   const r = await fetch(link, { headers: cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR })
   if (!r.ok || !r.body) throw new Error(`descărcare HTTP ${r.status}`)
@@ -288,8 +302,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       const eticheta = grup.length > 1 ? `${grup[0].nume.replace(/\.part\d+\.rar(\.p7s)?$/i, '')} (${grup.length} volume)` : grup[0].nume
       stare(`aduc ${eticheta}`)
       const dir = `${tmp}/${raport.adusi++}`
-      await Deno.mkdir(`${dir}/in`, { recursive: true })
-      await Deno.chmod(dir, 0o777)                     // extractorul (uid 10001) scrie listarea și out/ aici
+      await pregatesteJob(dir)
       const locale: { doc: DocSeap; nume: string; cale: string; marime: number; sha: string }[] = []
       let esec: string | null = null
       // cifrele numărului de volum din SEAP (part01 → 2) — numele canonic trebuie să le păstreze

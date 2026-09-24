@@ -1,6 +1,6 @@
 // Teste locale pentru worker/ofertare/seap.ts (fără rețea, fără Supabase): p7s, volume RAR, verificarea arhivelor.
 // Rulare: bash test-fixtures/seap_terra/run.sh (are nevoie de openssl + 7z + rar opțional)
-import { continutP7s, volumRar, numeVolum, verificaListare, cheieNume, esteArhiva, verificaVolume, listeazaIzolat, extrageIzolat } from '../../worker/ofertare/seap.ts'
+import { continutP7s, volumRar, numeVolum, verificaListare, cheieNume, esteArhiva, verificaVolume, listeazaIzolat, extrageIzolat, pregatesteJob } from '../../worker/ofertare/seap.ts'
 const dir = Deno.args[0]
 let ok = 0, fail = 0
 const t = (nume: string, cond: boolean, info = '') => { if (cond) { ok++; console.log('PASS', nume) } else { fail++; console.log('FAIL', nume, info) } }
@@ -59,17 +59,25 @@ for (const [n, taie] of [['19 p7s trunchiat la jumătate', p7.length >> 1], ['20
 }
 
 // 22-24. protocolul cu extractorul izolat (rulează în fundal din run.sh, pe LUCRU=${dir}/w)
-const job = `${dir}/w/seap_test_1`
-await Deno.mkdir(`${job}/in`, { recursive: true })
+const job = `${dir}/w/seap_test/0`
+await pregatesteJob(job)
 await Deno.copyFile(`${dir}/bun.zip`, `${job}/in/bun.zip`)
 const lst = await listeazaIzolat(job, 'bun.zip', 30_000)
 t('22 listare prin extractor → cod 0, verificaListare trece', lst.code === 0 && verificaListare(lst.out).ok, JSON.stringify(lst).slice(0, 200))
 const xz = await extrageIzolat(job, 30_000)
 let areA = false; try { areA = (await Deno.stat(`${job}/out/PT/pdf/a.pdf`)).isFile } catch { /* lipsă */ }
 t('23 extragere prin extractor → cod 0 + fișiere', xz.code === 0 && areA, JSON.stringify(xz))
-const mort = `${dir}/w_fara_extractor/j`; await Deno.mkdir(`${mort}/in`, { recursive: true })
+const mort = `${dir}/w_fara_extractor/j`; await pregatesteJob(mort)
 const fara = await listeazaIzolat(mort, 'x.zip', 1_500)
 t('24 extractor oprit → eroare explicită, nu ocolire', fara.code === -1 && /nu a răspuns/.test(fara.err))
+
+
+// 25-27. legături respinse DIN LISTARE (înainte de extragere)
+const lsl = verificaListare(await run('7z', ['l', '-slt', '-ba', `${dir}/symlink.zip`]))
+t('25 symlink în zip (Attributes l...) → respins la listare', !lsl.ok && /legătură/.test((lsl as any).motiv), JSON.stringify(lsl))
+const lhl = verificaListare(await run('7z', ['l', '-slt', '-ba', `${dir}/hardlink.tar`]))
+t('26 hardlink în tar → respins la listare', !lhl.ok && /legătură/.test((lhl as any).motiv), JSON.stringify(lhl))
+t('27 fișier normal nu e confundat cu legătură', verificaListare('Path = a.pdf\nSize = 3\nAttributes = A -rw-r--r--\nSymbolic Link = \nHard Link = \n').ok)
 
 console.log(`TOTAL ${ok}/${ok + fail}`)
 if (fail) Deno.exit(1)
