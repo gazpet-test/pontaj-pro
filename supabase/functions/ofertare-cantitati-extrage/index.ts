@@ -135,15 +135,19 @@ function felii(t: string): string[] {
   return out
 }
 
-const PROMPT = (nume: string, tip: string) => `Ești inginer de devize într-o firmă de construcții de conducte. Citește bucata de mai jos din documentația unei licitații publice și extrage POZIȚIILE CANTITATIVE — materiale, lucrări, echipamente — cu cantitatea și unitatea lor.
+const PROMPT = (nume: string, tip: string, obiectCurent: string) => `Ești inginer de devize într-o firmă de construcții de conducte. Citește bucata de mai jos din documentația unei licitații publice și extrage POZIȚIILE CANTITATIVE — materiale, lucrări, echipamente — cu cantitatea și unitatea lor.
 
 Document: "${nume}" (tip: ${tip})
 
-Răspunde EXCLUSIV cu JSON COMPACT, fiecare poziție ca TABLOU de 5 elemente, în ordinea:
-[denumire, um, cantitate, sursa, e_total]
+Obiectul în care începe bucata (continuat din bucata anterioară): ${obiectCurent || 'necunoscut'}
+
+Răspunde EXCLUSIV cu JSON COMPACT, fiecare poziție ca TABLOU de 7 elemente, în ordinea în care apar în document:
+[obiect, cod_articol, denumire, um, cantitate, sursa, e_total]
 
 {"p":[
- ["<denumirea poziției, ca în document, cu diametru/material/tip dacă sunt date>",
+ ["<obiectul/secțiunea de deviz căruia îi aparține rândul, ex. 'Obiect 1 - ...', copiat din titlul tabelului; dacă tabelul continuă din bucata anterioară, folosește obiectul de mai sus>",
+  "<codul articolului EXACT cum e scris (ex. 'TSC03B1', 'ACC03A1'), sau null dacă rândul nu are cod>",
+  "<denumirea poziției, ca în document, cu diametru/material/tip dacă sunt date>",
   "<unitatea EXACTĂ din document: m, ml, mp, mc, buc, kg, to, ore>",
   <număr sau null dacă poziția e cerută dar cantitatea NU e dată>,
   "<unde anume, cu tabelul/secțiunea din care vine: 'C6 poz.12' / 'PD03 Tabel hidranti pe strazi, rand 4' / 'F3 006 003 poz.7'>",
@@ -157,7 +161,8 @@ REGULI, în ordinea importanței:
 4. Păstrează unitatea din document. Dacă scrie "ml" pui "m" doar dacă e clar aceeași; altfel lași "ml".
 5. Nu inventa poziții care nu apar. Mai bine 10 poziții corecte decât 40 din care 15 ghicite.
 6. Sari peste prețuri, valori în lei și coloane de manoperă/utilaj/transport — ne interesează cantitățile fizice.
-7. La sursa, scrie ȘI tabelul sau secțiunea, nu doar numărul rândului: două tabele din același document se însumează separat, iar fără asta se amestecă.
+7. Copiază codul articolului caracter cu caracter; nu-l completa și nu-l ghici.
+8. La sursa, scrie ȘI tabelul sau secțiunea, nu doar numărul rândului: două tabele din același document se însumează separat, iar fără asta se amestecă.
 
 Dacă bucata nu conține poziții cantitative, întoarce {"p":[]}.
 Nu scrie NIMIC în afara JSON-ului — nici explicații, nici comentarii.`
@@ -214,6 +219,20 @@ Deno.serve(async (req: Request) => {
     const b = felii(d.text_extras as string)
     b.forEach((bu, i) => munca.push({ doc: d, bucata: bu, nr: i + 1, din: b.length }))
   }
+  // Obiectul curent se poarta intre felii (tabelele trec peste pagini). La o reluare (de_la>0)
+  // se ia din ultimul rand scris pentru documentul feliei de reluare.
+  let obiectCurent = ''
+  let docCurent: number | null = null
+  if (deLa > 0 && munca[deLa]) {
+    const dr = munca[deLa]
+    if (dr.nr > 1) {
+      const { data: ult } = await db.from('ofertare_cantitati').select('obiect')
+        .eq('licitatie_id', licId).like('sursa', `${dr.doc.nume_original}%`).not('obiect', 'is', null)
+        .order('ordine', { ascending: false, nullsFirst: false }).limit(1)
+      obiectCurent = ult?.[0]?.obiect || ''
+    }
+    docCurent = dr.doc.id
+  }
 
   let tokIn = 0, tokOut = 0, poz = deLa, continua = false, scriseTotal = 0
   const raport: any[] = []
@@ -223,7 +242,8 @@ Deno.serve(async (req: Request) => {
     if (Date.now() - t0 > BUGET_MS) { continua = true; break }
     if (maxFelii && poz - deLa >= maxFelii) { continua = true; break }
     const { doc: d, bucata, nr, din } = munca[poz]
-    const intrebare = `${PROMPT(d.nume_original, d.tip)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}`
+    if (d.id !== docCurent) { docCurent = d.id; if (nr === 1) obiectCurent = '' }
+    const intrebare = `${PROMPT(d.nume_original, d.tip, obiectCurent)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}`
     const r = await cheama(furnizor, intrebare, KEY_A, KEY_G, KEY_O)
     if (r.eroare) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: r.eroare }); poz++; continue }
     const inF = r.inF, outF = r.outF
@@ -272,18 +292,36 @@ Deno.serve(async (req: Request) => {
       const n = Number(t)
       return Number.isFinite(n) ? n : null
     }
-    for (const p of lista) {
-      // [denumire, um, cantitate, sursa, e_total]
-      if (!Array.isArray(p) || !p[0]) continue
+    const eF3 = d.tip === 'lista_cantitati'
+    let idx = 0
+    for (const p0 of lista) {
+      // [obiect, cod_articol, denumire, um, cantitate, sursa, e_total]; compatibil si cu vechiul
+      // tuplu de 5 [denumire, um, cantitate, sursa, e_total]
+      if (!Array.isArray(p0)) continue
+      const p7 = p0.length >= 7
+      const p = p7 ? p0.slice(2) : p0
+      if (!p[0]) continue
+      const ob = p7 ? curat(p0[0], 200) : null
+      if (ob) obiectCurent = ob
+      const cod = p7 ? curat(p0[1], 40) : null
       const eTotal = p[4] === 1 || p[4] === true
       const den = String(p[0]).slice(0, 480)
+      idx++
+      // sursa include obiectul si codul: identitatea (licitatie, denumire, sursa) nu contopeste
+      // aceeasi denumire din obiecte diferite
+      const loc = [obiectCurent || null, cod, p[3] || null].filter(Boolean).join(' | ')
       feliaAsta.push({
+        obiect: obiectCurent || null,
+        cod_articol: cod,
+        // ordine determinista pe document: felia*100000 + pozitia in felie (reluarea nu o strica)
+        ordine: nr * 100000 + idx,
+        ...(eF3 ? { tip_sursa: 'lista_f3' } : {}),
         licitatie_id: licId,
         // categoria NU mai vine de la model: o pune trigger-ul din dictionar (fn_categorie_cantitate).
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
         um: curat(p[1], 20),
         cantitate: numar(p[2]),
-        sursa: `${d.nume_original}${p[3] ? ' \u2014 ' + p[3] : ''}`.slice(0, 300),
+        sursa: `${d.nume_original}${loc ? ' \u2014 ' + loc : ''}`.slice(0, 300),
         status: 'extras',
         extras_de_ai: true,
       })
