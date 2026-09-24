@@ -17,4 +17,8 @@ import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('../../evil.txt', 'x'); z.writestr('ok.txt', 'y')
 PY
 if command -v rar >/dev/null; then head -c 400000 /dev/urandom > "$D/z/mare.bin"; (cd "$D/z" && rar a -v100k -idq "$D/multi.rar" mare.bin); fi
-deno run --allow-read --allow-env --allow-run=7z test-fixtures/seap_terra/seap_test.ts "$D"
+mkdir -p "$D/w"
+LUCRU="$D/w" SEVENZIP=7z sh worker/ofertare/extractor/extractor.sh >/dev/null 2>&1 & EXT=$!
+trap 'kill $EXT 2>/dev/null; rm -rf "$D"' EXIT
+deno run --allow-read --allow-write="$D" --allow-env --allow-run=7z test-fixtures/seap_terra/seap_test.ts "$D"
+bash test-fixtures/seap_terra/extractor_test.sh

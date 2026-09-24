@@ -20,8 +20,33 @@ services:
       # P0b: pack-urile validate de containerul claude-cli (out/) — workerul le citește și scrie DOAR în ofertare_source_pack;
       # marchează fișierul procesat cu un sidecar .importat / .respins (de aceea montat rw)
       - ${PACKS_DIR_HOST:-/Volume1/docker/gazpet-claude-cli/out}:/packs
+      # folderul de lucru comun cu extractorul izolat (arhivele SEAP): workerul pune volumele, extractorul le despachetează
+      - ./seap-work:/seap-work
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Extractorul SEAP IZOLAT (P0 Copilot, 24.09.2026): singurul loc unde rulează 7-Zip pe arhive din SEAP.
+  # Fără rețea, fără .env/chei, fără socket Docker, fără alte foldere de pe NAS; non-root, FS read-only, resurse limitate.
+  # extractor.sh e copiat în imagine → o schimbare a lui cere rebuild (nu vine prin git pull ca workerul).
+  seap-extractor:
+    build: ./extractor
+    container_name: gazpet-seap-extractor
+    restart: always
+    network_mode: none
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 64
+    cpus: 1.0
+    volumes:
+      - ./seap-work:/work
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
