@@ -73,5 +73,15 @@ t "E12 job pe două niveluri → listat" "$([ -f $D/w/lot/0/rasp/listare.gata ] 
 job lu "$D/multe.zip"; cere lu l; ruleaza env MAX_LISTARE_BLK=2
 t "E13 listare peste limită → cod ≠ 0" "$([ "$(cat $D/w/lu/rasp/listare.cod)" != 0 ] && echo 1)" "$(cat $D/w/lu/rasp/listare.cod)"
 
+# 12. ca pe Terra: extractorul NE-root, jobul al lui root (755), doar out/ + rasp/ ale extractorului
+if [ "$(id -u)" = 0 ] && command -v setpriv >/dev/null; then
+  chmod 755 "$D" "$D/w"
+  job nr "$D/bun.zip"; chmod 755 "$D/w/nr" "$D/w/nr/in"; chmod 644 "$D/w/nr/in/bun.zip"
+  chown 65534:65534 "$D/w/nr/out" "$D/w/nr/rasp"; chmod 700 "$D/w/nr/out" "$D/w/nr/rasp"
+  cere nr l; LUCRU=$D/w SEVENZIP=7z O_DATA=1 setpriv --reuid=65534 --regid=65534 --clear-groups sh "$X"
+  cere nr x; LUCRU=$D/w SEVENZIP=7z O_DATA=1 setpriv --reuid=65534 --regid=65534 --clear-groups sh "$X"
+  t "E14 non-root: listare + extragere reușite, doar în out/ + rasp/" "$([ "$(cat $D/w/nr/rasp/listare.cod)" = 0 ] && [ "$(rez nr)" = 0 ] && [ -f $D/w/nr/out/PT/a.pdf ] && [ -z "$(find $D/w/nr -maxdepth 1 -newer $D/w/nr/prima -type f ! -name cerere)" ] && echo 1)" "$(rez nr) $(motiv nr)"
+else echo "SKIP E14 (fără root/setpriv)"; fi
+
 echo "TOTAL $ok/$((ok+fail))"
 [ "$fail" = 0 ]

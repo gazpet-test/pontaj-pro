@@ -56,7 +56,7 @@ extrage() {
   r=$j/rasp
   [ -d "$r" ] && [ -w "$r" ] && [ -d "$j/out" ] && [ -w "$j/out" ] || return
   if ! p=$(prima_sigura "$j"); then scrie "$r/rezultat" 2 "cerere invalidă (numele volumului)"; return; fi
-  ( cd "$j/in" && ulimit -f "$MAX_FIS_BLK" && exec "$Z" x -y -aou -bd -o../out -- "$p" ) > "$j/x.log" 2>&1 &
+  ( cd "$j/in" && ulimit -f "$MAX_FIS_BLK" && exec "$Z" x -y -aou -bd -o../out -- "$p" ) > "$r/x.log" 2>&1 &
   pid=$!
   motiv=""; t=0
   while kill -0 "$pid" 2>/dev/null; do
@@ -67,7 +67,7 @@ extrage() {
   wait "$pid"; cod=$?
   [ -z "$motiv" ] && motiv=$(peste_limite "$j" "$t")   # și după: o arhivă mică poate exploda sub o secundă
   if [ -z "$motiv" ] && [ "$cod" -ne 0 ]; then
-    motiv="7z x cod $cod: $(tail -c 300 "$j/x.log" | tr '\n' ' ')"
+    motiv="7z x cod $cod: $(tail -c 300 "$r/x.log" | tr '\n' ' ')"
     [ "$cod" -ge 128 ] && motiv="LIMITĂ: 7z oprit de semnal $((cod - 128)) (fișier peste $((MAX_FIS_BLK / 2097152)) GB?) — $motiv"
   fi
   if [ -z "$motiv" ] && [ -n "$(find "$j/out" -type l | head -n 1)" ]; then motiv="RESPINS: arhiva conține legături simbolice"; fi
