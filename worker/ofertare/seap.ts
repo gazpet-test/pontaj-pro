@@ -219,7 +219,7 @@ export async function descarca(doc: DocSeap, cookie: string, tinta: string): Pro
 const sha256 = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16).padStart(2, '0')).join('')
 
 // -- Urcarea unui fișier + rândul în BD (aceleași reguli ca ofertare-seap-import) ---------------------------
-async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Array, placeholders: Map<string, number>): Promise<string | null> {
+async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Array, placeholders: Map<string, number>): Promise<string | { id: number }> {
   if (buf.length > MAX_FISIER_STORAGE) return `peste limita de stocare (${Math.round(buf.length / 2 ** 20)} MB > 200 MB)`
   const estePdf = /\.pdf$/i.test(numeFinal) || (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46)
   const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180)
@@ -233,24 +233,25 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
     sursa: 'seap',
   }
   const idPh = placeholders.get(cheieNume(numeFinal))
-  const { error } = idPh
-    ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
-    : await supa.from('ofertare_documente_atribuire').insert(rand)
+  const { data, error } = idPh
+    ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh).select('id').single()
+    : await supa.from('ofertare_documente_atribuire').insert(rand).select('id').single()
   if (error) { await supa.storage.from(BUCKET).remove([path]); return `rând BD: ${error.message}` }
-  return null
+  return { id: (data as any).id as number }
 }
 
 // -- O licitație ------------------------------------------------------------------------------------
+type ManifestRand = { licitatie_id: number; arhiva_cheie: string; cale: string; marime: number; sha256: string; document_id: number | null; stare: 'urcat' | 'deja_in_platforma' | 'eroare_urcare' | 'ignorat'; motiv: string | null; verificat_la: string }
 type Raport = { seap: number; deja: number; adusi: number; fisiere_urcate: number; erori: string[]; sarite: number }
 
-async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'ok' | 'eroare' | 'sarit'; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
+async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'identificat' | 'ok' | 'eroare' | 'sarit'; etapa?: string; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
   const cheie = cheieNume(nume)
   const { data: vechi } = await supa.from('ofertare_seap_fisiere').select('id, incercari').eq('licitatie_id', licId).eq('cheie', cheie).maybeSingle()
   const rand = {
-    licitatie_id: licId, nume_seap: nume, cheie, stare: rez.stare, motiv: rez.motiv ?? null, marime: rez.marime ?? null,
+    licitatie_id: licId, nume_seap: nume, cheie, stare: rez.stare, etapa: rez.etapa ?? null, motiv: rez.motiv ?? null, marime: rez.marime ?? null,
     sha256: rez.sha ?? null, fisiere_extrase: rez.extrase ?? null, procesat_la: new Date().toISOString(),
     // respinsă de controalele de securitate → nu se reîncearcă automat (rămâne vizibilă cu motivul, nu „ignorată")
-    incercari: rez.faraReincercare ? MAX_INCERCARI : rez.stare === 'eroare' ? (vechi?.incercari ?? 0) + 1 : (vechi?.incercari ?? 1),
+    incercari: rez.faraReincercare ? MAX_INCERCARI : rez.stare === 'eroare' ? (vechi?.incercari ?? 0) + 1 : rez.stare === 'identificat' ? (vechi?.incercari ?? 0) : (vechi?.incercari ?? 1),
   }
   const { error } = vechi
     ? await supa.from('ofertare_seap_fisiere').update(rand).eq('id', vechi.id)
@@ -266,7 +267,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   const { docs, cookie } = await listaSeap(lic.c_notice_id, lic.sys_notice_type_id)
   raport.seap = docs.length
   const { data: dinBd } = await supa.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path').eq('licitatie_id', licId)
-  const urcate = new Set((dinBd || []).filter(d => !estePlaceholder(d)).map(d => cheieNume(d.nume_original)))
+  const urcate = new Map((dinBd || []).filter(d => !estePlaceholder(d)).map(d => [cheieNume(d.nume_original), d.id as number]))
   const placeholders = new Map((dinBd || []).filter(estePlaceholder).map(d => [cheieNume(d.nume_original), d.id as number]))
   const { data: evid } = await supa.from('ofertare_seap_fisiere').select('cheie, stare, incercari').eq('licitatie_id', licId)
   const evidenta = new Map((evid || []).map(e => [e.cheie, e]))
@@ -295,6 +296,11 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   }
 
   await Deno.mkdir(LUCRU, { recursive: true })
+  // etapa 1: identificat — rămâne vizibil „în curs” dacă jobul moare înainte de rezultat (poarta: „încă în curs de aducere”)
+  for (const g of grupuri.values()) for (const d of g) {
+    const k = cheieNume(d.nume)
+    if (evidenta.get(k)?.stare !== 'eroare') await inregistreaza(supa, licId, d.nume, { stare: 'identificat', etapa: 'identificare' })
+  }
   const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_${licId}_` })
   await Deno.chmod(tmp, 0o755)
   try {
@@ -304,7 +310,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       const dir = `${tmp}/${raport.adusi++}`
       await pregatesteJob(dir)
       const locale: { doc: DocSeap; nume: string; cale: string; marime: number; sha: string }[] = []
-      let esec: string | null = null
+      let esec: string | null = null, etapaEsec = 'descarcare'
       // cifrele numărului de volum din SEAP (part01 → 2) — numele canonic trebuie să le păstreze
       const cifre = Math.max(1, ...grup.map(d => d.nume.match(/\.part(\d+)/i)?.[1].length ?? 1))
       grup.sort((a, b) => (volumRar(a.nume.replace(/\.p7s$/i, ''))?.nr ?? 0) - (volumRar(b.nume.replace(/\.p7s$/i, ''))?.nr ?? 0))
@@ -320,12 +326,12 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           await Deno.writeFile(cale, buf)
           await Deno.remove(brut)
           locale.push({ doc, nume, cale, marime: buf.length, sha: await sha256(buf) })
-        } catch (e) { esec = `${doc.nume}: ${(e as Error)?.message ?? e}`; break }
+        } catch (e) { esec = `${doc.nume}: ${(e as Error)?.message ?? e}`; etapaEsec = /p7s|CMS|SignedData|DER/i.test(String((e as Error)?.message)) ? 'semnatura' : 'descarcare'; break }
       }
-      if (!esec && cheieGrup.startsWith('rar:')) esec = verificaVolume(locale.map(l => volumRar(l.nume)?.nr ?? 0))
+      if (!esec && cheieGrup.startsWith('rar:')) { esec = verificaVolume(locale.map(l => volumRar(l.nume)?.nr ?? 0)); etapaEsec = 'set_volume' }
       if (esec) {
         raport.erori.push(esec)
-        for (const doc of grup) await inregistreaza(supa, licId, doc.nume, { stare: 'eroare', motiv: esec })
+        for (const doc of grup) await inregistreaza(supa, licId, doc.nume, { stare: 'eroare', etapa: etapaEsec, motiv: esec })
         continue
       }
 
@@ -337,7 +343,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         if (!v.ok) {
           raport.erori.push(`${eticheta}: ${v.motiv}`)
           const deSecuritate = lst.code === 0   // listarea a mers, dar conținutul a fost respins de controale
-          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv: (deSecuritate ? 'RESPINS de controalele de siguranță: ' : '') + v.motiv, marime: l.marime, sha: l.sha, faraReincercare: deSecuritate })
+          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', etapa: 'listare', motiv: (deSecuritate ? 'RESPINS de controalele de siguranță: ' : '') + v.motiv, marime: l.marime, sha: l.sha, faraReincercare: deSecuritate })
           continue
         }
         stare(`despachetez ${eticheta} (${v.intrari} fișiere, ${Math.round(v.total / 2 ** 20)} MB)`)
@@ -347,26 +353,37 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           const motiv = `extragere izolată cod ${x.code}: ${x.motiv.slice(0, 300)}`
           raport.erori.push(`${eticheta}: ${motiv}`)
           const limita = /^(LIMITĂ|RESPINS)/.test(x.motiv)   // depășire / conținut periculos → nu se reîncearcă singur
-          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv, marime: l.marime, sha: l.sha, faraReincercare: limita })
+          for (const l of locale) await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', etapa: 'extragere', motiv, marime: l.marime, sha: l.sha, faraReincercare: limita })
           continue
         }
         for (const l of locale) await Deno.remove(l.cale)          // eliberăm discul înainte de urcare
         let extrase = 0
         const eroriInterne: string[] = []
+        // manifestul se calculează pe output-ul VALIDAT (extractorul a terminat, nimic nu mai scrie în out/)
+        const manifest: ManifestRand[] = []
+        const arhivaCheie = cheieNume(locale[0].doc.nume)
         for await (const f of fisiereDin(out)) {
-          if (JUNK_RE.test(f.rel)) continue
-          if (urcate.has(cheieNume(f.rel))) { extrase++; continue }   // deja în platformă (ex. urcat de mână)
-          stare(`urc ${f.rel}`)
           const buf = await Deno.readFile(f.cale)
-          const er = await urca(supa, licId, f.rel, buf, placeholders)
-          if (er) eroriInterne.push(`${f.rel}: ${er}`)
-          else { extrase++; raport.fisiere_urcate++; urcate.add(cheieNume(f.rel)) }
+          const rand: ManifestRand = { licitatie_id: licId, arhiva_cheie: arhivaCheie, cale: f.rel, marime: buf.length, sha256: await sha256(buf), document_id: null, stare: 'urcat', motiv: null, verificat_la: new Date().toISOString() }
+          if (JUNK_RE.test(f.rel)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)' }
+          else if (urcate.has(cheieNume(f.rel))) { extrase++; rand.stare = 'deja_in_platforma'; rand.document_id = urcate.get(cheieNume(f.rel)) ?? null }   // ex. urcat de mână
+          else {
+            stare(`urc ${f.rel}`)
+            const r = await urca(supa, licId, f.rel, buf, placeholders)
+            if (typeof r === 'string') { eroriInterne.push(`${f.rel}: ${r}`); rand.stare = 'eroare_urcare'; rand.motiv = r }
+            else { extrase++; raport.fisiere_urcate++; urcate.set(cheieNume(f.rel), r.id); rand.document_id = r.id }
+          }
+          manifest.push(rand)
           await Deno.remove(f.cale)
+        }
+        for (let i = 0; i < manifest.length; i += 200) {
+          const { error: eM } = await supa.from('ofertare_seap_manifest').upsert(manifest.slice(i, i + 200), { onConflict: 'licitatie_id,arhiva_cheie,cale' })
+          if (eM) eroriInterne.push(`manifest: ${eM.message}`)   // fără manifest nu declarăm „ok”
         }
         const motiv = eroriInterne.length ? `${eroriInterne.length} fișiere neurcate: ${eroriInterne.slice(0, 5).join(' | ')}` : undefined
         if (motiv) raport.erori.push(`${eticheta}: ${motiv}`)
         for (const l of locale) {
-          await inregistreaza(supa, licId, l.doc.nume, { stare: eroriInterne.length ? 'eroare' : 'ok', motiv, marime: l.marime, sha: l.sha, extrase })
+          await inregistreaza(supa, licId, l.doc.nume, { stare: eroriInterne.length ? 'eroare' : 'ok', etapa: 'urcare', motiv, marime: l.marime, sha: l.sha, extrase })
           // placeholder-ul arhivei (pus de veghe) nu mai e „document lipsă": spunem ce s-a întâmplat cu el
           const idPh = placeholders.get(cheieNume(l.doc.nume))
           if (idPh) await supa.from('ofertare_documente_atribuire').update({ eroare: `Arhivă adusă pe Terra: ${extrase} fișiere în platformă${motiv ? ' — ' + motiv : ''}.` }).eq('id', idPh)
@@ -375,10 +392,10 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         // FIȘIER SIMPLU
         const l = locale[0]
         const buf = await Deno.readFile(l.cale)
-        const er = await urca(supa, licId, l.nume, buf, placeholders)
+        const r = await urca(supa, licId, l.nume, buf, placeholders)
         await Deno.remove(l.cale)
-        if (er) { raport.erori.push(`${l.nume}: ${er}`); await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', motiv: er, marime: l.marime, sha: l.sha }) }
-        else { raport.fisiere_urcate++; urcate.add(cheieNume(l.nume)); await inregistreaza(supa, licId, l.doc.nume, { stare: 'ok', marime: l.marime, sha: l.sha, extrase: 1 }) }
+        if (typeof r === 'string') { raport.erori.push(`${l.nume}: ${r}`); await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', etapa: 'urcare', motiv: r, marime: l.marime, sha: l.sha }) }
+        else { raport.fisiere_urcate++; urcate.set(cheieNume(l.nume), r.id); await inregistreaza(supa, licId, l.doc.nume, { stare: 'ok', etapa: 'urcare', marime: l.marime, sha: l.sha, extrase: 1 }) }
       }
       await Deno.remove(dir, { recursive: true }).catch(() => {})
     }

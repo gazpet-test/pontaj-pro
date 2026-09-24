@@ -12,6 +12,7 @@ const VERDE = {
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0,
   cerinte_neverificate: 0,
   cerinte_neconfirmate_cu_capitol: 0,
+  documentatie_verificata: true, documentatie_blocaj: null, documentatie_esentiale: 5,
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
@@ -115,9 +116,9 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 21 de randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 22 de randuri ale portii sunt prezente, in ordinea afisata', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','neconfirmate','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
+      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
   })
 })
 
@@ -184,5 +185,20 @@ describe('FIXTURE Prunișor–Jupa: fișele 18–21 declarate în F4, absente di
     expect(r.stare).toBe('ok')
     expect(r.detalii).toMatch(/rol dublu — HABAU S\.R\.L\.: subcontractant \+ terț susținător/)
     expect(r.detalii).toMatch(/asocierea nu e cazul/)
+  })
+})
+
+describe('P0 pas 2 — documentația de atribuire', () => {
+  it('controlul indisponibil = block „nu putem verifica”, nu verde', () => {
+    const ev = cu({ documentatie_verificata: undefined })
+    expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['documentatie'])
+  })
+  it('enumerarea SEAP eșuată blochează cu motivul din view', () => {
+    const ev = cu({ documentatie_blocaj: 'nu putem verifica completitudinea: enumerarea SEAP a eșuat (HTTP 503)' })
+    expect(ev.stare).toBe('block')
+    expect(ev.randuri.find(x => x.k === 'documentatie').detalii).toMatch(/enumerarea SEAP a eșuat/)
+  })
+  it('complet și citit = ok', () => {
+    expect(cu({}).randuri.find(x => x.k === 'documentatie').stare).toBe('ok')
   })
 })

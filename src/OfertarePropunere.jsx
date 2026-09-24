@@ -25,6 +25,10 @@ import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './Ofer
 import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+// P0 pas 2: rândul „documentatie” al porții. Eroare / lipsă = documentatie_verificata false → poarta spune „nu putem verifica”.
+const campuriDocumentatie = r => (!r || r.error || !r.data)
+  ? { documentatie_verificata: false, documentatie_blocaj: null }
+  : { documentatie_verificata: true, documentatie_blocaj: r.data.blocaj || null, documentatie_esentiale: r.data.esentiale }
 import ClarificariAC from './OfertareClarificariAC.jsx'
 import OrganigramaSection from './OfertareOrganigrama.jsx'
 import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
@@ -1228,7 +1232,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const cer = rCer.data || []
     // P0c: rândul de poartă „neconfirmate” vine dintr-un view separat (poate lipsi până la aplicarea migrării → poarta veche).
     const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', id).maybeSingle()
-    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}) } : null); setCapitole(rCap.data || []); setCerinte(cer)
+    const rCompl = await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', id).maybeSingle()
+    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl) } : null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
     // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
@@ -1833,6 +1838,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     const { data: proaspat, error: e1 } = await supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', licId).maybeSingle()
     if (e1 || !proaspat) { setBusy(false); showToast?.('Nu s-a putut reciti starea.', 'err'); return }
     { const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', licId).maybeSingle(); if (!rNc.error && rNc.data) Object.assign(proaspat, rNc.data) }
+    Object.assign(proaspat, campuriDocumentatie(await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', licId).maybeSingle()))
     // Acelasi evaluator ca butonul si cardul. Daca cele trei ar diverge, butonul ar fi activ
     // dar semnarea ar cadea — sau invers, mai rau.
     const ev = evalueazaPoarta(proaspat)
