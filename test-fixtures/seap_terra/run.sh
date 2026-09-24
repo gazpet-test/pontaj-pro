@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export SEVENZIP=7z
 # Generează fixture-urile (openssl + 7z) într-un director temporar și rulează testele seap.ts.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -16,4 +17,4 @@ import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('../../evil.txt', 'x'); z.writestr('ok.txt', 'y')
 PY
 if command -v rar >/dev/null; then head -c 400000 /dev/urandom > "$D/z/mare.bin"; (cd "$D/z" && rar a -v100k -idq "$D/multi.rar" mare.bin); fi
-deno run --allow-read --allow-run=7z test-fixtures/seap_terra/seap_test.ts "$D"
+deno run --allow-read --allow-env --allow-run=7z test-fixtures/seap_terra/seap_test.ts "$D"
