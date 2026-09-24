@@ -149,7 +149,14 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
   if (!c?.activ) return
   const esuate = new Set<number>()
   let citite = 0
+  const t0Tura = Date.now()
   while (!esteOprire()) {
+    // 24.09: rând între licitații — după o tură (15 documente sau 15 min) cedăm locul, dacă mai e cineva la coadă;
+    // main alege următoarea după ultimul_tick (cea mai veche), deci nicio licitație nu mai stă ore după alta
+    if (citite + esuate.size >= 15 || Date.now() - t0Tura > 15 * 60_000) {
+      const { data: altele } = await supabase.from('ofertare_ingest_coada').select('licitatie_id').eq('activ', true).neq('licitatie_id', licId).limit(1)
+      if (altele?.length) { log(`#${licId} citire: cedez rândul (${citite} citite în tura asta)`); return }
+    }
     const lista = (await candidati(supabase, licId)).filter(d => !esuate.has(d.id))
     if (!lista.length) break
     const d = lista[0]

@@ -147,7 +147,7 @@ while (!oprire) {
       }
     }
     if (!ingestInLucru) {
-      const { data: ing } = await supabase.from('ofertare_ingest_coada').select('licitatie_id').eq('activ', true).order('cerut_la').limit(1)
+      const { data: ing } = await supabase.from('ofertare_ingest_coada').select('licitatie_id').eq('activ', true).order('ultimul_tick', { ascending: true, nullsFirst: true }).order('cerut_la').limit(1)
       const lid = ing?.[0]?.licitatie_id
       if (lid) {
         ingestInLucru = true

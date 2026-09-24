@@ -1160,14 +1160,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
         const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
         const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : d.status_procesare === 'partial' ? Math.max(0, (d.pagini || 0) - (d.pagini_necitite?.length || 0)) : (d.pagini_procesate || 0)), 0)
         const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
-        return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={tot ? Math.round(100 * done / tot) : null} detaliu={tot ? `${done}/${tot} pagini citite · ${ramase} documente rămase` : `${ramase} documente rămase`} />
+        return <Lucru icon="🤖" text={`AI citește: ${procBusy}`} pct={rel.length ? Math.round(100 * (rel.length - ramase) / rel.length) : null} detaliu={`${rel.length - ramase}/${rel.length} documente citite · ${ramase} rămase${tot ? ` · ${done} pagini citite până acum` : ''}`} />
       })()}
       {coada?.activ && !procBusy && (() => {
         const rel = (docs || []).filter(d => E_PDF.test(d.nume_original || '') && ['neprocesat', 'in_lucru', 'procesat', 'partial'].includes(d.status_procesare))
         const tot = rel.reduce((a, d) => a + (d.pagini || 0), 0)
         const done = rel.reduce((a, d) => a + (d.status_procesare === 'procesat' ? (d.pagini || 0) : d.status_procesare === 'partial' ? Math.max(0, (d.pagini || 0) - (d.pagini_necitite?.length || 0)) : (d.pagini_procesate || 0)), 0)
         const ramase = rel.filter(d => !['procesat', 'partial'].includes(d.status_procesare)).length
-        return <Lucru icon="☁️" text="Serverul citește documentația (poți închide pagina)" pct={tot ? Math.round(100 * done / tot) : null} detaliu={`${done}/${tot} pagini citite · ${ramase} documente rămase · ${coada.lansari || 0} lansări`} />
+        return <Lucru icon="☁️" text="Serverul citește documentația (poți închide pagina)" pct={rel.length ? Math.round(100 * (rel.length - ramase) / rel.length) : null} detaliu={`${rel.length - ramase}/${rel.length} documente citite · ${ramase} rămase${tot ? ` · ${done} pagini citite până acum` : ''} · serverul lucrează pe rând la licitațiile din coadă`} />
       })()}
       {coada && !coada.activ && coada.terminat_la && (
         <div style={{ fontSize:12, color:G.green, marginBottom:8 }}>☁️ Citire pe server terminată {new Date(coada.terminat_la).toLocaleString('ro-RO')}: {coada.nota}</div>
