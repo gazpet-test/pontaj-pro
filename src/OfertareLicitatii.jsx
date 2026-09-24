@@ -25,6 +25,7 @@ import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
 import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 import SourcePackSection from './OfertareSourcePack.jsx'
+import OfertareParteneri from './OfertareParteneri.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -3943,28 +3944,7 @@ function ReferinteFinanciare({ showToast }) {
 
       {!loading && tab === 'normative' && <NormativeLista norme={norme} showToast={showToast} onChange={loadAll} />}
 
-      {!loading && tab === 'parteneri' && (
-        <>
-          <input style={{ ...S.input, marginBottom:12, maxWidth:420 }} placeholder="🔍 Caută partener..." value={cauta} onChange={e => setCauta(e.target.value)} />
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {part.filter(p => !q || `${p.nume} ${p.observatii || ''}`.toLowerCase().includes(q)).map(p => (
-              <div key={p.id} style={{ ...S.card, padding:'12px 16px', borderLeft:`3px solid ${p.tip_relatie === 'subcontractant' ? G.ofertare : G.blue}`, opacity: p.abandonat ? 0.5 : 1 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                  <span style={{ fontWeight:800, fontSize:13.5 }}>{p.nume}</span>
-                  <span style={{ fontSize:10.5, fontWeight:700, color:G.muted, border:`1px solid ${G.border}`, borderRadius:10, padding:'1px 8px' }}>{p.tip_relatie === 'subcontractant' ? '🔧 subcontractant' : '📦 furnizor servicii'}</span>
-                  {p.abandonat && <span style={{ fontSize:10.5, color:G.red, fontWeight:700 }}>⛔ abandonat{p.abandonat_motiv ? ` — ${p.abandonat_motiv}` : ''}</span>}
-                  {p.cui && <span style={{ fontSize:11, color:G.dim }}>{p.cui}</span>}
-                  {p.contact && <span style={{ fontSize:11, color:G.dim }}>{p.contact}</span>}
-                </div>
-                {p.observatii && <div style={{ fontSize:12, color:G.muted, marginTop:5 }}>{p.observatii}</div>}
-              </div>
-            ))}
-          </div>
-          <div style={{ fontSize:11.5, color:G.dim, padding:'8px 4px' }}>
-            Sursa: folderele de pe NAS din <code>Oferte\Calificare\autorizari firme</code> — documentele fiecăruia se caută în tabul 🗂 Documente NAS.
-          </div>
-        </>
-      )}
+      {!loading && tab === 'parteneri' && <OfertareParteneri parteneri={part} showToast={showToast} onChange={loadAll} />}
 
       {!loading && tab === 'documente' && <DocumenteNasCauta />}
       {!loading && tab === 'nomenclatoare' && <OfertareNomenclatoare showToast={showToast} />}
