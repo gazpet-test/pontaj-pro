@@ -24,8 +24,7 @@ const S = {
 const TABELE = {
   probe_diametre:     { label:'⌀ Probe — diametre', pk:'id', order:'ordine' },
   probe_configuratii: { label:'⚙️ Probe — configurații', pk:'id', order:'id' },
-  isc_rte_domenii:    { label:'🎓 Domenii RTE (ISC)', pk:'cod', order:'cod', pkManual:true, ro:true,
-    nota:'Editarea necesită drept în BD (de adăugat politică INSERT/UPDATE pentru authenticated) — tabelul are doar politică SELECT.' },
+  isc_rte_domenii:    { label:'🎓 Domenii RTE (ISC)', pk:'cod', order:'cod', pkManual:true },
   logistica_categorii:{ label:'🚜 Categorii utilaje → F23', pk:'id', order:'tip', doar:['in_f23'], fixe:['id','tip','subcategorie','in_f23'] },
 }
 const SISTEM = ['created_at', 'updated_at', 'created_by', 'updated_by']

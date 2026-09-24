@@ -3548,6 +3548,28 @@ function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const valid = form.denumire.trim()
+  // 24.09 (audit Ofertare pct. 8): PV-ul și recomandarea se urcă direct aici (bucket ofertare, experienta/<id>/),
+  // ca dovada să nu depindă doar de folder_nas. Se salvează imediat pe rând — doar la o lucrare existentă.
+  const [fis, setFis] = useState({ pv_path: e0?.pv_path || null, recomandare_path: e0?.recomandare_path || null })
+  const [upBusy, setUpBusy] = useState(null)
+  const [upErr, setUpErr] = useState(null)
+  const urcaFisier = async (col, file) => {
+    if (!file || !e0?.id) return
+    setUpBusy(col); setUpErr(null)
+    const nume = file.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.\-]+/g, '_')
+    const path = `experienta/${e0.id}/${col === 'pv_path' ? 'pv' : 'recomandare'}_${Date.now()}_${nume}`
+    const { error: eUp } = await supabase.storage.from('ofertare').upload(path, file, { contentType: file.type || 'application/pdf' })
+    if (eUp) { setUpBusy(null); setUpErr('Upload eșuat: ' + eUp.message); return }
+    const { data: upd, error: eDb } = await supabase.from('ofertare_experienta').update({ [col]: path, updated_at: new Date().toISOString() }).eq('id', e0.id).select('id')
+    setUpBusy(null)
+    if (eDb || !upd?.length) { setUpErr('Fișierul s-a urcat, dar legătura nu s-a salvat: ' + (eDb?.message || '0 rânduri actualizate')); return }
+    setFis(f => ({ ...f, [col]: path }))
+  }
+  const deschide = async (path) => {
+    const { data, error } = await supabase.storage.from('ofertare').createSignedUrl(path, 600)
+    if (error) { setUpErr('Nu pot deschide fișierul: ' + error.message); return }
+    window.open(data.signedUrl, '_blank')
+  }
 
   const submit = async () => {
     if (!valid) return
@@ -3583,6 +3605,21 @@ function ExperientaFormModal({ lucrare, profile, onClose, onSave, onDelete }) {
             <input style={S.input} value={form.dosar_sursa_path} onChange={e => set('dosar_sursa_path', e.target.value)} placeholder={'ex: 1.TRANSGAZ\\63. Cond. Dn500 Plataresti Balaceanca...'} /></div>
           <div style={{ gridColumn:'1 / -1' }}><label style={S.lbl}>Observații</label>
             <textarea style={{ ...S.input, minHeight:56, resize:'vertical' }} value={form.observatii} onChange={e => set('observatii', e.target.value)} /></div>
+          {[['pv_path', 'PV recepție (PDF)'], ['recomandare_path', 'Recomandare beneficiar (PDF)']].map(([col, lbl]) => (
+            <div key={col}><label style={S.lbl}>{lbl}</label>
+              {!e0 ? <div style={{ fontSize:11, color:G.dim }}>Salvează întâi lucrarea, apoi urci fișierul.</div> : (
+                <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                  {fis[col] && <button style={{ ...S.btnS, padding:'4px 10px', fontSize:12 }} onClick={() => deschide(fis[col])}>📄 Deschide</button>}
+                  <label style={{ ...S.btnS, padding:'4px 10px', fontSize:12, cursor: upBusy ? 'wait' : 'pointer' }}>
+                    {upBusy === col ? 'Se urcă…' : fis[col] ? '⬆ Înlocuiește' : '⬆ Urcă'}
+                    <input type="file" accept="application/pdf,image/*" style={{ display:'none' }} disabled={!!upBusy}
+                      onChange={e => { urcaFisier(col, e.target.files?.[0]); e.target.value = '' }} />
+                  </label>
+                </div>
+              )}
+            </div>
+          ))}
+          {upErr && <div style={{ gridColumn:'1 / -1', fontSize:12, color:G.red }}>{upErr}</div>}
           <label style={{ display:'flex', alignItems:'center', gap:7, fontSize:13, cursor:'pointer' }}>
             <input type="checkbox" checked={form.asociere} onChange={e => set('asociere', e.target.checked)} style={{ accentColor:G.orange }} />
             Executată în asociere <span style={{ color:G.dim, fontSize:11 }}>(se invocă doar cota Gazpet)</span>
