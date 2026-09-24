@@ -677,7 +677,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const load = async () => {
     const [{ data, error }, { data: c }] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
-        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name)')
+        .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
     ])
@@ -878,6 +878,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (!baza) return false
     return (toate || []).some(x => x.id !== d.id &&
       new RegExp('^' + baza.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' — p\\d+_pag[\\d-]+\\.pdf$', 'i').test(x.nume_original || ''))
+  }
+  // 24.09 (Copilot, bloc 4: „ignorat tehnic ≠ neaplicabil"): necitit automat și fără bifa unui om → blochează poarta
+  // finală (v_ofertare_seap_completitudine.ignorate_neverificate). Aceeași regulă ca în view: nu intră arhivele,
+  // semnăturile, DUAE, jurnalele .log, fișierele-lacăt Office și originalele sparte în bucăți.
+  const ignoratTehnic = (d, toate) => ['ignorat', 'eroare'].includes(d.status_procesare) &&
+    !/\.(rar|zip|7z|p7s|p7m|xml|log)\s*\d*$/i.test(d.nume_original || '') &&
+    !/(^|\/)~\$/.test(d.nume_original || '') && !areBucati(d, toate)
+  const bifeazaRelevanta = async (d, retrage = false) => {
+    const nota = retrage ? null : window.prompt(`„${String(d.nume_original).split('/').pop()}" nu a putut fi citit automat.\nCe ai verificat? (ex.: „planșă consultată manual, fără cerințe noi" sau „nerelevant: jurnal de plotare")`)
+    if (!retrage && nota == null) return
+    const { data, error } = await supabase.rpc('fn_ofertare_doc_bifa_relevanta', { p_doc_id: d.id, p_nota: nota, p_retrage: retrage })
+    if (error || data?.error) { setWarn('Bifa nu s-a salvat: ' + (error?.message || data.error)); return }
+    await load()
   }
   const deCititCaPdf = (ds) => (ds || []).filter(d =>
     ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare) &&
@@ -1226,6 +1239,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       <i style={{ display:'block', height:'100%', width:`${d.pagini ? Math.max(3, Math.round(100 * (d.pagini_procesate || 0) / d.pagini)) : 3}%`, background:G.ofertare }} />
                     </span>
                   )}
+                  {ignoratTehnic(d, docs) && (d.relevanta_verificata_la ? (
+                    <span style={{ color:G.green, fontSize:11, whiteSpace:'nowrap', cursor:'pointer' }}
+                      title={`Verificat de ${d.verificat?.name || '?'} · ${new Date(d.relevanta_verificata_la).toLocaleString('ro-RO')}: ${d.relevanta_nota}\nClick = retrage bifa`}
+                      onClick={() => { if (window.confirm('Retragi bifa? Documentul va bloca din nou poarta finală.')) bifeazaRelevanta(d, true) }}>✓ verificat de om</span>
+                  ) : (
+                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}
+                      title="Documentul n-a putut fi citit automat. Până nu confirmă un om că l-a consultat sau că nu e relevant, poarta finală rămâne blocată."
+                      onClick={() => bifeazaRelevanta(d)}>✋ confirmă manual</button>
+                  ))}
                   {eMare(d) && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={!!plansaBusy} title="PDF peste 20 MB — citirea AI cade pe el; îl sparg în bucăți ≤ 15 MB"
                       onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
