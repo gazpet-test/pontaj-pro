@@ -107,7 +107,7 @@ const TIMP_7Z_MS = 20 * 60_000
 const SEVENZIP = Deno.env.get('SEVENZIP') ?? '7zz'
 async function ruleaza(cmd: string, args: string[]) {
   const ac = new AbortController(); const t = setTimeout(() => ac.abort(), TIMP_7Z_MS)
-  const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped', clearEnv: true, env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' }, signal: ac.signal }).output()
+  const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped', clearEnv: true, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' }, signal: ac.signal }).output()
     .finally(() => clearTimeout(t))
   const dec = new TextDecoder()
   return { code: p.code, out: dec.decode(p.stdout), err: dec.decode(p.stderr) }
