@@ -17,7 +17,7 @@ Actualizare: nimic de făcut — containerul face `git pull` la 5 minute și rep
 ## Documentația SEAP și extractorul izolat (24.09.2026)
 `seap.ts` descarcă din SEAP, desface `.p7s`, dar **nu despachetează singur**: arhivele merg la containerul
 `gazpet-seap-extractor` (`extractor/`), singurul cu 7-Zip. Acesta rulează fără rețea, fără `.env`/chei,
-non-root, cu FS read-only și 1 GB RAM; vede doar `./seap-work` (montat `/seap-work` în worker, `/work` în extractor).
+non-root, cu FS read-only și 1 GB RAM; vede doar volumul Docker `seap-work` (montat `/seap-work` în worker, `/work` în extractor; NU un folder din share-ul NAS — cotă + ACL).
 Protocolul e pe fișiere (vezi antetul `extractor/extractor.sh`): workerul cere listarea, o verifică
 (`verificaListare`, `verificaVolume`), apoi cere extragerea; extractorul impune limitele efective
 (spațiu, număr de fișiere, mărime pe fișier, timp, symlinkuri, adâncime) și șterge tot la depășire.
