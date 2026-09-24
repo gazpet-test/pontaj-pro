@@ -21,7 +21,9 @@ services:
       # marchează fișierul procesat cu un sidecar .importat / .respins (de aceea montat rw)
       - ${PACKS_DIR_HOST:-/Volume1/docker/gazpet-claude-cli/out}:/packs
       # folderul de lucru comun cu extractorul izolat (arhivele SEAP): workerul pune volumele, extractorul le despachetează
-      - ./seap-work:/seap-work
+      # volum Docker (nu folder din share-ul NAS): share-ul /Volume1/docker are cotă (~1 GB liber) și ACL-uri moștenite —
+      # la Huedin (712 MB volume + 762 MB extras) extragerea murea cu „Disk quota exceeded” (24.09)
+      - seap-work:/seap-work
     logging:
       driver: json-file
       options:
@@ -44,9 +46,12 @@ services:
     pids_limit: 64
     cpus: 1.0
     volumes:
-      - ./seap-work:/work
+      - seap-work:/work
     logging:
       driver: json-file
       options:
         max-size: "5m"
         max-file: "2"
+
+volumes:
+  seap-work: {}
