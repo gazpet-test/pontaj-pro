@@ -142,7 +142,11 @@ async function candidati(supabase: Supa, licId: number): Promise<any[]> {
     if (l?.lansat_la && Date.now() - new Date(l.lansat_la).getTime() < 3 * 60_000) continue
     out.push(d)
   }
-  return out
+  // 24.09: întâi documentele esențiale pentru poarta de completitudine (fișa de date, caiete/PT, liste de
+  // cantități), apoi restul în ordinea id — altfel un studiu geotehnic de 100 MB ținea „Volumul 2” în așteptare
+  const ESENTIAL = ['fisa_date', 'cs_volum', 'lista_cantitati']
+  const rang = (d: any) => (ESENTIAL.includes(d.tip) ? 0 : 1)
+  return out.sort((x, y) => rang(x) - rang(y) || x.id - y.id)
 }
 
 // 24.09: .docx-urile (formularul de propunere tehnică, acordul contractual…) rămâneau „ignorat" — edge-ul
