@@ -14,4 +14,6 @@ $PSQL "psql -d z1_subiect_test -f $PWD/test-fixtures/cerinte_subiect/test_local.
 # Z2: titularul vizat — rulează după testele de subiect (folosește aceeași bază și aceleași cerințe)
 $PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z2_cerinte_titular.sql"
 $PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z2_cerinte_titular.sql"   # idempotență
+$PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z2b_acoperire_titular_poarta.sql"
+$PSQL "psql -v ON_ERROR_STOP=1 -q -d z1_subiect_test -f $PWD/supabase/migrations/20260924_z2b_acoperire_titular_poarta.sql"   # idempotență
 $PSQL "psql -d z1_subiect_test -f $PWD/test-fixtures/cerinte_subiect/test_titular.sql" | grep -E 'PASS|FAIL|TOTAL|ERROR'

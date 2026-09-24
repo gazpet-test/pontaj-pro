@@ -2796,6 +2796,8 @@ function CandidatiAcoperirePanel({ cerinta, acoperire, catalog, busy, termen, on
     const { data, error } = await supabase.rpc('fn_ofertare_cerinta_titular_seteaza', { p_cerinta_id: cerinta.id, p_tip: tip, p_calitate: null })
     if (error) return setTitularErr('Nu s-a salvat ținta: ' + error.message)
     setDecizieTitular(data?.tip_titular ? { tip_titular: data.tip_titular } : null)
+    // BD verifică: dacă pe cerință e deja aleasă dovada unei persoane, spune (nu șterge nimic).
+    if (data?.avertisment) setTitularErr('⚠️ ' + data.avertisment)
   }
   const revinoLaRegula = async () => {
     const { error } = await supabase.rpc('fn_ofertare_cerinta_titular_seteaza', { p_cerinta_id: cerinta.id, p_tip: null, p_calitate: null })
