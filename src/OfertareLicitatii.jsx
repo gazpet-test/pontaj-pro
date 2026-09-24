@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
+import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
@@ -1557,6 +1558,38 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
   // alea se dovedesc cu documente și alea decid dacă oferta trece. Restul se
   // vede la cerere, nu dispare.
   const [fRegistru, setFRegistru] = useState('capabilitate')
+  // Z1 — vedere „grupat pe subiecte" (Silviu: aceeași temă împrăștiată la #16, #37, #131… se citește împreună).
+  // Subiectul stă în ofertare_cerinte_subiect, nu pe cerință: gruparea nu schimbă text, E2, stare sau acoperire.
+  const [grupat, setGrupat] = useState(() => { try { return localStorage.getItem('ofertare_cerinte_grupat') === '1' } catch { return false } })
+  const [subiecte, setSubiecte] = useState({})     // cerinta_id → { subiect, sursa, alternative }
+  const [reguli, setReguli] = useState([])         // [{ cheie, eticheta, ordine }] — versiunea curentă
+  const [subBusy, setSubBusy] = useState(false)
+  const [doarDeVerificat, setDoarDeVerificat] = useState(false)
+  const loadSubiecte = async () => {
+    setSubBusy(true)
+    // Clasifică doar ce e nou/schimbat de la ultima rulare; mutările omului nu se ating (garantat în BD).
+    const { error: eAp } = await supabase.rpc('fn_ofertare_subiecte_aplica', { p_licitatie_id: licitatie.id, p_aplica: true })
+    if (eAp) setWarn('Gruparea pe subiecte nu a rulat: ' + eAp.message)
+    const [{ data: rg }, { data: sb, error: eSb }] = await Promise.all([
+      supabase.from('ofertare_subiecte_regula').select('versiune, cheie, eticheta, ordine').order('versiune', { ascending: false }).order('ordine'),
+      supabase.from('ofertare_cerinte_subiect').select('cerinta_id, subiect, sursa, alternative').eq('licitatie_id', licitatie.id).limit(10000),
+    ])
+    const vMax = (rg || [])[0]?.versiune
+    setReguli((rg || []).filter(r => r.versiune === vMax))
+    if (eSb) setWarn('Nu s-au încărcat subiectele: ' + eSb.message)
+    const m = {}; (sb || []).forEach(r => { m[r.cerinta_id] = r })
+    setSubiecte(m); setSubBusy(false)
+  }
+  const comutaGrupat = () => setGrupat(v => {
+    try { localStorage.setItem('ofertare_cerinte_grupat', v ? '0' : '1') } catch { /* fără stocare locală */ }
+    return !v
+  })
+  const mutaSubiect = async (c, cheie) => {
+    const { data, error } = await supabase.rpc('fn_ofertare_subiect_muta', { p_cerinta_id: c.id, p_subiect: cheie === '__auto' ? null : cheie })
+    if (error) return setWarn('Nu s-a mutat: ' + error.message)
+    setSubiecte(m => ({ ...m, [c.id]: { cerinta_id: c.id, subiect: data.subiect, sursa: data.sursa, alternative: data.sursa === 'om' ? [] : (m[c.id]?.alternative || []) } }))
+    if (data.sursa === 'auto') loadSubiecte()   // alternativele se recalculează în BD
+  }
   const load = async () => {
     const camp = 'id, nr_ordine, sursa_sectiune, sursa_pagina, sursa_document_id, text_cerinta, tip, lot, document_probant, cand_se_prezinta, confirmata_de, extras_de_ai, stare, stare_motiv, duplicat_al, registru, registru_sursa, sursa_pack_id, sursa_ref, locator_verificat, pagina_declarata, pagina_interval_start, pagina_interval_end, incertitudine, doc:ofertare_documente_atribuire!ofertare_cerinte_sursa_document_id_fkey(nume_original)'
     const { data, error } = await supabase.from('ofertare_cerinte')
@@ -1573,6 +1606,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
     const m = {}; (dup || []).forEach(d => { (m[d.duplicat_al] ||= []).push(d) })
     setRepetari(m)
     loadDovezi()
+    if (grupat) loadSubiecte()
   }
   // Dovezile de verificare (P0c). View-ul poate lipsi până se aplică migrarea → secțiunea pur și simplu nu apare.
   const [dovezi, setDovezi] = useState({})
@@ -1593,6 +1627,7 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
     load()
   }
   useEffect(() => { load() }, [licitatie.id, reloadKey])
+  useEffect(() => { if (grupat && cerinte !== null) loadSubiecte() }, [grupat])
 
   const extrage = async () => {
     // Plasa dinainte de cheltuială (10.09): la Răcari toate documentele fuseseră citite înainte să
@@ -1747,7 +1782,10 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
     if (fRegistru === 'capabilitate') return !c.registru || c.registru === 'capabilitate'
     return c.registru === fRegistru
   }
-  const filtrate = (cerinte || []).filter(c => potrivesteRegistru(c) && (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare))
+  const filtrate = (cerinte || []).filter(c => potrivesteRegistru(c) && (!fTip || c.tip === fTip) && (!fStare || (c.stare || 'de_analizat') === fStare)
+    && (!grupat || !doarDeVerificat || esteDeVerificat(subiecte[c.id])))
+  const grupuri = grupat ? grupeazaPeSubiect(filtrate, subiecte, reguli) : null
+  const etichetaSubiect = Object.fromEntries(reguli.map(r => [r.cheie, r.eticheta]))
   const nrPeRegistru = (cerinte || []).reduce((m, c) => {
     const k = c.registru || 'capabilitate'; m[k] = (m[k] || 0) + 1; return m
   }, {})
@@ -1758,6 +1796,102 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
   const rxCumul = new RegExp(REGEX_INTERZICE_CUMUL, 'i')
   const regulaCumul = (cerinte || []).filter(c => !c.duplicat_al && rxCumul.test(c.text_cerinta || ''))
 
+  // Un rând din registru. În vederea grupată primește și numărul din grup („2.3") și selectorul de subiect.
+  const randRegistru = (c, numar = null, info = null) => {
+    const t = TIP_CERINTA[c.tip] || TIP_CERINTA.propunere
+    const st = STARE_CERINTA[c.stare || 'de_analizat'] || STARE_CERINTA.de_analizat
+    const inEdit = editId === c.id
+    return (
+      <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.stare === 'nu_se_aplica' ? G.purple : c.confirmata_de ? G.green : t.color}`, opacity: c.stare === 'nu_se_aplica' ? 0.72 : 1 }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
+          <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
+            checked={selC.includes(c.id)}
+            onChange={e => setSelC(v => e.target.checked ? [...v, c.id] : v.filter(x => x !== c.id))} />
+          <span title="Sari la aceeași cerință în „Acoperirea cerințelor”" onClick={() => {
+              const el = document.getElementById(`acop-${c.id}`)
+              if (el) el.scrollIntoView({ behavior:'smooth', block:'center' })
+            }}
+            style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums', cursor:'pointer', whiteSpace:'nowrap' }}>
+            {numar ? <><span style={{ color:G.ofertare }}>{numar}</span> <span style={{ fontWeight:600 }}>#{c.nr_ordine}</span></> : `#${c.nr_ordine}`}
+          </span>
+          <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
+          {c.sursa_pack_id && <span title={`Din Source Pack #${c.sursa_pack_id} (${c.sursa_ref || '?'}) — locator dovedit de validator: ${c.locator_verificat || '?'}; proveniența e blocată la editare`}
+            style={{ fontSize:10.5, fontWeight:800, color:G.teal, background:G.teal + '18', border:`1px solid ${G.teal}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>📦 pack{c.incertitudine ? ` · ${c.incertitudine}` : ''}</span>}
+          <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
+          {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
+          {!inEdit && (
+            <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
+              <select
+                title="Starea de lucru — „nu se aplică” scoate cerința din eliminatoriile fără dovadă"
+                value={c.stare || 'de_analizat'} onChange={e => setStare(c, e.target.value)}
+                style={{ ...S.input, width:'auto', padding:'3px 6px', fontSize:11, color:st.color, fontWeight:700, borderColor:st.color + '55' }}>
+                {Object.entries(STARE_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+              {c.confirmata_de ? <span style={{ fontSize:11, color:G.green, fontWeight:700 }}>✓</span> : (<>
+                <button title="Confirm" onClick={() => confirma(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66' }}>✓</button>
+                <button title="Corectez" onClick={() => { setEditId(c.id); setEditVal({ sursa_sectiune: c.sursa_sectiune, text_cerinta: c.text_cerinta, tip: c.tip, document_probant: c.document_probant || '' }) }} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>✏️</button>
+                <button title="Resping" onClick={() => respinge(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.red, borderColor:G.red + '66' }}>✕</button>
+              </>)}
+            </span>
+          )}
+        </div>
+        {!inEdit && (c.doc?.nume_original || c.sursa_pagina || c.sursa_sectiune) && (
+          <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="De unde provine cerința în documentație">
+            📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : (c.sursa_sectiune ? 'document scos din licitație' : 'document șters din licitație')}
+            {locProvenienta(c)}
+          </div>
+        )}
+        {!inEdit && <DoveziRand c={c} lista={dovezi[c.id] || []} activ={doveziActiv} licitatieId={licitatie.id} onAdaugat={loadDovezi} />}
+        {!inEdit && grupat && (
+          <div style={{ fontSize:11, color:G.dim, marginTop:3, display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+            <span title={info?.sursa === 'om' ? 'Mutată de om — regula automată nu o mai schimbă' : 'Pusă de regula automată'}>🗂️ {info?.sursa === 'om' ? 'mutată manual' : 'automat'}:</span>
+            <select value={info?.subiect && etichetaSubiect[info.subiect] ? info.subiect : 'neclasificat'} onChange={e => mutaSubiect(c, e.target.value)}
+              title="Mută cerința în alt subiect. „↺ regula automată” anulează mutarea."
+              style={{ ...S.input, width:'auto', padding:'1px 5px', fontSize:10.5 }}>
+              {reguli.map(r => <option key={r.cheie} value={r.cheie}>{r.eticheta}</option>)}
+              <option value="neclasificat">❔ Neclasificată</option>
+              {info?.sursa === 'om' && <option value="__auto">↺ regula automată</option>}
+            </select>
+            {esteDeVerificat(info) && (
+              <span style={{ color:G.orange }} title="Regula a găsit și aceste subiecte — dacă alegerea e greșită, mut-o">
+                se potrivește și cu: {info.alternative.map(a => etichetaSubiect[a] || a).join(', ')}
+              </span>
+            )}
+          </div>
+        )}
+        {!inEdit && repetari[c.id]?.length > 0 && (
+          <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="Aceeași obligație, repetată în alte felii ale documentației — se bifează o singură dată">
+            🔁 se repetă de {repetari[c.id].length} ori
+            {aratRepetari
+              ? <>: {repetari[c.id].map(r => (
+                  <span key={r.id} style={{ marginLeft:6 }}>
+                    #{r.nr_ordine} {right60(r.doc?.nume_original || '—')}{r.sursa_pagina ? ` p.${r.sursa_pagina}` : ''}
+                    <button title="Nu e aceeași cerință — scoate-o din repetări" onClick={() => desfaRepetarea(r.id)}
+                      style={{ ...S.btnS, padding:'0 5px', fontSize:10, marginLeft:4, color:G.orange, borderColor:G.orange + '55' }}>desfă</button>
+                  </span>))}</>
+              : <> în documentație</>}
+          </div>
+        )}
+        {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 se dovedește cu: {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
+        {c.stare_motiv && !inEdit && <div style={{ fontSize:11, color:st.color, marginTop:3 }}>{st.label} — {c.stare_motiv}</div>}
+        {inEdit && (
+          <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:6 }}>
+            <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={editVal.text_cerinta} onChange={e => setEditVal(v => ({ ...v, text_cerinta: e.target.value }))} />
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              <input style={{ ...S.input, maxWidth:120 }} value={editVal.sursa_sectiune} onChange={e => setEditVal(v => ({ ...v, sursa_sectiune: e.target.value }))} placeholder="secțiune" />
+              <select style={{ ...S.input, maxWidth:150 }} value={editVal.tip} onChange={e => setEditVal(v => ({ ...v, tip: e.target.value }))}>
+                {Object.entries(TIP_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+              <input style={{ ...S.input, flex:1, minWidth:160 }} value={editVal.document_probant} onChange={e => setEditVal(v => ({ ...v, document_probant: e.target.value }))} placeholder="document probant" />
+              <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={() => salveazaCorectia(c)}>💾 Salvează corecția</button>
+              <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={() => setEditId(null)}>Anulează</button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.bg }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
@@ -1767,6 +1901,18 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
             style={{ ...S.btnS, padding:'4px 9px', fontSize:11, color: aratRepetari ? G.ofertare : G.dim, borderColor: (aratRepetari ? G.ofertare : G.border2) }}>
             🔁 {nrRepetari} repetări {aratRepetari ? '(ascunde unde)' : '(arată unde)'}
           </button>
+        )}
+        {!!cerinte?.length && (
+          <button onClick={comutaGrupat} title="Pune una sub alta cerințele despre același lucru (EDSB, grafic, manager de proiect…), oriunde ar fi în documentație. Nu schimbă nimic la cerințe — confirmarea rămâne pe fiecare rând."
+            style={{ ...S.btnS, padding:'4px 9px', fontSize:11, color: grupat ? G.ofertare : G.dim, borderColor: (grupat ? G.ofertare : G.border2) }}>
+            🗂️ {grupat ? 'grupat pe subiecte' : 'grupează pe subiecte'}{subBusy ? ' …' : ''}
+          </button>
+        )}
+        {grupat && (
+          <label title="Regula a găsit mai multe subiecte posibile — verifică dacă a ales bine" style={{ fontSize:11, color: doarDeVerificat ? G.orange : G.dim, display:'flex', alignItems:'center', gap:4, cursor:'pointer' }}>
+            <input type="checkbox" checked={doarDeVerificat} onChange={e => setDoarDeVerificat(e.target.checked)} style={{ accentColor:G.orange }} />
+            doar „de verificat"
+          </label>
         )}
         <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
           <select style={{ ...S.input, width:'auto', padding:'6px 10px', fontSize:12, borderColor: fRegistru === 'capabilitate' ? G.ofertare : G.border2 }}
@@ -1825,82 +1971,19 @@ function CerinteSection({ licitatie, profile, onChanged, sel, setSel, reloadKey 
         !cerinte.length ? (
           <div style={{ fontSize:12, color:G.dim }}>Niciun rând încă. „🤖 Extrage cerințele" citește cu Opus fișa de date (secțiunile III, IV, II + restul) și apoi TOATE caietele de sarcini + clarificările procesate — apoi tu confirmi/corectezi fiecare rând. Corecțiile tale devin exemple pentru extracțiile viitoare.</div>
         ) : (
-          <div style={{ maxHeight:340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
-            {filtrate.map(c => {
-              const t = TIP_CERINTA[c.tip] || TIP_CERINTA.propunere
-              const st = STARE_CERINTA[c.stare || 'de_analizat'] || STARE_CERINTA.de_analizat
-              const inEdit = editId === c.id
-              return (
-                <div key={c.id} style={{ padding:'7px 10px', borderRadius:7, background:G.surface, borderLeft:`3px solid ${c.stare === 'nu_se_aplica' ? G.purple : c.confirmata_de ? G.green : t.color}`, opacity: c.stare === 'nu_se_aplica' ? 0.72 : 1 }}>
-                  <div style={{ display:'flex', alignItems:'flex-start', gap:8, flexWrap:'wrap' }}>
-                    <input type="checkbox" style={{ accentColor:G.ofertare, marginTop:3 }}
-                      checked={selC.includes(c.id)}
-                      onChange={e => setSelC(v => e.target.checked ? [...v, c.id] : v.filter(x => x !== c.id))} />
-                    <span title="Sari la aceeași cerință în „Acoperirea cerințelor”" onClick={() => {
-                        const el = document.getElementById(`acop-${c.id}`)
-                        if (el) el.scrollIntoView({ behavior:'smooth', block:'center' })
-                      }}
-                      style={{ fontSize:11.5, fontWeight:800, color:G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums', cursor:'pointer' }}>#{c.nr_ordine}</span>
-                    <span style={{ fontSize:10.5, fontWeight:800, color:t.color, background:t.color + '18', border:`1px solid ${t.color}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>{t.label}</span>
-                    {c.sursa_pack_id && <span title={`Din Source Pack #${c.sursa_pack_id} (${c.sursa_ref || '?'}) — locator dovedit de validator: ${c.locator_verificat || '?'}; proveniența e blocată la editare`}
-                      style={{ fontSize:10.5, fontWeight:800, color:G.teal, background:G.teal + '18', border:`1px solid ${G.teal}55`, borderRadius:10, padding:'2px 8px', whiteSpace:'nowrap' }}>📦 pack{c.incertitudine ? ` · ${c.incertitudine}` : ''}</span>}
-                    <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}{c.lot && c.lot !== 'toate' ? ` · lot ${c.lot}` : ''}</span>
-                    {!inEdit && <span style={{ flex:1, fontSize:12.5, minWidth:220 }}>{c.text_cerinta}</span>}
-                    {!inEdit && (
-                      <span style={{ display:'flex', gap:5, marginLeft:'auto', alignItems:'center' }}>
-                        <select
-                          title="Starea de lucru — „nu se aplică” scoate cerința din eliminatoriile fără dovadă"
-                          value={c.stare || 'de_analizat'} onChange={e => setStare(c, e.target.value)}
-                          style={{ ...S.input, width:'auto', padding:'3px 6px', fontSize:11, color:st.color, fontWeight:700, borderColor:st.color + '55' }}>
-                          {Object.entries(STARE_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                        </select>
-                        {c.confirmata_de ? <span style={{ fontSize:11, color:G.green, fontWeight:700 }}>✓</span> : (<>
-                          <button title="Confirm" onClick={() => confirma(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.green, borderColor:G.green + '66' }}>✓</button>
-                          <button title="Corectez" onClick={() => { setEditId(c.id); setEditVal({ sursa_sectiune: c.sursa_sectiune, text_cerinta: c.text_cerinta, tip: c.tip, document_probant: c.document_probant || '' }) }} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}>✏️</button>
-                          <button title="Resping" onClick={() => respinge(c)} style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color:G.red, borderColor:G.red + '66' }}>✕</button>
-                        </>)}
-                      </span>
-                    )}
+          <div style={{ maxHeight: grupat ? 560 : 340, overflowY:'auto', display:'flex', flexDirection:'column', gap:4 }}>
+            {grupuri
+              ? grupuri.map(g => (
+                  <div key={g.cheie} style={{ display:'flex', flexDirection:'column', gap:4, marginBottom:6 }}>
+                    <div style={{ position:'sticky', top:0, zIndex:1, display:'flex', gap:10, alignItems:'baseline', padding:'6px 10px', borderRadius:7, background:G.bg, border:`1px solid ${G.border2}`, fontSize:12.5, fontWeight:800 }}>
+                      <span>{g.eticheta}</span>
+                      <span style={{ fontSize:11.5, color:G.muted, fontWeight:700 }}>{g.total} {g.total === 1 ? 'cerință' : 'cerințe'} · {g.confirmate} confirmate</span>
+                      {g.deVerificat > 0 && <span style={{ fontSize:11, color:G.orange, fontWeight:700 }}>{g.deVerificat} de verificat</span>}
+                    </div>
+                    {g.randuri.map(r => randRegistru(r.c, r.numar, r.info))}
                   </div>
-                  {!inEdit && (c.doc?.nume_original || c.sursa_pagina || c.sursa_sectiune) && (
-                    <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="De unde provine cerința în documentație">
-                      📑 {c.doc?.nume_original ? right60(c.doc.nume_original) : (c.sursa_sectiune ? 'document scos din licitație' : 'document șters din licitație')}
-                      {locProvenienta(c)}
-                    </div>
-                  )}
-                  {!inEdit && <DoveziRand c={c} lista={dovezi[c.id] || []} activ={doveziActiv} licitatieId={licitatie.id} onAdaugat={loadDovezi} />}
-                  {!inEdit && repetari[c.id]?.length > 0 && (
-                    <div style={{ fontSize:11, color:G.dim, marginTop:3 }} title="Aceeași obligație, repetată în alte felii ale documentației — se bifează o singură dată">
-                      🔁 se repetă de {repetari[c.id].length} ori
-                      {aratRepetari
-                        ? <>: {repetari[c.id].map(r => (
-                            <span key={r.id} style={{ marginLeft:6 }}>
-                              #{r.nr_ordine} {right60(r.doc?.nume_original || '—')}{r.sursa_pagina ? ` p.${r.sursa_pagina}` : ''}
-                              <button title="Nu e aceeași cerință — scoate-o din repetări" onClick={() => desfaRepetarea(r.id)}
-                                style={{ ...S.btnS, padding:'0 5px', fontSize:10, marginLeft:4, color:G.orange, borderColor:G.orange + '55' }}>desfă</button>
-                            </span>))}</>
-                        : <> în documentație</>}
-                    </div>
-                  )}
-                  {c.document_probant && !inEdit && <div style={{ fontSize:11, color:G.dim, marginTop:3 }}>📄 se dovedește cu: {c.document_probant}{c.cand_se_prezinta ? ` · ${c.cand_se_prezinta}` : ''}</div>}
-                  {c.stare_motiv && !inEdit && <div style={{ fontSize:11, color:st.color, marginTop:3 }}>{st.label} — {c.stare_motiv}</div>}
-                  {inEdit && (
-                    <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:6 }}>
-                      <textarea style={{ ...S.input, minHeight:54, resize:'vertical' }} value={editVal.text_cerinta} onChange={e => setEditVal(v => ({ ...v, text_cerinta: e.target.value }))} />
-                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                        <input style={{ ...S.input, maxWidth:120 }} value={editVal.sursa_sectiune} onChange={e => setEditVal(v => ({ ...v, sursa_sectiune: e.target.value }))} placeholder="secțiune" />
-                        <select style={{ ...S.input, maxWidth:150 }} value={editVal.tip} onChange={e => setEditVal(v => ({ ...v, tip: e.target.value }))}>
-                          {Object.entries(TIP_CERINTA).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                        </select>
-                        <input style={{ ...S.input, flex:1, minWidth:160 }} value={editVal.document_probant} onChange={e => setEditVal(v => ({ ...v, document_probant: e.target.value }))} placeholder="document probant" />
-                        <button style={{ ...S.btnP, padding:'7px 12px', fontSize:12 }} onClick={() => salveazaCorectia(c)}>💾 Salvează corecția</button>
-                        <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} onClick={() => setEditId(null)}>Anulează</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+                ))
+              : filtrate.map(c => randRegistru(c))}
           </div>
         )}
     </div>
