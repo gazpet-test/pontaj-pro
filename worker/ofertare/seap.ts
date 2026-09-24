@@ -2,7 +2,7 @@
 // De ce aici: Supabase taie la 20 MB, Vercel n-a dus nici el arhivele mari. Jilava avea PT-ul ca .zip.p7s de 54 MB,
 // Botoșani ca RAR în 9 volume .p7s (~850 MB) — iar platforma nu știa RAR deloc, deci caietul de sarcini lipsea TĂCUT.
 // Aici: fișier cu fișier, fără limită de mărime, semnătura .p7s scoasă cu un parser DER, ZIP/RAR (și multi-volum)
-// despachetate cu 7z, fiecare fișier urcat separat. Orice eșec își scrie MOTIVUL în ofertare_seap_fisiere.
+// despachetate cu 7zz (7-Zip oficial), fiecare fișier urcat separat. Orice eșec își scrie MOTIVUL în ofertare_seap_fisiere.
 //
 // Conținut EXTERN și neîncrezător (arhivele vin de la autoritate, dar le tratăm ca input ostil):
 //  - listăm întâi arhiva (7z l -slt): refuzăm căi absolute / cu „..", prea multe intrări sau dimensiune totală
@@ -103,6 +103,8 @@ export const numeVolum = (v: { baza: string; nr: number }, cifre: number) => `${
 // cu argumente separate (fără shell) și cu limită de timp. Izolarea completă într-un container separat, fără rețea,
 // e pasul următor (vezi docs); până atunci conținutul arhivei nu vede nicio cheie.
 const TIMP_7Z_MS = 20 * 60_000
+// binarul oficial 7-Zip (7zz) — cel din Alpine nu are RAR; local (teste) se poate folosi 7z prin SEVENZIP=7z
+const SEVENZIP = Deno.env.get('SEVENZIP') ?? '7zz'
 async function ruleaza(cmd: string, args: string[]) {
   const ac = new AbortController(); const t = setTimeout(() => ac.abort(), TIMP_7Z_MS)
   const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped', clearEnv: true, env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' }, signal: ac.signal }).output()
@@ -284,7 +286,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       if (cheieGrup.startsWith('rar:') || (locale.length === 1 && esteArhiva(locale[0].nume))) {
         // ARHIVĂ: listăm, verificăm, extragem, urcăm fiecare fișier
         const prima = locale[0].cale
-        const lst = await ruleaza('7z', ['l', '-slt', '-ba', prima])
+        const lst = await ruleaza(SEVENZIP, ['l', '-slt', '-ba', prima])
         const v = lst.code === 0 ? verificaListare(lst.out) : { ok: false as const, motiv: `7z l: ${(lst.err || lst.out).slice(-300)}` }
         if (!v.ok) {
           raport.erori.push(`${eticheta}: ${v.motiv}`)
@@ -294,7 +296,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         }
         stare(`despachetez ${eticheta} (${v.intrari} fișiere, ${Math.round(v.total / 2 ** 20)} MB)`)
         const out = `${dir}/out`
-        const x = await ruleaza('7z', ['x', '-y', '-bd', `-o${out}`, prima])
+        const x = await ruleaza(SEVENZIP, ['x', '-y', '-bd', `-o${out}`, prima])
         if (x.code !== 0) {
           const motiv = `7z x cod ${x.code}: ${(x.err || x.out).slice(-300)}`
           raport.erori.push(`${eticheta}: ${motiv}`)
