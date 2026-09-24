@@ -39,6 +39,7 @@ const CATEGORII = {
   hr:               { label:'HR',                 icon:'👥', color:G.pink },
   sudura_otel:      { label:'Sudură Oțel',        icon:'🔥', color:G.red  },
   sudura_pehd:      { label:'Sudură PEHD',        icon:'🔵', color:G.cyan || G.blue },
+  procedura:        { label:'Proceduri (PTE/SMC)', icon:'📘', color:G.purple },  // 24.09: procedurile tehnice de execuție, cu cod + revizie (cap. 4.b din PT)
   etalonare:        { label:'Etalonări aparate',  icon:'📏', color:G.cyan || G.blue },  // BD o acceptă deja (5 înregistrări importate); lipsea din UI
   altele:           { label:'Altele',             icon:'📄', color:G.dim },
 }
@@ -408,6 +409,7 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
     tip: item.tip || '',
     denumire: item.denumire || '',
     numar_document: item.numar_document || '',
+    revizie: item.revizie || '',
     autoritate_emitenta: item.autoritate_emitenta || '',
     data_emitere: item.data_emitere || '',
     data_valabilitate: item.data_valabilitate || '',
@@ -453,6 +455,7 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
       tip: f.tip.trim() || 'Document',
       denumire: f.denumire.trim(),
       numar_document: f.numar_document.trim() || null,
+      revizie: (f.revizie || '').trim() || null,
       autoritate_emitenta: f.autoritate_emitenta.trim() || null,
       data_emitere: f.data_emitere || null,
       data_valabilitate: f.fara_expirare ? null : (f.data_valabilitate || null),
@@ -537,9 +540,15 @@ function DocumentModal({ item, allDocs, onClose, onSaved, onError, onAiSuccess }
             <input style={S.input} value={f.autoritate_emitenta} onChange={e => setF({...f, autoritate_emitenta:e.target.value})} placeholder="ANAF, Reg.Comerțului, SRAC..." />
           </div>
           <div>
-            <label style={S.lbl}>Număr/Serie document</label>
-            <input style={S.input} value={f.numar_document} onChange={e => setF({...f, numar_document:e.target.value})} />
+            <label style={S.lbl}>{f.categorie === 'procedura' ? 'Cod procedură' : 'Număr/Serie document'}</label>
+            <input style={S.input} value={f.numar_document} onChange={e => setF({...f, numar_document:e.target.value})} placeholder={f.categorie === 'procedura' ? 'ex. PTE-07' : ''} />
           </div>
+          {f.categorie === 'procedura' && (
+            <div>
+              <label style={S.lbl}>Revizie / ediție</label>
+              <input style={S.input} value={f.revizie} onChange={e => setF({...f, revizie:e.target.value})} placeholder="ex. Ed. 2 / Rev. 1" />
+            </div>
+          )}
         </div>
 
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
