@@ -16,6 +16,7 @@ python3 - "$D/traversal.zip" <<'PY'
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('../../evil.txt', 'x'); z.writestr('ok.txt', 'y')
 PY
+mkdir -p "$D/l/s"; echo x > "$D/l/s/a.txt"; ln -s /etc/passwd "$D/l/s/abs"; (cd "$D/l" && zip -qry "$D/symlink.zip" s && ln s/a.txt s/hard && tar cf "$D/hardlink.tar" s)
 if command -v rar >/dev/null; then head -c 400000 /dev/urandom > "$D/z/mare.bin"; (cd "$D/z" && rar a -v100k -idq "$D/multi.rar" mare.bin); fi
 mkdir -p "$D/w"
 LUCRU="$D/w" SEVENZIP=7z sh worker/ofertare/extractor/extractor.sh >/dev/null 2>&1 & EXT=$!

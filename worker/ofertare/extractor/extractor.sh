@@ -4,10 +4,12 @@
 # (folderul de lucru comun cu workerul). Rulează ca utilizator neprivilegiat, cu FS read-only.
 #
 # Protocol pe fișiere (workerul scrie, extractorul răspunde) — într-un folder de job /work/<job>/:
-#   in/<volume>     arhiva (sau volumele RAR, cu nume canonice)       ← worker
-#   prima           numele primului volum din in/ (fără /)             ← worker
-#   cerere = "l"    → listare.txt + listare.cod + listare.gata         ← extractor
-#   cerere = "x"    → out/ + rezultat ("<cod>\n<motiv>")               ← extractor (doar după ce workerul a aprobat listarea)
+#   in/<volume>     arhiva (sau volumele RAR, cu nume canonice)       ← worker (root, 755: extractorul doar citește)
+#   prima, cerere   numele primului volum / "l" sau "x"                ← worker (root: extractorul nu le poate modifica)
+#   out/, rasp/     singurele foldere în care extractorul poate scrie (create de worker, chown 10001, 700)
+#   cerere = "l"    → rasp/listare.txt + listare.cod + listare.gata    ← extractor
+#   cerere = "x"    → out/ + rasp/rezultat ("<cod>\n<motiv>")          ← extractor (doar după ce workerul a aprobat listarea)
+# Joburile stau pe unul sau două niveluri sub /work (/work/<job> sau /work/<lot>/<job>).
 # Politica (căi, număr, mărime declarată) o decide WORKERUL pe listare (verificaListare, testată);
 # aici se impun limitele EFECTIVE, în timpul extragerii: spațiu, număr de fișiere, mărime/fișier, timp,
 # plus legături simbolice și adâncime după extragere. Orice depășire = eșec, niciodată succes parțial.
@@ -19,6 +21,7 @@ MAX_FIS=${MAX_FIS:-5000}             # fișiere + foldere create
 MAX_FIS_BLK=${MAX_FIS_BLK:-4194304}  # 2 GB pe fișier (ulimit -f, blocuri de 512 B)
 MAX_SEC=${MAX_SEC:-1200}             # 20 min
 MAX_ADANC=${MAX_ADANC:-30}           # niveluri de foldere
+MAX_LISTARE_BLK=${MAX_LISTARE_BLK:-102400}  # listarea: max 50 MB de text (ulimit -f), 120 s CPU
 
 scrie() { printf '%s\n%s\n' "$2" "$3" > "$1.tmp" && mv "$1.tmp" "$1"; }   # atomic: workerul nu citește jumătăți
 
@@ -31,10 +34,12 @@ prima_sigura() {  # numele vine de la worker, dar tot îl verificăm: fără că
 
 lista() {
   j=$1
-  if ! p=$(prima_sigura "$j"); then echo 2 > "$j/listare.cod"; : > "$j/listare.txt"; touch "$j/listare.gata"; return; fi
-  ( cd "$j/in" && ulimit -t 120 && exec "$Z" l -slt -ba -- "$p" ) > "$j/listare.txt" 2> "$j/listare.err"
-  echo $? > "$j/listare.cod"
-  touch "$j/listare.gata"
+  r=$j/rasp
+  [ -d "$r" ] && [ -w "$r" ] || return            # jobul nu e pregătit pentru noi
+  if ! p=$(prima_sigura "$j"); then echo 2 > "$r/listare.cod"; : > "$r/listare.txt"; touch "$r/listare.gata"; return; fi
+  ( cd "$j/in" && ulimit -t 120 && ulimit -f "$MAX_LISTARE_BLK" && exec "$Z" l -slt -ba -- "$p" ) > "$r/listare.txt" 2> "$r/listare.err"
+  echo $? > "$r/listare.cod"
+  touch "$r/listare.gata"
 }
 
 peste_limite() {  # $1 job, $2 secunde scurse → motivul depășirii sau nimic
@@ -48,8 +53,9 @@ peste_limite() {  # $1 job, $2 secunde scurse → motivul depășirii sau nimic
 
 extrage() {
   j=$1
-  if ! p=$(prima_sigura "$j"); then scrie "$j/rezultat" 2 "cerere invalidă (numele volumului)"; return; fi
-  mkdir -p "$j/out"
+  r=$j/rasp
+  [ -d "$r" ] && [ -w "$r" ] && [ -d "$j/out" ] && [ -w "$j/out" ] || return
+  if ! p=$(prima_sigura "$j"); then scrie "$r/rezultat" 2 "cerere invalidă (numele volumului)"; return; fi
   ( cd "$j/in" && ulimit -f "$MAX_FIS_BLK" && exec "$Z" x -y -aou -bd -o../out -- "$p" ) > "$j/x.log" 2>&1 &
   pid=$!
   motiv=""; t=0
@@ -67,21 +73,21 @@ extrage() {
   if [ -z "$motiv" ] && [ -n "$(find "$j/out" -type l | head -n 1)" ]; then motiv="RESPINS: arhiva conține legături simbolice"; fi
   if [ -z "$motiv" ] && [ -n "$(find "$j/out" -mindepth "$MAX_ADANC" | head -n 1)" ]; then motiv="RESPINS: peste $MAX_ADANC niveluri de foldere"; fi
   if [ -n "$motiv" ]; then
-    rm -rf "$j/out"                    # extragere parțială = nimic de urcat
+    find "$j/out" -mindepth 1 -delete 2>/dev/null; rm -rf "$j/out"/* 2>/dev/null   # extragere parțială = nimic de urcat
     [ "$cod" -eq 0 ] && cod=3
-    scrie "$j/rezultat" "$cod" "$motiv"
+    scrie "$r/rezultat" "$cod" "$motiv"
   else
-    scrie "$j/rezultat" 0 "ok"
+    scrie "$r/rezultat" 0 "ok"
   fi
 }
 
 o_trecere() {
-  for j in "$W"/*/; do
+  for j in "$W"/*/ "$W"/*/*/; do
     j=${j%/}
     [ -f "$j/cerere" ] || continue
     case "$(cat "$j/cerere" 2>/dev/null)" in
-      l) [ -f "$j/listare.gata" ] || lista "$j" ;;
-      x) [ -f "$j/rezultat" ] || extrage "$j" ;;
+      l) [ -f "$j/rasp/listare.gata" ] || lista "$j" ;;
+      x) [ -f "$j/rasp/rezultat" ] || extrage "$j" ;;
     esac
   done
 }

@@ -23,3 +23,16 @@ Protocolul e pe fișiere (vezi antetul `extractor/extractor.sh`): workerul cere 
 (spațiu, număr de fișiere, mărime pe fișier, timp, symlinkuri, adâncime) și șterge tot la depășire.
 `extractor.sh` e copiat în imagine → după o schimbare: `docker-compose -p gazpet-ofertare-worker up -d --build seap-extractor`.
 Teste: `bash test-fixtures/seap_terra/run.sh` (include `extractor_test.sh`, arhive malițioase).
+
+### Cum sunt impuse limitele (precizare cerută de Copilot)
+- **Mărime pe fișier (2 GB)** și **listare (50 MB text)**: `ulimit -f` — plafon strict impus de kernel.
+- **CPU listare (120 s)**: `ulimit -t` — strict.
+- **Memorie (1 GB), procese (64)**: `mem_limit` / `pids_limit` ale containerului — stricte.
+- **Spațiu total (6 GB), număr de fișiere (5.000), timp (20 min)**: MONITORIZARE o dată pe secundă + `kill -KILL`
+  (7zz nu creează subprocese, deci oprirea lui oprește tot arborele) + o verificare finală după ieșire. NU e plafon
+  absolut: se poate depăși cu cât scrie 7-Zip într-o secundă (de ordinul sutelor de MB / miilor de fișiere mici).
+  Rezultatul tot eșec e, iar `out/` se golește; intrările și diagnosticul (`rasp/`) rămân până curăță workerul.
+- **Separare per job**: folderul jobului, `in/`, `cerere` și `prima` sunt ale workerului (root, 755) — extractorul
+  (uid 10001) le poate doar citi; scrie numai în `out/` și `rasp/` (chown 10001, 700). Joburile rulează secvențial.
+- **Replay de acceptare** pe un set real: `docker exec gazpet-ofertare-worker deno run -A /app/worker/ofertare/replay_seap.ts <licitatie>`
+  (fără urcare/BD; CRC per fișier vs. antetul arhivei, SHA-256, nume+mărimi vs. documentele urcate, intrări neatinse).
