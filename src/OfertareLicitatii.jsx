@@ -1036,6 +1036,25 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (error || data?.error) { setWarn(`Note tăiate: ${data?.error || error.message}`); return null }
     return data
   }
+  // 25.09.2026 (audit T4/C3): reluare pe zone, FĂRĂ retăiere — 'continua' (citire întreruptă) sau 'reia_erori'
+  // (doar zonele căzute). Zonele deja citite bine nu se mai plătesc.
+  const reiaPlansa = async (d, mod) => {
+    setWarn(null)
+    let runde = 0, sumar = null, sari = []
+    try {
+      while (runde < 25) {
+        setPlansaBusy(`${d.nume_original}: ${mod === 'reia_erori' ? 'recitesc zonele căzute' : 'continui citirea'} (runda ${runde + 1})...`)
+        const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, mod, sari, paralel: PLANSA_PARALEL } })
+        if (error || data?.error) { setWarn(`Eroare la reluare: ${data?.error || error.message}`); break }
+        sumar = data.sumar; sari = data.reincercate || sari
+        if (!data.continua) break
+        runde++
+      }
+      if (sumar) setWarn(`✅ Reluare terminată: ${sumar.felii_citite} zone cu rezultat, ${sumar.erori} căzute` +
+        `${sumar.erori ? ` (${(sumar.zone_cazute || []).join(', ')})` : ''} · ${sumar.tronsoane_gasite} tronsoane (${sumar.lungime_totala_m.toLocaleString('ro-RO')} m, nevalidat)` +
+        `${sumar.metrici ? ` · ⏱ ${sumar.metrici.durata_s}s total, ~${sumar.metrici.cost_usd}$ total` : ''}.`)
+    } finally { setPlansaBusy(null); await load(); onChanged?.() }
+  }
   const citestePlansa = async (d, eticheta = '', fin = false) => {
     let ok = false
     setWarn(null); setPlansaBusy(`${eticheta}${d.nume_original}: pregătesc feliile...`)
@@ -1071,7 +1090,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
         setWarn(`✅ Planșă citită: ${sumar.tronsoane_gasite} tronsoane (${sumar.lungime_totala_m.toLocaleString('ro-RO')} m)` +
           `${sumar.tabele.length ? `, tabele: ${sumar.tabele.join(', ')}` : ''}` +
           `${sumar.subtraversari ? `, ${sumar.subtraversari} subtraversări` : ''}` +
-          `${sumar.erori ? ` — ${sumar.erori} zone cu erori` : ''}` +
+          `${sumar.erori ? ` — ${sumar.erori} zone căzute (${(sumar.zone_cazute || []).join(', ')}): „🔁 reia zonele căzute”` : ''}` +
+          `${(sumar.avertismente || []).length ? ` · ⚠ ${sumar.avertismente.length} avertismente (vezi documentul)` : ''} · totaluri NEVALIDATE până la reconciliere` +
           `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}` +
           `${sumar.metrici ? ` · ⏱ ${sumar.metrici.durata_s}s, ${sumar.metrici.runde} runde, ${sumar.metrici.limitari} limitări, ${sumar.metrici.reincercari} reîncercări, ~${sumar.metrici.cost_usd}$` : ''}` +
           `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}.`)
@@ -1356,6 +1376,17 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                   {eMare(d) && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={!!plansaBusy} title="PDF peste 20 MB — citirea AI cade pe el; îl sparg în bucăți ≤ 15 MB"
                       onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
+                  )}
+                  {d.tip === 'plansa' && poatePorniProcesarea(profile, licitatie) && d.analiza?.citire_ai && !peSigla(d) && (
+                    d.analiza.citire_ai.gata === false ? (
+                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
+                        title="Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."
+                        onClick={() => reiaPlansa(d, 'continua')}>⏯ continuă citirea</button>
+                    ) : (d.analiza.citire_ai.sumar?.erori > 0 ? (
+                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
+                        title={`Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
+                        onClick={() => reiaPlansa(d, 'reia_erori')}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
+                    ) : null)
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
                     plansaGoala(d) ? (<>

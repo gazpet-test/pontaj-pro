@@ -29,7 +29,8 @@ const FELII_PE_RULARE = 4;
 // face controlat și se MĂSOARĂ (citire_ai.metrici): durata, 429/529, reîncercări, cost. Nu presupunem înjumătățirea.
 const PARALEL = 2;
 const PARALEL_MAX = 4;
-const REINCERCARI = 2;          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const REINCERCARI = 2;
+const COD_VERSIUNE = '2026-09-25.3'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -486,11 +487,27 @@ Deno.serve(async (req: Request) => {
       cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4) });
   }
 
-  const lot = felii.slice(deLa, deLa + FELII_PE_RULARE);
+  // 25.09.2026 (audit T4/C3): reluare PE ZONE, fără a retăia și fără a plăti din nou zonele bune.
+  //  mod 'continua'   = citește zonele fără rezultat (browser închis la mijloc)
+  //  mod 'reia_erori' = citește DOAR zonele căzute (body.sari = zonele deja reîncercate în trecerea asta)
+  // Reluarea e permisă numai pe aceeași tăiere (plansa.taiat_la), altfel zonele nu corespund.
+  const ca0 = doc.analiza?.citire_ai;
+  const mod = body?.mod === 'continua' || body?.mod === 'reia_erori' ? body.mod : null;
+  const acelasiTaiat = !!ca0 && (ca0.taiat_la || null) === (plansa.taiat_la || null);
+  if (mod && !acelasiTaiat) return json({ error: 'Citirea salvată e pe altă tăiere a planșei — pornește „citește” din nou.' }, 409);
+  const numeZona = (f: any) => String(f.name || '').replace('.jpg', '');
+  const existente: any[] = (mod || deLa > 0) && acelasiTaiat ? (ca0?.felii || []) : (deLa > 0 ? (ca0?.felii || []) : []);
+  const rezPe = new Map(existente.map((r: any) => [String(r.eticheta || '').replace('.jpg', ''), r]));
+  const sari = new Set<string>((Array.isArray(body?.sari) ? body.sari : []).map(String));
+  const lot = mod === 'reia_erori'
+    ? felii.filter((f: any) => rezPe.get(numeZona(f))?.eroare && !sari.has(numeZona(f))).slice(0, FELII_PE_RULARE)
+    : mod === 'continua'
+      ? felii.filter((f: any) => !rezPe.has(numeZona(f))).slice(0, FELII_PE_RULARE)
+      : felii.slice(deLa, deLa + FELII_PE_RULARE);
   // 25.09.2026 (Vâlcelele, schema tehnologică): tabelul de dimensionare se întinde pe multe zone, dar antetul e
   // doar în prima — zonele fără antet ghiceau coloanele (debitul citit ca diametru: Dn43/48/56/96/98).
   // Antetele găsite în zonele deja citite se dau mai departe.
-  const anteteCunoscute = [...new Set((deLa ? (doc.analiza?.citire_ai?.felii || []) : [])
+  const anteteCunoscute = [...new Set(existente
     .flatMap((r: any) => (r.tabele || []).map((t: any) => `${t.denumire || 'tabel'}: ${(t.coloane || []).join(' | ')}`))
     .filter((x: string) => x.includes('|')))].slice(0, 4).join(' ;; ');
   const paralel = Math.max(1, Math.min(PARALEL_MAX, Math.floor(Number(body?.paralel)) || PARALEL));
@@ -500,7 +517,7 @@ Deno.serve(async (req: Request) => {
     const grup = lot.slice(i, i + paralel);
     const parti = await Promise.all(grup.map(async (f: any) => {
       const { data: bin, error } = await supa.storage.from('ofertare').download(`${plansa.cale_felii}/${f.name}`);
-      if (error || !bin) return { eticheta: f.name, eroare: error?.message || 'descarcare esuata' };
+      if (error || !bin) return { eticheta: numeZona(f), eroare: error?.message || 'descarcare esuata' };
       return await citesteFelie(API_KEY, new Uint8Array(await bin.arrayBuffer()), f.name.replace('.jpg', ''), anteteCunoscute);
     }));
     rezultate.push(...parti);
@@ -524,9 +541,16 @@ Deno.serve(async (req: Request) => {
     erori: rezultate.filter((r: any) => r.eroare).length,
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4), la: new Date().toISOString(),
   };
-  const gata = deLa + lot.length >= felii.length;
-  const precedente = deLa === 0 ? [] : (doc.analiza?.citire_ai?.felii || []);
-  const toate = [...precedente, ...rezultate];
+  // proveniența pe tronson: zona (regiunea) din care a fost citit
+  for (const r of rezultate) for (const t of (r.tronsoane || [])) t._zona = r.eticheta;
+  const inLot = new Set(lot.map(numeZona));
+  const precedente = existente.filter((r: any) => !inLot.has(String(r.eticheta || '').replace('.jpg', '')));
+  const toate = [...precedente, ...rezultate].sort((a: any, b: any) => String(a.eticheta).localeCompare(String(b.eticheta)));
+  const cuRezultat = new Set(toate.map((r: any) => String(r.eticheta || '').replace('.jpg', '')));
+  const gata = felii.every((f: any) => cuRezultat.has(numeZona(f)));
+  const maiSunt = mod === 'reia_erori'
+    ? felii.some((f: any) => { const n = numeZona(f); return !inLot.has(n) && !sari.has(n) && toate.find((r: any) => r.eticheta === n)?.eroare; })
+    : !gata;
 
   // sumar peste tot ce s-a citit pana acum, ca sa se vada imediat ce a iesit.
   // Se numara tronsoanele UNICE: cu suprapunerea dintre felii, acelasi rand apare de
@@ -560,6 +584,17 @@ Deno.serve(async (req: Request) => {
     const deScos = new Set(nestandard);
     pentruCantitati.splice(0, pentruCantitati.length, ...pentruCantitati.filter((t: any) => !deScos.has(t)));
   }
+  // 25.09.2026 (audit T5/T6): similaritatea lungimilor e AVERTISMENT, nu deduplicare — nu se scoate nimic din total.
+  const avertismente: string[] = [];
+  for (const a of adnotariInPlus) {
+    const gem = dinTabel.find((t: any) => Math.abs(Number(t.lungime_m) - Number(a.lungime_m)) <= 1);
+    if (gem) avertismente.push(`Adnotarea Dn${a.diametru_mm} ${a.lungime_m} m (${a._zona || '?'}) are aceeași lungime ca rândul din tabel Dn${gem.diametru_mm} ${gem.de_la ?? '?'}→${gem.la ?? '?'} — posibil același tronson, numărat de două ori`);
+  }
+  const grupe = new Map<string, number>();
+  for (const t of dinTabel) { const k = `${t.lungime_m}|${t.diametru_mm}`; grupe.set(k, (grupe.get(k) || 0) + 1); }
+  const repetate = [...grupe.entries()].filter(([, n]) => n > 1);
+  if (repetate.length) avertismente.push(`${repetate.length} grupuri de rânduri din tabel au aceeași lungime și același Dn (ex. ${repetate.slice(0, 3).map(([k, n]) => `${k.replace('|', ' m Dn')} ×${n}`).join(', ')}) — pot fi tronsoane reale diferite sau rânduri citite de două ori; neverificat`);
+  if (!pentruCantitati.some((t: any) => t.material)) avertismente.push('Materialul (PE/OL, SDR) nu apare pe niciun tronson citit — nu se completează din presupuneri');
   const nrPlansa = toate.map((r: any) => r?.cartus?.plansa_nr).find(Boolean) ||
     doc.analiza?.cartus?.plansa_nr || null;
   const sumar: Record<string, unknown> = {
@@ -576,6 +611,9 @@ Deno.serve(async (req: Request) => {
     subtraversari: toate.flatMap((r: any) => r.subtraversari || []).length,
     bransamente: toate.flatMap((r: any) => r.bransamente || []).length,
     erori: toate.filter((r: any) => r.eroare).length,
+    zone_cazute: toate.filter((r: any) => r.eroare).map((r: any) => r.eticheta),
+    avertismente,
+    validat: false, // totalurile din citirea pe zone rămân NEVALIDATE până la reconcilierea cu memoriul/F3
     ...(zoneLipsa.length ? { zone_lipsa: zoneLipsa } : {}),
     ...(plansa.rezolutie_redusa ? { rezolutie_redusa: plansa.rezolutie_redusa } : {}),
   };
@@ -596,7 +634,7 @@ Deno.serve(async (req: Request) => {
   } else if (gata && sumar.erori) {
     cantitati = { amanat: `${sumar.erori} feli${sumar.erori === 1 ? 'e' : 'i'} n-au putut fi citite — ` +
       `cifrele NU s-au trecut in cantitati, fiindca totalul ar fi incomplet si ar arata ca o diferenta reala. ` +
-      `Reia felia esuata si transferul se face singur.` };
+      `Apasă „🔁 reia zonele căzute” (se citesc doar zonele căzute) și transferul se face singur.` };
     sumar.cantitati = cantitati;
   } else if (gata) {
     try {
@@ -611,7 +649,7 @@ Deno.serve(async (req: Request) => {
   // „neprocesat" fără text — Rezumatul îl număra la „rămase de citit" și UI-ul oferea recitire plătită.
   // La final: procesat + text_extras (randare text a citirii, pt cerințe/clarificări/căutare);
   // dacă TOATE feliile au căzut: eroare. Pe runde intermediare statusul nu se atinge.
-  const metrici = [...(deLa === 0 ? [] : (doc.analiza?.citire_ai?.metrici || [])), metricaRunda];
+  const metrici = [...(existente.length ? (ca0?.metrici || []) : []), { ...metricaRunda, mod: mod || 'complet' }];
   if (gata) sumar.metrici = {
     runde: metrici.length, paralel: [...new Set(metrici.map((m: any) => m.paralel))],
     durata_s: Math.round(metrici.reduce((q: number, m: any) => q + m.durata_ms, 0) / 1000),
@@ -619,7 +657,13 @@ Deno.serve(async (req: Request) => {
     limitari: metrici.flatMap((m: any) => m.limitari).length,
     cost_usd: +metrici.reduce((q: number, m: any) => q + m.cost_usd, 0).toFixed(3),
   };
-  const citireAi = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: MODEL, gata, actualizat: new Date().toISOString() };
+  // proveniența rulării (T11): ce tăiere, ce versiune de cod/prompt, ce model
+  const promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
+    .slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const versiune = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: MODEL, prompt_sha: promptSha,
+    fisier: doc.nume_original, pagina: 1, dpi: plansa.dpi || null, cale_felii: plansa.cale_felii, taiat_la: plansa.taiat_la || null };
+  const citireAi = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: MODEL, versiune, taiat_la: plansa.taiat_la || null,
+    gata, actualizat: new Date().toISOString() };
   const upd: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi }, analiza_la: new Date().toISOString() };
   // 25.09.2026 (audit țintit): PL1–PL4 Vâlcelele au fost „citite" pe sigla semnăturii (900x450) și au ieșit
   // procesat fără eroare — butoanele le socoteau citite. O sursă sub 2000px pe latura mare nu e o planșă:
@@ -634,12 +678,13 @@ Deno.serve(async (req: Request) => {
       upd.status_procesare = 'eroare';
       upd.eroare = `Citire planșă eșuată pe toate cele ${toate.length} zone: ` + String(toate.find((r: any) => r.eroare)?.eroare || '').slice(0, 200);
     } else {
-      upd.status_procesare = 'procesat';
+      // 25.09.2026 (audit T3): zone căzute => 'partial', nu 'procesat' (stare onestă; se reiau doar ele)
+      upd.status_procesare = (sumar.erori as number) || zoneLipsa.length ? 'partial' : 'procesat';
       upd.text_extras = textPlansa(doc.nume_original, citireAi);
       // 25.09.2026: citită dar nimic extras (0 tronsoane, 0 tabele, 0 m) — rămâne procesat, dar marcat
       // ca să fie interogabil și UI-ul să ofere „recitește fin".
       const gol = !(sumar.tronsoane_gasite as number) && !(sumar.tabele as unknown[]).length && !(sumar.lungime_totala_m as number)
-      upd.eroare = zoneLipsa.length ? `${zoneLipsa.length} zone lipsă (retaie planșa)` : sumar.erori ? `${sumar.erori} zone necitite (se pot relua)` : gol ? 'citită fără rezultat' : null;
+      upd.eroare = zoneLipsa.length ? `${zoneLipsa.length} zone lipsă (retaie planșa)` : sumar.erori ? `${sumar.erori} zone căzute — „🔁 reia zonele căzute”` : gol ? 'citită fără rezultat' : null;
       upd.procesat_la = new Date().toISOString();
     }
   }
@@ -659,7 +704,8 @@ Deno.serve(async (req: Request) => {
   return json({
     document: doc.nume_original, citite_acum: lot.length, din: felii.length, sumar, cantitati,
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4),
-    clarificare, continua: !gata, de_la_urmator: gata ? null : deLa + lot.length,
+    clarificare, continua: maiSunt && lot.length > 0, de_la_urmator: gata ? null : deLa + lot.length,
+    reincercate: mod === 'reia_erori' ? [...sari, ...inLot] : undefined, zone_cazute: sumar.zone_cazute,
     lipire_necesara: gata ? perechiDeLipit(toate, peStorage).slice(0, MAX_PERECHI).length : 0,
   });
 });
