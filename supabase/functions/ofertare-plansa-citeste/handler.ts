@@ -35,7 +35,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-25.5'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-25.6'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -212,16 +212,34 @@ function numar(v: unknown): number | null {
 // Feliile se suprapun ca sa nu taie randuri de tabel pe margine, deci acelasi rand e
 // citit de doua ori. Fara eliminarea dublurilor totalul iese umflat — exact genul de
 // cifra gresita care ajunge tacut intr-o oferta.
-function tronsoaneUnice(lista: any[]) {
-  const vazute = new Set<string>();
+// 25.09.2026 (planșa 470, felia z2_7): deduplicarea pe MULȚIME pierdea rânduri legitime identice ca text din ACELAȘI
+// tabel — Nr 37, 40, 41 „Florenta Albu → CT, C-tin Brâncoveanu, Dn40, 300 m, Q20” apar de 3 ori în z2_7, rămânea 1
+// (−600 m pe Dn40). Acum dedup pe MULTISET: pentru fiecare cheie, multiplicitatea finală = MAXIMUL aparițiilor în oricare
+// felie. Feliile se suprapun, deci o cheie văzută în 2 felii nu se dublează (max(1,1) = 1), dar 3 apariții în aceeași
+// felie rămân 3. Limită cunoscută (ca înainte): două rânduri identice ca text în felii care NU se suprapun rămân unul.
+// Primește feliile (zonele citite), nu lista plată: identitatea feliei nu depinde de _zona (lipsește pe citirile vechi).
+export function tronsoaneUnice(felii: any[]) {
+  const maxPeFelie = new Map<string, number>();
+  const valide: { t: any; cheie: string; lung: number; dn: number | null }[] = [];
+  for (const f of felii || []) {
+    const inFelie = new Map<string, number>();
+    for (const t of (f?.tronsoane || [])) {
+      const lung = numar(t?.lungime_m);
+      if (!lung || lung <= 0) continue;
+      const dn = numar(t?.diametru_mm);
+      const cheie = [text(t?.de_la), text(t?.la), lung, dn ?? '', numar(t?.debit_mch) ?? '', text(t?.zona)].join('|');
+      inFelie.set(cheie, (inFelie.get(cheie) || 0) + 1);
+      valide.push({ t, cheie, lung, dn });
+    }
+    for (const [k, c] of inFelie) if (c > (maxPeFelie.get(k) || 0)) maxPeFelie.set(k, c);
+  }
+  // în ordinea citirii (feliile sortate pe etichetă), fiecare cheie intră de maxPeFelie ori
+  const puse = new Map<string, number>();
   const out: any[] = [];
-  for (const t of lista) {
-    const lung = numar(t?.lungime_m);
-    if (!lung || lung <= 0) continue;
-    const dn = numar(t?.diametru_mm);
-    const cheie = [text(t?.de_la), text(t?.la), lung, dn ?? '', numar(t?.debit_mch) ?? '', text(t?.zona)].join('|');
-    if (vazute.has(cheie)) continue;
-    vazute.add(cheie);
+  for (const { t, cheie, lung, dn } of valide) {
+    const n = puse.get(cheie) || 0;
+    if (n >= (maxPeFelie.get(cheie) || 0)) continue;
+    puse.set(cheie, n + 1);
     out.push({ ...t, lungime_m: lung, diametru_mm: dn });
   }
   return out;
@@ -773,7 +791,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // Se numara tronsoanele UNICE: cu suprapunerea dintre felii, acelasi rand apare de
   // doua ori si totalul ar iesi umflat.
   const brute = toate.flatMap((r: any) => r.tronsoane || []);
-  const unice = tronsoaneUnice(brute);
+  const unice = tronsoaneUnice(toate);
   // Acelasi tronson poate fi citit de doua ori: o data din tabelul de dimensionare si o
   // data din adnotarea de pe traseu — aceeasi teava, dar cu alte denumiri de capete
   // ("Nod 2 -> Nod 3" vs "Limita Intravilan -> Limita UAT Ulmeni"), deci deduplicarea pe

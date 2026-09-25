@@ -2,9 +2,23 @@
 
 Data: 25.09.2026 (noapte) · Răspuns la verdictul Copilot: „Rămân coada independentă de browser și prevenirea apelurilor AI duplicate între taburi.”
 Runda 2 (după verificator): defectul major „citește de la zero cooperează” reparat + test; plafon pe `pana_la`; `/api/plansa-felii` fail-closed; corecturi de text; design NAS completat (§3). Plus un bug nou de agregare găsit pe planșa 470 (§5, commit separat).
-Ramură locală: `claude/r4-rezervare-zone` (bază `main` @ `8a6fbbb`). **Nimic deployat, nimic pushat, nicio scriere în BD** (doar SELECT-uri).
+Ramură locală: `claude/r4-rezervare-zone` (bază `main` @ `8a6fbbb`; numerele de linie din §2 și §5 sunt pe capul ramurii). **Nimic deployat, nimic pushat, nicio scriere în BD** (doar SELECT-uri).
 
 **Verdict propus: PARȚIAL.**
+
+Teste finale pe ramură (după ambele commit-uri; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins):
+
+| Comandă | Rezultat |
+|---|---|
+| `deno test supabase/functions/ofertare-plansa-citeste` | **68/68** |
+| `deno test -A supabase/functions/` | **85/85** |
+| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 46/46 de fiecare dată |
+| `node scripts/test-cas-felii.mjs` | **34/34** |
+| `node scripts/test-detector-sigla.mjs` | 23/23 |
+| `node scripts/verifica-poarta-identica.mjs` | OK |
+| `deno check` pe `index.ts` | OK |
+
+Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare; cu dedup pe mulțime pică 4 teste de multiset.
 
 | Punct | Stare |
 |---|---|
@@ -45,11 +59,11 @@ Ordin de mărime (SELECT pe `ai_usage_log`, `function_name='ofertare-plansa-cite
 
 ### 2.1 Mecanism (fără schemă nouă)
 - Stocare: `analiza.rezervari_zone = {rev, zone: {cheie: {rulare, taiat_la, de_la, pana_la, resetare?}}}`; cheie = zona (`z1_5`) sau perechea (`lipire:z1_1+z1_2`).
-- Rezervarea se face prin **CAS** (`concurenta.ts:211 rezervaChei`). Lotul se calculează pe documentul **proaspăt** (`handler.ts:657 planifica`). Se exclud zonele rezervate activ de **altă** rulare pe **aceeași** tăiere (`concurenta.ts:170 rezervateDeAltii`), apoi se scriu rezervările (jeton `rezervari_zone.rev` nou, `:178 rezervariNoi`). La conflict se recalculează, pentru că alt tab a rezervat între timp.
-- Toate candidatele rezervate de alții: **409** „Zonele … sunt în lucru în alt tab (altă rulare), rezervate până la HH:MM — nu s-a apelat AI, nu s-a plătit nimic” + `in_lucru`, `rezervat_pana_la`, `cost_usd: 0` (`handler.ts:687–690`). Zero AI, zero scrieri.
-- **„Citește” de la zero NU cooperează** (defectul major găsit de verificator, reparat în runda 2): scrierea unei resetări pleacă de la baza `[]` (înlocuiește citirea). La reîncercarea CAS ar fi aruncat rezultatele plătite ale rulării care ținea zonele. Acum, orice rezervare activă a altei rulări pe tăierea curentă (zone sau perechi de note) dă 409 „în lucru în alt tab”, zero AI (`handler.ts:678`). **Simetric**, rezervările unei resetări poartă `resetare: true`. Cât sunt active, „continuă”, „reia zonele căzute”, runda următoare a altei bucle (`de_la>0`) și „note tăiate” primesc 409 fără AI (`handler.ts:682–684`, `:570`). Motivul: scrierea resetării le-ar fi aruncat rezultatele după plată. Astfel o resetare nu coexistă niciodată cu altă rulare activă pe aceeași tăiere.
-- În rest (fără resetare), rezervarea parțială înseamnă cooperare: tabul curent citește doar restul, `in_lucru_alt_tab` apare în răspuns, iar bucla nu mai cere runde pentru zonele celuilalt (`maiSunt`). La `de_la>0`, o zonă citită deja bine în citirea curentă nu se mai plătește; `de_la_urmator` avansează după ultima zonă din lot (`handler.ts:696`).
-- Eliberare: la scrierea rezultatului (`handler.ts:883 rzCurat`: scoate rezervările rulării curente, curăță expiratele / altă tăiere); la eșec (excepție în AI `:717`, CAS epuizat `:930`) eliberarea e best-effort (`concurenta.ts:239 elibereazaRezervari`).
+- Rezervarea se face prin **CAS** (`concurenta.ts:211 rezervaChei`). Lotul se calculează pe documentul **proaspăt** (`handler.ts:675 planifica`). Se exclud zonele rezervate activ de **altă** rulare pe **aceeași** tăiere (`concurenta.ts:170 rezervateDeAltii`), apoi se scriu rezervările (jeton `rezervari_zone.rev` nou, `:178 rezervariNoi`). La conflict se recalculează, pentru că alt tab a rezervat între timp.
+- Toate candidatele rezervate de alții: **409** „Zonele … sunt în lucru în alt tab (altă rulare), rezervate până la HH:MM — nu s-a apelat AI, nu s-a plătit nimic” + `in_lucru`, `rezervat_pana_la`, `cost_usd: 0` (`handler.ts:705–708`). Zero AI, zero scrieri.
+- **„Citește” de la zero NU cooperează** (defectul major găsit de verificator, reparat în runda 2): scrierea unei resetări pleacă de la baza `[]` (înlocuiește citirea). La reîncercarea CAS ar fi aruncat rezultatele plătite ale rulării care ținea zonele. Acum, orice rezervare activă a altei rulări pe tăierea curentă (zone sau perechi de note) dă 409 „în lucru în alt tab”, zero AI (`handler.ts:696`). **Simetric**, rezervările unei resetări poartă `resetare: true`. Cât sunt active, „continuă”, „reia zonele căzute”, runda următoare a altei bucle (`de_la>0`) și „note tăiate” primesc 409 fără AI (`handler.ts:700–702`, `:588`). Motivul: scrierea resetării le-ar fi aruncat rezultatele după plată. Astfel o resetare nu coexistă niciodată cu altă rulare activă pe aceeași tăiere.
+- În rest (fără resetare), rezervarea parțială înseamnă cooperare: tabul curent citește doar restul, `in_lucru_alt_tab` apare în răspuns, iar bucla nu mai cere runde pentru zonele celuilalt (`maiSunt`). La `de_la>0`, o zonă citită deja bine în citirea curentă nu se mai plătește; `de_la_urmator` avansează după ultima zonă din lot (`handler.ts:714`).
+- Eliberare: la scrierea rezultatului (`handler.ts:901 rzCurat`: scoate rezervările rulării curente, curăță expiratele / altă tăiere); la eșec (excepție în AI `:735`, CAS epuizat `:948`) eliberarea e best-effort (`concurenta.ts:239 elibereazaRezervari`).
 - **Expirare**: `REZERVARE_EXPIRA_MS = 7 min` (`concurenta.ts:155`), peste limita de ceas Edge (150 s Free / 400 s plătit, docs Supabase „Edge Functions / Limits”). Dacă tabul se închide sau funcția e omorâtă, zona se **preia** automat după expirare.
 - **Plafon pe `pana_la`** (runda 2): o rezervare e activă doar dacă `now < pana_la <= now + 7 min + 60 s` (`TOLERANTA_CEAS_MS`, `concurenta.ts:161–166` `rezActiva`; aceeași regulă în `api/_cas.js:16–26` `rezervariActive`, constantele verificate identice în `scripts/test-cas-felii.mjs`). O rezervare coruptă sau scrisă de mână (`pana_la = 2099`; politica RLS de update pe `analiza` e a modulului Ofertare, nu doar a ownerului) e tratată ca expirată. Nu blochează nici citirea, nici retăierea, și se curăță la următoarea scriere.
 - Rezervările de pe **altă tăiere** sunt ignorate, pentru că zonele nu mai corespund.
@@ -182,3 +196,71 @@ Tabelul e mai simplu de auditat.
 - `/api/plansa-felii` cere doar un utilizator autentificat (`api/plansa-felii.js:146–151`), **fără poarta owner/responsabil**. Orice autentificat poate retăia o planșă: șterge feliile și invalidează citirea în curs. Retăierea nu costă AI, dar poate arunca o citire plătită. E candidat pentru aceeași poartă ca `poateCheltui`.
 - Politica RLS `ofertare_documente_update` (`fn_are_acces_ofertare`) permite oricărui utilizator Ofertare să scrie în `analiza`, deci și în `rezervari_zone`. Plafonul din §2.1 limitează efectul unei rezervări false la ≤ 8 min.
 - Cozile existente `ofertare_acoperire_coada`, `ofertare_clarificari_coada`, `ofertare_ingest_coada` au politica RLS `ALL` cu `auth.uid() IS NOT NULL` + GRANT INSERT/UPDATE pentru `authenticated`, fără triggere (SELECT pe `pg_policies`, `role_table_grants`, `pg_trigger`, 25.09). Workerul le execută cu service_role fără verificare de rol pe `cerut_de` (ex. `worker/ofertare/acoperire.ts:44–46`). Adică poarta pe cheltuială se poate ocoli prin insert direct în coadă (CLAUDE.md pct. 7d). Coada propusă în §3 NU copiază politica asta.
+
+## 5. Bug nou (commit separat): agregarea `tronsoaneUnice` pierdea rânduri legitime identice ca text
+
+### 5.1 Defectul
+`handler.ts` (pe `main`, l. 215–228) deduplica tronsoanele pe **mulțime**, cu cheia `de_la|la|L|Dn|Q|zona`. Scopul era ca un rând citit de două ori, din cauza suprapunerii feliilor, să nu se numere dublu. Dar trei rânduri **diferite** din același tabel, identice ca text, rămâneau unul singur.
+Planșa 470 (lic. 95), felia `z2_7`: rândurile Nr crt **37, 40, 41** au aceeași cheie „Florenta Albu → CT, C-tin Brancoveanu, 300 m, Dn40, Q20”. Nodurile din felia vecină `z2_6` sunt diferite: 33→61, 34→59, 34→60. Nr 38 (33→62) e rândul de 320 m. Sursa e un SELECT 25.09 pe `analiza->'citire_ai'->'felii'->'tabele'->'randuri'`.
+Cheia apare de 3 ori în `z2_7` și o dată în `z1_7` (suprapunerea cu rândul Nr 37). Agregarea veche păstra un singur rând, adică **−600 m pe Dn40**.
+
+### 5.2 Fix
+- **Dedup pe MULTISET** (`handler.ts:221 tronsoaneUnice`): pentru fiecare cheie, multiplicitatea finală = **maximul aparițiilor în oricare felie**. O cheie văzută o dată în fiecare din 2 felii suprapuse rămâne 1; 3 apariții în aceeași felie rămân 3. Ordinea de ieșire rămâne ordinea citirii.
+- Funcția primește acum feliile (`tronsoaneUnice(toate)`, l. 794), nu lista plată. Identitatea feliei nu depinde de `_zona`, care lipsește pe citirile vechi.
+- Regulile R5 sunt neschimbate:
+  - adnotarea pe un Dn absent din tabel nu intră în total;
+  - la ±1% față de un rând de tabel, adnotarea dă avertismentul `posibila_dublura`;
+  - `Dn60` nestandard e scos din cantități.
+- `COD_VERSIUNE` 2026-09-25.5 → **.6** (agregarea s-a schimbat). Efect practic nul pe datele de azi: cele 8 planșe cu citire au toate `gata=true` și 0 zone căzute (SELECT 25.09). „Note tăiate” nu verifică versiunea.
+- Limită cunoscută, ca înainte: două rânduri identice ca text aflate în felii care **nu** se suprapun rămân numărate o dată.
+
+### 5.3 Efect pe planșa 470
+Simularea s-a făcut pe feliile salvate (`z1_7..z4_7` tabel + `z3_1/z3_2/z4_2` adnotări). Funcția veche, rulată pe aceleași date, reproduce **exact** ce e în BD: 206 unice, 130 tronsoane, 48.195 m, aceleași cifre pe Dn, 75 adnotări / 34.732 m, 52 posibile dubluri.
+
+| | azi (BD) | cu fix |
+|---|---|---|
+| Dn40 (tabel) | 13.140 m, 54 tronsoane | **13.740 m, 56 tronsoane (+600 m)** |
+| Dn200 / Dn125 / Dn110 / Dn90 / Dn63 | 17.785 / 2.275 / 780 / 4.545 / 9.670 m | neschimbate |
+| `lungime_totala_m` / `tronsoane_gasite` | 48.195 / 130 | 48.795 / 132 |
+| `tronsoane_unice` | 206 | 221 |
+| adnotări neconfirmate (nu intră în total) | 75 / 34.732 m | 88 / 37.472 m (+13 rânduri, +2.740 m: aceleași lungimi pe Floroaica în `z3_2`/`z4_2`) |
+| `posibile_dubluri` | 52 | 63 |
+| adnotări pe Dn absent / Dn60 nestandard | 3 (1.770 m) / 110 m | neschimbate |
+
+Alte planșe: un SELECT 25.09 pe toate citirile `tip='plansa'` (normalizare aproximativă: litere mici, spații) arată că **doar 470** are chei cu multiplicitate > 1 în aceeași felie: 1 cheie de tabel (Dn40 300 m ×3) și 8 de adnotare. Restul planșelor nu se schimbă.
+Teste:
+- `agregare_test.ts`: 5 teste noi, fixture `fixture_470.ts`, redus la feliile de tabel cu lungimi. Transcrierea e verificată față de BD: număr de rânduri, sume de L/Dn/Q și md5 pe `de_la|la|zona`, identice pe fiecare felie.
+- `concurenta_test.ts`: testul de retransfer de mai jos.
+- Suita `ofertare-plansa-citeste`: **68 passed, 0 failed**.
+
+### 5.4 Efectul asupra transferului (`treciInCantitati`) — nimic nu s-a scris în BD
+Rândurile `ofertare_cantitati` **1751–1756** (lic. 95) au fost **inserate** de transferul din 25.09 16:51 cu agregarea veche. Toate au `cantitate = cantitate_plansa`, `status 'extras'`, sursa „Planșa 1 — tabel de dimensionare…”, iar în licitația 95 nu există alte rânduri de conductă (SELECT 25.09).
+Un retransfer cu agregarea nouă (testul „multiset 470: retransfer…”, același RPC simulat: actualizează doar `cantitate_plansa`, `diferenta_nota`, `status`) ar face:
+
+| rând | ce se rescrie |
+|---|---|
+| **1756 Dn40** | `cantitate_plansa` 13.140 → **13.740**; `status` extras → **diferenta**; `diferenta_nota` = „Memoriu 13.140 m vs planșa 1 13.740 m (+600 m, pe 56 tronsoane citite din tabel).” **`cantitate` rămâne 13.140** (RPC-ul nu o atinge). |
+| 1751–1755 (Dn200, Dn125, Dn110, Dn90, Dn63) | `cantitate_plansa` neschimbat; `diferenta_nota` rescrisă în „Planșa 1 confirmă: N m.” (planșa se „confirmă” pe ea însăși); `status` rămâne `extras`. |
+| rânduri noi | niciunul (0 inserări: fiecare Dn are exact un candidat). |
+
+Două probleme de semnalat (în afara fix-ului, **nemodificate**):
+- **Eticheta „Memoriu” e greșită** la 1756. Rândul a fost creat de planșă, nu din memoriu, deci „Memoriu 13.140” e de fapt cifra veche a aceleiași planșe.
+- **Retransferul nu corectează `cantitate`**, cifra care intră în ofertă.
+
+Cum s-ar ajunge la retransfer din aplicație:
+- „continuă” / „reia” **nu** retransferă: transferul e `facut` pe aceeași rulare, iar după `COD_VERSIUNE .6` sunt refuzate oricum fără `mixare_permisa`;
+- rămâne doar un „citește” complet, adică retăiere + ~35 zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde, `citire_ai.sumar.metrici`), cu rezultate AI posibil diferite.
+
+Recomandare: corecția pe 1756 se face în reconcilierea R5 (totalurile 470 sunt oricum nevalidate), prin **preview → GO Razvan → apply**. SQL-ul propus e mai jos, **neexecutat**. `analiza.citire_ai.sumar` al lui 470 rămâne 48.195 m până la o nouă citire.
+```sql
+-- PREVIEW
+SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota FROM ofertare_cantitati WHERE id = 1756;
+-- APPLY (doar după GO Razvan; condiționat pe valorile de azi => idempotent, 0 rânduri dacă s-a schimbat ceva)
+UPDATE ofertare_cantitati
+   SET cantitate = 13740, cantitate_plansa = 13740,
+       diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 56 tronsoane citite din tabelul planșei (corecție 25.09: +600 m — rândurile Nr 37, 40, 41 C-tin Brâncoveanu Dn40 300 m erau numărate o dată; deduplicare multiset).',
+       updated_at = now()
+ WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND cantitate_plansa = 13140
+RETURNING id, cantitate, cantitate_plansa;
+-- ROLLBACK: UPDATE ofertare_cantitati SET cantitate = 13140, cantitate_plansa = 13140, diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 54 tronsoane citite din tabelul planșei.' WHERE id = 1756;
+```
