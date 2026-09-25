@@ -48,8 +48,11 @@ export default function OfertareNomenclatoare({ showToast }) {
           <button key={k} onClick={() => setTab(k)} style={{ ...S.btnS, fontWeight:700,
             ...(tab === k ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>{c.label}</button>
         ))}
+        <button onClick={() => setTab('profil_firma')} style={{ ...S.btnS, fontWeight:700,
+          ...(tab === 'profil_firma' ? { background:G.ofertare + '22', color:G.ofertare, border:`1px solid ${G.ofertare}88` } : {}) }}>🏢 Profil firmă</button>
       </div>
-      <TabelNomenclator key={tab} tabel={tab} cfg={TABELE[tab]} showToast={showToast} />
+      {tab === 'profil_firma' ? <ProfilFirma showToast={showToast} />
+        : <TabelNomenclator key={tab} tabel={tab} cfg={TABELE[tab]} showToast={showToast} />}
     </div>
   )
 }
@@ -180,6 +183,97 @@ function TabelNomenclator({ tabel, cfg, showToast }) {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+// 🏢 Profil firmă — rândul unic firma_profil (id=1), folosit la auto-completarea formularelor de licitație
+// (edge ofertare-clauze-formulare). Scriere doar owner (RLS pe profiles.is_owner); ceilalți văd read-only.
+const CAMPURI_FIRMA = [
+  ['denumire','Denumire'], ['forma_juridica','Formă juridică'], ['cui','CUI / CIF'], ['nr_reg_com','Nr. Reg. Com.'],
+  ['euid','EUID'], ['caen_principal','CAEN principal'], ['caen_secundare','CAEN secundare (separate prin virgulă)', 'arr'],
+  ['sediu_social','Sediu social', 'lung'], ['adresa_corespondenta','Adresă corespondență', 'lung'],
+  ['telefon','Telefon'], ['fax','Fax'], ['email','Email'], ['website','Website'],
+  ['reprezentant_legal','Reprezentant legal'], ['functie_reprezentant','Funcție reprezentant'], ['persoana_contact','Persoană de contact'],
+  ['capital_social','Capital social (lei)', 'num'], ['data_infiintare','Data înființării', 'date'],
+  ['certificari','Certificări (ISO, ANRE etc.)', 'text'], ['observatii','Observații', 'text'],
+]
+const LISTE_FIRMA = {
+  conturi: { label:'Conturi bancare', cols:[['banca','Banca'], ['iban','IBAN'], ['tip','Tip (trezorerie/bancar)']] },
+  cifra_afaceri: { label:'Cifra de afaceri', cols:[['an','An','num'], ['valoare','Valoare','num'], ['moneda','Monedă']] },
+  nr_angajati_mediu: { label:'Nr. mediu angajați', cols:[['an','An','num'], ['numar','Număr','num']] },
+}
+
+function ProfilFirma({ showToast }) {
+  const [row, setRow] = useState(null), [vals, setVals] = useState(null)
+  const [owner, setOwner] = useState(false), [activi, setActivi] = useState(null), [busy, setBusy] = useState(false)
+  const incarca = async () => {
+    const { data, error } = await supabase.from('firma_profil').select('*').eq('id', 1).maybeSingle()
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    const r = data || { id:1, conturi:[], cifra_afaceri:[], nr_angajati_mediu:[] }
+    setRow(r); setVals({ ...r, caen_secundare: (r.caen_secundare || []).join(', ') })
+  }
+  useEffect(() => {
+    incarca()
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) { const { data } = await supabase.from('profiles').select('is_owner').eq('id', user.id).maybeSingle(); setOwner(!!data?.is_owner) }
+      const { count } = await supabase.from('employees').select('id', { count:'exact', head:true }).eq('active', true)
+      setActivi(count ?? null)
+    })()
+  }, [])
+  if (!vals) return <div style={{ color:G.muted, fontSize:12 }}>Se încarcă…</div>
+  const set = (k, v) => setVals(x => ({ ...x, [k]: v }))
+  const salveaza = async () => {
+    setBusy(true)
+    const p = { ...vals }
+    delete p.updated_at; delete p.updated_by
+    p.caen_secundare = String(vals.caen_secundare || '').split(',').map(x => x.trim()).filter(Boolean)
+    for (const [k,, t] of CAMPURI_FIRMA) {
+      if (k === 'caen_secundare') continue
+      if (p[k] === '') p[k] = null
+      if (t === 'num' && p[k] != null) { const n = Number(String(p[k]).replace(',', '.')); p[k] = isNaN(n) ? null : n }
+    }
+    for (const k of Object.keys(LISTE_FIRMA)) p[k] = (p[k] || []).filter(o => Object.values(o).some(v => v !== '' && v != null))
+    const { data, error } = await supabase.from('firma_profil').upsert(p).select('id')
+    setBusy(false)
+    if (error || !data?.length) { showToast?.('Nu s-a salvat' + (error ? ': ' + error.message : ' (fără drept de scriere)'), 'error'); return }
+    showToast?.('Profil firmă salvat', 'success'); incarca()
+  }
+  const inp = (k, t) => t === 'text'
+    ? <textarea disabled={!owner} rows={3} value={vals[k] ?? ''} onChange={e => set(k, e.target.value)} style={{ ...S.input, resize:'vertical' }} />
+    : <input disabled={!owner} type={t === 'date' ? 'date' : 'text'} value={vals[k] ?? ''} onChange={e => set(k, e.target.value)} style={S.input} />
+  return (
+    <div style={{ ...S.card, padding:14 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, gap:8, flexWrap:'wrap' }}>
+        <div style={{ fontSize:12, color:G.muted }}>Date folosite la completarea automată a formularelor de licitație. Câmpurile goale rămân „[DE COMPLETAT]” în formulare.
+          {!owner && <span style={{ color:G.yellow }}> Doar citire — editează doar owner-ul.</span>}</div>
+        {owner && <button disabled={busy} onClick={salveaza} style={S.btnP}>{busy ? 'Se salvează…' : '💾 Salvează'}</button>}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:10 }}>
+        {CAMPURI_FIRMA.map(([k, l, t]) => (
+          <label key={k} style={{ fontSize:11, color:G.muted, gridColumn: t === 'lung' || t === 'text' ? '1 / -1' : undefined }}>{l}{inp(k, t)}</label>
+        ))}
+      </div>
+      {Object.entries(LISTE_FIRMA).map(([k, cfg]) => (
+        <div key={k} style={{ marginTop:14 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:G.text, marginBottom:6 }}>{cfg.label}
+            {k === 'nr_angajati_mediu' && activi != null && <span style={{ fontWeight:400, color:G.dim }}> — indiciu: {activi} angajați activi acum în Pontaj (nu se salvează automat)</span>}</div>
+          {(vals[k] || []).map((o, i) => (
+            <div key={i} style={{ display:'flex', gap:6, marginBottom:4 }}>
+              {cfg.cols.map(([c, cl, ct]) => (
+                <input key={c} disabled={!owner} placeholder={cl} value={o[c] ?? ''} style={S.input}
+                  onChange={e => { const v = ct === 'num' && e.target.value !== '' && !isNaN(Number(e.target.value.replace(',', '.'))) ? Number(e.target.value.replace(',', '.')) : e.target.value
+                    set(k, vals[k].map((x, j) => j === i ? { ...x, [c]: v } : x)) }} />
+              ))}
+              {owner && <button onClick={() => set(k, vals[k].filter((_, j) => j !== i))} style={{ ...S.btnS, color:G.red }}>✕</button>}
+            </div>
+          ))}
+          {owner && <button onClick={() => set(k, [...(vals[k] || []), {}])} style={S.btnS}>+ Adaugă</button>}
+          {!owner && !(vals[k] || []).length && <div style={{ fontSize:11, color:G.dim }}>—</div>}
+        </div>
+      ))}
+      {row?.updated_at && <div style={{ marginTop:12, fontSize:10.5, color:G.dim }}>Actualizat: {new Date(row.updated_at).toLocaleString('ro-RO')}</div>}
     </div>
   )
 }
