@@ -681,8 +681,16 @@ function Lucru({ icon, text, pct, detaliu }) {
   )
 }
 
-function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
+function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = null, onIntrareConsumata = null, showToast = null, onGoClarificari = null }) {
   const [docs, setDocs] = useState(null)
+  // 25.09.2026: ciorna de clarificare pregătită AUTOMAT de server pt planșe necitibile (nu se trimite singură)
+  const [clarAuto, setClarAuto] = useState(null)
+  useEffect(() => {
+    if (!licitatie?.id || !docs) return
+    supabase.from('ofertare_clarificari').select('id, sursa').eq('licitatie_id', licitatie.id)
+      .eq('origine', 'automat').like('cheie', 'auto_planse_%').eq('status', 'de_trimis').order('id', { ascending: false }).limit(1)
+      .then(({ data }) => setClarAuto(data?.[0] ? { id: data[0].id, n: String(data[0].sursa || '').replace('planse_auto:', '').split(',').filter(Boolean).length } : null))
+  }, [licitatie?.id, docs])
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
   const [plansaBusy, setPlansaBusy] = useState(null) // text progres citire planșă
@@ -1369,6 +1377,12 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           </div>
         )
       })()}
+      {clarAuto?.n > 0 && (
+        <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', background:'#1d1a0d', border:`1px solid ${G.orange}66`, borderRadius:10, padding:'8px 12px', marginTop:8, fontSize:12.5 }}>
+          <span>❓ Am pregătit automat o clarificare pentru <b>{clarAuto.n}</b> planș{clarAuto.n === 1 ? 'ă necitibilă' : 'e necitibile'} — verific-o în Clarificări <span style={{ color:G.muted }}>(ciornă, nu s-a trimis nimic)</span></span>
+          {onGoClarificari && <button style={{ ...S.btnS, padding:'4px 10px', fontSize:12 }} onClick={onGoClarificari}>→ Clarificări</button>}
+        </div>
+      )}
 
       {/* ── Impact asupra cerințelor ─────────────────────────────────────────────
           Antetul spune din prima cât se schimbă și câte acoperiri rămân de reverificat.
@@ -3356,7 +3370,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {tab === 'triere' && <ClauzeContractSection licitatie={l} profile={profile} showToast={showToast} />}
             {tab === 'formulare' && <FormulareRegistruSection licitatie={l} profile={profile} showToast={showToast} />}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
-              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} />}
+              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
