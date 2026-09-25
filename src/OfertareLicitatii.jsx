@@ -661,6 +661,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
   const [plansaBusy, setPlansaBusy] = useState(null) // text progres citire planșă
+  const stopPlanseRef = useRef(false)   // „⏹ Oprește" pe citirea în lot a planșelor
+  const [docFiltru, setDocFiltru] = useState(null) // filtru din linia „Rezumat" (citite/sarite/ramase/erori)
   const [seapBusy, setSeapBusy] = useState(null) // text progres aducere din SEAP
   const stopRef = useRef(false)                // ref, nu state — loop-ul citește valoarea LIVE
   const [warn, setWarn] = useState(null)
@@ -887,6 +889,16 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const ignoratTehnic = (d, toate) => ['ignorat', 'eroare'].includes(d.status_procesare) &&
     !/\.(rar|zip|7z|p7s|p7m|xml|log)\s*\d*$/i.test(d.nume_original || '') &&
     !/(^|\/)~\$/.test(d.nume_original || '') && !areBucati(d, toate)
+  // Linia „Rezumat" (25.09.2026): citite = procesat/parțial (inclusiv bucățile); erori = eroare/ignorat tehnic fără
+  // text și fără bifa omului; rămase = neprocesat/în lucru; restul = sărite intenționat (formular, doar fișier,
+  // arhive, originale sparte în bucăți, bifate de om).
+  const categorieDoc = (d) => {
+    if (['procesat', 'partial'].includes(d.status_procesare)) return 'citite'
+    if (['neprocesat', 'in_lucru'].includes(d.status_procesare) || !d.status_procesare) return 'ramase'
+    if (d.relevanta_verificata_la) return 'sarite'
+    if (ignoratTehnic(d, docs)) return 'erori'
+    return 'sarite'
+  }
   const bifeazaRelevanta = async (d, retrage = false) => {
     const nota = retrage ? null : window.prompt(`„${String(d.nume_original).split('/').pop()}" nu a putut fi citit automat.\nCe ai verificat? (ex.: „planșă consultată manual, fără cerințe noi" sau „nerelevant: jurnal de plotare")`)
     if (!retrage && nota == null) return
@@ -976,8 +988,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // `areBucati` e plasa de siguranță: marcajul din `eroare` se pierde la re-import, bucățile nu.
   const eMare = d => E_PDF.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && !areBucati(d, docs) && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
 
-  const citestePlansa = async (d) => {
-    setWarn(null); setPlansaBusy(`${d.nume_original}: pregătesc feliile...`)
+  const citestePlansa = async (d, eticheta = '') => {
+    let ok = false
+    setWarn(null); setPlansaBusy(`${eticheta}${d.nume_original}: pregătesc feliile...`)
     try {
       const { data: sesiune } = await supabase.auth.getSession()
       const tok = sesiune?.session?.access_token || ''
@@ -992,7 +1005,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
 
       let deLa = 0, runde = 0, sumar = null
       while (runde < 15) {
-        setPlansaBusy(`${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
+        setPlansaBusy(`${eticheta}${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
         const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa } })
         if (error || data?.error) { setWarn(`Eroare la citire: ${data?.error || error.message}`); break }
         sumar = data.sumar
@@ -1000,6 +1013,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
         deLa = data.de_la_urmator; runde++
       }
       if (sumar) {
+        ok = true
         setWarn(`✅ Planșă citită: ${sumar.tronsoane_gasite} tronsoane (${sumar.lungime_totala_m.toLocaleString('ro-RO')} m)` +
           `${sumar.tabele.length ? `, tabele: ${sumar.tabele.join(', ')}` : ''}` +
           `${sumar.subtraversari ? `, ${sumar.subtraversari} subtraversări` : ''}` +
@@ -1010,6 +1024,23 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     } finally {
       setPlansaBusy(null); await load(); onChanged?.()
     }
+    return ok
+  }
+
+  // Răzvan 25.09.2026: „📐 Citește planșele desenate" = butonul „citește" de pe rând, pentru TOATE planșele
+  // necitite încă, pe rând (nu există coadă pe server pentru planșe). Aceeași poartă pe cheltuială.
+  const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !d.analiza?.citire_ai)
+  const citesteToatePlansele = async () => {
+    const lista = planseNecitite
+    if (!lista.length || !poatePorniProcesarea(profile, licitatie)) return
+    if (!window.confirm(`Citesc cu AI ${lista.length} ${lista.length === 1 ? 'planșă necitită' : 'planșe necitite'}, pe rând.\nFiecare planșă costă (se taie în zone citite de AI). Continui?`)) return
+    stopPlanseRef.current = false
+    let ok = 0, err = 0
+    for (let i = 0; i < lista.length; i++) {
+      if (stopPlanseRef.current) break
+      if (await citestePlansa(lista[i], `[${i + 1}/${lista.length}] `)) ok++; else err++
+    }
+    setWarn(`📐 Planșe: ${ok} citite${err ? ` · ${err} cu erori/necitibile` : ''}${stopPlanseRef.current ? ' · oprit manual' : ''} (din ${lista.length}).`)
   }
 
   // Documentele care pot intra într-un set de răspuns: doar cele din care s-a extras text.
@@ -1141,6 +1172,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
             <input type="file" webkitdirectory="" directory="" multiple style={{ display:'none' }}
               disabled={!!upBusy} onChange={e => { urca(e.target.files); e.target.value = '' }} />
           </label>
+          {planseNecitite.length > 0 && !plansaBusy && poatePorniProcesarea(profile, licitatie) && (
+            <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12 }} disabled={!!procBusy || !!upBusy} onClick={citesteToatePlansele}
+              title={`${MOTIV_POARTA}\nCitește pe rând toate planșele încă necitite (${planseNecitite.length})`}>
+              📐 Citește planșele desenate ({planseNecitite.length})
+            </button>
+          )}
+          {plansaBusy && /^\[\d+\/\d+\]/.test(plansaBusy) && (
+            <button style={{ ...S.btnS, padding:'7px 12px', fontSize:12, color:G.red, borderColor:G.red + '66' }} onClick={() => { stopPlanseRef.current = true }}>⏹ Oprește planșele</button>
+          )}
           <label style={{ ...S.btnS, padding:'7px 12px', fontSize:12, cursor:'pointer' }}>
             📄 Urcă fișiere
             <input type="file" multiple style={{ display:'none' }}
@@ -1198,7 +1238,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           </div>
         ) : (
           <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
-            {docs.map(d => {
+            {docs.filter(d => !docFiltru || categorieDoc(d) === docFiltru).map(d => {
               const st = DOC_STATUS[d.status_procesare] || DOC_STATUS.neprocesat
               // Eticheta „🔀 spart în N": întâi din realitate (câte bucăți există), apoi din textul
               // din `eroare` — textul se pierde la re-import, bucățile nu (anti-bug 15.09.2026).
@@ -1266,6 +1306,21 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
             })}
           </div>
         )}
+      {docs?.length > 0 && (() => {
+        const n = { citite: 0, sarite: 0, ramase: 0, erori: 0 }
+        for (const d of docs) n[categorieDoc(d)]++
+        const buc = [['citite', 'citite', G.green], ['sarite', 'sărite intenționat', G.dim], ['ramase', 'rămase de citit', G.orange], ['erori', 'cu erori (de discutat cu Răzvan)', G.red]]
+        return (
+          <div style={{ fontSize:12, color:G.muted, marginTop:8, display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+            <b>Rezumat:</b>
+            {buc.map(([k, lbl, c], i) => (
+              <span key={k}>{i > 0 && '· '}<span onClick={() => setDocFiltru(f => f === k ? null : k)} title="Click = arată doar acestea (din nou = toate)"
+                style={{ cursor:'pointer', color:c, fontWeight: docFiltru === k ? 800 : 600, textDecoration: docFiltru === k ? 'underline' : 'none' }}>{n[k]} {lbl}</span></span>
+            ))}
+            {docFiltru && <span onClick={() => setDocFiltru(null)} style={{ cursor:'pointer', color:G.ofertare }}>✕ toate</span>}
+          </div>
+        )
+      })()}
 
       {/* ── Impact asupra cerințelor ─────────────────────────────────────────────
           Antetul spune din prima cât se schimbă și câte acoperiri rămân de reverificat.
@@ -2299,7 +2354,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       .select('id, nr_ordine, sursa_sectiune, text_cerinta, tip, lot, stare, stare_motiv, cand_se_prezinta, registru')
       .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
       .or('registru.is.null,registru.eq.capabilitate')
-      .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
+      .in('tip', ['eliminatorie', 'propunere']).order('nr_ordine').limit(5000)
     setCerinte(cs || [])
     if (cs?.length) {
       const { data: ac } = await supabase.from('ofertare_acoperire')
