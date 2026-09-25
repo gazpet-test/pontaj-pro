@@ -170,7 +170,7 @@ export default async function handler(req, res) {
     try { pagini = await randeazaVectorial(buf, corp.fin === true ? DPI_VECTOR_FIN : undefined) } catch (e) { eroareRandare = String(e?.message || e).slice(0, 160) }
     for (const [i, p] of pagini.entries()) {
       const v = await esteCitibila(p.img)
-      if (v.citibila) surse.push({ img: p.img, meta: { width: p.latime, height: p.inaltime }, verdict: v, prefix: pagini.length > 1 ? `p${i + 1}_` : '', dpi: p.dpi })
+      if (v.citibila) surse.push({ img: p.img, meta: { width: p.latime, height: p.inaltime }, verdict: v, prefix: pagini.length > 1 ? `p${i + 1}_` : '', dpi: p.dpi, pagina: i + 1, latime_pt: p.latime_pt, inaltime_pt: p.inaltime_pt })
     }
     // R3: randarea nu a dat desen, dar există o imagine NEdovedită drept siglă și citibilă => rămâne imaginea
     if (!surse.length && meta && imagini.length && !siglaDovedita) {
@@ -237,7 +237,7 @@ export default async function handler(req, res) {
   const { data: vechi } = await supa.storage.from('ofertare').list(bazaCale, { limit: 200 })
   if (vechi?.length) await supa.storage.from('ofertare').remove(vechi.map((f) => `${bazaCale}/${f.name}`))
   const felii = []
-  for (const { img: sursa, meta, prefix, g: { latura, pas, coloane, randuri } } of surse) {
+  for (const [iSursa, { img: sursa, meta, prefix, g: { latura, pas, coloane, randuri } }] of surse.entries()) {
   for (let r = 0; r < randuri; r++) {
     for (let c = 0; c < coloane; c++) {
       const left = Math.min(c * pas, Math.max(0, meta.width - latura))
@@ -257,7 +257,7 @@ export default async function handler(req, res) {
         const cale = `${bazaCale}/z${zona}.jpg`
         const { error } = await supa.storage.from('ofertare').upload(cale, iesire, { contentType: 'image/jpeg', upsert: true })
         if (error) { felii.push({ zona, eroare: error.message }); continue }
-        felii.push({ zona, cale, left, top, width, height, kb: Math.round(iesire.length / 1024), ...(goala ? { goala: true } : {}) })
+        felii.push({ zona, cale, left, top, width, height, sursa: iSursa, kb: Math.round(iesire.length / 1024), ...(goala ? { goala: true } : {}) })
       } catch (e) {
         felii.push({ zona, eroare: String(e?.message || e).slice(0, 120) })
       }
@@ -285,7 +285,13 @@ export default async function handler(req, res) {
       felii: reusite.length, randuri, coloane, latura, fin,
       ...(vectorial ? { vectorial: true, randat: true, dpi: surse[0].dpi, pagini: surse.length } : {}),
       cale_felii: bazaCale, verificare: verdict,
-      zone_asteptate: zoneAsteptate, felii_goale: reusite.filter((f) => f.goala).length,
+      zone_asteptate: zoneAsteptate,
+      // R4 (T11): geometria fiecărei zone în pixelii sursei [left, top, width, height, index sursă] + sursele
+      // (pagina PDF, dimensiuni px și, la randare vectorială, în puncte PDF) => _regiune pe tronson (x0..y1 în pt).
+      zone_geom: Object.fromEntries(felii.filter((f) => f.width).map((f) => [f.zona, [f.left, f.top, f.width, f.height, f.sursa]])),
+      surse_geom: surse.map((s) => ({ pagina: s.pagina || 1, latime: s.meta.width, inaltime: s.meta.height, dpi: s.dpi || null,
+        latime_pt: s.latime_pt || null, inaltime_pt: s.inaltime_pt || null })),
+      suprapunere: SUPRAPUNERE, felii_goale: reusite.filter((f) => f.goala).length,
       micsorare: +micsorare.toFixed(2), rezolutie_redusa: rezolutieRedusa,
       // 25.09.2026 (audit T4/T11): amprenta tăierii — o citire se poate relua pe zone doar pe ACEEAȘI tăiere
       taiat_la: new Date().toISOString(),
@@ -293,6 +299,9 @@ export default async function handler(req, res) {
       ...(!vectorial && meta && Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN ? { avertisment_rezolutie: `sursa are ${meta.width}x${meta.height}px (<${MIN_LATURA_SCAN}) — avertisment, nu dovadă de siglă` } : {}),
     },
   }
+  // R4: retăierea schimbă jetonul citirii (citire_ai.rev) => o rundă de citire în zbor pe tăierea veche
+  // nu mai poate scrie peste (compare-and-set în ofertare-plansa-citeste; la recitire vede alt taiat_la => 409).
+  if (analiza.citire_ai) analiza.citire_ai = { ...analiza.citire_ai, rev: `taiere-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }
   await supa.from('ofertare_documente_atribuire')
     .update({ analiza, analiza_la: new Date().toISOString() }).eq('id', docId)
   // planșa a devenit citibilă prin randare => lista din ciorna automată (dacă există) se reîmprospătează

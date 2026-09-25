@@ -40,7 +40,8 @@ export async function randeazaVectorial(buf, dpi = DPI_VECTOR) {
       await pag.render({ canvasContext: ctx, viewport: vp, background: 'rgb(255,255,255)' }).promise
       const png = await canvas.encode('png')
       pag.cleanup()
-      pagini.push({ img: png, latime: w, inaltime: h, dpi: Math.round(zoom * 72) })
+      // R4: dimensiunea paginii în puncte PDF (viewport scale 1) — pt proveniența pe regiune (_regiune, x0..y1 în pt)
+      pagini.push({ img: png, latime: w, inaltime: h, dpi: Math.round(zoom * 72), latime_pt: +vp1.width.toFixed(2), inaltime_pt: +vp1.height.toFixed(2) })
     }
   } finally { await doc.destroy() }
   return pagini
