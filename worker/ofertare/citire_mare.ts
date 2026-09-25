@@ -12,6 +12,8 @@
 // Anti-buclă (lecția 770): fiecare încercare se numără în BD ÎNAINTE de munca grea (compare-and-set pe
 // analiza->citire_mare->>rev); după MAX_INCERCARI_MARE → 'eroare' definitiv cu motiv, iar decizia îl sare până la un
 // reset manual. Nu apelează edge-ul (care refuză oricum peste 60 MB) și nu citește cu AI paginile fără text.
+// Runda 2 (verificator): pdfinfo oprit la timeout (semnal) sau nepornit (cod -1) = eșec TRECĂTOR (se reia, cu încercarea
+// numărată și plafon de timp crescător); definitiv doar când pdfinfo a răspuns, dar fără „Pages:” (PDF necitibil).
 // Fără importuri la distanță: testele (citire_mare_test.ts) rulează fără rețea.
 import { createHash } from 'node:crypto'
 
@@ -23,6 +25,7 @@ export const FELIE_PAGINI = 25
 export const MAX_INCERCARI_MARE = 3
 export const MAX_TEXT = 900_000                            // același plafon ca ingest.ts / edge
 export const TIMP_FELIE_MS = 120_000                       // pe un apel pdftotext (o felie)
+export const TIMP_PDFINFO_MS = 60_000                      // pe încercare: x1, x2, x3 (un NAS încetinit primește mai mult)
 export const TIMP_DESCARCARE_MS = 20 * 60_000
 export const TIMP_TOTAL_MS = 60 * 60_000                   // pe document; restul paginilor → necitite, cu motiv
 export const CALE_REV_MARE = 'analiza->citire_mare->>rev'
@@ -156,20 +159,28 @@ export function mesajNecitite(c: Compunere, motivCoada = 'text trunchiat la 900k
 
 // ---- efecte (proces, disc, rețea) --------------------------------------------------------------------------
 
-export async function ruleaza(cmd: string, args: string[], timeoutMs?: number): Promise<{ code: number; out: string; err: string }> {
+export type RezComanda = { code: number; out: string; err: string; semnal: string | null }
+// timeout → Deno omoară procesul (SIGTERM) și întoarce cod 143 + semnal; comanda care nu pornește → cod -1
+export async function ruleaza(cmd: string, args: string[], timeoutMs?: number): Promise<RezComanda> {
   try {
     const p = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped', ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}) }).output()
     const dec = new TextDecoder()
     const err = dec.decode(p.stderr) + (p.signal ? ` [oprit: ${p.signal}${timeoutMs ? `, plafon ${Math.round(timeoutMs / 1000)} s` : ''}]` : '')
-    return { code: p.code, out: dec.decode(p.stdout), err }
-  } catch (e) { return { code: -1, out: '', err: String((e as Error)?.message ?? e) } }
+    return { code: p.code, out: dec.decode(p.stdout), err, semnal: p.signal ?? null }
+  } catch (e) { return { code: -1, out: '', err: String((e as Error)?.message ?? e), semnal: null } }
 }
 
-export async function paginiPdf(cale: string): Promise<{ nPag: number } | { motiv: string }> {
-  const r = await ruleaza('pdfinfo', [cale], 60_000)
+export type RezPagini = { nPag: number } | { motiv: string; trecator?: boolean }
+// Definitiv („PDF necitibil”) DOAR când pdfinfo a rulat până la capăt și n-a dat „Pages:”. Oprit de semnal (timeout,
+// OOM-killer) sau nepornit (cod -1) nu spune nimic despre PDF → trecător: se reia, cu încercarea numărată în BD.
+export function clasificaPdfinfo(r: RezComanda): RezPagini {
   const m = r.out.match(/^Pages:\s+(\d+)/m)
-  if (!m) return { motiv: `pdfinfo: ${(r.err || r.out).trim().slice(0, 200) || 'cod ' + r.code}` }
-  return { nPag: Number(m[1]) }
+  if (m) return { nPag: Number(m[1]) }
+  return { motiv: `pdfinfo: ${(r.err || r.out).trim().slice(0, 200) || 'cod ' + r.code}`, trecator: r.code === -1 || r.semnal != null }
+}
+
+export async function paginiPdf(cale: string, timeoutMs = TIMP_PDFINFO_MS): Promise<RezPagini> {
+  return clasificaPdfinfo(await ruleaza('pdfinfo', [cale], timeoutMs))
 }
 
 export const extractorPdftotext = (cale: string, timeoutMs = TIMP_FELIE_MS): Extractor => async (de, la) => {
@@ -203,7 +214,7 @@ export type DepsMare = {
   // antetul (obiectiv/beneficiar/…/revizie) din primele 2 pagini — Haiku în producție (ingest.ts), lipsă în teste
   antet?: (text: string) => Promise<{ antet: any; tokIn: number; tokOut: number }>
   modelAntet?: { id: string; in: number; out: number }
-  pagini?: (cale: string) => Promise<{ nPag: number } | { motiv: string }>
+  pagini?: (cale: string, timeoutMs: number) => Promise<RezPagini>
   extractor?: (cale: string) => Extractor
   felie?: number
   dirLucru?: string
@@ -285,9 +296,13 @@ export async function citesteMare(supa: any, docId: number, deps: DepsMare): Pro
     if (marimeBd && dl.marime !== marimeBd) return await esec(`descărcați ${dl.marime} B, în BD ${marimeBd} B — descărcare incompletă sau alt obiect`)
     if (deps.esteOprire?.()) return await intrerupt()
 
-    // 3. pagini + plafon
-    const pg = await (deps.pagini ?? paginiPdf)(cale)
-    if ('motiv' in pg) return await esec(`PDF necitibil — ${pg.motiv}`, true, { marime: dl.marime, sha256: dl.sha256 })
+    // 3. pagini + plafon. pdfinfo oprit/nepornit = trecător (se reia; plafonul de timp crește cu încercarea);
+    //    definitiv doar dacă pdfinfo a răspuns fără „Pages:” (runda 2: un NAS încetinit nu mai blochează documentul)
+    const pg = await (deps.pagini ?? paginiPdf)(cale, TIMP_PDFINFO_MS * dec.incercare)
+    if ('motiv' in pg) {
+      if (pg.trecator) return await esec(`pdfinfo nu a terminat (${Math.round(TIMP_PDFINFO_MS * dec.incercare / 1000)} s) — ${pg.motiv}`, false, { marime: dl.marime, sha256: dl.sha256 })
+      return await esec(`PDF necitibil — ${pg.motiv}`, true, { marime: dl.marime, sha256: dl.sha256 })
+    }
     const nPag = pg.nPag
     if (nPag < 1) return await esec('PDF fără pagini', true, { marime: dl.marime, sha256: dl.sha256 })
     if (nPag > MAX_PAGINI_MARE) return await esec(`${nPag} pagini > plafonul de ${MAX_PAGINI_MARE}`, true, { marime: dl.marime, sha256: dl.sha256, pagini: nPag })

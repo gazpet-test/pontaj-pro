@@ -21,10 +21,16 @@ care le marchează `ignorat` „prea mare pentru citirea automată…”) worker
 `pdftotext -f/-l` pe felii de 25 de pagini (felia care pică se înjumătățește până la o pagină) → aceleași coloane ca un PDF
 normal + urma în `analiza.citire_mare` (încercări, felii, SHA-256, comparația cu `ofertare_seap_manifest`).
 Anti-buclă: încercarea se numără în BD înainte de muncă (CAS pe `analiza->citire_mare->>rev`), max. 3, apoi `eroare`
-definitiv cu motiv; în `proceseazaIngest`, un document care revine candidat după o trecere în aceeași tură e oprit.
-Nu cere rebuild (`--allow-run=git,pdftotext,pdfinfo` e deja în `entrypoint.sh`).
-Teste: `deno test --node-modules-dir=none --allow-read --allow-write --allow-run=pdftotext,pdfinfo worker/ofertare/citire_mare_test.ts`
-și `deno test --node-modules-dir=none --allow-env --allow-read --allow-write=/tmp --allow-run=pdftotext,pdfinfo worker/ofertare/ingest_mare_test.ts`.
+definitiv cu motiv; `pdfinfo` oprit la timeout / nepornit = eșec trecător (se reia, plafon 60/120/180 s), definitiv doar
+când răspunde fără „Pages:”. Pe drumul cu AI, orice răspuns al edge-ului fără `ok:true` (ex. 546 WORKER_LIMIT) e eroare
+cu motivul real (cauza celor 5421 de treceri pe 770); în `proceseazaIngest`, un document care revine candidat după o
+trecere în aceeași tură e oprit, iar `ofertare_ingest_coada.activ` se recitește înainte de fiecare document („Oprește”
+din UI / rollback-ul oprește tura la documentul următor; citirea deja pornită se termină — un PDF mare poate ține
+rândul de citire ~85 min pe încercare).
+Nu cere rebuild (`--allow-run=git,pdftotext,pdfinfo` e deja în `entrypoint.sh`). Detalii: `docs/R6_770_CITIRE_PDF_MARE.md`.
+Teste (`--no-lock`: altfel deno rescrie `deno.lock` din rădăcina repo-ului):
+`deno test --node-modules-dir=none --no-lock --allow-read --allow-write --allow-run=pdftotext,pdfinfo,sleep worker/ofertare/citire_mare_test.ts`
+și `deno test --node-modules-dir=none --no-lock --allow-env --allow-read --allow-write=/tmp --allow-run=pdftotext,pdfinfo worker/ofertare/ingest_mare_test.ts`.
 
 ## Documentația SEAP și extractorul izolat (24.09.2026)
 `seap.ts` descarcă din SEAP, desface `.p7s`, dar **nu despachetează singur**: arhivele merg la containerul

@@ -1,10 +1,12 @@
-// deno test --node-modules-dir=none --allow-read --allow-write --allow-run=pdftotext,pdfinfo worker/ofertare/citire_mare_test.ts
+// deno test --node-modules-dir=none --no-lock --allow-read --allow-write --allow-run=pdftotext,pdfinfo,sleep worker/ofertare/citire_mare_test.ts
+// (--no-lock: altfel deno scrie în deno.lock din rădăcina repo-ului; `sleep` doar pentru testul de timeout real)
 // R6 / doc 770: eligibilitatea PDF-urilor mari, fragmentarea pe felii, compunerea textului, anti-buclă, citirea cap-coadă
 // pe o BD simulată (fără rețea, fără Supabase, fără AI). Testul cu pdftotext real se sare dacă poppler lipsește.
 import { assert, assertEquals, assertMatch, assertRejects } from 'jsr:@std/assert@1'
 import {
-  CALE_REV_MARE, MARCAJ_PREA_MARE, MAX_INCERCARI_MARE, MAX_MARE_BYTES, PRAG_MARE, citesteMare, compuneText, decizieCitireMare,
-  descarcaPeDisc, esteMare, extragePeFelii, extractorPdftotext, imparteText, mesajNecitite, paginiPdf, trecereBlocata, type Extractor,
+  CALE_REV_MARE, MARCAJ_PREA_MARE, MAX_INCERCARI_MARE, MAX_MARE_BYTES, PRAG_MARE, TIMP_PDFINFO_MS, citesteMare, clasificaPdfinfo, compuneText,
+  decizieCitireMare, descarcaPeDisc, esteMare, extragePeFelii, extractorPdftotext, imparteText, mesajNecitite, paginiPdf, ruleaza, trecereBlocata,
+  type Extractor,
 } from './citire_mare.ts'
 
 // rândul real al doc 770 (SELECT 25.09 seara, lic. 101)
@@ -288,6 +290,74 @@ Deno.test('CAS: dacă altcineva a scris citire_mare între timp, rezultatul nu s
   assertEquals(doc(bd).text_extras, undefined); assertEquals(CALE_REV_MARE, 'analiza->citire_mare->>rev')
 })
 
+Deno.test('rollback pe document în timpul citirii (SQL-ul R6: analiza - citire_mare, înapoi la ignorat) → rezultatul nu se scrie peste', async () => {
+  const octeti = new TextEncoder().encode('%PDF')
+  const bd = bdFalsa([{ ...DOC_770, size_bytes: octeti.length }], { signedUrl: () => dataUrl(octeti) })
+  const { f } = extractorFals(5)
+  const r = await citesteMare(bd.supa, 770, {
+    cerutDe: null, dirLucru: await Deno.makeTempDir(), extractor: () => f,
+    pagini: async () => {   // exact ce face pasul de rollback din SQL, cât timp workerul citește
+      const d = doc(bd); delete d.analiza.citire_mare
+      Object.assign(d, { analiza: Object.keys(d.analiza).length ? d.analiza : null, status_procesare: 'ignorat', eroare: DOC_770.eroare })
+      return { nPag: 5 }
+    },
+  })
+  assertMatch(r, /^eroare: rezultatul nu s-a putut scrie/)
+  const d = doc(bd)
+  assertEquals([d.status_procesare, d.eroare, d.analiza, d.text_extras], ['ignorat', DOC_770.eroare, null, undefined])
+})
+
+// ---------------- pdfinfo: trecător vs definitiv (runda 2) ----------------
+Deno.test('clasificaPdfinfo: răspuns fără „Pages:” → definitiv; oprit de semnal (timeout) sau nepornit (cod -1) → trecător', () => {
+  assertEquals(clasificaPdfinfo({ code: 0, out: 'Title: x\nPages:          412\n', err: '', semnal: null }), { nPag: 412 })
+  const corupt = clasificaPdfinfo({ code: 1, out: '', err: "Syntax Error: Couldn't find trailer dictionary", semnal: null })
+  assertEquals((corupt as any).trecator, false); assertMatch((corupt as any).motiv, /^pdfinfo: Syntax Error/)
+  assertEquals((clasificaPdfinfo({ code: 0, out: 'Title: fără pagini', err: '', semnal: null }) as any).trecator, false)
+  const timeout = clasificaPdfinfo({ code: 143, out: '', err: ' [oprit: SIGTERM, plafon 60 s]', semnal: 'SIGTERM' })
+  assertEquals((timeout as any).trecator, true); assertMatch((timeout as any).motiv, /oprit: SIGTERM, plafon 60 s/)
+  assertEquals((clasificaPdfinfo({ code: -1, out: '', err: "Failed to spawn 'pdfinfo': entity not found", semnal: null }) as any).trecator, true)
+})
+
+Deno.test('ruleaza real: comanda care nu pornește → cod -1 (→ trecător)', async () => {
+  const r = await ruleaza('comanda-inexistenta-r6-770', [])
+  assertEquals([r.code, r.semnal], [-1, null]); assertEquals((clasificaPdfinfo(r) as any).trecator, true)
+})
+
+const areSleep = (await Deno.permissions.query({ name: 'run', command: 'sleep' })).state === 'granted'
+Deno.test({ name: 'ruleaza real: plafonul de timp oprește procesul cu semnal (cod 143) → trecător, nu „PDF necitibil”', ignore: !areSleep, fn: async () => {
+  const t0 = Date.now()
+  const r = await ruleaza('sleep', ['5'], 200)
+  assert(Date.now() - t0 < 3000, 'procesul e omorât la plafon')
+  assertEquals([r.code, r.semnal], [143, 'SIGTERM']); assertMatch(r.err, /\[oprit: SIGTERM, plafon 0 s\]/)
+  assertEquals((clasificaPdfinfo(r) as any).trecator, true)
+} })
+
+Deno.test('pdfinfo oprit la timeout → „reia” (încercarea numărată, NU definitiv), plafon x1/x2/x3; la a 3-a → eșec definitiv', async () => {
+  const octeti = new TextEncoder().encode('%PDF')
+  const bd = bdFalsa([{ ...DOC_770, size_bytes: octeti.length }], { signedUrl: () => dataUrl(octeti) })
+  const plafoane: number[] = []
+  const deps = { cerutDe: null, dirLucru: await Deno.makeTempDir(),
+    pagini: async (_c: string, ms: number) => { plafoane.push(ms); return { motiv: `pdfinfo:  [oprit: SIGTERM, plafon ${ms / 1000} s]`, trecator: true } } }
+  assertMatch(await citesteMare(bd.supa, 770, deps), /^reia: pdfinfo nu a terminat \(60 s\)/)
+  assertEquals(doc(bd).status_procesare, 'eroare'); assertEquals(doc(bd).analiza.citire_mare.stare, 'eroare')
+  assertMatch(doc(bd).eroare, /încercarea 1\/3: pdfinfo nu a terminat .* — se reia/)
+  assertEquals(decizieCitireMare(doc(bd)), { actiune: 'citeste', incercare: 2 })
+  assertMatch(await citesteMare(bd.supa, 770, deps), /^reia:/)
+  assertMatch(await citesteMare(bd.supa, 770, deps), /^eroare: pdfinfo nu a terminat \(180 s\)/)
+  assertEquals(plafoane, [TIMP_PDFINFO_MS, 2 * TIMP_PDFINFO_MS, 3 * TIMP_PDFINFO_MS])
+  assertEquals(doc(bd).analiza.citire_mare.stare, 'esuat'); assertMatch(await citesteMare(bd.supa, 770, deps), /^sărit/)
+})
+
+Deno.test('pdfinfo a răspuns fără „Pages:” (PDF corupt) → definitiv din prima încercare, cu motiv', async () => {
+  const octeti = new TextEncoder().encode('%PDF')
+  const bd = bdFalsa([{ ...DOC_770, size_bytes: octeti.length }], { signedUrl: () => dataUrl(octeti) })
+  const r = await citesteMare(bd.supa, 770, { cerutDe: null, dirLucru: await Deno.makeTempDir(),
+    pagini: async () => ({ motiv: "pdfinfo: Syntax Error: Couldn't find trailer dictionary", trecator: false }) })
+  assertMatch(r, /^eroare: PDF necitibil — pdfinfo: Syntax Error/)
+  assertEquals(doc(bd).analiza.citire_mare.stare, 'esuat'); assertEquals(doc(bd).analiza.citire_mare.incercari, 1)
+  assertMatch(doc(bd).eroare, /încercarea 1\/3: PDF necitibil .* oprită definitiv/)
+})
+
 // ---------------- pdftotext real (poppler) ----------------
 const arePoppler = await (async () => { try { return (await new Deno.Command('pdftotext', { args: ['-v'], stderr: 'null', stdout: 'null' }).output()).success } catch { return false } })()
 
@@ -319,7 +389,8 @@ Deno.test({ name: 'pdftotext real: -f/-l pe felii de 2 pagini, pagina goală →
     const r = await extractorPdftotext(`${dir}/t.pdf`)(2, 4)
     assert(r.ok); assertEquals((r as any).pagini.length, 3); assertEquals((r as any).pagini[1], '')
     assert(!(await extractorPdftotext(`${dir}/t.pdf`)(9, 12)).ok, 'interval în afara documentului → eroare, nu text gol')
-    assertMatch(String((await paginiPdf(`${dir}/lipsa.pdf`) as any).motiv), /pdfinfo/)
+    const lipsa = await paginiPdf(`${dir}/lipsa.pdf`) as any
+    assertMatch(String(lipsa.motiv), /pdfinfo/); assertEquals(lipsa.trecator, false, 'pdfinfo a răspuns (cod 1) → definitiv')
     const bd = bdFalsa([{ ...DOC_770, size_bytes: pdf.length, pagina_offset: 10 }], { signedUrl: () => dataUrl(pdf) })
     const rez = await citesteMare(bd.supa, 770, { cerutDe: null, dirLucru: dir, felie: 2 })
     assertMatch(rez, /^partial \(7 pagini/)

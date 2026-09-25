@@ -20,6 +20,8 @@ const PRAG_DOC_TEXT = 0.85           // proporția de pagini cu text ca document
 const HAIKU = { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6 }
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[ingest]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+// pauzele dintre reîncercări (ms) — obiect exportat ca testele să le poată pune pe 0
+export const PAUZE = { edgeMs: 15_000, reluareMareMs: 30_000 }
 
 export type Supa = ReturnType<typeof createClient>
 
@@ -64,11 +66,23 @@ ${text.slice(0, 6000)}`
   return { antet, tokIn: data.usage?.input_tokens || 0, tokOut: data.usage?.output_tokens || 0 }
 }
 
+// R6/770 (runda 2, cauza reală a buclei): DOAR {ok:true} e succes — edge-ul pune ok:true pe toate răspunsurile bune
+// (skip-uri + felie citită). Un răspuns de platformă fără `error` (546 WORKER_LIMIT {code,message} la „Memory limit
+// exceeded”, 502/504 de la gateway, corp gol) era luat drept „gata (?/? pagini, AI)” → citite++ și documentul rămânea
+// candidat: de aici cele 5421 de treceri pe 770. Întoarce motivul (null = succes); mesajul edge-ului rămâne neschimbat.
+export function motivRaspunsEdge(data: any, http = 200): string | null {
+  if (data && typeof data === 'object' && data.ok === true && !data.error) return null
+  const h = http && http !== 200 ? ` (HTTP ${http})` : ''
+  if (data?.error) return String(typeof data.error === 'object' ? (data.error.message ?? JSON.stringify(data.error)) : data.error) + h
+  const parti = [data?.code, data?.message].filter(x => x != null && x !== '').map(String)
+  return (parti.length ? parti.join(': ') : (data == null ? 'răspuns gol' : 'răspuns fără ok:true')) + h
+}
+
 // drumul vechi, cu AI (scanuri): edge function-ul ofertare-ingest-doc, apel după apel cât timp continua=true
-async function citesteCuAI(docId: number): Promise<string> {
+export async function citesteCuAI(docId: number): Promise<string> {
   let incercari = 0
   for (let runda = 0; runda < 120; runda++) {
-    let data: any
+    let data: any, http = 0
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/ofertare-ingest-doc`, {
         method: 'POST',
@@ -76,12 +90,15 @@ async function citesteCuAI(docId: number): Promise<string> {
         body: JSON.stringify({ doc_id: docId, apeluri: 2 }),
         signal: AbortSignal.timeout(170_000),
       })
-      data = await resp.json()
+      http = resp.status
+      const corp = await resp.text()
+      try { data = corp ? JSON.parse(corp) : null } catch (_) { data = { error: 'răspuns ne-JSON: ' + corp.slice(0, 120).replace(/\s+/g, ' ').trim() } }
     } catch (e) { data = { error: 'apel edge: ' + String((e as Error)?.message ?? e) } }
-    if (!data || data.error) {
+    const motiv = motivRaspunsEdge(data, http)
+    if (motiv) {
       incercari++
-      if (incercari >= 3) return 'eroare: ' + String(data?.error ?? 'răspuns gol')
-      await sleep(15_000 * incercari); continue
+      if (incercari >= 3) return 'eroare: ' + motiv
+      await sleep(PAUZE.edgeMs * incercari); continue
     }
     incercari = 0
     if (data.skip) return 'sărit: ' + data.skip
@@ -92,7 +109,7 @@ async function citesteCuAI(docId: number): Promise<string> {
 
 // R6: drumul „PDF mare” (citire_mare.ts) cu dependențele de producție: antetul cu Haiku, ca pe drumul obișnuit
 const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void) => ({
-  cerutDe, esteOprire, stare, antet: antetDinText, modelAntet: HAIKU, log, pauzaReluareMs: 30_000,
+  cerutDe, esteOprire, stare, antet: antetDinText, modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
 })
 
 async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
@@ -219,6 +236,16 @@ async function citesteWordLicitatie(supabase: Supa, licId: number): Promise<numb
   return n
 }
 
+// R6 (runda 2): starea cozii se recitește înainte de FIECARE document. Butonul „Oprește” din UI sau rollback-ul SQL
+// (activ=false) opresc tura la documentul următor, fără să rescrie nota și fără notificarea „s-a terminat” — până acum
+// workerul îl vedea doar la pornire și mergea până la capăt. Citirea DEJA pornită nu se întrerupe (un PDF mare: până la
+// ~85 min); pe aceea o opresc doar SIGTERM (esteOprire) sau, pe document, rollback-ul care îi strică CAS-ul pe rev.
+async function coadaActiva(supabase: Supa, licId: number): Promise<boolean> {
+  const { data, error } = await supabase.from('ofertare_ingest_coada').select('activ').eq('licitatie_id', licId).maybeSingle()
+  if (error) { log(`#${licId} citire: starea cozii nu se citește (${error.message}) — continui`); return true }
+  return (data as { activ?: boolean } | null)?.activ === true   // cast: tiparele supabase-js dau „never” (erori vechi)
+}
+
 export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void) {
   const { data: c } = await supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
@@ -230,6 +257,7 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
   let citite = 0
   const t0Tura = Date.now()
   while (!esteOprire()) {
+    if (!await coadaActiva(supabase, licId)) { log(`#${licId} citire: coada a fost oprită între timp (activ=false) — mă opresc (${citite} citite în tura asta)`); return }
     // 24.09: rând între licitații — după o tură (15 documente sau 15 min) cedăm locul, dacă mai e cineva la coadă;
     // main alege următoarea după ultimul_tick (cea mai veche), deci nicio licitație nu mai stă ore după alta
     if (citite + esuate.size >= 15 || Date.now() - t0Tura > 15 * 60_000) {
