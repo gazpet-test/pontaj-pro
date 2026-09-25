@@ -35,6 +35,15 @@ async function jpegSigla() {
   }
   return sharp(px, { raw: { width: w, height: h, channels: 3 } }).jpeg({ quality: 90 }).toBuffer()
 }
+// 472 (Vâlcelele PL4): plan topografic rar — străzi subțiri în benzi, mult alb; sondele 3x3 cădeau toate pe alb
+async function pdfTopoRar() {
+  const d = new jsPDF({ unit: 'pt', format: [1684, 2384] })
+  const W = 1684, H = 2384
+  for (const fx of [0.1, 0.38, 0.62, 0.9]) for (let k = 0; k < 6; k++) d.line(fx * W + k * 4, 40, fx * W + k * 4 + 20, H - 40)
+  for (const fy of [0.1, 0.38, 0.62, 0.9]) for (let k = 0; k < 6; k++) d.line(40, fy * H + k * 4, W - 40, fy * H + k * 4 + 20)
+  d.addImage(dataUrl(await jpegSigla()), 'JPEG', 1, H - 72, 141, 71)
+  return cuByteRange(Buffer.from(d.output('arraybuffer')))
+}
 async function pdfSiglaEasySignReala() {     // A3 vectorial + sigla 900x450 cu textul de semnătură SUPRAPUS pe ea
   const d = new jsPDF({ unit: 'pt', format: 'a3', orientation: 'landscape' })
   for (let i = 0; i < 600; i++) d.line(40 + (i * 1.7) % 1000, 40 + (i * 13) % 700, 60 + (i * 7) % 1050, 60 + (i * 11) % 740)
@@ -133,5 +142,9 @@ verifica(r8.acoperire_pdf?.paths_peste > 0 && r8.acoperire_pdf?.text_peste > 0, 
 verifica(r8.randeaza === true && r8.ruta === 'suprapunere vectorială peste imagine', '8: scan 100% + cote peste => ruta = randare completă')
 verifica(r8.sursa === 'randare_pagina', '8: sursa = randarea paginii, nu imaginea')
 verifica(r2.acoperire_pdf?.text_peste === 0, '2: textul de semnătură EasySign în bbox NU contează ca suprapunere')
+const r9 = await ruleaza('topo_rar_472', await pdfTopoRar())
+verifica(r9.sursa === 'randare_pagina', '9: plan topografic rar (472) => randarea paginii e citibilă, nu fallback pe siglă')
+const alb = await sharp({ create: { width: 3000, height: 4000, channels: 3, background: '#fff' } }).png().toBuffer()
+verifica((await esteCitibila(alb)).citibila === false, '9: pagină albă randată => necitibilă')
 console.log(`\n${ok}/${tot} verificări trecute`)
 process.exit(ok === tot ? 0 : 1)

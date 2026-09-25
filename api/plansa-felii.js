@@ -60,7 +60,9 @@ export function jpegDinPdf(buf) {
 export async function esteCitibila(img) {
   const { data, info } = await sharp(img, { limitInputPixels: false, failOn: 'none' })
     .resize({ width: 1600, fit: 'inside' }).greyscale().raw().toBuffer({ resolveWithObject: true })
-  const pas = 4, raza = 60
+  // 25.09.2026 (doc 472, plan topografic rar): grila 3x3 cădea integral pe alb între străzi => randare bună
+  // declarată necitibilă. Grilă 7x7 + prag 10%: o imagine alterată dă 0 PESTE TOT, deci pragul mic rămâne sigur.
+  const pas = 8, raza = 40
   let sonde = 0, cuContinut = 0
   for (let r = 1; r < pas; r++) {
     for (let c = 1; c < pas; c++) {
@@ -80,7 +82,7 @@ export async function esteCitibila(img) {
       if (abatere > 2) cuContinut++
     }
   }
-  return { sonde, cu_continut: cuContinut, citibila: cuContinut >= Math.ceil(sonde * 0.25) }
+  return { sonde, cu_continut: cuContinut, citibila: cuContinut >= Math.max(3, Math.ceil(sonde * 0.1)) }
 }
 
 // R3: alege sursa. Semnalele declanșează randarea paginii complete; o scanare mare care acoperă pagina rămâne imagine.
