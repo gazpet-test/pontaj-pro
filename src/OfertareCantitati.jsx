@@ -89,7 +89,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   // Bucla + mesajele sunt în ofertareExtragereCantitati.js (25.09.2026, Jilava): eroarea reală (ex. 403
   // „doar ownerul sau responsabilul") nu mai e acoperită de un fals „terminată: 0 rânduri", iar o rulare
   // oprită de plafonul de apeluri SAU de o eroare trecătoare la mijloc (504/546, furnizor) se reia de unde
-  // a rămas, nu de la zero (feliile deja plătite nu se replătesc). La 401/403 nu se oferă reluare.
+  // a rămas, nu de la zero (feliile deja plătite nu se replătesc). La 401/403 nu se oferă o reluare nouă,
+  // dar se păstrează cea de dinainte de clic (reluareDupa(r, licId, reluare)).
   const [extrag, setExtrag] = useState(null)
   const [reluare, setReluare] = useState(null)   // { licId, deLa } după o rulare neterminată / întreruptă
   const extrage = async () => {
@@ -104,7 +105,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
       const r = await ruleazaExtragere(
         body => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
         licId, { deLa, onPas: i => { feliaCurenta = i; setExtrag(`felia ${i + 1}…`) } })
-      setReluare(reluareDupa(r, licId))
+      setReluare(reluareDupa(r, licId, reluare))
       const m = mesajExtragere(r)
       showToast(m.text, m.tip)
     } catch (e) {

@@ -1,6 +1,6 @@
 # Jilava (lic. 93): de ce sunt 0 cantități în platformă
 
-Diagnostic din 25.09.2026, runda 2 (după verificarea independentă din runda 1). În BD s-a rulat doar SELECT, plus s-au citit loguri Edge și cod. Nu s-a rulat nimic plătit, nu s-a scris nimic în BD, nu s-a făcut deploy și nu s-a făcut push.
+Diagnostic din 25.09.2026, runda 2 (după verificarea independentă din runda 1). Runda 3 a adus finisajele cerute de verificare: R3 și eticheta din §2, reluarea la 401/403 (§3.A), interdicția de re-rulare după retipizare (§4) și SQL-ul din §5. În BD s-a rulat doar SELECT, plus s-au citit loguri Edge și cod. Nu s-a rulat nimic plătit, nu s-a scris nimic în BD, nu s-a făcut deploy și nu s-a făcut push.
 
 ## 1. Concluzie
 **Extragerea cantităților nu a pornit niciodată pentru licitația 93.** Nu e o problemă de filtru și nici de document: nu există niciun declanșator automat, iar din butonul 🤖 nu a pornit nicio rulare. La 25.09.2026, ~22:00 UTC (runda 2), starea e aceeași: `ofertare_cantitati` are 0 rânduri pe lic. 93, iar `ai_usage_log` are 0 apeluri `ofertare-cantitati-extrage` cu `ref_id=93` (SELECT count).
@@ -16,7 +16,7 @@ Singurul POST din browser către funcție în ultimele 24 h (25.09, 15:53:55 UTC
 | Doc 434 (`…LST-002-00-R Cantitati de lucrari.pdf`): tip `lista_cantitati`, 83 de pagini, `text_extras` = 141.697 de caractere, OCR, cu marcaje `⟦PAGINA n⟧` | `ofertare_documente_atribuire` id=434 |
 | **26 de liste F3.** Le-am numărat după antetul „Lista cu cantitati de lucrari pe categorii de lucrari” (26 de apariții). Tot 26 apar „TOTAL 1 (Cheltuieli directe)” și „Stadiul fizic:”. Șirul „Formular F3” apare de 89 de ori, pentru că e și antet, și subsol de pagină: nu e numărul de liste | `regexp_matches` pe `text_extras` id=434 |
 | **Doc 434 are și anexele C6–C9:** C6 „Lista cuprinzand consumurile de resurse materiale” (pag. 76–80), C7 manoperă (pag. 81), C8 utilaje (pag. 82), C9 transport (pag. 83). Între pag. 1 și 75 nu apare niciun antet C6–C9. După pag. 76 nu mai apare niciun antet F3 | SELECT pe pagini (`⟦PAGINA n⟧`), secțiunile [0, 121.853) / [121.853, 137.048) / [137.048, 141.697) |
-| Pag. 1–9, 18–19, 28–29, 44–45, 60–61 și 68–69 sunt DEVIZ GENERAL / CENTRALIZATORUL: valori în lei, fără cantități. Pe pag. 10–75 sunt 88 de rânduri „N \| 4.1.1 \| …” | SELECT pe pagini |
+| Pag. 1–9, 18–19, 28–29, 44–45, 60–61 și 68–69 sunt DEVIZ GENERAL / CENTRALIZATORUL: valori în lei, fără cantități. Pe pag. 10–75, regex-ul R3 (mai jos) prinde 88 de linii de capitol „N \| 4.x… / 6.x \| …”: 80 cu 4.x (ex. „10 \| 4.1.4 \| Instalatii”) și 8 cu 6.x („17 \| 6.2 \| Probe tehnologice si teste”). Toate sunt pe paginile de centralizator 18, 19, 28, 44, 60 și 68, deci nu sunt poziții F3. Forma strictă „N \| x.y.z” dă 40. Cifra e informativă și nu intră în reper | SELECT pe pagini (spații normalizate), refăcut în runda 3 |
 | În `ai_usage_log` nu e niciun apel `ofertare-cantitati-extrage` cu ref_id=93. Singurele sunt 32 de apeluri pe lic. 5 (11.09, 1,28 $) | `ai_usage_log` (runda 1, confirmat de verificator) |
 | Logurile Edge nu au niciun apel al funcției între 17.09 și 24.09. Pe 25.09 sunt 7 POST-uri curl de test (cheie anon sau JWT fals), care au primit 401, și un POST din browser cu 403 (§1) | `query_logs` (runda 1, confirmat de verificator) |
 | Singurul care apelează funcția e butonul din `src/OfertareCantitati.jsx`. Worker-ul NAS și `ofertare-ingest-doc` nu pornesc extragerea | `grep cantitati-extrage` |
@@ -35,6 +35,7 @@ Am numărat linii din `text_extras`, după ce am normalizat spațiile (SELECT cu
 ```
 R1: ^\|?\s*[1-9][0-9]*\s*\|\s*\S+\s+-\s
 R2: ^\|?\s*[0-9]+\.[0-9]+\s*\|\s*\S+\s+-\s
+R3: ^\|?\s*[0-9]+\s*\|\s*[0-9]+\.[0-9]+          (doar pentru cifra informativă din §2: linii de capitol din centralizator)
 ```
 
 Verificatorul din runda 1 a numărat, cu alt regex, ~214 poziții F3, ~94 de sub-rânduri și ~90 de rânduri C6–C9. **Reperul pentru F3 este deci ~190–214 poziții principale, plus ~94–105 sub-rânduri de material.** C6–C9 (~145 de rânduri distincte după numărătoarea de mai sus) se numără **separat**, nu în F3. Cifra de ~307 din runda 1 amesteca F3 cu C6–C9 și nu mai e reper.
@@ -48,9 +49,9 @@ Verificatorul din runda 1 a numărat, cu alt regex, ~214 poziții F3, ~94 de sub
 
 Acum stările sunt `ok`, `partial`, `neterminat` și `eroare`, iar mesajul arată motivul real și statusul HTTP. **Reluarea** pornește de la felia unde s-a oprit, fără să plătească din nou feliile deja făcute (upsert-ul previne dublurile, nu costul). Se reia în două situații:
 - după plafonul de apeluri;
-- **după o eroare trecătoare la mijlocul rulării** (`eroare` cu `deLa > 0` și status ≠ 401/403, de ex. 504/546 sau o eroare de furnizor). Butonul devine „Continuă extragerea (felia X)”.
+- **după o eroare trecătoare la mijlocul rulării** (`eroare` cu `deLa > 0` și status ≠ 401/403, de ex. 504/546 sau o eroare de furnizor). Butonul devine „🤖 Continuă extragerea (felia X)”. Reluarea nu pornește singură: cere clic și confirmare.
 
-La 401/403 nu se oferă reluare. Funcția pură `reluareDupa` are teste.
+La 401/403 nu se oferă o reluare nouă și nici mesajul „apasă din nou”. Dacă însă exista deja o reluare de dinainte de clic, ea se păstrează: pe aceeași licitație avansează până la felia apelului refuzat, iar pentru altă licitație rămâne neschimbată. Altfel, următorul clic ar porni de la felia 0 și ar replăti feliile deja făcute (runda 3). Funcția pură `reluareDupa(r, licId, anterioara)` are 9 teste.
 
 **B. `mesajInvoke` într-un singur loc:** `src/lib/mesajInvoke.js`, plus `statusInvoke`. Până acum existau copii identice în `OfertareLicitatii.jsx` și în modulul extragerii. `OfertareLicitatii.jsx` o importă acum; corpul funcției nu s-a schimbat.
 
@@ -68,7 +69,7 @@ La 401/403 nu se oferă reluare. Funcția pură `reluareDupa` are teste.
   - **Restul documentelor** (lic. 3, 5, 15): o singură secțiune, felii identice.
 
 **Teste** (rulate pe ramură):
-- `npx vitest run`: 389/389, dintre care 17 în `src/ofertareExtragereCantitati.test.js`
+- `npx vitest run`: 393/393, dintre care 21 în `src/ofertareExtragereCantitati.test.js` (runda 3: +4 teste pentru reluarea la 401/403; cu regula veche, care întorcea null la 401/403, 3 dintre ele pică)
 - `npm install && npx vite build`: OK
 - `deno test --node-modules-dir=none --no-lock supabase/functions/ofertare-cantitati-extrage/`: 25/25 (12 pentru poartă + 13 pentru secțiuni)
 - `supabase/functions/ofertare-plansa-citeste/`: 44/44, pentru că `_test/fake_supa.ts` înregistrează acum și payload-ul de upsert
@@ -77,12 +78,25 @@ La 401/403 nu se oferă reluare. Funcția pură `reluareDupa` are teste.
 ## 4. Cum se populează cantitățile Jilavei (decizia și apăsarea îi aparțin lui Razvan)
 **Cine poate porni (poarta pe cheltuială, `poarta.ts` + `handler.ts`):** doar ownerii, **Razvan Trusu** și **Tudorache Marilena Claudia** (`profiles.is_owner`), sau responsabila lic. 93, **Cristina Dumitrescu** (`ofertare_licitatii.responsabil_id`). Contul „Claude” primește 403. Calea `x-radar-secret` (worker) sare peste poarta de owner și cere OK explicit de la Razvan.
 
-**Ordinea contează.** Funcția live e cea veche până la PR + merge + **deploy** pentru `ofertare-cantitati-extrage` (cu `sectiuni.ts`). O rulare înainte de deploy scrie C6–C9 ca `lista_f3`. Asta se repară doar cu retipizare prin UPDATE, cu preview și confirmare (SQL-ul (4) de mai jos).
+**Ordinea contează.** Funcția live e cea veche până la PR + merge + **deploy** pentru `ofertare-cantitati-extrage` (cu `sectiuni.ts`). O rulare înainte de deploy scrie C6–C9 ca `lista_f3`. Asta se repară doar cu retipizare prin UPDATE, cu preview și confirmare (SQL-ul (4) din §5).
+
+**După retipizare NU se reia extragerea pe feliile C6–C9 (indicii 20–21 după deploy).** Altfel rândurile se dublează, din cauza cheii de upsert:
+- Cheia este indexul unic `uq_ofertare_cantitati_sursa` pe (`licitatie_id`, `denumire`, `sursa`), iar `sursa` = `nume — obiect | cod | loc`.
+- În codul vechi, rândurile C6–C9 moștenesc obiectul F3 de dinainte (ex. „Obj6 …”), care intră în `sursa`.
+- Codul nou golește obiectul la începutul secțiunii, deci `sursa` iese, de regulă, alta. Upsert-ul nu mai prinde conflictul și rândurile C6–C9 intră a doua oară.
+- `obiect = NULL` din UPDATE (opțional) nu schimbă `sursa`, deci nu previne dublarea.
+
+Același lucru, mai slab, pentru restul doc 434:
+- Feliile F3 17–18 au același text în ambele coduri.
+- Felia 19 nu mai are același text: în codul vechi conținea și C6–C9, în cel nou se oprește înainte de pag. 76.
+- Modelul nu e determinist, deci o re-rulare nu garantează aceeași `sursa`.
+
+**Regula: după o rulare pe codul vechi, doc 434 nu se mai extrage deloc (nici B, nici butonul A); se repară doar prin UPDATE.** Dacă totuși se vrea o extragere curată, întâi se șterg rândurile vechi ale doc 434 (DELETE cu preview, confirmare și `array_agg(id)`), apoi se rulează. Variantele de mai jos presupun că nu s-a rulat nimic înainte de deploy (azi, 25.09 seara: 0 rânduri pe lic. 93).
 
 | Varianta | Ce face | Cost (gpt-5-mini) |
 |---|---|---|
 | **B. Doar doc 434, după deploy** (recomandat) | **5 apeluri separate**, fiecare `{licitatie_id:93, de_la:N, max_felii:1}` pentru N = 17, 18, 19, 20, 21 (doc 434 ocupă feliile 17–21 din 54 după deploy; înainte ocupa 17–19 din 52). Apelul se face cu JWT-ul unui owner sau al responsabilei. Tipurile așteptate pe felii: `lista_f3`, `lista_f3`, `lista_f3`, `lista_c6`, `lista_alt`. **Verificare după FIECARE apel:** `raport[0].doc` = „…LST-002-00-R Cantitati de lucrari.pdf”, `raport[0].bucata` = „k/5”, `raport[0].tip_sursa` cel așteptat, fără `raport[].eroare`, `stop` ≠ `max_output_tokens`, apoi `cost_usd`, `pe_tip_sursa` și durata (trebuie să fie mult sub ~150 s). Dacă o felie iese „raspuns neinterpretabil” / `max_output_tokens` (riscul e mai ales pe N=18: ~178 de rânduri candidate, ~12,5k tokeni de ieșire din plafonul de 16k), se reia **o singură dată** doar felia respectivă. Dacă pică din nou, **nu se mai reia**: se decide o felie mai mică, ceea ce înseamnă cod | estimat ~0,075 $; plafon ~0,17 $ |
-| **A. Butonul din UI** | Procesează **43 de documente / 54 de felii** (52 înainte), adică `lista_cantitati`, `cs_volum` și `alta`, inclusiv Plan SSM, bibliografie, acorduri și 23 de planșe tipizate `alta`. Rezultă și rânduri-zgomot fără `tip_sursa`. După fix, butonul se reia singur și după o eroare trecătoare | plafon ~1,81 $ |
+| **A. Butonul din UI** | Procesează **43 de documente / 54 de felii** (52 înainte), adică `lista_cantitati`, `cs_volum` și `alta`, inclusiv Plan SSM, bibliografie, acorduri și 23 de planșe tipizate `alta`. Rezultă și rânduri-zgomot fără `tip_sursa`. După fix, butonul nu reia singur: după o eroare trecătoare oferă «Continuă de la felia X» (eticheta „🤖 Continuă extragerea (felia X)”), cu clic și confirmare, fără să replătească feliile făcute | plafon ~1,81 $ |
 | **C. Cod: parametru `doc_ids`** + opțiunea „doar lista F3” în UI | Face A la fel de curată și de ieftină ca B. Cere PR și deploy (funcție + front) | ca B |
 
 Baza estimărilor:
@@ -95,7 +109,64 @@ Baza estimărilor:
 1. Breakdown pe felie și tip pentru doc 434. Reperul: felii 1–3 `lista_f3` ≈ 190–214 principale + 94–105 sub-rânduri; felia 4 `lista_c6` ≈ 105; felia 5 `lista_alt` ≈ 40.
 2. Rândurile `lista_f3` cu `cantitate IS NULL`. Pot veni din paginile DEVIZ GENERAL / CENTRALIZATOR (§2) și sunt zgomot, nu clarificări.
 3. Cele 9 anomalii (TSE01C1 121,5 × 100 mp etc.). Apoi `v_ofertare_contradictii` pe 93, plus `lista_f3_m` / `lista_c6_m` din `v_ofertare_pt_stare`.
-4. Legarea clarificărilor 54–62 la `cantitate_id`: UPDATE cu preview și confirmare.
+4. **Doar dacă s-a rulat înainte de deploy:** retipizarea C6–C9 scrise ca `lista_f3`. Se face cu preview și confirmare. După ea, doc 434 nu se mai extrage (§4).
+5. Legarea clarificărilor 54–62 la `cantitate_id`: UPDATE cu preview și confirmare. Azi toate 9 au `cantitate_id` NULL.
+
+Coloanele sunt verificate în `information_schema` (25.09, runda 3). Toate SELECT-urile au rulat fără eroare pe BD. Rezultatele de azi: (1), (2), (4) și primele două interogări din (3) întorc 0 rânduri. `v_ofertare_pt_stare` întoarce un rând cu toate cele 4 valori NULL, iar (5) întoarce 9 clarificări. UPDATE-urile sunt comentate. **NEEXECUTAT.**
+
+```sql
+-- 1) Breakdown pe felie (în document) și tip pentru doc 434. ordine = nr_felie*100000 + poziție.
+--    Reper după deploy: felii 1–3 lista_f3 ≈ 190–214 principale + 94–105 sub-rânduri; felia 4 lista_c6 ≈ 105; felia 5 lista_alt ≈ 40.
+SELECT ordine/100000 AS felia, tip_sursa, count(*) n, count(*) FILTER (WHERE cantitate IS NULL) fara_cant
+FROM ofertare_cantitati
+WHERE licitatie_id = 93 AND sursa LIKE 'PT/pdf/parte scrisa/CLJ-02-2025-DD- CPD-PL-LST-002-00-R%'
+GROUP BY 1,2 ORDER BY 1,2;
+
+-- 2) Zgomot posibil din paginile DEVIZ GENERAL / CENTRALIZATOR (rămân în secțiunea F3)
+SELECT id, ordine, denumire, um, cantitate, sursa FROM ofertare_cantitati
+WHERE licitatie_id = 93 AND tip_sursa = 'lista_f3' AND cantitate IS NULL ORDER BY ordine;
+
+-- 3) Anomaliile + controalele
+SELECT id, obiect, cod_articol, denumire, um, cantitate, tip_sursa FROM ofertare_cantitati
+WHERE licitatie_id = 93 AND cod_articol IN ('TSE01C1','CMTE01C3','M1L29A1','M1G27A1','W2G01A01','ACB08A1','PIZ-UV','IZ-UV','PC-13mm','IZZ-PC-DN700','MTP-DN350-DN200','CG32A#[1]','TSD06A1') ORDER BY ordine;
+SELECT fel, count(*) FROM v_ofertare_contradictii WHERE licitatie_id = 93 GROUP BY fel;
+SELECT lista_f3_m, lista_c6_m, memoriu_m, plansa_m FROM v_ofertare_pt_stare WHERE licitatie_id = 93;
+
+-- 4) DOAR dacă s-a rulat ÎNAINTE de deploy. Codul vechi taie doc 434 în 3 felii, iar C6–C9 (de la pag. 76)
+--    cad toate în felia 3, scrise ca lista_f3.
+--    Preview: felia 3 veche (ordine 300000–399999), în ordinea documentului. `sugestie` e doar un indiciu, luat
+--    din obiect + partea de după „ — ” a sursei (fără numele fișierului). Pe Domnești (lic. 5) indiciul
+--    potrivește exact: 77/77 lista_c6, 29/29 lista_alt și 0 din 756 lista_f3. Granița F3 → C6 o confirmă
+--    omul pe preview. Rezultatul preview-ului (id, obiect) se PĂSTREAZĂ: e rollback-ul pentru obiect=NULL.
+--    ATENȚIE: după retipizare NU se reia extragerea pe feliile C6–C9 (indicii 20–21 după deploy) și nici
+--    pe restul doc 434. `sursa` rândurilor vechi conține obiectul F3 moștenit (ex. „Obj6 …”), iar cea nouă nu.
+--    Cheia de upsert (licitatie_id, denumire, sursa) nu prinde conflictul, deci rândurile se dublează (§4).
+SELECT id, ordine, obiect, cod_articol, denumire, um, cantitate, sursa,
+       CASE WHEN concat_ws(' ', obiect, split_part(sursa, ' — ', 2)) ~* '\mC\s*6\M|resurse\s+materiale' THEN 'lista_c6'
+            WHEN concat_ws(' ', obiect, split_part(sursa, ' — ', 2)) ~* '\mC\s*[789]\M|m[aâă]n[aă]\s+de\s+lucru|ore\s+de\s+func|transporturi' THEN 'lista_alt'
+       END AS sugestie
+FROM ofertare_cantitati
+WHERE licitatie_id = 93 AND tip_sursa = 'lista_f3'
+  AND sursa LIKE 'PT/pdf/parte scrisa/CLJ-02-2025-DD- CPD-PL-LST-002-00-R%'
+  AND ordine BETWEEN 300000 AND 399999
+ORDER BY ordine;
+-- Două UPDATE-uri, câte unul pe tip (lista_c6, apoi lista_alt), numai pe id-urile confirmate pe preview:
+-- WITH u AS (
+--   UPDATE ofertare_cantitati
+--      SET tip_sursa = 'lista_c6',      -- respectiv 'lista_alt' pentru C7–C9
+--          obiect = NULL,               -- opțional: C6–C9 sunt pe investiție, nu pe Obj6. `sursa` NU se schimbă
+--          updated_at = now()
+--    WHERE licitatie_id = 93 AND tip_sursa = 'lista_f3' AND id = ANY('{<id-uri confirmate>}'::bigint[])
+--   RETURNING id)
+-- SELECT count(*), array_agg(id ORDER BY id) AS rollback_ids FROM u;
+-- Sanity: se reia (1) și trebuie să apară felia 3 împărțită în lista_f3 / lista_c6 / lista_alt.
+
+-- 5) Legarea clarificărilor 54–62 la cantitate_id: preview, apoi câte un UPDATE per clarificare
+SELECT id, nr, intrebare, sursa, cantitate_id, status FROM ofertare_clarificari
+WHERE licitatie_id = 93 AND id BETWEEN 54 AND 62 ORDER BY nr;
+-- UPDATE ofertare_clarificari SET cantitate_id = <id poziție>, updated_at = now()
+--  WHERE id = 54 AND licitatie_id = 93 AND cantitate_id IS NULL RETURNING id, cantitate_id;
+```
 
 ## 6. Checklist Jilava (2–11): ce depinde de cantități
 | # | Depinde? | De ce |

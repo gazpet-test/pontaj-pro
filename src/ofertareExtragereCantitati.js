@@ -38,13 +38,21 @@ export async function ruleazaExtragere(invoke, licId, { deLa = 0, maxApeluri = 4
 }
 
 // De unde continuă următorul clic, ca feliile deja plătite să nu se plătească din nou (upsert-ul previne
-// dublurile, NU costul). null = de la zero.
+// dublurile, NU costul). null = de la zero. `anterioara` = reluarea de dinainte de clic ({ licId, deLa } sau null).
 //  - neterminat (plafonul de apeluri): de la felia la care s-a oprit;
 //  - eroare DUPĂ ce au trecut felii (deLa > 0), de ex. 504/546 de la gateway sau o eroare de furnizor:
-//    de la felia apelului eșuat. NU la 401/403: acolo nu e o problemă trecătoare (sesiune / drept lipsă),
-//    iar un „Continuă" ar sugera că reîncercarea rezolvă ceva.
+//    de la felia apelului eșuat;
+//  - 401/403: nu e o problemă trecătoare (sesiune / drept lipsă), deci NU creează o reluare nouă (nici
+//    mesajul „apasă din nou"), dar nici nu o ȘTERGE pe cea de dinainte de clic — altfel următorul clic ar
+//    porni de la 0 și ar replăti feliile deja făcute. Pe aceeași licitație punctul avansează până la felia
+//    apelului refuzat (feliile dintre ele au trecut cu 200 și sunt scrise); pe alta rămâne cum era.
 export const STATUS_FARA_RELUARE = [401, 403]
-export function reluareDupa(r, licId) {
+export function reluareDupa(r, licId, anterioara = null) {
+  if (r?.stare === 'eroare' && STATUS_FARA_RELUARE.includes(r.status)) {
+    if (!anterioara) return null
+    if (anterioara.licId === licId && r.deLa != null) return { licId, deLa: Math.max(anterioara.deLa, r.deLa) }
+    return anterioara
+  }
   if (!r || r.deLa == null) return null
   if (r.stare === 'neterminat') return { licId, deLa: r.deLa }
   if (r.stare === 'eroare' && r.deLa > 0 && !STATUS_FARA_RELUARE.includes(r.status)) return { licId, deLa: r.deLa }
@@ -56,6 +64,8 @@ export function mesajExtragere(r) {
   const nr = `${r.scrise} rânduri noi`
   const primaEroare = r.erori?.[0] ? ` (ex. ${r.erori[0].doc || ''} ${r.erori[0].bucata || ''}: ${r.erori[0].eroare})` : ''
   if (r.stare === 'eroare') {
+    // fără `anterioara`: „apasă din nou" doar când EROAREA ASTA e trecătoare — la 401/403 niciodată,
+    // chiar dacă butonul păstrează o reluare mai veche
     const reia = reluareDupa(r, null) ? ` — apasă din nou ca să continui de la felia ${r.deLa + 1}` : ''
     return { tip: 'err', text: `Extragere oprită: ${r.mesaj}${r.scrise ? ` — ${nr} scrise înainte de eroare` : ''}${reia}` }
   }

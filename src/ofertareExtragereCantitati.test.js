@@ -152,6 +152,38 @@ describe('reluareDupa (de unde continuă următorul clic)', () => {
       expect(mesajExtragere(r).text).not.toContain('continui')
     }
   })
+  it('401/403 pe o rulare care era deja reluare → păstrează punctul anterior, fără „apasă din nou"', async () => {
+    for (const st of [401, 403]) {
+      const anterioara = { licId: 93, deLa: 17 }
+      // refuzat chiar la primul apel al reluării (ex. sesiune expirată cât pagina a stat deschisă)
+      const { invoke, apeluri } = scriptat([{ data: null, error: httpErr(st, { error: 'token invalid' }) }])
+      const r = await ruleazaExtragere(invoke, 93, { deLa: anterioara.deLa })
+      expect(apeluri).toEqual([{ licitatie_id: 93, de_la: 17 }])
+      expect(r).toMatchObject({ stare: 'eroare', status: st, deLa: 17 })
+      expect(reluareDupa(r, 93, anterioara)).toEqual({ licId: 93, deLa: 17 })
+      const m = mesajExtragere(r)
+      expect(m.tip).toBe('err')
+      expect(m.text).not.toContain('apasă din nou')
+      expect(m.text).not.toContain('continui')
+    }
+  })
+  it('401/403 la mijlocul unei reluări → punctul avansează la felia refuzată (17–18 nu se replătesc)', async () => {
+    const { invoke } = scriptat([pas({ continua: true, urmatorul: 19, scrise: 12 }), { data: null, error: httpErr(401, { error: 'token invalid' }) }])
+    const r = await ruleazaExtragere(invoke, 93, { deLa: 17 })
+    expect(r).toMatchObject({ stare: 'eroare', status: 401, deLa: 19 })
+    expect(reluareDupa(r, 93, { licId: 93, deLa: 17 })).toEqual({ licId: 93, deLa: 19 })
+    expect(mesajExtragere(r).text).not.toContain('apasă din nou')
+  })
+  it('401/403 pe altă licitație → reluarea celeilalte rămâne neatinsă', async () => {
+    const r = await ruleazaExtragere(scriptat([{ data: null, error: httpErr(403, { error: 'fără drept' }) }]).invoke, 93)
+    expect(reluareDupa(r, 93, { licId: 5, deLa: 8 })).toEqual({ licId: 5, deLa: 8 })
+  })
+  it('reluarea anterioară NU supraviețuiește unei rulări reușite; eroarea trecătoare folosește punctul nou', async () => {
+    const anterioara = { licId: 93, deLa: 17 }
+    expect(reluareDupa({ stare: 'ok', deLa: null }, 93, anterioara)).toBe(null)
+    expect(reluareDupa({ stare: 'partial', deLa: null }, 93, anterioara)).toBe(null)
+    expect(reluareDupa({ stare: 'eroare', status: 504, deLa: 20 }, 93, anterioara)).toEqual({ licId: 93, deLa: 20 })
+  })
   it('eroare la prima felie (deLa 0) → fără reluare (nu e nimic plătit de ocolit)', async () => {
     const r = await ruleazaExtragere(scriptat([{ data: null, error: httpErr(500, { error: 'OPENAI_API_KEY lipsă din secretele funcției' }) }]).invoke, 93)
     expect(reluareDupa(r, 93)).toBe(null)
