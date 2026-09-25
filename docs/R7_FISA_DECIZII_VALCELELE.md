@@ -1,6 +1,6 @@
 # R7 — Fișa de decizii financiar-contractuale, Vâlcelele (lic. 95), 25.09.2026
 
-Analiză READ-ONLY: în BD s-au rulat doar SELECT-uri; nu s-a scris, nu s-a trimis nimic și nu s-a făcut niciun apel AI. Revizia 2: include corecturile celui de-al doilea evaluator (IBAN, pct. 2/4/7/8, maparea F1–F6, locatori).
+Analiză READ-ONLY: în BD s-au rulat doar SELECT-uri; nu s-a scris, nu s-a trimis nimic și nu s-a făcut niciun apel AI. Revizia 2: include corecturile celui de-al doilea evaluator (IBAN, pct. 2/4/7/8, maparea F1–F6, locatori). Revizia 3 (25.09 seara): finisajele de la reverificare. Reemiterea poliței e formulată unitar, cu marja de ~30 de zile calendaristice. Textul pentru `garantie_participare` e scurt, iar detaliile trec în `observatii`. F6 are sub-punctul (c), cu Formularul 3 și CS. La pct. 1, „nu prevede reducerea GBE” (tăcere).
 **Surse:** doc 479 (Fișa de date, FD; „pag.” = marcajul ⟦PAGINA N⟧), 480 (contract .doc, fără pagini: titlul articolului + poziția caracterului în `text_extras`), 481 (formulare), 1276 (CS p01). Din BD: `ofertare_licitatii` 95, `ofertare_clarificari` 63/64, `ofertare_clauze_contract` 30–64, `ofertare_formulare_registru` 11–22, `ofertare_cerinte`, `ofertare_garantii`, `ofertare_pt_garantie`. Citatele sunt date din documentație, copiate literal.
 **Bază de calcul (proxy):** valoarea estimată 37.366.625,89 lei (`ofertare_licitatii.valoare_estimata`; 479 pag. 2), nu prețul ofertat.
 **Termene:** depunere 19.10.2026 15:00 (ora RO) — vine **doar din BD** (`termen_depunere` = 2026-10-19 12:00 UTC); „19.10” nu apare în niciunul din cele 16 documente cu text ⇒ **de confirmat în anunțul SEAP CN1096479**. Clarificări până la **01.10.2026** = depunere − 18 zile (FD pag. 1, poz. 1 071: „Numar zile pana la care se pot solicita clarificari inainte de data limita de depunere a ofertelor/candidaturilor 18”); răspunsul AC ≤ **08.10.2026** (FD pag. 17, poz. 80 522: „cel târziu cu 11 zile înainte de data-limită”). Ambele date derivă din termenul din BD. #63 și #64 sunt `de_trimis` (netrimise).
@@ -10,7 +10,7 @@ Analiză READ-ONLY: în BD s-au rulat doar SELECT-uri; nu s-a scris, nu s-a trim
 | # | Punct | Recomandare | Impact (valoare estimată) | Parametru platformă: acum → propus |
 |---|---|---|---|---|
 | 1 | GBE | Poliță/SGB 10%: pe E1 + completare dacă AC confirmă (#64 pt 1a), altfel pe total. Fără rețineri succesive. Termen tratat ca 5 zile calendaristice | 3.736.662,59 (total) vs 829.890,92 (E1) | cl. 30/32 corecte literal; cl. 31 = „5 zile” (480) vs „5 zile lucrătoare, prelungibil 15” (479) → notă; toate neverificate |
-| 2 | Garanția de participare | Poliță prin broker 370.000 lei, CUI 3796837, **150 zile** (minim legal 123 = 19.10.2026→19.02.2027), după confirmarea datei în SEAP | primă proxy ≈ 1.536 (123 z) / ≈ 1.873 lei (150 z) vs 370.000 blocați la virament | UI propune **90 zile** (→17.01.2027) ✗ → 150; textul din BD „IBAN mascat” ✗ |
+| 2 | Garanția de participare | Poliță prin broker 370.000 lei, CUI 3796837, **150 zile** (minim legal 123 = 19.10.2026→19.02.2027; marja acoperă o decalare de până la ~30 de zile calendaristice), după confirmarea datei în SEAP | primă proxy ≈ 1.536 (123 z) / ≈ 1.873 lei (150 z) vs 370.000 blocați la virament | UI propune **90 zile** (→17.01.2027) ✗ → 150; textul din BD „IBAN mascat” ✗ → text scurt + detalii în `observatii` |
 | 3 | Penalități (executant + AC) | Trimitem #64 pt 2b/2c; rezervă de risc în preț | 30 zile întârziere: 248.967 (E1) / 872.032 (E2) / 1.120.999 (total) | cl. 33/34 corecte; cl. 35: `termen_zile 60` = perioadă de grație, nu periodicitate; plafonul = interpretare AI |
 | 4 | Ajustarea prețului | #64 pt 3; prețuri la data ofertei, ajustarea = protecție | materiale +10% ⇒ +5,5%: 456.440 (E1) / 2.055.164 (total); risc: Dată de Referință ulterioară ofertei | cl. 40–42 corecte; nu există câmp pentru Data de Referință / indicii INS |
 | 5 | Avans | #64 pt 4 ca confirmare; cash-flow cu avans 0 | prefinanțare OS E1 134.446,35 + primele 45–60 zile | niciun parametru; formula e în cl. 40 |
@@ -31,14 +31,14 @@ Criteriul de închidere R7 (`RESTANTE_AUDIT_OFERTARE.md`, rândul R7, linia 15):
 | F3 (l. 28) | GBE: rol, termen 5 zile | pct. 1 (+ pct. 7) | Forma și baza GBE; termenul | C dacă AC confirmă 1a, altfel A; 5 zile calendaristice |
 | F4 (l. 29) | Plată / ajustare / Etapa 2 | pct. 4, 5, 6, 7, 8 | Ajustare, avans, repartizarea costurilor fixe, durata E1 | Ajustare = protecție; avans 0; costuri fixe în E1; E1 cu marjă |
 | F5 (l. 30) | Garanția de participare: aplicare + valabilitate | pct. 2 | Forma, valabilitatea, textul din BD | Poliță prin broker, 150 zile, CUI 3796837; SQL de mai jos după confirmare |
-| F6 (l. 31) | Formulare 481 (matricea spune „registru = 0” — depășit: registrul 95 are 12 rânduri, id 11–22, toate `de_pregatit`) | nou: acest rând + tabelul „Parametri platformă” (R7 §8) | (a) aplicabilitatea: Formularele nr. 4/41 (terț susținător), nr. 5 (asociere), nr. 6 (subcontractare) sunt `aplicabil=false` ⇒ ofertant individual, fără terți/subcontractanți; Formularul nr. 2 (Împuternicire) e `true`, necesar doar dacă semnatarul ≠ persoana din DUAE (479 pag. 16, poz. 73 485). (b) cele 5 livrabile din FD fără formular 481 (R7 §8: garanția de participare, DUAE răspuns, Lista de prețuri + Graficul, Planul de management al calității, docs terț „dacă e cazul”) nu sunt în registru | (a) confirmă strategia „individual, fără subcontractare” sau corectează flag-urile; (b) rânduri noi în registru, cu preview → confirmare → apply (Oana Nica completează) |
+| F6 (l. 31) | Formulare 481 (matricea spune „registru = 0” — depășit: registrul 95 are 12 rânduri, id 11–22, toate `de_pregatit`) | nou: acest rând + tabelul „Parametri platformă” (R7 §8) | (a) aplicabilitatea: Formularele nr. 4/41 (terț susținător), nr. 5 (asociere), nr. 6 (subcontractare) sunt `aplicabil=false` ⇒ ofertant individual, fără terți/subcontractanți; Formularul nr. 2 (Împuternicire) e `true`, necesar doar dacă semnatarul ≠ persoana din DUAE (479 pag. 16, poz. 73 485). (b) cele 5 livrabile din FD fără formular 481 (R7 §8: garanția de participare, DUAE răspuns, Lista de prețuri + Graficul, Planul de management al calității, docs terț „dacă e cazul”) nu sunt în registru. (c) **Formularul nr. 3** (registru id 13) are în titlu „art. 60 din Legea 98/2016”, preluat din lista din 481 (poz. 1 092). FD cere însă „Declarația privind neîncadrarea în situațiile prevăzute la **art. 59-60** din Legea nr. 98/2016” (479 pag. 16, poz. 71 926; R7 §8). **Reconcilierea cu CS**: nu e necesară ca listă de formulare. CS (1276) conține o singură dată „formular”, la poz. 85 266 (pag. 25): „Lista de prețuri anexă a formularului de ofertă”, deja tratată la pct. 6 / F1. Matricea (l. 31) cere „reconciliere FD/CS”: FD e acoperită la (a)–(c), CS nu adaugă niciun formular | (a) confirmă strategia „individual, fără subcontractare” sau corectează flag-urile; (b) rânduri noi în registru, cu preview → confirmare → apply (Oana Nica completează); (c) Formularul 3 se completează cu „art. 59-60”, cum cere FD, nu „art. 60”, cum apare în 481. Titlul din registru se corectează odată cu (b), prin preview → confirmare → apply |
 
 ---
 
 ### 1. GBE
 - **Citate.** 479 pag. 12, III.1.6.b (poz. 50 790): „Cuantumul garanției de buna execuție este de 10% din valoarea contractului fara TVA.” Termen: 479 pag. 17, VI.3 (poz. 77 377) „în termen de maxim 5 zile lucratoare de la data semnarii contractului public, termen ce poate fi prelungit pana la 15 zile” vs 480 (poz. 54 966) „cel mai tarziu in termen de 5 zile de la data semnarii contractului”.
 - Forme: SGB de la IFN admisă sub 40 mil. lei (479 pag. 17, poz. 78 190); rețineri succesive cu depunere inițială „nu poate fi mai mică de 0,5% din prețul contractului” (480 poz. 54 296). Ordinul de începere E1 „numai dupa constituirea” GBE (480 poz. 14 200); eliberarea după „art. 42 alin. (3) si (4) din HG nr. 395/2016” (480 poz. 57 577).
-- **Interpretare.** Baza = Prețul total E1+E2 (480 poz. 10 569: „suma acestora reprezinta Pretul total al Contractului”). Contractul nu reduce GBE dacă E2 nu se activează (pct. 7, 480 poz. 15 023). Procentul reținut din fiecare factură nu e definit.
+- **Interpretare.** Baza = Prețul total E1+E2 (480 poz. 10 569: „suma acestora reprezinta Pretul total al Contractului”). Contractul nu prevede reducerea GBE dacă E2 nu se activează (tăcere; 480 poz. 15 023 nu o menționează; pct. 7). Procentul reținut din fiecare factură nu e definit.
 - **#64.** Întreabă pt 1a (total vs E1 cu completare) și 1b (zile lucrătoare). Lipsesc: procentul reținut pe factură și reducerea GBE la notificarea că E2 nu se activează (propuse mai jos).
 - **Impact.** 10% pe total = 3.736.662,59 lei (45,03% din E1) vs 829.890,92 pe E1; rețineri: inițial 186.833,13 (total) / 41.494,55 (E1). Cost instrument: fiecare **1%/an din suma garantată** = 37.366,63 lei/an (total) vs 8.298,91 (E1); prima reală o dă brokerul (`gbe_polite` nu are câmp de primă).
 - **Opțiuni.** A) poliță/SGB 10% pe total din prima zi; B) rețineri succesive; C) poliță pe E1 + completare la activarea E2 (doar dacă AC confirmă la 1a).
@@ -52,8 +52,8 @@ Criteriul de închidere R7 (`RESTANTE_AUDIT_OFERTARE.md`, rândul R7, linia 15):
 - **Impact.** 370.000 lei = 0,99% din valoare (479 pag. 2). Virament: 370.000 blocați ≥123 zile, iar dacă câștigăm, până la dovada GBE (480 poz. 55 143).
 - Poliță, proxy `ofertare_garantii` id 1 (singura cu primă: 1.185,20 / 292.641,99 = 0,405% pentru 120 zile): ≈ 1.498,50 lei la rată fixă, ≈ 1.536 lei pro-rata la 123 zile, ≈ 1.873 lei pro-rata la 150 zile ⇒ marja costă ≈ 337 lei.
 - **Opțiuni.** A) virament; B) poliță prin broker (tabul 🛡) pe exact 123 zile; C) B cu marjă: 130–150 zile (până la 26.02–18.03.2027).
-- **Recomandare.** C, 150 zile (acoperă o decalare a termenului de ≈ 27 de zile), cerută după confirmarea datei-limită din anunțul SEAP. La orice decalare peste marjă, polița se reemite/actualizează: UI-ul avertizează (`OfertareGarantie.jsx:212`), dar numai cât polița nu e în starea `original` (linia 168).
-- **Platformă.** `garantie_participare` spune „IBAN-ul e mascat” ✗ (SQL propus mai jos); `ofertare_garantii` pt 95: 0 rânduri. UI pune implicit **90 zile** (`OfertareGarantie.jsx:56`: cerințele 6386/6427 nu conțin „NNN zile”) ⇒ 17.01.2027, sub 19.02.2027; câmpul „Valabilitate (zile)” se pune manual.
+- **Recomandare.** C, 150 de zile, cerute după confirmarea datei-limită din anunțul SEAP. Marja **acoperă o decalare de până la ~30 de zile calendaristice**: 4 luni de la 18.11.2026 = 18.03.2027 = ziua 150; 150 − 123 = 27 e diferența în zile, nu în luni calendaristice. **La decalarea termenului se verifică dacă 4 luni de la noul termen depășesc valabilitatea poliței; dacă da, polița se reemite.** UI-ul avertizează (`OfertareGarantie.jsx:212`), dar numai cât polița nu e în starea `original` (linia 168). După starea `original`, verificarea se face manual.
+- **Platformă.** `garantie_participare` spune „IBAN-ul e mascat” ✗. Propunerea e un text scurt (cuantum + formă + valabilitate + CUI/IBAN), cu detaliile în `observatii` (SQL mai jos); `ofertare_garantii` pt 95: 0 rânduri. UI pune implicit **90 zile** (`OfertareGarantie.jsx:56`: cerințele 6386/6427 nu conțin „NNN zile”) ⇒ 17.01.2027, sub 19.02.2027; câmpul „Valabilitate (zile)” se pune manual.
 
 ### 3. Penalități (executant + autoritate)
 - **Citate.** 480, „Sanctiuni pentru neindeplinirea culpabila a obligatiilor” (poz. ~51 450–52 700). Pentru executant: „penalitati in cuantum de 0,1% pe zi, calculate prin raportare la valoarea fara TVA a etapei sau a partii de Contract afectate” și „0,1% pentru fiecare zi de intarziere”. Pentru AC: „in termen de 60 de zile de la expirarea perioadei convenite […] 0,1% din plata neefectuata, pana la indeplinirea efectiva a obligatiilor. Cuantumul penalitatilor nu poate depasi valoarea debitului restant.”
@@ -102,7 +102,7 @@ Criteriul de închidere R7 (`RESTANTE_AUDIT_OFERTARE.md`, rândul R7, linia 15):
   - 480 art. 4 (poz. 10 019): „nu conferă Executantului dreptul de a solicita plata lucrărilor neexecutate aferente Etapei 2, despăgubiri, daune-interese, profit nerealizat”.
   - Evaluarea se face „prin raportare la prețul total” (1276 pag. 2).
 - **Valoarea exactă.** Suma celor 12 linii ale E2 din 479 pag. 2 (poz. ~3 460–4 296) = **29.067.716,73**. E1 (3 linii) = 8.298.909,16. **E1+E2 = 37.366.625,89 exact** (verificat cu SELECT). „29.067.716,7” (479 poz. 4 296) e aceeași valoare scrisă cu o singură zecimală, deci **diferența de 3 bani e lămurită din document**.
-- **Legătura cu GBE (pct. 1, opțiunea C).** Timp de până la 10 luni **de la semnare** nu se știe dacă E2 pornește, iar după notificare contractul continuă pe E1 fără nicio reducere a GBE. O GBE pe total ținută 10 luni costă, la fiecare 1%/an din suma garantată, ≈ 31.138,85 lei, față de ≈ 6.915,76 lei pe E1 (diferență ≈ 24.223,10 lei). De aici: opțiunea C la pct. 1 și întrebarea despre reducerea GBE la notificare (#64, mai jos).
+- **Legătura cu GBE (pct. 1, opțiunea C).** Timp de până la 10 luni **de la semnare** nu se știe dacă E2 pornește. După notificare, contractul continuă pe E1 și nu prevede reducerea GBE (tăcere; 480 poz. 15 023 nu o menționează). O GBE pe total ținută 10 luni costă, la fiecare 1%/an din suma garantată, ≈ 31.138,85 lei, față de ≈ 6.915,76 lei pe E1 (diferență ≈ 24.223,10 lei). De aici: opțiunea C la pct. 1 și întrebarea despre reducerea GBE la notificare (#64, mai jos).
 - **Ce întreabă #64.** Pt 5 întreabă valoarea E2, care acum nu mai e necesară.
 - **Impact.** E1 = 22,21% din total. Dacă E2 nu pornește: încasări de maximum 8,30 mil. lei, GBE pe total = 45% din valoarea E1, iar costurile fixe puse pe E2 se pierd. E2 conține și livrări: utilaje 1.126.268,00 lei, dotări 145.112,01 lei, active necorporale 1.452.120,11 lei (479 pag. 2). Valoarea estimată nu include cheltuielile diverse și neprevăzute (571.551,99 lei, 479 pag. 2).
 - **Opțiuni.** A) toate costurile fixe în E1, E2 prețuită separat; B) costurile fixe repartizate proporțional; C) no-go.
@@ -151,27 +151,52 @@ Criteriul de închidere R7 (`RESTANTE_AUDIT_OFERTARE.md`, rândul R7, linia 15):
 ## Parametri platformă de aplicat (preview → confirmare Razvan → apply)
 | Parametru | Acum | Propus |
 |---|---|---|
-| `ofertare_licitatii.garantie_participare` (95) | „… CUI apare „379683” (vs 3796837) și IBAN-ul e mascat …” | textul din SQL-ul de mai jos (CUI 3796837; IBAN valid ISO mod-97 așa cum e scris și identic în 480; minim 123 zile; reemitere la decalare) |
+| `ofertare_licitatii.garantie_participare` (95) | „… CUI apare „379683” (vs 3796837) și IBAN-ul e mascat …” (329 de caractere) | **text scurt**, 226 caractere: cuantum + formă + valabilitate + CUI/IBAN (SQL mai jos) |
+| `ofertare_licitatii.observatii` (95) | 343 de caractere, începe cu „Radar (scor 92)” (filtrul Radar din `OfertareLicitatii.jsx:223` caută `^Radar`) | **se adaugă la final** detaliile: sursa CUI, verificarea IBAN, 123 zile / 150 zile, formularea reemiterii, art. 154 |
 | Cererea către broker (`ofertare_garantii`) | 0 rânduri; UI propune 90 zile | 370.000 lei, **150 zile** (sau 123, după decizie), beneficiar UAT Vâlcelele CUI 3796837; după confirmarea datei-limită în SEAP |
 | `ofertare_pt_garantie` (95) | 0 rânduri | cerut/oferit 36 luni, `receptie_terminare`, cerința 6407 (din UI) |
 | `ofertare_clauze_contract` 30–64 | 35/35 cu `verificat_de` NULL | verificare de către om, cu notele de la cl. 31, 35 și 43 |
 | `ofertare_cantitati` (95) | 6 rânduri, `obiect` NULL | convenția `obiect` = Etapa 1 / Etapa 2 |
-| `ofertare_formulare_registru` (95) | 12 rânduri (id 11–22), toate `de_pregatit`; Formularele nr. 4/41/5/6 `aplicabil=false` | aplicabilitate confirmată de Razvan (F6 a) + rânduri pentru livrabilele FD fără formular (F6 b); Formularul nr. 9 (id 20): E1 / E2 / total, C+I vs organizare de șantier, termenul identic cu graficul |
+| `ofertare_formulare_registru` (95) | 12 rânduri (id 11–22), toate `de_pregatit`; Formularele nr. 4/41/5/6 `aplicabil=false`; id 13 (Formularul nr. 3) cu „art. 60” | aplicabilitate confirmată de Razvan (F6 a) + rânduri pentru livrabilele FD fără formular (F6 b) + Formularul nr. 3 cu „art. 59-60” ca în FD (F6 c); Formularul nr. 9 (id 20): E1 / E2 / total, C+I vs organizare de șantier, termenul identic cu graficul |
 | `valoare_estimata` / `termen_depunere` | 37.366.625,89 ✓ / 19.10.2026 15:00 (ora RO) | fără schimbare; termenul se **confirmă din anunțul SEAP CN1096479** (nu apare în textul documentelor) înainte de cererea către broker |
 
 ```sql
--- NEEXECUTAT. Se rulează doar după confirmarea explicită a lui Razvan (pct. 3 din CLAUDE.md).
--- 1) Preview (păstrează textul vechi pentru rollback)
-SELECT id, garantie_participare, updated_at FROM public.ofertare_licitatii WHERE id = 95;
--- 2) Apply: textul începe cu „370.000”, ca numar() din OfertareGarantie.jsx:30 să dea în continuare 370000 (testat local)
+-- NEEXECUTAT. Se rulează doar după confirmarea explicită a lui Razvan (pct. 3 din CLAUDE.md). Fiecare pas = un apel execute_sql separat.
+-- 1) Preview + snapshot pentru rollback (păstrează rezultatul: textele vechi, complete)
+SELECT id, garantie_participare, observatii, updated_at FROM public.ofertare_licitatii WHERE id = 95;
+-- 2) Apply: garantie_participare = text scurt (începe cu „370.000”, ca numar() din OfertareGarantie.jsx:30 să dea 370000; testat);
+--    detaliile se ADAUGĂ LA FINALUL lui observatii (începutul „Radar (scor 92)” rămâne; filtrul Radar caută ^Radar).
+--    Gardă: starea din preview + idempotent (a doua rulare atinge 0 rânduri).
 UPDATE public.ofertare_licitatii
-SET garantie_participare = '370.000 lei (fișa de date III.1.6.a, doc 479 pag. 11), conform art. 154 L98/2016; virament sau instrument de garantare (SGB/asigurare), irevocabilă și necondiționată (FD VI.3); valabilitate ≥ 4 luni de la termenul-limită de depunere (FD pag. 16) = min. 123 zile (19.10.2026–19.02.2027; data depunerii de confirmat în anunțul SEAP); la orice decalare a termenului polița se reemite/actualizează. Beneficiar UAT Vâlcelele, CUI 3796837 (în III.1.6.a apare „379683” — cifră de control invalidă; confirmare cerută în #63 pt 6). IBAN RO71TREZ2015006XXX000189, Trezoreria Călărași — valid ISO mod-97 așa cum e scris și identic în contract (doc 480, preambul).',
+SET garantie_participare = '370.000 lei (FD III.1.6.a); virament sau SGB/poliță, irevocabilă și necondiționată; valabilitate ≥ 4 luni de la termenul-limită de depunere (min. 123 zile); beneficiar UAT Vâlcelele, CUI 3796837, IBAN RO71TREZ2015006XXX000189.',
+    observatii = coalesce(observatii || E'\n\n', '') || 'Garanția de participare (R7, 25.09.2026), detalii: cuantum conform art. 154 L98/2016 (FD III.1.6.a, doc 479 pag. 11); formă irevocabilă și necondiționată (FD VI.3). Valabilitate minimă = 4 luni de la termenul-limită de depunere (FD pag. 16) = 19.10.2026–19.02.2027 = 123 zile (data depunerii din BD, de confirmat în anunțul SEAP CN1096479); cu 150 zile, marja acoperă o decalare a termenului de până la ~30 de zile calendaristice. La decalarea termenului se verifică dacă 4 luni de la noul termen depășesc valabilitatea poliței; dacă da, polița se reemite. CUI: în III.1.6.a apare „379683” (cifră de control invalidă); corect 3796837 (FD I.1; contract 480, preambul); confirmare cerută în #63 pt 6. IBAN RO71TREZ2015006XXX000189, Trezoreria Călărași: valid ISO mod-97 așa cum e scris și identic în contract (480, preambul); mod-97 singur nu e dovadă.',
     updated_at = now()
 WHERE id = 95
-RETURNING id, garantie_participare;
+  AND garantie_participare LIKE '370.000 lei (fișa de date III.1.6.a, doc 479)%'
+  AND coalesce(observatii, '') NOT LIKE '%Garanția de participare (R7, 25.09.2026)%'
+RETURNING id, garantie_participare, length(garantie_participare) AS len, left(observatii, 16) AS obs_inceput, right(observatii, 60) AS obs_final;
+-- așteptat: 1 rând. 0 rânduri = textul s-a schimbat între timp sau pasul e deja aplicat → refă preview-ul, nu forța.
 -- 3) Sanity check
-SELECT id, left(garantie_participare, 60) FROM public.ofertare_licitatii WHERE id = 95;
+SELECT id, left(garantie_participare, 40) AS gp, left(observatii, 16) AS obs_inceput, length(observatii) AS len_obs
+  FROM public.ofertare_licitatii WHERE id = 95;
+-- așteptat: gp începe cu „370.000 lei (FD III.1.6.a)”, obs_inceput = „Radar (scor 92):”.
+-- 4) Rollback (doar la nevoie): textul vechi al garanției din snapshot-ul de la 1); din observatii se taie blocul adăugat.
+UPDATE public.ofertare_licitatii
+SET garantie_participare = '<textul vechi din snapshot-ul de la pasul 1>',
+    observatii = nullif(left(observatii, strpos(observatii, E'\n\nGaranția de participare (R7, 25.09.2026)') - 1), ''),
+    updated_at = now()
+WHERE id = 95 AND strpos(observatii, E'\n\nGaranția de participare (R7, 25.09.2026)') > 0
+RETURNING id, left(garantie_participare, 60) AS gp, length(observatii) AS len_obs;
 ```
+
+Testat local, nu pe Supabase, pe un Postgres 16 de unică folosință, cu rândul 95 copiat: textul vechi al garanției și un `observatii` care începe cu „Radar (scor 92):”. Rezultatele:
+- apply atinge 1 rând; a doua rulare atinge 0 rânduri;
+- `observatii ~ '^Radar'` rămâne adevărat;
+- textul scurt are 226 de caractere;
+- rollback-ul readuce starea inițială (md5 identic), iar rulat a doua oară atinge 0 rânduri;
+- `numar()` din `OfertareGarantie.jsx:30`, rulat cu node pe textul scurt, dă 370000.
+
+Textul scurt trece și în mailurile existente (`ofertare-etapa1-mail`, `ofertare-garantie-mail`) și în prompturile AI (`ofertare-verificare-finala/index.ts:106`, `ofertare-clarificari-propune/core.ts:94`). `observatii` nu e trimis în aceste prompturi (grep).
 
 Cod (tichet separat, nu în acest item): `OfertareGarantie.jsx:56` recunoaște doar „NNN zile”, așa că „4 luni” duce la valoarea implicită de 90 de zile; avertizarea de decalare (linia 212) nu apare după starea `original` (linia 168).
 
@@ -182,6 +207,11 @@ Cod (tichet separat, nu în acest item): `OfertareGarantie.jsx:56` recunoaște d
 - „E1 pe 12 luni” (R7 §1, linia 18; clauza 43): **greșit**, cele 12 luni sunt nete pentru E1+E2.
 - Matricea, F6 („registru = 0”, linia 31): **depășit**, registrul 95 are 12 rânduri (id 11–22).
 - Locatorul „0,5%” (VALCELELE §2, „~poz. 53 500–54 300”): exact 480 poz. 54 296.
+- Revizia 3 (finisajele de la reverificare):
+  - Reemiterea poliței are o singură formulare, în pct. 2 și în SQL: „se verifică dacă 4 luni de la noul termen depășesc valabilitatea; dacă da, se reemite”. „≈ 27 de zile” devine „până la ~30 de zile calendaristice” (27 = 150 − 123 e diferența în zile).
+  - `garantie_participare` primește un text scurt (226 de caractere față de 652 în revizia 2), iar detaliile se adaugă la finalul lui `observatii`.
+  - F6 are sub-punctul (c): Formularul 3 „art. 60” (481) față de „art. 59-60” (FD), plus reconcilierea cu CS.
+  - Pct. 1 și pct. 7: „nu reduce” devine „nu prevede reducerea GBE (tăcere)”.
 
 ## Verificări (SELECT / calcul local)
 | Verificare | Rezultat |
@@ -195,15 +225,19 @@ Cod (tichet separat, nu în acest item): `OfertareGarantie.jsx:56` recunoaște d
 | Registru formulare 95 | 12 rânduri (id 11–22), toate `de_pregatit` / `stare_depunere = nu`; `aplicabil=false`: id 14, 15, 16, 17 |
 | Clauze / cantități / garanții | 35/35 `verificat_de` NULL; `ofertare_cantitati` 6/6 `obiect` NULL; `ofertare_pt_garantie` 95 = 0; `ofertare_garantii` 95 = 0, id 1 = 1.185,20 / 292.641,99 / 120 zile |
 | #63 / #64 | ambele `de_trimis`; #63 pt 5 = liste de cantități + structura Listei de prețuri; #64 pt 5 = valoarea E2 |
+| Formularul 3 (25.09 seara) | registru id 13: „art. 60” (`citat` din 481); 481 poz. 1 092 „art. 60”; 479 poz. 71 926 (pag. 16) „art. 59-60”; „59-60” apare de 0 ori în 480 / 481 / 1276 |
+| CS și formulare (25.09 seara) | 1276: „formular” apare o singură dată, la poz. 85 266 (pag. 25), în „Lista de prețuri anexă a formularului de ofertă” |
+| Garanția în BD (25.09 seara) | `garantie_participare` 95 = 329 de caractere; `observatii` 95 = 343 de caractere, începe cu „Radar (scor 92)”; `termen_depunere` 2026-10-19 12:00 UTC |
+| Marja poliței | 19.10.2026 + 150 z = 18.03.2027 = 4 luni de la 18.11.2026; 18.11 − 19.10 = 30 de zile ⇒ decalare acoperită ≤ ~30 de zile calendaristice |
 
 ## Decizii Razvan (opțiunea recomandată în paranteză)
 1. F1 — Lista de prețuri: construim acum lista proprie granulară vs așteptăm #63 pt 5 (**lista proprie acum**, ajustată după răspuns).
 2. F3 — GBE: A (total) / B (rețineri) / C (E1 + completare) (**C dacă AC confirmă 1a, altfel A; 5 zile calendaristice**).
-3. F5 — Garanția de participare: virament / poliță 123 zile / poliță cu marjă (**poliță prin broker, 150 zile, CUI 3796837, după confirmarea datei în SEAP**) + aplicarea SQL-ului de mai sus.
+3. F5 — Garanția de participare: virament / poliță 123 zile / poliță cu marjă (**poliță prin broker, 150 zile, CUI 3796837, după confirmarea datei în SEAP**) + aplicarea SQL-ului de mai sus (text scurt în `garantie_participare`, detaliile la finalul lui `observatii`).
 4. Penalități: acceptăm / #64 pt 2 + rezervă / no-go (**#64 pt 2 + rezervă de risc; suma în lei o fixezi tu**).
 5. F4 — Ajustare și avans (**prețuri la data ofertei, ajustarea = protecție; cash-flow cu avans 0**).
 6. F4 — Etapa 2 (**costuri fixe integral în E1; GO confirmat**).
 7. F4 — Termen: E1 scurt / E1 realist + marjă / proporțional (**E1 realist + marjă, propus de Oana Nica, + întrebarea restrânsă în #64**).
 8. Garanția lucrărilor: 36 / peste 36 luni (**36 luni, recepții separate pe etape**).
-9. F2 + F6 — clauze și formulare (**verificare umană a celor 35 de clauze; confirmi „ofertant individual, fără terț/asociere/subcontractare”; rânduri noi în registru pentru livrabilele FD fără formular**).
+9. F2 + F6 — clauze și formulare (**verificare umană a celor 35 de clauze; confirmi „ofertant individual, fără terț/asociere/subcontractare”; rânduri noi în registru pentru livrabilele FD fără formular; Formularul 3 cu „art. 59-60”, ca în FD**).
 10. #64 + trimitere: (**scoatem pt 5, adăugăm pt 1c/1d și punctul nou despre jaloanele E1; #63 + #64 trimise pe SEAP de Oana Nica, cu aprobarea ta, până la 01.10**).

@@ -1,22 +1,54 @@
 # R5 v2: reconcilierea cantităților din planșa 470 (lic. 95 Vâlcelele)
 
-Stare: **doar propunere**. În BD s-au rulat numai SELECT-uri. Nu s-a modificat nici codul, nici datele. Data: 25.09.2026. Revizia 2: corecturile cerute de verificatorul rundei 1 (lista la final, „Jurnal de corecturi”).
+Stare: **doar propunere**. În BD s-au rulat numai SELECT-uri. Nu s-a modificat nici codul, nici datele. Data: 25.09.2026. **Revizia 3 (25.09 seara):** documentul e aliniat la verdictul Copilot de mai jos și la verificatorul rundei 2. Revizia 2 a corectat observațiile verificatorului rundei 1. Lista corecturilor e la final, în „Jurnal de corecturi”.
 Sursa: `ofertare_documente_atribuire.id=470`, `analiza->'citire_ai'`, versiunea `2026-09-25.5` (model claude-opus-5, tăiat la 16:45:36Z, 35/35 felii, `sumar.erori=0`, `zone_cazute=[]`, cost 2,595 USD). Transferul are `transfer.stare='facut'` la 16:51:08Z și `cantitati.adaugate=6`.
 Citirea aceasta **înlocuiește** citirea analizată în v1 (`R5_RECONCILIERE_CANTITATI_470.md`: 152 de rânduri unice, z3_1 eșuată).
 
-## Rezumat
-- **Tabelul planșei are 133 de rânduri** (Nr crt 1–133), Σ **48.905 m** cu Nr 57 citit ca Dn63 (Q1). Sumarul din BD dă 48.195 m din cauza a două artefacte: −600 m Dn40 (Nr 40–41 pierdute la deduplicare) și −110 m (Nr 57 „Dn60”, exclus ca nestandard; `sumar.nestandard_m=110`).
-- Față de 44.355 m (CS + memoriu), **diferența candidată este +4.440 … +4.560 m, nu +3.840** (§3). Limita de jos: Nr 40–41 = 2 × 300 m, Nr 57 exclus, Nr 38 = 320. Limita de sus: Nr 57 ca Dn63 și Nr 38 = 330. Nr 40–41, 38 și 57 sunt încă **de verificat pe imagine**.
-- Nr 1–4 (în afara UAT Vâlcelele) însumează **13.765 m Dn200**. **Nicio combinație de rânduri Dn200 întregi nu dă 3.840 sau 4.550** (nici 4.440 sau 4.560) (Q6). Pe toate cele 133 de rânduri însă există combinații pentru fiecare dintre aceste cifre. De exemplu, 3.840 = Nr 3 + 8 + 13 (1.980 + 1.370 + 490), iar 4.550 = Nr 2 + 10 + 56 (4.080 + 340 + 130). Numărul total de submulțimi este ≈ 4,6 × 10²¹ pentru 3.840 și ≈ 4,2 × 10²³ pentru 4.550 (Q10). **O potrivire numerică între o sumă de rânduri și o diferență nu dovedește deci nimic.** Atribuirea diferenței tronsoanelor din afara UAT se respinge (§4).
-- **BD contrazice măsura „în afara ofertei până la reconciliere”**: rândul 1751 (Dn200, 17.785 m) conține Nr 1–4 (Q5). SQL-ul propus (§7, pasul A) mută Nr 1–4 într-un rând separat, cu cantitate NULL și marcat „de confirmat prin #63”. Σ în ofertă scade de la 48.195 la 34.430. Creșterea Dn40 (+600 m) e **pasul B**, separat, care se rulează numai după validarea Oanei Nica. Nimic nu s-a aplicat.
-- Verdict propus: **deschis**. Motivele: #63 are `status=de_trimis` și `raspuns=NULL` (Q8, recitit la 25.09); verificările pe imagine nu sunt făcute; SQL-ul așteaptă GO.
+## Verdict Copilot (25.09 seara)
+Verdictul lui Copilot la propunerea din revizia 2, redat literal:
 
-## 0. Constatări noi (față de v1 și de verdictul Copilot)
+> „(a) 4.020 m «în ofertă», 13.765 m separat — NU în această formă: scăderea e corectă aritmetic, dar nu demonstrează că 4.020 m reprezintă cantitatea de ofertat; nici amplasarea în afara UAT nu dovedește excluderea din contract. (b) Nu adaugi cei 600 m până la verificarea Oanei — DA pentru cantitatea ofertată; păstrezi constatarea pentru rândurile 40–41 cu imagine/locator. (c) R5 rămâne deschis — DA, dar răspunsul AC nu e singurul criteriu: bugul de deduplicare se repară și se testează acum; cantitățile se închid după verificarea extracției, clarificarea obiectului/etapelor, aprobarea umană și verificarea propagării în ofertă. «În afara ofertei până la reconciliere» înseamnă să nu folosim cantități nevalidate drept cantități aprobate, nu eliminarea automată a tronsoanelor din alte UAT. Rândul 1751: păstrezi 17.785 m ca rezultat extras, nevalidat, cu sursa și istoricul; poți reprezenta analitic 13.765 + 4.020, ambele candidate. Verifică consumatorii (financiar, F3/centralizator, grafic, generator PT, poartă finală). Diferența de bază este 4.550 m pentru 48.905; valorile 4.440–4.560 se prezintă ca scenarii distincte, cu ajustarea care produce fiecare. Ordinea: protejăm utilizarea cantităților nevalidate → reparăm deduplicarea pe identitatea rândului → Oana verifică pozițiile controversate → reconciliem obiectul și etapele.”
+
+**Ce schimbă verdictul în acest document**
+
+| Punct din verdict | Consecința | Unde |
+|---|---|---|
+| (a) 4.020 „în ofertă”, 13.765 separat: nu | Pasul A e scos: SQL-ul care reducea 1751 la 4.020 și punea Nr 1–4 într-un rând separat, cu cantitate NULL. Rămâne doar ca istoric respins, pe scurt | §7.2 |
+| Rândul 1751 | Rămâne 17.785 m, `status=extras`: rezultat extras, nevalidat, cu sursa (planșa 470, Nr 1–8) și istoricul (transferul din 25.09, 16:51:08Z). 13.765 (Nr 1–4) + 4.020 (Nr 5–8) e o descompunere **analitică**. Ambele valori sunt candidate; niciuna nu e cantitatea de ofertat | §2, §6.1 |
+| „În afara ofertei până la reconciliere” | Înseamnă că nicio cantitate nevalidată nu e folosită drept aprobată. Nu înseamnă scoaterea automată a tronsoanelor din alte UAT | Rezumat, §4, §6.3 |
+| (b) +600 m Dn40 | Nu intră în cantitatea ofertată până la verificarea Oanei. Constatarea rămâne, cu locatorul pe imagine | §3, §6.2, pasul B (§7.3) |
+| Diferența de bază | +4.550 m (48.905 − 44.355). 4.440, 4.450 și 4.560 sunt scenarii distincte, fiecare cu ajustarea lui. 3.840 e cifra din BD, produsă de două artefacte | §3 |
+| Consumatorii | Financiar, F3/centralizator, grafic, generator PT, poartă finală: verificați într-un livrabil separat, încă în lucru | §6.3 → `docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md` |
+| (c) Bugul de deduplicare | Se repară și se testează acum, pe identitatea rândului (nu pe multiset) | §6.5, ramura R4 |
+| Ordinea | protecție → deduplicare → verificarea Oanei → obiect și etape | §7.1 |
+
+**Criteriile de închidere R5** (din verdict) și starea lor la 25.09 seara:
+
+| # | Criteriu | Stare | Unde |
+|---|---|---|---|
+| 1 | Cantitățile nevalidate nu sunt folosite drept aprobate (protecția consumatorilor) | **în lucru.** Fix-urile de cod sunt pe ramura `claude/cantitati-nevalidate-consumatori` (commit `990a6b1`; nepushată, fără PR, nedeployată). Un view nou și `ofertare_clarificare_planse_auto` v6 sunt propuse, neaplicate | §6.3 |
+| 2 | Deduplicarea pe identitatea rândului, reparată și testată | **reparată și testată în cod** pe ramura R4 `claude/r4-rezervare-zone` (`a800d38`, documentat în `1fd76dd`); nemergiuită, nedeployată. `agregare_test.ts` 17/17, rerulat la 25.09 seara | §6.5 |
+| 3 | Verificarea extracției pe imagine (Oana Nica) | **nefăcută** | §6.2 |
+| 4 | Clarificarea obiectului și a etapelor (#63) | **deschisă**: #63 are `status=de_trimis` și `raspuns` NULL (recitit la 25.09 seara, Q8) | §6.6 |
+| 5 | Aprobarea umană (bifa ✓, adică `status='validat'`) | **0 din 6** rânduri validate (Q5) | §6.1 |
+| 6 | Verificarea propagării în ofertă | **de făcut după 1–5**. Azi lic. 95 nu are niciun derivat (Q12) | §6.3 |
+
+## Rezumat
+- **Tabelul planșei are 133 de rânduri** (Nr crt 1–133). Σ **48.905 m** așa cum e citit: Nr 57 numărat cu 110 m, deși Dn-ul citit e 60, și Nr 38 = 320. Sumarul din BD dă 48.195 m din cauza a două artefacte: −600 m Dn40 (Nr 40–41 pierdute la deduplicare) și −110 m (Nr 57 „Dn60”, exclus ca nestandard; `sumar.nestandard_m=110`). Recalculat pe BD la 25.09 seara (Q1).
+- **Diferența de bază față de 44.355 m (CS + memoriu) este +4.550 m** (48.905). 4.440, 4.450 și 4.560 sunt **scenarii distincte**, fiecare produs de o ajustare anume: Nr 57 scos, Nr 38 = 330. 3.840 e cifra din BD, cu cele două artefacte (§3). Niciun scenariu nu e validat pe imagine.
+- Nr 1–4 (în afara UAT Vâlcelele) însumează **13.765 m Dn200**, iar Nr 5–8 însumează **4.020 m**. Scăderea 17.785 − 13.765 = 4.020 e corectă aritmetic, dar **nu arată că 4.020 m e cantitatea de ofertat**. Nici amplasarea în afara UAT **nu dovedește excluderea din contract**: CS p.5 descrie tronsonul din Ștefan Vodă în Etapa 1 (§4).
+- **Nicio combinație de rânduri Dn200 întregi nu dă 3.840 sau 4.550** (nici 4.440 sau 4.560) (Q6). Pe toate cele 133 de rânduri există însă combinații pentru fiecare dintre aceste cifre. De exemplu, 3.840 = Nr 3 + 8 + 13 (1.980 + 1.370 + 490), iar 4.550 = Nr 2 + 10 + 56 (4.080 + 340 + 130). Numărul de submulțimi este ≈ 4,6 × 10²¹ pentru 3.840 și ≈ 4,2 × 10²³ pentru 4.550 (Q10). **O potrivire numerică nu dovedește nimic.** Atribuirea diferenței tronsoanelor din afara UAT se respinge (§4).
+- **Rândul 1751 (Dn200) rămâne 17.785 m**, cu `status=extras`: rezultat extras, nevalidat, cu sursa și istoricul lui. Descompunerea 13.765 + 4.020 e o analiză și stă în acest document; ambele valori sunt candidate. Separarea în BD propusă în revizia 2 (pasul A) a fost **respinsă** și scoasă (§7.2).
+- **„În afara ofertei până la reconciliere” înseamnă că nicio cantitate nevalidată nu e folosită drept aprobată.** Tronsoanele din alte UAT nu se elimină automat. Protecția stă la consumatori și e tratată în livrabilul separat `docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md`, în lucru (§6.3).
+- **+600 m Dn40 (Nr 40–41).** Constatarea rămâne, cu locatorul pe imagine (§6.2), dar nu intră în cantitatea ofertată până la verificarea Oanei Nica. După verificare, pasul B (condiționat, testat local) schimbă doar `cantitate` pe 1756 (§7.3). Cauza e deduplicarea pe text. E reparată și testată, pe identitatea rândului, pe ramura R4 (§6.5).
+- Verdict propus: **deschis**. Închiderea cere toate cele 6 criterii de mai sus, nu doar răspunsul AC. Nimic nu s-a aplicat.
+
+## 0. Constatări noi (față de v1)
 1. **Tabelul are 133 de rânduri, nu 131.** Reconstrucția din feliile pereche z?_6 (Nr crt, noduri, Sat) × z?_7 (Dn, Q, L) dă Nr crt 1–133. Sunt 133 de perechi de noduri distincte și 133 de noduri de sosire distincte: e o rețea arborescentă, fiecare rând e alt tronson. Între feliile suprapuse există 0 conflicte (Q1).
-   `tronsoane_unice` are 131 de rânduri de tabel pentru că cheia de deduplicare (`handler.ts` l.215–228: `de_la|la|L|Dn|Q|zona`) nu include Nr crt și nodurile. Nici nu le poate include direct: tronsoanele cu lungime nu le au (vezi §6). Rândurile Nr 40 (34→59) și Nr 41 (34→60) sunt identice ca text cu Nr 37 (33→61): C-tin Brâncoveanu, Florența Albu→CT, Dn40, 300 m, Q20. Se pierd deci **600 m Dn40**.
-2. **Totalul tabelului este 48.905 m** (cu Nr 57 ca Dn63 și Nr 38 = 320). Cifra de 48.195 m din BD se explică așa: 48.195 = 48.905 − 600 (dedup Nr 40–41) − 110 (Nr 57 „Dn60”, nestandard). Față de 44.355, **diferența candidată este +4.440 … +4.560** (intervalul din §3), nu +3.840. Limita de jos presupune Nr 40–41 = 2 × 300 m, încă nevalidate pe imagine.
+   `tronsoane_unice` are 131 de rânduri de tabel pentru că cheia de deduplicare (`handler.ts` l.215–228: `de_la|la|L|Dn|Q|zona`) nu include Nr crt și nodurile. Tronsoanele cu lungime (feliile z?_7) nici nu le au. Rândurile Nr 40 (34→59) și Nr 41 (34→60) sunt identice ca text cu Nr 37 (33→61): C-tin Brâncoveanu, Florența Albu→CT, Dn40, 300 m, Q20. Se pierd deci **600 m Dn40**. Remedierea împerechează rândul cu lungime cu Nr crt din felia vecină: deduplicarea pe identitatea rândului (§6.5).
+2. **Totalul tabelului, așa cum e citit, este 48.905 m.** Cifra de 48.195 m din BD se explică așa: 48.195 = 48.905 − 600 (dedup Nr 40–41) − 110 (Nr 57 „Dn60”, nestandard). Față de 44.355, **diferența de bază este +4.550**. Scenariile +4.440 … +4.560 sunt în §3.
 3. **Rândurile din afara UAT (Nr 1–4) însumează 13.765 m Dn200** și nu explică 3.840 (secțiunea 4).
-4. **Rândul `ofertare_cantitati` id 1751 (Dn200, 17.785 m, status `extras`) include deja Nr 1–4.** Asta contrazice măsura temporară „în afara ofertei până la reconciliere” (Q5, recitit la 25.09). Corectarea e pasul A din §7.
+4. **Rândul `ofertare_cantitati` id 1751 (Dn200, 17.785 m, status `extras`) include Nr 1–4** (Q5, recitit la 25.09 seara). În sine, asta nu contrazice măsura „în afara ofertei până la reconciliere”: `extras` înseamnă nevalidat. Riscul real e ca un consumator să folosească rândul drept aprobat, iar asta se tratează la consumatori (§6.3). Revizia 2 propunea separarea în BD (pasul A); Copilot a respins-o (§7.2).
 5. Ce s-a rezolvat față de v1:
    - Adnotarea de 1.370 m se citește acum **Dn200** (idx 120, z3_2), la fel ca Nr 8. Dn250 a dispărut.
    - Dn43 a dispărut.
@@ -165,11 +197,11 @@ Categorii: **A** = în afara UAT Vâlcelele · **B** = trunchi Dn200 în UAT Vâ
 | 132 | 129→130 | E | Floroaica | Mihail Kogalniceanu | Sf Mihail si Gavril → Teiului | 63 | 270 | 30 | z4_7 | #130 |  |
 | 133 | 130→131 | E | Floroaica | Mihail Kogalniceanu | Teiului → CT | 40 | 260 | 10 | z4_7 | #131 |  |
 
-Observații de citire. Toate sunt NEVALIDATE și trebuie verificate pe imaginea planșei:
-- **Nr 38**: z2_7 citește rândul întreg ca 0,320. Rândul e tăiat la marginea feliei z1_7, iar `alte_mentiuni` spune „rand taiat: C-tin Brancoveanu - Florenta Albu - CT, 40, 20, 0,330”. Diferența posibilă este ±10 m.
-- **Nr 57**: Dn60 e nestandard. Debitul (Q40) e în coloana lui, iar vecinii de pe Florența Albu sunt Dn63 (Nr 51 cu Q80, Nr 54 cu Q60, Nr 60 cu Q20). Propunerea Dn63 (+110 m) rămâne nevalidată.
+Observații de citire. Toate sunt NEVALIDATE și trebuie verificate pe imaginea planșei. Locatorii sunt în §6.2.
+- **Nr 38**: z2_7 (rândul 7 al fragmentului) citește 0,320. Rândul e tăiat la marginea de jos a feliilor z1_6/z1_7. z1_6 notează „Randul 38 (33-62, …) este taiat de marginea de jos”, iar z1_7 (`alte_mentiuni`) „rand taiat: C-tin Brancoveanu - Florenta Albu - CT, 40, 20, 0,330”. Diferența posibilă este ±10 m.
+- **Nr 57** (z2_6/z2_7, rândul 26): Dn60 e nestandard. Debitul (Q40) e în coloana lui, iar vecinii de pe Florența Albu sunt Dn63 (Nr 51 cu Q80, Nr 54 cu Q60, Nr 60 cu Q20). Propunerea Dn63 rămâne nevalidată. Lungimea de 110 m e în totalul tabelului (48.905). Dn-ul decide doar poziția (1755 sau niciuna) și dacă regula nestandard a codului o scoate (§3).
 - **Nr 37/38**: pleacă din nodul 33 (Florența Albu × Aurel Vlaicu, conform Nr 35–36), dar strada citită e „C-tin Brancoveanu”. Tiparul nodurilor sugerează Aurel Vlaicu. Asta afectează doar denumirea, nu lungimea.
-- **Nr 40/41**: sunt rânduri distincte după Nr crt și noduri (59 și 60). Merită verificat pe imagine că lungimile sunt într-adevăr 300 + 300.
+- **Nr 40/41** (z2_6/z2_7, rândurile 9 și 10): sunt rânduri distincte după Nr crt și noduri (34→59 și 34→60). Lungimile 300 + 300 se verifică pe imagine înainte de pasul B.
 
 ### 1.2 Adnotările de pe plan (75). NU intră în total
 Sursa: `tronsoane_unice` cu `sursa≠'tabel'`. Sunt 36 în z3_1 (11.427 m), 22 în z3_2 (17.291 m) și 17 în z4_2 (6.014 m); Σ 34.732 m = `sumar.adnotari_neconfirmate_m` (Q3).
@@ -277,7 +309,8 @@ Subcategoriile din UAT Vâlcelele se stabilesc după capete și Sat:
 | **Σ** | **13.765** | **4.020** | **1.345** | **21.295** | **8.480** | **35.140** | **48.905** |
 
 - Pe fiecare UAT din afara Vâlcelelor: Ștefan Vodă 5.485, Cuza Vodă 4.080, Grădiștea 1.980, Independența 2.220.
-- Comparația cu sumarul BD (`lungime_totala_m=48195`, `pe_diametre`): diferă doar Dn40 (13.140 în BD față de 13.740 aici; −600 din cauza deduplicării) și Dn60 (110, exclus ca nestandard). În UAT, pe baza sumarului, rămân 34.430 m.
+- Comparația cu sumarul BD (`lungime_totala_m=48195`, `pe_diametre`): diferă doar Dn40 (13.140 în BD față de 13.740 aici; −600 din cauza deduplicării) și Dn60 (110, exclus ca nestandard). În UAT (B–E), pe baza sumarului, rămân 34.430 m — cifră aritmetică, nu cantitate de ofertat.
+- Coloanele A și B–E sunt o **descompunere analitică**, nu o decizie de ofertă. Pentru Dn200, A = 13.765 (Nr 1–4) și B = 4.020 (Nr 5–8) sunt **ambele candidate** până la răspunsul la #63 pct. 3b / 2b și aprobarea umană. Rândul 1751 rămâne 17.785 m (§6.1).
 
 ## 3. `posibila_dublura` și rândurile repetate: ce ar schimba totalul
 | Element | Date (Q3) | Efect asupra totalului |
@@ -286,11 +319,24 @@ Subcategoriile din UAT Vâlcelele se stabilesc după capete și Sat:
 | Toate cele 75 de adnotări | 34.732 m | Dacă s-ar aduna, totalul ar crește cu **+34.732** (dintre care 16.326 m fără nicio pereche ±1%). **Nu se adună**: tabelul e complet (Nr 1–133 continuu, 133 de noduri de sosire unice). |
 | Adnotări Dn200 fără pereche Dn200 în tabel (idx 121, 122, 199, 200, 201) | 3.226 m | 0 acum. Trebuie verificate pe imagine: pot fi ramificațiile spre Cuza Vodă/Dragoș Vodă (z4_2, z3_2), care nu sunt în tabel, sau citiri greșite. La fel pentru idx 119 (Dn90 1.080), 124 (Dn125 2.350) și 125 (Dn90 5.005). |
 | Avertismentul „23 grupuri de rânduri cu aceeași lungime și același Dn” | Toate rândurile au Nr crt și noduri distincte | **0**: sunt tronsoane reale. Suprapunerea feliilor a produs 19 rânduri citite de două ori (Nr 32–37, 78–83, 123–129), cu valori identice (0 conflicte), iar deduplicarea le-a eliminat corect. |
-| Deduplicarea greșită Nr 40–41 | 2 × 300 m Dn40 | Totalul **crește cu 600** (48.195 → 48.795, fără Nr 57). De validat pe imagine că lungimile sunt 300 + 300. |
-| Nr 57 Dn60 → Dn63 (nevalidat) | 110 m | +110 dacă se validează (→ 48.905) |
-| Nr 38: 320 sau 330 (nevalidat) | 10 m | +10 dacă se validează 330 |
+| Deduplicarea greșită Nr 40–41 | 2 × 300 m Dn40 | Totalul **crește cu 600** (48.195 → 48.795, fără Nr 57). Codul R4, cu identitatea rândului, dă exact 48.795 în cantități (§6.5). Lungimile 300 + 300 se verifică pe imagine. Până atunci cei 600 m **nu intră în cantitatea ofertată** (pasul B, §7.3). |
+| Nr 57 (110 m, citit Dn60) | 110 m | Cei 110 m sunt în totalul tabelului (48.905). Regula codului scoate din cantități Dn-urile nestandard (−110 → 48.795). Dn63 e o propunere nevalidată și decide doar poziția (1755). |
+| Nr 38: 320 sau 330 (nevalidat) | 10 m | +10 dacă imaginea arată 330 |
 
-Totalul candidat al tabelului este 48.905 m (cu Nr 57 ca Dn63 și Nr 38 = 320). Intervalul e **48.795–48.915**, adică o **diferență candidată de +4.440 … +4.560** față de 44.355. Limita de jos (48.795) presupune Nr 40–41 = 2 × 300 m. Fără ele rămâne cifra din BD, 48.195 (+3.840).
+**Diferența de bază și scenariile.** Referința este 44.355 = 11.525 + 32.830 (CS p.4/p.6 și memoriul p.11–12, Q15). Diferența de bază e **+4.550 m**: tabelul complet, așa cum e citit. Celelalte cifre sunt scenarii distincte, fiecare produs de o ajustare anume față de bază. Niciun scenariu nu e validat pe imagine. Toate includ Nr 1–4 (13.765 m). Dacă Nr 1–4 intră în obiect e o întrebare separată (#63 pct. 3b, §4).
+
+| Scenariu | Total planșă (m) | Δ față de 44.355 | Ajustarea care îl produce | Unde apare |
+|---|---|---|---|---|
+| **S0 — bază** | **48.905** | **+4.550** | niciuna: 133 de rânduri (Nr 1–133, fiecare o dată), Nr 57 numărat cu 110 m, Nr 38 = 320 (lectura z2_7) | reconstrucția după Nr crt (Q1); `total_sigur_m` al codului R4 (§6.5) |
+| S1 | 48.915 | +4.560 | S0, dar Nr 38 = 330 (lectura rândului tăiat din z1_7) în loc de 320 | — |
+| S2 | 48.795 | +4.440 | S0 − 110: Nr 57 scos ca Dn nestandard (regula codului, `sumar.nestandard_m`) | ce ar intra în cantități cu codul R4 (132 de rânduri, Dn40 13.740) |
+| S3 | 48.805 | +4.450 | S2, dar Nr 38 = 330 | — |
+| BD azi (nu e scenariu) | 48.195 | +3.840 | S2 − 600: Nr 40–41 pierdute la deduplicarea pe text | `sumar.lungime_totala_m`; Σ 1751–1756 (Q5) |
+
+Plaja 4.440–4.560 înseamnă deci patru scenarii S0–S3, nu o incertitudine continuă: fiecare valoare are cauza ei. Verificarea pe imagine alege între ele:
+- Nr 38 decide între S0 și S1, respectiv între S2 și S3.
+- Nr 57 decide între S0/S1 și S2/S3. Dacă Dn60 e o citire greșită (probabil Dn63), cei 110 m intră (S0/S1). S2/S3 urmează regula codului, care ține Dn-urile nestandard în afara cantităților până la verificare.
+- Nr 40–41 decid dacă se iese din cifra BD (3.840).
 
 ## 4. Suma din afara UAT față de 3.840
 - Suma din afara UAT este **13.765 m** (Nr 1–4), adică de 3,58 ori cât 3.840.
@@ -307,13 +353,13 @@ Totalul candidat al tabelului este 48.905 m (cu Nr 57 ca Dn63 și Nr 38 = 320). 
 
   Tabelul are 133 de lungimi rotunde, în mare parte multipli de 10. Cu ele, aproape orice cifră se poate „explica” printr-o sumă de rânduri. O potrivire exactă ar conta doar dacă rândurile potrivite ar forma un grup cu sens: un UAT, o etapă sau un traseu contiguu. Exact grupul cu sens, Nr 1–4, nu se potrivește.
 - Dacă se exclud toate rândurile Nr 1–4, rămân 35.140 m (sau 34.430 pe baza sumarului). Asta înseamnă **−9.215 / −9.925** față de 44.355. Excluderea „răstoarnă” diferența în loc s-o închidă.
-- **Cât se explică:** 0 m din 3.840 se pot demonstra ca provenind din afara UAT. În schimb, 600–720 m din diferența dintre tabel și sumar sunt artefacte de citire și agregare: 600 m dedup Nr 40–41, 0–110 m Nr 57, 0–10 m Nr 38. Ele **măresc** diferența la +4.440 … +4.560, nu o explică.
-- **Ce rămâne neexplicat:** toată diferența candidată, +4.440 … +4.560. Pe clase de Dn, pe totalul de 48.905: Dn200 are +6.260 față de 11.525, iar Dn ≤ 125 are −1.710 față de 32.830.
+- **Cât se explică:** 0 m din 3.840 se pot demonstra ca provenind din afara UAT. În schimb, 600–720 m din diferența dintre tabel și sumar sunt artefacte de citire și agregare: 600 m dedup Nr 40–41, 0–110 m Nr 57, 0–10 m Nr 38. Ele **măresc** diferența la scenariile +4.440 … +4.560 (§3), nu o explică.
+- **Ce rămâne neexplicat:** toată diferența de bază, +4.550 (scenariile +4.440 … +4.560). Pe clase de Dn, pe totalul de 48.905: Dn200 are +6.260 față de 11.525, iar Dn ≤ 125 are −1.710 față de 32.830.
 - **De ce nu se poate închide:**
   - (i) Cifrele 44.355 / 11.525 / 32.830 vin din caietul de sarcini (CS) și din memoriu. Acolo sunt descrise trepte „Dn 200 la Dn 160” și „Dn 160 la Dn 40”. Tabelul are **0 m Dn160**, deci documentația și planșa nu au aceeași defalcare pe diametre.
   - (ii) CS p.5 (doc 1276, poz. 13 142–13 404) descrie Etapa 1, „Tronson 1-SRMP-SNT Transgaz - SRS-uri distribuție”, ca pornind „din sistemul de distribuție pe Stefan Voda … cca 9,5 km … cca 2,5 km … cca 1,5 km … cca 1,5 km”. După CS, rândurile din afara UAT **fac parte din Etapa 1**, nu sunt un „surplus”. Totuși, doar Nr 1–4 (13.765) depășesc deja cei 11.525 m ai Etapei 1, iar aproximațiile din text însumează ~15 km. Documentația se contrazice singură.
   - (iii) Cifra de 3.840 e ea însăși subestimată cu 600–720 m (vezi mai sus).
-- **Concluzie:** ipoteza că cei 3.840 m sunt exact tronsoanele din afara UAT **se respinge**. Măsura „tronsoanele din afara UAT stau în afara ofertei până la reconciliere” rămâne corectă, dar **nu e aplicată în BD**: rândul 1751 (Dn200, 17.785) le conține. Aplicarea e pasul A din §7.
+- **Concluzie:** ipoteza că cei 3.840 m sunt exact tronsoanele din afara UAT **se respinge**. Nici concluzia inversă nu se poate trage: amplasarea în afara UAT **nu dovedește** că Nr 1–4 sunt excluse din contract (CS p.5 le descrie în Etapa 1, punctul ii). Măsura „în afara ofertei până la reconciliere” înseamnă că 17.785 m, ca orice cantitate nevalidată, **nu se folosesc drept aprobate**. Nu înseamnă scoaterea automată a lui Nr 1–4 din rândul 1751 (verdict Copilot). Protecția se face la consumatori (§6.3), nu prin separarea în BD (pasul A, respins, §7.2).
 
 ## 5. Maparea pe etape
 Referințe:
@@ -328,7 +374,7 @@ Referințe:
 | V4 fără amonte: E1 = Nr 5–8 + racorduri, E2 = D + E | 5.365 | −6.160 | 29.775 | −3.055 | 35.140 | −9.215 |
 | V5 prefix contiguu: E1 = Nr 1–3 (SRMP → limita Grădiștea/Independența) | 11.545 | **+20** | 37.360 | +4.530 | 48.905 | +4.550 |
 
-Totalurile presupun Nr 40–41 = 2 × 300 m și Nr 57 ca Dn63. Fără Nr 57, E2 și totalul scad cu 110 în toate variantele.
+Totalurile sunt pe scenariul de bază S0 (§3): Nr 40–41 = 2 × 300 m și Nr 57 numărat în Dn ≤ 125. În S2 (Nr 57 scos ca nestandard), E2 și totalul scad cu 110 în toate variantele. Toate variantele sunt analitice: nicio etapă nu e confirmată (#63 pct. 2b).
 
 Unde nu se potrivește:
 - **Dn160**: are 0 m în tabel, dar CS și memoriul îl menționează în ambele etape.
@@ -341,41 +387,95 @@ Unde nu se potrivește:
 - **Bilanțul de debit pe trunchi**: 7.500 = 2.500 („Ramificatie ptr alimentarea UAT Cuza Voda”, z4_2) + 500 (SRS 1, z3_2) + 3.500 (Dragoș Vodă, z3_2) + 1.000 (SRS 2, z3_2). Coloana Q din tabel scade la fel: 7.500 (Nr 1–4) → 5.000 (Nr 5–6) → 4.500 (Nr 7–8) → 1.000 (Nr 9–10). Deci trunchiul Nr 1–4 transportă și gazul pentru Cuza Vodă și Dragoș Vodă (6.000 din 7.500 mc/h). E un indiciu că e o conductă regională comună. Nu decide cine o execută.
 - **Nota de pe planurile topografice**: „54200mp … UAT Vlad Tepes = 3200 mp; UAT Vilcelele 51000 mp” apare pe **toate** planșele 471–475, nu doar pe 474 (Q7). Nicio interpretare nu o împacă cu 44.355 sau cu 48.905. Punctul e deja întrebat la #63 pct. 4.
 
-## 6. Propunerea de rânduri de cantități (NEAPLICATĂ) și ce trebuie confirmat prin #63
-Starea actuală a fost recitită prin SELECT la 25.09.2026 (Q5): 6 rânduri, id 1751–1756, toate cu status `extras`, `tip_sursa` NULL, categoria „Conducte și montaj”, sursa „Planșa 1 — tabel de dimensionare, citit automat din scanare”. Σ `cantitate` = Σ `cantitate_plansa` = 48.195.
+## 6. Rândurile de cantități: starea, propunerea și ce trebuie confirmat
+Starea actuală a fost recitită prin SELECT la 25.09.2026 seara (Q5, Q12). Sunt 6 rânduri, id 1751–1756, toate cu status `extras`, `tip_sursa` NULL și `obiect` NULL, categoria „Conducte și montaj”, sursa „Planșa 1 — tabel de dimensionare, citit automat din scanare”, `updated_at` = 16:51:08 (transferul). Σ `cantitate` = Σ `cantitate_plansa` = 48.195. Nicio clarificare nu e legată de ele (`ofertare_clarificari.cantitate_id`: 0). În `v_ofertare_pt_stare` (lic. 95), `lista_f3_m`, `memoriu_m`, `plansa_m` și `grafic_fronturi_m` sunt NULL.
 
-| id | Denumire | acum: cantitate / planșă / status | după pasul A | după pasul B (condiționat) | Motiv |
-|---|---|---|---|---|---|
-| 1751 | Dn200 → „Dn200 — UAT Vâlcelele (planșa 470, Nr 5–8)” | 17.785 / 17.785 / extras | **4.020** / 4.020 / diferenta | la fel | Nr 1–4 ies într-un rând separat; etapa se confirmă la #63 pct. 2b |
-| nou | „Dn200 — amonte, în afara UAT Vâlcelele (planșa 470, Nr 1–4)” | — | **NULL** / 13.765 / diferenta | la fel | În afara ofertei până la #63 pct. 3b, „de confirmat prin #63” |
-| 1752 | Dn125 | 2.275 / 2.275 / extras | fără schimbare | la fel | — |
-| 1753 | Dn110 | 780 / 780 / extras | fără schimbare | la fel | — |
-| 1754 | Dn90 | 4.545 / 4.545 / extras | + notă | la fel | Include 1.345 m racorduri SRS; etapa la #63 pct. 2b |
-| 1755 | Dn63 | 9.670 / 9.670 / extras | + notă | la fel | Nr 57 Dn60 (110 m) exclus; Dn63 e o propunere nevalidată |
-| 1756 | Dn40 | 13.140 / 13.140 / extras | + notă (cantitatea **nu** se schimbă) | **13.740** / 13.740 / diferenta | +600 pentru Nr 40–41, doar după validarea pe imagine; Nr 38 320/330 |
-| **Σ** | | **48.195 / 48.195** | **34.430 / 48.195** | **35.030 / 48.795** | Față de 44.355: după A −9.925 în ofertă; după B −9.325 în ofertă / +4.440 pe planșă |
+### 6.1 Propunerea (NEAPLICATĂ): numai pasul B, condiționat
 
-Valorile pasului B presupun Nr 40 = Nr 41 = 300 și Nr 38 = 320. Blocul SQL al pasului B primește lungimile validate ca parametri: cu Nr 38 = 330 iese 13.750 / 35.040 / 48.805 (= 48.795 + 10).
-Nr 57 ca Dn63 (+110 m pe 1755) **nu** e în niciun pas. Dacă se validează, se face un pas separat, după același model.
+| id | Denumire | acum: cantitate / planșă / status | după pasul B (condiționat) | Motiv |
+|---|---|---|---|---|
+| 1751 | Dn200 | 17.785 / 17.785 / extras | **fără schimbare** | Rezultat extras, nevalidat, cu sursa și istoricul lui. Analitic: 13.765 (Nr 1–4, în afara UAT Vâlcelele) + 4.020 (Nr 5–8, UAT Vâlcelele), ambele candidate. Se decide după #63 pct. 3b / 2b și aprobarea umană |
+| 1752 | Dn125 | 2.275 / 2.275 / extras | fără schimbare | — |
+| 1753 | Dn110 | 780 / 780 / extras | fără schimbare | — |
+| 1754 | Dn90 | 4.545 / 4.545 / extras | fără schimbare | Include 1.345 m racorduri SRS (Nr 9 1.000, Nr 10 340, Nr 97 5). Etapa se confirmă la #63 pct. 2b (informația stă în document, nu în notă) |
+| 1755 | Dn63 | 9.670 / 9.670 / extras | fără schimbare | Nr 57 (110 m, citit Dn60) nu e inclus. Dn63 e o propunere nevalidată; un eventual +110 m cere un pas separat, după același model ca B |
+| 1756 | Dn40 | 13.140 / 13.140 / extras | **13.740** / 13.140 / diferenta | +600 (Nr 40–41), doar după verificarea Oanei. Se schimbă numai `cantitate` (cantitatea ofertată). `cantitate_plansa` (citirea automată) rămâne 13.140 până la o recitire cu identitatea rândului, care o duce la 13.740 (§6.4) |
+| **Σ** | | **48.195 / 48.195** | **48.795 / 48.195** | Față de 44.355: +4.440 în `cantitate` (scenariul S2, §3), cu Nr 1–4 incluse și nevalidate |
 
-**Atenție, risc comercial.** Cifra de 34.430 m (35.030 după pasul B) e o separare prudentă, nu cantitatea finală. Dacă AC confirmă că Nr 1–4 fac parte din obiect (textul CS p.5 sugerează asta), în ofertă trebuie să intre și cei 13.765 m. Decizia comercială îi aparține lui Razvan.
+- Valorile pasului B presupun Nr 40 = Nr 41 = 300 și Nr 38 = 320. Blocul SQL primește lungimile verificate ca parametri; cu Nr 38 = 330 iese 13.750 / 48.805.
+- **Nicio poziție nu devine aprobată prin pasul B.** Aprobarea înseamnă bifa ✓ (`status='validat'`) pusă de om în 📋 Cantități, după reconcilierea obiectului și a etapelor (criteriul 5).
+- După pasul B, 1756 apare în `v_ofertare_contradictii` ca „plansa_vs_document” (13.740 vs 13.140; condiția e |planșă − cantitate| > 0,5, Q14). E intenționat: diferența dintre citirea automată și verificarea umană rămâne vizibilă până la recitire.
+- Notele pe 1751, 1754, 1755 și 1756 propuse în revizia 2 nu se mai scriu. Un retransfer le-ar fi șters oricum (§6.4); informația rămâne în acest document.
+- **Reprezentarea analitică 13.765 + 4.020 în platformă.** Deocamdată nu se scrie nimic. Dacă Razvan o vrea vizibilă în 📋 Cantități, locul e `specificatii` pe 1751, fiindcă transferul scrie `specificatii` doar la insert, nu la update (Q14). Se face fără rând nou, fără schimbarea lui `cantitate` sau `status`, cu GO separat. Acum nu se propune.
 
-**Efectele unui nou transfer din planșă** (retransfer: `treciInCantitati`, `handler.ts` l.248–357, cu scrierea prin RPC-ul `ofertare_transfer_plansa_cantitati`):
-- **Dn200** are două poziții după pasul A: 1751 și rândul nou. Ambele conțin „Dn200” în denumire, deci transferul le raportează „ambigue” (l.301–304) și **nu scrie pe niciuna**. Asta e dorit. Dacă una dintre ele e redenumită sau ștearsă, cealaltă redevine singurul candidat și primește din nou toți cei 17.785 m în `cantitate_plansa`.
-- **Dn125, Dn110, Dn90, Dn63 și Dn40 (id 1752–1756)** au câte o singură poziție. Pe fiecare, transferul **rescrie `diferenta_nota` în întregime** (l.315 și l.319; RPC-ul face `diferenta_nota = patch`, nu adaugă la ea). Notele R5 v2 de pe 1754, 1755 și 1756 se pierd toate.
-- Tot pe 1752–1756 transferul rescrie și **`cantitate_plansa`**. Pe 1752–1755 valoarea rămâne aceeași (2.275 / 780 / 4.545 / 9.670). Pe **1756 revine la 13.140** cât timp deduplicarea nu e reparată. Dacă pasul B e aplicat, `cantitate` rămâne 13.740, fiindcă transferul nu atinge niciodată `cantitate`. Nota devine „Memoriu 13.740 m vs planșa 1 13.140 m (-600 m, pe 54 tronsoane citite din tabel).”, iar `status` rămâne `diferenta` (l.317 schimbă doar `extras` → `diferenta`).
-- **Rândul nou** (cantitate NULL, planșă 13.765) **nu apare** în `v_ofertare_contradictii`. `difere` cere `cantitate IS NOT NULL`, iar `lipsa` cere ca ambele valori să fie NULL. Rândul se vede doar prin `status='diferenta'`, prin notă și prin „?” în coloana de cantitate din UI.
-- `ofertare-clarificari-propune` citește rândurile care au `diferenta_nota` (`core.ts` l.69). Rulează numai la cerere și e o procesare plătită.
+**Risc comercial.** Nici 17.785, nici 4.020, nici vreun scenariu din §3 nu e cantitatea de ofertat. Dacă AC confirmă că Nr 1–4 fac parte din obiect (textul CS p.5 sugerează asta), în ofertă intră și cei 13.765 m. Dacă AC răspunde că nu fac parte, rămân 4.020 m Dn200. Decizia comercială îi aparține lui Razvan, după răspunsul la #63.
 
-**Remedierea de cod.** E un tichet separat, care se implementează **pe ramura R4**, nu aici. Cheia de deduplicare din `tronsoaneUnice` (l.215–228, cheia la l.222) **nu poate** primi Nr crt sau nodurile. Tronsoanele din feliile z?_7, singurele care au lungime, nu le conțin. Nodurile sunt pe tronsoanele z?_6, care au `lungime_m = null` și sunt deja sărite la l.220.
-Formularea implementabilă este **deduplicarea pe multiset**. Pentru fiecare cheie `de_la|la|L|Dn|Q|zona`, multiplicitatea finală este **maximul aparițiilor cheii într-o singură felie**, nu suma pe felii, fiindcă feliile suprapuse recitesc aceleași rânduri.
-- Verificat pe BD (Q9): pe rândurile de tabel (152 de citiri brute, 131 de chei distincte), regula dă **133 de rânduri / 48.905 m, Dn40 = 13.740**. E identic cu reconstrucția după Nr crt. Cheia lui Nr 37/40/41 apare o dată în z1_7 (poziția 37) și de 3 ori în z2_7 (pozițiile 6, 9, 10), deci multiplicitatea finală e 3.
-- Limită: dacă două rânduri identice ca text cad în felii diferite și amândouă sunt în afara zonei de suprapunere, maximul le numără o singură dată, adică le subnumără. Varianta robustă este împerecherea z?_6 × z?_7 după poziție și deduplicarea după Nr crt. Verificatorul rundei 1 a constatat că Strada coincide pe toate cele 152 de perechi.
-- De decis pe R4: dacă regula se aplică și adnotărilor. Pe ele ar da 88 de rânduri în loc de 75 și 37.472 m în loc de 34.732 m (Q9), ceea ce schimbă `adnotari_neconfirmate_m` și avertismentele. Cât timp există tabel, adnotările nu intră în cantități; fără tabel, intră.
-- Test obligatoriu: cazul Nr 37/40/41. În z2_7 sunt 3 × (Florența Albu → CT, 300 m, Dn40, Q20, C-tin Brâncoveanu), în z1_7 1 ×; rezultatul trebuie să fie 3 rânduri, 900 m.
-- Tot pe acel tichet: `posibila_dublura` (l.459) să caute întâi același Dn și aceleași noduri, nu primul rând cu lungime ±1%.
+### 6.2 Pozițiile de verificat pe imagine (Oana Nica), cu locator
+**Imaginea.** Doc 470, „Schema tehnologica Valcelele alimentare din Stefan Voda.pdf” (`95/atribuire/mu6wbbqw_…`), pagina 1. E randată la 200 dpi, 9.362 × 6.623 px, cu grila de 7 coloane × 5 benzi, latura 1.600 px și suprapunere 12%. Feliile sunt în Storage, `95/felii/470` (Q13).
+**Tabelul.** Tabelul „Dimensionare” e în dreapta sus și e tăiat în două coloane de felii:
+- z?_6: Nr crt, noduri, Sat, Strada, capete;
+- z?_7: Strada, capete, Dn, Q, Lungime Km.
+Rândurile de fragment se numără de la 1 în fiecare felie.
 
-Ce trebuie confirmat prin răspunsul la #63 (#63: `status=de_trimis`, `raspuns=NULL`, Q8):
+| Poziție | Ce se verifică | Locator (Q13) | Lectura automată | Efect |
+|---|---|---|---|---|
+| **Nr 40** | lungimea | z2_6 rândul 9 (Nr crt 40, noduri 34→59, C-tin Brancoveanu) × z2_7 rândul 9 (0,300 km, Dn40, Q20). `zone_geom` z2_6 = [x 7040, y 1408, 1600 × 1600], z2_7 = [7762, 1408, 1600 × 1600] | 300 m | +300 în pasul B |
+| **Nr 41** | lungimea | z2_6 / z2_7 rândul 10 (34→60), aceleași felii | 300 m | +300 în pasul B |
+| Nr 37 (reper) | că e alt rând decât 40–41 | z2_6 / z2_7 rândul 6 (33→61); și z1_7 rândul 37 | 300 m | — (e deja în 13.140) |
+| **Nr 38** | 320 sau 330 | z2_6 / z2_7 rândul 7 (33→62) = 0,320. z1_6 se oprește la Nr 37 și notează rândul 38 tăiat. z1_7 notează „0,330” pentru rândul tăiat | 320 / 330 | 0 sau +10 |
+| **Nr 57** | Dn60 sau Dn63 | z2_6 / z2_7 rândul 26 (40→41, Florența Albu, Crinului→Rozelor, 0,110 km, Q40) | Dn60 | 0 / +110 pe 1755 (pas separat) |
+| Nr 37–38 | strada: Aurel Vlaicu sau C-tin Brâncoveanu | z2_6 rândurile 6–7 | C-tin Brancoveanu | doar denumirea |
+| Adnotări Dn200 fără pereche | ramificații în afara tabelului sau citiri greșite | idx 121, 122 (z3_2), 199, 200, 201 (z4_2): 3.226 m. Plus idx 119 (Dn90 1.080), 124 (Dn125 2.350), 125 (Dn90 5.005) | — | 0 acum (adnotările nu intră când există tabel) |
+
+Rezultatul verificării are nevoie de: cine a verificat, data și cele trei valori (Nr 40, Nr 41, Nr 38). Acestea sunt constantele pasului B.
+
+### 6.3 Consumatorii: „nu folosim cantități nevalidate drept aprobate”
+Livrabil separat, **în lucru**: `docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md`, pe ramura `claude/cantitati-nevalidate-consumatori` (commit `990a6b1`, din `main` @ `8a6fbbb`; nepushată, fără PR, nedeployată). Aici e doar legătura. Detaliile, testele și SQL-ul propus sunt acolo. Regula lui este **aprobat = `status='validat'`**; `extras`, `diferenta` și `revizuit_clarificare` sunt date de lucru.
+
+| Consumator cerut de Copilot | Ce constată livrabilul (după documentul în lucru) |
+|---|---|
+| Calcul financiar | Niciun cod de calcul financiar, deviz sau preț nu citește `ofertare_cantitati`: nu există consumator |
+| F3 / centralizator | Nu se generează F3 sau centralizator din `ofertare_cantitati`: nu există consumator |
+| Grafic | Poarta graficului dădea „ok” pe rânduri `extras`, iar „Propune din cantități” punea fronturi Dn200 17.785 m, inclusiv Nr 1–4. **Fix pe ramură**: rândul „cant” e BLOCK cât timp există rânduri nevalidate, iar fronturile se propun doar din rânduri validate |
+| Generator PT | Nu citește tabela direct, ci indirect, prin `grafic_activitati`. E acoperit de fix-ul graficului |
+| Poartă finală (H2 „Cantitățile rețelei”) | F3 nevalidată trecea „ok”. **Fix JS pe ramură** plus un view nou propus (`v_ofertare_cantitati_nevalidate`), neaplicat; ordinea este întâi migrarea, apoi merge-ul |
+| În plus | generatorul de clarificări (trimitea `lista: 17785` ca F3), recitirea planșei („Planșa 1 confirmă” fals) și citirea CAD (scria direct `validat`): reparate pe ramură |
+
+Derivatele lic. 95 recitite aici (Q12, 25.09 seara) sunt toate zero: `grafic_parametri`, `grafic_versiuni`, `grafic_activitati`, `ofertare_pt_poarta`, `ofertare_pt_pachet` și `ofertare_verificari` au câte 0 rânduri, iar `v_ofertare_pt_stare` are câmpurile de cantități NULL. Deci **nimic nu s-a propagat încă**, iar criteriul 6 („verificarea propagării”) se face după aprobare, pe aceleași surse.
+
+### 6.4 Efectele unui nou transfer din planșă (retransfer)
+Retransferul înseamnă `treciInCantitati` plus RPC-ul `ofertare_transfer_plansa_cantitati`. La update, RPC-ul scrie doar `cantitate_plansa`, `diferenta_nota`, `status` și `updated_at`; `specificatii` se scrie numai la insert (Q14). Codul de la HEAD `8a6fbbb`: `handler.ts` l.248–357.
+- Pe **1751–1756**, retransferul rescrie **`diferenta_nota` în întregime** (RPC-ul face `diferenta_nota = patch`) și rescrie `cantitate_plansa`. **`cantitate` nu e atinsă niciodată.** Pe 1751 nu mai apare ambiguitatea Dn200 din revizia 2, fiindcă nu mai există un al doilea rând Dn200.
+- **Cu codul de la HEAD** (deduplicarea pe text), 1756 primește din nou `cantitate_plansa` = 13.140. Dacă pasul B e aplicat, nota devine „Memoriu 13.740 m vs planșa 1 13.140 m (-600 m, …)”. Eticheta „Memoriu” e greșită (e cifra verificării umane), iar fix-ul de consumatori o corectează. Marcajul „R5 pas B” din notă se pierde. Consecințe:
+  - **B nu se mai poate rula a doua oară**: refuză, fiindcă `cantitate` ≠ 13.140, cu mesajul „pasul B pare aplicat deja (un retransfer șterge marcajul din notă)”;
+  - **RB refuză**, fiindcă marcajul lipsește;
+  - rollback-ul se face cu **RB-manual**, din snapshot-ul R0 (§7.3). Toate trei sunt testate local (T9).
+- **Cu codul R4** (identitatea rândului, §6.5), 1756 primește `cantitate_plansa` = 13.740, `status` trece din extras în diferenta, iar nota devine „Memoriu 13.140 m vs planșa 1 13.740 m (+600 m, pe 56 tronsoane …)” (R4 §5.5). **Pasul B funcționează și în starea asta**, fiindcă nu mai depinde de o notă pusă anterior. Ridică `cantitate` la valoarea verificată, iar Σ planșă rămâne 48.795 (T10).
+- Pentru un retransfer e nevoie de un „citește” complet: retăiere plus ~35 de zone plătite (ultima citire completă a lui 470 a costat 2,595 USD). „Continuă” și „reia” nu retransferă (R4 §5.5). `ofertare-clarificari-propune` citește rândurile care au `diferenta_nota`; rulează numai la cerere și e o procesare plătită.
+
+### 6.5 Remedierea de cod: deduplicarea pe identitatea rândului (ramura R4)
+- Revizia 2 propunea deduplicarea pe **multiset** (maximul aparițiilor unei chei într-o felie; implementată pe R4 în `e762c6e`). Copilot a respins-o. Contraexemplul lui: rândul 37 în felia A și rândul 40 în felia B, cu text identic, dau max(1,1) = 1, deși corect e 2. Simularea Q9 de mai jos rămâne doar ca istoric.
+- **Implementat și testat** pe ramura `claude/r4-rezervare-zone`, commit `a800d38` („Planșe: deduplicarea rândurilor de tabel pe IDENTITATEA RÂNDULUI”), documentat în `1fd76dd`, `docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md` §5.
+  - Regula e în `handler.ts:322` (`identificaRanduri`, apelată la l.1098) și se aplică pe codul cu `COD_VERSIUNE` 2026-09-25.7. Identitatea = (document, pagină, tabel identificat, Nr crt).
+  - Pe 470, rândul cu lungime din z?_7 se împerechează cu Nr crt din z?_6 (aceeași bandă, decalaj unic, câmp comun identic). Aceeași identitate văzută în felii suprapuse înseamnă un singur rând. L, Dn sau Q diferite dau un CONFLICT raportat, fără alegere automată; un rând fără identitate sigură intră la „de verificat”.
+- **Efectul pe 470** (R4 §5.4, simulat pe citirile salvate):
+  - 152 de lecturi → 133 de rânduri, toate prin Nr, cu 0 de verificat și 0 conflicte;
+  - `total_sigur_m` = 48.905 (scenariul S0);
+  - în cantități: 132 de rânduri / 48.795 m (S2), fiindcă Nr 57 Dn60 e scos de regula nestandard; Dn40 = 13.740;
+  - adnotările rămân 75 / 34.732 m, fără multiset;
+  - la transfer, doar rândurile sigure intră în `cantitate_plansa`, iar restul e numit în `diferenta_nota`.
+- **Teste.** `agregare_test.ts`: **17/17**, rerulat aici la 25.09 seara, pe capul ramurii `1fd76dd`, cu `deno test --node-modules-dir=none --no-lock -A`; worktree-ul a rămas neschimbat. Suita include:
+  - cazul Nr 37/40/41 (3 rânduri distincte, în aceeași felie și pe z2_6 × z2_7);
+  - contraexemplul Copilot (= 2);
+  - același Nr în două felii (= 1);
+  - conflictele pe L și pe Dn;
+  - fixture-ul 470 (133 de rânduri / 48.905; fără coloana Nr: totul „de verificat”, nu 48.195).
+  R4 raportează suita `ofertare-plansa-citeste` 78/78 și mutațiile negative (identitate pe text ⇒ 8 teste pică).
+- **Rămâne de făcut:** `posibila_dublura` caută încă primul rând cu lungime ±1% **indiferent de Dn** (`handler.ts` l.760–784 pe ramura R4). Căutarea după același Dn și aceleași noduri nu e în `a800d38`.
+- **Livrare:** codul e nemergiuit și nedeployat; deploy-ul e separat, cu GO Razvan. Conform ordinii Copilot (§7.1), protecția consumatorilor vine înainte. Recitirea lui 470 cu codul nou e o procesare plătită și cere GO.
+
+### 6.6 Ce trebuie confirmat prin răspunsul la #63
+#63: `status=de_trimis`, `raspuns=NULL`, `raspuns_la` NULL (Q8, recitit la 25.09 seara).
 
 | Decizie de cantitate | Punct #63 | Răspunsul care închide decizia |
 |---|---|---|
@@ -386,321 +486,317 @@ Ce trebuie confirmat prin răspunsul la #63 (#63: `status=de_trimis`, `raspuns=N
 | Ținta 44.355 = 11.525 + 32.830; include Dn200? | 1, 2a | confirmare sau corecție |
 | Corespondența tronson ↔ poziție din Lista de prețuri | 5b | structura listei |
 
+Răspunsul AC închide obiectul și etapele (criteriul 4), dar nu închide singur R5. Mai trebuie verificarea pe imagine (3), aprobarea umană (5) și verificarea propagării (6).
+
 Puncte care NU sunt în #63:
-- **Verificare internă pe imagine (Oana Nica)**: Nr 40–41 (+600 m, condiția pasului B), Nr 38 (±10), Nr 57 (Dn60), strada pentru Nr 37–38, adnotările Dn200 fără pereche (idx 121, 122, 199, 200, 201; 3.226 m) și idx 119 / 124 / 125.
-- **Neacoperit de textul actual**: trunchiul Nr 1–4 alimentează și Cuza Vodă (2.500 mc/h) și Dragoș Vodă (3.500 mc/h); CS vorbește de „cele patru SRS-uri”, tabelul are 2 SRS. Adăugarea lor ar redeschide redactarea #63 (R8 închis), deci cere re-aprobare. Opțional, doar cu GO Razvan.
+- **Verificarea internă pe imagine (Oana Nica)**: lista și locatorii sunt în §6.2.
+- **Neacoperit de textul actual**: trunchiul Nr 1–4 alimentează și Cuza Vodă (2.500 mc/h), și Dragoș Vodă (3.500 mc/h), iar CS vorbește de „cele patru SRS-uri”, deși tabelul are 2 SRS. Adăugarea lor ar redeschide redactarea #63 (R8 închis), deci cere re-aprobare. E opțională, doar cu GO Razvan.
+## 7. Aplicare
+**Nimic de aici nu s-a executat pe BD.**
 
-## 7. Aplicare — cu GO
-**Nimic de aici nu s-a executat pe BD.** Obiectivul este să aducă BD în acord cu măsura Copilot „în afara ofertei până la reconciliere”: rândul 1751 nu mai conține Nr 1–4 (13.765 m) în cantitatea ofertată. Nr 1–4 se păstrează separat, cu cantitate NULL, și sunt marcate „de confirmat prin #63”.
+### 7.1 Ordinea (verdictul Copilot)
+1. **Protejăm utilizarea cantităților nevalidate**: consumatorii (§6.3). Asta vine înaintea oricărei schimbări de cantitate.
+2. **Reparăm deduplicarea pe identitatea rândului**: codul și testele sunt pe ramura R4 (§6.5). Livrarea cere GO.
+3. **Oana verifică pozițiile controversate** (§6.2). Numai după asta, și cu GO Razvan, se poate rula **pasul B** (§7.3).
+4. **Reconciliem obiectul și etapele**: răspunsul la #63 (§6.6). Urmează aprobarea umană pe rânduri (✓) și verificarea propagării în ofertă (§6.3).
 
-Ordinea (pattern-ul preview → confirmare → apply → verificare):
-1. **(0) Preview** și **(R0) snapshot**. Snapshot-ul e un SELECT separat care întoarce valorile vechi complete. Se păstrează ca sursă pentru rollback.
-2. **GO Razvan** pentru pasul A.
-3. **(A)** se trimite ca **un singur apel** `execute_sql`. Un bloc DO e o singură instrucțiune, deci o singură tranzacție: orice `RAISE EXCEPTION` anulează tot, fără efecte parțiale.
-4. **(A-verif)** se rulează ca apel separat. `execute_sql` întoarce doar ultimul rezultat, iar `RAISE NOTICE` s-ar putea să nu fie vizibil.
-5. **(B)** e opțional și condiționat. Se rulează numai după ce Oana Nica validează pe imagine Nr 40, Nr 41 și Nr 38 și numai cu GO Razvan. Constantele blocului sunt NULL intenționat: blocul refuză să ruleze până nu sunt completate.
-6. Rollback-ul, dacă e nevoie: întâi **(RB)**, apoi **(RA)**.
+### 7.2 Pasul A: respins (istoric, pe scurt)
+Revizia 2 propunea un bloc DO. Blocul reducea 1751 la 4.020 m (Nr 5–8) și insera un rând nou „Dn200 — amonte, în afara UAT Vâlcelele (Nr 1–4)”, cu `cantitate` NULL, `cantitate_plansa` 13.765 și `tip_sursa='plansa'`, plus note pe 1754–1756. Rezultatul ar fi fost Σ cantitate 34.430 și Σ planșă 48.195. Propunerea e **respinsă** și nu se aplică. Motivele:
+- **Copilot (a):** scăderea e corectă aritmetic, dar nu arată că 4.020 m e cantitatea de ofertat, iar amplasarea în afara UAT nu dovedește excluderea din contract. Măsura „în afara ofertei” cere doar ca o cantitate nevalidată să nu fie folosită drept aprobată.
+- **Verificatorul rundei 2 (major):** `tip_sursa='plansa'` pe rândul nou ar fi făcut `v_ofertare_pt_stare.plansa_m` = 13.765 (azi NULL). Poarta H2 ar fi afișat „există doar planșe 13.765 m”, iar după încărcarea F3 „diferență nerezolvată: planșe 13.765 m vs F3”. În `GraficPoarta`, cu baza „planșe”, cei 13.765 m ar fi intrat în fronturi.
+- **Verificatorul rundei 2 (minor):**
+  - A și rollback-ul lui (RA) suprascriau un `status='validat'`;
+  - după un retransfer, RA refuza;
+  - RA ștergea rândul nou fără să verifice `ofertare_clarificari.cantitate_id`, un FK `ON DELETE SET NULL` care ar fi rupt legătura fără urmă.
 
-Gărzile din pasul A:
-- blochează rândul de document 470 (`FOR UPDATE`) ca să se serializeze cu RPC-ul de transfer, care blochează același rând, și cere `transfer.stare='facut'`;
-- blochează rândurile licitației 95;
-- dacă pasul A e deja aplicat, ridică un NOTICE și iese fără modificări;
-- altfel cere exact starea din preview (6 rânduri, 48.195 / 48.195);
-- după fiecare UPDATE: `GET DIAGNOSTICS` = 1, altfel `RAISE EXCEPTION`;
-- INSERT-ul e idempotent, cu `WHERE NOT EXISTS` pe cheia indexului unic `uq_ofertare_cantitati_sursa (licitatie_id, denumire, sursa)`;
-- notele se adaugă o singură dată (`NOT LIKE '%R5 v2%'`);
-- la final verifică sumele: n = 7, Σ cantitate = 34.430, Σ planșă = 48.195, 1 rând NULL, Dn200 pe planșă = 17.785, 5 note.
+SQL-ul (A, A-verif, RA) a fost scos din document. Textul lui rămâne în istoricul git (commitul `5e1001d`, §7 din acest fișier).
+**Regulă păstrată:** niciun bloc din acest document nu mai șterge rânduri. Orice ștergere viitoare din `ofertare_cantitati` (de exemplu o separare după răspunsul la #63) verifică întâi `ofertare_clarificari.cantitate_id` și refuză dacă există legături, sau le mută explicit. Azi pe 1751–1756 sunt 0 legături (Q12).
 
-Coloanele, constrângerile (status ∈ {extras, validat, diferenta, revizuit_clarificare}, tip_sursa ∈ {…, plansa, …}), indexul unic și trigger-ul `trg_categorie_cantitate` au fost citite din catalog (Q11). Trigger-ul pune categoria „Conducte și montaj” pe ambele denumiri noi; am verificat cu `fn_categorie_cantitate`, o funcție STABLE, doar citire.
+### 7.3 Pasul B: condiționat (Dn40 +600 m, doar `cantitate`)
+**Condiții:** verificarea pe imagine făcută de Oana Nica pentru Nr 40, Nr 41 și Nr 38 (§6.2) și GO Razvan. Pasul **nu mai depinde de pasul A**.
 
-**Testat local, nu pe Supabase.** Am folosit un Postgres 16 local de unică folosință, cu o machetă care are aceleași coloane, aceleași constrângeri CHECK, indexul unic și trigger-ul pe `denumire`. Datele din machetă sunt cele 6 rânduri reale, citite la 25.09. Au trecut 16 scenarii, printre care:
-- pasul B înainte de A e refuzat;
-- pasul A dă 34.430 / 48.195, iar rulat a doua oară dă NOTICE fără modificări;
-- rollback-ul A readuce exact starea inițială (hash identic pe toate coloanele de date);
-- pasul A, apoi B dau 35.030 / 48.795; B rulat a doua oară e refuzat;
-- rollback-ul A cu B aplicat e refuzat; rollback-ul B, apoi rollback-ul A readuc starea inițială;
-- cu Nr 38 = 330, pasul B dă 35.040 / 48.805;
-- o stare modificată între timp e refuzată, fără efecte parțiale;
-- o notă „R5 v2” existentă deja pe 1755 face ca blocul să fie refuzat, iar 1751 rămâne 17.785;
-- `transfer.stare='in_curs'` e refuzat;
-- rândul Nr 1–4 inserat deja de mână e refuzat. Ăsta e exact cazul de dublare semnalat de verificator, 17.785 + 13.765.
+Ordinea: **(0) preview** și **(R0) snapshot**, păstrat pentru rollback → GO → **(B)** într-un singur apel `execute_sql` → **(B-verif)** în apel separat. `execute_sql` întoarce doar ultimul rezultat, iar `RAISE NOTICE` poate să nu fie vizibil. Rollback: **(RB)**, iar dacă un retransfer a șters marcajul din notă, **(RB-manual)** din R0.
+
+Gărzile lui B:
+- **Validarea umană e obligatorie**: cine, când, Nr 40, Nr 41, Nr 38. Constantele sunt NULL intenționat, iar blocul refuză până se completează.
+- **Plauzibilitate**: Nr 40 și Nr 41 între **250 și 350 m** (tabelul citește 300 / 300); Nr 38 ∈ {320, 330}; Dn40 rezultat între 13.640 și 13.850. O greșeală de tastare ca 3.000 e refuzată (T2).
+- **Serializare cu transferul**: `FOR UPDATE` pe documentul 470 (același rând pe care îl blochează RPC-ul) și `transfer.stare='facut'`, plus lock pe rândurile lic. 95.
+- **Starea lui 1756, verificată pe rând, cu mesaj separat pentru fiecare motiv**:
+  - denumire și um;
+  - `status` ∈ {extras, diferenta}; un `validat` sau `revizuit_clarificare` e o decizie umană și **nu se suprascrie**;
+  - marcajul „R5 pas B” absent;
+  - `cantitate` = 13.140;
+  - `cantitate_plansa` ∈ {13.140, 13.740}, adică citirea de azi sau recitirea cu identitatea rândului.
+- **Scrie numai `cantitate`**, plus `status='diferenta'` și o notă care păstrează valorile, cine a verificat, locatorul și **statusul anterior**. `cantitate_plansa` rămâne neatinsă, ca istoric al extragerii.
+- **Verificare finală**: numărul de rânduri și Σ planșă neschimbate, iar Σ cantitate crește exact cu diferența. Altfel `RAISE EXCEPTION` anulează tot blocul.
+
+Gărzile lui RB:
+- aceeași serializare cu transferul;
+- cere marcajul și valorile din nota lui B;
+- refuză dacă statusul nu mai e `diferenta` (decizie umană după B) sau dacă `cantitate` a fost editată după B;
+- restaurează 13.140, statusul anterior și nota de dinainte de B;
+- verifică sumele.
+
+**Testat local, nu pe Supabase.** Am folosit un Postgres 16 de unică folosință, pornit și șters la 25.09 seara, cu o machetă care are aceleași coloane, aceleași CHECK-uri, indexul unic, FK-ul `cantitate_id ON DELETE SET NULL` (Q14) și cele 6 rânduri reale. Toate cele 16 rulări (T1–T15 și T3b) au dat rezultatul așteptat:
+
+| Test | Scenariu | Rezultat |
+|---|---|---|
+| T1 | B cu constantele NULL | refuzat, stare neschimbată |
+| T2 / T3b | Nr 40 = 3.000 / Nr 41 = 240 | refuzat (plauzibilitate), stare neschimbată |
+| T3 | Nr 38 = 325 | refuzat |
+| T4 | B cu 300 / 300 / 320 | 1756 = 13.740 / 13.140 / diferenta; Σ 48.795 / 48.195; n = 6 |
+| T5 | B rulat a doua oară | refuzat („deja aplicat”) |
+| T6 | RB | hash identic cu starea inițială |
+| T7 | B pe 1756 `validat` | refuzat, statusul rămâne `validat` |
+| T8 | B cu `transfer.stare='in_curs'` | refuzat |
+| T9 | B, apoi retransfer cu codul de la HEAD (nota rescrisă) | B din nou refuzat („pare aplicat deja…”); RB refuzat („marcajul lipsește”); RB-manual dă 13.140 / 13.140 / extras |
+| T10 | retransfer cu codul R4 (`cantitate_plansa` 13.740) **înainte** de B, apoi B, apoi RB | B: 13.740 / 13.740; Σ 48.795 / 48.795; RB revine exact la starea de după retransfer (status `diferenta`) |
+| T11 | B cu 300 / 300 / 330 | 13.750; Σ cantitate 48.805 |
+| T12 | B, apoi 1756 validat de om, apoi RB | RB refuzat |
+| T13 | B, apoi `cantitate` editată la 13.700, apoi RB | RB refuzat |
+| T14 | clarificare legată de 1756, apoi B + RB | legătura rămâne (5001 → 1756), hash inițial |
+| T15 | nota 1756 NULL, apoi B + RB | nota revine NULL, hash identic |
 
 ```sql
--- R5 v2 · lic. 95 / planșa 470 (doc 470) · PROPUNERE NEEXECUTATĂ — se rulează DOAR cu GO Razvan.
+-- R5 v3 · lic. 95 / planșa 470 (doc 470) · PROPUNERE NEEXECUTATĂ — se rulează DOAR după verificarea Oanei Nica și cu GO Razvan.
 -- Fiecare bloc de mai jos = UN apel execute_sql separat (execute_sql întoarce doar ultimul rezultat).
 -- Un bloc DO e o singură instrucțiune: orice RAISE EXCEPTION anulează TOT ce a făcut blocul (nimic parțial).
 
 -- ============================================================================================
--- (0) PREVIEW — starea de plecare (citită la 25.09.2026: 6 rânduri, id 1751–1756, Σ 48.195 / 48.195)
+-- (0) PREVIEW — starea de plecare (citită la 25.09.2026 seara: 6 rânduri, id 1751–1756, toate extras, Σ 48.195 / 48.195)
 -- ============================================================================================
-SELECT id, denumire, cantitate, cantitate_plansa, status, categorie, tip_sursa,
+SELECT id, denumire, cantitate, cantitate_plansa, status, tip_sursa, obiect,
        left(diferenta_nota, 90) AS nota, updated_at
   FROM public.ofertare_cantitati WHERE licitatie_id = 95 ORDER BY id;
 
--- (R0) SNAPSHOT PENTRU ROLLBACK — rulează-l ÎNAINTE de pasul A și păstrează rezultatul (valorile vechi, complete)
+-- (R0) SNAPSHOT PENTRU ROLLBACK — rulează-l ÎNAINTE de pasul B și păstrează rezultatul (valorile vechi, complete)
 SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) AS valori_vechi_r5
   FROM public.ofertare_cantitati c WHERE c.licitatie_id = 95;
 
 -- ============================================================================================
--- (A) PASUL A — Nr 1–4 (13.765 m Dn200, în afara UAT Vâlcelele) ies din cantitatea ofertată.
---     1751 rămâne cu Nr 5–8 (4.020 m); Nr 1–4 trec într-un rând separat cu cantitate NULL,
---     marcat „de confirmat prin #63”. Plus note (o singură dată) pe 1754, 1755, 1756.
---     Dn40 NU se modifică aici (vezi pasul B).
---     După A: 7 rânduri, Σ cantitate = 34.430, Σ cantitate_plansa = 48.195.
+-- (B) PASUL B — Dn40: cantitatea ofertată +Nr 40 +Nr 41 (+10 dacă Nr 38 = 330), DOAR după verificarea pe imagine.
+--     Schimbă numai `cantitate` (+ status 'diferenta' + notă) pe 1756; `cantitate_plansa` rămâne citirea automată.
+--     Cu Nr 40 = Nr 41 = 300 și Nr 38 = 320: 1756 = 13.740; Σ cantitate 48.795; Σ planșă neschimbată.
+--     NU aprobă nimic: aprobarea = bifa ✓ (status 'validat') după reconcilierea obiectului și a etapelor.
 -- ============================================================================================
 DO $$
 DECLARE
-  c_den_nou   constant text := 'Conductă distribuție gaze Dn200 — amonte, în afara UAT Vâlcelele (planșa 470, Nr 1–4)';
-  c_sursa_nou constant text := 'Planșa 470 — tabel Dimensionare, Nr crt 1–4 (felii z1_6/z1_7), separat la R5 v2';
-  n int; v_transfer text; v_id_nou bigint;
-  v_n int; v_cant numeric; v_plansa numeric; v_null int; v_dn200 numeric; v_note int;
+  c_validat_de constant text := NULL;   -- COMPLETEAZĂ: cine a verificat pe imagine (ex. 'Oana Nica')
+  c_validat_la constant date := NULL;   -- COMPLETEAZĂ: data verificării
+  c_nr40       constant int  := NULL;   -- COMPLETEAZĂ: lungimea Nr 40 citită pe imagine (propus 300)
+  c_nr41       constant int  := NULL;   -- COMPLETEAZĂ: lungimea Nr 41 citită pe imagine (propus 300)
+  c_nr38       constant int  := NULL;   -- COMPLETEAZĂ: 320 sau 330, cum se citește pe imagine
+  v_transfer text; v_nou numeric; r record; n int;
+  v_n0 int; v_c0 numeric; v_p0 numeric; v_n1 int; v_c1 numeric; v_p1 numeric;
 BEGIN
-  -- 0. serializare cu transferul automat: RPC-ul ofertare_transfer_plansa_cantitati blochează același rând de document
-  SELECT analiza->'citire_ai'->'transfer'->>'stare' INTO v_transfer
-    FROM public.ofertare_documente_atribuire WHERE id = 470 AND licitatie_id = 95 FOR UPDATE;
-  IF v_transfer IS DISTINCT FROM 'facut' THEN
-    RAISE EXCEPTION 'R5 v2 A: transferul planșei 470 nu e în starea facut (e %) — oprit, nimic modificat', coalesce(v_transfer, 'NULL');
-  END IF;
-  PERFORM 1 FROM public.ofertare_cantitati WHERE licitatie_id = 95 FOR UPDATE;
-
-  -- 1. deja aplicat complet? => rulare repetată = nicio modificare
-  IF EXISTS (SELECT 1 FROM public.ofertare_cantitati WHERE licitatie_id = 95 AND denumire = c_den_nou AND sursa = c_sursa_nou)
-     AND EXISTS (SELECT 1 FROM public.ofertare_cantitati WHERE id = 1751 AND licitatie_id = 95 AND cantitate = 4020
-                   AND diferenta_nota LIKE '%R5 v2%') THEN
-    RAISE NOTICE 'R5 v2 A: deja aplicat — nicio modificare';
-    RETURN;
-  END IF;
-
-  -- 2. starea de plecare trebuie să fie exact cea din preview
-  SELECT count(*), sum(cantitate), sum(cantitate_plansa) INTO v_n, v_cant, v_plansa
-    FROM public.ofertare_cantitati WHERE licitatie_id = 95;
-  IF v_n <> 6 OR v_cant IS DISTINCT FROM 48195 OR v_plansa IS DISTINCT FROM 48195 THEN
-    RAISE EXCEPTION 'R5 v2 A: stare neașteptată (n=%, Σcantitate=%, Σplanșă=%; așteptat 6 / 48195 / 48195) — refă preview-ul',
-      v_n, v_cant, v_plansa;
-  END IF;
-
-  -- 3. 1751: în ofertă rămân doar Nr 5–8 (600 + 1.400 + 650 + 1.370 = 4.020 m)
-  UPDATE public.ofertare_cantitati
-     SET denumire = 'Conductă distribuție gaze Dn200 — UAT Vâlcelele (planșa 470, Nr 5–8)',
-         cantitate = 4020, cantitate_plansa = 4020, status = 'diferenta',
-         specificatii = 'Nr 5 UAT Valcelele 600 · Nr 6 intravilan Floroaica 1400 · Nr 7 intravilan Floroaica 650 · Nr 8 UAT Valcelele → Ramif. Dragos Voda 1370',
-         diferenta_nota = coalesce(diferenta_nota, '') || ' | R5 v2 (25.09.2026): din 17.785 m s-au scos Nr 1–4 (13.765 m, în afara UAT Vâlcelele) într-un rând separat, în afara ofertei până la răspunsul la #63 pct. 3b. Etapa E1/E2 pentru Nr 5–8 de confirmat (#63 pct. 2b); Dn160 = 0 m în tabel (#63 pct. 3c).',
-         updated_at = now()
-   WHERE id = 1751 AND licitatie_id = 95
-     AND denumire = 'Conductă distribuție gaze Dn200' AND cantitate = 17785 AND cantitate_plansa = 17785
-     AND coalesce(diferenta_nota, '') NOT LIKE '%R5 v2%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 A: UPDATE 1751 a atins % rânduri (așteptat 1)', n; END IF;
-
-  -- 4. rândul separat Nr 1–4: cantitate NULL (în afara ofertei), cantitate_plansa 13.765 (5.485 + 4.080 + 1.980 + 2.220)
-  --    cheie de idempotență = indexul unic uq_ofertare_cantitati_sursa (licitatie_id, denumire, sursa)
-  INSERT INTO public.ofertare_cantitati
-         (licitatie_id, denumire, um, cantitate, cantitate_plansa, status, extras_de_ai, tip_sursa, sursa, specificatii, diferenta_nota)
-  SELECT 95, c_den_nou, 'm', NULL, 13765, 'diferenta', true, 'plansa', c_sursa_nou,
-         'Nr 1 UAT Stefan Voda 5485 · Nr 2 UAT Cuza Voda 4080 · Nr 3 UAT Gradistea 1980 · Nr 4 UAT Independenta 2220 · Q 7500 mc/h',
-         'R5 v2 (25.09.2026): ÎN AFARA OFERTEI (cantitate NULL) — de confirmat prin #63 pct. 3b (fac parte din obiect? în ce etapă?). Nu intră în Σ cantitate până la răspunsul AC.'
-   WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cantitati
-                      WHERE licitatie_id = 95 AND denumire = c_den_nou AND sursa = c_sursa_nou)
-  RETURNING id INTO v_id_nou;
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 A: INSERT Nr 1–4 a adăugat % rânduri (așteptat 1)', n; END IF;
-
-  -- 5. note (o singură dată) pe Dn90, Dn63, Dn40 — cantitățile lor NU se schimbă în pasul A
-  UPDATE public.ofertare_cantitati
-     SET diferenta_nota = coalesce(diferenta_nota, '') || ' | R5 v2 (25.09.2026): include 1.345 m racorduri SRS (Nr 9 1.000, Nr 10 340, Nr 97 5); etapa E1/E2 de confirmat prin #63 pct. 2b.',
-         updated_at = now()
-   WHERE id = 1754 AND licitatie_id = 95 AND cantitate = 4545 AND coalesce(diferenta_nota, '') NOT LIKE '%R5 v2%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 A: nota 1754 a atins % rânduri (așteptat 1)', n; END IF;
-
-  UPDATE public.ofertare_cantitati
-     SET diferenta_nota = coalesce(diferenta_nota, '') || ' | R5 v2 (25.09.2026): Nr 57 (Florența Albu, Crinului→Rozelor, 110 m, Q40) citit Dn60 (nestandard), NEinclus; Dn63 (+110 m) e o propunere nevalidată pe imagine.',
-         updated_at = now()
-   WHERE id = 1755 AND licitatie_id = 95 AND cantitate = 9670 AND coalesce(diferenta_nota, '') NOT LIKE '%R5 v2%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 A: nota 1755 a atins % rânduri (așteptat 1)', n; END IF;
-
-  UPDATE public.ofertare_cantitati
-     SET diferenta_nota = coalesce(diferenta_nota, '') || ' | R5 v2 (25.09.2026): tabelul are 56 de rânduri Dn40 = 13.740 m; Nr 40 (34→59) și Nr 41 (34→60), 2 × 300 m, pierdute la deduplicare. Cantitatea rămâne 13.140 până la validarea pe imagine (Oana Nica) — pasul B. Nr 38: 320 sau 330, de verificat.',
-         updated_at = now()
-   WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND coalesce(diferenta_nota, '') NOT LIKE '%R5 v2%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 A: nota 1756 a atins % rânduri (așteptat 1)', n; END IF;
-
-  -- 6. verificarea finală a sumelor — dacă nu ies, se anulează tot blocul
-  SELECT count(*), sum(cantitate), sum(cantitate_plansa),
-         count(*) FILTER (WHERE cantitate IS NULL),
-         sum(cantitate_plansa) FILTER (WHERE denumire ~* 'dn\s*200'),
-         count(*) FILTER (WHERE diferenta_nota LIKE '%R5 v2%')
-    INTO v_n, v_cant, v_plansa, v_null, v_dn200, v_note
-    FROM public.ofertare_cantitati WHERE licitatie_id = 95;
-  IF v_n <> 7 OR v_cant IS DISTINCT FROM 34430 OR v_plansa IS DISTINCT FROM 48195
-     OR v_null <> 1 OR v_dn200 IS DISTINCT FROM 17785 OR v_note <> 5 THEN
-    RAISE EXCEPTION 'R5 v2 A: verificare eșuată (n=%, Σcantitate=%, Σplanșă=%, NULL=%, Dn200 planșă=%, note=%; așteptat 7 / 34430 / 48195 / 1 / 17785 / 5) — anulat',
-      v_n, v_cant, v_plansa, v_null, v_dn200, v_note;
-  END IF;
-  RAISE NOTICE 'R5 v2 A aplicat: rând nou id=%, Σ în ofertă 34.430, Σ planșă 48.195', v_id_nou;
-END $$;
-
--- (A-verif) apel separat, după pasul A
-SELECT count(*) AS n, sum(cantitate) AS in_oferta, sum(cantitate_plansa) AS plansa,
-       count(*) FILTER (WHERE cantitate IS NULL) AS in_afara_ofertei,
-       array_agg(id ORDER BY id) AS ids
-  FROM public.ofertare_cantitati WHERE licitatie_id = 95;
--- așteptat: n = 7, in_oferta = 34430, plansa = 48195, in_afara_ofertei = 1
-
--- ============================================================================================
--- (B) PASUL B — SEPARAT, CONDIȚIONAT: Dn40 +600 m (Nr 40 și Nr 41) DOAR după ce Oana Nica validează
---     pe imaginea planșei lungimile Nr 40, Nr 41 și Nr 38. Cere pasul A aplicat.
---     Constantele sunt NULL intenționat: blocul refuză să ruleze până se completează.
---     Cu Nr 40 = Nr 41 = 300 și Nr 38 = 320: 1756 = 13.740; Σ cantitate 35.030, Σ planșă 48.795.
--- ============================================================================================
-DO $$
-DECLARE
-  c_validat_de constant text := NULL;  -- COMPLETEAZĂ: cine a verificat pe imagine (ex. 'Oana Nica')
-  c_validat_la constant date := NULL;  -- COMPLETEAZĂ: data verificării
-  c_nr40       constant int  := NULL;  -- COMPLETEAZĂ: lungimea Nr 40 citită pe imagine (propus 300)
-  c_nr41       constant int  := NULL;  -- COMPLETEAZĂ: lungimea Nr 41 citită pe imagine (propus 300)
-  c_nr38       constant int  := NULL;  -- COMPLETEAZĂ: 320 sau 330, cum se citește pe imagine
-  n int; v_transfer text; v_nou numeric; v_n int; v_cant numeric; v_plansa numeric;
-BEGIN
+  -- 1. validarea umană e obligatorie și plauzibilă
   IF c_validat_de IS NULL OR c_validat_la IS NULL OR c_nr40 IS NULL OR c_nr41 IS NULL OR c_nr38 IS NULL THEN
-    RAISE EXCEPTION 'R5 v2 B: lipsește validarea pe imagine (cine, când, Nr 40, Nr 41, Nr 38) — pasul B nu rulează fără ea';
+    RAISE EXCEPTION 'R5 pas B: lipsește verificarea pe imagine (cine, când, Nr 40, Nr 41, Nr 38) — nu rulează fără ea';
   END IF;
-  IF c_nr40 <= 0 OR c_nr41 <= 0 OR c_nr38 NOT IN (320, 330) THEN
-    RAISE EXCEPTION 'R5 v2 B: valori invalide (Nr 40=%, Nr 41=%, Nr 38=%)', c_nr40, c_nr41, c_nr38;
+  IF c_nr40 NOT BETWEEN 250 AND 350 OR c_nr41 NOT BETWEEN 250 AND 350 THEN
+    RAISE EXCEPTION 'R5 pas B: Nr 40 = %, Nr 41 = % în afara limitei de plauzibilitate 250–350 m (tabelul citește 300 / 300) — verifică tastarea; o valoare reală în afara limitei cere o analiză separată', c_nr40, c_nr41;
   END IF;
-  v_nou := 13140 + c_nr40 + c_nr41 + (c_nr38 - 320);   -- 13.140 conține deja Nr 38 = 320 (z2_7)
+  IF c_nr38 NOT IN (320, 330) THEN
+    RAISE EXCEPTION 'R5 pas B: Nr 38 = % (se acceptă doar 320 sau 330, cele două lecturi ale rândului)', c_nr38;
+  END IF;
+  v_nou := 13140 + c_nr40 + c_nr41 + (c_nr38 - 320);   -- 13.140 conține deja Nr 38 = 320 (z2_7) și Nr 37 = 300
+  IF v_nou NOT BETWEEN 13640 AND 13850 THEN
+    RAISE EXCEPTION 'R5 pas B: Dn40 calculat % în afara plajei 13.640–13.850', v_nou;
+  END IF;
 
+  -- 2. serializare cu transferul automat (RPC-ul ofertare_transfer_plansa_cantitati blochează același rând de document)
   SELECT analiza->'citire_ai'->'transfer'->>'stare' INTO v_transfer
     FROM public.ofertare_documente_atribuire WHERE id = 470 AND licitatie_id = 95 FOR UPDATE;
   IF v_transfer IS DISTINCT FROM 'facut' THEN
-    RAISE EXCEPTION 'R5 v2 B: transferul planșei 470 nu e în starea facut (e %)', coalesce(v_transfer, 'NULL');
+    RAISE EXCEPTION 'R5 pas B: transferul planșei 470 nu e în starea facut (e %) — oprit, nimic modificat', coalesce(v_transfer, 'NULL');
   END IF;
   PERFORM 1 FROM public.ofertare_cantitati WHERE licitatie_id = 95 FOR UPDATE;
-
-  UPDATE public.ofertare_cantitati
-     SET cantitate = v_nou, cantitate_plansa = v_nou, status = 'diferenta',
-         diferenta_nota = diferenta_nota || format(' | R5 v2 pas B: Nr 40 = %s m și Nr 41 = %s m validate pe imaginea planșei de %s la %s; Nr 38 = %s m. Dn40 = %s m.',
-                                                   c_nr40, c_nr41, c_validat_de, to_char(c_validat_la, 'DD.MM.YYYY'), c_nr38, v_nou),
-         updated_at = now()
-   WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND cantitate_plansa = 13140
-     AND diferenta_nota LIKE '%R5 v2 (25.09.2026)%'          -- pasul A aplicat
-     AND diferenta_nota NOT LIKE '%R5 v2 pas B%';            -- pasul B neaplicat
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN
-    RAISE EXCEPTION 'R5 v2 B: UPDATE 1756 a atins % rânduri (așteptat 1: pasul A aplicat, B neaplicat, Dn40 = 13140)', n;
-  END IF;
-
-  SELECT count(*), sum(cantitate), sum(cantitate_plansa) INTO v_n, v_cant, v_plansa
+  SELECT count(*), sum(cantitate), sum(cantitate_plansa) INTO v_n0, v_c0, v_p0
     FROM public.ofertare_cantitati WHERE licitatie_id = 95;
-  IF v_n <> 7 OR v_cant IS DISTINCT FROM 34430 + (v_nou - 13140) OR v_plansa IS DISTINCT FROM 48195 + (v_nou - 13140) THEN
-    RAISE EXCEPTION 'R5 v2 B: verificare eșuată (n=%, Σcantitate=%, Σplanșă=%; așteptat 7 / % / %) — anulat',
-      v_n, v_cant, v_plansa, 34430 + (v_nou - 13140), 48195 + (v_nou - 13140);
+
+  -- 3. starea rândului 1756, verificată pe rând, cu mesaj pentru fiecare motiv de refuz
+  SELECT id, denumire, um, cantitate, cantitate_plansa, status, coalesce(diferenta_nota, '') AS nota INTO r
+    FROM public.ofertare_cantitati WHERE id = 1756 AND licitatie_id = 95;
+  IF NOT FOUND THEN RAISE EXCEPTION 'R5 pas B: rândul 1756 nu există pe lic. 95'; END IF;
+  IF r.denumire IS DISTINCT FROM 'Conductă distribuție gaze Dn40' OR r.um IS DISTINCT FROM 'm' THEN
+    RAISE EXCEPTION 'R5 pas B: 1756 nu mai e poziția Dn40 în metri (denumire %, um %)', r.denumire, r.um;
   END IF;
-  RAISE NOTICE 'R5 v2 B aplicat: Dn40 = %, Σ în ofertă %, Σ planșă %', v_nou, v_cant, v_plansa;
-END $$;
+  IF r.status NOT IN ('extras', 'diferenta') THEN
+    RAISE EXCEPTION 'R5 pas B: 1756 are status % — decizie umană (validat / revizuit_clarificare), nu se suprascrie; redeschide întâi rândul din 📋 Cantități', r.status;
+  END IF;
+  IF r.nota LIKE '%R5 pas B%' THEN
+    RAISE EXCEPTION 'R5 pas B: deja aplicat (marcajul „R5 pas B” e în notă) — nicio modificare';
+  END IF;
+  IF r.cantitate IS DISTINCT FROM 13140 THEN
+    RAISE EXCEPTION 'R5 pas B: cantitatea Dn40 e %, nu 13.140 — pasul B pare aplicat deja (un retransfer șterge marcajul din notă) sau rândul a fost editat; verifică istoricul, nu rula din nou', r.cantitate;
+  END IF;
+  IF r.cantitate_plansa NOT IN (13140, 13740) THEN
+    RAISE EXCEPTION 'R5 pas B: cantitate_plansa pe 1756 e % (așteptat 13.140 = citirea actuală sau 13.740 = recitirea cu identitatea rândului)', r.cantitate_plansa;
+  END IF;
 
--- ============================================================================================
--- ROLLBACK — valorile vechi sunt cele citite prin SELECT la 25.09.2026 (identice cu snapshot-ul R0).
--- Ordinea: întâi rollback B (dacă B s-a aplicat), apoi rollback A. updated_at primește now() (urma rămâne).
--- ============================================================================================
-
--- (RB) rollback pasul B: 1756 revine la 13.140 / 13.140 / extras, nota revine la forma de după pasul A
-DO $$
-DECLARE n int; v_cant numeric; v_plansa numeric;
-BEGIN
-  PERFORM 1 FROM public.ofertare_cantitati WHERE licitatie_id = 95 FOR UPDATE;
+  -- 4. doar cantitatea ofertată se schimbă; cantitate_plansa (rezultatul extras) rămâne cum e — istoricul extragerii
   UPDATE public.ofertare_cantitati
-     SET cantitate = 13140, cantitate_plansa = 13140, status = 'extras',
-         diferenta_nota = left(diferenta_nota, strpos(diferenta_nota, ' | R5 v2 pas B') - 1),
+     SET cantitate = v_nou,
+         status = 'diferenta',
+         diferenta_nota = coalesce(diferenta_nota, '') || format(
+           ' | R5 pas B (%s): Nr 40 = %s m și Nr 41 = %s m (planșa 470, felii z2_6/z2_7, rândurile 9–10 ale fragmentului) și Nr 38 = %s m, verificate pe imagine de %s. Cantitatea ofertată Dn40 = %s m; cantitate_plansa (citirea automată) rămâne %s m până la recitirea cu deduplicarea pe identitatea rândului. NEAPROBATĂ: aprobarea = bifa ✓ după reconcilierea obiectului și a etapelor. status anterior: %s',
+           to_char(c_validat_la, 'DD.MM.YYYY'), c_nr40, c_nr41, c_nr38, c_validat_de, v_nou, r.cantitate_plansa, r.status),
          updated_at = now()
-   WHERE id = 1756 AND licitatie_id = 95 AND strpos(diferenta_nota, ' | R5 v2 pas B') > 0;
+   WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND status IN ('extras', 'diferenta')
+     AND coalesce(diferenta_nota, '') NOT LIKE '%R5 pas B%';
   GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 rollback B: % rânduri (așteptat 1 — pasul B e aplicat?)', n; END IF;
-  SELECT sum(cantitate), sum(cantitate_plansa) INTO v_cant, v_plansa FROM public.ofertare_cantitati WHERE licitatie_id = 95;
-  IF v_cant IS DISTINCT FROM 34430 OR v_plansa IS DISTINCT FROM 48195 THEN
-    RAISE EXCEPTION 'R5 v2 rollback B: Σcantitate=%, Σplanșă=% (așteptat 34430 / 48195) — anulat', v_cant, v_plansa;
+  IF n <> 1 THEN RAISE EXCEPTION 'R5 pas B: UPDATE 1756 a atins % rânduri (așteptat 1)', n; END IF;
+
+  -- 5. verificare: se schimbă doar Σ cantitate, cu exact diferența; numărul de rânduri și Σ planșă rămân
+  SELECT count(*), sum(cantitate), sum(cantitate_plansa) INTO v_n1, v_c1, v_p1
+    FROM public.ofertare_cantitati WHERE licitatie_id = 95;
+  IF v_n1 <> v_n0 OR v_c1 IS DISTINCT FROM v_c0 + (v_nou - 13140) OR v_p1 IS DISTINCT FROM v_p0 THEN
+    RAISE EXCEPTION 'R5 pas B: verificare eșuată (n % → %, Σcantitate % → %, Σplanșă % → %; așteptat Σcantitate +%) — anulat',
+      v_n0, v_n1, v_c0, v_c1, v_p0, v_p1, v_nou - 13140;
   END IF;
+  RAISE NOTICE 'R5 pas B aplicat: Dn40 ofertat = %, Σ cantitate % → %, Σ planșă % (neschimbată)', v_nou, v_c0, v_c1, v_p1;
 END $$;
 
--- (RA) rollback pasul A: șterge rândul Nr 1–4 (după cheia unică) și readuce 1751, 1754, 1755, 1756 la valorile vechi
+-- (B-verif) apel separat, după pasul B
+SELECT (SELECT jsonb_build_object('cantitate', cantitate, 'plansa', cantitate_plansa, 'status', status, 'nota', right(diferenta_nota, 200))
+          FROM public.ofertare_cantitati WHERE id = 1756) AS r1756,
+       count(*) AS n, sum(cantitate) AS s_cantitate, sum(cantitate_plansa) AS s_plansa,
+       count(*) FILTER (WHERE status = 'validat') AS validate
+  FROM public.ofertare_cantitati WHERE licitatie_id = 95;
+-- așteptat (300 + 300 + 320, fără retransfer): 1756 = 13740 / 13140 / diferenta; n = 6; Σ cantitate 48795; Σ planșă 48195; validate 0
+
+-- ============================================================================================
+-- (RB) ROLLBACK pasul B — 1756 revine la 13.140, la statusul de dinainte de B și la nota de dinainte de B.
+--      Refuză dacă un retransfer a șters marcajul, dacă omul a schimbat statusul sau cantitatea după B.
+-- ============================================================================================
 DO $$
 DECLARE
-  c_den_nou   constant text := 'Conductă distribuție gaze Dn200 — amonte, în afara UAT Vâlcelele (planșa 470, Nr 1–4)';
-  c_sursa_nou constant text := 'Planșa 470 — tabel Dimensionare, Nr crt 1–4 (felii z1_6/z1_7), separat la R5 v2';
-  n int; v_n int; v_cant numeric; v_plansa numeric; v_note int;
+  v_transfer text; r record; n int; v_b numeric; v_prev text;
+  v_n0 int; v_c0 numeric; v_p0 numeric; v_n1 int; v_c1 numeric; v_p1 numeric;
 BEGIN
+  SELECT analiza->'citire_ai'->'transfer'->>'stare' INTO v_transfer
+    FROM public.ofertare_documente_atribuire WHERE id = 470 AND licitatie_id = 95 FOR UPDATE;
+  IF v_transfer IS DISTINCT FROM 'facut' THEN
+    RAISE EXCEPTION 'R5 rollback B: transferul planșei 470 nu e în starea facut (e %) — oprit', coalesce(v_transfer, 'NULL');
+  END IF;
   PERFORM 1 FROM public.ofertare_cantitati WHERE licitatie_id = 95 FOR UPDATE;
-  IF EXISTS (SELECT 1 FROM public.ofertare_cantitati WHERE id = 1756 AND diferenta_nota LIKE '%R5 v2 pas B%') THEN
-    RAISE EXCEPTION 'R5 v2 rollback A: pasul B e aplicat — rulează întâi rollback-ul B';
+  SELECT count(*), sum(cantitate), sum(cantitate_plansa) INTO v_n0, v_c0, v_p0
+    FROM public.ofertare_cantitati WHERE licitatie_id = 95;
+
+  SELECT id, cantitate, status, coalesce(diferenta_nota, '') AS nota INTO r
+    FROM public.ofertare_cantitati WHERE id = 1756 AND licitatie_id = 95;
+  IF NOT FOUND THEN RAISE EXCEPTION 'R5 rollback B: rândul 1756 nu există'; END IF;
+  IF strpos(r.nota, ' | R5 pas B') = 0 THEN
+    RAISE EXCEPTION 'R5 rollback B: marcajul „R5 pas B” lipsește din nota lui 1756 — fie B nu e aplicat, fie un retransfer a rescris nota; folosește procedura manuală din snapshot-ul R0';
+  END IF;
+  v_b    := substring(r.nota FROM 'Cantitatea ofertată Dn40 = ([0-9]+) m')::numeric;
+  v_prev := substring(r.nota FROM 'status anterior: (extras|diferenta)$');
+  IF v_b IS NULL OR v_prev IS NULL THEN
+    RAISE EXCEPTION 'R5 rollback B: nota pasului B e incompletă (valoare %, status anterior %) — procedura manuală', v_b, v_prev;
+  END IF;
+  IF r.status IS DISTINCT FROM 'diferenta' THEN
+    RAISE EXCEPTION 'R5 rollback B: 1756 are status % după pasul B — decizie umană, nu se suprascrie', r.status;
+  END IF;
+  IF r.cantitate IS DISTINCT FROM v_b THEN
+    RAISE EXCEPTION 'R5 rollback B: cantitatea e %, nu % cât a scris pasul B — rândul a fost editat după B; procedura manuală', r.cantitate, v_b;
   END IF;
 
-  DELETE FROM public.ofertare_cantitati
-   WHERE licitatie_id = 95 AND denumire = c_den_nou AND sursa = c_sursa_nou
-     AND cantitate IS NULL AND cantitate_plansa = 13765;
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 rollback A: DELETE Nr 1–4 a atins % rânduri (așteptat 1)', n; END IF;
-
   UPDATE public.ofertare_cantitati
-     SET denumire = 'Conductă distribuție gaze Dn200', cantitate = 17785, cantitate_plansa = 17785, status = 'extras',
-         specificatii = 'UAT Stefan Voda, UAT Cuza Voda, UAT Gradistea, UAT Independenta, UAT Valcelele, Intravilan sat Floroaica',
-         diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 8 tronsoane citite din tabelul planșei.',
+     SET cantitate = 13140, status = v_prev,
+         diferenta_nota = nullif(left(diferenta_nota, strpos(diferenta_nota, ' | R5 pas B') - 1), ''),
          updated_at = now()
-   WHERE id = 1751 AND licitatie_id = 95 AND cantitate = 4020 AND diferenta_nota LIKE '%R5 v2 (25.09.2026)%';
+   WHERE id = 1756 AND licitatie_id = 95 AND cantitate = v_b AND status = 'diferenta'
+     AND strpos(diferenta_nota, ' | R5 pas B') > 0;
   GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 rollback A: 1751 % rânduri (așteptat 1)', n; END IF;
+  IF n <> 1 THEN RAISE EXCEPTION 'R5 rollback B: UPDATE a atins % rânduri (așteptat 1)', n; END IF;
 
-  UPDATE public.ofertare_cantitati
-     SET diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 19 tronsoane citite din tabelul planșei.', updated_at = now()
-   WHERE id = 1754 AND licitatie_id = 95 AND diferenta_nota LIKE '%R5 v2 (25.09.2026)%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 rollback A: 1754 % rânduri (așteptat 1)', n; END IF;
-
-  UPDATE public.ofertare_cantitati
-     SET diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 30 tronsoane citite din tabelul planșei.', updated_at = now()
-   WHERE id = 1755 AND licitatie_id = 95 AND diferenta_nota LIKE '%R5 v2 (25.09.2026)%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 rollback A: 1755 % rânduri (așteptat 1)', n; END IF;
-
-  UPDATE public.ofertare_cantitati
-     SET diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 54 tronsoane citite din tabelul planșei.', updated_at = now()
-   WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND diferenta_nota LIKE '%R5 v2 (25.09.2026)%';
-  GET DIAGNOSTICS n = ROW_COUNT;
-  IF n <> 1 THEN RAISE EXCEPTION 'R5 v2 rollback A: 1756 % rânduri (așteptat 1)', n; END IF;
-
-  SELECT count(*), sum(cantitate), sum(cantitate_plansa), count(*) FILTER (WHERE diferenta_nota LIKE '%R5 v2%')
-    INTO v_n, v_cant, v_plansa, v_note FROM public.ofertare_cantitati WHERE licitatie_id = 95;
-  IF v_n <> 6 OR v_cant IS DISTINCT FROM 48195 OR v_plansa IS DISTINCT FROM 48195 OR v_note <> 0 THEN
-    RAISE EXCEPTION 'R5 v2 rollback A: verificare eșuată (n=%, Σcantitate=%, Σplanșă=%, note=%; așteptat 6 / 48195 / 48195 / 0) — anulat',
-      v_n, v_cant, v_plansa, v_note;
+  SELECT count(*), sum(cantitate), sum(cantitate_plansa) INTO v_n1, v_c1, v_p1
+    FROM public.ofertare_cantitati WHERE licitatie_id = 95;
+  IF v_n1 <> v_n0 OR v_c1 IS DISTINCT FROM v_c0 - (v_b - 13140) OR v_p1 IS DISTINCT FROM v_p0 THEN
+    RAISE EXCEPTION 'R5 rollback B: verificare eșuată (Σcantitate % → %, Σplanșă % → %) — anulat', v_c0, v_c1, v_p0, v_p1;
   END IF;
+  RAISE NOTICE 'R5 rollback B: 1756 = 13.140 / %, Σ cantitate %', v_prev, v_c1;
 END $$;
+
+-- ============================================================================================
+-- (RB-manual) DOAR dacă RB refuză pentru că un retransfer a rescris nota lui 1756 (marcajul „R5 pas B” lipsește).
+--   Valorile vin din snapshot-ul R0: cantitate 13140, status 'extras'. Nota rămâne cea scrisă de retransfer (e citirea curentă).
+--   13740 = valoarea scrisă de pasul B (din B-verif; 13750 dacă Nr 38 = 330). Preview → GO → apoi rulează.
+-- ============================================================================================
+UPDATE public.ofertare_cantitati
+   SET cantitate = 13140,
+       status = CASE WHEN cantitate_plansa = 13140 AND status = 'diferenta' THEN 'extras' ELSE status END,
+       updated_at = now()
+ WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13740 AND status IN ('extras', 'diferenta')
+RETURNING id, cantitate, cantitate_plansa, status, left(diferenta_nota, 60) AS nota;
 ```
 
 ## Interogări și locatori (toate sunt SELECT)
-- **Q1**: `felii[eticheta ~ '^z[1-4]_[67]$'].tabele[0].randuri`, zip pe ordinalitate pentru z?_6 × z?_7, DISTINCT pe `Nr crt`. Rezultat: 133 de rânduri (1–133), 0 conflicte, Σ 48.905; singurul grup identic e Nr 37/40/41. 133 de perechi de noduri distincte și 133 de noduri de sosire distincte.
+- **Q1**: `felii[eticheta ~ '^z[1-4]_[67]$'].tabele[0].randuri`, zip pe ordinalitate pentru z?_6 × z?_7, DISTINCT pe `Nr crt`. Rezultatul, recalculat la 25.09 seara:
+  - 152 de lecturi, 133 de Nr distincte și 133 de triplete (Nr, Dn, L) distincte, adică 0 conflicte;
+  - Σ 48.905; pe Dn: 200 = 17.785, 125 = 2.275, 110 = 780, 90 = 4.545, 63 = 9.670, 60 = 110, 40 = 13.740;
+  - Nr 1–4 = 13.765, Nr 5–8 = 4.020;
+  - singurul grup identic ca text e Nr 37/40/41;
+  - 133 de perechi de noduri distincte și 133 de noduri de sosire distincte.
 - **Q1b**: coloana „același Dn ±1%” din §1.2, calculată pe două baze: tabelul complet (133 de rânduri) și `tronsoane_unice` (131). Diferă doar idx 81 și 83 (13 față de 11).
 - **Q2**: aceeași reconstrucție, grupată pe categoria A–E × Dn.
-- **Q3**: `sumar.posibile_dubluri` (52; 19 cu același Dn; 18.406 / 8.696 m) și `tronsoane_unice` cu `sursa≠'tabel'` (75; 34.732 m = `sumar.adnotari_neconfirmate_m`, recitit la 25.09). Pe felii: z3_1 36 / 11.427, z3_2 22 / 17.291, z4_2 17 / 6.014.
+- **Q3**: `sumar.posibile_dubluri` (52; 19 cu același Dn; 18.406 / 8.696 m) și `tronsoane_unice` cu `sursa≠'tabel'` (75; 34.732 m = `sumar.adnotari_neconfirmate_m`, recitit la 25.09 seara). Pe felii: z3_1 36 / 11.427, z3_2 22 / 17.291, z4_2 17 / 6.014.
 - **Q4**: adnotările din z3_1 (`de_la`=„Nod n”), join pe `Noduri de Plecare/Sosire`.
-- **Q5**: `ofertare_cantitati WHERE licitatie_id=95` → id 1751–1756, recitit la 25.09 cu toate coloanele. Coloanele au fost verificate întâi în `information_schema.columns`.
+- **Q5**: `ofertare_cantitati WHERE licitatie_id=95` → id 1751–1756, recitit la 25.09 seara cu toate coloanele. Coloanele au fost verificate întâi în `information_schema.columns`. Toate 6 sunt `extras`, cu `tip_sursa` și `obiect` NULL; Σ 48.195 / 48.195; `updated_at` 16:51:08.
 - **Q6**: subset-sum pe rândurile Nr 1–4 și pe rândurile Dn200 (Nr 1–8). Script local, fără BD.
 - **Q7**: `alte_mentiuni` din 471–475 (nota 54200mp).
-- **Q8**: `ofertare_clarificari id=63`, recitit la 25.09: `status=de_trimis`, `raspuns` NULL, `raspuns_la` NULL.
-- **Q9**: simularea deduplicării pe multiset pe `felii[*].tronsoane` cu lungime > 0. Pentru fiecare cheie `de_la|la|L|Dn|Q|zona` se ia maximul aparițiilor într-o felie. Rezultat pe `sursa='tabel'`: 152 de citiri, 131 de chei, 133 de rânduri, 48.905 m (Dn40 13.740 față de 13.140 pe set). Pe `sursa='adnotare'`: 94 de citiri, 75 de chei, 88 de rânduri, 37.472 m (față de 34.732). Cheia lui Nr 37/40/41 e în z1_7 la poziția 37 și în z2_7 la pozițiile 6, 9, 10.
+- **Q8**: `ofertare_clarificari id=63`, recitit la 25.09 seara: `status=de_trimis`, `raspuns` NULL, `raspuns_la` NULL. #64: `de_trimis`, `raspuns` NULL.
+- **Q9 (istoric, înlocuit de §6.5)**: simularea deduplicării pe multiset pe `felii[*].tronsoane` cu lungime > 0, cu maximul aparițiilor unei chei `de_la|la|L|Dn|Q|zona` într-o felie.
+  - Pe `sursa='tabel'`: 152 de citiri, 131 de chei, 133 de rânduri, 48.905 m.
+  - Pe `sursa='adnotare'`: 88 de rânduri, 37.472 m.
+  - Copilot a respins regula (contraexemplul 37/40 din felii diferite). Ea nu se implementează.
 - **Q10**: numărarea submulțimilor (programare dinamică) pe toate cele 133 de lungimi, pentru țintele 3.840 / 4.440 / 4.550 / 4.560, plus căutarea combinațiilor minime. Script local, fără BD.
 - **Q11**: catalogul pentru `ofertare_cantitati`: `pg_constraint`, `pg_trigger`, `pg_indexes`. Plus definițiile `fn_trg_categorie_cantitate`, `fn_categorie_cantitate`, `ofertare_transfer_plansa_cantitati` și `v_ofertare_contradictii`.
+- **Q12** (25.09 seara), derivatele lic. 95:
+  - `v_ofertare_pt_stare`: `lista_f3_m`, `memoriu_m`, `plansa_m` și `grafic_fronturi_m` sunt NULL;
+  - `grafic_parametri`, `grafic_versiuni`, `grafic_activitati`, `ofertare_pt_poarta`, `ofertare_pt_pachet` și `ofertare_verificari` au câte 0 rânduri;
+  - `ofertare_clarificari` cu `cantitate_id` în 1751–1756: 0.
+- **Q13** (25.09 seara), locatorii din §6.2:
+  - `felii` z1_6, z1_7, z2_6, z2_7, `tabele[0].randuri` cu ordinalitate. În z2, rândul 1 = Nr 32, rândul 7 = Nr 38 (0,320), rândurile 9/10 = Nr 40/41 (34→59, 34→60; 0,300; Dn40; Q20) și rândul 26 = Nr 57 (0,110; Dn60; Q40). z1_6 are 37 de rânduri, iar z1_7 rândul 37 = Nr 37.
+  - `alte_mentiuni`: z1_6 „Randul 38 … este taiat de marginea de jos”; z1_7 „rand taiat: … 0,330”.
+  - `analiza.plansa`: `zone_geom` 2_6 = [7040, 1408, 1600, 1600], 2_7 = [7762, 1408, 1600, 1600]; `latime`/`inaltime`/`dpi` = 9.362 / 6.623 / 200; `coloane`/`randuri` = 7 / 5; `suprapunere` 0,12; `cale_felii` `95/felii/470`.
+  - `citire_ai.versiune`: fișierul și pagina 1.
+- **Q14** (25.09 seara), catalogul:
+  - `pg_get_functiondef(ofertare_transfer_plansa_cantitati)`: update-ul scrie doar `cantitate_plansa`, `diferenta_nota`, `status` și `updated_at`, fără gardă pe status. Insert-ul scrie și `specificatii`, `cantitate`, `sursa`.
+  - `pg_constraint`: `ofertare_clarificari_cantitate_id_fkey` e `ON DELETE SET NULL`; CHECK pe status ∈ {extras, validat, diferenta, revizuit_clarificare} și pe `tip_sursa`.
+  - `v_ofertare_contradictii`, CTE `difere`: `cantitate` și `cantitate_plansa` NOT NULL și |diferență| > 0,5.
+- **Q15**: `strpos` pe `text_extras` (prima apariție). „44,355”: 1276 poz. 10 036 (în „aproximativ 44,355 km”, de la poz. 10 024) și 468 poz. 13 162. „11,525”: 1276 poz. 16 094, 468 poz. 25 423. „32,830”: 1276 poz. 16 254, 468 poz. 25 581.
 - Text CS / memoriu: `strpos(text_extras, …)` pe doc 1276 / 468. Pagina = ultimul marcaj ⟦PAGINA n⟧ înainte de poziție.
 - Cod (commitul `8a6fbbb`, ramura `claude/erp-continuare-x4p5a7`), `supabase/functions/ofertare-plansa-citeste/handler.ts`:
   - l.215–228 `tronsoaneUnice` (l.220 sare tronsoanele fără lungime, l.222 e cheia);
-  - l.248–357 `treciInCantitati` (l.301–304 pozițiile ambigue, l.315 patch-ul `cantitate_plansa` + `diferenta_nota`, l.317 status, l.319 op-ul de update);
+  - l.248–357 `treciInCantitati` (l.301–304 pozițiile ambigue, l.315 patch-ul `cantitate_plansa` + `diferenta_nota`, l.317 status, l.319 op-ul de update; l.330 `specificatii` numai la insert);
   - l.446–470 `agregaTronsoane` (l.459 regula ±1%);
   - l.720–725 diametrele nestandard (Dn60 scos);
   - l.726–731 avertismentul pentru rândurile repetate.
 - Tot acolo: `ofertare-clarificari-propune/core.ts` l.69.
+- Ramura R4 `claude/r4-rezervare-zone` (capul `1fd76dd`): `handler.ts` l.322 `identificaRanduri` (apelată la l.1098), l.537 `notaRestTransfer`, l.555 `treciInCantitati`, l.760–784 `posibila_dublura`; `COD_VERSIUNE` `2026-09-25.7` (l.38).
+- Ramura consumatorilor `claude/cantitati-nevalidate-consumatori` (`990a6b1`): `docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md` (în lucru).
 
-## Jurnal de corecturi (runda 2, după verificatorul rundei 1)
+## Jurnal de corecturi
+### Runda 3 (25.09 seara): verdictul Copilot + verificatorul rundei 2
+| # | Sursa | Problema | Ce s-a schimbat |
+|---|---|---|---|
+| 1 | Copilot (a) | „4.020 în ofertă, 13.765 separat” nu demonstrează cantitatea de ofertat; amplasarea în afara UAT nu dovedește excluderea | Pasul A e scos (§7.2, istoric pe scurt). 1751 rămâne 17.785 `extras`. 13.765 + 4.020 e doar descompunere analitică, ambele candidate (§2, §6.1) |
+| 2 | Copilot (b) | +600 m doar după verificarea Oanei; constatarea rămâne cu locator | Pasul B e condiționat și schimbă doar `cantitate`. Locatorii pe imagine sunt în §6.2 (felie, rând, `zone_geom`) |
+| 3 | Copilot (c) | Răspunsul AC nu e singurul criteriu | Tabelul cu cele 6 criterii de închidere și starea fiecăruia |
+| 4 | Copilot | Sensul lui „în afara ofertei până la reconciliere” | Rezumat, §0 pct. 4, §4, §6.3: nevalidat ≠ aprobat, fără eliminarea automată a altor UAT |
+| 5 | Copilot | Verificarea consumatorilor | §6.3 → `docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md` (livrabil separat, în lucru); derivatele lic. 95 = 0 (Q12) |
+| 6 | Copilot | Baza 4.550; 4.440–4.560 ca scenarii distincte | §3: S0 (bază), S1, S2, S3 + cifra BD, fiecare cu ajustarea care o produce |
+| 7 | Copilot | Ordinea lucrului | §7.1 |
+| 8 | Copilot + R4 | Multiset-ul nu ajunge | §6.5: identitatea rândului (`a800d38`), `agregare_test.ts` 17/17 rerulat; Q9 marcat istoric |
+| 9 | Verificator runda 2 (major) | `tip_sursa='plansa'` pe rândul nou → `plansa_m` 13.765 în H2 / GraficPoarta | Dispare odată cu pasul A. E trecut ca motiv de respingere în §7.2 |
+| 10 | Verificator runda 2 (minor) | B fără limită de plauzibilitate | Nr 40/41 între 250 și 350; Nr 38 ∈ {320, 330}; Dn40 între 13.640 și 13.850 (T2, T3, T3b) |
+| 11 | Verificator runda 2 (minor) | După retransfer, B și RA refuză, cu mesaj înșelător | B nu mai depinde de nota lui A și funcționează și după un retransfer cu codul R4 (T10). Fiecare refuz are mesajul lui (T5, T9). RB refuză fără marcaj, iar procedura e RB-manual din R0 (T9). B și RB blochează doc 470 și cer `stare='facut'` |
+| 12 | Verificator runda 2 (minor) | A și RA suprascriu `validat` | B refuză pe `validat` / `revizuit_clarificare` (T7). RB refuză dacă statusul nu mai e `diferenta` (T12). RA nu mai există |
+| 13 | Verificator runda 2 (minor) | RA șterge fără să verifice `ofertare_clarificari.cantitate_id` | Niciun bloc nu mai șterge. Regula pentru orice ștergere viitoare e în §7.2; azi sunt 0 legături (Q12); legătura rămâne după B și RB (T14) |
+| 14 | Verificator runda 2 (fix 4) | 1751 `diferenta` ar bloca controlul „cant” din GraficPoarta | 1751 nu mai e atins |
+
+### Runda 2 (după verificatorul rundei 1)
 | # | Problema semnalată | Gravitate | Ce s-a schimbat |
 |---|---|---|---|
 | 1 | SQL-ul propus nu era sigur: COMMIT necondiționat, INSERT fără gardă și fără idempotență (risc Dn200 dublu: 17.785 + 13.765), note adăugate la fiecare rulare | major | Rescris ca blocuri DO (§7): lock pe document și pe rânduri, verificarea stării de plecare, `GET DIAGNOSTICS` + `RAISE EXCEPTION` pe fiecare UPDATE, INSERT cu `WHERE NOT EXISTS` pe cheia unică, note `NOT LIKE '%R5 v2%'`, verificarea finală a sumelor, rollback separat (RB, RA) plus SELECT de snapshot (R0). Dn40 scos din pasul A și mutat în pasul B, condiționat. Testat local în 16 scenarii. |
@@ -710,3 +806,5 @@ END $$;
 | 5 | §1.2: coloana ±1% era calculată pe 131 de rânduri, deși documentul spune 133 | minor | Coloana e acum pe tabelul complet (133); idx 81 și 83 = **13** (11 pe `tronsoane_unice`); baza e precizată (Q1b) |
 | 6 | Locator `handler.ts` l.460 | minor | **l.459** |
 | 7 | Formulări prea tari: „diferența corectă +4.550” și „nicio combinație de rânduri întregi” | minor | Rezumat, §0, §3 și §4: diferența candidată e **+4.440 … +4.560**; „nicio combinație de rânduri **Dn200** întregi”, cu combinațiile de pe toate rândurile arătate ca argument (§4, Q10) |
+
+Rândurile 1, 3, 4 și 7 din runda 2 sunt depășite de runda 3: pasul A a fost scos, multiset-ul a fost înlocuit de identitatea rândului, iar „diferența candidată +4.440 … +4.560” a devenit diferența de bază +4.550, cu scenarii distincte (§3).
