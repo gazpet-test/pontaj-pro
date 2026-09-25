@@ -1027,7 +1027,12 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     const ca = d.tip === 'plansa' && d.analiza?.citire_ai
     if (!ca?.gata) return false
     const s = ca.sumar || {}
-    return !s.tronsoane_gasite && !(s.tabele || []).length && !s.lungime_totala_m
+    return !s.tronsoane_gasite && !(s.tabele || []).length && !s.lungime_totala_m && !s.lungime_declarata_m
+  }
+  const lipesteNote = async (d) => {
+    const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, doar_lipire: true } })
+    if (error || data?.error) { setWarn(`Note tăiate: ${data?.error || error.message}`); return null }
+    return data
   }
   const citestePlansa = async (d, eticheta = '', fin = false) => {
     let ok = false
@@ -1044,21 +1049,28 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       if (!r.ok) { setWarn(`Nu am putut pregăti planșa: ${felii.error || `HTTP ${r.status}`}`); return }
       if (felii.citibila === false) { setWarn(`⚠️ ${felii.motiv}`); await load(); return }
 
-      let deLa = 0, runde = 0, sumar = null
+      let deLa = 0, runde = 0, sumar = null, lipire = 0
       while (runde < 25) {
         setPlansaBusy(`${eticheta}${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
         const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa } })
         if (error || data?.error) { setWarn(`Eroare la citire: ${data?.error || error.message}`); break }
         sumar = data.sumar
-        if (!data.continua) break
+        if (!data.continua) { lipire = data.lipire_necesara || 0; break }
         deLa = data.de_la_urmator; runde++
+      }
+      // 25.09.2026: rânduri de text tăiate între zone (ex. „Lungimea totală a rețelei...") — se refac în perechi
+      if (sumar && lipire) {
+        setPlansaBusy(`${eticheta}${d.nume_original}: refac ${lipire} note tăiate între zone...`)
+        const rl = await lipesteNote(d)
+        if (rl?.lungime_declarata_m) sumar = { ...sumar, lungime_declarata_m: rl.lungime_declarata_m }
       }
       if (sumar) {
         ok = true
         setWarn(`✅ Planșă citită: ${sumar.tronsoane_gasite} tronsoane (${sumar.lungime_totala_m.toLocaleString('ro-RO')} m)` +
           `${sumar.tabele.length ? `, tabele: ${sumar.tabele.join(', ')}` : ''}` +
           `${sumar.subtraversari ? `, ${sumar.subtraversari} subtraversări` : ''}` +
-          `${sumar.erori ? ` — ${sumar.erori} zone cu erori` : ''}.`)
+          `${sumar.erori ? ` — ${sumar.erori} zone cu erori` : ''}` +
+          `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}.`)
       }
     } catch (e) {
       setWarn(`Eroare la citirea planșei: ${e.message}`)
@@ -1339,12 +1351,22 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
-                    plansaGoala(d) ? (
+                    plansaGoala(d) ? (<>
+                    {!d.analiza?.citire_ai?.note_lipite && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
+                      title="Refă rândurile de text tăiate la marginea zonelor (note, cartuș — ex. lungimea totală declarată). Recitește doar perechile de zone afectate, max. 6 apeluri."
+                      onClick={async () => {
+                        setPlansaBusy(`${d.nume_original}: refac notele tăiate...`)
+                        try {
+                          const r = await lipesteNote(d)
+                          if (r) setWarn(r.perechi ? `🧩 ${r.note.length} rânduri refăcute din ${r.perechi} perechi de zone` +
+                            (r.lungime_declarata_m ? ` · lungime totală declarată: ${r.lungime_declarata_m.toLocaleString('ro-RO')} m` : ' · nicio lungime totală găsită') : 'Nicio notă tăiată de refăcut.')
+                        } finally { setPlansaBusy(null); await load(); onChanged?.() }
+                      }}>🧩 note tăiate</button>}
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
                       title="Recitire cu grilă deasă (zone de ~1000px din original, până la 80 de zone) — costă mai mult"
                       onClick={() => { if (window.confirm('Recitire fină: planșa se taie în mai multe zone, fiecare citită cu AI (cost mai mare). Continui?')) citestePlansa(d, '', true) }}>
                       📐 recitește fin
-                    </button>
+                    </button></>
                     ) : (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}

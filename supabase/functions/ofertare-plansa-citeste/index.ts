@@ -72,6 +72,8 @@ function textPlansa(nume: string, c: any): string {
   if (sub.length) { L.push('', 'SUBTRAVERSĂRI:'); for (const x of sub) L.push(`- ${[x.obstacol, x.lungime_m && `${x.lungime_m} m`, x.tub_protectie, x.pozitie].filter(Boolean).join(', ')}`); }
   const br = (c.felii || []).flatMap((r: any) => r.bransamente || []);
   if (br.length) { L.push('', 'BRANȘAMENTE:'); for (const x of br) L.push(`- ${[x.descriere, x.numar].filter(Boolean).join(', ')}`); }
+  if ((c.note_lipite || []).length) { L.push('', 'NOTE (refăcute peste marginea zonelor):'); for (const n of c.note_lipite) L.push(`- ${n.text}`); }
+  if (s.lungime_declarata_m) L.push(`Lungime totală declarată pe planșă: ${s.lungime_declarata_m} m`);
   const alte = [...new Set((c.felii || []).flatMap((r: any) => r.alte_mentiuni || []).filter(Boolean))];
   if (alte.length) { L.push('', 'MENȚIUNI:'); for (const x of alte) L.push(`- ${x}`); }
   return L.join('\n');
@@ -286,6 +288,75 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   return { adaugate, actualizate, ambigue, total_m: total, pe_diametre: peDiametreRaport };
 }
 
+
+// ---- 25.09.2026 „note tăiate" (lic. 95, PL5 Vâlcelele) ------------------------------
+// Un rând lung de text (ex. „Lungimea totală a rețelei de alimentare cu gaze naturale este de ...")
+// e mai lat decât o felie + suprapunere, deci fiecare felie îl vede tăiat și cifra se pierde.
+// După citirea completă: feliile care raportează text tăiat se recitesc ÎN PERECHE cu vecina din
+// dreapta (două imagini într-un singur apel), iar modelul reface doar rândurile care trec peste margine.
+const MARCAJ_TAIAT = /(t[aă]iat|trunchiat|partial lizibil|\.\.\.|…)/i;
+const MAX_PERECHI = 6;
+function perechiDeLipit(felii: any[], toateNumele: Set<string>): [string, string][] {
+  const out: [string, string][] = [];
+  const vazute = new Set<string>();
+  for (const f of felii) {
+    const texte = [...(f.alte_mentiuni || []), ...(f.tabele || []).map((t: any) => t?.denumire)].filter(Boolean).map(String);
+    if (!texte.some((t) => MARCAJ_TAIAT.test(t))) continue;
+    const m = /^(.*?)(\d+)_(\d+)$/.exec(String(f.eticheta || ''));
+    if (!m) continue;
+    const [, pre, r, c] = m;
+    const dreapta = `${pre}${r}_${Number(c) + 1}`, stanga = `${pre}${r}_${Number(c) - 1}`;
+    const vecin = toateNumele.has(dreapta) ? [f.eticheta, dreapta] : toateNumele.has(stanga) ? [stanga, f.eticheta] : null;
+    if (!vecin) continue;
+    const k = vecin.join('+');
+    if (vazute.has(k)) continue;
+    vazute.add(k); out.push(vecin as [string, string]);
+  }
+  return out;
+}
+
+const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
+Unele randuri de text (note, cartus, legenda, tabele) sunt taiate de marginea dintre ele. Reconstituie DOAR randurile care continua dintr-o bucata in cealalta, citind textul complet de la stanga la dreapta. Nu repeta textul care e deja intreg intr-o singura bucata.
+Raspunde NUMAI cu JSON valid: {"randuri": [{"text": "randul complet", "lungime_m": null, "diametru_mm": null}]}
+- lungime_m / diametru_mm: numai daca randul chiar scrie o lungime (in metri; km x 1000) sau un diametru. Fara separator de mii.
+- Nu inventa: daca un cuvant tot nu se poate citi, pune [?] in locul lui.`;
+
+async function lipestePereche(apiKey: string, st: Uint8Array, dr: Uint8Array, eticheta: string) {
+  const b64 = (u: Uint8Array) => { let b = ''; for (let i = 0; i < u.length; i += 8192) b += String.fromCharCode(...u.subarray(i, i + 8192)); return btoa(b); };
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL, max_tokens: 4000, thinking: { type: 'disabled' }, system: INSTRUCTIUNI_LIPIRE,
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: 'STANGA:' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64(st) } },
+        { type: 'text', text: 'DREAPTA:' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64(dr) } },
+        { type: 'text', text: `Perechea ${eticheta}. Reconstituie randurile taiate intre ele.` },
+      ] }],
+    }),
+  });
+  const j = await r.json();
+  const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
+  const txt = (Array.isArray(j?.content) ? j.content : []).filter((c: any) => c?.type === 'text').map((c: any) => c.text || '').join('\n');
+  const m = txt.match(/\{[\s\S]*\}/);
+  try { return { eticheta, randuri: m ? (JSON.parse(m[0]).randuri || []) : [], _tin: tin, _tout: tout }; }
+  catch { return { eticheta, randuri: [], eroare: 'JSON invalid', _tin: tin, _tout: tout }; }
+}
+
+// „Lungimea totală a rețelei ... este de 12.345 m" — cifra declarată pe planșă (control, nu cantitate)
+function lungimeDeclarata(note: any[]): number | null {
+  for (const n of note) {
+    const t = faraDiacritice(String(n?.text || '')).toLowerCase();
+    if (!/lungime\w*\s+total/.test(t)) continue;
+    const v = numar(n?.lungime_m) ?? numar((/(\d[\d.,]*)\s*(m|ml|metri)\b/.exec(t) || [])[1]);
+    const km = /(\d[\d.,]*)\s*km\b/.exec(t);
+    if (v) return v; if (km) return (numar(km[1]) || 0) * 1000 || null;
+  }
+  return null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const json = (b: unknown, status = 200) =>
@@ -327,6 +398,42 @@ Deno.serve(async (req: Request) => {
   // în storage nu dădea nicio eroare — planșa părea citită complet, cu un total scurt.
   const peStorage = new Set(felii.map((f: any) => f.name.replace('.jpg', '')));
   const zoneLipsa: string[] = (plansa.zone_asteptate || []).map((z: string) => `z${z}`).filter((z: string) => !peStorage.has(z));
+
+  // Pasul „lipește notele tăiate" — apel separat (bugetul de timp al unei rulări), cerut de UI după citire.
+  if (body?.doar_lipire === true) {
+    const ca = doc.analiza?.citire_ai;
+    if (!ca?.gata) return json({ error: 'planșa nu e citită complet' }, 400);
+    const perechi = perechiDeLipit(ca.felii || [], peStorage).slice(0, MAX_PERECHI);
+    const rez: any[] = [];
+    for (let i = 0; i < perechi.length; i += PARALEL) {
+      rez.push(...await Promise.all(perechi.slice(i, i + PARALEL).map(async ([a, b]) => {
+        const [x, y] = await Promise.all([a, b].map((n) => supa.storage.from('ofertare').download(`${plansa.cale_felii}/${n}.jpg`)));
+        if (!x.data || !y.data) return { eticheta: `${a}+${b}`, randuri: [], eroare: 'descarcare esuata' };
+        return await lipestePereche(API_KEY, new Uint8Array(await x.data.arrayBuffer()), new Uint8Array(await y.data.arrayBuffer()), `${a}+${b}`);
+      })));
+    }
+    const tinL = rez.reduce((q, r) => q + (r._tin || 0), 0), toutL = rez.reduce((q, r) => q + (r._tout || 0), 0);
+    if (rez.length) await supa.from('ai_usage_log').insert({ function_name: 'ofertare-plansa-citeste', model: MODEL, tokens_in: tinL, tokens_out: toutL,
+      cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4), ref_table: 'ofertare_documente_atribuire', ref_id: docId });
+    const vazut = new Set<string>();
+    const note = rez.flatMap((r: any) => (r.randuri || []).map((n: any) => ({ ...n, perechea: r.eticheta })))
+      .filter((n: any) => { const k = text(n.text); if (!k || vazut.has(k)) return false; vazut.add(k); return true; });
+    const decl = lungimeDeclarata(note);
+    const citireAi2 = { ...ca, note_lipite: note, sumar: { ...ca.sumar, note_lipite: note.length, perechi_lipite: rez.length, ...(decl ? { lungime_declarata_m: decl } : {}) } };
+    const upd2: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi2 }, analiza_la: new Date().toISOString(),
+      text_extras: textPlansa(doc.nume_original, citireAi2) };
+    // lungimea declarată e o dată utilă => planșa nu mai e „fără rezultat" (nu mai intră în clarificarea automată)
+    const { data: cur } = await supa.from('ofertare_documente_atribuire').select('eroare').eq('id', docId).single();
+    if (decl && cur?.eroare === 'citită fără rezultat') upd2.eroare = null;
+    await supa.from('ofertare_documente_atribuire').update(upd2).eq('id', docId);
+    let clar: unknown = null;
+    if (upd2.eroare === null) {
+      const { data, error } = await supa.rpc('ofertare_clarificare_planse_auto', { p_licitatie_id: doc.licitatie_id });
+      clar = error ? { eroare: error.message } : data;
+    }
+    return json({ document: doc.nume_original, perechi: rez.length, note, lungime_declarata_m: decl, clarificare: clar,
+      cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4) });
+  }
 
   const lot = felii.slice(deLa, deLa + FELII_PE_RULARE);
   const rezultate: any[] = [];
@@ -459,5 +566,6 @@ Deno.serve(async (req: Request) => {
     document: doc.nume_original, citite_acum: lot.length, din: felii.length, sumar, cantitati,
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4),
     clarificare, continua: !gata, de_la_urmator: gata ? null : deLa + lot.length,
+    lipire_necesara: gata ? perechiDeLipit(toate, peStorage).slice(0, MAX_PERECHI).length : 0,
   });
 });
