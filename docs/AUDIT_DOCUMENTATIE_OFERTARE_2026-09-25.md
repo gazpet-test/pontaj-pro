@@ -1,7 +1,46 @@
 # Audit țintit — traseul documentației de licitație (Ofertare)
 
+## VERDICT CURENT (actualizat 25.09.2026, după PR #467–#474 și reconcilierea T12–T15)
+
+Tabelul de mai jos înlocuiește coloana „Status” din tabelul istoric. Matricea completă: `docs/MATRICE_ACOPERIRE_AUDIT_OFERTARE.md`; rezultate măsurate: `docs/REMEDIERI_DOCUMENTATIE_REZULTATE.md`.
+„Remediat în cod” ≠ „remediat în date”: citirile vechi din BD NU au fost refăcute (vezi SQL la final).
+
+| # | Stare curentă | Dovadă |
+|---|---|---|
+| T1 siglă EasySign | **parțial** — cod: nu mai contează drept citită (UI + server); date: 472–474 tot `procesat`, 900 px, nerecitite | #473; `src/OfertareLicitatii.jsx:1112` (`peSigla`); `ofertare-plansa-citeste/index.ts:668-675`; SQL: 472–474 `latime=900`, `procesat` |
+| T2 PL5 471 gol | deschis (conținut) — clarificare #63 propusă | 471 `tronsoane_gasite=0` |
+| T3 status `partial` | **remediat în cod** (#474), date vechi neschimbate | `index.ts:681-682`; 470 tot `procesat` cu „1 zone necitite” |
+| T4 reluare felie | **remediat în cod** (#474, `mod='reia_erori'`), nerulat pe 470 | `index.ts:492-504`; UI l.1039-1047, 1388 |
+| T5 dublă numărare 1370 m | **parțial** — doar avertisment, nu reconciliere | `index.ts:588-591` (#474); cifra rămâne NEVALIDATĂ (R5) |
+| T6 rânduri repetate | **parțial** — avertisment „neverificat” | `index.ts:596` |
+| T7 Dn nestandard | neschimbat (excludere + raportare, #469); maparea OL→DN lipsește | `index.ts:581-587` |
+| T8 material null | **parțial** — avertisment, fără completare din presupuneri (decizie) | `index.ts:597` |
+| T9 total 470 | NEVALIDAT | — |
+| T10 | VERIFICAT | — |
+| T11 proveniență | **parțial** — `versiune` (COD_VERSIUNE) + zona pe tronson; fără rând tabel / coordonate | `index.ts:33, 544, 660-665` (#474); citirile din BD au `versiune=null` (făcute înainte) |
+| T12 hash / seap_cod | **deschis (confirmat)** — fără coloană hash; `seap_cod` NULL pe 95/101/102, 2/10 la 90 | secțiunea „Reconciliere T12–T15” |
+| T13 Huedin RAR | **RETRAS** — 233 fișiere recuperate din RAR și inventariate (CRC 233/233). Rămâne doar legătura arhivă→fișier, inclusă în T12 | idem; id 595–771, 1257–1265 |
+| T14 Huedin rutare | **deschis** — 11 planșe `alta` `partial`, 745/750 `ignorat`, 770 `in_lucru` >24 h | idem |
+| T15 | **reformulat**: 90 = **Ibănești** (PT 340–342 neaduse — valabil); 102 = **Botoșani**: PT recuperat (485 fișiere) — lipsa **RETRASĂ**; 2 `partial` + 3 planșe `neprocesat` NETESTAT | idem |
+| T16, T17 | VERIFICAT / curățenie neefectuată | — |
+| F1 F3 lipsă | deschis (de confirmat în SEAP) | `VALCELELE_95_…md` §1 |
+| F2–F6 | deschise (interpretare/validare umană, autofill, registru formulare nerulat) | — |
+| F7 | VERIFICAT | — |
+| C1 | VERIFICAT (istoric) | — |
+| C2 poarta de rol pe server | **remediat în cod** (#473): 403 pentru non-owner/non-responsabil, înainte de Storage/AI. **Test live 403: neverificat în acest raport** (R2) | `ofertare-plansa-citeste/index.ts:424-433`; `ofertare-cantitati-extrage/index.ts:196-205` |
+| C3 reluare după închiderea browserului | **parțial** — `mod='continua'` fără retăiere (#474); concurența între 2 taburi: nerezolvată | `index.ts:495-504`; UI l.1039 |
+| C4 coadă server | deschis | — |
+
+Suplimentar (#467–#472, nu erau constatări): pdf.js în loc de MuPDF, note tăiate refăcute, antet propagat între zone, „54200mp” = necorelare, concurență configurabilă + metrici.
+
+SQL de control (date, nu cod): `SELECT id,status_procesare,eroare,analiza->'plansa'->>'latime' FROM ofertare_documente_atribuire WHERE licitatie_id=95 AND tip='plansa'` → 470 `procesat`+„1 zone necitite”, 471/475 „citită fără rezultat”, 472–474 `latime=900` `procesat` (25.09.2026).
+
+---
+
+## Raport istoric (constatările inițiale; statusurile de aici sunt depășite — vezi VERDICT CURENT)
+
 Data: 25.09.2026 · Mod: read-only (fără UPDATE/INSERT/DELETE, fără apeluri AI) · Cod: `origin/main` @ `2bdfe87` · BD: `dxczwkbciseqniprspcu`
-Cazuri: Vâlcelele = lic. 95 · Huedin (Transgaz) = lic. 101 · Botoșani (Ibănești) = lic. 90
+Cazuri: Vâlcelele = lic. 95 · Huedin (Transgaz) = lic. 101 · Ibănești = lic. 90 · Botoșani (Transgaz) = lic. 102 (corectat)
 
 **Totalurile din citirea pe zone sunt NEVALIDATE**: nu s-au reconciliat cu memoriul, cu F3 sau cu o citire umană.
 
@@ -33,9 +72,9 @@ Observație de proveniență: 472–475 au fost citite la 10:00 UTC, **înainte*
 | T10 | Tehnic | Rezoluție: `rezolutie_redusa=null`, `micsorare=1`, iar pe 470/471 `zone_asteptate` = felii citite (35/35, 40/40) | 470, 471 `analiza.plansa` | — | complet | plansa-felii l.236-258 | — | — | — | VERIFICAT |
 | T11 | Tehnic | Proveniența: se salvează doc, felie (eticheta z r_c), DPI și calea feliilor; **nu** se salvează rândul din tabel, coordonatele, commit-ul sau versiunea funcției, iar `sumar.provenienta.zone=null` | 470 `sumar.provenienta` | doc + pagină + regiune + versiune | parțial | l.~540 | citirile făcute cu cod diferit nu se pot deosebi (vezi „Live vs repo”) | — | `citire_ai.versiune_cod` + `rand_tabel` | **EȘUAT** (parțial) |
 | T12 | Tehnic | SEAP: nu există nici hash pe fișierul original, nici cod SEAP; `seap_cod` e NULL pe toate documentele lic. 95 | `ofertare_documente_atribuire` (nu are coloană hash); `api/seap-import.js:205` | lista SEAP ↔ BD reconciliabilă, cu hash | nu se poate dovedi că fișierul e cel publicat, nici că n-a lipsit vreunul | seap-import.js | omisiuni nedetectabile | — | `sha256` + `seap_cod` la import | **EȘUAT** |
-| T13 | Tehnic | Huedin (101): arhiva SEAP e împărțită în volume `.part01…part09` (RAR), toate marcate `ignorat` „non-PDF”; conținutul lor nu e cunoscut | lic. 101, 9 rânduri `ignorat` | dezarhivare + inventar | necitite, cu status care arată ca decizie normală | seap-import.js:207 | documente din proiect posibil lipsă | — | dezarhivare multi-volum pe NAS sau cerere de upload | **EȘUAT** |
+| T13 | Tehnic | Huedin (101): arhiva SEAP e împărțită în volume `.part01…part09` (RAR), toate marcate `ignorat` „non-PDF”; conținutul lor nu e cunoscut | lic. 101, 9 rânduri `ignorat` | dezarhivare + inventar | necitite, cu status care arată ca decizie normală | seap-import.js:207 | documente din proiect posibil lipsă | — | dezarhivare multi-volum pe NAS sau cerere de upload | ~~EȘUAT~~ **RETRAS** (233 fișiere recuperate; vezi Reconciliere) |
 | T14 | Tehnic | Huedin: 11 planșe de o pagină (29–41 MB) au tipul `alta`, deci trec prin ingest-doc ⇒ `partial` „1 pagină necitită”; nu intră pe calea de planșe. Documentul 770 (100 MB) e blocat `in_lucru` | 595…748, 770 | tip `plansa` → plansa-felii | 11 `partial`, 1 `in_lucru` | ingest-doc (marcaj corect: `partial`), clasificarea `ghicesteTip` | desene necitite | — | reclasificare: o pagină și >5 MB ⇒ `plansa` | **EȘUAT** (rutare) / onestitatea statusului: VERIFICAT |
-| T15 | Tehnic | Botoșani (90): proiectul tehnic (partea scrisă și cea desenată) și avizele nu au fost aduse automat; fișa de date, lista de cantități și caietul sunt `neprocesat`; .docx `ignorat` | lic. 90 | aduse + citite | lipsesc | seap-import | licitație fără bază tehnică | — | upload manual (e deja semnalat în `eroare`) | VERIFICAT (e semnalat) |
+| T15 | Tehnic | [CORECTAT: 90 = Ibănești; Botoșani = 102, PT recuperat] Botoșani (90): proiectul tehnic (partea scrisă și cea desenată) și avizele nu au fost aduse automat; fișa de date, lista de cantități și caietul sunt `neprocesat`; .docx `ignorat` | lic. 90 | aduse + citite | lipsesc | seap-import | licitație fără bază tehnică | — | upload manual (e deja semnalat în `eroare`) | VERIFICAT (e semnalat) |
 | T16 | Tehnic | `.doc` (480, 481) e extras ca text (110k, 47k caractere) „fără pagini”; tabelele din .doc nu se păstrează fidel | 480/481 `eroare`, `pagini=NULL` | text + locator | locatorul e articolul, nu pagina | ofertare-word-text (word-extractor) | citările rămân verificabile (T17) | — | LibreOffice→PDF (docs/CONVERSIE_DOC_LIBREOFFICE.md) | VERIFICAT |
 | T17 | Tehnic | Documente vechi `in_lucru` cu `procesat_la=NULL` (262, 271) | BD | — | blocate | — | zgomot în coadă | — | curățenie (cu confirmare) | VERIFICAT |
 | F1 | Fin. | Lic. 95 nu are **niciun** rând în `ofertare_cantitati` (niciun `lista_f3`); în documentație nu există un document cu lista de cantități / F3 | `ofertare_cantitati` (0 rânduri); docs 468–1277 | F3 importat, cu UM | nu există bază pentru ofertă sau reconciliere | cantitati-extrage | oferta nu are cantități contractuale | — | verificați în SEAP dacă F3 e în arhivă sau lipsește ⇒ clarificare | **EȘUAT** (lipsă date) |

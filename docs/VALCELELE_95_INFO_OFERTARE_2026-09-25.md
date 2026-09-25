@@ -1,5 +1,7 @@
 # Vâlcelele (licitația 95): informații pentru ofertare, 25.09.2026
 
+> Stare 25.09.2026: nimic din acest raport nu e retras. F3 lipsă, GBE, garanția de participare și clarificarea #63 rămân deschise (R7/R8). Planșele 472–474 sunt tot citite pe siglă în BD (cod reparat în #473, recitire nefăcută). Verdictul pe constatări: `AUDIT_DOCUMENTATIE_OFERTARE_2026-09-25.md` (sus) și `MATRICE_ACOPERIRE_AUDIT_OFERTARE.md`.
+
 Analiză READ-ONLY. Sursa: `ofertare_documente_atribuire` (docs 468–482, 494, 1276, 1277), `ofertare_clauze_contract` (id 30–64) și `ofertare_clarificari` (id 63). Nu s-a scris nimic în BD și nu s-a făcut niciun apel AI. Textele citate sunt date din documentație. Sunt copiate literal, cu diacriticele și greșelile originale.
 
 Locator = `doc <id>` + secțiune/articol (+ poziția caracterului în `text_extras`, unde e utilă).
