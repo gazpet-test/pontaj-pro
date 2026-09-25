@@ -106,7 +106,7 @@ REGULI:
 - "documente_suport" = ce se atașează la formular, dacă textul spune, altfel null.
 Răspunde EXCLUSIV JSON: {"formulare":[{"cod":"...","denumire":"...","citat":"...","aplicabil":true,"motiv_aplicabil":null,"cine_completeaza":"...","cine_semneaza":"...","documente_suport":null}]}`
 
-// Datele firmei (aceleași ca antetul din OfertareClarificari.jsx — nu există tabel de profil firmă în BD)
+// Fallback dacă lipsește rândul din firma_profil (profilul editabil din Ofertare → Nomenclatoare → 🏢 Profil firmă)
 const FIRMA = {
   denumire: 'GAZPET INSTAL S.R.L.', sediu: 'Str. Fluturilor nr. 34, Ploiești, jud. Prahova', cui: 'RO 22029920',
   nr_reg_com: 'J29/1650/2007', email: 'office@gazpet.ro', telefon_fax: '0244/435005',
@@ -169,7 +169,16 @@ async function completare(db: any, licId: number, formId: number, KEY: string): 
     db.from('documente_firma').select('categorie, tip, denumire, numar_document, autoritate_emitenta, data_emitere, data_valabilitate')
       .eq('activ', true).eq('utilizabil', true).in('categorie', ['act_constitutiv', 'autorizatie', 'iso', 'certificat_legal', 'financiar']).limit(60),
   ])
-  const date = { firma: FIRMA, licitatie: lic, echipa_propusa: ech || [], documente_firma_active: acte || [] }
+  const { data: prof } = await db.from('firma_profil').select('*').eq('id', 1).maybeSingle()
+  let firma: any = FIRMA
+  if (prof) {
+    firma = {}
+    for (const [k, v] of Object.entries(prof)) {
+      if (['id', 'updated_at', 'updated_by'].includes(k) || v == null || (Array.isArray(v) && !v.length) || v === '') continue
+      firma[k] = v
+    }
+  }
+  const date = { firma, licitatie: lic, echipa_propusa: ech || [], documente_firma_active: acte || [] }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({ model: MODEL, max_tokens: 6000, thinking: { type: 'disabled' }, system: PROMPT_COMPLETARE,
