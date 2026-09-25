@@ -11,9 +11,9 @@ const cale = (row: any, c: string) => {
   for (const p of parti) v = v == null ? undefined : v[p]
   return c.includes('->>') ? (v == null ? null : String(v)) : v
 }
-type OptDb = { inainteDeUpdateDoc?: (rows: any[]) => void; intarziereSelectCantitati?: number; laSelectCantitati?: () => Promise<void> | void }
+type OptDb = { inainteDeUpdateDoc?: (rows: any[]) => void; intarziereSelectCantitati?: number; laSelectCantitati?: () => Promise<void> | void; inainteDeRpc?: () => Promise<void> | void }
 function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
-  const n = { ai: 0, scrieriDoc: 0, conflicte: 0, inserts: [] as string[] }
+  const n = { ai: 0, scrieriDoc: 0, conflicte: 0, rpc: 0, inserts: [] as string[] }
   const from = (t: string) => {
     tabele[t] ||= []
     let filtre: ((r: any) => boolean)[] = []
@@ -45,7 +45,29 @@ function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
     }
     return b
   }
-  return { from, n, rpc: () => Promise.resolve({ data: null, error: null }) }
+  // RPC atomic simulat (ofertare_transfer_plansa_cantitati): verificare lease + scrieri + transfer 'facut', fără await intern
+  const rpc = async (nume: string, a: any): Promise<{ data: any; error: any }> => {
+    if (nume !== 'ofertare_transfer_plansa_cantitati') return { data: null, error: null }
+    if (opt.inainteDeRpc) await opt.inainteDeRpc()
+    n.rpc++
+    const doc = (tabele.ofertare_documente_atribuire || []).find((r) => String(r.id) === String(a.p_doc_id))
+    const tr = doc?.analiza?.citire_ai?.transfer
+    if (!doc || tr?.rulare !== a.p_rulare || tr?.stare !== 'in_curs') return { data: { eroare: 'lease_pierdut' }, error: null }
+    let adaugate = 0, actualizate = 0, sarite_existente = 0
+    const cant = (tabele.ofertare_cantitati ||= [])
+    for (const o of a.p_randuri || []) {
+      if (o.op === 'update') {
+        const r = cant.find((x) => x.id === o.id && x.licitatie_id === doc.licitatie_id)
+        if (r) { Object.assign(r, structuredClone(o.patch)); actualizate++ }
+      } else if (o.op === 'insert') {
+        if (cant.some((x) => x.licitatie_id === doc.licitatie_id && x.denumire === o.row.denumire && x.sursa === o.row.sursa)) { sarite_existente++; continue }
+        n.inserts.push('ofertare_cantitati'); cant.push({ id: 9000 + cant.length, licitatie_id: doc.licitatie_id, ...structuredClone(o.row) }); adaugate++
+      }
+    }
+    doc.analiza.citire_ai = { ...doc.analiza.citire_ai, rev: crypto.randomUUID(), transfer: { ...tr, stare: 'facut', la: new Date().toISOString() } }
+    return { data: { ok: true, adaugate, actualizate, sarite_existente }, error: null }
+  }
+  return { from, n, rpc }
 }
 
 const ZONE = ['1_1', '1_2', '1_3', '1_4', '1_5', '1_6']
@@ -388,4 +410,41 @@ Deno.test('R4: lease expirat în timpul transferului lui A -> B preia; A revine 
   const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
   assertEquals(doc.analiza.citire_ai.transfer.stare, 'facut')
   assertEquals(doc.analiza.citire_ai.sumar.cantitati.adaugate, 1, 'sumarul e al lui B, nu suprascris de A')
+})
+
+// ---- R4 (Copilot, atomic): lease + scrieri + „facut” într-un singur RPC ----
+Deno.test('R4 atomic: lease pierdut înainte de RPC -> rpc întoarce lease_pierdut, 0 scrieri în ofertare_cantitati', async () => {
+  const Z4 = ['1_1', '1_2', '2_1', '2_2']
+  const pl = { ...PLANSA, zone_asteptate: Z4, acoperire_demonstrata: true }
+  let tabele: any
+  const furaLease = async () => {
+    const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
+    await tabele.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, citire_ai: { ...doc.analiza.citire_ai,
+      transfer: { ...doc.analiza.citire_ai.transfer, rulare: 'ALTA', de_la: new Date().toISOString() } } } }).eq('id', 470)
+  }
+  const r = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: pl } }, Z4, { inainteDeRpc: furaLease })
+  tabele = r.tabele
+  const res = await handler(cerereSvc({ doc_id: 470, de_la: 0 }), { SERVICE: 'svc', API_KEY: 'k', supa: r.supa, getUser: () => Promise.resolve(null), fetch: aiDn(r.n, 1) })
+  assertEquals(res.status, 200)
+  const j = await res.json()
+  assertEquals(r.n.rpc, 1)
+  assert(j.cantitati?.lease_pierdut, JSON.stringify(j.cantitati))
+  assertEquals((await tabele.from('ofertare_cantitati').select()).data.length, 0)
+  assertEquals(r.n.inserts.filter((t: string) => t === 'ofertare_cantitati').length, 0)
+  const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
+  assertEquals(doc.analiza.citire_ai.transfer.rulare, 'ALTA', 'lease-ul altei rulări nu e atins')
+  assertEquals(doc.analiza.citire_ai.transfer.stare, 'in_curs')
+})
+Deno.test('R4 atomic: două apeluri RPC cu aceeași cheie (licitație+denumire+sursă) -> un singur rând', async () => {
+  const doc = { id: 470, licitatie_id: 95, analiza: { citire_ai: { transfer: { stare: 'in_curs', rulare: 'R1' } } } }
+  const d = db({ ofertare_documente_atribuire: [doc], ofertare_cantitati: [] })
+  const row = { denumire: 'Conductă distribuție gaze PE Dn110', sursa: 'Planșa 1 — tabel de dimensionare, citit automat din scanare', um: 'm', cantitate: 400, cantitate_plansa: 400 }
+  const r1 = await d.rpc('ofertare_transfer_plansa_cantitati', { p_doc_id: 470, p_rulare: 'R1', p_randuri: [{ op: 'insert', row }] })
+  assertEquals(r1.data.adaugate, 1)
+  doc.analiza.citire_ai.transfer = { stare: 'in_curs', rulare: 'R2' } as any // reluare (ex. după eroare)
+  const r2 = await d.rpc('ofertare_transfer_plansa_cantitati', { p_doc_id: 470, p_rulare: 'R2', p_randuri: [{ op: 'insert', row }] })
+  assertEquals([r2.data.adaugate, r2.data.sarite_existente], [0, 1])
+  assertEquals((await d.from('ofertare_cantitati').select()).data.length, 1)
+  const r3 = await d.rpc('ofertare_transfer_plansa_cantitati', { p_doc_id: 470, p_rulare: 'R2', p_randuri: [{ op: 'insert', row }] })
+  assertEquals(r3.data.eroare, 'lease_pierdut', 'după „facut” același lease nu mai scrie')
 })
