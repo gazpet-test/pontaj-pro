@@ -100,3 +100,11 @@ FROM ofertare_clarificari WHERE id = 63;
 --   Rollback: UPDATE ofertare_documente_atribuire SET status_procesare='procesat',
 --     analiza = jsonb_set(analiza,'{plansa}', (analiza->'plansa') - 'rezultat' - 'rezultat_motiv' - 'rezultat_sursa' - 'rezultat_la')
 --     WHERE id=470;
+
+-- ═══ APLICAT 25.09.2026 ~15:50 UTC ═══════════════════════════════════════════════════════════════
+-- 471–475 → status 'partial', plansa.rezultat='partial' (de_retaiat), gardă md5 per rând → 5 rânduri.
+--   Backup: 471/475 procesat + eroare 'citită fără rezultat'; 472–474 procesat + eroare NULL.
+--   Rollback: SET status_procesare='procesat', eroare=<backup>, analiza=jsonb_set(analiza,'{plansa}',(analiza->'plansa')-'rezultat'-'rezultat_motiv'-'rezultat_sursa'-'rezultat_la')
+-- Migrarea v4 aplicată (apply_migration ofertare_clarificare_planse_auto_v4).
+-- #63: sursa 'planse_auto:475,471' → 'planse_auto:475,471,revizie_motiv_ilizibil_infirmat' (md5 text neschimbat 6bd72fc3…).
+-- Test RPC(95) după v4: {"actiune":"nimic"}; #63 rămâne propunere, text + marcaj intacte (v4 nu mai retrage ciorne editate de om).
