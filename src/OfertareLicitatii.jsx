@@ -1029,6 +1029,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     const s = ca.sumar || {}
     return !s.tronsoane_gasite && !(s.tabele || []).length && !s.lungime_totala_m && !s.lungime_declarata_m
   }
+  // 25.09.2026: test controlat cu 4 zone simultan (serverul are implicit 2). Rezultatul se MĂSOARĂ în citire_ai.metrici.
+  const PLANSA_PARALEL = 4
   const lipesteNote = async (d) => {
     const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, doar_lipire: true } })
     if (error || data?.error) { setWarn(`Note tăiate: ${data?.error || error.message}`); return null }
@@ -1052,7 +1054,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       let deLa = 0, runde = 0, sumar = null, lipire = 0
       while (runde < 25) {
         setPlansaBusy(`${eticheta}${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
-        const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa } })
+        const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa, paralel: PLANSA_PARALEL } })
         if (error || data?.error) { setWarn(`Eroare la citire: ${data?.error || error.message}`); break }
         sumar = data.sumar
         if (!data.continua) { lipire = data.lipire_necesara || 0; break }
@@ -1071,6 +1073,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           `${sumar.subtraversari ? `, ${sumar.subtraversari} subtraversări` : ''}` +
           `${sumar.erori ? ` — ${sumar.erori} zone cu erori` : ''}` +
           `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}` +
+          `${sumar.metrici ? ` · ⏱ ${sumar.metrici.durata_s}s, ${sumar.metrici.runde} runde, ${sumar.metrici.limitari} limitări, ${sumar.metrici.reincercari} reîncercări, ~${sumar.metrici.cost_usd}$` : ''}` +
           `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}.`)
       }
     } catch (e) {
