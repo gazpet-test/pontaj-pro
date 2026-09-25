@@ -92,3 +92,11 @@ FROM ofertare_clarificari WHERE id = 63;
 -- ═══ 7. SANITY după apply ═══════════════════════════════════════════════════════════════════════════
 -- SELECT analiza->'plansa'->>'rezultat' rezultat, count(*), array_agg(id ORDER BY id)
 -- FROM ofertare_documente_atribuire WHERE analiza ? 'plansa' GROUP BY 1 ORDER BY 1;
+
+-- ═══ APLICAT 25.09.2026 ~15:40 UTC (GO Razvan + acord Copilot) ═══════════════════════════════════
+-- 470: status_procesare procesat → partial; plansa.rezultat='partial' (reclasificare_retroactiva_r3).
+--   Gardă md5 032b9a44a342670f7bc75fed63c12905 → 1 rând (ids [470]).
+--   Backup: status='procesat', eroare='1 zone necitite (se pot relua)', plansa fără cheile rezultat*.
+--   Rollback: UPDATE ofertare_documente_atribuire SET status_procesare='procesat',
+--     analiza = jsonb_set(analiza,'{plansa}', (analiza->'plansa') - 'rezultat' - 'rezultat_motiv' - 'rezultat_sursa' - 'rezultat_la')
+--     WHERE id=470;
