@@ -3007,6 +3007,7 @@ const estePlaceholderDoc = d => !d.fisier_path || String(d.fisier_path).includes
 const fmtDataScurt = d => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
 function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
+  const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
   const [veghe, setVeghe] = useState(null)    // raportul ultimei verificări manuale
@@ -3015,7 +3016,28 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     const { data } = await supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip, fisier_path, created_at, analiza, analiza_la, eroare')
       .eq('licitatie_id', l.id).eq('aparut_ulterior', true).order('created_at', { ascending: false })
+    const { data: tot } = await supabase.from('ofertare_documente_atribuire')
+      .select('id, nume_original, tip, fisier_path, size_bytes, status_procesare')
+      .eq('licitatie_id', l.id).limit(5000)
+    setToate(tot || [])
     setDocs(data || [])
+  }
+  // Răzvan 25.09.2026: nu mai oferim orbește „Citește cu AI" pe un document deja citit în Documentație
+  // (ex. lic. 95, doc 494 „Caiet de sarcini.pdf" spart în split_494_p01/p02, ambele procesate).
+  const CITIT = ['procesat', 'partial']
+  const bazaNume = n => String(n || '').split('/').pop().replace(/\.pdf *\d*$/i, '').replace(/[_\s]+/g, ' ').trim().toLowerCase()
+  const FAMILII = [[/caiet.{0,3}de.{0,3}sarcini/i, 'un caiet de sarcini'], [/fi[sș]a.{0,3}de.{0,3}date/i, 'o fișă de date'], [/formular/i, 'formulare'], [/contract/i, 'un model de contract'], [/cantit|f[1-3][ _.-]/i, 'o listă de cantități']]
+  const stareCitire = d => {
+    const full = toate.find(x => x.id === d.id) || d
+    if (CITIT.includes(full.status_procesare)) return { citit: true }
+    const bucati = toate.filter(x => x.id !== d.id && String(x.fisier_path || '').includes(`/split_${d.id}_p`))
+    if (bucati.length && bucati.every(x => CITIT.includes(x.status_procesare))) return { citit: true, bucati: bucati.length }
+    if (full.size_bytes && toate.some(x => x.id !== d.id && x.size_bytes === full.size_bytes && bazaNume(x.nume_original) === bazaNume(d.nume_original) && CITIT.includes(x.status_procesare))) return { citit: true }
+    const fam = FAMILII.find(([re]) => re.test(d.nume_original || ''))
+    const alt = toate.find(x => x.id !== d.id && CITIT.includes(x.status_procesare) && x.size_bytes !== full.size_bytes &&
+      !String(x.fisier_path || '').includes(`/split_${d.id}_p`) && (fam ? fam[0].test(x.nume_original || '') : (d.tip && x.tip === d.tip && !['alta', 'altul', 'document_nou'].includes(d.tip))))
+    if (alt) return { citit: false, alt, fam: fam ? fam[1] : `un document de tip „${d.tip}”` }
+    return null
   }
   useEffect(() => { load() }, [l.id])   // eslint-disable-line react-hooks/exhaustive-deps
   const anunta = (t, tip = 'ok') => { if (showToast) showToast(t, tip); else setMsg({ t, tip }) }
@@ -3079,6 +3101,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
         : docs.map(d => {
           const ph = estePlaceholderDoc(d)
           const c = d.analiza?.citire_noi
+          const sc = stareCitire(d)
           return (
             <div key={d.id} style={{ padding:'11px 13px', borderRadius:11, marginBottom:8, background:'#1C2430', borderLeft:`3px solid ${(TIP_NOU[c?.tip || d.tip] || TIP_NOU.altul)[1]}` }}>
               <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
@@ -3090,13 +3113,23 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                 {ph
                   ? <span style={{ fontSize:11.5, color:G.yellow }} title={d.eroare || ''}>⚠ neadus automat — urcă-l din Documente</span>
                   : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschide(d)}>📎 deschide</button>}
+                {sc?.citit && <span style={{ fontSize:11.5, fontWeight:800, color:G.green, border:`1px solid ${G.green}55`, borderRadius:6, padding:'1px 7px' }}>✅ Deja citit în Documentație{sc.bucati ? ` (spart în ${sc.bucati} bucăți)` : ''}</span>}
+                {sc?.citit ? (
+                  <button style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5, color:G.dim }} disabled={ph || !!busy} onClick={() => citeste(d)}
+                    title="E deja citit în Documentație — recitește-l aici doar dacă vrei rezumatul de document nou">{busy === d.id ? '⏳ citesc…' : 'recitește'}</button>
+                ) :
                 <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1, cursor: ph || busy ? 'default' : 'pointer' }}
                   disabled={ph || !!busy} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
                   {busy === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 Citește cu AI'}
-                </button>
+                </button>}
                 {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtDataScurt(c.citit_la)}</span>}
                 {c?.termen_nou && <span style={{ fontSize:11.5, fontWeight:800, color:G.red }}>⏰ termen nou: {fmtZi(c.termen_nou)}</span>}
               </div>
+              {sc && !sc.citit && (
+                <div style={{ marginTop:7, fontSize:12, color:G.yellow }} title={`Citit deja: ${sc.alt.nume_original}`}>
+                  ⚠️ Ai deja {sc.fam} citit în Documentație, dar acesta e alt fișier — e indicat să-l citești și pe acesta (poate aduce modificări).
+                </div>
+              )}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
                   <div style={{ whiteSpace:'pre-wrap', color:G.text }}>{c.rezumat || '(fără rezumat)'}</div>
