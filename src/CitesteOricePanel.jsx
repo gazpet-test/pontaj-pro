@@ -130,7 +130,7 @@ function resolveTipCod(rawTip, tipuriFK) {
 // Rezultat: din 5-8MB (poze telefon) → ~200-400KB. Edge-ul primește mereu PDF,
 // deci scapă de limita de 5MB/imagine a AI-ului și de orice transform pe server.
 const IMG_MAX_DIM = 1600
-async function imageToPdf(file) {
+export async function imageToPdf(file) {
   const dataUrl = await new Promise((res, rej) => {
     const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('citire fișier')); r.readAsDataURL(file)
   })

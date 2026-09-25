@@ -10,6 +10,8 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
+import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
+import { imageToPdf } from './CitesteOricePanel.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -237,6 +239,44 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     // docRasp din closure e vechi aici (load() abia a rulat) → panoul se deschide pe citirea întoarsă de edge fn
     if (citire) deschideLegare(ins.id, { id: ins.id, analiza: { citire_noi: citire } })
     else await load()
+  }
+  // TKT-2026-0251 (Răzvan): fișierul de răspuns urcat direct pe O întrebare. Același flux ca mai sus:
+  // rând în ofertare_documente_atribuire (raspuns_clarificare, aparut_ulterior) legat prin raspuns_document_id
+  // (coloană existentă), citit cu aceeași edge fn. Pozele → PDF în browser (edge-ul citește doar PDF);
+  // doc/docx se păstrează și se leagă, fără citire AI. Citirea costă → doar owner/responsabil (poarta).
+  // Textul propus intră în caseta de răspuns NESALVAT — omul îl verifică, salvarea e la ieșirea din casetă.
+  const urcaRaspunsIntrebare = async (q, file0) => {
+    if (!file0 || !licId) return
+    setBusy('Urc răspunsul…')
+    let file = file0
+    try { if ((file0.type || '').startsWith('image/')) file = await imageToPdf(file0) }
+    catch (e) { setBusy(null); return showToast('Conversie imagine: ' + e.message, 'err') }
+    const ePdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
+    const safe = file.name.replace(/[^a-zA-Z0-9ăâîșțĂÂÎȘȚ._-]+/g, '_').slice(-160)
+    const path = `${licId}/clarificari/raspunsuri/${Date.now()}_q${q.nr || q.id}_${safe}`
+    const { error: eUp } = await supabase.storage.from('ofertare').upload(path, file, { upsert: false })
+    if (eUp) { setBusy(null); return showToast('Upload: ' + eUp.message, 'err') }
+    const { data: ins, error } = await supabase.from('ofertare_documente_atribuire').insert({
+      licitatie_id: licId, fisier_path: path, nume_original: file.name, tip: 'raspuns_clarificare', sursa: 'upload',
+      aparut_ulterior: true, status_procesare: 'neprocesat', size_bytes: file.size,
+    }).select('id, nume_original').single()
+    if (error) { setBusy(null); return showToast('Eroare la înregistrare: ' + error.message, 'err') }
+    const { error: eL } = await supabase.from('ofertare_clarificari').update({ raspuns_document_id: ins.id, updated_at: new Date().toISOString() }).eq('id', q.id)
+    if (eL) { setBusy(null); return showToast('Legare: ' + eL.message, 'err') }
+    if (!ePdf) { setBusy(null); showToast('Fișier urcat și legat de întrebare. Citirea AI merge doar pe PDF/poze — scrie răspunsul manual.', 'warn'); return load() }
+    if (!poatePorniProcesarea(profile, lic)) { setBusy(null); showToast('Fișier urcat și legat. Citirea AI o pornește ownerul / responsabilul licitației.', 'warn'); return load() }
+    setBusy('🤖 Citesc răspunsul cu AI…')
+    const citire = await citesteDoc(ins)   // face și load()
+    setBusy(null)
+    if (!citire) return
+    const lista = Array.isArray(citire.intrebari_raspunse) ? citire.intrebari_raspunse : []
+    let best = null, bestS = 0
+    lista.forEach(x => { const s = scorPotrivire(q.intrebare, x.intrebare_scurt); if (s > bestS) { bestS = s; best = x } })
+    const propus = ((best && bestS >= 0.34 ? best.raspuns_scurt : (lista.length === 1 ? lista[0].raspuns_scurt : citire.rezumat)) || '').trim()
+    if (!propus) return showToast('AI-ul n-a găsit un răspuns clar în fișier — scrie-l manual.', 'warn')
+    if ((q.raspuns || '').trim()) return showToast('Întrebarea avea deja răspuns scris — l-am păstrat. Propunerea AI e în „📥 Primite de la autoritate”.', 'warn')
+    setQ(q.id, 'raspuns', propus.slice(0, 20000))
+    showToast('🤖 Am propus răspunsul din fișier — verifică-l în casetă; se salvează când ieși din ea.')
   }
   // Întrebările noastre care mai așteaptă răspuns — candidatele la legare
   const candidateLegare = () => (clar || []).filter(q => q.status === 'trimisa' || q.status === 'de_trimis')
@@ -475,6 +515,13 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                             </select>
                           </div>
                         )}
+                        <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:5, flexWrap:'wrap' }}>
+                          <label style={{ ...S.btnS, padding:'3px 10px', fontSize:11.5, cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 }}
+                            title={poatePorniProcesarea(profile, lic) ? 'Urcă fișierul cu răspunsul autorității (PDF / poză / doc) pentru ÎNTREBAREA asta; PDF-ul și pozele le citesc cu AI și îți propun textul' : 'Urcă fișierul cu răspunsul (se leagă de întrebare). ' + MOTIV_POARTA}>
+                            📎 Urcă fișier răspuns{poatePorniProcesarea(profile, lic) ? ' + citește AI' : ''}
+                            <input type="file" accept=".pdf,image/*,.doc,.docx" style={{ display:'none' }} disabled={!!busy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; urcaRaspunsIntrebare(q, f) }} />
+                          </label>
+                        </div>
                         {(q.raspuns_document_id || (q.raspuns || '').trim()) && (
                           <div style={{ marginTop:5 }}>
                             {q.raspuns_document_id ? (
