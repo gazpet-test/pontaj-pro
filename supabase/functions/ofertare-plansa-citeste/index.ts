@@ -53,6 +53,30 @@ Reguli:
 - Daca un tabel e taiat de marginea bucatii, transcrie randurile intregi pe care le vezi si atat.
 - Nu inventa valori pe care nu le poti citi clar.`;
 
+// Randare text a citirii unei planșe (aceeași logică ca fn SQL ofertare_plansa_text din backfill-ul 25.09.2026).
+function textPlansa(nume: string, c: any): string {
+  const L: string[] = [`PLANȘĂ: ${nume}`];
+  const cart = (c.felii || []).map((r: any) => r?.cartus).find((x: any) => x && Object.values(x).some(Boolean));
+  if (cart) L.push('Cartuș: ' + Object.entries(cart).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('; '));
+  const s = c.sumar || {};
+  L.push(`Rezumat citire AI: ${s.felii_citite ?? 0} zone citite, ${s.tronsoane_gasite ?? 0} tronsoane, lungime totală ${s.lungime_totala_m ?? 0} m, ` +
+    `${s.subtraversari ?? 0} subtraversări, ${s.bransamente ?? 0} branșamente${s.erori ? `, ${s.erori} zone cu erori` : ''}.`);
+  if ((s.tabele || []).length) L.push('Tabele: ' + s.tabele.join(', '));
+  const tr = c.tronsoane_unice || [];
+  if (tr.length) {
+    L.push('', 'TRONSOANE:');
+    for (const t of tr) L.push(`- ${t.de_la ?? '?'} -> ${t.la ?? '?'}: ${t.lungime_m ?? '?'} m` +
+      `${t.diametru_mm ? `, Dn ${t.diametru_mm} mm` : ''}${t.material ? `, ${t.material}` : ''}${t.zona ? `, ${t.zona}` : ''}${t.sursa ? ` [${t.sursa}]` : ''}`);
+  }
+  const sub = (c.felii || []).flatMap((r: any) => r.subtraversari || []);
+  if (sub.length) { L.push('', 'SUBTRAVERSĂRI:'); for (const x of sub) L.push(`- ${[x.obstacol, x.lungime_m && `${x.lungime_m} m`, x.tub_protectie, x.pozitie].filter(Boolean).join(', ')}`); }
+  const br = (c.felii || []).flatMap((r: any) => r.bransamente || []);
+  if (br.length) { L.push('', 'BRANȘAMENTE:'); for (const x of br) L.push(`- ${[x.descriere, x.numar].filter(Boolean).join(', ')}`); }
+  const alte = [...new Set((c.felii || []).flatMap((r: any) => r.alte_mentiuni || []).filter(Boolean))];
+  if (alte.length) { L.push('', 'MENȚIUNI:'); for (const x of alte) L.push(`- ${x}`); }
+  return L.join('\n');
+}
+
 async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string) {
   let binar = '';
   const bloc = 8192;
@@ -356,10 +380,24 @@ Deno.serve(async (req: Request) => {
     sumar.cantitati = cantitati;
   }
 
-  await supa.from('ofertare_documente_atribuire').update({
-    analiza: { ...doc.analiza, citire_ai: { felii: toate, sumar, tronsoane_unice: unice, model: MODEL, gata, actualizat: new Date().toISOString() } },
-    analiza_la: new Date().toISOString(),
-  }).eq('id', docId);
+  // 25.09.2026 (bug Răzvan, lic. 95): citirea se salva doar în `analiza`, iar documentul rămânea
+  // „neprocesat" fără text — Rezumatul îl număra la „rămase de citit" și UI-ul oferea recitire plătită.
+  // La final: procesat + text_extras (randare text a citirii, pt cerințe/clarificări/căutare);
+  // dacă TOATE feliile au căzut: eroare. Pe runde intermediare statusul nu se atinge.
+  const citireAi = { felii: toate, sumar, tronsoane_unice: unice, model: MODEL, gata, actualizat: new Date().toISOString() };
+  const upd: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi }, analiza_la: new Date().toISOString() };
+  if (gata) {
+    if (toate.length && (sumar.erori as number) >= toate.length) {
+      upd.status_procesare = 'eroare';
+      upd.eroare = `Citire planșă eșuată pe toate cele ${toate.length} zone: ` + String(toate.find((r: any) => r.eroare)?.eroare || '').slice(0, 200);
+    } else {
+      upd.status_procesare = 'procesat';
+      upd.text_extras = textPlansa(doc.nume_original, citireAi);
+      upd.eroare = sumar.erori ? `${sumar.erori} zone necitite (se pot relua)` : null;
+      upd.procesat_la = new Date().toISOString();
+    }
+  }
+  await supa.from('ofertare_documente_atribuire').update(upd).eq('id', docId);
 
   return json({
     document: doc.nume_original, citite_acum: lot.length, din: felii.length, sumar, cantitati,
