@@ -171,7 +171,7 @@ function buildInvoiceHTML(f) {
       <td style="padding:8px 10px;text-align:right;font-weight:900;font-size:14px;color:#1F6FEB;font-family:monospace">${fmt2(f.total)}</td>
     </tr>
   </table>
-  <div style="font-size:10px;color:#666;margin-bottom:8px">Termen de plată: <strong>${f.termen_plata_zile||30} zile</strong> de la data facturii.</div>
+  <div style="font-size:10px;color:#666;margin-bottom:8px">Termen de plată: <strong>${f.termen_plata_zile??30} zile</strong> de la data facturii.</div>
   <div style="font-size:9px;color:#888;margin-bottom:14px">Factura circulă fără semnătură și ștampilă conform Legii 277/2015 privind Codul Fiscal art.319</div>
   <table style="width:100%;border-collapse:collapse;border-top:1px solid #ccc;padding-top:12px">
     <tr>
@@ -215,7 +215,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     mod_plata:   item?.mod_plata || 'OP',
     delegat_nume: item?.delegat_nume || 'TRUSU RAZVAN MIHAIL',
     delegat_awb:  item?.delegat_awb || '',
-    termen_plata_zile: item?.termen_plata_zile || 30,
+    termen_plata_zile: item?.termen_plata_zile ?? 30,
     proiect_id:        item?.proiect_id || proiectDefault || '',
     situatie_plata_ids: item?.situatie_plata_ids || (slDefault ? [slDefault.id] : []),
     email_destinatar: item?.email_destinatar || 'marilena.tudorache@gazpet.ro',
@@ -614,7 +614,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
         mod_plata: form.mod_plata,
         delegat_nume: form.delegat_nume.trim() || null,
         delegat_awb:  form.delegat_awb.trim()  || null,
-        termen_plata_zile: parseInt(form.termen_plata_zile)||30,
+        termen_plata_zile: (()=>{ const n=parseInt(form.termen_plata_zile); return Number.isFinite(n)&&n>=0 ? n : 30 })(), // 0 permis (storno) — TKT-2026-0283
         proiect_id: form.proiect_id ? parseInt(form.proiect_id) : null,
         situatie_plata_ids: form.situatie_plata_ids.length ? form.situatie_plata_ids.map(Number) : null,
         email_destinatar: form.email_destinatar.trim() || null,
@@ -918,7 +918,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             </div>
             <div>
               <label style={S.lbl}>Termen plată (zile)</label>
-              <input type="number" value={form.termen_plata_zile} onChange={e=>set('termen_plata_zile',e.target.value)} style={fieldStyle} placeholder="30" />
+              <input type="number" value={form.termen_plata_zile} onChange={e=>set('termen_plata_zile',e.target.value)} style={fieldStyle} placeholder="30" min="0" />
             </div>
             <div>
               <label style={S.lbl}>Delegat</label>
