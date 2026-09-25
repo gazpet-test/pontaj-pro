@@ -109,7 +109,7 @@ Deno.serve(async (req: Request) => {
   if (!docId && !licId) return json({ error: 'dă doc_id sau licitatie_id' }, 400)
 
   let q = db.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, nume_original, fisier_path, text_extras, status_procesare')
+    .select('id, licitatie_id, nume_original, tip, fisier_path, text_extras, status_procesare')
   q = docId ? q.eq('id', docId) : q.eq('licitatie_id', licId)
   const { data: randuri, error: qErr } = await q.order('id')
   if (qErr) return json({ error: 'citire documente: ' + qErr.message })
@@ -157,7 +157,7 @@ Deno.serve(async (req: Request) => {
       // pagini rămâne NULL intenționat: .docx n-are paginație fixă, n-o inventăm
       pagini_procesate: 0,
       procesat_la: new Date().toISOString(),
-      eroare: `text extras din ${/\.docx$/i.test(r.nume_original) ? '.docx' : '.doc'} în platformă (${parti} părți, ${text.length} caractere) — fără paginație fixă`,
+      eroare: `text extras din ${/\.docx$/i.test(r.nume_original) ? '.docx' : '.doc'} în platformă (${parti} părți, ${text.length} caractere) — fără paginație fixă${r.tip === 'model_contract' ? ' · model de contract: pentru etapa clauze contractuale, nu cerințe tehnice' : ''}`,
     }).eq('id', r.id)
     if (upErr) { rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'update: ' + upErr.message }); continue }
     rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'scris', caractere: text.length, parti, inainte: vechi })
