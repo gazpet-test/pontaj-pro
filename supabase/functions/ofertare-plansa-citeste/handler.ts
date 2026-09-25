@@ -17,7 +17,7 @@
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
-import { cheieVersiune, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
+import { cheieVersiune, cheiResetare, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a);
@@ -566,6 +566,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         return { cand: [], lot: [], stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — reia „lipește”.' } };
       const facuteX = new Set<string>([...(caX.note_lipite_perechi || []), ...(caX.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
       const toate = perechiDeLipit(caX.felii || [], peStorage, facuteX);
+      // un „citește” de la zero în curs (alt tab) va înlocui citirea — notele lipite acum s-ar pierde după plată => 409
+      const reset = cheiResetare(altii);
+      if (reset.length) return { cand: toate.map(cheiePer), lot: [], blocat: reset, nota: 'o citire „de la zero” e în curs în alt tab (ar înlocui notele)' };
       const libere = toate.filter((p) => !altii.has(cheiePer(p))).slice(0, MAX_PERECHI);
       return { cand: toate.map(cheiePer), lot: libere.map(cheiePer), perechi: libere };
     });
@@ -667,7 +670,19 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         ? felii.filter((f: any) => !rezPe.has(numeZona(f)))
         : felii.slice(deLa).filter((f: any) => resetare || !(rezPe.has(numeZona(f)) && !rezPe.get(numeZona(f)).eroare))
     ).map(numeZona);
-    return { cand, lot: cand.filter((z) => !altii.has(z)).slice(0, FELII_PE_RULARE), exist, altii };
+    // R4 (verificator, runda 1 — defect major): „citește” de la zero NU cooperează. Scrierea lui pleacă de la baza []
+    // (înlocuiește citirea), deci la reîncercarea CAS ar arunca rezultatele PLĂTITE ale rulării care ține zonele rezervate
+    // (reprodus: 6 zone, două bucle „citește” => 8 apeluri AI sau 4 zone plătite și pierdute). Orice rezervare activă a
+    // altei rulări pe tăierea asta (zone sau perechi de note) => 409 „în lucru în alt tab”, zero AI, zero scrieri.
+    const ordonate = (chei: string[]) => [...cand.filter((z) => chei.includes(z)), ...chei.filter((z) => !cand.includes(z))];
+    if (resetare && altii.size)
+      return { cand, lot: [], blocat: ordonate([...altii.keys()]), nota: 'o citire de la zero nu se amestecă cu o citire în curs', exist, altii };
+    // Simetric: cât timp un „citește” de la zero al altei rulări e în zbor, nimeni nu scrie în citirea pe care o va
+    // înlocui (continuă / reia / runda următoare a altei bucle) — rezultatele lor s-ar pierde după plată.
+    const reset = cheiResetare(altii);
+    if (!resetare && reset.length)
+      return { cand, lot: [], blocat: ordonate(reset), nota: 'o citire „de la zero” e în curs în alt tab (ar înlocui citirea)', exist, altii };
+    return { cand, lot: cand.filter((z) => !altii.has(z)).slice(0, FELII_PE_RULARE), exist, altii, resetare };
   };
   const rz = await rezervaChei(supa, docId, doc, rulareNoua, taiatCur, planifica);
   if (!rz.ok) return rz.inLucru

@@ -48,6 +48,10 @@ CREATE INDEX IF NOT EXISTS ofertare_plansa_coada_de_luat
   ON public.ofertare_plansa_coada (cerut_la) WHERE stare IN ('asteapta', 'lucru');
 
 ALTER TABLE public.ofertare_plansa_coada ENABLE ROW LEVEL SECURITY;
+-- Verificator R4 (runda 1): privilegiile implicite din `public` dau ALL (arwdDxtm) lui anon ȘI authenticated pe orice tabel
+-- nou (SELECT pe pg_default_acl, 25.09.2026: rolurile postgres și supabase_admin). RLS le-ar bloca oricum, dar nu ne bazăm
+-- doar pe RLS: întâi se retrag, apoi se dă exact ce trebuie.
+REVOKE ALL ON public.ofertare_plansa_coada FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.ofertare_plansa_coada TO authenticated;
 GRANT ALL ON public.ofertare_plansa_coada TO service_role;
 -- Citire pentru utilizatorii autentificați (starea jobului în UI). FĂRĂ INSERT/UPDATE/DELETE pentru authenticated:
@@ -73,13 +77,18 @@ DECLARE
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'neautentificat'; END IF;
   IF p_mod NOT IN ('citeste', 'continua', 'reia_erori') THEN RAISE EXCEPTION 'mod invalid'; END IF;
-  SELECT d.id, d.licitatie_id, d.fisier_path, d.analiza INTO v_doc
+  SELECT d.id, d.licitatie_id, d.fisier_path, d.analiza, d.tip INTO v_doc
     FROM ofertare_documente_atribuire d WHERE d.id = p_doc_id;
   SELECT l.responsabil_id INTO v_resp FROM ofertare_licitatii l WHERE l.id = v_doc.licitatie_id;
   SELECT COALESCE(p.is_owner, false) INTO v_owner FROM profiles p WHERE p.id = v_uid;
   -- același mesaj dacă documentul nu există (fără enumerare de id-uri)
   IF v_doc.id IS NULL OR NOT (COALESCE(v_owner, false) OR (v_resp IS NOT NULL AND v_resp = v_uid)) THEN
     RAISE EXCEPTION 'Fără drept pe acest document — citirea planșei costă și o pornește doar ownerul sau responsabilul licitației.';
+  END IF;
+  -- verificator R4 (runda 1): coada citește DOAR planșe (tip='plansa' — 40 de documente la 25.09.2026); orice alt tip are
+  -- fluxul lui (ofertare-ingest-doc), iar citirea pe zone cu Opus e cea mai scumpă.
+  IF v_doc.tip IS DISTINCT FROM 'plansa' THEN
+    RETURN jsonb_build_object('eroare', 'documentul nu e planșă (tip ≠ plansa) — coada citește doar planșe');
   END IF;
   IF v_doc.analiza -> 'plansa' ->> 'cale_felii' IS NULL THEN
     RETURN jsonb_build_object('eroare', 'planșa nu e tăiată în felii — rulează întâi /api/plansa-felii');

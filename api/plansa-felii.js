@@ -15,7 +15,7 @@ import sharp from 'sharp'
 // 25.09.2026: planșele VECTORIALE se randează cu pdf.js + @napi-rs/canvas (vezi _randare-pdf.js).
 // MuPDF a fost scos în aceeași zi: licență AGPL, risc pe o platformă folosită prin internet.
 import { randeazaVectorial, analizeazaSemnale } from './_randare-pdf.js'
-import { scrieAnalizaCAS, rezervariActive } from './_cas.js'
+import { scrieAnalizaCAS, rezervariActive, refuzInLucru, verificaRetaiere } from './_cas.js'
 const DPI_VECTOR_FIN = 300 // „recitește fin" pe vectorial: randare mai densă, felii normale de 1600px
 
 const LATURA = 1600        // latura unei felii trimise la AI
@@ -102,7 +102,7 @@ export function decideRuta(meta, a) {
 }
 
 // R4 (Copilot): scrierea `analiza` e compare-and-set (api/_cas.js — testat în scripts/test-cas-felii.mjs).
-export { scrieAnalizaCAS, rezervariActive }
+export { scrieAnalizaCAS, rezervariActive, refuzInLucru, verificaRetaiere }
 
 // R4 (Copilot) pct. 1: acoperirea paginii la o SCANARE din PDF. Procentul (fractie_pagina ≥50%) rămâne DOAR pentru
 // rutare (decideRuta). Acoperirea e demonstrată doar dacă imaginea acoperă practic toată pagina (≥95% din aria
@@ -161,16 +161,14 @@ export default async function handler(req, res) {
   if (doc.size_bytes && doc.size_bytes > MAX_MB * 1e6) return res.status(400).json({ error: `document peste ${MAX_MB}MB` })
   // R4 (runda 3): planșă în citire în alt tab (zone rezervate, neexpirate) => nu se retaie: retăierea ar șterge feliile și
   // ar face citirea în curs să pice DUPĂ ce a plătit AI-ul. Verificat înainte de orice descărcare/ștergere de felii.
-  const refuzInLucru = (analiza) => {
-    const ocupate = rezervariActive(analiza)
-    if (!ocupate.length) return null
-    const pana = ocupate.map((o) => o.pana_la).sort().pop()
-    const ora = new Date(pana).toLocaleTimeString('ro-RO', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' })
-    return res.status(409).json({ error: `Planșa e în citire în alt tab (${ocupate.length} zone rezervate, până la ${ora}) — retăierea ar arunca ` +
-      'citirea în curs. Lasă celălalt tab să termine; dacă a fost închis, rezervarea expiră singură.', in_lucru: ocupate.map((o) => o.cheie), rezervat_pana_la: pana })
-  }
   const refuz0 = refuzInLucru(doc.analiza)
-  if (refuz0) return refuz0
+  if (refuz0) return res.status(refuz0.status).json(refuz0.body)
+  // Re-verificare pe starea PROASPĂTĂ (fail-closed: eroare la re-citire => 503, nimic șters) înaintea fiecărui pas care
+  // invalidează o citire în curs: scrierile „necitibilă” (înlocuiesc tot `plansa`, taiat_la dispare) și ștergerea feliilor.
+  const reverifica = async () => {
+    const r = await verificaRetaiere(supa, docId)
+    return r ? res.status(r.status).json(r.body) : null
+  }
 
   const { data: fisier, error: eDl } = await supa.storage.from('ofertare').download(doc.fisier_path)
   if (eDl || !fisier) return res.status(502).json({ error: eDl?.message || 'descarcare esuata' })
@@ -243,6 +241,8 @@ export default async function handler(req, res) {
             'Nu tăiem și nu plătim citirea unei sigle. Consultă planșa manual; clarificarea către autoritate s-a pregătit automat (ciornă).'
           : `Sursă de reverificat/de randat: randarea vectorială nu a produs desen citibil${meta ? ` (cea mai mare imagine, ${meta.width}x${meta.height}px, nu e identificată drept siglă și nici citibilă)` : ''}. ` +
             'Consultă planșa manual; clarificarea către autoritate s-a pregătit automat (ciornă).'
+      const rv0 = await reverifica()
+      if (rv0) return rv0
       const w0 = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: { citibila: false, vectorial: true, motiv, latime: meta?.width || null, inaltime: meta?.height || null,
         randare_esuata: !!eroareRandare, acoperire_demonstrata: false, rezultat: 'partial', rezultat_motiv: 'de verificat: ' + (eroareRandare ? 'randare eșuată (eșec tehnic, nu ilizibil)' : 'randare fără desen citibil'), ...plansaSemnale } }))
       if (!w0.ok) return res.status(w0.status || 409).json({ error: w0.error })
@@ -252,6 +252,8 @@ export default async function handler(req, res) {
   } else {
     if (!imagini.length || !meta) {
       const mesaj = 'Nu am gasit nicio imagine scanata in document.'
+      const rv0 = await reverifica()
+      if (rv0) return rv0
       const w0 = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: { citibila: false, motiv: mesaj, acoperire_demonstrata: false, ...plansaSemnale } }))
       if (!w0.ok) return res.status(w0.status || 409).json({ error: w0.error })
       return res.status(200).json({ citibila: false, motiv: mesaj })
@@ -260,6 +262,8 @@ export default async function handler(req, res) {
     if (!verdict.citibila) {
       const motiv = `Imaginea se deschide, dar continutul nu se poate reface: ${verdict.cu_continut} din ${verdict.sonde} zone verificate au desen. ` +
         'Fisierul publicat are date deteriorate — se vede doar in Acrobat. Deschide-l acolo si salveaza-l din nou (Export ca imagine sau tiparire in PDF nou), apoi urca varianta curata.'
+      const rv0 = await reverifica()
+      if (rv0) return rv0
       const w0 = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height, acoperire_demonstrata: false, ...plansaSemnale } }),
         { eroare: 'Plansa nu poate fi citita automat — necesita conversie (vezi detalii).' })
       if (!w0.ok) return res.status(w0.status || 409).json({ error: w0.error })
@@ -298,9 +302,10 @@ export default async function handler(req, res) {
 
   const bazaCale = `${doc.licitatie_id}/felii/${docId}`
   // R4 (runda 3): re-verificare pe starea PROASPĂTĂ chiar înainte de pasul distructiv (ștergerea feliilor) — o citire
-  // putea porni în alt tab cât am descărcat/analizat planșa. Rămâne doar fereastra tăiere+upload (secunde; vezi docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md).
-  const { data: proaspat } = await supa.from('ofertare_documente_atribuire').select('analiza').eq('id', docId).maybeSingle()
-  const refuz1 = refuzInLucru(proaspat?.analiza)
+  // putea porni în alt tab cât am descărcat/analizat planșa. Fail-closed: re-citire eșuată => 503, nimic șters.
+  // Rămâne fereastra tăiere+upload (felii tăiate și urcate SECVENȚIAL, până la 60/80: zeci de secunde, până la ~1 min;
+  // vezi docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md §2.3) — o închide coada pe NAS.
+  const refuz1 = await reverifica()
   if (refuz1) return refuz1
   // feliile vechi (altă grilă) s-ar citi și ele — le ștergem întâi
   const { data: vechi } = await supa.storage.from('ofertare').list(bazaCale, { limit: 200 })

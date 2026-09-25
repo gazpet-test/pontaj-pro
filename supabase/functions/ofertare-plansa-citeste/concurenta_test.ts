@@ -2,7 +2,7 @@
 // R4: scrieri concurente (CAS + fuziune pe zone), versiuni nemixate (409), regiunea în coordonate PDF, rezultatCitire.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { handler, rezultatCitire } from './handler.ts'
-import { CALE_REV, CALE_REZ, REZERVARE_EXPIRA_MS, fuzioneazaZone, leaseTransferOcupat, rezervariNoi, rezervateDeAltii, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
+import { CALE_REV, CALE_REZ, REZERVARE_EXPIRA_MS, TOLERANTA_CEAS_MS, fuzioneazaZone, leaseTransferOcupat, rezActiva, rezervariNoi, rezervateDeAltii, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
 
 // ---- DB simulată cu update real + filtre pe cale JSON (analiza->citire_ai->>rev) ----
 const cale = (row: any, c: string) => {
@@ -665,4 +665,143 @@ Deno.test('rezervateDeAltii / rezervariNoi: active vs expirate vs altă tăiere 
   assertEquals(Object.keys(nou.zone).sort(), ['a', 'd', 'e'])
   assertEquals(nou.zone.e.pana_la, new Date(acum + REZERVARE_EXPIRA_MS).toISOString())
   assertEquals(CALE_REZ, 'analiza->rezervari_zone->>rev')
+})
+
+// ---- R4 (verificator, runda 1): „citește” de la zero NU cooperează; plafon pe pana_la ----
+// Bucla din UI (src/OfertareLicitatii.jsx, citestePlansa — fără /api/plansa-felii): de_la=0, apoi de_la_urmator cât timp continua.
+async function buclaCiteste(deps: any, doc = 470) {
+  const statusuri: number[] = []
+  let deLa = 0, runde = 0, ult: any = null
+  while (runde < 25) {
+    const r = await handler(cerereSvc({ doc_id: doc, de_la: deLa }), deps)
+    ult = { status: r.status, j: await r.json() }
+    statusuri.push(r.status)
+    if (r.status !== 200 || !ult.j.continua) break
+    deLa = ult.j.de_la_urmator; runde++
+  }
+  return { ...ult, statusuri }
+}
+// AI simulat cu întârziere pe zonă (zonele „lente” țin rezervarea mai mult)
+function aiPeZona(n: { ai: number }, ms: (et: string) => number, etichete: string[]) {
+  return (async (_u: unknown, init?: RequestInit) => {
+    n.ai++
+    const txt = JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || ''
+    const et = /Bucata (\S+)/.exec(txt)?.[1] || '?'
+    etichete.push(et)
+    await new Promise((ok) => setTimeout(ok, ms(et)))
+    const rasp = { tronsoane: [{ de_la: `N-${et}`, la: 'X', lungime_m: 10, sursa: 'tabel' }], cartus: { titlu: 'Plan' }, tabele: [] }
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(rasp) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
+  }) as typeof fetch
+}
+
+for (const [varianta, ms] of [
+  ['aceeași viteză', (_: string) => 15],
+  ['zonele 5–6 mai lente', (et: string) => (et === 'z1_5' || et === 'z1_6' ? 60 : 5)],
+] as [string, (et: string) => number][]) {
+  Deno.test(`R4 reset: două bucle „citește” de la zero pe 6 zone (${varianta}) -> 6 apeluri AI, 6 zone salvate, gata; al doilea tab 409 fără AI`, async () => {
+    const { supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: PLANSA } })
+    const et: string[] = []
+    const deps = svc(n, aiPeZona(n, ms, et), supa)
+    const [a, b] = await Promise.all([buclaCiteste(deps), buclaCiteste(deps)])
+    assertEquals([a.status, b.status].sort(), [200, 409])
+    const perdant = a.status === 409 ? a : b, castigator = a.status === 409 ? b : a
+    assert(perdant.j.error.includes('în lucru în alt tab'), perdant.j.error)
+    assertEquals(perdant.j.cost_usd, 0); assertEquals(perdant.j.citite_acum, 0)
+    assertEquals(perdant.statusuri, [409], 'al doilea tab se oprește din prima rundă, fără nicio plată')
+    assertEquals(castigator.j.continua, false)
+    assertEquals(n.ai, 6, 'fiecare zonă plătită o singură dată')
+    assertEquals([...et].sort(), ZONE.map((z) => `z${z}`))
+    const doc = await citesteDoc(tabele)
+    const salvate = doc.analiza.citire_ai.felii.map((f: any) => f.eticheta)
+    assertEquals(salvate, ZONE.map((z) => `z${z}`))
+    assert(et.every((z) => salvate.includes(z)), 'niciun rezultat plătit pierdut')
+    assertEquals(doc.analiza.citire_ai.gata, true)
+    assertEquals(doc.analiza.rezervari_zone.zone, {})
+  })
+}
+
+Deno.test('R4 reset: „citește” de la zero cu o rezervare activă a altei rulări (continuă / note) -> 409, zero AI, zero scrieri', async () => {
+  for (const cheie of ['z1_5', 'lipire:z1_1+z1_2']) {
+    const ca = await citireSalvata(['1_1', '1_2', '1_3', '1_4'])
+    const rz = { rev: 'rz0', zone: { [cheie]: rez('ALT', 'T1', -1, 6) } }
+    const { supa, n, tabele } = supaCu(docCu(ca, { rezervari_zone: rz }))
+    const r = await handler(cerereSvc({ doc_id: 470, de_la: 0 }), svc(n, aiFals(n, 0), supa))
+    assertEquals(r.status, 409, cheie)
+    const j = await r.json()
+    assert(j.error.includes('în lucru în alt tab') && j.error.includes('de la zero'), j.error)
+    assertEquals(j.in_lucru, [cheie])
+    assertEquals(n.ai, 0); assertEquals(n.scrieriDoc, 0)
+    assertEquals((await citesteDoc(tabele)).analiza.rezervari_zone, rz)
+  }
+})
+
+Deno.test('R4 reset: cât timp un „citește” de la zero al altei rulări e în zbor, continuă / reia / runda următoare / note -> 409, zero AI', async () => {
+  const v = await versiuneCurenta()
+  for (const body of [{ mod: 'continua' }, { mod: 'reia_erori' }, { de_la: 4 }, { doar_lipire: true }]) {
+    const ca = { ...(await citireSalvata(['1_1', '1_2', '1_3', '1_4'])), gata: !!(body as any).doar_lipire }
+    if ((body as any).mod === 'reia_erori') ca.felii[1] = { eticheta: 'z1_2', eroare: 'timeout', _versiune: cheieV(v) }
+    if ((body as any).doar_lipire) ca.felii[0] = { ...ca.felii[0], alte_mentiuni: ['Lungimea totala a retelei este de ... (taiat)'] }
+    const rz = { rev: 'rz0', zone: { z1_1: { ...rez('RESET', 'T1', -1, 6), resetare: true } } }
+    const { supa, n, tabele } = supaCu(docCu(ca, { rezervari_zone: rz }))
+    const r = await handler(cerereSvc({ doc_id: 470, ...body }), svc(n, aiFals(n, 0), supa))
+    assertEquals(r.status, 409, JSON.stringify(body))
+    const j = await r.json()
+    assert(j.error.includes('de la zero') && j.error.includes('nu s-a apelat AI'), j.error)
+    assertEquals(j.in_lucru, ['z1_1'])
+    assertEquals(n.ai, 0, JSON.stringify(body)); assertEquals(n.scrieriDoc, 0)
+    assertEquals((await citesteDoc(tabele)).analiza.rezervari_zone, rz)
+  }
+})
+
+Deno.test('R4 reset: „continuă” pornit în timpul rundei 1 a unui „citește” de la zero -> 409; citirea de la zero termină singură, 6 AI, nimic pierdut', async () => {
+  const ca = await citireSalvata(['1_1', '1_2'])          // citire veche, necompletă, pe aceeași tăiere
+  const { supa, n, tabele } = supaCu(docCu(ca))
+  const et: string[] = []
+  let rc: any = null
+  const aiB = aiPeZona(n, () => 10, et)
+  const fB = (async (u: unknown, i?: RequestInit) => {
+    // în timpul primului apel AI al lui B (rezervările de reset sunt deja scrise), alt tab apasă „⏯ continuă”
+    if (!rc) { rc = 'pornit'; const r = await handler(cerereSvc({ doc_id: 470, mod: 'continua' }), svc(n, aiPeZona(n, () => 0, et), supa)); rc = { status: r.status, j: await r.json() } }
+    return aiB(u as any, i)
+  }) as typeof fetch
+  const b = await buclaCiteste(svc(n, fB, supa))
+  assertEquals(b.status, 200)
+  assertEquals(rc.status, 409)
+  assert(rc.j.error.includes('de la zero'), rc.j.error)
+  assertEquals(n.ai, 6)
+  assertEquals([...et].sort(), ZONE.map((z) => `z${z}`))
+  const doc = await citesteDoc(tabele)
+  assertEquals(doc.analiza.citire_ai.felii.map((f: any) => f.eticheta), ZONE.map((z) => `z${z}`))
+  assertEquals(doc.analiza.citire_ai.gata, true)
+  assertEquals(doc.analiza.rezervari_zone.zone, {})
+})
+
+Deno.test('R4 plafon pana_la: activă doar dacă now < pana_la <= now + termen + 60 s (rezervare forjată/coruptă = expirată)', () => {
+  const acum = Date.parse('2026-09-25T12:00:00Z')
+  const la = (ms: number) => new Date(acum + ms).toISOString()
+  const rz = { rev: 'x', zone: {
+    ok: { rulare: 'A', taiat_la: 'T1', pana_la: la(REZERVARE_EXPIRA_MS) },
+    tol: { rulare: 'A', taiat_la: 'T1', pana_la: la(REZERVARE_EXPIRA_MS + TOLERANTA_CEAS_MS) },
+    peste: { rulare: 'A', taiat_la: 'T1', pana_la: la(REZERVARE_EXPIRA_MS + TOLERANTA_CEAS_MS + 1000) },
+    forjata: { rulare: 'A', taiat_la: 'T1', pana_la: '2099-01-01T00:00:00Z' },
+    invalida: { rulare: 'A', taiat_la: 'T1', pana_la: 'mâine' },
+  } }
+  assertEquals([...rezervateDeAltii(rz, 'T1', 'EU', acum).keys()], ['ok', 'tol'])
+  assertEquals(Object.keys(rezervariNoi(rz, 'T1', acum).zone), ['ok', 'tol'], 'cele peste plafon se curăță la următoarea scriere')
+  assert(!rezActiva(rz.zone.forjata, 'T1', acum))
+  assertEquals(TOLERANTA_CEAS_MS, 60_000)
+})
+
+Deno.test('R4 plafon pana_la: rezervare forjată pe 2099 nu blochează citirea; se curăță la scriere', async () => {
+  const ca = await citireSalvata(['1_1', '1_2', '1_3', '1_4'])
+  const forjata = { rulare: 'X', taiat_la: 'T1', de_la: '2026-09-25T00:00:00Z', pana_la: '2099-01-01T00:00:00Z' }
+  const rz = { rev: 'rz0', zone: { z1_5: forjata, z1_6: { ...forjata, resetare: true } } }
+  const { supa, n, tabele } = supaCu(docCu(ca, { rezervari_zone: rz }))
+  const et: string[] = []
+  const r = await handler(cerereSvc({ doc_id: 470, mod: 'continua' }), svc(n, aiEtichete(n, 0, et), supa))
+  assertEquals(r.status, 200)
+  assertEquals(et.sort(), ['z1_5', 'z1_6'])
+  const doc = await citesteDoc(tabele)
+  assertEquals(doc.analiza.citire_ai.gata, true)
+  assertEquals(doc.analiza.rezervari_zone.zone, {}, 'rezervarea forjată a fost curățată')
 })

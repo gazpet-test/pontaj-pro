@@ -153,11 +153,17 @@ export function transferDeReluat(c: any, acumMs = Date.now()): boolean {
 // Termenul: > durata maximă a unei invocări Edge (limita de ceas: 150 s pe Free, 400 s pe planurile plătite — docs
 // Supabase „Edge Functions / Limits”), ca o rulare încă vie să nu-și piardă rezervarea.
 export const REZERVARE_EXPIRA_MS = 7 * 60 * 1000;
+// Plafon pe pana_la (verificator R4, runda 1): o rezervare e activă DOAR dacă now < pana_la <= now + termen + toleranță.
+// Fără plafon, o rezervare coruptă sau scrisă de mână (pana_la = 2099 — politica RLS de update pe `analiza` e a
+// modulului Ofertare, nu doar a ownerului) ar bloca pe termen nelimitat citirea (409) și retăierea. Toleranța acoperă
+// diferența de ceas între instanțele Edge (cine scrie) și Vercel/Edge (cine verifică). Peste plafon = expirată: se ignoră
+// și se curăță la următoarea scriere a rezervărilor. Aceeași regulă în api/_cas.js (rezervariActive) — constante identice.
+export const TOLERANTA_CEAS_MS = 60 * 1000;
 
-const rezActiva = (r: any, taiatLa: string | null, acumMs: number) => {
+export const rezActiva = (r: any, taiatLa: string | null, acumMs: number) => {
   if (!r || (r.taiat_la ?? null) !== (taiatLa ?? null)) return false;
   const t = Date.parse(r.pana_la);
-  return Number.isFinite(t) && t > acumMs;
+  return Number.isFinite(t) && t > acumMs && t <= acumMs + REZERVARE_EXPIRA_MS + TOLERANTA_CEAS_MS;
 };
 
 // Rezervările ACTIVE ale ALTOR rulări pe tăierea curentă: cheie -> rezervare.
@@ -170,33 +176,40 @@ export function rezervateDeAltii(rz: any, taiatLa: string | null, rulare: string
 // Obiectul rezervari_zone de scris: păstrează doar rezervările active de pe tăierea curentă, scoate (opțional) pe ale
 // unei rulări (eliberare) și adaugă cheile noi. Jeton NOU la fiecare scriere.
 export function rezervariNoi(rz: any, taiatLa: string | null, acumMs: number,
-  opt: { scoateRulare?: string; adauga?: { chei: string[]; rulare: string } } = {}): { rev: string; zone: Record<string, any> } {
+  opt: { scoateRulare?: string; adauga?: { chei: string[]; rulare: string; resetare?: boolean } } = {}): { rev: string; zone: Record<string, any> } {
   const zone: Record<string, any> = {};
   for (const [k, r] of Object.entries(rz?.zone || {})) {
     if (!rezActiva(r, taiatLa, acumMs)) continue;
     if (opt.scoateRulare && (r as any).rulare === opt.scoateRulare) continue;
     zone[k] = r;
   }
+  // resetare=true: rezervarea unui „citește” de la zero — scrierea lui înlocuiește citirea, deci nicio altă rulare nu
+  // cooperează cu el cât timp e activă (vezi rezervaChei / planifica în handler.ts).
   if (opt.adauga) for (const k of opt.adauga.chei) zone[k] = { rulare: opt.adauga.rulare, taiat_la: taiatLa ?? null,
-    de_la: new Date(acumMs).toISOString(), pana_la: new Date(acumMs + REZERVARE_EXPIRA_MS).toISOString() };
+    de_la: new Date(acumMs).toISOString(), pana_la: new Date(acumMs + REZERVARE_EXPIRA_MS).toISOString(),
+    ...(opt.adauga.resetare ? { resetare: true } : {}) };
   return { rev: revNou(), zone };
 }
 
-export function mesajInLucru(chei: string[], altii: Map<string, any>): string {
+// Cheile rezervate de alte rulări care au făcut „citește” de la zero (rezervare cu resetare=true).
+export const cheiResetare = (altii: Map<string, any>): string[] => [...altii.entries()].filter(([, r]) => r?.resetare === true).map(([k]) => k);
+
+export function mesajInLucru(chei: string[], altii: Map<string, any>, nota = ''): string {
   const t = chei.map((k) => Date.parse(altii.get(k)?.pana_la)).filter(Number.isFinite);
   const pana = t.length ? new Date(Math.max(...t)).toLocaleTimeString('ro-RO', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' }) : null;
   const lista = chei.slice(0, 8).join(', ') + (chei.length > 8 ? ` și încă ${chei.length - 8}` : '');
   return `${chei.length === 1 ? 'Zona' : 'Zonele'} ${lista} ${chei.length === 1 ? 'e' : 'sunt'} în lucru în alt tab (altă rulare)` +
-    `${pana ? `, rezervate până la ${pana}` : ''} — nu s-a apelat AI, nu s-a plătit nimic. Lasă celălalt tab să termine; ` +
+    `${pana ? `, rezervate până la ${pana}` : ''}${nota ? ` — ${nota}` : ''} — nu s-a apelat AI, nu s-a plătit nimic. Lasă celălalt tab să termine; ` +
     'dacă a fost închis, rezervarea expiră singură și zona se poate relua.';
 }
 
 // Rezervă cheile lotului prin CAS. planifica(d, altii) calculează pe documentul PROASPĂT (la conflict se recalculează):
-//  { cand: chei candidate (ce s-ar citi fără rezervări), lot: chei de rezervat acum } sau { stop }.
+//  { cand: chei candidate (ce s-ar citi fără rezervări), lot: chei de rezervat acum, resetare?: bool,
+//    blocat?: chei ale altor rulări care blochează TOATĂ rularea (nu doar zonele lor), nota?: motivul blocării } sau { stop }.
 // Rezultat: { ok, doc, plan, rezervat } (doc = documentul DUPĂ rezervare — baza scrierii următoare) |
-//           { ok:false, inLucru: {chei, mesaj} } (toate candidatele rezervate de alții) | { ok:false, stop }.
+//           { ok:false, inLucru: {chei, mesaj} } (toate candidatele rezervate de alții, sau rularea blocată) | { ok:false, stop }.
 export async function rezervaChei(supa: any, docId: number, docStart: any, rulare: string, taiatLa: string | null,
-  planifica: (d: any, altii: Map<string, any>, incercare: number) => { cand: string[]; lot: string[]; stop?: any; [k: string]: any },
+  planifica: (d: any, altii: Map<string, any>, incercare: number) => { cand: string[]; lot: string[]; stop?: any; blocat?: string[]; nota?: string; resetare?: boolean; [k: string]: any },
 ): Promise<any> {
   let plan: any = null, baza: any = docStart, altii = new Map<string, any>();
   const w = await scrieCAS(supa, docId, docStart, (d: any, incercare: number) => {
@@ -206,16 +219,17 @@ export async function rezervaChei(supa: any, docId: number, docStart: any, rular
     altii = rezervateDeAltii(d?.analiza?.rezervari_zone, taiatLa, rulare);
     plan = planifica(d, altii, incercare);
     if (plan.stop) return { stop: plan.stop };
+    if (plan.blocat?.length) return { stop: { inLucru: true } };
     if (!plan.lot.length) return { stop: plan.cand.length ? { inLucru: true } : { nimic: true } };
     return { upd: { analiza: { ...d.analiza, rezervari_zone: rezervariNoi(d.analiza?.rezervari_zone, taiatLa, Date.now(),
-      { adauga: { chei: plan.lot, rulare } }) } } };
+      { adauga: { chei: plan.lot, rulare, resetare: plan.resetare === true } }) } } };
   });
   if (w.ok) return { ok: true, rezervat: true, plan, doc: { ...w.doc, analiza: w.rezultat.upd.analiza } };
   if (w.stop?.nimic) return { ok: true, rezervat: false, plan, doc: baza };
   if (w.stop?.inLucru) {
-    const chei = plan.cand.filter((k: string) => altii.has(k));
+    const chei: string[] = plan.blocat?.length ? plan.blocat : plan.cand.filter((k: string) => altii.has(k));
     const pana = chei.map((k: string) => altii.get(k)?.pana_la).filter(Boolean).sort().pop() || null;
-    return { ok: false, inLucru: { chei, pana_la: pana, mesaj: mesajInLucru(chei, altii) } };
+    return { ok: false, inLucru: { chei, pana_la: pana, mesaj: mesajInLucru(chei, altii, plan.nota || '') } };
   }
   return { ok: false, stop: w.stop };
 }
