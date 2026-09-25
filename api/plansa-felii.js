@@ -15,6 +15,9 @@ import sharp from 'sharp'
 const LATURA = 1600        // latura unei felii trimise la AI
 const SUPRAPUNERE = 0.12   // 12% ca sa nu taiem un rand de tabel exact pe margine
 const MAX_FELII = 40
+const LATURA_FIN = 1000    // 25.09.2026 „recitește fin": zone mai mici din original => rezolutie efectiva mai mare
+const MAX_FELII_FIN = 80
+const MIN_LATURA_SCAN = 2000 // sub atat, cea mai mare imagine din PDF nu e planșa (ex. sigla semnaturii EasySign)
 const MAX_MB = 100   // 07.09.2026: planșele SF Potlogi au 73–92 MB
 
 // Imaginea scanata sta in PDF ca stream JPEG (/DCTDecode). O scoatem direct, fara sa
@@ -119,6 +122,19 @@ export default async function handler(req, res) {
     return res.status(200).json({ citibila: false, motiv: 'imaginea nu poate fi deschisa: ' + String(e?.message || e).slice(0, 120) })
   }
 
+  // 25.09.2026 (lic. 95, PL1–PL5 Vilcelele): planșele erau PDF VECTORIALE; singurul JPEG din fișier era
+  // sigla semnăturii electronice (900x450) — AI-ul a „citit" sigla și n-a extras nimic, plătit. O imagine
+  // mică nu e o scanare de planșă: spunem asta în loc să tăiem și să plătim citirea unei sigle.
+  if (/\.pdf$/i.test(doc.nume_original) && Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN) {
+    const motiv = `PDF-ul nu conține o scanare a planșei (cea mai mare imagine are ${meta.width}x${meta.height}px — probabil sigla semnăturii). ` +
+      'Desenul e vectorial și nu se poate tăia în zone aici. Exportă planșa ca imagine/PDF scanat la rezoluție mare și urc-o din nou, sau consult-o manual.'
+    await supa.from('ofertare_documente_atribuire').update({
+      analiza: { ...doc.analiza, plansa: { citibila: false, vectorial: true, motiv, latime: meta.width, inaltime: meta.height } },
+      analiza_la: new Date().toISOString(),
+    }).eq('id', docId)
+    return res.status(200).json({ citibila: false, vectorial: true, motiv, latime: meta.width, inaltime: meta.height })
+  }
+
   const verdict = await esteCitibila(sursa)
   if (!verdict.citibila) {
     const motiv = `Imaginea se deschide, dar continutul nu se poate reface: ${verdict.cu_continut} din ${verdict.sonde} zone verificate au desen. ` +
@@ -135,19 +151,25 @@ export default async function handler(req, res) {
   // Latura decupajului creste pana cand numarul de felii intra in buget: o plansa A0
   // taiata la 1600px ar iesi in ~90 de bucati, adica 90 de citiri AI pentru un singur
   // desen. Feliile mai mari se micsoreaza la salvare, deci raman citibile.
-  let latura = LATURA, pas = 0, coloane = 0, randuri = 0
+  // `fin: true` (butonul „recitește fin"): grilă mai deasă — decupaje de 1000px din original, până la 80 de zone.
+  const fin = corp.fin === true
+  const maxFelii = fin ? MAX_FELII_FIN : MAX_FELII
+  let latura = fin ? LATURA_FIN : LATURA, pas = 0, coloane = 0, randuri = 0
   for (let i = 0; i < 12; i++) {
     pas = Math.floor(latura * (1 - SUPRAPUNERE))
     coloane = Math.max(1, Math.ceil(meta.width / pas))
     randuri = Math.max(1, Math.ceil(meta.height / pas))
-    if (coloane * randuri <= MAX_FELII) break
+    if (coloane * randuri <= maxFelii) break
     latura = Math.floor(latura * 1.25)
   }
-  if (coloane * randuri > MAX_FELII) {
+  if (coloane * randuri > maxFelii) {
     return res.status(400).json({ error: `plansa ar iesi in ${coloane * randuri} felii chiar si la ${latura}px` })
   }
 
   const bazaCale = `${doc.licitatie_id}/felii/${docId}`
+  // feliile vechi (altă grilă) s-ar citi și ele — le ștergem întâi
+  const { data: vechi } = await supa.storage.from('ofertare').list(bazaCale, { limit: 200 })
+  if (vechi?.length) await supa.storage.from('ofertare').remove(vechi.map((f) => `${bazaCale}/${f.name}`))
   const felii = []
   for (let r = 0; r < randuri; r++) {
     for (let c = 0; c < coloane; c++) {
@@ -179,7 +201,7 @@ export default async function handler(req, res) {
     ...doc.analiza,
     plansa: {
       citibila: true, latime: meta.width, inaltime: meta.height,
-      felii: reusite.length, randuri, coloane, latura,
+      felii: reusite.length, randuri, coloane, latura, fin,
       cale_felii: bazaCale, verificare: verdict,
     },
   }
