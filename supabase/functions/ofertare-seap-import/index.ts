@@ -53,6 +53,7 @@
 //    urcat cu contentType octet-stream. Formularul propunerii tehnice a zacut necitit de la
 //    inceput. Acum se verifica si semnatura reala: orice PDF incepe cu octetii %PDF-.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -360,7 +361,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const t0 = Date.now();
-  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[] };
+  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[] };
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
@@ -369,31 +370,64 @@ Deno.serve(async (req: Request) => {
 
   const scrie = async (rand: any, nume: string) => {
     const idPh = placeholders.get(cheieNume(nume));
-    const { error } = idPh
-      ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
-      : await supa.from('ofertare_documente_atribuire').insert(rand);
-    if (error) { raport.erori.push(`${nume}: scriere rand - ${error.message}`); return; }
+    const { data, error } = idPh
+      ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh).select('id').maybeSingle()
+      : await supa.from('ofertare_documente_atribuire').insert(rand).select('id').maybeSingle();
+    if (error) { raport.erori.push(`${nume}: scriere rand - ${error.message}`); return null; }
     if (idPh) raport.completate++; else raport.adaugate++;
+    return (data?.id ?? idPh ?? null) as number | null;
+  };
+
+  // R6: manifest de integritate (SHA-256 pe byte-ii urcati). Se strange in memorie si se scrie la final;
+  // o eroare de manifest NU opreste importul — devine avertisment (raport + seap_meta pe documente).
+  const manifest: ManifestRand[] = [];
+  const noteazaManifest = async (arhivaCheie: string | null, cale: string, buf: Uint8Array, documentId: number | null, motiv: string | null) => {
+    try {
+      manifest.push(randManifest({ licitatieId, arhivaCheie, cale, marime: buf.length, sha256: await sha256Hex(buf), documentId, motiv }));
+    } catch (e) { raport.avertismente.push(`manifest ${cale}: ${String((e as Error)?.message || e)}`); }
+  };
+  const scrieManifest = async () => {
+    if (!manifest.length) return;
+    // aceeasi cheie de 2 ori in acelasi upsert => Postgres refuza TOT lotul ("cannot affect row a second time"); pastram ultimul
+    const unice = [...new Map(manifest.map(r => [`${r.arhiva_cheie}\u0000${r.cale}`, r])).values()];
+    const esuate: ManifestRand[] = [];
+    for (let k = 0; k < unice.length; k += 200) {
+      const felie = unice.slice(k, k + 200);
+      const { error } = await supa.from('ofertare_seap_manifest').upsert(felie, { onConflict: MANIFEST_CONFLICT });
+      if (error) { raport.avertismente.push(`manifest: ${error.message}`); esuate.push(...felie); }
+      else raport.manifest_randuri += felie.length;
+    }
+    // avertismentul ajunge si pe document, ca sa se vada in platforma (nu doar in raportul apelului)
+    const ids = esuate.map(r => r.document_id).filter((x): x is number => !!x);
+    if (!ids.length) return;
+    try {
+      const { data: meta } = await supa.from('ofertare_documente_atribuire').select('id, seap_meta').in('id', ids);
+      for (const d of meta || []) {
+        await supa.from('ofertare_documente_atribuire')
+          .update({ seap_meta: { ...(d.seap_meta || {}), manifest_avertisment: `manifest nescris (${new Date().toISOString()})` } }).eq('id', d.id);
+      }
+    } catch (_) { /* avertismentul e deja in raport */ }
   };
 
   // Urcarea unui fisier (deja desfacut din semnatura) + randul in BD. Aceleasi reguli
   // in ambele cai: ghicesteTip, calea de storage, status_procesare, sursa:'seap', size_bytes.
   let urcatiOcteti = 0;
-  const urcaFisier = async (numeFinal: string, buf: Uint8Array) => {
+  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null) => {
     // numele SAU semnatura reala - vezi anti-bug 6
     const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
     const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
     const path = `${licitatieId}/atribuire/${Date.now().toString(36)}_${safe}`;
     const { error: eUp } = await supa.storage.from('ofertare')
       .upload(path, buf, { contentType: estePdf ? 'application/pdf' : 'application/octet-stream' });
-    if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); return false; }
-    await scrie({
+    if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, numeFinal, buf, null, eUp.message); return false; }
+    const docId = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
       tip: ghicesteTip(numeFinal), size_bytes: buf.length,
       status_procesare: estePdf ? 'neprocesat' : 'ignorat',
       eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
       sursa: 'seap',
     }, numeFinal);
+    await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');
     urcate.add(cheieNume(numeFinal));
     urcatiOcteti += buf.length;
     return true;
@@ -471,7 +505,7 @@ Deno.serve(async (req: Request) => {
             },
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
-              await urcaFisier(r.nume, r.buf);
+              await urcaFisier(r.nume, r.buf, doc.nume);
               return 'continua';
             },
             (n, m) => raport.erori.push(`${n}: ${m}`),
@@ -527,7 +561,7 @@ Deno.serve(async (req: Request) => {
           },
           async (h, brut) => {
             const r = desfaSemnatura(brut, h.nume);
-            await urcaFisier(r.nume, r.buf);
+            await urcaFisier(r.nume, r.buf, 'seap:downloadarchive');
             iArh++;
             if (bugetDepasit()) { continua = true; return 'stop'; }
             return 'continua';
@@ -544,6 +578,7 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  await scrieManifest();
   if (!continua) {
     await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
     raport.orfani_stersi = await curataOrfani(supa, licitatieId);

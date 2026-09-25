@@ -75,6 +75,14 @@ async function pdfScanIntreg() {
   d.addImage(dataUrl(await jpeg(3000, 2100)), 'JPEG', 0, 0, 1000, 700)
   return Buffer.from(d.output('arraybuffer'))
 }
+// 25.09.2026: scanare pe toată pagina + cote vectoriale desenate PESTE ea => randare completă, nu imaginea
+async function pdfScanCuCote() {
+  const d = new jsPDF({ unit: 'pt', format: [1000, 700], orientation: 'landscape' })
+  d.addImage(dataUrl(await jpeg(3000, 2100)), 'JPEG', 0, 0, 1000, 700)
+  for (let i = 0; i < 8; i++) { d.line(100 + i * 100, 200, 180 + i * 100, 200); d.text(`L=${12 + i}.50 m`, 110 + i * 100, 195) }
+  d.text('Digitally signed by EasySign', 20, 690)
+  return cuByteRange(Buffer.from(d.output('arraybuffer')))
+}
 
 async function ruleaza(nume, buf) {
   const imagini = jpegDinPdf(buf)
@@ -120,5 +128,10 @@ const r7 = await ruleaza('scan_pagina_intreaga', await pdfScanIntreg())
 verifica(r7.sursa === 'imagine' && r7.acoperire?.demonstrata === true, '7: scanare pe toată pagina fără altceva => acoperire demonstrată')
 verifica(r7.acoperire?.tip === 'imagine_pagina_intreaga', '7: acoperire_tip = imagine_pagina_intreaga')
 verifica(r2.acoperire?.demonstrata === true, '2: scanare semnată pe toată pagina, textul semnăturii ÎN bbox => acoperire demonstrată')
+const r8 = await ruleaza('scan_intreg_cu_cote_peste', await pdfScanCuCote())
+verifica(r8.acoperire_pdf?.paths_peste > 0 && r8.acoperire_pdf?.text_peste > 0, '8: cotele (path + text) detectate PESTE scanare, în bbox')
+verifica(r8.randeaza === true && r8.ruta === 'suprapunere vectorială peste imagine', '8: scan 100% + cote peste => ruta = randare completă')
+verifica(r8.sursa === 'randare_pagina', '8: sursa = randarea paginii, nu imaginea')
+verifica(r2.acoperire_pdf?.text_peste === 0, '2: textul de semnătură EasySign în bbox NU contează ca suprapunere')
 console.log(`\n${ok}/${tot} verificări trecute`)
 process.exit(ok === tot ? 0 : 1)

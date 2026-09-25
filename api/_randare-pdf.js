@@ -168,7 +168,7 @@ export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
     }
     pag.cleanup()
     // R4 (Copilot) pct. 1: conținut în afara bbox-ului imaginii selectate (path-uri, text, alte imagini), în coordonate
-    // PDF, toleranță 2pt. Folosit DOAR la demonstrarea acoperirii (nu la rutare, nu la siglă).
+    // PDF, toleranță 2pt. Folosit la demonstrarea acoperirii și (paths_peste/text_peste, 25.09.2026) la rutare; nu la siglă.
     let acoperire_pdf = null
     if (sel) {
       const tol = 2, B = sel.bbox_pdf
@@ -178,6 +178,10 @@ export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
         paths_in_afara: pathBbox.filter((bb) => !inauntru(bb)).length,
         text_in_afara: texte.filter((t) => t.str.trim() && !inauntru(t.bbox)).length,
         imagini_in_afara: imagini.filter((m) => m !== sel && !inauntru(m.bbox_pdf)).length,
+        // conținut DESENAT PESTE imagine (cote, legendă) în interiorul bbox-ului => imaginea singură nu e toată planșa.
+        // Textul de semnătură (EasySign / „Semnat digital”) nu contează ca suprapunere.
+        paths_peste: pathBbox.filter((bb) => bb && inauntru(bb)).length,
+        text_peste: texte.filter((t) => t.str.trim() && inauntru(t.bbox) && !RE_SEMNAT.test(t.str)).length,
       }
     }
     // Identificare POZITIVĂ (singura care poate da verdictul „siglă”)

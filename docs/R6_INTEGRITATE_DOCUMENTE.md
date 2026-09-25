@@ -72,3 +72,12 @@ Verificare periodică: job (worker/cron) care re-descarcă din Storage, recalcul
 2. GO backfill (după preview).
 3. GO separat pentru cron.
 4. 770: aștepți progres sau oprești (reset / felii pe pagini).
+
+## Implementat (25.09.2026, branch claude/erp-continuare-x4p5a7 — necomis)
+- **Edge `ofertare-seap-import` scrie acum `ofertare_seap_manifest`** (fără schemă nouă): pentru fiecare fișier urcat (per-fișier, ZIP interior, rezerva DownloadArchive) — SHA-256 calculat cu `crypto.subtle` pe byte-ii urcați (după desfacerea .p7s), mărime, cale, `document_id`, `arhiva_cheie` (documentul SEAP părinte; la fișier simplu = propria cheie; la rezerva arhivă = `seap:downloadarchive`). Upload refuzat → rând `eroare_urcare` cu motiv.
+- Upsert idempotent pe `UNIQUE (licitatie_id, arhiva_cheie, cale)`, în felii de 200, la finalul fiecărei rulări (inclusiv rulările cu `continua`).
+- Eroarea de manifest NU oprește importul: ajunge în `raport.avertismente` și pe document în `seap_meta.manifest_avertisment`; nu se aruncă (regula Edge). Răspunsul are și `manifest_randuri`.
+- Funcția pură `randManifest` + `sha256Hex` în `supabase/functions/ofertare-seap-import/manifest.ts`, test `manifest_test.ts` (5 teste).
+- Fără backfill. Deploy edge: nefăcut (cere PR + deploy).
+- **Diagnostic 102 (Botoșani)**: cele 497 rânduri vechi au venit prin workerul Terra 24.09 07:21–12:11 UTC, adică ÎNAINTE de migrarea manifestului (15:06) → nu aveau unde scrie. Singurele 9 rânduri de după migrare (25.09 05:21–05:24, id 1267–1275) sunt volumele `.partNN.rar` urcate întregi de **Vercel `/api/seap-import`** (textul `eroare` „…se parseaza in M2” există doar acolo), nu de edge și nici de worker — iar acel drum nu scrie manifest.
+- **Worker**: manifestul se scrie doar pe ramura ARHIVĂ; ramura „FIȘIER SIMPLU” (seap.ts ~391) nu scrie niciun rând. Nu e bug de condiție care să fi golit tabela (cauza e cronologia), dar e o lipsă de acoperire.
