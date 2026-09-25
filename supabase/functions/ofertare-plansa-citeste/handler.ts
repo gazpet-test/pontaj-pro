@@ -427,6 +427,36 @@ function lungimeDeclarata(note: any[]): { m: number | null; necorelare: string |
 
 // Dependențele externe, injectabile ca handlerul să poată fi testat fără rețea (poarta_test.ts):
 // supa = client service_role (DB + storage), getUser(jwt) -> uid|null, fetch = apelul AI.
+export const MOTIV_DN_ABSENT = 'diametru absent din tabel — de verificat';
+// Agregarea tronsoanelor unice (R5). Cu tabel: DOAR tabelul intră în cantități; toate adnotările rămân
+// neconfirmate (cele pe diametre absente din tabel sunt listate separat, cu motiv). Adnotare cu aceeași
+// lungime ±1% ca un rând de tabel (orice Dn) => avertisment posibila_dublura (fără deduplicare).
+export function agregaTronsoane(unice: any[]) {
+  const dinTabel = unice.filter((t: any) => text(t?.sursa) === 'tabel');
+  const cheieDM = (t: any) => `${t.diametru_mm || 0}|${materialNorm(t.material)}`;
+  const acoperitDeTabel = new Set(dinTabel.map(cheieDM));
+  const adnotari = dinTabel.length ? unice.filter((t: any) => text(t?.sursa) !== 'tabel') : [];
+  const adnotariDiametruAbsent = adnotari.filter((t: any) => t.diametru_mm && !acoperitDeTabel.has(cheieDM(t)))
+    .map((t: any) => ({ ...t, doar_adnotare: true, motiv: MOTIV_DN_ABSENT }));
+  const pentruCantitati = dinTabel.length ? [...dinTabel] : [...unice];
+  const adnotariNeconfirmate = adnotari;
+  const avertismenteDublura: any[] = [];
+  for (const a of adnotari) {
+    const L = Number(a.lungime_m);
+    if (!(L > 0)) continue;
+    const idx = dinTabel.findIndex((t: any) => Math.abs(Number(t.lungime_m) - L) <= 0.01 * Math.max(L, Number(t.lungime_m)));
+    if (idx < 0) continue;
+    const gem = dinTabel[idx];
+    avertismenteDublura.push({
+      tip: 'posibila_dublura',
+      mesaj: `posibila_dublura: adnotarea Dn${a.diametru_mm} ${a.lungime_m} m (${a._zona || '?'}) are aceeași lungime (±1%) ca rândul de tabel #${idx + 1} Dn${gem.diametru_mm} ${gem.lungime_m} m ${gem.de_la ?? '?'}→${gem.la ?? '?'} — posibil același tronson; adnotarea NU e numărată`,
+      adnotare: { diametru_mm: a.diametru_mm, lungime_m: a.lungime_m, zona: a._zona ?? null },
+      rand_tabel: { index: idx, diametru_mm: gem.diametru_mm, lungime_m: gem.lungime_m, de_la: gem.de_la ?? null, la: gem.la ?? null, zona: gem._zona ?? null },
+    });
+  }
+  return { dinTabel, pentruCantitati, adnotariNeconfirmate, adnotariDiametruAbsent, avertismenteDublura };
+}
+
 export type Deps = {
   SERVICE: string; API_KEY: string | undefined;
   supa: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch;
@@ -670,14 +700,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // diametru/material pe care tabelul nu-l are deloc (tabel parțial, alt obiect pe aceeași planșă).
   // Regula: tabelul rămâne autoritar pe diametrele lui; adnotările pe diametre ABSENTE din tabel se numără
   // și se marchează; restul adnotărilor sunt păstrate ca neconfirmate, vizibile pt control uman.
-  const dinTabel = unice.filter((t: any) => text(t?.sursa) === 'tabel');
-  const cheieDM = (t: any) => `${t.diametru_mm || 0}|${materialNorm(t.material)}`;
-  const acoperitDeTabel = new Set(dinTabel.map(cheieDM));
-  const adnotari = dinTabel.length ? unice.filter((t: any) => text(t?.sursa) !== 'tabel') : [];
-  const adnotariInPlus = adnotari.filter((t: any) => t.diametru_mm && !acoperitDeTabel.has(cheieDM(t)))
-    .map((t: any) => ({ ...t, doar_adnotare: true }));
-  const pentruCantitati = dinTabel.length ? [...dinTabel, ...adnotariInPlus] : [...unice];
-  const adnotariNeconfirmate = adnotari.filter((t: any) => !adnotariInPlus.some((a: any) => a === t || (a.de_la === t.de_la && a.la === t.la && a.lungime_m === t.lungime_m)));
+  // 25.09.2026 (R5, cazul 470): diametrul unei adnotări poate fi citit greșit (1.370 m „Dn250” = rândul 8 Dn200
+  // 1.370 m) — adnotările pe diametre ABSENTE din tabel NU mai intră în total; rămân observații „de verificat”.
+  const { dinTabel, pentruCantitati, adnotariNeconfirmate, adnotariDiametruAbsent, avertismenteDublura } = agregaTronsoane(unice);
   // Diametre nominale reale (PE SR EN 1555 + OL DN). Orice altceva = citire greșită probabilă (debit, Di, viteză)
   // => NU intră în cantități, se raportează „de verificat".
   const DN_STANDARD = new Set([16,20,25,32,40,50,63,65,75,80,90,100,110,125,140,150,160,180,200,225,250,280,300,315,350,355,400,450,500,560,600,630,700,800]);
@@ -687,11 +712,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     pentruCantitati.splice(0, pentruCantitati.length, ...pentruCantitati.filter((t: any) => !deScos.has(t)));
   }
   // 25.09.2026 (audit T5/T6): similaritatea lungimilor e AVERTISMENT, nu deduplicare — nu se scoate nimic din total.
-  const avertismente: string[] = [];
-  for (const a of adnotariInPlus) {
-    const gem = dinTabel.find((t: any) => Math.abs(Number(t.lungime_m) - Number(a.lungime_m)) <= 1);
-    if (gem) avertismente.push(`Adnotarea Dn${a.diametru_mm} ${a.lungime_m} m (${a._zona || '?'}) are aceeași lungime ca rândul din tabel Dn${gem.diametru_mm} ${gem.de_la ?? '?'}→${gem.la ?? '?'} — posibil același tronson, numărat de două ori`);
-  }
+  const avertismente: string[] = avertismenteDublura.map((a: any) => a.mesaj);
   const grupe = new Map<string, number>();
   for (const t of dinTabel) { const k = `${t.lungime_m}|${t.diametru_mm}`; grupe.set(k, (grupe.get(k) || 0) + 1); }
   const repetate = [...grupe.entries()].filter(([, n]) => n > 1);
@@ -706,7 +727,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     adnotari_lasate_deoparte: adnotariNeconfirmate.length,
     ...(nestandard.length ? { diametre_nestandard: [...new Set(nestandard.map((t: any) => Number(t.diametru_mm)))].sort((a, b) => a - b),
       nestandard_m: +nestandard.reduce((q: number, t: any) => q + (Number(t.lungime_m) || 0), 0).toFixed(1) } : {}),
-    adnotari_numarate_in_plus: adnotariInPlus.length,
+    ...(avertismenteDublura.length ? { posibile_dubluri: avertismenteDublura } : {}),
+    adnotari_numarate_in_plus: 0, // R5: nicio adnotare nu mai intră în total când există tabel
+    adnotari_diametru_absent: adnotariDiametruAbsent.map((t: any) => ({ diametru_mm: t.diametru_mm, material: t.material ?? null,
+      lungime_m: t.lungime_m, de_la: t.de_la ?? null, la: t.la ?? null, zona: t._zona ?? null, motiv: MOTIV_DN_ABSENT })),
     adnotari_neconfirmate_m: +adnotariNeconfirmate.reduce((s: number, t: any) => s + (Number(t.lungime_m) || 0), 0).toFixed(1),
     lungime_totala_m: +pentruCantitati.reduce((s: number, t: any) => s + t.lungime_m, 0).toFixed(1),
     tabele: [...new Set(toate.flatMap((r: any) => (r.tabele || []).map((t: any) => t.denumire)).filter(Boolean))],
