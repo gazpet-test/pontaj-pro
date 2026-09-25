@@ -81,12 +81,18 @@ Deno.serve(async (req) => {
     const { data: dv } = await sb.from('v_dovezi_stare').select('id, denumire, stare, observatii').in('id', docIds).eq('stare', 'rosie')
     doveziRosii = dv || []
   }
+  // E3 (25.09.2026): formularele aplicabile din registru care NU sunt semnate SAU nu sunt în pachet = BLOCANTE.
+  const { data: formulare } = await sb.from('ofertare_formulare_registru')
+    .select('cod, denumire, stare_pregatire, stare_depunere').eq('licitatie_id', licId).eq('aplicabil', true)
+  const formulareBlocante = (formulare || []).filter((f: any) => f.stare_pregatire !== 'semnat' || f.stare_depunere === 'nu')
   const termen = lic.termen_depunere ? new Date(lic.termen_depunere) : null
   const zileRamase = termen ? Math.floor((termen.getTime() - Date.now()) / 86400000) : null
   const trecereaA = {
     cerinte_total: toate.length, neconfirmate: neconfirmate.length, neacoperite: neacoperite.length,
     dovezi_rosii: doveziRosii, zile_pana_la_termen: zileRamase,
     garantie_participare: lic.garantie_participare || null, decizie_go: lic.decizie_go ?? null,
+    formulare_registru: (formulare || []).length,
+    formulare_blocante: formulareBlocante.map((f: any) => `${f.cod ? f.cod + ' — ' : ''}${f.denumire} (${f.stare_pregatire} / ${f.stare_depunere})`),
     exemple_neacoperite: neacoperite.slice(0, 10).map((c: any) => String(c.text_cerinta || '').slice(0, 160)),
   }
 
@@ -120,7 +126,12 @@ Deno.serve(async (req) => {
     // scris in raport, ca sa nu se citeasca "verde" ca "am verificat documentatia"
     acoperire_verificare: 'Trecerile B si C s-au uitat DOAR la registrul de cerinte extras, nu la documentatia originala.',
   }
-  const verdict = (c1.date as { verdict?: string } | undefined)?.verdict
+  let verdict = (c1.date as { verdict?: string } | undefined)?.verdict
+  // E3: formularele aplicabile nesemnate / în afara pachetului BLOCHEAZĂ verdele, determinist (nu depinde de arbitru)
+  if (verdict === 'verde' && formulareBlocante.length) {
+    verdict = 'galben'
+    ;(raport as any).blocaj_formulare = `Verde retrogradat la galben: ${formulareBlocante.length} formulare aplicabile nesemnate sau nepuse în pachet.`
+  }
   const { data: rand, error: eIns } = await sb.from('ofertare_verificari').insert({
     licitatie_id: licId, verdict: ['verde','galben','rosu'].includes(verdict || '') ? verdict : null,
     raport, modele: 'A:determinist B:claude-sonnet-5 C:claude-fable-5-1', rulat_de: userId,

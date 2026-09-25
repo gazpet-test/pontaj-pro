@@ -25,6 +25,7 @@ import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
 import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 import SourcePackSection from './OfertareSourcePack.jsx'
+import FormulareRegistruSection, { ClauzeContractSection } from './OfertareClauzeFormulare.jsx'
 import OfertareParteneri from './OfertareParteneri.jsx'
 
 const G = {
@@ -3241,6 +3242,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['cerinte', `📋 Cerințe & acoperire${sx.cerinte ? ` (${sx.acoperite || 0}/${sx.cerinte})` : ''}`],
     ['perechi', '🔗 Cerință ↔ dovadă'],
     ['propunere', `📑 Propunere tehnică${ptSt ? ` (${ptSt.cu_capitol}/${ptSt.de_raspuns})` : ''}`],
+    ['formulare', '🗂 Formulare de depus'],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
     ['garantie', `🛡 Garanție${l.garantie_status === 'original' ? ' · ✓' : l.garantie_status ? ' · în curs' : ''}`],
@@ -3304,6 +3306,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
                 proveniența pe ambele părți. Stă ca tab separat cât se compară cu vederea veche. */}
             {tab === 'perechi' && <CerinteAcoperirePerechi licitatie={l} />}
             {tab === 'triere' && <OfertareTriere licitatie={l} profile={profile} showToast={showToast} onChanged={onChanged} onProceseaza={() => setTab('documente')} />}
+            {tab === 'triere' && <ClauzeContractSection licitatie={l} profile={profile} showToast={showToast} />}
+            {tab === 'formulare' && <FormulareRegistruSection licitatie={l} profile={profile} showToast={showToast} />}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
               intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} />}
             {tab === 'garantie' && <>
@@ -4375,6 +4379,13 @@ function VerificareFinalaSection({ licitatie: l }) {
       {ultima && (
         <div style={{ marginTop:10, fontSize:12.5 }}>
           {arb.motivare && <div style={{ color:G.muted, marginBottom:8 }}>{arb.motivare}</div>}
+          {ultima.raport?.blocaj_formulare && <div style={{ color:G.red, fontWeight:700, marginBottom:6 }}>🗂 {ultima.raport.blocaj_formulare}</div>}
+          {(ultima.raport?.trecerea_a?.formulare_blocante || []).length > 0 && (
+            <div style={{ padding:'6px 10px', marginBottom:8, borderRadius:7, background:G.surface, borderLeft:`3px solid ${G.red}` }}>
+              <b>🗂 Formulare blocante (aplicabile, nesemnate / nepuse în pachet):</b>
+              {ultima.raport.trecerea_a.formulare_blocante.map((f, i) => <div key={i} style={{ color:G.muted }}>• {f}</div>)}
+            </div>
+          )}
           {(arb.probleme_critice || []).map((p, i) => (
             <div key={i} style={{ padding:'6px 10px', marginBottom:5, borderRadius:7, background:G.surface, borderLeft:`3px solid ${vCol}` }}>
               <b>{p.titlu}</b>{p.actiune ? <span style={{ color:G.muted }}> — {p.actiune}</span> : null}
