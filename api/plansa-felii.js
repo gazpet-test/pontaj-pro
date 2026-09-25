@@ -256,6 +256,8 @@ export default async function handler(req, res) {
       cale_felii: bazaCale, verificare: verdict,
       zone_asteptate: zoneAsteptate, felii_goale: reusite.filter((f) => f.goala).length,
       micsorare: +micsorare.toFixed(2), rezolutie_redusa: rezolutieRedusa,
+      // 25.09.2026 (audit T4/T11): amprenta tăierii — o citire se poate relua pe zone doar pe ACEEAȘI tăiere
+      taiat_la: new Date().toISOString(),
     },
   }
   await supa.from('ofertare_documente_atribuire')
