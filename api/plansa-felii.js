@@ -15,7 +15,7 @@ import sharp from 'sharp'
 // 25.09.2026: planșele VECTORIALE se randează cu pdf.js + @napi-rs/canvas (vezi _randare-pdf.js).
 // MuPDF a fost scos în aceeași zi: licență AGPL, risc pe o platformă folosită prin internet.
 import { randeazaVectorial, analizeazaSemnale } from './_randare-pdf.js'
-import { scrieAnalizaCAS } from './_cas.js'
+import { scrieAnalizaCAS, rezervariActive } from './_cas.js'
 const DPI_VECTOR_FIN = 300 // „recitește fin" pe vectorial: randare mai densă, felii normale de 1600px
 
 const LATURA = 1600        // latura unei felii trimise la AI
@@ -102,7 +102,7 @@ export function decideRuta(meta, a) {
 }
 
 // R4 (Copilot): scrierea `analiza` e compare-and-set (api/_cas.js — testat în scripts/test-cas-felii.mjs).
-export { scrieAnalizaCAS }
+export { scrieAnalizaCAS, rezervariActive }
 
 // R4 (Copilot) pct. 1: acoperirea paginii la o SCANARE din PDF. Procentul (fractie_pagina ≥50%) rămâne DOAR pentru
 // rutare (decideRuta). Acoperirea e demonstrată doar dacă imaginea acoperă practic toată pagina (≥95% din aria
@@ -159,6 +159,18 @@ export default async function handler(req, res) {
     .select('id, licitatie_id, nume_original, fisier_path, size_bytes, analiza').eq('id', docId).single()
   if (!doc) return res.status(404).json({ error: 'document inexistent' })
   if (doc.size_bytes && doc.size_bytes > MAX_MB * 1e6) return res.status(400).json({ error: `document peste ${MAX_MB}MB` })
+  // R4 (runda 3): planșă în citire în alt tab (zone rezervate, neexpirate) => nu se retaie: retăierea ar șterge feliile și
+  // ar face citirea în curs să pice DUPĂ ce a plătit AI-ul. Verificat înainte de orice descărcare/ștergere de felii.
+  const refuzInLucru = (analiza) => {
+    const ocupate = rezervariActive(analiza)
+    if (!ocupate.length) return null
+    const pana = ocupate.map((o) => o.pana_la).sort().pop()
+    const ora = new Date(pana).toLocaleTimeString('ro-RO', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' })
+    return res.status(409).json({ error: `Planșa e în citire în alt tab (${ocupate.length} zone rezervate, până la ${ora}) — retăierea ar arunca ` +
+      'citirea în curs. Lasă celălalt tab să termine; dacă a fost închis, rezervarea expiră singură.', in_lucru: ocupate.map((o) => o.cheie), rezervat_pana_la: pana })
+  }
+  const refuz0 = refuzInLucru(doc.analiza)
+  if (refuz0) return refuz0
 
   const { data: fisier, error: eDl } = await supa.storage.from('ofertare').download(doc.fisier_path)
   if (eDl || !fisier) return res.status(502).json({ error: eDl?.message || 'descarcare esuata' })
@@ -285,6 +297,11 @@ export default async function handler(req, res) {
   }
 
   const bazaCale = `${doc.licitatie_id}/felii/${docId}`
+  // R4 (runda 3): re-verificare pe starea PROASPĂTĂ chiar înainte de pasul distructiv (ștergerea feliilor) — o citire
+  // putea porni în alt tab cât am descărcat/analizat planșa. Rămâne doar fereastra tăiere+upload (secunde; vezi docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md).
+  const { data: proaspat } = await supa.from('ofertare_documente_atribuire').select('analiza').eq('id', docId).maybeSingle()
+  const refuz1 = refuzInLucru(proaspat?.analiza)
+  if (refuz1) return refuz1
   // feliile vechi (altă grilă) s-ar citi și ele — le ștergem întâi
   const { data: vechi } = await supa.storage.from('ofertare').list(bazaCale, { limit: 200 })
   if (vechi?.length) await supa.storage.from('ofertare').remove(vechi.map((f) => `${bazaCale}/${f.name}`))

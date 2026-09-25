@@ -17,7 +17,7 @@
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
-import { cheieVersiune, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
+import { cheieVersiune, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a);
@@ -556,22 +556,42 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (body?.doar_lipire === true) {
     const ca = doc.analiza?.citire_ai;
     if (!ca?.gata) return json({ error: 'planșa nu e citită complet' }, 400);
-    const facute = new Set<string>([...(ca.note_lipite_perechi || []), ...(ca.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
-    const perechi = perechiDeLipit(ca.felii || [], peStorage, facute).slice(0, MAX_PERECHI);
+    // R4 (runda 3): perechile se REZERVĂ înainte de AI (cheie „lipire:zA+zB”) — două taburi pe „note tăiate” nu mai
+    // plătesc aceleași perechi; dacă toate perechile rămase sunt în lucru în alt tab => 409, zero AI.
+    const taiatL = plansa.taiat_la || null, rulareL = crypto.randomUUID();
+    const cheiePer = (p: string[]) => `lipire:${p.join('+')}`;
+    const rzL = await rezervaChei(supa, docId, doc, rulareL, taiatL, (d: any, altii: Map<string, any>) => {
+      const caX = d.analiza?.citire_ai;
+      if (!caX?.gata || (caX.taiat_la || null) !== (ca.taiat_la || null))
+        return { cand: [], lot: [], stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — reia „lipește”.' } };
+      const facuteX = new Set<string>([...(caX.note_lipite_perechi || []), ...(caX.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
+      const toate = perechiDeLipit(caX.felii || [], peStorage, facuteX);
+      const libere = toate.filter((p) => !altii.has(cheiePer(p))).slice(0, MAX_PERECHI);
+      return { cand: toate.map(cheiePer), lot: libere.map(cheiePer), perechi: libere };
+    });
+    if (!rzL.ok) return rzL.inLucru
+      ? json({ error: rzL.inLucru.mesaj, in_lucru: rzL.inLucru.chei, rezervat_pana_la: rzL.inLucru.pana_la, cost_usd: 0 }, 409)
+      : json({ error: rzL.stop?.error || 'rezervare eșuată' }, rzL.stop?.status || 409);
+    const perechi: [string, string][] = rzL.plan.perechi || [];
     const rez: any[] = [];
-    for (let i = 0; i < perechi.length; i += PARALEL) {
-      rez.push(...await Promise.all(perechi.slice(i, i + PARALEL).map(async ([a, b]) => {
-        const [x, y] = await Promise.all([a, b].map((n) => supa.storage.from('ofertare').download(`${plansa.cale_felii}/${n}.jpg`)));
-        if (!x.data || !y.data) return { eticheta: `${a}+${b}`, randuri: [], eroare: 'descarcare esuata' };
-        return await lipestePereche(API_KEY, new Uint8Array(await x.data.arrayBuffer()), new Uint8Array(await y.data.arrayBuffer()), `${a}+${b}`);
-      })));
+    try {
+      for (let i = 0; i < perechi.length; i += PARALEL) {
+        rez.push(...await Promise.all(perechi.slice(i, i + PARALEL).map(async ([a, b]) => {
+          const [x, y] = await Promise.all([a, b].map((n) => supa.storage.from('ofertare').download(`${plansa.cale_felii}/${n}.jpg`)));
+          if (!x.data || !y.data) return { eticheta: `${a}+${b}`, randuri: [], eroare: 'descarcare esuata' };
+          return await lipestePereche(API_KEY, new Uint8Array(await x.data.arrayBuffer()), new Uint8Array(await y.data.arrayBuffer()), `${a}+${b}`);
+        })));
+      }
+    } catch (e) {
+      if (rzL.rezervat) await elibereazaRezervari(supa, docId, rulareL, taiatL); // altfel expiră singură
+      throw e;
     }
     const tinL = rez.reduce((q, r) => q + (r._tin || 0), 0), toutL = rez.reduce((q, r) => q + (r._tout || 0), 0);
     if (rez.length) await supa.from('ai_usage_log').insert({ function_name: 'ofertare-plansa-citeste', model: MODEL, tokens_in: tinL, tokens_out: toutL,
       cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4), ref_table: 'ofertare_documente_atribuire', ref_id: docId });
     let ld: any = null, note: any[] = [], citireAi2: any = null, decl: number | null = null;
     // R4: scriere compare-and-set — notele se refac peste citirea PROASPĂTĂ dacă între timp a scris altcineva
-    const w = await scrieCAS(supa, docId, doc, (d: any) => {
+    const w = await scrieCAS(supa, docId, rzL.doc, (d: any) => {
       const caX = d.analiza?.citire_ai;
       if (!caX?.gata || (caX.taiat_la || null) !== (ca.taiat_la || null))
         return { stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — notele nu s-au salvat. Reia „lipește”.' } };
@@ -587,13 +607,17 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         ...(ld.necorelare ? { necorelare_unitate: ld.necorelare } : {}),
         // proveniența vizuală: ce document, ce pagină, ce zone/imagini au dat cifra
         provenienta: { doc_id: docId, fisier: d.nume_original, pagina: 1, dpi: plansa.dpi || null, cale_felii: plansa.cale_felii, zone: ld.sursa } } };
-      const upd2: Record<string, unknown> = { analiza: { ...d.analiza, citire_ai: citireAi2 }, analiza_la: new Date().toISOString(),
+      const rzCurat = d.analiza?.rezervari_zone ? { rezervari_zone: rezervariNoi(d.analiza.rezervari_zone, taiatL, Date.now(), { scoateRulare: rulareL }) } : {};
+      const upd2: Record<string, unknown> = { analiza: { ...d.analiza, citire_ai: citireAi2, ...rzCurat }, analiza_la: new Date().toISOString(),
         text_extras: textPlansa(d.nume_original, citireAi2) };
       // lungimea declarată e o dată utilă => planșa nu mai e „fără rezultat" (nu mai intră în clarificarea automată)
       if (decl && d.eroare === 'citită fără rezultat') upd2.eroare = null;
       return { upd: upd2 };
     });
-    if (!w.ok) return json({ error: w.stop.error, cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4) }, w.stop.status);
+    if (!w.ok) {
+      if (rzL.rezervat) await elibereazaRezervari(supa, docId, rulareL, taiatL);
+      return json({ error: w.stop.error, cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4) }, w.stop.status);
+    }
     let clar: unknown = null;
     if ((w.rezultat.upd as any).eroare === null) {
       const { data, error } = await supa.rpc('ofertare_clarificare_planse_auto', { p_licitatie_id: doc.licitatie_id });
@@ -618,14 +642,43 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     if (incomp) return json({ error: incomp, versiune_salvata: ca0?.versiune || null, versiune_curenta: versiuneCur }, 409);
   }
   const numeZona = (f: any) => String(f.name || '').replace('.jpg', '');
-  const existente: any[] = (mod || deLa > 0) && acelasiTaiat ? (ca0?.felii || []) : (deLa > 0 ? (ca0?.felii || []) : []);
-  const rezPe = new Map(existente.map((r: any) => [String(r.eticheta || '').replace('.jpg', ''), r]));
   const sari = new Set<string>((Array.isArray(body?.sari) ? body.sari : []).map(String));
-  const lot = mod === 'reia_erori'
-    ? felii.filter((f: any) => rezPe.get(numeZona(f))?.eroare && !sari.has(numeZona(f))).slice(0, FELII_PE_RULARE)
-    : mod === 'continua'
-      ? felii.filter((f: any) => !rezPe.has(numeZona(f))).slice(0, FELII_PE_RULARE)
-      : felii.slice(deLa, deLa + FELII_PE_RULARE);
+  const taiatCur = plansa.taiat_la || null;
+  const rulareNoua = crypto.randomUUID(); // invocarea curentă: rezervări + lease de transfer
+  // R4 (Copilot, runda 3): lotul se calculează pe documentul PROASPĂT și se REZERVĂ (CAS pe analiza.rezervari_zone)
+  // ÎNAINTE de apelul AI. Zonele rezervate de altă rulare pe aceeași tăiere nu intră în lot (nu se plătesc de două ori);
+  // dacă toate candidatele sunt rezervate => 409 „în lucru în alt tab”, zero AI, zero scrieri. Rezervare expirată => preluare.
+  //  mod 'reia_erori' = zonele căzute (fără cele din `sari`) · 'continua' = zonele fără rezultat ·
+  //  „citește” pe runde (de_la) = de la poziția de_la încolo; la de_la>0 o zonă citită deja BINE în citirea curentă
+  //  (ex. de un tab care a făcut „continuă” între timp) nu se mai plătește.
+  const planifica = (d: any, altii: Map<string, any>, incercare: number) => {
+    const caD = d.analiza?.citire_ai;
+    if (incercare > 0 && !resetare) { // documentul s-a schimbat între timp: aceleași verificări ca la început
+      if (!caD || (caD.taiat_la || null) !== taiatCur)
+        return { cand: [], lot: [], stop: { status: 409, error: 'Citirea salvată e pe altă tăiere a planșei — pornește „citește” din nou.' } };
+      const inc = versiuneIncompatibila(caD, versiuneCur, mixarePermisa);
+      if (inc) return { cand: [], lot: [], stop: { status: 409, error: inc } };
+    }
+    const exist: any[] = resetare ? [] : (caD?.felii || []);
+    const rezPe = new Map(exist.map((r: any) => [String(r.eticheta || '').replace('.jpg', ''), r]));
+    const cand: string[] = (mod === 'reia_erori'
+      ? felii.filter((f: any) => rezPe.get(numeZona(f))?.eroare && !sari.has(numeZona(f)))
+      : mod === 'continua'
+        ? felii.filter((f: any) => !rezPe.has(numeZona(f)))
+        : felii.slice(deLa).filter((f: any) => resetare || !(rezPe.has(numeZona(f)) && !rezPe.get(numeZona(f)).eroare))
+    ).map(numeZona);
+    return { cand, lot: cand.filter((z) => !altii.has(z)).slice(0, FELII_PE_RULARE), exist, altii };
+  };
+  const rz = await rezervaChei(supa, docId, doc, rulareNoua, taiatCur, planifica);
+  if (!rz.ok) return rz.inLucru
+    ? json({ error: rz.inLucru.mesaj, in_lucru: rz.inLucru.chei, rezervat_pana_la: rz.inLucru.pana_la, citite_acum: 0, cost_usd: 0 }, 409)
+    : json({ error: rz.stop?.error || 'rezervare eșuată' }, rz.stop?.status || 409);
+  const docBaza = rz.doc;                                   // documentul după rezervare = baza scrierii rezultatului
+  const existente: any[] = rz.plan.exist;
+  const rezervateAlt: Map<string, any> = rz.plan.altii;     // zone lăsate altei rulări (nu se așteaptă după ele)
+  const inPlan = new Set<string>(rz.plan.lot);
+  const lot = felii.filter((f: any) => inPlan.has(numeZona(f)));
+  const deLaUrmator = mod ? deLa + lot.length : (lot.length ? felii.indexOf(lot[lot.length - 1]) + 1 : deLa);
   // 25.09.2026 (Vâlcelele, schema tehnologică): tabelul de dimensionare se întinde pe multe zone, dar antetul e
   // doar în prima — zonele fără antet ghiceau coloanele (debitul citit ca diametru: Dn43/48/56/96/98).
   // Antetele găsite în zonele deja citite se dau mai departe.
@@ -635,14 +688,19 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const paralel = Math.max(1, Math.min(PARALEL_MAX, Math.floor(Number(body?.paralel)) || PARALEL));
   const tRunda = Date.now();
   const rezultate: any[] = [];
-  for (let i = 0; i < lot.length; i += paralel) {
-    const grup = lot.slice(i, i + paralel);
-    const parti = await Promise.all(grup.map(async (f: any) => {
-      const { data: bin, error } = await supa.storage.from('ofertare').download(`${plansa.cale_felii}/${f.name}`);
-      if (error || !bin) return { eticheta: numeZona(f), eroare: error?.message || 'descarcare esuata' };
-      return await citesteFelie(API_KEY, new Uint8Array(await bin.arrayBuffer()), f.name.replace('.jpg', ''), anteteCunoscute);
-    }));
-    rezultate.push(...parti);
+  try {
+    for (let i = 0; i < lot.length; i += paralel) {
+      const grup = lot.slice(i, i + paralel);
+      const parti = await Promise.all(grup.map(async (f: any) => {
+        const { data: bin, error } = await supa.storage.from('ofertare').download(`${plansa.cale_felii}/${f.name}`);
+        if (error || !bin) return { eticheta: numeZona(f), eroare: error?.message || 'descarcare esuata' };
+        return await citesteFelie(API_KEY, new Uint8Array(await bin.arrayBuffer()), f.name.replace('.jpg', ''), anteteCunoscute);
+      }));
+      rezultate.push(...parti);
+    }
+  } catch (e) {
+    if (rz.rezervat) await elibereazaRezervari(supa, docId, rulareNoua, taiatCur); // altfel expiră singură
+    throw e;
   }
 
   const tin = rezultate.reduce((s, r) => s + (r._tin || 0), 0);
@@ -670,7 +728,6 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     for (const t of (r.tronsoane || [])) { t._zona = r.eticheta; if (reg) t._regiune = reg; }
   }
   const inLot = new Set(lot.map(numeZona));
-  const rulareNoua = crypto.randomUUID();
 
   // Tot ce urmează se calculează dintr-o BAZĂ (analiza salvată). La conflict de scriere (alt tab / altă rulare a
   // scris între timp) baza e recitită și rezultatele rundei se fuzionează pe zone peste ea (scrieCAS).
@@ -692,9 +749,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const toate = fuzioneazaZone(baza, rezultate);
     const cuRezultat = new Set(toate.map((r: any) => String(r.eticheta || '').replace('.jpg', '')));
     const gata = felii.every((f: any) => cuRezultat.has(numeZona(f)));
+    // zonele rezervate de altă rulare nu țin bucla deschisă: le termină rularea care le-a rezervat
     const maiSunt = mod === 'reia_erori'
-      ? felii.some((f: any) => { const n = numeZona(f); return !inLot.has(n) && !sari.has(n) && toate.find((r: any) => r.eticheta === n)?.eroare; })
-      : !gata;
+      ? felii.some((f: any) => { const n = numeZona(f); return !inLot.has(n) && !sari.has(n) && !rezervateAlt.has(n) && toate.find((r: any) => r.eticheta === n)?.eroare; })
+      : felii.some((f: any) => { const n = numeZona(f); return !cuRezultat.has(n) && !rezervateAlt.has(n); });
 
   // sumar peste tot ce s-a citit pana acum, ca sa se vada imediat ce a iesit.
   // Se numara tronsoanele UNICE: cu suprapunerea dintre felii, acelasi rand apare de
@@ -806,7 +864,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     gata, actualizat: new Date().toISOString(), rev: revNou(), rulare,
     ...(caB?.transfer ? { transfer: caB.transfer } : {}), // lease-ul de transfer al altei rulări nu se șterge
     ...(caB?.rulare === rulare && caB?.note_lipite ? { note_lipite: caB.note_lipite, note_lipite_perechi: caB.note_lipite_perechi } : {}) };
-  const upd: Record<string, unknown> = { analiza: { ...d.analiza, citire_ai: citireAi }, analiza_la: new Date().toISOString() };
+  // rezervările: ale rulării curente se eliberează odată cu scrierea rezultatului; ale altora (active) rămân
+  const rzCurat = d.analiza?.rezervari_zone ? { rezervari_zone: rezervariNoi(d.analiza.rezervari_zone, taiatCur, Date.now(), { scoateRulare: rulareNoua }) } : {};
+  const upd: Record<string, unknown> = { analiza: { ...d.analiza, citire_ai: citireAi, ...rzCurat }, analiza_la: new Date().toISOString() };
   // 25.09.2026 (audit țintit): PL1–PL4 Vâlcelele au fost „citite" pe sigla semnăturii (900x450) și au ieșit
   // procesat fără eroare — butoanele le socoteau citite. O sursă sub 2000px pe latura mare nu e o planșă:
   // rezultatul NU poate fi „procesat".
@@ -836,7 +896,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (gata) {
     const r = rezultatCitire({ plansa: plansaD, toate, sumar, zoneLipsa, prea_mica });
     citireAi.rezultat = r.rezultat;
-    upd.analiza = { ...d.analiza, citire_ai: citireAi,
+    upd.analiza = { ...d.analiza, citire_ai: citireAi, ...rzCurat,
       plansa: { ...plansaD, rezultat: r.rezultat, rezultat_motiv: r.motiv, rezultat_la: new Date().toISOString(), rezultat_sursa: 'extractor', rezultat_cod: COD_VERSIUNE } };
     // `eroare` păstrează formatele vechi, doar „citită fără rezultat” se desparte în cele două formulări
     if (upd.eroare === 'citită fără rezultat') upd.eroare = r.rezultat === 'ilizibil' ? 'ilizibilă' : r.rezultat === 'citita_fara_date_cantitative' ? 'citită fără date cantitative' : 'de verificat: ' + r.motiv.replace(/^de verificat: /, '');
@@ -850,8 +910,11 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   return { upd };
   };
 
-  const w = await scrieCAS(supa, docId, doc, construieste);
-  if (!w.ok) return json({ error: w.stop.error, citite_acum: lot.length, cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4) }, w.stop.status);
+  const w = await scrieCAS(supa, docId, docBaza, construieste);
+  if (!w.ok) {
+    if (rz.rezervat) await elibereazaRezervari(supa, docId, rulareNoua, taiatCur); // altfel expiră singură
+    return json({ error: w.stop.error, citite_acum: lot.length, cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4) }, w.stop.status);
+  }
   const { toate, gata, maiSunt, sumar, upd } = { ...ctx, upd: w.rezultat.upd };
   let { cantitati } = ctx;
 
@@ -908,7 +971,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   return json({
     document: doc.nume_original, citite_acum: lot.length, din: felii.length, sumar, cantitati,
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4),
-    clarificare, continua: maiSunt && lot.length > 0, de_la_urmator: gata ? null : deLa + lot.length,
+    clarificare, continua: maiSunt && lot.length > 0, de_la_urmator: gata ? null : deLaUrmator,
+    ...(rezervateAlt.size ? { in_lucru_alt_tab: [...rezervateAlt.keys()].filter((k) => !k.startsWith('lipire:')) } : {}),
     reincercate: mod === 'reia_erori' ? [...sari, ...inLot] : undefined, zone_cazute: sumar.zone_cazute,
     lipire_necesara: gata ? perechiDeLipit(toate, peStorage).slice(0, MAX_PERECHI).length : 0,
     ...(w.incercari > 1 ? { scriere_concurenta: { incercari: w.incercari } } : {}),

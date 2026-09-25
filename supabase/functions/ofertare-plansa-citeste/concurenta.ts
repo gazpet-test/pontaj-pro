@@ -6,11 +6,16 @@
 // expiră prea devreme și nu mai protejează nimic. CAS nu ține nimic ocupat: fiecare scriere spune „scriu doar
 // dacă analiza e încă cea pe care am citit-o" (citire_ai.rev). La conflict se recitește, se FUZIONEAZĂ pe zone
 // și se reîncearcă — rezultatele deja plătite ale ambelor rulări se păstrează. Costul dublu (două taburi care
-// citesc aceeași zonă) nu îl previne nici CAS; îl rezolvă coada persistentă (docs/R4_COADA_PERSISTENTA_ZONE.md).
+// citesc aceeași zonă) nu îl previne CAS-ul; îl previne REZERVAREA pe zonă (mai jos, docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md):
+// înainte de apelul AI, zonele lotului se rezervă prin CAS în analiza.rezervari_zone, cu termen de expirare.
 
 export const INCERCARI_CAS = 3;
 export const CALE_REV = 'analiza->citire_ai->>rev';
 export const CALE_TAIAT = 'analiza->plansa->>taiat_la';
+// Jetonul rezervărilor (analiza.rezervari_zone.rev) — schimbat la FIECARE scriere a rezervărilor. Toate scrierile CAS
+// de aici filtrează și pe el: altfel o scriere a citirii (care rescrie toată coloana `analiza`) ar șterge pe tăcute o
+// rezervare făcută de alt tab între citirea și scrierea ei.
+export const CALE_REZ = 'analiza->rezervari_zone->>rev';
 
 // Cheia de compatibilitate: aceeași logică de citire (cod), același model, același prompt.
 export function cheieVersiune(v: any): string | null {
@@ -98,6 +103,8 @@ export async function scrieCAS(supa: any, docId: number, docInitial: any,
     // o rundă în zbor pe tăierea veche ar trece CAS-ul și ar suprascrie analiza.plansa nouă cu cea veche.
     const taiatBaza = doc?.analiza?.plansa?.taiat_la ?? null;
     q = taiatBaza == null ? q.is(CALE_TAIAT, null) : q.eq(CALE_TAIAT, String(taiatBaza));
+    const rezBaza = doc?.analiza?.rezervari_zone?.rev ?? null;
+    q = rezBaza == null ? q.is(CALE_REZ, null) : q.eq(CALE_REZ, String(rezBaza));
     const { data, error } = await q.select('id');
     if (error) return { ok: false, stop: { status: 500, error: error.message }, incercari: i + 1 };
     if ((data || []).length === 1) return { ok: true, doc, rezultat: rez, incercari: i + 1 };
@@ -131,4 +138,101 @@ export function transferDeReluat(c: any, acumMs = Date.now()): boolean {
     return !Number.isFinite(t) || acumMs - t > TRANSFER_EXPIRA_MS;
   }
   return false;
+}
+
+// ---- R4 (Copilot, runda 3): REZERVARE per (document, zonă, tăiere) înainte de apelul AI --------------------------
+// Problema rămasă după CAS: două taburi care pornesc „continuă” / „reia zonele căzute” (sau un „citește” în curs +
+// un „continuă”) calculau ACELAȘI lot de zone și plăteau de două ori (CAS-ul păstra rezultatul o singură dată).
+// Acum lotul se rezervă ÎNAINTE de AI, prin CAS, în analiza.rezervari_zone = {rev, zone: {cheie: {rulare, taiat_la,
+// de_la, pana_la}}} (cheie = eticheta zonei „z1_5”, sau „lipire:z1_1+z1_2” pentru perechile de note). Fără schemă nouă.
+//  - rezervarea altei rulări, pe ACEEAȘI tăiere (taiat_la) și neexpirată => zona nu intră în lot (zero AI pe ea);
+//  - dacă TOATE zonele candidate sunt rezervate de alții => 409 „în lucru în alt tab”, zero AI, zero scrieri;
+//  - rezervarea se eliberează la scrierea rezultatului (sau best-effort la eșec); dacă funcția e omorâtă, expiră
+//    singură după REZERVARE_EXPIRA_MS și zona se poate prelua;
+//  - rezervările de pe altă tăiere sunt moarte (retăierea schimbă zonele) și se curăță la următoarea scriere.
+// Termenul: > durata maximă a unei invocări Edge (limita de ceas: 150 s pe Free, 400 s pe planurile plătite — docs
+// Supabase „Edge Functions / Limits”), ca o rulare încă vie să nu-și piardă rezervarea.
+export const REZERVARE_EXPIRA_MS = 7 * 60 * 1000;
+
+const rezActiva = (r: any, taiatLa: string | null, acumMs: number) => {
+  if (!r || (r.taiat_la ?? null) !== (taiatLa ?? null)) return false;
+  const t = Date.parse(r.pana_la);
+  return Number.isFinite(t) && t > acumMs;
+};
+
+// Rezervările ACTIVE ale ALTOR rulări pe tăierea curentă: cheie -> rezervare.
+export function rezervateDeAltii(rz: any, taiatLa: string | null, rulare: string, acumMs = Date.now()): Map<string, any> {
+  const m = new Map<string, any>();
+  for (const [k, r] of Object.entries(rz?.zone || {})) if (rezActiva(r, taiatLa, acumMs) && (r as any).rulare !== rulare) m.set(k, r);
+  return m;
+}
+
+// Obiectul rezervari_zone de scris: păstrează doar rezervările active de pe tăierea curentă, scoate (opțional) pe ale
+// unei rulări (eliberare) și adaugă cheile noi. Jeton NOU la fiecare scriere.
+export function rezervariNoi(rz: any, taiatLa: string | null, acumMs: number,
+  opt: { scoateRulare?: string; adauga?: { chei: string[]; rulare: string } } = {}): { rev: string; zone: Record<string, any> } {
+  const zone: Record<string, any> = {};
+  for (const [k, r] of Object.entries(rz?.zone || {})) {
+    if (!rezActiva(r, taiatLa, acumMs)) continue;
+    if (opt.scoateRulare && (r as any).rulare === opt.scoateRulare) continue;
+    zone[k] = r;
+  }
+  if (opt.adauga) for (const k of opt.adauga.chei) zone[k] = { rulare: opt.adauga.rulare, taiat_la: taiatLa ?? null,
+    de_la: new Date(acumMs).toISOString(), pana_la: new Date(acumMs + REZERVARE_EXPIRA_MS).toISOString() };
+  return { rev: revNou(), zone };
+}
+
+export function mesajInLucru(chei: string[], altii: Map<string, any>): string {
+  const t = chei.map((k) => Date.parse(altii.get(k)?.pana_la)).filter(Number.isFinite);
+  const pana = t.length ? new Date(Math.max(...t)).toLocaleTimeString('ro-RO', { timeZone: 'Europe/Bucharest', hour: '2-digit', minute: '2-digit' }) : null;
+  const lista = chei.slice(0, 8).join(', ') + (chei.length > 8 ? ` și încă ${chei.length - 8}` : '');
+  return `${chei.length === 1 ? 'Zona' : 'Zonele'} ${lista} ${chei.length === 1 ? 'e' : 'sunt'} în lucru în alt tab (altă rulare)` +
+    `${pana ? `, rezervate până la ${pana}` : ''} — nu s-a apelat AI, nu s-a plătit nimic. Lasă celălalt tab să termine; ` +
+    'dacă a fost închis, rezervarea expiră singură și zona se poate relua.';
+}
+
+// Rezervă cheile lotului prin CAS. planifica(d, altii) calculează pe documentul PROASPĂT (la conflict se recalculează):
+//  { cand: chei candidate (ce s-ar citi fără rezervări), lot: chei de rezervat acum } sau { stop }.
+// Rezultat: { ok, doc, plan, rezervat } (doc = documentul DUPĂ rezervare — baza scrierii următoare) |
+//           { ok:false, inLucru: {chei, mesaj} } (toate candidatele rezervate de alții) | { ok:false, stop }.
+export async function rezervaChei(supa: any, docId: number, docStart: any, rulare: string, taiatLa: string | null,
+  planifica: (d: any, altii: Map<string, any>, incercare: number) => { cand: string[]; lot: string[]; stop?: any; [k: string]: any },
+): Promise<any> {
+  let plan: any = null, baza: any = docStart, altii = new Map<string, any>();
+  const w = await scrieCAS(supa, docId, docStart, (d: any, incercare: number) => {
+    baza = d;
+    if ((d?.analiza?.plansa?.taiat_la ?? null) !== (taiatLa ?? null))
+      return { stop: { status: 409, error: 'Planșa a fost retăiată între timp — pornește „citește” din nou.' } };
+    altii = rezervateDeAltii(d?.analiza?.rezervari_zone, taiatLa, rulare);
+    plan = planifica(d, altii, incercare);
+    if (plan.stop) return { stop: plan.stop };
+    if (!plan.lot.length) return { stop: plan.cand.length ? { inLucru: true } : { nimic: true } };
+    return { upd: { analiza: { ...d.analiza, rezervari_zone: rezervariNoi(d.analiza?.rezervari_zone, taiatLa, Date.now(),
+      { adauga: { chei: plan.lot, rulare } }) } } };
+  });
+  if (w.ok) return { ok: true, rezervat: true, plan, doc: { ...w.doc, analiza: w.rezultat.upd.analiza } };
+  if (w.stop?.nimic) return { ok: true, rezervat: false, plan, doc: baza };
+  if (w.stop?.inLucru) {
+    const chei = plan.cand.filter((k: string) => altii.has(k));
+    const pana = chei.map((k: string) => altii.get(k)?.pana_la).filter(Boolean).sort().pop() || null;
+    return { ok: false, inLucru: { chei, pana_la: pana, mesaj: mesajInLucru(chei, altii) } };
+  }
+  return { ok: false, stop: w.stop };
+}
+
+// Eliberare best-effort a rezervărilor unei rulări (după un eșec care n-a scris rezultatul). Pe altă tăiere nu se
+// scrie nimic: rezervările vechi sunt oricum moarte. Dacă eliberarea nu reușește, rezervarea expiră singură.
+export async function elibereazaRezervari(supa: any, docId: number, rulare: string, taiatLa: string | null): Promise<boolean> {
+  try {
+    const { data: d } = await supa.from('ofertare_documente_atribuire')
+      .select('id, licitatie_id, nume_original, analiza, eroare').eq('id', docId).maybeSingle();
+    if (!d) return false;
+    const w = await scrieCAS(supa, docId, d, (x: any) => {
+      const rz = x.analiza?.rezervari_zone;
+      if ((x.analiza?.plansa?.taiat_la ?? null) !== (taiatLa ?? null)) return { stop: { status: 200 } };
+      if (!Object.values(rz?.zone || {}).some((r: any) => r?.rulare === rulare)) return { stop: { status: 200 } };
+      return { upd: { analiza: { ...x.analiza, rezervari_zone: rezervariNoi(rz, taiatLa, Date.now(), { scoateRulare: rulare }) } } };
+    });
+    return w.ok;
+  } catch (_) { return false; }
 }

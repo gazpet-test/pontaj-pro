@@ -1,8 +1,8 @@
 // R4 (Copilot) pct. 2 — traseul COMPLET al scrierii din /api/plansa-felii (scrieAnalizaCAS din api/_cas.js, aceeași
 // funcție pe care o importă handlerul), cu client Supabase simulat: update real + filtre pe calea JSON.
 // Rulare: node scripts/test-cas-felii.mjs
-import { scrieAnalizaCAS, INCERCARI_CAS } from '../api/_cas.js'
-import { scrieAnalizaCAS as dinHandler } from '../api/plansa-felii.js'
+import { scrieAnalizaCAS, INCERCARI_CAS, rezervariActive } from '../api/_cas.js'
+import { scrieAnalizaCAS as dinHandler, rezervariActive as rezDinHandler } from '../api/plansa-felii.js'
 
 const cale = (row, c) => { let v = row; for (const p of c.split(/->>?/)) v = v == null ? undefined : v[p]; return c.includes('->>') ? (v == null ? null : String(v)) : v }
 function db(rows, { inainteDeUpdate } = {}) {
@@ -85,6 +85,19 @@ verifica(dinHandler === scrieAnalizaCAS, '0: /api/plansa-felii folosește exact 
   const { supa } = db(rows, { inainteDeUpdate: (rs) => { rs.length = 0 } })
   const w = await scrieAnalizaCAS(supa, 10, structuredClone(rows[0]), (a) => a)
   verifica(!w.ok && w.status === 404, '4: document șters => 404')
+}
+
+// 5) R4 runda 3: retăierea e refuzată cât timp o citire din alt tab are zone rezervate (active, pe tăierea curentă)
+{
+  const acum = Date.parse('2026-09-25T12:00:00Z')
+  const an = (zone) => ({ plansa: { taiat_la: 'T1' }, rezervari_zone: { rev: 'x', zone } })
+  verifica(rezDinHandler === rezervariActive, '5: /api/plansa-felii folosește exact rezervariActive din api/_cas.js')
+  const r = rezervariActive(an({ z1_5: { rulare: 'A', taiat_la: 'T1', pana_la: '2026-09-25T12:05:00Z' } }), acum)
+  verifica(r.length === 1 && r[0].cheie === 'z1_5' && r[0].pana_la === '2026-09-25T12:05:00Z', '5: rezervare activă pe tăierea curentă => blochează retăierea')
+  verifica(rezervariActive(an({ z1_5: { rulare: 'A', taiat_la: 'T1', pana_la: '2026-09-25T11:59:00Z' } }), acum).length === 0, '5: rezervare expirată (tab închis) => nu blochează')
+  verifica(rezervariActive(an({ z1_5: { rulare: 'A', taiat_la: 'T0', pana_la: '2026-09-25T12:05:00Z' } }), acum).length === 0, '5: rezervare pe altă tăiere => nu blochează')
+  verifica(rezervariActive({ plansa: { taiat_la: 'T1' } }, acum).length === 0 && rezervariActive(null, acum).length === 0, '5: fără rezervări => nu blochează')
+  verifica(rezervariActive(an({ 'lipire:z1_1+z1_2': { rulare: 'B', taiat_la: 'T1', pana_la: '2026-09-25T12:05:00Z' } }), acum).length === 1, '5: și perechile „note tăiate” în lucru blochează')
 }
 
 console.log(`\n${ok}/${tot} verificări trecute`)

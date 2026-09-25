@@ -6,6 +6,17 @@
 export const INCERCARI_CAS = 3
 export const CALE_REV = 'analiza->citire_ai->>rev'
 
+// R4 (runda 3): rezervările ACTIVE de zone (citire AI în curs în alt tab) pe tăierea CURENTĂ — scrise de
+// ofertare-plansa-citeste în analiza.rezervari_zone = {rev, zone: {cheie: {rulare, taiat_la, de_la, pana_la}}}.
+// O retăiere acum ar schimba zonele => citirea în curs ar pica cu 409 DUPĂ ce a plătit; /api/plansa-felii refuză.
+// Rezervările de pe altă tăiere sau expirate (tab închis) nu contează.
+export function rezervariActive(analiza, acumMs = Date.now()) {
+  const taiat = analiza?.plansa?.taiat_la ?? null
+  return Object.entries(analiza?.rezervari_zone?.zone || {})
+    .filter(([, r]) => r && (r.taiat_la ?? null) === taiat && Date.parse(r.pana_la) > acumMs)
+    .map(([cheie, r]) => ({ cheie, pana_la: r.pana_la }))
+}
+
 export async function scrieAnalizaCAS(supa, docId, docInitial, construieste, extra = {}) {
   let d = docInitial
   for (let i = 0; i < INCERCARI_CAS; i++) {

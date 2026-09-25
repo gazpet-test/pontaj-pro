@@ -22,6 +22,13 @@ Regula: orice acțiune plătită (recitire AI), modificare de date reale sau tri
 - R4: funcția `ofertare_transfer_plansa_cantitati` APLICATĂ (GO Razvan); test live: rulare greșită → `lease_pierdut`, 0 rânduri scrise. Handler-ul publicat o folosește.
 - R8/v5: comportament intenționat — ciorna cu text standard, dacă primește planșe noi, își rescrie textul și revine la `propunere` (conținut nou = re-aprobare); ciorna editată de om își păstrează textul și statusul (testat, #63).
 
+## R4 — runda 3 (25.09 noapte): plata dublă între taburi închisă în cod; coada pe NAS = design (cere GO)
+Detaliu: `docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md`. Ramura locală `claude/r4-rezervare-zone` — **nedeployat, nepushat**.
+| Restanță | Stare | Owner | Criteriu de acceptare | Măsură temporară |
+|---|---|---|---|---|
+| Apeluri AI duplicate între taburi (zone + perechi „note tăiate”) | **cod + teste** (rezervare per doc/zonă/tăiere, CAS, expirare 7 min, preluare; retăierea refuzată cât există zone rezervate) | Claude (cod), GO Razvan (deploy) | deploy edge `ofertare-plansa-citeste` + Vercel; test LIVE: 2 taburi „continuă” pe aceeași planșă ⇒ un singur apel AI pe zonă (`ai_usage_log`), al doilea tab vede „în lucru în alt tab” | un singur tab per planșă |
+| Coada independentă de browser (NAS) | design + migrare propusă, **neaplicată** | Claude (cod), GO Razvan (schemă + automatizare plătită + plafon) | job înscris din UI rulează până la capăt cu tabul închis; reluare după oprirea workerului fără re-plată; fișă în `registru_automatizari` | nu se închide tabul în timpul citirii; „⏯ continuă” reia doar zonele fără rezultat |
+
 ## R6 — închis cu restanță documentată (Copilot, 25.09 seara)
 Dovada traseului SEAP → extracție → manifest → obiect Storage: `worker/ofertare/verifica_manifest.ts` (PR #482), rulat pe toate licitațiile GO active: 878 fișiere = 825 identice la hash + 52 `__MACOSX` (păstrate în manifest ca `ignorat`, cu motiv) + 1 diferit la octeți; 0 lipsă, 0 erori Storage. Stare la 25.09, nu garanție pentru publicări ulterioare.
 Restanțe nominale:
