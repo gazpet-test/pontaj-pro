@@ -44,6 +44,11 @@ const scorPotrivire = (a, b) => {
   return comune / Math.min(A.size, B.size)
 }
 
+// #63: marcaj rezervat în ofertare_clarificari.sursa — token exact după virgulă, prefix 'revizie_'
+// (ex. '…,revizie_v2_manual'). Parsare pe split(','), nu LIKE: textul liber al sursei conține virgule.
+export const tokeniRevizie = (sursa) => String(sursa || '').split(',').slice(1).map(t => t.trim()).filter(t => /^revizie_[a-z0-9_]+$/i.test(t))
+export const necesitaRevizie = (q) => tokeniRevizie(q?.sursa).length > 0
+
 export default function ClarificariPanel({ licitatii, profile, showToast, initialLicId = null, onInapoi = null, onDeschideAnaliza = null }) {
   const active = (licitatii || []).filter(l => !['castigata', 'pierduta', 'abandonata'].includes(l.status))
   const [licId, setLicId] = useState(initialLicId)
@@ -143,8 +148,10 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   // Dar SEAP publică întrebările și răspunsurile către toți operatorii, deci numele firmei
   // în textul întrebării ajunge la concurență. Antetul e emitentul adresei, e în regulă.
   const genereazaAdresa = async () => {
-    const deTrimis = (clar || []).filter(q => q.status === 'de_trimis' && (q.intrebare || '').trim())
-    if (!deTrimis.length) { showToast('Nicio întrebare cu status „de trimis".', 'warn'); return }
+    // #63: întrebările marcate „revizie_*” în sursa NU intră în adresă (rămân vizibile în listă cu badge)
+    const deTrimis = (clar || []).filter(q => q.status === 'de_trimis' && (q.intrebare || '').trim() && !necesitaRevizie(q))
+    const excluse = (clar || []).filter(q => q.status === 'de_trimis' && necesitaRevizie(q)).length
+    if (!deTrimis.length) { showToast(`Nicio întrebare cu status „de trimis"${excluse ? ` (${excluse} excluse: necesită revizie)` : ''}.`, 'warn'); return }
     setBusy('PDF...')
     try {
       // HTML pe antet → html2canvas → A4 (fontul standard jsPDF nu are diacritice)
@@ -197,7 +204,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, -i * 297, 210, imgH)
       }
       pdf.save(`clarificari_${lic?.nr_anunt || licId}.pdf`)
-      showToast(`Adresa cu ${deTrimis.length} întrebări generată — verifică să nu apară numele firmei în textul întrebărilor (SEAP le publică tuturor ofertanților), apoi depune și marchează-le „trimisă".`)
+      showToast(`Adresa cu ${deTrimis.length} întrebări generată${excluse ? ` (${excluse} excluse — necesită revizie)` : ''} — verifică să nu apară numele firmei în textul întrebărilor (SEAP le publică tuturor ofertanților), apoi depune și marchează-le „trimisă".`)
     } catch (e) { showToast('Eroare PDF: ' + (e?.message || e), 'err') }
     setBusy(null)
   }
@@ -487,6 +494,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       {q.status === 'propunere' && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.green, borderColor:G.green + '66' }}
                         title="Ai verificat că datele chiar lipsesc (nu sunt în memoriu, F3 sau alt document) — ciorna trece la „de trimis”"
                         onClick={() => { setQ(q.id, 'status', 'de_trimis'); saveQ({ ...q, status: 'de_trimis', _mod: true }) }}>✅ Confirm motivul — de trimis</button>}
+                      {necesitaRevizie(q) && <span title={`Marcaj în sursă: ${tokeniRevizie(q.sursa).join(', ')} — exclusă din adresa generată până la revizie`} style={{ fontSize:10.5, fontWeight:700, color:G.red, background:G.red + '1A', border:`1px solid ${G.red}55`, borderRadius:5, padding:'1px 7px' }}>⚠ necesită revizie</span>}
                       {q.sursa && <span style={{ fontSize:11, color:G.dim }}>sursa: {q.sursa}</span>}
                       {q.fisier_path && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={async () => {
                         const { data } = await supabase.storage.from('ofertare').createSignedUrl(q.fisier_path, 600)

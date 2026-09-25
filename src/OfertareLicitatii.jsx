@@ -94,6 +94,18 @@ const fmtTermen = t => t ? new Date(t).toLocaleString('ro-RO', { day:'2-digit', 
 // timestamptz → valoare pentru <input type="datetime-local"> (ora locală, nu UTC)
 const toLocalInput = t => { if (!t) return ''; const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16) }
 
+// R4 risc 3: la 409/403 functions.invoke dă FunctionsHttpError cu mesaj generic („non-2xx status code”);
+// mesajul real (ex. „scrisă simultan din altă parte”, „fără drept”) e în corpul răspunsului: error.context (Response).
+async function mesajInvoke(error, data) {
+  if (data?.error) return data.error
+  const ctx = error?.context
+  if (ctx && typeof ctx.json === 'function') {
+    try { const j = await ctx.clone().json(); if (j?.error || j?.message) return `${j.error || j.message}${ctx.status ? ` (HTTP ${ctx.status})` : ''}` } catch { /* nu e JSON */ }
+    try { const t = await ctx.text(); if (t) return `${t.slice(0, 300)}${ctx.status ? ` (HTTP ${ctx.status})` : ''}` } catch { /* corp deja citit */ }
+  }
+  return error?.message || 'eroare necunoscută'
+}
+
 export default function OfertareLicitatiiTab() {
   const [profile, setProfile] = useState(null)
   const [rows, setRows] = useState([])
@@ -1033,7 +1045,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const PLANSA_PARALEL = 4
   const lipesteNote = async (d) => {
     const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, doar_lipire: true } })
-    if (error || data?.error) { setWarn(`Note tăiate: ${data?.error || error.message}`); return null }
+    if (error || data?.error) { setWarn(`Note tăiate: ${await mesajInvoke(error, data)}`); return null }
     return data
   }
   // 25.09.2026 (audit T4/C3): reluare pe zone, FĂRĂ retăiere — 'continua' (citire întreruptă) sau 'reia_erori'
@@ -1045,7 +1057,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       while (runde < 25) {
         setPlansaBusy(`${d.nume_original}: ${mod === 'reia_erori' ? 'recitesc zonele căzute' : 'continui citirea'} (runda ${runde + 1})...`)
         const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, mod, sari, paralel: PLANSA_PARALEL } })
-        if (error || data?.error) { setWarn(`Eroare la reluare: ${data?.error || error.message}`); break }
+        if (error || data?.error) { setWarn(`Eroare la reluare: ${await mesajInvoke(error, data)}`); break }
         sumar = data.sumar; sari = data.reincercate || sari
         if (!data.continua) break
         runde++
@@ -1074,7 +1086,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       while (runde < 25) {
         setPlansaBusy(`${eticheta}${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
         const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa, paralel: PLANSA_PARALEL } })
-        if (error || data?.error) { setWarn(`Eroare la citire: ${data?.error || error.message}`); break }
+        if (error || data?.error) { setWarn(`Eroare la citire: ${await mesajInvoke(error, data)}`); break }
         sumar = data.sumar
         if (!data.continua) { lipire = data.lipire_necesara || 0; break }
         deLa = data.de_la_urmator; runde++
@@ -1108,8 +1120,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // necitite încă, pe rând (nu există coadă pe server pentru planșe). Aceeași poartă pe cheltuială.
   // 25.09.2026 (audit țintit): o „citire" făcută pe o sursă sub 2000px (sigla semnăturii, nu desenul) NU contează
   // drept citită — altfel „Citește planșele desenate" sărea exact planșele care n-au fost citite niciodată (PL1–PL4 Vâlcelele).
-  const peSigla = d => { const p = d.analiza?.plansa; const l = Math.max(Number(p?.latime) || 0, Number(p?.inaltime) || 0); return !!p && !p.vectorial && l > 0 && l < 2000 }
-  const plansaCitita = d => !peSigla(d) && (['procesat', 'partial'].includes(d.status_procesare) || d.analiza?.citire_ai?.gata === true)
+  // R3: sub 2000px = doar avertisment (sursă de randat), NU dovadă de siglă. Siglă = plansa.rezultat când există; fallback regula veche (docuri istorice).
+  const subPrag = d => { const p = d.analiza?.plansa; const l = Math.max(Number(p?.latime) || 0, Number(p?.inaltime) || 0); return !!p && !p.vectorial && l > 0 && l < 2000 }
+  // Copilot R3: verdictul „siglă” vine DOAR din rezultat (identificare pozitivă pe server) — NU din pragul de 2000px
+  const peSigla = d => d.analiza?.plansa?.rezultat === 'sursa_gresita_sigla'
+  const ETICHETA_REZ = { sursa_gresita_sigla: ['⚠ citită pe siglă', G.red, 'Imaginea citită e doar sigla semnăturii — retaie planșa (randare pagină completă)'],
+    citita_fara_date_cantitative: ['fără date cantitative', G.orange, 'Nu au fost identificate date cantitative în lectura efectuată (lectură completă)'],
+    ilizibil: ['ilizibil', G.red, 'Lectură completă fără niciun text recunoscut'], partial: ['parțial / de verificat', G.orange, 'Lectură incompletă sau acoperirea paginii nedemonstrată — vezi motivul'] }
+  const plansaCitita = d => !peSigla(d) && !subPrag(d) && (['procesat', 'partial'].includes(d.status_procesare) || d.analiza?.citire_ai?.gata === true)
   const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !plansaCitita(d))
   const citesteToatePlansele = async () => {
     const lista = planseNecitite
@@ -1359,6 +1377,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       <span style={{ color:G.orange, marginLeft:6 }} title={`Pagini necitite: ${d.pagini_necitite.join(', ')}`}>· {d.pagini_necitite.length} necitite</span>
                     )}
                   </span>
+                  {d.tip === 'plansa' && (() => { const e = ETICHETA_REZ[d.analiza?.plansa?.rezultat] || (subPrag(d) ? ['sursă sub 2000px — de randat', G.orange, 'Sursa citită are sub 2000px; nu e dovadă de siglă — retaie (randare pagină completă)'] : null)
+                    return e && <span title={e[2] + (d.analiza?.plansa?.rezultat_motiv ? `\n${d.analiza.plansa.rezultat_motiv}` : '')} style={{ color:e[1], fontSize:11, whiteSpace:'nowrap' }}>{e[0]}</span> })()}
                   {d.status_procesare === 'in_lucru' && (
                     <span title={d.pagini ? `${Math.round(100 * (d.pagini_procesate || 0) / d.pagini)}%` : 'se pregătește'} style={{ width:64, height:5, borderRadius:3, background:G.border, overflow:'hidden', flexShrink:0 }}>
                       <i style={{ display:'block', height:'100%', width:`${d.pagini ? Math.max(3, Math.round(100 * (d.pagini_procesate || 0) / d.pagini)) : 3}%`, background:G.ofertare }} />
@@ -1377,7 +1397,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={!!plansaBusy} title="PDF peste 20 MB — citirea AI cade pe el; îl sparg în bucăți ≤ 15 MB"
                       onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
                   )}
-                  {d.tip === 'plansa' && poatePorniProcesarea(profile, licitatie) && d.analiza?.citire_ai && !peSigla(d) && (
+                  {d.tip === 'plansa' && poatePorniProcesarea(profile, licitatie) && d.analiza?.citire_ai && !peSigla(d) && !subPrag(d) && (
                     d.analiza.citire_ai.gata === false ? (
                       <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
                         title="Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."

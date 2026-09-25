@@ -7,12 +7,12 @@ name: Edge functions — repo vs producție
 on:
   push:
     branches: [main]
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   pull_request:
     # Și căile verificatorului, nu doar ale funcțiilor: altfel o modificare A VERIFICATORULUI
     # nu e rulată pe PR-ul care o aduce, ci abia după merge, direct pe main. Adică exact
     # unealta care există ca să prindă derive ajungea în producție neverificată (22.09.2026).
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   schedule:
     - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
   workflow_dispatch:
@@ -52,3 +52,22 @@ jobs:
           SUPABASE_PROJECT_REF: dxczwkbciseqniprspcu
           VERIFICA_DEBUG: ${{ vars.VERIFICA_DEBUG }}
         run: node scripts/verifica-edge-functions.mjs
+
+  # Poarta pe cheltuială: copiile poarta.ts identice + testele locale ale porții (fără rețea spre
+  # Supabase/AI, deps simulate). Nu depinde de secrete — rulează pe orice PR.
+  poarta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: poarta.ts identică în ambele funcții
+        run: node scripts/verifica-poarta-identica.mjs
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: deno check (entrypoint + handler)
+        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts
+      - name: deno test poarta
+        run: deno test --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts

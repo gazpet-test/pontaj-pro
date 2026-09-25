@@ -89,7 +89,7 @@ const nepublicate = [], laZi = [], niciodataPublicate = [], faraIstoric = []
 const inRepo = new Set()
 
 for (const d of (await readdir(DIR, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-  if (!d.isDirectory()) continue
+  if (!d.isDirectory() || d.name.startsWith('_')) continue // _test, _shared: nu-s funcții
   const slug = d.name
   inRepo.add(slug)
   const meta = publicate.get(slug)

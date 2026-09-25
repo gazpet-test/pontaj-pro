@@ -1,0 +1,402 @@
+// ofertare-cantitati-extrage — scoate pozițiile cantitative din documentația deja citită
+// și le pune în `ofertare_cantitati`, ca pasul determinist să aibă pe ce lucra (11.09.2026).
+//
+// De ce: `v_ofertare_contradictii` calculează în COD diferențele (sumă vs total declarat,
+// planșă vs document, poziții fără cantitate) — fiindcă modelele halucinează la reconcilieri
+// numerice. Dar codul n-are ce compara dacă nimeni n-a structurat cifrele. Pe Mostiștea
+// existau 9 rânduri puse cu mâna și verificarea a găsit imediat cei 7.340 m lipsă; pe Domnești
+// erau ZERO rânduri, deci zero contradicții găsite — nu pentru că n-ar fi, ci fiindcă nu e ce compara.
+//
+// Împărțirea muncii, exact cum trebuie: AI-ul EXTRAGE (valoare, unitate, obiect, sursă),
+// codul CALCULEAZĂ. Modelul nu face nicio adunare aici și nu i se cere să tragă concluzii.
+//
+// Un document pe apel, nu tot corpusul într-unul singur: la ~140k tokeni modelul pierde
+// mijlocul contextului, iar o reluare costă tot. Documentele mari se taie în felii cu
+// suprapunere, ca un tabel rupt între felii să nu se piardă.
+//
+// BUGET DE TIMP, nu buclă lungă: gateway-ul taie la ~150s, iar corpusul Domnești are 18 felii
+// a câte ~40s de Opus — o singură invocare ar fi murit la jumătate, cu banii cheltuiți și nimic
+// scris. Fiecare rulare lucrează cât îi permite bugetul, SCRIE ce a găsit, și întoarce
+// `continua: true` + indexul următor. Același tipar ca ofertare-seap-import.
+//
+// Auth: JWT de utilizator SAU x-radar-secret. Body: {licitatie_id, dry_run?, de_la?}.
+// ⚠️ dry_run = PREVIZUALIZARE AI PLĂTITĂ: apelurile AI rulează (consumă credit, se jurnalizează în
+// ai_usage_log), doar scrierea în ofertare_cantitati e sărită. NU e o probă gratuită; limitează cu max_felii.
+// Răspunsul poartă previzualizare_platita:true. (Propunere, neimplementată: mod `preflight` fără AI —
+// doar numărul de felii/documente + cost estimat.)
+// Erorile de business se întorc în răspuns, nu se aruncă.
+import { createClient } from 'npm:@supabase/supabase-js@2'
+import { poateCheltui } from './poarta.ts'
+
+// Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
+let aiFetch: typeof fetch = (...a) => fetch(...a)
+
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Content-Type': 'application/json',
+}
+// gpt-5-mini e alegerea implicită de la 11.09.2026, măsurată pe felia C6 Domnești: aceleași
+// poziții ca Haiku, cifre identice rând cu rând, sursă mai precisă, marchează TOTAL-urile
+// declarate (Haiku le rata) și costă cu 71% mai puțin. Comutatorul rămâne pentru oricine vrea
+// să reia comparația pe date reale în loc să presupună.
+//
+// Ce NU se mai cere niciunui model: CATEGORIA. Pe C6 (coloane: Nr.crt|Cod|U/M|Consumuri|Preț|
+// Val|Greutate|Furnizorul) nu există coloană de categorie — Haiku o completa, adică o inventa,
+// iar Gemini/gpt-5-mini/gpt-5-nano o lăsau goală, corect. Acum o pune un dicționar
+// (fn_categorie_cantitate + trigger), deci iese la fel de fiecare dată și se vede de ce.
+//
+// `furnizor: "gemini"` rulează aceleași felii prin Gemini, ca să comparăm pe date reale în loc
+// să presupunem. Prețuri verificate pe ai.google.dev/gemini-api/docs/pricing la 11.09.2026.
+// ⚠️ Tariful Gemini se DUBLEAZĂ la 1 ianuarie 2027 ($1,50 / $7,50) — atunci devine mai scump
+// decât Haiku, deci alegerea de azi trebuie recântărită înainte de anul nou.
+//
+// `openai_mini` / `openai_nano`: a treia ramura, ceruta de Razvan dupa proba Gemini. Tarifele
+// de IESIRE sunt cele care conteaza (o lista de cantitati are sute de randuri, intrarea e o
+// felie de text), si acolo sunt sub Haiku: $2,00 si $0,40 fata de $5,00.
+// Preturi de pe developers.openai.com/api/docs/pricing, 11.09.2026.
+const MODELE = {
+  anthropic:   { nume: 'claude-haiku-4-5-20251001', in: 1 / 1e6,    out: 5 / 1e6 },
+  gemini:      { nume: 'gemini-3.8-flash',          in: 0.75 / 1e6, out: 3.75 / 1e6 },
+  openai_mini: { nume: 'gpt-5-mini',                in: 0.25 / 1e6, out: 2 / 1e6 },
+  openai_nano: { nume: 'gpt-5-nano',                in: 0.05 / 1e6, out: 0.4 / 1e6 },
+} as const
+type Furnizor = keyof typeof MODELE
+
+// Un singur loc unde se vorbește cu modelele, ca schimbarea furnizorului să nu însemne
+// rescrierea buclei. Erorile se ÎNTORC, nu se aruncă.
+async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG: string, keyO: string):
+  Promise<{ txt: string; inF: number; outF: number; stop?: string; eroare?: string }> {
+  if (furnizor === 'openai_mini' || furnizor === 'openai_nano') {
+    // Responses API, acelasi tipar ca in ofertare-inventar-ai (deja in productie).
+    // reasoning effort minimal: gpt-5-* sunt modele de rationament, iar tokenii de gandire
+    // se taxeaza ca IESIRE si intra in acelasi plafon. Aici n-avem ce rationa — se copiaza
+    // cifra din tabel — deci gandirea ar fi bani si plafon cheltuiti degeaba.
+    const r = await aiFetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${keyO}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: MODELE[furnizor].nume,
+        input: [{ role: 'user', content: [{ type: 'input_text', text: intrebare }] }],
+        text: { format: { type: 'json_object' } },
+        reasoning: { effort: 'minimal' },
+        max_output_tokens: 16000,
+      }),
+    })
+    const d = await r.json()
+    if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'OpenAI: ' + (d?.error?.message || r.status) }
+    const txt = d?.output_text
+      || (d?.output || []).flatMap((o: any) => (o?.content || []).map((c: any) => c?.text || '')).join('')
+    return {
+      txt, inF: d?.usage?.input_tokens || 0, outF: d?.usage?.output_tokens || 0,
+      stop: d?.status === 'incomplete' ? (d?.incomplete_details?.reason || 'incomplete') : d?.status,
+    }
+  }
+  if (furnizor === 'gemini') {
+    const r = await aiFetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODELE.gemini.nume}:generateContent?key=${keyG}`,
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: intrebare }] }],
+          // responseMimeType json: Gemini scoate JSON curat, fără gard de ```
+          generationConfig: { maxOutputTokens: 16000, temperature: 0, responseMimeType: 'application/json' },
+        }) })
+    const d = await r.json()
+    if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'Gemini: ' + (d?.error?.message || r.status) }
+    const c = d.candidates?.[0]
+    return {
+      txt: (c?.content?.parts || []).map((p: any) => p.text || '').join(''),
+      inF: d.usageMetadata?.promptTokenCount || 0,
+      outF: d.usageMetadata?.candidatesTokenCount || 0,
+      stop: c?.finishReason,
+    }
+  }
+  const r = await aiFetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': keyA, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    // 8000 taia raspunsul la jumatate pe o lista de cantitati si il facea necitibil
+    body: JSON.stringify({ model: MODELE.anthropic.nume, max_tokens: 16000, messages: [{ role: 'user', content: intrebare }] }),
+  })
+  const d = await r.json()
+  if (!r.ok) return { txt: '', inF: 0, outF: 0, eroare: 'Claude: ' + (d?.error?.message || r.status) }
+  return {
+    txt: (d.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'),
+    inF: d.usage?.input_tokens || 0, outF: d.usage?.output_tokens || 0, stop: d.stop_reason,
+  }
+}
+const FELIE = 55000        // caractere per apel — sub pragul unde se pierde mijlocul
+const SUPRAPUNERE = 2000   // ca un tabel rupt între felii să nu dispară
+const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
+
+async function secretOk(req: Request, db: any): Promise<boolean> {
+  const s = req.headers.get('x-radar-secret')
+  if (!s) return false
+  const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
+  return !error && data === true
+}
+
+function felii(t: string): string[] {
+  if (t.length <= FELIE) return [t]
+  const out: string[] = []
+  for (let i = 0; i < t.length; i += FELIE - SUPRAPUNERE) out.push(t.slice(i, i + FELIE))
+  return out
+}
+
+const PROMPT = (nume: string, tip: string, obiectCurent: string) => `Ești inginer de devize într-o firmă de construcții de conducte. Citește bucata de mai jos din documentația unei licitații publice și extrage POZIȚIILE CANTITATIVE — materiale, lucrări, echipamente — cu cantitatea și unitatea lor.
+
+Document: "${nume}" (tip: ${tip})
+
+Obiectul în care începe bucata (continuat din bucata anterioară): ${obiectCurent || 'necunoscut'}
+
+Răspunde EXCLUSIV cu JSON COMPACT, fiecare poziție ca TABLOU de 7 elemente, în ordinea în care apar în document:
+[obiect, cod_articol, denumire, um, cantitate, sursa, e_total]
+
+{"p":[
+ ["<obiectul/secțiunea de deviz căruia îi aparține rândul, ex. 'Obiect 1 - ...', copiat din titlul tabelului; dacă tabelul continuă din bucata anterioară, folosește obiectul de mai sus>",
+  "<codul articolului EXACT cum e scris (ex. 'TSC03B1', 'ACC03A1'), sau null dacă rândul nu are cod>",
+  "<denumirea poziției, ca în document, cu diametru/material/tip dacă sunt date>",
+  "<unitatea EXACTĂ din document: m, ml, mp, mc, buc, kg, to, ore>",
+  <număr sau null dacă poziția e cerută dar cantitatea NU e dată>,
+  "<unde anume, cu tabelul/secțiunea din care vine: 'C6 poz.12' / 'PD03 Tabel hidranti pe strazi, rand 4' / 'F3 006 003 poz.7'>",
+  <1 doar dacă rândul e un total sau subtotal declarat, altfel 0>]
+]}
+
+REGULI, în ordinea importanței:
+1. NU calcula nimic. Nu aduna, nu înmulți, nu converti unități. Copiază cifra așa cum e scrisă. Dacă un total e scris în document, îl dai cu ultimul element 1; dacă nu e scris, NU îl inventezi.
+2. Cantitatea se scrie ca număr simplu, cu punct zecimal (1234.56), fără separatori de mii.
+3. O poziție cerută explicit dar fără cantitate în document → cantitate=null. NU pune 0: zero înseamnă "documentul scrie zero", null înseamnă "documentul nu spune". Astea contează cel mai mult: sunt exact golurile pentru care se cere clarificare.
+4. Păstrează unitatea din document. Dacă scrie "ml" pui "m" doar dacă e clar aceeași; altfel lași "ml".
+5. Nu inventa poziții care nu apar. Mai bine 10 poziții corecte decât 40 din care 15 ghicite.
+6. Sari peste prețuri, valori în lei și coloane de manoperă/utilaj/transport — ne interesează cantitățile fizice.
+7. Copiază codul articolului caracter cu caracter; nu-l completa și nu-l ghici.
+8. La sursa, scrie ȘI tabelul sau secțiunea, nu doar numărul rândului: două tabele din același document se însumează separat, iar fără asta se amestecă.
+
+Dacă bucata nu conține poziții cantitative, întoarce {"p":[]}.
+Nu scrie NIMIC în afara JSON-ului — nici explicații, nici comentarii.`
+
+// Dependențele externe, injectabile ca handlerul să poată fi testat fără rețea (poarta_test.ts):
+// db = client service_role, getUser(jwt) -> uid|null, fetch = apelurile AI, chei = cheile furnizorilor.
+export type Deps = {
+  db: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch
+  chei: { A: string; G: string; O: string }
+}
+export function depsReale(): Deps {
+  const SUPA_URL = Deno.env.get('SUPABASE_URL')!
+  return {
+    db: createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!), fetch,
+    getUser: async (jwt) => {
+      const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+      const { data: u } = await uc.auth.getUser()
+      return u?.user?.id || null
+    },
+    chei: { A: Deno.env.get('ANTHROPIC_API_KEY') || '', G: Deno.env.get('GEMINI_API_KEY') || '', O: Deno.env.get('OPENAI_API_KEY') || '' },
+  }
+}
+
+export async function handler(req: Request, deps: Deps): Promise<Response> {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const db = deps.db
+  aiFetch = deps.fetch
+
+  let uidApelant: string | null = null
+  if (!(await secretOk(req, db))) {
+    const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
+    if (!jwt) return json({ error: 'fără autentificare' }, 401)
+    uidApelant = await deps.getUser(jwt)
+    if (!uidApelant) return json({ error: 'token invalid' }, 401)
+  }
+  const KEY_A = deps.chei.A
+  const KEY_G = deps.chei.G
+  const KEY_O = deps.chei.O
+
+  let body: any = {}; try { body = await req.json() } catch { /* gol */ }
+  const licId = Number(body.licitatie_id)
+  const dryRun = body.dry_run === true
+  const deLa = Number(body.de_la) || 0
+  const maxFelii = Number(body.max_felii) || 0   // pentru probe ieftine de calitate
+  const furnizor: Furnizor = (String(body.furnizor) in MODELE ? body.furnizor : 'openai_mini') as Furnizor
+  const M = MODELE[furnizor]
+  if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
+  // 25.09.2026 (audit țintit, CLAUDE.md 7d): apel PLĂTIT — „poarta pe cheltuială" și pe server, nu doar în UI.
+  // Pornește doar ownerul sau responsabilul licitației (calea x-radar-secret/worker rămâne neatinsă).
+  if (uidApelant) {
+    const [{ data: prof }, { data: lic }] = await Promise.all([
+      db.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
+      db.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
+    ])
+    if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uidApelant))
+      return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
+  }
+  const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
+    : furnizor === 'anthropic' ? (!KEY_A && 'ANTHROPIC_API_KEY')
+    : (!KEY_O && 'OPENAI_API_KEY')
+  if (cheiaLipsa) return json({ error: cheiaLipsa + ' lipsă din secretele funcției' }, 500)
+  const t0 = Date.now()
+  // 110s păreau o marjă bună față de pragul de 150s, dar bugetul se verifică ÎNAINTE de o felie,
+  // iar o felie durează până la 40s: prima rulare a ajuns la ~155s, a fost tăiată, și a pierdut
+  // TOT ce plătise. 60s lasă loc feliei celei mai lente plus scrierii.
+  const BUGET_MS = 60000
+
+  // Doar documentele din care ies cifre. Fișa de date e despre calificare, nu despre cantități;
+  // planșele merg pe alt flux (ofertare-plansa-citeste), care scrie în cantitate_plansa.
+  const { data: docs, error: dErr } = await db.from('ofertare_documente_atribuire')
+    .select('id, nume_original, tip, text_extras')
+    .eq('licitatie_id', licId)
+    .in('tip', ['lista_cantitati', 'cs_volum', 'alta'])
+    .order('id')
+  if (dErr) return json({ error: 'citire documente: ' + dErr.message })
+
+  const deLucru = (docs || []).filter((d: any) => (d.text_extras || '').length > 500)
+  if (!deLucru.length) return json({ error: 'niciun document cu text din care să ies cifre' }, 404)
+
+  // munca, aplatizată în felii, ca reluarea să fie un simplu index
+  const munca: { doc: any; bucata: string; nr: number; din: number }[] = []
+  for (const d of deLucru) {
+    const b = felii(d.text_extras as string)
+    b.forEach((bu, i) => munca.push({ doc: d, bucata: bu, nr: i + 1, din: b.length }))
+  }
+  // Obiectul curent se poarta intre felii (tabelele trec peste pagini). La o reluare (de_la>0)
+  // se ia din ultimul rand scris pentru documentul feliei de reluare.
+  let obiectCurent = ''
+  let docCurent: number | null = null
+  if (deLa > 0 && munca[deLa]) {
+    const dr = munca[deLa]
+    if (dr.nr > 1) {
+      const { data: ult } = await db.from('ofertare_cantitati').select('obiect')
+        .eq('licitatie_id', licId).like('sursa', `${dr.doc.nume_original}%`).not('obiect', 'is', null)
+        .order('ordine', { ascending: false, nullsFirst: false }).limit(1)
+      obiectCurent = ult?.[0]?.obiect || ''
+    }
+    docCurent = dr.doc.id
+  }
+
+  let tokIn = 0, tokOut = 0, poz = deLa, continua = false, scriseTotal = 0
+  const raport: any[] = []
+  const toate: any[] = []
+
+  while (poz < munca.length) {
+    if (Date.now() - t0 > BUGET_MS) { continua = true; break }
+    if (maxFelii && poz - deLa >= maxFelii) { continua = true; break }
+    const { doc: d, bucata, nr, din } = munca[poz]
+    if (d.id !== docCurent) { docCurent = d.id; if (nr === 1) obiectCurent = '' }
+    const intrebare = `${PROMPT(d.nume_original, d.tip, obiectCurent)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}`
+    const r = await cheama(furnizor, intrebare, KEY_A, KEY_G, KEY_O)
+    if (r.eroare) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: r.eroare }); poz++; continue }
+    const inF = r.inF, outF = r.outF
+    tokIn += inF; tokOut += outF
+    // jurnalul se scrie PE FELIE: rularea pierduta la timeout a cheltuit bani pe care
+    // nu i-am mai putut masura, fiindca logul se scria abia la final
+    try {
+      await db.from('ai_usage_log').insert({
+        function_name: 'ofertare-cantitati-extrage', model: M.nume,
+        tokens_in: inF, tokens_out: outF, cost_usd: inF * M.in + outF * M.out,
+        ref_table: 'ofertare_licitatii', ref_id: licId,
+      })
+    } catch { /* jurnalul nu blocheaza munca */ }
+    const txt = r.txt
+    let j: any = null
+    try { const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); j = m ? JSON.parse(m[0]) : null } catch { /* mai jos */ }
+    const lista = Array.isArray(j?.p) ? j.p : null
+    // stop_reason si numarul de tokeni de iesire spun DE CE n-a mers: raspuns taiat la plafon
+    // arata altfel decat model care a raspuns aiurea. Prima proba a esuat tacut fara ele.
+    if (!lista) {
+      raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'raspuns neinterpretabil',
+        out: outF, stop: r.stop })
+      poz++; continue
+    }
+    let alePastrate = 0
+    const feliaAsta: any[] = []
+    // Un model poate intoarce textul "null"/"N/A" in loc de null-ul JSON. Un sir nevid e
+    // adevarat, deci s-ar scrie in coloana cuvantul "null" ca text, care apoi ar grupa
+    // fericit cu el insusi in pasul determinist.
+    // Prins la proba gpt-5-mini, care a facut-o la 23 din 25 de randuri verificate.
+    const curat = (v: any, n: number) => {
+      if (v === null || v === undefined) return null
+      const t = String(v).trim()
+      return !t || /^(null|n\/a|nu e cazul|-)$/i.test(t) ? null : t.slice(0, n)
+    }
+    // Number(null) === 0 SI Number('') === 0, iar Number.isFinite(0) === true. Deci
+    // `Number.isFinite(Number(v)) ? Number(v) : null` scria ZERO exact acolo unde modelul
+    // raspunsese corect "cantitatea nu e data" — iar verificarea cantitate_lipsa cauta NULL,
+    // deci pozitia aceea nu mai aparea NICIODATA ca gol. Adica fix golurile pentru care se
+    // cere clarificare deveneau invizibile, fara nicio eroare. Pe Domnesti: 34 de randuri cu
+    // zero si zero randuri cu NULL, in timp ce la Mostistea (puse cu mana) era exact invers.
+    const numar = (v: any) => {
+      if (v === null || v === undefined) return null
+      const t = String(v).trim()
+      if (!t || /^(null|n\/a|nedeterminat|nu e (dat|precizat)[a\u0103]?|-)$/i.test(t)) return null
+      const n = Number(t)
+      return Number.isFinite(n) ? n : null
+    }
+    const eF3 = d.tip === 'lista_cantitati'
+    let idx = 0
+    for (const p0 of lista) {
+      // [obiect, cod_articol, denumire, um, cantitate, sursa, e_total]; compatibil si cu vechiul
+      // tuplu de 5 [denumire, um, cantitate, sursa, e_total]
+      if (!Array.isArray(p0)) continue
+      const p7 = p0.length >= 7
+      const p = p7 ? p0.slice(2) : p0
+      if (!p[0]) continue
+      const ob = p7 ? curat(p0[0], 200) : null
+      if (ob) obiectCurent = ob
+      const cod = p7 ? curat(p0[1], 40) : null
+      const eTotal = p[4] === 1 || p[4] === true
+      const den = String(p[0]).slice(0, 480)
+      idx++
+      // sursa include obiectul si codul: identitatea (licitatie, denumire, sursa) nu contopeste
+      // aceeasi denumire din obiecte diferite
+      const loc = [obiectCurent || null, cod, p[3] || null].filter(Boolean).join(' | ')
+      feliaAsta.push({
+        obiect: obiectCurent || null,
+        cod_articol: cod,
+        // ordine determinista pe document: felia*100000 + pozitia in felie (reluarea nu o strica)
+        ordine: nr * 100000 + idx,
+        ...(eF3 ? { tip_sursa: 'lista_f3' } : {}),
+        licitatie_id: licId,
+        // categoria NU mai vine de la model: o pune trigger-ul din dictionar (fn_categorie_cantitate).
+        denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
+        um: curat(p[1], 20),
+        cantitate: numar(p[2]),
+        sursa: `${d.nume_original}${loc ? ' \u2014 ' + loc : ''}`.slice(0, 300),
+        status: 'extras',
+        extras_de_ai: true,
+      })
+      alePastrate++
+    }
+    toate.push(...feliaAsta)
+    // Scriem DUPĂ FIECARE FELIE, nu la final. Prima rulare a strâns tot în memorie și a fost
+    // tăiată de gateway înainte să scrie: munca plătită s-a pierdut integral. Acum o tăiere
+    // costă cel mult ultima felie.
+    if (!dryRun && feliaAsta.length) {
+      // upsert, nu insert: feliile se suprapun cu 2.000 de caractere si o reluare reprocesează
+      // felii deja scrise. Fara asta, o reluare dubleaza cantitatile in tacere (24 de randuri
+      // duplicate pe Domnesti, curatate la 11.09.2026). Indexul unic e pe (licitatie, denumire, sursa).
+      const { data: ins, error: eIns } = await db.from('ofertare_cantitati')
+        .upsert(feliaAsta, { onConflict: 'licitatie_id,denumire,sursa', ignoreDuplicates: true })
+        .select('id')
+      if (eIns) raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'scriere: ' + eIns.message })
+      else scriseTotal += ins?.length || 0
+    }
+    raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, pozitii: alePastrate })
+    poz++
+  }
+
+  const cost = tokIn * M.in + tokOut * M.out
+
+  const comun = {
+    ok: true, furnizor, model: M.nume, felii_total: munca.length, de_la: deLa, pana_la: poz, continua,
+    urmatorul: continua ? poz : null,
+    pozitii: toate.length,
+    cu_cantitate: toate.filter(x => x.cantitate !== null).length,
+    fara_cantitate: toate.filter(x => x.cantitate === null).length,
+    totaluri: toate.filter(x => /^TOTAL\b/i.test(x.denumire)).length,
+    tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
+  }
+  // dry_run: previzualizare AI — a consumat credit (cost_usd de mai sus, jurnalizat), NU a salvat nimic.
+  if (dryRun) return json({ ...comun, dry_run: true, previzualizare_platita: true,
+    nota: 'previzualizare AI — consumă credit, nu salvează', esantion: toate.slice(0, 25) })
+  // NU se mai scrie nimic aici. Scrierea se face pe felie, mai sus. O a doua inserare la final
+  // ar re-scrie tot ce s-a scris deja — exact asa au aparut cele 77 de duplicate pe Domnesti.
+  return json({ ...comun, scrise: scriseTotal })
+}
