@@ -14,7 +14,7 @@ import sharp from 'sharp'
 
 // 25.09.2026: planșele VECTORIALE se randează cu pdf.js + @napi-rs/canvas (vezi _randare-pdf.js).
 // MuPDF a fost scos în aceeași zi: licență AGPL, risc pe o platformă folosită prin internet.
-import { randeazaVectorial } from './_randare-pdf.js'
+import { randeazaVectorial, analizeazaSemnale } from './_randare-pdf.js'
 const DPI_VECTOR_FIN = 300 // „recitește fin" pe vectorial: randare mai densă, felii normale de 1600px
 
 const LATURA = 1600        // latura unei felii trimise la AI
@@ -28,7 +28,7 @@ const MAX_MB = 100   // 07.09.2026: planșele SF Potlogi au 73–92 MB
 
 // Imaginea scanata sta in PDF ca stream JPEG (/DCTDecode). O scoatem direct, fara sa
 // randam pagina: e mai rapid si pastreaza rezolutia originala a scanarii.
-function jpegDinPdf(buf) {
+export function jpegDinPdf(buf) {
   const iesiri = []
   let de = 0
   while (iesiri.length < 8) {
@@ -80,6 +80,19 @@ export async function esteCitibila(img) {
     }
   }
   return { sonde, cu_continut: cuContinut, citibila: cuContinut >= Math.ceil(sonde * 0.25) }
+}
+
+// R3: alege sursa. Semnalele declanșează randarea paginii complete; o scanare mare care acoperă pagina rămâne imagine.
+// Semnale de IMAGINE (raport 2:1 sub 1500px, imagine <10% din pagina afișată) => randare. Semnale de DOCUMENT
+// (>500 path-uri, text de semnătură, /ByteRange) => randare doar dacă imaginea selectată nu domină pagina (<50%).
+// Pragul MIN_LATURA_SCAN rămâne fallback (randare), nu verdict de siglă.
+export function decideRuta(meta, a) {
+  if (!meta) return { randeaza: true, motiv: 'nicio imagine' }
+  const s = a?.semnale || {}, fr = a?.imagine_selectata?.fractie_pagina
+  if (s.raport_2_1_sub_1500 || s.imagine_sub_10_la_suta) return { randeaza: true, motiv: 'semnal imagine' }
+  if ((s.paths_peste_500 || s.text_semnatura || s.byte_range) && (fr == null || fr < 0.5)) return { randeaza: true, motiv: 'semnal document' }
+  if (Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN) return { randeaza: true, motiv: 'sub prag rezoluție (fallback)' }
+  return { randeaza: false, motiv: 'scanare' }
 }
 
 // Ciornă AUTOMATĂ de clarificare (niciodată trimisă) când planșe rămân necitibile — logica e în BD
@@ -138,7 +151,20 @@ export default async function handler(req, res) {
   // vectorial se RANDEAZĂ; „nu plătim siglă" rămâne pt cazul în care nici randarea nu dă desen.
   let surse = []
   let vectorial = false
-  if (ePdf && (!meta || Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN)) {
+  // R3: semnale structurale (NU verdict) => randare pagină completă; sigla doar cu dovadă (vezi decideRuta).
+  let semnaleSigla = null
+  // PDF-uri mari cu scanare ≥2000px: analiza încarcă tot PDF-ul în pdf.js (timeout Vercel) — rămâne regula veche
+  const scanMare = meta && Math.max(meta.width, meta.height) >= 2000 && buf.length > 40 * 1024 * 1024
+  if (ePdf && !scanMare) {
+    try { semnaleSigla = await analizeazaSemnale(buf, meta ? { width: meta.width, height: meta.height } : null) }
+    catch (e) { semnaleSigla = { eroare: String(e?.message || e).slice(0, 160) } }
+  }
+  const ruta = decideRuta(meta, semnaleSigla)
+  const siglaDovedita = !!semnaleSigla?.sursa_sigla_dovedita
+  const plansaSemnale = ePdf ? { semnale_sigla: { ...(semnaleSigla?.semnale || {}), paths: semnaleSigla?.paths ?? null,
+    imagine_selectata: semnaleSigla?.imagine_selectata || null, dovada: semnaleSigla?.dovada || null, ruta: ruta.motiv,
+    ...(semnaleSigla?.eroare ? { eroare: semnaleSigla.eroare } : {}) }, sursa_sigla_dovedita: siglaDovedita } : {}
+  if (ePdf && ruta.randeaza) {
     vectorial = true
     let pagini = [], eroareRandare = null
     try { pagini = await randeazaVectorial(buf, corp.fin === true ? DPI_VECTOR_FIN : undefined) } catch (e) { eroareRandare = String(e?.message || e).slice(0, 160) }
@@ -146,13 +172,18 @@ export default async function handler(req, res) {
       const v = await esteCitibila(p.img)
       if (v.citibila) surse.push({ img: p.img, meta: { width: p.latime, height: p.inaltime }, verdict: v, prefix: pagini.length > 1 ? `p${i + 1}_` : '', dpi: p.dpi })
     }
+    // R3: randarea nu a dat desen, dar există o imagine NEdovedită drept siglă și citibilă => rămâne imaginea
+    if (!surse.length && meta && imagini.length && !siglaDovedita) {
+      const v = await esteCitibila(imagini[0])
+      if (v.citibila) { vectorial = false; surse.push({ img: imagini[0], meta, verdict: v, prefix: '' }) }
+    }
     if (!surse.length) {
       const motiv = eroareRandare
         ? `PDF vectorial — randarea a eșuat (${eroareRandare}). Consultă planșa manual sau cere-o în format editabil (clarificarea s-a pregătit automat).`
-        : `PDF-ul nu conține o scanare a planșei${meta ? ` (cea mai mare imagine are ${meta.width}x${meta.height}px — probabil sigla semnăturii)` : ''}, iar randarea vectorială nu a produs desen citibil. ` +
+        : `PDF-ul nu conține o scanare a planșei${meta ? ` (cea mai mare imagine are ${meta.width}x${meta.height}px — sursă sub pragul de rezoluție; nu e dovedit că e sigla)` : ''}, iar randarea vectorială nu a produs desen citibil. ` +
           'Nu tăiem și nu plătim citirea unei sigle. Consultă planșa manual; clarificarea către autoritate s-a pregătit automat (ciornă).'
       await supa.from('ofertare_documente_atribuire').update({
-        analiza: { ...doc.analiza, plansa: { citibila: false, vectorial: true, motiv, latime: meta?.width || null, inaltime: meta?.height || null, randare_esuata: !!eroareRandare } },
+        analiza: { ...doc.analiza, plansa: { citibila: false, vectorial: true, motiv, latime: meta?.width || null, inaltime: meta?.height || null, randare_esuata: !!eroareRandare, ...plansaSemnale } },
         analiza_la: new Date().toISOString(),
       }).eq('id', docId)
       const clarificare = await clarificareAuto(supa, doc.licitatie_id)
@@ -161,7 +192,7 @@ export default async function handler(req, res) {
   } else {
     if (!imagini.length || !meta) {
       const mesaj = 'Nu am gasit nicio imagine scanata in document.'
-      await supa.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, plansa: { citibila: false, motiv: mesaj } }, analiza_la: new Date().toISOString() }).eq('id', docId)
+      await supa.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, plansa: { citibila: false, motiv: mesaj, ...plansaSemnale } }, analiza_la: new Date().toISOString() }).eq('id', docId)
       return res.status(200).json({ citibila: false, motiv: mesaj })
     }
     const verdict = await esteCitibila(imagini[0])
@@ -169,7 +200,7 @@ export default async function handler(req, res) {
       const motiv = `Imaginea se deschide, dar continutul nu se poate reface: ${verdict.cu_continut} din ${verdict.sonde} zone verificate au desen. ` +
         'Fisierul publicat are date deteriorate — se vede doar in Acrobat. Deschide-l acolo si salveaza-l din nou (Export ca imagine sau tiparire in PDF nou), apoi urca varianta curata.'
       await supa.from('ofertare_documente_atribuire').update({
-        analiza: { ...doc.analiza, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height } },
+        analiza: { ...doc.analiza, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height, ...plansaSemnale } },
         analiza_la: new Date().toISOString(),
         eroare: 'Plansa nu poate fi citita automat — necesita conversie (vezi detalii).',
       }).eq('id', docId)
@@ -258,6 +289,8 @@ export default async function handler(req, res) {
       micsorare: +micsorare.toFixed(2), rezolutie_redusa: rezolutieRedusa,
       // 25.09.2026 (audit T4/T11): amprenta tăierii — o citire se poate relua pe zone doar pe ACEEAȘI tăiere
       taiat_la: new Date().toISOString(),
+      ...plansaSemnale,
+      ...(!vectorial && meta && Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN ? { avertisment_rezolutie: `sursa are ${meta.width}x${meta.height}px (<${MIN_LATURA_SCAN}) — avertisment, nu dovadă de siglă` } : {}),
     },
   }
   await supa.from('ofertare_documente_atribuire')

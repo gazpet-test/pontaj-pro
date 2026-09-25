@@ -34,7 +34,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-25.3'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-25.4'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -63,6 +63,25 @@ Reguli:
 - Daca o sectiune nu apare in aceasta bucata, las-o lista goala sau null. E normal: fiecare bucata vede doar o parte.
 - Daca un tabel e taiat de marginea bucatii, transcrie randurile intregi pe care le vezi si atat.
 - Nu inventa valori pe care nu le poti citi clar.`;
+
+// R3: rezultatul citirii — ok | partial | sursa_gresita_sigla | ilizibil | citita_fara_date_cantitative.
+export function rezultatCitire({ plansa, toate, sumar, zoneLipsa, prea_mica }: any): { rezultat: string; motiv: string } {
+  const erori = Number(sumar?.erori) || 0, n = toate?.length || 0;
+  if (plansa?.sursa_sigla_dovedita === true && !plansa?.vectorial)
+    return { rezultat: 'sursa_gresita_sigla', motiv: 'imaginea citită e doar sigla semnăturii (dovadă: bbox imagine vs conținut în afara lui)' };
+  if (n && erori >= n) return { rezultat: 'ilizibil', motiv: 'toate zonele au căzut la citire' };
+  const date = (Number(sumar?.tronsoane_gasite) || 0) > 0 || (sumar?.tabele || []).length > 0 || (Number(sumar?.lungime_totala_m) || 0) > 0;
+  const completa = !erori && !(zoneLipsa || []).length && !prea_mica;
+  if (!completa) return { rezultat: 'partial', motiv: prea_mica
+    ? 'sursă sub 2000px fără dovadă de siglă — de randat pagina completă (avertisment de rezoluție, nu verdict)'
+    : `lectură incompletă (${erori} zone căzute, ${(zoneLipsa || []).length} zone lipsă)` };
+  if (date) return { rezultat: 'ok', motiv: 'date cantitative extrase' };
+  const cuText = (toate || []).filter((r: any) => !r?.eroare && ((r?.cartus && Object.values(r.cartus).some(Boolean)) ||
+    (r?.alte_mentiuni || []).length || (r?.noduri || []).length)).length;
+  return cuText > 0
+    ? { rezultat: 'citita_fara_date_cantitative', motiv: 'nu au fost identificate date cantitative în lectura efectuată' }
+    : { rezultat: 'ilizibil', motiv: 'lectură completă fără niciun text recunoscut' };
+}
 
 // Randare text a citirii unei planșe (aceeași logică ca fn SQL ofertare_plansa_text din backfill-ul 25.09.2026).
 function textPlansa(nume: string, c: any): string {
@@ -696,7 +715,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     Math.max(Number(plansa.latime) || 0, Number(plansa.inaltime) || 0) < 2000;
   if (gata && prea_mica) {
     upd.status_procesare = 'eroare';
-    upd.eroare = `Nu s-a citit desenul: sursa are doar ${plansa.latime}x${plansa.inaltime}px (probabil sigla semnăturii). Retaie planșa („citește") — PDF-ul vectorial se randează acum.`;
+    upd.eroare = `Nu s-a citit desenul: sursa are doar ${plansa.latime}x${plansa.inaltime}px (sub pragul de rezoluție; siglă nedovedită). Retaie planșa („citește") — PDF-ul vectorial se randează acum.`;
   } else if (gata) {
     if (toate.length && (sumar.erori as number) >= toate.length) {
       upd.status_procesare = 'eroare';
@@ -712,13 +731,24 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       upd.procesat_la = new Date().toISOString();
     }
   }
+  // R3 (25.09.2026): rezultatul citirii ca stare distinctă — analiza.plansa.rezultat (+ citire_ai.rezultat).
+  // sursa_gresita_sigla DOAR cu dovadă (plansa.sursa_sigla_dovedita, scrisă de /api/plansa-felii); pragul
+  // de 2000px rămâne avertisment. citita_fara_date_cantitative DOAR pe lectură completă (toate zonele).
+  if (gata) {
+    const r = rezultatCitire({ plansa, toate, sumar, zoneLipsa, prea_mica });
+    (citireAi as any).rezultat = r.rezultat;
+    upd.analiza = { ...doc.analiza, citire_ai: citireAi,
+      plansa: { ...plansa, rezultat: r.rezultat, rezultat_motiv: r.motiv, rezultat_la: new Date().toISOString(), rezultat_sursa: 'extractor', rezultat_cod: COD_VERSIUNE } };
+    // `eroare` păstrează formatele vechi, doar „citită fără rezultat” se desparte în cele două formulări
+    if (upd.eroare === 'citită fără rezultat') upd.eroare = r.rezultat === 'ilizibil' ? 'ilizibilă' : 'citită fără date cantitative';
+  }
   await supa.from('ofertare_documente_atribuire').update(upd).eq('id', docId);
 
   // 25.09.2026: planșă citită dar inutilizabilă (nimic extras / toate zonele căzute) => ciornă AUTOMATĂ de
   // clarificare (idempotentă, o ciornă per licitație pe lot; NU se trimite nimic). Rulează aici, server-side,
   // indiferent cine a apăsat butonul. Eșecul ei nu strică citirea.
   let clarificare: unknown = null;
-  if (gata && (upd.status_procesare === 'eroare' || upd.eroare === 'citită fără rezultat')) {
+  if (gata && (upd.status_procesare === 'eroare' || upd.eroare === 'ilizibilă' || upd.eroare === 'citită fără date cantitative')) {
     try {
       const { data, error } = await supa.rpc('ofertare_clarificare_planse_auto', { p_licitatie_id: doc.licitatie_id });
       clarificare = error ? { eroare: error.message } : data;

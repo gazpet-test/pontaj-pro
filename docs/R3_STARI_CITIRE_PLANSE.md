@@ -121,3 +121,27 @@ Total: 8 docuri cu `plansa`; 2 ok, 3 siglă, 2 fără date, 1 de reprocesat; 1 c
    - 1035: doar retăiere din UI (ruta vectorială), fără UPDATE manual.
 6. **Rulare RPC** v4 pe lic. 95 → clarificarea 63 (status `propunere`, text standard) se regenerează cu motivul corect. Nimic nu se trimite.
 7. **Sanity SELECT** + actualizare `claude_context` (lecție: sigla se recunoaște după conținut, nu după pixeli).
+
+## 6. Decizii finale (Copilot + Claude) și implementare — 25.09.2026 (cod, NIMIC aplicat în BD)
+
+Decizii:
+- Semnalele structurale (raport ~2:1 sub 1500px; imagine <10% din pagină calculat din **bbox-ul în coordonate PDF** din matricea de transformare a operatorList pdf.js; >500 path-uri; text EasySign/„Semnat digital”; `/ByteRange`) **nu sunt verdict** — declanșează randarea paginii complete.
+- `sursa_gresita_sigla` **doar cu dovadă**: imaginea efectiv selectată ocupă <10% din pagina afișată ȘI randarea paginii are conținut (sonde de variație) în afara bbox-ului imaginii. Fără AI.
+- 2000px = avertisment de rezoluție / fallback de randare, nu dovadă.
+- `analiza.plansa.rezultat` ∈ {ok, partial, sursa_gresita_sigla, ilizibil, citita_fara_date_cantitative}; `citita_fara_date_cantitative` doar pe lectură COMPLETĂ (toate zonele), altfel `partial`. Formulare: „nu au fost identificate date cantitative în lectura efectuată”.
+- 470 → partial retroactiv (marcat `rezultat_sursa='reclasificare_retroactiva_r3'`), 130 rămâne partial, 1035 → randare întâi.
+- 472–474: la citirea veche nu s-au calculat semnale/bbox ⇒ **nu există dovadă** ⇒ NU se marchează siglă; stare „de randat” (partial + motiv). Dovada apare la retăiere.
+- #63: rămâne propunere; textul NU începe cu antetul standard ⇒ considerat editat de om, nu se suprascrie. `ofertare_clarificari` nu are câmp note/meta ⇒ marcajul „necesită revizie” e doar PROPUS (A: token în `sursa`; B: coloană `meta` — necreată).
+
+Implementare:
+- `api/_randare-pdf.js` → `analizeazaSemnale(buf, imgSel)`: CTM din save/restore/transform/paintFormXObject, bbox unitar al imaginii în coordonate PDF, fracție din `page.view`, path-uri, text semnătură, /ByteRange, dovada (randare ~1200px + 7×7 sonde excluzând bbox-ul).
+- `api/plansa-felii.js` → `decideRuta()`: semnale de imagine ⇒ randare; semnale de document ⇒ randare doar dacă imaginea selectată <50% din pagină; <2000px ⇒ fallback randare. Dacă randarea nu dă desen și imaginea nu e dovedită siglă ⇒ rămâne imaginea. Scrie `plansa.semnale_sigla{…}`, `plansa.sursa_sigla_dovedita`, `plansa.avertisment_rezolutie`.
+- Edge `ofertare-plansa-citeste` (COD_VERSIUNE 2026-09-25.4) → `rezultatCitire()` la final: `plansa.rezultat/rezultat_motiv/rezultat_sursa='extractor'` + `citire_ai.rezultat`; „citită fără rezultat” devine „ilizibilă” / „citită fără date cantitative”.
+- UI `peSigla` citește `plansa.rezultat` (fallback regula veche); `subPrag` separat (nu contează drept citită); etichete: siglă / fără date cantitative / ilizibil / parțial / „sursă sub 2000px — de randat”.
+- Migrare `supabase/migrations/20260926_ofertare_clarificare_planse_auto_v4.sql` (NEAPLICATĂ, nevalidată pe BD): exclude sigla/ok/partial și istoricele <2000px fără rezultat; două liste; DWG/PDF-text doar pt ilizibile; regula v3 a textului uman păstrată.
+- Preview: `docs/R3_PREVIEW_CORECTURI.sql` (SELECT-uri rulate, UPDATE-uri comentate cu gardă md5 + backup).
+
+Rezultate teste:
+- `node scripts/test-detector-sigla.mjs` → **6/6**: (1) siglă 900×450 pe A3 cu 600 linii: fracție 0.0098, 47/48 sonde cu conținut în afară ⇒ randare pagină + siglă dovedită; (2) scanare 3000×2100 semnată (EasySign + /ByteRange), fracție 1.0 ⇒ rămâne imaginea, fără siglă; (3) imagine 800×600 singur conținut, fracție 0.0335, 0/45 sonde în afară ⇒ NU siglă, fallback pe imagine.
+- `deno test` poarta_test.ts: 14 + 12 = **26/26**; `deno check handler.ts` OK; deno.lock readus.
+- `npx vite build` OK.
