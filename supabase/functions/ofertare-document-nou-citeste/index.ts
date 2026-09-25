@@ -111,7 +111,17 @@ Deno.serve(async (req: Request) => {
     model: MODEL, citit_la: new Date().toISOString(), citit_de: cititDe, tokens_in: tokIn, tokens_out: tokOut,
   }
   const analiza = { ...((row.analiza && typeof row.analiza === 'object') ? row.analiza : {}), citire_noi: citire }
-  const { error: upErr } = await db.from('ofertare_documente_atribuire').update({ analiza, analiza_la: new Date().toISOString() }).eq('id', id)
+  // 25.09.2026: dacă documentul nu era citit (neprocesat/eroare, fără text), citirea de aici îl face „procesat"
+  // cu text_extras = rezumatul + modificările + Q&A, ca Rezumatul să nu-l mai numere la „rămase de citit".
+  const upd: Record<string, unknown> = { analiza, analiza_la: new Date().toISOString() }
+  const { data: cur } = await db.from('ofertare_documente_atribuire').select('status_procesare, text_extras').eq('id', id).maybeSingle()
+  if (cur && !cur.text_extras && ['neprocesat', 'eroare', null].includes(cur.status_procesare)) {
+    const L = [`DOCUMENT: ${row.nume_original}`, `Tip: ${citire.tip}`, '', citire.rezumat]
+    if (citire.modificari.length) { L.push('', 'MODIFICĂRI:'); for (const m of citire.modificari) L.push('- ' + (typeof m === 'string' ? m : JSON.stringify(m))) }
+    if (citire.intrebari_raspunse.length) { L.push('', 'ÎNTREBĂRI ȘI RĂSPUNSURI:'); for (const q of citire.intrebari_raspunse) L.push('- ' + (typeof q === 'string' ? q : JSON.stringify(q))) }
+    Object.assign(upd, { status_procesare: 'procesat', text_extras: L.join('\n'), eroare: null, procesat_la: new Date().toISOString() })
+  }
+  const { error: upErr } = await db.from('ofertare_documente_atribuire').update(upd).eq('id', id)
   if (upErr) return json({ error: 'update: ' + upErr.message })
 
   // Tipul din BD se corectează doar dacă era generic ('alta'); separat, ca un CHECK pe `tip`

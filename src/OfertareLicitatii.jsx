@@ -1030,7 +1030,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
 
   // Răzvan 25.09.2026: „📐 Citește planșele desenate" = butonul „citește" de pe rând, pentru TOATE planșele
   // necitite încă, pe rând (nu există coadă pe server pentru planșe). Aceeași poartă pe cheltuială.
-  const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !d.analiza?.citire_ai)
+  const plansaCitita = d => ['procesat', 'partial'].includes(d.status_procesare) || d.analiza?.citire_ai?.gata === true
+  const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !plansaCitita(d))
   const citesteToatePlansele = async () => {
     const lista = planseNecitite
     if (!lista.length || !poatePorniProcesarea(profile, licitatie)) return
@@ -1297,9 +1298,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
-                      title={d.analiza?.citire_ai ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
+                      title={plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
                       onClick={() => citestePlansa(d)}>
-                      {d.analiza?.citire_ai ? '📐 recitește' : '📐 citește'}
+                      {plansaCitita(d) ? '📐 recitește' : '📐 citește'}
                     </button>
                   )}
                 </div>
