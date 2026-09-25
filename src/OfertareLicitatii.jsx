@@ -219,6 +219,24 @@ export default function OfertareLicitatiiTab() {
   rows.forEach(r => { if (!r.responsabil_id) return; const x = perResp[r.responsabil_id] ||= { nume: r.responsabil_nume, in_lucru: 0, an: 0 }
     if (!FINALE.includes(r.status)) x.in_lucru++
     if (new Date(r.created_at).getFullYear() === anCurent) x.an++ })
+  // Filtru responsabil (Răzvan 25.09): chips „Ale mele” / per responsabil / toți — DOAR filtru de vedere, nu drepturi.
+  // Default: non-owner cu cel puțin o licitație ca responsabil → „Ale mele”; ownerul → toți. Ultima alegere se ține per user.
+  const respInit = useRef(false)
+  const respKey = profile?.id ? `ofertare_licitatii_fresp_${profile.id}` : null
+  useEffect(() => {
+    if (respInit.current || !profile?.id || loading) return
+    respInit.current = true
+    let v = null
+    try { v = localStorage.getItem(respKey) } catch { /* fără stocare locală */ }
+    if (v != null) { setFResp(v === 'toti' ? '' : v); return }
+    if (!profile.is_owner && rows.some(r => r.responsabil_id === profile.id)) setFResp(profile.id)
+  }, [profile, loading, rows, respKey])
+  const alegeResp = v => { setFResp(v); try { if (respKey) localStorage.setItem(respKey, v || 'toti') } catch { /* fără stocare locală */ } }
+  const respChips = Object.entries(perResp).filter(([id, x]) => x.in_lucru > 0 && id !== profile?.id)
+    .sort((a, b) => (a[1].nume || '').localeCompare(b[1].nume || ''))
+  const nrAleMele = profile?.id ? (perResp[profile.id]?.in_lucru || 0) : 0
+  const respChipSt = (on) => ({ borderRadius:999, padding:'5px 13px', fontSize:12.5, fontWeight:700, cursor:'pointer',
+    background: on ? '#3a3113' : G.surface, color: on ? G.ofertare : G.muted, border:`1px solid ${on ? '#5c4d1c' : G.border2}` })
   const nrInLucru = rows.filter(r => ['go', 'in_lucru', 'analiza'].includes(r.status)).length
   const nrDepuse = rows.filter(r => r.status === 'depusa').length
   const nrArhiva = rows.filter(r => FINALE.includes(r.status)).length
@@ -366,7 +384,7 @@ export default function OfertareLicitatiiTab() {
             {!!cauta && <button onClick={() => setCauta('')} title="Șterge căutarea"
               style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:G.muted, cursor:'pointer', fontSize:15, lineHeight:1, padding:2 }}>×</button>}
           </div>
-          <select style={{ ...S.input, width:'auto' }} value={fResp} onChange={e => setFResp(e.target.value)} title="Filtru după responsabil">
+          <select style={{ ...S.input, width:'auto' }} value={fResp} onChange={e => alegeResp(e.target.value)} title="Filtru după responsabil">
             <option value="">Toți responsabilii</option>
             {echipa.map(p => <option key={p.id} value={p.id}>{p.name}{perResp[p.id] ? ` (${perResp[p.id].in_lucru} în lucru · ${perResp[p.id].an} în ${anCurent})` : ''}</option>)}
           </select>
@@ -377,11 +395,17 @@ export default function OfertareLicitatiiTab() {
           <button style={{ ...S.btnP, borderRadius:10, padding:'10px 18px' }} onClick={() => { setEditRow(null); setShowForm(true) }}>＋ Licitație nouă</button>
         </div>
       </div>
-      <div style={{ display:'flex', gap:8, marginBottom:16, flexWrap:'wrap' }}>
+      <div style={{ display:'flex', gap:8, marginBottom:8, flexWrap:'wrap' }}>
         {[['active', 'Toate active'], ['in_lucru', '🔨 în lucru'], ['depuse', '📮 depuse'], ['radar', '🛰️ din radar'], ['probleme', '⚠️ cu probleme'], ['finale', '📦 arhivă'], ['toate', 'toate']].map(([k, lbl]) => (
           <button key={k} onClick={() => setFStatus(k)} style={{ borderRadius:999, padding:'7px 16px', fontSize:13, fontWeight:700, cursor:'pointer',
             background: fStatus === k ? '#3a3113' : G.surface, color: fStatus === k ? G.ofertare : G.muted, border:`1px solid ${fStatus === k ? '#5c4d1c' : G.border2}` }}>{lbl}</button>
         ))}
+      </div>
+      <div style={{ display:'flex', gap:6, marginBottom:16, flexWrap:'wrap', alignItems:'center' }} title="Filtru de vedere după responsabil — toată lumea poate vedea toate licitațiile">
+        <span style={{ fontSize:12, color:G.dim, marginRight:2 }}>Responsabil:</span>
+        <button onClick={() => alegeResp('')} style={respChipSt(!fResp)}>toți</button>
+        {profile?.id && <button onClick={() => alegeResp(profile.id)} style={respChipSt(fResp === profile.id)}>👤 Ale mele{nrAleMele ? ` (${nrAleMele})` : ''}</button>}
+        {respChips.map(([id, x]) => <button key={id} onClick={() => alegeResp(id)} style={respChipSt(fResp === id)}>{x.nume || '—'} ({x.in_lucru})</button>)}
       </div>
 
       {loading && <div style={{ padding:40, textAlign:'center', color:G.muted }}>Se încarcă licitațiile...</div>}
