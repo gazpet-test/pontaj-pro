@@ -1,4 +1,4 @@
--- NEAPLICAT (R3, 25.09.2026) — v4 peste v3. Se aplică DOAR după confirmarea lui Razvan (apply_migration).
+-- R3 v4 (25.09.2026) — aplicată cu GO Razvan după revizia Copilot.
 --  1) sursa_gresita_sigla NU intră în clarificare (problemă a noastră — se retaie, nu se cere autorității);
 --     nici istoricele nevectoriale <2000px FĂRĂ rezultat (de randat, nu de clarificat).
 --  2) două liste cu formulări diferite: „nu pot fi citite” (ilizibil) vs „nu au fost identificate date
@@ -15,7 +15,7 @@ DECLARE
   v_ids bigint[]; v_nume text[]; v_motive text[]; v_acoperite bigint[]; v_draft record; v_lot int; v_f3 numeric;
   v_text text; v_lista text; v_det text; v_id bigint; v_nou boolean := false; v_resp uuid; v_nr int; v_noi int;
   v_antet constant text := 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe';
-  v_standard boolean; v_det_fd text; v_ilizibile int; v_fara_date int;
+  v_standard boolean; v_tok text; v_det_fd text; v_ilizibile int; v_fara_date int;
 BEGIN
   SELECT array_agg(id ORDER BY nume_original),
          array_agg(regexp_replace(nume_original, '\.pdf$', '', 'i') ORDER BY nume_original),
@@ -33,10 +33,13 @@ BEGIN
     AND ( analiza->'plansa'->>'rezultat' IN ('ilizibil','citita_fara_date_cantitative')
           OR (analiza->'plansa'->>'citibila') = 'false'
           OR eroare IN ('citită fără rezultat','citită fără date cantitative','ilizibilă')
-          OR (status_procesare = 'eroare' AND analiza ? 'citire_ai') );
+          OR (analiza->'plansa'->>'randare_esuata') = 'true' );
+    -- v4: eșecul tehnic (status eroare fără verdict de lizibilitate) NU mai e tratat ca „ilizibil”.
   IF v_ids IS NULL THEN
+    -- v4: se retrag DOAR ciornele cu textul standard; o ciornă editată de om rămâne (decide omul).
     UPDATE ofertare_clarificari SET status = 'retrasa', updated_at = now()
-     WHERE licitatie_id = p_licitatie_id AND origine = 'automat' AND cheie LIKE 'auto_planse_%' AND status IN ('propunere','de_trimis');
+     WHERE licitatie_id = p_licitatie_id AND origine = 'automat' AND cheie LIKE 'auto_planse_%' AND status IN ('propunere','de_trimis')
+       AND left(coalesce(intrebare,''), length(v_antet)) = v_antet;
     RETURN jsonb_build_object('actiune','nimic');
   END IF;
 
@@ -80,16 +83,19 @@ BEGIN
   IF FOUND THEN
     -- textul e încă cel generat de funcție? (orice text care nu începe cu antetul standard = editat de om)
     v_standard := left(coalesce(v_draft.intrebare, ''), length(v_antet)) = v_antet;
+    -- v4: marcajele rezervate de revizie (,revizie_*) din sursa se PĂSTREAZĂ la rescriere
+    SELECT coalesce(string_agg(',' || t, '' ORDER BY o), '') INTO v_tok
+      FROM unnest(string_to_array(v_draft.sursa, ',')) WITH ORDINALITY AS x(t, o) WHERE o > 1 AND t ~ '^revizie_[a-z0-9_]+$';
     SELECT count(*) INTO v_noi FROM unnest(v_ids) i
       WHERE NOT (i::text = ANY(string_to_array(replace(v_draft.sursa,'planse_auto:',''), ',')));
-    IF v_noi = 0 AND v_draft.sursa = 'planse_auto:' || array_to_string(v_ids, ',')
+    IF v_noi = 0 AND v_draft.sursa = 'planse_auto:' || array_to_string(v_ids, ',') || v_tok
        AND (NOT v_standard OR v_draft.intrebare = v_text) THEN
       RETURN jsonb_build_object('actiune','neschimbat','id',v_draft.id,'planse',cardinality(v_ids),'editat_de_om', NOT v_standard);
     END IF;
     -- o ciornă deja confirmată care primește planșe NOI revine la 'propunere' (motivul pt cele noi e neconfirmat)
     UPDATE ofertare_clarificari SET
       intrebare = CASE WHEN v_standard THEN v_text ELSE intrebare END,
-      sursa = 'planse_auto:' || array_to_string(v_ids, ','),
+      sursa = 'planse_auto:' || array_to_string(v_ids, ',') || v_tok,
       status = CASE WHEN v_noi > 0 THEN 'propunere' ELSE status END, updated_at = now()
       WHERE id = v_draft.id;
     v_id := v_draft.id; v_nou := v_noi > 0;
