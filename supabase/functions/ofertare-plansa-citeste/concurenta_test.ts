@@ -347,7 +347,10 @@ function aiDn(n: { ai: number }, ms: number) {
     const txt = JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || ''
     const et = /Bucata (\S+)/.exec(txt)?.[1] || '?'
     await new Promise((ok) => setTimeout(ok, ms))
-    const rasp = { tronsoane: [{ de_la: `N-${et}`, la: 'X', lungime_m: 100, diametru_mm: 110, material: 'PE100 SDR11', sursa: 'tabel' }], cartus: {}, tabele: [] }
+    // 25.09.2026 (identitate de rând): rândul de tabel vine cu tabelul lui și cu Nr (unic pe zonă) — fără ele ar fi
+    // „de verificat” (fără identitate sigură) și n-ar mai intra în transfer
+    const rasp = { tronsoane: [{ de_la: `N-${et}`, la: 'X', lungime_m: 100, diametru_mm: 110, material: 'PE100 SDR11', sursa: 'tabel' }], cartus: {},
+      tabele: [{ denumire: 'Dimensionare', coloane: ['Nr crt', 'De la', 'La', 'Dn', 'L (m)'], randuri: [{ 'Nr crt': et.replace(/\D/g, ''), 'De la': `N-${et}`, 'La': 'X', 'Dn': '110', 'L (m)': '100' }] }] }
     return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(rasp) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
   }) as typeof fetch
 }
@@ -806,12 +809,13 @@ Deno.test('R4 plafon pana_la: rezervare forjată pe 2099 nu blochează citirea; 
   assertEquals(doc.analiza.rezervari_zone.zone, {}, 'rezervarea forjată a fost curățată')
 })
 
-// ---- 25.09.2026: multiset pe planșa 470 — efectul asupra transferului (treciInCantitati) ----
-// Rândurile 1751–1756 (lic. 95) au fost INSERATE de transferul din 25.09 cu agregarea veche (SELECT 25.09: cantitate =
-// cantitate_plansa, status 'extras', sursa „Planșa 1 — tabel de dimensionare…”). Ce ar face un retransfer cu agregarea nouă:
-Deno.test('multiset 470: retransfer peste rândurile 1751–1756 -> doar 1756 (Dn40) primește cantitate_plansa 13740 + status diferenta; cantitate neatinsă', async () => {
-  const { FELII_470, AZI_470 } = await import('./fixture_470.ts')
-  const Z = ['1_7', '2_7', '3_7', '4_7']
+// ---- 25.09.2026: identitatea rândului pe planșa 470 — efectul asupra transferului (treciInCantitati) ----
+// Rândurile 1751–1756 (lic. 95) au fost INSERATE de transferul din 25.09 16:51 cu agregarea veche (SELECT 25.09: cantitate =
+// cantitate_plansa, status 'extras', sursa „Planșa 1 — tabel de dimensionare…”). Ce ar face un retransfer cu identitatea de rând
+// (AI simulat = feliile reale z?_6 cu Nr + z?_7 cu lungimi, fixture_470.ts):
+Deno.test('identitate 470: retransfer peste 1751–1756 -> doar 1756 (Dn40) primește cantitate_plansa 13740 + status diferenta; cantitate neatinsă; Dn60 menționat', async () => {
+  const { raspuns470, AZI_470 } = await import('./fixture_470.ts')
+  const Z = ['1_6', '1_7', '2_6', '2_7', '3_6', '3_7', '4_6', '4_7']
   const pl = { ...PLANSA, zone_asteptate: Z, acoperire_demonstrata: true }
   const { supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'Schema tehnologica Valcelele alimentare din Stefan Voda.pdf', analiza: { plansa: pl } }, Z)
   const ids: Record<string, number> = { Dn200: 1751, Dn125: 1752, Dn110: 1753, Dn90: 1754, Dn63: 1755, Dn40: 1756 }
@@ -824,15 +828,21 @@ Deno.test('multiset 470: retransfer peste rândurile 1751–1756 -> doar 1756 (D
     n.ai++
     const txt = JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || ''
     const et = /Bucata (\S+)/.exec(txt)?.[1] || '?'
-    const tronsoane = ((FELII_470 as any)[et] || []).map(([de_la, la, lungime_m, diametru_mm, debit_mch, zona]: any[]) =>
-      ({ de_la, la, lungime_m, diametru_mm, debit_mch, zona, material: null, sursa: 'tabel' }))
-    const rasp = { tronsoane, cartus: et === 'z1_7' ? { plansa_nr: '1' } : {}, tabele: [{ denumire: 'Dimensionare', coloane: ['Dn ales (mm)', 'Lungime Km'] }] }
-    return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(rasp) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(raspuns470(et)) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
   }) as typeof fetch
-  const r = await handler(cerereSvc({ doc_id: 470, de_la: 0 }), svc(n, ai, supa))
-  assertEquals(r.status, 200)
-  const j = await r.json()
-  assertEquals(j.sumar.lungime_totala_m, 48795, '48195 azi + 600')
+  // 8 zone / 4 pe rulare => 2 runde (ca bucla din UI)
+  let j: any = null
+  for (let runde = 0; runde < 4; runde++) {
+    const r = await handler(cerereSvc(runde === 0 ? { doc_id: 470, de_la: 0 } : { doc_id: 470, mod: 'continua' }), svc(n, ai, supa))
+    assertEquals(r.status, 200)
+    j = await r.json()
+    if (!j.continua) break
+  }
+  assertEquals(n.ai, 8)
+  assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m, j.sumar.conflicte, j.sumar.randuri_fara_identitate_n], [48905, 0, [], 0])
+  assertEquals(j.sumar.identitate_randuri, { lecturi_tabel: 152, randuri_sigure: 133, prin_nr: 133, prin_pozitie: 0, fara_identitate: 0, conflicte: 0 })
+  assertEquals([j.sumar.lungime_totala_m, j.sumar.tronsoane_gasite], [48795, 132], '48.905 − Nr 57 (Dn60 nestandard, 110 m)')
+  assertEquals([j.sumar.diametre_nestandard, j.sumar.nestandard_m], [[60], 110])
   assertEquals(j.cantitati.pe_diametre, { Dn200: 17785, Dn125: 2275, Dn110: 780, Dn90: 4545, Dn63: 9670, Dn40: 13740 })
   assertEquals([j.cantitati.adaugate, j.cantitati.actualizate], [0, 6], 'niciun rând nou; cele 6 existente primesc patch')
   assertEquals(n.inserts.filter((t: string) => t === 'ofertare_cantitati').length, 0)
@@ -840,10 +850,44 @@ Deno.test('multiset 470: retransfer peste rândurile 1751–1756 -> doar 1756 (D
   const r1756 = rows.find((x: any) => x.id === 1756)
   assertEquals([r1756.cantitate, r1756.cantitate_plansa, r1756.status], [13140, 13740, 'diferenta'], 'cantitate NEatinsă; doar cantitate_plansa + status')
   assert(r1756.diferenta_nota.startsWith('Memoriu 13.140 m vs planșa 1 13.740 m (+600 m, pe 56 tronsoane'), r1756.diferenta_nota)
+  assert(r1756.diferenta_nota.endsWith('De verificat, NEincluse în cifra din planșă: pe planșă: Dn nestandard Dn60: 110 m.'), r1756.diferenta_nota)
   for (const [dn, id] of Object.entries(ids)) {
     if (dn === 'Dn40') continue
     const x = rows.find((y: any) => y.id === id)
     assertEquals([x.cantitate, x.cantitate_plansa, x.status], [AZI_470[dn], AZI_470[dn], 'extras'], dn)
     assert(x.diferenta_nota.startsWith('Planșa 1 confirmă:'), `${dn}: ${x.diferenta_nota}`)   // nota se rescrie (auto-„confirmare”)
   }
+})
+Deno.test('identitate: transfer cu rânduri „de verificat” -> doar cele sigure în cantitate_plansa; restul numit în diferenta_nota, nepromovat', async () => {
+  const Z = ['1_1', '2_1']
+  const pl = { ...PLANSA, zone_asteptate: Z, acoperire_demonstrata: true }
+  const { supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: pl } }, Z)
+  const COL = ['Nr crt', 'De la', 'La', 'Dn', 'L (km)']
+  const rd = (nr: string, dl: string, L: string) => ({ 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': '40', 'L (km)': L })
+  const tr = (dl: string, L: number) => ({ de_la: dl, la: 'CT', lungime_m: L, diametru_mm: 40, material: 'PE100', sursa: 'tabel' })
+  // z1_1: Nr 1 (300), Nr 2 (320), rând cu Nr ilizibil (250); z2_1: Nr 2 citit 330 (conflict cu 320)
+  const felii: Record<string, any> = {
+    z1_1: { tronsoane: [tr('A', 300), tr('B', 320), tr('C', 250)], tabele: [{ denumire: 'Dimensionare', coloane: COL, randuri: [rd('1', 'A', '0,300'), rd('2', 'B', '0,320'), rd('?', 'C', '0,250')] }] },
+    z2_1: { tronsoane: [tr('B', 330)], tabele: [{ denumire: 'Dimensionare', coloane: COL, randuri: [rd('2', 'B', '0,330')] }] },
+  }
+  const ai = (async (_u: unknown, init?: RequestInit) => {
+    n.ai++
+    const et = /Bucata (\S+)/.exec(JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || '')?.[1] || '?'
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ cartus: {}, ...felii[et] }) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
+  }) as typeof fetch
+  const r = await handler(cerereSvc({ doc_id: 470, de_la: 0 }), svc(n, ai, supa))
+  assertEquals(r.status, 200)
+  const j = await r.json()
+  assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m, j.sumar.randuri_fara_identitate_n, j.sumar.conflicte.length], [300, 580, 1, 1])
+  assertEquals(j.sumar.conflicte[0].variante.map((v: any) => v.lungime_m), [320, 330])
+  assertEquals(j.sumar.lungime_totala_m, 300, 'în cantități intră DOAR totalul sigur')
+  assertEquals(j.cantitati.pe_diametre, { 'Dn40 PE': 300 })
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  assertEquals(rows.length, 1)
+  assertEquals([rows[0].cantitate, rows[0].cantitate_plansa], [300, 300])
+  assertEquals(rows[0].diferenta_nota, 'Diametru care nu apare în cantitățile din memoriu. 1 tronsoane citite din tabelul planșei. De verificat, NEincluse în cifra din planșă: ' +
+    '1 rând Dn40 fără identitate sigură (250 m); pe planșă: 1 rând de tabel fără identitate sigură (250 m); 1 conflict (același rând citit diferit: Nr 2 320 m Dn40 / 330 m Dn40).')
+  assert(rows[0].diferenta_nota.includes('1 conflict (același rând citit diferit: Nr 2 320 m Dn40 / 330 m Dn40)'), rows[0].diferenta_nota)
+  assert(j.sumar.avertismente.includes('1 rând de tabel fără identitate sigură și 1 conflict (același rând citit cu valori diferite): 580 m de verificat — NU intră în cantități'), j.sumar.avertismente.join(' | '))
+  assertEquals(j.sumar.randuri_fara_identitate, [{ zona: 'z1_1', de_la: 'C', la: 'CT', lungime_m: 250, diametru_mm: 40, debit_mch: null, motiv: 'Nr lipsă sau ilizibil pe rând' }])
 })
