@@ -46,6 +46,7 @@ Reguli:
 - OBLIGATORIU: fiecare rand dintr-un tabel de dimensionare trebuie sa apara SI in "tronsoane", cu sursa "tabel". Tabelul ramane in "tabele" asa cum e; "tronsoane" e lista din care se calculeaza cantitatile, deci nu sari niciun rand.
 - Pune sursa "adnotare" DOAR pentru ce citesti de pe desen, nu dintr-un tabel. Daca acelasi tronson apare si in tabel, si scris pe traseu, da-l o singura data, cu sursa "tabel".
 - In "zona" pune localitatea/satul/strada de pe randul respectiv, daca tabelul le are.
+- Cotele de nivel (altimetrice, de obicei albastre, ex. 42.70) NU sunt lungimi de conducta — nu le pune in lungime_m.
 - Lungimile trec-le in METRI (daca pe plansa scrie km, inmulteste cu 1000 si da valoarea in metri).
 - Foloseste punctul ca separator zecimal in JSON si NU folosi separator de mii (scrie 4800, nu 4.800).
 - Diametrul da-l ca numar in mm (Dn250 -> 250), si NUMAI din coloana al carei antet e diametru (Dn / De / D / Ø / diametru). Coloanele de debit (mc/h, Nmc/h), viteza, presiune, cadere de presiune, diametru interior (Di) NU sunt diametru nominal. Daca nu vezi antetul coloanei in bucata asta si nici nu ai primit antetul mai jos, pune diametru_mm null.
@@ -75,6 +76,7 @@ function textPlansa(nume: string, c: any): string {
   if (br.length) { L.push('', 'BRANȘAMENTE:'); for (const x of br) L.push(`- ${[x.descriere, x.numar].filter(Boolean).join(', ')}`); }
   if ((c.note_lipite || []).length) { L.push('', 'NOTE (refăcute peste marginea zonelor):'); for (const n of c.note_lipite) L.push(`- ${n.text}`); }
   if (s.lungime_declarata_m) L.push(`Lungime totală declarată pe planșă: ${s.lungime_declarata_m} m`);
+  if (s.necorelare_unitate) L.push(`⚠ NECORELARE unitate: ${s.necorelare_unitate}`);
   const alte = [...new Set((c.felii || []).flatMap((r: any) => r.alte_mentiuni || []).filter(Boolean))];
   if (alte.length) { L.push('', 'MENȚIUNI:'); for (const x of alte) L.push(`- ${x}`); }
   return L.join('\n');
@@ -324,7 +326,7 @@ function perechiDeLipit(felii: any[], toateNumele: Set<string>, facute = new Set
 const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
 Unele randuri de text (note, cartus, legenda, tabele) sunt taiate de marginea dintre ele. Reconstituie DOAR randurile care continua dintr-o bucata in cealalta, citind textul complet de la stanga la dreapta. Nu repeta textul care e deja intreg intr-o singura bucata.
 Raspunde NUMAI cu JSON valid: {"randuri": [{"text": "randul complet", "lungime_m": null, "diametru_mm": null}]}
-- lungime_m / diametru_mm: numai daca randul chiar scrie o lungime (in metri; km x 1000) sau un diametru. Fara separator de mii.
+- lungime_m / diametru_mm: numai daca randul chiar scrie o lungime cu unitate de lungime (m, ml, km) sau un diametru. Daca unitatea e alta (mp, mc, ha) lasa lungime_m null si copiaza textul exact, cu unitatea lui. Fara separator de mii.
 - Nu inventa: daca un cuvant tot nu se poate citi, pune [?] in locul lui.`;
 
 async function lipestePereche(apiKey: string, st: Uint8Array, dr: Uint8Array, eticheta: string) {
@@ -351,16 +353,23 @@ async function lipestePereche(apiKey: string, st: Uint8Array, dr: Uint8Array, et
   catch { return { eticheta, randuri: [], eroare: 'JSON invalid', _tin: tin, _tout: tout }; }
 }
 
-// „Lungimea totală a rețelei ... este de 12.345 m" — cifra declarată pe planșă (control, nu cantitate)
-function lungimeDeclarata(note: any[]): number | null {
+// „Lungimea totală a rețelei ... este de 12.345 m" — cifra declarată pe planșă (CONTROL, nu cantitate).
+// 25.09.2026 (Copilot, fixture PL5 Vâlcelele): nota spune „54200mp" — mărime de lungime cu unitate de SUPRAFAȚĂ.
+// NU se „corectează" în 54.200 m: se raportează ca necorelare și decide omul (memoriu / F3 / clarificare).
+// Se acceptă doar unitatea scrisă explicit în text; lungime_m dat de model fără unitate în text e ignorat.
+function lungimeDeclarata(note: any[]): { m: number | null; necorelare: string | null; sursa: string | null } {
   for (const n of note) {
-    const t = faraDiacritice(String(n?.text || '')).toLowerCase();
+    const brut = String(n?.text || '');
+    const t = faraDiacritice(brut).toLowerCase();
     if (!/lungime\w*\s+total/.test(t)) continue;
-    const v = numar(n?.lungime_m) ?? numar((/(\d[\d.,]*)\s*(m|ml|metri)\b/.exec(t) || [])[1]);
+    const supr = /(\d[\d.,]*)\s*(mp|m2|m²|mc|m3|ha)\b/.exec(t);
+    if (supr) return { m: null, necorelare: `„${brut.slice(0, 160)}" — lungime exprimată în ${supr[2]} (unitate de suprafață/volum). Nu se convertește automat; verifică memoriul și F3.`, sursa: n.perechea || null };
     const km = /(\d[\d.,]*)\s*km\b/.exec(t);
-    if (v) return v; if (km) return (numar(km[1]) || 0) * 1000 || null;
+    if (km) { const v = numar(km[1]); if (v) return { m: v * 1000, necorelare: null, sursa: n.perechea || null }; }
+    const m = /(\d[\d.,]*)\s*(m|ml|metri)\b/.exec(t);
+    if (m) { const v = numar(m[1]); if (v) return { m: v, necorelare: null, sursa: n.perechea || null }; }
   }
-  return null;
+  return { m: null, necorelare: null, sursa: null };
 }
 
 Deno.serve(async (req: Request) => {
@@ -425,9 +434,13 @@ Deno.serve(async (req: Request) => {
     const vazut = new Set<string>();
     const note = [...(ca.note_lipite || []), ...rez.flatMap((r: any) => (r.randuri || []).map((n: any) => ({ ...n, perechea: r.eticheta })))
     ].filter((n: any) => { const k = text(n.text); if (!k || vazut.has(k)) return false; vazut.add(k); return true; });
-    const decl = lungimeDeclarata(note);
+    const ld = lungimeDeclarata(note);
+    const decl = ld.m;
     const citireAi2 = { ...ca, note_lipite: note, note_lipite_perechi: [...facute, ...rez.map((r: any) => r.eticheta)],
-      perechi_ramase: Math.max(0, perechiDeLipit(ca.felii || [], peStorage, new Set([...facute, ...rez.map((r: any) => r.eticheta)])).length), sumar: { ...ca.sumar, note_lipite: note.length, perechi_lipite: rez.length, ...(decl ? { lungime_declarata_m: decl } : {}) } };
+      perechi_ramase: Math.max(0, perechiDeLipit(ca.felii || [], peStorage, new Set([...facute, ...rez.map((r: any) => r.eticheta)])).length), sumar: { ...ca.sumar, note_lipite: note.length, perechi_lipite: rez.length, ...(decl ? { lungime_declarata_m: decl } : {}),
+      ...(ld.necorelare ? { necorelare_unitate: ld.necorelare } : {}),
+      // proveniența vizuală: ce document, ce pagină, ce zone/imagini au dat cifra
+      provenienta: { doc_id: docId, fisier: doc.nume_original, pagina: 1, dpi: plansa.dpi || null, cale_felii: plansa.cale_felii, zone: ld.sursa } } };
     const upd2: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi2 }, analiza_la: new Date().toISOString(),
       text_extras: textPlansa(doc.nume_original, citireAi2) };
     // lungimea declarată e o dată utilă => planșa nu mai e „fără rezultat" (nu mai intră în clarificarea automată)
@@ -439,7 +452,7 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await supa.rpc('ofertare_clarificare_planse_auto', { p_licitatie_id: doc.licitatie_id });
       clar = error ? { eroare: error.message } : data;
     }
-    return json({ document: doc.nume_original, perechi: rez.length, perechi_ramase: citireAi2.perechi_ramase, note, lungime_declarata_m: decl, clarificare: clar,
+    return json({ document: doc.nume_original, necorelare_unitate: ld.necorelare, perechi: rez.length, perechi_ramase: citireAi2.perechi_ramase, note, lungime_declarata_m: decl, clarificare: clar,
       cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4) });
   }
 
