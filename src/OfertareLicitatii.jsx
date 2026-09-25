@@ -1086,7 +1086,10 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
 
   // Răzvan 25.09.2026: „📐 Citește planșele desenate" = butonul „citește" de pe rând, pentru TOATE planșele
   // necitite încă, pe rând (nu există coadă pe server pentru planșe). Aceeași poartă pe cheltuială.
-  const plansaCitita = d => ['procesat', 'partial'].includes(d.status_procesare) || d.analiza?.citire_ai?.gata === true
+  // 25.09.2026 (audit țintit): o „citire" făcută pe o sursă sub 2000px (sigla semnăturii, nu desenul) NU contează
+  // drept citită — altfel „Citește planșele desenate" sărea exact planșele care n-au fost citite niciodată (PL1–PL4 Vâlcelele).
+  const peSigla = d => { const p = d.analiza?.plansa; const l = Math.max(Number(p?.latime) || 0, Number(p?.inaltime) || 0); return !!p && !p.vectorial && l > 0 && l < 2000 }
+  const plansaCitita = d => !peSigla(d) && (['procesat', 'partial'].includes(d.status_procesare) || d.analiza?.citire_ai?.gata === true)
   const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !plansaCitita(d))
   const citesteToatePlansele = async () => {
     const lista = planseNecitite
