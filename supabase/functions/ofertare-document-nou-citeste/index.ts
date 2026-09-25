@@ -42,10 +42,10 @@ Citește-l integral și răspunde EXCLUSIV cu JSON valid, fără alt text:
 {"tip": "raspuns_clarificare" | "erata" | "document_nou" | "altul",
  "rezumat": "<3-6 propoziții: ce este documentul, ce comunică autoritatea, ce contează pentru ofertă>",
  "modificari": [{"ce_se_schimba": "<pe scurt>", "unde": "<secțiune / articol / formular / planșă afectată>", "impact_oferta": "<ce trebuie schimbat sau verificat în ofertă>"}],
- "intrebari_raspunse": [{"intrebare_scurt": "<întrebarea ofertantului, 1 propoziție>", "raspuns_scurt": "<răspunsul autorității, 1-2 propoziții>"}],
+ "intrebari_raspunse": [{"intrebare_scurt": "<întrebarea ofertantului, 1 propoziție>", "raspuns_scurt": "<răspunsul autorității, 1-2 propoziții>", "intrebare_originala": "<textul întrebării COPIAT EXACT din document, cuvânt cu cuvânt>", "raspuns_original": "<textul răspunsului autorității COPIAT EXACT din document, cuvânt cu cuvânt>"}],
  "termen_nou": "<AAAA-LL-ZZ dacă documentul stabilește un nou termen de depunere, altfel null>",
  "data_document": "<AAAA-LL-ZZ sau null>"}
-Reguli: listele pot fi goale; nu inventa modificări sau întrebări care nu sunt în document; păstrează numerele, articolele și formularele exact cum apar.`
+Reguli: listele pot fi goale; nu inventa modificări sau întrebări care nu sunt în document; păstrează numerele, articolele și formularele exact cum apar; intrebare_originala și raspuns_original sunt CITATE LITERALE din document (fără parafrazare, rezumare sau corecturi) — intrebare_scurt / raspuns_scurt rămân interpretarea ta pe scurt.`
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
@@ -85,7 +85,7 @@ Deno.serve(async (req: Request) => {
 
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 4000, messages: [{ role: 'user', content: [
+    body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: [
       { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
       { type: 'text', text: PROMPT } ] }] }),
   })

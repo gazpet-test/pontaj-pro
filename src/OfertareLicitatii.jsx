@@ -17,7 +17,7 @@ import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
-import ClarificariPanel from './OfertareClarificari.jsx'
+import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem } from './OfertareClarificari.jsx'
 import GarantieSection from './OfertareGarantie.jsx'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
@@ -3112,7 +3112,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
               <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginTop:7 }}>
                 {ph
                   ? <span style={{ fontSize:11.5, color:G.yellow }} title={d.eroare || ''}>⚠ neadus automat — urcă-l din Documente</span>
-                  : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschide(d)}>📎 deschide</button>}
+                  : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschide(d)}>📎 Deschide documentul original</button>}
                 {sc?.citit && <span style={{ fontSize:11.5, fontWeight:800, color:G.green, border:`1px solid ${G.green}55`, borderRadius:6, padding:'1px 7px' }}>✅ Deja citit în Documentație{sc.bucati ? ` (spart în ${sc.bucati} bucăți)` : ''}</span>}
                 {sc?.citit ? (
                   <button style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5, color:G.dim }} disabled={ph || !!busy} onClick={() => citeste(d)}
@@ -3130,6 +3130,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                   ⚠️ Ai deja {sc.fam} citit în Documentație, dar acesta e alt fișier — e indicat să-l citești și pe acesta (poate aduce modificări).
                 </div>
               )}
+              {!ph && <TextOriginalToggle docId={d.id} />}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
                   <div style={{ whiteSpace:'pre-wrap', color:G.text }}>{c.rezumat || '(fără rezumat)'}</div>
@@ -3145,7 +3146,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                     <details style={{ marginTop:6 }}>
                       <summary style={{ cursor:'pointer', fontWeight:700, color:G.blue }}>❓ Întrebări răspunse ({c.intrebari_raspunse.length})</summary>
                       <ul style={{ margin:'6px 0 0', paddingLeft:18 }}>
-                        {c.intrebari_raspunse.map((q, i) => <li key={i} style={{ marginBottom:4 }}><span style={{ color:G.muted }}>Î:</span> {q.intrebare_scurt}<div style={{ color:G.green, fontSize:12 }}>R: {q.raspuns_scurt}</div></li>)}
+                        {c.intrebari_raspunse.map((q, i) => <IntrebareRaspunsItem key={i} q={q} />)}
                       </ul>
                     </details>
                   )}
