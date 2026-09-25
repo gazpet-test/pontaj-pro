@@ -2,7 +2,7 @@
 // R4: scrieri concurente (CAS + fuziune pe zone), versiuni nemixate (409), regiunea în coordonate PDF, rezultatCitire.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { handler, rezultatCitire } from './handler.ts'
-import { CALE_REV, fuzioneazaZone, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
+import { CALE_REV, fuzioneazaZone, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
 
 // ---- DB simulată cu update real + filtre pe cale JSON (analiza->citire_ai->>rev) ----
 const cale = (row: any, c: string) => {
@@ -198,26 +198,68 @@ Deno.test('R4: CAS filtrează pe calea JSON a jetonului', () => { assertEquals(C
 
 // ---- R4 pct. 5: rezultatCitire ----
 const T = (o: any = {}) => ({ eticheta: 'z1_1', ...o })
-Deno.test('rezultatCitire: ok', () => {
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T()], sumar: { erori: 0, tronsoane_gasite: 3 }, zoneLipsa: [], prea_mica: false }).rezultat, 'ok')
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T()], sumar: { erori: 0, tabele: ['Calcul'] }, zoneLipsa: [] }).rezultat, 'ok')
+const P = (o: any = {}) => ({ acoperire_demonstrata: true, ...o })  // tăiere nouă, pagină acoperită demonstrat
+Deno.test('rezultatCitire: ok (doar cu acoperire demonstrată)', () => {
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T()], sumar: { erori: 0, tronsoane_gasite: 3 }, zoneLipsa: [], prea_mica: false }).rezultat, 'ok')
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T()], sumar: { erori: 0, tabele: ['Calcul'] }, zoneLipsa: [] }).rezultat, 'ok')
 })
 Deno.test('rezultatCitire: partial (zone căzute / lipsă / sursă mică fără dovadă)', () => {
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T(), T({ eroare: 'x' })], sumar: { erori: 1, tronsoane_gasite: 2 }, zoneLipsa: [] }).rezultat, 'partial')
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T()], sumar: { erori: 0, tronsoane_gasite: 2 }, zoneLipsa: ['z1_2'] }).rezultat, 'partial')
-  const r = rezultatCitire({ plansa: {}, toate: [T()], sumar: { erori: 0 }, zoneLipsa: [], prea_mica: true })
-  assertEquals(r.rezultat, 'partial'); assert(r.motiv.includes('2000px'))
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T(), T({ eroare: 'x' })], sumar: { erori: 1, tronsoane_gasite: 2 }, zoneLipsa: [] }).rezultat, 'partial')
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T()], sumar: { erori: 0, tronsoane_gasite: 2 }, zoneLipsa: ['z1_2'] }).rezultat, 'partial')
+  const r = rezultatCitire({ plansa: P(), toate: [T()], sumar: { erori: 0 }, zoneLipsa: [], prea_mica: true })
+  assertEquals(r.rezultat, 'partial'); assert(r.motiv.includes('2000px')); assert(r.motiv.includes('de reverificat'))
 })
-Deno.test('rezultatCitire: ilizibil (toate căzute / fără niciun text)', () => {
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T({ eroare: 'a' }), T({ eroare: 'b' })], sumar: { erori: 2 }, zoneLipsa: [] }).rezultat, 'ilizibil')
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T({ cartus: { titlu: null } })], sumar: { erori: 0 }, zoneLipsa: [] }).rezultat, 'ilizibil')
+Deno.test('rezultatCitire: o zonă căzută cu zero tronsoane -> partial (nu citita_fara_date, nu ilizibil)', () => {
+  const r = rezultatCitire({ plansa: P(), toate: [T({ cartus: { titlu: 'Plan' } }), T({ eticheta: 'z1_2', eroare: 'timeout' })], sumar: { erori: 1, tronsoane_gasite: 0, tabele: [] }, zoneLipsa: [] })
+  assertEquals(r.rezultat, 'partial')
 })
-Deno.test('rezultatCitire: citita_fara_date_cantitative (text dar fără cifre, lectură completă)', () => {
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T({ cartus: { titlu: 'Plan situatie' } })], sumar: { erori: 0, tronsoane_gasite: 0, lungime_totala_m: 0, tabele: [] }, zoneLipsa: [] }).rezultat, 'citita_fara_date_cantitative')
-  assertEquals(rezultatCitire({ plansa: {}, toate: [T({ alte_mentiuni: ['nota'] })], sumar: { erori: 0 }, zoneLipsa: [] }).rezultat, 'citita_fara_date_cantitative')
+Deno.test('rezultatCitire: ilizibil DOAR pe lectură completă fără text; toate căzute = eșec tehnic -> partial', () => {
+  const r = rezultatCitire({ plansa: P(), toate: [T({ eroare: 'a' }), T({ eroare: 'b' })], sumar: { erori: 2 }, zoneLipsa: [] })
+  assertEquals(r.rezultat, 'partial'); assert(r.motiv.includes('eșec tehnic'))
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T({ cartus: { titlu: null } })], sumar: { erori: 0 }, zoneLipsa: [] }).rezultat, 'ilizibil')
 })
-Deno.test('rezultatCitire: sursa_gresita_sigla doar cu dovadă și nu pe randare vectorială', () => {
-  assertEquals(rezultatCitire({ plansa: { sursa_sigla_dovedita: true }, toate: [], sumar: {}, zoneLipsa: [] }).rezultat, 'sursa_gresita_sigla')
-  assert(rezultatCitire({ plansa: { sursa_sigla_dovedita: true, vectorial: true }, toate: [T()], sumar: { tronsoane_gasite: 1 }, zoneLipsa: [] }).rezultat !== 'sursa_gresita_sigla')
-  assert(rezultatCitire({ plansa: { sursa_sigla_dovedita: false }, toate: [T()], sumar: { tronsoane_gasite: 1 }, zoneLipsa: [] }).rezultat !== 'sursa_gresita_sigla')
+Deno.test('rezultatCitire: toate zonele citite, zero parametri -> citita_fara_date_cantitative', () => {
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T({ cartus: { titlu: 'Plan situatie' } }), T({ eticheta: 'z1_2', noduri: ['N1'] })], sumar: { erori: 0, tronsoane_gasite: 0, lungime_totala_m: 0, tabele: [] }, zoneLipsa: [] }).rezultat, 'citita_fara_date_cantitative')
+  assertEquals(rezultatCitire({ plansa: P(), toate: [T({ alte_mentiuni: ['nota'] })], sumar: { erori: 0 }, zoneLipsa: [] }).rezultat, 'citita_fara_date_cantitative')
+})
+Deno.test('rezultatCitire: randare eșuată / acoperire nedemonstrată -> partial, niciodată ilizibil sau succes', () => {
+  for (const plansa of [{ randare_esuata: true }, P({ randare_esuata: true }), { acoperire_demonstrata: false, acoperire_motiv: 'randare eșuată — fallback pe imagine' },
+    { acoperire_demonstrata: false, semnale_sigla: { analiza_sarita: 'PDF >40MB' } }]) {
+    for (const [toate, sumar] of [[[T()], { erori: 0, tronsoane_gasite: 4 }], [[T({ cartus: { titlu: 'x' } })], { erori: 0 }], [[T()], { erori: 0 }]] as any[]) {
+      const r = rezultatCitire({ plansa, toate, sumar, zoneLipsa: [] })
+      assertEquals(r.rezultat, 'partial', JSON.stringify({ plansa, sumar }))
+      assert(r.motiv.startsWith('de verificat'))
+    }
+  }
+})
+Deno.test('rezultatCitire: imagine mică legitimă + cartuș exterior (fără identificare pozitivă) -> nu siglă', () => {
+  const plansa = { sursa_sigla_dovedita: false, latime: 800, inaltime: 600, acoperire_demonstrata: false,
+    semnale_sigla: { imagine_sub_10_la_suta: true, declansator_randare: true, identificare: { raport_2_1: false, text_semnatura_pe_imagine: false, dovedita: false } } }
+  const r = rezultatCitire({ plansa, toate: [T({ cartus: { titlu: 'Plan' } })], sumar: { erori: 0, tronsoane_gasite: 2 }, zoneLipsa: [], prea_mica: true })
+  assert(r.rezultat !== 'sursa_gresita_sigla'); assertEquals(r.rezultat, 'partial')
+})
+Deno.test('rezultatCitire: istoric fără semnale (tăiere veche) -> incertitudinea păstrată (partial)', () => {
+  const r = rezultatCitire({ plansa: { citibila: true, latime: 9000, inaltime: 6000 }, toate: [T()], sumar: { erori: 0, tronsoane_gasite: 5 }, zoneLipsa: [] })
+  assertEquals(r.rezultat, 'partial'); assert(r.motiv.includes('istoric'))
+  const g = rezultatCitire({ plansa: { citibila: true }, toate: [T({ cartus: { titlu: 'x' } })], sumar: { erori: 0 }, zoneLipsa: [] })
+  assertEquals(g.rezultat, 'partial')
+})
+Deno.test('rezultatCitire: sursa_gresita_sigla doar cu identificare pozitivă și nu pe randare vectorială', () => {
+  assertEquals(rezultatCitire({ plansa: { sursa_sigla_dovedita: true, semnale_sigla: { identificare: { dovedita: true } } }, toate: [], sumar: {}, zoneLipsa: [] }).rezultat, 'sursa_gresita_sigla')
+  // tăiere veche: sursa_sigla_dovedita din euristica veche (fără identificare pozitivă) => NU siglă
+  assert(rezultatCitire({ plansa: { sursa_sigla_dovedita: true }, toate: [], sumar: {}, zoneLipsa: [] }).rezultat !== 'sursa_gresita_sigla')
+  assert(rezultatCitire({ plansa: P({ sursa_sigla_dovedita: true, vectorial: true }), toate: [T()], sumar: { tronsoane_gasite: 1 }, zoneLipsa: [] }).rezultat !== 'sursa_gresita_sigla')
+  assert(rezultatCitire({ plansa: P({ sursa_sigla_dovedita: false }), toate: [T()], sumar: { tronsoane_gasite: 1 }, zoneLipsa: [] }).rezultat !== 'sursa_gresita_sigla')
+})
+
+// ---- R4 risc 1: transferul în cantități nu rămâne blocat ----
+Deno.test('transferDeReluat: {eroare} și in_curs >5 min se reiau; in_curs recent și făcut nu', () => {
+  const acum = Date.parse('2026-09-25T12:00:00Z')
+  assert(transferDeReluat(null, acum))
+  assert(transferDeReluat({ eroare: 'timeout' }, acum))
+  assert(transferDeReluat({ amanat: 'x' }, acum))
+  assert(transferDeReluat({ in_curs: true, la: '2026-09-25T11:54:00Z' }, acum))
+  assert(transferDeReluat({ in_curs: true }, acum))
+  assert(!transferDeReluat({ in_curs: true, la: '2026-09-25T11:58:00Z' }, acum))
+  assert(!transferDeReluat({ inserate: 3, actualizate: 1 }, acum))
 })

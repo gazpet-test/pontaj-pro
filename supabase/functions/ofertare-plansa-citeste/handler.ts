@@ -17,7 +17,7 @@
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
-import { cheieVersiune, fuzioneazaZone, regiuneZona, revNou, scrieCAS, versiuneIncompatibila } from './concurenta.ts';
+import { cheieVersiune, fuzioneazaZone, regiuneZona, revNou, scrieCAS, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a);
@@ -66,16 +66,26 @@ Reguli:
 - Nu inventa valori pe care nu le poti citi clar.`;
 
 // R3: rezultatul citirii — ok | partial | sursa_gresita_sigla | ilizibil | citita_fara_date_cantitative.
+// Copilot R3: sursa_gresita_sigla DOAR pe identificare pozitivă (plansa.sursa_sigla_dovedita scris de /api/plansa-felii
+// din raport 2:1 + <1000px + conținut simplu + text de semnătură suprapus); fără ea: „de reverificat/de randat”.
+// Fără succes fals: acoperirea paginii nedemonstrată (tăieri istorice fără semnale, PDF >40MB sărit, fallback după
+// randare nereușită) => partial „de verificat”, niciodată ok / citita_fara_date_cantitative. Eșecul tehnic (toate
+// zonele căzute la apel, randare eșuată) NU devine „ilizibil” — ilizibil = lectură completă, fără niciun text.
 export function rezultatCitire({ plansa, toate, sumar, zoneLipsa, prea_mica }: any): { rezultat: string; motiv: string } {
   const erori = Number(sumar?.erori) || 0, n = toate?.length || 0;
-  if (plansa?.sursa_sigla_dovedita === true && !plansa?.vectorial)
-    return { rezultat: 'sursa_gresita_sigla', motiv: 'imaginea citită e doar sigla semnăturii (dovadă: bbox imagine vs conținut în afara lui)' };
-  if (n && erori >= n) return { rezultat: 'ilizibil', motiv: 'toate zonele au căzut la citire' };
+  if (plansa?.sursa_sigla_dovedita === true && plansa?.semnale_sigla?.identificare?.dovedita === true && !plansa?.vectorial)
+    return { rezultat: 'sursa_gresita_sigla', motiv: 'imaginea citită e sigla semnăturii (identificare pozitivă: 2:1, <1000px, conținut simplu, text EasySign/„Semnat digital” pe imagine)' };
+  if (plansa?.randare_esuata)
+    return { rezultat: 'partial', motiv: 'de verificat: randarea paginii a eșuat (eșec tehnic, nu planșă ilizibilă)' };
+  if (n && erori >= n) return { rezultat: 'partial', motiv: `de verificat: toate cele ${n} zone au căzut la citire (eșec tehnic, nu planșă ilizibilă) — „reia zonele căzute”` };
   const date = (Number(sumar?.tronsoane_gasite) || 0) > 0 || (sumar?.tabele || []).length > 0 || (Number(sumar?.lungime_totala_m) || 0) > 0;
   const completa = !erori && !(zoneLipsa || []).length && !prea_mica;
   if (!completa) return { rezultat: 'partial', motiv: prea_mica
-    ? 'sursă sub 2000px fără dovadă de siglă — de randat pagina completă (avertisment de rezoluție, nu verdict)'
+    ? 'sursă de reverificat/de randat: sub 2000px fără identificare pozitivă de siglă (avertisment de rezoluție, nu verdict)'
     : `lectură incompletă (${erori} zone căzute, ${(zoneLipsa || []).length} zone lipsă)` };
+  if (plansa?.acoperire_demonstrata !== true)
+    return { rezultat: 'partial', motiv: `de verificat: acoperirea paginii nu e demonstrată (${plansa?.acoperire_motiv ||
+      (plansa?.acoperire_demonstrata === false ? 'fallback / analiză sărită' : 'tăiere istorică fără semnale — retaie planșa')})` };
   if (date) return { rezultat: 'ok', motiv: 'date cantitative extrase' };
   const cuText = (toate || []).filter((r: any) => !r?.eroare && ((r?.cartus && Object.values(r.cartus).some(Boolean)) ||
     (r?.alte_mentiuni || []).length || (r?.noduri || []).length)).length;
@@ -729,8 +739,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       `cifrele NU s-au trecut in cantitati, fiindca totalul ar fi incomplet si ar arata ca o diferenta reala. ` +
       `Apasă „🔁 reia zonele căzute” (se citesc doar zonele căzute) și transferul se face singur.` };
     sumar.cantitati = cantitati;
-  } else if (gata && cantBaza && !cantBaza.amanat) {
-    cantitati = cantBaza; sumar.cantitati = cantBaza; // făcut (sau în curs) de rularea concurentă
+  } else if (gata && cantBaza && !transferDeReluat(cantBaza)) {
+    cantitati = cantBaza; sumar.cantitati = cantBaza; // făcut (sau în curs <5 min) de rularea concurentă
+    // R4 risc 1: {eroare} sau in_curs mai vechi de 5 min (worker omorât) => se reia (treciInCantitati e idempotent pe potrivire)
   } else if (gata) {
     deTransferat = true;
     cantitati = { in_curs: true, la: new Date().toISOString() };
@@ -789,7 +800,12 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     upd.analiza = { ...d.analiza, citire_ai: citireAi,
       plansa: { ...plansaD, rezultat: r.rezultat, rezultat_motiv: r.motiv, rezultat_la: new Date().toISOString(), rezultat_sursa: 'extractor', rezultat_cod: COD_VERSIUNE } };
     // `eroare` păstrează formatele vechi, doar „citită fără rezultat” se desparte în cele două formulări
-    if (upd.eroare === 'citită fără rezultat') upd.eroare = r.rezultat === 'ilizibil' ? 'ilizibilă' : 'citită fără date cantitative';
+    if (upd.eroare === 'citită fără rezultat') upd.eroare = r.rezultat === 'ilizibil' ? 'ilizibilă' : r.rezultat === 'citita_fara_date_cantitative' ? 'citită fără date cantitative' : 'de verificat: ' + r.motiv.replace(/^de verificat: /, '');
+    // fără succes fals: un rezultat partial nu rămâne „procesat”
+    if (r.rezultat === 'partial' && upd.status_procesare === 'procesat') {
+      upd.status_procesare = 'partial';
+      if (!upd.eroare) upd.eroare = r.motiv.slice(0, 200);
+    }
   }
   ctx = { toate, gata, maiSunt, sumar, cantitati, deTransferat, pentruCantitati, nrPlansa, rulare, citireAi };
   return { upd };

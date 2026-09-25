@@ -90,3 +90,15 @@ export async function scrieCAS(supa: any, docId: number, docInitial: any,
   }
   return { ok: false, stop: { status: 409, error: `Citirea planșei e scrisă simultan din altă parte — ${INCERCARI_CAS} încercări fără succes. Reîncearcă.` }, incercari: INCERCARI_CAS };
 }
+
+// R4 risc 1: transferul în ofertare_cantitati marcat pe citire_ai.sumar.cantitati. Nu se blochează definitiv:
+// {eroare} (a căzut) sau {in_curs} mai vechi de 5 min (funcția a murit între marcaj și rezultat) => se reia.
+export const TRANSFER_EXPIRA_MS = 5 * 60 * 1000;
+export function transferDeReluat(c: any, acumMs = Date.now()): boolean {
+  if (!c || c.amanat || c.eroare) return true;
+  if (c.in_curs) {
+    const t = Date.parse(c.la);
+    return !Number.isFinite(t) || acumMs - t > TRANSFER_EXPIRA_MS;
+  }
+  return false;
+}

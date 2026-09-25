@@ -95,6 +95,25 @@ export function decideRuta(meta, a) {
   return { randeaza: false, motiv: 'scanare' }
 }
 
+// R4 (Copilot): scrierea `analiza` e compare-and-set pe analiza->citire_ai->>rev citit la început. La conflict
+// (o rundă de citire a scris între timp) se recitește documentul și se reconstruiește O dată; altfel 409.
+export async function scrieAnalizaCAS(supa, docId, docInitial, construieste, extra = {}) {
+  let d = docInitial
+  for (let i = 0; i < 2; i++) {
+    const rev = d?.analiza?.citire_ai?.rev ?? null
+    let q = supa.from('ofertare_documente_atribuire')
+      .update({ analiza: construieste(d?.analiza || {}), analiza_la: new Date().toISOString(), ...extra }).eq('id', docId)
+    q = rev == null ? q.is('analiza->citire_ai->>rev', null) : q.eq('analiza->citire_ai->>rev', String(rev))
+    const { data, error } = await q.select('id')
+    if (error) return { ok: false, error: error.message }
+    if ((data || []).length === 1) return { ok: true, incercari: i + 1 }
+    const { data: proaspat } = await supa.from('ofertare_documente_atribuire').select('id, analiza').eq('id', docId).maybeSingle()
+    if (!proaspat) return { ok: false, error: 'document inexistent' }
+    d = proaspat
+  }
+  return { ok: false, error: 'Planșa e scrisă simultan de o citire în curs — reîncearcă după ce se termină.' }
+}
+
 // Ciornă AUTOMATĂ de clarificare (niciodată trimisă) când planșe rămân necitibile — logica e în BD
 // (ofertare_clarificare_planse_auto, doar service_role): idempotentă, o ciornă per licitație pe lot.
 async function clarificareAuto(supa, licitatieId) {
@@ -156,57 +175,78 @@ export default async function handler(req, res) {
   // PDF-uri mari cu scanare ≥2000px: analiza încarcă tot PDF-ul în pdf.js (timeout Vercel) — rămâne regula veche
   const scanMare = meta && Math.max(meta.width, meta.height) >= 2000 && buf.length > 40 * 1024 * 1024
   if (ePdf && !scanMare) {
-    try { semnaleSigla = await analizeazaSemnale(buf, meta ? { width: meta.width, height: meta.height } : null) }
+    try { semnaleSigla = await analizeazaSemnale(buf, meta ? { width: meta.width, height: meta.height } : null, imagini[0] || null) }
     catch (e) { semnaleSigla = { eroare: String(e?.message || e).slice(0, 160) } }
   }
   const ruta = decideRuta(meta, semnaleSigla)
-  const siglaDovedita = !!semnaleSigla?.sursa_sigla_dovedita
+  // R3 (Copilot): sursa_sigla_dovedita = IDENTIFICARE POZITIVĂ (raport 2:1, <1000px, conținut simplu, text de
+  // semnătură suprapus pe imagine). Imagine mică + conținut în afara bbox-ului = doar declanșator de randare.
+  const siglaDovedita = semnaleSigla?.sursa_sigla_dovedita === true
   const plansaSemnale = ePdf ? { semnale_sigla: { ...(semnaleSigla?.semnale || {}), paths: semnaleSigla?.paths ?? null,
-    imagine_selectata: semnaleSigla?.imagine_selectata || null, dovada: semnaleSigla?.dovada || null, ruta: ruta.motiv,
+    imagine_selectata: semnaleSigla?.imagine_selectata || null, dovada: semnaleSigla?.dovada || null,
+    identificare: semnaleSigla?.identificare || null, declansator_randare: !!semnaleSigla?.declansator_randare, ruta: ruta.motiv,
+    ...(scanMare ? { analiza_sarita: 'PDF >40MB — analiza structurală sărită; acoperirea paginii nedemonstrată' } : {}),
     ...(semnaleSigla?.eroare ? { eroare: semnaleSigla.eroare } : {}) }, sursa_sigla_dovedita: siglaDovedita } : {}
+  // R3 pct. 2: acoperirea paginii trebuie DEMONSTRATĂ, altfel citirea iese partial/„de verificat” (niciodată ok).
+  let acoperireDemonstrata = !ePdf   // imagine încărcată direct = documentul însuși
+  let motivAcoperire = ePdf ? null : 'imagine directă'
   if (ePdf && ruta.randeaza) {
     vectorial = true
     let pagini = [], eroareRandare = null
     try { pagini = await randeazaVectorial(buf, corp.fin === true ? DPI_VECTOR_FIN : undefined) } catch (e) { eroareRandare = String(e?.message || e).slice(0, 160) }
+    const totalPagini = pagini[0]?.total_pagini || pagini.length
     for (const [i, p] of pagini.entries()) {
       const v = await esteCitibila(p.img)
       if (v.citibila) surse.push({ img: p.img, meta: { width: p.latime, height: p.inaltime }, verdict: v, prefix: pagini.length > 1 ? `p${i + 1}_` : '', dpi: p.dpi, pagina: i + 1, latime_pt: p.latime_pt, inaltime_pt: p.inaltime_pt })
     }
     // R3: randarea nu a dat desen, dar există o imagine NEdovedită drept siglă și citibilă => rămâne imaginea
+    if (surse.length) {
+      acoperireDemonstrata = !eroareRandare && pagini.length >= totalPagini
+      motivAcoperire = acoperireDemonstrata ? 'randare pagină completă' : `randate ${pagini.length} din ${totalPagini} pagini`
+    }
     if (!surse.length && meta && imagini.length && !siglaDovedita) {
       const v = await esteCitibila(imagini[0])
-      if (v.citibila) { vectorial = false; surse.push({ img: imagini[0], meta, verdict: v, prefix: '' }) }
+      // fallback pe imagine: randarea n-a reușit => acoperirea paginii NU e demonstrată (rezultat de verificat)
+      if (v.citibila) { vectorial = false; surse.push({ img: imagini[0], meta, verdict: v, prefix: '' })
+        acoperireDemonstrata = false; motivAcoperire = eroareRandare ? 'randare eșuată — fallback pe imagine' : 'randarea n-a dat desen — fallback pe imagine' }
     }
     if (!surse.length) {
       const motiv = eroareRandare
         ? `PDF vectorial — randarea a eșuat (${eroareRandare}). Consultă planșa manual sau cere-o în format editabil (clarificarea s-a pregătit automat).`
-        : `PDF-ul nu conține o scanare a planșei${meta ? ` (cea mai mare imagine are ${meta.width}x${meta.height}px — sursă sub pragul de rezoluție; nu e dovedit că e sigla)` : ''}, iar randarea vectorială nu a produs desen citibil. ` +
-          'Nu tăiem și nu plătim citirea unei sigle. Consultă planșa manual; clarificarea către autoritate s-a pregătit automat (ciornă).'
-      await supa.from('ofertare_documente_atribuire').update({
-        analiza: { ...doc.analiza, plansa: { citibila: false, vectorial: true, motiv, latime: meta?.width || null, inaltime: meta?.height || null, randare_esuata: !!eroareRandare, ...plansaSemnale } },
-        analiza_la: new Date().toISOString(),
-      }).eq('id', docId)
+        : siglaDovedita
+          ? `Imaginea din PDF (${meta.width}x${meta.height}px) e identificată pozitiv drept sigla semnăturii, iar randarea vectorială nu a produs desen citibil. ` +
+            'Nu tăiem și nu plătim citirea unei sigle. Consultă planșa manual; clarificarea către autoritate s-a pregătit automat (ciornă).'
+          : `Sursă de reverificat/de randat: randarea vectorială nu a produs desen citibil${meta ? ` (cea mai mare imagine, ${meta.width}x${meta.height}px, nu e identificată drept siglă și nici citibilă)` : ''}. ` +
+            'Consultă planșa manual; clarificarea către autoritate s-a pregătit automat (ciornă).'
+      const w0 = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: { citibila: false, vectorial: true, motiv, latime: meta?.width || null, inaltime: meta?.height || null,
+        randare_esuata: !!eroareRandare, acoperire_demonstrata: false, rezultat: 'partial', rezultat_motiv: 'de verificat: ' + (eroareRandare ? 'randare eșuată (eșec tehnic, nu ilizibil)' : 'randare fără desen citibil'), ...plansaSemnale } }))
+      if (!w0.ok) return res.status(409).json({ error: w0.error })
       const clarificare = await clarificareAuto(supa, doc.licitatie_id)
       return res.status(200).json({ citibila: false, vectorial: true, motiv, clarificare })
     }
   } else {
     if (!imagini.length || !meta) {
       const mesaj = 'Nu am gasit nicio imagine scanata in document.'
-      await supa.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, plansa: { citibila: false, motiv: mesaj, ...plansaSemnale } }, analiza_la: new Date().toISOString() }).eq('id', docId)
+      const w0 = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: { citibila: false, motiv: mesaj, acoperire_demonstrata: false, ...plansaSemnale } }))
+      if (!w0.ok) return res.status(409).json({ error: w0.error })
       return res.status(200).json({ citibila: false, motiv: mesaj })
     }
     const verdict = await esteCitibila(imagini[0])
     if (!verdict.citibila) {
       const motiv = `Imaginea se deschide, dar continutul nu se poate reface: ${verdict.cu_continut} din ${verdict.sonde} zone verificate au desen. ` +
         'Fisierul publicat are date deteriorate — se vede doar in Acrobat. Deschide-l acolo si salveaza-l din nou (Export ca imagine sau tiparire in PDF nou), apoi urca varianta curata.'
-      await supa.from('ofertare_documente_atribuire').update({
-        analiza: { ...doc.analiza, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height, ...plansaSemnale } },
-        analiza_la: new Date().toISOString(),
-        eroare: 'Plansa nu poate fi citita automat — necesita conversie (vezi detalii).',
-      }).eq('id', docId)
+      const w0 = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: { citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height, acoperire_demonstrata: false, ...plansaSemnale } }),
+        { eroare: 'Plansa nu poate fi citita automat — necesita conversie (vezi detalii).' })
+      if (!w0.ok) return res.status(409).json({ error: w0.error })
       return res.status(200).json({ citibila: false, motiv, verificare: verdict, latime: meta.width, inaltime: meta.height, imagini_gasite: imagini.length })
     }
     surse = [{ img: imagini[0], meta, verdict, prefix: '' }]
+    // scanare: acoperirea e demonstrată doar dacă imaginea selectată domină pagina afișată (bbox din operatorList)
+    const fr = semnaleSigla?.imagine_selectata?.fractie_pagina
+    if (ePdf) {
+      acoperireDemonstrata = !scanMare && !semnaleSigla?.eroare && fr != null && fr >= 0.5
+      motivAcoperire = scanMare ? 'PDF >40MB — analiză sărită' : semnaleSigla?.eroare ? 'analiza structurală a eșuat' : fr == null ? 'imaginea nu a fost localizată pe pagină' : `scanarea acoperă ${Math.round(fr * 100)}% din pagină`
+    }
   }
 
   // Taiem in felii care se suprapun, ca sa nu pierdem randuri de tabel pe margini.
@@ -278,9 +318,7 @@ export default async function handler(req, res) {
   // Coloana `analiza` tine mai multe lucruri despre acelasi document (tabelul de
   // dimensionare citit, rezultatul citirii AI). Scriem DOAR cheia `plansa`, altfel
   // sterge restul — asa s-a pierdut o data tabelul de 18 tronsoane de pe plansa 1.1.
-  const analiza = {
-    ...doc.analiza,
-    plansa: {
+  const plansaNoua = {
       citibila: true, latime: m0.width, inaltime: m0.height,
       felii: reusite.length, randuri, coloane, latura, fin,
       ...(vectorial ? { vectorial: true, randat: true, dpi: surse[0].dpi, pagini: surse.length } : {}),
@@ -296,14 +334,15 @@ export default async function handler(req, res) {
       // 25.09.2026 (audit T4/T11): amprenta tăierii — o citire se poate relua pe zone doar pe ACEEAȘI tăiere
       taiat_la: new Date().toISOString(),
       ...plansaSemnale,
+      acoperire_demonstrata: acoperireDemonstrata, acoperire_motiv: motivAcoperire,
       ...(!vectorial && meta && Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN ? { avertisment_rezolutie: `sursa are ${meta.width}x${meta.height}px (<${MIN_LATURA_SCAN}) — avertisment, nu dovadă de siglă` } : {}),
-    },
   }
   // R4: retăierea schimbă jetonul citirii (citire_ai.rev) => o rundă de citire în zbor pe tăierea veche
   // nu mai poate scrie peste (compare-and-set în ofertare-plansa-citeste; la recitire vede alt taiat_la => 409).
-  if (analiza.citire_ai) analiza.citire_ai = { ...analiza.citire_ai, rev: `taiere-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` }
-  await supa.from('ofertare_documente_atribuire')
-    .update({ analiza, analiza_la: new Date().toISOString() }).eq('id', docId)
+  // Scrierea însăși e compare-and-set pe rev-ul citit la început (o rundă care a scris între timp => recitim o dată).
+  const w = await scrieAnalizaCAS(supa, docId, doc, (a) => ({ ...a, plansa: plansaNoua,
+    ...(a.citire_ai ? { citire_ai: { ...a.citire_ai, rev: `taiere-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` } } : {}) }))
+  if (!w.ok) return res.status(409).json({ error: w.error })
   // planșa a devenit citibilă prin randare => lista din ciorna automată (dacă există) se reîmprospătează
   const clarificare = vectorial ? await clarificareAuto(supa, doc.licitatie_id) : null
 

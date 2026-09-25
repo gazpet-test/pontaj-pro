@@ -24,6 +24,31 @@ async function pdfSiglaPeVectorial() {       // A3 landscape, 600 linii vectoria
   d.text('Semnat digital EasySign', 1000, 830)
   return cuByteRange(Buffer.from(d.output('arraybuffer')))
 }
+// siglă EasySign „reală” sintetică: 900x450, fond alb + blocuri de text/logo (conținut simplu)
+async function jpegSigla() {
+  const w = 900, h = 450, px = Buffer.alloc(w * h * 3, 255)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 3
+    const logo = (x - 150) ** 2 + (y - 225) ** 2 < 90 ** 2 && (x - 150) ** 2 + (y - 225) ** 2 > 70 ** 2
+    const text = x > 300 && x < 860 && ((y > 150 && y < 175) || (y > 215 && y < 240) || (y > 280 && y < 300)) && (x % 23) < 15
+    if (logo) { px[i] = 20; px[i + 1] = 60; px[i + 2] = 160 } else if (text) px[i] = px[i + 1] = px[i + 2] = 30
+  }
+  return sharp(px, { raw: { width: w, height: h, channels: 3 } }).jpeg({ quality: 90 }).toBuffer()
+}
+async function pdfSiglaEasySignReala() {     // A3 vectorial + sigla 900x450 cu textul de semnătură SUPRAPUS pe ea
+  const d = new jsPDF({ unit: 'pt', format: 'a3', orientation: 'landscape' })
+  for (let i = 0; i < 600; i++) d.line(40 + (i * 1.7) % 1000, 40 + (i * 13) % 700, 60 + (i * 7) % 1050, 60 + (i * 11) % 740)
+  d.addImage(dataUrl(await jpegSigla()), 'JPEG', 1000, 740, 140, 70)
+  d.setFontSize(7); d.text('Semnat digital EasySign', 1030, 780)
+  return cuByteRange(Buffer.from(d.output('arraybuffer')))
+}
+async function pdfMicCartusExterior() {      // imagine mică legitimă (desen 800x600) + cartuș vectorial în afara ei, fără semnătură
+  const d = new jsPDF({ unit: 'pt', format: 'a4' })
+  d.addImage(dataUrl(await jpeg(800, 600, 3)), 'JPEG', 60, 80, 150, 112)
+  d.rect(300, 650, 260, 150); for (let i = 0; i < 6; i++) d.line(300, 670 + i * 20, 560, 670 + i * 20)
+  d.text('Plan situatie PL3 - Beneficiar', 310, 665)
+  return Buffer.from(d.output('arraybuffer'))
+}
 async function pdfScanSemnat() {             // scanare 3000x2100 pe toată pagina, semnată
   const d = new jsPDF({ unit: 'pt', format: [1000, 700], orientation: 'landscape' })
   d.addImage(dataUrl(await jpeg(3000, 2100)), 'JPEG', 0, 0, 1000, 700)
@@ -39,7 +64,7 @@ async function pdfDesenMic() {               // A4, singurul conținut = o imagi
 async function ruleaza(nume, buf) {
   const imagini = jpegDinPdf(buf)
   const meta = imagini.length ? await sharp(imagini[0]).metadata() : null
-  const a = await analizeazaSemnale(buf, meta ? { width: meta.width, height: meta.height } : null)
+  const a = await analizeazaSemnale(buf, meta ? { width: meta.width, height: meta.height } : null, imagini[0] || null)
   const ruta = decideRuta(meta, a)
   let sursa = 'imagine'
   if (ruta.randeaza) {
@@ -50,7 +75,7 @@ async function ruleaza(nume, buf) {
   }
   const r = { nume, img: meta && `${meta.width}x${meta.height}`, semnale: a.semnale, paths: a.paths,
     fractie: a.imagine_selectata?.fractie_pagina, bbox_pdf: a.imagine_selectata?.bbox_pdf, dovada: a.dovada,
-    ruta: ruta.motiv, sursa, sursa_sigla_dovedita: a.sursa_sigla_dovedita }
+    identificare: a.identificare, declansator_randare: a.declansator_randare, ruta: ruta.motiv, randeaza: ruta.randeaza, sursa, sursa_sigla_dovedita: a.sursa_sigla_dovedita }
   console.log(JSON.stringify(r))
   return r
 }
@@ -58,12 +83,19 @@ let ok = 0, tot = 0
 const verifica = (cond, msg) => { tot++; if (cond) ok++; console.log(`${cond ? 'PASS' : 'FAIL'} ${msg}`) }
 const r1 = await ruleaza('sigla_pe_vectorial', await pdfSiglaPeVectorial())
 verifica(r1.sursa === 'randare_pagina', '1: siglă izolată => randare pagină completă')
-verifica(r1.sursa_sigla_dovedita === true, '1: dovadă siglă (imagine <10% + conținut în afara bbox)')
+verifica(r1.sursa_sigla_dovedita === false, '1: text de semnătură SUB imagine (nu pe ea) => NU dovedit (doar declanșator de randare)')
+verifica(r1.declansator_randare === true, '1: imagine mică + conținut în afara bbox => declanșator de randare')
 const r2 = await ruleaza('scan_mare_semnat', await pdfScanSemnat())
 verifica(r2.sursa === 'imagine', '2: scanare mare semnată => rămâne imaginea')
 verifica(r2.sursa_sigla_dovedita === false, '2: fără siglă')
 const r3 = await ruleaza('desen_mic_legitim', await pdfDesenMic())
 verifica(r3.sursa_sigla_dovedita === false, '3: imagine mică singurul conținut => NU siglă')
 verifica(r3.sursa !== 'necitibil', '3: planșa rămâne citibilă (randare sau imagine)')
+const r4 = await ruleaza('sigla_easysign_reala', await pdfSiglaEasySignReala())
+verifica(r4.sursa_sigla_dovedita === true, '4: siglă EasySign 900x450 + text „Semnat digital EasySign” suprapus => dovedit (identificare pozitivă)')
+verifica(r4.sursa === 'randare_pagina', '4: se randează pagina completă')
+const r5 = await ruleaza('mic_cartus_exterior', await pdfMicCartusExterior())
+verifica(r5.sursa_sigla_dovedita === false, '5: imagine mică + cartuș exterior fără text de semnătură => NU dovedit')
+verifica(r5.randeaza === true, '5: ... doar randare (declanșator)')
 console.log(`\n${ok}/${tot} verificări trecute`)
 process.exit(ok === tot ? 0 : 1)

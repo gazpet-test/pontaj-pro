@@ -41,7 +41,7 @@ export async function randeazaVectorial(buf, dpi = DPI_VECTOR) {
       const png = await canvas.encode('png')
       pag.cleanup()
       // R4: dimensiunea paginii în puncte PDF (viewport scale 1) — pt proveniența pe regiune (_regiune, x0..y1 în pt)
-      pagini.push({ img: png, latime: w, inaltime: h, dpi: Math.round(zoom * 72), latime_pt: +vp1.width.toFixed(2), inaltime_pt: +vp1.height.toFixed(2) })
+      pagini.push({ total_pagini: doc.numPages, img: png, latime: w, inaltime: h, dpi: Math.round(zoom * 72), latime_pt: +vp1.width.toFixed(2), inaltime_pt: +vp1.height.toFixed(2) })
     }
   } finally { await doc.destroy() }
   return pagini
@@ -49,9 +49,10 @@ export async function randeazaVectorial(buf, dpi = DPI_VECTOR) {
 
 // ── R3 (25.09.2026): semnale structurale + dovada de siglă ──────────────────────────────────────────
 // Semnalele NU sunt verdict: doar declanșează randarea paginii complete (ruta vectorială) în locul imaginii.
-// Sigla se marchează DOAR cu dovadă: imaginea efectiv selectată ocupă <10% din pagina afișată (bbox calculat din
-// matricea de transformare din operatorList, în coordonate PDF — nu din pixeli) ȘI randarea paginii are conținut
-// (sonde de variație) în afara bbox-ului imaginii. Fără AI.
+// R3 (Copilot): sigla se marchează DOAR prin IDENTIFICARE POZITIVĂ a conținutului imaginii selectate (fără AI):
+//   raport ~2:1 ȘI latura mare <1000px ȘI conținut simplu (fond dominant + puține culori = text/logo) ȘI textul
+//   pdf.js „EasySign/Semnat digital” are bbox-ul suprapus pe bbox-ul imaginii (aceeași regiune a paginii).
+// Imagine mică (<10% din pagină) + conținut în afara bbox-ului rămâne DOAR declanșator de randare (dovada).
 const RE_SEMNAT = /EasySign|Semnat digital|Digitally signed|Signature valid/i
 const inm = (m1, m2) => [m1[0] * m2[0] + m1[2] * m2[1], m1[1] * m2[0] + m1[3] * m2[1], m1[0] * m2[2] + m1[2] * m2[3],
   m1[1] * m2[2] + m1[3] * m2[3], m1[0] * m2[4] + m1[2] * m2[5] + m1[4], m1[1] * m2[4] + m1[3] * m2[5] + m1[5]]
@@ -81,8 +82,26 @@ function sondeInAfara(data, w, h, excl) {
   return { sonde, cu_continut: cu }
 }
 
+// Conținut simplu (siglă/text): pe o miniatură de 128px — fondul dominant ≥60% din pixeli și ≤12 culori
+// (cuantizate 3 biți/canal) cu pondere ≥0,5%. O planșă/fotografie are variație mare și multe tonuri.
+export async function continutSimplu(imgBuf) {
+  if (!imgBuf) return null
+  const { default: sharp } = await import('sharp')
+  const { data, info } = await sharp(imgBuf, { failOn: 'none' }).resize({ width: 128, height: 128, fit: 'inside' })
+    .removeAlpha().raw().toBuffer({ resolveWithObject: true })
+  const n = info.width * info.height, hist = new Map()
+  for (let i = 0; i < n; i++) {
+    const k = ((data[i * 3] >> 5) << 6) | ((data[i * 3 + 1] >> 5) << 3) | (data[i * 3 + 2] >> 5)
+    hist.set(k, (hist.get(k) || 0) + 1)
+  }
+  const frecv = [...hist.values()].sort((a, b) => b - a)
+  const fond = frecv[0] / n, culori = frecv.filter((c) => c / n >= 0.005).length
+  return { fond: +fond.toFixed(3), culori, simplu: fond >= 0.6 && culori <= 12 }
+}
+const seSuprapun = (a, b, tol = 2) => a[0] <= b[2] + tol && b[0] <= a[2] + tol && a[1] <= b[3] + tol && b[1] <= a[3] + tol
+
 // imgSel: {width,height} ale imaginii selectate de extractorul JPEG (se potrivește după dimensiunile în pixeli).
-export async function analizeazaSemnale(buf, imgSel = null) {
+export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const doc = await pdfjs.getDocument({
     data: new Uint8Array(buf), CanvasFactory: FabricaCanvas, disableFontFace: true, standardFontDataUrl: FONTURI,
@@ -112,6 +131,11 @@ export async function analizeazaSemnale(buf, imgSel = null) {
     }
     const txt = await pag.getTextContent()
     const textSemnatura = RE_SEMNAT.test(txt.items.map((t) => t.str).join(' '))
+    // bbox-ul fiecărui item de text în coordonate PDF (transform = [a,b,c,d,e,f], deja în spațiul paginii)
+    const texte = txt.items.filter((t) => t.str && t.transform).map((t) => {
+      const [a, b, , d, e, f] = t.transform, h = Math.abs(t.height || d || Math.hypot(a, b)) || 1, w = Math.abs(t.width || 0)
+      return { str: t.str, bbox: [e, f - h * 0.25, e + w, f + h] }
+    })
     const byteRange = /\/ByteRange\s*\[/.test(Buffer.from(buf).toString('latin1', 0, Math.min(buf.length, 8e6)))
     // imaginea efectiv selectată = cea cu aceleași dimensiuni în pixeli ca JPEG-ul ales; altfel cea mai mare afișată
     const sel = (imgSel && imagini.find((m) => m.latime === imgSel.width && m.inaltime === imgSel.height)) ||
@@ -135,9 +159,25 @@ export async function analizeazaSemnale(buf, imgSel = null) {
       dovada = { ...s, continut_in_afara: s.cu_continut >= Math.max(2, Math.ceil(s.sonde * 0.10)) }
     }
     pag.cleanup()
+    // Identificare POZITIVĂ (singura care poate da verdictul „siglă”)
+    let identificare = null
+    if (sel && W && H) {
+      const raport = Math.max(W, H) / Math.min(W, H)
+      const peImagine = texte.filter((t) => seSuprapun(t.bbox, sel.bbox_pdf))
+      let simplu = null
+      try { simplu = await continutSimplu(imgBuf) } catch (e) { simplu = { eroare: String(e?.message || e).slice(0, 80) } }
+      identificare = {
+        raport_2_1: Math.abs(raport - 2) < 0.2, sub_1000: Math.max(W, H) < 1000,
+        continut_simplu: simplu?.simplu === true, metrici_continut: simplu,
+        text_semnatura_pe_imagine: RE_SEMNAT.test(peImagine.map((t) => t.str).join(' ')),
+      }
+      identificare.dovedita = identificare.raport_2_1 && identificare.sub_1000 && identificare.continut_simplu && identificare.text_semnatura_pe_imagine
+    }
     return {
-      semnale, pagina_pdf: [vx0, vy0, vx1, vy1], paths, imagini: imagini.slice(0, 20), imagine_selectata: sel, dovada,
-      sursa_sigla_dovedita: !!(semnale.imagine_sub_10_la_suta && dovada?.continut_in_afara),
+      semnale, pagina_pdf: [vx0, vy0, vx1, vy1], paths, imagini: imagini.slice(0, 20), imagine_selectata: sel, dovada, identificare,
+      // declanșator de randare (NU verdict): imagine mică + conținut în afara bbox-ului
+      declansator_randare: !!(semnale.imagine_sub_10_la_suta && dovada?.continut_in_afara),
+      sursa_sigla_dovedita: identificare?.dovedita === true,
     }
   } finally { await doc.destroy() }
 }
