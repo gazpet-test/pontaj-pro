@@ -97,3 +97,10 @@ Rândurile #1–#4 (SRMP Ștefan Vodă → limita Vălcelele, 13765 m Dn200) tre
 3. Dn43 / 270 m Floroaica: 40, 63 sau altceva?
 4. Maparea tronsoanelor pe Etapa 1 / Etapa 2 (inclusiv #1–#4, 13.765 m); unde e Dn160.
 5. GO pentru reluarea z3_1 (cost AI) și pentru schimbarea de cod a regulii de adăugare.
+
+## Implementat (25.09.2026)
+- `ofertare-plansa-citeste/handler.ts`: agregarea e extrasă în `agregaTronsoane(unice)` (exportată, testabilă).
+- Când planșa are tabel, **doar rândurile de tabel** intră în `lungime_totala_m` și în cantități. Adnotările pe diametre absente din tabel NU se mai numără (`adnotari_numarate_in_plus` = 0, păstrat pt compatibilitate); apar în `sumar.adnotari_diametru_absent` (Dn, material, lungime, capete, zonă) cu motiv „diametru absent din tabel — de verificat” și se numără în `adnotari_lasate_deoparte` / `adnotari_neconfirmate_m`.
+- Adnotare cu lungime egală ±1% cu un rând de tabel (orice Dn) → text `posibila_dublura: …` în `sumar.avertismente` (cu „rândul de tabel #n”) + detaliu structurat în `sumar.posibile_dubluri` (`rand_tabel.index/diametru_mm/lungime_m/de_la/la`). Fără deduplicare.
+- `sumar.validat` rămâne `false`. Fără planșă cu tabel, comportamentul e neschimbat.
+- Teste: `supabase/functions/ofertare-plansa-citeste/agregare_test.ts` (caz 470 simplificat, Dn absent fără pereche, fără tabel).
