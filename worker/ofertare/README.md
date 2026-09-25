@@ -23,7 +23,10 @@ normal + urma în `analiza.citire_mare` (încercări, felii, SHA-256, comparați
 Anti-buclă: încercarea se numără în BD înainte de muncă (CAS pe `analiza->citire_mare->>rev`), max. 3, apoi `eroare`
 definitiv cu motiv; `pdfinfo` oprit la timeout / nepornit = eșec trecător (se reia, plafon 60/120/180 s), definitiv doar
 când răspunde fără „Pages:”. Pe drumul cu AI, orice răspuns al edge-ului fără `ok:true` (ex. 546 WORKER_LIMIT) e eroare
-cu motivul real (cauza celor 5421 de treceri pe 770); în `proceseazaIngest`, un document care revine candidat după o
+cu motivul real (cauza celor 5421 de treceri pe 770); workerul cere `{apeluri:1}` (o felie pe invocare, ca tick-ul), iar
+după un răspuns neclar (504/502/520/524 sau niciun răspuns — edge-ul poate lucra încă, până la 400 s) reîncearcă abia
+după 400 s și după ce vede în BD dacă `pagini_procesate` a avansat, ca aceeași felie să nu fie citită (și plătită) de
+două ori; SIGTERM oprește drumul AI între felii; în `proceseazaIngest`, un document care revine candidat după o
 trecere în aceeași tură e oprit, iar `ofertare_ingest_coada.activ` se recitește înainte de fiecare document („Oprește”
 din UI / rollback-ul oprește tura la documentul următor; citirea deja pornită se termină — un PDF mare poate ține
 rândul de citire ~85 min pe încercare).

@@ -20,8 +20,12 @@ const PRAG_DOC_TEXT = 0.85           // proporția de pagini cu text ca document
 const HAIKU = { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6 }
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[ingest]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-// pauzele dintre reîncercări (ms) — obiect exportat ca testele să le poată pune pe 0
-export const PAUZE = { edgeMs: 15_000, reluareMareMs: 30_000 }
+// pauzele dintre reîncercări (ms) — obiect exportat ca testele să le poată pune pe 0.
+// edgeNeclarMs (runda 3): după un răspuns NECLAR al edge-ului (vezi raspunsNeclar) — cel puțin limita de timp a unei
+// invocări edge (400 s pe planul Pro; 504 vine la 150 s, deci invocarea mai poate trăi ≤250 s după el)
+export const PAUZE = { edgeMs: 15_000, edgeNeclarMs: 400_000, reluareMareMs: 30_000 }
+// dormitul din citesteCuAI, într-un obiect exportat: testele pun un ceas virtual (fără 400 s reale de așteptare)
+export const ceas = { dormi: (ms: number): Promise<unknown> => sleep(ms) }
 
 export type Supa = ReturnType<typeof createClient>
 
@@ -78,16 +82,47 @@ export function motivRaspunsEdge(data: any, http = 200): string | null {
   return (parti.length ? parti.join(': ') : (data == null ? 'răspuns gol' : 'răspuns fără ok:true')) + h
 }
 
+// R6/770 (runda 3): răspuns NECLAR = edge-ul poate lucra ÎNCĂ pe felie. 504 = gateway-ul a tăiat la 150 s (request idle
+// timeout), dar invocarea trăiește până la limita ei de timp (400 s pe Pro); 502/520/524 = proxy-ul n-a primit un verdict
+// de la funcție; 0 = n-a venit niciun răspuns (apelul nostru a expirat la 170 s sau a căzut rețeaua). NU sunt neclare
+// verdictele runtime-ului: 500 WORKER_ERROR, 503 BOOT_ERROR, 546 limită de resurse — invocarea s-a oprit.
+// Dovada (25.09, doc 1276, din browser, 2 × 504): ai_usage_log scris la 12 s și 14 s DUPĂ 504, fără niciun 200 pereche,
+// iar reîncercarea pornită la 5 s după primul 504, ÎNAINTE ca prima invocare să-și scrie felia, a citit-o din nou
+// (rândurile 4500 și 4504) — cost AI dublu, „ultimul care scrie câștigă”. Vezi docs/R6_770_CITIRE_PDF_MARE.md §3.1.
+export const raspunsNeclar = (http: number) => http === 0 || http === 502 || http === 504 || http === 520 || http === 524
+export type ProgresDoc = { status_procesare: string | null; pagini: number | null; pagini_procesate: number | null }
+const INCHEIAT = ['procesat', 'partial']
+// a avansat documentul între două citiri din BD? (pagini_procesate mai mare, sau încheiat între timp)
+// necunoscut (o citire a picat) → false: se numără ca încercare eșuată; siguranța vine din pauza lungă, nu de aici
+export function aAvansat(inainte: ProgresDoc | null, dupa: ProgresDoc | null): boolean {
+  if (!inainte || !dupa) return false
+  if ((dupa.pagini_procesate ?? 0) > (inainte.pagini_procesate ?? 0)) return true
+  return INCHEIAT.includes(String(dupa.status_procesare)) && !INCHEIAT.includes(String(inainte.status_procesare))
+}
+// runda 3: {apeluri:1} (o felie pe invocare, ca tick-ul din Supabase și cum cere edge-ul pentru apelurile de pe server:
+// două felii de scan pot trece de 150 s) → 240 de runde = aceeași capacitate ca vechile 120 de runde × 2 felii
+const RUNDE_AI = 240
+
 // drumul vechi, cu AI (scanuri): edge function-ul ofertare-ingest-doc, apel după apel cât timp continua=true
-export async function citesteCuAI(docId: number): Promise<string> {
+export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () => boolean = () => false): Promise<string> {
+  const progres = async (): Promise<ProgresDoc | null> => {
+    try {
+      const { data, error } = await supabase.from('ofertare_documente_atribuire').select('status_procesare, pagini, pagini_procesate').eq('id', docId).maybeSingle()
+      return error ? null : (data as ProgresDoc | null)   // cast: tiparele supabase-js dau „never” (erori vechi)
+    } catch (_) { return null }
+  }
+  let inainte = await progres()
   let incercari = 0
-  for (let runda = 0; runda < 120; runda++) {
+  for (let runda = 0; runda < RUNDE_AI; runda++) {
+    // SIGTERM: ies doar ÎNTRE apeluri — apelul anterior s-a încheiat sau pauza lungă a trecut, deci nicio invocare edge
+    // nu mai lucrează pe document; felia scrisă rămâne, iar următoarea tură reia de la pagini_procesate
+    if (runda > 0 && esteOprire()) return `întrerupt: SIGTERM (${inainte?.pagini_procesate ?? '?'}/${inainte?.pagini ?? '?'} pagini, AI; se reia de acolo)`
     let data: any, http = 0
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/ofertare-ingest-doc`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${SERVICE_KEY}`, 'apikey': SERVICE_KEY, 'content-type': 'application/json' },
-        body: JSON.stringify({ doc_id: docId, apeluri: 2 }),
+        body: JSON.stringify({ doc_id: docId, apeluri: 1 }),
         signal: AbortSignal.timeout(170_000),
       })
       http = resp.status
@@ -95,14 +130,30 @@ export async function citesteCuAI(docId: number): Promise<string> {
       try { data = corp ? JSON.parse(corp) : null } catch (_) { data = { error: 'răspuns ne-JSON: ' + corp.slice(0, 120).replace(/\s+/g, ' ').trim() } }
     } catch (e) { data = { error: 'apel edge: ' + String((e as Error)?.message ?? e) } }
     const motiv = motivRaspunsEdge(data, http)
+    if (motiv && raspunsNeclar(http)) {
+      // NU reîncerc cât invocarea poate trăi: aștept peste limita ei, apoi văd în BD dacă și-a scris felia.
+      // Pauza nu se scurtează la SIGTERM (170 s apel + 400 s < stop_grace_period 12 min).
+      log(`doc ${docId}: ${motiv} — edge-ul poate lucra încă; aștept ${Math.round(PAUZE.edgeNeclarMs / 1000)} s, apoi verific pagini_procesate`)
+      await ceas.dormi(PAUZE.edgeNeclarMs)
+      const dupa = await progres()
+      if (aAvansat(inainte, dupa)) {
+        log(`doc ${docId}: edge-ul și-a terminat felia după ${motiv} (${inainte?.pagini_procesate ?? '?'} → ${dupa!.pagini_procesate ?? '?'} pagini)`)
+        inainte = dupa; incercari = 0
+        if (INCHEIAT.includes(String(dupa!.status_procesare))) return `${dupa!.status_procesare} (${dupa!.pagini_procesate ?? '?'}/${dupa!.pagini ?? '?'} pagini, AI; încheiat de edge după ${motiv})`
+        continue
+      }
+      if (dupa) inainte = dupa
+      if (++incercari >= 3) return 'eroare: ' + motiv
+      continue   // pauza lungă e deja făcută
+    }
     if (motiv) {
-      incercari++
-      if (incercari >= 3) return 'eroare: ' + motiv
-      await sleep(PAUZE.edgeMs * incercari); continue
+      if (++incercari >= 3) return 'eroare: ' + motiv
+      await ceas.dormi(PAUZE.edgeMs * incercari); continue
     }
     incercari = 0
     if (data.skip) return 'sărit: ' + data.skip
     if (!data.continua) return `${data.status ?? 'gata'} (${data.pagini_procesate ?? '?'}/${data.pagini ?? '?'} pagini, AI)`
+    inainte = { status_procesare: data.status ?? null, pagini: data.pagini ?? null, pagini_procesate: data.pagini_procesate ?? null }
   }
   return 'eroare: prea multe runde'
 }
@@ -132,9 +183,9 @@ async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null,
   await Deno.writeFile(cale, bytes)
   try {
     const local = await textLocal(cale)
-    if (!local) return await citesteCuAI(doc.id)                       // pdfinfo/pdftotext n-au putut → AI (și decide el dacă e corupt)
+    if (!local) return await citesteCuAI(supabase, doc.id, esteOprire)   // pdfinfo/pdftotext n-au putut → AI (și decide el dacă e corupt)
     const cuText = local.pagini.filter(p => p.replace(/\s/g, '').length >= PRAG_TEXT_PAGINA).length
-    if (cuText / local.nPag < PRAG_DOC_TEXT) return await citesteCuAI(doc.id)   // scan sau majoritar imagini → AI
+    if (cuText / local.nPag < PRAG_DOC_TEXT) return await citesteCuAI(supabase, doc.id, esteOprire)   // scan sau majoritar imagini → AI
     await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: null, procesat_de: cerutDe, procesat_la: new Date().toISOString() }).eq('id', doc.id)
     // aceeași compunere ca pe felii: peste plafon, paginile care nu mai încap intră în pagini_necitite (nu doar tăiere tăcută)
     const comp = compuneText(local.pagini, local.nPag, off, MAX_TEXT)
@@ -282,6 +333,7 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
       await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: rez.slice(0, 500) }).eq('id', d.id).in('status_procesare', ['neprocesat', 'in_lucru'])
     } else if (rez.startsWith('reia') || rez.startsWith('întrerupt')) {
       // PDF mare: încercarea e deja numărată în BD (max. MAX_INCERCARI_MARE), se reia în tura asta; întrerupt = SIGTERM
+      // (și pe drumul AI, între felii: documentul rămâne 'in_lucru' cu pagini_procesate, tura următoare continuă de acolo)
     } else citite++
     await supabase.from('ofertare_ingest_coada').update({ ultimul_tick: new Date().toISOString(), lansari: (c.lansari ?? 0) + citite + esuate.size }).eq('licitatie_id', licId)
   }
