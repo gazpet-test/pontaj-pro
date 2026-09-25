@@ -3,7 +3,7 @@
 import { jsPDF } from 'jspdf'
 import sharp from 'sharp'
 import { analizeazaSemnale, randeazaVectorial } from '../api/_randare-pdf.js'
-import { jpegDinPdf, decideRuta, esteCitibila } from '../api/plansa-felii.js'
+import { jpegDinPdf, decideRuta, esteCitibila, acoperireScanPdf } from '../api/plansa-felii.js'
 
 // JPEG cu zgomot + linii (peste 10 KB, ca să-l vadă jpegDinPdf)
 async function jpeg(w, h, dens = 1) {
@@ -61,6 +61,21 @@ async function pdfDesenMic() {               // A4, singurul conținut = o imagi
   return Buffer.from(d.output('arraybuffer'))
 }
 
+// R4 pct. 1: scanare pe 60% din pagină + tabel vectorial în restul paginii (nicio semnătură)
+async function pdfScan60Tabel() {
+  const d = new jsPDF({ unit: 'pt', format: [1000, 700], orientation: 'landscape' })
+  d.addImage(dataUrl(await jpeg(3000, 2520)), 'JPEG', 0, 0, 600, 700)   // 600x700 = 60% din pagină
+  d.rect(630, 60, 340, 580); for (let i = 1; i < 20; i++) d.line(630, 60 + i * 29, 970, 60 + i * 29)
+  d.line(760, 60, 760, 640); d.text('Tabel dimensionare', 640, 50)
+  return Buffer.from(d.output('arraybuffer'))
+}
+// R4 pct. 1: scanare pe toată pagina, nimic altceva
+async function pdfScanIntreg() {
+  const d = new jsPDF({ unit: 'pt', format: [1000, 700], orientation: 'landscape' })
+  d.addImage(dataUrl(await jpeg(3000, 2100)), 'JPEG', 0, 0, 1000, 700)
+  return Buffer.from(d.output('arraybuffer'))
+}
+
 async function ruleaza(nume, buf) {
   const imagini = jpegDinPdf(buf)
   const meta = imagini.length ? await sharp(imagini[0]).metadata() : null
@@ -75,7 +90,7 @@ async function ruleaza(nume, buf) {
   }
   const r = { nume, img: meta && `${meta.width}x${meta.height}`, semnale: a.semnale, paths: a.paths,
     fractie: a.imagine_selectata?.fractie_pagina, bbox_pdf: a.imagine_selectata?.bbox_pdf, dovada: a.dovada,
-    identificare: a.identificare, declansator_randare: a.declansator_randare, ruta: ruta.motiv, randeaza: ruta.randeaza, sursa, sursa_sigla_dovedita: a.sursa_sigla_dovedita }
+    identificare: a.identificare, acoperire_pdf: a.acoperire_pdf, acoperire: ruta.randeaza ? null : acoperireScanPdf(a), declansator_randare: a.declansator_randare, ruta: ruta.motiv, randeaza: ruta.randeaza, sursa, sursa_sigla_dovedita: a.sursa_sigla_dovedita }
   console.log(JSON.stringify(r))
   return r
 }
@@ -97,5 +112,13 @@ verifica(r4.sursa === 'randare_pagina', '4: se randează pagina completă')
 const r5 = await ruleaza('mic_cartus_exterior', await pdfMicCartusExterior())
 verifica(r5.sursa_sigla_dovedita === false, '5: imagine mică + cartuș exterior fără text de semnătură => NU dovedit')
 verifica(r5.randeaza === true, '5: ... doar randare (declanșator)')
+const r6 = await ruleaza('scan_60_tabel_vectorial', await pdfScan60Tabel())
+verifica(r6.sursa === 'imagine', '6: scanare 60% fără semnale de document => ruta rămâne imaginea (procentul doar pt rutare)')
+verifica(r6.acoperire?.demonstrata === false, '6: scanare 60% + tabel vectorial în rest => acoperire NEdemonstrată (partial)')
+verifica(r6.acoperire_pdf?.paths_in_afara > 0 && r6.acoperire_pdf?.text_in_afara > 0, '6: path-urile și textul tabelului detectate în afara bbox-ului scanării')
+const r7 = await ruleaza('scan_pagina_intreaga', await pdfScanIntreg())
+verifica(r7.sursa === 'imagine' && r7.acoperire?.demonstrata === true, '7: scanare pe toată pagina fără altceva => acoperire demonstrată')
+verifica(r7.acoperire?.tip === 'imagine_pagina_intreaga', '7: acoperire_tip = imagine_pagina_intreaga')
+verifica(r2.acoperire?.demonstrata === true, '2: scanare semnată pe toată pagina, textul semnăturii ÎN bbox => acoperire demonstrată')
 console.log(`\n${ok}/${tot} verificări trecute`)
 process.exit(ok === tot ? 0 : 1)

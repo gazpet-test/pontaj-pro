@@ -18,14 +18,32 @@ export function cheieVersiune(v: any): string | null {
   return `${v.cod}|${v.model}|${v.prompt_sha}`;
 }
 
+// R4 (Copilot) pct. 3: câmpurile care definesc CE s-a citit (tăierea, grila, fișierul). Diferențele aici fac zonele
+// incomparabile — 409 INDIFERENT de mixare_permisa. mixare_permisa acoperă DOAR model / prompt_sha / cod.
+export const CAMPURI_NEMIXABILE = ['taiat_la', 'cale_felii', 'geom_sha', 'fisier', 'fisier_path'] as const;
+export function diferenteNemixabile(vSalvata: any, vCurenta: any): string[] {
+  return CAMPURI_NEMIXABILE.filter((c) => String(vSalvata?.[c] ?? '') !== String(vCurenta?.[c] ?? ''));
+}
+
 // Reluarea ('continua' / 'reia_erori' / de_la>0) pe o citire salvată cu altă versiune ar amesteca zone citite cu
 // alt prompt/model într-un singur total. Implicit: refuz. Citire veche fără versiune = necunoscută = incompatibilă.
 export function versiuneIncompatibila(caSalvata: any, curenta: any, mixarePermisa = false): string | null {
-  if (!caSalvata || mixarePermisa) return null;
+  if (!caSalvata) return null;
+  const dif = diferenteNemixabile(caSalvata.versiune, curenta);
+  if (dif.length) return `Citirea salvată e pe altă tăiere/grilă/fișier (${dif.join(', ')} diferă) — zonele nu se amestecă, ` +
+    'nici cu mixare_permisa. Pornește „citește” din nou.';
+  if (mixarePermisa) return null;
   const a = cheieVersiune(caSalvata.versiune), b = cheieVersiune(curenta);
   if (a === b) return null;
   return `Citirea salvată e făcută cu altă versiune (${a || 'necunoscută'}) decât cea curentă (${b}) — zonele nu se amestecă. ` +
     'Pornește „citește” din nou (sau reia explicit cu mixare_permisa=true).';
+}
+
+// Amprenta geometriei zonelor (zone_geom + zone_asteptate) — o retăiere cu altă grilă o schimbă.
+export async function shaGeometrie(plansa: any): Promise<string> {
+  const j = JSON.stringify({ g: plansa?.zone_geom ?? null, z: plansa?.zone_asteptate ?? null });
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(j)));
+  return Array.from(h.slice(0, 8)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 const cheieZona = (r: any) => String(r?.eticheta || '').replace(/\.jpg$/, '');
@@ -89,6 +107,18 @@ export async function scrieCAS(supa: any, docId: number, docInitial: any,
     doc = proaspat;
   }
   return { ok: false, stop: { status: 409, error: `Citirea planșei e scrisă simultan din altă parte — ${INCERCARI_CAS} încercări fără succes. Reîncearcă.` }, incercari: INCERCARI_CAS };
+}
+
+// R4 (Copilot) pct. 4: transferul în ofertare_cantitati e SERIALIZAT printr-un „lease” pe citire_ai.transfer =
+// {stare:'in_curs', de_la, rulare} obținut prin CAS. Doar deținătorul transferă; ceilalți sar.
+// Refuz (null = se poate lua): in_curs recent al ALTEI rulări, sau făcut de altă rulare după ce a pornit rularea curentă
+// (transfer concurent deja încheiat pe aceeași citire).
+export function leaseTransferOcupat(tr: any, rulare: string, pornitMs: number, acumMs = Date.now()): string | null {
+  if (!tr || tr.rulare === rulare) return null;
+  const t = Date.parse(tr.de_la);
+  if (tr.stare === 'in_curs' && Number.isFinite(t) && acumMs - t <= TRANSFER_EXPIRA_MS) return 'transfer în curs de altă rulare';
+  if (tr.stare === 'facut' && Number.isFinite(t) && t >= pornitMs) return 'transfer făcut deja de o rulare concurentă';
+  return null;
 }
 
 // R4 risc 1: transferul în ofertare_cantitati marcat pe citire_ai.sumar.cantitati. Nu se blochează definitiv:

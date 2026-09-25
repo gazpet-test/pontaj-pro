@@ -113,7 +113,7 @@ export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
     const ops = await pag.getOperatorList()
     const O = pdfjs.OPS, IMG = new Set([O.paintImageXObject, O.paintInlineImageXObject, O.paintImageXObjectRepeat].filter((x) => x != null))
     let ctm = [1, 0, 0, 1, 0, 0], stiva = [], paths = 0
-    const imagini = []
+    const imagini = [], pathBbox = []  // bbox-ul fiecărui path în coordonate PDF (minMax local × CTM)
     for (let i = 0; i < ops.fnArray.length; i++) {
       const f = ops.fnArray[i], a = ops.argsArray[i]
       if (f === O.save) stiva.push(ctm)
@@ -121,7 +121,15 @@ export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
       else if (f === O.transform) ctm = inm(ctm, a)
       else if (f === O.paintFormXObjectBegin) { stiva.push(ctm); if (Array.isArray(a?.[0]) && a[0].length === 6) ctm = inm(ctm, a[0]) }
       else if (f === O.paintFormXObjectEnd) ctm = stiva.pop() || [1, 0, 0, 1, 0, 0]
-      else if (f === O.constructPath) paths++
+      else if (f === O.constructPath) {
+        paths++
+        const mm = a?.[2]
+        if (Array.isArray(mm) && mm.length === 4 && mm.every(Number.isFinite)) {
+          const bb = bboxUnitar([ctm[0] * (mm[2] - mm[0]), ctm[1] * (mm[2] - mm[0]), ctm[2] * (mm[3] - mm[1]), ctm[3] * (mm[3] - mm[1]),
+            ctm[0] * mm[0] + ctm[2] * mm[1] + ctm[4], ctm[1] * mm[0] + ctm[3] * mm[1] + ctm[5]])
+          pathBbox.push(bb)
+        } else pathBbox.push(null) // necunoscut => tratat ca „în afară” (conservator)
+      }
       else if (IMG.has(f)) {
         const w = f === O.paintInlineImageXObject ? a?.[0]?.width : a?.[1], h = f === O.paintInlineImageXObject ? a?.[0]?.height : a?.[2]
         const bb = bboxUnitar(ctm)
@@ -159,6 +167,19 @@ export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
       dovada = { ...s, continut_in_afara: s.cu_continut >= Math.max(2, Math.ceil(s.sonde * 0.10)) }
     }
     pag.cleanup()
+    // R4 (Copilot) pct. 1: conținut în afara bbox-ului imaginii selectate (path-uri, text, alte imagini), în coordonate
+    // PDF, toleranță 2pt. Folosit DOAR la demonstrarea acoperirii (nu la rutare, nu la siglă).
+    let acoperire_pdf = null
+    if (sel) {
+      const tol = 2, B = sel.bbox_pdf
+      const inauntru = (bb) => !!bb && bb[0] >= B[0] - tol && bb[1] >= B[1] - tol && bb[2] <= B[2] + tol && bb[3] <= B[3] + tol
+      acoperire_pdf = {
+        fractie_pagina: sel.fractie_pagina,
+        paths_in_afara: pathBbox.filter((bb) => !inauntru(bb)).length,
+        text_in_afara: texte.filter((t) => t.str.trim() && !inauntru(t.bbox)).length,
+        imagini_in_afara: imagini.filter((m) => m !== sel && !inauntru(m.bbox_pdf)).length,
+      }
+    }
     // Identificare POZITIVĂ (singura care poate da verdictul „siglă”)
     let identificare = null
     if (sel && W && H) {
@@ -174,7 +195,7 @@ export async function analizeazaSemnale(buf, imgSel = null, imgBuf = null) {
       identificare.dovedita = identificare.raport_2_1 && identificare.sub_1000 && identificare.continut_simplu && identificare.text_semnatura_pe_imagine
     }
     return {
-      semnale, pagina_pdf: [vx0, vy0, vx1, vy1], paths, imagini: imagini.slice(0, 20), imagine_selectata: sel, dovada, identificare,
+      semnale, pagina_pdf: [vx0, vy0, vx1, vy1], paths, acoperire_pdf, imagini: imagini.slice(0, 20), imagine_selectata: sel, dovada, identificare,
       // declanșator de randare (NU verdict): imagine mică + conținut în afara bbox-ului
       declansator_randare: !!(semnale.imagine_sub_10_la_suta && dovada?.continut_in_afara),
       sursa_sigla_dovedita: identificare?.dovedita === true,

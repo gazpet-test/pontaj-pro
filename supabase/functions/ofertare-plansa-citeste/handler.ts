@@ -17,7 +17,7 @@
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
-import { cheieVersiune, fuzioneazaZone, regiuneZona, revNou, scrieCAS, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
+import { cheieVersiune, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a);
@@ -469,7 +469,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (!docId) return json({ error: 'doc_id lipsa' }, 400);
 
   const { data: doc } = await supa.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, nume_original, analiza, eroare').eq('id', docId).maybeSingle();
+    .select('id, licitatie_id, nume_original, fisier_path, analiza, eroare').eq('id', docId).maybeSingle();
   // 25.09.2026 (audit țintit, CLAUDE.md 7d): cea mai scumpă citire (Opus pe imagini) — poarta pe cheltuială
   // și pe server: doar ownerul sau responsabilul licitației (poateCheltui, poarta.ts).
   // Poarta vine ÎNAINTE de 404: un user fără drept primește ACELAȘI 403 dacă doc_id există sau nu
@@ -503,7 +503,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // ca reluarea să poată refuza amestecul de versiuni (R4/C4) fără cost.
   const promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
     .slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
-  const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: MODEL, prompt_sha: promptSha };
+  // + ce s-a citit (tăiere, grilă, fișier): diferențele aici => 409 chiar și cu mixare_permisa (concurenta.ts)
+  const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: MODEL, prompt_sha: promptSha,
+    taiat_la: plansa.taiat_la || null, cale_felii: plansa.cale_felii, geom_sha: await shaGeometrie(plansa),
+    fisier: doc.nume_original, fisier_path: doc.fisier_path || null };
   const cheieVers = cheieVersiune(versiuneCur);
   const mixarePermisa = body?.mixare_permisa === true;
 
@@ -762,10 +765,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   };
   const versiuniZone = [...new Set(toate.map((r: any) => r._versiune || 'necunoscuta'))];
   if (versiuniZone.length > 1) sumar.versiuni_mixte = versiuniZone; // doar cu mixare_permisa=true
-  const versiune = { ...versiuneCur,
-    fisier: d.nume_original, pagina: 1, dpi: plansaD.dpi || null, cale_felii: plansaD.cale_felii, taiat_la: plansaD.taiat_la || null };
+  const versiune = { ...versiuneCur, pagina: 1, dpi: plansaD.dpi || null };
   const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: MODEL, versiune, taiat_la: plansaD.taiat_la || null,
     gata, actualizat: new Date().toISOString(), rev: revNou(), rulare,
+    ...(caB?.transfer ? { transfer: caB.transfer } : {}), // lease-ul de transfer al altei rulări nu se șterge
     ...(caB?.rulare === rulare && caB?.note_lipite ? { note_lipite: caB.note_lipite, note_lipite_perechi: caB.note_lipite_perechi } : {}) };
   const upd: Record<string, unknown> = { analiza: { ...d.analiza, citire_ai: citireAi }, analiza_la: new Date().toISOString() };
   // 25.09.2026 (audit țintit): PL1–PL4 Vâlcelele au fost „citite" pe sigla semnăturii (900x450) și au ieșit
@@ -816,20 +819,38 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const { toate, gata, maiSunt, sumar, upd } = { ...ctx, upd: w.rezultat.upd };
   let { cantitati } = ctx;
 
-  // Transferul în cantități — după scrierea câștigătoare; rezultatul se scrie înapoi tot prin CAS (doar sumar.cantitati).
+  // Transferul în cantități — după scrierea câștigătoare, SERIALIZAT (R4/Copilot pct. 4): întâi lease prin CAS pe
+  // citire_ai.transfer = {stare:'in_curs', de_la, rulare}; doar deținătorul transferă, ceilalți sar și raportează.
+  // `rulare` aici = invocarea curentă (rulareNoua), nu citire_ai.rulare (comună rundelor aceleiași citiri).
   if (ctx.deTransferat) {
-    try {
-      cantitati = await treciInCantitati(supa, w.doc, ctx.pentruCantitati, ctx.nrPlansa);
-    } catch (e) {
-      cantitati = { eroare: String((e as Error)?.message || e).slice(0, 200) };
-    }
-    sumar.cantitati = cantitati;
-    const docDupa = { ...w.doc, analiza: upd.analiza };
-    await scrieCAS(supa, docId, docDupa, (d: any) => {
+    const deLaLease = new Date().toISOString();
+    let lease = await scrieCAS(supa, docId, { ...w.doc, analiza: upd.analiza }, (d: any) => {
       const caX = d.analiza?.citire_ai;
-      if (caX?.rulare !== ctx.rulare) return { stop: { status: 409, error: 'altă rulare' } };
-      return { upd: { analiza: { ...d.analiza, citire_ai: { ...caX, rev: revNou(), sumar: { ...caX.sumar, cantitati } } } } };
+      if (!caX?.gata) return { stop: { status: 409, error: 'citirea nu mai e completă' } };
+      const ocupat = leaseTransferOcupat(caX.transfer, rulareNoua, tRunda);
+      if (ocupat) return { stop: { status: 200, sarit: ocupat } };
+      return { upd: { analiza: { ...d.analiza, citire_ai: { ...caX, rev: revNou(), transfer: { stare: 'in_curs', de_la: deLaLease, rulare: rulareNoua } } } } };
     });
+    if (lease.ok) {
+      try {
+        cantitati = await treciInCantitati(supa, w.doc, ctx.pentruCantitati, ctx.nrPlansa);
+      } catch (e) {
+        cantitati = { eroare: String((e as Error)?.message || e).slice(0, 200) };
+      }
+      sumar.cantitati = cantitati;
+      const eroare = !!(cantitati as any)?.eroare;
+      // eliberare: rezultatul + starea lease-ului (facut / eroare => poate fi reluat), doar dacă încă îl deținem
+      await scrieCAS(supa, docId, lease.doc ? { ...lease.doc, analiza: lease.rezultat.upd.analiza } : w.doc, (d: any) => {
+        const caX = d.analiza?.citire_ai;
+        if (caX?.transfer?.rulare !== rulareNoua) return { stop: { status: 409, error: 'lease pierdut' } };
+        return { upd: { analiza: { ...d.analiza, citire_ai: { ...caX, rev: revNou(), sumar: { ...caX.sumar, cantitati },
+          transfer: { ...caX.transfer, stare: eroare ? 'eroare' : 'facut', la: new Date().toISOString() } } } } };
+      });
+    } else {
+      // alt deținător (sau conflict persistent): NU se transferă; se raportează
+      cantitati = { sarit: lease.stop?.sarit || lease.stop?.error || 'lease indisponibil', transfer_in_curs_alta_rulare: !!lease.stop?.sarit };
+      sumar.cantitati = cantitati;
+    }
   }
 
   // 25.09.2026: planșă citită dar inutilizabilă (nimic extras / toate zonele căzute) => ciornă AUTOMATĂ de

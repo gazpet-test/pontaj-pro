@@ -1,7 +1,12 @@
 # R4 — Citirea planșelor pe zone: concurență, versiuni, proveniență, coadă persistentă
 
 Data: 25.09.2026 · Acoperă T4 / T11 / C3 / C4 din `AUDIT_DOCUMENTATIE_OFERTARE_2026-09-25.md` și `MATRICE_ACOPERIRE_AUDIT_OFERTARE.md`.
-Stare: pct. 1–5 **implementate în cod + teste** (fără schemă nouă, nimic deployat). Pct. 6 = **design; tabelul cere GO**.
+Stare: pct. 1–5 **implementate în cod + teste** (fără schemă nouă, nimic deployat). Pct. 6 = **design; tabelul cere GO**. R4 **nu** rezolvă independența de browser și nici costul dublu între taburi — doar coada (§2).
+
+> **Limite explicite ale R4 (ce NU rezolvă codul livrat):**
+> - **Independența de browser — NU.** Bucla de citire rulează tot în browser: tab închis ⇒ citirea se oprește și se reia manual („continuă”). CAS-ul doar împiedică suprascrierea; nu continuă nimic singur.
+> - **Costul dublu între taburi — NU.** Două taburi care citesc aceleași zone plătesc de două ori; CAS + fuziunea păstrează rezultatul o singură dată, dar banii s-au cheltuit. Lease-ul de transfer (§1.1) serializează doar scrierea în `ofertare_cantitati`, nu citirea AI.
+> - Ambele se rezolvă **doar** prin coada persistentă (§2) = **schemă nouă ⇒ cere GO** de la Razvan. Până atunci rămân riscuri deschise.
 
 ## 1. Ce s-a implementat
 
@@ -12,14 +17,16 @@ Stare: pct. 1–5 **implementate în cod + teste** (fără schemă nouă, nimic 
 - La conflict: se recitește documentul, rezultatele rundei se **fuzionează pe cheia zonei** (`fuzioneazaZone`: ce e salvat rămâne; zona nouă o înlocuiește pe cea veche; o **eroare nouă nu înlocuiește un rezultat bun**), apoi sumarul/statusul/rezultatul se recalculează din fuziune și se reîncearcă — max. 3 încercări, apoi 409.
 - Retăierea (`/api/plansa-felii`) schimbă și ea `rev` ⇒ o rundă în zbor pe tăierea veche nu scrie peste; la recitire vede alt `taiat_la` ⇒ 409 (nu amestecă zonele a două grile).
 - Pasul „lipește notele” scrie tot prin CAS (notele se refac peste citirea proaspătă).
-- Transferul în `ofertare_cantitati` se face **după** scrierea câștigătoare, o singură dată pe rulare (`citire_ai.rulare`): scrierea pune `sumar.cantitati = {in_curs}`; a doua rulare concurentă vede marcajul și nu repetă transferul (fără poziții duble). Rezultatul transferului se scrie înapoi tot prin CAS.
+- Transferul în `ofertare_cantitati` se face **după** scrierea câștigătoare și e **serializat printr-un lease**: înainte de transfer, invocarea obține prin CAS `citire_ai.transfer = {stare:'in_curs', de_la, rulare}` (refuzat dacă altă invocare are `in_curs` de <5 min sau a terminat `facut` după ce a pornit invocarea curentă). Doar deținătorul transferă; ceilalți sar și raportează `cantitati.sarit = "transfer în curs de altă rulare"`. La final deținătorul scrie (tot prin CAS, doar dacă încă deține lease-ul) `stare: facut|eroare` + `sumar.cantitati`. Lease-ul unei alte rulări nu e șters de scrierea citirii (se păstrează `citire_ai.transfer`). Lease expirat (>5 min, worker omorât) ⇒ se poate relua.
+- `/api/plansa-felii` scrie tot prin CAS — funcția e în `api/_cas.js` (`scrieAnalizaCAS`, 3 încercări, apoi **409 explicit**, nimic suprascris), importată efectiv de handler și testată separat.
 - Răspunsul are `scriere_concurenta: {incercari}` când a fost conflict.
 
 **De ce CAS și nu lacăt** (`citire_ai.lock {de_la, pana_la, uid}`): o rundă ține 1–3 min; un lacăt fie blochează al doilea tab tot timpul ăsta, fie rămâne agățat când funcția e oprită (worker killed — exact cazul pe care îl evităm în Edge), fie expiră prea devreme și nu mai protejează. CAS nu ține nimic ocupat, nu are stare de curățat și nu pierde nimic plătit. Limita: nu previne **plata dublă** (două taburi pe `continua` citesc aceleași zone) — rezultatul se păstrează o dată, costul se plătește de două ori. Asta o rezolvă coada (§2), nu un lacăt pe JSON.
 
 ### 1.2 Versiuni incompatibile nemixate
 - Versiunea curentă `{cod: COD_VERSIUNE, model, prompt_sha}` se calculează **înainte** de orice citire.
-- `continua` / `reia_erori` / `de_la > 0` pe o citire salvată cu altă cheie `cod|model|prompt_sha` (sau fără versiune = necunoscută) ⇒ **409**, zero AI, zero scrieri. Mesaj: „pornește «citește» din nou”. Parametrul explicit `mixare_permisa: true` permite amestecul; atunci `sumar.versiuni_mixte` listează cheile.
+- `continua` / `reia_erori` / `de_la > 0` pe o citire salvată cu altă cheie `cod|model|prompt_sha` (sau fără versiune = necunoscută) ⇒ **409**, zero AI, zero scrieri. Mesaj: „pornește «citește» din nou”. Parametrul explicit `mixare_permisa: true` permite amestecul **doar pentru model / prompt_sha / cod**; atunci `sumar.versiuni_mixte` listează cheile.
+- `mixare_permisa` **nu** trece peste diferențe de `taiat_la`, `cale_felii`, geometria zonelor (`geom_sha` = SHA pe `zone_geom` + `zone_asteptate`), `fisier` / `fisier_path` ⇒ 409 indiferent de parametru (`CAMPURI_NEMIXABILE`, `diferenteNemixabile` în `concurenta.ts`). Citirile salvate fără aceste câmpuri (dinaintea schimbării) ⇒ 409 la reluare: se pornește „citește”.
 - Fiecare zonă citită poartă `_versiune` (`cod|model|prompt_sha`). `COD_VERSIUNE` → `2026-09-25.5`.
 - ⚠ Efect la deploy: citirile rămase la jumătate pe versiunea `.4` vor primi 409 la „continuă / reia zonele căzute” — intenționat; se pornește „citește”.
 
@@ -30,12 +37,19 @@ Stare: pct. 1–5 **implementate în cod + teste** (fără schemă nouă, nimic 
 
 ### 1.4 Teste (`concurenta_test.ts`, deps simulate, fără rețea)
 Două rulări concurente pe zone diferite (A `continua` 1_5/1_6, B `reia_erori` 1_2) ⇒ ambele păstrate, B reîncearcă o dată, planșa `gata`; eroare nouă nu înlocuiește rezultat bun; versiune diferită ⇒ 409 pe `continua`/`reia_erori`/`de_la`; `_versiune`/`_zona`/`_regiune` pe rularea completă; `regiuneZona` pe caz simplu + fallback dpi/px; retăiere în timpul rundei ⇒ 409 și tăierea nouă nu e suprascrisă; `rezultatCitire` pe ok / partial / ilizibil / citita_fara_date_cantitative / sursa_gresita_sigla.
-`deno test --node-modules-dir=none -A supabase/functions/` ⇒ **39 passed, 0 failed** (26 existente + 13 noi). `deno.lock` readus.
+Plus (Copilot, runda 2): epuizarea celor 3 reîncercări CAS ⇒ 409 explicit, zonele salvate și tăierea intacte; `mixare_permisa` refuzat pe tăiere/grilă/geometrie/fișier diferite (unitar + handler, zero AI); două rulări „citește” simultane ⇒ **o singură inserare** pe Dn nou în `ofertare_cantitati` (lease; testul pică dacă lease-ul e dezactivat); `leaseTransferOcupat` pe cazuri.
+`deno test --node-modules-dir=none -A supabase/functions/` ⇒ **50 passed, 0 failed**. `node scripts/test-cas-felii.mjs` ⇒ 14/14 (traseul complet al scrierii din `/api/plansa-felii`). `node scripts/test-detector-sigla.mjs` ⇒ 17/17. `deno.lock` readus.
+
+### 1.5 Acoperirea paginii (`acoperire_demonstrata`)
+- Scanare din PDF cu ≥50% din pagină: procentul **decide doar ruta** (`decideRuta`), nu mai dă acoperire.
+- `true` doar dacă: (a) randare completă a tuturor paginilor (`acoperire_tip: 'randare_completa'`), sau (b) imaginea acoperă ≥95% din aria paginii în coordonate PDF **și** operatorList nu are path-uri / text / alte imagini în afara bbox-ului ei (`acoperire_tip: 'imagine_pagina_intreaga'`; `_randare-pdf.js → acoperire_pdf`, `plansa-felii.js → acoperireScanPdf`).
+- Imagine încărcată direct (JPG/PNG): `true`, cu `acoperire_tip: 'imagine_originala'` (acoperă imaginea originală, nu o pagină).
+- Fixture-uri: scanare 60% + tabel vectorial în rest ⇒ `false` (partial); scanare pe toată pagina fără altceva ⇒ `true`.
 
 ### Rămas neatins
 - UI (`OfertareLicitatii.jsx`): un 409 apare ca eroare generică `non-2xx` din `functions.invoke` (la fel ca celelalte 409 existente). De citit `error.context` pentru mesaj — mic, separat.
 
-## 2. Design: coadă persistentă pe NAS (independentă de browser)
+## 2. Design: coadă persistentă pe NAS (independentă de browser) — singura soluție pentru independența de browser și costul dublu; **schemă nouă, cere GO**
 
 Azi bucla rulează în browser: tab închis ⇒ citirea se oprește (se reia manual cu „continuă”). Workerul de pe NAS Terra (`worker/ofertare`, Deno, heartbeat `worker_heartbeat`, deja consumă `ofertare_extragere_coada`, `ofertare_acoperire_coada`, `ofertare_clarificari_coada`) poate rula aceeași logică fără limita de 150 s.
 

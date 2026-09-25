@@ -2,7 +2,7 @@
 // R4: scrieri concurente (CAS + fuziune pe zone), versiuni nemixate (409), regiunea în coordonate PDF, rezultatCitire.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { handler, rezultatCitire } from './handler.ts'
-import { CALE_REV, fuzioneazaZone, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
+import { CALE_REV, fuzioneazaZone, leaseTransferOcupat, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
 
 // ---- DB simulată cu update real + filtre pe cale JSON (analiza->citire_ai->>rev) ----
 const cale = (row: any, c: string) => {
@@ -11,7 +11,8 @@ const cale = (row: any, c: string) => {
   for (const p of parti) v = v == null ? undefined : v[p]
   return c.includes('->>') ? (v == null ? null : String(v)) : v
 }
-function db(tabele: Record<string, any[]>) {
+type OptDb = { inainteDeUpdateDoc?: (rows: any[]) => void; intarziereSelectCantitati?: number }
+function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
   const n = { ai: 0, scrieriDoc: 0, conflicte: 0, inserts: [] as string[] }
   const from = (t: string) => {
     tabele[t] ||= []
@@ -35,7 +36,11 @@ function db(tabele: Record<string, any[]>) {
       insert: (p: any) => { op = { tip: 'ins', patch: p }; return b },
       maybeSingle: () => Promise.resolve({ data: structuredClone(potrivite()[0] ?? null), error: null }),
       single: () => Promise.resolve({ data: structuredClone(potrivite()[0] ?? null), error: null }),
-      then: (ok: any, ko: any) => Promise.resolve(exec()).then(ok, ko),
+      then: (ok: any, ko: any) => (async () => {
+        if (op.tip === 'upd' && t === 'ofertare_documente_atribuire' && opt.inainteDeUpdateDoc) opt.inainteDeUpdateDoc(tabele[t])
+        if (op.tip === 'sel' && t === 'ofertare_cantitati' && opt.intarziereSelectCantitati) await new Promise((r) => setTimeout(r, opt.intarziereSelectCantitati))
+        return exec()
+      })().then(ok, ko),
     }
     return b
   }
@@ -43,16 +48,16 @@ function db(tabele: Record<string, any[]>) {
 }
 
 const ZONE = ['1_1', '1_2', '1_3', '1_4', '1_5', '1_6']
-function supaCu(doc: any) {
-  const d = db({ ofertare_documente_atribuire: [doc], ofertare_cantitati: [], ai_usage_log: [] })
+function supaCu(doc: any, zone: string[] = ZONE, opt: OptDb = {}) {
+  const d = db({ ofertare_documente_atribuire: [doc], ofertare_cantitati: [], ai_usage_log: [] }, opt)
   const supa = {
     from: d.from, rpc: d.rpc,
     storage: { from: () => ({
-      list: () => Promise.resolve({ data: ZONE.map((z) => ({ name: `z${z}.jpg` })), error: null }),
+      list: () => Promise.resolve({ data: zone.map((z) => ({ name: `z${z}.jpg` })), error: null }),
       download: () => Promise.resolve({ data: new Blob([new Uint8Array([1, 2, 3])]), error: null }),
     }) },
   }
-  return { supa, n: d.n, tabele: d }
+  return { supa, n: d.n, tabele: d, raw: d }
 }
 // AI simulat: răspunde după eticheta din prompt, cu întârziere (ca rulările să se întrepătrundă)
 function aiFals(n: { ai: number }, intarziere: number) {
@@ -113,8 +118,9 @@ Deno.test('R4: rezultat bun salvat nu e înlocuit de o eroare nouă (fuziune pe 
 })
 
 Deno.test('R4: versiune diferită la continua / reia_erori / de_la>0 -> 409, zero AI, zero scrieri', async () => {
+  const v = await versiuneCurenta()   // aceeași tăiere/grilă/fișier; diferă doar cod/model/prompt
   for (const body of [{ mod: 'continua' }, { mod: 'reia_erori' }, { de_la: 4 }]) {
-    const ca = { felii: [felie('1_1'), { eticheta: 'z1_2', eroare: 'x' }], versiune: { cod: '2026-09-01.1', model: 'claude-opus-5', prompt_sha: 'vechi' },
+    const ca = { felii: [felie('1_1'), { eticheta: 'z1_2', eroare: 'x' }], versiune: { ...v, cod: '2026-09-01.1', model: 'claude-opus-5', prompt_sha: 'vechi' },
       taiat_la: 'T1', rev: 'r0' }
     const { supa, n } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: PLANSA, citire_ai: ca } })
     const r = await handler(cerereSvc({ doc_id: 470, ...body }), { SERVICE: 'svc', API_KEY: 'k', supa, getUser: () => Promise.resolve(null), fetch: aiFals(n, 0) })
@@ -262,4 +268,90 @@ Deno.test('transferDeReluat: {eroare} și in_curs >5 min se reiau; in_curs recen
   assert(transferDeReluat({ in_curs: true }, acum))
   assert(!transferDeReluat({ in_curs: true, la: '2026-09-25T11:58:00Z' }, acum))
   assert(!transferDeReluat({ inserate: 3, actualizate: 1 }, acum))
+})
+
+// ---- R4 (Copilot) pct. 2: epuizarea celor 3 reîncercări CAS -> 409 explicit, ce e salvat rămâne intact ----
+Deno.test('R4: 3 conflicte CAS la rând -> 409 explicit, rezultatele salvate intacte', async () => {
+  const v = await versiuneCurenta()
+  const salvate = [felie('1_1'), felie('1_2')].map((f) => ({ ...f, _versiune: `${v.cod}|${v.model}|${v.prompt_sha}` }))
+  const ca = { felii: salvate, versiune: v, taiat_la: 'T1', gata: false, rev: 'r0', rulare: 'R', sumar: {}, metrici: [] }
+  let k = 0
+  // înainte de FIECARE update al documentului, altă rulare schimbă jetonul (și adaugă o zonă a ei)
+  const { supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: PLANSA, citire_ai: ca } }, ZONE, {
+    inainteDeUpdateDoc: (rows) => { const c = rows[0].analiza.citire_ai; rows[0].analiza.citire_ai = { ...c, rev: `alt-${++k}`, felii: [...c.felii.filter((f: any) => f.eticheta !== 'z1_6'), { ...felie('1_6'), _alt: k }] } } })
+  const r = await handler(cerereSvc({ doc_id: 470, mod: 'continua' }), { SERVICE: 'svc', API_KEY: 'k', supa, getUser: () => Promise.resolve(null), fetch: aiFals(n, 0) })
+  assertEquals(r.status, 409)
+  assert((await r.json()).error.includes('3 încercări'))
+  assertEquals(n.scrieriDoc, 0); assertEquals(n.conflicte, 3)
+  const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
+  assertEquals(doc.analiza.citire_ai.rev, 'alt-3')
+  assertEquals(doc.analiza.citire_ai.felii.map((f: any) => f.eticheta), ['z1_1', 'z1_2', 'z1_6'], 'zonele salvate (ale noastre + ale celeilalte rulări) intacte')
+  assertEquals(doc.analiza.plansa, PLANSA)
+})
+
+// ---- R4 (Copilot) pct. 3: mixare_permisa acoperă doar model/prompt/cod ----
+Deno.test('R4: mixare_permisa NU trece peste taiat_la / cale_felii / geometrie / fișier diferite', () => {
+  const baza = { cod: 'a', model: 'm', prompt_sha: 's', taiat_la: 'T1', cale_felii: '95/felii/470', geom_sha: 'g1', fisier: 'PL1.pdf', fisier_path: '95/PL1.pdf' }
+  assertEquals(versiuneIncompatibila({ versiune: { ...baza, model: 'alt', prompt_sha: 'x', cod: 'b' } }, baza, true), null, 'model/prompt/cod: mixare permisă')
+  assert(versiuneIncompatibila({ versiune: { ...baza, model: 'alt' } }, baza, false), 'fără mixare: refuz')
+  for (const c of ['taiat_la', 'cale_felii', 'geom_sha', 'fisier', 'fisier_path']) {
+    const m = versiuneIncompatibila({ versiune: { ...baza, [c]: 'ALTUL' } }, baza, true)
+    assert(m && m.includes(c), c)
+    assert(versiuneIncompatibila({ versiune: { ...baza, [c]: 'ALTUL' } }, baza, false), c + ' fără mixare')
+  }
+})
+Deno.test('R4: mixare_permisa=true + geometrie/tăiere diferită -> 409 în handler, zero AI, zero scrieri', async () => {
+  const v = await versiuneCurenta()
+  for (const [camp, alt] of [['geom_sha', 'grila-veche'], ['taiat_la', 'T0'], ['cale_felii', '95/felii/999'], ['fisier', 'PL1-vechi.pdf']]) {
+    const ca = { felii: [felie('1_1')], versiune: { ...v, model: 'alt-model', [camp]: alt }, taiat_la: 'T1', rev: 'r0' }
+    const { supa, n } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: PLANSA, citire_ai: ca } })
+    const r = await handler(cerereSvc({ doc_id: 470, de_la: 4, mixare_permisa: true }), { SERVICE: 'svc', API_KEY: 'k', supa, getUser: () => Promise.resolve(null), fetch: aiFals(n, 0) })
+    assertEquals(r.status, 409, camp)
+    assert((await r.text()).includes(camp))
+    assertEquals(n.ai, 0); assertEquals(n.scrieriDoc, 0)
+  }
+  // doar modelul diferă + mixare_permisa => trece
+  const ca = { felii: [felie('1_1')], versiune: { ...v, model: 'alt-model' }, taiat_la: 'T1', rev: 'r0' }
+  const { supa, n } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: PLANSA, citire_ai: ca } })
+  const r = await handler(cerereSvc({ doc_id: 470, de_la: 4, mixare_permisa: true }), { SERVICE: 'svc', API_KEY: 'k', supa, getUser: () => Promise.resolve(null), fetch: aiFals(n, 0) })
+  assertEquals(r.status, 200)
+})
+
+// ---- R4 (Copilot) pct. 4: transfer serializat prin lease pe citire_ai.transfer ----
+function aiDn(n: { ai: number }, ms: number) {
+  return (async (_u: unknown, init?: RequestInit) => {
+    n.ai++
+    const txt = JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || ''
+    const et = /Bucata (\S+)/.exec(txt)?.[1] || '?'
+    await new Promise((ok) => setTimeout(ok, ms))
+    const rasp = { tronsoane: [{ de_la: `N-${et}`, la: 'X', lungime_m: 100, diametru_mm: 110, material: 'PE100 SDR11', sursa: 'tabel' }], cartus: {}, tabele: [] }
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(rasp) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
+  }) as typeof fetch
+}
+Deno.test('R4: două rulări simultane „citește” -> un singur transfer (o singură inserare pe Dn nou)', async () => {
+  const Z4 = ['1_1', '1_2', '2_1', '2_2']
+  const pl = { ...PLANSA, zone_asteptate: Z4, acoperire_demonstrata: true }
+  // selectul din ofertare_cantitati întârziat => transferul lui A e „în zbor” când B încearcă lease-ul
+  const { supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: pl } }, Z4, { intarziereSelectCantitati: 60 })
+  const deps = (ms: number) => ({ SERVICE: 'svc', API_KEY: 'k', supa, getUser: () => Promise.resolve(null), fetch: aiDn(n, ms) })
+  const [ra, rb] = await Promise.all([handler(cerereSvc({ doc_id: 470, de_la: 0 }), deps(5)), handler(cerereSvc({ doc_id: 470, de_la: 0 }), deps(25))])
+  assertEquals([ra.status, rb.status], [200, 200])
+  const [ja, jb] = [await ra.json(), await rb.json()]
+  assertEquals(n.inserts.filter((t) => t === 'ofertare_cantitati').length, 1, 'o singură inserare pe Dn110 PE')
+  assertEquals(tabele.from('ofertare_cantitati') && (await tabele.from('ofertare_cantitati').select()).data.length, 1)
+  const sarit = [ja, jb].filter((j) => j.cantitati?.sarit)
+  assertEquals(sarit.length, 1, 'exact o rulare a sărit transferul')
+  assertEquals(sarit[0].cantitati.sarit, 'transfer în curs de altă rulare')
+  const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
+  assertEquals(doc.analiza.citire_ai.transfer.stare, 'facut')
+})
+Deno.test('leaseTransferOcupat: in_curs recent al altei rulări / făcut concurent -> ocupat; expirat, propriu sau vechi -> liber', () => {
+  const acum = Date.parse('2026-09-25T12:00:00Z'), pornit = Date.parse('2026-09-25T11:59:00Z')
+  assertEquals(leaseTransferOcupat(null, 'B', pornit, acum), null)
+  assertEquals(leaseTransferOcupat({ stare: 'in_curs', de_la: '2026-09-25T11:59:30Z', rulare: 'A' }, 'B', pornit, acum), 'transfer în curs de altă rulare')
+  assertEquals(leaseTransferOcupat({ stare: 'in_curs', de_la: '2026-09-25T11:59:30Z', rulare: 'B' }, 'B', pornit, acum), null)
+  assertEquals(leaseTransferOcupat({ stare: 'in_curs', de_la: '2026-09-25T11:50:00Z', rulare: 'A' }, 'B', pornit, acum), null, 'expirat (worker mort)')
+  assert(leaseTransferOcupat({ stare: 'facut', de_la: '2026-09-25T11:59:10Z', rulare: 'A' }, 'B', pornit, acum))
+  assertEquals(leaseTransferOcupat({ stare: 'facut', de_la: '2026-09-25T10:00:00Z', rulare: 'A' }, 'B', pornit, acum), null, 'transfer vechi => citire nouă transferă')
+  assertEquals(leaseTransferOcupat({ stare: 'eroare', de_la: '2026-09-25T11:59:10Z', rulare: 'A' }, 'B', pornit, acum), null)
 })
