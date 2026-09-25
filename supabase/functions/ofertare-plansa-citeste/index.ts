@@ -393,7 +393,10 @@ Deno.serve(async (req: Request) => {
     } else {
       upd.status_procesare = 'procesat';
       upd.text_extras = textPlansa(doc.nume_original, citireAi);
-      upd.eroare = sumar.erori ? `${sumar.erori} zone necitite (se pot relua)` : null;
+      // 25.09.2026: citită dar nimic extras (0 tronsoane, 0 tabele, 0 m) — rămâne procesat, dar marcat
+      // ca să fie interogabil și UI-ul să ofere „recitește fin".
+      const gol = !(sumar.tronsoane_gasite as number) && !(sumar.tabele as unknown[]).length && !(sumar.lungime_totala_m as number)
+      upd.eroare = sumar.erori ? `${sumar.erori} zone necitite (se pot relua)` : gol ? 'citită fără rezultat' : null;
       upd.procesat_la = new Date().toISOString();
     }
   }

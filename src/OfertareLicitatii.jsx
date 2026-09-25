@@ -1013,7 +1013,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // `areBucati` e plasa de siguranță: marcajul din `eroare` se pierde la re-import, bucățile nu.
   const eMare = d => E_PDF.test(d.nume_original || '') && (d.size_bytes || 0) > 20e6 && !/spart .*în \d+ bucăți/i.test(d.eroare || '') && !areBucati(d, docs) && d.tip !== 'plansa' && ['neprocesat', 'in_lucru', 'eroare'].includes(d.status_procesare)
 
-  const citestePlansa = async (d, eticheta = '') => {
+  // 25.09.2026: planșă citită complet, dar fără nimic extras (0 tronsoane, 0 tabele, 0 m) — de obicei zone
+  // prea mari pt desen fin sau PDF vectorial fără scanare. Se oferă „recitește fin".
+  const plansaGoala = d => {
+    const ca = d.tip === 'plansa' && d.analiza?.citire_ai
+    if (!ca?.gata) return false
+    const s = ca.sumar || {}
+    return !s.tronsoane_gasite && !(s.tabele || []).length && !s.lungime_totala_m
+  }
+  const citestePlansa = async (d, eticheta = '', fin = false) => {
     let ok = false
     setWarn(null); setPlansaBusy(`${eticheta}${d.nume_original}: pregătesc feliile...`)
     try {
@@ -1022,14 +1030,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       const r = await fetch('/api/plansa-felii', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ doc_id: d.id }),
+        body: JSON.stringify(fin ? { doc_id: d.id, fin: true } : { doc_id: d.id }),
       })
       const felii = await r.json().catch(() => ({}))
       if (!r.ok) { setWarn(`Nu am putut pregăti planșa: ${felii.error || `HTTP ${r.status}`}`); return }
       if (felii.citibila === false) { setWarn(`⚠️ ${felii.motiv}`); await load(); return }
 
       let deLa = 0, runde = 0, sumar = null
-      while (runde < 15) {
+      while (runde < 25) {
         setPlansaBusy(`${eticheta}${d.nume_original}: citesc ${deLa + 1}–${Math.min(deLa + 4, felii.felii)} din ${felii.felii} zone...`)
         const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, de_la: deLa } })
         if (error || data?.error) { setWarn(`Eroare la citire: ${data?.error || error.message}`); break }
@@ -1264,7 +1272,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           </div>
         ) : (
           <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
-            {docs.filter(d => !docFiltru || categorieDoc(d) === docFiltru).map(d => {
+            {docs.filter(d => !docFiltru || (docFiltru === 'goale' ? plansaGoala(d) : categorieDoc(d) === docFiltru)).map(d => {
               const st = DOC_STATUS[d.status_procesare] || DOC_STATUS.neprocesat
               // Eticheta „🔀 spart în N": întâi din realitate (câte bucăți există), apoi din textul
               // din `eroare` — textul se pierde la re-import, bucățile nu (anti-bug 15.09.2026).
@@ -1292,6 +1300,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     {spart && <span style={{ color:G.muted, fontStyle:'italic' }}> — prea mare, s-a spart în {spart[1]} bucăți; se citesc bucățile, fișierul acesta NU intră în analiză</span>}
                     {formularXml && <span style={{ color:G.muted, fontStyle:'italic' }}> — DUAE/formular SEAP: se completează la depunere, nu se citește</span>}
                   </span>
+                  {plansaGoala(d) && <span style={{ color:G.orange, fontWeight:700, fontSize:11, whiteSpace:'nowrap' }}
+                    title="AI-ul a citit planșa, dar n-a găsit niciun tronson, tabel sau lungime. Încearcă „recitește fin” (zone mai mici) sau verifică manual.">⚠ citită, nimic extras</span>}
                   <span style={{ color:G.dim, whiteSpace:'nowrap' }}>
                     {d.tip}{d.revizie ? ` · rev ${d.revizie}` : ''}{d.ocr ? ' · scan' : ''}
                     {d.pornit?.name && <span title={`Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}`}> · 👤 {d.pornit.name.split(' ')[0]}</span>}
@@ -1321,11 +1331,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       onClick={async () => { await sparge(d); await load() }}>🔀 sparge</button>
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
+                    plansaGoala(d) ? (
+                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
+                      title="Recitire cu grilă deasă (zone de ~1000px din original, până la 80 de zone) — costă mai mult"
+                      onClick={() => { if (window.confirm('Recitire fină: planșa se taie în mai multe zone, fiecare citită cu AI (cost mai mare). Continui?')) citestePlansa(d, '', true) }}>
+                      📐 recitește fin
+                    </button>
+                    ) : (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
                       onClick={() => citestePlansa(d)}>
                       {plansaCitita(d) ? '📐 recitește' : '📐 citește'}
                     </button>
+                    )
                   )}
                 </div>
               )
@@ -1343,6 +1361,10 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
               <span key={k}>{i > 0 && '· '}<span onClick={() => setDocFiltru(f => f === k ? null : k)} title="Click = arată doar acestea (din nou = toate)"
                 style={{ cursor:'pointer', color:c, fontWeight: docFiltru === k ? 800 : 600, textDecoration: docFiltru === k ? 'underline' : 'none' }}>{n[k]} {lbl}</span></span>
             ))}
+            {(() => { const g = docs.filter(plansaGoala).length; return g > 0 && (
+              <span>· <span onClick={() => setDocFiltru(f => f === 'goale' ? null : 'goale')} title="Planșe citite de AI fără niciun tronson/tabel extras. Click = arată doar acestea"
+                style={{ cursor:'pointer', color:G.orange, fontWeight: docFiltru === 'goale' ? 800 : 600, textDecoration: docFiltru === 'goale' ? 'underline' : 'none' }}>{g} ⚠ citite fără rezultat</span></span>
+            ) })()}
             {docFiltru && <span onClick={() => setDocFiltru(null)} style={{ cursor:'pointer', color:G.ofertare }}>✕ toate</span>}
           </div>
         )
