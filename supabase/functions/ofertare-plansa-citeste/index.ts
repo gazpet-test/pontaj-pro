@@ -25,7 +25,7 @@ const CORS: Record<string, string> = {
 const MODEL = 'claude-opus-5';   // plansele cer citire vizuala buna; restul modulului foloseste Sonnet
 const PRET_IN = 5 / 1e6, PRET_OUT = 25 / 1e6;
 const FELII_PE_RULARE = 4;
-const PARALEL = 2;
+const PARALEL = 4; // 25.09.2026: 2 -> 4 (schema Vâlcelele: 35 zone în ~15 min); o rundă = 4 zone citite simultan, sub limita de 150 s
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
