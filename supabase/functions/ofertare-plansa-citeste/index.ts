@@ -403,10 +403,12 @@ Deno.serve(async (req: Request) => {
 
   const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
   if (!jwt) return json({ error: 'unauthorized' }, 401);
+  let uidApelant: string | null = null;
   if (jwt !== SERVICE) {
     const anon = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!);
     const { data: u } = await anon.auth.getUser(jwt);
     if (!u?.user) return json({ error: 'unauthorized' }, 401);
+    uidApelant = u.user.id;
   }
 
   let body: any = {};
@@ -418,6 +420,16 @@ Deno.serve(async (req: Request) => {
   const { data: doc } = await supa.from('ofertare_documente_atribuire')
     .select('id, licitatie_id, nume_original, analiza').eq('id', docId).single();
   if (!doc) return json({ error: 'document inexistent' }, 404);
+  // 25.09.2026 (audit țintit, CLAUDE.md 7d): cea mai scumpă citire (Opus pe imagini) — poarta pe cheltuială
+  // și pe server: doar ownerul sau responsabilul licitației (UI-ul avea poarta, serverul doar getUser()).
+  if (uidApelant) {
+    const [{ data: prof }, { data: lic }] = await Promise.all([
+      supa.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
+      supa.from('ofertare_licitatii').select('responsabil_id').eq('id', doc.licitatie_id).maybeSingle(),
+    ]);
+    if (!prof?.is_owner && !(lic?.responsabil_id && lic.responsabil_id === uidApelant))
+      return json({ error: 'Citirea planșei costă — o pornește doar ownerul sau responsabilul licitației.' }, 403);
+  }
 
   const plansa = doc.analiza?.plansa;
   if (!plansa?.cale_felii) return json({ error: 'plansa nu e taiata in felii — ruleaza intai /api/plansa-felii' }, 400);
@@ -609,7 +621,15 @@ Deno.serve(async (req: Request) => {
   };
   const citireAi = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: MODEL, gata, actualizat: new Date().toISOString() };
   const upd: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi }, analiza_la: new Date().toISOString() };
-  if (gata) {
+  // 25.09.2026 (audit țintit): PL1–PL4 Vâlcelele au fost „citite" pe sigla semnăturii (900x450) și au ieșit
+  // procesat fără eroare — butoanele le socoteau citite. O sursă sub 2000px pe latura mare nu e o planșă:
+  // rezultatul NU poate fi „procesat".
+  const prea_mica = !plansa.vectorial && Math.max(Number(plansa.latime) || 0, Number(plansa.inaltime) || 0) > 0 &&
+    Math.max(Number(plansa.latime) || 0, Number(plansa.inaltime) || 0) < 2000;
+  if (gata && prea_mica) {
+    upd.status_procesare = 'eroare';
+    upd.eroare = `Nu s-a citit desenul: sursa are doar ${plansa.latime}x${plansa.inaltime}px (probabil sigla semnăturii). Retaie planșa („citește") — PDF-ul vectorial se randează acum.`;
+  } else if (gata) {
     if (toate.length && (sumar.erori as number) >= toate.length) {
       upd.status_procesare = 'eroare';
       upd.eroare = `Citire planșă eșuată pe toate cele ${toate.length} zone: ` + String(toate.find((r: any) => r.eroare)?.eroare || '').slice(0, 200);

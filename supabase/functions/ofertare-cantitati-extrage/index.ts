@@ -172,12 +172,14 @@ Deno.serve(async (req: Request) => {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
+  let uidApelant: string | null = null
   if (!(await secretOk(req, db))) {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
     const { data: u } = await uc.auth.getUser()
     if (!u?.user) return json({ error: 'token invalid' }, 401)
+    uidApelant = u.user.id
   }
   const KEY_A = Deno.env.get('ANTHROPIC_API_KEY') || ''
   const KEY_G = Deno.env.get('GEMINI_API_KEY') || ''
@@ -191,6 +193,16 @@ Deno.serve(async (req: Request) => {
   const furnizor: Furnizor = (String(body.furnizor) in MODELE ? body.furnizor : 'openai_mini') as Furnizor
   const M = MODELE[furnizor]
   if (!licId) return json({ error: 'licitatie_id lipsă' }, 400)
+  // 25.09.2026 (audit țintit, CLAUDE.md 7d): apel PLĂTIT — „poarta pe cheltuială" și pe server, nu doar în UI.
+  // Pornește doar ownerul sau responsabilul licitației (calea x-radar-secret/worker rămâne neatinsă).
+  if (uidApelant) {
+    const [{ data: prof }, { data: lic }] = await Promise.all([
+      db.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
+      db.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
+    ])
+    if (!prof?.is_owner && !(lic?.responsabil_id && lic.responsabil_id === uidApelant))
+      return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
+  }
   const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
     : furnizor === 'anthropic' ? (!KEY_A && 'ANTHROPIC_API_KEY')
     : (!KEY_O && 'OPENAI_API_KEY')
