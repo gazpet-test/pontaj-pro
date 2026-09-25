@@ -297,12 +297,17 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
 // dreapta (două imagini într-un singur apel), iar modelul reface doar rândurile care trec peste margine.
 const MARCAJ_TAIAT = /(t[aă]iat|trunchiat|partial lizibil|\.\.\.|…)/i;
 const MAX_PERECHI = 6;
-function perechiDeLipit(felii: any[], toateNumele: Set<string>): [string, string][] {
-  const out: [string, string][] = [];
+// Prioritate: rândurile tăiate care par să poarte cifre utile (lungime totală, Dn, cantități) trec primele —
+// pe PL5 Vâlcelele primele 6 perechi (de sus) au fost nume de străzi, iar nota cu lungimea era jos.
+const UTIL = /lungime|total|cantit|diametr|\bdn\b|\bde\b|\bpe ?100\b|sdr|\d+[.,]?\d*\s*(m|ml|km)\b|l\s*=/i;
+function perechiDeLipit(felii: any[], toateNumele: Set<string>, facute = new Set<string>()): [string, string][] {
+  const out: { p: [string, string]; scor: number }[] = [];
   const vazute = new Set<string>();
   for (const f of felii) {
     const texte = [...(f.alte_mentiuni || []), ...(f.tabele || []).map((t: any) => t?.denumire)].filter(Boolean).map(String);
-    if (!texte.some((t) => MARCAJ_TAIAT.test(t))) continue;
+    const taiate = texte.filter((t) => MARCAJ_TAIAT.test(t));
+    if (!taiate.length) continue;
+    const scor = taiate.some((t) => UTIL.test(faraDiacritice(t))) ? 1 : 0;
     const m = /^(.*?)(\d+)_(\d+)$/.exec(String(f.eticheta || ''));
     if (!m) continue;
     const [, pre, r, c] = m;
@@ -310,10 +315,10 @@ function perechiDeLipit(felii: any[], toateNumele: Set<string>): [string, string
     const vecin = toateNumele.has(dreapta) ? [f.eticheta, dreapta] : toateNumele.has(stanga) ? [stanga, f.eticheta] : null;
     if (!vecin) continue;
     const k = vecin.join('+');
-    if (vazute.has(k)) continue;
-    vazute.add(k); out.push(vecin as [string, string]);
+    if (vazute.has(k) || facute.has(k)) continue;
+    vazute.add(k); out.push({ p: vecin as [string, string], scor });
   }
-  return out;
+  return out.sort((a, b) => b.scor - a.scor).map((x) => x.p);
 }
 
 const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
@@ -404,7 +409,8 @@ Deno.serve(async (req: Request) => {
   if (body?.doar_lipire === true) {
     const ca = doc.analiza?.citire_ai;
     if (!ca?.gata) return json({ error: 'planșa nu e citită complet' }, 400);
-    const perechi = perechiDeLipit(ca.felii || [], peStorage).slice(0, MAX_PERECHI);
+    const facute = new Set<string>([...(ca.note_lipite_perechi || []), ...(ca.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
+    const perechi = perechiDeLipit(ca.felii || [], peStorage, facute).slice(0, MAX_PERECHI);
     const rez: any[] = [];
     for (let i = 0; i < perechi.length; i += PARALEL) {
       rez.push(...await Promise.all(perechi.slice(i, i + PARALEL).map(async ([a, b]) => {
@@ -417,10 +423,11 @@ Deno.serve(async (req: Request) => {
     if (rez.length) await supa.from('ai_usage_log').insert({ function_name: 'ofertare-plansa-citeste', model: MODEL, tokens_in: tinL, tokens_out: toutL,
       cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4), ref_table: 'ofertare_documente_atribuire', ref_id: docId });
     const vazut = new Set<string>();
-    const note = rez.flatMap((r: any) => (r.randuri || []).map((n: any) => ({ ...n, perechea: r.eticheta })))
-      .filter((n: any) => { const k = text(n.text); if (!k || vazut.has(k)) return false; vazut.add(k); return true; });
+    const note = [...(ca.note_lipite || []), ...rez.flatMap((r: any) => (r.randuri || []).map((n: any) => ({ ...n, perechea: r.eticheta })))
+    ].filter((n: any) => { const k = text(n.text); if (!k || vazut.has(k)) return false; vazut.add(k); return true; });
     const decl = lungimeDeclarata(note);
-    const citireAi2 = { ...ca, note_lipite: note, sumar: { ...ca.sumar, note_lipite: note.length, perechi_lipite: rez.length, ...(decl ? { lungime_declarata_m: decl } : {}) } };
+    const citireAi2 = { ...ca, note_lipite: note, note_lipite_perechi: [...facute, ...rez.map((r: any) => r.eticheta)],
+      perechi_ramase: Math.max(0, perechiDeLipit(ca.felii || [], peStorage, new Set([...facute, ...rez.map((r: any) => r.eticheta)])).length), sumar: { ...ca.sumar, note_lipite: note.length, perechi_lipite: rez.length, ...(decl ? { lungime_declarata_m: decl } : {}) } };
     const upd2: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi2 }, analiza_la: new Date().toISOString(),
       text_extras: textPlansa(doc.nume_original, citireAi2) };
     // lungimea declarată e o dată utilă => planșa nu mai e „fără rezultat" (nu mai intră în clarificarea automată)
@@ -432,7 +439,7 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await supa.rpc('ofertare_clarificare_planse_auto', { p_licitatie_id: doc.licitatie_id });
       clar = error ? { eroare: error.message } : data;
     }
-    return json({ document: doc.nume_original, perechi: rez.length, note, lungime_declarata_m: decl, clarificare: clar,
+    return json({ document: doc.nume_original, perechi: rez.length, perechi_ramase: citireAi2.perechi_ramase, note, lungime_declarata_m: decl, clarificare: clar,
       cost_usd: +(tinL * PRET_IN + toutL * PRET_OUT).toFixed(4) });
   }
 
