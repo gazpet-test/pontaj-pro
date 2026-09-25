@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
@@ -94,17 +95,8 @@ const fmtTermen = t => t ? new Date(t).toLocaleString('ro-RO', { day:'2-digit', 
 // timestamptz → valoare pentru <input type="datetime-local"> (ora locală, nu UTC)
 const toLocalInput = t => { if (!t) return ''; const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16) }
 
-// R4 risc 3: la 409/403 functions.invoke dă FunctionsHttpError cu mesaj generic („non-2xx status code”);
-// mesajul real (ex. „scrisă simultan din altă parte”, „fără drept”) e în corpul răspunsului: error.context (Response).
-async function mesajInvoke(error, data) {
-  if (data?.error) return data.error
-  const ctx = error?.context
-  if (ctx && typeof ctx.json === 'function') {
-    try { const j = await ctx.clone().json(); if (j?.error || j?.message) return `${j.error || j.message}${ctx.status ? ` (HTTP ${ctx.status})` : ''}` } catch { /* nu e JSON */ }
-    try { const t = await ctx.text(); if (t) return `${t.slice(0, 300)}${ctx.status ? ` (HTTP ${ctx.status})` : ''}` } catch { /* corp deja citit */ }
-  }
-  return error?.message || 'eroare necunoscută'
-}
+// R4 risc 3: mesajul real al unei funcții Edge la non-2xx (409/403…) — funcția stă în ./lib/mesajInvoke.js
+// (import mai sus), folosită și de butonul 🤖 din 📋 Cantități (ofertareExtragereCantitati.js).
 
 export default function OfertareLicitatiiTab() {
   const [profile, setProfile] = useState(null)
