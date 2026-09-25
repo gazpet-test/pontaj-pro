@@ -368,7 +368,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                 <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginTop:6 }}>
                   {ph
                     ? <span style={{ fontSize:11.5, color:G.yellow }} title={d.eroare || ''}>⚠ neadus automat — urcă-l din fișă → Documente</span>
-                    : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschideDoc(d)}>📎 deschide</button>}
+                    : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschideDoc(d)}>📎 Deschide documentul original</button>}
                   <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1 }}
                     disabled={ph || !!citindDoc || !!busy} onClick={() => citesteDoc(d)} title={c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): rezumat, modificări, întrebări răspunse'}>
                     {citindDoc === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 citește cu AI'}
@@ -378,6 +378,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                   {c && !inLegare && <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }} disabled={!!busy} onClick={() => deschideLegare(d.id, d)}>🔗 La ce întrebări răspunde?</button>}
                   {legate.length > 0 && <span style={{ fontSize:11, color:G.muted }} title={legate.map(q => `${q.nr}. ${(q.intrebare || '').slice(0, 80)}`).join('\n')}>🔗 legat de întrebările: {legate.map(q => q.nr).join(', ')}</span>}
                 </div>
+                {!ph && <TextOriginalToggle docId={d.id} />}
                 {c && (
                   <details style={{ marginTop:8, fontSize:12.5 }}>
                     <summary style={{ cursor:'pointer', fontWeight:700, color:G.muted }}>🤖 Rezumatul citirii{Array.isArray(c.intrebari_raspunse) && c.intrebari_raspunse.length ? ` · ${c.intrebari_raspunse.length} întrebări răspunse` : ''}{Array.isArray(c.modificari) && c.modificari.length ? ` · ${c.modificari.length} modificări` : ''}</summary>
@@ -395,7 +396,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         <details style={{ marginTop:6 }}>
                           <summary style={{ cursor:'pointer', fontWeight:700, color:G.blue }}>❓ Întrebări răspunse ({c.intrebari_raspunse.length})</summary>
                           <ul style={{ margin:'6px 0 0', paddingLeft:18 }}>
-                            {c.intrebari_raspunse.map((q, i) => <li key={i} style={{ marginBottom:4 }}><span style={{ color:G.muted }}>Î:</span> {q.intrebare_scurt}<div style={{ color:G.green, fontSize:12 }}>R: {q.raspuns_scurt}</div></li>)}
+                            {c.intrebari_raspunse.map((q, i) => <IntrebareRaspunsItem key={i} q={q} />)}
                           </ul>
                         </details>
                       )}
@@ -556,5 +557,46 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
         {clar !== null && !clar.length && <div style={{ color:G.dim, fontSize:12.5, padding:14, textAlign:'center' }}>Nicio clarificare — diferențele din cantități apar automat aici la extracție.</div>}
       </div>
     </div>
+  )
+}
+
+// Răzvan 25.09.2026: colegii vor să citească și TEXTUL ORIGINAL al documentului primit, nu doar
+// interpretarea AI. text_extras se încarcă leneș, doar la deschiderea toggle-ului.
+export function TextOriginalToggle({ docId }) {
+  const [open, setOpen] = useState(false)
+  const [txt, setTxt] = useState(undefined)   // undefined = neîncărcat, null = eroare
+  const toggle = async () => {
+    const nou = !open; setOpen(nou)
+    if (nou && txt === undefined) {
+      const { data, error } = await supabase.from('ofertare_documente_atribuire').select('text_extras').eq('id', docId).maybeSingle()
+      setTxt(error ? null : (data?.text_extras || ''))
+    }
+  }
+  return (
+    <div style={{ marginTop:6 }}>
+      <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={toggle}>{open ? '▾' : '▸'} 📄 Text original</button>
+      {open && (
+        <div style={{ marginTop:6 }}>
+          <div style={{ fontSize:11, color:G.dim, marginBottom:4 }}>text extras automat din PDF — pentru document oficial apăsați «deschide» (📎 Deschide documentul original)</div>
+          {txt === undefined ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă…</div>
+            : txt === null ? <div style={{ fontSize:12, color:G.red }}>Nu am putut încărca textul.</div>
+            : !txt.trim() ? <div style={{ fontSize:12, color:G.dim }}>Nu există text extras pentru acest document (poate e scanat) — deschide documentul original.</div>
+            : <pre style={{ margin:0, maxHeight:400, overflow:'auto', whiteSpace:'pre-wrap', wordBreak:'break-word', fontFamily:'ui-monospace, Menlo, Consolas, monospace', fontWeight:300, fontSize:12, lineHeight:1.45, color:G.text, background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8, padding:'8px 10px' }}>{txt}</pre>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Î/R: textul original (verbatim, dacă AI l-a copiat) primul, interpretarea dedesubt, estompată.
+export function IntrebareRaspunsItem({ q }) {
+  const io = String(q.intrebare_originala || '').trim(), ro = String(q.raspuns_original || '').trim()
+  if (!io && !ro) return <li style={{ marginBottom:4 }}><span style={{ color:G.muted }}>Î:</span> {q.intrebare_scurt}<div style={{ color:G.green, fontSize:12 }}>R: {q.raspuns_scurt}</div></li>
+  return (
+    <li style={{ marginBottom:8 }}>
+      <div style={{ whiteSpace:'pre-wrap' }}><span style={{ color:G.muted }}>Î:</span> {io || q.intrebare_scurt}</div>
+      <div style={{ whiteSpace:'pre-wrap', color:G.green, fontSize:12 }}>R: {ro || q.raspuns_scurt}</div>
+      <div style={{ fontSize:11, color:G.dim, fontStyle:'italic', marginTop:2 }}>🤖 interpretare — Î: {q.intrebare_scurt} · R: {q.raspuns_scurt}</div>
+    </li>
   )
 }
