@@ -167,7 +167,7 @@ function buildInvoiceHTML(f) {
   </table>
   <table style="width:260px;margin-left:auto;border-collapse:collapse;font-size:11px;margin-bottom:12px">
     <tr><td style="padding:5px 10px;color:#555">Valoare netă:</td><td style="padding:5px 10px;text-align:right;font-family:monospace">${fmt2(f.valoare_neta)} RON</td></tr>
-    <tr><td style="padding:5px 10px;color:#555">TVA ${f.tva_pct||TVA_DEFAULT}%:</td><td style="padding:5px 10px;text-align:right;font-family:monospace">${fmt2(f.tva)} RON</td></tr>
+    <tr><td style="padding:5px 10px;color:#555">TVA ${(parseFloat(f.tva)||0)===0 ? '0% (neimpozabil)' : ((f.articole||[]).some(a=>parseFloat(a.tva_pct)===0) ? '' : (f.tva_pct||TVA_DEFAULT)+'%')}:</td><td style="padding:5px 10px;text-align:right;font-family:monospace">${fmt2(f.tva)} RON</td></tr>
     <tr style="background:#E8F4FD;border-top:2px solid #1F6FEB">
       <td style="padding:8px 10px;font-weight:800;font-size:12px">TOTAL PLATĂ RON:</td>
       <td style="padding:8px 10px;text-align:right;font-weight:900;font-size:14px;color:#1F6FEB;font-family:monospace">${fmt2(f.total)}</td>
@@ -877,7 +877,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
                   <label style={S.lbl}>Denumire *</label>
                   <input value={a.denumire} onChange={e=>setArticol(i,'denumire',e.target.value)} style={fieldStyle} placeholder="Contravaloare lucrări conf. situație nr...." />
                 </div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr auto',gap:8,alignItems:'flex-end'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr auto auto',gap:8,alignItems:'flex-end'}}>
                   <div>
                     <label style={S.lbl}>U.M.</label>
                     <input value={a.um} onChange={e=>setArticol(i,'um',e.target.value)} style={fieldStyle} placeholder="buc" />
@@ -900,6 +900,12 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
                       <label style={S.lbl}>TVA {cota||0}%</label>
                       <div style={{...fieldStyle,color:G.yellow,fontFamily:'monospace'}}>{fmtLei((parseFloat(a.valoare)||0)*(cota||0)/100)}</div>
                     </div> })()}
+                  {/* TKT-2026-0280/0129: bifă TVA 0 / neimpozabil pe poziție (ex. refacturare poliță) — se salvează ca tva_pct:0 în articole */}
+                  <label style={{display:'flex',alignItems:'center',gap:4,fontSize:11,color:G.muted,cursor:'pointer',whiteSpace:'nowrap',paddingBottom:8}} title="Poziție neimpozabilă (ex. refacturare poliță de asigurare/garanție)">
+                    <input type="checkbox" checked={a.tva_pct !== undefined && a.tva_pct !== '' && a.tva_pct !== null && parseFloat(a.tva_pct) === 0}
+                      onChange={e=>setArticol(i,'tva_pct', e.target.checked ? 0 : (parseFloat(form.tva_pct)||TVA_DEFAULT))} />
+                    TVA 0 / neimpozabil
+                  </label>
                   {form.articole.length > 1 && (
                     <button onClick={()=>removeArticol(i)} style={{padding:'8px 10px',background:'transparent',border:'none',color:G.red,fontSize:16,cursor:'pointer'}}>🗑</button>
                   )}
@@ -910,7 +916,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
             <div style={{background:G.card2,borderRadius:8,padding:'12px 14px',border:`1px solid ${G.financiar}33`}}>
               <div style={{display:'flex',justifyContent:'flex-end',gap:24,fontSize:13}}>
                 <div style={{color:G.muted}}>Valoare netă: <strong style={{color:G.text,fontFamily:'monospace'}}>{fmtLei(totals.neta)}</strong></div>
-                <div style={{color:G.muted}}>TVA {form.tva_pct}%: <strong style={{color:G.yellow,fontFamily:'monospace'}}>{fmtLei(totals.tva)}</strong></div>
+                <div style={{color:G.muted}}>TVA{(totals.tva===0 && totals.neta!==0) ? ' 0% (neimpozabil)' : (form.articole.some(a=>parseFloat(a.tva_pct)===0) ? ' (mixt)' : ` ${form.tva_pct}%`)}: <strong style={{color:G.yellow,fontFamily:'monospace'}}>{fmtLei(totals.tva)}</strong></div>
                 <div style={{color:G.muted}}>TOTAL: <strong style={{color:G.financiar,fontSize:15,fontFamily:'monospace'}}>{fmtLei(totals.total)}</strong></div>
               </div>
             </div>
