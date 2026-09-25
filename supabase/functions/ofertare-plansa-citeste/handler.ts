@@ -424,10 +424,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   aiFetch = deps.fetch;
   if (!API_KEY) return json({ error: 'lipseste ANTHROPIC_API_KEY' }, 500);
 
-  const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+  const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim();
   if (!jwt) return json({ error: 'unauthorized' }, 401);
   let uidApelant: string | null = null;
-  if (jwt !== SERVICE) {
+  if (!SERVICE || jwt !== SERVICE) { // SERVICE gol/nesetat nu devine niciodată „cheie valabilă”
     uidApelant = await deps.getUser(jwt);
     if (!uidApelant) return json({ error: 'unauthorized' }, 401);
   }
@@ -733,6 +733,3 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     lipire_necesara: gata ? perechiDeLipit(toate, peStorage).slice(0, MAX_PERECHI).length : 0,
   });
 }
-
-// Testele setează POARTA_TEST=1 ca importul să nu pornească serverul (import.meta.main nu e garantat în edge runtime).
-if (!Deno.env.get('POARTA_TEST')) Deno.serve((req: Request) => handler(req, depsReale()));

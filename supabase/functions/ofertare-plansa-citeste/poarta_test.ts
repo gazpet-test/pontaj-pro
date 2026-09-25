@@ -1,10 +1,9 @@
-// deno test --allow-env supabase/functions/ofertare-plansa-citeste/poarta_test.ts
+// deno test supabase/functions/ofertare-plansa-citeste/poarta_test.ts
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { cerere, fakeFetch, fakeSupa, getUser, LICITATII, OWNER, PROFILE, RESP, RESP_ALTA, STRAIN } from '../_test/fake_supa.ts'
+import { cerere, cerereH, fakeFetch, fakeSupa, getUser, JWT_FALS_SERVICE, LICITATII, OWNER, PROFILE, RESP, RESP_ALTA, STRAIN } from '../_test/fake_supa.ts'
 import { poateCheltui } from './poarta.ts'
 
-Deno.env.set('POARTA_TEST', '1')
-const { handler } = await import('./index.ts')
+import { handler } from './handler.ts'
 
 // doc 470 (lic 95) are felii în storage (listă goală în fake => 404 „nicio felie", DUPĂ poartă)
 const DOCS = [{ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: { cale_felii: 'x/470' } } }]
@@ -44,4 +43,29 @@ Deno.test('plansa: responsabil corect trece poarta', async () => {
 })
 Deno.test('plansa: token invalid -> 401, zero cost', async () => {
   const r = await ruleaza('invalid', 470); assertEquals(r.status, 401); zeroCost(r.n)
+})
+
+// --- apel intern cu cheia service_role / header lipsă ---
+function ruleazaH(headers: Record<string, string>, SERVICE = 'service-key') {
+  const { supa, n } = fakeSupa({ profiles: PROFILE, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: DOCS })
+  const deps = { SERVICE, API_KEY: 'k', supa, getUser, fetch: fakeFetch(n) }
+  return handler(cerereH(headers, { doc_id: 470 }), deps).then(async (r) => ({ status: r.status, corp: await r.text(), n }))
+}
+Deno.test('plansa: Bearer = service key valid -> trece poarta (ajunge la storage)', async () => {
+  const r = await ruleazaH({ Authorization: 'Bearer service-key' }); assertEquals(r.status, 404); assert(r.corp.includes('nicio felie')); assertEquals(r.n.storage, 1)
+})
+Deno.test('plansa: service key greșit -> 401, zero cost', async () => {
+  const r = await ruleazaH({ Authorization: 'Bearer service-kez.x.y' }); assertEquals(r.status, 401); zeroCost(r.n)
+})
+Deno.test('plansa: JWT nesemnat care pretinde role=service_role -> 401, zero cost', async () => {
+  const r = await ruleazaH({ Authorization: `Bearer ${JWT_FALS_SERVICE}` }); assertEquals(r.status, 401); zeroCost(r.n)
+})
+Deno.test('plansa: Authorization absent -> 401, zero cost', async () => {
+  const r = await ruleazaH({}); assertEquals(r.status, 401); zeroCost(r.n)
+})
+Deno.test('plansa: Authorization gol / doar "Bearer " -> 401, zero cost', async () => {
+  for (const v of ['', 'Bearer ', 'Bearer']) { const r = await ruleazaH({ Authorization: v }); assertEquals(r.status, 401, `"${v}"`); zeroCost(r.n) }
+})
+Deno.test('plansa: SERVICE nesetat ("") nu face din header gol o cheie valabilă -> 401', async () => {
+  for (const v of ['', 'Bearer ']) { const r = await ruleazaH({ Authorization: v }, ''); assertEquals(r.status, 401); zeroCost(r.n) }
 })

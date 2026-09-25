@@ -3,7 +3,7 @@
 Funcții: `ofertare-plansa-citeste` (Opus pe imagini), `ofertare-cantitati-extrage` (OpenAI/Gemini/Anthropic).
 
 ## a) Ordinea în cod (repo)
-### ofertare-plansa-citeste/index.ts
+### ofertare-plansa-citeste/index.ts (acum handler.ts)
 - 405-406: fără Bearer -> 401. 408-413: `getUser(jwt)` -> 401 dacă invalid.
 - 421-423: citește doc (DB, gratuit) -> 404 dacă nu există.
 - 426-433: `is_owner` sau `responsabil_id === uid`, altfel 403.
@@ -14,7 +14,7 @@ Funcții: `ofertare-plansa-citeste` (Opus pe imagini), `ofertare-cantitati-extra
   - `responsabil_id` null -> nimeni în afară de owner (condiția `lic?.responsabil_id &&`). OK.
   - Doc inexistent -> 404 înainte de poartă: permite unui user logat să afle dacă un id există (enumerare, fără cost). Minor.
   - Licitație ștearsă (lic null) -> 403 pt. non-owner. OK.
-### ofertare-cantitati-extrage/index.ts
+### ofertare-cantitati-extrage/index.ts (acum handler.ts)
 - 176: `x-radar-secret` valid (RPC `fn_verifica_radar_secret`) -> sare JWT ȘI poarta (by design, worker). Secret greșit -> cade pe JWT.
 - 177-182: fără Bearer 401, token invalid 401.
 - 198-205: poarta owner/responsabil pe `licitatie_id` din body, 403.
@@ -60,8 +60,8 @@ Schimbări:
 - Poarta extrasă în funcție pură `poateCheltui({is_owner, responsabil_id}, uid)` — `poarta.ts` în FIECARE folder
   (copie identică, folosită efectiv de handler). Nu `_shared/`: deploy-ul prin MCP `deploy_edge_function` trimite
   doar fișierele listate, iar `verifica-edge-functions.mjs` compară per folder — un fișier local e mai sigur.
-- Ambele `index.ts` exportă `handler(req, deps)` + `depsReale()`; `Deno.serve` folosește deps reale
-  (sărit doar când `POARTA_TEST` e setat — setat numai de teste). Apelul AI trece prin `aiFetch` (injectabil).
+- (înlocuit în f) Inițial `index.ts` exporta `handler`/`depsReale`, cu `Deno.serve` condiționat de `POARTA_TEST`.
+  Apelul AI trece prin `aiFetch` (injectabil).
 - plansa-citeste: poarta rulează ÎNAINTEA lui 404 — user logat fără drept primește același 403
   (`Fără drept pe acest document — ...`) indiferent dacă `doc_id` există. Owner/service key: 404 pe doc inexistent.
   `.single()` -> `.maybeSingle()` pe lookup-ul docului (fără efect funcțional).
@@ -93,6 +93,32 @@ plansa: token invalid -> 401, zero cost ... ok
 ok | 14 passed | 0 failed
 ```
 (cu type-check; `--allow-net` doar pt. descărcarea `jsr:@std/assert` și `npm:@supabase/supabase-js` la import.)
+
+## f) Entrypoint separat + teste extinse + CI (25.09.2026, cerințe Copilot, NEdeployat)
+- Tot codul mutat în `handler.ts` (exportă `handler`, `depsReale`, `Deps`); `index.ts` = doar
+  `import { handler, depsReale } from './handler.ts'; Deno.serve(req => handler(req, depsReale()))`.
+  Condiția `POARTA_TEST` eliminată complet; testele importă `./handler.ts` static (nu mai cer `--allow-env`).
+- Deploy: `supabase functions deploy <slug>` împachetează graful de importuri din `index.ts` => `handler.ts` și
+  `poarta.ts` pleacă automat. Prin MCP `deploy_edge_function` trebuie trimise EXPLICIT `index.ts`, `handler.ts`,
+  `poarta.ts` (NU `*_test.ts`). `deploy-edge-function.yml` verifică doar existența `index.ts` — corect.
+- `verifica-edge-functions.mjs` NU compară conținut: compară data ultimului commit pe TOT folderul (`git log -- <folder>`)
+  cu `updated_at` al deploy-ului => funcționează cu mai multe fișiere. Efect secundar: un commit doar pe
+  `poarta_test.ts` marchează funcția „nepublicată" (fals pozitiv inofensiv, deja documentat în script).
+- Întărire găsită de teste: `Authorization: Bearer ` (valoare trimată de Headers la `Bearer`) trecea ca token literal
+  `Bearer` spre `getUser`. Acum `replace(/^Bearer(\s+|$)/i,'').trim()` => gol => 401. plansa: `!SERVICE || jwt !== SERVICE`
+  — cheia service nesetată nu devine niciodată „cheie valabilă”.
+- cantitati: `x-radar-secret` gol/absent => `secretOk` întoarce false FĂRĂ RPC (`if (!s)`); RPC-ul
+  `fn_verifica_radar_secret` cere rând `RADAR_SECRET` în vault + egalitate cu lungime egală => secret neconfigurat = false.
+  Fără breșă `'' === ''`.
+- CI: job `poarta` în `.github/workflows/verifica-edge-functions.yml` (rulează pe PR, fără secrete):
+  `node scripts/verifica-poarta-identica.mjs` (eșuează dacă cele 2 `poarta.ts` diferă) + `deno check` + `deno test`.
+- `dry_run`: UI nu îl folosește. Dacă va fi expus în UI, avertismentul „previzualizare plătită” trebuie afișat ÎNAINTE de pornire.
+
+```
+deno test supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts
+ok | 26 passed | 0 failed   (12 cantitati + 14 plansa; noi: service key valid/greșit, JWT fals role=service_role,
+Authorization absent/gol/"Bearer ", SERVICE nesetat; x-radar-secret valid/greșit, secret neconfigurat + header absent/gol)
+```
 
 ## Ce rămâne
 - **A) test integrat live cu cont non-owner** (JWT real, nesetat responsabil) — cere GO Razvan (cont de test = drepturi).

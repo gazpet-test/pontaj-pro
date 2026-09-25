@@ -2,8 +2,9 @@
 // Numără: citiri pe tabele, scrieri (insert/update/upsert/delete/rpc non-verificare), apeluri storage, apeluri AI.
 export type Tabele = Record<string, Record<string, unknown>[]>
 
-export function fakeSupa(tabele: Tabele) {
-  const n = { scrieri: 0, storage: 0, ai: 0, citiri: [] as string[] }
+// radarSecret: emulează fn_verifica_radar_secret — undefined = secretul NU există în vault (=> false mereu).
+export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string } = {}) {
+  const n = { scrieri: 0, storage: 0, ai: 0, rpcSecret: 0, citiri: [] as string[] }
   const from = (t: string) => {
     let rows = [...(tabele[t] || [])]
     let scriere = false
@@ -24,8 +25,12 @@ export function fakeSupa(tabele: Tabele) {
   }
   const supa = {
     from,
-    rpc: (name: string) => {
-      if (name === 'fn_verifica_radar_secret') return Promise.resolve({ data: false, error: null })
+    rpc: (name: string, args?: { p_secret?: string | null }) => {
+      if (name === 'fn_verifica_radar_secret') {
+        n.rpcSecret++
+        const s = opt.radarSecret, p = args?.p_secret ?? ''
+        return Promise.resolve({ data: s !== undefined && p.length === s.length && p === s, error: null })
+      }
       n.scrieri++
       return Promise.resolve({ data: null, error: null })
     },
@@ -56,7 +61,15 @@ export const PROFILE = [
 ]
 export const LICITATII = [{ id: 95, responsabil_id: RESP }, { id: 96, responsabil_id: RESP_ALTA }, { id: 97, responsabil_id: null }]
 // token = uid (getUser simulat); 'invalid' => null
-export const getUser = (jwt: string) => Promise.resolve(jwt === 'invalid' ? null : jwt)
+// Orice token în formă JWT (cu puncte) e tratat ca nevalidat de Auth => null, ca în producție pt semnătură falsă.
+export const getUser = (jwt: string) => Promise.resolve(jwt === 'invalid' || jwt.includes('.') ? null : jwt)
 export const cerere = (uid: string, body: unknown) => new Request('http://x/', {
   method: 'POST', headers: { Authorization: `Bearer ${uid}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 })
+// cerere cu antete arbitrare (fără Authorization implicit)
+export const cerereH = (headers: Record<string, string>, body: unknown) => new Request('http://x/', {
+  method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+})
+// JWT nesemnat care PRETINDE role=service_role — getUser real l-ar respinge (semnătură invalidă).
+const b64 = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
+export const JWT_FALS_SERVICE = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role: 'service_role', iss: 'supabase' })}.semnatura-falsa`

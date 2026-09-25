@@ -201,7 +201,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   let uidApelant: string | null = null
   if (!(await secretOk(req, db))) {
-    const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
+    const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer(\s+|$)/i, '').trim()
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
     uidApelant = await deps.getUser(jwt)
     if (!uidApelant) return json({ error: 'token invalid' }, 401)
@@ -400,6 +400,3 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // ar re-scrie tot ce s-a scris deja — exact asa au aparut cele 77 de duplicate pe Domnesti.
   return json({ ...comun, scrise: scriseTotal })
 }
-
-// Testele setează POARTA_TEST=1 ca importul să nu pornească serverul (import.meta.main nu e garantat în edge runtime).
-if (!Deno.env.get('POARTA_TEST')) Deno.serve((req: Request) => handler(req, depsReale()))
