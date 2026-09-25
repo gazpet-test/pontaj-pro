@@ -20,8 +20,16 @@
 // `continua: true` + indexul următor. Același tipar ca ofertare-seap-import.
 //
 // Auth: JWT de utilizator SAU x-radar-secret. Body: {licitatie_id, dry_run?, de_la?}.
+// ⚠️ dry_run = PREVIZUALIZARE AI PLĂTITĂ: apelurile AI rulează (consumă credit, se jurnalizează în
+// ai_usage_log), doar scrierea în ofertare_cantitati e sărită. NU e o probă gratuită; limitează cu max_felii.
+// Răspunsul poartă previzualizare_platita:true. (Propunere, neimplementată: mod `preflight` fără AI —
+// doar numărul de felii/documente + cost estimat.)
 // Erorile de business se întorc în răspuns, nu se aruncă.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { poateCheltui } from './poarta.ts'
+
+// Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
+let aiFetch: typeof fetch = (...a) => fetch(...a)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -65,7 +73,7 @@ async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG:
     // reasoning effort minimal: gpt-5-* sunt modele de rationament, iar tokenii de gandire
     // se taxeaza ca IESIRE si intra in acelasi plafon. Aici n-avem ce rationa — se copiaza
     // cifra din tabel — deci gandirea ar fi bani si plafon cheltuiti degeaba.
-    const r = await fetch('https://api.openai.com/v1/responses', {
+    const r = await aiFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: { authorization: `Bearer ${keyO}`, 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -86,7 +94,7 @@ async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG:
     }
   }
   if (furnizor === 'gemini') {
-    const r = await fetch(
+    const r = await aiFetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${MODELE.gemini.nume}:generateContent?key=${keyG}`,
       { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -104,7 +112,7 @@ async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG:
       stop: c?.finishReason,
     }
   }
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await aiFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': keyA, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     // 8000 taia raspunsul la jumatate pe o lista de cantitati si il facea necitibil
@@ -167,23 +175,40 @@ REGULI, în ordinea importanței:
 Dacă bucata nu conține poziții cantitative, întoarce {"p":[]}.
 Nu scrie NIMIC în afara JSON-ului — nici explicații, nici comentarii.`
 
-Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+// Dependențele externe, injectabile ca handlerul să poată fi testat fără rețea (poarta_test.ts):
+// db = client service_role, getUser(jwt) -> uid|null, fetch = apelurile AI, chei = cheile furnizorilor.
+export type Deps = {
+  db: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch
+  chei: { A: string; G: string; O: string }
+}
+export function depsReale(): Deps {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
-  const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  return {
+    db: createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!), fetch,
+    getUser: async (jwt) => {
+      const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
+      const { data: u } = await uc.auth.getUser()
+      return u?.user?.id || null
+    },
+    chei: { A: Deno.env.get('ANTHROPIC_API_KEY') || '', G: Deno.env.get('GEMINI_API_KEY') || '', O: Deno.env.get('OPENAI_API_KEY') || '' },
+  }
+}
+
+export async function handler(req: Request, deps: Deps): Promise<Response> {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const db = deps.db
+  aiFetch = deps.fetch
 
   let uidApelant: string | null = null
   if (!(await secretOk(req, db))) {
     const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
     if (!jwt) return json({ error: 'fără autentificare' }, 401)
-    const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
-    const { data: u } = await uc.auth.getUser()
-    if (!u?.user) return json({ error: 'token invalid' }, 401)
-    uidApelant = u.user.id
+    uidApelant = await deps.getUser(jwt)
+    if (!uidApelant) return json({ error: 'token invalid' }, 401)
   }
-  const KEY_A = Deno.env.get('ANTHROPIC_API_KEY') || ''
-  const KEY_G = Deno.env.get('GEMINI_API_KEY') || ''
-  const KEY_O = Deno.env.get('OPENAI_API_KEY') || ''
+  const KEY_A = deps.chei.A
+  const KEY_G = deps.chei.G
+  const KEY_O = deps.chei.O
 
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
   const licId = Number(body.licitatie_id)
@@ -200,7 +225,7 @@ Deno.serve(async (req: Request) => {
       db.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
       db.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
     ])
-    if (!prof?.is_owner && !(lic?.responsabil_id && lic.responsabil_id === uidApelant))
+    if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uidApelant))
       return json({ error: 'Extragerea F3 costă — o pornește doar ownerul sau responsabilul licitației.' }, 403)
   }
   const cheiaLipsa = furnizor === 'gemini' ? (!KEY_G && 'GEMINI_API_KEY')
@@ -222,7 +247,7 @@ Deno.serve(async (req: Request) => {
     .order('id')
   if (dErr) return json({ error: 'citire documente: ' + dErr.message })
 
-  const deLucru = (docs || []).filter(d => (d.text_extras || '').length > 500)
+  const deLucru = (docs || []).filter((d: any) => (d.text_extras || '').length > 500)
   if (!deLucru.length) return json({ error: 'niciun document cu text din care să ies cifre' }, 404)
 
   // munca, aplatizată în felii, ca reluarea să fie un simplu index
@@ -368,8 +393,13 @@ Deno.serve(async (req: Request) => {
     totaluri: toate.filter(x => /^TOTAL\b/i.test(x.denumire)).length,
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
   }
-  if (dryRun) return json({ ...comun, dry_run: true, esantion: toate.slice(0, 25) })
+  // dry_run: previzualizare AI — a consumat credit (cost_usd de mai sus, jurnalizat), NU a salvat nimic.
+  if (dryRun) return json({ ...comun, dry_run: true, previzualizare_platita: true,
+    nota: 'previzualizare AI — consumă credit, nu salvează', esantion: toate.slice(0, 25) })
   // NU se mai scrie nimic aici. Scrierea se face pe felie, mai sus. O a doua inserare la final
   // ar re-scrie tot ce s-a scris deja — exact asa au aparut cele 77 de duplicate pe Domnesti.
   return json({ ...comun, scrise: scriseTotal })
-})
+}
+
+// Testele setează POARTA_TEST=1 ca importul să nu pornească serverul (import.meta.main nu e garantat în edge runtime).
+if (!Deno.env.get('POARTA_TEST')) Deno.serve((req: Request) => handler(req, depsReale()))

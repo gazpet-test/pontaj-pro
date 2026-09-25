@@ -54,3 +54,48 @@ Neverificat: că versiunea DEPLOYATĂ conține poarta 403 (comparat doar repo; d
 
 ## Concluzie
 Toate căile neautentificate/false refuză cu 401 înainte de orice storage/AI; nicio scriere în DB. În cod, poarta 403 precede orice cost în ambele funcții. Ocoliri doar prin chei de server (SERVICE_ROLE, radar-secret). Atenție: `dry_run` costă.
+
+## e) Refactor + teste Deno offline (25.09.2026, branch claude/erp-continuare-x4p5a7, NEdeployat)
+Schimbări:
+- Poarta extrasă în funcție pură `poateCheltui({is_owner, responsabil_id}, uid)` — `poarta.ts` în FIECARE folder
+  (copie identică, folosită efectiv de handler). Nu `_shared/`: deploy-ul prin MCP `deploy_edge_function` trimite
+  doar fișierele listate, iar `verifica-edge-functions.mjs` compară per folder — un fișier local e mai sigur.
+- Ambele `index.ts` exportă `handler(req, deps)` + `depsReale()`; `Deno.serve` folosește deps reale
+  (sărit doar când `POARTA_TEST` e setat — setat numai de teste). Apelul AI trece prin `aiFetch` (injectabil).
+- plansa-citeste: poarta rulează ÎNAINTEA lui 404 — user logat fără drept primește același 403
+  (`Fără drept pe acest document — ...`) indiferent dacă `doc_id` există. Owner/service key: 404 pe doc inexistent.
+  `.single()` -> `.maybeSingle()` pe lookup-ul docului (fără efect funcțional).
+- cantitati-extrage: `dry_run` documentat ca **previzualizare AI plătită** (consumă credit, jurnalizat în
+  `ai_usage_log`, nu salvează); răspunsul are `previzualizare_platita: true` + `nota`. UI (`OfertareCantitati.jsx`)
+  nu folosește `dry_run` — nimic de schimbat în src/. Licitație inexistentă -> același 403 pt. non-owner (deja așa).
+- Propunere (NEimplementată): mod `preflight` fără AI — doar nr. documente/felii + cost estimat.
+
+Teste: `supabase/functions/{ofertare-plansa-citeste,ofertare-cantitati-extrage}/poarta_test.ts`, fake în
+`supabase/functions/_test/fake_supa.ts` (numără AI / storage / scrieri).
+```
+deno test --allow-env --allow-read --allow-net --allow-sys supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts
+running 6 tests from ./supabase/functions/ofertare-cantitati-extrage/poarta_test.ts
+cantitati: user fără drept -> 403, zero cost ... ok
+cantitati: responsabil pe ALTĂ licitație -> 403, zero cost ... ok
+cantitati: licitație existentă inaccesibilă vs inexistentă -> răspuns identic ... ok
+cantitati: owner trece; dry_run = previzualizare plătită (AI + jurnal, fără upsert) ... ok
+cantitati: responsabil corect trece și scrie (non dry_run) ... ok
+cantitati: token invalid -> 401, zero cost ... ok
+running 8 tests from ./supabase/functions/ofertare-plansa-citeste/poarta_test.ts
+poateCheltui: pur ... ok
+plansa: user fără drept -> 403, zero cost ... ok
+plansa: responsabil pe ALTĂ licitație -> 403, zero cost ... ok
+plansa: doc existent inaccesibil vs inexistent -> răspuns identic ... ok
+plansa: owner trece poarta (ajunge la storage) ... ok
+plansa: owner, doc inexistent -> 404 ... ok
+plansa: responsabil corect trece poarta ... ok
+plansa: token invalid -> 401, zero cost ... ok
+ok | 14 passed | 0 failed
+```
+(cu type-check; `--allow-net` doar pt. descărcarea `jsr:@std/assert` și `npm:@supabase/supabase-js` la import.)
+
+## Ce rămâne
+- **A) test integrat live cu cont non-owner** (JWT real, nesetat responsabil) — cere GO Razvan (cont de test = drepturi).
+- **Sursa publicată**: de confirmat cu `get_edge_function` ce versiune rulează LIVE (poarta 403 + noul ordin 403/404);
+  deploy-ul acestui refactor e separat, prin workflow manual, după merge.
+- Diferență de timp 403 (doc existent = 3 citiri DB, inexistent = 2) — enumerare teoretică prin timing, neglijabilă.

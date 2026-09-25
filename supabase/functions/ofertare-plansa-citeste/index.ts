@@ -16,6 +16,10 @@
 // Bugetul unei rulari e limitat, deci se citesc cel mult FELII_PE_RULARE bucati si se
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { poateCheltui } from './poarta.ts';
+
+// Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
+let aiFetch: typeof fetch = (...a) => fetch(...a);
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -98,7 +102,7 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string, 
   const t0 = Date.now();
   let r: Response, incercari = 0; const coduri: number[] = [];
   for (;;) {
-  r = await fetch('https://api.anthropic.com/v1/messages', {
+  r = await aiFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -350,7 +354,7 @@ Raspunde NUMAI cu JSON valid: {"randuri": [{"text": "randul complet", "lungime_m
 
 async function lipestePereche(apiKey: string, st: Uint8Array, dr: Uint8Array, eticheta: string) {
   const b64 = (u: Uint8Array) => { let b = ''; for (let i = 0; i < u.length; i += 8192) b += String.fromCharCode(...u.subarray(i, i + 8192)); return btoa(b); };
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await aiFetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -391,25 +395,41 @@ function lungimeDeclarata(note: any[]): { m: number | null; necorelare: string |
   return { m: null, necorelare: null, sursa: null };
 }
 
-Deno.serve(async (req: Request) => {
+// Dependențele externe, injectabile ca handlerul să poată fi testat fără rețea (poarta_test.ts):
+// supa = client service_role (DB + storage), getUser(jwt) -> uid|null, fetch = apelul AI.
+export type Deps = {
+  SERVICE: string; API_KEY: string | undefined;
+  supa: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch;
+};
+export function depsReale(): Deps {
+  const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
+  const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  return {
+    SERVICE, API_KEY: Deno.env.get('ANTHROPIC_API_KEY'), supa: createClient(SUPA_URL, SERVICE), fetch,
+    getUser: async (jwt) => {
+      const anon = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!);
+      const { data: u } = await anon.auth.getUser(jwt);
+      return u?.user?.id || null;
+    },
+  };
+}
+const MESAJ_FARA_DREPT = 'Fără drept pe acest document — citirea planșei costă și o pornește doar ownerul sau responsabilul licitației.';
+
+export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
-  const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
-  const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-  const API_KEY = Deno.env.get('ANTHROPIC_API_KEY');
+  const { SERVICE, API_KEY, supa } = deps;
+  aiFetch = deps.fetch;
   if (!API_KEY) return json({ error: 'lipseste ANTHROPIC_API_KEY' }, 500);
-  const supa = createClient(SUPA_URL, SERVICE);
 
   const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
   if (!jwt) return json({ error: 'unauthorized' }, 401);
   let uidApelant: string | null = null;
   if (jwt !== SERVICE) {
-    const anon = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!);
-    const { data: u } = await anon.auth.getUser(jwt);
-    if (!u?.user) return json({ error: 'unauthorized' }, 401);
-    uidApelant = u.user.id;
+    uidApelant = await deps.getUser(jwt);
+    if (!uidApelant) return json({ error: 'unauthorized' }, 401);
   }
 
   let body: any = {};
@@ -419,18 +439,22 @@ Deno.serve(async (req: Request) => {
   if (!docId) return json({ error: 'doc_id lipsa' }, 400);
 
   const { data: doc } = await supa.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, nume_original, analiza').eq('id', docId).single();
-  if (!doc) return json({ error: 'document inexistent' }, 404);
+    .select('id, licitatie_id, nume_original, analiza').eq('id', docId).maybeSingle();
   // 25.09.2026 (audit țintit, CLAUDE.md 7d): cea mai scumpă citire (Opus pe imagini) — poarta pe cheltuială
-  // și pe server: doar ownerul sau responsabilul licitației (UI-ul avea poarta, serverul doar getUser()).
+  // și pe server: doar ownerul sau responsabilul licitației (poateCheltui, poarta.ts).
+  // Poarta vine ÎNAINTE de 404: un user fără drept primește ACELAȘI 403 dacă doc_id există sau nu
+  // (nu poate enumera id-urile). Ownerul / apelul intern cu service key primesc 404 pe doc inexistent.
+  // Storage și AI rulează strict după poartă.
   if (uidApelant) {
     const [{ data: prof }, { data: lic }] = await Promise.all([
       supa.from('profiles').select('is_owner').eq('id', uidApelant).maybeSingle(),
-      supa.from('ofertare_licitatii').select('responsabil_id').eq('id', doc.licitatie_id).maybeSingle(),
+      doc ? supa.from('ofertare_licitatii').select('responsabil_id').eq('id', doc.licitatie_id).maybeSingle()
+          : Promise.resolve({ data: null }),
     ]);
-    if (!prof?.is_owner && !(lic?.responsabil_id && lic.responsabil_id === uidApelant))
-      return json({ error: 'Citirea planșei costă — o pornește doar ownerul sau responsabilul licitației.' }, 403);
+    if (!poateCheltui({ is_owner: prof?.is_owner, responsabil_id: lic?.responsabil_id }, uidApelant))
+      return json({ error: MESAJ_FARA_DREPT }, 403);
   }
+  if (!doc) return json({ error: 'document inexistent' }, 404);
 
   const plansa = doc.analiza?.plansa;
   if (!plansa?.cale_felii) return json({ error: 'plansa nu e taiata in felii — ruleaza intai /api/plansa-felii' }, 400);
@@ -442,7 +466,7 @@ Deno.serve(async (req: Request) => {
   if (!felii.length) return json({ error: 'nicio felie in storage' }, 404);
   // 25.09.2026 (Jakarinos): manifestul zonelor AȘTEPTATE (scris de /api/plansa-felii). O felie care n-a ajuns
   // în storage nu dădea nicio eroare — planșa părea citită complet, cu un total scurt.
-  const peStorage = new Set(felii.map((f: any) => f.name.replace('.jpg', '')));
+  const peStorage = new Set<string>(felii.map((f: any) => f.name.replace('.jpg', '')));
   const zoneLipsa: string[] = (plansa.zone_asteptate || []).map((z: string) => `z${z}`).filter((z: string) => !peStorage.has(z));
 
   // Pasul „lipește notele tăiate" — apel separat (bugetul de timp al unei rulări), cerut de UI după citire.
@@ -708,4 +732,7 @@ Deno.serve(async (req: Request) => {
     reincercate: mod === 'reia_erori' ? [...sari, ...inLot] : undefined, zone_cazute: sumar.zone_cazute,
     lipire_necesara: gata ? perechiDeLipit(toate, peStorage).slice(0, MAX_PERECHI).length : 0,
   });
-});
+}
+
+// Testele setează POARTA_TEST=1 ca importul să nu pornească serverul (import.meta.main nu e garantat în edge runtime).
+if (!Deno.env.get('POARTA_TEST')) Deno.serve((req: Request) => handler(req, depsReale()));
