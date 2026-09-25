@@ -109,7 +109,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
 
     const { data: auth, error: eAuth } = await supabase.from('hr_autorizatii')
       .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
-      .is('deleted_at', null).order('id')   // ordine STABILA: fara ea, prefixul difera intre apeluri si cache-ul nu se potriveste
+      .is('deleted_at', null).is('inlocuita_de_id', null).order('id')   // ordine STABILA: fara ea, prefixul difera intre apeluri si cache-ul nu se potriveste
     // 17.09.2026: titularii cu contract închis (employees.active=false) sau externii dezactivați nu
     // intră în catalog — o autorizație a unui om plecat nu poate acoperi nimic în fața autorității.
     const titularActiv = (r: any) => !(r.emp && r.emp.active === false) && !(r.ext && r.ext.activ === false)
