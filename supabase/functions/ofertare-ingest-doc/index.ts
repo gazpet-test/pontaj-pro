@@ -185,6 +185,16 @@ Deno.serve(async (req: Request) => {
         return new Response(JSON.stringify({ ok: true, skip: 'spart in bucati - se citesc bucatile', continua: false }), { headers: CORS })
       }
     }
+    // 25.09.2026 (Huedin 770, 99,9 MB): PDF-ul ucidea worker-ul (Memory limit exceeded) după ce doc-ul era pus
+    // 'in_lucru', iar coada îl relua la ~6 s la nesfârșit. 'ignorat' nu se mai reia; peste prag → 'ignorat' explicit.
+    if (row.status_procesare === 'ignorat') {
+      return new Response(JSON.stringify({ ok: true, skip: 'ignorat', continua: false }), { headers: CORS })
+    }
+    if (Number(row.size_bytes) > 60 * 1024 * 1024) {
+      await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'ignorat',
+        eroare: `prea mare pentru citirea automată (${Math.round(Number(row.size_bytes) / 1048576)} MB > 60 MB) — de spart pe bucăți / procesat pe NAS` }).eq('id', docId)
+      return new Response(JSON.stringify({ ok: true, skip: 'prea mare', continua: false }), { headers: CORS })
+    }
     await supabase.from('ofertare_documente_atribuire')
       .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
       .eq('id', docId)

@@ -19,6 +19,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { inflateRawSync } from 'node:zlib'
 import { continutSemnat } from './_p7s.js'
+import { randManifest, sha256Hex, dedupManifest, MANIFEST_CONFLICT, ARHIVA_SEAP } from './_manifest.js'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR = {
@@ -144,7 +145,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'licitatia nu are c_notice_id / sys_notice_type_id (se completeaza la promovarea din radar)' })
   }
 
-  const raport = { adaugate: 0, completate: 0, sarite_existente: 0, erori: [], intrari: 0 }
+  const raport = { adaugate: 0, completate: 0, sarite_existente: 0, erori: [], intrari: 0, manifest_randuri: 0, avertismente: [] }
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId)
   const urcate = new Set((dejaAre || []).filter((d) => !estePlaceholder(d)).map((d) => d.nume_original))
@@ -152,11 +153,41 @@ export default async function handler(req, res) {
 
   const scrie = async (rand, nume) => {
     const idPh = placeholders.get(nume)
-    const { error } = idPh
-      ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
-      : await supa.from('ofertare_documente_atribuire').insert(rand)
-    if (error) { raport.erori.push(`${nume}: scriere rand - ${error.message}`); return }
+    const { data, error } = idPh
+      ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh).select('id').maybeSingle()
+      : await supa.from('ofertare_documente_atribuire').insert(rand).select('id').maybeSingle()
+    if (error) { raport.erori.push(`${nume}: scriere rand - ${error.message}`); return null }
     if (idPh) raport.completate++; else raport.adaugate++
+    return data?.id ?? idPh ?? null
+  }
+
+  // R6: manifest de integritate (SHA-256 pe byte-ii urcati, dupa continutSemnat) — ca in edge.
+  // O eroare de manifest NU opreste importul: devine avertisment (raport + seap_meta pe document).
+  const manifest = []
+  const noteazaManifest = (cale, buf, documentId, motiv) => {
+    try {
+      manifest.push(randManifest({ licitatieId, arhivaCheie: ARHIVA_SEAP, cale, marime: buf.length, sha256: sha256Hex(buf), documentId, motiv }))
+    } catch (e) { raport.avertismente.push(`manifest ${cale}: ${String(e?.message || e)}`) }
+  }
+  const scrieManifest = async () => {
+    if (!manifest.length) return
+    const unice = dedupManifest(manifest)
+    const esuate = []
+    for (let k = 0; k < unice.length; k += 200) {
+      const felie = unice.slice(k, k + 200)
+      const { error } = await supa.from('ofertare_seap_manifest').upsert(felie, { onConflict: MANIFEST_CONFLICT })
+      if (error) { raport.avertismente.push(`manifest: ${error.message}`); esuate.push(...felie) }
+      else raport.manifest_randuri += felie.length
+    }
+    const ids = esuate.map((r) => r.document_id).filter(Boolean)
+    if (!ids.length) return
+    try {
+      const { data: meta } = await supa.from('ofertare_documente_atribuire').select('id, seap_meta').in('id', ids)
+      for (const d of meta || []) {
+        await supa.from('ofertare_documente_atribuire')
+          .update({ seap_meta: { ...(d.seap_meta || {}), manifest_avertisment: `manifest nescris (${new Date().toISOString()})` } }).eq('id', d.id)
+      }
+    } catch (_) { /* avertismentul e deja in raport */ }
   }
 
   const url = `${SEAP}/NoticeCommon/DownloadArchive/?initNoticeId=${lic.c_notice_id}&sysNoticeTypeId=${lic.sys_notice_type_id}`
@@ -198,16 +229,17 @@ export default async function handler(req, res) {
         const { error: eUp } = await supa.storage.from('ofertare').upload(path, buf, { contentType: ctype })
         if (eUp) {
           const eroare = await urcaInFelii(SUPA_URL, SERVICE, 'ofertare', path, ctype, buf)
-          if (eroare) { raport.erori.push(`${numeFinal}: ${eUp.message} | in felii: ${eroare}`); continue }
+          if (eroare) { raport.erori.push(`${numeFinal}: ${eUp.message} | in felii: ${eroare}`); noteazaManifest(numeFinal, buf, null, eroare); continue }
         }
 
-        await scrie({
+        const docId = await scrie({
           licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
           tip: ghicesteTip(numeFinal), size_bytes: buf.length,
           status_procesare: estePdf ? 'neprocesat' : 'ignorat',
           eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)',
           sursa: 'seap',
         }, numeFinal)
+        noteazaManifest(numeFinal, buf, docId, docId ? null : 'rand BD nescris')
         urcate.add(numeFinal)
       } catch (e) {
         raport.erori.push(`${numeCurat}: ${String(e?.message || e)}`)
@@ -216,6 +248,8 @@ export default async function handler(req, res) {
   } catch (e) {
     raport.erori.push('flux: ' + String(e?.message || e))
   }
+
+  try { await scrieManifest() } catch (e) { raport.avertismente.push('manifest: ' + String(e?.message || e)) }
 
   if (!raport.erori.length) {
     await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId)
