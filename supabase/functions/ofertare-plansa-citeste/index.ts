@@ -25,7 +25,11 @@ const CORS: Record<string, string> = {
 const MODEL = 'claude-opus-5';   // plansele cer citire vizuala buna; restul modulului foloseste Sonnet
 const PRET_IN = 5 / 1e6, PRET_OUT = 25 / 1e6;
 const FELII_PE_RULARE = 4;
-const PARALEL = 4; // 25.09.2026: 2 -> 4 (schema Vâlcelele: 35 zone în ~15 min); o rundă = 4 zone citite simultan, sub limita de 150 s
+// 25.09.2026: concurența e CONFIGURABILĂ (body.paralel, 1..4; implicit 2 = comportamentul vechi). Testul cu 4 se
+// face controlat și se MĂSOARĂ (citire_ai.metrici): durata, 429/529, reîncercări, cost. Nu presupunem înjumătățirea.
+const PARALEL = 2;
+const PARALEL_MAX = 4;
+const REINCERCARI = 2;          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -90,7 +94,10 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string, 
   }
   const b64 = btoa(binar);
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const t0 = Date.now();
+  let r: Response, incercari = 0; const coduri: number[] = [];
+  for (;;) {
+  r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -112,6 +119,17 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string, 
       }],
     }),
   });
+  if ((r.status === 429 || r.status === 529 || r.status >= 500) && incercari < REINCERCARI) {
+    coduri.push(r.status); incercari++;
+    const ra = Number(r.headers.get('retry-after')) || 0;
+    await r.body?.cancel();
+    await new Promise((ok) => setTimeout(ok, Math.min(20000, ra ? ra * 1000 : 3000 * 2 ** (incercari - 1))));
+    continue;
+  }
+  break;
+  }
+  if (r.status >= 400) coduri.push(r.status);
+  const _m = { _ms: Date.now() - t0, _reincercari: incercari, _coduri: coduri };
   const j = await r.json();
   const tin = j?.usage?.input_tokens || 0, tout = j?.usage?.output_tokens || 0;
   // Raspunsul poate incepe cu un bloc de gandire, deci textul NU e neaparat content[0]:
@@ -123,12 +141,12 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string, 
   if (!m) {
     const detaliu = j?.error?.message || txt ||
       `fara text (http ${r.status}, stop ${j?.stop_reason}, blocuri ${blocuri.map((c: any) => c?.type).join('+') || 'niciunul'})`;
-    return { eticheta, eroare: String(detaliu).slice(0, 300), _tin: tin, _tout: tout };
+    return { eticheta, eroare: String(detaliu).slice(0, 300), _tin: tin, _tout: tout, ..._m };
   }
   try {
-    return { eticheta, ...JSON.parse(m[0]), _tin: tin, _tout: tout };
+    return { eticheta, ...JSON.parse(m[0]), _tin: tin, _tout: tout, ..._m };
   } catch (e) {
-    return { eticheta, eroare: 'JSON invalid: ' + String((e as Error)?.message).slice(0, 120), _tin: tin, _tout: tout };
+    return { eticheta, eroare: 'JSON invalid: ' + String((e as Error)?.message).slice(0, 120), _tin: tin, _tout: tout, ..._m };
   }
 }
 
@@ -463,9 +481,11 @@ Deno.serve(async (req: Request) => {
   const anteteCunoscute = [...new Set((deLa ? (doc.analiza?.citire_ai?.felii || []) : [])
     .flatMap((r: any) => (r.tabele || []).map((t: any) => `${t.denumire || 'tabel'}: ${(t.coloane || []).join(' | ')}`))
     .filter((x: string) => x.includes('|')))].slice(0, 4).join(' ;; ');
+  const paralel = Math.max(1, Math.min(PARALEL_MAX, Math.floor(Number(body?.paralel)) || PARALEL));
+  const tRunda = Date.now();
   const rezultate: any[] = [];
-  for (let i = 0; i < lot.length; i += PARALEL) {
-    const grup = lot.slice(i, i + PARALEL);
+  for (let i = 0; i < lot.length; i += paralel) {
+    const grup = lot.slice(i, i + paralel);
     const parti = await Promise.all(grup.map(async (f: any) => {
       const { data: bin, error } = await supa.storage.from('ofertare').download(`${plansa.cale_felii}/${f.name}`);
       if (error || !bin) return { eticheta: f.name, eroare: error?.message || 'descarcare esuata' };
@@ -483,6 +503,15 @@ Deno.serve(async (req: Request) => {
     ref_table: 'ofertare_documente_atribuire', ref_id: docId,
   });
 
+  // Metrici pe rundă (măsurare, nu presupunere): durata, concurența, reîncercări, coduri HTTP de limitare, cost.
+  const metricaRunda = {
+    de_la: deLa, zone: lot.length, paralel, durata_ms: Date.now() - tRunda,
+    zona_ms: rezultate.map((r: any) => r._ms || null),
+    reincercari: rezultate.reduce((q, r) => q + (r._reincercari || 0), 0),
+    limitari: rezultate.flatMap((r: any) => r._coduri || []),
+    erori: rezultate.filter((r: any) => r.eroare).length,
+    cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4), la: new Date().toISOString(),
+  };
   const gata = deLa + lot.length >= felii.length;
   const precedente = deLa === 0 ? [] : (doc.analiza?.citire_ai?.felii || []);
   const toate = [...precedente, ...rezultate];
@@ -570,7 +599,15 @@ Deno.serve(async (req: Request) => {
   // „neprocesat" fără text — Rezumatul îl număra la „rămase de citit" și UI-ul oferea recitire plătită.
   // La final: procesat + text_extras (randare text a citirii, pt cerințe/clarificări/căutare);
   // dacă TOATE feliile au căzut: eroare. Pe runde intermediare statusul nu se atinge.
-  const citireAi = { felii: toate, sumar, tronsoane_unice: unice, model: MODEL, gata, actualizat: new Date().toISOString() };
+  const metrici = [...(deLa === 0 ? [] : (doc.analiza?.citire_ai?.metrici || [])), metricaRunda];
+  if (gata) sumar.metrici = {
+    runde: metrici.length, paralel: [...new Set(metrici.map((m: any) => m.paralel))],
+    durata_s: Math.round(metrici.reduce((q: number, m: any) => q + m.durata_ms, 0) / 1000),
+    reincercari: metrici.reduce((q: number, m: any) => q + m.reincercari, 0),
+    limitari: metrici.flatMap((m: any) => m.limitari).length,
+    cost_usd: +metrici.reduce((q: number, m: any) => q + m.cost_usd, 0).toFixed(3),
+  };
+  const citireAi = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: MODEL, gata, actualizat: new Date().toISOString() };
   const upd: Record<string, unknown> = { analiza: { ...doc.analiza, citire_ai: citireAi }, analiza_la: new Date().toISOString() };
   if (gata) {
     if (toate.length && (sumar.erori as number) >= toate.length) {
