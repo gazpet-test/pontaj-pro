@@ -827,7 +827,7 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
         data_livrare_estimata: termen || null,
       }).select('id').single()
       if (eH) throw eH
-      // 3) liniile selectate (snapshot denumire/cantitate/um din cerere)
+      // 3) liniile selectate (snapshot denumire/cantitate/um/specificații din cerere)
       const cerLinii = (cerere.linii || []).filter(l => lineIds.includes(l.id))
       const rows = cerLinii.map((l, i) => ({
         comanda_furnizor_id: cf.id,
@@ -835,6 +835,7 @@ export default function CereriInterneProiect({ proiectId, inbox = false }) {
         denumire: l.denumire,
         cantitate: Number(l.cantitate) || 1,
         um: l.um || null,
+        observatii: l.observatii || null, // TKT-2026-0282: specificațiile din cerere trec în comanda furnizor
         display_order: i,
       }))
       const { error: eL } = await supabase.from('comenzi_furnizor_linii').insert(rows)
