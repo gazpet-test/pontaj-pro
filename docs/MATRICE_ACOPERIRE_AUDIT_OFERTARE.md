@@ -36,3 +36,18 @@ R1 rapoarte · R2 test C2 · R3 stări citire · R4 reluare persistentă · R5 c
 | C4 coadă server | R4 | deschis | UI secvențial | worker/coadă existentă |
 
 Notă (25.09.2026): în `ofertare-plansa-citeste` codul s-a mutat din `index.ts` în `handler.ts` (index.ts = doar `Deno.serve`); numerele de linie de mai sus sunt în `handler.ts`, neschimbate. `dry_run` (cantitati-extrage) nu e folosit de UI; dacă va fi expus în UI, avertismentul „previzualizare plătită” trebuie afișat ÎNAINTE de pornire.
+
+## Verdict final (Copilot, 25.09.2026) — stare pe restanțe nominale
+
+| R | Verdict | Restanță (detaliu în `RESTANTE_AUDIT_OFERTARE.md`) |
+|---|---|---|
+| R1 rapoarte | **ÎNCHIS** | — |
+| R2 poarta server (C2) | **ÎNCHIS pe endpointurile testate** | avertisment „previzualizare plătită” ÎNAINTE de apel (UI nu folosește `dry_run`) — tichet UX |
+| R3 stări citire | PARȚIAL | 472 în lucru + review manual al rezultatelor istorice |
+| R4 reluare | PARȚIAL (perimetru acceptat) | reluare sigură doar cu browserul deschis; coadă persistentă / cost dublu între taburi = deschis |
+| R5 cantități 470 | PARȚIAL | reconciliere z3_1, identitate tronsoane, etape + recalcul controlat |
+| R6 integritate documente | PARȚIAL | acceptanță end-to-end pe traseu (edge, Vercel, Terra), backfill, cron, 770 fragmentare, 1035 adnotări CTGN |
+| R7 Vâlcelele financiar | PARȚIAL | decizii comerciale + parametrizare |
+| R8 clarificarea #63 | **redactare ÎNCHISĂ** + test regresie v5 trecut | trimitere / dovadă / răspuns AC |
+
+**Test regresie v5 (R8)** — `ofertare_clarificare_planse_auto` v5, rulat în `DO` cu `RAISE EXCEPTION` (rollback forțat, fără efect permanent): 472 marcat temporar `citita_fara_date_cantitative` ⇒ funcția întoarce `actualizat` id 63, 5 planșe; #63 rămâne `de_trimis`, md5 text neschimbat (`429ce455…`), sursa devine `planse_auto:475,474,473,472,471`; nicio clarificare nouă (1 `auto_planse_%` pe 95). SELECT după: #63 (status, md5, sursa, updated_at) și 472 (md5 analiza `5397ca18…`, `partial`) identice cu înainte.
