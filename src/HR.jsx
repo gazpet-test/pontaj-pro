@@ -126,6 +126,8 @@ export default function HRPage() {
   const [editEmp, setEditEmp] = useState(null)
   const [showAddAut, setShowAddAut] = useState(null)  // employee_id
   const [editAut, setEditAut] = useState(null)  // autorizatie object
+  const [reinnoireAut, setReinnoireAut] = useState(null)  // 25.09.2026: autorizația veche care se reînnoiește
+  const [istoricAut, setIstoricAut] = useState([])  // autorizații înlocuite prin reînnoire (istoric)
   const [citesteOpen, setCitesteOpen] = useState(false)  // 01.07.2026: panel „Citește Orice" HR
   const [wizardAngajat, setWizardAngajat] = useState(false)  // 11.08.2026: wizard „Angajat nou" (todo 835)
   
@@ -181,7 +183,9 @@ export default function HRPage() {
       supabase.from('v_hr_autorizatii_arhiva').select('*'),
     ])
     setEmployees(empRes.data || [])
-    setAutorizatii(autRes.data || [])
+    // 25.09.2026: rândurile înlocuite prin „Reînnoiește” rămân ca istoric, nu intră în statistici/alerte
+    setAutorizatii((autRes.data || []).filter(a => !a.inlocuita_de_id))
+    setIstoricAut((autRes.data || []).filter(a => a.inlocuita_de_id))
     setTipuri(tipRes.data || [])
     setCosCount(cosRes.count || 0)
     setChuckCount(chuckRes.count || 0)
@@ -296,7 +300,7 @@ export default function HRPage() {
       {load && <div style={{padding:60, textAlign:'center', color:G.muted}}><div className="sp" style={{margin:'0 auto'}}/></div>}
       
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
-      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} employees={employees} onClickEmp={setEditEmp} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} />}
+      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} employees={employees} onClickEmp={setEditEmp} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} istoric={istoricAut} onReinnoieste={setReinnoireAut} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
@@ -364,6 +368,18 @@ export default function HRPage() {
           tipuri={tipuri}
           onClose={() => setEditAut(null)}
           onSaved={() => { loadAll(); setEditAut(null) }}
+          onReinnoieste={a => { setEditAut(null); setReinnoireAut(a) }}
+          showToast={showToast}
+        />
+      )}
+
+      {reinnoireAut && (
+        <ModalAddAutorizatie
+          employeeId={reinnoireAut.employee_id}
+          tipuri={tipuri}
+          reinnoire={reinnoireAut}
+          onClose={() => setReinnoireAut(null)}
+          onSaved={() => { loadAll(); setReinnoireAut(null) }}
           showToast={showToast}
         />
       )}
@@ -473,7 +489,8 @@ function TabPersonal({ employees, autorizatii, onClickEmp, showToast }) {
 // ===========================================================================
 // TAB AUTORIZAȚII — tabel cu toate
 // ===========================================================================
-function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAddAut, isAdmin, onReload, showToast, onEditAut }) {
+function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAddAut, isAdmin, onReload, showToast, onEditAut, istoric = [], onReinnoieste }) {
+  const [showIstoric, setShowIstoric] = useState(false)
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('Toate')
   const [tipFilter, setTipFilter] = useState('')  // task #71: filtru pe tipul exact de autorizație (denumire), pt. export calificări
@@ -928,6 +945,7 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
                   <td style={tdStyle}>
                     <div style={{fontWeight:600}}>{a.tip_denumire}</div>
                     <div style={{fontSize:10, color:G.muted}}>{a.tip_categorie}</div>
+                    {neverificatPeScan(a) && <div title="Autorizație nouă — datele nu au fost încă verificate pe scan (bifa din Editează)" style={{marginTop:3, display:'inline-block', padding:'1px 6px', borderRadius:4, fontSize:10, fontWeight:700, background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`}}>⚠ neverificat pe scan</div>}
                   </td>
                   <td style={{...tdStyle, fontSize:11}}>
                     {a.procedeu_sudura && <div>🔥 Procedeu: <strong>{a.procedeu_sudura}</strong>{a.diametru_teava_mm && ` · Ø${a.diametru_teava_mm}mm`}{a.calitate_material && ` · ${a.calitate_material}`}</div>}
@@ -958,6 +976,7 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
                           style={{padding:'4px 8px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:4, fontSize:11, cursor:'pointer'}}
                           title={a.fisier_path ? 'Înlocuiește fișier' : 'Adaugă PDF/poză'}>
                           {uploadingId===a.id ? '⏳' : '📎'}</button>
+                        {onReinnoieste && <button onClick={() => onReinnoieste(a)} style={{padding:'4px 8px', background:G.green+'22', color:G.green, border:`1px solid ${G.green}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="🔄 Reînnoiește — autorizație nouă, cea veche rămâne în istoric">🔄</button>}
                         <button onClick={() => onEditAut?.(a)} style={{padding:'4px 8px', background:G.blue+'22', color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Editează">✏️</button>
                         <button onClick={() => handleDelete(a)} style={{padding:'4px 8px', background:G.red+'22', color:G.red, border:`1px solid ${G.red}55`, borderRadius:4, fontSize:11, cursor:'pointer'}} title="Mută în Coș">🗑️</button>
                       </div>
@@ -974,6 +993,28 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
       <div style={{marginTop:12, fontSize:11, color:G.muted, textAlign:'center'}}>
         💡 {filtered.length} / {autorizatii.length} autorizații afișate
       </div>
+
+      {istoric.length > 0 && (
+        <div style={{...S.card, marginTop:12, padding:12}}>
+          <div onClick={() => setShowIstoric(v => !v)} style={{cursor:'pointer', fontSize:12, fontWeight:700, color:G.muted}}>
+            {showIstoric ? '▾' : '▸'} 📜 Istoric — {istoric.length} autorizații înlocuite prin reînnoire
+          </div>
+          {showIstoric && (
+            <div style={{marginTop:8, display:'grid', gap:4}}>
+              {istoric.map(a => {
+                const noua = autorizatii.find(x => x.id === a.inlocuita_de_id)
+                return (
+                  <div key={a.id} style={{display:'flex', gap:10, alignItems:'center', fontSize:11, color:G.muted, padding:'4px 0', borderTop:`1px solid ${G.border}`}}>
+                    <span style={{flex:1}}><strong style={{color:G.text}}>{a.employee_name}</strong> · {a.tip_denumire} · nr. {a.numar_autorizatie || '—'} · exp. {a.data_expirare ? new Date(a.data_expirare).toLocaleDateString('ro-RO') : '—'}
+                      {' '}→ înlocuită{a.inlocuita_la ? ' la ' + new Date(a.inlocuita_la).toLocaleDateString('ro-RO') : ''}{noua ? ` de nr. ${noua.numar_autorizatie || '—'}` : ''}</span>
+                    {a.dovada_path && <button onClick={() => handleViewPdf(a.dovada_path, a.dovada_bucket)} style={{padding:'2px 6px', background:'transparent', color:G.muted, border:`1px solid ${G.border}`, borderRadius:4, fontSize:10, cursor:'pointer'}}>📄</button>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1172,7 +1213,8 @@ function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
   const expirateAll = autorizatii.filter(a => a.status === 'expirat')
   const expira7All = autorizatii.filter(a => a.status === 'expira_7z')
   const expira30All = autorizatii.filter(a => a.status === 'expira_30z')
-  const toateAlerteAll = [...expirateAll, ...expira7All, ...expira30All]
+  const expira60All = autorizatii.filter(a => a.status === 'expira_60z')  // 25.09.2026: alertă din timp (60 zile) pt. HR/Ofertare
+  const toateAlerteAll = [...expirateAll, ...expira7All, ...expira30All, ...expira60All]
 
   // Count per categorie (doar din alertele active)
   const tipCounts = toateAlerteAll.reduce((acc, a) => {
@@ -1186,6 +1228,7 @@ function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
   const expirate = tipFilter ? expirateAll.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expirateAll
   const expira7  = tipFilter ? expira7All.filter(a => (a.tip_categorie || 'altele') === tipFilter)  : expira7All
   const expira30 = tipFilter ? expira30All.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expira30All
+  const expira60 = tipFilter ? expira60All.filter(a => (a.tip_categorie || 'altele') === tipFilter) : expira60All
 
   // Vize RTS (la 6 luni, sudori) — categorie separată, nu intră sub filtrul pe tip
   const vizaExpirate = autorizatii.filter(a => a.rsvti_status === 'rsvti_expirat')
@@ -1284,6 +1327,7 @@ function TabAlerte({ autorizatii, stats, onClickAut, onEditViza }) {
         <SectiuneAlerte titlu="🚨 EXPIRATE — necesită reînnoire URGENT" lista={expirate} color={G.red} onClick={onClickAut} />
         <SectiuneAlerte titlu="⚠⚠ Expiră în mai puțin de 7 zile" lista={expira7} color={G.orange} onClick={onClickAut} />
         <SectiuneAlerte titlu="⚠ Expiră în mai puțin de 30 zile" lista={expira30} color={G.yellow} onClick={onClickAut} />
+        <SectiuneAlerte titlu="🔔 Expiră în 31–60 zile — pornește reînnoirea (🔄 din Editează)" lista={expira60} color={G.blue} onClick={onClickAut} />
       </>}
 
       {(vizaOnly || !tipFilter || tipFilter === 'sudura') && <>
@@ -1669,17 +1713,39 @@ const PROCEDEE_SUDURA = ['111', '111MMA', '135', '136', '135-136', '141', '141-1
 const CALITATI_MATERIAL = ['Oțel', 'Oțel inox', 'Oțel carbon', 'PEHD', 'Aluminiu', 'Cupru', 'Aliaj']
 
 
-function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }) {
-  const [tipId, setTipId] = useState('')
+// 25.09.2026: procedura de autorizare — activitățile INSEMEX (GANEx) se salvează structurat în `domenii`
+const ACTIVITATI_INSEMEX = ['montare', 'punere în funcțiune', 'utilizare/exploatare', 'inspecție', 'întreținere', 'reparații']
+const esteInsemex = t => /^INSEMEX/i.test(t?.cod || '') || /insemex/i.test(t?.denumire || '')
+// „Nou” = introdusă după pornirea procedurii (25.09.2026); cele vechi nu se marchează ca să nu inunde lista
+const neverificatPeScan = a => a.verificat_pe_scan !== true && !!a.uploadat_la && a.uploadat_la >= '2026-09-25'
+function ActivitatiInsemexPicker({ domenii, setDomenii }) {
+  const toggle = v => setDomenii(domenii.includes(v) ? domenii.filter(x => x !== v) : [...domenii, v])
+  return (
+    <div style={{marginBottom:12, padding:12, background:G.blue+'11', border:`1px solid ${G.blue}33`, borderRadius:8}}>
+      <div style={{fontSize:11, color:G.blue, fontWeight:700, marginBottom:8}}>⚡ Activități autorizate (INSEMEX / GANEx)</div>
+      <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+        {ACTIVITATI_INSEMEX.map(v => {
+          const on = domenii.includes(v)
+          return <button key={v} type="button" onClick={() => toggle(v)} style={{padding:'4px 10px', borderRadius:14, fontSize:12, cursor:'pointer', fontWeight:on ? 700 : 400, background:on ? G.blue+'33' : 'transparent', color:on ? G.blue : G.muted, border:`1px solid ${on ? G.blue : G.border}`}}>{on ? '✓ ' : ''}{v}</button>
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast, reinnoire = null }) {
+  // reinnoire = autorizația veche: se preiau tip/emitent/domenii/detalii; nr., date și fișier se cer din nou
+  const r = reinnoire || {}
+  const [tipId, setTipId] = useState(r.tip_id || '')
   const [numar, setNumar] = useState('')
-  const [emitent, setEmitent] = useState('')
+  const [emitent, setEmitent] = useState(r.emitent || '')
   const [dataEmitere, setDataEmitere] = useState('')
   const [dataExpirare, setDataExpirare] = useState('')
-  const [faraExpirare, setFaraExpirare] = useState(false)
-  const [procedeu, setProcedeu] = useState('')
-  const [diametru, setDiametru] = useState('')
-  const [calitateMat, setCalitateMat] = useState('')
-  const [domenii, setDomenii] = useState([])
+  const [faraExpirare, setFaraExpirare] = useState(!!r.fara_expirare)
+  const [procedeu, setProcedeu] = useState(r.procedeu_sudura || '')
+  const [diametru, setDiametru] = useState(r.diametru_teava_mm || '')
+  const [calitateMat, setCalitateMat] = useState(r.calitate_material || '')
+  const [domenii, setDomenii] = useState(r.domenii || [])
   const [observatii, setObservatii] = useState('')
   const [saving, setSaving] = useState(false)
   const [pdfFile, setPdfFile] = useState(null)
@@ -1700,8 +1766,14 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
   
   const save = async () => {
     if (!tipId) { showToast('Alege tipul autorizației', 'warn'); return }
+    if (reinnoire) {
+      if (!numar.trim()) { showToast('Reînnoire: completează numărul noii autorizații', 'warn'); return }
+      if (!dataEmitere || (!faraExpirare && !dataExpirare)) { showToast('Reînnoire: completează data emiterii și data expirării', 'warn'); return }
+      if (!pdfFile) { showToast('Reînnoire: atașează scanul noii autorizații', 'warn'); return }
+      if (numar.trim() === (reinnoire.numar_autorizatie || '').trim() && dataExpirare === reinnoire.data_expirare) { showToast('Numărul și expirarea sunt identice cu cele vechi — verifică datele', 'warn'); return }
+    }
     setSaving(true)
-    
+
     // 11.06.2026 FIX: atribuim autorul (Natalia introducea 62 autorizații fără nume)
     const { data: { user: _uplUser } } = await supabase.auth.getUser()
     const payload = {
@@ -1752,7 +1824,14 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
       if (eViza) showToast('Autorizație salvată, dar viza RTS a eșuat: ' + eViza.message, 'warning')
     }
     
-    showToast('Autorizatie adaugata' + (pdfFile ? ' cu PDF atasat!' : ''))
+    // Reînnoire: vechea autorizație rămâne ca istoric, marcată ca înlocuită de cea nouă
+    if (reinnoire && inserted?.id) {
+      const { error: eOld } = await supabase.from('hr_autorizatii')
+        .update({ inlocuita_de_id: inserted.id, inlocuita_la: new Date().toISOString() }).eq('id', reinnoire.id)
+      if (eOld) showToast('Autorizația nouă e salvată, dar cea veche n-a putut fi marcată ca înlocuită: ' + eOld.message, 'warning')
+    }
+
+    showToast((reinnoire ? '🔄 Autorizație reînnoită' : 'Autorizatie adaugata') + (pdfFile ? ' cu PDF atasat!' : ''))
     onSaved()
   }
   
@@ -1760,7 +1839,10 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
     <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
       <div style={{...S.card, width:'100%', maxWidth:560, maxHeight:'92vh', overflow:'auto', padding:24}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
-          <div style={{fontSize:17, fontWeight:700, color:G.text}}>+ Adaugă Autorizație</div>
+          <div>
+            <div style={{fontSize:17, fontWeight:700, color:G.text}}>{reinnoire ? '🔄 Reînnoiește Autorizație' : '+ Adaugă Autorizație'}</div>
+            {reinnoire && <div style={{fontSize:11, color:G.muted, marginTop:2}}>{reinnoire.employee_name} · înlocuiește nr. {reinnoire.numar_autorizatie || '—'} (exp. {reinnoire.data_expirare ? new Date(reinnoire.data_expirare).toLocaleDateString('ro-RO') : '—'}) — cea veche rămâne în istoric</div>}
+          </div>
           <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
         </div>
         
@@ -1800,7 +1882,9 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
           </div>
         )}
         
-        {tipSelectat?.necesita_domenii && (
+        {esteInsemex(tipSelectat) ? (
+          <ActivitatiInsemexPicker domenii={domenii} setDomenii={setDomenii} />
+        ) : tipSelectat?.necesita_domenii && (
           <DomeniiPicker domenii={domenii} setDomenii={setDomenii} />
         )}
         
@@ -1854,7 +1938,7 @@ function ModalAddAutorizatie({ employeeId, tipuri, onClose, onSaved, showToast }
         {/* Upload PDF direct la adaugare */}
         <input ref={uploadRefAdd} type="file" accept=".pdf,image/*" style={{display:'none'}}
           onChange={e => { const f=e.target.files?.[0]; if(f) setPdfFile(f); e.target.value='' }} />
-        <Lbl>📎 PDF / Dovadă (opțional)</Lbl>
+        <Lbl>📎 PDF / Dovadă {reinnoire ? '* (scanul noii autorizații)' : '(opțional)'}</Lbl>
         <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:16, padding:'10px 12px', background:G.bg, border:`1px dashed ${pdfFile ? G.green+'88' : G.border}`, borderRadius:8}}>
           <button type="button" onClick={() => uploadRefAdd.current?.click()}
             style={{padding:'6px 14px', background:G.orange+'22', color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:6, fontSize:12, cursor:'pointer', fontWeight:600}}>
@@ -1885,7 +1969,7 @@ function Lbl({ children }) {
 // ===========================================================================
 // MODAL EDIT AUTORIZAȚIE — pre-fill cu datele existente
 // ===========================================================================
-function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, onSaved, showToast }) {
+function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, onSaved, showToast, onReinnoieste }) {
   const [tipId, setTipId] = useState(autorizatie.tip_id || '')
   const [numar, setNumar] = useState(autorizatie.numar_autorizatie || '')
   const [emitent, setEmitent] = useState(autorizatie.emitent || '')
@@ -1951,10 +2035,14 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
     onSaved()
   }
   
+  // 25.09.2026: schimbarea nr./datelor suprascrie istoria — se recomandă „Reînnoiește”
+  const schimbaIdentitatea = numar.trim() !== (autorizatie.numar_autorizatie || '').trim()
+    || (dataEmitere || '') !== (autorizatie.data_emitere || '') || (dataExpirare || '') !== (autorizatie.data_expirare || '')
+
   const save = async () => {
-    if (!tipId) { showToast('Alege tipul autorizației', 'warn'); return }
+    if (schimbaIdentitatea && onReinnoieste && !window.confirm('Schimbi numărul / datele autorizației — vechea valoare se pierde.\n\nDacă e o autorizație NOUĂ (reînnoită), folosește „🔄 Reînnoiește” ca să păstrezi istoricul.\n\nContinui totuși cu suprascrierea (ex. corectezi o greșeală de introducere)?')) return
     setSaving(true)
-    
+
     const payload = {
       tip_id: Number(tipId),
       numar_autorizatie: numar.trim() || null,
@@ -1991,6 +2079,7 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
             <div style={{fontSize:17, fontWeight:700, color:G.text}}>✏️ Editează Autorizație</div>
             <div style={{fontSize:11, color:G.muted, marginTop:2}}>{autorizatie.employee_name}</div>
           </div>
+          {onReinnoieste && !autorizatie.inlocuita_de_id && <button onClick={() => onReinnoieste(autorizatie)} style={{...S.btnS, marginLeft:'auto', marginRight:8, padding:'4px 10px', color:G.green, borderColor:G.green+'55'}} title="Autorizație nouă (nr./date/scan noi); cea veche rămâne ca istoric">🔄 Reînnoiește</button>}
           <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
         </div>
         
@@ -2030,7 +2119,9 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
           </div>
         )}
         
-        {tipSelectat?.necesita_domenii && (
+        {esteInsemex(tipSelectat) ? (
+          <ActivitatiInsemexPicker domenii={domenii} setDomenii={setDomenii} />
+        ) : tipSelectat?.necesita_domenii && (
           <DomeniiPicker domenii={domenii} setDomenii={setDomenii} />
         )}
         
@@ -2056,6 +2147,11 @@ function ModalEditAutorizatie({ autorizatie, autorizatii = [], tipuri, onClose, 
           </div>
         </div>
         
+        {schimbaIdentitatea && onReinnoieste && (
+          <div style={{marginBottom:10, padding:'8px 10px', background:G.orange+'15', border:`1px solid ${G.orange}55`, borderRadius:6, fontSize:12, color:G.orange}}>
+            ⚠ Schimbi nr./datele — asta suprascrie autorizația existentă. Dacă e o autorizație nouă, folosește <strong>🔄 Reînnoiește</strong> (păstrează istoricul).
+          </div>
+        )}
         <label style={{display:'flex', alignItems:'center', gap:8, marginBottom:14, cursor:'pointer', fontSize:13, color:G.text}}>
           <input type="checkbox" checked={faraExpirare} onChange={e => setFaraExpirare(e.target.checked)} style={{accentColor:G.green}}/>
           ∞ Fără expirare (curs permanent — "NU E CAZUL")
