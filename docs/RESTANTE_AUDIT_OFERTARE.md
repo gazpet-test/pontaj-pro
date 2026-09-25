@@ -21,3 +21,13 @@ Regula: orice acțiune plătită (recitire AI), modificare de date reale sau tri
 ## Actualizare 25.09 seara
 - R4: funcția `ofertare_transfer_plansa_cantitati` APLICATĂ (GO Razvan); test live: rulare greșită → `lease_pierdut`, 0 rânduri scrise. Handler-ul publicat o folosește.
 - R8/v5: comportament intenționat — ciorna cu text standard, dacă primește planșe noi, își rescrie textul și revine la `propunere` (conținut nou = re-aprobare); ciorna editată de om își păstrează textul și statusul (testat, #63).
+
+## R6 — închis cu restanță documentată (Copilot, 25.09 seara)
+Dovada traseului SEAP → extracție → manifest → obiect Storage: `worker/ofertare/verifica_manifest.ts` (PR #482), rulat pe toate licitațiile GO active: 878 fișiere = 825 identice la hash + 52 `__MACOSX` (păstrate în manifest ca `ignorat`, cu motiv) + 1 diferit la octeți; 0 lipsă, 0 erori Storage. Stare la 25.09, nu garanție pentru publicări ulterioare.
+Restanțe nominale:
+| Restanță | Owner | Criteriu de acceptare | Măsură temporară |
+|---|---|---|---|
+| Verificare periodică automată (cron săptămânal în worker, buget de transfer) | Claude | rulează singur pe licitațiile GO, raport în `ofertare_seap_cereri`, înscris în `registru_automatizari` | veghea existentă pe documente noi/erate + reconciliere manuală (`verifica_manifest.ts <lic>`) înainte de înghețarea pachetului |
+| 770 Huedin (95 MB): identic cu SEAP, dar necitit | Claude | fragmentat + citit; rezultat în `analiza` | verificare manuală a documentului înainte de ofertă |
+| Excepția Jilava: Fișa de date din platformă = copie resalvată (PDF-1.6, 17.09); originalul SEAP = PDF-1.4, 14.09; text identic 15/15 pagini | Claude + cine asamblează dosarul | verificarea finală a pachetului se face pe originalul SEAP (hash `a0953d746dd0…`, 146.176 B) sau randare comparată | ambele identități păstrate în manifest; nu se atribuie copiei hash-ul originalului |
+Checklist Jilava pct. 1: „Inventarul este reconciliat; o excepție de identitate binară este documentată, cu text extras identic.”
