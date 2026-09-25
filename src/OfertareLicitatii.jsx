@@ -229,7 +229,7 @@ export default function OfertareLicitatiiTab() {
     let v = null
     try { v = localStorage.getItem(respKey) } catch { /* fără stocare locală */ }
     if (v != null) { setFResp(v === 'toti' ? '' : v); return }
-    if (!profile.is_owner && rows.some(r => r.responsabil_id === profile.id)) setFResp(profile.id)
+    if (!profile.is_owner && rows.some(r => r.responsabil_id === profile.id && !FINALE.includes(r.status))) setFResp(profile.id)
   }, [profile, loading, rows, respKey])
   const alegeResp = v => { setFResp(v); try { if (respKey) localStorage.setItem(respKey, v || 'toti') } catch { /* fără stocare locală */ } }
   const respChips = Object.entries(perResp).filter(([id, x]) => x.in_lucru > 0 && id !== profile?.id)
