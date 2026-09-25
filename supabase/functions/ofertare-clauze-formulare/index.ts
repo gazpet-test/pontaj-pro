@@ -16,14 +16,14 @@
 //     ofertare_formulare_registru (insert rânduri noi) + ai_usage_log. Fără mail, bani, drepturi.
 // (c) Identitate: service_role (citire text_extras + scriere) — justificat de poarta de rol din cod (autorizat()).
 // (d) Cine pornește: owner sau responsabil_id al licitației (poarta pe cheltuială, ca ofertare-organigrama-spec); anon
-//     respins; verify_jwt singur NU ajunge. service_role liber (rutine interne).
+//     respins; verify_jwt singur NU ajunge. service_role sau x-radar-secret (Vault, fn_verifica_radar_secret) = rutine interne / Claude.
 // (e) Confirmare umană: rezultatul e PROPUNERE — clauzele au bifă „verificat" de om, formularele stări puse de om.
 //     (a)+(b) se ating doar prin scrieri în tabele de propuneri, în spatele porții de rol.
 // Erori de business → return json({error}), nu throw.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
 const PRICE_IN = 3 / 1e6, PRICE_OUT = 15 / 1e6
 const MAX_TEXT = 140_000, FEREASTRA = 1500
@@ -35,6 +35,9 @@ const IMPACT = ['pret', 'cashflow', 'go_nogo']
 const RE_CLAUZE = /garan[tț]i|penalit|daune|plat[aăi]|factur|avans|re[tț]inere|ajust|actualiz|ordin(ul)? de [iî]ncepere|durat|termen de execu|recep[tț]i|subcontract|risc|for[tț][aă] major|reziliere|asigur/gi
 
 async function autorizat(req: Request, supabase: any, licId: number): Promise<string | null> {
+  // rutine interne / Claude: x-radar-secret verificat contra Vault (ca ofertare-verificare-finala)
+  const sec = req.headers.get('x-radar-secret')
+  if (sec) { const { data, error } = await supabase.rpc('fn_verifica_radar_secret', { p_secret: sec }); return !error && data === true ? null : 'secret invalid' }
   const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
   if (!jwt) return 'lipsește Authorization'
   const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
