@@ -48,7 +48,8 @@ Reguli:
 - In "zona" pune localitatea/satul/strada de pe randul respectiv, daca tabelul le are.
 - Lungimile trec-le in METRI (daca pe plansa scrie km, inmulteste cu 1000 si da valoarea in metri).
 - Foloseste punctul ca separator zecimal in JSON si NU folosi separator de mii (scrie 4800, nu 4.800).
-- Diametrul da-l ca numar in mm (Dn250 -> 250).
+- Diametrul da-l ca numar in mm (Dn250 -> 250), si NUMAI din coloana al carei antet e diametru (Dn / De / D / Ø / diametru). Coloanele de debit (mc/h, Nmc/h), viteza, presiune, cadere de presiune, diametru interior (Di) NU sunt diametru nominal. Daca nu vezi antetul coloanei in bucata asta si nici nu ai primit antetul mai jos, pune diametru_mm null.
+- La fiecare tabel pune in "coloane" antetele EXACT cum sunt scrise, in ordine. In de_la / la pune nodurile sau capetele tronsonului (Nod 1, CT, PRM ...), nu nume de persoane din cartus.
 - Daca o sectiune nu apare in aceasta bucata, las-o lista goala sau null. E normal: fiecare bucata vede doar o parte.
 - Daca un tabel e taiat de marginea bucatii, transcrie randurile intregi pe care le vezi si atat.
 - Nu inventa valori pe care nu le poti citi clar.`;
@@ -79,7 +80,7 @@ function textPlansa(nume: string, c: any): string {
   return L.join('\n');
 }
 
-async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string) {
+async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string, antete = '') {
   let binar = '';
   const bloc = 8192;
   for (let i = 0; i < jpeg.length; i += bloc) {
@@ -104,7 +105,7 @@ async function citesteFelie(apiKey: string, jpeg: Uint8Array, eticheta: string) 
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-          { type: 'text', text: `Bucata ${eticheta} din plansa. Extrage ce se vede.` },
+          { type: 'text', text: `Bucata ${eticheta} din plansa. Extrage ce se vede.` + (antete ? `\nAntetele tabelelor citite in bucatile anterioare (acelasi tabel poate continua aici, fara antet): ${antete}` : '') },
         ],
       }],
     }),
@@ -436,13 +437,19 @@ Deno.serve(async (req: Request) => {
   }
 
   const lot = felii.slice(deLa, deLa + FELII_PE_RULARE);
+  // 25.09.2026 (Vâlcelele, schema tehnologică): tabelul de dimensionare se întinde pe multe zone, dar antetul e
+  // doar în prima — zonele fără antet ghiceau coloanele (debitul citit ca diametru: Dn43/48/56/96/98).
+  // Antetele găsite în zonele deja citite se dau mai departe.
+  const anteteCunoscute = [...new Set((deLa ? (doc.analiza?.citire_ai?.felii || []) : [])
+    .flatMap((r: any) => (r.tabele || []).map((t: any) => `${t.denumire || 'tabel'}: ${(t.coloane || []).join(' | ')}`))
+    .filter((x: string) => x.includes('|')))].slice(0, 4).join(' ;; ');
   const rezultate: any[] = [];
   for (let i = 0; i < lot.length; i += PARALEL) {
     const grup = lot.slice(i, i + PARALEL);
     const parti = await Promise.all(grup.map(async (f: any) => {
       const { data: bin, error } = await supa.storage.from('ofertare').download(`${plansa.cale_felii}/${f.name}`);
       if (error || !bin) return { eticheta: f.name, eroare: error?.message || 'descarcare esuata' };
-      return await citesteFelie(API_KEY, new Uint8Array(await bin.arrayBuffer()), f.name.replace('.jpg', ''));
+      return await citesteFelie(API_KEY, new Uint8Array(await bin.arrayBuffer()), f.name.replace('.jpg', ''), anteteCunoscute);
     }));
     rezultate.push(...parti);
   }
@@ -482,8 +489,16 @@ Deno.serve(async (req: Request) => {
   const adnotari = dinTabel.length ? unice.filter((t: any) => text(t?.sursa) !== 'tabel') : [];
   const adnotariInPlus = adnotari.filter((t: any) => t.diametru_mm && !acoperitDeTabel.has(cheieDM(t)))
     .map((t: any) => ({ ...t, doar_adnotare: true }));
-  const pentruCantitati = dinTabel.length ? [...dinTabel, ...adnotariInPlus] : unice;
+  const pentruCantitati = dinTabel.length ? [...dinTabel, ...adnotariInPlus] : [...unice];
   const adnotariNeconfirmate = adnotari.filter((t: any) => !adnotariInPlus.some((a: any) => a === t || (a.de_la === t.de_la && a.la === t.la && a.lungime_m === t.lungime_m)));
+  // Diametre nominale reale (PE SR EN 1555 + OL DN). Orice altceva = citire greșită probabilă (debit, Di, viteză)
+  // => NU intră în cantități, se raportează „de verificat".
+  const DN_STANDARD = new Set([16,20,25,32,40,50,63,65,75,80,90,100,110,125,140,150,160,180,200,225,250,280,300,315,350,355,400,450,500,560,600,630,700,800]);
+  const nestandard = pentruCantitati.filter((t: any) => t.diametru_mm && !DN_STANDARD.has(Number(t.diametru_mm)));
+  if (nestandard.length) {
+    const deScos = new Set(nestandard);
+    pentruCantitati.splice(0, pentruCantitati.length, ...pentruCantitati.filter((t: any) => !deScos.has(t)));
+  }
   const nrPlansa = toate.map((r: any) => r?.cartus?.plansa_nr).find(Boolean) ||
     doc.analiza?.cartus?.plansa_nr || null;
   const sumar: Record<string, unknown> = {
@@ -491,6 +506,8 @@ Deno.serve(async (req: Request) => {
     tronsoane_gasite: pentruCantitati.length,
     tronsoane_brute: brute.length,
     adnotari_lasate_deoparte: adnotariNeconfirmate.length,
+    ...(nestandard.length ? { diametre_nestandard: [...new Set(nestandard.map((t: any) => Number(t.diametru_mm)))].sort((a, b) => a - b),
+      nestandard_m: +nestandard.reduce((q: number, t: any) => q + (Number(t.lungime_m) || 0), 0).toFixed(1) } : {}),
     adnotari_numarate_in_plus: adnotariInPlus.length,
     adnotari_neconfirmate_m: +adnotariNeconfirmate.reduce((s: number, t: any) => s + (Number(t.lungime_m) || 0), 0).toFixed(1),
     lungime_totala_m: +pentruCantitati.reduce((s: number, t: any) => s + t.lungime_m, 0).toFixed(1),
