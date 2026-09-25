@@ -1070,7 +1070,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           `${sumar.tabele.length ? `, tabele: ${sumar.tabele.join(', ')}` : ''}` +
           `${sumar.subtraversari ? `, ${sumar.subtraversari} subtraversări` : ''}` +
           `${sumar.erori ? ` — ${sumar.erori} zone cu erori` : ''}` +
-          `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}.`)
+          `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}` +
+          `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}.`)
       }
     } catch (e) {
       setWarn(`Eroare la citirea planșei: ${e.message}`)
