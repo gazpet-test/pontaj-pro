@@ -40,7 +40,7 @@ Deno.serve(async (req: Request) => {
   if (!resendKey) return json({ error: 'lipsa_RESEND_API_KEY' }, 500);
 
   const azi = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Bucharest' }).format(new Date());
-  const in45 = new Date(Date.now() + 45 * 864e5).toISOString().slice(0, 10);
+  const in60 = new Date(Date.now() + 60 * 864e5).toISOString().slice(0, 10);
   const acum7 = new Date(Date.now() - 7 * 864e5).toISOString();
 
   // Toate citirile, in paralel. Fiecare e mica; impreuna dau tot tabloul.
@@ -50,11 +50,11 @@ Deno.serve(async (req: Request) => {
       .select('id, employees!inner(name, active), hr_autorizatii_tipuri!inner(cod)')
       .is('deleted_at', null).is('fisier_path', null)
       .eq('hr_autorizatii_tipuri.cod', 'AVIZ_MEDICAL').eq('employees.active', true),
-    // 2. autorizatii care expira in urmatoarele 45 de zile (oricare tip, fara medicale)
+    // 2. autorizatii care expira in urmatoarele 60 de zile (oricare tip, fara medicale)
     supa.from('hr_autorizatii')
       .select('numar_autorizatie, data_expirare, employees!inner(name, active), hr_autorizatii_tipuri!inner(cod, denumire)')
       .is('deleted_at', null).eq('employees.active', true)
-      .gte('data_expirare', azi).lte('data_expirare', in45)
+      .gte('data_expirare', azi).lte('data_expirare', in60)
       .neq('hr_autorizatii_tipuri.cod', 'AVIZ_MEDICAL')
       .order('data_expirare'),
     // 3. deja expirate, la oameni activi (fara medicale — alea au sectiunea lor)
@@ -112,7 +112,7 @@ Deno.serve(async (req: Request) => {
     (rX.length ? `<h3 style="color:#a32a21;margin:18px 0 6px">🔴 Autorizații EXPIRATE la oameni activi: ${rX.length}</h3>` +
       `<ul style="margin:0 0 6px">${lista(rX.map((r) => `${r.employees.name} — ${r.hr_autorizatii_tipuri.denumire} (din ${r.data_expirare})`))}</ul>` : '') +
 
-    (rE.length ? `<h3 style="margin:18px 0 6px">⏳ Expiră în următoarele 45 de zile: ${rE.length}</h3>` +
+    (rE.length ? `<h3 style="margin:18px 0 6px">⏳ Expiră în următoarele 60 de zile: ${rE.length}</h3>` +
       `<table style="border-collapse:collapse;font-size:13px">${randuriExpira}</table>` : '') +
 
     `<h3 style="margin:18px 0 6px">🩺 Fără fișă de aptitudini în platformă: ${fiseLipsa.length} angajați activi</h3>` +
@@ -147,7 +147,7 @@ Deno.serve(async (req: Request) => {
 
   return json({
     ok: true, azi,
-    expirate: rX.length, expira_45_zile: rE.length,
+    expirate: rX.length, expira_60_zile: rE.length,
     fara_fisa_aptitudini: fiseLipsa.length,
     neclasificate: neclas.count, aduse_saptamana: aduse.count, calificari_noi: rN.length,
     destinatari: catre, test,
