@@ -216,6 +216,28 @@ async function incarcaRegistru() {
   return _registruCache
 }
 
+// Postgres verifică indexul unic `ofertare_acoperire_o_aleasa_pe_pozitie` rând cu rând în UPDATE-ul
+// din `fn_ofertare_alege_acoperire`: dacă rândul nou e atins înaintea celui vechi → 23505 (duplicate key).
+// Ocolire locală: la 23505 scoatem întâi vechea aleasă din aceeași poziție, apoi rechemăm RPC-ul;
+// dacă tot cade, punem vechea la loc ca poziția să nu rămână descoperită.
+async function alegeAcoperireSigur(idNou) {
+  const r1 = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: idNou })
+  if (!r1.error || !(r1.error.code === '23505' || /o_aleasa_pe_pozitie/.test(r1.error.message || ''))) return r1
+  const { data: nou } = await supabase.from('ofertare_acoperire').select('cerinta_id, pozitie_id').eq('id', idNou).single()
+  if (!nou) return r1
+  let q = supabase.from('ofertare_acoperire').select('id').eq('cerinta_id', nou.cerinta_id).eq('ales', true).neq('id', idNou)
+  q = nou.pozitie_id == null ? q.is('pozitie_id', null) : q.eq('pozitie_id', nou.pozitie_id)
+  const { data: vechi } = await q
+  const ids = (vechi || []).map(v => v.id)
+  if (ids.length) {
+    const { error: eU } = await supabase.from('ofertare_acoperire').update({ ales: false }).in('id', ids)
+    if (eU) return { error: { message: 'Nu am putut înlocui persoana aleasă anterior pe poziția asta: ' + eU.message } }
+  }
+  const r2 = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: idNou })
+  if (r2.error && ids.length) await supabase.from('ofertare_acoperire').update({ ales: true }).eq('id', ids[0])
+  return r2
+}
+
 const FELURI = [['toate', 'toate'], ['persoana', '👤 persoane'], ['partener', '🤝 parteneri'], ['document', '📄 documente firmă']]
 
 function CautareInFirma({ cerinta, pozitieId = null, onAles, onInchide }) {
@@ -248,7 +270,7 @@ function CautareInFirma({ cerinta, pozitieId = null, onAles, onInchide }) {
       ...x.legatura,
     }).select('id').single()
     if (error) { setEroare(error.message); setSalvez(null); return }
-    const { error: e2 } = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: data.id })
+    const { error: e2 } = await alegeAcoperireSigur(data.id)
     setSalvez(null)
     if (e2) { setEroare(e2.message); return }
     onAles?.()
@@ -540,7 +562,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
         .select('id, nr_ordine, sursa_sectiune, sursa_pagina, text_cerinta, tip, lot, cand_se_prezinta, document_probant, registru, sursa_document_id, doc:ofertare_documente_atribuire(id, nume_original, fisier_path)')
         .eq('licitatie_id', licitatie.id).is('inlocuita_de', null).is('duplicat_al', null)
         .or('registru.is.null,registru.eq.capabilitate')
-        .in('tip', ['eliminatorie', 'propunere']).order('tip').order('nr_ordine').limit(5000)
+        .in('tip', ['eliminatorie', 'propunere']).order('nr_ordine').limit(5000)
       if (!viu) return
       if (error) { setEroare(error.message); setCerinte([]); return }
       setCerinte(cs || [])
@@ -595,7 +617,7 @@ export default function CerinteAcoperirePerechi({ licitatie }) {
     if (vechea?.id === idNou) return
     setAcoperiri(prev => ({ ...prev, [cerintaId]: (prev[cerintaId] || [])
       .map(x => ({ ...x, ales: x.id === idNou })) }))
-    const { error } = await supabase.rpc('fn_ofertare_alege_acoperire', { p_acoperire_id: idNou })
+    const { error } = await alegeAcoperireSigur(idNou)
     if (error) {
       setAcoperiri(prev => ({ ...prev, [cerintaId]: (prev[cerintaId] || [])
         .map(x => ({ ...x, ales: x.id === vechea?.id })) }))

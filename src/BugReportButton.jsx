@@ -37,6 +37,17 @@ const ACCEPT_ATASAMENT = 'image/*,.pdf,.xlsx,.xls,.docx,.doc,.csv,.txt'
 
 export default function BugReportButton({ profile }) {
   const [open, setOpen] = useState(false)
+  // TKT-2026-0225: poziția ferestrei (deplasare față de centru) — se mută trăgând de antet
+  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const mutat = pos.x !== 0 || pos.y !== 0
+  const incepeMutare = (e) => {
+    if (e.button !== undefined && e.button !== 0) return
+    if (e.target.closest('button')) return
+    const x0 = e.clientX - pos.x, y0 = e.clientY - pos.y
+    const muta = ev => setPos({ x: ev.clientX - x0, y: ev.clientY - y0 })
+    const gata = () => { window.removeEventListener('pointermove', muta); window.removeEventListener('pointerup', gata) }
+    window.addEventListener('pointermove', muta); window.addEventListener('pointerup', gata)
+  }
   const [tip, setTip] = useState('bug')          // 'bug' | 'feature'
   const [hidden, setHidden] = useState(false)   // ascunde widgetul în timpul capturii
   const [desc, setDesc] = useState('')
@@ -226,15 +237,18 @@ export default function BugReportButton({ profile }) {
       {/* Modal */}
       {open && !hidden && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+          position: 'fixed', inset: 0, background: mutat ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.7)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10600, padding: 16,
         }} onClick={e => e.target === e.currentTarget && !saving && close()}>
           <div style={{
             background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14,
             width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', padding: 22,
+            transform: `translate(${pos.x}px, ${pos.y}px)`,
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>🐛 Raportează un bug / o cerere</div>
+            {/* TKT-2026-0225: fereastra se mută trăgând de antet — ca să vezi cerința de sub ea cât scrii */}
+            <div onPointerDown={incepeMutare} title="Trage de aici ca să muți fereastra"
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, cursor: 'move', userSelect: 'none', touchAction: 'none' }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: G.text }}>✥ 🐛 Raportează un bug / o cerere</div>
               <button onClick={close} disabled={saving} style={{ background: 'none', border: 'none', color: G.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1 }}>×</button>
             </div>
 
