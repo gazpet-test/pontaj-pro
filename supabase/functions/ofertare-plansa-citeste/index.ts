@@ -402,9 +402,20 @@ Deno.serve(async (req: Request) => {
   }
   await supa.from('ofertare_documente_atribuire').update(upd).eq('id', docId);
 
+  // 25.09.2026: planșă citită dar inutilizabilă (nimic extras / toate zonele căzute) => ciornă AUTOMATĂ de
+  // clarificare (idempotentă, o ciornă per licitație pe lot; NU se trimite nimic). Rulează aici, server-side,
+  // indiferent cine a apăsat butonul. Eșecul ei nu strică citirea.
+  let clarificare: unknown = null;
+  if (gata && (upd.status_procesare === 'eroare' || upd.eroare === 'citită fără rezultat')) {
+    try {
+      const { data, error } = await supa.rpc('ofertare_clarificare_planse_auto', { p_licitatie_id: doc.licitatie_id });
+      clarificare = error ? { eroare: error.message } : data;
+    } catch (e) { clarificare = { eroare: String((e as Error)?.message || e).slice(0, 120) }; }
+  }
+
   return json({
     document: doc.nume_original, citite_acum: lot.length, din: felii.length, sumar, cantitati,
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4),
-    continua: !gata, de_la_urmator: gata ? null : deLa + lot.length,
+    clarificare, continua: !gata, de_la_urmator: gata ? null : deLa + lot.length,
   });
 });

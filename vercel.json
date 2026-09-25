@@ -10,7 +10,8 @@
     },
     "api/plansa-felii.js": {
       "maxDuration": 300,
-      "memory": 3009
+      "memory": 3009,
+      "includeFiles": "node_modules/mupdf/dist/{mupdf.js,mupdf-wasm.js,mupdf-wasm.wasm}"
     },
     "api/pdf-sparge.js": {
       "maxDuration": 300,
