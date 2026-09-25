@@ -2,23 +2,24 @@
 
 Data: 25.09.2026 (noapte) · Răspuns la verdictul Copilot: „Rămân coada independentă de browser și prevenirea apelurilor AI duplicate între taburi.”
 Runda 2 (după verificator): defectul major „citește de la zero cooperează” reparat + test; plafon pe `pana_la`; `/api/plansa-felii` fail-closed; corecturi de text; design NAS completat (§3). Plus un bug nou de agregare găsit pe planșa 470 (§5, commit separat).
+Runda 3 (verdictul Copilot pe deduplicare): dedup-ul pe multiset (`e762c6e`) e înlocuit cu **identitatea rândului de tabel** — (document, pagină, tabel identificat, Nr rând) — commit `a800d38` (§5).
 Ramură locală: `claude/r4-rezervare-zone` (bază `main` @ `8a6fbbb`; numerele de linie din §2 și §5 sunt pe capul ramurii). **Nimic deployat, nimic pushat, nicio scriere în BD** (doar SELECT-uri).
 
 **Verdict propus: PARȚIAL.**
 
-Teste finale pe ramură (după ambele commit-uri; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins):
+Teste finale pe ramură (pe capul ramurii, după `a800d38`; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins, md5 `875e293d…`):
 
 | Comandă | Rezultat |
 |---|---|
-| `deno test supabase/functions/ofertare-plansa-citeste` | **68/68** |
-| `deno test -A supabase/functions/` | **85/85** |
-| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 46/46 de fiecare dată |
+| `deno test supabase/functions/ofertare-plansa-citeste` | **78/78** |
+| `deno test -A supabase/functions/` | **95/95** |
+| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 47/47 de fiecare dată |
 | `node scripts/test-cas-felii.mjs` | **34/34** |
 | `node scripts/test-detector-sigla.mjs` | 23/23 |
 | `node scripts/verifica-poarta-identica.mjs` | OK |
 | `deno check` pe `index.ts` | OK |
 
-Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare; cu dedup pe mulțime pică 4 teste de multiset.
+Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare. Pentru identitatea rândului, mutațiile pe o copie a funcției (identitate pe text / conflict ignorat / împerechere laxă / fără garda de bandă / fără prefixul de margine) fac să pice 8 / 3 / 5 / 2 / 2 teste (§5.6); pe contraexemplul Copilot, dedup-ul pe mulțime și cel pe multiset dau 1 rând, identitatea dă 2.
 
 | Punct | Stare |
 |---|---|
@@ -76,7 +77,7 @@ Ordin de mărime (SELECT pe `ai_usage_log`, `function_name='ofertare-plansa-cite
   Re-verificarea e **fail-closed** (`api/_cas.js:41 verificaRetaiere`): dacă re-citirea dă eroare sau excepție, răspunsul e 503 „nu retai pe nesigure; nimic nu s-a șters”, nu se trece mai departe.
 
 ### 2.2 Teste (deps simulate, fără rețea, fără AI real)
-`deno test --node-modules-dir=none --no-lock supabase/functions/ofertare-plansa-citeste` dă **62 passed, 0 failed** (runda 1: 55; `main`: 44). `concurenta_test.ts` rulat de 10 ori la rând: **10/10 verzi** (45/45 de fiecare dată).
+`deno test --node-modules-dir=none --no-lock supabase/functions/ofertare-plansa-citeste` dă **78 passed, 0 failed** pe capul ramurii (după `a800d38`). Istoric: `main` 44; runda 1: 55; după commit-ul `71b74e8`: 62; după `e762c6e` (multiset): 68. `concurenta_test.ts` rulat de 10 ori la rând: **10/10 verzi, 47/47 de fiecare dată** (după `71b74e8`: 45/45; după `e762c6e`: 46/46).
 Noi în runda 2 (`concurenta_test.ts`):
 - **două bucle „citește” de la zero pe 6 zone** (bucla din UI, `citestePlansa`, fără `/api/plansa-felii`), în două variante: aceeași viteză, respectiv zonele 5–6 mai lente. Rezultat: **6 apeluri AI, 6 zone salvate, `gata=true`**; al doilea tab primește 409 „în lucru în alt tab” din prima rundă (`cost_usd 0`); fiecare zonă plătită apare în citirea finală; nicio rezervare rămasă.
   Reproducere FĂRĂ fix (aceleași teste, cu cele două gărzi dezactivate temporar; 5 rulări pe variantă, rezultat identic de fiecare dată):
@@ -91,7 +92,7 @@ Noi în runda 2 (`concurenta_test.ts`):
 
 Din runda 1 (păstrate): două „continuă” simultane dau 2 apeluri AI (nu 4); zone care se suprapun parțial sunt citite exact o dată; o rezervare activă dă 409 fără AI; o rezervare expirată e preluată; o rezervare pe altă tăiere nu blochează; rezervarea e vizibilă în timpul apelului AI; la CAS epuizat rezervarea e eliberată; `de_la=4` sare zona rezervată; „note tăiate” din două taburi plătesc perechea o dată. Testul adaptat „două citește simultane” (4 zone) trece neschimbat.
 Alte rulări:
-- `deno test --node-modules-dir=none --no-lock -A supabase/functions/`: **79 passed, 0 failed**;
+- `deno test --node-modules-dir=none --no-lock -A supabase/functions/`: **95 passed, 0 failed** (după `71b74e8`: 79; după `e762c6e`: 85);
 - `node scripts/test-cas-felii.mjs`: **34/34** (+14: plafon, constante identice cu edge, `verificaRetaiere` 409/503/404/null, ordinea re-verificării înaintea celor 3 scrieri „necitibilă” și a ștergerii);
 - `node scripts/test-detector-sigla.mjs`: 23/23;
 - `node scripts/verifica-poarta-identica.mjs`: OK;
@@ -123,6 +124,7 @@ RPC `ofertare_plansa_coada_inscrie(p_doc_id, p_mod)` (`SECURITY DEFINER`, `searc
 - cere **`tip = 'plansa'`** (40 de documente la 25.09.2026; celelalte tipuri au fluxul lor), `plansa.cale_felii` și `citibila ≠ false`;
 - îngheață `taiat_la`, `cale_felii`, `fisier_path`, `doc_sha256` (din `ofertare_seap_manifest`);
 - `INSERT … ON CONFLICT (doc_id, COALESCE(taiat_la,'')) WHERE stare IN ('asteapta','lucru') DO NOTHING`: dublu-click sau al doilea tab dau același job.
+- **Notă (verificator, runda 2; Postgres 16 local cu tabele stub, NU Supabase):** pe un job activ existent pentru același (doc, tăiere), `ofertare_plansa_coada_inscrie` întoarce `{id, existent: true}` și **ignoră `p_mod`-ul nou** — ex. „continua” peste un „citeste” în așteptare lasă modul `citeste`. E intenționat (un singur job activ pe tăiere; workerul alege oricum modul pe starea proaspătă, §3.4 pas 3), dar UI-ul nu trebuie să afișeze modul cerut ca fiind cel pus în coadă: la implementare, răspunsul întoarce și `mod`-ul jobului existent.
 
 UI: „📐 citește” = tăierea (Vercel, secunde, ca azi) + înscriere; mesaj „în coadă — poți închide tabul”; starea jobului se citește din tabel. Dacă heartbeat-ul workerului (`worker_heartbeat`) e mai vechi de 10 min, se păstrează bucla din browser (failover, ca la celelalte cozi).
 
@@ -197,70 +199,144 @@ Tabelul e mai simplu de auditat.
 - Politica RLS `ofertare_documente_update` (`fn_are_acces_ofertare`) permite oricărui utilizator Ofertare să scrie în `analiza`, deci și în `rezervari_zone`. Plafonul din §2.1 limitează efectul unei rezervări false la ≤ 8 min.
 - Cozile existente `ofertare_acoperire_coada`, `ofertare_clarificari_coada`, `ofertare_ingest_coada` au politica RLS `ALL` cu `auth.uid() IS NOT NULL` + GRANT INSERT/UPDATE pentru `authenticated`, fără triggere (SELECT pe `pg_policies`, `role_table_grants`, `pg_trigger`, 25.09). Workerul le execută cu service_role fără verificare de rol pe `cerut_de` (ex. `worker/ofertare/acoperire.ts:44–46`). Adică poarta pe cheltuială se poate ocoli prin insert direct în coadă (CLAUDE.md pct. 7d). Coada propusă în §3 NU copiază politica asta.
 
-## 5. Bug nou (commit separat): agregarea `tronsoaneUnice` pierdea rânduri legitime identice ca text
+## 5. Agregarea rândurilor de tabel: identitatea rândului (înlocuiește dedup-ul pe mulțime și pe multiset)
 
-### 5.1 Defectul
-`handler.ts` (pe `main`, l. 215–228) deduplica tronsoanele pe **mulțime**, cu cheia `de_la|la|L|Dn|Q|zona`. Scopul era ca un rând citit de două ori, din cauza suprapunerii feliilor, să nu se numere dublu. Dar trei rânduri **diferite** din același tabel, identice ca text, rămâneau unul singur.
-Planșa 470 (lic. 95), felia `z2_7`: rândurile Nr crt **37, 40, 41** au aceeași cheie „Florenta Albu → CT, C-tin Brancoveanu, 300 m, Dn40, Q20”. Nodurile din felia vecină `z2_6` sunt diferite: 33→61, 34→59, 34→60. Nr 38 (33→62) e rândul de 320 m. Sursa e un SELECT 25.09 pe `analiza->'citire_ai'->'felii'->'tabele'->'randuri'`.
-Cheia apare de 3 ori în `z2_7` și o dată în `z1_7` (suprapunerea cu rândul Nr 37). Agregarea veche păstra un singur rând, adică **−600 m pe Dn40**.
+### 5.1 Defectul și de ce multiset-ul nu ajungea
+- **Pe `main`** (`handler.ts`, `tronsoaneUnice`), tronsoanele se deduplicau pe **mulțime**, cu cheia de text `de_la|la|L|Dn|Q|zona`. Pe planșa 470 (lic. 95), felia `z2_7` are rândurile Nr crt **37, 40, 41**, toate cu „Florenta Albu → CT, C-tin Brancoveanu, 300 m, Dn40, Q20”. Din ele rămânea unul singur, deci **−600 m pe Dn40**.
+- **Runda 2** (`e762c6e`) a introdus dedup-ul pe **multiset**: pentru fiecare cheie se păstra maximul aparițiilor într-o singură felie. Verdictul Copilot: nu ajunge. Contraexemplu: felia A are rândul 37 (300 m, Dn40), felia B are rândul 40 (300 m, Dn40). Textul coincide, dar sunt două rânduri reale; max(1,1)=1, corect este 2. Am rulat contraexemplul pe cele trei funcții: mulțime = 1, multiset = 1, identitate = 2.
+- **Al doilea defect, găsit la simulare pe planșa 130** (lic. 3). Același tabel e citit în două felii vecine, iar cele două lecturi transcriu diferit capetele sau zona pe 6 rânduri de tronson (în tabel diferă 13 rânduri, și la cod SIRUTA / sat), deși au aceleași L/Dn/Q. Dedup-ul pe text le număra de două ori: 24 de rânduri / 41.920 m în loc de 18 / 37.320 m (§5.4).
 
-### 5.2 Fix
-- **Dedup pe MULTISET** (`handler.ts:221 tronsoaneUnice`): pentru fiecare cheie, multiplicitatea finală = **maximul aparițiilor în oricare felie**. O cheie văzută o dată în fiecare din 2 felii suprapuse rămâne 1; 3 apariții în aceeași felie rămân 3. Ordinea de ieșire rămâne ordinea citirii.
-- Funcția primește acum feliile (`tronsoaneUnice(toate)`, l. 794), nu lista plată. Identitatea feliei nu depinde de `_zona`, care lipsește pe citirile vechi.
-- Regulile R5 sunt neschimbate:
-  - adnotarea pe un Dn absent din tabel nu intră în total;
-  - la ±1% față de un rând de tabel, adnotarea dă avertismentul `posibila_dublura`;
-  - `Dn60` nestandard e scos din cantități.
-- `COD_VERSIUNE` 2026-09-25.5 → **.6** (agregarea s-a schimbat). Efect practic nul pe datele de azi: cele 8 planșe cu citire au toate `gata=true` și 0 zone căzute (SELECT 25.09). „Note tăiate” nu verifică versiunea.
-- Limită cunoscută, ca înainte: două rânduri identice ca text aflate în felii care **nu** se suprapun rămân numărate o dată.
+### 5.2 Ce identitate există efectiv în datele citite (SELECT 25.09 pe toate documentele cu `analiza->'citire_ai'`)
+8 documente au citire. Tronsoane au doar 470 (399 brute), 130 (75) și 1035 (8). 471–475 au 0 tronsoane, deci nu se schimbă nimic la ele.
 
-### 5.3 Efect pe planșa 470
-Simularea s-a făcut pe feliile salvate (`z1_7..z4_7` tabel + `z3_1/z3_2/z4_2` adnotări). Funcția veche, rulată pe aceleași date, reproduce **exact** ce e în BD: 206 unice, 130 tronsoane, 48.195 m, aceleași cifre pe Dn, 75 adnotări / 34.732 m, 52 posibile dubluri.
+**Planșa 470**, `felii[].tabele[0].randuri`:
+- Tabelul „Dimensionare” e tăiat de grila de zone în două coloane de felii:
+  - `z?_6` are coloanele `Nr crt | Noduri de Plecare | Noduri de Sosire | Sat | Strada | Str. De la | Str. Pana la`, **fără lungime**;
+  - `z?_7` are coloanele `Strada | Str. De la | Str. Pana la | Dn ales (mm) | Debit mc/h | Lungime Km`, **fără Nr**.
+- Numărul de rânduri e identic în fiecare bandă: 37/37, 52/52, 52/52, 11/11. Tronsoanele din `z?_7` corespund 1:1 și în ordine rândurilor din tabel. Am verificat derivarea pe 152/152 rânduri: `de_la` = Str. De la, `la` = Str. Pana la, `zona` = Strada, L = km × 1000, Dn, Q.
+- **Nu există coordonate pe rând.** `_regiune` e cea a zonei (ex. `z1_6`: x 2534–3110 pt, y 1808–2384 pt), identică pe toate rândurile feliei. Rămâne deci „aceeași ordine + câmp comun”.
+- Câmpurile comune `z?_6` ↔ `z?_7` sunt `Strada`, `Str. De la` și `Str. Pana la`:
+  - `Strada` și `Str. De la` sunt **identice pe toate cele 152 de perechi**;
+  - `Str. Pana la` e tăiat de marginea dreaptă a lui `z1_6` pe 6 rânduri (ex. „UAT Cuza Voda” față de „UAT Cuza Voda-Limita”) și e marcat „...” pe 4 rânduri din `z4_6`.
+- Geometria (`plansa.zone_geom`): `z1_6` [7040, 0, 1600, 1600] și `z1_7` [7762, 0, 1600, 1600] sunt în aceeași bandă. Benzile se suprapun vertical cu 192 px, așa că Nr 32–37, 78–83 și 123–129 apar în două benzi. Nr 1–133 sunt unice și nu am găsit nicio valoare contrazisă între benzi.
 
-| | azi (BD) | cu fix |
-|---|---|---|
-| Dn40 (tabel) | 13.140 m, 54 tronsoane | **13.740 m, 56 tronsoane (+600 m)** |
-| Dn200 / Dn125 / Dn110 / Dn90 / Dn63 | 17.785 / 2.275 / 780 / 4.545 / 9.670 m | neschimbate |
-| `lungime_totala_m` / `tronsoane_gasite` | 48.195 / 130 | 48.795 / 132 |
-| `tronsoane_unice` | 206 | 221 |
-| adnotări neconfirmate (nu intră în total) | 75 / 34.732 m | 88 / 37.472 m (+13 rânduri, +2.740 m: aceleași lungimi pe Floroaica în `z3_2`/`z4_2`) |
-| `posibile_dubluri` | 52 | 63 |
-| adnotări pe Dn absent / Dn60 nestandard | 3 (1.770 m) / 110 m | neschimbate |
+**Planșa 130:**
+- Tabelul „Calcul dimensionare” are 18 rânduri, 13 coloane și **fără Nr**. Apare întreg în `z1_4` și în `z1_5` (aceeași bandă).
+- 13 din 18 rânduri diferă ca text între cele două lecturi ale tabelului (18 celule: Tronson Plecare/Sosire, Cod SIRUTA Loc., Sat); în tronsoane diferă 6 rânduri (capete / zonă) — exact cele numărate de două ori de dedup-ul pe text. Secvența L/Dn/Q e identică pe toate 18.
+- Citirea e veche și nu are `zone_geom`. Tabelul din banda 2 („Tronsoane / noduri”) nu are lungimi.
 
-Alte planșe: un SELECT 25.09 pe toate citirile `tip='plansa'` (normalizare aproximativă: litere mici, spații) arată că **doar 470** are chei cu multiplicitate > 1 în aceeași felie: 1 cheie de tabel (Dn40 300 m ×3) și 8 de adnotare. Restul planșelor nu se schimbă.
-Teste:
-- `agregare_test.ts`: 5 teste noi, fixture `fixture_470.ts`, redus la feliile de tabel cu lungimi. Transcrierea e verificată față de BD: număr de rânduri, sume de L/Dn/Q și md5 pe `de_la|la|zona`, identice pe fiecare felie.
-- `concurenta_test.ts`: testul de retransfer de mai jos.
-- Suita `ofertare-plansa-citeste`: **68 passed, 0 failed**.
+**Planșa 1035:** doar adnotări (8), fără tabel.
 
-### 5.4 Efectul asupra transferului (`treciInCantitati`) — nimic nu s-a scris în BD
-Rândurile `ofertare_cantitati` **1751–1756** (lic. 95) au fost **inserate** de transferul din 25.09 16:51 cu agregarea veche. Toate au `cantitate = cantitate_plansa`, `status 'extras'`, sursa „Planșa 1 — tabel de dimensionare…”, iar în licitația 95 nu există alte rânduri de conductă (SELECT 25.09).
-Un retransfer cu agregarea nouă (testul „multiset 470: retransfer…”, același RPC simulat: actualizează doar `cantitate_plansa`, `diferenta_nota`, `status`) ar face:
+### 5.3 Regula implementată (`handler.ts:322 identificaRanduri`, apelată la l. 1098)
+- **Identitate = (document, pagină, tabel identificat, Nr rând).**
+  - Pagina vine din `surse_geom` prin `zone_geom` (implicit 1).
+  - „Tabelul identificat” = setul de antete normalizate al fragmentului care poartă Nr.
+  - Felia și regiunea rămân doar **proveniență**: `_zona`, `_regiune`, `_observatii` = feliile în care s-a văzut rândul.
+- **Legarea tronson → rând.** Tronsoanele cu `sursa='tabel'` se leagă 1:1, în ordine, de rândurile tabelelor din **aceeași** felie. Rândul trebuie să conțină lungimea (în m sau km), Dn-ul și măcar un capăt. Dacă numărul nu se potrivește sau valorile diferă, rândul intră la „de verificat”.
+- **Nr în altă felie decât lungimea** (cazul 470). Rândul se împerechează cu felia vecină pe orizontală din aceeași bandă (etichetă `r_c`/`r_c+1`, confirmată de `zone_geom` când există), dar **doar dacă e sigur**:
+  - există un singur decalaj δ (|δ| ≤ 2; un δ ≠ 0 cere minimum 2 perechi) la care fiecare pereche are **un câmp comun identic** și **niciun câmp comun contrazis**;
+  - un prefix e admis doar pe coloana tăiată de marginea feliei sau pe textul marcat „...”;
+  - mai multe decalaje valide = ambiguu, adică „de verificat”.
+- **Tabel fără Nr** (cazul 130). Identitatea e **poziția rândului**, admisă doar dacă toate rândurile cu lungime ale tabelului stau într-o **singură bandă verticală** (fără suprapunere verticală de deosebit) și fragmentele vecine sunt împerecheate sigur.
+  - Două lecturi vecine cu lungimi se pot împerechea și pe **secvența L/Dn/Q** (decalaj unic, minimum 2 perechi). Diferențele de transcriere pe celelalte coloane sunt numărate (`perechi[].diferente_text`), dar nu schimbă identitatea.
+  - Pe mai multe benzi: „de verificat”.
+- **Observațiile aceleiași identități** din felii suprapuse = **un rând**.
+  - **L, Dn sau Q diferite = CONFLICT** în `sumar.conflicte[]`, cu toate variantele și feliile lor. Nu se alege automat nicio valoare, iar rândul nu intră în totalul sigur.
+  - Un Q lipsă într-o lectură nu e conflict.
+- **Rândurile fără identitate sigură** (Nr lipsă sau ilizibil, împerechere nesigură sau ambiguă, tronson nelegat de un rând, același Nr sub antete diferite pe aceeași pagină) intră la **„de verificat”**. Fiecare lectură se păstrează separat, cu motivul ei: nu dispare și nu se contopește pe text.
+- **Adnotările** rămân pe regulile R5: dedup pe mulțime (fără multiset, fără identitate) și nu intră în total când există tabel. „Există tabel” include și rândurile „de verificat”: o planșă cu tabel nesigur nu trece pe adnotări.
+- **Sumarul** (`citire_ai.sumar`):
+  - `total_sigur_m` = rândurile cu identitate sigură fără conflict, înainte de filtrul de Dn nestandard;
+  - `total_de_verificat_m` = lecturile fără identitate (brut) + varianta maximă a fiecărui conflict (plafon);
+  - `conflicte[]`, `randuri_fara_identitate[]` (+ `_n`), `identitate_randuri` (lecturi, sigure prin Nr / prin poziție, fără identitate, conflicte);
+  - un avertisment când există rânduri de verificat.
+  - `lungime_totala_m` / `tronsoane_gasite` rămân cifra care intră în cantități (sigur − nestandard).
+- `COD_VERSIUNE` 2026-09-25.6 → **.7**.
 
-| rând | ce se rescrie |
-|---|---|
-| **1756 Dn40** | `cantitate_plansa` 13.140 → **13.740**; `status` extras → **diferenta**; `diferenta_nota` = „Memoriu 13.140 m vs planșa 1 13.740 m (+600 m, pe 56 tronsoane citite din tabel).” **`cantitate` rămâne 13.140** (RPC-ul nu o atinge). |
-| 1751–1755 (Dn200, Dn125, Dn110, Dn90, Dn63) | `cantitate_plansa` neschimbat; `diferenta_nota` rescrisă în „Planșa 1 confirmă: N m.” (planșa se „confirmă” pe ea însăși); `status` rămâne `extras`. |
-| rânduri noi | niciunul (0 inserări: fiecare Dn are exact un candidat). |
+### 5.4 Efect (simulat pe citirile salvate; nimic scris în BD)
+| | azi (BD) | multiset (`e762c6e`) | **identitate de rând** |
+|---|---|---|---|
+| 470 `total_sigur_m` | — | — | **48.905 m** (133 rânduri, toate prin Nr; 152 de lecturi; 19 rânduri văzute în două benzi) |
+| 470 în cantități (`lungime_totala_m` / `tronsoane_gasite`) | 48.195 / 130 | 48.795 / 132 | **48.795 / 132** |
+| 470 Dn40 | 13.140 | 13.740 | **13.740** (Nr 40, 41 adăugate; Nr 37 văzut în `z1_7` și `z2_7` = o dată) |
+| 470 Dn200 / 125 / 110 / 90 / 63 | 17.785 / 2.275 / 780 / 4.545 / 9.670 | neschimbate | neschimbate |
+| 470 de verificat / conflicte | — | — | **0 / 0** |
+| 470 adnotări neconfirmate | 75 / 34.732 m | 88 / 37.472 m | **75 / 34.732 m** (fără multiset, ca în BD) |
+| 470 `posibile_dubluri` / adnotări pe Dn absent | 52 / 3 (1.770 m) | 63 / 3 | 52 / 3 (1.770 m) |
+| 470 `tronsoane_unice` | 206 | 221 | 208 (133 rânduri + 75 adnotări) |
+| 130 în cantități | 41.920 / 24 | 41.920 / 24 | **37.320 / 18** (prin poziție; Dn250 30.970, Dn180 1.105, Dn160 5.245) |
+| 1035 | 167.200 / 5 (adnotări) | idem | idem |
 
-Două probleme de semnalat (în afara fix-ului, **nemodificate**):
-- **Eticheta „Memoriu” e greșită** la 1756. Rândul a fost creat de planșă, nu din memoriu, deci „Memoriu 13.140” e de fapt cifra veche a aceleiași planșe.
-- **Retransferul nu corectează `cantitate`**, cifra care intră în ofertă.
+**Nr 57** (Florenta Albu, Crinului → Rozelor, **Dn60**, 110 m) are identitate sigură, deci intră în `total_sigur_m` = 48.905. Pe el se aplică **regula existentă pentru Dn nestandard**: e scos din cantități (`diametre_nestandard: [60]`, `nestandard_m: 110`), de aceea în cantități rămân 132 de rânduri / 48.795 m. În plus, acum e numit în `diferenta_nota` la transfer (§5.5).
 
-Cum s-ar ajunge la retransfer din aplicație:
-- „continuă” / „reia” **nu** retransferă: transferul e `facut` pe aceeași rulare, iar după `COD_VERSIUNE .6` sunt refuzate oricum fără `mixare_permisa`;
-- rămâne doar un „citește” complet, adică retăiere + ~35 zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde, `citire_ai.sumar.metrici`), cu rezultate AI posibil diferite.
+**Planșa 130 / lic. 3 (constatare, nemodificată).** `ofertare_cantitati` (SELECT 25.09, scrise la 15.09 din planșa 1.1) are `cantitate_plansa` = 34.465 (id 1, Dn250), 2.210 (id 2, Dn180), 5.245 (id 3, Dn160) și 41.920 (id 4, TOTAL).
+- Cu identitatea de rând, cifrele planșei sunt 30.970 / 1.105 / 5.245 / 37.320. Deci id 1, 2 și 4 sunt umflate cu +3.495 / +1.105 / +4.600 m din cauza celor 6 rânduri numărate de două ori.
+- `cantitate` (memoriul: 23.630 / 1.100 / 5.250 / 37.320) nu e afectată.
+- Totalul corect din planșă (37.320) e egal cu totalul memoriului. Pe Dn250, diferența față de memoriu devine +7.340 m (în BD: +10.835).
+- Corecția e o modificare de date: se face doar prin preview → GO → apply.
 
-Recomandare: corecția pe 1756 se face în reconcilierea R5 (totalurile 470 sunt oricum nevalidate), prin **preview → GO Razvan → apply**. SQL-ul propus e mai jos, **neexecutat**. `analiza.citire_ai.sumar` al lui 470 rămâne 48.195 m până la o nouă citire.
+### 5.5 Transferul în cantități (`treciInCantitati`, l. 555; `notaRestTransfer`, l. 537)
+- `cantitate_plansa` primește **doar** rândurile cu identitate sigură, fără conflict și cu Dn standard.
+- Restul **nu se promovează**. E numit în `diferenta_nota`, pe fiecare poziție atinsă și pe rândul de total:
+  - rândurile fără identitate de pe Dn-ul poziției;
+  - apoi, pe planșă, numărul și metrii fără identitate, conflictele cu variantele lor și Dn-urile nestandard.
+- Retransferul simulat al lui 470 peste 1751–1756 (test „identitate 470: retransfer…”):
+  - **1756 Dn40:** `cantitate_plansa` 13.140 → **13.740**, `status` extras → diferenta, `diferenta_nota` = „Memoriu 13.140 m vs planșa 1 13.740 m (+600 m, pe 56 tronsoane citite din tabel). De verificat, NEincluse în cifra din planșă: pe planșă: Dn nestandard Dn60: 110 m.”
+  - **`cantitate` rămâne 13.140** (RPC-ul nu o atinge);
+  - 1751–1755 rămân neschimbate ca cifre, iar nota lor devine „Planșa 1 confirmă: … De verificat, NEincluse …”;
+  - 0 inserări.
+- Rămân **nemodificate** (în afara fix-ului): eticheta „Memoriu” pe cifra venită din planșa însăși și „confirmă” pe propriile cifre.
+- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după `COD_VERSIUNE` .7 sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
+
+Recomandare pentru 1756: corecția se face în reconcilierea R5, prin **preview → GO Razvan → apply**. SQL-ul e **neexecutat**. `analiza.citire_ai.sumar` al lui 470 rămâne 48.195 m până la o nouă citire.
 ```sql
 -- PREVIEW
-SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota FROM ofertare_cantitati WHERE id = 1756;
--- APPLY (doar după GO Razvan; condiționat pe valorile de azi => idempotent, 0 rânduri dacă s-a schimbat ceva)
+SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota, updated_at FROM ofertare_cantitati WHERE id = 1756;
+-- APPLY (doar după GO Razvan; condiționat pe valorile de azi => 0 rânduri dacă s-a schimbat ceva)
 UPDATE ofertare_cantitati
    SET cantitate = 13740, cantitate_plansa = 13740,
-       diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 56 tronsoane citite din tabelul planșei (corecție 25.09: +600 m — rândurile Nr 37, 40, 41 C-tin Brâncoveanu Dn40 300 m erau numărate o dată; deduplicare multiset).',
+       diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 56 tronsoane citite din tabelul planșei (corecție 25.09: +600 m — rândurile Nr 40 și 41, C-tin Brâncoveanu Dn40 300 m, identice ca text cu Nr 37, erau numărate o dată; deduplicare pe identitatea rândului). Neincluse: Nr 57 Dn60 nestandard 110 m, de verificat.',
        updated_at = now()
  WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND cantitate_plansa = 13140
-RETURNING id, cantitate, cantitate_plansa;
--- ROLLBACK: UPDATE ofertare_cantitati SET cantitate = 13140, cantitate_plansa = 13140, diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 54 tronsoane citite din tabelul planșei.' WHERE id = 1756;
+RETURNING id, cantitate, cantitate_plansa, updated_at;
+-- ROLLBACK (valorile de azi, SELECT 25.09, inclusiv updated_at):
+-- UPDATE ofertare_cantitati SET cantitate = 13140, cantitate_plansa = 13140,
+--        diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 54 tronsoane citite din tabelul planșei.',
+--        updated_at = '2026-09-25 16:51:08.040401+00'
+--  WHERE id = 1756;
 ```
+
+### 5.6 Teste
+- **Fixture reală** `fixture_470.ts`: feliile `z1_6..z4_7`, reduse la Nr, Strada, Str. De la, Str. Pana la (`z?_6`) și la rândul complet + tronsoanele (`z?_7`); antetele sunt exact ca în BD. Transcrierea e verificată prin SELECT față de fișier, pe fiecare din cele 8 felii: număr de rânduri, suma Nr, suma L și md5 pe câmpurile păstrate, **toate identice** (ex. `z2_6`: 52 de rânduri, ΣNr 2990, md5 `f36087…`; `z2_7`: ΣL 11.600, md5 tronsoane `552ee3…`).
+- **`agregare_test.ts`** (17 teste), cazurile cerute:
+  - (1) Nr 37/40/41 cu text identic = 3 rânduri, și în aceeași felie, și cu Nr în `z2_6` / L în `z2_7`;
+  - (2) același Nr în două felii suprapuse = o dată;
+  - (3) contraexemplul Copilot = 2;
+  - (4) conflict pe L (raportat, în afara totalului sigur, plafon 330 m) și pe Dn;
+  - (5) 6 lecturi fără identitate (fără tabel, câmp comun contrazis, Nr ilizibil, împerechere ambiguă cu 3 rânduri identice), totalul lor separat 1.800 m, iar adnotarea nu devine sursă;
+  - (6) fixture 470: 133 de rânduri prin Nr, 48.905 m, 0 de verificat, perechile `z?_6+z?_7` cu δ=0, Nr 57 → nestandard, cantități 132 / 48.795, Dn40 13.740.
+
+  Plus: poziția (130) + garda multi-bandă, antete diferite, adnotări fără multiset, `nrRand`, 470 fără `z?_6` (152 de lecturi, toate de verificat).
+- **`concurenta_test.ts`:**
+  - retransferul 470 prin handler (8 zone `z?_6`/`z?_7`, 2 runde, 8 apeluri AI simulate);
+  - transfer cu rânduri de verificat (doar 300 m sigur ajung în `cantitate_plansa`; nota numește 250 m fără identitate și conflictul Nr 2 320/330 m);
+  - mock-ul `aiDn` primește acum tabelul cu Nr (fără el, rândul ar fi „de verificat”).
+- **Controale negative** (mutații pe o copie a funcției, testele neschimbate):
+
+  | Mutație | Teste care pică |
+  |---|---|
+  | identitate pe text | 8 |
+  | conflict ignorat | 3 |
+  | împerechere care acceptă câmp contrazis | 5 |
+  | fără garda de bandă pentru poziție | 2 |
+  | fără prefixul de margine | 2 (fixture 470: banda 1 nu s-ar mai împerechea) |
+
+### 5.7 Limite cunoscute (documentate, nu blochează)
+- `total_de_verificat_m` e un **plafon brut**: fiecare lectură fără identitate se adună separat, deci un rând din suprapunerea verticală poate fi numărat de două ori; conflictele intră cu varianta maximă.
+- Două tabele **cu antete identice** pe aceeași pagină, cu Nr care se suprapun, se tratează ca un singur tabel:
+  - valori diferite ⇒ conflict (vizibil);
+  - valori identice ⇒ un rând (subnumărare posibilă, rară).
+
+  Cu antete diferite și același Nr ⇒ „de verificat”.
+- Împerecherea caută doar între felii vecine direct (c, c+1); un Nr aflat la două felii distanță ajunge la rând doar prin fragmentul din mijloc, dacă are câmpuri comune cu ambele.
+- Identitatea depinde de `tabele[].randuri`. Promptul (`INSTRUCTIUNI`) cere deja tabelele cu rânduri și nu s-a schimbat; o citire care n-ar transcrie rândurile ar da totul „de verificat”, nu un total pe text.
