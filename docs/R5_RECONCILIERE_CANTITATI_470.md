@@ -22,7 +22,7 @@ Câmpul `sumar` (`lungime_totala_m=49565`, `adnotari_neconfirmate_m=7731`) **se 
 ## (a) 1370 m: Dn250 sau Dn200
 - Din tabel: rândul unic #8, felia z1_7. Tabelul „Dimensionare” are rândul `8 | 6' | 7 | UAT Valcelele | Limita extravilan → Ramif. Alimentare Dragos Voda | 200 | 4500 | 1,370` (note_lipite, perechea z1_6+z1_7).
 - Din adnotare: rândul unic #84, felia z3_2, zona „Valcelele”, cu Dn250, L=1370, Q=3500. În aceeași felie apare mențiunea „Ramificatie ptr alimentarea UAT Dragos Voda, Q=3500 mc/h” și avertismentul „Etichetele de pe plan sunt partial ilizibile”. Felia z4_2 are o adnotare Dn250 fără lungime.
-- **Propun** să păstrăm 1370 m **o singură dată**, la **Dn200**, după tabel. Adnotarea e același tronson (aceeași lungime, capătul Dragoș Vodă), citită greșit. Alt argument: memoriul (doc 468) spune „Dn 200 la Dn 40”, deci un Dn250 nu intră în gama declarată. Încredere: medie-mare. Rămâne o întrebare: Q=3500 la adnotare față de Q=4500 în tabel.
+- ~~Propun Dn200~~ (corectat, verdict Copilot 25.09): se **păstrează ambele observații** (#8 tabel Dn200/Q4500 și #84 adnotare Dn250/Q3500), cu diferențele Dn/Q vizibile. Identitatea (același tronson sau nu) o decide omul, pe capete/regiune/imagine. Indicii: aceeași lungime, capătul Dragoș Vodă. Alt argument: memoriul (doc 468) spune „Dn 200 la Dn 40”, deci un Dn250 nu intră în gama declarată. Încredere: medie-mare. Rămâne o întrebare: Q=3500 la adnotare față de Q=4500 în tabel.
 
 ## (b) Rânduri dublate între tabel și adnotări (z3_2 / z4_2 sunt adnotări pe plan, peste tronsoanele din tabel)
 | adnotare (#, felie) | pereche în tabel | propunere |
@@ -33,17 +33,17 @@ Câmpul `sumar` (`lungime_totala_m=49565`, `adnotari_neconfirmate_m=7731`) **se 
 | #98 Dn90 110, #93 Dn63 110, #97 Dn110 130 | multe rânduri de 110/130 m în tabel | probabil dubluri, se exclud |
 | #83 Dn90 1093; #85 Dn200 856; #86 Dn200 850 Q500; #148 Dn200 220; #90/#96 Dn125 250/153; #88,89,91,92,94,95,101 | nu au pereche exactă în tabel | nu se pun în cantități; merg la verificare vizuală |
 - Toate cele 21 de adnotări au `de_la`/`la` = null, deci nu le pot lega de un tronson anume din tabel.
-- **Discrepanță de transcriere:** rândul unic #38 are 320 m Dn40 (C-tin Brâncoveanu). Textul brut din note_lipite, rândul 38 al tabelului, spune `40 | 20 | 0,330` (textul brut NEVERIFICAT de revizor; valoarea 320 din rând confirmată prin SELECT). **Propun 330** după textul brut (+10 m).
+- **Discrepanță de transcriere:** rândul unic #38 are 320 m Dn40 (C-tin Brâncoveanu). Textul brut din note_lipite, rândul 38 al tabelului, spune `40 | 20 | 0,330` (textul brut NEVERIFICAT de revizor; valoarea 320 din rând confirmată prin SELECT). **Propunere de corecție NEVALIDATĂ: 330** după textul brut (+10 m) — decide omul pe imagine.
 - Rândul #62 „Macului → Macului” (Dn40, 280 m) are capetele identice. E probabil o eroare de citire a capătului. Lungimea o păstrez.
 
 ## (c) Diametre nestandard
-- **Dn60**: rândul #55, sursa tabel, felia z2_7: `Crinului → Rozelor`, `debit_mch=40`, `lungime_m=110`, `diametru_mm=60`. Debitul e în coloana lui separată (40), deci 60 NU este debitul. Rândurile vecine de pe Florenta Albu (#52, #58) sunt Dn63 cu 110 m. **Propun Dn63.** Încredere: medie. 60 nu există în seria PE100 SDR11.
-- **Dn43**: rândul #99, sursa adnotare, felia z3_2, zona Floroaica, 270 m, fără Q. În felie nu există text brut suplimentar, doar avertismentul de ilizibilitate. Poate fi 40 sau 63. Nu se poate decide din date. **Propun să rămână nedeclarat și în afara cantităților.**
+- **Dn60**: rândul #55, sursa tabel, felia z2_7: `Crinului → Rozelor`, `debit_mch=40`, `lungime_m=110`, `diametru_mm=60`. Debitul e în coloana lui separată (40), deci 60 NU este debitul. Rândurile vecine de pe Florenta Albu (#52, #58) sunt Dn63 cu 110 m. **Propunere de corecție NEVALIDATĂ: Dn63.** Încredere: medie. 60 nu există în seria PE100 SDR11.
+- **Dn43**: rândul #99, sursa adnotare, felia z3_2, zona Floroaica, 270 m, fără Q. În felie nu există text brut suplimentar, doar avertismentul de ilizibilitate. Poate fi 40 sau 63. Nu se poate decide din date. **Rămâne observație vizibilă în listă, exclusă din subtotalul utilizabil.**
 - Nimic nu arată că valorile ar fi Di (diametre interioare): în tabel coloana e diametrul nominal, cu debitul separat.
 
 ## (d) Material
 - Legenda este demonstrată în **felia z1_1**, în `alte_mentiuni`: „Legenda: Retea GN_MP PEHD PE 100 SDR 11 (linie verde)”.
-- Pe rânduri, `material = null` peste tot. Legenda se aplică tuturor rețelelor desenate cu linie verde. Asocierea fiecărui rând cu linia verde nu este verificată vizual. Propun materialul **PE100 SDR11 (din legenda z1_1)** pentru rândurile din tabel. Memoriul îl confirmă (doc 468: „Material tubular – PEID 100 SDR 11”).
+- Pe rânduri, `material = null` peste tot. Legenda se aplică tuturor rețelelor desenate cu linie verde. Asocierea fiecărui rând cu linia verde nu este verificată vizual. Material: **„PE100 SDR11 declarat în legendă (felia z1_1, `alte_mentiuni`) și în memoriu (doc 468)”** — locator, NU se aplică automat pe fiecare tronson (`material` rămâne null pe rând). Memoriul îl confirmă (doc 468: „Material tubular – PEID 100 SDR 11”).
 
 ## (e) Comparație cu referința oficială
 Citate:
@@ -52,8 +52,8 @@ Citate:
 
 | | referință | tabel 470 | diferență |
 |---|---|---|---|
-| Etapa 1 (Dn200–160) | 11525 | Dn200 = 17785 (160 lipsește) | **+6260** |
-| Etapa 2 (Dn160–40) | 32830 | 30520 (sub Dn200, cu Dn60→63 și #38 corectat: 30530) | **−2300** |
+| Etapa 1 (Dn200–160) | 11525 | Dn200 = 17785 (160 lipsește) | **+6260 (nevalidat)** |
+| Etapa 2 (Dn160–40) | 32830 | 30520 (sub Dn200, cu Dn60→63 și #38 corectat: 30530) | **−2300 (nevalidat)** |
 | Total | 44355 | 48305 / 48315 | **+3950 / +3960** |
 
 Rândurile #1–#4 (SRMP Ștefan Vodă → limita Vălcelele, 13765 m Dn200) trec prin UAT-urile Ștefan Vodă, Cuza Vodă, Grădiștea și Independența. Din date nu se poate stabili dacă referința de 11,525 km le include. În tabel nu apare niciun Dn160, deși memoriul pomenește Dn160 în ambele etape. **Diferențele NU se validează**, doar se marchează.
@@ -71,7 +71,7 @@ Rândurile #1–#4 (SRMP Ștefan Vodă → limita Vălcelele, 13765 m Dn200) tre
 | 60 | 110 | 0 | 0 | mutat la Dn63 | medie |
 | 43 | 0 | 270 | 0 | nedeclarat, adnotare ilizibilă | mică |
 | 40 PE100 SDR11 | 13140 | 0 | 13150 | tabel + 10 m (#38: 330 în loc de 320) | medie |
-| **Σ** | 48305 | 9641 | **48315** | față de referința 44355: **+3960 (nevalidat)** | — |
+| **Σ (scenariu candidat, NU total corect)** | 48305 | 9641 | **48315** | față de referința 44355: **+3960 (nevalidat)** | — |
 
 ## Întrebări deschise
 1. Rândurile #1–#4 (13765 m Dn200, SRMP Ștefan Vodă → limită) intră în obiectul licitației? Ar explica o parte din +6260 la Etapa 1.
@@ -79,3 +79,21 @@ Rândurile #1–#4 (SRMP Ștefan Vodă → limita Vălcelele, 13765 m Dn200) tre
 3. Felia eșuată (`sumar.erori=1`) ar trebui reluată înainte de orice transfer. Sunt posibile rânduri lipsă.
 4. Dn43 / 270 m Floroaica și adnotările nelegate (#83 1093, #85 856, #86 850, #148 220 Dn200): trebuie verificate vizual pe plan, în felia z3_2.
 5. ~~Sumarul 49565 nu se împacă~~ — REZOLVAT de revizor: se împacă (vezi sus); 49565 include dubla 1370 (Dn250). Codul actual numără orice adnotare pe diametru absent din tabel, deci o citire greșită de Dn umflă totalul.
+
+## Verdict Copilot 25.09
+- **48.315 m = scenariu candidat, NU total corect.** Depinde de corecții nevalidate (Dn60→63, #38 320→330) și de decizia pe 1.370 m; nu se transferă în cantități.
+- **Regula „diametru absent din tabel → adnotarea se adaugă”** (`ofertare-plansa-citeste/handler.ts` l.614-626, 651-652) **se elimină** — propunere de cod, nu s-a modificat nimic. O citire greșită de Dn (ex. Dn250) nu mai umflă totalul; adnotarea rămâne observație.
+- **±1% lungime** între adnotare și rând din tabel = **avertisment `posibila_dublura`**, NU deduplicare automată. Tabelul (b) de mai sus devine listă de avertismente, nu de excluderi.
+- **1.370 m:** se păstrează ambele observații (#8 Dn200 Q4500 / #84 Dn250 Q3500) cu diferențele Dn/Q; identitatea o decide omul pe capete/regiune/imagine.
+- **Dn60→63 și 320→330** = propuneri de corecție **nevalidate**.
+- **Dn43 (#99, 270 m)** = observație vizibilă, **exclusă din subtotalul utilizabil**.
+- **PE100 SDR11** = „declarat în legendă (z1_1) / memoriu (doc 468)” cu locator; nu se aplică automat pe tronson.
+- **E1 +6.260 / E2 −2.300** = nevalidate până la maparea tronsoanelor pe etape (rândurile #1–#4, Dn160 lipsă).
+- **Reluarea feliei eșuate (z3_1)** se face **înainte** de orice concluzie pe totaluri.
+
+### Decizii umane
+1. 1.370 m: același tronson (Dn200 sau Dn250) sau două tronsoane? (imagine z1_7 + z3_2)
+2. Aprobi corecțiile #55 Dn60→63 și #38 320→330? (imagine)
+3. Dn43 / 270 m Floroaica: 40, 63 sau altceva?
+4. Maparea tronsoanelor pe Etapa 1 / Etapa 2 (inclusiv #1–#4, 13.765 m); unde e Dn160.
+5. GO pentru reluarea z3_1 (cost AI) și pentru schimbarea de cod a regulii de adăugare.
