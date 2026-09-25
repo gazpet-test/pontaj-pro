@@ -139,6 +139,50 @@ function Chips({ opt, val, onSet }) {
   )
 }
 
+// Ciorna AI de completare a unui formular (ce='completare'). Starea trece în „ciornă" doar la „accept propunerea".
+function PropunereFormular({ f, licitatie, profile, upd, onGata }) {
+  const [busy, setBusy] = useState(false)
+  const [deschis, setDeschis] = useState(false)
+  const poate = poatePorniProcesarea(profile, licitatie)
+  const propune = async () => {
+    if (f.propunere_text && !window.confirm('Există deja o propunere — o înlocuiești (cost ~0,03 USD)?')) return
+    setBusy(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const r = await fetch(FN_URL, { method:'POST', headers:{ Authorization:`Bearer ${session?.access_token}`, 'Content-Type':'application/json' },
+        body: JSON.stringify({ licitatie_id: licitatie.id, formular_id: f.id, ce:'completare' }) })
+      const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
+      if (!j.ok) throw new Error(j.error || 'eroare')
+      setDeschis(true); onGata()
+    } catch (e) { window.alert('Propunere: ' + e.message) }
+    setBusy(false)
+  }
+  const copiaza = async () => { try { await navigator.clipboard.writeText(f.propunere_text); window.alert('Copiat.') } catch (e) { window.alert(e.message) } }
+  const docx = async () => {
+    const { Document, Paragraph, TextRun } = await import('docx')
+    const { descarcaDocx, numeFisier } = await import('./OfertareExport.js')
+    const doc = new Document({ sections: [{ children: String(f.propunere_text).split('\n').map(r =>
+      new Paragraph({ spacing:{ after:100 }, children:[new TextRun({ text:r, font:'Times New Roman', size:24 })] })) }] })
+    await descarcaDocx(doc, numeFisier(String(f.cod || 'Formular').replace(/\s+/g, '_'), licitatie))
+  }
+  const nDC = (String(f.propunere_text || '').match(/\[DE COMPLETAT/g) || []).length
+  return (
+    <div style={{ marginTop:6 }}>
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+        {poate ? <button style={{ ...S.btn, color:G.ofertare, opacity: busy ? .6 : 1 }} disabled={busy} onClick={propune}>{busy ? '⏳ se propune…' : f.propunere_text ? '🤖 Re-propune completarea' : '🤖 Propune completarea'}</button>
+          : <span style={{ fontSize:11, color:G.dim }} title={MOTIV_POARTA}>🔒 propunerea o pornește ownerul / responsabilul</span>}
+        {f.propunere_text && <>
+          <button style={S.btn} onClick={() => setDeschis(!deschis)}>{deschis ? '▾' : '▸'} ciorna ({nDC} de completat · {new Date(f.propunere_la).toLocaleString('ro-RO')})</button>
+          <button style={S.btn} onClick={copiaza}>📋 copiază</button>
+          <button style={S.btn} onClick={docx}>⬇ descarcă .docx</button>
+          {f.stare_pregatire === 'de_pregatit' && <button style={{ ...S.btn, color:G.green }} onClick={() => upd(f.id, { stare_pregatire:'ciorna' })}>✓ accept propunerea</button>}
+        </>}
+      </div>
+      {deschis && f.propunere_text && <pre style={{ marginTop:6, padding:10, background:G.bg, border:`1px solid ${G.border2}`, borderRadius:6, fontSize:11.5, color:G.text, whiteSpace:'pre-wrap', fontFamily:'inherit', maxHeight:420, overflow:'auto' }}>{f.propunere_text}</pre>}
+    </div>
+  )
+}
+
 function CampText({ val, onSave, ph, w = 150 }) {
   const [v, setV] = useState(val || '')
   useEffect(() => setV(val || ''), [val])
@@ -201,6 +245,7 @@ export default function FormulareRegistruSection({ licitatie, profile, showToast
                 <CampText val={f.fisier_hash} ph="hash fișier semnat" w={130} onSave={v => upd(f.id, { fisier_hash:v })} />
                 <CampText val={f.observatii} ph="observații" w={200} onSave={v => upd(f.id, { observatii:v })} />
               </div>
+              {f.aplicabil && <PropunereFormular f={f} licitatie={licitatie} profile={profile} upd={upd} onGata={load} />}
               {f.citat && <div style={{ marginTop:4, fontSize:11, color:G.dim, fontStyle:'italic' }}>sursa: „{f.citat}"</div>}
             </div>
           ))}
