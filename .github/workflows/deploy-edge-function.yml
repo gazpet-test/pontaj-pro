@@ -1,0 +1,81 @@
+name: Deploy edge function (manual)
+
+# Publică în producție una sau mai multe edge functions din main. Pornire DOAR manuală
+# (workflow_dispatch) — cine are drept de Actions write pe repo. Vezi registru_automatizari.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Slug(uri) edge function, separate prin virgulă (ex: ofertare-acoperire,hr-digest-saptamanal)'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-edge-function
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validează slug-urile
+        id: val
+        env:
+          SLUGS: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          lista=""
+          IFS=',' read -ra ARR <<< "$SLUGS"
+          for s in "${ARR[@]}"; do
+            s="$(echo "$s" | tr -d '[:space:]')"
+            [ -z "$s" ] && continue
+            if ! [[ "$s" =~ ^[a-z0-9_-]+$ ]]; then
+              echo "::error::Slug invalid: '$s' (doar [a-z0-9-_])"; exit 1
+            fi
+            if [ ! -f "supabase/functions/$s/index.ts" ]; then
+              echo "::error::Nu există supabase/functions/$s/index.ts"; exit 1
+            fi
+            lista="$lista $s"
+          done
+          [ -z "$lista" ] && { echo "::error::Niciun slug valid"; exit 1; }
+          echo "lista=$lista" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LISTA: ${{ steps.val.outputs.lista }}
+        run: |
+          set -euo pipefail
+          # Funcțiile care rulează LIVE cu verify_jwt=false (listă derivată din
+          # list_edge_functions la 25.09.2026). Au autentificare proprie în cod (cron/webhook/QR).
+          # O funcție nouă cu verify_jwt=false trebuie adăugată AICI, altfel pleacă cu true.
+          NO_JWT=" dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci meta-publish meteo-sync nas-upload-url ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-participari-import ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tuya vercel-relay vicare "
+          for s in $LISTA; do
+            extra=""
+            if [[ "$NO_JWT" == *" $s "* ]]; then extra="--no-verify-jwt"; fi
+            echo "::group::deploy $s $extra"
+            supabase functions deploy "$s" --project-ref dxczwkbciseqniprspcu $extra
+            echo "::endgroup::"
+          done
+
+      - name: Rezumat repo vs producție
+        if: always()
+        continue-on-error: true
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: dxczwkbciseqniprspcu
+        run: node scripts/verifica-edge-functions.mjs
