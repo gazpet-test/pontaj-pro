@@ -81,3 +81,17 @@ Verificare periodică: job (worker/cron) care re-descarcă din Storage, recalcul
 - Fără backfill. Deploy edge: nefăcut (cere PR + deploy).
 - **Diagnostic 102 (Botoșani)**: cele 497 rânduri vechi au venit prin workerul Terra 24.09 07:21–12:11 UTC, adică ÎNAINTE de migrarea manifestului (15:06) → nu aveau unde scrie. Singurele 9 rânduri de după migrare (25.09 05:21–05:24, id 1267–1275) sunt volumele `.partNN.rar` urcate întregi de **Vercel `/api/seap-import`** (textul `eroare` „…se parseaza in M2” există doar acolo), nu de edge și nici de worker — iar acel drum nu scrie manifest.
 - **Worker**: manifestul se scrie doar pe ramura ARHIVĂ; ramura „FIȘIER SIMPLU” (seap.ts ~391) nu scrie niciun rând. Nu e bug de condiție care să fi golit tabela (cauza e cronologia), dar e o lipsă de acoperire.
+
+## Implementat (25.09.2026, branch claude/erp-r6-manifest) — manifest pe ruta Vercel
+- **`api/seap-import.js` scrie acum `ofertare_seap_manifest`** (drumul folosit la volumele mari, ex. lic 102). Funcțiile pure sunt în `api/_manifest.js` (port 1:1 al `manifest.ts`: `randManifest`, `sha256Hex` cu `crypto.createHash('sha256')`, `dedupManifest`, `MANIFEST_CONFLICT`).
+- SHA-256 pe byte-ii URCAȚI, după `continutSemnat` (echivalentul Node al `desfaSemnatura`) — aceeași regulă ca edge și ca workerul (care hash-uiește output-ul extras).
+- `arhiva_cheie = 'seap:downloadarchive'` (ruta parcurge mereu arhiva SEAP completă) — identic cu calea de rezervă din edge. Upload refuzat (și în felii) → rând `eroare_urcare` cu motiv; rând BD nescris → `eroare_urcare` „rand BD nescris”.
+- Upsert pe `licitatie_id,arhiva_cheie,cale`, dedup pe lot, felii de 200, la final; eroarea de manifest → `raport.avertismente` + `seap_meta.manifest_avertisment`, nu oprește importul. Răspunsul are `manifest_randuri`.
+- Test: `node scripts/test-manifest-vercel.mjs` (6 teste, inclusiv paritatea hash Node == WebCrypto).
+- **Diferențe de paritate rămase (neschimbate aici):** (1) Vercel NU desface ZIP-uri interioare (edge da) → un .zip din arhivă intră ca un singur rând; (2) Vercel decide PDF doar după nume, edge și după semnătura `%PDF`; (3) Vercel nu are cheie per-document SEAP, deci același fișier importat pe per-fișier (edge, `arhiva_cheie` = documentul) și pe Vercel produce 2 rânduri cu chei diferite; (4) workerul Terra folosește ca `arhiva_cheie` numele arhivei locale.
+
+## Doc 770 (Huedin, lic 101, 99,9 MB) — diagnostic 25.09
+- Ținut de **workerul NAS** (`worker/ofertare/ingest.ts`, coada lic 101 activă, `lansari` 8206): `citesteDocument` → `citesteCuAI` → edge `ofertare-ingest-doc`, care pune `in_lucru` + `procesat_la` (fără condiție de stare) și apoi moare cu **„Memory limit exceeded”** la descărcare/`PDFDocument.load` de 100 MB (log-uri la ~6 s). `pagini` rămâne null, 0 apeluri AI; workerul marchează `eroare`, iar `candidati()` include `eroare` → buclă infinită.
+- `procesat_la` se reîmprospăta (16:06:02 → 16:07:14 → 16:07:43).
+- Aplicat: `status_procesare='ignorat'` + eroare explicită (ca 745/750), cu gardă (`in_lucru/eroare`, `pagini_procesate=0`, `pagini is null`, `procesat_la` recent). Backup: status `in_lucru`, eroare null, procesat_de 01ab5a45-…, procesat_la 16:07:20. Primul update a fost suprascris de un apel edge deja în zbor; al doilea a fost reaplicat.
+- **Găuri de cod (de reparat separat):** edge-ul nu verifică `ignorat` înainte de a pune `in_lucru`; lipsește un prag de mărime (ex. >60 MB → nu se încarcă în edge); workerul reia la nesfârșit documentele `eroare`.
