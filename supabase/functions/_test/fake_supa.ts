@@ -4,7 +4,8 @@ export type Tabele = Record<string, Record<string, unknown>[]>
 
 // radarSecret: emulează fn_verifica_radar_secret — undefined = secretul NU există în vault (=> false mereu).
 export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string } = {}) {
-  const n = { scrieri: 0, storage: 0, ai: 0, rpcSecret: 0, citiri: [] as string[] }
+  // upsertate: payload-urile trimise la upsert, pe tabel (ca testele să verifice CE s-ar scrie, ex. tip_sursa)
+  const n = { scrieri: 0, storage: 0, ai: 0, rpcSecret: 0, citiri: [] as string[], upsertate: [] as { tabel: string; rows: any[] }[] }
   const from = (t: string) => {
     let rows = [...(tabele[t] || [])]
     let scriere = false
@@ -14,7 +15,7 @@ export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string } = {}) {
       in: (c: string, vs: unknown[]) => { rows = rows.filter((r) => vs.includes(r[c])); return b },
       insert: () => { scriere = true; n.scrieri++; return b },
       update: () => { scriere = true; n.scrieri++; return b },
-      upsert: () => { scriere = true; n.scrieri++; return b },
+      upsert: (r: unknown) => { scriere = true; n.scrieri++; n.upsertate.push({ tabel: t, rows: Array.isArray(r) ? r : [r] }); return b },
       delete: () => { scriere = true; n.scrieri++; return b },
       maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
       single: () => Promise.resolve(rows[0] ? { data: rows[0], error: null } : { data: null, error: { message: 'no rows' } }),

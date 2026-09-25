@@ -27,6 +27,7 @@
 // Erorile de business se întorc în răspuns, nu se aruncă.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { poateCheltui } from './poarta.ts'
+import { feliiDocument, type TipLista } from './sectiuni.ts'
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a)
@@ -125,8 +126,7 @@ async function cheama(furnizor: Furnizor, intrebare: string, keyA: string, keyG:
     inF: d.usage?.input_tokens || 0, outF: d.usage?.output_tokens || 0, stop: d.stop_reason,
   }
 }
-const FELIE = 55000        // caractere per apel — sub pragul unde se pierde mijlocul
-const SUPRAPUNERE = 2000   // ca un tabel rupt între felii să nu dispară
+// FELIE / SUPRAPUNERE și feliile pe secțiuni (F3 / C6 / C7–C9): sectiuni.ts
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
 
 async function secretOk(req: Request, db: any): Promise<boolean> {
@@ -134,13 +134,6 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
   if (!s) return false
   const { data, error } = await db.rpc('fn_verifica_radar_secret', { p_secret: s })
   return !error && data === true
-}
-
-function felii(t: string): string[] {
-  if (t.length <= FELIE) return [t]
-  const out: string[] = []
-  for (let i = 0; i < t.length; i += FELIE - SUPRAPUNERE) out.push(t.slice(i, i + FELIE))
-  return out
 }
 
 const PROMPT = (nume: string, tip: string, obiectCurent: string) => `Ești inginer de devize într-o firmă de construcții de conducte. Citește bucata de mai jos din documentația unei licitații publice și extrage POZIȚIILE CANTITATIVE — materiale, lucrări, echipamente — cu cantitatea și unitatea lor.
@@ -250,11 +243,12 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const deLucru = (docs || []).filter((d: any) => (d.text_extras || '').length > 500)
   if (!deLucru.length) return json({ error: 'niciun document cu text din care să ies cifre' }, 404)
 
-  // munca, aplatizată în felii, ca reluarea să fie un simplu index
-  const munca: { doc: any; bucata: string; nr: number; din: number }[] = []
+  // munca, aplatizată în felii, ca reluarea să fie un simplu index.
+  // 25.09.2026: o listă de cantități se taie întâi pe SECȚIUNI (antet F3 / C6 / C7–C9, sectiuni.ts), ca
+  // anexele C6–C9 din același PDF să nu intre ca F3; fiecare felie are un singur tip_sursa.
+  const munca: { doc: any; bucata: string; nr: number; din: number; tipSursa: TipLista | null; inceputSectiune: boolean }[] = []
   for (const d of deLucru) {
-    const b = felii(d.text_extras as string)
-    b.forEach((bu, i) => munca.push({ doc: d, bucata: bu, nr: i + 1, din: b.length }))
+    for (const f of feliiDocument(d.text_extras as string, d.tip)) munca.push({ doc: d, ...f })
   }
   // Obiectul curent se poarta intre felii (tabelele trec peste pagini). La o reluare (de_la>0)
   // se ia din ultimul rand scris pentru documentul feliei de reluare.
@@ -262,7 +256,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   let docCurent: number | null = null
   if (deLa > 0 && munca[deLa]) {
     const dr = munca[deLa]
-    if (dr.nr > 1) {
+    // o felie care începe o secțiune nouă (ex. C6 după F3) pornește fără obiect moștenit
+    if (dr.nr > 1 && !dr.inceputSectiune) {
       const { data: ult } = await db.from('ofertare_cantitati').select('obiect')
         .eq('licitatie_id', licId).like('sursa', `${dr.doc.nume_original}%`).not('obiect', 'is', null)
         .order('ordine', { ascending: false, nullsFirst: false }).limit(1)
@@ -278,11 +273,14 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   while (poz < munca.length) {
     if (Date.now() - t0 > BUGET_MS) { continua = true; break }
     if (maxFelii && poz - deLa >= maxFelii) { continua = true; break }
-    const { doc: d, bucata, nr, din } = munca[poz]
+    const { doc: d, bucata, nr, din, tipSursa, inceputSectiune } = munca[poz]
     if (d.id !== docCurent) { docCurent = d.id; if (nr === 1) obiectCurent = '' }
+    // C6/C7–C9 sunt pe investiție, nu pe obiectul F3 de dinainte: obiectul nu se moștenește peste secțiuni
+    if (inceputSectiune) obiectCurent = ''
+    const sect = tipSursa ? { tip_sursa: tipSursa } : {}
     const intrebare = `${PROMPT(d.nume_original, d.tip, obiectCurent)}\n\n--- BUCATA ${nr}/${din} ---\n${bucata}`
     const r = await cheama(furnizor, intrebare, KEY_A, KEY_G, KEY_O)
-    if (r.eroare) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: r.eroare }); poz++; continue }
+    if (r.eroare) { raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, ...sect, eroare: r.eroare }); poz++; continue }
     const inF = r.inF, outF = r.outF
     tokIn += inF; tokOut += outF
     // jurnalul se scrie PE FELIE: rularea pierduta la timeout a cheltuit bani pe care
@@ -301,7 +299,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     // stop_reason si numarul de tokeni de iesire spun DE CE n-a mers: raspuns taiat la plafon
     // arata altfel decat model care a raspuns aiurea. Prima proba a esuat tacut fara ele.
     if (!lista) {
-      raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'raspuns neinterpretabil',
+      raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, ...sect, eroare: 'raspuns neinterpretabil',
         out: outF, stop: r.stop })
       poz++; continue
     }
@@ -329,7 +327,6 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       const n = Number(t)
       return Number.isFinite(n) ? n : null
     }
-    const eF3 = d.tip === 'lista_cantitati'
     let idx = 0
     for (const p0 of lista) {
       // [obiect, cod_articol, denumire, um, cantitate, sursa, e_total]; compatibil si cu vechiul
@@ -352,7 +349,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         cod_articol: cod,
         // ordine determinista pe document: felia*100000 + pozitia in felie (reluarea nu o strica)
         ordine: nr * 100000 + idx,
-        ...(eF3 ? { tip_sursa: 'lista_f3' } : {}),
+        // tip_sursa DOAR pe liste de cantități, pe secțiunea feliei (lista_f3 / lista_c6 / lista_alt)
+        ...sect,
         licitatie_id: licId,
         // categoria NU mai vine de la model: o pune trigger-ul din dictionar (fn_categorie_cantitate).
         denumire: eTotal && !/^\s*total\b/i.test(den) ? `TOTAL ${den}` : den,
@@ -375,10 +373,10 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       const { data: ins, error: eIns } = await db.from('ofertare_cantitati')
         .upsert(feliaAsta, { onConflict: 'licitatie_id,denumire,sursa', ignoreDuplicates: true })
         .select('id')
-      if (eIns) raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, eroare: 'scriere: ' + eIns.message })
+      if (eIns) raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, ...sect, eroare: 'scriere: ' + eIns.message })
       else scriseTotal += ins?.length || 0
     }
-    raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, pozitii: alePastrate })
+    raport.push({ doc: d.nume_original, bucata: `${nr}/${din}`, ...sect, pozitii: alePastrate })
     poz++
   }
 
@@ -391,6 +389,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     cu_cantitate: toate.filter(x => x.cantitate !== null).length,
     fara_cantitate: toate.filter(x => x.cantitate === null).length,
     totaluri: toate.filter(x => /^TOTAL\b/i.test(x.denumire)).length,
+    // pozițiile extrase pe tip_sursa (null = document care nu e listă de cantități) — control după fiecare apel
+    pe_tip_sursa: toate.reduce((a: Record<string, number>, x) => { const k = x.tip_sursa ?? 'null'; a[k] = (a[k] || 0) + 1; return a }, {}),
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
   }
   // dry_run: previzualizare AI — a consumat credit (cost_usd de mai sus, jurnalizat), NU a salvat nimic.
