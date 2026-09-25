@@ -1361,7 +1361,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                           const r = await lipesteNote(d)
                           if (r) setWarn(r.perechi ? `🧩 ${r.note.length} rânduri refăcute din ${r.perechi} perechi de zone` +
                             (r.lungime_declarata_m ? ` · lungime totală declarată: ${r.lungime_declarata_m.toLocaleString('ro-RO')} m` : ' · nicio lungime totală găsită') +
-                            (r.perechi_ramase ? ` · mai sunt ${r.perechi_ramase} perechi — apasă din nou` : '') : 'Nicio notă tăiată de refăcut.')
+                            (r.perechi_ramase ? ` · mai sunt ${r.perechi_ramase} perechi — apasă din nou` : '') +
+                            (r.necorelare_unitate ? ` · ⚠ NECORELARE: ${r.necorelare_unitate}` : '') : 'Nicio notă tăiată de refăcut.')
                         } finally { setPlansaBusy(null); await load(); onChanged?.() }
                       }}>🧩 note tăiate{d.analiza?.citire_ai?.perechi_ramase > 0 ? ` (+${d.analiza.citire_ai.perechi_ramase})` : ''}</button>}
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
