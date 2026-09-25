@@ -405,6 +405,39 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   return raport
 }
 
+// -- R6: verificarea periodică SEAP → Storage (hash), fără SSH -----------------------------------------
+// O licitație GO activă pe tură, doar dacă ultima ei verificare e mai veche de 7 zile. Rulează scriptul
+// verifica_manifest.ts ca proces copil (același cod ca rularea manuală), cu plafon de timp; rezultatul
+// rămâne în ofertare_seap_manifest (verificat_la). Nu urcă și nu modifică documente.
+const VERIFICARE_INTERVAL_MS = 7 * 24 * 3600_000
+const VERIFICARE_PLAFON_MS = 30 * 60_000
+let ultimaCautareVerificare = 0
+async function verificarePeriodica(supa: Supa, stare: (s: string) => void) {
+  if (Date.now() - ultimaCautareVerificare < RECONCILIERE_MS) return
+  ultimaCautareVerificare = Date.now()
+  const { data: active } = await supa.from('ofertare_licitatii').select('id')
+    .eq('decizie_go', 'go').not('c_notice_id', 'is', null).gt('termen_depunere', new Date().toISOString())
+  for (const a of active || []) {
+    const { data: ult } = await supa.from('ofertare_seap_manifest').select('verificat_la').eq('licitatie_id', a.id)
+      .order('verificat_la', { ascending: false }).limit(1).maybeSingle()
+    if (ult && Date.now() - new Date(ult.verificat_la).getTime() < VERIFICARE_INTERVAL_MS) continue
+    stare(`#${a.id} verificare hash SEAP ↔ Storage`)
+    const script = new URL('./verifica_manifest.ts', import.meta.url).pathname
+    const ctl = new AbortController()
+    const t = setTimeout(() => ctl.abort(), VERIFICARE_PLAFON_MS)
+    try {
+      const r = await new Deno.Command(Deno.execPath(), { args: ['run', '-A', script, String(a.id)], stdout: 'piped', stderr: 'piped', signal: ctl.signal }).output()
+      const out = new TextDecoder().decode(r.stdout)
+      const m = out.match(/"identice":\s*(\d+)[\s\S]*?"diferite":\s*(\d+)[\s\S]*?"lipsa_in_platforma":\s*(\d+)/)
+      log(`#${a.id}: verificare ${r.success ? 'ok' : 'EȘEC cod ' + r.code}${m ? ` — identice ${m[1]}, diferite ${m[2]}, lipsă ${m[3]}` : ''}`)
+      if (!r.success) log(new TextDecoder().decode(r.stderr).slice(-500))
+    } catch (e) {
+      log(`#${a.id}: verificare oprită — ${(e as Error)?.message ?? e}`)
+    } finally { clearTimeout(t) }
+    return   // una pe tură: nu ține bucla ocupată
+  }
+}
+
 // -- Bucla: cereri + reconciliere orară ---------------------------------------------------------------
 let ultimaReconciliere = 0
 let lucruCuratat = false
@@ -449,4 +482,5 @@ export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (
       })
     }
   }
+  if (!oprire()) await verificarePeriodica(supa, stare)
 }
