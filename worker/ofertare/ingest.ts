@@ -3,20 +3,21 @@
 // textul se scoate GRATUIT cu pdftotext (poppler) și se scrie cu marcajele ⟦PAGINA n⟧ exact ca edge function-ul
 // ofertare-ingest-doc; doar antetul (obiectiv/beneficiar/proiectant/revizie) se citește cu Haiku din primele pagini
 // (~0,001 USD). Scanurile (fără strat de text) merg pe drumul vechi: edge function-ul ofertare-ingest-doc, cu AI.
+// 26.09 (R6, doc 770): PDF-urile peste 60 MB (pe care edge-ul le refuză) se citesc aici, pe felii — vezi citire_mare.ts.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import JSZip from 'https://esm.sh/jszip@3.10.1'
 // .doc binar (OLE) — aceeași librărie ca edge-ul ofertare-word-text; esm.sh, NU npm: (npm: nu merge pe Terra)
 import WordExtractor from 'https://esm.sh/word-extractor@1.0.4'  // fără ?target=deno: acolo fs e null și extract() pică (testat 25.09)
 import { Buffer } from 'node:buffer'
+// R6 (26.09): PDF-urile peste pragul edge-ului (60 MB, ex. 770 Huedin) — descărcare în flux + pdftotext pe felii
+import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY'), ANTHROPIC_KEY = env('ANTHROPIC_API_KEY')
 const BUCKET = 'ofertare'
-const MAX_TEXT = 900_000
 const PRAG_TEXT_PAGINA = 120         // caractere non-spațiu ca o pagină să conteze „cu text"
 const PRAG_DOC_TEXT = 0.85           // proporția de pagini cu text ca documentul să fie citit local
 const HAIKU = { id: 'claude-haiku-4-5-20251001', in: 1 / 1e6, out: 5 / 1e6 }
-const marcaj = (n: number) => `⟦PAGINA ${n}⟧`
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[ingest]', ...a)
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -36,12 +37,9 @@ async function textLocal(caleaPdf: string): Promise<{ pagini: string[]; nPag: nu
   if (!nPag) return null
   const r = await ruleaza('pdftotext', ['-layout', '-enc', 'UTF-8', caleaPdf, '-'])
   if (r.code !== 0) { log('pdftotext:', r.err.slice(0, 200)); return null }
-  const parti = r.out.split('\f')
-  if (parti.length && parti[parti.length - 1].trim() === '') parti.pop()
-  while (parti.length < nPag) parti.push('')
-  // -layout păstrează coloanele tabelelor, dar umflă textul cu spații (fișa SEAP: ~4,6k car./pagină); rulăm 2+ spații într-unul dublu
-  const pagini = parti.slice(0, nPag).map(t => t.split('\n').map(l => l.replace(/\s+$/, '').replace(/[ \t]{2,}/g, '  ')).join('\n').replace(/\n{3,}/g, '\n\n').trim())
-  return { pagini, nPag }
+  // -layout păstrează coloanele tabelelor, dar umflă textul cu spații (fișa SEAP: ~4,6k car./pagină); rulăm 2+ spații
+  // într-unul dublu — aceeași funcție ca pe felii (citire_mare.ts)
+  return { pagini: imparteText(r.out, nPag), nPag }
 }
 
 async function antetDinText(text: string): Promise<{ antet: any; tokIn: number; tokOut: number }> {
@@ -92,7 +90,14 @@ async function citesteCuAI(docId: number): Promise<string> {
   return 'eroare: prea multe runde'
 }
 
-async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null): Promise<string> {
+// R6: drumul „PDF mare” (citire_mare.ts) cu dependențele de producție: antetul cu Haiku, ca pe drumul obișnuit
+const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void) => ({
+  cerutDe, esteOprire, stare, antet: antetDinText, modelAntet: HAIKU, log, pauzaReluareMs: 30_000,
+})
+
+async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
+  // peste 60 MB (sau 'ignorat' de edge pe mărime): nu în memorie și nu prin edge (care îl refuză) — pe felii, pe disc
+  if (esteMare(doc)) return await citesteMare(supabase, doc.id, depsMare(cerutDe, esteOprire, stare))
   const off = Math.max(0, Number(doc.pagina_offset) || 0)
   const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(doc.fisier_path)
   if (dlErr || !blob) {
@@ -100,6 +105,12 @@ async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null)
     return 'eroare: download'
   }
   const bytes = new Uint8Array(await blob.arrayBuffer())
+  if (bytes.length > PRAG_MARE) {
+    // size_bytes lipsea/greșit în BD: scriem mărimea reală (o vede și poarta edge-ului) și trecem pe drumul pe felii
+    const { error: eSz } = await supabase.from('ofertare_documente_atribuire').update({ size_bytes: bytes.length }).eq('id', doc.id)
+    if (eSz) return 'eroare: size_bytes ' + eSz.message
+    return await citesteMare(supabase, doc.id, depsMare(cerutDe, esteOprire, stare))
+  }
   const cale = `/tmp/ingest_${doc.id}.pdf`
   await Deno.writeFile(cale, bytes)
   try {
@@ -108,38 +119,40 @@ async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null)
     const cuText = local.pagini.filter(p => p.replace(/\s/g, '').length >= PRAG_TEXT_PAGINA).length
     if (cuText / local.nPag < PRAG_DOC_TEXT) return await citesteCuAI(doc.id)   // scan sau majoritar imagini → AI
     await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: null, procesat_de: cerutDe, procesat_la: new Date().toISOString() }).eq('id', doc.id)
-    const necitite: number[] = []
-    let text = ''
-    local.pagini.forEach((p, i) => {
-      const nr = off + i + 1
-      if (p.replace(/\s/g, '').length < 20) { necitite.push(nr); text += `${marcaj(nr)}\n[PAGINA ${nr}: fără text în stratul PDF — probabil imagine/planșă]\n\n` }
-      else text += `${marcaj(nr)}\n${p}\n\n`
-    })
-    if (text.length > MAX_TEXT) text = text.slice(0, MAX_TEXT) + `\n[TRUNCHIAT la ${MAX_TEXT} caractere]`
+    // aceeași compunere ca pe felii: peste plafon, paginile care nu mai încap intră în pagini_necitite (nu doar tăiere tăcută)
+    const comp = compuneText(local.pagini, local.nPag, off, MAX_TEXT)
+    const necitite = comp.necitite, text = comp.text
     let antet: any = null, tokIn = 0, tokOut = 0
     try { const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n')); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
     try { await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: HAIKU.id, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * HAIKU.in + tokOut * HAIKU.out, ref_table: 'ofertare_documente_atribuire', ref_id: doc.id }) } catch (_) {}
     const upd: Record<string, unknown> = {
       text_extras: text.trim() || null, pagini: local.nPag, size_bytes: bytes.length, pagini_procesate: local.nPag, pagini_necitite: necitite,
       status_procesare: necitite.length ? 'partial' : 'procesat',
-      eroare: necitite.length ? `${necitite.length} pagin${necitite.length === 1 ? 'ă' : 'i'} fără text (imagini): ${necitite.slice(0, 20).join(', ')}${necitite.length > 20 ? '…' : ''}` : null,
+      eroare: mesajNecitite(comp),
       ocr: false, procesat_la: new Date().toISOString(), procesat_de: cerutDe,
     }
     if (antet) { upd.antet = antet; upd.revizie = antet?.revizie || doc.revizie || null }
     const { error: upErr } = await supabase.from('ofertare_documente_atribuire').update(upd).eq('id', doc.id)
     if (upErr) return 'eroare: update ' + upErr.message
-    return `${upd.status_procesare} (${local.nPag} pagini, text local${necitite.length ? `, ${necitite.length} fără text` : ''})`
+    return `${upd.status_procesare} (${local.nPag} pagini, text local${necitite.length ? `, ${necitite.length} necitite` : ''})`
   } finally { try { await Deno.remove(cale) } catch (_) {} }
 }
 
 async function candidati(supabase: Supa, licId: number): Promise<any[]> {
-  const { data: docs } = await supabase.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, nume_original, tip, fisier_path, pagina_offset, revizie, status_procesare, pagini_procesate')
-    .eq('licitatie_id', licId).in('status_procesare', ['neprocesat', 'in_lucru', 'eroare']).not('fisier_path', 'like', '%/neincarcat/%').order('id')
+  const COL = 'id, licitatie_id, nume_original, tip, fisier_path, pagina_offset, revizie, status_procesare, pagini_procesate, size_bytes, eroare, citire_mare:analiza->citire_mare'
+  const [{ data: docs }, { data: mari }] = await Promise.all([
+    supabase.from('ofertare_documente_atribuire').select(COL)
+      .eq('licitatie_id', licId).in('status_procesare', ['neprocesat', 'in_lucru', 'eroare']).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
+    // R6 (770): 'ignorat' DOAR pentru că depășea pragul edge-ului → se citește aici, pe felii (alte 'ignorat' rămân în pace)
+    supabase.from('ofertare_documente_atribuire').select(COL)
+      .eq('licitatie_id', licId).eq('status_procesare', 'ignorat').like('eroare', `${MARCAJ_PREA_MARE}%`).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
+  ])
   const out: any[] = []
-  for (const d of docs ?? []) {
+  for (const d of [...(docs ?? []), ...(mari ?? [])] as any[]) {
     const { data: ok } = await supabase.rpc('ofertare_doc_de_citit', { p_licitatie_id: d.licitatie_id, p_doc_id: d.id, p_nume: d.nume_original, p_tip: d.tip })
     if (ok !== true) continue
+    // PDF mare: intră doar dacă decizia o permite (încercări rămase, fără eșec definitiv) — altfel NU se atinge, deci nu buclează
+    if (esteMare(d)) { if (decizieCitireMare(d).actiune === 'sari') continue; d._mare = true }
     // un apel lansat de tick-ul din Supabase și încă în zbor (lease 3 min) — îl lăsăm în pace
     const { data: l } = await supabase.from('ofertare_ingest_lansari').select('lansat_la').eq('doc_id', d.id).maybeSingle()
     if (l?.lansat_la && Date.now() - new Date(l.lansat_la).getTime() < 3 * 60_000) continue
@@ -211,6 +224,9 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
   if (!c?.activ) return
   try { await citesteWordLicitatie(supabase, licId) } catch (e) { log('word:', (e as Error)?.message ?? e) }
   const esuate = new Set<number>()
+  // anti-buclă (770: același document „citit” de 5421 de ori într-o activare, pentru că după fiecare trecere rămânea
+  // tot candidat): de câte ori a revenit fiecare document în tura asta; peste limită → eșuat, nu încă o trecere
+  const treceri = new Map<number, number>()
   let citite = 0
   const t0Tura = Date.now()
   while (!esteOprire()) {
@@ -225,12 +241,19 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
     const d = lista[0]
     stare(`citesc ${String(d.nume_original || d.id).split('/').pop()} (${citite + 1}; ${lista.length} rămase)`)
     const t0 = Date.now()
+    const deCate = (treceri.get(d.id) ?? 0) + 1
+    treceri.set(d.id, deCate)
     let rez = ''
-    try { rez = await citesteDocument(supabase, d, c.cerut_de ?? null) } catch (e) { rez = 'eroare: ' + String((e as Error)?.message ?? e) }
+    if (trecereBlocata(deCate, d._mare === true)) rez = `eroare: documentul revine în coadă după ${deCate - 1 === 1 ? 'o trecere' : `${deCate - 1} treceri`} în aceeași tură — oprit, ca să nu intre în buclă`
+    else {
+      try { rez = await citesteDocument(supabase, d, c.cerut_de ?? null, esteOprire, s => stare(`${s} (${citite + 1}; ${lista.length} rămase)`)) } catch (e) { rez = 'eroare: ' + String((e as Error)?.message ?? e) }
+    }
     log(`#${licId} doc ${d.id} „${String(d.nume_original).slice(-50)}" → ${rez} · ${Math.round((Date.now() - t0) / 1000)} s`)
     if (rez.startsWith('eroare')) {
       esuate.add(d.id)
       await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: rez.slice(0, 500) }).eq('id', d.id).in('status_procesare', ['neprocesat', 'in_lucru'])
+    } else if (rez.startsWith('reia') || rez.startsWith('întrerupt')) {
+      // PDF mare: încercarea e deja numărată în BD (max. MAX_INCERCARI_MARE), se reia în tura asta; întrerupt = SIGTERM
     } else citite++
     await supabase.from('ofertare_ingest_coada').update({ ultimul_tick: new Date().toISOString(), lansari: (c.lansari ?? 0) + citite + esuate.size }).eq('licitatie_id', licId)
   }

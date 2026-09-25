@@ -14,6 +14,18 @@ docker logs -f gazpet-ofertare-worker
 ```
 Actualizare: nimic de făcut — containerul face `git pull` la 5 minute și repornește la commit nou pe `REPO_BRANCH`.
 
+## Citirea documentelor (ingest.ts) și PDF-urile mari (citire_mare.ts, R6 / doc 770)
+PDF cu strat de text → `pdftotext` gratuit; scanurile → edge `ofertare-ingest-doc` (AI). Peste **60 MB** (pragul edge-ului,
+care le marchează `ignorat` „prea mare pentru citirea automată…”) workerul le citește singur, fără AI și fără să le țină
+în memorie: descărcare în flux pe disc (URL semnat, plafon 200 MB, SHA-256 din mers) → `pdfinfo` (plafon 3.000 pagini) →
+`pdftotext -f/-l` pe felii de 25 de pagini (felia care pică se înjumătățește până la o pagină) → aceleași coloane ca un PDF
+normal + urma în `analiza.citire_mare` (încercări, felii, SHA-256, comparația cu `ofertare_seap_manifest`).
+Anti-buclă: încercarea se numără în BD înainte de muncă (CAS pe `analiza->citire_mare->>rev`), max. 3, apoi `eroare`
+definitiv cu motiv; în `proceseazaIngest`, un document care revine candidat după o trecere în aceeași tură e oprit.
+Nu cere rebuild (`--allow-run=git,pdftotext,pdfinfo` e deja în `entrypoint.sh`).
+Teste: `deno test --node-modules-dir=none --allow-read --allow-write --allow-run=pdftotext,pdfinfo worker/ofertare/citire_mare_test.ts`
+și `deno test --node-modules-dir=none --allow-env --allow-read --allow-write=/tmp --allow-run=pdftotext,pdfinfo worker/ofertare/ingest_mare_test.ts`.
+
 ## Documentația SEAP și extractorul izolat (24.09.2026)
 `seap.ts` descarcă din SEAP, desface `.p7s`, dar **nu despachetează singur**: arhivele merg la containerul
 `gazpet-seap-extractor` (`extractor/`), singurul cu 7-Zip. Acesta rulează fără rețea, fără `.env`/chei,
