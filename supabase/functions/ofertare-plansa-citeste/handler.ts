@@ -17,7 +17,7 @@
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
-import { cheieVersiune, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
+import { TRANSFER_EXPIRA_MS, cheieVersiune, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
 let aiFetch: typeof fetch = (...a) => fetch(...a);
@@ -239,7 +239,12 @@ function materialNorm(x: unknown): string {
 // pentru aceleasi diametre, deci nu duplicam pozitii: completam `cantitate_plansa` si
 // notam diferenta. Pozitia se adauga doar daca diametrul nu exista deloc in oferta.
 // Primeste lista deja filtrata (vezi `pentruCantitati` mai jos).
-async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null) {
+// R4 (lease expirat): `detineLease` se verifică ÎNAINTE de FIECARE scriere în ofertare_cantitati, nu doar la eliberare —
+// altfel o rulare care a „adormit” peste 5 min (lease preluat între timp de alta) ar scrie peste cantitățile noului deținător.
+export class LeasePierdut extends Error { constructor() { super('lease pierdut'); } }
+async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null,
+  detineLease: () => Promise<boolean> = () => Promise.resolve(true)) {
+  const garda = async () => { if (!(await detineLease())) throw new LeasePierdut(); };
   // 25.09.2026 (Jakarinos): gruparea era DOAR pe diametru — Dn110 PE și Dn110 OL (sau SDR11 vs SDR17) se
   // adunau într-o singură cifră. Acum cheia e diametru + material; SDR-ul rămâne în specificații.
   const peDiametru = new Map<string, { dn: number; mat: string; m: number; n: number; zone: Set<string>; sdr: Set<string> }>();
@@ -309,16 +314,25 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
       const patch: Record<string, unknown> = { cantitate_plansa: m, diferenta_nota: nota, updated_at: new Date().toISOString() };
       // daca cineva a validat deja pozitia, nu-i schimbam decizia — doar ii aratam nota
       if (potrivit.status === 'extras' && dinMemoriu !== null && Math.abs(dinMemoriu - m) >= 1) patch.status = 'diferenta';
+      await garda();
       await supa.from('ofertare_cantitati').update(patch).eq('id', potrivit.id);
       actualizate++;
     } else {
+      // idempotent: cheia licitatie + Dn/material (denumire) + sursă; se verifică existența imediat înainte de insert
+      const denumire = `Conductă distribuție gaze${g.mat ? ' ' + g.mat : ''} Dn${dn}`;
+      const sursa = `${eticheta} — tabel de dimensionare, citit automat din scanare`;
+      await garda();
+      const { data: deja } = await supa.from('ofertare_cantitati').select('id')
+        .eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).eq('sursa', sursa).limit(1);
+      if ((deja || []).length) continue;
+      await garda();
       await supa.from('ofertare_cantitati').insert({
         licitatie_id: doc.licitatie_id,
         // categoria o pune trigger-ul din dictionar (fn_categorie_cantitate)
-        denumire: `Conductă distribuție gaze${g.mat ? ' ' + g.mat : ''} Dn${dn}`,
+        denumire,
         um: 'm', cantitate: m, cantitate_plansa: m,
         status: 'extras', extras_de_ai: true,
-        sursa: `${eticheta} — tabel de dimensionare, citit automat din scanare`,
+        sursa,
         specificatii: [[...g.sdr].join('/'), [...g.zone].slice(0, 12).join(', ') || `${g.n} tronsoane`].filter(Boolean).join(' · '),
         diferenta_nota: `Diametru care nu apare în cantitățile din memoriu. ${g.n} tronsoane citite din tabelul planșei.`,
       });
@@ -331,6 +345,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   const randTotal = retea.find((r: any) => /total/i.test(r.denumire || ''));
   if (randTotal) {
     const dinMemoriu = randTotal.cantitate === null ? null : Number(randTotal.cantitate);
+    await garda();
     await supa.from('ofertare_cantitati').update({
       cantitate_plansa: total,
       diferenta_nota: dinMemoriu !== null && Math.abs(dinMemoriu - total) >= 1
@@ -857,19 +872,30 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     });
     if (lease.ok) {
       try {
-        cantitati = await treciInCantitati(supa, w.doc, ctx.pentruCantitati, ctx.nrPlansa);
+        // CAS de deținere: citire_ai.transfer.rulare + de_la trebuie să fie încă ale noastre și lease-ul neexpirat
+        const detineLease = async () => {
+          const { data: d } = await supa.from('ofertare_documente_atribuire').select('id, analiza').eq('id', docId).maybeSingle();
+          const tr = d?.analiza?.citire_ai?.transfer;
+          return !!tr && tr.rulare === rulareNoua && tr.de_la === deLaLease && tr.stare === 'in_curs' &&
+            Date.now() - Date.parse(tr.de_la) <= TRANSFER_EXPIRA_MS;
+        };
+        cantitati = await treciInCantitati(supa, w.doc, ctx.pentruCantitati, ctx.nrPlansa, detineLease);
       } catch (e) {
-        cantitati = { eroare: String((e as Error)?.message || e).slice(0, 200) };
+        cantitati = e instanceof LeasePierdut
+          ? { sarit: 'lease pierdut (expirat, preluat de altă rulare) — nu s-a mai scris', lease_pierdut: true }
+          : { eroare: String((e as Error)?.message || e).slice(0, 200) };
       }
       sumar.cantitati = cantitati;
+      if ((cantitati as any)?.lease_pierdut) { /* nu eliberăm: lease-ul e al altei rulări */ } else {
       const eroare = !!(cantitati as any)?.eroare;
       // eliberare: rezultatul + starea lease-ului (facut / eroare => poate fi reluat), doar dacă încă îl deținem
       await scrieCAS(supa, docId, lease.doc ? { ...lease.doc, analiza: lease.rezultat.upd.analiza } : w.doc, (d: any) => {
         const caX = d.analiza?.citire_ai;
-        if (caX?.transfer?.rulare !== rulareNoua) return { stop: { status: 409, error: 'lease pierdut' } };
+        if (caX?.transfer?.rulare !== rulareNoua || caX?.transfer?.de_la !== deLaLease) return { stop: { status: 409, error: 'lease pierdut' } };
         return { upd: { analiza: { ...d.analiza, citire_ai: { ...caX, rev: revNou(), sumar: { ...caX.sumar, cantitati },
           transfer: { ...caX.transfer, stare: eroare ? 'eroare' : 'facut', la: new Date().toISOString() } } } } };
       });
+      }
     } else {
       // alt deținător (sau conflict persistent): NU se transferă; se raportează
       cantitati = { sarit: lease.stop?.sarit || lease.stop?.error || 'lease indisponibil', transfer_in_curs_alta_rulare: !!lease.stop?.sarit };

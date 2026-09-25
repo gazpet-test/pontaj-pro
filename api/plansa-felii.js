@@ -91,6 +91,9 @@ export function decideRuta(meta, a) {
   if (!meta) return { randeaza: true, motiv: 'nicio imagine' }
   const s = a?.semnale || {}, fr = a?.imagine_selectata?.fractie_pagina
   if (s.raport_2_1_sub_1500 || s.imagine_sub_10_la_suta) return { randeaza: true, motiv: 'semnal imagine' }
+  // 25.09.2026: conținut vectorial/text desenat PESTE imagine (în bbox) => randare completă, imaginea singură pierde cotele
+  const ap = a?.acoperire_pdf
+  if (ap && ((ap.paths_peste || 0) + (ap.text_peste || 0)) > 0) return { randeaza: true, motiv: 'suprapunere vectorială peste imagine' }
   if ((s.paths_peste_500 || s.text_semnatura || s.byte_range) && (fr == null || fr < 0.5)) return { randeaza: true, motiv: 'semnal document' }
   if (Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN) return { randeaza: true, motiv: 'sub prag rezoluție (fallback)' }
   return { randeaza: false, motiv: 'scanare' }
@@ -114,6 +117,8 @@ export function acoperireScanPdf(a, scanMare = false) {
   if (ap.paths_in_afara == null) return { demonstrata: false, tip: null, motiv: 'conținutul din afara imaginii nu a putut fi verificat' }
   const afara = (ap.paths_in_afara || 0) + (ap.text_in_afara || 0) + (ap.imagini_in_afara || 0)
   if (afara) return { demonstrata: false, tip: null, motiv: `pagina are conținut în afara scanării (${ap.paths_in_afara} path-uri, ${ap.text_in_afara} texte, ${ap.imagini_in_afara || 0} imagini) — necitit` }
+  if (ap.paths_peste == null) return { demonstrata: false, tip: null, motiv: 'conținutul desenat peste scanare nu a putut fi verificat' }
+  if ((ap.paths_peste || 0) + (ap.text_peste || 0)) return { demonstrata: false, tip: null, motiv: `pagina are conținut desenat peste scanare (${ap.paths_peste} path-uri, ${ap.text_peste} texte) — necesită randare completă` }
   return { demonstrata: true, tip: 'imagine_pagina_intreaga', motiv: `scanarea acoperă ${Math.round(fr * 100)}% din pagină, fără conținut în afara ei` }
 }
 

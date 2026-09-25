@@ -11,7 +11,7 @@ const cale = (row: any, c: string) => {
   for (const p of parti) v = v == null ? undefined : v[p]
   return c.includes('->>') ? (v == null ? null : String(v)) : v
 }
-type OptDb = { inainteDeUpdateDoc?: (rows: any[]) => void; intarziereSelectCantitati?: number }
+type OptDb = { inainteDeUpdateDoc?: (rows: any[]) => void; intarziereSelectCantitati?: number; laSelectCantitati?: () => Promise<void> | void }
 function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
   const n = { ai: 0, scrieriDoc: 0, conflicte: 0, inserts: [] as string[] }
   const from = (t: string) => {
@@ -39,6 +39,7 @@ function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
       then: (ok: any, ko: any) => (async () => {
         if (op.tip === 'upd' && t === 'ofertare_documente_atribuire' && opt.inainteDeUpdateDoc) opt.inainteDeUpdateDoc(tabele[t])
         if (op.tip === 'sel' && t === 'ofertare_cantitati' && opt.intarziereSelectCantitati) await new Promise((r) => setTimeout(r, opt.intarziereSelectCantitati))
+        if (op.tip === 'sel' && t === 'ofertare_cantitati' && opt.laSelectCantitati) await opt.laSelectCantitati()
         return exec()
       })().then(ok, ko),
     }
@@ -354,4 +355,37 @@ Deno.test('leaseTransferOcupat: in_curs recent al altei rulări / făcut concure
   assert(leaseTransferOcupat({ stare: 'facut', de_la: '2026-09-25T11:59:10Z', rulare: 'A' }, 'B', pornit, acum))
   assertEquals(leaseTransferOcupat({ stare: 'facut', de_la: '2026-09-25T10:00:00Z', rulare: 'A' }, 'B', pornit, acum), null, 'transfer vechi => citire nouă transferă')
   assertEquals(leaseTransferOcupat({ stare: 'eroare', de_la: '2026-09-25T11:59:10Z', rulare: 'A' }, 'B', pornit, acum), null)
+})
+Deno.test('R4: lease expirat în timpul transferului lui A -> B preia; A revine și NU mai scrie (fără rând dublu, cantitățile lui B intacte)', async () => {
+  const Z4 = ['1_1', '1_2', '2_1', '2_2']
+  const pl = { ...PLANSA, zone_asteptate: Z4, acoperire_demonstrata: true }
+  let primul = true; let rb: any = null
+  let n: any, tabele: any, supa: any
+  const deps = () => ({ SERVICE: 'svc', API_KEY: 'k', supa, getUser: () => Promise.resolve(null), fetch: aiDn(n, 1) })
+  // A intră în transfer (a citit ofertare_cantitati) și „adoarme”: lease-ul lui expiră (de_la împins cu 6 min în urmă),
+  // B pornește, preia lease-ul expirat, transferă și îl eliberează ca „facut”; abia apoi A continuă.
+  const laSelect = async () => {
+    if (!primul) return
+    primul = false
+    const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
+    const tr = doc.analiza.citire_ai.transfer
+    assertEquals(tr.stare, 'in_curs')
+    await tabele.from('ofertare_documente_atribuire').update({ analiza: { ...doc.analiza, citire_ai: { ...doc.analiza.citire_ai,
+      transfer: { ...tr, de_la: new Date(Date.now() - 6 * 60 * 1000).toISOString() } } } }).eq('id', 470)
+    rb = await handler(cerereSvc({ doc_id: 470, de_la: 0 }), deps())
+  }
+  ;({ supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: pl } }, Z4, { laSelectCantitati: laSelect }))
+  const ra = await handler(cerereSvc({ doc_id: 470, de_la: 0 }), deps())
+  assert(rb, 'B a rulat în timp ce A dormea')
+  assertEquals([ra.status, rb!.status], [200, 200])
+  const [ja, jb] = [await ra.json(), await rb!.json()]
+  assertEquals(jb.cantitati?.adaugate, 1, 'B a transferat')
+  const rand = (await tabele.from('ofertare_cantitati').select()).data
+  assertEquals(rand.length, 1, 'un singur rând pe Dn110 PE')
+  assertEquals(n.inserts.filter((t: string) => t === 'ofertare_cantitati').length, 1)
+  assertEquals(rand[0].cantitate, 400, 'cantitatea lui B intactă')
+  assert(ja.cantitati?.sarit || ja.cantitati?.lease_pierdut, `A trebuie să raporteze lease pierdut: ${JSON.stringify(ja.cantitati)}`)
+  const doc = (await tabele.from('ofertare_documente_atribuire').select().eq('id', 470).maybeSingle()).data
+  assertEquals(doc.analiza.citire_ai.transfer.stare, 'facut')
+  assertEquals(doc.analiza.citire_ai.sumar.cantitati.adaugate, 1, 'sumarul e al lui B, nu suprascris de A')
 })
