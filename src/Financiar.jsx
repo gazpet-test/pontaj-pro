@@ -112,6 +112,7 @@ function buildInvoiceHTML(f) {
       <td style="padding:7px 8px;text-align:right;font-family:monospace">${fmt2(a.pret_unitar)}</td>
       <td style="padding:7px 8px;text-align:right;font-family:monospace;font-weight:600">${fmt2(a.valoare)}</td>
       <td style="padding:7px 8px;text-align:right">${fmt2(a.tva_pct!==undefined&&a.tva_pct!==''&&a.tva_pct!==null?a.tva_pct:TVA_DEFAULT)}%</td>
+      <td style="padding:7px 8px;text-align:right;font-family:monospace">${fmt2((parseFloat(a.valoare)||0)*(parseFloat(a.tva_pct!==undefined&&a.tva_pct!==''&&a.tva_pct!==null?a.tva_pct:TVA_DEFAULT)||0)/100)}</td>
     </tr>`).join('')
   return `<div style="width:794px;background:#fff;color:#000;font-family:Arial,sans-serif;font-size:11px;padding:28px">
   <table style="width:100%;border-collapse:collapse;margin-bottom:10px">
@@ -153,12 +154,13 @@ function buildInvoiceHTML(f) {
     <thead>
       <tr style="background:#f0f4f8">
         <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:center;width:4%">Nr.</th>
-        <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:left;width:42%">Denumirea produselor / serviciilor</th>
+        <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:left;width:34%">Denumirea produselor / serviciilor</th>
         <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:center;width:5%">U.M.</th>
         <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:right;width:7%">Cant.</th>
         <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:right;width:14%">Preț unitar (fără TVA) RON</th>
         <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:right;width:14%">Valoare Netă RON</th>
         <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:right;width:7%">TVA %</th>
+        <th style="padding:7px 8px;border-bottom:2px solid #aaa;text-align:right;width:8%">Valoare TVA RON</th>
       </tr>
     </thead>
     <tbody>${rows}</tbody>
@@ -875,7 +877,7 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
                   <label style={S.lbl}>Denumire *</label>
                   <input value={a.denumire} onChange={e=>setArticol(i,'denumire',e.target.value)} style={fieldStyle} placeholder="Contravaloare lucrări conf. situație nr...." />
                 </div>
-                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr auto',gap:8,alignItems:'flex-end'}}>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr auto',gap:8,alignItems:'flex-end'}}>
                   <div>
                     <label style={S.lbl}>U.M.</label>
                     <input value={a.um} onChange={e=>setArticol(i,'um',e.target.value)} style={fieldStyle} placeholder="buc" />
@@ -892,6 +894,12 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
                     <label style={S.lbl}>Valoare netă</label>
                     <input type="number" value={a.valoare} onChange={e=>setArticol(i,'valoare',e.target.value)} style={{...fieldStyle,color:G.green,fontWeight:600}} step="0.01" />
                   </div>
+                  {/* TKT-2026-0284: valoarea TVA pe poziție (calculată, aceeași regulă ca totals) */}
+                  {(() => { const cota = (a.tva_pct !== undefined && a.tva_pct !== '' && a.tva_pct !== null) ? parseFloat(a.tva_pct) : (parseFloat(form.tva_pct)||21)
+                    return <div>
+                      <label style={S.lbl}>TVA {cota||0}%</label>
+                      <div style={{...fieldStyle,color:G.yellow,fontFamily:'monospace'}}>{fmtLei((parseFloat(a.valoare)||0)*(cota||0)/100)}</div>
+                    </div> })()}
                   {form.articole.length > 1 && (
                     <button onClick={()=>removeArticol(i)} style={{padding:'8px 10px',background:'transparent',border:'none',color:G.red,fontSize:16,cursor:'pointer'}}>🗑</button>
                   )}
