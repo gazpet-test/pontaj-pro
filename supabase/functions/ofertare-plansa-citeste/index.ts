@@ -169,19 +169,33 @@ function tronsoaneUnice(lista: any[]) {
   return out;
 }
 
+// PE / OL / PEHD etc. din textul liber citit de AI (sau din denumirea poziției) — '' când nu se știe
+function materialNorm(x: unknown): string {
+  const t = faraDiacritice(String(x || '')).toUpperCase();
+  if (/\bPE(HD|100|80)?\b|POLIETILEN/.test(t)) return 'PE';
+  if (/\bOL\b|OTEL|L\d{3}|\bST\s?\d/.test(t)) return 'OL';
+  return '';
+}
+
 // Cantitatile deja existente vin din memoriu (partea scrisa). Plansa da a doua sursa
 // pentru aceleasi diametre, deci nu duplicam pozitii: completam `cantitate_plansa` si
 // notam diferenta. Pozitia se adauga doar daca diametrul nu exista deloc in oferta.
 // Primeste lista deja filtrata (vezi `pentruCantitati` mai jos).
 async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null) {
-  const peDiametru = new Map<number, { m: number; n: number; zone: Set<string> }>();
+  // 25.09.2026 (Jakarinos): gruparea era DOAR pe diametru — Dn110 PE și Dn110 OL (sau SDR11 vs SDR17) se
+  // adunau într-o singură cifră. Acum cheia e diametru + material; SDR-ul rămâne în specificații.
+  const peDiametru = new Map<string, { dn: number; mat: string; m: number; n: number; zone: Set<string>; sdr: Set<string> }>();
   for (const t of tronsoane) {
     if (!t.diametru_mm) continue;
-    const g = peDiametru.get(t.diametru_mm) || { m: 0, n: 0, zone: new Set<string>() };
+    const mat = materialNorm(t.material);
+    const cheie = `${t.diametru_mm}|${mat}`;
+    const g = peDiametru.get(cheie) || { dn: t.diametru_mm, mat, m: 0, n: 0, zone: new Set<string>(), sdr: new Set<string>() };
     g.m += t.lungime_m; g.n += 1;
     const z = String(t.zona || t.de_la || '').trim();
     if (z) g.zone.add(z);
-    peDiametru.set(t.diametru_mm, g);
+    const sdr = /sdr\s*(\d+)/i.exec(String(t.material || ''))?.[1];
+    if (sdr) g.sdr.add(`SDR${sdr}`);
+    peDiametru.set(cheie, g);
   }
   if (!peDiametru.size) return { adaugate: 0, actualizate: 0, ambigue: [], pe_diametre: {} };
 
@@ -206,16 +220,22 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   const ambigue: any[] = [];
   const peDiametreRaport: Record<string, number> = {};
 
-  for (const [dn, g] of [...peDiametru.entries()].sort((a, b) => b[0] - a[0])) {
+  for (const g of [...peDiametru.values()].sort((a, b) => b.dn - a.dn)) {
+    const dn = g.dn;
     const m = +g.m.toFixed(1);
-    peDiametreRaport[`Dn${dn}`] = m;
-    const candidati = retea.filter((r: any) =>
+    peDiametreRaport[`Dn${dn}${g.mat ? ' ' + g.mat : ''}`] = m;
+    let candidati = retea.filter((r: any) =>
       new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || '')));
+    // mai multe poziții pe același diametru => încearcă să departajezi după material, înainte de „ambiguu"
+    if (candidati.length > 1 && g.mat) {
+      const peMat = candidati.filter((r: any) => materialNorm(r.denumire) === g.mat);
+      if (peMat.length) candidati = peMat;
+    }
     // Daca acelasi diametru apare pe mai multe pozitii (doua localitati, doua loturi, doua
     // materiale), NU ghicim care e. Pana acum `.find()` lua prima si suprascria tacut — iar
     // o plansa ulterioara putea suprascrie ce pusese cea dinainte. Ambiguitatea se RAPORTEAZA.
     if (candidati.length > 1) {
-      ambigue.push({ dn, metri: m, pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
+      ambigue.push({ dn, material: g.mat || null, metri: m, pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
       continue;
     }
     const potrivit = candidati[0];
@@ -237,11 +257,11 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
       await supa.from('ofertare_cantitati').insert({
         licitatie_id: doc.licitatie_id,
         // categoria o pune trigger-ul din dictionar (fn_categorie_cantitate)
-        denumire: `Conductă distribuție gaze Dn${dn}`,
+        denumire: `Conductă distribuție gaze${g.mat ? ' ' + g.mat : ''} Dn${dn}`,
         um: 'm', cantitate: m, cantitate_plansa: m,
         status: 'extras', extras_de_ai: true,
         sursa: `${eticheta} — tabel de dimensionare, citit automat din scanare`,
-        specificatii: [...g.zone].slice(0, 12).join(', ') || `${g.n} tronsoane`,
+        specificatii: [[...g.sdr].join('/'), [...g.zone].slice(0, 12).join(', ') || `${g.n} tronsoane`].filter(Boolean).join(' · '),
         diferenta_nota: `Diametru care nu apare în cantitățile din memoriu. ${g.n} tronsoane citite din tabelul planșei.`,
       });
       adaugate++;
@@ -303,6 +323,10 @@ Deno.serve(async (req: Request) => {
   if (eList) return json({ error: eList.message }, 500);
   const felii = (fisiere || []).filter((f: any) => f.name.endsWith('.jpg')).sort((a: any, b: any) => a.name.localeCompare(b.name));
   if (!felii.length) return json({ error: 'nicio felie in storage' }, 404);
+  // 25.09.2026 (Jakarinos): manifestul zonelor AȘTEPTATE (scris de /api/plansa-felii). O felie care n-a ajuns
+  // în storage nu dădea nicio eroare — planșa părea citită complet, cu un total scurt.
+  const peStorage = new Set(felii.map((f: any) => f.name.replace('.jpg', '')));
+  const zoneLipsa: string[] = (plansa.zone_asteptate || []).map((z: string) => `z${z}`).filter((z: string) => !peStorage.has(z));
 
   const lot = felii.slice(deLa, deLa + FELII_PE_RULARE);
   const rezultate: any[] = [];
@@ -341,20 +365,34 @@ Deno.serve(async (req: Request) => {
   // tabel se numara doar el; adnotarile raman doar pe plansele fara tabel.
   // Masurat la Manastirea: cu adnotarile adunate ieseau 42.490 m, fara ele exact 37.320 m,
   // adica fix cat declara memoriul.
+  // 25.09.2026 (Jakarinos): „există tabel => ignorăm TOATE adnotările" pierdea tronsoanele de pe un
+  // diametru/material pe care tabelul nu-l are deloc (tabel parțial, alt obiect pe aceeași planșă).
+  // Regula: tabelul rămâne autoritar pe diametrele lui; adnotările pe diametre ABSENTE din tabel se numără
+  // și se marchează; restul adnotărilor sunt păstrate ca neconfirmate, vizibile pt control uman.
   const dinTabel = unice.filter((t: any) => text(t?.sursa) === 'tabel');
-  const pentruCantitati = dinTabel.length ? dinTabel : unice;
+  const cheieDM = (t: any) => `${t.diametru_mm || 0}|${materialNorm(t.material)}`;
+  const acoperitDeTabel = new Set(dinTabel.map(cheieDM));
+  const adnotari = dinTabel.length ? unice.filter((t: any) => text(t?.sursa) !== 'tabel') : [];
+  const adnotariInPlus = adnotari.filter((t: any) => t.diametru_mm && !acoperitDeTabel.has(cheieDM(t)))
+    .map((t: any) => ({ ...t, doar_adnotare: true }));
+  const pentruCantitati = dinTabel.length ? [...dinTabel, ...adnotariInPlus] : unice;
+  const adnotariNeconfirmate = adnotari.filter((t: any) => !adnotariInPlus.some((a: any) => a === t || (a.de_la === t.de_la && a.la === t.la && a.lungime_m === t.lungime_m)));
   const nrPlansa = toate.map((r: any) => r?.cartus?.plansa_nr).find(Boolean) ||
     doc.analiza?.cartus?.plansa_nr || null;
   const sumar: Record<string, unknown> = {
     felii_citite: toate.length,
     tronsoane_gasite: pentruCantitati.length,
     tronsoane_brute: brute.length,
-    adnotari_lasate_deoparte: unice.length - pentruCantitati.length,
+    adnotari_lasate_deoparte: adnotariNeconfirmate.length,
+    adnotari_numarate_in_plus: adnotariInPlus.length,
+    adnotari_neconfirmate_m: +adnotariNeconfirmate.reduce((s: number, t: any) => s + (Number(t.lungime_m) || 0), 0).toFixed(1),
     lungime_totala_m: +pentruCantitati.reduce((s: number, t: any) => s + t.lungime_m, 0).toFixed(1),
     tabele: [...new Set(toate.flatMap((r: any) => (r.tabele || []).map((t: any) => t.denumire)).filter(Boolean))],
     subtraversari: toate.flatMap((r: any) => r.subtraversari || []).length,
     bransamente: toate.flatMap((r: any) => r.bransamente || []).length,
     erori: toate.filter((r: any) => r.eroare).length,
+    ...(zoneLipsa.length ? { zone_lipsa: zoneLipsa } : {}),
+    ...(plansa.rezolutie_redusa ? { rezolutie_redusa: plansa.rezolutie_redusa } : {}),
   };
 
   // Cand s-a citit toata plansa, cifrele trec singure in cantitati. Daca pasul asta
@@ -366,7 +404,11 @@ Deno.serve(async (req: Request) => {
   // reala. Mai bine nu transferam si spunem de ce, decat sa dam o cifra in care nu se poate
   // avea incredere. Feliile esuate se pot relua, citirea deja platita nu se pierde.
   let cantitati: unknown = null;
-  if (gata && sumar.erori) {
+  if (gata && zoneLipsa.length) {
+    cantitati = { amanat: `${zoneLipsa.length} zone din planșă lipsesc din storage (${zoneLipsa.slice(0, 6).join(', ')}) — ` +
+      `cifrele NU s-au trecut in cantitati. Retaie planșa („recitește") și citește din nou.` };
+    sumar.cantitati = cantitati;
+  } else if (gata && sumar.erori) {
     cantitati = { amanat: `${sumar.erori} feli${sumar.erori === 1 ? 'e' : 'i'} n-au putut fi citite — ` +
       `cifrele NU s-au trecut in cantitati, fiindca totalul ar fi incomplet si ar arata ca o diferenta reala. ` +
       `Reia felia esuata si transferul se face singur.` };
@@ -396,7 +438,7 @@ Deno.serve(async (req: Request) => {
       // 25.09.2026: citită dar nimic extras (0 tronsoane, 0 tabele, 0 m) — rămâne procesat, dar marcat
       // ca să fie interogabil și UI-ul să ofere „recitește fin".
       const gol = !(sumar.tronsoane_gasite as number) && !(sumar.tabele as unknown[]).length && !(sumar.lungime_totala_m as number)
-      upd.eroare = sumar.erori ? `${sumar.erori} zone necitite (se pot relua)` : gol ? 'citită fără rezultat' : null;
+      upd.eroare = zoneLipsa.length ? `${zoneLipsa.length} zone lipsă (retaie planșa)` : sumar.erori ? `${sumar.erori} zone necitite (se pot relua)` : gol ? 'citită fără rezultat' : null;
       upd.procesat_la = new Date().toISOString();
     }
   }

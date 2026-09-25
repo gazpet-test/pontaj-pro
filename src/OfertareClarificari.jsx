@@ -25,6 +25,8 @@ const S = {
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
 const CLAR_STATUS = {
+  // 25.09.2026: propunere automată cu motiv NECONFIRMAT (ex. planșe necitibile) — nu intră la trimis până nu o confirmă responsabilul
+  propunere: ['💭 propunere — motiv neconfirmat', G.yellow],
   de_trimis: ['📝 de trimis', G.orange],
   trimisa:   ['📮 trimisă',   G.blue],
   raspunsa:  ['✅ răspunsă',  G.green],
@@ -482,6 +484,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       {q.origine === 'manual' && (q.citita_la
                         ? <span title={q.citita_rezumat || ''} style={{ fontSize:10.5, fontWeight:700, color:G.green }}>✓ citită de platformă {new Date(q.citita_la).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</span>
                         : <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.yellow, borderColor:G.yellow + '66' }} disabled={citind === q.id} onClick={() => citesteClarificare(q)}>{citind === q.id ? '⏳ citesc…' : '⚠ necitită — 🤖 citește PDF-ul'}</button>)}
+                      {q.status === 'propunere' && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.green, borderColor:G.green + '66' }}
+                        title="Ai verificat că datele chiar lipsesc (nu sunt în memoriu, F3 sau alt document) — ciorna trece la „de trimis”"
+                        onClick={() => { setQ(q.id, 'status', 'de_trimis'); saveQ({ ...q, status: 'de_trimis', _mod: true }) }}>✅ Confirm motivul — de trimis</button>}
                       {q.sursa && <span style={{ fontSize:11, color:G.dim }}>sursa: {q.sursa}</span>}
                       {q.fisier_path && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={async () => {
                         const { data } = await supabase.storage.from('ofertare').createSignedUrl(q.fisier_path, 600)

@@ -12,35 +12,15 @@
 import { createClient } from '@supabase/supabase-js'
 import sharp from 'sharp'
 
-// 25.09.2026: planșele VECTORIALE (text convertit în curbe, fără scanare) se randează cu MuPDF (WASM pur,
-// fără dependențe native — merge pe Vercel Node). Import leneș: doar când e nevoie, ca să nu încărcăm ~10MB wasm degeaba.
-const DPI_VECTOR = 200     // A0/A1 la 200 dpi => cotele (text de 1.5–2mm) au ~12–16px, lizibile pe felii de 1600px
-const MAX_LATURA_RANDARE = 9000 // plafon pe latura randată (memorie wasm: 9000x9000x3 = 243MB)
-const MAX_PAGINI_VECTOR = 6
-export async function randeazaVectorial(buf) {
-  const mupdf = await import('mupdf')
-  const doc = mupdf.Document.openDocument(buf, 'application/pdf')
-  const pagini = []
-  try {
-    const n = Math.min(doc.countPages(), MAX_PAGINI_VECTOR)
-    for (let i = 0; i < n; i++) {
-      const pag = doc.loadPage(i)
-      const [x0, y0, x1, y1] = pag.getBounds()
-      const zoom = Math.min(DPI_VECTOR / 72, MAX_LATURA_RANDARE / Math.max(x1 - x0, y1 - y0))
-      const pix = pag.toPixmap(mupdf.Matrix.scale(zoom, zoom), mupdf.ColorSpace.DeviceRGB, false, true)
-      const w = pix.getWidth(), h = pix.getHeight()
-      // PNG din mupdf, apoi sharp face restul (decupaje, jpeg) exact ca la scanări
-      const png = Buffer.from(pix.asPNG())
-      pix.destroy(); pag.destroy()
-      pagini.push({ img: png, latime: w, inaltime: h, dpi: Math.round(zoom * 72) })
-    }
-  } finally { doc.destroy() }
-  return pagini
-}
+// 25.09.2026: planșele VECTORIALE se randează cu pdf.js + @napi-rs/canvas (vezi _randare-pdf.js).
+// MuPDF a fost scos în aceeași zi: licență AGPL, risc pe o platformă folosită prin internet.
+import { randeazaVectorial } from './_randare-pdf.js'
+const DPI_VECTOR_FIN = 300 // „recitește fin" pe vectorial: randare mai densă, felii normale de 1600px
 
 const LATURA = 1600        // latura unei felii trimise la AI
 const SUPRAPUNERE = 0.12   // 12% ca sa nu taiem un rand de tabel exact pe margine
-const MAX_FELII = 40
+const MAX_FELII = 60      // 25.09.2026: 40 forța mărirea decupajelor + micșorare => rezoluția se pierdea (Jakarinos)
+const MICSORARE_MAX_OK = 0.8 // sub atât, textul de 1.5mm devine nesigur — se marchează rezolutie_redusa
 const LATURA_FIN = 1000    // 25.09.2026 „recitește fin": zone mai mici din original => rezolutie efectiva mai mare
 const MAX_FELII_FIN = 80
 const MIN_LATURA_SCAN = 2000 // sub atat, cea mai mare imagine din PDF nu e planșa (ex. sigla semnaturii EasySign)
@@ -161,7 +141,7 @@ export default async function handler(req, res) {
   if (ePdf && (!meta || Math.max(meta.width || 0, meta.height || 0) < MIN_LATURA_SCAN)) {
     vectorial = true
     let pagini = [], eroareRandare = null
-    try { pagini = await randeazaVectorial(buf) } catch (e) { eroareRandare = String(e?.message || e).slice(0, 160) }
+    try { pagini = await randeazaVectorial(buf, corp.fin === true ? DPI_VECTOR_FIN : undefined) } catch (e) { eroareRandare = String(e?.message || e).slice(0, 160) }
     for (const [i, p] of pagini.entries()) {
       const v = await esteCitibila(p.img)
       if (v.citibila) surse.push({ img: p.img, meta: { width: p.latime, height: p.inaltime }, verdict: v, prefix: pagini.length > 1 ? `p${i + 1}_` : '', dpi: p.dpi })
@@ -206,7 +186,7 @@ export default async function handler(req, res) {
   const fin = corp.fin === true
   const maxFelii = Math.floor((fin ? MAX_FELII_FIN : MAX_FELII) / surse.length) || 1
   const grila = (meta) => {
-    let latura = fin ? LATURA_FIN : LATURA, pas = 0, coloane = 0, randuri = 0
+    let latura = fin && !vectorial ? LATURA_FIN : LATURA, pas = 0, coloane = 0, randuri = 0
     for (let i = 0; i < 12; i++) {
       pas = Math.floor(latura * (1 - SUPRAPUNERE))
       coloane = Math.max(1, Math.ceil(meta.width / pas))
@@ -236,14 +216,17 @@ export default async function handler(req, res) {
       if (width < 50 || height < 50) continue
       const zona = `${prefix}${r + 1}_${c + 1}`
       try {
-        const iesire = await sharp(sursa, { limitInputPixels: false, failOn: 'none' })
+        const decupaj = sharp(sursa, { limitInputPixels: false, failOn: 'none' })
           .extract({ left, top, width, height })
           .resize({ width: LATURA, height: LATURA, fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 82 }).toBuffer()
+        const iesire = await decupaj.clone().jpeg({ quality: 82 }).toBuffer()
+        // felie albă (margine, spațiu gol) — se păstrează în manifest, dar se știe că n-are ce da
+        const st = await sharp(iesire).greyscale().stats()
+        const goala = (st.channels[0]?.stdev ?? 99) < 1.5
         const cale = `${bazaCale}/z${zona}.jpg`
         const { error } = await supa.storage.from('ofertare').upload(cale, iesire, { contentType: 'image/jpeg', upsert: true })
         if (error) { felii.push({ zona, eroare: error.message }); continue }
-        felii.push({ zona, cale, left, top, width, height, kb: Math.round(iesire.length / 1024) })
+        felii.push({ zona, cale, left, top, width, height, kb: Math.round(iesire.length / 1024), ...(goala ? { goala: true } : {}) })
       } catch (e) {
         felii.push({ zona, eroare: String(e?.message || e).slice(0, 120) })
       }
@@ -253,6 +236,14 @@ export default async function handler(req, res) {
   const { meta: m0, verdict, g: { latura, coloane, randuri } } = surse[0]
 
   const reusite = felii.filter((f) => f.cale)
+  // Manifest: zonele AȘTEPTATE (toate, inclusiv cele căzute la upload) — citirea compară cu ce găsește în
+  // storage și nu declară planșa completă dacă lipsește vreuna (Jakarinos, 25.09.2026).
+  const zoneAsteptate = felii.map((f) => f.zona)
+  // Micșorarea efectivă: decupaj > LATURA => felia salvată e redusă. Sub 0.8 cotele mici devin nesigure.
+  const micsorare = Math.min(...surse.map((s) => Math.min(1, LATURA / s.g.latura)))
+  const rezolutieRedusa = micsorare < MICSORARE_MAX_OK
+    ? `felii micșorate la ${Math.round(micsorare * 100)}% (planșă foarte mare) — cotele mici pot fi ratate; folosește „recitește fin"`
+    : null
   // Coloana `analiza` tine mai multe lucruri despre acelasi document (tabelul de
   // dimensionare citit, rezultatul citirii AI). Scriem DOAR cheia `plansa`, altfel
   // sterge restul — asa s-a pierdut o data tabelul de 18 tronsoane de pe plansa 1.1.
@@ -263,6 +254,8 @@ export default async function handler(req, res) {
       felii: reusite.length, randuri, coloane, latura, fin,
       ...(vectorial ? { vectorial: true, randat: true, dpi: surse[0].dpi, pagini: surse.length } : {}),
       cale_felii: bazaCale, verificare: verdict,
+      zone_asteptate: zoneAsteptate, felii_goale: reusite.filter((f) => f.goala).length,
+      micsorare: +micsorare.toFixed(2), rezolutie_redusa: rezolutieRedusa,
     },
   }
   await supa.from('ofertare_documente_atribuire')
@@ -270,5 +263,5 @@ export default async function handler(req, res) {
   // planșa a devenit citibilă prin randare => lista din ciorna automată (dacă există) se reîmprospătează
   const clarificare = vectorial ? await clarificareAuto(supa, doc.licitatie_id) : null
 
-  return res.status(200).json({ citibila: true, vectorial, clarificare, pagini: surse.length, latime: m0.width, inaltime: m0.height, felii: reusite.length, esuate: felii.length - reusite.length, cale_felii: bazaCale, lista: reusite })
+  return res.status(200).json({ citibila: true, vectorial, clarificare, pagini: surse.length, latime: m0.width, inaltime: m0.height, felii: reusite.length, esuate: felii.length - reusite.length, rezolutie_redusa: rezolutieRedusa, cale_felii: bazaCale })
 }

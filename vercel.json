@@ -11,7 +11,7 @@
     "api/plansa-felii.js": {
       "maxDuration": 300,
       "memory": 3009,
-      "includeFiles": "node_modules/mupdf/dist/{mupdf.js,mupdf-wasm.js,mupdf-wasm.wasm}"
+      "includeFiles": "node_modules/{pdfjs-dist,@napi-rs}/**"
     },
     "api/pdf-sparge.js": {
       "maxDuration": 300,

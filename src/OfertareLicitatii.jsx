@@ -688,7 +688,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   useEffect(() => {
     if (!licitatie?.id || !docs) return
     supabase.from('ofertare_clarificari').select('id, sursa').eq('licitatie_id', licitatie.id)
-      .eq('origine', 'automat').like('cheie', 'auto_planse_%').eq('status', 'de_trimis').order('id', { ascending: false }).limit(1)
+      .eq('origine', 'automat').like('cheie', 'auto_planse_%').in('status', ['propunere', 'de_trimis']).order('id', { ascending: false }).limit(1)
       .then(({ data }) => setClarAuto(data?.[0] ? { id: data[0].id, n: String(data[0].sursa || '').replace('planse_auto:', '').split(',').filter(Boolean).length } : null))
   }, [licitatie?.id, docs])
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
@@ -3310,7 +3310,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['detalii', '📝 Detalii & decizie'],
     ['verificari', `🔍 Verificări${sx.verdict ? ` · ${sx.verdict.toUpperCase()}` : ''}`],
   ]
-  const CL_ST = { de_trimis: ['📝 de trimis', G.orange], trimisa: ['📮 trimisă', G.blue], raspunsa: ['✅ răspunsă', G.green] }
+  const CL_ST = { propunere: ['💭 propunere', G.yellow], de_trimis: ['📝 de trimis', G.orange], trimisa: ['📮 trimisă', G.blue], raspunsa: ['✅ răspunsă', G.green] }
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.75)', zIndex:1000, display:'flex', alignItems:'flex-start', justifyContent:'center', overflowY:'auto', padding:'22px 14px' }} onClick={onClose}>
