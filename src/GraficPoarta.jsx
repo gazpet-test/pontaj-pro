@@ -12,7 +12,9 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 // R5 (Copilot 25.09.2026): fronturile și rândul „cant" iau DOAR cantități validate de om (status='validat').
-import { controlCantitatiGrafic, fronturiDinCantitati } from './ofertareCantitatiAprobare.js'
+import { fronturiDinCantitati } from './ofertareCantitatiAprobare.js'
+// R5 runda 4: checklist-ul porții = funcție pură, recalculată ÎNTREAGĂ pe cantitățile recitite înainte de îngheț
+import { BRANS_PE_KM, totalFronturi, durataMaxDinCerinte, calculeazaPoartaGrafic } from './graficPoartaCalcul.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -43,14 +45,12 @@ const PARAM_DEFAULT = {
   include_bransamente: true,     // Răzvan 04.09.2026: în 98% din contracte branșamentele sunt incluse
   nr_bransamente: 0,             // 0 = necunoscut → motorul estimează BRANS_PE_KM buc/km
   srm: false, srm_zile: 120,
-  fronturi: [],                  // [{nume, lungime_m, dn, echipe}]
+  fronturi: [],                  // [{nume, lungime_m, dn, echipe, cantitate_id, baza, lungime_sursa} | {…, manual: true}]
   jaloane: ['Ordin administrativ de începere', 'Predare / preluare amplasament', 'Recepție la terminarea lucrărilor'],
   ferestre_operator: '',         // text liber: cuplări, avize, autorizații spargere
 }
 
-// Branșamente/km când numărul nu e în documentație: media Finta (sat compact de câmpie, 590 branș. / 17,4 km rețea PE).
-// Hoghilag (20/km) e sat de munte, răsfirat — nu e reprezentativ (Răzvan 04.09.2026).
-const BRANS_PE_KM = 34
+// BRANS_PE_KM (media Finta, 34 branș./km) și totalFronturi: mutate în graficPoartaCalcul.js (R5 runda 4).
 const zileLuni = (luni) => Math.round((Number(luni) || 0) * 30.44)
 const addZile = (iso, n) => { if (!iso) return ''; const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
 
@@ -150,7 +150,6 @@ export function motorPEHD(p, norme) {
   rows.forEach((r, i) => { r.ordine = i + 1; delete r._grup; delete r._fix; r.predecesori = r.predecesori.map(({ _mat, ...x }) => x) })
   return { rows, factor, intern, total: cpmTotal(rows) }
 }
-const totalFronturi = (p) => (p.fronturi || []).reduce((s, f) => s + (Number(f.lungime_m) || 0), 0)
 
 // CPM minimal (forward pass) pe rânduri cu id temporar — durata totală
 function cpmTotal(rows) {
@@ -225,12 +224,8 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   }
   useEffect(() => { load() }, [licitatieId])
 
-  // durata maximă din cerințe („36 de luni", „maximum 36 luni")
-  const durataMax = useMemo(() => {
-    let m = null
-    cerinte.forEach(c => { const x = (c.text_cerinta || '').match(/(\d{1,3})\s*(?:de\s*)?luni/i); if (x && /durat|execu|depăș|maxim/i.test(c.text_cerinta)) { const v = Number(x[1]); if (!m || v < m) m = v } })
-    return m
-  }, [cerinte])
+  // durata maximă din cerințe („36 de luni", „maximum 36 luni") — graficPoartaCalcul.js
+  const durataMax = useMemo(() => durataMaxDinCerinte(cerinte), [cerinte])
 
   const setParam = (k, v) => { setP(x => ({ ...x, [k]: v })); setDirty(true) }
   const setFront = (i, k, v) => { setP(x => ({ ...x, fronturi: x.fronturi.map((f, j) => j === i ? { ...f, [k]: v } : f) })); setDirty(true) }
@@ -259,34 +254,10 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
     setDirty(false); showToast('Parametri salvați.')
   }
 
-  // ── Checklist-ul porții: fiecare rând = {k, titlu, stare: ok|warn|block, detalii} ──
-  const poarta = useMemo(() => {
-    if (!p) return []
-    const out = []
-    // R5 (Copilot 25.09.2026): „cant" = BLOCK cât timp un rând de rețea nu e validat de om (vezi ofertareCantitatiAprobare.js).
-    const cc = controlCantitatiGrafic(cantitati, p.cantitati_asumate)
-    const totalRetea = cc.totalRetea
-    const reteaRows = cc.retea
-    out.push({ k: 'cant', titlu: 'Cantități rețea în platformă — validate de om', stare: cc.stare, detalii: cc.detalii })
-    const lf = totalFronturi(p)
-    const ref = Number(totalRetea?.cantitate) || reteaRows.reduce((s, c) => s + (Number(p.cantitati_asumate === 'plansa' ? c.cantitate_plansa : c.cantitate) || 0), 0)
-    const dev = ref ? Math.abs(lf - ref) / ref : 1
-    out.push({ k: 'front', titlu: 'Fronturi de lucru (localități / tronsoane)', stare: !p.fronturi?.length ? 'block' : dev > 0.1 ? 'warn' : 'ok',
-      detalii: !p.fronturi?.length ? 'nedefinite — „Propune din cantități" apoi ajustezi' : `${p.fronturi.length} fronturi, ${lf.toLocaleString('ro-RO')} m (${ref ? Math.round(lf / ref * 100) + '% din rețea' : 'fără referință'})` })
-    const nv = norme.filter(n => n.tip_lucrare === p.tip_lucrare)
-    const val = nv.filter(n => n.incredere === 'validat')
-    out.push({ k: 'norme', titlu: 'Norme de productivitate validate', stare: !val.length ? 'block' : val.length < nv.length ? 'warn' : 'ok',
-      detalii: `${val.length} validate din ${nv.length} pentru ${p.tip_lucrare}${val.length ? ' (' + val.map(n => `${n.cod} ${n.productie_zi} ${n.um}/zi`).join(', ') + ')' : ''}` })
-    out.push({ k: 'echipe', titlu: 'Echipe alocate', stare: Number(p.echipe) >= 1 ? 'ok' : 'block', detalii: `${p.echipe || 0} echipe de rețea simultane · mediu ${p.mediu}` })
-    const dl = Number(p.durata_luni)
-    out.push({ k: 'durata', titlu: 'Data de start + durata ofertată', stare: !p.data_start || !dl ? 'block' : (durataMax && dl > durataMax) ? 'block' : 'ok',
-      detalii: `${p.data_start || 'fără dată'} · ${dl || '—'} luni${durataMax ? ` (maxim din cerințe: ${durataMax} luni)` : ' (nu am găsit durata maximă în cerințe)'}${durataMax && dl > durataMax ? ' — DEPĂȘEȘTE' : ''}` })
-    out.push({ k: 'cerinte', titlu: 'Cerințe de grafic extrase din registru', stare: cerinte.length ? 'ok' : 'block', detalii: `${cerinte.length} cerințe (durată, jaloane, format, resurse)` })
-    out.push({ k: 'brans', titlu: 'Branșamente', stare: p.include_bransamente === null ? 'block' : (p.include_bransamente && !Number(p.nr_bransamente)) ? 'warn' : 'ok',
-      detalii: p.include_bransamente === null ? 'nedecis: contractul include branșamente?' : p.include_bransamente ? (Number(p.nr_bransamente) ? `da, ${p.nr_bransamente} buc` : `da, număr necunoscut → estimat ${BRANS_PE_KM}/km, media Finta (~${Math.round(totalFronturi(p) / 1000 * BRANS_PE_KM)} buc); completează când vine clarificarea`) : 'nu (doar rețeaua)' })
-    out.push({ k: 'ferestre', titlu: 'Constrângeri operator (cuplări, avize, spargeri)', stare: (p.ferestre_operator || '').trim() ? 'ok' : 'warn', detalii: (p.ferestre_operator || '').trim() || 'necompletate — merg în notele graficului' })
-    return out
-  }, [p, cantitati, norme, cerinte, durataMax])
+  // ── Checklist-ul porții: fiecare rând = {k, titlu, stare: ok|warn|block, detalii} — graficPoartaCalcul.js ──
+  // R5 runda 4: rândul „front" ia ca referință totalul declarat DOAR dacă e validat și blochează fronturile salvate
+  // care nu vin din rânduri validate cu cifra de acum (salvate înainte de 26.09 / rând redeschis / cifră schimbată).
+  const poarta = useMemo(() => calculeazaPoartaGrafic({ p, cantitati, norme, cerinte, durataMax }), [p, cantitati, norme, cerinte, durataMax])
   const blocat = poarta.some(r => r.stare === 'block')
 
   const genereaza = async () => {
@@ -299,9 +270,11 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
       const { data: proaspete, error: eCant } = await supabase.from('ofertare_cantitati')
         .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status').eq('licitatie_id', licitatieId).order('id')
       if (eCant) throw new Error('nu s-au putut reciti cantitățile — nu se generează (' + eCant.message + ')')
-      const ccProaspat = controlCantitatiGrafic(proaspete || [], p.cantitati_asumate)
-      if (ccProaspat.stare === 'block') { setCantitati(proaspete || []); throw new Error('între timp cantitățile nu mai sunt toate validate: ' + ccProaspat.detalii) }
-      const poartaInghetata = poarta.map(r => r.k === 'cant' ? { ...r, stare: ccProaspat.stare, detalii: ccProaspat.detalii } : r)
+      // R5 runda 4 (verificator R3): se recalculează TOATA poarta pe cantitățile proaspete (nu doar rândul „cant") —
+      // referința și proveniența fronturilor depind și ele de ce e validat ACUM; ce se îngheață e poarta recalculată.
+      const poartaInghetata = calculeazaPoartaGrafic({ p, cantitati: proaspete || [], norme, cerinte, durataMax })
+      const blocate = poartaInghetata.filter(r => r.stare === 'block')
+      if (blocate.length) { setCantitati(proaspete || []); throw new Error('între timp poarta s-a închis — ' + blocate.map(r => `${r.titlu}: ${r.detalii}`).join(' · ')) }
       if (dirty) await salveaza()
       const { rows: gen, factor, intern, total } = motorPEHD(p, norme)
       // 1. înghețăm versiunea (înainte de a atinge grafic_activitati)
@@ -400,7 +373,19 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <span style={{ ...lbl, marginBottom: 0 }}>Fronturi de lucru (ordinea = ordinea de execuție; se împart pe echipe rotativ)</span>
                 <button style={{ ...S.btnS, padding: '3px 9px', fontSize: 11, marginLeft: 'auto' }} onClick={propuneFronturi}>Propune din cantități</button>
-                <button style={{ ...S.btnS, padding: '3px 9px', fontSize: 11 }} onClick={() => setParam('fronturi', [...(p.fronturi || []), { nume: '', lungime_m: 0, dn: '', echipe: 1 }])}>＋</button>
+                {/* R5 runda 4: fronturile salvate fără legătură cu un rând de cantități (dinainte de 26.09) blochează poarta; omul le poate
+                    re-propune din cantități SAU le asumă explicit ca manuale (decizia lui, ca la ＋) */}
+                {(p.fronturi || []).some(f => !f.manual && f.cantitate_id == null) && (
+                  <button style={{ ...S.btnS, padding: '3px 9px', fontSize: 11, color: G.yellow }}
+                    title="Fronturi salvate fără legătură cu un rând de cantități validat. Le poți re-propune din cantități sau le asumi ca introduse manual."
+                    onClick={() => {
+                      const n = p.fronturi.filter(f => !f.manual && f.cantitate_id == null).length
+                      if (!window.confirm(`${n} fronturi nu vin dintr-un rând de cantități validat. Le păstrezi ca fronturi introduse MANUAL (cifrele sunt decizia ta, nu cantități validate)?`)) return
+                      setParam('fronturi', p.fronturi.map(f => (!f.manual && f.cantitate_id == null) ? { ...f, manual: true } : f))
+                    }}>✋ Le asum ca manuale</button>
+                )}
+                <button style={{ ...S.btnS, padding: '3px 9px', fontSize: 11 }} onClick={() => setParam('fronturi', [...(p.fronturi || []), { nume: '', lungime_m: 0, dn: '', echipe: 1, manual: true }])}
+                  title="Front introdus manual (cifra e decizia ta, nu vine dintr-un rând de cantități)">＋</button>
               </div>
               {(p.fronturi || []).map((f, i) => (
                 <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 90px 70px 60px 28px 28px 28px', gap: 6, marginBottom: 4 }}>

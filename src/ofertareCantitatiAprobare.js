@@ -68,6 +68,9 @@ export function controlCantitatiGrafic(cantitati, cantitatiAsumate) {
 
 // ── „Propune din cantități": fronturi DOAR din rândurile validate ──
 // Rândurile nevalidate nu se propun (ar deveni fronturi, apoi grafic_fronturi_m în poarta propunerii).
+// R5 runda 4 (verificator R3): fiecare front poartă PROVENIENȚA — cantitate_id (rândul-sursă), baza (coloana folosită) și
+// lungime_sursa (cifra rândului la propunere). grafic_parametri.parametri e jsonb: câmpurile noi nu cer schimbare de schemă,
+// iar consumatorii fronturilor (motorPEHD, v_ofertare_pt_stare.gp) citesc doar nume / lungime_m / dn / echipe.
 export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
@@ -81,9 +84,52 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
       lungime_m: Math.round(Number(c[baza] ?? c.cantitate)),
       dn: ((c.denumire || '').match(/D[ne]?\s*(\d{2,3})/i) || [])[1] || '',
       echipe: 1,
+      cantitate_id: c.id ?? null, baza, lungime_sursa: Number(c[baza] ?? c.cantitate),
     }
   })
   return { fronturi, excluse, m_excluse: excluse.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0) }
+}
+
+// ── Rândul „front" din poarta graficului (R5 runda 4, verificator R3) ──
+// (1) Referința: totalul declarat (rândul „total … m") DOAR dacă e validat; altfel suma rândurilor de rețea VALIDATE
+//     (pe baza aleasă). Înainte: un total 'extras' de 50.000 m era referința și putea da „ok" (ADV6).
+// (2) Fronturile SALVATE se verifică față de cantitățile de ACUM: un front care nu vine dintr-un rând validat cu aceeași
+//     cifră e BLOCK până la re-propunere. Cazuri: salvat înainte de 26.09 fără legătură (lic. 3: 6 fronturi / 29.985 m din
+//     04.09, baza „planșe"), rând-sursă nevalidat / șters / redeschis, altă bază, cifra rândului schimbată de la propunere.
+//     Un front introdus MANUAL (＋, `manual: true`) e decizia omului: trece, dar e numărat în detalii.
+export function controlFronturiGrafic(p, cantitati) {
+  const baza = bazaCol(p?.cantitati_asumate)
+  const retea = randuriFront(cantitati, baza)
+  const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && c.um === 'm') || null
+  const fronturi = p?.fronturi || []
+  const lf = fronturi.reduce((s, f) => s + (Number(f.lungime_m) || 0), 0)
+  const totalAprobat = esteAprobata(totalRetea) && nr(totalRetea.cantitate) > 0
+  const ref = totalAprobat ? nr(totalRetea.cantitate) : retea.filter(esteAprobata).reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0)
+  const refTxt = totalAprobat ? 'totalul declarat (validat)' : `rețeaua validată${totalRetea ? '; totalul declarat e nevalidat, nu e referință' : ''}`
+  const peId = new Map((cantitati || []).map(c => [c.id, c]))
+  const probleme = []
+  let manuale = 0
+  fronturi.forEach((f, i) => {
+    const et = `„${f.nume || `frontul ${i + 1}`}"`
+    if (f.manual) { manuale++; return }
+    if (f.cantitate_id == null) { probleme.push(`${et} e salvat fără legătură cu un rând de cantități (dinainte de 26.09.2026)`); return }
+    const c = peId.get(f.cantitate_id)
+    if (!c) { probleme.push(`${et}: rândul-sursă #${f.cantitate_id} nu mai există`); return }
+    if (!esteAprobata(c)) { probleme.push(`${et}: rândul-sursă #${c.id} nu e validat (${c.status || 'fără status'})`); return }
+    if ((f.baza || baza) !== baza) { probleme.push(`${et} e propus pe altă bază (${f.baza === 'cantitate_plansa' ? 'planșe' : 'memoriu / F3'})`); return }
+    const acum = nr(c[baza] ?? c.cantitate)
+    if (f.lungime_sursa != null && Math.abs(acum - Number(f.lungime_sursa)) >= 1)
+      probleme.push(`${et}: rândul-sursă #${c.id} s-a schimbat de la propunere (${fmt(f.lungime_sursa)} → ${fmt(acum)} m)`)
+  })
+  const base = { k: 'front', ref, lf, probleme, manuale, totalAprobat }
+  if (!fronturi.length) return { ...base, stare: 'block', detalii: 'nedefinite — „Propune din cantități" apoi ajustezi' }
+  if (probleme.length) return { ...base, stare: 'block',
+    detalii: `${probleme.length} din ${fronturi.length} fronturi nu vin din cantități validate cu cifra de acum — apasă „Propune din cantități" (sau adaugă-le manual cu ＋): ` +
+      probleme.slice(0, 4).join('; ') + (probleme.length > 4 ? `; … încă ${probleme.length - 4}` : '') }
+  const dev = ref ? Math.abs(lf - ref) / ref : 1
+  return { ...base, stare: dev > 0.1 ? 'warn' : 'ok',
+    detalii: `${fronturi.length} fronturi, ${fmt(lf)} m (${ref ? `${Math.round(lf / ref * 100)}% din ${refTxt}` : 'fără referință validată'})` +
+      (manuale ? ` · ${manuale} introduse manual` : '') }
 }
 
 // ── Poarta propunerii (H2): câmpurile din v_ofertare_cantitati_nevalidate ──
