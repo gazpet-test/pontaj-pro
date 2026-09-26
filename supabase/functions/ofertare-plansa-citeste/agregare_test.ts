@@ -4,7 +4,8 @@
 //   cazuri sintetice + fixture reală din planșa 470 (fixture_470.ts, z?_6 cu Nr + z?_7 cu lungimi).
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { agregaTronsoane, capacitateFasie, identificaRanduri, intervaleNr, MOTIV_AFARA_NR, MOTIV_COLOANA_NR, MOTIV_COLOANA_NR_FARA_GEOM, MOTIV_DN_ABSENT, MOTIV_DUBLA_PARTIALA,
-  MOTIV_FARA_GEOM_COLOANA_FIXATA, MOTIV_PESTE_CAPACITATE, notaRestTransfer, nrRand, raportIdentitate, textNrFaraLungime, textPlansa } from './handler.ts'
+  MOTIV_FARA_GEOM_COLOANA_FIXATA, MOTIV_PESTE_CAPACITATE, notaRestTransfer, nrRand, raportIdentitate, textNrFaraLungime, textPlansa,
+  descriereRestDn, dnuriDenumire, textFaraDn } from './handler.ts'
 import { AZI_470, feliiDin470, RANDURI_Z6 } from './fixture_470.ts'
 
 const total = (l: any[]) => l.reduce((s, t) => s + t.lungime_m, 0)
@@ -859,4 +860,42 @@ Deno.test('runda 8 B3: două tabele cu aceleași antete, Nr 1–5 (z1_2) și 20�
   const f2 = feliiDin470(); const z26 = f2.find((q) => q.eticheta === 'z2_6')!, z27: any = f2.find((q) => q.eticheta === 'z2_7')!
   const k = z26.tabele[0].randuri.findIndex((q: any) => q['Nr crt'] === '50'); z26.tabele[0].randuri.splice(k, 1); z27.tabele[0].randuri.splice(k, 1); z27.tronsoane.splice(k, 1)
   assertEquals(identificaRanduri(f2, { doc: 470, plansa: PLANSA470_REAL }).nrLipsa.map((x) => [x.lipsesc, x.intre_grupuri]), [['50', undefined]])
+})
+
+// ---- 26.09.2026 — runda 9 (verificatorul rundei 8): teste care pică pe b5e7ecd ----
+Deno.test('runda 9 NFL-FP: același tabel văzut ÎNTREG în două felii alăturate, Nr în ambele cu antet diferit („Nr crt” / „Nr”) => nr_fara_lungime gol, totalul complet (b5e7ecd: fals „fără lungime” pe Nr 1–4, total_sigur_incomplet)', () => {
+  const nrs = ['1', '2', '3', '4']
+  const rows = (col: string) => nrs.map((n) => { const r: any = R(n, { 'Strada': 'S' + n, 'Lungime Km': `0,${n}00` }); if (col !== 'Nr crt') { r[col] = r['Nr crt']; delete r['Nr crt'] } return r })
+  const trs = nrs.map((n) => T({ zona: 'S' + n, lungime_m: Number(n) * 100 }))
+  const f = [felieTab('z1_4', rows('Nr crt'), trs), felieTab('z1_5', rows('Nr'), trs, ['Nr', ...COL.slice(1)])]
+  for (const opt of [{ doc: 1 }, { doc: 1, plansa: cuDpi(geomTaiere(7340, 1600)) }]) {
+    const r = identificaRanduri(structuredClone(f), opt)
+    assertEquals([r.sigure.length, r.total_sigur_m, r.nrFaraLungime], [4, 1000, []], opt.plansa ? 'cu geometrie' : 'fără geometrie')
+    assertEquals([raportIdentitate(r).sumar.total_sigur_incomplet, notaRestTransfer(r).incomplet], [undefined, undefined])
+  }
+  // control: aceeași pereche, dar rândul 3 și-a pierdut lungimea în AMBELE felii => rămâne semnalat (o singură dată)
+  const g = structuredClone(f)
+  for (const fl of g) { fl.tabele[0].randuri[2]['Lungime Km'] = ''; fl.tronsoane[2] = { ...fl.tronsoane[2], lungime_m: null } }
+  const r = identificaRanduri(g, { doc: 1 })
+  assertEquals([r.total_sigur_m, r.nrFaraLungime.map((x) => x.nr)], [700, ['3']])
+})
+Deno.test('runda 9: dnuriDenumire — un Dn = subtotal / poziție; interval sau mai multe Dn = total global (TOTAL-b)', () => {
+  assertEquals(dnuriDenumire('Total conducte De 110'), { dn: [110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea De 63–110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea Dn 63-110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total conducte Dn32 … Dn110'), { dn: [32, 110], interval: true })
+  assertEquals(dnuriDenumire('Total Dn63 și Dn110'), { dn: [63, 110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea De 60–110'), { dn: [110], interval: true }, 'interval cu un capăt nestandard: tot interval')
+  assertEquals(dnuriDenumire('TOTAL rețea distribuție'), { dn: [], interval: false })
+})
+Deno.test('runda 9: notaRestTransfer — Nr fără lungime pe cheia (Dn, \'\') (NFL-DN) și tronsoanele sigure fără Dn pe (?, material) + global + incomplet (DN0)', () => {
+  const idr = { faraIdentitate: [], conflicte: [], total_de_verificat_m: 0, nrFaraLungime: [{ nr: '2', zona: 'z1_1', dn: 90 }, { nr: '7', zona: 'z1_1' }] }
+  const r = notaRestTransfer(idr, [], [{ lungime_m: 300, material: 'PE100' }, { lungime_m: 50 }])
+  assertEquals(Object.keys(r.peDnMat).sort(), ['90|', '?|', '?|PE'])
+  assertEquals(descriereRestDn(r, '90|'), '1 rând Dn90 cu Nr citit, fără lungime (Nr 2; metri necunoscuți)')
+  assertEquals(descriereRestDn(r, '?|PE'), '1 tronson sigur fără Dn PE (300 m, Dn necitit — în nicio poziție)')
+  assert(r.global.endsWith(`; ${textFaraDn(2, 350)}`), r.global)
+  assertEquals(textFaraDn(2, 350), '2 tronsoane sigure fără Dn citit (350 m) — în lungimea planșei, dar în nicio poziție de cantități (Dn necunoscut)')
+  assertEquals(r.incomplet, true)
+  assertEquals(notaRestTransfer({ faraIdentitate: [], conflicte: [], total_de_verificat_m: 0 }, [], [{ lungime_m: 10 }]).incomplet, true, 'doar DN0 => incomplet')
 })

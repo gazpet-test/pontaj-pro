@@ -35,7 +35,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-26.12'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-26.13'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -120,6 +120,7 @@ export function textPlansa(nume: string, c: any): string {
     for (const k of (s.conflicte || [])) L.push(`- CONFLICT ${k.nr ? `Nr ${k.nr}` : k.identitate}: ${k.variante.map((v: any) => `${v.lungime_m} m${v.diametru_mm ? ` Dn${v.diametru_mm}` : ''} (${v.zone.join(', ')})`).join(' vs ')}`);
   }
   for (const x of (s.nr_lipsa || [])) L.push(`⚠ ${textNrLipsa(x).replace(/^secvență Nr incompletă/, 'SECVENȚĂ Nr INCOMPLETĂ')} — totalul sigur e incomplet`);
+  if (s.tronsoane_fara_dn_n) L.push(`⚠ FĂRĂ Dn: ${textFaraDn(s.tronsoane_fara_dn_n, s.tronsoane_fara_dn_m || 0)}`);
   if ((s.nr_fara_lungime || []).length) L.push(`⚠ Nr FĂRĂ LUNGIME: ${textNrFaraLungime(s.nr_fara_lungime, s.nr_fara_lungime_n || s.nr_fara_lungime.length)}; totalul sigur e incomplet`);
   for (const x of (s.comasari_neconfirmate || [])) L.push(`⚠ COMASARE NECONFIRMATĂ: ${x.nr ? `Nr ${x.nr}` : randuri(x.randuri)} din ${x.a} și ${x.b} ` +
     `(${x.axa === 'orizontal' ? 'felii alăturate, tabel întreg în ambele' : 'benzi diferite'}) numărate o dată — posibil două tabele identice`);
@@ -294,6 +295,16 @@ export const TOL_GEOM_PX = 2;
 // Diametre nominale reale (PE SR EN 1555 + OL DN). Orice altceva = citire greșită probabilă (debit, Di, viteză) => NU intră în
 // cantități, se raportează „de verificat". Runda 8: la nivel de modul (și rândul TOTAL se recunoaște după lipsa unui Dn standard).
 const DN_STANDARD = new Set([16,20,25,32,40,50,63,65,75,80,90,100,110,125,140,150,160,180,200,225,250,280,300,315,350,355,400,450,500,560,600,630,700,800]);
+// runda 9: Dn-urile standard numite într-o denumire de poziție + dacă denumirea are un INTERVAL de Dn („De 63–110”, „Dn 32-110”,
+// „Dn 32…110”). Folosit la alegerea rândului TOTAL: „total” cu un singur Dn = subtotal pe Dn (candidat), cu interval / ≥ 2 Dn = total global.
+export function dnuriDenumire(s: unknown): { dn: number[]; interval: boolean } {
+  const dn = new Set<number>(); let interval = false;
+  for (const m of faraDiacritice(String(s || '')).matchAll(/(?:\bdn|\bde|ø|Ø|φ)\s*(\d{2,3})\b(?:\s*(?:[-–—]|\.{2,3}|…)\s*(?:(?:dn|de|ø|Ø|φ)\s*)?(\d{2,3})\b)?/gi)) {
+    if (DN_STANDARD.has(Number(m[1]))) dn.add(Number(m[1]));
+    if (m[2]) { interval = true; if (DN_STANDARD.has(Number(m[2]))) dn.add(Number(m[2])); }
+  }
+  return { dn: [...dn].sort((a, b) => a - b), interval };
+}
 // B4: înălțimea minimă a unui rând de tabel, în mm pe planșă. Justificare (date reale, 470, 200 dpi): 52 de rânduri într-o bandă
 // de 1.600 px și 6–7 rânduri în fâșia de 192 px dintre benzi => rândul are 24–27,4 px ≈ 3,0–3,5 mm; textul de 1,5 mm (pragul de
 // lizibilitate din api/plansa-felii.js) cere cel puțin ~2 mm pe rând. Fără scară (scanare fără dpi / puncte PDF): 12 px (2 mm
@@ -867,6 +878,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   // tăcut rândul: semnal cu `alt_tabel` (un tabel A cu Nr 1–2 și un tabel B cu Nr 2 fără L și Nr 3 dădeau 3 rânduri, niciun semnal).
   const nrFaraLungime: { nr: string; zona: string; dn?: number; alt_tabel?: true }[] = [];
   const vazutNr = new Set<string>();
+  const vazutComp = new Set<number>();
   for (const fr of frag) {
     if (!fr.colNr || (!cuLungimi(fr) && !nrImperecheatCuL.has(fr.i))) continue;
     fr.randuri.forEach((rw, k) => {
@@ -874,6 +886,11 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
       if (!n || nrCuLungimeTabel.has(cheie) || vazutNr.has(cheie)) return;
       const membri = comp.get(rad(nod(fr, k)))!.map((i) => noduri[i]);
       if (membri.some((m) => nodLNesigur.has(`${m.fr.i}:${m.rand}`))) return;
+      // runda 9 (verificatorul rundei 8, minor NFL-FP): rândul are lungime într-o lectură împerecheată (același tabel văzut întreg în două
+      // felii alăturate, cu antetul Nr transcris altfel: `c.nrs` ține doar sig-ul primului fragment) => nu e „fără lungime”
+      if (membri.some((m) => valori.has(`${m.fr.i}:${m.rand}`))) return;
+      // … și același rând fizic (o componentă) se raportează o singură dată, chiar dacă fragmentele lui au antete diferite
+      const rc = rad(nod(fr, k)); if (vazutComp.has(rc)) return; vazutComp.add(rc);
       let dn: number | null = null;
       for (const m of membri) for (const h of m.fr.hdr) {
         if (dn !== null || h === m.fr.colNr || !E_COL_DN.test(h)) continue;
@@ -964,7 +981,10 @@ export class LeasePierdut extends Error { constructor() { super('lease pierdut')
 // Runda 7 (B3): `incomplet` = secvența Nr a unui tabel are goluri (rânduri fără nicio lectură, Dn și metri necunoscuți) =>
 // cifra din planșă e doar partea citită: numită în notă („pe planșă: secvență Nr incompletă …”), „extras” => „diferenta”.
 // Runda 8: și rândurile cu Nr citit, dar fără nicio lungime citită (`nrFaraLungime`, „… fără nicio lungime citită: Nr 50 (Dn40) …”).
-export type RestTransfer = { peDnMat: Record<string, { n: number; m: number; c?: number; mc?: number }>; global: string; incomplet?: boolean };
+// Runda 9 (verificatorul rundei 8): `f`/`fnr` = rânduri cu Nr citit, fără lungime, pe Dn-ul lor (cheia (Dn, '')) — ca Dn-ul să fie țintit
+// (poziția lui nu mai păstrează tăcut cifra veche); `s`/`ms` = rânduri SIGURE fără Dn citit (cheia ('?', material)), care nu intră în
+// nicio poziție (erau pierdute tăcut la transfer).
+export type RestTransfer = { peDnMat: Record<string, { n: number; m: number; c?: number; mc?: number; f?: number; fnr?: string[]; s?: number; ms?: number }>; global: string; incomplet?: boolean };
 export const randuri = (n: number) => `${n} ${n === 1 ? 'rând' : 'rânduri'}`;
 const fmtM = (x: number) => (+x.toFixed(1)).toLocaleString('ro-RO');
 export const cheieRest = (dn: unknown, material: unknown) => `${dn ? String(dn) : '?'}|${materialNorm(material)}`;
@@ -975,7 +995,9 @@ export function descriereRestDn(rest: RestTransfer | undefined, k: string): stri
   if (!x) return '';
   const dn = eticRest(k);
   return [x.n ? `${randuri(x.n)} ${dn} fără identitate sigură (${fmtM(x.m)} m)` : '',
-    x.c ? `${x.c} conflict${x.c === 1 ? '' : 'e'} ${dn} (până la ${fmtM(x.mc || 0)} m)` : ''].filter(Boolean).join('; ');
+    x.c ? `${x.c} conflict${x.c === 1 ? '' : 'e'} ${dn} (până la ${fmtM(x.mc || 0)} m)` : '',
+    x.f ? `${randuri(x.f)} ${dn} cu Nr citit, fără lungime (Nr ${(x.fnr || []).slice(0, 8).join(', ')}${(x.fnr || []).length > 8 ? ', …' : ''}; metri necunoscuți)` : '',
+    x.s ? `${x.s === 1 ? '1 tronson sigur' : `${x.s} tronsoane sigure`} ${dn} (${fmtM(x.ms || 0)} m, Dn necitit — în nicio poziție)` : ''].filter(Boolean).join('; ');
 }
 export const textNrLipsa = (x: { pagina: number; interval: [number, number]; lipsesc: string; n: number; nr_ilizibil?: number; intre_grupuri?: string; grupuri_felii?: string[] }) =>
   `secvență Nr incompletă: lipsesc Nr ${x.lipsesc} (p${x.pagina}, tabel cu Nr ${x.interval[0]}–${x.interval[1]}; ${randuri(x.n)} fără nicio lectură, metri necunoscuți` +
@@ -986,7 +1008,11 @@ export const textNrFaraLungime = (xs: { nr: string; zona?: string; dn?: number; 
   `${n === 1 ? '1 rând cu Nr citit, dar fără nicio lungime citită' : `${n} rânduri cu Nr citit, dar fără nicio lungime citită`}: Nr ` +
   `${xs.slice(0, 12).map((x) => `${x.nr}${x.dn || x.alt_tabel ? ` (${[x.dn ? `Dn${x.dn}` : '', x.alt_tabel ? 'același Nr are lungime doar într-un tabel cu alte antete' : ''].filter(Boolean).join('; ')})` : ''}`).join(', ')}${n > 12 ? ', …' : ''} — ` +
   `${n === 1 ? 'rândul există pe planșă, metrii lui nu sunt' : 'rândurile există pe planșă, metrii lor nu sunt'} în total`;
-export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[]; total_de_verificat_m: number; nrLipsa?: any[]; nrFaraLungime?: any[] }, nestandard: any[] = []): RestTransfer {
+// runda 9 (verificatorul rundei 8, MAJOR DN0): rândurile SIGURE (Nr și L citite) al căror Dn nu s-a citit intrau în total_sigur_m,
+// dar `treciInCantitati` le sărea (`if (!t.diametru_mm) continue`) fără niciun semnal: TOTAL „confirma” 900 când planșa avea 1.200 sigur.
+export const textFaraDn = (n: number, m: number) =>
+  `${n === 1 ? '1 tronson sigur' : `${n} tronsoane sigure`} fără Dn citit (${fmtM(m)} m) — în lungimea planșei, dar în nicio poziție de cantități (Dn necunoscut)`;
+export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[]; total_de_verificat_m: number; nrLipsa?: any[]; nrFaraLungime?: any[] }, nestandard: any[] = [], faraDn: any[] = []): RestTransfer {
   const fmt = fmtM;
   const peDnMat: RestTransfer['peDnMat'] = {};
   for (const t of idr.faraIdentitate) {
@@ -1013,7 +1039,23 @@ export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[];
   // runda 8: Nr citit fără lungime => același regim ca golul B3 (cifra din planșă e doar partea citită)
   const nf = idr.nrFaraLungime || [];
   if (nf.length) p.push(textNrFaraLungime(nf));
-  return { peDnMat, global: p.join('; '), ...(nl.length || nf.length ? { incomplet: true } : {}) };
+  // runda 9 (NFL-DN): rândul cu Nr citit, fără lungime, cu Dn cunoscut => și pe cheia (Dn, '') — poziția Dn-ului lui (fără grup sigur:
+  // „doar de verificat”, golire pe „extras”; cu grup sigur: nota grupului + MY-T4 pe celelalte poziții de pe Dn). Fără metri adunați.
+  for (const x of nf) {
+    if (!(Number(x.dn) > 0)) continue;
+    const g = peDnMat[cheieRest(x.dn, '')] || (peDnMat[cheieRest(x.dn, '')] = { n: 0, m: 0 });
+    g.f = (g.f || 0) + 1; (g.fnr || (g.fnr = [])).push(String(x.nr));
+  }
+  // runda 9 (DN0): rândurile sigure fără Dn citit — în `rest.global` (nota fiecărei poziții atinse și a TOTAL-ului), pe cheia ('?', material)
+  // (`doar_de_verificat` … 'fara_dn') și `incomplet` (cifrele din planșă pot fi incomplete pe orice Dn => „extras” → „diferenta”)
+  if (faraDn.length) {
+    for (const t of faraDn) {
+      const g = peDnMat[cheieRest(null, t.material)] || (peDnMat[cheieRest(null, t.material)] = { n: 0, m: 0 });
+      g.s = (g.s || 0) + 1; g.ms = (g.ms || 0) + (Number(t.lungime_m) || 0);
+    }
+    p.push(textFaraDn(faraDn.length, faraDn.reduce((q: number, t: any) => q + (Number(t.lungime_m) || 0), 0)));
+  }
+  return { peDnMat, global: p.join('; '), ...(nl.length || nf.length || faraDn.length ? { incomplet: true } : {}) };
 }
 async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null, rulare: string, rest?: RestTransfer) {
   const ops: any[] = [];
@@ -1082,10 +1124,27 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   // runda 8 (verificatorul rundei 7, minor): TOTAL = rândul cu „total” în denumire FĂRĂ un Dn standard. Un „total” cu Dn în denumire
   // („Total conducte De 110” = subtotal pe Dn, sau „Conductă PE Dn110 — lungime totală” = poziție) e candidat pe Dn-ul lui, ca orice
   // poziție: primul găsit nu mai devine TOTAL după ordinea din BD (poziția „… lungime totală” lua totalul, iar Dn-ul ei se insera nou)
-  const areDnStandard = (s: unknown) => [...faraDiacritice(String(s || '')).matchAll(/(?:\bdn|\bde|ø|Ø|φ)\s*(\d{2,3})\b/gi)].some((m) => DN_STANDARD.has(Number(m[1])));
+  // runda 9 (verificatorul rundei 8, MAJOR TOTAL-b): un „total” cu INTERVAL de Dn („Total rețea De 63–110”) sau cu mai multe Dn-uri
+  // („Dn32 … Dn110”) e total global, nu subtotal pe primul Dn: ca TOTAL, nu ca candidat pe Dn63 (primea subtotalul Dn63 în rândul
+  // TOTAL validat, cu o diferență falsă, iar poziția Dn63 nu se mai insera). TOTAL = „total” + (niciun Dn standard, ≥ 2 Dn sau interval).
+  const esteTotal = (r: any) => {
+    if (!/total/i.test(r.denumire || '')) return false;
+    const { dn, interval } = dnuriDenumire(r.denumire);
+    return interval || dn.length !== 1;
+  };
   const conducte = (existente || []).filter(eConducta);
-  const randTotal = conducte.find((r: any) => /total/i.test(r.denumire || '') && !areDnStandard(r.denumire));
-  const retea = conducte.filter((r: any) => r !== randTotal);
+  // dintre mai multe rânduri TOTAL, primul (ca înainte); NICIUNUL nu e candidat pe Dn (un interval „De 63–110” s-ar potrivi cu Dn63)
+  const randTotal = conducte.find(esteTotal);
+  const retea = conducte.filter((r: any) => !esteTotal(r));
+  // runda 9 (TOTAL-a): mai mulți candidați pe Dn, dintre care unii cu „total” în denumire ⇒ se păstrează cei fără „total”; un subtotal
+  // „Total conducte De 110” e candidat doar când e singurul de pe Dn (altfel primește nota din bucla „total cu Dn”, mai jos).
+  // Înainte, cu o poziție reală fără material („Conductă distribuție gaze Dn110”), filtrul pe material nu departaja => ambiguu, poziția
+  // validată păstra tăcut cifra veche.
+  const preferaFaraTotal = (cs: any[]) => {
+    if (cs.length < 2) return cs;
+    const f = cs.filter((r: any) => !/total/i.test(r.denumire || ''));
+    return f.length && f.length < cs.length ? f : cs;
+  };
   // unde a ajuns fiecare grup sigur, pe Dn (pentru notele pozițiilor de pe Dn neatinse de el: MY-T4, „total” cu Dn)
   const undePeDn = new Map<number, string[]>();
   const unde = (g: { dn: number; mat: string }, m: number, ce: string) =>
@@ -1111,6 +1170,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
       const peMat = candidati.filter((r: any) => materialNorm(r.denumire) === g.mat);
       if (peMat.length) candidati = peMat;
     }
+    candidati = preferaFaraTotal(candidati);
     return { g, m: +g.m.toFixed(1), candidati };
   });
   const grupuriPeId = new Map<unknown, typeof tinte>();
@@ -1211,6 +1271,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
       const peMat = candidati.filter((r: any) => materialNorm(r.denumire) === mat);
       if (peMat.length) candidati = peMat;
     }
+    candidati = preferaFaraTotal(candidati);
     if (candidati.length > 1) {
       ambigue.push({ dn, material, metri: 0, de_verificat: ce, pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
       doarVerif.push({ dn, material, pozitie_id: null, actiune: 'ambiguu' }); continue;
@@ -1259,18 +1320,25 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   }
 
   // runda 8: un rând „total” cu Dn în denumire (candidat pe Dn) neatins de grupul sigur al Dn-ului lui (grupul a mers, prin filtrul pe
-  // material, la altă poziție) nu rămâne tăcut cu cifra veche: notă cu unde a ajuns grupul, „extras” => „diferenta”, cifra neatinsă
+  // material, la altă poziție) nu rămâne tăcut cu cifra veche: notă cu unde a ajuns grupul, „extras” => „diferenta”, cifra neatinsă.
+  // Runda 9: cu prioritatea pozițiilor fără „total” (preferaFaraTotal), și pe un Dn fără grup sigur, doar cu rest de verificat (rândul
+  // „doar de verificat” a mers la poziția reală) — nota numește restul de pe Dn-ul lui.
   for (const r of retea) {
     if (!/total/i.test(r.denumire || '') || ops.some((o) => o.op === 'update' && o.id === r.id)) continue;
-    const dns = [...undePeDn.keys()].filter((d) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${d}\\b`, 'i').test(faraDiacritice(r.denumire || ''))).sort((a, b) => b - a);
-    if (!dns.length) continue;
+    const peDnRand = (d: number | string) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${d}\\b`, 'i').test(faraDiacritice(r.denumire || ''));
+    const dns = [...undePeDn.keys()].filter(peDnRand).sort((a, b) => b - a);
+    const cheiDoar = doarDeVerificat.filter((k) => { const d = k.split('|')[0]; return d !== '?' && !dns.includes(Number(d)) && peDnRand(d); });
+    if (!dns.length && !cheiDoar.length) continue;
     const cp = r.cantitate_plansa == null ? null : Number(r.cantitate_plansa);
-    const patch: Record<string, unknown> = { diferenta_nota: `De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — grupurile sigure ` +
-      `de pe Dn-ul lui (${eticheta}): ${dns.map((d) => (undePeDn.get(d) || []).join('; ')).join('; ')}; nu se completează automat aici; ${ceVechi(cp, false)}.` +
-      (rest?.global ? ` Pe planșă: ${rest.global}.` : '') };
+    const ce = [dns.length ? `grupurile sigure de pe Dn-ul lui (${eticheta}): ${dns.map((d) => (undePeDn.get(d) || []).join('; ')).join('; ')}` : '',
+      cheiDoar.length ? `pe Dn-ul lui doar rânduri de verificat, fără nicio cifră sigură: ${cheiDoar.map((k) => descriereRestDn(rest, k)).filter(Boolean).join('; ')}` : '']
+      .filter(Boolean).join('; ');
+    const patch: Record<string, unknown> = { diferenta_nota: `De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — ${ce}; ` +
+      `nu se completează automat aici; ${ceVechi(cp, false)}.` + (rest?.global ? ` Pe planșă: ${rest.global}.` : '') };
     if (r.status === 'extras') patch.status = 'diferenta';
     ops.push({ op: 'update', id: r.id, patch });
-    doarVerif.push({ dn: dns[0], material: null, pozitie_id: r.id, actiune: 'nota_total_dn' });
+    const dn0 = dns[0] ?? Number(cheiDoar[0].split('|')[0]);
+    doarVerif.push({ dn: dn0, material: null, pozitie_id: r.id, actiune: 'nota_total_dn' });
   }
 
   // randul de total, daca exista, primeste si el valoarea din plansa (runda 7: nu mai e candidat pe Dn => un singur update pe id)
@@ -1801,8 +1869,11 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     pentruCantitati.splice(0, pentruCantitati.length, ...pentruCantitati.filter((t: any) => !deScos.has(t)));
   }
   // Ce NU intră în cantitate_plansa (se menționează în diferenta_nota la transfer, fără să se promoveze): rândurile de tabel
-  // fără identitate sigură (pe Dn), conflictele, Dn-urile nestandard.
-  const restTransfer = notaRestTransfer(idr, nestandard);
+  // fără identitate sigură (pe Dn), conflictele, Dn-urile nestandard; runda 9: și tronsoanele sigure fără Dn citit (`faraDn`), pe care
+  // transferul le sare (nu au Dn => nicio poziție) — acum în notă, `incomplet`, avertisment și ⚠ (înainte: pierdute tăcut la transfer).
+  const faraDn = pentruCantitati.filter((t: any) => !(Number(t.diametru_mm) > 0));
+  const faraDnM = +faraDn.reduce((q: number, t: any) => q + (Number(t.lungime_m) || 0), 0).toFixed(1);
+  const restTransfer = notaRestTransfer(idr, nestandard, faraDn);
   // 25.09.2026 (audit T5/T6): similaritatea lungimilor e AVERTISMENT, nu deduplicare — nu se scoate nimic din total.
   const avertismente: string[] = avertismenteDublura.map((a: any) => a.mesaj);
   const grupe = new Map<string, number>();
@@ -1813,6 +1884,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // identitatea rândurilor (runda 7: extrasă în raportIdentitate — aceeași logică, testabilă direct; + nr_lipsa, comasări)
   const ri = raportIdentitate(idr);
   avertismente.push(...ri.avertismente);
+  if (faraDn.length) avertismente.push(`${textFaraDn(faraDn.length, faraDnM)} — cifrele pe Dn și rândul TOTAL de la transfer NU le conțin; de verificat Dn-ul pe planșă`);
   if (!pentruCantitati.some((t: any) => t.material)) avertismente.push('Materialul (PE/OL, SDR) nu apare pe niciun tronson citit — nu se completează din presupuneri');
   const nrPlansa = toate.map((r: any) => r?.cartus?.plansa_nr).find(Boolean) ||
     d.analiza?.cartus?.plansa_nr || null;
@@ -1821,6 +1893,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     tronsoane_gasite: pentruCantitati.length,
     tronsoane_brute: brute.length,
     adnotari_lasate_deoparte: adnotariNeconfirmate.length,
+    ...(faraDn.length ? { tronsoane_fara_dn_n: faraDn.length, tronsoane_fara_dn_m: faraDnM,
+      tronsoane_fara_dn: faraDn.slice(0, 60).map((t: any) => ({ nr: t._nr ?? null, de_la: t.de_la ?? null, la: t.la ?? null, lungime_m: t.lungime_m, zona: t._zona ?? t.zona ?? null })) } : {}),
     ...(nestandard.length ? { diametre_nestandard: [...new Set(nestandard.map((t: any) => Number(t.diametru_mm)))].sort((a, b) => a - b),
       nestandard_m: +nestandard.reduce((q: number, t: any) => q + (Number(t.lungime_m) || 0), 0).toFixed(1) } : {}),
     ...(avertismenteDublura.length ? { posibile_dubluri: avertismenteDublura } : {}),
