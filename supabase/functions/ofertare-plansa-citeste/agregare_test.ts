@@ -3,7 +3,7 @@
 // + IDENTITATEA RÂNDULUI de tabel (doc, pagină, tabel, Nr) în locul dedup-ului pe text/multiset (Copilot, runda 3) —
 //   cazuri sintetice + fixture reală din planșa 470 (fixture_470.ts, z?_6 cu Nr + z?_7 cu lungimi).
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { agregaTronsoane, identificaRanduri, MOTIV_DN_ABSENT, notaRestTransfer, nrRand } from './handler.ts'
+import { agregaTronsoane, identificaRanduri, MOTIV_AFARA_NR, MOTIV_DN_ABSENT, notaRestTransfer, nrRand } from './handler.ts'
 import { AZI_470, feliiDin470 } from './fixture_470.ts'
 
 const total = (l: any[]) => l.reduce((s, t) => s + t.lungime_m, 0)
@@ -222,4 +222,116 @@ Deno.test('identitate (6b) fixture 470 fără coloana Nr (z?_6 lipsă) => nimic 
   assertEquals(r.sigure.length, 0)
   assertEquals(r.faraIdentitate.length, 152)
   assert(r.faraIdentitate.every((t) => t._motiv.includes('mai multe benzi')))
+})
+
+// ---- 26.09.2026 — runda 4 (verificator runda 3): teste adversariale devenite regresie. Fiecare pică pe a800d38. ----
+// Principiul: niciodată pierdere sau umflare TĂCUTĂ; ce nu e sigur merge la „de verificat”, cu total separat și motiv.
+const C6 = ['Nr crt', 'Strada', 'Str. De la', 'Str. Pana la'], C7 = ['Strada', 'Str. De la', 'Str. Pana la', 'Dn ales (mm)', 'Debit mc/h', 'Lungime Km']
+type Rd = [string, string, number]                       // [Nr, Strada, L]
+const r6 = (xs: Rd[]) => xs.map(([nr, st]) => ({ 'Nr crt': nr, 'Strada': st, 'Str. De la': 'N' + nr, 'Str. Pana la': 'N' + (Number(nr) + 1) }))
+const r7 = (xs: Rd[]) => xs.map(([nr, st, L]) => ({ 'Strada': st, 'Str. De la': 'N' + nr, 'Str. Pana la': 'N' + (Number(nr) + 1), 'Dn ales (mm)': '63', 'Debit mc/h': '10', 'Lungime Km': String(L / 1000).replace('.', ',') }))
+const t7 = (xs: Rd[]) => xs.map(([nr, st, L]) => ({ de_la: 'N' + nr, la: 'N' + (Number(nr) + 1), zona: st, lungime_m: L, diametru_mm: 63, debit_mch: 10, sursa: 'tabel' }))
+const RR: Rd[] = [['1', 'Alba', 100], ['2', 'Bega', 200], ['3', 'Cerna', 300], ['4', 'Dunarea', 400], ['5', 'Enisala', 500]]
+
+Deno.test('runda 4 BLOCANT (sintetic): rândul de margine văzut DOAR în felia cu lungimi (nu și în cea cu Nr) nu primește poziție — nu se numără de două ori', () => {
+  // banda 1: z1_6 are Nr 1–3, z1_7 are rândurile 1–4 (rândul 4 tăiat de marginea de jos în z1_6); banda 2: Nr 3–5 cu lungimi
+  const b1n = RR.slice(0, 3), b1l = RR.slice(0, 4), b2 = RR.slice(2, 5)
+  const r = identificaRanduri([felieTab('z1_6', r6(b1n), [], C6), felieTab('z1_7', r7(b1l), t7(b1l), C7), felieTab('z2_6', r6(b2), [], C6), felieTab('z2_7', r7(b2), t7(b2), C7)], { doc: 1 })
+  assertEquals(r.sigure.map((t) => t._nr).sort(), ['1', '2', '3', '4', '5'])
+  assertEquals(r.total_sigur_m, 1500, 'a800d38: 6 rânduri / 1.900 m (rândul 4 o dată prin „poz z1_7#4” și o dată prin Nr 4)')
+  assertEquals(r.prin.pozitie, 0)
+  assertEquals(r.faraIdentitate.map((t) => [t._zona, t.lungime_m, t._motiv]), [['z1_7', 400, MOTIV_AFARA_NR]])
+  assertEquals(r.total_de_verificat_m, 400)
+  // numărul diferit de rânduri la δ=0 e semnalat pe pereche
+  assertEquals(r.perechi.map((p) => [p.a, p.b, p.delta, p.randuri, p.neimperecheate]), [['z1_6', 'z1_7', 0, [3, 4], [0, 1]], ['z2_6', 'z2_7', 0, [3, 3], [0, 0]]])
+})
+Deno.test('runda 4 BLOCANT (fixture 470): z1_7 transcrie în plus Nr 38 la marginea de jos / z2_7 transcrie în plus Nr 31 la marginea de sus => tot 133 / 48.905 m, rândul în plus la de verificat', () => {
+  // jos: rândul Nr 38 (tăiat în z1_6) apare în plus la baza lui z1_7; banda 2 îl are cu Nr
+  const f = feliiDin470()
+  const z17 = f.find((x) => x.eticheta === 'z1_7')!, z27 = f.find((x) => x.eticheta === 'z2_7')!, z26 = f.find((x) => x.eticheta === 'z2_6')!
+  const k = z26.tabele[0].randuri.findIndex((x: any) => x['Nr crt'] === '38')
+  ;(z17.tabele[0].randuri as any[]).push(structuredClone(z27.tabele[0].randuri[k])); (z17 as any).tronsoane.push(structuredClone((z27 as any).tronsoane[k]))
+  const r = identificaRanduri(f, { doc: 470 })
+  assertEquals([r.sigure.length, r.total_sigur_m, r.conflicte.length], [133, 48905, 0], 'a800d38: 134 / 49.225 m, 0 de verificat')
+  assertEquals(r.faraIdentitate.map((t) => [t._zona, t.lungime_m, t._motiv]), [['z1_7', 320, MOTIV_AFARA_NR]])
+  assertEquals(r.nrFaraLungime, [])
+  // sus: rândul Nr 31 (din banda 1) apare în plus la vârful lui z2_7; z2_6 nu-l are => δ = 1
+  const g = feliiDin470()
+  const a17 = g.find((x) => x.eticheta === 'z1_7')!, a16 = g.find((x) => x.eticheta === 'z1_6')!, a27 = g.find((x) => x.eticheta === 'z2_7')!
+  const k2 = a16.tabele[0].randuri.findIndex((x: any) => x['Nr crt'] === '31')
+  ;(a27.tabele[0].randuri as any[]).unshift(structuredClone(a17.tabele[0].randuri[k2])); (a27 as any).tronsoane.unshift(structuredClone((a17 as any).tronsoane[k2]))
+  const r2 = identificaRanduri(g, { doc: 470 })
+  assertEquals([r2.sigure.length, r2.total_sigur_m, r2.conflicte.length], [133, 48905, 0], 'a800d38: 134 / 49.205 m, 0 de verificat')
+  assertEquals(r2.faraIdentitate.length, 1)
+  assertEquals([r2.faraIdentitate[0]._zona, r2.faraIdentitate[0].lungime_m, r2.faraIdentitate[0]._motiv], ['z2_7', (a17 as any).tronsoane[k2].lungime_m, MOTIV_AFARA_NR])
+  assertEquals(r2.perechi.find((p) => p.a === 'z2_6')!.neimperecheate, [0, 1])
+})
+Deno.test('runda 4 (C): două tabele cu antete identice în ACEEAȘI felie, Nr 1–2 fiecare, valori egale => nu se contopesc (de verificat)', () => {
+  const f = { eticheta: 'z2_3', tabele: [{ denumire: 'Sat A', coloane: COL, randuri: [R('1', { Strada: 'Liliacului' }), R('2', { Strada: 'Liliacului' })] },
+    { denumire: 'Sat B', coloane: COL, randuri: [R('1', { Strada: 'Macului' }), R('2', { Strada: 'Macului' })] }],
+    tronsoane: [T({ zona: 'Liliacului' }), T({ zona: 'Liliacului' }), T({ zona: 'Macului' }), T({ zona: 'Macului' })] }
+  const r = identificaRanduri([f], { doc: 1 })
+  assertEquals([r.sigure.length, r.total_sigur_m], [0, 0], 'a800d38: 2 rânduri / 600 m (2 rânduri reale pierdute tăcut)')
+  assertEquals([r.faraIdentitate.length, r.total_de_verificat_m], [4, 1200])
+  assert(r.faraIdentitate.every((t) => /^Nr [12] repetat — tabel neidentificat sigur \(de două ori în z2_3\)$/.test(t._motiv)), r.faraIdentitate[0]._motiv)
+})
+Deno.test('runda 4 (C2): numerotare reluată în ACELAȘI tabel (Sat A: 1, 2; Sat B: 1, 2) => de verificat, nu 2 rânduri', () => {
+  const f = felieTab('z2_3', [R('1', { Strada: 'Liliacului' }), R('2', { Strada: 'Liliacului' }), R('1', { Strada: 'Macului' }), R('2', { Strada: 'Macului' })],
+    [T({ zona: 'Liliacului' }), T({ zona: 'Liliacului' }), T({ zona: 'Macului' }), T({ zona: 'Macului' })])
+  const r = identificaRanduri([f], { doc: 1 })
+  assertEquals([r.sigure.length, r.faraIdentitate.length, r.total_de_verificat_m], [0, 4, 1200], 'a800d38: 2 sigure / 600 m')
+  assert(r.faraIdentitate.every((t) => t._motiv.includes('repetat')), r.faraIdentitate[0]._motiv)
+})
+Deno.test('runda 4 (B): același tabel/Nr în benzi NEVECINE (z1_2 și z3_5 nu se pot suprapune) => de verificat', () => {
+  const t = [R('1'), R('2'), R('3')]
+  const r = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z3_5', t, [T(), T(), T()])], { doc: 1 })
+  assertEquals([r.sigure.length, r.faraIdentitate.length, r.total_de_verificat_m], [0, 6, 1800], 'a800d38: 3 rânduri / 900 m')
+  assert(r.faraIdentitate[0]._motiv.includes('în z1_2 și z3_5, felii care nu se suprapun'), r.faraIdentitate[0]._motiv)
+  // control: benzi VECINE (z1_2 / z2_2) = suprapunerea verticală => același rând, o dată (ca la 470)
+  const v = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z2_2', t, [T(), T(), T()])], { doc: 1 })
+  assertEquals([v.sigure.length, v.total_sigur_m, v.faraIdentitate.length], [3, 900, 0])
+})
+Deno.test('runda 4 (D): două tabele FĂRĂ Nr cu antete identice în aceeași felie => indexul tabelului în cheia de poziție (4 rânduri, 950 m)', () => {
+  const C = ['Localitate', 'Tronson - Plecare', 'Tronson - Sosire', 'Lung. Trs. Km', 'Dn-ul de ales mm (ext)']
+  const rd = (loc: string, sos: string, l: string, dn: string) => ({ 'Localitate': loc, 'Tronson - Plecare': 'A', 'Tronson - Sosire': sos, 'Lung. Trs. Km': l, 'Dn-ul de ales mm (ext)': dn })
+  const tr = (loc: string, sos: string, L: number, dn: number) => ({ de_la: 'A', la: sos, lungime_m: L, diametru_mm: dn, zona: loc, sursa: 'tabel' })
+  const f = { eticheta: 'z1_2', tabele: [
+    { denumire: 'Calcul Sat X', coloane: C, randuri: [rd('X', 'B', '0,3', '40'), rd('X', 'C', '0,2', '63')] },
+    { denumire: 'Calcul Sat Y', coloane: C, randuri: [rd('Y', 'B', '0,3', '40'), rd('Y', 'D', '0,15', '63')] }],
+    tronsoane: [tr('X', 'B', 300, 40), tr('X', 'C', 200, 63), tr('Y', 'B', 300, 40), tr('Y', 'D', 150, 63)] }
+  const r = identificaRanduri([f], { doc: 1 })
+  assertEquals([r.sigure.length, r.total_sigur_m, r.conflicte.length, r.faraIdentitate.length], [4, 950, 0, 0], 'a800d38: 1 sigur (300 m) + conflict 200/150, 300 m pierduți')
+  assertEquals(r.sigure.map((t) => t._identitate.split('|').pop()), ['poz z1_2.t1#1', 'poz z1_2.t1#2', 'poz z1_2.t2#1', 'poz z1_2.t2#2'])
+  // același tabel transcris de DOUĂ ori în aceeași felie (aceleași rânduri) => posibilă dublură => de verificat, nu 2×
+  const d = { eticheta: 'z1_2', tabele: [f.tabele[0], structuredClone(f.tabele[0])], tronsoane: [f.tronsoane[0], f.tronsoane[1], f.tronsoane[0], f.tronsoane[1]] }
+  const r2 = identificaRanduri([d], { doc: 1 })
+  assertEquals([r2.sigure.length, r2.faraIdentitate.length, r2.total_de_verificat_m], [0, 4, 1000])
+  assert(r2.faraIdentitate[0]._motiv.includes('posibilă transcriere dublă'), r2.faraIdentitate[0]._motiv)
+})
+Deno.test('runda 4 (text): același Nr în benzi vecine, dar Strada diferită (două tabele cu antete identice) => nu se contopește', () => {
+  const r = identificaRanduri([
+    felieTab('z1_3', [R('1', { Strada: 'Liliacului' }), R('2', { Strada: 'Liliacului' })], [T({ zona: 'Liliacului' }), T({ zona: 'Liliacului' })]),
+    felieTab('z2_3', [R('1', { Strada: 'Macului' }), R('2', { Strada: 'Macului' })], [T({ zona: 'Macului' }), T({ zona: 'Macului' })]),
+  ], { doc: 1 })
+  assertEquals([r.sigure.length, r.faraIdentitate.length, r.total_de_verificat_m], [0, 4, 1200], 'a800d38: 2 rânduri / 600 m')
+  assert(r.faraIdentitate[0]._motiv.startsWith('Nr 1 citit cu text diferit între felii (strada: „Liliacului” în z1_3 / „Macului” în z2_3)'), r.faraIdentitate[0]._motiv)
+  // diferențele de transcriere (spații, cratimă, text tăiat marcat „...”) NU sunt text contrazis
+  const s = identificaRanduri([
+    felieTab('z1_3', [R('1', { Strada: 'C-tin Brancoveanu', 'Str. Pana la': 'Limita intra...' })], [T()]),
+    felieTab('z2_3', [R('1', { Strada: 'Ctin  Brâncoveanu', 'Str. Pana la': 'Limita intravilan' })], [T()]),
+  ], { doc: 1 })
+  assertEquals([s.sigure.length, s.faraIdentitate.length], [1, 0])
+})
+Deno.test('runda 4: Nr ilizibil în felia cu Nr, rândul împerecheat din felia cu lungimi => de verificat (nu poziție)', () => {
+  const b = RR.slice(0, 3)
+  const n6 = r6(b); n6[1]['Nr crt'] = '?'
+  const r = identificaRanduri([felieTab('z1_6', n6, [], C6), felieTab('z1_7', r7(b), t7(b), C7)], { doc: 1 })
+  assertEquals(r.sigure.map((t) => t._nr), ['1', '3'])
+  assertEquals(r.faraIdentitate.map((t) => [t.lungime_m, t._motiv]), [[200, 'Nr lipsă sau ilizibil pe rând (în felia vecină, împerecheată)']], 'a800d38: „poz z1_7#2” sigur')
+})
+Deno.test('runda 4: Nr fără nicio lungime (felia cu L a pierdut rândul de margine, nicio bandă nu-l vede) => semnalat, nu dispare tăcut', () => {
+  const r = identificaRanduri([felieTab('z1_6', r6(RR.slice(0, 4)), [], C6), felieTab('z1_7', r7(RR.slice(0, 3)), t7(RR.slice(0, 3)), C7)], { doc: 1 })
+  assertEquals([r.sigure.length, r.total_sigur_m, r.faraIdentitate.length], [3, 600, 0])
+  assertEquals(r.nrFaraLungime, [{ nr: '4', zona: 'z1_6' }])
+  assertEquals(r.perechi[0].neimperecheate, [1, 0])
 })

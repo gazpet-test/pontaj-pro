@@ -35,7 +35,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-25.7'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-26.8'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -236,6 +236,15 @@ function numar(v: unknown): number | null {
 //   ale tabelului stau într-o singură bandă verticală (fără suprapunere verticală de deosebit) și fragmentele vecine pe
 //   orizontală sunt împerecheate sigur; altfel „de verificat”.
 // - Adnotările (nu rânduri de tabel) rămân pe regulile existente (R5): dedup pe mulțime, fără multiset, fără identitate.
+// 26.09.2026 (verificator runda 3 → runda 4). Principiul (Copilot): niciodată pierdere sau umflare TĂCUTĂ — ce nu e sigur
+// merge la „de verificat”, cu total separat și motiv:
+// - poziția e identitate DOAR dacă niciun fragment din tabel (grupul de fragmente împerecheate sigur) nu are coloană Nr;
+//   rândul fără Nr dintr-un fragment împerecheat cu unul care are Nr => „rând în afara fragmentului cu Nr” (BLOCANT: rândul
+//   de margine transcris doar în felia cu lungimi se număra o dată prin poziție și încă o dată prin Nr în banda vecină);
+// - același (tabel, Nr) pe noduri din aceeași felie în componente diferite, sau în benzi/coloane nevecine => „Nr repetat”;
+// - aceeași identitate din componente diferite cu text contrazis pe o coloană comună (Strada / De la) => nu se contopește;
+// - cheia de poziție conține indexul tabelului din felie; tabel fără Nr repetat identic în aceeași felie => de verificat;
+// - număr diferit de rânduri între fragmentele împerecheate: `perechi[].neimperecheate`; Nr fără nicio lungime => `nrFaraLungime`.
 const E_TRUNCHIAT = /(\.\.\.|…)$/;
 const antet = (h: unknown) => text(h).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 const E_COL_NR = /^((nr|numar|poz|pozitie)( (crt|curent|tronson|trs|rand))?|crt)$/;
@@ -265,8 +274,23 @@ function comparaCelule(a: unknown, b: unknown, aLaMargine: boolean, bLaMargine: 
   if ((bLaMargine || E_TRUNCHIAT.test(y)) && ys.length >= 3 && x.startsWith(ys)) return 'p';
   return 'X';
 }
-type Fragment = { i: number; felie: number; et: string; pre: string; r: number; c: number; pag: number; sig: string;
+type Fragment = { i: number; felie: number; et: string; t: number; pre: string; r: number; c: number; pag: number; sig: string;
   hdr: string[]; colNr: string | null; randuri: Record<string, string>[]; brut: any[] };
+// Runda 4 (verificator, MAJOR (3)): două lecturi ale aceluiași Nr din componente diferite (ex. suprapunerea verticală a
+// benzilor) care diferă pe o coloană de TEXT comună (Strada / De la) nu se contopesc — pot fi două rânduri reale.
+// Comparația e laxă (fără spații/punctuație, prefix admis la margine sau „...”), ca diferențele de transcriere să nu conteze.
+const compact = (v: unknown) => text(v).replace(E_TRUNCHIAT, '').replace(/[^a-z0-9]/g, '');
+function textContrazis(a: unknown, b: unknown, aLaMargine: boolean, bLaMargine: boolean): boolean {
+  const x = text(a), y = text(b);
+  if (!/[a-z]/.test(x) || !/[a-z]/.test(y)) return false;          // doar celule de text (numerele au regulile lor: L/Dn/Q)
+  if (comparaCelule(a, b, aLaMargine, bLaMargine) !== 'X') return false;
+  const cx = compact(a), cy = compact(b);
+  if (cx === cy) return false;
+  if ((aLaMargine || E_TRUNCHIAT.test(x)) && cx.length >= 3 && cy.startsWith(cx)) return false;
+  if ((bLaMargine || E_TRUNCHIAT.test(y)) && cy.length >= 3 && cx.startsWith(cy)) return false;
+  return true;
+}
+export const MOTIV_AFARA_NR = 'rând în afara fragmentului cu Nr — tabelul are coloană Nr în felia vecină, dar rândul nu se împerechează cu niciun rând numerotat (margine de felie?)';
 // Împerecherea a două fragmente din felii vecine pe orizontală (A în stânga, B în dreapta): decalajul δ (|δ| ≤ 2) la care
 // TOATE perechile suprapuse au un câmp comun identic și niciun câmp contrazis. Un singur δ valid = sigur; mai multe = ambiguu.
 function perecheFragmente(A: Fragment, B: Fragment): { delta: number } | { ambiguu: true } | { nimic: true } | null {
@@ -336,7 +360,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
     const m = /^(.*?)(\d+)_(\d+)$/.exec(et);
     const pag = Number(regiuneZona(plansa, et)?.pagina) || Number(f?.tronsoane?.[0]?._regiune?.pagina) || 1;
     const aici: Fragment[] = [];
-    for (const tb of (Array.isArray(f.tabele) ? f.tabele : [])) {
+    for (const [tIdx, tb] of (Array.isArray(f.tabele) ? f.tabele : []).entries()) {
       const randuriBrute = Array.isArray(tb?.randuri) ? tb.randuri.filter((r: any) => r && typeof r === 'object') : [];
       if (!randuriBrute.length) continue;
       const hdr: string[] = [];
@@ -344,7 +368,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
         const a = antet(h); if (a && !hdr.includes(a)) hdr.push(a);
       }
       const randuri = randuriBrute.map((r: any) => Object.fromEntries(Object.entries(r).map(([k, v]) => [antet(k), String(v ?? '')])));
-      const fr: Fragment = { i: frag.length, felie: iF, et, pre: m?.[1] ?? et, r: m ? Number(m[2]) : NaN, c: m ? Number(m[3]) : NaN, pag,
+      const fr: Fragment = { i: frag.length, felie: iF, et, t: tIdx, pre: m?.[1] ?? et, r: m ? Number(m[2]) : NaN, c: m ? Number(m[3]) : NaN, pag,
         sig: [...hdr].sort().join('|'), hdr, colNr: hdr.find((h) => E_COL_NR.test(h)) || null, randuri, brut: randuriBrute };
       frag.push(fr); aici.push(fr);
     }
@@ -392,25 +416,37 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   const vecinNrNesigur = new Set<number>();                 // fragmente cu Nr în felia vecină, dar neîmperecheate sigur
   const vecinNeimp = new Set<number>();                     // fragmente vecine cu câmpuri comune, neîmperecheate sigur
   const valori = new Map<string, [number, number | null, number | null]>(obs.map((o) => [`${o.fr!.i}:${o.rand}`, [o.L, o.dn, o.q]]));
-  const perechi: { a: string; b: string; delta: number; prin: string; diferente_text: number }[] = [];
+  const perechi: { a: string; b: string; delta: number; prin: string; diferente_text: number; randuri: [number, number]; neimperecheate: [number, number] }[] = [];
+  // Runda 4 (verificator, BLOCANT): fragmentele împerecheate sigur formează același TABEL (grup). Dacă un fragment din grup are
+  // coloană Nr, identitatea prin POZIȚIE e interzisă în tot grupul: rândul din felia cu lungimi care cade în afara
+  // suprapunerii cu felia cu Nr (ex. rândul de margine transcris în plus în z1_7) NU mai primește „poz …” — altfel se numără
+  // încă o dată prin Nr în banda vecină (470: +320 m tăcut). Merge la „de verificat”.
+  const ufFr = frag.map((_, i) => i);
+  const radFr = (x: number): number => (ufFr[x] === x ? x : (ufFr[x] = radFr(ufFr[x])));
+  const cuLungimi = (F: Fragment) => F.randuri.some((_, k) => valori.has(`${F.i}:${k}`));
+  const nrImperecheatCuL = new Set<number>();               // fragmente cu Nr, împerecheate sigur cu un fragment cu lungimi
   for (const A of frag) for (const B of frag) {
     if (A.pre !== B.pre || A.r !== B.r || B.c !== A.c + 1 || A.pag !== B.pag || !aceeasiBanda(plansa, A.et, B.et)) continue;
     const pt = perecheFragmente(A, B);
     const pv = pt && 'delta' in pt ? null : perecheValori(A, B, valori);
     const p = pt && 'delta' in pt ? pt : pv;
     // două fragmente vecine CU LUNGIMI, neîmperecheate, contează ca „neîmperecheate” chiar fără coloane comune
-    const cuLungimi = (F: Fragment) => F.randuri.some((_, k) => valori.has(`${F.i}:${k}`));
     if (!pt && !pv && !(cuLungimi(A) && cuLungimi(B))) continue;
     if (p && 'delta' in p) {
-      let dif = 0;
+      let dif = 0, n = 0;
       const comune = A.hdr.filter((h) => B.hdr.includes(h));
       for (let i = 0; i < A.randuri.length; i++) {
         const j = i + p.delta;
         if (j < 0 || j >= B.randuri.length) continue;
-        uf[rad(nod(A, i))] = rad(nod(B, j));
+        uf[rad(nod(A, i))] = rad(nod(B, j)); n++;
         if (pv) dif += comune.filter((h) => comparaCelule(A.randuri[i][h], B.randuri[j][h], false, false) === 'X').length;
       }
-      perechi.push({ a: A.et, b: B.et, delta: p.delta, prin: pv ? 'valori L/Dn/Q' : 'câmp comun + ordine', diferente_text: dif });
+      ufFr[radFr(A.i)] = radFr(B.i);
+      if (A.colNr && cuLungimi(B)) nrImperecheatCuL.add(A.i);
+      if (B.colNr && cuLungimi(A)) nrImperecheatCuL.add(B.i);
+      // număr diferit de rânduri (inclusiv la δ=0) => rândurile rămase în afara suprapunerii sunt SEMNALATE (nu dispar)
+      perechi.push({ a: A.et, b: B.et, delta: p.delta, prin: pv ? 'valori L/Dn/Q' : 'câmp comun + ordine', diferente_text: dif,
+        randuri: [A.randuri.length, B.randuri.length], neimperecheate: [A.randuri.length - n, B.randuri.length - n] });
     } else {
       vecinNeimp.add(A.i); vecinNeimp.add(B.i);
       if (B.colNr) vecinNrNesigur.add(A.i);
@@ -419,9 +455,9 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   }
   const comp = new Map<number, number[]>();
   noduri.forEach((_, i) => { const r0 = rad(i); if (!comp.has(r0)) comp.set(r0, []); comp.get(r0)!.push(i); });
-  const infoComp = new Map<number, { nrs: Map<string, string>; ambiguu: boolean; benzi: Set<number>; vecinNr: boolean; ref: { fr: Fragment; rand: number } }>();
+  const infoComp = new Map<number, { nrs: Map<string, string>; ambiguu: boolean; benzi: Set<number>; vecinNr: boolean; cuColNr: boolean; ref: { fr: Fragment; rand: number } }>();
   for (const [r0, membri] of comp) {
-    const nrs = new Map<string, string>(); const felii = new Set<number>(); let ambiguu = false, vecinNr = false;
+    const nrs = new Map<string, string>(); const felii = new Set<number>(); let ambiguu = false, vecinNr = false, cuColNr = false;
     const benzi = new Set<number>();
     let ref = noduri[membri[0]];
     for (const i of membri) {
@@ -429,19 +465,22 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
       if (felii.has(fr.felie)) ambiguu = true;
       felii.add(fr.felie); benzi.add(fr.r);
       if (vecinNrNesigur.has(fr.i)) vecinNr = true;
-      if (fr.colNr) { const n = nrRand(fr.randuri[rand][fr.colNr]); if (n && !nrs.has(n)) nrs.set(n, fr.sig); }
+      if (fr.colNr) { cuColNr = true; const n = nrRand(fr.randuri[rand][fr.colNr]); if (n && !nrs.has(n)) nrs.set(n, fr.sig); }
       if (fr.felie < ref.fr.felie || (fr.felie === ref.fr.felie && rand < ref.rand)) ref = noduri[i];
     }
-    infoComp.set(r0, { nrs, ambiguu, benzi, vecinNr, ref });
+    infoComp.set(r0, { nrs, ambiguu, benzi, vecinNr, cuColNr, ref });
   }
+  const grupCuNr = new Set<number>(frag.filter((fr) => fr.colNr).map((fr) => radFr(fr.i)));
 
   // identitatea fiecărei observații cu lungime
   type Id = { o: Obs; id: string; tip: 'nr' | 'pozitie'; nr: string | null; tabel: string };
   const cuId: Id[] = [];
   const candPoz: { o: Obs; c: any }[] = [];
+  const nrCuLungime = new Set<string>();                    // (pagină, Nr) legate de o lungime citită, orice ar ieși din ele
   for (const o of obs) {
     const c = infoComp.get(rad(nod(o.fr!, o.rand)))!;
     const fr = o.fr!;
+    for (const n of c.nrs.keys()) nrCuLungime.add(`${fr.pag}|${n}`);
     if (c.ambiguu) { nesigur(o.t, o.L, o.dn, 'împerechere ambiguă: rândul se leagă de două rânduri din aceeași felie', o.zona); continue; }
     if (c.nrs.size > 1) { nesigur(o.t, o.L, o.dn, `Nr diferit pentru același rând în felii vecine (${[...c.nrs.keys()].join(' / ')})`, o.zona); continue; }
     if (c.nrs.size === 1) {
@@ -449,36 +488,92 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
       cuId.push({ o, id: `doc ${doc}|p${fr.pag}|${sig}|nr ${nr}`, tip: 'nr', nr, tabel: sig }); continue;
     }
     if (fr.colNr) { nesigur(o.t, o.L, o.dn, 'Nr lipsă sau ilizibil pe rând', o.zona); continue; }
+    if (c.cuColNr) { nesigur(o.t, o.L, o.dn, 'Nr lipsă sau ilizibil pe rând (în felia vecină, împerecheată)', o.zona); continue; }
     if (c.vecinNr) { nesigur(o.t, o.L, o.dn, 'Nr în felia vecină, dar împerecherea rândurilor nu e sigură (ordine/câmp comun)', o.zona); continue; }
+    // runda 4 (BLOCANT): poziția doar dacă NICIUN fragment din tabel (grupul împerecheat) nu are coloană Nr
+    if (grupCuNr.has(radFr(fr.i))) { nesigur(o.t, o.L, o.dn, MOTIV_AFARA_NR, o.zona); continue; }
     candPoz.push({ o, c });
   }
   // poziția ca identitate: doar tabel într-o singură bandă verticală, fragmente vecine împerecheate sigur
   const pePag = new Map<number, typeof candPoz>();
   for (const x of candPoz) pePag.set(x.o.fr!.pag, [...(pePag.get(x.o.fr!.pag) || []), x]);
+  // runda 4: două fragmente fără Nr cu ACELEAȘI antete și ACEEAȘI secvență L/Dn/Q în aceeași felie = posibilă transcriere
+  // dublă a aceluiași tabel => „de verificat” (cu indexul tabelului în cheie, altfel s-ar număra de două ori)
+  const secv = (fr: Fragment) => fr.randuri.map((_, k) => (valori.get(`${fr.i}:${k}`) || ['x']).join('/')).join(';');
+  const dublat = new Set<number>();
+  const frPoz = [...new Map(candPoz.map((x) => [x.o.fr!.i, x.o.fr!])).values()];
+  for (const A of frPoz) for (const B of frPoz)
+    if (A.i < B.i && A.felie === B.felie && A.sig === B.sig && secv(A) === secv(B)) { dublat.add(A.i); dublat.add(B.i); }
   for (const [, xs] of pePag) {
     const benzi = new Set<number>(xs.flatMap((x) => [...x.c.benzi]));
     for (const x of xs) {
       const fr = x.o.fr!;
       if (benzi.size > 1) { nesigur(x.o.t, x.o.L, x.o.dn, 'tabel fără coloană Nr pe mai multe benzi — rândurile din suprapunerea verticală nu se pot deosebi', x.o.zona); continue; }
       if (vecinNeimp.has(fr.i) || Number.isNaN(fr.r)) { nesigur(x.o.t, x.o.L, x.o.dn, 'tabel fără coloană Nr, fragmente vecine neîmperecheate sigur — poziția rândului nu e sigură', x.o.zona); continue; }
+      if (dublat.has(fr.i)) { nesigur(x.o.t, x.o.L, x.o.dn, 'tabel fără coloană Nr repetat în aceeași felie, cu aceleași rânduri — posibilă transcriere dublă', x.o.zona); continue; }
       const ref = x.c.ref;
-      cuId.push({ o: x.o, id: `doc ${doc}|p${fr.pag}|${ref.fr.sig}|poz ${ref.fr.et}#${ref.rand + 1}`, tip: 'pozitie', nr: null, tabel: ref.fr.sig });
+      // runda 4 (MAJOR, cazul D): indexul tabelului din felie intră în cheie — două tabele fără Nr cu antete identice în
+      // aceeași felie nu se mai ciocnesc pe „poz z1_2#1”
+      cuId.push({ o: x.o, id: `doc ${doc}|p${fr.pag}|${ref.fr.sig}|poz ${ref.fr.et}.t${ref.fr.t + 1}#${ref.rand + 1}`, tip: 'pozitie', nr: null, tabel: ref.fr.sig });
     }
   }
   // același Nr sub două tabele (antete) diferite pe aceeași pagină => tabelul nu e identificat sigur
   const tabelePeNr = new Map<string, Set<string>>();
   for (const x of cuId) if (x.tip === 'nr') { const k = `${x.o.fr!.pag}|${x.nr}`; tabelePeNr.set(k, (tabelePeNr.get(k) || new Set()).add(x.tabel)); }
+  // runda 4 (MAJOR, cazurile B/C/C2): același (tabel, Nr) citit pe noduri care NU sunt același rând fizic — în aceeași felie
+  // dar în componente diferite (două tabele cu antete identice / numerotare reluată), sau în benzi / coloane NEVECINE
+  // (|Δr|>1 sau |Δc|>1: felii care nu se suprapun) => tabelul nu e identificat sigur, nimic nu se contopește.
+  const locNr = new Map<string, { comp: number; felie: number; r: number; c: number; et: string }[]>();
+  noduri.forEach((nd, i) => {
+    const fr = nd.fr; if (!fr.colNr) return;
+    const n = nrRand(fr.randuri[nd.rand][fr.colNr]); if (!n) return;
+    const k = `${fr.pag}|${fr.sig}|${n}`;
+    locNr.set(k, [...(locNr.get(k) || []), { comp: rad(i), felie: fr.felie, r: fr.r, c: fr.c, et: fr.et }]);
+  });
+  const nrRepetat = new Map<string, string>();
+  for (const [k, ls] of locNr) {
+    for (let a = 0; a < ls.length && !nrRepetat.has(k); a++) for (let b = a + 1; b < ls.length; b++) {
+      const x = ls[a], y = ls[b];
+      if (x.comp === y.comp) continue;
+      const vecine = Math.abs(x.r - y.r) <= 1 && Math.abs(x.c - y.c) <= 1;       // NaN (grilă necunoscută) => nevecine
+      if (x.felie === y.felie) { nrRepetat.set(k, `de două ori în ${x.et}`); break; }
+      if (!vecine) { nrRepetat.set(k, `în ${x.et} și ${y.et}, felii care nu se suprapun`); break; }
+    }
+  }
   const grupuri = new Map<string, Id[]>();
   for (const x of cuId) {
     if (x.tip === 'nr' && tabelePeNr.get(`${x.o.fr!.pag}|${x.nr}`)!.size > 1) {
       nesigur(x.o.t, x.o.L, x.o.dn, `Nr ${x.nr} apare în tabele cu antete diferite pe aceeași pagină — tabelul nu e identificat sigur`, x.o.zona); continue;
     }
+    const rep = x.tip === 'nr' ? nrRepetat.get(`${x.o.fr!.pag}|${x.tabel}|${x.nr}`) : undefined;
+    if (rep) { nesigur(x.o.t, x.o.L, x.o.dn, `Nr ${x.nr} repetat — tabel neidentificat sigur (${rep})`, x.o.zona); continue; }
     grupuri.set(x.id, [...(grupuri.get(x.id) || []), x]);
   }
+  // runda 4 (MAJOR (3)): lecturile aceleiași identități din componente diferite care diferă pe o coloană de TEXT comună
+  // (Strada / De la …) nu se contopesc: pot fi două rânduri reale (ex. două tabele cu antete identice în benzi vecine)
+  const laMargine = (fr: Fragment, h: string) => h === fr.hdr[0] || h === fr.hdr[fr.hdr.length - 1];
+  const textDiferit = (xs: Id[]): string | null => {
+    const radacini = [...new Set(xs.map((x) => rad(nod(x.o.fr!, x.o.rand))))];
+    for (let a = 0; a < radacini.length; a++) for (let b = a + 1; b < radacini.length; b++)
+      for (const i of comp.get(radacini[a])!) for (const j of comp.get(radacini[b])!) {
+        const A = noduri[i], B = noduri[j];
+        for (const h of A.fr.hdr) {
+          if (h === A.fr.colNr || h === B.fr.colNr || !B.fr.hdr.includes(h)) continue;
+          const va = A.fr.randuri[A.rand][h], vb = B.fr.randuri[B.rand][h];
+          if (textContrazis(va, vb, laMargine(A.fr, h), laMargine(B.fr, h))) return `${h}: „${va}” în ${A.fr.et} / „${vb}” în ${B.fr.et}`;
+        }
+      }
+    return null;
+  };
   // observațiile aceleiași identități: valori identice => un rând; diferite => CONFLICT (fără alegere automată)
   const sigure: any[] = [], conflicte: any[] = [];
   const egal = (a: number | null, b: number | null) => a === null || b === null || Math.abs(a - b) < 1e-6;
   for (const [id, xs] of grupuri) {
+    const td = textDiferit(xs);
+    if (td) {
+      for (const x of xs) nesigur(x.o.t, x.o.L, x.o.dn, `${x.nr ? `Nr ${x.nr}` : 'rând'} citit cu text diferit între felii (${td}) — posibil două rânduri reale, nu se contopesc`, x.o.zona);
+      continue;
+    }
     const b = xs[0];
     const dn = xs.map((x) => x.o.dn).find((v) => v !== null) ?? null;
     const q = xs.map((x) => x.o.q).find((v) => v !== null) ?? null;
@@ -502,9 +597,22 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
     sigure.push({ ...b.o.t, lungime_m: b.o.L, diametru_mm: dn, ...(q !== null ? { debit_mch: q } : {}),
       _identitate: id, _identitate_tip: b.tip, _nr: b.nr, _observatii: zone });
   }
+  // runda 4: rânduri numerotate dintr-un fragment cu Nr (fără lungimi) împerecheat sigur cu felia cu lungimi, al căror Nr nu
+  // primește NICIO lungime în nicio felie (ex. felia cu L a pierdut rândul de margine, iar banda vecină nu-l vede) =>
+  // semnalate (fără metri: lungimea nu s-a citit), ca lipsa să nu fie tăcută.
+  const nrFaraLungime: { nr: string; zona: string }[] = [];
+  const vazutNr = new Set<string>();
+  for (const fr of frag) {
+    if (!fr.colNr || cuLungimi(fr) || !nrImperecheatCuL.has(fr.i)) continue;
+    fr.randuri.forEach((rw) => {
+      const n = nrRand(rw[fr.colNr!]); const k = `${fr.pag}|${n}`;
+      if (!n || nrCuLungime.has(k) || vazutNr.has(k)) return;
+      vazutNr.add(k); nrFaraLungime.push({ nr: n, zona: fr.et });
+    });
+  }
   const suma = (l: any[]) => +l.reduce((s, t) => s + (Number(t.lungime_m) || 0), 0).toFixed(1);
   return {
-    sigure, faraIdentitate, conflicte, adnotari, observatii_tabel: nObsTabel, perechi,
+    sigure, faraIdentitate, conflicte, adnotari, observatii_tabel: nObsTabel, perechi, nrFaraLungime,
     total_sigur_m: suma(sigure),
     // de verificat = observațiile fără identitate (brut, fiecare lectură) + varianta MAXIMĂ a fiecărui conflict (plafon)
     total_de_verificat_m: +(suma(faraIdentitate) + conflicte.reduce((s, c) => s + Math.max(...c.variante.map((v: any) => v.lungime_m)), 0)).toFixed(1),
@@ -532,15 +640,31 @@ export class LeasePierdut extends Error { constructor() { super('lease pierdut')
 // stare='facut', totul în aceeași tranzacție. Lease pierdut => 0 scrieri.
 // 25.09.2026 (identitate de rând): `tronsoane` = DOAR rândurile cu identitate sigură (fără conflict, Dn standard); restul
 // (fără identitate / conflicte / nestandard) NU se promovează în cantitate_plansa — se menționează în diferenta_nota (`rest`).
-export type RestTransfer = { peDn: Record<string, { n: number; m: number }>; global: string };
+// Runda 4 (verificator, MAJOR): `peDn` numără pe Dn și CONFLICTELE (c, cu plafonul mc = varianta maximă pe acel Dn), ca un Dn
+// ale cărui rânduri sunt TOATE de verificat (fără identitate sau în conflict) să fie găsit și menționat pe poziția lui.
+export type RestTransfer = { peDn: Record<string, { n: number; m: number; c?: number; mc?: number }>; global: string };
 export const randuri = (n: number) => `${n} ${n === 1 ? 'rând' : 'rânduri'}`;
+const fmtM = (x: number) => (+x.toFixed(1)).toLocaleString('ro-RO');
+// „2 rânduri Dn250 fără identitate sigură (10.350 m); 1 conflict Dn250 (până la 330 m)”
+export function descriereRestDn(rest: RestTransfer | undefined, k: string): string {
+  const x = rest?.peDn?.[k];
+  if (!x) return '';
+  const dn = k === '?' ? 'fără Dn' : `Dn${k}`;
+  return [x.n ? `${randuri(x.n)} ${dn} fără identitate sigură (${fmtM(x.m)} m)` : '',
+    x.c ? `${x.c} conflict${x.c === 1 ? '' : 'e'} ${dn} (până la ${fmtM(x.mc || 0)} m)` : ''].filter(Boolean).join('; ');
+}
 export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[]; total_de_verificat_m: number }, nestandard: any[] = []): RestTransfer {
-  const fmt = (x: number) => (+x.toFixed(1)).toLocaleString('ro-RO');
-  const peDn: Record<string, { n: number; m: number }> = {};
+  const fmt = fmtM;
+  const peDn: RestTransfer['peDn'] = {};
   for (const t of idr.faraIdentitate) {
     const k = t.diametru_mm ? String(t.diametru_mm) : '?';
     const g = peDn[k] || (peDn[k] = { n: 0, m: 0 });
     g.n++; g.m += Number(t.lungime_m) || 0;
+  }
+  for (const k of idr.conflicte) {
+    const pe = new Map<string, number>();
+    for (const v of (k.variante || [])) { const d = v.diametru_mm ? String(v.diametru_mm) : '?'; pe.set(d, Math.max(pe.get(d) || 0, Number(v.lungime_m) || 0)); }
+    for (const [d, m] of pe) { const g = peDn[d] || (peDn[d] = { n: 0, m: 0 }); g.c = (g.c || 0) + 1; g.mc = (g.mc || 0) + m; }
   }
   const p: string[] = [];
   if (idr.faraIdentitate.length) p.push(`${randuri(idr.faraIdentitate.length)} de tabel fără identitate sigură (${fmt(idr.faraIdentitate.reduce((s, t) => s + (Number(t.lungime_m) || 0), 0))} m)`);
@@ -554,11 +678,11 @@ export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[];
 }
 async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null, rulare: string, rest?: RestTransfer) {
   const ops: any[] = [];
-  const fmtR = (x: number) => (+x.toFixed(1)).toLocaleString('ro-RO');
+  const fmtR = fmtM;
   const sufixRest = (dn: number | null) => {
     const p: string[] = [];
-    const x = dn !== null ? rest?.peDn?.[String(dn)] : null;
-    if (x) p.push(`${randuri(x.n)} Dn${dn} fără identitate sigură (${fmtR(x.m)} m)`);
+    const x = dn !== null ? descriereRestDn(rest, String(dn)) : '';
+    if (x) p.push(x);
     if (rest?.global) p.push(`pe planșă: ${rest.global}`);
     return p.length ? ` De verificat, NEincluse în cifra din planșă: ${p.join('; ')}.` : '';
   };
@@ -577,11 +701,17 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     if (sdr) g.sdr.add(`SDR${sdr}`);
     peDiametru.set(cheie, g);
   }
-  if (!peDiametru.size) return { adaugate: 0, actualizate: 0, ambigue: [], pe_diametre: {} };
+  // Runda 4 (verificator, MAJOR): Dn-urile ale căror rânduri sunt TOATE „de verificat” (niciun grup sigur) nu mai sunt sărite —
+  // poziția lor primește o notă (și, dacă e încă „extras”, cifra veche din planșă se golește). Fără early-return cât timp
+  // există rest de menționat: altfel poziția păstra tăcut cantitate_plansa și nota unei citiri anterioare.
+  const dnSigure = new Set([...peDiametru.values()].map((g) => String(g.dn)));
+  const doarDeVerificat = Object.keys(rest?.peDn || {}).filter((k) => !dnSigure.has(k))
+    .sort((a, b) => (Number(b) || 0) - (Number(a) || 0));
+  if (!peDiametru.size && !doarDeVerificat.length && !rest?.global) return { adaugate: 0, actualizate: 0, ambigue: [], pe_diametre: {} };
 
   const eticheta = nrPlansa ? `Planșa ${nrPlansa}` : `Planșa „${doc.nume_original}”`;
   const { data: existente } = await supa.from('ofertare_cantitati')
-    .select('id, denumire, categorie, um, cantitate, status')
+    .select('id, denumire, categorie, um, cantitate, cantitate_plansa, status')
     .eq('licitatie_id', doc.licitatie_id);
   // NU se mai filtreaza dupa numele categoriei. Pana la 11.09.2026 aici scria
   // `r.categorie === 'Rețea distribuție'`, iar in aceeasi zi categoriile au fost rescrise
@@ -629,7 +759,8 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
             `(${m - dinMemoriu > 0 ? '+' : ''}${(m - dinMemoriu).toLocaleString('ro-RO')} m, pe ${g.n} tronsoane citite din tabel).`;
       const patch: Record<string, unknown> = { cantitate_plansa: m, diferenta_nota: nota + sufixRest(dn), updated_at: new Date().toISOString() };
       // daca cineva a validat deja pozitia, nu-i schimbam decizia — doar ii aratam nota
-      if (potrivit.status === 'extras' && dinMemoriu !== null && Math.abs(dinMemoriu - m) >= 1) patch.status = 'diferenta';
+      // (runda 4: și când pe același Dn există rânduri de verificat, cifra din planșă e incompletă => „diferenta”)
+      if (potrivit.status === 'extras' && ((dinMemoriu !== null && Math.abs(dinMemoriu - m) >= 1) || rest?.peDn?.[String(dn)])) patch.status = 'diferenta';
       delete patch.updated_at; // îl pune RPC-ul (now())
       ops.push({ op: 'update', id: potrivit.id, patch });
     } else {
@@ -640,7 +771,8 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
         // categoria o pune trigger-ul din dictionar (fn_categorie_cantitate)
         denumire,
         um: 'm', cantitate: m, cantitate_plansa: m,
-        status: 'extras', extras_de_ai: true,
+        // runda 4 (verificator, minor): pe un Dn cu rânduri de verificat cifra (doar partea sigură) cere verificare => „diferenta”
+        status: rest?.peDn?.[String(dn)] ? 'diferenta' : 'extras', extras_de_ai: true,
         sursa,
         specificatii: [[...g.sdr].join('/'), [...g.zone].slice(0, 12).join(', ') || `${g.n} tronsoane`].filter(Boolean).join(' · '),
         diferenta_nota: `Diametru care nu apare în cantitățile din memoriu. ${g.n} tronsoane citite din tabelul planșei.` + sufixRest(dn),
@@ -648,10 +780,42 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     }
   }
 
+  // Runda 4: Dn-uri fără NICIUN rând sigur (toate „de verificat”). Poziția existentă NU primește o cifră (nu există una sigură):
+  //  - status „extras” (nevalidată de om) => cantitate_plansa = null, status „diferenta”, nota spune ce era înainte;
+  //  - validată / deja „diferenta” => doar nota (decizia omului rămâne), cu mențiunea că cifra din planșă e dintr-o citire veche.
+  // Nu se inserează poziții noi din rânduri nesigure; Dn-ul fără poziție (sau „fără Dn”) e raportat în răspuns și în nota TOTAL.
+  const ceVechi = (cp: number | null, golit: boolean) => golit
+    ? `cifra din planșă s-a golit${cp !== null ? ` (era ${fmtR(cp)} m, dintr-o citire anterioară)` : ''}`
+    : `cifra din planșă nu s-a actualizat${cp !== null ? ` (${fmtR(cp)} m e dintr-o citire anterioară)` : ''}`;
+  const patchDoarVerificare = (r: any, ce: string) => {
+    const cp = r.cantitate_plansa == null ? null : Number(r.cantitate_plansa);
+    const golit = r.status === 'extras';
+    const diferenta_nota = `De verificat: ${ce}; ${ceVechi(cp, golit)}.` + (rest?.global ? ` Pe planșă: ${rest.global}.` : '');
+    return golit ? { cantitate_plansa: null, status: 'diferenta', diferenta_nota } : { diferenta_nota };
+  };
+  const doarVerif: { dn: number | null; pozitie_id: number | null; actiune: string }[] = [];
+  for (const k of doarDeVerificat) {
+    const ce = descriereRestDn(rest, k);
+    const dn = k === '?' ? null : Number(k);
+    if (dn === null) { doarVerif.push({ dn, pozitie_id: null, actiune: 'fara_dn' }); continue; }
+    const candidati = retea.filter((r: any) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || '')));
+    if (candidati.length > 1) {
+      ambigue.push({ dn, material: null, metri: 0, de_verificat: ce, pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
+      doarVerif.push({ dn, pozitie_id: null, actiune: 'ambiguu' }); continue;
+    }
+    const p = candidati[0];
+    if (!p) { doarVerif.push({ dn, pozitie_id: null, actiune: 'fara_pozitie' }); continue; }
+    const deja = ops.find((o) => o.op === 'update' && o.id === p.id);
+    if (deja) { deja.patch.diferenta_nota += ` De verificat (Dn${dn}, fără nicio cifră sigură): ${ce}.`; doarVerif.push({ dn, pozitie_id: p.id, actiune: 'nota' }); continue; }
+    const patch = patchDoarVerificare(p, ce);
+    ops.push({ op: 'update', id: p.id, patch });
+    doarVerif.push({ dn, pozitie_id: p.id, actiune: 'cantitate_plansa' in patch ? 'golit' : 'nota' });
+  }
+
   // randul de total, daca exista, primeste si el valoarea din plansa
   const total = +[...peDiametru.values()].reduce((s, g) => s + g.m, 0).toFixed(1);
   const randTotal = retea.find((r: any) => /total/i.test(r.denumire || ''));
-  if (randTotal) {
+  if (randTotal && peDiametru.size) {
     const dinMemoriu = randTotal.cantitate === null ? null : Number(randTotal.cantitate);
     ops.push({ op: 'update', id: randTotal.id, patch: {
       cantitate_plansa: total,
@@ -659,8 +823,13 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
         ? `Memoriu ${dinMemoriu.toLocaleString('ro-RO')} m vs ${eticheta.toLowerCase()} ${total.toLocaleString('ro-RO')} m.`
         : `${eticheta} confirmă totalul: ${total.toLocaleString('ro-RO')} m.`) + sufixRest(null),
     } });
+  } else if (randTotal) {
+    // niciun rând sigur (cu Dn standard) pe planșă: totalul NU devine 0 m — doar nota (sau golire, dacă e „extras”)
+    ops.push({ op: 'update', id: randTotal.id, patch: patchDoarVerificare(randTotal, `nicio lungime sigură cu Dn standard pe ${eticheta.toLowerCase()}`) });
   }
 
+  const extra = doarVerif.length ? { doar_de_verificat: doarVerif } : {};
+  if (!peDiametru.size && !ops.length) return { adaugate: 0, actualizate: 0, ambigue, total_m: 0, pe_diametre: {}, ...extra };
   const { data: rez, error } = await supa.rpc('ofertare_transfer_plansa_cantitati',
     { p_doc_id: doc.id, p_rulare: rulare, p_randuri: ops });
   if (error) throw new Error(error.message || String(error));
@@ -668,7 +837,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   if (!rez?.ok) throw new Error(`transfer: răspuns neașteptat ${JSON.stringify(rez).slice(0, 120)}`);
   const adaugate = rez.adaugate ?? 0, actualizate = rez.actualizate ?? 0;
 
-  return { adaugate, actualizate, ambigue, total_m: total, pe_diametre: peDiametreRaport };
+  return { adaugate, actualizate, ambigue, total_m: total, pe_diametre: peDiametreRaport, ...extra };
 }
 
 
@@ -1133,6 +1302,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (idr.faraIdentitate.length || idr.conflicte.length)
     avertismente.push(`${randuri(idr.faraIdentitate.length)} de tabel fără identitate sigură și ${idr.conflicte.length} ` +
       `conflict${idr.conflicte.length === 1 ? '' : 'e'} (același rând citit cu valori diferite): ${idr.total_de_verificat_m} m de verificat — NU intră în cantități`);
+  if (idr.nrFaraLungime.length)
+    avertismente.push(`${randuri(idr.nrFaraLungime.length)} numerotate fără nicio lungime citită (Nr ${idr.nrFaraLungime.slice(0, 12).map((x: any) => x.nr).join(', ')}` +
+      `${idr.nrFaraLungime.length > 12 ? ', …' : ''}) — lungimea lor lipsește din total; de verificat pe planșă`);
   if (!pentruCantitati.some((t: any) => t.material)) avertismente.push('Materialul (PE/OL, SDR) nu apare pe niciun tronson citit — nu se completează din presupuneri');
   const nrPlansa = toate.map((r: any) => r?.cartus?.plansa_nr).find(Boolean) ||
     d.analiza?.cartus?.plansa_nr || null;
@@ -1157,6 +1329,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     randuri_fara_identitate: idr.faraIdentitate.slice(0, 200).map((t: any) => ({ zona: t._zona ?? null, de_la: t.de_la ?? null, la: t.la ?? null,
       lungime_m: t.lungime_m, diametru_mm: t.diametru_mm ?? null, debit_mch: numar(t.debit_mch), motiv: t._motiv })),
     randuri_fara_identitate_n: idr.faraIdentitate.length,
+    ...(idr.nrFaraLungime.length ? { nr_fara_lungime: idr.nrFaraLungime.slice(0, 60), nr_fara_lungime_n: idr.nrFaraLungime.length } : {}),
     identitate_randuri: { lecturi_tabel: idr.observatii_tabel, randuri_sigure: idr.sigure.length, prin_nr: idr.prin.nr, prin_pozitie: idr.prin.pozitie,
       fara_identitate: idr.faraIdentitate.length, conflicte: idr.conflicte.length },
     tabele: [...new Set(toate.flatMap((r: any) => (r.tabele || []).map((t: any) => t.denumire)).filter(Boolean))],
