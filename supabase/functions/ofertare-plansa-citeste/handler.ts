@@ -18,7 +18,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
-import { aplicaRegulaAprobare, citestePaginat, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
+import { aceeasiValoare, aplicaRegulaAprobare, citestePaginat, descrieDiferenta, fmtRo, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
 import { cheieVersiune, cheiResetare, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
@@ -1118,15 +1118,17 @@ export const dinAceeasiPlansa = (r: any, etichete: string[]) => {
   return etichete.some((e) => !!e && (s === e || s.startsWith(e + ' ')));
 };
 // R5 runda 4 (verificator R3, MAJOR): „aprobat = status 'validat'” acoperă și cantitate_plansa. O citire automată care pune pe
-// un rând o cifră diferită (≥ 1 m) de cea pe care rândul o avea deja — cantitate_plansa existentă sau, dacă n-avea, `cantitate`
-// (ori nicio cifră) — scoate rândul din 'validat': status 'diferenta', validarea se reface. Referința e cifra DEJA de pe rând:
+// un rând o cifră diferită (runda 1b: ORICE diferență de valoare canonică, fără prag — `aceeasiValoare`) de cea pe care rândul o
+// avea deja — cantitate_plansa existentă sau, dacă n-avea, `cantitate` (ori nicio cifră) — scoate rândul din 'validat': status
+// 'diferenta', validarea se reface. Referința e cifra DEJA de pe rând:
 // aceeași cifră recitită nu redeschide o validare făcută după transferul anterior. Aceeași regulă în api/_cadCantitate.js.
 // Statusul pleacă în patch INDIFERENT de statusul citit: RPC-ul ofertare_transfer_plansa_cantitati aplică statusul din patch
 // fără gardă, deci o validare făcută între citirea de aici și RPC nu mai poate rămâne peste o cifră pe care n-a văzut-o.
 export const referintaCitire = (r: any): number | null =>
   r?.cantitate_plansa != null ? Number(r.cantitate_plansa) : r?.cantitate != null ? Number(r.cantitate) : null;
 // R5 (Copilot 26.09.2026, condiția 1): aceeași regulă ca pentru orice atribut al aprobării — invalidare.js (`schimbariRelevante`):
-// schimbarea RELEVANTĂ a cifrei din planșă efective (cantitate_plansa, altfel cantitate), ≥ 1 m pe unitățile de lungime.
+// schimbarea RELEVANTĂ a cifrei din planșă efective (cantitate_plansa, altfel cantitate); runda 1b: comparație EXACTĂ a valorii
+// canonice, pe orice unitate (100 → 100,8 m = altă cantitate; 100 = 100,000).
 export const cifraSchimbata = (r: any, nou: number | null): boolean =>
   nou != null && schimbariRelevante(r, { cantitate_plansa: Number(nou) }).relevante.some((x: any) => x.camp === 'cantitate_plansa');
 // R5 „pas B” (docs/R5_RECONCILIERE_470_V2.md §7.3): pe 1756 (lic. 95) omul a verificat pe imaginea planșei Nr 40 / 41 / 38, iar
@@ -1149,16 +1151,25 @@ export const pozMarcajR5B = (nota: unknown): number => {
 export const corectieR5B = (r: any) => pozMarcajR5B(r?.diferenta_nota) >= 0;
 // valoarea verificată de om = cantitatea (pusă de pasul B)
 export const valoareVerificataR5B = (r: any): number | null => (r?.cantitate == null ? null : Number(r.cantitate));
-const fmtB = (x: number | null) => (x === null ? 'nicio cifră' : `${(+Number(x).toFixed(1)).toLocaleString('ro-RO')} m`);
+// runda 1b: cifrele de referință cu fmtRo (2 zecimale, rotunjire exactă) — cu comparația exactă, o afișare pe 1 zecimală ar fi arătat
+// „35.620,6 m → 35.620,6 m” pentru 35.620,59 → 35.620,6
+const fmtB = (x: number | null) => (x === null ? 'nicio cifră' : `${fmtRo(x)} m`);
 export const etichetaVerificataR5B = (r: any) => `cantitatea ${fmtB(valoareVerificataR5B(r))}, verificată de om pe imaginea planșei (pasul B din R5)`;
 // ce cifră avea rândul când a fost validat (pentru nota care cere revalidarea)
 export const descriereReferinta = (r: any) => corectieR5B(r)
   ? `cantitatea ${fmtB(valoareVerificataR5B(r))} (verificată de om pe imaginea planșei, pasul B din R5)`
   : r?.cantitate_plansa != null
-  ? `cifra din planșă ${(+Number(r.cantitate_plansa).toFixed(1)).toLocaleString('ro-RO')} m`
-  : r?.cantitate != null ? `cantitatea ${(+Number(r.cantitate).toFixed(1)).toLocaleString('ro-RO')} m (fără cifră din planșă)` : 'nicio cifră';
+  ? `cifra din planșă ${fmtRo(r.cantitate_plansa)} m`
+  : r?.cantitate != null ? `cantitatea ${fmtRo(r.cantitate)} m (fără cifră din planșă)` : 'nicio cifră';
+// runda 1b (Copilot, închiderea R4/R5): severitatea diferenței față de cifra numită în `descriereReferinta` — DOAR text („ (diferență
+// mică: +0,8 m, +0,04 %)”); statusul l-a decis deja comparația exactă. Cifră lipsă / aceeași valoare => ''.
+export const severitateFata = (r: any, nou: number | null): string => {
+  const d = descrieDiferenta(corectieR5B(r) ? valoareVerificataR5B(r) : referintaCitire(r), nou);
+  return d ? ` (${d})` : '';
+};
 // R5 runda 5 (verificator, MAJOR 2): valoarea APROBATĂ a rândurilor validate (de la ultima validare) din ofertare_cantitati_istoric —
-// referința regulii aprobării, ca pașii mici cumulați (recitiri care diferă fiecare cu < 1 m) să nu ocolească pragul. Tabelul lipsă
+// referința regulii aprobării (runda 1b: comparația e exactă, deci referința decide doar FAȚĂ DE CE se compară și ce valoare aprobată
+// numește nota — nu mai există prag de ocolit prin pași mici). Tabelul lipsă
 // (migrarea neaplicată) / orice eroare => Map gol => comparația cu rândul de acum (ca înainte). Doar citire.
 // Runda 6 (minorul verificatorului): DESCRESCĂTOR și paginat (citestePaginat), pe loturi de id-uri — un plafon PostgREST nu mai poate
 // tăia tocmai ultima validare (referința ar fi fost o validare mai veche).
@@ -1441,15 +1452,16 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
       // cu aprobarea veche numită (validarea se reface). `cantitate` nu se scrie niciodată din transfer.
       if (dinPlansa && corectieR5B(potrivit)) {
         const ver = valoareVerificataR5B(potrivit);
-        const confirma = ver !== null && Math.abs(ver - m) < 1;
+        // runda 1b: confirmă doar ACEEAȘI valoare (canonic) — 13.740 vs 13.739,6 nu mai e „confirmare”
+        const confirma = ver !== null && aceeasiValoare(ver, m);
         const patchB: Record<string, unknown> = { diferenta_nota: `${eticheta} (recitire) dă ${fmtR(m)} m pe ${g.n} tronsoane — valoarea verificată e ` +
           `${etichetaVerificataR5B(potrivit)}, nu o citire automată; ` +
-          (confirma ? 'recitirea o confirmă.' : `recitirea diferă (${ver === null ? '' : `${m - ver > 0 ? '+' : ''}${fmtR(m - ver)} m`}): cantitatea verificată NU se modifică automat — verifică pe planșă.`) +
+          (confirma ? 'recitirea o confirmă.' : `recitirea diferă${ver === null ? '' : ` (${descrieDiferenta(ver, m)})`}: cantitatea verificată NU se modifică automat — verifică pe planșă.`) +
           sufixRest(dn, g.mat) };
         if (!(potrivit.status === 'validat' && confirma)) patchB.cantitate_plansa = m;
         if (!confirma || ((cheiRest(dn, g.mat).length || rest?.incomplet) && potrivit.status === 'extras')) {
           if (!confirma && potrivit.status === 'validat') patchB.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(potrivit)}; ` +
-            `${eticheta.toLowerCase()} dă acum ${fmtR(m)} m — validarea se reface. ` + patchB.diferenta_nota;
+            `${eticheta.toLowerCase()} dă acum ${fmtR(m)} m${severitateFata(potrivit, m)} — validarea se reface. ` + patchB.diferenta_nota;
           if (potrivit.status !== 'validat' || !confirma) patchB.status = 'diferenta';
         }
         ops.push({ op: 'update', id: potrivit.id, patch: patchB });
@@ -1461,12 +1473,12 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
       const nota = dinPlansa
         // rând din planșă: nu există referință din memoriu; spunem ce dă recitirea și dacă diferă de cifra din rând
         ? `Diametru care nu apare în cantitățile din memoriu. ${eticheta} (recitire) dă ${m.toLocaleString('ro-RO')} m pe ${g.n} tronsoane` +
-          (anterior !== null && Math.abs(anterior - m) >= 1
+          (anterior !== null && !aceeasiValoare(anterior, m)
             ? ` — rândul are ${anterior.toLocaleString('ro-RO')} m din citirea anterioară (${m - anterior > 0 ? '+' : ''}${(m - anterior).toLocaleString('ro-RO')} m); cifra nu e confirmată, verifică pe planșă.`
             : ' (valoare din planșă, nu confirmare din memoriu).')
         : dinMemoriu === null
         ? `${eticheta} dă ${m.toLocaleString('ro-RO')} m pe ${g.n} tronsoane.`
-        : Math.abs(dinMemoriu - m) < 1
+        : aceeasiValoare(dinMemoriu, m)   // runda 1b: „confirmă” = aceeași valoare, nu „sub 1 m”
           ? `${eticheta} confirmă: ${m.toLocaleString('ro-RO')} m.`
           : `${etRef} ${dinMemoriu.toLocaleString('ro-RO')} m vs ${eticheta.toLowerCase()} ${m.toLocaleString('ro-RO')} m ` +
             `(${m - dinMemoriu > 0 ? '+' : ''}${(m - dinMemoriu).toLocaleString('ro-RO')} m, pe ${g.n} tronsoane citite din tabel).`;
@@ -1476,12 +1488,15 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
       // runda 7 (B3): și când secvența Nr a planșei e incompletă (cifra e doar partea citită)
       // R5: și recitirea care diferă de cifra din rând (tot din planșă) e o diferență de verificat, nu o confirmare
       const deComparat = dinMemoriu !== null ? dinMemoriu : anterior;
-      if (potrivit.status === 'extras' && ((deComparat !== null && Math.abs(deComparat - m) >= 1) || cheiRest(dn, g.mat).length || rest?.incomplet)) patch.status = 'diferenta';
+      if (potrivit.status === 'extras' && ((deComparat !== null && !aceeasiValoare(deComparat, m)) || cheiRest(dn, g.mat).length || rest?.incomplet)) patch.status = 'diferenta';
       // R5 runda 4 (MAJOR): cifra din planșă se schimbă față de ce avea rândul => 'diferenta' ORICARE ar fi statusul citit
       // (și pe 'validat': validarea s-a dat pe altă cifră; și în fereastra citire → RPC, vezi `cifraSchimbata`).
-      if (cifraSchimbata(potrivit, m)) {
-        if (potrivit.status === 'validat') patch.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(potrivit)}; ` +
-          `${eticheta.toLowerCase()} dă acum ${fmtR(m)} m — validarea se reface. ` + patch.diferenta_nota;
+      // Runda 1b: pe rândul VALIDAT, comparația și nota se fac față de valoarea APROBATĂ (`refs`, din istoric — ca trigger-ul), dacă
+      // există: nota numește cifra aprobată, nu o stare intermediară; fără istoric, față de rândul de acum.
+      const baza = potrivit.status === 'validat' ? (refs.get(Number(potrivit.id)) || potrivit) : potrivit;
+      if (cifraSchimbata(baza, m)) {
+        if (potrivit.status === 'validat') patch.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(baza)}; ` +
+          `${eticheta.toLowerCase()} dă acum ${fmtR(m)} m${severitateFata(baza, m)} — validarea se reface. ` + patch.diferenta_nota;
         patch.status = 'diferenta';
       }
       delete patch.updated_at; // îl pune RPC-ul (now())
@@ -1620,15 +1635,16 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     const dinMemoriu = randTotal.cantitate == null ? null : Number(randTotal.cantitate);
     const patch: Record<string, unknown> = {
       cantitate_plansa: total,
-      diferenta_nota: (dinMemoriu !== null && Math.abs(dinMemoriu - total) >= 1
+      diferenta_nota: (dinMemoriu !== null && !aceeasiValoare(dinMemoriu, total)
         ? `Memoriu ${dinMemoriu.toLocaleString('ro-RO')} m vs ${eticheta.toLowerCase()} ${total.toLocaleString('ro-RO')} m.`
         : `${eticheta} confirmă totalul: ${total.toLocaleString('ro-RO')} m.`) + sufixRest(null),
     };
     // runda 5 (verificator, minor): ca pe Dn — TOTAL „extras” cu rest de verificat pe planșă (cifra = doar partea sigură) => „diferenta”
     if (randTotal.status === 'extras' && rest?.global) patch.status = 'diferenta';
     // R5 runda 4 (MAJOR): și TOTAL-ul — referința graficului („front”) când e validat — se revalidează dacă cifra din planșă se schimbă
-    if (cifraSchimbata(randTotal, total)) {
-      if (randTotal.status === 'validat') patch.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(randTotal)}; ${eticheta.toLowerCase()} dă acum ${fmtR(total)} m — validarea se reface. ` + patch.diferenta_nota;
+    const bazaT = randTotal.status === 'validat' ? (refs.get(Number(randTotal.id)) || randTotal) : randTotal;   // runda 1b: ca mai sus
+    if (cifraSchimbata(bazaT, total)) {
+      if (randTotal.status === 'validat') patch.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(bazaT)}; ${eticheta.toLowerCase()} dă acum ${fmtR(total)} m${severitateFata(bazaT, total)} — validarea se reface. ` + patch.diferenta_nota;
       patch.status = 'diferenta';
     }
     ops.push({ op: 'update', id: randTotal.id, patch });

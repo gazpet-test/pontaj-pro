@@ -70,16 +70,19 @@ describe('ce NU invalidează', () => {
     const s = schimbariRelevante(R2, { obiect: 'Magistrala', categorie: 'Conducte și montaj', denumire: R2.denumire, um: 'm', cantitate: 1100, specificatii: 'PE100 SDR11', sursa: R2.sursa })
     expect([s.relevante, s.subPrag]).toEqual([[], []])
   })
-  it('sub prag: cifra din planșă 2.210 → 2.210,4 m, majuscule / spații în denumire — raportate ca sub prag, validarea rămâne', () => {
-    const s = schimbariRelevante(R2, { cantitate_plansa: 2210.4, denumire: 'ȚEAVĂ PE100 SDR11  Dn180 — extravilan Mănăstirea→Coconi ' })
+  it('runda 1b: majuscule / spații în denumire și cifre egale canonic (2.210 = „2210.000”) = doar formă; cifra din planșă 2.210 → 2.210,4 NU mai e „sub prag”', () => {
+    const s = schimbariRelevante(R2, { cantitate_plansa: '2210.000', denumire: 'ȚEAVĂ PE100 SDR11  Dn180 — extravilan Mănăstirea→Coconi ' })
     expect(s.relevante).toEqual([])
-    expect(s.subPrag.map(x => x.camp)).toEqual(['cantitate_plansa', 'denumire'])
+    expect(s.subPrag.map(x => x.camp)).toEqual(['denumire'])   // „2210.000” nici nu e o scriere distinctă
     const r = aplicaRegulaAprobare(R2, { cantitate_plansa: 2210.4 })
-    expect([r.invalidat, r.patch.status]).toEqual([false, undefined])
+    expect([r.invalidat, r.patch.status]).toEqual([true, 'diferenta'])
+    expect(r.patch.diferenta_nota).toContain('s-a schimbat cifra din planșă (2.210 m → 2.210,4 m; diferență mică: +0,4 m, +0,02 %)')
   })
-  it('prima cifră din planșă egală cu cantitatea (1.100 → planșa 1.100,3) nu e o schimbare (ca cifraSchimbata)', () => {
-    const s = schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1100.3 })
-    expect(s.relevante).toEqual([])
+  it('prima cifră din planșă EGALĂ cu cantitatea (1.100 → planșa 1.100) nu e o schimbare (ca cifraSchimbata); 1.100,3 da (runda 1b: fără prag)', () => {
+    const s = schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1100 })
+    expect([s.relevante, s.subPrag.map(x => x.camp)]).toEqual([[], ['cantitate_plansa']])
+    const x = schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1100.3 }).relevante
+    expect(x.map(y => [y.camp, y.severitate])).toEqual([['cantitate_plansa', 'diferență mică: +0,3 m, +0,03 %, efectiv 1.100 m → 1.100,3 m']])
     expect(schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1101 }).relevante.map(x => x.camp)).toEqual(['cantitate_plansa'])
   })
   it('rând nevalidat: nimic de invalidat', () => {
@@ -96,14 +99,18 @@ describe('unități non-lungime și rândul CAD', () => {
     const r = { ...R2, um: 'buc', cantitate: 1, cantitate_plansa: null }
     expect(schimbariRelevante(r, { cantitate: 1.5 }).relevante.map(x => x.camp)).toEqual(['cantitate'])
   })
-  it('rândul 9 (CAD, validat): re-măsurare 35.620,59 → 35.620,9 sub prag; → 35.700 invalidează', () => {
-    expect(aplicaRegulaAprobare(R9, { cantitate_plansa: 35620.9 }).invalidat).toBe(false)
+  it('rândul 9 (CAD, validat): runda 1b — re-măsurare 35.620,59 → 35.620,9 INVALIDEAZĂ (mică); 35.620,590 nu; → 35.700 invalidează (mare)', () => {
+    const m = aplicaRegulaAprobare(R9, { cantitate_plansa: 35620.9 })
+    expect([m.invalidat, m.patch.status]).toEqual([true, 'diferenta'])
+    expect(m.patch.diferenta_nota).toContain('cifra din planșă (35.620,59 m → 35.620,9 m; diferență mică: +0,31 m, sub 0,01 %)')
+    expect(aplicaRegulaAprobare(R9, { cantitate_plansa: '35620.590' }).invalidat).toBe(false)
     const r = aplicaRegulaAprobare(R9, { cantitate_plansa: 35700 })
     expect([r.invalidat, r.patch.status]).toEqual([true, 'diferenta'])
-    expect(r.patch.diferenta_nota).toContain('cifra din planșă (35.620,59 m → 35.700 m)')
+    expect(r.patch.diferenta_nota).toContain('cifra din planșă (35.620,59 m → 35.700 m; diferență mare: +79,41 m, +0,22 %)')
   })
-  it('cifraDiferita: apariția / dispariția cifrei', () => {
-    expect([cifraDiferita(null, 5, 1), cifraDiferita(5, null, 1), cifraDiferita(null, null, 1), cifraDiferita(5, 5.5, 1), cifraDiferita(5, 5.5, 0)]).toEqual([true, true, false, false, true])
+  it('cifraDiferita (runda 1b: exact, fără toleranță): apariția / dispariția cifrei; 5 → 5,5 contează; 5 = „5.000”', () => {
+    expect([cifraDiferita(null, 5), cifraDiferita(5, null), cifraDiferita(null, null), cifraDiferita(5, 5.5), cifraDiferita(5, '5.000'), cifraDiferita(0.1 + 0.2, 0.3)])
+      .toEqual([true, true, false, true, false, false])
   })
 })
 
@@ -142,31 +149,30 @@ function simulare(rand) {
   return { scrie, ev, rand: () => r }
 }
 
-describe('runda 5, MAJOR 2: pragul față de valoarea APROBATĂ, nu față de cea de dinainte (pași mici cumulați)', () => {
+describe('runda 5, MAJOR 2 → runda 1b: față de valoarea APROBATĂ, fără prag — pașii mici nu mai au ce ocoli', () => {
   const R3 = { ...R2, id: 3, cantitate: 5250, cantitate_plansa: null, um: 'm', diferenta_nota: null, updated_at: '2026-09-15T15:19:53+00:00' }
-  it('repro verificator: 5 × (+0,99 m) FĂRĂ referință (regula veche) => 5.254,95 m și tot „validat” (gaura)', () => {
+  it('repro verificator: 5 × (+0,99 m) — runda 1b: chiar FĂRĂ referință din istoric, PRIMUL pas invalidează (înainte: 5.254,95 și tot „validat”)', () => {
     const s = simulare(R3)
-    for (let i = 0; i < 5; i++) s.scrie({ cantitate: +(s.rand().cantitate + 0.99).toFixed(2) }, false)
-    expect([s.rand().cantitate, s.rand().status]).toEqual([5254.95, 'validat'])
+    const st = []
+    for (let i = 0; i < 5; i++) { s.scrie({ cantitate: +(s.rand().cantitate + 0.99).toFixed(2) }, false); st.push(s.rand().status) }
+    expect(st).toEqual(['diferenta', 'diferenta', 'diferenta', 'diferenta', 'diferenta'])
+    expect(s.rand().cantitate).toBe(5254.95)
   })
-  it('cu referința din istoric: primul pas sub prag rămâne validat, al doilea (5.251,98 vs 5.250 aprobat) invalidează', () => {
+  it('cu referința din istoric: primul pas (5.250 → 5.250,99) invalidează; nota numește valoarea APROBATĂ și severitatea', () => {
     const s = simulare(R3)
     const r1 = s.scrie({ cantitate: 5250.99 })
-    expect([r1.invalidat, s.rand().status]).toEqual([false, 'validat'])
-    const r2 = s.scrie({ cantitate: 5251.98 })
-    expect([r2.invalidat, s.rand().status]).toEqual([true, 'diferenta'])
-    // nota numește valoarea APROBATĂ (5.250), nu pe cea de dinainte (5.250,99)
-    expect(s.rand().diferenta_nota).toContain(`${PREFIX_INVALIDARE} (cantitate 5.250 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cantitatea (5.250 m → 5.251,98 m)`)
+    expect([r1.invalidat, s.rand().status]).toEqual([true, 'diferenta'])
+    expect(s.rand().diferenta_nota).toContain(`${PREFIX_INVALIDARE} (cantitate 5.250 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cantitatea (5.250 m → 5.250,99 m; diferență mică: +0,99 m, +0,02 %)`)
   })
-  it('cifra din planșă: 1.000 → 1.000,9 → 1.001,5 (fiecare pas < 1 m) => invalidat la al doilea', () => {
+  it('cifra din planșă: 1.000 → 1.000,9 => invalidat din primul pas (înainte: abia 1.001,5)', () => {
     const s = simulare({ ...R3, cantitate: 1000, cantitate_plansa: 1000 })
-    expect(s.scrie({ cantitate_plansa: 1000.9 }).invalidat).toBe(false)
-    expect(s.scrie({ cantitate_plansa: 1001.5 }).invalidat).toBe(true)
+    expect(s.scrie({ cantitate_plansa: 1000.9 }).invalidat).toBe(true)
   })
-  it('înapoi spre valoarea aprobată (5.250,99 → 5.250,2) rămâne sub prag', () => {
+  it('o scriere care retrimite EXACT valoarea aprobată (5.250 → „5250.000”) nu e o schimbare; 5.250,2 este', () => {
     const s = simulare(R3)
-    s.scrie({ cantitate: 5250.99 })
-    expect(s.scrie({ cantitate: 5250.2 }).invalidat).toBe(false)
+    expect(s.scrie({ cantitate: '5250.000' }).schimbari).toMatchObject({ relevante: [], subPrag: [] })
+    expect(s.rand().status).toBe('validat')
+    expect(s.scrie({ cantitate: 5250.2 }).invalidat).toBe(true)
   })
   it('referinteDinIstoric: ultima validare câștigă; fără validare = rândul dinaintea PRIMEI scrieri; rânduri străine ignorate', () => {
     const ev = [
@@ -304,5 +310,100 @@ describe('runda 5, minor NBSP: normText tratează spațiile Unicode ca spațiu (
     expect(normText('Țeavă PE100 SDR11  Dn180\t')).toBe('țeavă pe100 sdr11 dn180')
     const s = schimbariRelevante(R2, { denumire: R2.denumire.replace(/ /g, ' ') })
     expect([s.relevante.length, s.subPrag.map(x => x.camp)]).toEqual([0, ['denumire']])
+  })
+})
+
+// ── R5 runda 1b (Copilot, închiderea R4/R5, 26.09.2026, condiția nr. 1): comparație EXACTĂ a valorii canonice; pragurile doar pentru
+// SEVERITATE. Setul comun (src/ofertareCantitati1b.cazuri.js) e rulat și prin trigger-ul SQL (PGlite, nota SQL = JS octet cu octet). ──
+import { valoareCanonica, aceeasiValoare, descrieDiferenta, fmtRo, PRAG_SEVERITATE_LUNGIME_M, PRAG_SEVERITATE_PROCENT, ZECIMALE_CANONICE } from './ofertareCantitatiInvalidare.js'
+import { RANDURI_1B, CAZURI_1B } from './ofertareCantitati1b.cazuri.js'
+
+// istoricul pe care l-ar scrie trigger-ul, simulat: validarea (valori_noi = rândul aprobat), invalidare / formă (valori_vechi)
+function ruleaza(id, pregatire, patch) {
+  let r = { ...RANDURI_1B.find(x => x.id === id) }
+  const ev = []
+  const scrie = p => {
+    if (r.status !== 'validat') {
+      if (p.status === 'validat') ev.push({ id: ev.length + 1, cantitate_id: id, motiv: 'validat', valori_vechi: { ...r }, valori_noi: { ...r, ...p } })
+      r = { ...r, ...p }
+      return null
+    }
+    const x = aplicaRegulaAprobare(r, p, referinteDinIstoric(ev).get(id) || null)
+    const motiv = x.invalidat ? 'invalidat' : x.schimbari.subPrag.length ? 'modificat_sub_prag' : p.status && p.status !== 'validat' ? 'redeschis' : null
+    if (motiv) ev.push({ id: ev.length + 1, cantitate_id: id, motiv, valori_vechi: { ...r } })
+    r = { ...r, ...x.patch }
+    return { x, motiv }
+  }
+  for (const p of pregatire) scrie(p)
+  return scrie(patch)
+}
+
+describe('runda 1b — setul comun de cazuri (aceleași rezultate ca trigger-ul SQL)', () => {
+  it('setul acoperă: lic. 3 validat (2, 3, 4, 9), rând nevalidat, ≥ 10 unități diferite, formă, invalidare, ↩', () => {
+    expect(RANDURI_1B.filter(r => r.status === 'validat').map(r => r.id)).toEqual([2, 3, 4, 9])
+    expect(new Set(RANDURI_1B.map(r => r.um)).size).toBeGreaterThanOrEqual(10)
+    expect(CAZURI_1B.some(c => c[4].inval) && CAZURI_1B.some(c => c[4].motiv === 'modificat_sub_prag') && CAZURI_1B.some(c => c[4].motiv === 'redeschis')).toBe(true)
+  })
+  for (const [nume, id, pregatire, patch, astept] of CAZURI_1B) {
+    it(nume, () => {
+      const rez = ruleaza(id, pregatire, patch)
+      const inval = !!rez?.x.invalidat
+      expect(inval).toBe(astept.inval)
+      expect(rez?.motiv ?? null).toBe(astept.inval ? 'invalidat' : astept.motiv)
+      if (!astept.inval) return
+      const nota = rez.x.patch.diferenta_nota
+      expect(rez.x.patch.status).toBe('diferenta')
+      expect(/; diferență mică: /.test(nota) ? 'mică' : /; diferență mare: /.test(nota) ? 'mare' : null).toBe(astept.sev)
+      if (astept.contine) expect(nota).toContain(astept.contine)
+      // valoarea aprobată rămâne numită în notă și nu se suprascrie (cantitatea nu e în patch decât dacă scrierea testată o schimbă)
+      expect(nota.startsWith('Rândul era VALIDAT — aprobarea veche (')).toBe(true)
+    })
+  }
+})
+
+describe('runda 1b — valoarea canonică, severitatea, formatul', () => {
+  it('valoareCanonica = round(x, 6): formă egală, orice valoare diferită; fără virgulă mobilă', () => {
+    expect(ZECIMALE_CANONICE).toBe(6)
+    expect([aceeasiValoare(100, '100.000'), aceeasiValoare(100, 100.8), aceeasiValoare(0.1 + 0.2, 0.3), aceeasiValoare(null, null), aceeasiValoare(null, 0), aceeasiValoare('', null)])
+      .toEqual([true, false, true, true, false, true])
+    expect([valoareCanonica(85.2000004), valoareCanonica(85.2000005), valoareCanonica(-5e-7), valoareCanonica(1e21), valoareCanonica('x')].map(v => v === null ? null : String(v)))
+      .toEqual(['85200000', '85200001', '-1', '1000000000000000000000000000', null])
+  })
+  it('descrieDiferenta: „diferență mică 0,8 m (0,8 %)” (exemplul Copilot) vs „mare”; pe buc nu există prag în metri; |Δ| exact', () => {
+    expect([PRAG_SEVERITATE_LUNGIME_M, PRAG_SEVERITATE_PROCENT]).toEqual([1, 1])
+    expect(descrieDiferenta(100, 100.8)).toBe('diferență mică: +0,8 m, +0,8 %')
+    expect(descrieDiferenta(100, 101)).toBe('diferență mare: +1 m, +1 %')          // pragurile sunt stricte (< 1 m, < 1 %)
+    expect(descrieDiferenta(5000, 5004)).toBe('diferență mare: +4 m, +0,08 %')      // lungime: sub 1 % dar ≥ 1 m => mare
+    expect(descrieDiferenta(5000, 5004, { lungime: false, unitate: 'buc' })).toBe('diferență mică: +4 buc, +0,08 %')   // buc: doar relativ
+    expect(descrieDiferenta(10, 11, { lungime: false, unitate: 'buc' })).toBe('diferență mare: +1 buc, +10 %')
+    expect(descrieDiferenta(13740, 13140)).toBe('diferență mare: -600 m, -4,37 %')
+    expect(descrieDiferenta(1.084, 1.085, { lungime: false, unitate: 'mc' })).toBe('diferență mică: +0,001 mc, +0,09 %')
+    expect(descrieDiferenta(35620.59, 35620.6)).toBe('diferență mică: +0,01 m, sub 0,01 %')
+    expect(descrieDiferenta(0, 2, { lungime: false, unitate: 'buc' })).toBe('diferență mare: +2 buc')   // față de 0: fără procent
+    expect([descrieDiferenta(100, '100.000'), descrieDiferenta(null, 5), descrieDiferenta(5, null)]).toEqual(['', '', ''])
+  })
+  it('severitatea NU decide: 100 → 100,8 m (mică) invalidează exact ca 100 → 150 m (mare)', () => {
+    const r = { ...R2, cantitate: 100, cantitate_plansa: null }
+    const a = aplicaRegulaAprobare(r, { cantitate: 100.8 }), b = aplicaRegulaAprobare(r, { cantitate: 150 })
+    expect([a.invalidat, a.patch.status, b.invalidat, b.patch.status]).toEqual([true, 'diferenta', true, 'diferenta'])
+    expect(a.patch.diferenta_nota).toContain('cantitatea (100 m → 100,8 m; diferență mică: +0,8 m, +0,8 %)')
+    expect(b.patch.diferenta_nota).toContain('cantitatea (100 m → 150 m; diferență mare: +50 m, +50 %)')
+  })
+  it('buc 10 → 11: invalidat; nota în bucăți (nu „10 m → 11 m”); unitate schimbată (m → buc) => fără severitate', () => {
+    const r = { ...R2, um: 'buc', cantitate: 10, cantitate_plansa: null }
+    const x = aplicaRegulaAprobare(r, { cantitate: 11 })
+    expect([x.invalidat, x.patch.status]).toEqual([true, 'diferenta'])
+    expect(x.patch.diferenta_nota).toContain('aprobarea veche (cantitate 10 buc, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cantitatea (10 buc → 11 buc; diferență mare: +1 buc, +10 %)')
+    const u = aplicaRegulaAprobare(R2, { um: 'buc', cantitate: 1101 }).patch.diferenta_nota
+    expect(u).toContain('unitatea de măsură („m” → „buc”); cantitatea (1.100 m → 1.101 buc)')
+    expect(u).not.toContain('diferență')
+  })
+  it('fără conversie m ↔ ml: 100 m → 100 ml invalidează (unitatea), cifra nu e „confirmată” prin conversie', () => {
+    const x = aplicaRegulaAprobare({ ...R2, cantitate: 100, cantitate_plansa: null }, { um: 'ml' })
+    expect([x.invalidat, x.schimbari.relevante.map(y => y.camp)]).toEqual([true, ['um']])
+  })
+  it('fmtRo — zecimal exact (= ofertare_fmt_ro din SQL), independent de ICU: 1,085 → „1,09” (înainte „1,08” în JS, „1,09” în SQL)', () => {
+    expect([1.085, 2.675, 1.005, -1.005, 1100, 1234567.8, 35620.59, 0.005, -0.004, -5, null].map(fmtRo))
+      .toEqual(['1,09', '2,68', '1,01', '-1,01', '1.100', '1.234.567,8', '35.620,59', '0,01', '0', '-5', '—'])
   })
 })

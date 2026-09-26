@@ -143,6 +143,12 @@ describe('controlFronturiGrafic — fronturile SALVATE trebuie să vină din râ
     const c = controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, cantitate_plansa: 2600 } : x))
     expect(c.stare).toBe('block'); expect(c.detalii).toMatch(/#2 s-a schimbat de la propunere \(2\.210 → 2\.600 m\)/)
   })
+  it('runda 1b: ORICE altă cifră (2.210 → 2.210,4, revalidat) cere repropunere — nu doar ≥ 1 m; aceeași valoare scrisă altfel („2210.000”) nu', () => {
+    const fr = fronturiDinCantitati(LIC3_R, 'plansa').fronturi
+    const c = controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, cantitate_plansa: 2210.4 } : x))
+    expect(c.stare).toBe('block'); expect(c.detalii).toMatch(/#2 s-a schimbat de la propunere/)
+    expect(controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, cantitate_plansa: '2210.000' } : x)).stare).toBe('ok')
+  })
   it('baza schimbată după propunere (planșe → memoriu) => BLOCK; rând-sursă șters => BLOCK', () => {
     const fr = fronturiDinCantitati(LIC3_R, 'plansa').fronturi
     expect(controlFronturiGrafic(P(fr, 'memoriu'), LIC3_R).detalii).toMatch(/propus pe altă bază \(planșe\)/)

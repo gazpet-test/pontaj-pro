@@ -2,6 +2,7 @@
 // R4: scrieri concurente (CAS + fuziune pe zone), versiuni nemixate (409), regiunea în coordonate PDF, rezultatCitire.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { handler, rezultatCitire } from './handler.ts'
+import { aceeasiValoare, descrieDiferenta } from './invalidare.js'
 import { CALE_REV, CALE_REZ, REZERVARE_EXPIRA_MS, TOLERANTA_CEAS_MS, fuzioneazaZone, leaseTransferOcupat, rezActiva, rezervariNoi, rezervateDeAltii, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
 
 // ---- DB simulată cu update real + filtre pe cale JSON (analiza->citire_ai->>rev) ----
@@ -957,9 +958,10 @@ Deno.test('runda 4 transfer: Dn cu toate rândurile de verificat -> nota pe pozi
   // schimbă cantitate_plansa (1.740), deci ies din „validat” („diferenta”) și nota spune pe ce cifră fusese dată validarea.
   // Înainte: rămâneau „validat” cu o cifră pe care n-o verificase nimeni (cazul real lic. 3 din 15.09).
   assertEquals([id(3).cantitate_plansa, id(3).status], [1740, 'diferenta'])
-  assert(id(3).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 5.245 m; planșa „pl1.1.pdf” dă acum 1.740 m — validarea se reface. '), id(3).diferenta_nota)
+  // runda 1b: nota spune și severitatea (doar text)
+  assert(id(3).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 5.245 m; planșa „pl1.1.pdf” dă acum 1.740 m (diferență mare: -3.505 m, -66,83 %) — validarea se reface. '), id(3).diferenta_nota)
   assertEquals([id(4).cantitate_plansa, id(4).status], [1740, 'diferenta'])
-  assert(id(4).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 41.920 m; planșa „pl1.1.pdf” dă acum 1.740 m — validarea se reface. '), id(4).diferenta_nota)
+  assert(id(4).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 41.920 m; planșa „pl1.1.pdf” dă acum 1.740 m (diferență mare: -40.180 m, -95,85 %) — validarea se reface. '), id(4).diferenta_nota)
   assert(id(4).diferenta_nota.endsWith('De verificat, NEincluse în cifra din planșă: pe planșă: 3 rânduri de tabel fără identitate sigură (10.950 m).'), id(4).diferenta_nota)
   assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, material: 'PE', pozitie_id: 1, actiune: 'nota' }, { dn: 180, material: 'PE', pozitie_id: 2, actiune: 'golit' }])
 })
@@ -1440,7 +1442,7 @@ Deno.test('runda 9 TOTAL-a (V9R-TOTAL-a): „Total conducte De 110” + poziția
     // rebase R5 peste R4 runda 9: poziția primește cifra (intenția R4); cifra din planșă se schimbă 480 → 500 pe un rând VALIDAT =>
     // regula R5 (cifraSchimbata): iese din „validat”, cu aprobarea veche numită în notă
     assertEquals([id(3).cantitate_plansa, id(3).status, id(3).diferenta_nota], [500, 'diferenta',
-      'Rândul era VALIDAT cu cifra din planșă 480 m; planșa „pl1.1.pdf” dă acum 500 m — validarea se reface. Planșa „PL1.1.pdf” confirmă: 500 m.'])
+      'Rândul era VALIDAT cu cifra din planșă 480 m; planșa „pl1.1.pdf” dă acum 500 m (diferență mare: +20 m, +4,17 %) — validarea se reface. Planșa „PL1.1.pdf” confirmă: 500 m.'])
     assertEquals([id(4).cantitate_plansa, id(4).status], [480, 'diferenta'])
     assertEquals(id(4).diferenta_nota, 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — grupurile sigure de pe Dn-ul lui ' +
       '(Planșa „PL1.1.pdf”): Dn110 PE 500 m e pe poziția „Conductă distribuție gaze Dn110”; nu se completează automat aici; cifra din planșă nu s-a actualizat (480 m e dintr-o citire anterioară).')
@@ -1521,12 +1523,13 @@ const ruleaza10 = async (poz: any[], felii: any) => {
   return { j, rows, ops, id: (k: number) => rows.find((q: any) => q.id === k) }
 }
 // Rebase R5 peste R4 runda 10–12 (3039f2a): intenția R4 (ce poziție primește cifra, subtotalul doar notă, un update pe id) rămâne
-// verificată; pe un rând VALIDAT a cărui cifră din planșă se schimbă (≥ 1 m), regula R5 (cifraSchimbata) îl scoate din „validat”, cu
-// aprobarea veche numită în notă; și un rând „extras” a cărui cifră din planșă se schimbă trece pe „diferenta” (R5 runda 4).
+// verificată; pe un rând VALIDAT a cărui cifră din planșă se schimbă (runda 1b: orice valoare diferită, fără prag de 1 m), regula R5
+// (cifraSchimbata) îl scoate din „validat”, cu aprobarea veche numită în notă + severitatea; și un rând „extras” a cărui cifră din
+// planșă se schimbă trece pe „diferenta” (R5 runda 4).
 const fmtT = (x: number) => x.toLocaleString('ro-RO')
 const dupaR5 = (st: string, vechi: number, nou: number, nota: string): [string, string] => st === 'validat'
-  ? ['diferenta', `Rândul era VALIDAT cu cifra din planșă ${fmtT(vechi)} m; planșa „pl1.1.pdf” dă acum ${fmtT(nou)} m — validarea se reface. ${nota}`]
-  : [Math.abs(vechi - nou) >= 1 ? 'diferenta' : st, nota]
+  ? ['diferenta', `Rândul era VALIDAT cu cifra din planșă ${fmtT(vechi)} m; planșa „pl1.1.pdf” dă acum ${fmtT(nou)} m${aceeasiValoare(vechi, nou) ? '' : ` (${descrieDiferenta(vechi, nou)})`} — validarea se reface. ${nota}`]
+  : [aceeasiValoare(vechi, nou) ? st : 'diferenta', nota]
 Deno.test('runda 10 TOTAL-a (ADV10-1): subtotalul cu MATERIALUL grupului („Total conducte PE De 110”) + poziția reală fără material => poziția primește cifra, subtotalul notă; validat și extras, ambele ordini (7a7bf86: subtotalul lua 500, poziția păstra TĂCUT 480 „VECHE 3”)', async () => {
   for (const st of ['validat', 'extras']) for (const ordine of [0, 1]) {
     const poz = [{ id: 3, denumire: 'Conductă distribuție gaze Dn110', cantitate: 500, cantitate_plansa: 480, status: st, diferenta_nota: 'VECHE 3' },

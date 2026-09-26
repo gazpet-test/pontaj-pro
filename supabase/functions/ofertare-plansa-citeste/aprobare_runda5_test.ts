@@ -65,7 +65,7 @@ Deno.test('MAJOR 1 (lanțul transfer → grafic): rândul 2 VALIDAT trecut pe �
   assertEquals(c.lista.map((x: any) => [x.id, x.motiv]), [[2, 'invalidat, ieșit din rețea']])
 })
 
-Deno.test('MAJOR 2 + minor (plasa, capăt la capăt): cifra din planșă 1.000 aprobată → 1.000,9 (sub prag) → recitire 1.001,5 => „diferenta” doar prin plasă, față de valoarea din istoric', async () => {
+Deno.test('MAJOR 2 → runda 1b (capăt la capăt): cifra din planșă 1.000 aprobată, rândul rămas pe 1.000,9 (stare veche, „sub prag” dinainte de 1b) → recitire 1.001,5 => „diferenta”, nota numește valoarea APROBATĂ din istoric', async () => {
   const aprobat = { ...R2, cantitate: 1000, cantitate_plansa: 1000, diferenta_nota: null }
   const acum = { ...aprobat, cantitate_plansa: 1000.9 }
   const ist = [{ id: 1, cantitate_id: 2, motiv: 'validat', valori_vechi: { ...aprobat, status: 'extras' }, valori_noi: aprobat },
@@ -76,12 +76,17 @@ Deno.test('MAJOR 2 + minor (plasa, capăt la capăt): cifra din planșă 1.000 a
   assert(f.ordini.length && f.ordini.every((o: string) => o === 'desc'), 'runda 6: istoricul se citește descrescător')
   const [o] = f.apeluri[0].p_randuri
   assertEquals([o.patch.cantitate_plansa, o.patch.status], [1001.5, 'diferenta'])
-  assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT — aprobarea veche (cantitate 1.000 m, cifra din planșă 1.000 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cifra din planșă (1.000 m → 1.001,5 m).'), o.patch.diferenta_nota)
-  // control: fără istoric (tabel lipsă / eroare) => comparația cu rândul de acum, validarea rămâne (comportamentul de dinainte), fără excepții
+  assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 1.000 m; planșa 1.1 dă acum 1.001,5 m (diferență mare: +1,5 m, +0,15 %) — validarea se reface.'), o.patch.diferenta_nota)
+  // recitirea care dă EXACT valoarea aprobată (1.000) pe starea veche 1.000,9: față de aprobare nu e o schimbare (ca trigger-ul)
+  const e = supaFals([acum], ist)
+  await treciInCantitati(e.supa, DOC, tr(180, 1000), '1.1', 'R5')
+  assertEquals(e.apeluri[0].p_randuri[0].patch.status, undefined)
+  // control: fără istoric (tabel lipsă / eroare) => comparația cu rândul de acum; runda 1b: 1.000,9 → 1.001,5 tot „diferenta”, fără excepții
   for (const mod of ['lipsa', 'eroare'] as const) {
     const g = supaFals([acum], mod)
     await treciInCantitati(g.supa, DOC, tr(180, 1001.5), '1.1', 'R5')
-    assertEquals(g.apeluri[0].p_randuri[0].patch.status, undefined, mod)
+    assertEquals(g.apeluri[0].p_randuri[0].patch.status, 'diferenta', mod)
+    assert(g.apeluri[0].p_randuri[0].patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 1.000,9 m; planșa 1.1 dă acum 1.001,5 m (diferență mică: +0,6 m, +0,06 %)'), mod)
   }
 })
 
@@ -93,13 +98,18 @@ Deno.test('minor (plasa, ramură simulată): patch fără status care schimbă r
   assert((ops[0].patch.diferenta_nota as string).startsWith('Rândul era VALIDAT — aprobarea veche (cantitate 1.100 m, cifra din planșă 2.210 m'), ops[0].patch.diferenta_nota as string)
   assert((ops[0].patch.diferenta_nota as string).includes('s-a schimbat materialul PE100 → PE100/PE80; SDR 11 → 11/17') && (ops[0].patch.diferenta_nota as string).endsWith('nota ramurii'))
   assertEquals((ops[1].patch as any).status, undefined, 'doar notă => validarea rămâne')
-  // cu referința din istoric: cifra de acum 2.210,6 (sub prag), ramura scrie 2.211,2 (față de acum 0,6 m; față de aprobat 1,2 m)
+  // cu referința din istoric: cifra de acum 2.210,6 (stare veche), ramura scrie 2.211,2 (față de acum 0,6 m; față de aprobat 1,2 m)
   const ops2: any[] = [{ op: 'update', id: 2, patch: { cantitate_plansa: 2211.2 } }]
   plasaAprobare(ops2, [{ ...R2, cantitate_plansa: 2210.6 }], new Map([[2, R2]]))
   assertEquals((ops2[0].patch as any).status, 'diferenta')
+  assert((ops2[0].patch as any).diferenta_nota.includes('cifra din planșă (2.210 m → 2.211,2 m; diferență mare: +1,2 m, +0,05 %)'), (ops2[0].patch as any).diferenta_nota)
   const ops3: any[] = [{ op: 'update', id: 2, patch: { cantitate_plansa: 2211.2 } }]
   plasaAprobare(ops3, [{ ...R2, cantitate_plansa: 2210.6 }])
-  assertEquals((ops3[0].patch as any).status, undefined, 'fără referință: comparația cu rândul de acum (sub prag)')
+  assertEquals((ops3[0].patch as any).status, 'diferenta', 'fără referință: față de rândul de acum — runda 1b: 2.210,6 → 2.211,2 e altă valoare')
+  // aceeași valoare scrisă altfel („2210.000”) nu e o schimbare
+  const ops4: any[] = [{ op: 'update', id: 2, patch: { cantitate_plansa: '2210.000' } }]
+  plasaAprobare(ops4, [R2])
+  assertEquals((ops4[0].patch as any).status, undefined)
 })
 
 Deno.test('referinteAprobare: fără id-uri nu citește; eroare / tabel lipsă / rânduri străine => Map gol', async () => {

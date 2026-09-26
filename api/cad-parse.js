@@ -115,7 +115,7 @@ export default async function handler(req, res) {
       // Traseul cu cote e candidatul de conducta — intra ca pozitie de cantitate,
       // marcata ca provenind din desen, ca sa poata fi comparata cu memoriul.
       // R5 (25.09.2026): intra 'extras' (masuratoare automata), NU 'validat' — vezi _cadCantitate.js.
-      // R5 runda 4: o masuratoare noua (>= 1 m fata de cantitate_plansa / cantitate) scoate randul din 'validat' ('diferenta').
+      // R5 runda 4 / 1b: o masuratoare noua cu alta valoare (orice diferenta, fara prag de 1 m) fata de cantitate_plansa / cantitate scoate randul din 'validat' ('diferenta').
       const c = analiza.sumar.cu_cote
       let pozitie = null
       if (c.numar > 0 && c.lungime_3d_m > 0) {

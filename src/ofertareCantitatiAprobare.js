@@ -14,7 +14,7 @@
 //
 // Funcții PURE (fără React, fără Supabase): se testează cu vitest (ofertareCantitatiAprobare.test.js).
 // ════════════════════════════════════════════════════════════════
-import { invalidateDinIstoric, normUm, prefixInvalidare, prefixUnitate, unitateSchimbataDinIstoric } from './ofertareCantitatiInvalidare.js'
+import { aceeasiValoare, invalidateDinIstoric, normUm, prefixInvalidare, prefixUnitate, unitateSchimbataDinIstoric } from './ofertareCantitatiInvalidare.js'
 
 export const STATUS_APROBAT = 'validat'
 export const esteAprobata = c => c?.status === STATUS_APROBAT
@@ -185,7 +185,8 @@ export function controlFronturiGrafic(p, cantitati) {
     if (!esteAprobata(c)) { probleme.push(`${et}: rândul-sursă #${c.id} nu e validat (${c.status || 'fără status'})`); return }
     if ((f.baza || baza) !== baza) { probleme.push(`${et} e propus pe altă bază (${f.baza === 'cantitate_plansa' ? 'planșe' : 'memoriu / F3'})`); return }
     const acum = nr(c[baza] ?? c.cantitate)
-    if (f.lungime_sursa != null && Math.abs(acum - Number(f.lungime_sursa)) >= 1)
+    // runda 1b (Copilot, închiderea R4/R5): frontul e al cifrei de la propunere — ORICE altă valoare (nu doar ≥ 1 m) cere repropunere
+    if (f.lungime_sursa != null && !aceeasiValoare(acum, f.lungime_sursa))
       probleme.push(`${et}: rândul-sursă #${c.id} s-a schimbat de la propunere (${fmt(f.lungime_sursa)} → ${fmt(acum)} m)`)
   })
   // R5 condiția 2: referința (rețeaua validată) și fronturile exclud rândurile nevalidate => rezultatul NU e complet; niciun „ok” verde

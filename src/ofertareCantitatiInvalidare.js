@@ -9,22 +9,32 @@
 //   rândul e 'validat' și o scriere schimbă RELEVANT oricare dintre CAMPURI_APROBARE ⇒ status 'diferenta' („de reverificat”),
 //   cu nota „Rândul era VALIDAT — aprobarea veche (…) nu mai e valabilă: s-a schimbat …”. O validare explicită ulterioară
 //   (UPDATE doar pe status, bifa ✓) rămâne posibilă — și e singurul drum înapoi în 'validat'.
-//   - cifrele (cantitate, cifra din planșă): diferență ≥ 1 m pe unitățile de lungime (m / ml / fără unitate), orice diferență pe
-//     celelalte; apariția / dispariția cifrei contează. Cifra din planșă se compară EFECTIV (cantitate_plansa, altfel cantitate),
-//     exact ca `cifraSchimbata` din transferul planșei și din citirea CAD: prima cifră din planșă egală cu memoriul nu e o schimbare;
+//   - cifrele (cantitate, cifra din planșă): runda 1b (Copilot, închiderea R4/R5, 26.09.2026) — comparație EXACTĂ a valorii
+//     CANONICE (`valoareCanonica`: zecimalul rotunjit la 6 zecimale, ca round(x, 6) din SQL), pe ORICE unitate, fără prag:
+//     aprobat 100 m, cifră nouă 100,8 m = altă cantitate => invalidare. Excepție doar forma: 100 = 100,000 (aceeași valoare).
+//     Pragurile (1 m pe unitățile de lungime m / ml / fără unitate; 1 % relativ) decid DOAR SEVERITATEA din notă
+//     („diferență mică: +0,8 m, +0,8 %” / „diferență mare: …”, `descrieDiferenta`), nu păstrează aprobarea; pe buc / mp / mc / kg …
+//     nu există prag în metri (doar cel relativ). Nicio conversie m ↔ ml. Apariția / dispariția cifrei contează. Cifra din planșă
+//     se compară EFECTIV (cantitate_plansa, altfel cantitate), exact ca `cifraSchimbata` din transferul planșei și din citirea CAD:
+//     prima cifră din planșă EGALĂ cu cantitatea nu e o schimbare (observația confirmă valoarea aprobată);
+//     Roluri separate: `cantitate` = valoarea aprobată / folosită; `cantitate_plansa` = observația-candidat a citirii. Transferul și
+//     CAD nu scriu niciodată `cantitate` pe un rând validat; o observație diferită îl scoate pe „diferenta”, iar valoarea aprobată
+//     și sursa ei rămân în rând, în notă și în istoric (`valori_aprobate`), nesuprascrise tacit;
 //   - textele (denumire — unde stau Dn / material / SDR / tronsonul —, specificații, obiect, categorie, sursa, tip_sursa,
 //     cod_articol): orice schimbare după normalizare (spații — și cele Unicode, ca NBSP —, majuscule; `normText`, identic în SQL);
 //   - unitatea de măsură (um): runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil) — comparată NORMALIZAT
 //     (`normUm` = `normText`: spații — și NBSP —, trim, lower; SQL: public.ofertare_norm_text), ca „m” → „M” / „m ” să nu
-//     invalideze (se raportează sub prag), dar „m” → „ml” da. Filtrele de rețea folosesc ACEEAȘI normalizare (randuriFront,
+//     invalideze (se raportează ca formă), dar „m” → „ml” da. Filtrele de rețea folosesc ACEEAȘI normalizare (randuriFront,
 //     v_ofertare_cantitati_nevalidate, v6); v_ofertare_pt_stare.qm (live, neatins) cere încă exact 'm' — rândurile de rețea cu
 //     unitatea scrisă altfel sunt SEMNALATE în view (um_de_normalizat_*) și în H2, nu scăzute tacit din totaluri;
 //   - un rând NEAPROBAT care își schimbă unitatea din / în „m” (normalizat) iese / intră în rețea: nu invalidează (n-are aprobare),
 //     dar nu dispare tacit din semnalul de lipsă — istoric 'unitate_schimbata' (trigger) și, până la migrare, prefixul notei
 //     „Unitatea s-a schimbat (…) — … de reverificat.” (`aplicaRegulaUnitate`, păstrat de transfer / CAD ca prefixul invalidării);
-//   - schimbările SUB PRAG (ex. 5.245 → 5.245,4 m) nu invalidează, dar se raportează (în BD: rând de istoric „modificat_sub_prag”).
-//   - runda 5 (MAJOR verificator): pragul se măsoară față de valoarea APROBATĂ (a ultimei validări, din istoric), nu față de
-//     valoarea de dinainte de scriere: altfel pași mici cumulați (5 × 0,99 m) mutau cifra fără ca nimeni s-o fi aprobat.
+//   - schimbările doar de FORMĂ (texte: majuscule / spații; unitatea „m” → „M”; cifre egale canonic, ex. zgomot de virgulă mobilă
+//     sub 6 zecimale) nu invalidează, dar se raportează (`subPrag`; în BD: rând de istoric cu motivul „modificat_sub_prag” — numele
+//     motivului rămâne, e în CHECK-ul tabelului; din 1b nicio cifră cu altă valoare nu mai ajunge aici).
+//   - runda 5 (MAJOR verificator): comparația se face față de valoarea APROBATĂ (a ultimei validări, din istoric), nu față de
+//     valoarea de dinainte de scriere (pașii mici cumulați — din 1b, deja primul pas invalidează).
 //     `referinta` = rândul de la validare (`referinteDinIstoric`); fără istoric (migrarea neaplicată) = rândul de acum.
 // Dn / material / SDR nu au coloane proprii: se citesc din denumire + specificații doar ca să NUMEASCĂ schimbarea în notă.
 //
@@ -36,7 +46,10 @@
 
 export const STATUS_VALIDAT = 'validat'
 export const STATUS_DE_REVERIFICAT = 'diferenta'
-export const TOLERANTA_LUNGIME_M = 1
+// runda 1b: fără toleranță la comparație; pragurile de mai jos decid DOAR severitatea din notă (SQL: aceleași valori, în trigger)
+export const ZECIMALE_CANONICE = 6
+export const PRAG_SEVERITATE_LUNGIME_M = 1
+export const PRAG_SEVERITATE_PROCENT = 1
 // ordinea = ordinea din notă
 export const CAMPURI_APROBARE = ['licitatie_id', 'um', 'cantitate', 'cantitate_plansa', 'denumire', 'specificatii', 'obiect', 'categorie', 'tip_sursa', 'sursa', 'cod_articol']
 export const ETICHETE_CAMP = {
@@ -55,16 +68,57 @@ const numar = v => (v == null || v === '' || !Number.isFinite(Number(v)) ? null 
 // runda 6: unitatea NORMALIZATĂ (aceeași funcție ca textele; SQL: ofertare_norm_text) — și în filtrele de rețea
 export const normUm = v => normText(v)
 export const esteUnitateLungime = um => um == null || ['m', 'ml', ''].includes(normUm(um))
-export const toleranta = um => (esteUnitateLungime(um) ? TOLERANTA_LUNGIME_M : 0)
-// a / b: numere sau null. Apariția / dispariția cifrei e mereu o schimbare.
-export function cifraDiferita(a, b, tol) {
-  if ((a === null) !== (b === null)) return true
-  if (a === null) return false
-  return tol > 0 ? Math.abs(a - b) >= tol : a !== b
-}
-export const fmtRo = v => {
+// ── runda 1b: valoarea CANONICĂ și comparația EXACTĂ (o singură sursă pentru toate căile: regula, transferul, CAD, editorul,
+// poarta graficului) ──
+// Aritmetică zecimală întreagă (BigInt), fără virgulă mobilă: se pornește de la zecimalul cel mai scurt al numărului (exact ce
+// pleacă în JSON / PostgREST și ajunge `numeric` în BD), rotunjit EXACT, jumătatea departe de zero — ca round(x, n) din SQL.
+const BI = n => BigInt(n)
+const ZECE = BI(10)
+// a / b cu rotunjire la jumătate în sus (a ≥ 0, b > 0) — ca round() / div() din SQL pe valori pozitive
+const imparteRotunjit = (a, b) => (BI(2) * a + b) / (BI(2) * b)
+// v rotunjit la `zec` zecimale → întreg BigInt = valoarea × 10^zec; null / '' / nenumeric => null
+function zecimalRotunjit(v, zec) {
   const n = numar(v)
-  return n === null ? '—' : (+n.toFixed(2)).toLocaleString('ro-RO', { maximumFractionDigits: 2 })
+  if (n === null) return null
+  const m = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(n))
+  if (!m) return null
+  const frac = m[3] || ''
+  const cifre = BI(m[2] + frac)
+  const k = Number(m[4] || 0) - frac.length + zec
+  const q = k >= 0 ? cifre * ZECE ** BI(k) : imparteRotunjit(cifre, ZECE ** BI(-k))
+  return m[1] ? -q : q
+}
+// Valoarea canonică = milionimi întregi (round(x, 6) din trigger): 100 = 100,000 = 100,0000001; 100 ≠ 100,8; 0,1 + 0,2 = 0,3.
+export const valoareCanonica = v => zecimalRotunjit(v, ZECIMALE_CANONICE)
+// aceeași valoare canonică (null = null); ORICE altă diferență contează — fără toleranță
+export const aceeasiValoare = (a, b) => valoareCanonica(a) === valoareCanonica(b)
+// a / b: numere sau null. Apariția / dispariția cifrei e mereu o schimbare. (Runda 1b: fără al treilea parametru „tol”.)
+export const cifraDiferita = (a, b) => !aceeasiValoare(a, b)
+const grupeaza = s => s.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+// număr ro-RO, max. 2 zecimale („2.210”, „35.620,59”) — runda 1b: rotunjire zecimală EXACTĂ, identică cu public.ofertare_fmt_ro
+// (înainte toFixed + toLocaleString: 1,085 → „1,08” în JS, „1,09” în SQL; și dependent de ICU-ul browserului)
+export const fmtRo = v => {
+  const s = zecimalRotunjit(v, 2)
+  if (s === null) return '—'
+  const m = s < 0 ? -s : s, fr = String(m % BI(100)).padStart(2, '0').replace(/0+$/, '')
+  return (s < 0 ? '-' : '') + grupeaza(String(m / BI(100))) + (fr ? ',' + fr : '')
+}
+// milionimi ≥ 0 → text ro-RO cu toate zecimalele semnificative (max. 6): 800000 → „0,8”; 1000 → „0,001”; 600000000 → „600”
+const fmtMilionimi = q => { const fr = String(q % BI(1000000)).padStart(6, '0').replace(/0+$/, ''); return grupeaza(String(q / BI(1000000))) + (fr ? ',' + fr : '') }
+// SEVERITATEA unei diferențe (doar pentru notă; nu decide nimic): „diferență mică: +0,8 m, +0,8 %” / „diferență mare: -600 m,
+// -4,37 %”. Mică = sub 1 % relativ ȘI, pe unitățile de lungime, sub 1 m absolut (pe buc / mp / mc / kg … doar pragul relativ).
+// |Δ| exact (valorile canonice, până la 6 zecimale — „+0,001 mc”, nu „+0 mc”); procentul rotunjit la 2 zecimale („sub 0,01 %” dacă
+// iese 0); față de 0 nu există procent (=> mare). Identic, octet cu octet, cu textul trigger-ului (docs/R5_MIGRARE_1b_prag_exact.sql).
+// Aceeași valoare / o cifră lipsă => ''.
+export function descrieDiferenta(vechi, nou, { lungime = true, unitate = 'm' } = {}) {
+  const a = valoareCanonica(vechi), b = valoareCanonica(nou)
+  if (a === null || b === null || a === b) return ''
+  const d = b - a, ad = d < 0 ? -d : d, aa = a < 0 ? -a : a
+  const semn = d > 0 ? '+' : '-'
+  const pct = aa === BI(0) ? null : imparteRotunjit(ad * BI(10000), aa)   // sutimi de procent
+  const mica = pct !== null && pct < BI(PRAG_SEVERITATE_PROCENT * 100) && (!lungime || ad < BI(PRAG_SEVERITATE_LUNGIME_M * 1000000))
+  const tp = pct === null ? '' : pct === BI(0) ? ', sub 0,01 %' : `, ${semn}${fmtRo(Number(pct) / 100)} %`
+  return `diferență ${mica ? 'mică' : 'mare'}: ${semn}${fmtMilionimi(ad)} ${unitate}${tp}`
 }
 
 // Dn / material / SDR din denumire + specificații (doar pentru a numi schimbarea; aceleași expresii ca în trigger-ul SQL).
@@ -81,34 +135,42 @@ export function atributeTehnice(r) {
 
 // Ce schimbă `patch` pe rândul `vechi` (doar câmpurile din CAMPURI_APROBARE prezente în patch și diferite de `vechi`).
 // `referinta` (opțional) = rândul APROBAT (de la ultima validare, `referinteDinIstoric`): relevanța se măsoară față de el, ca pașii
-// mici cumulați să nu ocolească pragul; fără ea, față de `vechi` (ca înainte). `vechi` din fiecare schimbare relevantă = valoarea aprobată.
-// → { relevante: [{camp, eticheta, vechi, nou}], subPrag: [...], derivate: [{camp: 'dn'|'material'|'sdr', …}] }
+// mici cumulați să nu ocolească regula; fără ea, față de `vechi` (ca înainte). `vechi` din fiecare schimbare relevantă = valoarea aprobată.
+// Runda 1b: cifrele se compară EXACT (valoarea canonică); pe cifre, schimbarea relevantă poartă `unitati` [veche, nouă] (afișate în
+// notă) și `severitate` (`descrieDiferenta`, pe cifrele efective; doar dacă ambele există și unitatea normalizată e aceeași).
+// → { relevante: [{camp, eticheta, vechi, nou, unitati?, severitate?}], subPrag: [...], derivate: [{camp: 'dn'|'material'|'sdr', …}] }
+const unitateAfisata = um => (um == null || um === '' ? 'm' : um)   // SQL: coalesce(nullif(um, ''), 'm')
 export function schimbariRelevante(vechi, patch, referinta = null) {
   const v = vechi || {}, p = patch || {}, ref = referinta || v
   const nou = { ...v, ...p }
-  const tol = toleranta(nou.um)
   const relevante = [], subPrag = []
   const efectiva = r => numar(r.cantitate_plansa ?? r.cantitate)
   for (const camp of CAMPURI_APROBARE) {
     if (!(camp in p)) continue
     const a = v[camp], b = nou[camp], r = ref[camp]
-    let distinct, relevant
+    let distinct, relevant, extra = {}
     if (camp === 'licitatie_id') { distinct = numar(a) !== numar(b); relevant = numar(r) !== numar(b) }
     else if (CIFRE.has(camp)) {
       distinct = numar(a) !== numar(b)
-      relevant = camp === 'cantitate'
-        ? cifraDiferita(numar(r), numar(b), tol)
-        // cifra din planșă EFECTIVĂ (ca `referintaCitire` / `cifraSchimbata`)
-        : numar(r) !== numar(b) && cifraDiferita(efectiva(ref), efectiva(nou), tol)
+      // cifra din planșă EFECTIVĂ (ca `referintaCitire` / `cifraSchimbata`); cantitatea — valoarea ei
+      const pl = camp === 'cantitate_plansa'
+      const ea = pl ? efectiva(ref) : numar(r), eb = pl ? efectiva(nou) : numar(b)
+      relevant = cifraDiferita(ea, eb) && (!pl || cifraDiferita(r, b))
+      // cifra din planșă e o lungime (m); cantitatea — în unitatea rândului (aprobată / nouă)
+      extra = { unitati: pl ? ['m', 'm'] : [unitateAfisata(ref.um), unitateAfisata(nou.um)] }
+      if (relevant && ea !== null && eb !== null && (pl || normUm(ref.um) === normUm(nou.um))) {
+        extra.severitate = descrieDiferenta(ea, eb, { lungime: pl || esteUnitateLungime(nou.um), unitate: extra.unitati[1] }) +
+          (pl && (numar(r) === null || numar(b) === null) ? `, efectiv ${fmtRo(ea)} m → ${fmtRo(eb)} m` : '')
+      }
     } else if (camp === 'um') {
-      // runda 6: normalizat (trim + lower + spații Unicode): „m” → „M” = sub prag; „m” → „ml” = relevant
+      // runda 6: normalizat (trim + lower + spații Unicode): „m” → „M” = doar formă; „m” → „ml” = relevant
       distinct = (a ?? '') !== (b ?? ''); relevant = normUm(r) !== normUm(b)
     } else {
       distinct = (a ?? '') !== (b ?? '')
       relevant = normText(r) !== normText(b)
     }
     if (!distinct) continue
-    const x = { camp, eticheta: ETICHETE_CAMP[camp], vechi: (relevant ? r : a) ?? null, nou: b ?? null };
+    const x = { camp, eticheta: ETICHETE_CAMP[camp], vechi: (relevant ? r : a) ?? null, nou: b ?? null, ...extra };
     (relevant ? relevante : subPrag).push(x)
   }
   const derivate = []
@@ -120,10 +182,11 @@ export function schimbariRelevante(vechi, patch, referinta = null) {
 }
 
 const scurt = (s, n = 60) => { const t = String(s ?? '—'); return t.length > n ? t.slice(0, n - 1) + '…' : t }
-const valoare = (x, v) => (CIFRE.has(x.camp) ? `${fmtRo(v)}${v == null ? '' : ' m'}` : x.camp === 'licitatie_id' ? `#${v ?? '—'}` : `„${scurt(v ?? '—')}”`)
+// i = 0 (valoarea aprobată) / 1 (cea nouă); runda 1b: cifrele în unitatea lor (cantitatea: a rândului; cifra din planșă: m)
+const valoare = (x, v, i) => (CIFRE.has(x.camp) ? `${fmtRo(v)}${v == null ? '' : ' ' + (x.unitati?.[i] ?? 'm')}` : x.camp === 'licitatie_id' ? `#${v ?? '—'}` : `„${scurt(v ?? '—')}”`)
 export function descrieSchimbari({ relevante, derivate }) {
   const d = (derivate || []).map(x => `${x.eticheta} ${x.vechi ?? '—'} → ${x.nou ?? '—'}`)
-  const c = (relevante || []).map(x => `${x.eticheta} (${valoare(x, x.vechi)} → ${valoare(x, x.nou)})`)
+  const c = (relevante || []).map(x => `${x.eticheta} (${valoare(x, x.vechi, 0)} → ${valoare(x, x.nou, 1)}${x.severitate ? '; ' + x.severitate : ''})`)
   return [...d, ...c].join('; ')
 }
 // momentul în UTC, „AAAA-LL-ZZ HH:MM” (ca to_char(… AT TIME ZONE 'UTC') din SQL), oricare ar fi fusul din text

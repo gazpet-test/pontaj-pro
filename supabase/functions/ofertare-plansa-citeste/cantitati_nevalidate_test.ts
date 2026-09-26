@@ -60,19 +60,25 @@ Deno.test('R5: Dn40 recitit 13.740 (dedup multiset) vs 13.140 în rând => „ci
 })
 
 // R5 runda 4 (verificator R3, MAJOR): regula veche „rândul validat nu primește status nou” lăsa o cifră automată NEVERIFICATĂ
-// (cantitate_plansa rescrisă) să treacă drept aprobată în grafic (baza „planșe”). Acum: cifră nouă ≥ 1 m => „diferenta”.
+// (cantitate_plansa rescrisă) să treacă drept aprobată în grafic (baza „planșe”). Acum: cifră nouă => „diferenta” (runda 1b: orice
+// valoare diferită, fără prag de 1 m; nota spune severitatea).
 Deno.test('R5 runda 4: rând VALIDAT + recitire cu altă cifră (13.140 → 13.740) => „diferenta”, nota spune pe ce cifră fusese validat', async () => {
   const f = supaFals(LIC95().map((r) => r.id === 1756 ? { ...r, status: 'validat' } : r))
   await treciInCantitati(f.supa, DOC, tr({ 40: 13740 }), '1', 'R2')
   const [o] = f.apeluri[0].p_randuri
   assertEquals([o.id, o.patch.cantitate_plansa, o.patch.status], [1756, 13740, 'diferenta'])
-  assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 13.140 m; planșa 1 dă acum 13.740 m — validarea se reface. '), o.patch.diferenta_nota)
+  assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 13.140 m; planșa 1 dă acum 13.740 m (diferență mare: +600 m, +4,57 %) — validarea se reface. '), o.patch.diferenta_nota)
 })
-Deno.test('R5 runda 4: rând VALIDAT + recitire cu ACEEAȘI cifră (< 1 m) => validarea rămâne (fără status în patch)', async () => {
+Deno.test('R5 runda 4 → 1b: rând VALIDAT + recitire cu ACEEAȘI cifră => validarea rămâne; 13.140 → 13.140,4 (sub 1 m) NU mai e „aceeași cifră”: „diferenta”, severitate mică', async () => {
   const f = supaFals(LIC95().map((r) => r.id === 1756 ? { ...r, status: 'validat' } : r))
-  await treciInCantitati(f.supa, DOC, tr({ 40: 13140.4 }), '1', 'R2')
+  await treciInCantitati(f.supa, DOC, tr({ 40: 13140 }), '1', 'R2')
   const [o] = f.apeluri[0].p_randuri
   assertEquals([o.id, o.patch.status], [1756, undefined])
+  const g = supaFals(LIC95().map((r) => r.id === 1756 ? { ...r, status: 'validat' } : r))
+  await treciInCantitati(g.supa, DOC, tr({ 40: 13140.4 }), '1', 'R2')
+  const [p] = g.apeluri[0].p_randuri
+  assertEquals([p.id, p.patch.cantitate_plansa, p.patch.status, 'cantitate' in p.patch], [1756, 13140.4, 'diferenta', false])
+  assert(p.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 13.140 m; planșa 1 dă acum 13.140,4 m (diferență mică: +0,4 m, sub 0,01 %) — validarea se reface. '), p.patch.diferenta_nota)
 })
 
 Deno.test('regula veche neschimbată pentru memoriu: „confirmă" doar când memoriul chiar are cifra', async () => {
@@ -85,10 +91,34 @@ Deno.test('regula veche neschimbată pentru memoriu: „confirmă" doar când me
   assert(/^Memoriu 500 m vs planșa 1 620 m/.test(f2.apeluri[0].p_randuri[0].patch.diferenta_nota))
   assertEquals(f2.apeluri[0].p_randuri[0].patch.status, 'diferenta')
 })
+Deno.test('runda 1b: referința se afișează cu 2 zecimale — 35.620,59 → recitire 35.620,6 nu mai apare ca „35.620,6 → 35.620,6”', async () => {
+  const r9 = [{ id: 9, licitatie_id: 95, denumire: 'Conductă distribuție gaze Dn110', categorie: 'Conducte și montaj', um: 'm', cantitate: 35620.59, cantitate_plansa: 35620.59, status: 'validat', sursa: SURSA, tip_sursa: null }]
+  const f = supaFals(r9)
+  await treciInCantitati(f.supa, DOC, tr({ 110: 35620.6 }), '1', 'R')
+  const [o] = f.apeluri[0].p_randuri
+  assertEquals(o.patch.status, 'diferenta')
+  assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 35.620,59 m; planșa 1 dă acum 35.620,6 m (diferență mică: +0,01 m, sub 0,01 %) — validarea se reface.'), o.patch.diferenta_nota)
+})
+Deno.test('runda 1b: „confirmă” = ACEEAȘI valoare — memoriul 500 vs planșa 500,4 nu mai e „confirmă” (înainte: < 1 m), rândul trece pe „diferenta”', async () => {
+  const mem = [{ id: 1, licitatie_id: 95, denumire: 'Țeavă PE100 SDR11 Dn110', categorie: 'Conducte și montaj', um: 'm', cantitate: 500, status: 'extras', sursa: 'Memoriu tehnic', tip_sursa: 'memoriu' }]
+  const f = supaFals(structuredClone(mem))
+  await treciInCantitati(f.supa, DOC, tr({ 110: 500.4 }), '1', 'R')
+  const [o] = f.apeluri[0].p_randuri
+  assertFalse(/confirmă/.test(o.patch.diferenta_nota), o.patch.diferenta_nota)
+  assert(/^Memoriu 500 m vs planșa 1 500,4 m/.test(o.patch.diferenta_nota), o.patch.diferenta_nota)
+  assertEquals([o.patch.cantitate_plansa, o.patch.status, 'cantitate' in o.patch], [500.4, 'diferenta', false])
+  // același memoriu VALIDAT: observația 500,4 îl scoate din „validat”; cantitatea aprobată (500) nu se scrie, e numită în notă
+  const v = supaFals(structuredClone(mem).map((r: any) => ({ ...r, status: 'validat' })))
+  await treciInCantitati(v.supa, DOC, tr({ 110: 500.4 }), '1', 'R')
+  const [w] = v.apeluri[0].p_randuri
+  assertEquals([w.patch.status, 'cantitate' in w.patch], ['diferenta', false])
+  assert(w.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 500 m (fără cifră din planșă); planșa 1 dă acum 500,4 m (diferență mică: +0,4 m, +0,08 %) — validarea se reface. Memoriu 500 m vs planșa 1 500,4 m'), w.patch.diferenta_nota)
+})
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
 // R5 runda 4 (verificatorul rundei 3). Regula aplicată = varianta (a): scriitorul automat care schimbă cifra din planșă a unui
-// rând (≥ 1 m față de cantitate_plansa existentă sau, dacă n-are, față de cantitate) îl trece pe „diferenta” — și pe „validat”.
+// rând (runda 1b: orice valoare diferită — nu doar ≥ 1 m — față de cantitate_plansa existentă sau, dacă n-are, față de cantitate) îl
+// trece pe „diferenta” — și pe „validat”.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
 import { cifraSchimbata, dinAceeasiPlansa } from './handler.ts'
 // regula „aprobat” din UI (graficul) — modul JS pur, importat direct (fără React)
@@ -120,7 +150,7 @@ Deno.test('runda 4 (MAJOR) lic. 3 real: transferul din 15.09 pe rândurile 2/3 V
   const dupa = aplicaRpc(inainte, ops)
   const r2 = dupa.find((r: any) => r.id === 2), r3 = dupa.find((r: any) => r.id === 3)
   assertEquals([r2.cantitate_plansa, r2.status, r3.cantitate_plansa, r3.status], [2210, 'diferenta', 5245, 'diferenta'])
-  assert(r2.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 1.100 m (fără cifră din planșă); planșa 1.1 dă acum 2.210 m — validarea se reface.'), r2.diferenta_nota)
+  assert(r2.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 1.100 m (fără cifră din planșă); planșa 1.1 dă acum 2.210 m (diferență mare: +1.110 m, +100,91 %) — validarea se reface.'), r2.diferenta_nota)
   // consecința în grafic (baza „planșe”): nu mai e „ok, toate validate” și nu mai iese frontul Dn180 2.210 neverificat
   const dupaR1 = dupa.map((r: any) => r.id === 1 ? { ...r, status: 'validat' } : r)
   assertEquals(controlCantitatiGrafic(dupaR1, 'plansa').stare, 'block')
@@ -150,11 +180,14 @@ Deno.test('runda 4 (cursa citire → RPC): rând „diferenta” la citire, VALI
   const laRpc = laCitire.map((r) => ({ ...r, status: 'validat' }))       // omul a validat între timp (pe 2.275)
   assertEquals(aplicaRpc(laRpc, [o])[0].status, 'diferenta')
 })
-Deno.test('runda 4: cifraSchimbata — referința e cantitate_plansa, apoi cantitate; fără cifră => orice cifră nouă e schimbare', () => {
-  assert(!cifraSchimbata({ cantitate: 1100, cantitate_plansa: 2210 }, 2210.4))
+Deno.test('runda 4 / 1b: cifraSchimbata — referința e cantitate_plansa, apoi cantitate; fără cifră => orice cifră nouă e schimbare; fără prag (2.210 → 2.210,4 = schimbare)', () => {
+  assert(cifraSchimbata({ cantitate: 1100, cantitate_plansa: 2210 }, 2210.4))
+  assert(!cifraSchimbata({ cantitate: 1100, cantitate_plansa: 2210 }, 2210))
+  assert(!cifraSchimbata({ cantitate: 1100, cantitate_plansa: '2210.000' }, 2210))
   assert(cifraSchimbata({ cantitate: 1100, cantitate_plansa: 2210 }, 2211))
   assert(cifraSchimbata({ cantitate: 1100, cantitate_plansa: null }, 2210))
-  assert(!cifraSchimbata({ cantitate: 1100, cantitate_plansa: null }, 1100.5))
+  assert(cifraSchimbata({ cantitate: 1100, cantitate_plansa: null }, 1100.5))
+  assert(!cifraSchimbata({ cantitate: 1100, cantitate_plansa: null }, 1100))
   assert(cifraSchimbata({ cantitate: null, cantitate_plansa: null }, 10))
   assert(!cifraSchimbata({ cantitate: 5, cantitate_plansa: 5 }, null))
 })
@@ -307,7 +340,7 @@ for (const M of MODELE) {
     await treciInCantitati(f.supa, DOC, tr({ 40: 13140 }), '1', 'R3')
     const [o] = f.apeluri[0].p_randuri
     assertEquals([o.id, o.patch.cantitate_plansa, 'cantitate' in o.patch, o.patch.status], [1756, 13140, false, 'diferenta'])
-    assert(o.patch.diferenta_nota.startsWith(`Planșa 1 (recitire) dă 13.140 m pe 1 tronsoane — ${VER}, nu o citire automată; recitirea diferă (-600 m): cantitatea verificată NU se modifică automat — verifică pe planșă.`), o.patch.diferenta_nota)
+    assert(o.patch.diferenta_nota.startsWith(`Planșa 1 (recitire) dă 13.140 m pe 1 tronsoane — ${VER}, nu o citire automată; recitirea diferă (diferență mare: -600 m, -4,37 %): cantitatea verificată NU se modifică automat — verifică pe planșă.`), o.patch.diferenta_nota)
     assertFalse(/citirea anterioară|citire anterioară|^Memoriu/.test(o.patch.diferenta_nota), o.patch.diferenta_nota)
     literalOdata(o.patch.diferenta_nota, M.lit)
     assert(o.patch.diferenta_nota.endsWith(M.suf), o.patch.diferenta_nota)
@@ -326,8 +359,16 @@ for (const M of MODELE) {
     await treciInCantitati(v.supa, DOC, tr({ 40: 13140 }), '1', 'R3')
     const [w] = v.apeluri[0].p_randuri
     assertEquals([w.patch.cantitate_plansa, w.patch.status], [13140, 'diferenta'])
-    assert(w.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 13.740 m (verificată de om pe imaginea planșei, pasul B din R5); planșa 1 dă acum 13.140 m — validarea se reface. '), w.patch.diferenta_nota)
+    assert(w.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 13.740 m (verificată de om pe imaginea planșei, pasul B din R5); planșa 1 dă acum 13.140 m (diferență mare: -600 m, -4,37 %) — validarea se reface. '), w.patch.diferenta_nota)
     literalOdata(w.patch.diferenta_nota, M.lit)
+    // runda 1b: 13.739,6 NU mai „confirmă” 13.740 (înainte: < 1 m) — pe VALIDAT: „diferenta”, severitate mică, cantitatea neatinsă
+    const u = supaFals([M.rand({ status: 'validat' })])
+    await treciInCantitati(u.supa, DOC, tr({ 40: 13739.6 }), '1', 'R3')
+    const [x] = u.apeluri[0].p_randuri
+    assertEquals([x.patch.cantitate_plansa, x.patch.status, 'cantitate' in x.patch], [13739.6, 'diferenta', false])
+    assert(x.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 13.740 m (verificată de om pe imaginea planșei, pasul B din R5); planșa 1 dă acum 13.739,6 m (diferență mică: -0,4 m, sub 0,01 %) — validarea se reface. '), x.patch.diferenta_nota)
+    assert(x.patch.diferenta_nota.includes('recitirea diferă (diferență mică: -0,4 m, sub 0,01 %): cantitatea verificată NU se modifică automat'), x.patch.diferenta_nota)
+    literalOdata(x.patch.diferenta_nota, M.lit)
   })
   Deno.test(`R5 pas B (${M.nume}): Dn40 doar „de verificat” => cifra NU se golește, cantitatea verificată numită „neatinsă”; VALIDAT => varianta B; marcajul rămâne`, async () => {
     const rest = { peDnMat: { '40|PE': { n: 2, m: 600 } }, global: '2 rânduri de tabel fără identitate sigură (600 m)' }
