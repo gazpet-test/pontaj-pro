@@ -708,10 +708,14 @@ Deno.test('runda 7 B4: comasarea între benzi peste capacitatea fâșiei de supr
   // sub capacitate (10 rânduri): nu se poate deosebi de suprapunere => rămân comasate, DAR raportul spune (avertisment + sumar + text)
   const s = identificaRanduri([tabNr('z1_2', 10), tabNr('z2_2', 10)], { doc: 1, plansa: cuDpi(geomTaiere(4000, 3000)) })
   assertEquals([s.sigure.length, s.total_sigur_m, s.total_de_verificat_m], [10, 1045, 0])
-  assertEquals(s.comasariIntegrale, [{ a: 'z1_2', b: 'z2_2', nr: '1–10', randuri: 10, fasie_px: 200 }])
+  assertEquals(s.comasariIntegrale, [{ a: 'z1_2', b: 'z2_2', nr: '1–10', randuri: 10, fasie_px: 200, integral_in: ['z1_2', 'z2_2'] }])
   const rs = raportIdentitate(s)
   assertEquals(rs.sumar.comasari_neconfirmate, s.comasariIntegrale)
-  assert(rs.avertismente.some((a) => a.startsWith('10 rânduri (Nr 1–10) din z1_2 și z2_2 (benzi diferite) s-au comasat ca același rând (suprapunerea benzilor, fâșia comună 200 px)')), rs.avertismente.join(' | '))
+  assert(rs.avertismente.some((a) => a.startsWith('10 rânduri (Nr 1–10) din z1_2 și z2_2 (benzi diferite) s-au comasat ca același rând (suprapunerea benzilor, fâșia comună 200 px), ' +
+    'iar tot ce vede din tabel z1_2 și z2_2 e în comasare')), rs.avertismente.join(' | '))
+  // al doilea tabel = primul + încă 2 rânduri (T1 ⊆ T2): fragmentul din z1_2 e comasat integral => tot avertisment (nu tăcut)
+  const t2 = identificaRanduri([tabNr('z1_2', 10), tabNr('z2_2', 12)], { doc: 1, plansa: cuDpi(geomTaiere(4000, 3000)) })
+  assertEquals([t2.sigure.length, t2.comasariIntegrale.map((c) => [c.nr, c.integral_in])], [12, [['1–10', ['z1_2']]]])
   assert(textPlansa('PL', { felii: [], sumar: rs.sumar, tronsoane_unice: [] }).includes('⚠ COMASARE NECONFIRMATĂ: Nr 1–10 din z1_2 și z2_2'))
   // control: suprapunerea reală (tabelul continuă în afara fâșiei, ca la 470) => niciun semnal
   const lung = identificaRanduri([tabNr('z1_2', 12), felieTab('z2_2', Array.from({ length: 8 }, (_, i) => ({ 'Nr crt': String(i + 7), 'Strada': `S${i + 6}`, 'Dn (mm)': '63', 'Lungime (m)': String(106 + i) })),
