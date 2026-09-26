@@ -7,7 +7,8 @@ Migrările 1b și 2 nu au fost editate. Migrarea nouă este
 
 **Situația rundei 1:** nu au putut rula PostgreSQL 16, Vitest și Deno native
 în acea sesiune. Probele de diagnostic Node trec; ele nu înlocuiesc aceste trei rulări.
-Rezultatele actualizate și punctul F04 rămas condiționat sunt în secțiunea „Runda 2”.
+Rezultatele actualizate sunt în „Runda 2” și „Runda 2b — F04”. Decizia temporară F04 din runda 2b
+înlocuiește propunerea de amânare a blocării din rundele anterioare.
 
 ## Modificări și probe
 
@@ -16,7 +17,7 @@ Rezultatele actualizate și punctul F04 rămas condiționat sunt în secțiunea 
 | F01 | Migrarea 3: `ofertare_r5_blocaj_sursa` verifică toate cele șapte contoare cerute înaintea transferurilor, cu numele contorului și valoarea în mesaj. Contor lipsă într-un rând prezent = control indisponibil. `src/ofertarePoarta.js`: aceeași listă în `controlSursaAprobareFinala`, folosită efectiv de `evalueazaPoarta`. | `scripts/pg/test_r5_review_f.mjs`: șapte scenarii pe view-ul real, fiecare refuză inserarea pachetului aprobat. `src/ofertareReviewF.test.js`: fiecare contor, zero și date lipsă. Fixture-urile din `ofertarePoarta.test.js`, `ofertareSarcina2.test.js` și `scripts/test-r5-r9b.mjs` includ noul contract. | Probele SQL sunt scrise, dar nu rulate local. Controlul final cere explicit și `um_de_normalizat_f3`, deși H2 intermediar avea o excepție când exista `totaluri_control`. Migrarea 2 și semantica view-ului rămân neschimbate. |
 | F02 | `supabase/functions/ofertare-clarificari-propune/core.ts`: persistă `propunere`, cu comentariul corectat. Triggerul din migrarea 3 cere drept de decizie pentru `platforma`/`automat` la intrarea în `de_trimis`/`trimisa`. Originea și licitația devin imuabile pentru aceste rânduri, astfel încât aceeași comandă să nu poată ocoli verificarea. Amprenta R9b rămâne numai pentru `auto_planse_%`. | Test Deno nou în `core_test.ts` capturează rândul efectiv trimis la upsert. Proba PG verifică authenticated fără drept, anon, responsabil, owner, INSERT/UPDATE și încercarea de schimbare a originii; ciorna auto continuă să ceară reconfirmare. | `src/OfertareClarificari.jsx:532` are deja butonul `Confirm motivul — de trimis`, aplicabil și platformei; folosește salvarea obișnuită, deci triggerul decide dreptul. Am corectat doar textele generatorului din UI. Fără test de browser/autentificare reală. Rândurile existente nu au fost rescrise. |
 | F03 | Migrarea 3: verificarea stării vechi precedă orice editare de text și orice ieșire pentru clarificări fără cheie auto. `raspunsa` este permisă doar din `trimisa`/`raspunsa`, pentru originile AI, inclusiv refuz la INSERT. | Proba PG: `propunere → raspunsa`, text+status+răspuns în aceeași comandă și `de_trimis → raspunsa` refuzate; apoi transmitere și răspuns permise. Testată și ciorna auto. | Proba PostgreSQL n-a rulat în această sesiune. |
-| F04 | Migrarea 3: amprenta include versiunea formulei, calea, mărimea, hashurile opționale și `analiza.integritate`. `identitate_incompleta` apare per document, la nivelul bazei și în textul de review dacă lipsește un SHA-256 în câmpurile recunoscute. Calea/mărimea nu sunt prezentate ca dovadă a identității conținutului. | Două probe PG: schimbări numai de cale/mărime/hash schimbă amprenta; aprobare pe formula veche → migrare → `schimbata`; rollback restabilește formula, fără modificarea rândurilor. | Citirea `information_schema` în Supabase a fost refuzată de instrument. Codul local confirmă `fisier_path` și `size_bytes` (`src/OfertareGarantie.jsx:98`, `api/seap-import.js:237`). `sha256`, `fisier_sha256`, `marime` sunt citite tolerant prin `to_jsonb(d)`; nu presupun că există în schemă. Nu am demonstrat existența/popularea hashurilor în producție. |
+| F04 | Runda 2b: manifest eligibil după document_id și mărime, stări `identitate_limitata`/`ok_identitate_limitata`, excepție auditată per ciornă plus reconfirmare pe același token; UI și rollback actualizate. | Cele două probe PG inițiale + șapte probe F04 B noi, pregătite pentru Claude; șase teste helper/UI trecute în Vitest real. Detalii în „Runda 2b — F04”. | **mitigat temporar; identitate verificabilă restantă (import hash pentru cele 14 documente, cu GO Răzvan)**. PostgreSQL și PostgREST real nu au fost executate în această sesiune. |
 | F05 | Migrarea 3: completitudinea SEAP se reverifică la fiecare intrare în `depus`, inclusiv `aprobat → depus`. | Proba PG aprobă pachetul, introduce un blocaj SEAP, verifică refuzul depunerii și păstrarea stării `aprobat`, apoi ridică blocajul și depune. | SQL netestat pe server real în sesiune. |
 | F06 | Funcția de aprobare din 1b este copiată integral în migrarea 3; numai ramura DELETE diferă. Ștergerea se înregistrează și după invalidare dacă există o validare anterioară; `aprobare_veche` păstrează valorile acesteia și `istoric_id`. Pentru un rând încă validat fără istoric se păstrează fallback-ul vechi. | Proba PG: validare→DELETE și validare→diferență→DELETE, ambele în `sterse_dupa_validare`, referință la validare; rând niciodată validat fără eveniment `sters`. Comparația statică a confirmat identitatea cu 1b în afara ramurii DELETE. | Proba SQL netestată local. Nu se reconstruiesc retroactiv ștergeri istorice fără eveniment. |
 | F07 | `transfer_conflicte.ts`: dacă există `pozitie_id`/`pozitii`, toate identitățile trebuie să fie în acoperire. `handler.ts` transmite `pozitii_evaluate` din atribuirile efective, nu din întregul SELECT al cantităților. `acoperireCitire` le include în înregistrare. Semantica transferului este marcată `2026-09-26.t3`. | `transfer_conflicte_test.ts`: #57 omisă, #58 cu același Dn63 și aceeași zonă → conflict purtat deschis; toate identitățile prezente → poate fi închis. Testul E2E din `concurenta_test.ts` cere acum ambele poziții #31/#32 la închidere. | Probele au trecut prin adaptor Node; Deno nativ și verificarea sa TypeScript nu au rulat. Înregistrările vechi fără lista identităților acoperite nu sunt tratate ca dovadă pentru un conflict care are ID-uri explicite. |
@@ -24,7 +25,7 @@ Rezultatele actualizate și punctul F04 rămas condiționat sunt în secțiunea 
 | F09 | `src/ofertareGraficReverificare.js` exportă `COLOANE_GRAFIC_REVERIFICARE`; loaderul real din `OfertarePropunere.jsx` o folosește. Adăugate `tip_sursa` **și** `licitatie_id`, ambele din contractul perimetrului TOTAL. | `ofertareReviewF.test.js`: constanta apare în SELECT-ul real, conține câmpurile necesare; proiectarea efectivă păstrează TOTAL comparabil și reverificarea graficului, fără să amestece memoriul cu F3. | Diagnostic Node trecut. Query-ul real nu a putut fi executat pe API; coloanele sunt folosite deja de codul existent. |
 | F10 | `ofertareCantitatiAprobare.js`: aceeași extragere a tokenului complet în propunere și reverificare. `DN1000` rămâne `1000`; tokenurile cu lungime în afara a 2–4 cifre rămân întregi și sunt semnalate în mesajul propunerii și blochează controlul frontului. | `ofertareReviewF.test.js`: DN1000 ≠ DN100; front vechi trunchiat cere reverificare; 9/10000/123456 sunt semnalate, nu trunchiate. | „Suportat” înseamnă aici format numeric de 2–4 cifre. Nu am inventat un catalog tehnic de diametre/materiale admise; fronturile existente acceptă și editarea manuală a Dn. |
 
-## Efectul F04 și ordinea instalării
+## Efectul F04 și ordinea instalării — istoric runda 1; actualizat în runda 2b
 
 Identificatorul `r5_f04_v1` intră în formula amprentei, inclusiv pentru baze fără documente relevante.
 Toate bazele R9b salvate pe formula veche vor diferi la următoarea citire.
@@ -189,3 +190,72 @@ are identitate incompletă. De testat atunci: reconfirmare pe aceeași amprentă
   Harness-ul recreează exclusiv baza locală de test indicată. Nu se rulează pe producție.
 - Nu am rulat PostgreSQL, PostgREST real, verificarea hashurilor în producție, build sau CI/deploy.
   CI existent include automat noile teste Vitest/Deno și scriptul PG extins.
+
+## Runda 2b — F04
+
+Sarcina `JAK_F04.md`, varianta B aprobată de Copilot + Răzvan. Modificări locale, fără git,
+aplicare de migrări sau schimbări în producție.
+
+**F04 = mitigat temporar; identitate verificabilă restantă (import hash pentru cele 14 documente, cu GO Răzvan).**
+
+Faptele din producție sunt cele comunicate de Claude în sarcină: 26 documente relevante, niciun hash
+în `ofertare_documente_atribuire`, 12 documente cu manifest și mărime concordantă, 14 fără manifest.
+Nu am repetat verificarea în producție și nu am importat hashuri.
+
+Implementare în migrarea 3:
+
+- `ofertare_f3_baza` folosește și manifestul: `document_id` și licitație identice,
+  `marime = size_bytes`, SHA-256 valid; cel mai recent `verificat_la`, apoi `id` pentru egalități.
+  Caută ultimul rând eligibil, fără asociere după nume. Hashurile valide din document rămân utilizabile.
+  Documentele au `identitate: verificata/limitata`; hashul selectat intră în amprentă.
+  Formula este acum `r5_f04_v2`, deci aprobările pe formula anterioară cer reverificare.
+- Orice document relevant cu identitate limitată impune `identitate_limitata`, inclusiv peste `luat_act`.
+  Avertismentul nominal precizează limita înlocuirii la aceeași cale și mărime.
+  Exportul și trecerea în `de_trimis/trimisa` sunt blocate.
+- RPC-ul `ofertare_clarificare_exceptie_identitate` cere autentificare, drept de decizie pe licitație,
+  motiv de minimum 10 caractere și tokenul curent al textului+bazei. Este SECURITY DEFINER cu search_path
+  explicit, PUBLIC/anon revocate și authenticated autorizat. Blochează rândul ciornei la citire;
+  actualizarea are WHERE pe ID. Acceptă numai ciorne netransmise.
+- Excepția se păstrează în `baza_generare.exceptie_identitate` și `istoric_decizii`: token, autor,
+  dată, motiv, lista ID-urilor documentelor limitate și `metadate` indexate după ID, fiecare cu
+  `fisier_path` și `marime`. Scrierea directă a bazei rămâne interzisă clienților.
+  Reconfirmarea păstrează numai excepția pe același token. Numai perechea excepție+reconfirmare
+  curentă permite `ok_identitate_limitata`; avertismentul rămâne în text și în
+  `detalii.avertisment_identitate`, precum și în detaliile bazei salvate la reconfirmare.
+- Editarea textului elimină excepția activă, fără pierderea auditului, inclusiv dacă textul este
+  ulterior readus la forma veche. Schimbarea bazei invalidează tokenul; reconfirmarea singură
+  nu reînnoiește excepția. Caz suplimentar: regenerarea unei propuneri înainte de reconfirmare
+  putea elimina istoricul; triggerul îl păstrează și pe această cale.
+- UI: avertisment vizibil și buton „Accept excepția de identitate”, cu motiv obligatoriu.
+  Dreptul este citit prin poarta serverului existentă; răspunsurile întârziate nu dau drepturi
+  pe altă licitație/profil. Helperul JS acceptă aceleași două stări de ieșire ca SQL și păstrează
+  blocarea pentru editări locale, marcaje de revizie și control indisponibil.
+- `ofertare_r5_blocaj_sursa` nu a fost modificată în această rundă. Excepția nu aprobă cantități
+  și nu derogă de la poarta pachetului final. Rollback-ul restaurează suplimentar funcțiile de
+  stare/reconfirmare/export din migrarea 2 și elimină RPC-ul nou; datele și auditul se păstrează.
+  Migrarea și rollback-ul rămân tranzacții unice, cu COMMIT după ultimele definiții/granturi.
+
+Verificări:
+
+- **Vitest real 2.1.9: 732/732, 22 fișiere**, inclusiv 6 probe noi pentru helper/UI.
+  Comandă: `node .jak/review-f2-vitest-native.mjs src/ofertare src/grafic src/Ofertare`.
+  Runnerul existent folosește motorul/asertările Vitest cu worker threads, fără esbuild.
+  Comanda standard `npx --no-install vitest run src/ofertare src/grafic src/Ofertare`
+  s-a oprit înaintea testelor: `esbuild: spawn EPERM`.
+- **Deno nativ: încercat, fără teste executate confirmate.** Comanda `deno test -A --node-modules-dir=none`
+  pentru `ofertare-plansa-citeste`, `ofertare-clarificari-propune`, `ofertare-document-nou-citeste`
+  s-a oprit la descărcarea manifestului JSR `@std/assert`. Nu există rezultat Deno trecut.
+- **Regresii Node R5/R9b: 9/9.** JSX-ul modificat trece parsarea `@babel/parser`.
+- **PostgreSQL: 7 probe F04 B noi, scrise, nerulate**, conform sarcinii; Claude le rulează.
+  Acoperă refuzul fără excepție, ambele ordini excepție/reconfirmare, auditul și avertismentul,
+  schimbarea textului/bazei, token vechi/null, motiv scurt, lipsa dreptului/auth,
+  scriere directă, manifest valid, manifest cu mărime nepotrivită, lot mixt, nume identic cu ID diferit,
+  document nerelevant, regenerare, izolare per ciornă, `luat_act` și poarta finală independentă.
+  Fixture-ul include manifestul cu RLS; probele vechi pornesc cu o identitate verificată.
+  `node --check` trece pentru ambele scripturi PG. Comanda pentru Claude rămâne
+  `PGURI=postgres://postgres@localhost:5432/r9b_test_review_f node scripts/pg/test_r5_review_f.mjs`.
+- Nu am executat PostgreSQL, RPC/PostgREST real, build sau deploy. Validarea SQL și API rămâne
+  de făcut de Claude înaintea instalării; parsarea JS și Vitest nu o substituie.
+
+„Verificată” este clasificarea metadatelor în varianta B: această migrare nu recalculează hashul
+fișierului din storage. Excepția umană nu constituie dovadă de identitate a conținutului.

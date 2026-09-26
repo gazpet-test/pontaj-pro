@@ -377,4 +377,89 @@ $function$;
 REVOKE ALL ON FUNCTION public.ofertare_totaluri_control(bigint,text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.ofertare_totaluri_control(bigint,text) TO authenticated, service_role;
 
+-- F04 B: restaurare exactă a definițiilor din migrarea 2; istoricul din date se păstrează.
+CREATE OR REPLACE FUNCTION public.ofertare_clarificare_baza_stare(p_licitatie_id bigint,p_intrebare text,p_sursa text,p_baza jsonb)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_cur jsonb; v_st text; v_token text; v_hash text := md5(coalesce(p_intrebare,'')); v_old jsonb; v_dif jsonb;
+BEGIN
+  v_cur := public.ofertare_f3_baza(p_licitatie_id);
+  IF nullif(v_cur->>'amprenta','') IS NULL THEN RAISE EXCEPTION 'bază indisponibilă'; END IF;
+  v_token := md5((v_cur->>'amprenta') || '|' || v_hash);
+  v_st := CASE WHEN p_baza->>'evaluare' IS DISTINCT FROM 'r9b' THEN 'indisponibila'
+    WHEN p_baza->>'amprenta' IS DISTINCT FROM v_cur->>'amprenta' THEN 'schimbata'
+    WHEN p_baza->'reconfirmare'->>'token' IS DISTINCT FROM v_token THEN 'necesita_review'
+    ELSE 'ok' END;
+  -- Luarea la cunoștință este informativă, NICIODATĂ aprobare pentru export sau de_trimis.
+  IF v_st <> 'ok' AND p_baza->'luat_act'->>'token' = v_token THEN v_st := 'luat_act'; END IF;
+  v_old := CASE WHEN jsonb_typeof(p_baza->'randuri') = 'array' THEN p_baza->'randuri' ELSE '[]'::jsonb END;
+  SELECT jsonb_build_object(
+    'adaugate',coalesce((SELECT jsonb_agg(n) FROM jsonb_array_elements(v_cur->'randuri') n WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(v_old) o WHERE o->>'id'=n->>'id')),'[]'::jsonb),
+    'scoase',coalesce((SELECT jsonb_agg(o) FROM jsonb_array_elements(v_old) o WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(v_cur->'randuri') n WHERE o->>'id'=n->>'id')),'[]'::jsonb),
+    'modificate',coalesce((SELECT jsonb_agg(jsonb_build_object('id',o->'id','inainte',o,'acum',n)) FROM jsonb_array_elements(v_old) o JOIN jsonb_array_elements(v_cur->'randuri') n ON o->>'id'=n->>'id' WHERE o->>'h' IS DISTINCT FROM n->>'h'),'[]'::jsonb)) INTO v_dif;
+  RETURN jsonb_build_object('stare',v_st,'evaluare','r9b','amprenta_curenta',v_token,'amprenta_baza',v_cur->>'amprenta',
+    'text_hash',v_hash,'curent',v_cur-'randuri','diferente',v_dif,'mod_ciorna','corespondenta',
+    'marcaj_planse','revizie_planse_auto'=ANY(string_to_array(coalesce(p_sursa,''),',')),
+    'text',CASE v_st WHEN 'ok' THEN 'Text aprobat de om pe baza curentă. Cantitățile din text nu sunt validate automat.'
+      WHEN 'schimbata' THEN 'baza s-a schimbat — de reverificat'
+      WHEN 'luat_act' THEN 'baza s-a schimbat după transmitere — luat act; textul transmis rămâne neschimbat'
+      WHEN 'indisponibila' THEN 'necesită review — baza ciornei vechi nu este demonstrabilă'
+      ELSE 'necesită review — aprobă textul exact pe baza curentă' END);
+EXCEPTION WHEN others THEN
+  RETURN jsonb_build_object('stare','indisponibila','text','nu putem verifica baza: ' || SQLERRM);
+END $function$;
+
+CREATE OR REPLACE FUNCTION public.ofertare_clarificare_reconfirma(p_id bigint,p_amprenta text,p_decizie text,p_nota text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE c record; v_st jsonb; v_cur jsonb; v_decizie jsonb; v_sursa text;
+BEGIN
+  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces la Ofertare'); END IF;
+  IF coalesce(p_decizie,'') NOT IN ('revizuit','luat_act') THEN RETURN jsonb_build_object('error','alege revizuit sau, după transmitere, luat_act'); END IF;
+  IF length(btrim(coalesce(p_nota,''))) < (CASE WHEN p_decizie='luat_act' THEN 10 ELSE 5 END) THEN RETURN jsonb_build_object('error','nota de review este prea scurtă'); END IF;
+  SELECT * INTO c FROM public.ofertare_clarificari WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND OR coalesce(c.cheie,'') NOT LIKE 'auto_planse_%' THEN RETURN jsonb_build_object('error','nu e ciornă automată'); END IF;
+  -- R9b (Copilot): reconfirmarea cere DREPT DE DECIZIE pe licitație (owner / responsabil / admin Ofertare), nu doar acces la modul.
+  IF NOT coalesce(public.fn_ofertare_source_pack_poate_decide(c.licitatie_id),false) THEN RETURN jsonb_build_object('error','fără drept de decizie pe licitație'); END IF;
+  v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id,c.intrebare,c.sursa,c.baza_generare);
+  IF p_amprenta IS NULL OR v_st->>'amprenta_curenta' IS DISTINCT FROM p_amprenta THEN RETURN jsonb_build_object('error','textul sau baza s-au schimbat — reîncarcă și verifică'); END IF;
+  v_decizie := jsonb_build_object('token',p_amprenta,'text_hash',md5(coalesce(c.intrebare,'')),
+    'amprenta',v_st->>'amprenta_baza','text_aprobat',c.intrebare,'de',auth.uid(),'la',now(),'decizie',p_decizie,'nota',btrim(p_nota));
+  IF c.status IN ('trimisa','raspunsa') THEN
+    IF p_decizie <> 'luat_act' THEN RETURN jsonb_build_object('error','document transmis imuabil — doar luat_act'); END IF;
+    UPDATE public.ofertare_clarificari SET baza_generare=coalesce(baza_generare,'{}'::jsonb)||jsonb_build_object('luat_act',v_decizie,
+      'istoric_decizii',coalesce(baza_generare->'istoric_decizii','[]'::jsonb)||jsonb_build_array(v_decizie)) WHERE id=p_id;
+  ELSE
+    IF c.status NOT IN ('propunere','de_trimis') OR p_decizie <> 'revizuit' THEN RETURN jsonb_build_object('error','decizie incompatibilă cu starea ciornei'); END IF;
+    v_cur := public.ofertare_f3_baza(c.licitatie_id);
+    IF md5((v_cur->>'amprenta') || '|' || md5(coalesce(c.intrebare,''))) IS DISTINCT FROM p_amprenta THEN RETURN jsonb_build_object('error','baza s-a schimbat în timpul verificării'); END IF;
+    SELECT string_agg(t,',' ORDER BY o) INTO v_sursa FROM unnest(string_to_array(coalesce(c.sursa,''),',')) WITH ORDINALITY x(t,o) WHERE t <> 'revizie_planse_auto';
+    UPDATE public.ofertare_clarificari SET sursa=v_sursa, updated_at=now(),
+      baza_generare=v_cur||jsonb_build_object('text_hash',md5(coalesce(c.intrebare,'')),'reconfirmare',v_decizie,
+        'istoric_decizii',coalesce(c.baza_generare->'istoric_decizii','[]'::jsonb)||
+          CASE WHEN c.baza_generare->'reconfirmare' IS NOT NULL AND NOT (c.baza_generare ? 'istoric_decizii') THEN jsonb_build_array(c.baza_generare->'reconfirmare') ELSE '[]'::jsonb END || jsonb_build_array(v_decizie))
+      WHERE id=p_id;
+  END IF;
+  RETURN jsonb_build_object('ok',true,'id',p_id,'decizie',p_decizie);
+END $function$;
+
+CREATE OR REPLACE FUNCTION public.ofertare_clarificari_export(p_licitatie_id bigint)
+RETURNS jsonb LANGUAGE plpgsql SET search_path TO 'public','pg_temp'
+AS $function$
+DECLARE c record; v_st jsonb; v_out jsonb := '[]'::jsonb;
+BEGIN
+  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RAISE EXCEPTION 'fără acces'; END IF;
+  IF NOT coalesce(public.fn_ofertare_source_pack_poate_decide(p_licitatie_id),false) THEN RAISE EXCEPTION 'Export blocat: fără drept de decizie pe licitație'; END IF;
+  FOR c IN SELECT * FROM public.ofertare_clarificari WHERE licitatie_id=p_licitatie_id AND status='de_trimis' ORDER BY nr FOR SHARE LOOP
+    IF coalesce(c.sursa,'') ~ '(^|,)revizie_' THEN RAISE EXCEPTION 'Clarificarea #% necesită revizie',c.nr; END IF;
+    IF coalesce(c.cheie,'') LIKE 'auto_planse_%' THEN
+      v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id,c.intrebare,c.sursa,c.baza_generare);
+      IF v_st->>'stare' IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'Export blocat: %',v_st->>'text'; END IF;
+    END IF;
+    v_out := v_out || jsonb_build_array(to_jsonb(c));
+  END LOOP;
+  RETURN v_out;
+END $function$;
+DROP FUNCTION IF EXISTS public.ofertare_clarificare_exceptie_identitate(bigint,text,text);
+
 COMMIT;

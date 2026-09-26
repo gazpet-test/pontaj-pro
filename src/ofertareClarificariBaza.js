@@ -5,7 +5,7 @@ export const eCiornaAutomata = q => /^auto_planse_/.test(String(q?.cheie || ''))
 export const MESAJ_SCHIMBATA = 'baza s-a schimbat — de reverificat'
 
 // q = rândul clarificării; bazaPeId = Map(id → rândul din v_ofertare_clarificari_baza); eroare = mesajul citirii view-ului (sau null)
-// => { nivel: 'ok' | 'schimbata' | 'indisponibila' | 'luat_act' | 'nu_putem_verifica' | 'na', blocheaza, text, rand }
+// => { nivel: starea serverului | 'nu_putem_verifica' | 'na', blocheaza, text, rand }
 export function stareBazaCiorna(q, bazaPeId, eroare) {
   if (!eCiornaAutomata(q) || q?.status === 'retrasa') return { nivel: 'na', blocheaza: false, text: '' }
   if (q?._mod) return { nivel: 'necesita_review', blocheaza: true, text: 'Salvează textul înainte de reconfirmare.' }
@@ -15,9 +15,20 @@ export function stareBazaCiorna(q, bazaPeId, eroare) {
   if (!r) return { nivel: 'nu_putem_verifica', blocheaza: true, text: 'nu putem verifica baza ciornei (lipsește din control) — ciorna nu intră în adresă' }
   const marcaj = r.marcaj_planse === true
   if (r.stare === 'ok') return { nivel: 'ok', blocheaza: marcaj, text: marcaj ? 'planșele s-au schimbat după ce ciorna a fost editată / aprobată — de revizuit' : '', rand: r }
+  if (r.stare === 'ok_identitate_limitata') return { nivel: r.stare, blocheaza: marcaj,
+    text: [r.text || r.detalii?.avertisment_identitate || 'Identitate limitată: excepție acceptată pe baza curentă.',
+      marcaj ? 'Planșele s-au schimbat — de revizuit.' : ''].filter(Boolean).join(' '), rand: r }
+  if (r.stare === 'identitate_limitata') return { nivel: r.stare, blocheaza: true,
+    text: r.text || 'Identitate limitată: acceptă explicit excepția și reconfirmă textul pe baza curentă.', rand: r }
   if (r.stare === 'luat_act') return { nivel: 'luat_act', blocheaza: true, text: r.text || 'baza s-a schimbat după transmitere — luat act', rand: r }
   if (r.stare === 'schimbata' || r.stare === 'indisponibila' || r.stare === 'necesita_review') return { nivel: r.stare, blocheaza: true, text: r.text || MESAJ_SCHIMBATA, rand: r }
   return { nivel: 'nu_putem_verifica', blocheaza: true, text: `stare necunoscută a bazei („${r.stare}”) — nu putem verifica`, rand: r }
+}
+
+export function poateAcceptaExceptieIdentitate(q, st, poateDecide) {
+  return poateDecide === true && eCiornaAutomata(q) && !q._mod
+    && ['propunere', 'de_trimis'].includes(q.status) && st?.nivel === 'identitate_limitata'
+    && !!st.rand?.amprenta_curenta && st.rand?.detalii?.exceptie_identitate_valida !== true
 }
 
 // diferențele față de baza anterioară (detalii.diferente din view) => rânduri de text pentru om

@@ -155,6 +155,18 @@ CREATE POLICY ofertare_documente_update ON ofertare_documente_atribuire FOR UPDA
   USING ((SELECT fn_are_acces_ofertare())) WITH CHECK ((SELECT fn_are_acces_ofertare()));
 CREATE POLICY ofertare_documente_insert ON ofertare_documente_atribuire FOR INSERT TO authenticated WITH CHECK ((SELECT fn_are_acces_ofertare()));
 CREATE POLICY ofertare_documente_delete ON ofertare_documente_atribuire FOR DELETE TO authenticated USING ((SELECT fn_are_acces_ofertare()));
+CREATE TABLE ofertare_seap_manifest (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  licitatie_id bigint NOT NULL REFERENCES ofertare_licitatii(id), arhiva_cheie text NOT NULL, cale text NOT NULL,
+  marime bigint NOT NULL, sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  document_id bigint REFERENCES ofertare_documente_atribuire(id) ON DELETE SET NULL,
+  stare text NOT NULL CHECK (stare IN ('urcat','deja_in_platforma','eroare_urcare','ignorat')),
+  motiv text, verificat_la timestamptz NOT NULL DEFAULT now(), UNIQUE (licitatie_id,arhiva_cheie,cale));
+ALTER TABLE ofertare_seap_manifest ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON ofertare_seap_manifest FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON ofertare_seap_manifest TO authenticated;
+CREATE POLICY seap_manifest_citire ON ofertare_seap_manifest FOR SELECT TO authenticated
+  USING (auth.uid() IS NOT NULL AND fn_are_acces_ofertare());
 CREATE TABLE ofertare_cantitati (id bigserial PRIMARY KEY, licitatie_id bigint NOT NULL, obiect text, categorie text,
   denumire text NOT NULL, um text, cantitate numeric, specificatii text, sursa text, cantitate_plansa numeric,
   diferenta_nota text, status text NOT NULL DEFAULT 'extras', extras_de_ai boolean DEFAULT true,
@@ -253,8 +265,10 @@ async function draft(observer) {
     INSERT INTO seap_compl VALUES (${lic},NULL);
     INSERT INTO ofertare_cantitati(id,licitatie_id,denumire,categorie,um,cantitate,status,tip_sursa,sursa)
       VALUES (${lic},${lic},'Conductă PE100 Dn110','Conducte și montaj','m',100,'validat','lista_f3','F3 test');
-    INSERT INTO ofertare_documente_atribuire(id,licitatie_id,nume_original,tip,status_procesare,analiza)
-      VALUES (${lic},${lic},'Plansa test.pdf','plansa','finalizat','{"plansa":{"rezultat":"ilizibil","citibila":false}}');`)
+    INSERT INTO ofertare_documente_atribuire(id,licitatie_id,nume_original,tip,status_procesare,analiza,size_bytes,fisier_path)
+      VALUES (${lic},${lic},'Plansa test.pdf','plansa','finalizat','{"plansa":{"rezultat":"ilizibil","citibila":false}}',123,'test/plansa.pdf');
+    INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
+      VALUES (${lic},${lic},'test','plansa.pdf',123,repeat('a',64),'urcat');`)
   const generated = await observer.value(`ofertare_clarificare_planse_auto(${lic})`)
   assert.equal(generated.actiune, 'creat', JSON.stringify(generated))
   const d = { lic, id: generated.id, quantity: lic }
