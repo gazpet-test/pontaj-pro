@@ -223,3 +223,51 @@ Deno.test('runda 4 ADV5 (după R4 runda 6): Dn63 PE + Dn63 OL pe o singură pozi
   assertEquals(JSON.stringify(r1.ambigue), JSON.stringify(r2.ambigue))
   assertEquals(r1.ambigue.map((a: any) => [a.dn, a.pozitii[0].id, a.grupuri.map((x: any) => [x.material, x.metri])]), [[63, 1755, [['OL', 30], ['PE', 100.2]]]])
 })
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+// Rebase R5 peste R4 runda 6 (ab5c449): interacțiunea „coliziune de grupuri sigure” (R4) × „altă planșă” (R5 ADV3) și
+// × rest „doar de verificat” (R4 runda 5). Pe fiecare ramură luată singură, aceste cazuri se comportau altfel.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+const T_COLIZ = [
+  { diametru_mm: 63, material: 'PE', lungime_m: 100.05, de_la: 'X', la: 'Y' },
+  { diametru_mm: 63, material: 'OL', lungime_m: 30, de_la: 'Y', la: 'Z' },
+  { diametru_mm: 63, material: 'PE', lungime_m: 0.15, de_la: 'Y', la: 'Z' },
+]
+Deno.test('rebase R4×R5: coliziune pe poziția ALTEI planșe => nimic scris pe ea (nici nota coliziunii); o intrare ambiguă cu grupurile și motivul altei planșe; aceeași în orice ordine', async () => {
+  // doar R4: nota coliziunii rescria diferenta_nota (și statusul) rândului scris de planșa 1; doar R5: două intrări, fără `grupuri`
+  const DOC2 = { id: 999, licitatie_id: 95, nume_original: 'PL2.pdf' }
+  const f1 = supaFals(LIC95().filter((r) => r.id === 1755)), f2 = supaFals(LIC95().filter((r) => r.id === 1755))
+  const r1: any = await treciInCantitati(f1.supa, DOC2, T_COLIZ, '2', 'R')
+  const r2: any = await treciInCantitati(f2.supa, DOC2, [...T_COLIZ].reverse(), '2', 'R')
+  assertEquals([f1.apeluri[0].p_randuri.length, f2.apeluri[0].p_randuri.length], [0, 0], 'nicio operație pe rândul planșei 1')
+  assertEquals(JSON.stringify(r1.ambigue), JSON.stringify(r2.ambigue))
+  assertEquals(r1.ambigue.length, 1)
+  const [a] = r1.ambigue
+  assertEquals([a.dn, a.metri, a.pozitii, a.grupuri.map((x: any) => [x.material, x.metri, x.randuri])],
+    [63, 130.2, [{ id: 1755, denumire: 'Conductă distribuție gaze Dn63' }], [['OL', 30, 1], ['PE', 100.2, 2]]])
+  assert(a.motiv.startsWith('mai multe grupuri sigure (Dn, material) pe aceeași poziție — cantitate_plansa neatinsă; poziția are cifra altei planșe („Planșa 1 — tabel'), a.motiv)
+})
+Deno.test('rebase R4×R5: rest „doar de verificat” (Dn63 OL) pe poziția unei coliziuni din ACEEAȘI planșă => se adaugă la nota coliziunii (R4), nu „neatinsă”', async () => {
+  // doar R5: poziția coliziunii era „neatinsă” și restul Dn63 OL ajungea doar în JSON; acum nota de pe poziție îl numește
+  const f = supaFals(LIC95().filter((r) => r.id === 1755))
+  const t = [{ diametru_mm: 63, material: 'PE', lungime_m: 100.2, de_la: 'X', la: 'Y' }, { diametru_mm: 63, material: '', lungime_m: 30, de_la: 'Y', la: 'Z' }]
+  const rest = { peDnMat: { '63|OL': { n: 1, m: 120 } }, global: '1 rând de tabel fără identitate sigură (120 m)' }
+  const rez: any = await treciInCantitati(f.supa, DOC, t, '1', 'R', rest)
+  const ops = f.apeluri[0].p_randuri
+  assertEquals(ops.map((o: any) => o.id), [1755])
+  assertFalse('cantitate_plansa' in ops[0].patch)
+  assertEquals(ops[0].patch.status, 'diferenta')
+  assertEquals(ops[0].patch.diferenta_nota, 'De verificat: Planșa 1 dă 2 grupuri sigure pe aceeași poziție — Dn63 PE 100,2 m (1 rând); Dn63 fără material 30 m (1 rând); ' +
+    'împreună 130,2 m, dar nu se adună și nu se suprascriu automat (denumirea poziției nu le deosebește); cifra din planșă nu s-a actualizat (9.670 m e dintr-o citire anterioară).' +
+    ' De verificat, NEincluse în cifra din planșă: pe planșă: 1 rând de tabel fără identitate sigură (120 m).' +
+    ' De verificat (Dn63 OL, fără nicio cifră sigură): 1 rând Dn63 OL fără identitate sigură (120 m).')
+  assertEquals(rez.doar_de_verificat, [{ dn: 63, material: 'OL', pozitie_id: 1755, actiune: 'nota' }])
+  assertEquals(rez.ambigue.length, 1, 'doar coliziunea; restul nu mai e raportat separat ca „ambiguu”')
+})
+Deno.test('rebase R4×R5: coliziune pe un rând VALIDAT => cifra neatinsă, deci validarea rămâne (regula R5 „cifra schimbată” nu se declanșează)', async () => {
+  const f = supaFals(LIC95().filter((r) => r.id === 1755).map((r) => ({ ...r, status: 'validat' })))
+  await treciInCantitati(f.supa, DOC, T_COLIZ, '1', 'R')
+  const [o] = f.apeluri[0].p_randuri
+  assertEquals([o.id, 'cantitate_plansa' in o.patch, o.patch.status], [1755, false, undefined])
+  assert(o.patch.diferenta_nota.startsWith('De verificat: Planșa 1 dă 2 grupuri sigure pe aceeași poziție'), o.patch.diferenta_nota)
+})
