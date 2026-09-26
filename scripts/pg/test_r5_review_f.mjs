@@ -343,7 +343,7 @@ teste.push(['F04 B — excepția și reconfirmarea în ambele ordini permit ieș
     assert.match((await exceptieF04(a, d, ex.token)).error, /netransmisă/)
     // Excepția ciornei nu aprobă sursa cantităților sau pachetul final.
     await a.command(`UPDATE ofertare_cantitati SET cantitate=101 WHERE id=${d.quantity};`)
-    assert.ok(await a.value(`to_jsonb(ofertare_r5_blocaj_sursa(${d.lic}))`))
+    assert.ok(await observer.value(`to_jsonb(ofertare_r5_blocaj_sursa(${d.lic}))`))
     await refuza(a, `INSERT INTO ofertare_pt_pachet(licitatie_id,stare) VALUES (${d.lic},'aprobat')`, 'Aprobare blocată')
   }
 }])
