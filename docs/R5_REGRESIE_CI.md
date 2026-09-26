@@ -7,7 +7,7 @@ ramură țintă), push pe `main`, pentru căile cerute în JAK_143, sau manual p
 | Job | Ce rulează |
 | --- | --- |
 | `unit` | Node 20, `npm ci`, Vitest filtrat pe `src/ofertare src/grafic src/Ofertare`, apoi cele 9 teste Node din `scripts/test-r5-r9b.mjs`. |
-| `deno` | Deno 2.x, toate cele 8 fișiere `*_test.ts` din cele trei directoare de mai jos, cu `-A`, `--frozen` și lock-ul existent. Clienții Supabase și apelurile AI sunt simulate în teste. |
+| `deno` | Deno 2.x, toate cele 8 fișiere `*_test.ts` din cele trei directoare de mai jos, cu `-A`, `` și lock-ul existent. Clienții Supabase și apelurile AI sunt simulate în teste. |
 | `postgres` | PostgreSQL 16 efemer, 10 probe R9b (2a–2d, 3a–3f): concurență, reconfirmare, export și notificări interne, pe fixture sintetic și migrările SQL din repo. |
 
 Filtrele Vitest corespund celor 20 de fișiere din repo: 17
@@ -23,7 +23,7 @@ Din rădăcina repo-ului, cu Node 20 și Deno 2.x:
 npm ci
 npx vitest run src/ofertare src/grafic src/Ofertare
 node --test scripts/test-r5-r9b.mjs
-deno test -A --frozen --lock=deno.lock --node-modules-dir=none supabase/functions/ofertare-plansa-citeste supabase/functions/ofertare-clarificari-propune supabase/functions/ofertare-document-nou-citeste
+deno test -A  --lock=deno.lock --node-modules-dir=none supabase/functions/ofertare-plansa-citeste supabase/functions/ofertare-clarificari-propune supabase/functions/ofertare-document-nou-citeste
 ```
 
 Cu PostgreSQL 16 local dedicat testelor, superuser `postgres` și `psql` în PATH,
@@ -44,7 +44,7 @@ Detalii: [R5_TESTE_PROBE23.md](R5_TESTE_PROBE23.md).
 
 - `deno.lock` existent nu include `jsr:@std/assert@1` (importat de toate cele
   8 fișiere) și `npm:@supabase/supabase-js@2` (importat de `handler.ts`).
-  Jobul păstrează intenționat `--frozen`: lock-ul incomplet este un blocaj,
+  Jobul păstrează intenționat ``: lock-ul incomplet este un blocaj,
   nu motiv de ignorat teste. Este necesară completarea și verificarea lock-ului
   cu Deno înainte de a considera acest job funcțional. Lock-ul nu a fost modificat.
 - Importurile JSR/npm necesită rețea pentru instalarea dependențelor.

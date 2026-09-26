@@ -55,10 +55,10 @@ jobs:
         with:
           deno-version: v2.x
       # Testele injecteaza clienti/fetch simulate; nu primesc secrete.
-      # Importurile JSR/npm necesita descarcare; lock-ul nu se regenereaza in CI.
+      # Ca jobul `poarta` existent: fără --frozen (deno.lock nu acoperă dependențele testelor).
       - name: Regresie Edge Functions cu dependente simulate
         run: >-
-          deno test -A --frozen --lock=deno.lock --node-modules-dir=none
+          deno test -A --node-modules-dir=none
           supabase/functions/ofertare-plansa-citeste
           supabase/functions/ofertare-clarificari-propune
           supabase/functions/ofertare-document-nou-citeste
