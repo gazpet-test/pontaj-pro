@@ -259,3 +259,52 @@ Verificări:
 
 „Verificată” este clasificarea metadatelor în varianta B: această migrare nu recalculează hashul
 fișierului din storage. Excepția umană nu constituie dovadă de identitate a conținutului.
+
+## Runda 2c
+
+Sarcina `JAK_F04C.md`: cele trei puncte NO-GO corectate local. Regulile de mai jos înlocuiesc
+selecția manifestului și a primului hash descrise la runda 2b. Fără git sau aplicare în producție.
+
+- **F04 — eligibilitatea manifestului:** numai `stare='deja_in_platforma'`, asociere prin
+  `document_id`, aceeași `licitatie_id`, `marime=size_bytes` și SHA-256 de 64 caractere hex.
+  Ultimul rând se determină după `id DESC`, fără filtrare prealabilă după eligibilitate și fără
+  ordonare după `verificat_la`. Dacă acesta este neeligibil, documentul este `contradictorie`,
+  inclusiv când există un hash valid în analiză sau un manifest vechi eligibil. Metadatele relevante
+  ale ultimului manifest intră în amprentă; timestampurile și ID-ul rândului manifest nu intră.
+- **F04 — contradicții:** se colectează toate hashurile valide din cele patru câmpuri ale
+  documentului/analizei și din toate manifestele eligibile. Lista este normalizată lowercase,
+  deduplicată și sortată. Fără hash și fără manifest contradictoriu → `limitata`; un singur hash
+  distinct → `verificata`; cel puțin două → `contradictorie`. Istoricul eligibil cu hashuri diferite
+  nu este ascuns nici dacă ultimul rând revine la un hash anterior. Toată lista intră în amprenta
+  `r5_f04_v3`; hashul singular `sha256` este NULL la contradicție. Bazele anterioare cer reverificare.
+  `identitate_contradictorie` are prioritate față de review, `luat_act` și identitatea limitată din
+  același lot. Textul nominal cere rezolvare și interzice excepția. RPC-ul refuză fără să scrie
+  excepție/audit; porțile existente refuză exportul și trecerile în `de_trimis`/`trimisa`.
+  Helperul JS afișează aceeași stare, exclude ciorna din export și nu permite butonul de excepție.
+- **F02 — DELETE:** triggerul refuză ștergerea rândurilor `platforma`/`automat` în
+  `trimisa`/`raspunsa`, inclusiv chei hash fără prefix. Ciornele fără prefix auto și rândurile manuale
+  rămân ștergibile; protecția existentă `auto_planse_%` rămâne aplicată.
+
+Verificări:
+
+- **Vitest real 2.1.9: 734/734, 22 fișiere**, inclusiv cele două teste noi de contradicție UI/export.
+  Comandă: `node .jak/review-f2-vitest-native.mjs src/ofertare src/grafic src/Ofertare`.
+  Comanda standard `npx --no-install vitest run` s-a oprit înaintea testelor la `esbuild: spawn EPERM`.
+  Runnerul existent folosește motorul și aserțiunile Vitest, worker threads și transformarea TypeScript
+  prin Node, fără esbuild; rezultatul nu validează build-ul sau transformările React/Vite obișnuite.
+- **7 probe PostgreSQL noi scrise, nerulate**, în `scripts/pg/test_r5_review_f.mjs`:
+  DELETE prin rolul authenticated cu grant DELETE și RLS `clar_all` în fixture (ambele origini,
+  toate cele patru statusuri, manual și protecția auto); stări manifest neeligibile inclusiv cu hash
+  valid în analiză; ultimul ID neeligibil prin stare/mărime/licitație cu timestampuri în ordine inversă;
+  hashuri istorice contradictorii; fiecare dintre cele cinci surse de hash, egalitate și normalizare;
+  analiza A + manifest B cu schimbare de amprentă și refuzul excepției/exportului/tranzițiilor chiar
+  după reconfirmare; lot mixt cu excepție anterioară și `luat_act` după transmitere.
+  Probele existente au fost adaptate: fixture verificat cu `deja_in_platforma`, identitate absentă
+  separată de manifest neeligibil, duplicat identic fără schimbarea amprentei. Coloanele opționale de
+  hash există doar în fixture pentru acoperirea celor patru surse; schema reală nu este modificată.
+- `node --check` a trecut pentru ambele scripturi PG. Verificare statică: cele patru funcții modificate
+  sunt deja restaurate/eliminate de rollback; nu apar funcții noi în această rundă. Rollback-ul rămâne
+  neschimbat. Migrarea și rollback-ul au fiecare un singur COMMIT, ultima instrucțiune.
+- PostgreSQL și PostgREST nu au fost executate, conform sarcinii; Claude rulează:
+  `PGURI=postgres://postgres@localhost:5432/r9b_test_review_f node scripts/pg/test_r5_review_f.mjs`.
+  Scriptul recreează exclusiv baza locală de test. Nu am rulat build, deploy sau migrări în producție.

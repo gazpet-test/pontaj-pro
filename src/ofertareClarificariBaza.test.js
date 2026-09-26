@@ -8,6 +8,24 @@ const row = (stare, extra = {}) => ({ id: 1, stare, text: avertisment, amprenta_
 const state = r => stareBazaCiorna(q, new Map([[1, r]]), null)
 
 describe('F04 — identitate limitată și excepție per ciornă', () => {
+  it('contradicția blochează exportul și excepția, chiar cu o excepție anterioară', () => {
+    const text = 'Identitate contradictorie: hash-uri diferite pentru același document (documente: #8 F3.pdf) — de rezolvat, nu se poate accepta prin excepție.'
+    for (const exceptie_identitate_valida of [false, true]) {
+      const r = row('identitate_contradictorie', { text, detalii: { exceptie_identitate_valida } })
+      expect(state(r)).toMatchObject({ nivel: 'identitate_contradictorie', blocheaza: true, text })
+      expect(deExportat([q], [r], null)).toEqual({ incluse: [], excluse: [{ q, motiv: text }] })
+      for (const status of ['propunere', 'de_trimis']) {
+        expect(poateAcceptaExceptieIdentitate({ ...q, status }, state(r), true)).toBe(false)
+      }
+    }
+  })
+  it('contradicția păstrează explicația din detalii sau mesajul explicit de refuz', () => {
+    const text = 'Identitate contradictorie: document #8 — de rezolvat.'
+    expect(state(row('identitate_contradictorie', { text: '', detalii: { avertisment_identitate: text } })).text).toBe(text)
+    const st = state(row('identitate_contradictorie', { text: '', detalii: {} }))
+    expect(st.blocheaza).toBe(true)
+    expect(st.text).toContain('nu se poate accepta prin excepție')
+  })
   it('identitatea limitată blochează exportul și păstrează explicația nominală', () => {
     const r = row('identitate_limitata')
     expect(state(r)).toMatchObject({ nivel: 'identitate_limitata', blocheaza: true, text: avertisment })

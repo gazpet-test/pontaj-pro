@@ -14,6 +14,8 @@ export function stareBazaCiorna(q, bazaPeId, eroare) {
   const r = bazaPeId.get(q.id)
   if (!r) return { nivel: 'nu_putem_verifica', blocheaza: true, text: 'nu putem verifica baza ciornei (lipsește din control) — ciorna nu intră în adresă' }
   const marcaj = r.marcaj_planse === true
+  if (r.stare === 'identitate_contradictorie') return { nivel: r.stare, blocheaza: true,
+    text: r.text || r.detalii?.avertisment_identitate || 'Identitate contradictorie: de rezolvat, nu se poate accepta prin excepție.', rand: r }
   if (r.stare === 'ok') return { nivel: 'ok', blocheaza: marcaj, text: marcaj ? 'planșele s-au schimbat după ce ciorna a fost editată / aprobată — de revizuit' : '', rand: r }
   if (r.stare === 'ok_identitate_limitata') return { nivel: r.stare, blocheaza: marcaj,
     text: [r.text || r.detalii?.avertisment_identitate || 'Identitate limitată: excepție acceptată pe baza curentă.',

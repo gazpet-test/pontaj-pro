@@ -148,7 +148,8 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_t
 $$;
 CREATE TABLE ofertare_documente_atribuire (id bigint PRIMARY KEY, licitatie_id bigint, nume_original text,
   tip text, status_procesare text, eroare text, analiza jsonb, analiza_la timestamptz,
-  fisier_path text, size_bytes bigint, text_extras text, procesat_la timestamptz);
+  fisier_path text, size_bytes bigint, text_extras text, procesat_la timestamptz,
+  sha256 text, fisier_sha256 text);
 ALTER TABLE ofertare_documente_atribuire ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ofertare_documente_select ON ofertare_documente_atribuire FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
 CREATE POLICY ofertare_documente_update ON ofertare_documente_atribuire FOR UPDATE TO authenticated
@@ -189,6 +190,9 @@ CREATE TABLE ofertare_clarificari (id bigserial PRIMARY KEY, licitatie_id bigint
   raspuns text, raspuns_la timestamptz, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
   origine text, cheie text, fisier_path text, creat_de uuid, citita_la timestamptz, citita_rezumat text,
   raspuns_document_id bigint, UNIQUE (licitatie_id,cheie));
+-- Activată doar în proba DELETE 2c; probele de trigger anon verifică separat refuzul, înainte de RLS.
+CREATE POLICY clar_all ON ofertare_clarificari TO authenticated
+  USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 CREATE TABLE notifications (id bigserial PRIMARY KEY, profile_id uuid, type text, modul text, title text,
   message text, link_to text, created_at timestamptz DEFAULT now());
 CREATE TABLE seap_compl (licitatie_id bigint PRIMARY KEY, blocaj text);
@@ -268,7 +272,7 @@ async function draft(observer) {
     INSERT INTO ofertare_documente_atribuire(id,licitatie_id,nume_original,tip,status_procesare,analiza,size_bytes,fisier_path)
       VALUES (${lic},${lic},'Plansa test.pdf','plansa','finalizat','{"plansa":{"rezultat":"ilizibil","citibila":false}}',123,'test/plansa.pdf');
     INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
-      VALUES (${lic},${lic},'test','plansa.pdf',123,repeat('a',64),'urcat');`)
+      VALUES (${lic},${lic},'test','plansa.pdf',123,repeat('a',64),'deja_in_platforma');`)
   const generated = await observer.value(`ofertare_clarificare_planse_auto(${lic})`)
   assert.equal(generated.actiune, 'creat', JSON.stringify(generated))
   const d = { lic, id: generated.id, quantity: lic }
