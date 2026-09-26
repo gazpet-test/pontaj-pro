@@ -340,7 +340,6 @@ $fn$;
 
 -- Retrage întâi workerul F08; funcția nouă nu exista în migrarea 2.
 DROP FUNCTION IF EXISTS public.ofertare_plansa_analiza_cas(bigint,jsonb,jsonb);
-COMMIT;
 
 -- Revenire ofertare_totaluri_control la varianta din migrarea 2.
 CREATE OR REPLACE FUNCTION public.ofertare_totaluri_control(p_licitatie_id bigint, p_baza text DEFAULT 'cantitate')
@@ -377,3 +376,5 @@ SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'baza',p_baza,'obiect',obie
 $function$;
 REVOKE ALL ON FUNCTION public.ofertare_totaluri_control(bigint,text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.ofertare_totaluri_control(bigint,text) TO authenticated, service_role;
+
+COMMIT;

@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runTests, RESPONSABIL, FARA_ACCES, Session, draft, state, approved, sqlText } from './test_r9b_probe23.mjs'
+import { cazuriUnitatiF2 } from '../../src/ofertareInvalidareUnitati.cazuri.js'
+import { aplicaRegulaAprobare } from '../../src/ofertareCantitatiInvalidare.js'
 
 let next = 5000
 async function licitatie(observer) {
@@ -26,6 +28,104 @@ async function refuza(session, sql, mesaj) {
   END; END $test$;`)
 }
 const teste = []
+teste.push(['Runda 2 — migrare și rollback atomice până după ultimele granturi', async ({ observer }) => {
+  const migrare = readFileSync(new URL('../../docs/R5_MIGRARE_3_review_copilot.sql', import.meta.url), 'utf8')
+  const rollback = readFileSync(new URL('../../docs/R5_MIGRARE_3_review_copilot_ROLLBACK.sql', import.meta.url), 'utf8')
+  // Toate funcțiile publice: definiție, identitate, proprietar, ACL și configurație.
+  const snapshot = () => observer.value(`(SELECT jsonb_agg(jsonb_build_object(
+    'oid',p.oid,'def',pg_get_functiondef(p.oid),'owner',p.proowner,'acl',p.proacl,'config',p.proconfig) ORDER BY p.oid)
+    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f')`)
+  for (const [nume, baza, script] of [['migrare',rollback,migrare], ['rollback',migrare,rollback]]) {
+    await observer.command(baza)
+    const inainte = await snapshot()
+    assert.equal((script.match(/^COMMIT;\s*$/gm) || []).length, 1)
+    assert.match(script, /COMMIT;\s*$/)
+    const defect = script.replace(/COMMIT;\s*$/, "DO $eroare$ BEGIN RAISE EXCEPTION 'F2_EROARE_FINAL'; END $eroare$;\nCOMMIT;")
+    const writer = new Session(`F2_atomic_${nume}`)
+    try {
+      await writer.init()
+      await assert.rejects(writer.command(defect), /F2_EROARE_FINAL/)
+    } finally { await writer.close() }
+    assert.deepEqual(await snapshot(), inainte, `${nume}: o funcție sau un grant a rămas aplicat parțial`)
+  }
+  await observer.command(migrare)
+}])
+
+teste.push(['F02 runda 2 — editarea cere reaprobare; textul transmis este imuabil pentru toate originile generate', async ({ observer, a }) => {
+  const lic = await licitatie(observer)
+  const denied = new Session('F02_edit_fara_decizie')
+  try {
+    await denied.init(FARA_ACCES)
+    for (const origine of ['platforma','automat']) {
+      const id = JSON.parse(await observer.command(`INSERT INTO ofertare_clarificari(licitatie_id,origine,cheie,status,intrebare)
+        VALUES (${lic},'${origine}','f2_${origine}','de_trimis','Text aprobat') RETURNING to_jsonb(id);`))
+      await denied.command(`UPDATE ofertare_clarificari SET intrebare='Text editat' WHERE id=${id};`)
+      assert.equal(await observer.value(`(SELECT to_jsonb(status) FROM ofertare_clarificari WHERE id=${id})`), 'propunere')
+      await refuza(denied, `UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${id}`, 'drept de decizie')
+      await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${id};`)
+      // Editare + transmitere într-o singură comandă nu moștenește aprobarea veche.
+      await a.command(`UPDATE ofertare_clarificari SET intrebare='Text final',status='trimisa' WHERE id=${id};`)
+      assert.equal(await observer.value(`(SELECT to_jsonb(status) FROM ofertare_clarificari WHERE id=${id})`), 'propunere')
+      await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${id};
+        UPDATE ofertare_clarificari SET status='trimisa' WHERE id=${id};`)
+      for (const status of ['trimisa','raspunsa']) {
+        if (status === 'raspunsa') await a.command(`UPDATE ofertare_clarificari SET status='raspunsa',raspuns='Răspuns' WHERE id=${id};`)
+        await refuza(a, `UPDATE ofertare_clarificari SET intrebare='Text înlocuit' WHERE id=${id}`, 'transmis este imuabil')
+        await refuza(a, `UPDATE ofertare_clarificari SET status='propunere',intrebare='Text înlocuit' WHERE id=${id}`, 'transmis este imuabil')
+        assert.deepEqual(await observer.value(`(SELECT jsonb_build_array(status,intrebare) FROM ofertare_clarificari WHERE id=${id})`), [status,'Text final'])
+      }
+    }
+  } finally { await denied.close() }
+}])
+
+teste.push(['F06 runda 2 — aprobare anterioară fără eveniment validat; unitate_schimbata nu e dovadă', async ({ observer, a }) => {
+  const lic = await licitatie(observer)
+  for (const [i, motiv] of ['invalidat','redeschis'].entries()) {
+    const id = await cantitate(observer, lic, { status: 'validat' })
+    assert.equal(await observer.value(`(SELECT to_jsonb(count(*)) FROM ofertare_cantitati_istoric WHERE cantitate_id=${id})`), 0)
+    await a.command(`UPDATE ofertare_cantitati SET ${motiv === 'invalidat' ? 'cantitate=101' : "status='extras'"} WHERE id=${id};`)
+    const ev = await observer.value(`(SELECT to_jsonb(h) FROM ofertare_cantitati_istoric h WHERE cantitate_id=${id} AND motiv='${motiv}')`)
+    assert.equal(ev.aprobare_veche.status, 'validat')
+    await a.command(`DELETE FROM ofertare_cantitati WHERE id=${id};`)
+    const sters = await observer.value(`(SELECT to_jsonb(h) FROM ofertare_cantitati_istoric h WHERE cantitate_id=${id} AND motiv='sters')`)
+    assert.equal(sters.aprobare_veche.cantitate, 100)
+    assert.equal(sters.aprobare_veche.status, 'validat')
+    assert.equal(sters.aprobare_veche.istoric_id, ev.id)
+    assert.equal(await observer.value(`(SELECT to_jsonb(sterse_dupa_validare) FROM v_ofertare_cantitati_nevalidate WHERE licitatie_id=${lic})`), i + 1)
+  }
+  // Fiecare dintre cele două forme de dovadă este suficientă separat.
+  for (const numaiStatusVechi of [true,false]) {
+    const id = await cantitate(observer, lic)
+    await observer.command(`INSERT INTO ofertare_cantitati_istoric(cantitate_id,licitatie_id,motiv,status_vechi,valori_vechi,aprobare_veche)
+      VALUES (${id},${lic},'invalidat',${sqlText(numaiStatusVechi ? 'validat' : 'diferenta')},
+        '{"cantitate":100,"um":"m"}',${sqlText(JSON.stringify(numaiStatusVechi ? {} : { status:'validat',cantitate:99,um:'m' }))}::jsonb);`)
+    await a.command(`DELETE FROM ofertare_cantitati WHERE id=${id};`)
+    assert.equal(await observer.value(`(SELECT aprobare_veche->'cantitate' FROM ofertare_cantitati_istoric WHERE cantitate_id=${id} AND motiv='sters')`), numaiStatusVechi ? 100 : 99)
+  }
+  const id = await cantitate(observer, lic)
+  await a.command(`UPDATE ofertare_cantitati SET um='buc' WHERE id=${id}; DELETE FROM ofertare_cantitati WHERE id=${id};`)
+  assert.equal(await observer.value(`(SELECT to_jsonb(count(*)) FROM ofertare_cantitati_istoric WHERE cantitate_id=${id} AND motiv='unitate_schimbata')`), 1)
+  assert.equal(await observer.value(`(SELECT to_jsonb(count(*)) FROM ofertare_cantitati_istoric WHERE cantitate_id=${id} AND motiv='sters')`), 0)
+  assert.equal(await observer.value(`(SELECT to_jsonb(sterse_dupa_validare) FROM v_ofertare_cantitati_nevalidate WHERE licitatie_id=${lic})`), 4)
+}])
+
+for (const c of cazuriUnitatiF2) teste.push([`U runda 2 — ${c.nume}`, async ({ observer, a }) => {
+  const lic = await licitatie(observer)
+  const id = await cantitate(observer, lic, c.vechi)
+  const vechi = await observer.value(`(SELECT to_jsonb(q) FROM ofertare_cantitati q WHERE id=${id})`)
+  const referinta = c.referinta ? { ...vechi, ...c.referinta } : null
+  if (referinta) await observer.command(`INSERT INTO ofertare_cantitati_istoric(cantitate_id,licitatie_id,motiv,status_vechi,status_nou,valori_noi)
+    VALUES (${id},${lic},'validat','extras','validat',${sqlText(JSON.stringify(referinta))}::jsonb);`)
+  const js = aplicaRegulaAprobare(vechi, c.patch, referinta)
+  assert.equal(js.invalidat, c.invalidat)
+  const set = Object.entries(c.patch).map(([k,v]) => `${k}=${v == null ? 'NULL' : sqlText(v)}`).join(',')
+  await a.command(`UPDATE ofertare_cantitati SET ${set} WHERE id=${id};`)
+  const nou = await observer.value(`(SELECT to_jsonb(q) FROM ofertare_cantitati q WHERE id=${id})`)
+  assert.equal(nou.status, c.invalidat ? 'diferenta' : 'validat')
+  assert.equal(nou.diferenta_nota, js.patch.diferenta_nota ?? vechi.diferenta_nota)
+  assert.equal(await observer.value(`(SELECT to_jsonb(count(*)) FROM ofertare_cantitati_istoric WHERE cantitate_id=${id} AND motiv='invalidat')`), c.invalidat ? 1 : 0)
+}])
+
 const contoare = [
   ['lista_f3_nevalidate', {}, null],
   ['lista_f3_validate_fara_cant', { status: 'validat', cantitate: null }, null],

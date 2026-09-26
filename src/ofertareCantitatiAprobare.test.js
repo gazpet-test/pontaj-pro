@@ -77,7 +77,7 @@ describe('fronturiDinCantitati — „Propune din cantitati" doar din randuri va
   it('maparea numelui/lungimii/Dn e cea veche; runda 4: + proveniența (rândul-sursă, baza, cifra la propunere)', () => {
     const rows = [{ id: 1, um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn110 — Făgului', cantitate: 512.4, cantitate_plansa: 530, status: 'validat' }]
     expect(fronturiDinCantitati(rows, '').fronturi).toEqual([{ nume: 'Făgului', lungime_m: 512, dn: '110', echipe: 1, cantitate_id: 1, baza: 'cantitate', lungime_sursa: 512.4,
-      um_sursa: 'm', denumire_sursa: 'Țeavă PE100 SDR11 Dn110 — Făgului', obiect_sursa: null }])   // runda 9 (S4a): + atributele rândului-sursă
+      dn_tip: 'DN', um_sursa: 'm', denumire_sursa: 'Țeavă PE100 SDR11 Dn110 — Făgului', obiect_sursa: null }])   // runda 9 (S4a): + atributele rândului-sursă
     expect(fronturiDinCantitati(rows, 'plansa').fronturi[0]).toMatchObject({ lungime_m: 530, baza: 'cantitate_plansa', lungime_sursa: 530 })
   })
 })

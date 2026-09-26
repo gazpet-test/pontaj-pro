@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { controlSursaAprobareFinala, CONTOARE_BLOCANTE_CANTITATI } from './ofertarePoarta.js'
 import { COLOANE_GRAFIC_REVERIFICARE } from './ofertareGraficReverificare.js'
 import { controlTotaluri } from './ofertareTotaluri.js'
+import { aplicaRegulaAprobare } from './ofertareCantitatiInvalidare.js'
+import { cazuriUnitatiF2 } from './ofertareInvalidareUnitati.cazuri.js'
 import { fronturiDinCantitati, controlFronturiGrafic, reverificareGraficInghetat, mesajPropuneFronturi } from './ofertareCantitatiAprobare.js'
 
 const st = { ...Object.fromEntries(CONTOARE_BLOCANTE_CANTITATI.map(k => [k, 0])),
@@ -44,6 +46,19 @@ describe('F09 — proiecția folosită efectiv de loader', () => {
 })
 
 describe('F10 — Dn nu se trunchiază', () => {
+  it.each([['De914,4×7,1', '914,4', 'De'], ['De60.3', '60.3', 'De'], ['De110', '110', 'De'], ['DN60.3', '60.3', 'DN']])(
+    '%s păstrează valoarea și notația; modelul nesuportat cere verificare', (notatie, valoare, tip) => {
+      const r = [rand(57, `Conductă ${notatie}`)]
+      const rezultat = fronturiDinCantitati(r)
+      expect(rezultat.fronturi[0].dn).toBe(valoare)
+      expect(rezultat.fronturi[0].dn_tip).toBe(tip)
+      expect(mesajPropuneFronturi(rezultat).text).toContain('de verificat')
+      expect(mesajPropuneFronturi(rezultat).text).toContain(`${tip}${valoare}`)
+      expect(controlFronturiGrafic({ fronturi: rezultat.fronturi }, r).stare).toBe('block')
+      // Și fronturile istorice trunchiate, inclusiv cele cu denumire_sursa, rămân blocate.
+      expect(controlFronturiGrafic({ fronturi: [{ ...rezultat.fronturi[0], dn: String(parseInt(valoare, 10)) }] }, r).stare).toBe('block')
+      expect(reverificareGraficInghetat({ fronturi: rezultat.fronturi }, r).grafic_de_reverificat).toBeGreaterThan(0)
+    })
   it('DN1000 se păstrează, iar un front vechi DN100 cere reverificare', () => {
     const r = [rand(57, 'Conductă DN1000')]
     const f = fronturiDinCantitati(r).fronturi[0]
@@ -59,6 +74,18 @@ describe('F10 — Dn nu se trunchiază', () => {
     expect(f.fronturi[0].dn).toBe(dn)
     expect(mesajPropuneFronturi(f).text).toContain('nesuportat')
     expect(controlFronturiGrafic({ fronturi: f.fronturi }, r).stare).toBe('block')
+  })
+})
+
+describe('U runda 2 — observația efectivă și referința în metri', () => {
+  it.each(cazuriUnitatiF2)('$nume', ({ vechi, patch, referinta, invalidat }) => {
+    const r = aplicaRegulaAprobare(vechi, patch, referinta)
+    expect(r.invalidat).toBe(invalidat)
+    expect({ ...vechi, ...r.patch }.status).toBe(invalidat ? 'diferenta' : 'validat')
+  })
+  it('regula UI și regula workerului sunt identice octet cu octet', () => {
+    expect(readFileSync(new URL('../supabase/functions/ofertare-plansa-citeste/invalidare.js', import.meta.url), 'utf8'))
+      .toBe(readFileSync(new URL('./ofertareCantitatiInvalidare.js', import.meta.url), 'utf8'))
   })
 })
 

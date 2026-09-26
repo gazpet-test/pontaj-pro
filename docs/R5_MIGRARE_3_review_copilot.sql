@@ -68,6 +68,13 @@ BEGIN
     IF NEW.status='raspunsa' AND (TG_OP='INSERT' OR OLD.status IS NULL OR OLD.status NOT IN ('trimisa','raspunsa')) THEN
       RAISE EXCEPTION 'Clarificare blocată: răspunsul cere o clarificare trimisă';
     END IF;
+    IF TG_OP='UPDATE' THEN
+      IF OLD.status IN ('trimisa','raspunsa') AND ((NEW.intrebare,NEW.fisier_path) IS DISTINCT FROM (OLD.intrebare,OLD.fisier_path)
+        OR NEW.status IS NULL OR NEW.status NOT IN ('trimisa','raspunsa')) THEN RAISE EXCEPTION 'Documentul transmis este imuabil'; END IF;
+      -- O editare nu moștenește aprobarea textului anterior, indiferent de writer.
+      IF NEW.intrebare IS DISTINCT FROM OLD.intrebare
+         AND (OLD.status='de_trimis' OR NEW.status='de_trimis') THEN NEW.status := 'propunere'; END IF;
+    END IF;
     IF NEW.status IN ('de_trimis','trimisa') AND (TG_OP='INSERT' OR OLD.status IS DISTINCT FROM NEW.status)
        AND current_user IN ('authenticated','anon')
        AND NOT coalesce(public.fn_ofertare_source_pack_poate_decide(NEW.licitatie_id),false) THEN
@@ -80,8 +87,6 @@ BEGIN
     IF (NEW.cheie,NEW.licitatie_id,NEW.origine) IS DISTINCT FROM (OLD.cheie,OLD.licitatie_id,OLD.origine) THEN
       RAISE EXCEPTION 'Proveniența clarificării automate este imuabilă';
     END IF;
-    IF OLD.status IN ('trimisa','raspunsa') AND ((NEW.intrebare,NEW.fisier_path) IS DISTINCT FROM (OLD.intrebare,OLD.fisier_path)
-      OR NEW.status IS NULL OR NEW.status NOT IN ('trimisa','raspunsa')) THEN RAISE EXCEPTION 'Documentul transmis este imuabil'; END IF;
   END IF;
   IF current_user IN ('authenticated','anon','service_role') THEN
     IF TG_OP='INSERT' THEN RAISE EXCEPTION 'Ciorna automată se creează doar prin generatorul controlat'; END IF;
@@ -219,6 +224,21 @@ BEGIN
       'um',h.valori_noi->'um','nota',h.valori_noi->'diferenta_nota')
       INTO v_aprob FROM public.ofertare_cantitati_istoric h
       WHERE h.cantitate_id=OLD.id AND h.motiv='validat' ORDER BY h.id DESC LIMIT 1;
+    IF v_aprob IS NULL THEN
+      -- Rânduri aprobate înaintea istoricului: invalidarea/redeschiderea păstrează dovada.
+      -- Un eveniment unitate_schimbata nu dovedește o aprobare anterioară.
+      SELECT coalesce(h.aprobare_veche,'{}'::jsonb) || jsonb_build_object(
+        'istoric_id',h.id,'status','validat',
+        'ultima_scriere',coalesce(h.aprobare_veche->>'ultima_scriere',h.valori_vechi->>'updated_at'),
+        'cantitate',coalesce(h.aprobare_veche->'cantitate',h.valori_vechi->'cantitate'),
+        'cantitate_plansa',coalesce(h.aprobare_veche->'cantitate_plansa',h.valori_vechi->'cantitate_plansa'),
+        'um',coalesce(h.aprobare_veche->'um',h.valori_vechi->'um'),
+        'nota',coalesce(h.aprobare_veche->'nota',h.valori_vechi->'diferenta_nota'))
+        INTO v_aprob FROM public.ofertare_cantitati_istoric h
+        WHERE h.cantitate_id=OLD.id AND h.motiv IN ('invalidat','redeschis')
+          AND (h.aprobare_veche->>'status'='validat' OR h.status_vechi='validat')
+        ORDER BY h.id DESC LIMIT 1;
+    END IF;
     IF OLD.status = 'validat' OR v_aprob IS NOT NULL THEN
       INSERT INTO public.ofertare_cantitati_istoric (cantitate_id, licitatie_id, motiv, status_vechi, valori_vechi, aprobare_veche, autor, rol)
       VALUES (OLD.id, OLD.licitatie_id, 'sters', OLD.status, to_jsonb(OLD),
@@ -280,7 +300,9 @@ BEGIN
       ELSE
         IF k = 'cantitate' THEN ea := nr; eb := nb;
         ELSE   -- cifra din planșă EFECTIVĂ (ca referintaCitire / cifraSchimbata), față de cea aprobată
-          ea := coalesce(v_ref_cp, v_ref_cant); eb := coalesce(NEW.cantitate_plansa, NEW.cantitate);
+          -- Observația e în metri; doar fallback-ul poartă unitatea rândului.
+          ea := coalesce(v_ref_cp, v_ref_cant * coalesce((public.ofertare_clasa_unitate(v_ref_um)->>'factor')::numeric,1));
+          eb := coalesce(NEW.cantitate_plansa, NEW.cantitate * coalesce((public.ofertare_clasa_unitate(NEW.um)->>'factor')::numeric,1));
         END IF;
         v_rel := round(ea, 6) IS DISTINCT FROM round(eb, 6);   -- 1b: exact (apariția / dispariția cifrei = schimbare)
         IF k = 'cantitate_plansa' THEN v_rel := v_rel AND round(nr, 6) IS DISTINCT FROM round(nb, 6); END IF;
@@ -406,8 +428,6 @@ END $function$;
 REVOKE ALL ON FUNCTION public.ofertare_plansa_analiza_cas(bigint,jsonb,jsonb) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.ofertare_plansa_analiza_cas(bigint,jsonb,jsonb) TO service_role;
 
-COMMIT;
-
 -- Contract unități (întrebarea din review): cantitate = unitatea rândului; cantitate_plansa = metri (handler.ts o scrie în m).
 -- Factorul unității se aplică doar pe baza „cantitate” — fără a doua conversie pe planșă. Pereche: factorBaza din src/ofertareUnitati.js.
 CREATE OR REPLACE FUNCTION public.ofertare_totaluri_control(p_licitatie_id bigint, p_baza text DEFAULT 'cantitate')
@@ -444,3 +464,5 @@ SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'baza',p_baza,'obiect',obie
 $function$;
 REVOKE ALL ON FUNCTION public.ofertare_totaluri_control(bigint,text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.ofertare_totaluri_control(bigint,text) TO authenticated, service_role;
+
+COMMIT;
