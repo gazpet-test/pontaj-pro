@@ -8,24 +8,25 @@ Runda 5 (26.09, verificatorul rundei 4): poziția e interzisă în **coloana de 
 Runda 6 (26.09, verificatorul rundei 5): vecinătatea feliilor pe **geometria reală** `zone_geom` (coloana fixată la marginea planșei acoperă și `_N-1`); două grupuri sigure pe aceeași poziție ⇒ ambiguu, nimic suprascris; `COD_VERSIUNE` 2026-09-26.10 (commit `f1c4b66`; confirmat de verificatorul rundei 6: 0 blocante, 0 majore, 3 minore).
 Runda 7 (26.09, verdictul Copilot + minorele verificatorilor rundei 6 și ai documentului R5): regresiile obligatorii **COPILOT-REG-1…4** ca teste; cele **4 căi tăcute** rămase devin vizibile (B1 fără geometrie sub coloana fixată, B2 dublă parțială, B3 goluri în secvența Nr, B4 comasare peste capacitatea fâșiei / integrală); ADV7-M5, TOTAL, MY-T4, feliile identice în `api/plansa-felii.js`, rollback-ul 1756 condiționat; `COD_VERSIUNE` 2026-09-26.11 (commit-uri `f4406c7`, `cc2c77f`, `05b92cb`; §5.3, §5.5–5.7).
 Runda 8 (26.09, verificatorul rundei 7: 1 major, 7 minore): rândul cu **Nr citit și lungime necitită** (și în tabelul compact) primește regimul lui B3 — raport, notă la transfer, „diferenta”, ⚠ (major); B2 pe subsecvența comună lungă (LCS), B4 cu capacitatea pe tabel și comasarea integrală neascunsă de „Nr repetat” / de un conflict, B3 cu golul dintre grupuri de felii calificat, MY-T4 cu ținta grupului sigur, TOTAL = „total” fără Dn, rollback-urile 1756 condiționate și pe status (minore); `COD_VERSIUNE` 2026-09-26.12 (commit-uri `4e0591d`, `294a739`; §5.3, §5.5–5.7).
+Runda 9 (26.09, verificatorul rundei 8: 3 majore, 3 minore): rândul TOTAL cu **interval de Dn** („Total rețea De 63–110”) e TOTAL, nu candidat pe Dn63, iar între candidații unui Dn pozițiile fără „total” au prioritate (majorul TOTAL-a/b, regresie a rundei 8); rândul cu **Nr citit fără lungime** ajunge și la poziția Dn-ului lui (major NFL-DN); **tronsonul sigur fără Dn citit** nu mai dispare tăcut la transfer (major DN0, pre-existent); fără fals-pozitive NFL pe antete Nr diferite, rollback-ul A condiționat și pe nota exactă, §5.7 reformulat (minore); `COD_VERSIUNE` 2026-09-26.13 (commit `3197aa3`; §5.3, §5.5–5.7).
 Ramură locală: `claude/r4-rezervare-zone` (bază `main` @ `8a6fbbb`; numerele de linie din §2 și §5 sunt pe capul ramurii). **Nimic deployat, nimic pushat, nicio scriere în BD** (doar SELECT-uri).
 
 **Verdict propus: PARȚIAL.**
 
-Teste finale pe ramură (pe capul ramurii, după runda 8; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins, md5 `875e293d…`):
+Teste finale pe ramură (pe capul ramurii, după runda 9; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins, md5 `875e293d…`):
 
 | Comandă | Rezultat |
 |---|---|
-| `deno test supabase/functions/ofertare-plansa-citeste` | **132/132** (după `e8489a6`: 122/122; după `f1c4b66`: 109/109; după `f1274a1`: 100/100; după `a9fe186`: 89/89; după `a800d38`: 78/78) |
-| `deno test -A supabase/functions/` | **149/149** (după `e8489a6`: 139/139; după `f1c4b66`: 126/126; după `f1274a1`: 117/117; după `a9fe186`: 106/106; după `a800d38`: 95/95) |
-| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 67/67 de fiecare dată |
+| `deno test supabase/functions/ofertare-plansa-citeste` | **141/141** (după `b5e7ecd`: 132/132; după `e8489a6`: 122/122; după `f1c4b66`: 109/109; după `f1274a1`: 100/100; după `a9fe186`: 89/89; după `a800d38`: 78/78) |
+| `deno test -A supabase/functions/` | **158/158** (după `b5e7ecd`: 149/149; după `e8489a6`: 139/139; după `f1c4b66`: 126/126; după `f1274a1`: 117/117; după `a9fe186`: 106/106; după `a800d38`: 95/95) |
+| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 73/73 de fiecare dată |
 | `node scripts/test-cas-felii.mjs` | **34/34** |
 | `node scripts/test-detector-sigla.mjs` | 30/30 (+7 verificări `zoneTaiere`, runda 7) |
 | `npx vitest run` (atinge `api/`) | 372/372 |
 | `node scripts/verifica-poarta-identica.mjs` | OK |
 | `deno check` pe `index.ts` | OK |
 
-Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare. Pentru identitatea rândului, mutațiile pe o copie a funcției (identitate pe text / conflict ignorat / împerechere laxă / fără garda de bandă / fără prefixul de margine) fac să pice 8 / 3 / 5 / 2 / 2 teste (§5.6); pe contraexemplul Copilot, dedup-ul pe mulțime și cel pe multiset dau 1 rând, identitatea dă 2. Runda 4: toate cele 11 teste noi pică pe `a800d38` (copie în scratchpad), iar 8 mutații pe regulile noi fac să pice 1–3 teste fiecare (§5.6). Runda 5: toate cele 11 teste noi pică pe `a9fe186`, iar 7 mutații pe regulile noi fac să pice 1–6 teste fiecare (§5.6). Runda 8: toate cele 12 teste noi / actualizate pică pe `e8489a6`, iar 33 din 34 de mutații sunt prinse (a 34-a e echivalentă prin construcție; §5.6).
+Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare. Pentru identitatea rândului, mutațiile pe o copie a funcției (identitate pe text / conflict ignorat / împerechere laxă / fără garda de bandă / fără prefixul de margine) fac să pice 8 / 3 / 5 / 2 / 2 teste (§5.6); pe contraexemplul Copilot, dedup-ul pe mulțime și cel pe multiset dau 1 rând, identitatea dă 2. Runda 4: toate cele 11 teste noi pică pe `a800d38` (copie în scratchpad), iar 8 mutații pe regulile noi fac să pice 1–3 teste fiecare (§5.6). Runda 5: toate cele 11 teste noi pică pe `a9fe186`, iar 7 mutații pe regulile noi fac să pice 1–6 teste fiecare (§5.6). Runda 8: toate cele 12 teste noi / actualizate pică pe `e8489a6`, iar 33 din 34 de mutații sunt prinse (a 34-a e echivalentă prin construcție; §5.6). Runda 9: toate cele 9 teste noi și cel actualizat pică pe `b5e7ecd`; 20/20 mutații pe regulile noi sunt prinse (inclusiv „TOTAL candidat pe Dn”, echivalentă în runda 8), iar rollback-ul A e testat pe Postgres local, 41/41 (§5.5, §5.6).
 
 | Punct | Stare |
 |---|---|
@@ -233,7 +234,7 @@ Tabelul e mai simplu de auditat.
 
 **Planșa 1035:** doar adnotări (8), fără tabel.
 
-### 5.3 Regula implementată (`handler.ts:446 identificaRanduri`, apelată la l. 1780)
+### 5.3 Regula implementată (`handler.ts:457 identificaRanduri`, apelată la l. 1848)
 - **Identitate = (document, pagină, tabel identificat, Nr rând).**
   - Pagina vine din `surse_geom` prin `zone_geom` (implicit 1).
   - „Tabelul identificat” = setul de antete normalizate al fragmentului care poartă Nr.
@@ -257,7 +258,7 @@ Tabelul e mai simplu de auditat.
   - `conflicte[]`, `randuri_fara_identitate[]` (+ `_n`), `identitate_randuri` (lecturi, sigure prin Nr / prin poziție, fără identitate, conflicte);
   - un avertisment când există rânduri de verificat.
   - `lungime_totala_m` / `tronsoane_gasite` rămân cifra care intră în cantități (sigur − nestandard).
-- `COD_VERSIUNE` 2026-09-25.6 → **.7** → **2026-09-26.8** (runda 4) → **2026-09-26.9** (runda 5) → **2026-09-26.10** (runda 6) → **2026-09-26.11** (runda 7) → **2026-09-26.12** (runda 8, mai jos).
+- `COD_VERSIUNE` 2026-09-25.6 → **.7** → **2026-09-26.8** (runda 4) → **2026-09-26.9** (runda 5) → **2026-09-26.10** (runda 6) → **2026-09-26.11** (runda 7) → **2026-09-26.12** (runda 8) → **2026-09-26.13** (runda 9, mai jos).
 
 **Runda 4 (26.09, verificatorul rundei 3).** Principiul Copilot: nicio pierdere și nicio umflare **tăcută**. Ce nu e sigur trece la „de verificat”, cu total separat și motiv. Regulile noi din `identificaRanduri`:
 - **Poziția e identitate doar dacă niciun fragment din tabel nu are coloană Nr.** Tabelul = grupul fragmentelor împerecheate sigur. Rândul fără Nr dintr-un fragment împerecheat cu unul care are Nr intră la de verificat, cu motivul `MOTIV_AFARA_NR` („rând în afara fragmentului cu Nr”). Asta repară **blocantul**: rândul de margine transcris doar în felia cu lungimi (ex. Nr 38 în plus la baza lui `z1_7`) primea `poz z1_7#38` și se număra încă o dată prin Nr în banda 2. Efectul: 470 ieșea 49.225 m în loc de 48.905, fără niciun semnal. Tot aici: rândul legat de un Nr ilizibil din felia vecină merge la „Nr lipsă sau ilizibil pe rând (în felia vecină, împerecheată)”, nu primește poziție.
@@ -338,7 +339,13 @@ Cifre (fără scrieri în BD): **470 = 133 / 48.905 m** sigur, 0 de verificat, n
 
   Rămâne conservator: `total_sigur_incomplet`, iar la transfer „extras” ⇒ „diferenta”, fiindcă un rând lipsă dintr-o bandă netranscrisă arată la fel. Golul din interiorul aceluiași grup (470 fără Nr 50) rămâne „incomplet”, fără calificare.
 
-Cifre (fără scrieri în BD): **470 = 133 / 48.905 m** sigur, 0 de verificat, niciun semnal (fixture, cu `zone_geom` real și fără); **130 = 18 / 37.320 m** (`p130`, md5 e0bb8525), cu același semnal de comasare pe orizontală ca în runda 7. Pe datele reale nicio regulă din runda 8 nu schimbă un total sau un semnal.
+**Runda 9 (26.09, verificatorul rundei 8) — identificarea** (commit `3197aa3`; `COD_VERSIUNE` 2026-09-26.13). Transferul e în §5.5.
+- **NFL fără fals-pozitive pe antete Nr diferite** (minor, regresie a rundei 8 față de `e8489a6`, vizibilă și conservatoare, dar zgomotoasă). Același tabel văzut **întreg** în două felii alăturate, ambele cu coloana Nr și cu lungimi, dar cu antetul Nr transcris diferit („Nr crt” / „Nr”): `c.nrs` ține sig-ul doar al primului fragment din componentă, deci toate rândurile celui de-al doilea ieșeau „fără nicio lungime citită (… lungime doar într-un tabel cu alte antete)”, cu `total_sigur_incomplet` și „extras” ⇒ „diferenta”, deși totalul era complet (V9-NFL-FP: 4 rânduri / 1.000 m; V9E-NFL-FP: 900 m).
+  - Acum rândul e sărit dacă **vreun nod din componenta lui are lungime** (`valori`); proba dă `nr_fara_lungime` [] fără și cu geometrie, iar poziția rămâne „confirmă” / „extras”.
+  - Tot aici: același rând fizic (o componentă) se raportează **o singură dată**, chiar dacă fragmentele lui au antete diferite (controlul testului: rândul 3 fără L în ambele felii ⇒ un singur „Nr 3”, nu două).
+- 470 (cu `zone_geom` real și fără, și varianta V9-NFL-FP2 a verificatorului) și 130 rămân neschimbate.
+
+Cifre (fără scrieri în BD): **470 = 133 / 48.905 m** sigur, 0 de verificat, niciun semnal (fixture, cu `zone_geom` real și fără); **130 = 18 / 37.320 m** (`p130`, md5 e0bb8525), cu același semnal de comasare pe orizontală ca în runda 7. Pe datele reale nicio regulă din rundele 8 și 9 nu schimbă un total sau un semnal (runda 9: 0 din 188 de tronsoane „tabel” cu L de pe 130/470 fără Dn — SELECT verificator; 0 denumiri „total” cu Dn și 0 denumiri cu interval de Dn în `ofertare_cantitati` — SELECT 26.09).
 
 ### 5.4 Efect (simulat pe citirile salvate; nimic scris în BD)
 | | azi (BD) | multiset (`e762c6e`) | **identitate de rând** |
@@ -362,7 +369,7 @@ Cifre (fără scrieri în BD): **470 = 133 / 48.905 m** sigur, 0 de verificat, n
 - Totalul corect din planșă (37.320) e egal cu totalul memoriului. Pe Dn250, diferența față de memoriu devine +7.340 m (în BD: +10.835).
 - Corecția e o modificare de date: se face doar prin preview → GO → apply.
 
-### 5.5 Transferul în cantități (`treciInCantitati`, l. 1018; `notaRestTransfer`, l. 989; `descriereRestDn`, l. 973; `cheieRest`, l. 970)
+### 5.5 Transferul în cantități (`treciInCantitati`, l. 1060; `notaRestTransfer`, l. 1015; `descriereRestDn`, l. 993; `cheieRest`, l. 990)
 - `cantitate_plansa` primește **doar** rândurile cu identitate sigură, fără conflict și cu Dn standard.
 - Restul **nu se promovează**. E numit în `diferenta_nota`, pe fiecare poziție atinsă și pe rândul de total:
   - rândurile fără identitate de pe Dn-ul poziției;
@@ -373,7 +380,7 @@ Cifre (fără scrieri în BD): **470 = 133 / 48.905 m** sigur, 0 de verificat, n
   - 1751–1755 rămân neschimbate ca cifre, iar nota lor devine „Planșa 1 confirmă: … De verificat, NEincluse …”;
   - 0 inserări.
 - Rămân **nemodificate** (în afara fix-ului): eticheta „Memoriu” pe cifra venită din planșa însăși și „confirmă” pe propriile cifre.
-- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după o schimbare de `COD_VERSIUNE` — acum 2026-09-26.12 — sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
+- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după o schimbare de `COD_VERSIUNE` — acum 2026-09-26.13 — sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
 
 **Runda 4 — Dn cu TOATE rândurile „de verificat”** (verificatorul, MAJOR; test ADV-T). Pe `a800d38`, `peDiametru` se construia doar din rândurile sigure. Consecințele:
 - poziția unui Dn fără niciun rând sigur păstra tăcut `cantitate_plansa` și nota dintr-o citire anterioară;
@@ -437,12 +444,28 @@ Pe datele de azi nu apare: singurul Dn cu material amestecat e 130 Dn250 (28 de 
   - ordinea din BD decidea între „Total rețea PE” și „Total conducte De 110”;
   - o poziție „Conductă PE Dn110 — lungime totală” devenea TOTAL, iar Dn110 se insera ca poziție nouă (dublură în ofertă).
 
-  Acum TOTAL = rândul cu „total” **fără un Dn standard** în denumire (`areDnStandard`, pe `DN_STANDARD`, mutat la nivel de modul). Un „total” cu Dn e candidat pe Dn-ul lui, ca orice poziție: subtotalul pe Dn primește cifra Dn-ului, iar „… lungime totală” e tratată ca poziție. Dacă grupul sigur al Dn-ului merge (prin filtrul pe material) la altă poziție, rândul „total” cu Dn nu rămâne tăcut:
+  *Corectat în runda 9 (mai jos): regula de mai jos trata „Total rețea De 63–110” drept subtotal Dn63, iar un subtotal „Total conducte De 110” făcea ambiguă poziția reală Dn110 fără material.* Acum TOTAL = rândul cu „total” **fără un Dn standard** în denumire (`areDnStandard`, pe `DN_STANDARD`, mutat la nivel de modul). Un „total” cu Dn e candidat pe Dn-ul lui, ca orice poziție: subtotalul pe Dn primește cifra Dn-ului, iar „… lungime totală” e tratată ca poziție. Dacă grupul sigur al Dn-ului merge (prin filtrul pe material) la altă poziție, rândul „total” cu Dn nu rămâne tăcut:
   - primește nota „De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — grupurile sigure de pe Dn-ul lui (…): Dn110 PE 500 m e pe poziția „Conductă PE Dn110”; nu se completează automat aici; …”;
   - „extras” ⇒ „diferenta”, cifra rămâne neatinsă;
   - apare în `doar_de_verificat`, cu `actiune: 'nota_total_dn'`.
 
   Schimbare față de runda 7 (testul e rescris): „Total conducte De 110” singur nu mai e TOTAL + Dn110 inserat nou, ci primește cifra Dn110 („confirmă: 500 m”, 0 inserări). Scrierile nu mai depind de ordinea rândurilor (testat în ambele ordini). Pe BD nu schimbă nimic: rândurile TOTAL în metri (lic. 3 id 4, lic. 5 id 487 / 526 / 1097) n-au Dn în denumire (SELECT 26.09). Garda `throw` pe un al doilea update pe TOTAL rămâne. E inaccesibilă prin construcție (TOTAL n-are Dn, deci nu poate fi candidat), ca și excluderea lui din `retea` (mutant echivalent, §5.6).
+
+**Runda 9 — transferul** (verificatorul rundei 8: 3 majore; commit `3197aa3`):
+- **TOTAL-a / TOTAL-b** (MAJOR, regresie a rundei 8 față de `e8489a6`; pe BD nu apare: 0 denumiri „total” cu Dn, 0 intervale de Dn, SELECT 26.09).
+  - *TOTAL-b:* singurul rând „total” e total global cu interval de Dn, „Total rețea De 63–110” (validat, 1.100). `areDnStandard` vedea „de 63”, deci rândul devenea singurul candidat Dn63: primea subtotalul Dn63 (200 m) și nota falsă „Memoriu 1.100 m vs planșa 200 m (-900 m …)”, rămânea „validat”, iar poziția Dn63 nu se mai insera (cei 200 m nu apăreau pe nicio poziție Dn63). Acum `dnuriDenumire` întoarce Dn-urile standard din denumire și dacă există un **interval** („De 63–110”, „Dn 63-110”, „Dn63 … Dn110”, „Ø63 – Ø110”, și cu un capăt nestandard, „De 60–110”). **TOTAL = „total” + (niciun Dn standard, ≥ 2 Dn sau interval).** Dintre mai multe rânduri TOTAL primul primește totalul (ca înainte), dar **niciunul** nu mai e candidat pe Dn (`retea` le exclude pe toate). V9R-TOTAL-b: TOTAL 1.100 „confirmă totalul”, validat; Dn63 intră ca poziție nouă de 200 m.
+  - *TOTAL-a:* poziția reală „Conductă distribuție gaze Dn110” (fără material, formatul inserat chiar de sistem) + subtotalul „Total conducte De 110” + grupul Dn110 PE 500. Filtrul pe material nu departaja ⇒ grup AMBIGUU, nescris; poziția validată păstra tăcut 480 și „VECHE 3”. Acum, după filtrul pe material, dacă rămân mai mulți candidați și o parte au „total” în denumire, **se păstrează cei fără „total”** (`preferaFaraTotal`, și la „doar de verificat”). Un subtotal cu un singur Dn rămâne candidat doar când e singurul de pe Dn; altfel primește nota din bucla „total cu Dn” („De verificat: rând de total cu Dn în denumire …, neatribuit — grupurile sigure de pe Dn-ul lui: Dn110 PE 500 m e pe poziția „Conductă distribuție gaze Dn110”; …”, „extras” ⇒ „diferenta”, cifra neatinsă). V9R-TOTAL-a, în ambele ordini: poziția 3 = 500 „confirmă” (validat rămâne), subtotalul 480 + notă, `ambigue` gol, un singur update pe id.
+  - Bucla „total cu Dn” acoperă acum și Dn-ul **fără grup sigur**, doar cu rânduri de verificat (rândul „doar de verificat” a mers la poziția reală): nota „… neatribuit — pe Dn-ul lui doar rânduri de verificat, fără nicio cifră sigură: 1 rând Dn90 PE fără identitate sigură (300 m); …”. Înainte de prioritatea non-„total” cazul era ambiguu (ambele tăcute, doar în `ambigue[]`).
+- **NFL-DN — Nr citit fără lungime, cu Dn cunoscut** (MAJOR; majorul rundei 7 era închis doar parțial). Semnalul ajungea doar la pozițiile atinse de un grup sigur și la TOTAL (prin `rest.global`); poziția Dn-ului rândului fără lungime păstra tăcut cifra și nota unei citiri anterioare (V9E-NFL-DN: „Țeavă PE100 Dn90” 250 / „extras” / „VECHE 12”; Dn63 120 / „validat” / „VECHE 13”). Acum `notaRestTransfer` pune fiecare intrare NFL cu `dn` și pe cheia (Dn, '') (`f`, `fnr`, fără metri adunați la `m`), iar `descriereRestDn` o afișează: „1 rând Dn90 cu Nr citit, fără lungime (Nr 2; metri necunoscuți)”. Astfel:
+  - Dn **fără grup sigur** ⇒ „doar de verificat” (calea din runda 4): poziția „extras” se golește (`cantitate_plansa` null, „diferenta”, „… cifra din planșă s-a golit (era 250 m, dintr-o citire anterioară)”), cea validată primește doar nota; `doar_de_verificat` [{90, null, 12, golit}, {63, null, 13, nota}];
+  - Dn **cu grup sigur** ⇒ în `cheiRest`, deci în nota grupului („NEincluse în cifra din planșă: 1 rând Dn110 cu Nr citit, fără lungime (Nr 2; …); pe planșă: …”), iar celelalte poziții de pe Dn primesc nota MY-T4 (cifra neatinsă, „extras” ⇒ „diferenta”). Testul NFL compact din runda 8 e actualizat doar cu această mențiune;
+  - fără Dn citit, rândul rămâne doar „pe planșă” (`rest.global`), ca în runda 8.
+- **DN0 — tronson sigur fără Dn citit** (MAJOR, pre-existent: identic pe `e8489a6`). Un rând SIGUR (Nr și L citite, identitate sigură) cu Dn necitit (ex. celulă Dn comasată pe mai multe rânduri) intra în `total_sigur_m`, dar `treciInCantitati` îl sărea (`if (!t.diametru_mm) continue`), fără semnal: V9E-DN0 dădea 1.200 m sigur, `total_m` 900, poziția Dn110 și TOTAL „confirmă … 900 m” / „extras”. Acum în handler `faraDn = pentruCantitati` fără Dn > 0 (tabel sau, pe planșele fără tabel, adnotări):
+  - `rest.global` primește „1 tronson sigur fără Dn citit (300 m) — în lungimea planșei, dar în nicio poziție de cantități (Dn necunoscut)” ⇒ nota fiecărei poziții atinse și a TOTAL-ului; `rest.incomplet` ⇒ „extras” → „diferenta” pe toate (rândul poate fi al oricărui Dn);
+  - cheia ('?', material) (`s`, `ms`) ⇒ `doar_de_verificat` [{dn: null, …, `fara_dn`}];
+  - avertisment în sumar, câmpurile `tronsoane_fara_dn_n` / `_m` / `tronsoane_fara_dn[]` și linia „⚠ FĂRĂ Dn: …” în `text_extras`;
+  - `total_sigur_m` și `lungime_totala_m` rămân 1.200 (nu se scot / nu se inventează metri); TOTAL rămâne suma grupurilor pe Dn (900), ca la Dn-urile nestandard, cu diferența numită în notă.
+  Pe datele de azi nu apare (0 din 188 de tronsoane „tabel” cu L de pe 130/470 fără Dn, SELECT verificator pe `citire_ai.felii`).
 
 **1756 — două variante, decizie separată pentru Razvan** (verificator, minor). Codul de retransfer schimbă **doar** `cantitate_plansa`; `cantitate` rămâne neatinsă (testul „identitate 470: retransfer…”: 13.140). Poziția 1756 a fost însă *creată* din planșă (`cantitate` = `cantitate_plansa` = 13.140), deci se poate argumenta și corectarea lui `cantitate`:
 - **Varianta A — doar `cantitate_plansa`** (ce ar face un retransfer): `cantitate` rămâne 13.140, iar poziția arată „memoriu 13.140 vs planșă 13.740”.
@@ -475,10 +498,13 @@ SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota, update
 -- ROLLBACK după VARIANTA A (valorile de azi, SELECT 26.09, inclusiv status și updated_at) — doar la nevoie, după GO.
 -- NU după pasul B din R5: acolo doar RB / RB-manual din R5 (garda `NOT LIKE '%R5 pas B%'` + `cantitate = 13140` => 0 rânduri).
 -- Runda 8: și `status = 'diferenta'` (starea scrisă de A) — o validare umană ulterioară (status 'validat') NU se anulează (0 rânduri).
+-- Runda 9: și nota EXACTĂ scrisă de A (ca la rollback-ul B) — un retransfer legitim ulterior (aceleași valori 13.740 / „diferenta”,
+-- altă notă) NU se anulează (0 rânduri). După un retransfer se folosește DOAR RB-manual (valori verificate de om).
 -- UPDATE ofertare_cantitati SET cantitate = 13140, cantitate_plansa = 13140, status = 'extras',
 --        diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 54 tronsoane citite din tabelul planșei.',
 --        updated_at = '2026-09-25 16:51:08.040401+00'
 --  WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND cantitate_plansa = 13740 AND status = 'diferenta'
+--    AND diferenta_nota = 'Memoriu 13.140 m vs planșa 1 13.740 m (+600 m: Nr 40 și 41, C-tin Brâncoveanu Dn40 300 m, identice ca text cu Nr 37; deduplicare pe identitatea rândului). Neincluse: Nr 57 Dn60 nestandard 110 m, de verificat.'
 --    AND coalesce(diferenta_nota,'') NOT LIKE '%R5 pas B%'
 -- RETURNING id, cantitate, cantitate_plansa, status, updated_at;
 ```
@@ -506,6 +532,10 @@ Harness-ul e refăcut din blocurile SQL de mai sus, extrase automat din acest fi
 - R8-S10: A, validare, apoi omul revine pe „diferenta” ⇒ RB-A 1 rând (garda e pe starea lui A, nu pe istoric).
 
 Mutații: RB-A fără garda de status ⇒ pică 3 verificări (V8-S8); RB-B fără ea ⇒ pică 2 (R8-S9). Postgres-ul local a fost oprit și șters.
+
+**Runda 9** (verificatorul rundei 8, minor; scenariul V9-S11). Rollback-ul A era condiționat pe valori, status și lipsa marcajului, dar nu pe nota exactă a lui A (spre deosebire de rollback-ul B). După A, un retransfer legitim al codului nou scrie aceleași valori (13.740 / „diferenta”), cu altă notă și fără marcaj; RB-A atingea atunci 1 rând și anula și retransferul (13.140 / „extras” / notă veche / `updated_at` vechi). Acum RB-A cere și `diferenta_nota` = nota exactă scrisă de A. **După un retransfer (orice notă diferită de cea a lui A) se folosește DOAR RB-manual**, pe valori verificate de om.
+
+Harness-ul e refăcut din blocurile SQL de mai sus, extrase automat din acest fișier (`scratchpad/r9/pg/run.sh`, Postgres 16 local; pasul B și RB din R5 rev. 5): **41/41** — cele 36 din runda 8, plus V9-S11 (A + retransfer ⇒ RB-A 0 rânduri, retransferul intact), V9-S12 (B din R4 + retransfer ⇒ RB-B 0 rânduri) și R9-S13 (A + retransfer ⇒ RB-A 0, rândul rămâne cel al retransferului). Mutație: RB-A fără garda pe notă ⇒ pică 4 verificări (V9-S11, R9-S13). Postgres-ul local a fost oprit și șters.
 
 ### 5.6 Teste
 - **Fixture reală** `fixture_470.ts`: feliile `z1_6..z4_7`, reduse la Nr, Strada, Str. De la, Str. Pana la (`z?_6`) și la rândul complet + tronsoanele (`z?_7`); antetele sunt exact ca în BD. Transcrierea e verificată prin SELECT față de fișier, pe fiecare din cele 8 felii: număr de rânduri, suma Nr, suma L și md5 pe câmpurile păstrate, **toate identice** (ex. `z2_6`: 52 de rânduri, ΣNr 2990, md5 `f36087…`; `z2_7`: ΣL 11.600, md5 tronsoane `552ee3…`).
@@ -699,12 +729,35 @@ Mutații: RB-A fără garda de status ⇒ pică 3 verificări (V8-S8); RB-B făr
 
   `p130` = 18 / 37.320 m, cu același semnal pe orizontală.
 
-### 5.7 Limite cunoscute (documentate, nu blochează) — actualizat în runda 8
+- **Runda 9 — verificatorul rundei 8** (`agregare_test.ts` +3, `concurenta_test.ts` +6, 1 test actualizat: nota poziției Dn110 din „runda 8 NFL (E2E, compact)” numește acum și rândul fără lungime pe Dn-ul ei). Probele V9R-DN0, V9R-NFL-DN, V9R-TOTAL-a și V9R-TOTAL-b ale verificatorului sunt acum teste (întărite). Suitele: `ofertare-plansa-citeste` **141/141**, `-A supabase/functions/` **158/158**, `concurenta_test.ts` 10 × 73/73, `test-cas-felii` 34/34, `test-detector-sigla` 30/30, `verifica-poarta-identica` OK, `deno check index.ts` exit 0, `vitest` 372/372 (runda 9 nu atinge `api/`); `deno.lock` neschimbat (md5 875e293d).
+
+  | Test (runda 9) | Rezultat acum | Pe `b5e7ecd` |
+  |---|---|---|
+  | **DN0** (E2E) = V9R-DN0: Nr 1 Dn110 500, Nr 2 fără Dn 300, Nr 3 Dn110 400; poziție Dn110 + TOTAL „extras” | sumar 1.200 / 1.200, `tronsoane_fara_dn` [Nr 2, 300 m], avertisment; `total_m` 900; `doar_de_verificat` [fara_dn]; Dn110 și TOTAL 900 „diferenta”, nota „… pe planșă: 1 tronson sigur fără Dn citit (300 m) …”; ⚠ FĂRĂ Dn | TOTAL „confirmă totalul: 900 m” / „extras”, niciun semnal |
+  | **NFL-DN** (E2E) = V9R-NFL-DN: Nr 2 Dn90 și Nr 4 Dn63 fără L; poziții Dn90 „extras”, Dn63 „validat”; + Dn110 cu grup sigur și a doua poziție OL | Dn90 golită, „diferenta”, nota „1 rând Dn90 cu Nr citit, fără lungime (Nr 2; …)”; Dn63 validat, doar nota; Dn110 PE: mențiunea în nota grupului; OL: nota MY-T4, „diferenta”, cifra 60 neatinsă | Dn90 250 „extras” „VECHE 12”; Dn63 „VECHE 13” |
+  | **TOTAL-a** (E2E) = V9R-TOTAL-a, în ambele ordini | poziția 3 = 500 „confirmă”, validat; subtotalul 480 + notă, „diferenta”; `ambigue` []; un update pe id | ambiguu, poziția 3 480 „VECHE 3” |
+  | **TOTAL-b** (E2E) = V9R-TOTAL-b: 5 denumiri de total cu interval (inclusiv un capăt nestandard) + două rânduri TOTAL | TOTAL 1.100 „confirmă totalul”, validat; Dn63 inserat 200; al doilea TOTAL (cu interval) neatins, nu candidat pe Dn63 | TOTAL validat 200 + „-900 m”, Dn63 lipsă |
+  | **TOTAL** (E2E) subtotal pe un Dn doar cu rânduri de verificat | poziția Dn90 golită („doar de verificat”), subtotalul: notă „pe Dn-ul lui doar rânduri de verificat …”; `doar_de_verificat` [golit, nota_total_dn] | ambiguu, ambele tăcute |
+  | **NFL-FP** (unitar, fără / cu geometrie; E2E) | `nr_fara_lungime` [], totalul complet (1.000 / 900 m), poziția „extras”; control: rândul 3 fără L în ambele felii ⇒ un singur „Nr 3” | Nr 1–4 „fără lungime”, `total_sigur_incomplet`, „diferenta” |
+  | `dnuriDenumire` (unitar) | un Dn / interval / ≥ 2 Dn / capăt nestandard / fără Dn | — (funcție nouă) |
+  | `notaRestTransfer` (unitar): chei (90, ''), ('?', ''), ('?', PE); texte; `incomplet` doar din DN0 | ca în stânga | chei lipsă |
+
+  **Control negativ pe `b5e7ecd`** (copie `scratchpad/r9/neg`: handler-ul de la `b5e7ecd` + stub-uri fără comportament pentru exporturile noi `dnuriDenumire`, `textFaraDn`; `--no-check`): 127 de teste, **10 pică** (cele 9 noi și cel actualizat), toate pe aserțiunea de fond; restul de 117 trec.
+
+  **Mutații pe o copie a handler-ului nou** (`scratchpad/r9/mut/run.py`, testele neschimbate; copia nemutată 127/127): **20/20 prinse** — TOTAL cu regula rundei 8 1; TOTAL fără interval 1; `retea` exclude doar primul TOTAL 1; `retea = conducte` (echivalentă în runda 8, acum prinsă) 1; `preferaFaraTotal` dezactivat 2; doar în ținte 1; bucla „total cu Dn” fără restul de verificat 1; `dnuriDenumire` fără interval 2; NFL fără cheia (Dn, '') 3; `descriereRestDn` fără `f` 3; NFL fără `incomplet` (forma nouă) 3; DN0 nepasat 1; DN0 fără `incomplet` 2; fără text în `rest.global` 2; fără avertisment 1; fără ⚠ 1; fără sumar 1; fără cheia ('?', material) 1; NFL-FP fără verificarea lungimii în componentă 2; NFL fără dedup pe componentă 1. Mutațiile rundelor 7–8 re-rulate (`scratchpad/r8/mut/run.py`): toate cele aplicabile prinse; 3 nu se mai aplică textual (codul lor s-a schimbat) și sunt acoperite de echivalentele de mai sus.
+
+  **Probele verificatorului rundei 8 pe handler-ul nou** (`scratchpad/r9/probe`, comparat cu `b5e7ecd`): `v9_test` identic, cu excepția NFL-FP (fals-pozitivul dispare); `v9e2e_test`: V9E-DN0, V9E-NFL-DN, V9E-TOTAL-a/b arată comportamentul de mai sus, iar V9R-* trec toate 4. `p130` = 18 / 37.320 m (Dn250 30.970, Dn180 1.105, Dn160 5.245), neschimbat, cu același semnal pe orizontală; 470 = 133 / 48.905 m.
+
+### 5.7 Limite cunoscute (documentate, nu blochează) — actualizat în runda 9
 **Ce e acum vizibil (runda 7), care înainte era tăcut:** tabelul fără Nr sub coloana fixată fără geometrie (B1, „de verificat”); transcrierea dublă parțială în aceeași felie (B2, „de verificat”); golurile din secvența Nr (B3, `nr_lipsa` + avertisment + nota transferului + ⚠ în text, total marcat incomplet); comasarea între benzi peste capacitatea fâșiei (B4, „de verificat”) și, sub capacitate, comasarea integrală pe vertical sau pe orizontală (B4, `comasari_neconfirmate` + avertisment + ⚠); a doua poziție de pe un Dn la restul fără material (MY-T4, notă + „diferenta”); rândul TOTAL cu Dn în denumire (un singur update pe id); feliile identice (tăiate și plătite o singură dată, `zone_identice`).
 
 **Ce a mai devenit vizibil în runda 8:** rândul cu Nr citit și lungime necitită, inclusiv în tabelul compact (notă, „diferenta”, ⚠, ca B3); dubla parțială reciprocă, cea cu antete transcrise altfel și cea cu o valoare citită diferit (B2 pe LCS); comasarea integrală ascunsă de un „Nr repetat” sau de un conflict (B4); rândul „total” cu Dn neatins de grupul Dn-ului lui (notă).
 
+**Ce a mai devenit vizibil în runda 9:** tronsonul sigur fără Dn citit (DN0: avertisment, sumar, notă pe poziții și TOTAL, „diferenta”, ⚠); poziția Dn-ului unui rând cu Nr citit fără lungime (NFL-DN: golire pe „extras”, notă pe „validat”); subtotalul „total” cu Dn lângă poziția reală a Dn-ului (notă, în loc de ambiguu tăcut); TOTAL-ul global cu interval de Dn nu mai primește tăcut subtotalul primului Dn.
+
 *Corectură runda 8:* aici scria „Totalul sigur nu se mai poate umfla pe nicio cale cunoscută; pierderile cunoscute sunt toate semnalate”. Prima parte contrazicea limita B2 listată chiar mai jos, iar a doua rata cazul „Nr citit, lungime necitită”. Formularea corectă: **totalul sigur nu se umflă tăcut pe nicio cale cunoscută, cu excepția celor două limite de mai jos** (B4 cu numerotări care se suprapun parțial; B2 sub pragul LCS); **pierderile cunoscute sunt semnalate, cu excepția rândului omis de AI la capătul unui tabel** (B3, mai jos).
+
+*Corectură runda 9:* fraza de mai sus („pierderile cunoscute sunt semnalate, cu excepția rândului omis de AI la capătul unui tabel”) era contrazisă de trei căi găsite de verificatorul rundei 8 (tronsonul sigur fără Dn pierdut la transfer; poziția Dn-ului unui rând NFL cu cifra veche tăcută; efectele TOTAL-a/b), toate închise acum. Formularea de acum, fără „toate”: **pe căile cunoscute și testate, totalul sigur nu se umflă tăcut** (excepții: B4 cu numerotări care se suprapun parțial; B2 sub pragul LCS) **și pierderile sunt semnalate** (excepție: rândul omis de AI la capătul unui tabel, B3). Căile necunoscute rămân posibile; rundele 7–9 au găsit câte una sau mai multe la fiecare reverificare.
 
 **Ce rămâne (limite, cu semnalul care există):**
 - `total_de_verificat_m` e un **plafon brut**: fiecare lectură fără identitate se adună separat, deci un rând din suprapunerea verticală poate fi numărat de două ori (inclusiv la comasarea peste capacitate, B4: 20 de rânduri ⇒ 40 de lecturi); conflictele intră cu varianta maximă.
@@ -725,7 +778,7 @@ Mutații: RB-A fără garda de status ⇒ pică 3 verificări (V8-S8); RB-B făr
 - **B1 e deliberat larg:** fără geometrie, orice al doilea tabel fără Nr aflat la ≥ 2 coloane de felii în dreapta altuia, pe aceeași bandă, trece la „de verificat”, chiar dacă e alt tabel (fail-safe, cu motiv). Remediul e retăierea (scrie `zone_geom`). Pe datele de azi nu apare (130 are un singur tabel cu lungimi).
 - **B3 — golurile din secvența Nr** se văd doar **între** primul și ultimul Nr citit al unui tabel (pagină + antete). Începutul / sfârșitul tabelului nu se pot verifica pe Nr (numerotarea poate continua de pe altă planșă) — acolo rămân `nr_fara_lungime` și `perechi_neimperecheate`. Nr-urile cu sufix (12a) nu intră în verificare. Dacă o bandă are antetele transcrise altfel, formează alt „tabel” și pot apărea goluri false (semnal în plus, nu pierdere; cazul e oricum însoțit de rânduri „de verificat”, V1–V4). Două tabele diferite cu aceleași antete pe aceeași pagină (ex. 1–5 și 20–24) dau și ele un gol fals; din runda 8, când golul cade între grupuri de felii care nu se ating, raportul îl califică („pot fi și două tabele diferite cu aceleași antete”, `intre_grupuri`), dar rămâne conservator (incomplet, „diferenta” la transfer), fiindcă o bandă netranscrisă arată la fel. Când cele două tabele stau în felii care se ating, golul nu e calificat.
 - Garda „tabel dublat” (tabel fără Nr transcris de două ori în aceeași felie) și B2 lucrează doar în **aceeași felie**; între felii diferite decid împerecherea, garda multi-bandă și B1.
-- `nrFaraLungime` (din runda 8 și în tabelul compact, cu Dn și cu regimul lui B3 la transfer) acoperă fragmentele cu Nr care au lungimi sau sunt împerecheate sigur cu o felie cu lungimi. Dacă împerecherea eșuează, toată banda trece oricum la „de verificat” (ADV-H). Limite:
+- `nrFaraLungime` (din runda 8 și în tabelul compact, cu Dn și cu regimul lui B3 la transfer; din runda 9 și pe poziția Dn-ului lui, iar un rând cu lungime într-o lectură împerecheată nu mai e „fără lungime”, un rând fizic se raportează o dată) acoperă fragmentele cu Nr care au lungimi sau sunt împerecheate sigur cu o felie cu lungimi. Dacă împerecherea eșuează, toată banda trece oricum la „de verificat” (ADV-H). Limite:
   - fals-pozitive conservatoare: un rând de grupare numerotat („1” = localitatea X, cu sub-rânduri 1.1, 1.2) sau un rând numerotat fără conductă ⇒ semnal + „diferenta”;
   - acoperirea e pe (pagină, tabel, Nr); un Nr cu lungime doar sub **alte** antete pe aceeași pagină dă semnal cu `alt_tabel` (ambiguu: alt tabel sau același tabel transcris altfel). Fals-pozitiv posibil (vizibil): o bandă cu antetele transcrise altfel, în care rândul din fâșie și-a pierdut lungimea, deși banda vecină o are; cazul e oricum însoțit de „Nr apare în tabele cu antete diferite” (de verificat);
   - tabelul compact al cărui număr de tronsoane nu se potrivește cu rândurile (AI omite tronsonul fără L) ⇒ toată felia la „de verificat” (legare 1:1 imposibilă), nu „fără lungime”.
@@ -735,8 +788,13 @@ Mutații: RB-A fără garda de status ⇒ pică 3 verificări (V8-S8); RB-B făr
   - rândul TOTAL primește, când există rânduri sigure, doar partea sigură, cu restul numit în notă, și trece în „diferenta” dacă era „extras” și există rest pe planșă (inclusiv secvența Nr incompletă);
   - restul fără material pe un Dn cu grup sigur (MY-T4, închis în runda 7) marchează și celelalte poziții de pe Dn, dar **nu le golește** cifra din planșă (poate veni din altă planșă); nota o numește „dintr-o citire anterioară” și, din runda 8, spune unde a ajuns grupul sigur (altă poziție / ambiguu / coliziune / poziție nouă);
   - **coliziunea** (runda 6: mai multe grupuri sigure pe aceeași poziție) lasă `cantitate_plansa` neatinsă, cu nota care o numește veche, și trece poziția „extras” în „diferenta”. Nu o golește (ca „doar de verificat”), pentru că cerința a fost „niciun update de `cantitate_plansa` pe acel id”; golirea ar fi o alternativă de decis;
-  - rândul TOTAL = „total” în denumire **fără** un Dn standard (runda 8); un „total” cu Dn e candidat pe Dn-ul lui (subtotal sau „… lungime totală”). Rămâne: un TOTAL global cu un Dn în denumire (ex. „Total rețea De 110–250”) ar fi tratat ca un candidat pe Dn110, nu ca TOTAL, iar totalul planșei ar rămâne doar în răspuns (`total_m`); dintre mai multe rânduri „total” fără Dn, primul e TOTAL, iar celelalte nu se ating. Pe BD nu există niciunul (SELECT 26.09);
-  - poziția neatinsă de citire își păstrează cifra, comportament de dinainte, nelegat de identitate.
+  - rândul TOTAL = „total” în denumire cu **niciun Dn standard, ≥ 2 Dn-uri sau un interval** (runda 9; runda 8 lua doar „fără Dn”, iar „Total rețea De 63–110” devenea candidat Dn63 și primea subtotalul în rândul TOTAL validat, cu poziția Dn63 dispărută); un „total” cu **un singur** Dn e candidat pe Dn-ul lui (subtotal sau „… lungime totală”) doar când e singurul candidat — lângă o poziție fără „total” pe același Dn primește doar notă (runda 9). Rămân:
+    - dintre mai multe rânduri TOTAL, primul (în ordinea din BD) primește totalul, iar celelalte **nu se ating** (cifra lor rămâne din citirea anterioară, fără notă); niciunul nu mai e candidat pe Dn;
+    - TOTAL-ul primește suma tuturor grupurilor sigure, chiar dacă denumirea lui numește un interval mai îngust („De 63–110” cu Dn160 pe planșă);
+    - un „total” cu un singur Dn, singurul de pe acel Dn, e tratat ca poziție (subtotal); o poziție reală care conține cuvântul „total” pierde prioritatea în fața unei poziții fără „total” de pe același Dn (primește nota „total cu Dn”, nu cifra);
+    - intervalul se recunoaște pe „-”, „–”, „—”, „…” / „...” între două numere cu prefix Dn/De/Ø; „Dn 63 la 110” sau „63/110” nu. Pe BD nu există nicio denumire „total” cu Dn și nicio denumire cu interval de Dn (SELECT 26.09: 19 denumiri „total”, 4 în metri, 0 cu Dn, 0 intervale);
+  - tronsoanele sigure fără Dn citit (runda 9, DN0) nu intră în nicio poziție și nici în cifra TOTAL (ca Dn-urile nestandard); sunt numite în notă, în avertisment și ⚠, iar pozițiile / TOTAL „extras” trec în „diferenta”. Nu se ghicește Dn-ul (ex. din rândurile vecine);
+  - poziția neatinsă de citire (niciun rând — sigur, de verificat, fără lungime cu Dn-ul ei — pe Dn-ul ei) își păstrează cifra, comportament de dinainte, nelegat de identitate. Din runda 9, un rând cu Nr citit fără lungime, cu Dn citit, atinge poziția Dn-ului lui (NFL-DN).
 - **Regula pe coloana tabelului cu Nr (runda 5, pe geometrie din runda 6) e deliberat largă:**
   - un tabel fără Nr care are lungimi și a cărui felie atinge pe orizontală o felie a unui tabel cu Nr (orice bandă, aceeași pagină) trece la „de verificat” cu `MOTIV_COLOANA_NR`, chiar dacă e alt tabel. E fail-safe, cu motiv, nu tăcut. Pe datele de azi nu apare: singurele fragmente cu Nr sunt `z?_6` din 470 (SELECT 26.09);
   - **fără geometrie** (tăiere veche), poziția e interzisă pe **toată pagina** unui tabel cu Nr (`MOTIV_COLOANA_NR_FARA_GEOM`), inclusiv pentru un tabel fără Nr aflat departe. Remediul e retăierea (scrie `zone_geom`). Pe datele de azi nu apare: singurul document fără geometrie (130) n-are Nr.
