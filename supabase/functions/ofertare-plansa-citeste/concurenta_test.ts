@@ -1425,7 +1425,10 @@ Deno.test('runda 9 TOTAL-a (V9R-TOTAL-a): „Total conducte De 110” + poziția
     const rows = (await x.tabele.from('ofertare_cantitati').select()).data
     const id = (k: number) => rows.find((q: any) => q.id === k)
     assertEquals(j.cantitati.ambigue, [], `ordine ${ordine}`)
-    assertEquals([id(3).cantitate_plansa, id(3).status, id(3).diferenta_nota], [500, 'validat', 'Planșa „PL1.1.pdf” confirmă: 500 m.'])
+    // rebase R5 peste R4 runda 9: poziția primește cifra (intenția R4); cifra din planșă se schimbă 480 → 500 pe un rând VALIDAT =>
+    // regula R5 (cifraSchimbata): iese din „validat”, cu aprobarea veche numită în notă
+    assertEquals([id(3).cantitate_plansa, id(3).status, id(3).diferenta_nota], [500, 'diferenta',
+      'Rândul era VALIDAT cu cifra din planșă 480 m; planșa „pl1.1.pdf” dă acum 500 m — validarea se reface. Planșa „PL1.1.pdf” confirmă: 500 m.'])
     assertEquals([id(4).cantitate_plansa, id(4).status], [480, 'diferenta'])
     assertEquals(id(4).diferenta_nota, 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — grupurile sigure de pe Dn-ul lui ' +
       '(Planșa „PL1.1.pdf”): Dn110 PE 500 m e pe poziția „Conductă distribuție gaze Dn110”; nu se completează automat aici; cifra din planșă nu s-a actualizat (480 m e dintr-o citire anterioară).')
