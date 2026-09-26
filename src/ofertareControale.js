@@ -49,12 +49,27 @@ export function controlCantitati(x) {
     `aprobarea veche nu mai e valabilă, unitatea / categoria s-a schimbat) — nu mai intră în F3 și nici în fronturi; reverifică în 📋 Cantități („N nevalidate”)` : ''
   const txtFt = ft > 0 ? ` · INCOMPLET, de reverificat: ${ft} ${ft === 1 ? 'rând de rețea fără tip de sursă, nevalidat' : 'rânduri de rețea fără tip de sursă, nevalidate'} ` +
     `(${ftM != null ? `${fmt(ftM)} m` : 'metri necunoscuți'}) — nu intră în F3 și nici în comparație (📋 Cantități → „N nevalidate”)` : ''
-  const partial = Number.isInteger(num(x.lista_f3_nevalidate)) && (x.invalidate_in_afara_retea === undefined || x.fara_tip_nevalidate === undefined)
-    ? ' · control parțial: nu știm dacă lipsesc rânduri fără tip de sursă / invalidate (v_ofertare_cantitati_nevalidate în versiunea veche)' : ''
-  const out = { ...r, invalidate_in_afara_retea: inv, fara_tip_nevalidate: ft, incomplet: !!(inv > 0 || ft > 0 || partial) }
-  if (!txtInv && !txtFt && !partial) return out
-  const stare = inv > 0 ? 'block' : r.stare === 'ok' ? 'warn' : r.stare
-  return { ...out, stare, detalii: r.detalii + txtInv + txtFt + partial }
+  // runda 6 (decis în audit, reversibil): (a) rândul TOTAL invalidat — listat și în poarta graficului (randuriLipsa), aceeași
+  // definiție: BLOCK; (b) rândul NEAPROBAT ieșit din rețea prin schimbarea unității (m → ml): BLOCK, ca invalidatul (altfel F3 /
+  // fronturile scad fără semnal); (c) rândurile de rețea cu unitatea scrisă altfel decât exact „m” („M”, „m ”): în rețea după
+  // normalizare, dar v_ofertare_pt_stare.qm (neatins) nu le adună => BLOCK dacă sunt în F3, altfel WARN.
+  const ti = num(x.total_invalidate), tiM = num(x.total_invalidate_m)
+  const us = num(x.unitate_schimbata_in_afara_retea), usM = num(x.unitate_schimbata_in_afara_retea_m)
+  const un = num(x.um_de_normalizat), unM = num(x.um_de_normalizat_m), unF3 = num(x.um_de_normalizat_f3)
+  const mt = v => (v != null ? `${fmt(v)} m` : 'metri necunoscuți')
+  const txtTi = ti > 0 ? ` · ${ti === 1 ? '1 rând TOTAL INVALIDAT' : `${ti} rânduri TOTAL INVALIDATE`} (${mt(tiM)}, referință, nu se adună) — totalul declarat nu mai e aprobat; reverifică-l în 📋 Cantități` : ''
+  const txtUs = us > 0 ? ` · ${us === 1 ? '1 rând nevalidat a ieșit' : `${us} rânduri nevalidate au ieșit`} din setul de rețea prin schimbarea unității (${mt(usM)}; „unitate schimbată”) — ` +
+    `nu mai intră în F3 și nici în fronturi; reverifică în 📋 Cantități` : ''
+  const txtUn = un > 0 ? ` · ${un === 1 ? '1 rând de rețea are' : `${un} rânduri de rețea au`} unitatea scrisă altfel decât „m” („M”, „m ”; ${mt(unM)}${unF3 > 0 ? `, din care ${unF3} în F3` : ''}) — ` +
+    `totalurile din v_ofertare_pt_stare (F3 / memoriu / planșe) nu le cuprind; scrie „m” în 📋 Cantități` : ''
+  const noi = ['invalidate_in_afara_retea', 'fara_tip_nevalidate', 'total_invalidate', 'unitate_schimbata_in_afara_retea', 'um_de_normalizat']
+  const partial = Number.isInteger(num(x.lista_f3_nevalidate)) && noi.some(k => x[k] === undefined)
+    ? ' · control parțial: nu știm dacă lipsesc rânduri fără tip de sursă / invalidate / cu unitatea schimbată (v_ofertare_cantitati_nevalidate în versiunea veche)' : ''
+  const out = { ...r, invalidate_in_afara_retea: inv, fara_tip_nevalidate: ft, total_invalidate: ti, unitate_schimbata_in_afara_retea: us, um_de_normalizat: un,
+    incomplet: !!(inv > 0 || ft > 0 || ti > 0 || us > 0 || un > 0 || partial) }
+  if (!txtInv && !txtFt && !txtTi && !txtUs && !txtUn && !partial) return out
+  const stare = inv > 0 || ti > 0 || us > 0 || unF3 > 0 ? 'block' : r.stare === 'ok' ? 'warn' : r.stare
+  return { ...out, stare, detalii: r.detalii + txtInv + txtTi + txtUs + txtUn + txtFt + partial }
 }
 function controlCantitatiF3({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m,
                               lista_f3_nevalidate, lista_f3_nevalidate_m, lista_c6_nevalidate, memoriu_nevalidate, plansa_nevalidate }) {

@@ -9,7 +9,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
-import { aplicaRegulaAprobare, descrieSchimbari, referinteDinIstoric } from './ofertareCantitatiInvalidare.js'
+import { aplicaRegulaAprobare, aplicaRegulaUnitate, citestePaginat, descrieSchimbari, referinteDinIstoric } from './ofertareCantitatiInvalidare.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -79,7 +79,9 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   // (migrarea neaplicată) => null => comparația cu rândul de acum (în BD, trigger-ul face aceeași comparație cu istoricul).
   const referintaAprobare = async (id) => {
     try {
-      const { data, error } = await supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv, valori_vechi, valori_noi').eq('cantitate_id', id).order('id')
+      // runda 6: descrescător + paginat (citestePaginat) — un plafon PostgREST nu mai poate tăia tocmai ultima validare
+      const { data, error } = await citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv, valori_vechi, valori_noi')
+        .eq('cantitate_id', id).order('id', { ascending: false }).range(a, b))
       return error ? null : (referinteDinIstoric(data).get(Number(id)) || null)
     } catch { return null }
   }
@@ -92,7 +94,10 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
       specificatii: c.specificatii || null, sursa: c.sursa || null,
       diferenta_nota: c.diferenta_nota || null,
     }
-    const r = aplicaRegulaAprobare(o, patch, o.status === 'validat' ? await referintaAprobare(c.id) : null)
+    // runda 6 (decis în audit, reversibil): rândul NEAPROBAT care își schimbă unitatea din / în „m” (normalizat: „M” = „m”) iese /
+    // intră în rețea — nota primește „Unitatea s-a schimbat (…) … de reverificat.”, ca să nu dispară tacit din semnalul de lipsă
+    // (după migrare, trigger-ul scrie și evenimentul 'unitate_schimbata' în istoric)
+    const r = aplicaRegulaAprobare(o, aplicaRegulaUnitate(o, patch).patch, o.status === 'validat' ? await referintaAprobare(c.id) : null)
     if (r.invalidat && !window.confirm(`Rândul e VALIDAT. Modificarea schimbă ce s-a aprobat: ${descrieSchimbari(r.schimbari)}.
 
 ` +

@@ -11,15 +11,24 @@ import { aplicaRegulaAprobare } from './invalidare.js'
 import { controlCantitatiGrafic, esteInvalidat } from '../../../src/ofertareCantitatiAprobare.js'
 
 // fals Supabase cu tabele separate: ofertare_cantitati (select/eq) și ofertare_cantitati_istoric (select/in/order); rpc = transferul
-function supaFals(cantitati: any[], istoric: any[] | 'eroare' | 'lipsa' = []) {
-  const apeluri: any[] = [], citiriIstoric: any[] = []
+// runda 6: istoricul se citește DESCRESCĂTOR și paginat (.order('id', { ascending: false }).range(a, b)); `plafon` simulează db-max-rows
+function supaFals(cantitati: any[], istoric: any[] | 'eroare' | 'lipsa' = [], plafon = 1000) {
+  const apeluri: any[] = [], citiriIstoric: any[] = [], ordini: any[] = []
   const supa = {
     from: (t: string) => {
       if (t === 'ofertare_cantitati_istoric') {
         if (istoric === 'lipsa') throw new Error('relation "ofertare_cantitati_istoric" does not exist')
-        const b: any = { select: () => b, in: (_c: string, ids: unknown[]) => { citiriIstoric.push(ids); return b }, order: () => b,
-          then: (ok: any, ko: any) => Promise.resolve(istoric === 'eroare'
-            ? { data: null, error: { code: 'PGRST205', message: 'tabel lipsă' } } : { data: istoric, error: null }).then(ok, ko) }
+        let ids: unknown[] = [], asc = true, rng: [number, number] | null = null
+        const b: any = { select: () => b, in: (_c: string, x: unknown[]) => { ids = x; citiriIstoric.push(x); return b },
+          order: (_c: string, o?: any) => { asc = o?.ascending !== false; ordini.push(asc ? 'asc' : 'desc'); return b },
+          range: (a: number, z: number) => { rng = [a, z]; return b },
+          then: (ok: any, ko: any) => {
+            if (istoric === 'eroare') return Promise.resolve({ data: null, error: { code: 'PGRST205', message: 'tabel lipsă' } }).then(ok, ko)
+            const toate = (istoric as any[]).filter((e) => e.cantitate_id == null || ids.includes(e.cantitate_id))
+              .sort((x, y) => (asc ? 1 : -1) * (Number(x.id) - Number(y.id)))
+            const [a, z] = rng || [0, toate.length - 1]
+            return Promise.resolve({ data: toate.slice(a, Math.min(z + 1, a + plafon)), error: null }).then(ok, ko)
+          } }
         return b
       }
       const b: any = { select: () => b, eq: () => b, then: (ok: any, ko: any) => Promise.resolve({ data: cantitati, error: null }).then(ok, ko) }
@@ -27,7 +36,7 @@ function supaFals(cantitati: any[], istoric: any[] | 'eroare' | 'lipsa' = []) {
     },
     rpc: (nume: string, a: any) => { apeluri.push({ nume, ...a }); return Promise.resolve({ data: { ok: true, adaugate: 0, actualizate: a.p_randuri.length }, error: null }) },
   }
-  return { supa, apeluri, citiriIstoric }
+  return { supa, apeluri, citiriIstoric, ordini }
 }
 const DOC = { id: 11, licitatie_id: 3, nume_original: 'PL1.1.pdf' }
 const tr = (dn: number, l: number) => [{ diametru_mm: dn, material: 'PE100 SDR11', lungime_m: l, de_la: 'A', la: 'B' }]
@@ -63,7 +72,8 @@ Deno.test('MAJOR 2 + minor (plasa, capăt la capăt): cifra din planșă 1.000 a
     { id: 2, cantitate_id: 2, motiv: 'modificat_sub_prag', valori_vechi: aprobat }]
   const f = supaFals([acum], ist)
   await treciInCantitati(f.supa, DOC, tr(180, 1001.5), '1.1', 'R5')
-  assertEquals(f.citiriIstoric, [[2]], 'istoricul se citește doar pentru rândurile validate')
+  assertEquals([...new Set(f.citiriIstoric.flat())], [2], 'istoricul se citește doar pentru rândurile validate')
+  assert(f.ordini.length && f.ordini.every((o: string) => o === 'desc'), 'runda 6: istoricul se citește descrescător')
   const [o] = f.apeluri[0].p_randuri
   assertEquals([o.patch.cantitate_plansa, o.patch.status], [1001.5, 'diferenta'])
   assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT — aprobarea veche (cantitate 1.000 m, cifra din planșă 1.000 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cifra din planșă (1.000 m → 1.001,5 m).'), o.patch.diferenta_nota)
@@ -100,4 +110,23 @@ Deno.test('referinteAprobare: fără id-uri nu citește; eroare / tabel lipsă /
   assertEquals((await referinteAprobare(supaFals([], 'eroare').supa, [2])).size, 0)
   assertEquals((await referinteAprobare(supaFals([], 'lipsa').supa, [2])).size, 0)
   assertFalse((await referinteAprobare(supaFals([], [{ id: 3, cantitate_id: 2, motiv: 'validat', valori_noi: R2 }]).supa, [2])).size === 0)
+})
+
+Deno.test('runda 6 (minorul „istoric fără paginare”): referinteAprobare citește DESCRESCĂTOR și paginat — cu plafon db-max-rows, ultima validare nu se pierde', async () => {
+  // 2.500 de evenimente „modificat_sub_prag” vechi, apoi validarea cea NOUĂ (id 3000); plafon 1000 și 7 (mai mic decât pagina)
+  const vechi = { ...R2, cantitate_plansa: 1000 }
+  const nou = { ...R2, cantitate_plansa: 2000 }
+  const ist = [{ id: 1, cantitate_id: 2, motiv: 'validat', valori_noi: vechi },
+    ...Array.from({ length: 2500 }, (_, i) => ({ id: 10 + i, cantitate_id: 2, motiv: 'modificat_sub_prag', valori_vechi: vechi })),
+    { id: 3000, cantitate_id: 2, motiv: 'validat', valori_noi: nou }]
+  for (const plafon of [1000, 7]) {
+    const f = supaFals([], ist, plafon)
+    const m = await referinteAprobare(f.supa, [2])
+    assertEquals(m.get(2)?.cantitate_plansa, 2000, `plafon ${plafon}`)
+    assert(f.ordini.every((o: string) => o === 'desc'))
+  }
+  // control: citirea VECHE (crescătoare, o singură cerere tăiată la 1.000) ar fi luat validarea veche
+  const taiat = [...ist].sort((a, b) => a.id - b.id).slice(0, 1000)
+  const { referinteDinIstoric } = await import('./invalidare.js')
+  assertEquals(referinteDinIstoric(taiat).get(2)?.cantitate_plansa, 1000)
 })

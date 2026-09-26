@@ -282,46 +282,76 @@ Deno.test('R5 varianta B (control): coliziune pe un rând „diferenta” => nic
   assert(o.patch.diferenta_nota.startsWith('De verificat: Planșa 1 dă 2 grupuri sigure'), o.patch.diferenta_nota)
 })
 
-// ---- R5 pas B (26.09.2026): rândul cu cifra CORECTATĂ și verificată pe imaginea planșei (marcajul „R5 v2 pas B”, pus de
-// SQL-ul pasului B pe 1756) nu e „dintr-o citire anterioară”: recitirea automată nu-l suprascrie și nu-l golește, iar
-// marcajul (de care depind gărzile RB / RB-manual) rămâne în notă, oricare ramură rescrie nota.
-const NOTA_B = 'R5 v2 (25.09.2026): cifră din deduplicarea pe identitatea rândului. | R5 v2 pas B: Nr 40 = 300 m și Nr 41 = 300 m validate pe imaginea planșei de Oana Nica la 26.09.2026; Nr 38 = 260 m. Dn40 = 13740 m.'
-const R1756B = (extra: any = {}) => rand(1756, 40, 13740, { status: 'diferenta', diferenta_nota: NOTA_B, ...extra })
-Deno.test('R5 pas B: recitirea dă iar 13.140 => cifra corectată 13.740 NU se suprascrie; eticheta „corectată … R5 v2 pas B”, nu „citirea anterioară”; marcajul rămâne', async () => {
-  const f = supaFals([R1756B()])
+// ---- R5 pas B — runda 6 (decis în audit 26.09.2026, reversibil): marcajul DOCUMENTAT („ | R5 pas B (…)”, SQL-ul pasului B din
+// docs/R5_RECONCILIERE_470_V2.md §7.3: valoarea verificată în `cantitate`, `cantitate_plansa` = istoricul extragerii) și cel VECHI al
+// ramurii („ | R5 v2 pas B”, cifra corectată și în `cantitate_plansa`) sunt recunoscute; eticheta numește CANTITATEA drept valoarea
+// verificată de om; recitirea poate actualiza `cantitate_plansa` (nu pe un rând VALIDAT pe care îl confirmă), nu atinge `cantitate`;
+// marcajul (gărzile B / RB / RB-manual) rămâne la sfârșitul notei, o singură dată.
+const NOTA_ANT = 'Diametru care nu apare în cantitățile din memoriu. Planșa 1 dă 13.140 m pe 56 tronsoane.'
+const SUF_DOC = ' | R5 pas B (26.09.2026): Nr 40 = 300 m și Nr 41 = 300 m (planșa 470, felii z2_6/z2_7, rândurile 9–10 ale fragmentului) și Nr 38 = 260 m, verificate pe imagine de Oana Nica. ' +
+  'Cantitatea ofertată Dn40 = 13740 m; cantitate_plansa = 13140 m (citirea automată curentă, vezi nota anterioară) rămâne ca istoric al extragerii. NEAPROBATĂ: aprobarea = bifa ✓ după reconcilierea obiectului și a etapelor. status anterior: extras'
+const SUF_V2 = ' | R5 v2 pas B: Nr 40 = 300 m și Nr 41 = 300 m validate pe imaginea planșei de Oana Nica la 26.09.2026; Nr 38 = 260 m. Dn40 = 13740 m.'
+// modelul documentat: cantitate 13.740 (verificată), cantitate_plansa 13.140 (extragerea); modelul vechi: ambele 13.740
+const MODELE = [
+  { nume: 'marcaj documentat „ | R5 pas B”', lit: 'R5 pas B', suf: SUF_DOC, rand: (x: any = {}) => rand(1756, 40, 13140, { cantitate: 13740, status: 'diferenta', diferenta_nota: NOTA_ANT + SUF_DOC, ...x }) },
+  { nume: 'marcaj vechi „ | R5 v2 pas B”', lit: 'R5 v2 pas B', suf: SUF_V2, rand: (x: any = {}) => rand(1756, 40, 13740, { status: 'diferenta', diferenta_nota: NOTA_ANT + SUF_V2, ...x }) },
+]
+const VER = 'valoarea verificată e cantitatea 13.740 m, verificată de om pe imaginea planșei (pasul B din R5)'
+const literalOdata = (n: string, lit: string) => {
+  assertEquals(n.split(lit).length, 2, `literalul „${lit}” apare o singură dată: ${n}`)
+  if (lit !== 'R5 pas B') assertFalse(n.includes('R5 pas B'), 'eticheta nu introduce literalul marcajului documentat (gărzile SQL)')
+}
+for (const M of MODELE) {
+  Deno.test(`R5 pas B (${M.nume}): recitirea dă 13.140 => cantitatea verificată 13.740 numită, nu „citire anterioară”; cantitate_plansa = extragerea; marcajul rămâne la sfârșit`, async () => {
+    const f = supaFals([M.rand()])
+    await treciInCantitati(f.supa, DOC, tr({ 40: 13140 }), '1', 'R3')
+    const [o] = f.apeluri[0].p_randuri
+    assertEquals([o.id, o.patch.cantitate_plansa, 'cantitate' in o.patch, o.patch.status], [1756, 13140, false, 'diferenta'])
+    assert(o.patch.diferenta_nota.startsWith(`Planșa 1 (recitire) dă 13.140 m pe 1 tronsoane — ${VER}, nu o citire automată; recitirea diferă (-600 m): cantitatea verificată NU se modifică automat — verifică pe planșă.`), o.patch.diferenta_nota)
+    assertFalse(/citirea anterioară|citire anterioară|^Memoriu/.test(o.patch.diferenta_nota), o.patch.diferenta_nota)
+    literalOdata(o.patch.diferenta_nota, M.lit)
+    assert(o.patch.diferenta_nota.endsWith(M.suf), o.patch.diferenta_nota)
+  })
+  Deno.test(`R5 pas B (${M.nume}): recitirea confirmă 13.740 => „recitirea o confirmă”, status neatins; VALIDAT + confirmă => nimic atins; VALIDAT + diferă => varianta B cu cantitatea numită`, async () => {
+    const f = supaFals([M.rand()])
+    await treciInCantitati(f.supa, DOC, tr({ 40: 13740 }), '1', 'R3')
+    const [o] = f.apeluri[0].p_randuri
+    assertEquals([o.patch.cantitate_plansa, o.patch.status], [13740, undefined])
+    assert(o.patch.diferenta_nota.includes(`${VER}, nu o citire automată; recitirea o confirmă.`) && o.patch.diferenta_nota.endsWith(M.suf), o.patch.diferenta_nota)
+    const c = supaFals([M.rand({ status: 'validat' })])
+    await treciInCantitati(c.supa, DOC, tr({ 40: 13740 }), '1', 'R3')
+    const [oc] = c.apeluri[0].p_randuri
+    assertEquals(['cantitate_plansa' in oc.patch, oc.patch.status], [false, undefined], 'validat + recitire care confirmă => nimic din aprobare nu se atinge')
+    const v = supaFals([M.rand({ status: 'validat' })])
+    await treciInCantitati(v.supa, DOC, tr({ 40: 13140 }), '1', 'R3')
+    const [w] = v.apeluri[0].p_randuri
+    assertEquals([w.patch.cantitate_plansa, w.patch.status], [13140, 'diferenta'])
+    assert(w.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 13.740 m (verificată de om pe imaginea planșei, pasul B din R5); planșa 1 dă acum 13.140 m — validarea se reface. '), w.patch.diferenta_nota)
+    literalOdata(w.patch.diferenta_nota, M.lit)
+  })
+  Deno.test(`R5 pas B (${M.nume}): Dn40 doar „de verificat” => cifra NU se golește, cantitatea verificată numită „neatinsă”; VALIDAT => varianta B; marcajul rămâne`, async () => {
+    const rest = { peDnMat: { '40|PE': { n: 2, m: 600 } }, global: '2 rânduri de tabel fără identitate sigură (600 m)' }
+    for (const st of ['extras', 'diferenta', 'validat']) {
+      const f = supaFals([M.rand({ status: st })])
+      await treciInCantitati(f.supa, DOC, [], '1', 'R3', rest)
+      const [o] = f.apeluri[0].p_randuri
+      assertEquals([o.id, 'cantitate_plansa' in o.patch, o.patch.status], [1756, false, st === 'diferenta' ? undefined : 'diferenta'], st) // deja „diferenta” => rămâne
+      assert(o.patch.diferenta_nota.includes(`; ${VER}, neatinsă.`), o.patch.diferenta_nota)
+      if (st === 'validat') assert(o.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cantitatea 13.740 m (verificată de om pe imaginea planșei, pasul B din R5); planșa 1 nu dă nicio cifră sigură pentru el (doar rânduri de verificat), fără să confirme cifra — validarea se reface. De verificat: '), o.patch.diferenta_nota)
+      literalOdata(o.patch.diferenta_nota, M.lit)
+      assert(o.patch.diferenta_nota.endsWith(M.suf), o.patch.diferenta_nota)
+    }
+  })
+}
+Deno.test('R5 pas B (marcaj documentat): după recitire, RB găsește marcajul — left(nota, strpos(nota, \' | R5 pas B\') - 1) = nota codului, sufixul = cel pus de SQL', async () => {
+  const f = supaFals([MODELE[0].rand()])
   await treciInCantitati(f.supa, DOC, tr({ 40: 13140 }), '1', 'R3')
-  const [o] = f.apeluri[0].p_randuri
-  assertEquals([o.id, 'cantitate_plansa' in o.patch, o.patch.status], [1756, false, 'diferenta'])
-  assert(o.patch.diferenta_nota.includes('rândul are 13.740 m, cifra corectată și verificată de om pe imaginea planșei (pasul B din R5 v2), nu dintr-o citire automată'), o.patch.diferenta_nota)
-  assert(o.patch.diferenta_nota.includes('recitirea diferă (-600 m): cifra verificată NU se suprascrie automat'), o.patch.diferenta_nota)
-  assertFalse(/citirea anterioară|citire anterioară/.test(o.patch.diferenta_nota), o.patch.diferenta_nota)
-  assertEquals(o.patch.diferenta_nota.split('R5 v2 pas B').length, 2, 'literalul marcajului apare o singură dată (gărzile SQL)')
-  assert(o.patch.diferenta_nota.endsWith(' | R5 v2 pas B: Nr 40 = 300 m și Nr 41 = 300 m validate pe imaginea planșei de Oana Nica la 26.09.2026; Nr 38 = 260 m. Dn40 = 13740 m.'), o.patch.diferenta_nota)
+  const n: string = f.apeluri[0].p_randuri[0].patch.diferenta_nota
+  const i = n.indexOf(' | R5 pas B')
+  assert(i > 0 && n.slice(i) === SUF_DOC && !n.slice(0, i).includes('R5 pas B'), n)
 })
-Deno.test('R5 pas B: recitirea confirmă 13.740 => „recitirea o confirmă”, status neatins; pe rândul VALIDAT care diferă => „diferenta” cu aprobarea veche numită', async () => {
-  const f = supaFals([R1756B()])
-  await treciInCantitati(f.supa, DOC, tr({ 40: 13740 }), '1', 'R3')
-  const [o] = f.apeluri[0].p_randuri
-  assertEquals(['cantitate_plansa' in o.patch, o.patch.status], [false, undefined])
-  assert(o.patch.diferenta_nota.includes('recitirea o confirmă.') && o.patch.diferenta_nota.includes('| R5 v2 pas B:'), o.patch.diferenta_nota)
-  const v = supaFals([R1756B({ status: 'validat' })])
-  await treciInCantitati(v.supa, DOC, tr({ 40: 13140 }), '1', 'R3')
-  const [w] = v.apeluri[0].p_randuri
-  assertEquals(['cantitate_plansa' in w.patch, w.patch.status], [false, 'diferenta'])
-  assert(w.patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 13.740 m (corectată, pasul B din R5 v2); planșa 1 dă acum 13.140 m — validarea se reface. '), w.patch.diferenta_nota)
-  const c = supaFals([R1756B({ status: 'validat' })])
-  await treciInCantitati(c.supa, DOC, tr({ 40: 13740 }), '1', 'R3')
-  assertEquals(c.apeluri[0].p_randuri[0].patch.status, undefined, 'validat + recitire care confirmă => validarea rămâne')
-})
-Deno.test('R5 pas B: Dn40 doar „de verificat” (niciun rând sigur) pe un rând pas B „extras” => cifra NU se golește, eticheta „corectată”, marcajul rămâne', async () => {
-  const f = supaFals([R1756B({ status: 'extras' })])
+Deno.test('R5 pas B: control — același scenariu FĂRĂ marcaj => comportamentul R4 (golire „dintr-o citire anterioară”)', async () => {
   const rest = { peDnMat: { '40|PE': { n: 2, m: 600 } }, global: '2 rânduri de tabel fără identitate sigură (600 m)' }
-  await treciInCantitati(f.supa, DOC, [], '1', 'R3', rest)
-  const [o] = f.apeluri[0].p_randuri
-  assertEquals([o.id, 'cantitate_plansa' in o.patch, o.patch.status], [1756, false, 'diferenta'])
-  assert(o.patch.diferenta_nota.includes('(13.740 m e cifra corectată și verificată de om pe imaginea planșei (pasul B din R5 v2))'), o.patch.diferenta_nota)
-  assert(o.patch.diferenta_nota.includes(' | R5 v2 pas B: Nr 40 = 300 m'), o.patch.diferenta_nota)
-  // control: același scenariu fără marcaj => golire (comportamentul R4 neschimbat)
   const g = supaFals([rand(1756, 40, 13140)])
   await treciInCantitati(g.supa, DOC, [], '1', 'R3', rest)
   assertEquals(g.apeluri[0].p_randuri[0].patch.cantitate_plansa, null)

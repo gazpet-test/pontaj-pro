@@ -14,9 +14,14 @@
 //     exact ca `cifraSchimbata` din transferul planșei și din citirea CAD: prima cifră din planșă egală cu memoriul nu e o schimbare;
 //   - textele (denumire — unde stau Dn / material / SDR / tronsonul —, specificații, obiect, categorie, sursa, tip_sursa,
 //     cod_articol): orice schimbare după normalizare (spații — și cele Unicode, ca NBSP —, majuscule; `normText`, identic în SQL);
-//   - unitatea de măsură (um): orice schimbare, FĂRĂ normalizare (runda 5, minorul verificatorului): filtrele de rețea (qm din
-//     v_ofertare_pt_stare, v_ofertare_cantitati_nevalidate, v6) cer exact um = 'm', deci „m” → „M” / „m ” scoate rândul din rețea;
-//     regula și filtrele folosesc aceeași definiție;
+//   - unitatea de măsură (um): runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil) — comparată NORMALIZAT
+//     (`normUm` = `normText`: spații — și NBSP —, trim, lower; SQL: public.ofertare_norm_text), ca „m” → „M” / „m ” să nu
+//     invalideze (se raportează sub prag), dar „m” → „ml” da. Filtrele de rețea folosesc ACEEAȘI normalizare (randuriFront,
+//     v_ofertare_cantitati_nevalidate, v6); v_ofertare_pt_stare.qm (live, neatins) cere încă exact 'm' — rândurile de rețea cu
+//     unitatea scrisă altfel sunt SEMNALATE în view (um_de_normalizat_*) și în H2, nu scăzute tacit din totaluri;
+//   - un rând NEAPROBAT care își schimbă unitatea din / în „m” (normalizat) iese / intră în rețea: nu invalidează (n-are aprobare),
+//     dar nu dispare tacit din semnalul de lipsă — istoric 'unitate_schimbata' (trigger) și, până la migrare, prefixul notei
+//     „Unitatea s-a schimbat (…) — … de reverificat.” (`aplicaRegulaUnitate`, păstrat de transfer / CAD ca prefixul invalidării);
 //   - schimbările SUB PRAG (ex. 5.245 → 5.245,4 m) nu invalidează, dar se raportează (în BD: rând de istoric „modificat_sub_prag”).
 //   - runda 5 (MAJOR verificator): pragul se măsoară față de valoarea APROBATĂ (a ultimei validări, din istoric), nu față de
 //     valoarea de dinainte de scriere: altfel pași mici cumulați (5 × 0,99 m) mutau cifra fără ca nimeni s-o fi aprobat.
@@ -47,7 +52,9 @@ const CIFRE = new Set(['cantitate', 'cantitate_plansa'])
 const SPATII_UNICODE = /[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g
 export const normText = v => (v == null ? '' : String(v).replace(SPATII_UNICODE, ' ').replace(/[ \t\n\v\f\r]+/g, ' ').replace(/^ | $/g, '').toLowerCase())
 const numar = v => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v))
-export const esteUnitateLungime = um => um == null || /^(m|ml|)$/i.test(String(um).trim())
+// runda 6: unitatea NORMALIZATĂ (aceeași funcție ca textele; SQL: ofertare_norm_text) — și în filtrele de rețea
+export const normUm = v => normText(v)
+export const esteUnitateLungime = um => um == null || ['m', 'ml', ''].includes(normUm(um))
 export const toleranta = um => (esteUnitateLungime(um) ? TOLERANTA_LUNGIME_M : 0)
 // a / b: numere sau null. Apariția / dispariția cifrei e mereu o schimbare.
 export function cifraDiferita(a, b, tol) {
@@ -94,7 +101,8 @@ export function schimbariRelevante(vechi, patch, referinta = null) {
         // cifra din planșă EFECTIVĂ (ca `referintaCitire` / `cifraSchimbata`)
         : numar(r) !== numar(b) && cifraDiferita(efectiva(ref), efectiva(nou), tol)
     } else if (camp === 'um') {
-      distinct = (a ?? '') !== (b ?? ''); relevant = (r ?? '') !== (b ?? '')
+      // runda 6: normalizat (trim + lower + spații Unicode): „m” → „M” = sub prag; „m” → „ml” = relevant
+      distinct = (a ?? '') !== (b ?? ''); relevant = normUm(r) !== normUm(b)
     } else {
       distinct = (a ?? '') !== (b ?? '')
       relevant = normText(r) !== normText(b)
@@ -159,14 +167,27 @@ export function aplicaRegulaAprobare(vechi, patch, referinta = null) {
 // (transferul din planșă și citirea CAD rescriu nota oricărui rând nevalidat). Două surse, aceeași regulă ca view-ul
 // v_ofertare_cantitati_nevalidate: (1) ISTORICUL — ultimul eveniment al rândului e 'invalidat' / 'redeschis' (fără 'validat' după
 // el); (2) până la aplicarea migrării, prefixul notei — pe care transferul și CAD îl PĂSTREAZĂ acum (`pastreazaInvalidarea`).
-export const MOTIVE_ISTORIC = ['validat', 'invalidat', 'redeschis', 'modificat_sub_prag', 'sters']
+// runda 6: + 'unitate_schimbata' (rând NEAPROBAT a cărui unitate normalizată a ieșit din / intrat în „m”; nu atinge aprobarea).
+export const MOTIVE_ISTORIC = ['validat', 'invalidat', 'redeschis', 'modificat_sub_prag', 'sters', 'unitate_schimbata']
+// ordinea de citire nu contează (desc / paginat): se sortează aici crescător după id
 const evenimenteValide = ev => (ev || []).filter(e => e && e.cantitate_id != null && MOTIVE_ISTORIC.includes(e.motiv))
   .sort((a, b) => Number(a.id) - Number(b.id))
-// → Set(cantitate_id) cu ultimul eveniment 'invalidat' / 'redeschis'
-export function invalidateDinIstoric(evenimente) {
+// ultimul eveniment din `motive`, pe rând → Map(cantitate_id → motiv)
+const ultimulDin = (evenimente, motive) => {
   const ultim = new Map()
-  for (const e of evenimenteValide(evenimente)) ultim.set(Number(e.cantitate_id), e.motiv)
+  for (const e of evenimenteValide(evenimente)) if (motive.includes(e.motiv)) ultim.set(Number(e.cantitate_id), e.motiv)
+  return ultim
+}
+// → Set(cantitate_id) cu ultimul eveniment al APROBĂRII 'invalidat' / 'redeschis' (runda 6: 'unitate_schimbata' nu șterge starea —
+// un rând invalidat căruia i se schimbă apoi unitatea rămâne invalidat; SQL: același filtru pe motiv în view și v6)
+export function invalidateDinIstoric(evenimente) {
+  const ultim = ultimulDin(evenimente, ['validat', 'invalidat', 'redeschis', 'modificat_sub_prag', 'sters'])
   return new Set([...ultim].filter(([, m]) => m === 'invalidat' || m === 'redeschis').map(([id]) => id))
+}
+// → Set(cantitate_id) cu o schimbare de unitate (din / în „m”) după ultima validare (runda 6; SQL: același criteriu)
+export function unitateSchimbataDinIstoric(evenimente) {
+  const ultim = ultimulDin(evenimente, ['validat', 'unitate_schimbata'])
+  return new Set([...ultim].filter(([, m]) => m === 'unitate_schimbata').map(([id]) => id))
 }
 // Valoarea APROBATĂ a fiecărui rând (referința regulii; identic cu trigger-ul): rândul de la ULTIMA validare înregistrată
 // ('validat', valori_noi = rândul întreg); fără validare înregistrată (rând validat înainte de migrare) = rândul dinaintea PRIMEI
@@ -177,17 +198,71 @@ export function referinteDinIstoric(evenimente) {
   for (const e of evenimenteValide(evenimente)) {
     const k = Number(e.cantitate_id), x = per.get(k) || {}
     if (e.motiv === 'validat') { if (e.valori_noi) x.validare = e.valori_noi }
-    else if (!x.prim && e.valori_vechi) x.prim = e.valori_vechi
+    // 'unitate_schimbata' e scris pe un rând NEVALIDAT: nu e o aprobare, nu poate fi referință
+    else if (e.motiv !== 'unitate_schimbata' && !x.prim && e.valori_vechi) x.prim = e.valori_vechi
     per.set(k, x)
   }
   const out = new Map()
   for (const [k, x] of per) if (x.validare || x.prim) out.set(k, x.validare || x.prim)
   return out
 }
-// Transferul / CAD rescriu nota unui rând NEVALIDAT: dacă rândul fusese invalidat (prefixul regulii), prefixul rămâne în față.
+// ── runda 6: unitatea schimbată pe un rând NEAPROBAT (semnal până la aplicarea migrării; după ea, istoricul 'unitate_schimbata') ──
+export const PREFIX_UNITATE = 'Unitatea s-a schimbat'
+const FINAL_UNITATE = 'de reverificat.'
+export const prefixUnitate = nota => {
+  const s = String(nota ?? '')
+  if (!s.startsWith(PREFIX_UNITATE)) return ''
+  const i = s.indexOf(FINAL_UNITATE)
+  return i < 0 ? '' : s.slice(0, i + FINAL_UNITATE.length)
+}
+const faraPrefixUnitate = nota => { const s = String(nota ?? ''), pre = prefixUnitate(s); return pre ? s.slice(pre.length).replace(/^ +/, '') : s }
+// schimbarea de unitate care contează: normalizat diferit și una din ele e „m” (rândul iese din / intră în rețea)
+export const unitateIeseDinRetea = (vechiUm, nouUm) => normUm(vechiUm) !== normUm(nouUm) && (normUm(vechiUm) === 'm' || normUm(nouUm) === 'm')
+export function notaUnitate(vechiUm, nouUm, notaNoua) {
+  const u = v => `„${v == null || v === '' ? '—' : v}”`
+  return `${PREFIX_UNITATE} (${u(vechiUm)} → ${u(nouUm)})` + (normUm(nouUm) === 'm' ? '' : ' — rândul nu mai e o lungime de rețea în metri') +
+    `; ${FINAL_UNITATE} ` + faraPrefixUnitate(notaNoua)
+}
+// Rând NEAPROBAT (validatul trece prin aplicaRegulaAprobare) + patch care schimbă unitatea din / în „m” (fără să-l valideze) =>
+// nota primește prefixul „Unitatea s-a schimbat (…) … de reverificat.”  → { patch, unitate: bool }
+export function aplicaRegulaUnitate(vechi, patch) {
+  if (!patch || !('um' in patch) || vechi?.status === STATUS_VALIDAT || patch.status === STATUS_VALIDAT) return { patch, unitate: false }
+  if (!unitateIeseDinRetea(vechi?.um, patch.um)) return { patch, unitate: false }
+  const notaNoua = 'diferenta_nota' in patch ? patch.diferenta_nota : vechi?.diferenta_nota
+  return { patch: { ...patch, diferenta_nota: notaUnitate(vechi?.um, patch.um, notaNoua).trim() }, unitate: true }
+}
+// prefixele de la începutul notei (invalidare și / sau unitate, în orice ordine)
+const prefixeleNotei = nota => {
+  let s = String(nota ?? ''), pre = []
+  for (let i = 0; i < 2; i++) {
+    const p = prefixInvalidare(s) || prefixUnitate(s)
+    if (!p) break
+    pre.push(p); s = s.slice(p.length).replace(/^ +/, '')
+  }
+  return pre.join(' ')
+}
+// Transferul / CAD rescriu nota unui rând NEVALIDAT: dacă rândul fusese invalidat (prefixul regulii) sau își schimbase unitatea
+// (runda 6, prefixul unității), prefixele rămân în față.
 export function pastreazaInvalidarea(vechi, patch) {
   if (!patch || !('diferenta_nota' in patch) || vechi?.status === STATUS_VALIDAT || patch.status === STATUS_VALIDAT) return patch
-  const pre = prefixInvalidare(vechi?.diferenta_nota)
-  if (!pre || String(patch.diferenta_nota ?? '').startsWith('Rândul era VALIDAT')) return patch
+  const pre = prefixeleNotei(vechi?.diferenta_nota)
+  const nou = String(patch.diferenta_nota ?? '')
+  if (!pre || nou.startsWith('Rândul era VALIDAT') || nou.startsWith(PREFIX_UNITATE)) return patch
   return { ...patch, diferenta_nota: `${pre} ${patch.diferenta_nota ?? ''}`.trim() }
+}
+
+// ── runda 6 (verificatorul rundei 5, minor „istoric fără paginare”): citirea completă, pe pagini ──
+// `pagina(from, to)` = o cerere PostgREST cu .range(from, to) (ordonată DESCRESCĂTOR după id, ca cele mai noi evenimente — ultima
+// validare / invalidare — să vină primele). Se avansează cu câte rânduri au VENIT (un plafon db-max-rows mai mic decât `pas` nu sare
+// rânduri) și se oprește la o pagină goală; peste `max` rânduri => eroare („istoric trunchiat”), ca apelantul să nu ia o listă
+// tăiată drept completă.  → { data, error }
+export async function citestePaginat(pagina, pas = 1000, max = 100000) {
+  const out = []
+  while (out.length <= max) {
+    const { data, error } = await pagina(out.length, out.length + pas - 1)
+    if (error) return { data: null, error }
+    if (!data || !data.length) return { data: out, error: null }
+    out.push(...data)
+  }
+  return { data: null, error: { message: `istoric trunchiat (peste ${max} evenimente)` } }
 }

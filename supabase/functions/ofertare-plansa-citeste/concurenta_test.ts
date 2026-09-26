@@ -107,6 +107,12 @@ async function versiuneCurenta() {
   return doc.analiza.citire_ai.versiune
 }
 
+// Runda 6 (decis în audit 26.09.2026, reversibil — minorul 8): pe ramurile „doar de verificat”, MY-T4 și „total cu Dn”, rândul VALIDAT
+// căruia citirea nu-i dă nicio cifră sigură iese din „validat” (varianta B, ca la coliziune): prefixul de mai jos + nota ramurii.
+const PRE_B = (cifra: string, deCe: string, et = 'planșa „pl1.1.pdf”') => `Rândul era VALIDAT cu cifra din planșă ${cifra} m; ${et} ${deCe}, fără să confirme cifra — validarea se reface. `
+const DOAR_B = 'nu dă nicio cifră sigură pentru el (doar rânduri de verificat)'
+const MYT4_B = (dn: number) => `are pe Dn${dn} rânduri fără material care pot fi ale lui, iar grupul sigur de pe Dn nu i-a fost atribuit`
+const TOTDN_B = 'nu-i atribuie nicio cifră (rând de total cu Dn, neatribuit)'
 Deno.test('R4: două rulări concurente pe zone diferite -> ambele rezultate păstrate (CAS + fuziune)', async () => {
   const v = await versiuneCurenta()
   const cheie = `${v.cod}|${v.model}|${v.prompt_sha}`
@@ -977,8 +983,9 @@ Deno.test('runda 4 transfer: NICIUN rând sigur pe planșă -> fără early-retu
   assertEquals([id(1).cantitate, id(1).cantitate_plansa, id(1).status], [23630, null, 'diferenta'])
   assertEquals(id(1).diferenta_nota, 'De verificat: 1 rând Dn250 PE fără identitate sigură (5.550 m); 1 conflict Dn250 PE (până la 4.900 m); cifra din planșă s-a golit (era 34.465 m, dintr-o citire anterioară).' + pe)
   // TOTAL validat: nu primește 0 m; cifra veche e numită ca veche
-  assertEquals([id(4).cantitate_plansa, id(4).status], [34465, 'validat'])
-  assertEquals(id(4).diferenta_nota, 'De verificat: nicio lungime sigură cu Dn standard pe planșa „pl1.1.pdf”; cifra din planșă nu s-a actualizat (34.465 m e dintr-o citire anterioară).' + pe)
+  // runda 6: TOTAL validat fără nicio cifră sigură => varianta B (iese din „validat”, cifra neatinsă, aprobarea veche numită)
+  assertEquals([id(4).cantitate_plansa, id(4).status], [34465, 'diferenta'])
+  assertEquals(id(4).diferenta_nota, PRE_B('34.465', DOAR_B) + 'De verificat: nicio lungime sigură cu Dn standard pe planșa „pl1.1.pdf”; cifra din planșă nu s-a actualizat (34.465 m e dintr-o citire anterioară).' + pe)
   assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, material: 'PE', pozitie_id: 1, actiune: 'golit' }])
   assertEquals(n.rpc, 1, 'transferul rulează (a800d38: early-return, 0 scrieri, nota veche rămânea)')
 })
@@ -1246,8 +1253,9 @@ Deno.test('runda 7 MY-T4: Dn110 PE sigur + Dn110 fără material „de verificat
     { id: 12, denumire: 'Țeavă OL Dn110 subtraversare', cantitate: 80, cantitate_plansa: 900, status: 'validat', diferenta_nota: 'VECHE OL' }])
   await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(v.n, aiFelii(v.n, { z1_1: { tronsoane: [tr('A', 'PE100', 500), tr('B', undefined, 90)], tabele: [{ denumire: 'D', coloane: COLM, randuri: [rd('1', 'A', 'PE100', '0,5'), rd('?', 'B', '', '0,09')] }] } }), v.supa))
   const x12 = (await v.tabele.from('ofertare_cantitati').select()).data.find((x: any) => x.id === 12)
-  assertEquals([x12.cantitate_plansa, x12.status], [900, 'validat'])
-  assert(x12.diferenta_nota.startsWith('De verificat: 1 rând Dn110 fără identitate sigură (90 m) — fără material'), x12.diferenta_nota)
+  // runda 6: MY-T4 pe rândul VALIDAT => varianta B
+  assertEquals([x12.cantitate_plansa, x12.status], [900, 'diferenta'])
+  assert(x12.diferenta_nota.startsWith(PRE_B('900', MYT4_B(110)) + 'De verificat: 1 rând Dn110 fără identitate sigură (90 m) — fără material'), x12.diferenta_nota)
 })
 Deno.test('runda 7→8: rândul TOTAL = „total” FĂRĂ Dn în denumire; „total” cu Dn = candidat pe Dn-ul lui (subtotal sau poziție „… lungime totală”); un singur update pe id, independent de ordine', async () => {
   const COLM = ['Nr crt', 'De la', 'La', 'Dn', 'Material', 'L (km)']
@@ -1352,9 +1360,10 @@ Deno.test('runda 8 MY-T4: grup sigur Dn110 PE AMBIGUU (două poziții PE) + rest
   assertEquals(j.cantitati.ambigue.map((a: any) => [a.dn, a.material, a.pozitii.map((p: any) => p.id)]), [[110, 'PE', [11, 12]]])
   const rows = (await tabele.from('ofertare_cantitati').select()).data
   const id = (k: number) => rows.find((x: any) => x.id === k)
-  for (const [k, cp, st] of [[11, 500, 'diferenta'], [12, 300, 'validat']] as const) {
+  // runda 6: 12 era VALIDAT => varianta B (prefixul MY-T4)
+  for (const [k, cp, st] of [[11, 500, 'diferenta'], [12, 300, 'diferenta']] as const) {
     assertEquals([id(k).cantitate_plansa, id(k).status], [cp, st])
-    assertEquals(id(k).diferenta_nota, 'De verificat: 1 rând Dn110 fără identitate sigură (90 m) — fără material, pot fi ale acestei poziții (grupul sigur de pe Dn110 nu i-a fost ' +
+    assertEquals(id(k).diferenta_nota, (k === 12 ? PRE_B('300', MYT4_B(110)) : '') + 'De verificat: 1 rând Dn110 fără identitate sigură (90 m) — fără material, pot fi ale acestei poziții (grupul sigur de pe Dn110 nu i-a fost ' +
       `atribuit: Dn110 PE 500 m e ambiguu între 2 poziții (nescris)); cifra din planșă nu s-a actualizat (${cp} m e dintr-o citire anterioară). Pe planșă: 1 rând de tabel fără identitate sigură (90 m).`)
   }
 })
@@ -1399,8 +1408,9 @@ Deno.test('runda 9 NFL-DN (V9R-NFL-DN): Nr citit fără lungime, cu Dn cunoscut 
   const pe = ' Pe planșă: 2 rânduri cu Nr citit, dar fără nicio lungime citită: Nr 2 (Dn90), 4 (Dn63) — rândurile există pe planșă, metrii lor nu sunt în total.'
   assertEquals([id(12).cantitate_plansa, id(12).status], [null, 'diferenta'])
   assertEquals(id(12).diferenta_nota, 'De verificat: 1 rând Dn90 cu Nr citit, fără lungime (Nr 2; metri necunoscuți); cifra din planșă s-a golit (era 250 m, dintr-o citire anterioară).' + pe)
-  assertEquals([id(13).cantitate_plansa, id(13).status], [120, 'validat'])
-  assertEquals(id(13).diferenta_nota, 'De verificat: 1 rând Dn63 cu Nr citit, fără lungime (Nr 4; metri necunoscuți); cifra din planșă nu s-a actualizat (120 m e dintr-o citire anterioară).' + pe)
+  // runda 6: „validat” pe „doar de verificat” => varianta B
+  assertEquals([id(13).cantitate_plansa, id(13).status], [120, 'diferenta'])
+  assertEquals(id(13).diferenta_nota, PRE_B('120', DOAR_B) + 'De verificat: 1 rând Dn63 cu Nr citit, fără lungime (Nr 4; metri necunoscuți); cifra din planșă nu s-a actualizat (120 m e dintr-o citire anterioară).' + pe)
   assertEquals([id(11).cantitate_plansa, id(11).status], [900, 'diferenta'])
   // Dn cu grup sigur: rândul NFL al Dn-ului e numit în nota grupului, înainte de „pe planșă”
   const s = await lic3([{ id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 900, cantitate_plansa: null, status: 'extras' },
@@ -1474,8 +1484,9 @@ Deno.test('runda 9 TOTAL: subtotal „Total conducte De 90” pe un Dn doar cu r
   const id = (k: number) => rows.find((q: any) => q.id === k)
   assertEquals(j.cantitati.ambigue.filter((a: any) => a.dn === 90), [])
   assertEquals([id(5).cantitate_plansa, id(5).status], [null, 'diferenta'])
-  assertEquals([id(6).cantitate_plansa, id(6).status], [280, 'validat'])
-  assertEquals(id(6).diferenta_nota, 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — pe Dn-ul lui doar rânduri de verificat, fără nicio cifră sigură: ' +
+  // runda 6: „total cu Dn” pe rândul VALIDAT => varianta B
+  assertEquals([id(6).cantitate_plansa, id(6).status], [280, 'diferenta'])
+  assertEquals(id(6).diferenta_nota, PRE_B('280', TOTDN_B) + 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — pe Dn-ul lui doar rânduri de verificat, fără nicio cifră sigură: ' +
     '1 rând Dn90 PE fără identitate sigură (300 m); nu se completează automat aici; cifra din planșă nu s-a actualizat (280 m e dintr-o citire anterioară). Pe planșă: 1 rând de tabel fără identitate sigură (300 m).')
   assertEquals(j.cantitati.doar_de_verificat.map((d: any) => [d.dn, d.pozitie_id, d.actiune]), [[90, 5, 'golit'], [90, 6, 'nota_total_dn']])
 })
@@ -1542,8 +1553,8 @@ Deno.test('runda 10 TOTAL-a (ADV10-8), calea „doar de verificat”: rândul Dn
     assertEquals([r.id(5).cantitate_plansa, r.id(5).status], [null, 'diferenta'], cum)
     assertEquals(r.id(5).diferenta_nota, 'De verificat: 1 rând Dn90 PE fără identitate sigură (300 m); cifra din planșă s-a golit (era 280 m, dintr-o citire anterioară). ' +
       'Pe planșă: 1 rând de tabel fără identitate sigură (300 m).', cum)
-    assertEquals([r.id(6).cantitate_plansa, r.id(6).status], [280, 'validat'], cum)
-    assert(r.id(6).diferenta_nota.startsWith('De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — pe Dn-ul lui doar rânduri de verificat'), r.id(6).diferenta_nota)
+    assertEquals([r.id(6).cantitate_plansa, r.id(6).status], [280, 'diferenta'], cum) // runda 6: varianta B
+    assert(r.id(6).diferenta_nota.startsWith(PRE_B('280', TOTDN_B) + 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — pe Dn-ul lui doar rânduri de verificat'), r.id(6).diferenta_nota)
     assertEquals(r.j.cantitati.doar_de_verificat.map((d: any) => [d.dn, d.pozitie_id, d.actiune]), [[90, 5, 'golit'], [90, 6, 'nota_total_dn']], cum)
   }
 })
@@ -1661,8 +1672,9 @@ Deno.test('runda 11 (MAJOR, ADV11-3 / 3r): subtotal Dn110 urmat de un număr car
       const cum = `${den}, ordine ${ordine}`
       assertEquals([r.id(6).cantitate_plansa, r.id(6).diferenta_nota], [1100, 'Planșa „PL1.1.pdf” confirmă totalul: 1.100 m.'], cum)
       assertEquals([r.id(3).cantitate_plansa, r.id(5).cantitate_plansa, r.j.cantitati.adaugate, r.j.cantitati.ambigue], [900, 200, 0, []], cum)
-      assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [850, ordine ? 'validat' : 'diferenta'], cum)
-      assert(r.id(4).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(4).diferenta_nota)
+      // runda 6: subtotalul VALIDAT („total cu Dn”, neatribuit) => varianta B
+      assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [850, 'diferenta'], cum)
+      assert(r.id(4).diferenta_nota.startsWith((ordine ? PRE_B('850', TOTDN_B) : '') + nota11), cum + ': ' + r.id(4).diferenta_nota)
     }
 })
 Deno.test('runda 11: subtotal = „total” ca PRIM cuvânt (după numerotare / „Cap.”, „Art.”, „Poz.”, „Pct.” ca prefix întreg) — „Conductă PE Dn110 (total)”, „Poziție total conductă PE Dn110” sunt poziții reale: lângă „Conductă OL Dn110”, grupul fără material e AMBIGUU vizibil, nimic scris', async () => {

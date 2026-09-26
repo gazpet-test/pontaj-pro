@@ -14,7 +14,7 @@
 //
 // Funcții PURE (fără React, fără Supabase): se testează cu vitest (ofertareCantitatiAprobare.test.js).
 // ════════════════════════════════════════════════════════════════
-import { invalidateDinIstoric, prefixInvalidare } from './ofertareCantitatiInvalidare.js'
+import { invalidateDinIstoric, normUm, prefixInvalidare, prefixUnitate, unitateSchimbataDinIstoric } from './ofertareCantitatiInvalidare.js'
 
 export const STATUS_APROBAT = 'validat'
 export const esteAprobata = c => c?.status === STATUS_APROBAT
@@ -35,9 +35,12 @@ const bazaCol = cantitatiAsumate => cantitatiAsumate === 'plansa' ? 'cantitate_p
 // De aceea titlurile de secțiune câștigă când există, și nu se amestecă niciodată cele două surse.
 const rxFrontTitlu = /re[țt]ea|conduct|extindere/i
 const rxFrontCateg = /re[țt]ea|conduct/i
+// runda 6 (decis în audit, reversibil): unitatea NORMALIZATĂ (trim + lower + spații Unicode — `normUm`, aceeași ca regula de
+// invalidare și ca view-ul / v6): „M” / „m ” sunt metri; „ml” nu.
+export const eMetri = c => normUm(c?.um) === 'm'
 export function randuriFront(cantitati, baza = 'cantitate') {
   const cuMetri = (cantitati || []).filter(c =>
-    String(c.um || '').toLowerCase() === 'm' &&
+    eMetri(c) &&
     !/total/i.test(c.obiect || '') &&
     Number(c[baza] ?? c.cantitate) > 0)
   const titluri = cuMetri.filter(c => /titlu/i.test(c.categorie || '') && rxFrontTitlu.test(c.denumire || ''))
@@ -55,24 +58,43 @@ export function randuriFront(cantitati, baza = 'cantitate') {
 // ultimul eveniment 'invalidat' / 'redeschis', fără validare după el; aceeași regulă ca v_ofertare_cantitati_nevalidate) SAU
 // prefixul regulii în notă (până la aplicarea migrării; transferul și CAD îl păstrează acum, `pastreazaInvalidarea`).
 export const esteInvalidat = c => !esteAprobata(c) && (c?.invalidat_istoric === true || prefixInvalidare(c?.diferenta_nota) !== '')
+// runda 6: rândul NEAPROBAT a cărui unitate a ieșit din / intrat în „m” (istoric 'unitate_schimbata' după ultima validare, sau
+// prefixul „Unitatea s-a schimbat …” pus de editor până la migrare) — nu dispare tacit din semnalul de lipsă când iese din rețea
+export const esteUnitateSchimbata = c => !esteAprobata(c) && (c?.unitate_schimbata_istoric === true || prefixUnitate(c?.diferenta_nota) !== '')
+// runda 6 (decis în audit, reversibil): rândul TOTAL = „total” în obiect, denumire sau sursă (ca filtrul de rețea qm / view)
+export const eRandTotal = c => /total/i.test(`${c?.obiect || ''} ${c?.denumire || ''} ${c?.sursa || ''}`)
 // cantitati + evenimentele din ofertare_cantitati_istoric (id, cantitate_id, motiv) => aceleași rânduri, cu `invalidat_istoric`
-// pe cele invalidate / redeschise după istoric. Istoric indisponibil (migrarea neaplicată) = [] => rămâne doar prefixul notei.
+// pe cele invalidate / redeschise după istoric și `unitate_schimbata_istoric` (runda 6). Istoric indisponibil (migrarea neaplicată)
+// = [] => rămân doar prefixele notei.
 export function marcheazaInvalidate(cantitati, evenimente) {
-  const inv = invalidateDinIstoric(evenimente)
-  return (cantitati || []).map(c => (inv.has(Number(c.id)) ? { ...c, invalidat_istoric: true } : c))
+  const inv = invalidateDinIstoric(evenimente), um = unitateSchimbataDinIstoric(evenimente)
+  return (cantitati || []).map(c => {
+    const i = inv.has(Number(c.id)), u = um.has(Number(c.id))
+    return i || u ? { ...c, ...(i ? { invalidat_istoric: true } : {}), ...(u ? { unitate_schimbata_istoric: true } : {}) } : c
+  })
 }
 export function randuriLipsa(cantitati, cantitatiAsumate) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
   const inRetea = new Set(retea)
   const cifra = c => { const v = c[baza] ?? c.cantitate; return v == null || v === '' ? null : Number(v) }
+  const afara = (cantitati || []).filter(c => !inRetea.has(c))
+  // unitatea afișată normalizată („M” / „m ” = m), ca sumele pe unitate să nu se despartă pe scriere
+  const umAfis = c => (c.um == null || String(c.um).trim() === '' ? '—' : eMetri(c) ? 'm' : String(c.um).trim())
   const lipsa = [
-    ...retea.filter(c => !esteAprobata(c)).map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: c.um || 'm', cantitate: cifra(c), motiv: 'nevalidat' })),
-    ...(cantitati || []).filter(c => !inRetea.has(c) && esteInvalidat(c) && !/total/i.test(c.obiect || ''))
-      .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: c.um || '—', cantitate: cifra(c), motiv: 'invalidat, ieșit din rețea' })),
+    ...retea.filter(c => !esteAprobata(c)).map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: 'm', cantitate: cifra(c), motiv: 'nevalidat' })),
+    ...afara.filter(c => esteInvalidat(c) && !eRandTotal(c))
+      .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: umAfis(c), cantitate: cifra(c), motiv: 'invalidat, ieșit din rețea' })),
+    // runda 6 (decis în audit, reversibil; minorul 4 al verificatorului): rândul TOTAL invalidat e LISTAT (ca în view,
+    // total_invalidate), marcat ca referință — nu se adună la metrii lipsă (ar dubla rândurile pe care le totalizează)
+    ...afara.filter(c => esteInvalidat(c) && eRandTotal(c))
+      .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: umAfis(c), cantitate: cifra(c), motiv: 'invalidat, rând TOTAL (referință, nu se adună)', referinta: true })),
+    // runda 6 (minorul 1 al verificatorului): rândul NEAPROBAT ieșit din rețea prin schimbarea unității (m → ml) — nu tacit
+    ...afara.filter(c => !esteInvalidat(c) && esteUnitateSchimbata(c) && !eRandTotal(c))
+      .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: umAfis(c), cantitate: cifra(c), motiv: 'unitate schimbată, ieșit din rețea' })),
   ]
   const peUm = {}
-  for (const x of lipsa) if (x.cantitate != null) peUm[x.um] = (peUm[x.um] || 0) + x.cantitate
+  for (const x of lipsa) if (x.cantitate != null && !x.referinta) peUm[x.um] = (peUm[x.um] || 0) + x.cantitate
   return { lipsa, peUm, m: peUm.m || 0 }
 }
 const cantPeUm = peUm => Object.entries(peUm).map(([um, v]) => `${fmt(v)} ${um}`).join(' + ') || 'cantitate necunoscută'
@@ -94,7 +116,7 @@ export function textLipsa({ lipsa, peUm }, max = 5) {
 export function controlCantitatiGrafic(cantitati, cantitatiAsumate) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
-  const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && c.um === 'm') || null
+  const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && eMetri(c)) || null
   const nevalidate = retea.filter(c => !esteAprobata(c))
   const cuDif = retea.filter(c => c.status === 'diferenta')
   const mNevalidate = nevalidate.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0)
@@ -145,7 +167,7 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
 export function controlFronturiGrafic(p, cantitati) {
   const baza = bazaCol(p?.cantitati_asumate)
   const retea = randuriFront(cantitati, baza)
-  const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && c.um === 'm') || null
+  const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && eMetri(c)) || null
   const fronturi = p?.fronturi || []
   const lf = fronturi.reduce((s, f) => s + (Number(f.lungime_m) || 0), 0)
   const totalAprobat = esteAprobata(totalRetea) && nr(totalRetea.cantitate) > 0
@@ -220,5 +242,14 @@ export function campuriCantitatiNevalidate(r) {
     retea_nevalidate_m: nou('retea_nevalidate_m', m),
     invalidate_in_afara_retea: nou('invalidate_in_afara_retea', n),
     invalidate_in_afara_retea_m: nou('invalidate_in_afara_retea_m', m),
+    // runda 6: rândurile TOTAL invalidate, rândurile neaprobate cu unitatea schimbată ieșite din rețea, rândurile de rețea cu unitatea
+    // scrisă altfel decât exact „m” (v_ofertare_pt_stare.qm nu le adună)
+    total_invalidate: nou('total_invalidate', n),
+    total_invalidate_m: nou('total_invalidate_m', m),
+    unitate_schimbata_in_afara_retea: nou('unitate_schimbata_in_afara_retea', n),
+    unitate_schimbata_in_afara_retea_m: nou('unitate_schimbata_in_afara_retea_m', m),
+    um_de_normalizat: nou('um_de_normalizat', n),
+    um_de_normalizat_m: nou('um_de_normalizat_m', m),
+    um_de_normalizat_f3: nou('um_de_normalizat_f3', n),
   }
 }

@@ -267,3 +267,52 @@ describe('runda 5, minorul 5: poarta propunerii reverifică versiunea ÎNGHEȚAT
     expect(reverificareGraficInghetat({ mod: 'oferta' }, C)).toEqual({})
   })
 })
+
+// ── runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil) ──
+import { marcheazaInvalidate } from './ofertareCantitatiAprobare.js'
+import { aplicaRegulaUnitate } from './ofertareCantitatiInvalidare.js'
+describe('runda 6: unitatea normalizată în rețea, TOTAL invalidat listat, „unitate schimbată” — nimic tacit', () => {
+  const V = valideaza(LIC95)
+  it('„M” / „m ” / „m”+NBSP sunt metri (în rețea, ca în view); „ml” nu', () => {
+    const rows = [r(1, 110, 500, { um: 'M' }), r(2, 90, 300, { um: 'm ' }), r(3, 63, 200, { um: 'm ' }), r(4, 40, 100, { um: 'ml' })]
+    expect(randuriFront(rows).map(x => x.id)).toEqual([1, 2, 3])
+    // sumele pe unitate nu se despart pe scriere
+    const L = randuriLipsa(rows, '')
+    expect([L.lipsa.map(x => x.id), L.peUm]).toEqual([[1, 2, 3], { m: 1000 }])
+  })
+  it('rând NEAPROBAT m → ml (repro adv_r5r5: lic. 3 rândul 6, 700 m): iese din rețea, dar e listat „unitate schimbată” — din istoric SAU din prefixul editorului', () => {
+    const r6 = r(6, 63, 700)
+    const inainte = randuriLipsa([...V, r6], '')
+    expect(inainte.lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat']])
+    // (a) cu istoricul (migrarea aplicată): eveniment 'unitate_schimbata', nota rescrisă oricum
+    const dupa = marcheazaInvalidate([...V, { ...r6, um: 'ml', diferenta_nota: 'altceva' }], [{ id: 1, cantitate_id: 6, motiv: 'unitate_schimbata' }])
+    const L = randuriLipsa(dupa, '')
+    expect(L.lipsa.map(x => [x.id, x.motiv, x.um, x.cantitate])).toEqual([[6, 'unitate schimbată, ieșit din rețea', 'ml', 700]])
+    expect(controlCantitatiGrafic(dupa, '').stare).toBe('block')
+    // (b) fără istoric: prefixul pus de editor (aplicaRegulaUnitate)
+    const ed = { ...r6, ...aplicaRegulaUnitate(r6, { um: 'ml' }).patch }
+    expect(randuriLipsa([...V, ed], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'unitate schimbată, ieșit din rețea']])
+    // control negativ: fără istoric și fără prefix => ar ieși tacit (de aceea există semnalul)
+    expect(randuriLipsa([...V, { ...r6, um: 'ml' }], '').lipsa).toEqual([])
+    // revalidat => nu mai lipsește
+    expect(randuriLipsa([...V, { ...ed, status: 'validat' }], '').lipsa).toEqual([])
+  })
+  it('rândul TOTAL invalidat e LISTAT ca referință (ca total_invalidate din view), fără să se adune la metrii lipsă', () => {
+    const tot = { id: 99, obiect: 'TOTAL', categorie: 'Conducte și montaj', denumire: 'Total rețea', um: 'm', cantitate: 48195, status: 'validat', diferenta_nota: null }
+    const inval = { ...tot, ...aplicaRegulaAprobare(tot, { cantitate: 48000 }).patch, cantitate: 48000 }
+    const L = randuriLipsa([...V, inval], '')
+    expect(L.lipsa.map(x => [x.id, x.motiv, x.referinta])).toEqual([[99, 'invalidat, rând TOTAL (referință, nu se adună)', true]])
+    expect(L.peUm).toEqual({})
+    expect(controlCantitatiGrafic([...V, inval], '').stare).toBe('block')
+    // „total” doar în denumire / sursă (ca filtrul qm) = tot rând TOTAL
+    const tot2 = { ...inval, obiect: null, categorie: 'Diverse', denumire: 'Lungime totală rețea' }
+    expect(randuriLipsa([...V, tot2], '').lipsa.map(x => x.motiv)).toEqual(['invalidat, rând TOTAL (referință, nu se adună)'])
+    // TOTAL doar extras (niciodată validat) nu e „lipsă” (nu e front și n-a fost aprobat)
+    expect(randuriLipsa([...V, { ...tot, status: 'extras' }], '').lipsa).toEqual([])
+  })
+  it('campuriCantitatiNevalidate: câmpurile runda 6 (absente în view-ul vechi => undefined, nu 0)', () => {
+    const c = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0, total_invalidate: 1, total_invalidate_m: 48000, unitate_schimbata_in_afara_retea: 2, um_de_normalizat: 3, um_de_normalizat_f3: 1 } })
+    expect([c.total_invalidate, c.total_invalidate_m, c.unitate_schimbata_in_afara_retea, c.um_de_normalizat, c.um_de_normalizat_f3]).toEqual([1, 48000, 2, 3, 1])
+    expect(campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0 } }).total_invalidate).toBe(undefined)
+  })
+})

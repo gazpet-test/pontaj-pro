@@ -27,14 +27,16 @@ import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit }
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 // R5 (Copilot 25.09.2026): H2 nu ia F3 drept referință aprobată cât are rânduri de rețea nevalidate (view separat, ca neconfirmatele).
 import { campuriCantitatiNevalidate, marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
+import { citestePaginat } from './ofertareCantitatiInvalidare.js'
 // R5 runda 5 (minorul 5 al verificatorului): rândul „grafic” reverifică versiunea ÎNGHEȚATĂ (fronturile ei) față de cantitățile de ACUM
 // (+ istoricul aprobărilor, dacă migrarea e aplicată). Nicio versiune / fără parametri = {} (ca înainte); eroare = control indisponibil.
 async function campuriGraficReverificare(licId) {
   try {
     const [rV, rC, rI] = await Promise.all([
       supabase.from('grafic_versiuni').select('versiune, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licId).order('id').limit(20000),
-      supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id').limit(20000),
+      citestePaginat((a, b) => supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licId).order('id').range(a, b)),
+      // runda 6: istoricul DESCRESCĂTOR și paginat (citestePaginat)
+      citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id', { ascending: false }).range(a, b)),
     ])
     if (rV.error || rC.error) return { grafic_reverificare_eroare: (rV.error || rC.error).message || 'eroare la citire' }
     if (!rV.data?.parametri) return {}

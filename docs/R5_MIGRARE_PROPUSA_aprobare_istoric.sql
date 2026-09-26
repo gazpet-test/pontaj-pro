@@ -29,14 +29,19 @@
 --   fără validare înregistrată (rând validat înainte de migrare) = rândul dinaintea primei scrieri înregistrate; fără istoric = OLD.
 --     - cifrele: |Δ| ≥ 1 pe unitățile de lungime (m / ml / fără unitate), orice Δ pe celelalte; apariția / dispariția cifrei
 --       contează; cifra din planșă se compară EFECTIV (coalesce(cantitate_plansa, cantitate)), ca `cifraSchimbata` din transfer;
---     - unitatea (um): orice schimbare, FĂRĂ normalizare (runda 5): filtrele de rețea (qm din v_ofertare_pt_stare, view-ul
---       v_ofertare_cantitati_nevalidate, v6) cer exact um = 'm' — „m” → „M” scotea rândul din rețea cu el tot „validat”;
+--     - unitatea (um): runda 6 (decis în audit 26.09.2026, reversibil) — după ofertare_norm_text (trim, lower, spații Unicode),
+--       ca `normUm` din JS: „m” → „M” / „m ” = sub prag (validarea rămâne, istoric 'modificat_sub_prag'), „m” → „ml” = invalidare.
+--       Filtrele de rețea ale view-ului v_ofertare_cantitati_nevalidate și ale v6 folosesc aceeași normalizare; v_ofertare_pt_stare.qm
+--       (live, neatins) cere încă exact 'm' — view-ul semnalează rândurile de rețea cu unitatea scrisă altfel (um_de_normalizat_*);
 --     - celelalte texte: orice schimbare după ofertare_norm_text (spații — și NBSP —, trim, lower);
 --   ⇒ dacă UPDATE-ul lasă status = 'validat' (nu l-a atins sau l-a retrimis): status := 'diferenta' („de reverificat”), nota începe
 --     cu „Rândul era VALIDAT — aprobarea veche (…) nu mai e valabilă: s-a schimbat …”; istoric motiv 'invalidat';
 --   ⇒ dacă UPDATE-ul a pus el însuși alt status (transferul / CAD / UI au aplicat deja regula): doar istoric 'invalidat'.
 --   Fără schimbare relevantă: status → altceva = istoric 'redeschis' (↩, SQL-ul lic. 3, coliziunea R5 varianta B); schimbări doar
 --   sub prag = istoric 'modificat_sub_prag' (validarea rămâne); DELETE pe un rând validat = istoric 'sters'.
+--   Runda 6: pe un rând NEVALIDAT, o schimbare de unitate (normalizat) din / în „m” (rândul iese din / intră în rețea) = istoric
+--   'unitate_schimbata' (rândul nu se modifică) — v_ofertare_cantitati_nevalidate și v6 îl numără („unitate schimbată”), ca un rând
+--   neaprobat să nu iasă TACIT din semnalul de lipsă; o validare ulterioară îl închide. Nu e o aprobare => nu e referință.
 --   VALIDAREA EXPLICITĂ rămâne posibilă: un UPDATE pe un rând nevalidat (ex. ✓ = doar status) nu e modificat de trigger — doar se
 --   înregistrează în istoric (motiv 'validat', rândul aprobat în valori_noi), ca referință pentru scrierile următoare. Nicio cale
 --   din aplicație nu salvează atribute + status='validat' în același UPDATE pe un rând deja validat (inventarul din
@@ -50,7 +55,8 @@
 -- Rollback: docs/R5_MIGRARE_PROPUSA_aprobare_istoric_ROLLBACK.sql (păstrează implicit istoricul).
 -- Testat local pe PGlite 0.5.8 (Postgres 18.3 compilat WASM, în proces, de unică folosință — producția e PostgreSQL 17.6), cu
 -- rândurile REALE ale lic. 3 (inclusiv cele 4 validate: 2, 3, 4, 9) și lic. 95 copiate prin SELECT (26.09.2026):
--- scratchpad pglite/test_aprobare_istoric.mjs (runda 5: cu default privileges emulate ca în Supabase) — aplicare fără nicio schimbare de date; invalidare pe fiecare atribut (nota
+-- scratchpad pglite/test_aprobare_istoric.mjs (runda 5: cu default privileges emulate ca în Supabase; runda 6: 66/66, + um normalizat,
+-- „unitate_schimbata”) — aplicare fără nicio schimbare de date; invalidare pe fiecare atribut (nota
 -- SQL = nota JS, octet cu octet); istoric; validare explicită; ↩; sub prag; editorul; transferul; CAD; SQL-ul lic. 3 + rollback-ul
 -- lui; DELETE; RLS (authenticated citește, nu scrie; anon nimic); rollback R1 / R2; reaplicare. Control negativ (trigger-ul
 -- dezactivat după aplicare): 17 verificări pică.
@@ -71,7 +77,7 @@ CREATE TABLE IF NOT EXISTS public.ofertare_cantitati_istoric (
   id               bigserial PRIMARY KEY,
   cantitate_id     bigint NOT NULL,            -- fără FK: istoricul supraviețuiește ștergerii rândului (motiv 'sters')
   licitatie_id     bigint,
-  motiv            text NOT NULL CHECK (motiv IN ('validat', 'invalidat', 'redeschis', 'modificat_sub_prag', 'sters')),
+  motiv            text NOT NULL CHECK (motiv IN ('validat', 'invalidat', 'redeschis', 'modificat_sub_prag', 'sters', 'unitate_schimbata')),
   status_vechi     text,
   status_cerut     text,                       -- ce a cerut UPDATE-ul (NEW.status înainte de regulă)
   status_nou       text,                       -- ce a rămas (după regulă); NULL la ștergere
@@ -136,6 +142,9 @@ CREATE OR REPLACE FUNCTION public.ofertare_norm_text(p text)
     '[ ' || chr(9) || chr(10) || chr(11) || chr(12) || chr(13) || ']+', ' ', 'g'), ' '));
 $f$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_norm_text(text) FROM PUBLIC, anon;
+-- runda 6: folosită și de v_ofertare_cantitati_nevalidate (security_invoker => apelantul are nevoie de EXECUTE) — explicit, nu prin
+-- default privileges
+GRANT EXECUTE ON FUNCTION public.ofertare_norm_text(text) TO authenticated, service_role;
 
 -- 4) ─────────────────────────────────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.fn_trg_ofertare_cantitati_aprobare()
@@ -167,6 +176,18 @@ BEGIN
   IF OLD.status IS DISTINCT FROM 'validat' THEN
     -- validarea explicită (✓) și orice rând nevalidat: NEATINSE. Runda 5 (MAJOR 2): VALIDAREA se înregistrează — rândul aprobat
     -- (valori_noi = rândul întreg) e referința cu care se compară scrierile următoare.
+    -- Runda 6: schimbarea de unitate din / în „m” (normalizat) pe un rând nevalidat = 'unitate_schimbata' (semnal, fără modificare).
+    IF NEW.status IS DISTINCT FROM 'validat'
+       AND public.ofertare_norm_text(OLD.um) <> public.ofertare_norm_text(NEW.um)
+       AND 'm' IN (public.ofertare_norm_text(OLD.um), public.ofertare_norm_text(NEW.um)) THEN
+      INSERT INTO public.ofertare_cantitati_istoric (cantitate_id, licitatie_id, motiv, status_vechi, status_cerut, status_nou, campuri,
+                                                     valori_vechi, valori_noi, aprobare_veche, autor, rol)
+      VALUES (OLD.id, NEW.licitatie_id, 'unitate_schimbata', OLD.status, NEW.status, NEW.status, ARRAY['um'], to_jsonb(OLD),
+              jsonb_build_object('um', NEW.um),
+              jsonb_build_object('status', OLD.status, 'ultima_scriere', OLD.updated_at, 'cantitate', OLD.cantitate,
+                                 'cantitate_plansa', OLD.cantitate_plansa, 'um', OLD.um, 'nota', OLD.diferenta_nota),
+              auth.uid(), v_rol);
+    END IF;
     IF NEW.status = 'validat' THEN
       INSERT INTO public.ofertare_cantitati_istoric (cantitate_id, licitatie_id, motiv, status_vechi, status_cerut, status_nou,
                                                      valori_vechi, valori_noi, aprobare_veche, autor, rol)
@@ -185,14 +206,14 @@ BEGIN
   v_sursa_ref := 'validare';
   IF v_ref IS NULL THEN
     SELECT h.valori_vechi INTO v_ref FROM public.ofertare_cantitati_istoric h
-     WHERE h.cantitate_id = OLD.id AND h.motiv <> 'validat' ORDER BY h.id LIMIT 1;
+     WHERE h.cantitate_id = OLD.id AND h.motiv NOT IN ('validat', 'unitate_schimbata') ORDER BY h.id LIMIT 1;   -- runda 6: 'unitate_schimbata' nu e aprobare
     v_sursa_ref := 'prima_scriere_inregistrata';
   END IF;
   IF v_ref IS NULL THEN v_ref := v_old; v_sursa_ref := 'randul_curent'; END IF;
   v_ref_cant := (v_ref ->> 'cantitate')::numeric; v_ref_cp := (v_ref ->> 'cantitate_plansa')::numeric;
   v_ref_um := v_ref ->> 'um'; v_ref_upd := (v_ref ->> 'updated_at')::timestamptz;
 
-  v_tol := CASE WHEN NEW.um IS NULL OR lower(btrim(NEW.um)) IN ('', 'm', 'ml') THEN 1 ELSE 0 END;
+  v_tol := CASE WHEN public.ofertare_norm_text(NEW.um) IN ('', 'm', 'ml') THEN 1 ELSE 0 END;   -- runda 6: aceeași normalizare ca esteUnitateLungime
   FOREACH k IN ARRAY c_campuri LOOP
     a := v_old ->> k; b := v_new ->> k; r := v_ref ->> k;
     IF k IN ('cantitate', 'cantitate_plansa', 'licitatie_id') THEN
@@ -209,10 +230,10 @@ BEGIN
                  OR (ea IS NOT NULL AND CASE WHEN v_tol > 0 THEN abs(ea - eb) >= v_tol ELSE ea <> eb END);
         IF k = 'cantitate_plansa' THEN v_rel := v_rel AND nr IS DISTINCT FROM nb; END IF;
       END IF;
-    ELSIF k = 'um' THEN   -- runda 5: unitatea FĂRĂ normalizare (filtrele de rețea cer exact um = 'm')
+    ELSIF k = 'um' THEN   -- runda 6: unitatea NORMALIZATĂ (ca normUm din JS și filtrele de rețea ale view-ului / v6)
       v_distinct := coalesce(a, '') <> coalesce(b, '');
       IF NOT v_distinct THEN CONTINUE; END IF;
-      v_rel := coalesce(r, '') <> coalesce(b, '');
+      v_rel := public.ofertare_norm_text(r) <> public.ofertare_norm_text(b);
     ELSE
       v_distinct := coalesce(a, '') <> coalesce(b, '');
       IF NOT v_distinct THEN CONTINUE; END IF;
@@ -287,4 +308,4 @@ CREATE TRIGGER trg_zz_ofertare_cantitati_aprobare BEFORE UPDATE ON public.oferta
 DROP TRIGGER IF EXISTS trg_zz_ofertare_cantitati_aprobare_del ON public.ofertare_cantitati;
 CREATE TRIGGER trg_zz_ofertare_cantitati_aprobare_del AFTER DELETE ON public.ofertare_cantitati
   FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_cantitati_aprobare();
-COMMENT ON FUNCTION public.fn_trg_ofertare_cantitati_aprobare() IS 'R5 (Copilot 26.09.2026, condiția 1; runda 5): rând VALIDAT + schimbare relevantă FAȚĂ DE VALOAREA APROBATĂ (um exact, cifre, denumire/Dn/material/SDR, specificații, obiect/tronson, categorie, sursă, cod articol) => status diferenta + nota „aprobarea veche nu mai e valabilă”; valoarea și aprobarea veche în ofertare_cantitati_istoric; fiecare validare înregistrată (referința). Pereche cu aplicaRegulaAprobare (src/ofertareCantitatiInvalidare.js).';
+COMMENT ON FUNCTION public.fn_trg_ofertare_cantitati_aprobare() IS 'R5 (Copilot 26.09.2026, condiția 1; runda 5–6): rând VALIDAT + schimbare relevantă FAȚĂ DE VALOAREA APROBATĂ (um normalizat, cifre, denumire/Dn/material/SDR, specificații, obiect/tronson, categorie, sursă, cod articol) => status diferenta + nota „aprobarea veche nu mai e valabilă”; valoarea și aprobarea veche în ofertare_cantitati_istoric; fiecare validare înregistrată (referința); rând nevalidat cu unitatea schimbată din / în m => istoric unitate_schimbata. Pereche cu aplicaRegulaAprobare (src/ofertareCantitatiInvalidare.js).';

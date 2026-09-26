@@ -4,7 +4,7 @@ import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, contr
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 // R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
 // R5 condiția 2: câmpurile noi = 0 (licitație fără rânduri fără tip / invalidate); absente = „control parțial” (teste separate)
-const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0 }
+const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0 }
 const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...NOI0, ...o })
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   it('F3 = grafic, restul egal => ok', () =>
@@ -549,6 +549,27 @@ describe('H2 R5 condiția 2 — semnal de lipsă, niciun „ok” verde incomple
     expect([r.stare, /control parțial/.test(r.detalii)]).toEqual(['warn', true])
   })
   it('control: toate zero => ok neschimbat', () => {
-    expect(controlCantitati({ ...baza, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0 })).toMatchObject({ stare: 'ok', incomplet: false })
+    expect(controlCantitati({ ...baza, ...NOI0 })).toMatchObject({ stare: 'ok', incomplet: false })
+  })
+})
+
+describe('H2 runda 6 — TOTAL invalidat, unitate schimbată, unitate de normalizat (decis în audit, reversibil)', () => {
+  const baza = { lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0, ...NOI0 }
+  it('rând TOTAL invalidat => BLOCK, numit (ca poarta graficului)', () => {
+    const r = controlCantitati({ ...baza, total_invalidate: 1, total_invalidate_m: 48000 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând TOTAL INVALIDAT \(48\.000 m, referință, nu se adună\)/)
+  })
+  it('rând nevalidat ieșit din rețea prin unitate (m → ml) => BLOCK „unitate schimbată”', () => {
+    const r = controlCantitati({ ...baza, unitate_schimbata_in_afara_retea: 1, unitate_schimbata_in_afara_retea_m: 700 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând nevalidat a ieșit din setul de rețea prin schimbarea unității \(700 m; „unitate schimbată”\)/)
+  })
+  it('unitatea scrisă „M” / „m ” în rețea: în F3 => BLOCK (v_ofertare_pt_stare nu le adună); doar în alte surse => WARN', () => {
+    const f = controlCantitati({ ...baza, um_de_normalizat: 2, um_de_normalizat_m: 400, um_de_normalizat_f3: 1 })
+    expect(f.stare).toBe('block'); expect(f.detalii).toMatch(/2 rânduri de rețea au unitatea scrisă altfel decât „m” \(„M”, „m ”; 400 m, din care 1 în F3\)/)
+    expect(controlCantitati({ ...baza, um_de_normalizat: 2, um_de_normalizat_m: 400, um_de_normalizat_f3: 0 }).stare).toBe('warn')
+  })
+  it('view-ul intermediar (runda 5, fără câmpurile runda 6) => „control parțial”, nu ok', () => {
+    const r = controlCantitati({ lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0 })
+    expect([r.stare, /control parțial/.test(r.detalii)]).toEqual(['warn', true])
   })
 })

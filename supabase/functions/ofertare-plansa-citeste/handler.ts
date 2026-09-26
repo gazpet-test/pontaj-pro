@@ -18,7 +18,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
-import { aplicaRegulaAprobare, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
+import { aplicaRegulaAprobare, citestePaginat, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
 import { cheieVersiune, cheiResetare, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
@@ -1129,32 +1129,56 @@ export const referintaCitire = (r: any): number | null =>
 // schimbarea RELEVANTĂ a cifrei din planșă efective (cantitate_plansa, altfel cantitate), ≥ 1 m pe unitățile de lungime.
 export const cifraSchimbata = (r: any, nou: number | null): boolean =>
   nou != null && schimbariRelevante(r, { cantitate_plansa: Number(nou) }).relevante.some((x: any) => x.camp === 'cantitate_plansa');
-// R5 v2 „pas B” (docs/R5_RECONCILIERE_470_V2.md): cifra rândului a fost CORECTATĂ și verificată de om pe imaginea planșei
-// (marcajul „ | R5 v2 pas B: …” la sfârșitul notei, pus de SQL-ul pasului B). Nu e „dintr-o citire anterioară”: recitirea automată
-// nu o suprascrie și nu o golește, iar marcajul (de care depind gărzile B / RA / RB / RB-manual) nu se pierde din notă.
-// Textele scrise aici spun „pasul B din R5 v2”, NU literalul marcajului: gărzile SQL caută `LIKE '%R5 v2 pas B%'` / `strpos(…,
-// ' | R5 v2 pas B')`, iar o etichetă cu literalul ar rămâne în notă după RB și ar bloca reaplicarea pasului B.
-export const MARCAJ_R5B = ' | R5 v2 pas B';
-export const corectieR5B = (r: any) => String(r?.diferenta_nota || '').includes(MARCAJ_R5B);
-export const origineCifra = (r: any) => corectieR5B(r)
-  ? 'cifra corectată și verificată de om pe imaginea planșei (pasul B din R5 v2)' : 'dintr-o citire anterioară';
+// R5 „pas B” (docs/R5_RECONCILIERE_470_V2.md §7.3): pe 1756 (lic. 95) omul a verificat pe imaginea planșei Nr 40 / 41 / 38, iar
+// SQL-ul pasului B a pus valoarea verificată în `cantitate` (cantitatea ofertată) și marcajul „ | R5 pas B (…): …” la sfârșitul
+// notei; `cantitate_plansa` rămâne istoricul EXTRAGERII automate. Runda 6 (decis în audit 26.09.2026, reversibil): codul recunoaște
+// marcajul documentat („ | R5 pas B”) și pe cel vechi al ramurii („ | R5 v2 pas B”, modelul din testele rundei 5); eticheta numește
+// CANTITATEA drept valoarea verificată de om. Recitirea poate actualiza `cantitate_plansa` (extragerea) — nu și pe un rând VALIDAT
+// pe care îl confirmă (nimic din ce s-a aprobat nu se atinge) —, `cantitate` n-o atinge niciodată (transferul n-o scrie), iar
+// marcajul (de care depind gărzile B / RB / RB-manual) nu se pierde din notă.
+// Textele scrise aici spun „pasul B din R5”, NU literalul vreunui marcaj: gărzile SQL caută `LIKE '%R5 pas B%'` / `strpos(…, ' | R5
+// pas B')`, iar o etichetă cu literalul ar rămâne în notă după RB și ar bloca reaplicarea pasului B.
+export const MARCAJE_R5B = [' | R5 pas B', ' | R5 v2 pas B'];
+export const MARCAJ_R5B = MARCAJE_R5B[0];
+// poziția primului marcaj din notă (-1 = fără marcaj)
+export const pozMarcajR5B = (nota: unknown): number => {
+  const s = String(nota || '');
+  const i = MARCAJE_R5B.map((m) => s.indexOf(m)).filter((x) => x >= 0);
+  return i.length ? Math.min(...i) : -1;
+};
+export const corectieR5B = (r: any) => pozMarcajR5B(r?.diferenta_nota) >= 0;
+// valoarea verificată de om = cantitatea (pusă de pasul B)
+export const valoareVerificataR5B = (r: any): number | null => (r?.cantitate == null ? null : Number(r.cantitate));
+const fmtB = (x: number | null) => (x === null ? 'nicio cifră' : `${(+Number(x).toFixed(1)).toLocaleString('ro-RO')} m`);
+export const etichetaVerificataR5B = (r: any) => `cantitatea ${fmtB(valoareVerificataR5B(r))}, verificată de om pe imaginea planșei (pasul B din R5)`;
 // ce cifră avea rândul când a fost validat (pentru nota care cere revalidarea)
-export const descriereReferinta = (r: any) => r?.cantitate_plansa != null
-  ? `cifra din planșă ${(+Number(r.cantitate_plansa).toFixed(1)).toLocaleString('ro-RO')} m${corectieR5B(r) ? ' (corectată, pasul B din R5 v2)' : ''}`
+export const descriereReferinta = (r: any) => corectieR5B(r)
+  ? `cantitatea ${fmtB(valoareVerificataR5B(r))} (verificată de om pe imaginea planșei, pasul B din R5)`
+  : r?.cantitate_plansa != null
+  ? `cifra din planșă ${(+Number(r.cantitate_plansa).toFixed(1)).toLocaleString('ro-RO')} m`
   : r?.cantitate != null ? `cantitatea ${(+Number(r.cantitate).toFixed(1)).toLocaleString('ro-RO')} m (fără cifră din planșă)` : 'nicio cifră';
 // R5 runda 5 (verificator, MAJOR 2): valoarea APROBATĂ a rândurilor validate (de la ultima validare) din ofertare_cantitati_istoric —
 // referința regulii aprobării, ca pașii mici cumulați (recitiri care diferă fiecare cu < 1 m) să nu ocolească pragul. Tabelul lipsă
 // (migrarea neaplicată) / orice eroare => Map gol => comparația cu rândul de acum (ca înainte). Doar citire.
+// Runda 6 (minorul verificatorului): DESCRESCĂTOR și paginat (citestePaginat), pe loturi de id-uri — un plafon PostgREST nu mai poate
+// tăia tocmai ultima validare (referința ar fi fost o validare mai veche).
 export async function referinteAprobare(supa: any, ids: unknown[]): Promise<Map<number, any>> {
   if (!ids.length) return new Map();
   try {
-    const { data, error } = await supa.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv, valori_vechi, valori_noi').in('cantitate_id', ids).order('id');
-    return error ? new Map() : referinteDinIstoric(data);
+    const toate: any[] = [];
+    for (let i = 0; i < ids.length; i += 200) {
+      const lot = ids.slice(i, i + 200);
+      const { data, error } = await citestePaginat((a: number, b: number) => supa.from('ofertare_cantitati_istoric')
+        .select('id, cantitate_id, motiv, valori_vechi, valori_noi').in('cantitate_id', lot).order('id', { ascending: false }).range(a, b));
+      if (error) return new Map();
+      toate.push(...(data || []));
+    }
+    return referinteDinIstoric(toate);
   } catch { return new Map(); }
 }
 // Plasa finală a transferului, pe FIECARE update, chiar înainte de RPC (exportată ca să fie testată direct, cu o ramură simulată):
-//  - R5 pas B: marcajul „R5 v2 pas B” (și ce urmează după el) nu se pierde din notă, oricare ramură a rescris nota; cifra corectată
-//    nu se golește;
+//  - R5 pas B: marcajul („ | R5 pas B” documentat sau „ | R5 v2 pas B” vechi — și ce urmează după el) nu se pierde din notă, oricare
+//    ramură a rescris nota; cifra din planșă a rândului pas B nu se golește;
 //  - R5 runda 5 (MAJOR 1): rândul INVALIDAT (nevalidat, cu prefixul regulii în notă) își păstrează prefixul când ramura îi rescrie
 //    nota — altfel recitirea ștergea singurul semn că rândul fusese aprobat (și îl scotea tacit din lipsa porții graficului);
 //  - R5 condiția 1: o scriere care schimbă relevant un atribut al unui rând VALIDAT fără să-i fi schimbat și statusul => „diferenta”
@@ -1168,8 +1192,8 @@ export function plasaAprobare(ops: any[], existente: any[], refs: Map<number, an
     if (corectieR5B(r)) {
       if (o.patch.cantitate_plansa === null) delete o.patch.cantitate_plansa;
       const vechi = String(r.diferenta_nota || '');
-      if ('diferenta_nota' in o.patch && !String(o.patch.diferenta_nota || '').includes(MARCAJ_R5B)) {
-        const i = vechi.indexOf(MARCAJ_R5B);
+      if ('diferenta_nota' in o.patch && pozMarcajR5B(o.patch.diferenta_nota) < 0) {
+        const i = pozMarcajR5B(vechi);
         o.patch.diferenta_nota = `${o.patch.diferenta_nota || ''}${i >= 0 ? vechi.slice(i) : ` | ${vechi}`}`;
       }
     }
@@ -1319,10 +1343,12 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
 
   const ambigue: any[] = [];
   const peDiametreRaport: Record<string, number> = {};
-  // R5 pas B: cifra corectată de om e numită ca atare (nu „dintr-o citire anterioară”)
-  const ceVechi = (cp: number | null, golit: boolean, r?: any) => golit
-    ? `cifra din planșă s-a golit${cp !== null ? ` (era ${fmtR(cp)} m, ${origineCifra(r)})` : ''}`
-    : `cifra din planșă nu s-a actualizat${cp !== null ? ` (${fmtR(cp)} m e ${origineCifra(r)})` : ''}`;
+  // R5 pas B (runda 6): pe rândul verificat de om, cifra din planșă e extragerea; valoarea verificată e CANTITATEA, numită ca atare
+  const ceVechi = (cp: number | null, golit: boolean, r?: any) => corectieR5B(r)
+    ? `cifra din planșă nu s-a actualizat${cp !== null ? ` (${fmtR(cp)} m, din extragere)` : ''}; valoarea verificată e ${etichetaVerificataR5B(r)}, neatinsă`
+    : golit
+    ? `cifra din planșă s-a golit${cp !== null ? ` (era ${fmtR(cp)} m, dintr-o citire anterioară)` : ''}`
+    : `cifra din planșă nu s-a actualizat${cp !== null ? ` (${fmtR(cp)} m e dintr-o citire anterioară)` : ''}`;
   const eticheteDoc = [...new Set([eticheta, `Planșa „${doc.nume_original}”`])];
   const pozitiiPe = (r: any) => [{ id: r.id, denumire: r.denumire }];
   // R5 runda 4 (ADV3): rândul are cifra ALTEI planșe (sau a unei planșe nedeclarate) — nu e recitire, planșa de acum nu scrie pe el
@@ -1409,16 +1435,18 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
         continue;
       }
       unde(g, m, `e pe poziția „${potrivit.denumire}”`);
-      // R5 pas B: cifra rândului e CORECTATĂ și verificată de om pe imaginea planșei — recitirea n-o suprascrie (cantitate_plansa
-      // neatinsă); nota spune ce dă recitirea și dacă o confirmă. O recitire care diferă: „extras” => „diferenta”; pe un rând
-      // VALIDAT, planșa nu mai confirmă cifra aprobată => „diferenta”, cu aprobarea veche numită (validarea se reface).
+      // R5 pas B (runda 6, decis în audit, reversibil): valoarea verificată de om e CANTITATEA (pusă de pasul B); recitirea se compară
+      // cu ea. `cantitate_plansa` = extragerea: recitirea o actualizează, cu excepția rândului VALIDAT pe care îl confirmă (acolo nu se
+      // atinge nimic). O recitire care nu confirmă cantitatea: „extras” / „diferenta” => „diferenta”; pe un rând VALIDAT => „diferenta”,
+      // cu aprobarea veche numită (validarea se reface). `cantitate` nu se scrie niciodată din transfer.
       if (dinPlansa && corectieR5B(potrivit)) {
-        const ref = referintaCitire(potrivit);
-        const confirma = ref !== null && Math.abs(ref - m) < 1;
-        const patchB: Record<string, unknown> = { diferenta_nota: `${eticheta} (recitire) dă ${fmtR(m)} m pe ${g.n} tronsoane — rândul are ` +
-          `${ref === null ? 'nicio cifră' : `${fmtR(ref)} m`}, ${origineCifra(potrivit)}, nu dintr-o citire automată; ` +
-          (confirma ? 'recitirea o confirmă.' : `recitirea diferă (${ref === null ? '' : `${m - ref > 0 ? '+' : ''}${fmtR(m - ref)} m`}): cifra verificată NU se suprascrie automat — verifică pe planșă.`) +
+        const ver = valoareVerificataR5B(potrivit);
+        const confirma = ver !== null && Math.abs(ver - m) < 1;
+        const patchB: Record<string, unknown> = { diferenta_nota: `${eticheta} (recitire) dă ${fmtR(m)} m pe ${g.n} tronsoane — valoarea verificată e ` +
+          `${etichetaVerificataR5B(potrivit)}, nu o citire automată; ` +
+          (confirma ? 'recitirea o confirmă.' : `recitirea diferă (${ver === null ? '' : `${m - ver > 0 ? '+' : ''}${fmtR(m - ver)} m`}): cantitatea verificată NU se modifică automat — verifică pe planșă.`) +
           sufixRest(dn, g.mat) };
+        if (!(potrivit.status === 'validat' && confirma)) patchB.cantitate_plansa = m;
         if (!confirma || ((cheiRest(dn, g.mat).length || rest?.incomplet) && potrivit.status === 'extras')) {
           if (!confirma && potrivit.status === 'validat') patchB.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(potrivit)}; ` +
             `${eticheta.toLowerCase()} dă acum ${fmtR(m)} m — validarea se reface. ` + patchB.diferenta_nota;
@@ -1480,11 +1508,23 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
   //  - status „extras” (nevalidată de om) => cantitate_plansa = null, status „diferenta”, nota spune ce era înainte;
   //  - validată / deja „diferenta” => doar nota (decizia omului rămâne), cu mențiunea că cifra din planșă e dintr-o citire veche.
   // Nu se inserează poziții noi din rânduri nesigure; Dn-ul fără poziție (sau „fără Dn”) e raportat în răspuns și în nota TOTAL.
+  // Runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil — minorul 8): pe ramurile „doar de verificat”, MY-T4 și
+  // „total cu Dn”, un rând VALIDAT căruia citirea nu-i dă nicio cifră sigură (deci nu-i confirmă cifra) trece pe varianta B, ca la
+  // coliziune: iese din „validat” („diferenta”), nota începe cu „Rândul era VALIDAT cu … — validarea se reface.”, cifra rămâne
+  // neatinsă; în BD, trigger-ul scrie „redeschis” în istoric (valoarea și aprobarea veche păstrate). Înainte: doar notă, validat.
+  // (Rândul care primește o cifră sigură și, pe lângă ea, un rest de verificat — ramura sigură, sub-ramurile „deja” — rămâne cum era:
+  // cifra lui e confirmată de un grup sigur, restul e numit în notă; limită documentată.)
+  const iesireValidat = (r: any, patch: Record<string, unknown>, deCe: string) => {
+    if (r.status !== 'validat') return patch;
+    return { ...patch, status: 'diferenta',
+      diferenta_nota: `Rândul era VALIDAT cu ${descriereReferinta(r)}; ${eticheta.toLowerCase()} ${deCe}, fără să confirme cifra — validarea se reface. ` + String(patch.diferenta_nota || '') };
+  };
   const patchDoarVerificare = (r: any, ce: string) => {
     const cp = r.cantitate_plansa == null ? null : Number(r.cantitate_plansa);
-    const golit = r.status === 'extras' && !corectieR5B(r); // R5 pas B: cifra verificată de om nu se golește
+    const golit = r.status === 'extras' && !corectieR5B(r); // R5 pas B: cifra rândului verificat de om nu se golește
     const diferenta_nota = `De verificat: ${ce}; ${ceVechi(cp, golit, r)}.` + (rest?.global ? ` Pe planșă: ${rest.global}.` : '');
-    return golit ? { cantitate_plansa: null, status: 'diferenta', diferenta_nota } : { diferenta_nota, ...(r.status === 'extras' ? { status: 'diferenta' } : {}) };
+    return golit ? { cantitate_plansa: null, status: 'diferenta', diferenta_nota }
+      : iesireValidat(r, { diferenta_nota, ...(r.status === 'extras' ? { status: 'diferenta' } : {}) }, 'nu dă nicio cifră sigură pentru el (doar rânduri de verificat)');
   };
   const doarVerif: { dn: number | null; material: string | null; pozitie_id: number | null; actiune: string }[] = [];
   for (const k of doarDeVerificat) {
@@ -1546,7 +1586,7 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
       const patch: Record<string, unknown> = { diferenta_nota: `De verificat: ${ce} — fără material, pot fi ale acestei poziții (grupul sigur de pe Dn${dn} nu i-a fost ` +
         `atribuit: ${(undePeDn.get(dn) || []).join('; ')}); ${ceVechi(cp, false, p)}.` + (rest?.global ? ` Pe planșă: ${rest.global}.` : '') };
       if (p.status === 'extras') patch.status = 'diferenta';
-      ops.push({ op: 'update', id: p.id, patch });
+      ops.push({ op: 'update', id: p.id, patch: iesireValidat(p, patch, `are pe Dn${dn} rânduri fără material care pot fi ale lui, iar grupul sigur de pe Dn nu i-a fost atribuit`) });
       doarVerif.push({ dn, material: null, pozitie_id: p.id, actiune: 'nota_fara_material' });
     }
   }
@@ -1568,7 +1608,7 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     const patch: Record<string, unknown> = { diferenta_nota: `De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — ${ce}; ` +
       `nu se completează automat aici; ${ceVechi(cp, false, r)}.` + (rest?.global ? ` Pe planșă: ${rest.global}.` : '') };
     if (r.status === 'extras') patch.status = 'diferenta';
-    ops.push({ op: 'update', id: r.id, patch });
+    ops.push({ op: 'update', id: r.id, patch: iesireValidat(r, patch, 'nu-i atribuie nicio cifră (rând de total cu Dn, neatribuit)') });
     const dn0 = dns[0] ?? Number(cheiDoar[0].split('|')[0]);
     doarVerif.push({ dn: dn0, material: null, pozitie_id: r.id, actiune: 'nota_total_dn' });
   }

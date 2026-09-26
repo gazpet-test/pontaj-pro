@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { citesteDxf } from './_dxf.js'
 import { randCantitateCad } from './_cadCantitate.js'
-import { referinteDinIstoric } from './_cantitatiInvalidare.js'
+import { citestePaginat, referinteDinIstoric } from './_cantitatiInvalidare.js'
 
 const rulează = promisify(execFile)
 const BIN_DWG2DXF = path.join(process.cwd(), 'bin', 'dwg2dxf')
@@ -125,8 +125,9 @@ export default async function handler(req, res) {
         // R5 runda 5: valoarea APROBATĂ a rândului validat (istoric; tabel lipsă / eroare => null => rândul de acum)
         let referinta = null
         if (existent?.status === 'validat') {
-          const { data: ev, error: eIst } = await supa.from('ofertare_cantitati_istoric')
-            .select('id, cantitate_id, motiv, valori_vechi, valori_noi').eq('cantitate_id', existent.id).order('id')
+          // runda 6: descrescător + paginat — ultima validare nu poate fi tăiată de un plafon PostgREST
+          const { data: ev, error: eIst } = await citestePaginat((a, b) => supa.from('ofertare_cantitati_istoric')
+            .select('id, cantitate_id, motiv, valori_vechi, valori_noi').eq('cantitate_id', existent.id).order('id', { ascending: false }).range(a, b))
           if (!eIst) referinta = referinteDinIstoric(ev).get(Number(existent.id)) || null
         }
         const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent, referinta)

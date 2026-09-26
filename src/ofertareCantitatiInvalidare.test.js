@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import {
   schimbariRelevante, aplicaRegulaAprobare, atributeTehnice, notaInvalidare, faraPrefixVechi, cifraDiferita, CAMPURI_APROBARE,
-  PREFIX_INVALIDARE,
+  PREFIX_INVALIDARE, normUm, esteUnitateLungime, aplicaRegulaUnitate, prefixUnitate, unitateSchimbataDinIstoric, citestePaginat,
 } from './ofertareCantitatiInvalidare.js'
 
 const R2 = { id: 2, licitatie_id: 3, obiect: 'Magistrala', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi',
@@ -222,15 +222,80 @@ describe('runda 5, MAJOR 1: starea „invalidat” nu depinde de textul notei', 
   })
 })
 
-describe('runda 5, minor „um”: unitatea se compară EXACT (aceeași definiție ca filtrele de rețea um = \'m\')', () => {
-  it('„m” → „M” și „m” → „m ” invalidează (qm / view / v6 cer exact „m”)', () => {
-    expect(schimbariRelevante(R2, { um: 'M' }).relevante.map(x => x.camp)).toEqual(['um'])
-    expect(schimbariRelevante(R2, { um: 'm ' }).relevante.map(x => x.camp)).toEqual(['um'])
-    expect(aplicaRegulaAprobare(R2, { um: 'M' }).patch.status).toBe('diferenta')
+describe('runda 6 (decis în audit, reversibil): unitatea se compară NORMALIZAT (trim + lower + spații Unicode), ca filtrele de rețea', () => {
+  it('„m” → „M”, „m ” și „m” cu NBSP NU invalidează (sub prag, raportate); „m” → „ml” da', () => {
+    for (const u of ['M', 'm ', ' M\u00a0']) {
+      const s = schimbariRelevante(R2, { um: u })
+      expect([s.relevante, s.subPrag.map(x => x.camp)]).toEqual([[], ['um']])
+      expect(aplicaRegulaAprobare(R2, { um: u })).toMatchObject({ invalidat: false, patch: { um: u } })
+    }
+    expect(schimbariRelevante(R2, { um: 'ml' }).relevante.map(x => x.camp)).toEqual(['um'])
+    expect(aplicaRegulaAprobare(R2, { um: 'ml' }).patch.status).toBe('diferenta')
+    expect(aplicaRegulaAprobare({ ...R2, um: 'M' }, { um: 'ML' }).patch.status).toBe('diferenta')
   })
   it('„m” retrimis identic și null ↔ „” nu sunt schimbări', () => {
     expect(schimbariRelevante(R2, { um: 'm' })).toMatchObject({ relevante: [], subPrag: [] })
     expect(schimbariRelevante({ ...R2, um: null }, { um: '' })).toMatchObject({ relevante: [], subPrag: [] })
+  })
+  it('normUm = trim + lower (+ NBSP), esteUnitateLungime pe forma normalizată', () => {
+    expect([normUm(' M '), normUm('M\u00a0'), normUm('ml'), normUm(null)]).toEqual(['m', 'm', 'ml', ''])
+    expect([esteUnitateLungime(' ML'), esteUnitateLungime('buc')]).toEqual([true, false])
+  })
+})
+
+describe('runda 6: rândul NEAPROBAT care își schimbă unitatea din / în „m” — semnal „unitate schimbată”, nu tacit', () => {
+  const R6 = { id: 6, licitatie_id: 3, denumire: 'Țeavă PE100 SDR11 Dn63', um: 'm', cantitate: 700, status: 'extras', diferenta_nota: 'Memoriu 700 m.' }
+  it('extras m → ml: prefixul „Unitatea s-a schimbat („m” → „ml”) … de reverificat.” în fața notei, statusul neatins', () => {
+    const r = aplicaRegulaUnitate(R6, { um: 'ml' })
+    expect(r.unitate).toBe(true)
+    expect(r.patch.diferenta_nota).toBe('Unitatea s-a schimbat („m” → „ml”) — rândul nu mai e o lungime de rețea în metri; de reverificat. Memoriu 700 m.')
+    expect(prefixUnitate(r.patch.diferenta_nota)).toBe('Unitatea s-a schimbat („m” → „ml”) — rândul nu mai e o lungime de rețea în metri; de reverificat.')
+    expect('status' in r.patch).toBe(false)
+    // înapoi ml → m: prefixul se înlocuiește (nu se adună)
+    const r2 = aplicaRegulaUnitate({ ...R6, um: 'ml', diferenta_nota: r.patch.diferenta_nota }, { um: 'm' })
+    expect(r2.patch.diferenta_nota).toBe('Unitatea s-a schimbat („ml” → „m”); de reverificat. Memoriu 700 m.')
+  })
+  it('NU atinge: m → M (normalizat egal), buc → kg (fără „m”), rândul validat (trece prin aplicaRegulaAprobare), validarea în același patch', () => {
+    for (const [v, p] of [[R6, { um: 'M' }], [{ ...R6, um: 'buc' }, { um: 'kg' }], [{ ...R6, status: 'validat' }, { um: 'ml' }], [R6, { um: 'ml', status: 'validat' }]]) {
+      const r = aplicaRegulaUnitate(v, p)
+      expect([r.unitate, r.patch]).toEqual([false, p])
+    }
+  })
+  it('pastreazaInvalidarea păstrează și prefixul unității (și pe ambele, în ordine), când transferul / CAD rescriu nota', () => {
+    const n = aplicaRegulaUnitate(R6, { um: 'ml' }).patch.diferenta_nota
+    expect(pastreazaInvalidarea({ ...R6, um: 'ml', diferenta_nota: n }, { diferenta_nota: 'Planșa 1 dă 700 m.' }).diferenta_nota)
+      .toBe('Unitatea s-a schimbat („m” → „ml”) — rândul nu mai e o lungime de rețea în metri; de reverificat. Planșa 1 dă 700 m.')
+    const ambele = 'Rândul era VALIDAT cu x — validarea se reface. ' + n
+    expect(pastreazaInvalidarea({ ...R6, diferenta_nota: ambele }, { diferenta_nota: 'Z' }).diferenta_nota)
+      .toBe('Rândul era VALIDAT cu x — validarea se reface. Unitatea s-a schimbat („m” → „ml”) — rândul nu mai e o lungime de rețea în metri; de reverificat. Z')
+  })
+  it('istoric: unitateSchimbataDinIstoric = „unitate_schimbata” după ultima validare; invalidateDinIstoric nu e șters de el; nu e referință', () => {
+    const ev = [
+      { id: 1, cantitate_id: 6, motiv: 'unitate_schimbata', valori_vechi: { um: 'm' } },
+      { id: 2, cantitate_id: 7, motiv: 'unitate_schimbata' }, { id: 3, cantitate_id: 7, motiv: 'validat', valori_noi: { um: 'ml' } },
+      { id: 4, cantitate_id: 2, motiv: 'invalidat', valori_vechi: { cantitate: 1 } }, { id: 5, cantitate_id: 2, motiv: 'unitate_schimbata', valori_vechi: { cantitate: 9 } },
+    ]
+    expect([...unitateSchimbataDinIstoric(ev)].sort()).toEqual([2, 6])
+    expect([...invalidateDinIstoric(ev)]).toEqual([2])
+    expect(referinteDinIstoric(ev).get(6)).toBe(undefined)
+    expect(referinteDinIstoric(ev).get(2)).toEqual({ cantitate: 1 })
+  })
+})
+
+describe('runda 6 (minorul „istoric fără paginare”): citestePaginat — citire completă, fără să piardă cele mai noi evenimente', () => {
+  const ev = Array.from({ length: 2345 }, (_, i) => ({ id: 2345 - i }))   // descrescător, ca .order('id', { ascending: false })
+  it('pagini de 1000 => toate cele 2.345, în ordinea cerută', async () => {
+    const r = await citestePaginat((a, b) => Promise.resolve({ data: ev.slice(a, b + 1), error: null }))
+    expect([r.error, r.data.length, r.data[0].id, r.data.at(-1).id]).toEqual([null, 2345, 2345, 1])
+  })
+  it('plafon db-max-rows MAI MIC decât pagina (500) => nu sare rânduri', async () => {
+    const r = await citestePaginat((a, b) => Promise.resolve({ data: ev.slice(a, Math.min(b + 1, a + 500)), error: null }))
+    expect([r.data.length, new Set(r.data.map(x => x.id)).size]).toEqual([2345, 2345])
+  })
+  it('eroare => eroare (nu listă parțială); peste max => „istoric trunchiat”', async () => {
+    expect((await citestePaginat(() => Promise.resolve({ data: null, error: { message: 'x' } }))).error.message).toBe('x')
+    const t = await citestePaginat((a, b) => Promise.resolve({ data: ev.slice(a, b + 1), error: null }), 1000, 2000)
+    expect([t.data, /trunchiat/.test(t.error.message)]).toEqual([null, true])
   })
 })
 

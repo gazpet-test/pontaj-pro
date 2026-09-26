@@ -57,7 +57,17 @@
 --   (P1c) condiția 2 (26.09.2026) — corpul view-ului extins, rulat ca SELECT pe producție: lic. 3 → 3 de rețea nevalidate (23.630 m),
 --     0 invalidate ieșite; lic. 5 → F3 47 / 6.520 m, rețea 94 / 94 (28.862 m); lic. 95 → 6 fără tip (48.195 m); lic. 102 → 2 fără tip
 --     (167.200 m); invalidate_in_afara_retea = 0 peste tot (regula de invalidare nu rulează încă în BD — vezi
---     docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql). PGlite capăt-la-capăt cu trigger-ul: scratchpad pglite/test_view_conditia2.mjs 7/7.
+--     docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql). PGlite capăt-la-capăt cu trigger-ul: scratchpad pglite/test_view_conditia2.mjs
+--     (runda 6: 18/18), adv_r6.mjs 13/13, test_r5_runda4.mjs 16/16.
+--   (P1d) runda 6 (unitatea normalizată, decis în audit 26.09.2026, reversibil) — rândurile care intră în setul de rețea DOAR prin
+--     normalizare (um ≠ exact 'm', dar ofertare_norm_text(um) = 'm'):
+--     SELECT q.licitatie_id, q.um, q.tip_sursa, q.status, count(*), round(sum(q.cantitate), 2) FROM ofertare_cantitati q
+--      WHERE q.um IS DISTINCT FROM 'm' AND lower(btrim(translate(coalesce(q.um,''), chr(160), ' '))) = 'm'
+--        AND q.categorie ~* 'conduct|re[țt]ea' AND (coalesce(q.obiect,'')||' '||coalesce(q.denumire,'')||' '||coalesce(q.sursa,'')) !~* 'total'
+--      GROUP BY 1,2,3,4;
+--     La 26.09.2026: DOAR lic. 5 — 15 rânduri F3 „M”, extras, 1.227,89 m, în „Conducte și montaj”, dar sunt ARTICOLE DE DEVIZ (borduri,
+--     parapete…). Efect după aplicare: lista_f3_nevalidate lic. 5 47 → 62 și um_de_normalizat_f3 = 15 (H2 BLOCK, numite); v6 nu citează
+--     total cât există rânduri F3 cu unitatea ≠ exact 'm' (f3_um_de_normalizat). Nimic nu se adună tacit; corecția = categoria lor.
 -- SANITY (după): SELECT * FROM v_ofertare_cantitati_nevalidate WHERE licitatie_id IN (3,5,95,102) ORDER BY 1;
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -72,24 +82,47 @@
 -- (fără 'validat' după el); prefixul notei rămâne sursă secundară (transferul și CAD îl păstrează acum). Aceeași regulă ca
 -- `esteInvalidat` + `marcheazaInvalidate` din src/ofertareCantitatiAprobare.js. ORDINEA: migrarea istoricului se aplică ÎNAINTE.
 DO $$ BEGIN
-  IF to_regclass('public.ofertare_cantitati_istoric') IS NULL THEN
+  IF to_regclass('public.ofertare_cantitati_istoric') IS NULL OR to_regprocedure('public.ofertare_norm_text(text)') IS NULL THEN
     RAISE EXCEPTION 'R5: aplică întâi docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql (r5_cantitati_aprobare_istoric) — view-ul citește istoricul';
   END IF;
 END $$;
+-- Runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil):
+--  (a) unitatea NORMALIZATĂ (ofertare_norm_text: trim, lower, spații Unicode — ca `normUm` / randuriFront din JS și regula de
+--      invalidare): „M” / „m ” sunt metri, „ml” nu. v_ofertare_pt_stare.qm (live, neatins aici) cere încă exact 'm' => rândurile de
+--      rețea cu unitatea scrisă altfel nu intră în totalurile ei: SEMNALATE (um_de_normalizat, _m, _f3), nu scăzute tacit;
+--  (b) rândurile TOTAL (‚total’ în obiect / denumire / sursă) invalidate: numărate SEPARAT (total_invalidate, _m — referință, nu se
+--      adună cu rândurile pe care le totalizează), ca în randuriLipsa din JS; invalidate_in_afara_retea = fără TOTAL;
+--  (c) rândul NEAPROBAT ieșit din rețea prin schimbarea unității (istoric 'unitate_schimbata' după ultima validare, sau prefixul notei
+--      „Unitatea s-a schimbat … de reverificat.”): unitate_schimbata_in_afara_retea, _m — nu mai dispare tacit;
+--  (d) „invalidat” din istoric = ultimul eveniment al APROBĂRII (fără 'unitate_schimbata'), ca invalidateDinIstoric din JS; prefixele
+--      notei contează doar cu terminatorul lor („validarea se reface.” / „de reverificat.”), ca prefixInvalidare / prefixUnitate.
 DROP VIEW IF EXISTS public.v_ofertare_cantitati_nevalidate;
 CREATE VIEW public.v_ofertare_cantitati_nevalidate WITH (security_invoker = on) AS
 WITH ist AS (
   SELECT DISTINCT ON (h.cantitate_id) h.cantitate_id, h.motiv
     FROM public.ofertare_cantitati_istoric h
+   WHERE h.motiv <> 'unitate_schimbata'
    ORDER BY h.cantitate_id, h.id DESC
-), b AS (
-  SELECT q.licitatie_id, q.tip_sursa, q.status, q.cantitate,
-         -- ACELAȘI filtru ca v_ofertare_pt_stare.qm (pg_get_viewdef, 25.09.2026); coalesce: um / categorie NULL = în afara rețelei
-         coalesce(q.um = 'm'::text AND q.categorie ~* 'conduct|re[țt]ea'::text
+), ium AS (
+  SELECT DISTINCT ON (h.cantitate_id) h.cantitate_id, h.motiv
+    FROM public.ofertare_cantitati_istoric h
+   WHERE h.motiv IN ('validat', 'unitate_schimbata')
+   ORDER BY h.cantitate_id, h.id DESC
+), b0 AS (
+  SELECT q.licitatie_id, q.tip_sursa, q.status, q.cantitate, q.um,
+         -- filtrul qm din v_ofertare_pt_stare, cu unitatea NORMALIZATĂ (runda 6); coalesce: categorie NULL = în afara rețelei
+         coalesce(public.ofertare_norm_text(q.um) = 'm'::text AND q.categorie ~* 'conduct|re[țt]ea'::text
            AND ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) !~* 'total'::text, false) AS in_retea,
-         q.status <> 'validat' AND (coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' OR coalesce(i.motiv IN ('invalidat', 'redeschis'), false)) AS invalidat
+         ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) ~* 'total'::text AS e_total,
+         q.status <> 'validat' AND ((coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AND strpos(q.diferenta_nota, 'validarea se reface.') > 0)
+           OR coalesce(i.motiv IN ('invalidat', 'redeschis'), false)) AS invalidat,
+         q.status <> 'validat' AND ((strpos(coalesce(q.diferenta_nota, ''), 'Unitatea s-a schimbat') = 1 AND strpos(q.diferenta_nota, 'de reverificat.') > 0)
+           OR coalesce(u.motiv = 'unitate_schimbata', false)) AS unitate
     FROM public.ofertare_cantitati q
     LEFT JOIN ist i ON i.cantitate_id = q.id
+    LEFT JOIN ium u ON u.cantitate_id = q.id
+), b AS (
+  SELECT b0.*, (NOT in_retea AND unitate AND NOT invalidat AND NOT e_total) AS unitate_iesit FROM b0
 )
 SELECT b.licitatie_id,
        count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat')                  AS lista_f3_nevalidate,
@@ -102,15 +135,22 @@ SELECT b.licitatie_id,
        count(*) FILTER (WHERE in_retea AND status <> 'validat')                                              AS retea_nevalidate,
        round(sum(cantitate) FILTER (WHERE in_retea AND status <> 'validat'))                                AS retea_nevalidate_m,
        count(*) FILTER (WHERE in_retea)                                                                      AS retea_randuri,
-       count(*) FILTER (WHERE NOT in_retea AND invalidat)                                                    AS invalidate_in_afara_retea,
-       round(sum(cantitate) FILTER (WHERE NOT in_retea AND invalidat))                                      AS invalidate_in_afara_retea_m
+       count(*) FILTER (WHERE NOT in_retea AND invalidat AND NOT e_total)                                    AS invalidate_in_afara_retea,
+       round(sum(cantitate) FILTER (WHERE NOT in_retea AND invalidat AND NOT e_total))                      AS invalidate_in_afara_retea_m,
+       count(*) FILTER (WHERE e_total AND invalidat)                                                         AS total_invalidate,
+       round(sum(cantitate) FILTER (WHERE e_total AND invalidat))                                           AS total_invalidate_m,
+       count(*) FILTER (WHERE unitate_iesit)                                                                 AS unitate_schimbata_in_afara_retea,
+       round(sum(cantitate) FILTER (WHERE unitate_iesit))                                                   AS unitate_schimbata_in_afara_retea_m,
+       count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm')                                          AS um_de_normalizat,
+       round(sum(cantitate) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm'))                            AS um_de_normalizat_m,
+       count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm' AND tip_sursa = 'lista_f3')              AS um_de_normalizat_f3
   FROM b
  GROUP BY b.licitatie_id
-HAVING count(*) FILTER (WHERE in_retea OR invalidat) > 0;
+HAVING count(*) FILTER (WHERE in_retea OR invalidat OR unitate_iesit) > 0;
 -- runda 5: default privileges dau ALL pe obiectele noi — întâi REVOKE ALL (și de la authenticated), apoi doar SELECT
 REVOKE ALL ON public.v_ofertare_cantitati_nevalidate FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.v_ofertare_cantitati_nevalidate TO authenticated, service_role;
-COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare) NU sunt validate de om (status<>validat), pe tip_sursa, cu metri; plus rândurile INVALIDATE (istoricul: ultimul eveniment invalidat / redeschis; sau nota „Rândul era VALIDAT”) ieșite din setul de rețea. Citit de OfertarePropunere (H2, controlCantitati): F3 cu rânduri nevalidate nu e referință aprobată; rândurile fără tip / invalidate ieșite nu dispar tacit. security_invoker.';
+COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026, runda 6): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare, cu unitatea normalizată) NU sunt validate de om (status<>validat), pe tip_sursa, cu metri; plus rândurile INVALIDATE (istoricul aprobării: ultimul eveniment invalidat / redeschis; sau prefixul notei) ieșite din rețea, rândurile TOTAL invalidate (separat), rândurile neaprobate ieșite din rețea prin schimbarea unității și rândurile de rețea cu unitatea scrisă altfel decât exact m (pe care qm din v_ofertare_pt_stare nu le adună). Citit de OfertarePropunere (H2, controlCantitati): nimic nu dispare tacit. security_invoker.';
 
 -- 2) ─────────────────────────────────────────────────────────────────────────────────────────────────────
 -- v6 (R5): față de live se schimbă DOAR: v_f3_n/v_f3_nev/v_f3_txt declarate; SELECT-ul F3 (filtrul qm, sumă doar din
@@ -127,7 +167,7 @@ DECLARE
   v_text text; v_lista text; v_det text; v_id bigint; v_nou boolean := false; v_resp uuid; v_nr int; v_noi int;
   v_antet constant text := 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe';
   v_standard boolean; v_tok text; v_det_fd text; v_ilizibile int; v_fara_date int;
-  v_f3_n int; v_f3_nev int; v_f3_txt text;
+  v_f3_n int; v_f3_nev int; v_f3_txt text; v_f3_um int;
 BEGIN
   SELECT array_agg(id ORDER BY nume_original),
          array_agg(regexp_replace(nume_original, '\.pdf$', '', 'i') ORDER BY nume_original),
@@ -172,20 +212,32 @@ BEGIN
   -- omis tacit din total: se numără ca nevalidat (=> fără total) și ca rând F3 (=> textul cere corespondența, nu „nu le-am
   -- identificat”). „Invalidat” = ca în v_ofertare_cantitati_nevalidate (istoric: ultimul eveniment invalidat / redeschis; sau
   -- prefixul notei).
+  -- Runda 6 (decis în audit, reversibil): unitatea NORMALIZATĂ în qm (ca view-ul și JS); „de reverificat” = invalidat (istoricul
+  -- aprobării, fără 'unitate_schimbata'; sau prefixul regulii, cu terminatorul) SAU unitatea schimbată pe un rând neaprobat
+  -- ('unitate_schimbata' după ultima validare; sau prefixul „Unitatea s-a schimbat … de reverificat.”) — un rând F3 care a ieșit din qm
+  -- prin m → ml nu mai e omis tacit din total. Și: un rând F3 din qm cu unitatea scrisă altfel decât exact „m” („M”, „m ”; lic. 5
+  -- reală: 15 articole de deviz „M” în categoria „Conducte și montaj”, 1.227,89 m) e în setul normalizat, dar poate fi un articol de
+  -- deviz => totalul NU se citează autorității cât există astfel de rânduri (v_f3_um > 0: fără total, ca la nevalidate) — nici
+  -- umflare tăcută, nici omisiune tăcută; H2 le semnalează (um_de_normalizat_f3).
   SELECT round(sum(x.cantitate) FILTER (WHERE x.status = 'validat' AND x.qm), 1),
-         count(*) FILTER (WHERE x.qm OR x.invalidat), count(*) FILTER (WHERE x.status <> 'validat' AND (x.qm OR x.invalidat))
-    INTO v_f3, v_f3_n, v_f3_nev
+         count(*) FILTER (WHERE x.qm OR x.invalidat), count(*) FILTER (WHERE x.status <> 'validat' AND (x.qm OR x.invalidat)),
+         count(*) FILTER (WHERE x.qm AND x.um IS DISTINCT FROM 'm')
+    INTO v_f3, v_f3_n, v_f3_nev, v_f3_um
   FROM (
-    SELECT q.cantitate, q.status,
-           coalesce(q.um = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
+    SELECT q.cantitate, q.status, q.um,
+           coalesce(public.ofertare_norm_text(q.um) = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
              AND (coalesce(q.obiect, '') || ' ' || coalesce(q.denumire, '') || ' ' || coalesce(q.sursa, '')) !~* 'total', false) AS qm,
-           q.status <> 'validat' AND (coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%'
-             OR coalesce((SELECT h.motiv FROM ofertare_cantitati_istoric h WHERE h.cantitate_id = q.id ORDER BY h.id DESC LIMIT 1)
-                         IN ('invalidat', 'redeschis'), false)) AS invalidat
+           q.status <> 'validat' AND (
+             (coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AND strpos(q.diferenta_nota, 'validarea se reface.') > 0)
+             OR (strpos(coalesce(q.diferenta_nota, ''), 'Unitatea s-a schimbat') = 1 AND strpos(q.diferenta_nota, 'de reverificat.') > 0)
+             OR coalesce((SELECT h.motiv FROM ofertare_cantitati_istoric h WHERE h.cantitate_id = q.id AND h.motiv <> 'unitate_schimbata' ORDER BY h.id DESC LIMIT 1)
+                         IN ('invalidat', 'redeschis'), false)
+             OR coalesce((SELECT h.motiv FROM ofertare_cantitati_istoric h WHERE h.cantitate_id = q.id AND h.motiv IN ('validat', 'unitate_schimbata') ORDER BY h.id DESC LIMIT 1)
+                         = 'unitate_schimbata', false)) AS invalidat
       FROM ofertare_cantitati q
      WHERE q.licitatie_id = p_licitatie_id AND q.tip_sursa = 'lista_f3'
   ) x;
-  IF v_f3_nev > 0 THEN v_f3 := NULL; END IF;
+  IF v_f3_nev > 0 OR v_f3_um > 0 THEN v_f3 := NULL; END IF;
   -- runda 4: format ro-RO neambiguu, independent de lc_numeric („,” și „.” din șablon sunt fixe, G/D ar urma locale-ul):
   -- 6519.8 → „6.519,8”; 6520 → „6.520”. Live scria „7.747.7” (separatorul de mii și zecimalele = același punct).
   v_f3_txt := CASE WHEN v_f3 IS NULL THEN NULL
@@ -258,6 +310,6 @@ BEGIN
     END IF;
   END IF;
   RETURN jsonb_build_object('actiune', CASE WHEN v_draft.id IS NOT NULL THEN 'actualizat' ELSE 'creat' END, 'id', v_id,
-    'planse', cardinality(v_ids), 'motive', to_jsonb(v_motive), 'ilizibile', v_ilizibile, 'fara_date', v_fara_date, 'f3_m', v_f3, 'f3_nevalidate', v_f3_nev);
+    'planse', cardinality(v_ids), 'motive', to_jsonb(v_motive), 'ilizibile', v_ilizibile, 'fara_date', v_fara_date, 'f3_m', v_f3, 'f3_nevalidate', v_f3_nev, 'f3_um_de_normalizat', v_f3_um);
 END $function$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_clarificare_planse_auto(bigint) FROM PUBLIC, anon, authenticated;
