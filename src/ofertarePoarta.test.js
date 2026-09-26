@@ -18,6 +18,7 @@ const VERDE = {
   lista_f3_nevalidate: 0, lista_f3_nevalidate_m: null, lista_c6_nevalidate: 0, memoriu_nevalidate: 0, plansa_nevalidate: 0,
   // R5 condiția 2 (26.09.2026): câmpurile noi ale v_ofertare_cantitati_nevalidate
   fara_tip_nevalidate: 0, fara_tip_nevalidate_m: null, invalidate_in_afara_retea: 0, invalidate_in_afara_retea_m: null,
+  um_de_normalizat_f3: 0, retea_alte_unitati_lungimi_f3: 0,
   total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0,
   // R5 sarcina 2 (a): planșele cu conflicte de transfer deschise
   transfer_conflicte_docs: 0, transfer_conflicte_n: 0, totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0,
@@ -214,14 +215,14 @@ describe('P0 pas 2 — documentația de atribuire', () => {
 
 // R5 (Copilot 25.09.2026): existența rândului 'extras' nu dovedește că a intrat în oferta aprobată.
 describe('R5 — poarta propunerii nu ia F3 nevalidata drept referinta aprobata', () => {
-  it('F3 cu randuri de retea nevalidate => block pe „cantitati", restul verde', () => {
+  it('F3 nevalidată blochează cantitățile și aprobarea finală', () => {
     const ev = cu({ lista_f3_nevalidate: 3, lista_f3_nevalidate_m: 250 })
-    expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['cantitati'])
+    expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['cantitati', 'sursa_cantitati'])
     expect(ev.randuri.find(x => x.k === 'cantitati').detalii).toMatch(/NEVALIDATE \(250 m\)/)
   })
   it('view-ul de validare lipsa (campuri absente) => block „nu putem verifica", nu verde', () => {
     const ev = cu({ lista_f3_nevalidate: undefined })
-    expect(ev.blocaje).toEqual(['cantitati'])
+    expect(ev.blocaje).toEqual(['cantitati', 'sursa_cantitati'])
     expect(ev.randuri.find(x => x.k === 'cantitati').detalii).toMatch(/nu putem verifica/)
   })
 })

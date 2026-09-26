@@ -347,10 +347,14 @@ function controlCantitatiGraficRanduri(cantitati, cantitatiAsumate) {
 // R5 runda 4 (verificator R3): fiecare front poartă PROVENIENȚA — cantitate_id (rândul-sursă), baza (coloana folosită) și
 // lungime_sursa (cifra rândului la propunere). grafic_parametri.parametri e jsonb: câmpurile noi nu cer schimbare de schemă,
 // iar consumatorii fronturilor (motorPEHD, v_ofertare_pt_stare.gp) citesc doar nume / lungime_m / dn / echipe.
+// Nu trunchiem tokenul: 2–4 cifre acceptate, orice altă lungime cere verificare.
+const dnFront = c => ((c.denumire || '').match(/\bD[ne]?\s*(\d+)/i) || [])[1] || ''
+const dnNesuportat = c => dnFront(c) !== '' && !/^\d{2,4}$/.test(dnFront(c))
 export function fronturiDinCantitati(cantitati, cantitatiAsumate, sursa) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
   const excluse = retea.filter(c => !esteAprobata(c))
+  const dnDeVerificat = retea.filter(c => esteAprobata(c) && dnNesuportat(c))
   const fronturi = retea.filter(esteAprobata).map(c => {
     // numele frontului = ce e după liniuță („… - Făgului"), cu em-dash sau minus
     const d = (c.denumire || '').replace(/Țeavă\s+PE\d+\s+SDR\d+\s*/i, '')
@@ -358,7 +362,7 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate, sursa) {
     return {
       nume: dupaLiniuta || d.slice(0, 40),
       lungime_m: Math.round(inMetri(c, baza)),
-      dn: ((c.denumire || '').match(/D[ne]?\s*(\d{2,3})/i) || [])[1] || '',
+      dn: dnFront(c),
       echipe: 1,
       cantitate_id: c.id ?? null, baza, lungime_sursa: inMetri(c, baza),
       // runda 9 (verificatorul UI, minor S4a): atributele rândului-sursă la propunere — o schimbare de Dn / material / obiect (aceeași
@@ -372,15 +376,16 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate, sursa) {
   const ss = sursa === undefined ? null : stareSursa(sursa)
   return { fronturi, excluse, m_excluse: excluse.reduce((s, c) => s + nr(inMetri(c, baza)), 0), lipsa: L.lipsa, text_lipsa: textLipsa(L, 4),
     text_sursa: ss?.blocheaza ? ss.text : '',
+    text_dn: dnDeVerificat.map(c => `#${c.id}: Dn${dnFront(c)} nesuportat (se cer 2–4 cifre) — verifică diametrul`).join('; '),
     // runda 9 (M3): rețeaua de lungime validată în altă unitate — fronturile sunt un SUBTOTAL (numit, nu tăcut)
     text_de_verificat: L.deVerificat.length ? textPozitii(L.deVerificat, 'validate în altă unitate de lungime, în afara fronturilor (fără conversie)') : '' }
 }
 // Reparația rundei 2 (verificatorul UI, minor „toast-ul arată doar lipsa”): mesajul „Propune din cantități” — lipsa ȘI sursa incompletă,
 // împreună (ca rândul „front” din poartă), nu else-if. null = nimic de spus (fronturi complete).
 export function mesajPropuneFronturi(r) {
-  const { fronturi = [], excluse = [], m_excluse = 0, lipsa = [], text_lipsa = '', text_sursa = '', text_de_verificat = '' } = r || {}
+  const { fronturi = [], excluse = [], m_excluse = 0, lipsa = [], text_lipsa = '', text_sursa = '', text_de_verificat = '', text_dn = '' } = r || {}
   const mEx = Math.round(m_excluse).toLocaleString('ro-RO')
-  const parti = [lipsa.length ? text_lipsa + (fronturi.length && excluse.length ? ` (${mEx} m nepropuși)` : '') : '', text_sursa, text_de_verificat].filter(Boolean)
+  const parti = [lipsa.length ? text_lipsa + (fronturi.length && excluse.length ? ` (${mEx} m nepropuși)` : '') : '', text_sursa, text_de_verificat, text_dn].filter(Boolean)
   if (!fronturi.length) return { tip: 'err', text: (lipsa.length || text_sursa)
     ? `Niciun rând de rețea validat — ${parti.join(' · ')}. Verifică-le și validează-le (✓) în 📋 Cantități${text_sursa ? ' (și rezolvă sursa)' : ''}, apoi propune fronturile.`
     : 'Niciun rând de rețea cu metri în Cantități.' }
@@ -422,7 +427,8 @@ export function controlFronturiGrafic(p, cantitati, sursa) {
     // runda 9 (verificatorul UI, minor S4a): aceeași lungime, dar alt Dn / altă denumire / alt obiect (ex. Dn180 → Dn160, apoi revalidat) —
     // frontul poartă atributele vechi => de reverificat până la repropunere. Fronturile noi: denumire_sursa / obiect_sursa; cele vechi: Dn-ul
     // citit la propunere din denumire (f.dn) față de Dn-ul de acum.
-    const dnAcum = ((c.denumire || '').match(/D[ne]?\s*(\d{2,3})/i) || [])[1] || ''
+    const dnAcum = dnFront(c)
+    if (dnNesuportat(c)) probleme.push(`${et}: Dn${dnAcum} nesuportat — verifică diametrul`)
     if (f.denumire_sursa != null ? (normUm(f.denumire_sursa) !== normUm(c.denumire) || normUm(f.obiect_sursa) !== normUm(c.obiect))
         : (f.dn != null && String(f.dn) !== '' && String(f.dn) !== dnAcum))
       probleme.push(`${et}: rândul-sursă #${c.id} are alte atribute decât la propunere (${f.denumire_sursa != null ? 'denumire / obiect' : `Dn${f.dn} → ${dnAcum ? `Dn${dnAcum}` : 'fără Dn'}`}) — frontul poartă datele vechi`)

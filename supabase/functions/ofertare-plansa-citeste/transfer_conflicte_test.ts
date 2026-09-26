@@ -3,7 +3,7 @@
 // problemă”. Funcții pure: conflicteTransfer (handler.ts) + inregistrareTransfer / deschis (transfer_conflicte.ts).
 // Fixture-le „reale” = citire_ai.sumar al documentelor 470 / 471 / 130 / 1035 (SELECT 26.09.2026, doar câmpurile folosite).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
-import { conflicteTransfer, inregistrareDinTransfer } from './handler.ts'
+import { acoperireCitire, conflicteTransfer, inregistrareDinTransfer } from './handler.ts'
 import { acoperit, confirmareValida, deschis, EVALUARE_PARTIALA, formaCorupta, inregistrareLegacy, inregistrarePrecedenta, inregistrareTransfer, MAX_ISTORIC, restantePeTip, stareCitireNeterminata, stareLegacy } from './transfer_conflicte.ts'
 
 // doc 470 (lic. 95), sumar din producție (26.09.2026): Dn60 nestandard 110 m + 3 adnotări pe Dn absent (1.770 m)
@@ -53,7 +53,7 @@ Deno.test('sarcina 2: conflicteTransfer — ambigue, „doar de verificat” (f�
 })
 
 // acoperirea unei recitiri complete a zonei z1_1 cu Dn-urile date (cantitățile evaluate)
-const acop = (dn: number[], o: any = {}) => ({ complet: true, zone: ['z1_1'], dn, cantitati_evaluate: true, ...o })
+const acop = (dn: number[], o: any = {}) => ({ complet: true, zone: ['z1_1'], dn, cantitati_evaluate: true, pozitii: [31, 32], ...o })
 const rec = (prev: any, c: any, s: any, id: string, acoperire: any = null) => inregistrareDinTransfer(prev, c, s, { id, rulare: 'R-' + id, citire: 'C', plansa: 'Planșa 1', la: '2026-09-26T10:00:00.000Z', acoperire })
 const U = '00000000-0000-4000-8000-000000000121'
 const conf = (r: any, o: any = {}) => ({ ...r, confirmat_de: U, confirmat_la: '2026-09-26T11:00:00Z', confirmare_nota: 'verificat pe planșă, pozițiile sunt pe loturi diferite', confirmare_tip: 'rezolvat', confirmat_token: r.id, ...o })
@@ -217,3 +217,18 @@ Deno.test('runda 9 (M12 + ADDENDUM 3, 3): citirea NETERMINATĂ fără înregistr
   assertEquals(inregistrareLegacy({ citire_ai: { gata: false, sumar: { felii_citite: 3 } } }, conflicteTransfer), null)
   assert(/^verificare indisponibilă: /.test(EVALUARE_PARTIALA.text) && /nici o contradicție a documentației nu e dovedită/.test(EVALUARE_PARTIALA.text))
 })
+
+Deno.test('F07: poziția 57 omisă, alt Dn63 în aceeași zonă nu închide conflictul', () => {
+  const conflict = { tip: 'ambiguu', text: 'Poziția 57', pozitie_id: 57, ancore: { zone: ['z1_1'], dn: [63], pozitii: true } };
+  const a = acoperireCitire({ gata: true, toate: [{ eticheta: 'z1_1', tronsoane: [{ diametru_mm: 63 }] }],
+    zoneLipsa: [], transfer: { evaluat: true, pozitii_evaluate: [58] } });
+  assertFalse(acoperit(conflict, a));
+  const prev = inregistrareTransfer(null, { conflicte: [conflict], id: 'A', la: '2026-09-26T10:00:00Z', cod: 'test' });
+  const nou = inregistrareTransfer(prev, { conflicte: [], id: 'B', la: '2026-09-26T11:00:00Z', cod: 'test', acoperire: a });
+  assertEquals(nou.stare, 'conflicte');
+  assertEquals(nou.conflicte[0].pozitie_id, 57);
+  assertEquals(nou.conflicte[0].tip, 'nerezolvat_la_recitire');
+  assert(acoperit(conflict, { ...a, pozitii: [57, 58] }));
+  assertFalse(acoperit({ ...conflict, pozitii: [{ id: 59, denumire: 'alt tronson' }] }, { ...a, pozitii: [57] }));
+  assertFalse(acoperit(conflict, { ...a, pozitii: undefined }));
+});

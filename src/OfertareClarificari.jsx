@@ -149,7 +149,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     await load()
   }
   // 22.09.2026: „Propune clarificări” — generatorul rulează pe workerul NAS (ofertare_clarificari_coada):
-  // goluri din acoperire + ambiguități din registru + diferențe de cantități + răspunsuri primite → propuneri de_trimis.
+  // goluri din acoperire + ambiguități din registru + diferențe de cantități + răspunsuri primite → propuneri de verificat.
   const propuneServer = async () => {
     if (!licId) return
     if (!(profile?.is_owner || licitatii?.find(l => l.id === licId)?.responsabil_id === profile?.id)) { showToast('Propunerea de clarificări o pornește ownerul sau responsabilul licitației (costă).', 'err'); return }
@@ -508,7 +508,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                 if (ins?.id) citesteClarificare({ id: ins.id })
               }} />
             </label>
-            <button style={{ ...S.btnS, padding:'5px 14px', fontSize:12 }} onClick={propuneServer} disabled={!!busy} title="Generatorul rulează pe workerul NAS: goluri din acoperire, ambiguități din registru, diferențe de cantități, răspunsuri primite — propuneri de_trimis, le verifici tu">☁️ Propune clarificări (Sonnet)</button>
+            <button style={{ ...S.btnS, padding:'5px 14px', fontSize:12 }} onClick={propuneServer} disabled={!!busy} title="Generatorul rulează pe workerul NAS: goluri din acoperire, ambiguități din registru, diferențe de cantități, răspunsuri primite — propuneri de verificat, le verifici tu">☁️ Propune clarificări (Sonnet)</button>
             <button style={{ ...S.btnP, padding:'5px 14px', fontSize:12 }} onClick={genereazaAdresa} disabled={!!busy}>📄 Generează adresa</button>
           </div>
         </div>

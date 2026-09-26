@@ -87,7 +87,7 @@ export function regiuneZona(plansa: any, eticheta: string): any | null {
 
 export function revNou(): string { return crypto.randomUUID(); }
 
-// Scriere compare-and-set pe ofertare_documente_atribuire.analiza->citire_ai->>rev.
+// Scriere compare-and-set pe analiza întreagă (include revizia, tăierea și rezervările).
 // construieste(doc) -> { upd } (upd.analiza.citire_ai.rev trebuie să fie NOU) sau { stop: {status, error} }.
 // La conflict (0 rânduri afectate): recitește documentul și reconstruiește, de maximum INCERCARI_CAS ori.
 export async function scrieCAS(supa: any, docId: number, docInitial: any,
@@ -96,18 +96,13 @@ export async function scrieCAS(supa: any, docId: number, docInitial: any,
   for (let i = 0; i < INCERCARI_CAS; i++) {
     const rez = await construieste(doc, i);
     if (rez?.stop) return { ok: false, stop: rez.stop, incercari: i + 1 };
-    const revBaza = doc?.analiza?.citire_ai?.rev ?? null;
-    let q = supa.from('ofertare_documente_atribuire').update(rez.upd).eq('id', docId);
-    q = revBaza == null ? q.is(CALE_REV, null) : q.eq(CALE_REV, String(revBaza));
-    // și pe tăiere: la PRIMA tăiere nu există citire_ai (rev null rămâne null după retăiere) — fără filtrul ăsta
-    // o rundă în zbor pe tăierea veche ar trece CAS-ul și ar suprascrie analiza.plansa nouă cu cea veche.
-    const taiatBaza = doc?.analiza?.plansa?.taiat_la ?? null;
-    q = taiatBaza == null ? q.is(CALE_TAIAT, null) : q.eq(CALE_TAIAT, String(taiatBaza));
-    const rezBaza = doc?.analiza?.rezervari_zone?.rev ?? null;
-    q = rezBaza == null ? q.is(CALE_REZ, null) : q.eq(CALE_REZ, String(rezBaza));
-    const { data, error } = await q.select('id');
+    // F08: CAS pe analiza întreagă include integritatea și orice alt subarbore.
+    // Corp POST, nu filtru în URL (analiza planșelor poate avea sute de KB).
+    const { data, error } = await supa.rpc('ofertare_plansa_analiza_cas', {
+      p_doc_id: docId, p_analiza_veche: doc.analiza ?? null, p_patch: rez.upd,
+    });
     if (error) return { ok: false, stop: { status: 500, error: error.message }, incercari: i + 1 };
-    if ((data || []).length === 1) return { ok: true, doc, rezultat: rez, incercari: i + 1 };
+    if (data === true) return { ok: true, doc, rezultat: rez, incercari: i + 1 };
     const { data: proaspat } = await supa.from('ofertare_documente_atribuire')
       .select('id, licitatie_id, nume_original, analiza, eroare').eq('id', docId).maybeSingle();
     if (!proaspat) return { ok: false, stop: { status: 404, error: 'document inexistent' }, incercari: i + 1 };

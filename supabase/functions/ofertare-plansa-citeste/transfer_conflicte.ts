@@ -40,7 +40,8 @@
 export const VERSIUNE_INREGISTRARE = 2;
 // versiunea semanticii conflictelor (NU COD_VERSIUNE al citirii: acela decide compatibilitatea zonelor citite)
 // t2 (reparația rundei 1): ancore + acoperire, confirmare cu tip / token, legacy_partial, TOTAL multiplu nescris, identitate incertă
-export const COD_TRANSFER = '2026-09-26.t2';
+// t3 (F07): închiderea cere identitățile pozițiilor, nu doar Dn și zonă.
+export const COD_TRANSFER = '2026-09-26.t3';
 export const MAX_CONFLICTE = 40;
 export const MAX_ISTORIC = 10;
 
@@ -52,7 +53,7 @@ export type ConflictTransfer = {
 };
 // ce a acoperit un transfer: citirea COMPLETĂ (toate zonele citite, fără zone lipsă / căzute), zonele citite, Dn-urile observate
 // (orice tronson — sigur, nestandard, adnotare, fără identitate), și dacă a EVALUAT rândurile din cantități (le-a citit și le-a comparat)
-export type Acoperire = { complet: boolean; zone: string[]; dn: number[]; cantitati_evaluate: boolean };
+export type Acoperire = { complet: boolean; zone: string[]; dn: number[]; cantitati_evaluate: boolean; pozitii?: (number | string)[] };
 
 export const STARE_INCHISA = 'fara_conflicte';
 // compatibilitate (importat de teste / UI): stările care cer o decizie — de fapt ORICE stare în afară de 'fara_conflicte'
@@ -85,6 +86,12 @@ export const rezumat = (r: any) => ({
 // fără nicio observație, de ex. ilizibilă, NU închide o evaluare parțială / un transfer căzut; rămâne pentru confirmarea omului)
 export function acoperit(c: ConflictTransfer, a: Acoperire | null | undefined): boolean {
   if (!a || !a.complet) return false;
+  // F07: o altă poziție cu același Dn în aceeași zonă nu acoperă identitatea pierdută.
+  const pozitii = [...(c.pozitie_id != null ? [c.pozitie_id] : []), ...(c.pozitii || []).map(p => p.id)];
+  if (pozitii.length) {
+    const vazute = new Set((a.pozitii || []).map(String));
+    if (!a.cantitati_evaluate || pozitii.some(id => id == null || !vazute.has(String(id)))) return false;
+  }
   const an = c?.ancore || {};
   const zone = (an.zone || []).map(String), dn = (an.dn || []).map(Number).filter(Number.isFinite);
   if (!zone.length && !dn.length && !an.pozitii) return (a.zone || []).length > 0 && (a.dn || []).length > 0;

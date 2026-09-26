@@ -201,14 +201,23 @@ export function evalueazaPoarta(st) {
   }
 }
 
+// F01: contractul porții SQL ofertare_r5_blocaj_sursa.
+export const CONTOARE_BLOCANTE_CANTITATI = ['lista_f3_nevalidate', 'lista_f3_validate_fara_cant', 'invalidate_in_afara_retea',
+  'total_invalidate', 'unitate_schimbata_in_afara_retea', 'um_de_normalizat_f3', 'retea_alte_unitati_lungimi_f3']
+
 // Rândul „sursa_cantitati” (aprobarea finală) — funcție pură, testată și separat
 export function controlSursaAprobareFinala(st) {
-  const base = { k: 'sursa_cantitati', titlu: 'Sursa cantităților — restanțele transferului din planșe (aprobarea finală)' }
+  const base = { k: 'sursa_cantitati', titlu: 'Sursa cantităților — validare și transferuri (aprobarea finală)' }
   if (st?.cantitati_nevalidate_indisponibil) return { ...base, stare: 'block',
     detalii: `nu putem verifica sursa cantităților (${st.cantitati_nevalidate_indisponibil}) — draftul poate continua, aprobarea finală rămâne blocată` }
   if (!Array.isArray(st?.totaluri_control) || !Number.isInteger(st?.unitati_de_verificat)) return { ...base, stare: 'block',
     detalii: 'nu putem verifica TOTAL și unitățile (control R9b indisponibil) — aprobarea finală rămâne blocată' }
   const totaluri = st.totaluri_control.filter(t => t.stare !== 'ok')
+  const lipsa = CONTOARE_BLOCANTE_CANTITATI.filter(k => !Number.isInteger(st?.[k]) || st[k] < 0)
+  if (lipsa.length) return { ...base, stare: 'block', detalii: `nu putem verifica cantitățile: contoare lipsă / invalide (${lipsa.join(', ')})` }
+  const nevalidate = CONTOARE_BLOCANTE_CANTITATI.filter(k => st[k] > 0)
+  if (nevalidate.length) return { ...base, stare: 'block',
+    detalii: `cantități de verificat: ${nevalidate.map(k => `${k} = ${st[k]}`).join('; ')}; verifică și validează pozițiile în Cantități` }
   if (st.unitati_de_verificat > 0 || totaluri.length) return { ...base, stare: 'block',
     detalii: [st.unitati_de_verificat > 0 ? 'Unitate de verificat — baza este incompletă.' : '', ...totaluri.map(t => t.text)].filter(Boolean).join(' ') }
   const tcd = st?.transfer_conflicte_docs, tic = st?.transfer_in_curs

@@ -8,6 +8,7 @@ on:
       - 'src/grafic*'
       - 'supabase/functions/ofertare-**'
       - 'docs/R5_*.sql'
+      - 'docs/R5_MIGRARE_3*'
       - 'scripts/pg/**'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
@@ -19,6 +20,7 @@ on:
       - 'src/grafic*'
       - 'supabase/functions/ofertare-**'
       - 'docs/R5_*.sql'
+      - 'docs/R5_MIGRARE_3*'
       - 'scripts/pg/**'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
@@ -94,3 +96,8 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/r9b
           PGPASSWORD: postgres
         run: node scripts/pg/test_r9b_probe23.mjs
+      - name: Regresie F01-F06 pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/r9b_test_review_f
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_r5_review_f.mjs

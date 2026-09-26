@@ -131,6 +131,7 @@ const VERDE = { capitole: 5, fara_capitol: 0, de_raspuns: 10, cu_capitol: 10, ce
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0, capitole_nescrise_de_om: 0, observatii_deschise: 0, documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0, lista_f3_m: 700, grafic_fronturi_m: 700 }
 const VIEW_OK = { licitatie_id: 3, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0,
+  um_de_normalizat_f3: 0, retea_alte_unitati_lungimi_f3: 0,
   um_de_normalizat: 0, transfer_conflicte_docs: 0, transfer_conflicte_n: 0, totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0, transfer_restante: {}, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }
 
 describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 1: toate cantitățile validate + conflict relevant DESCHIS => aprobarea finală BLOCATĂ, chiar dacă H2 e WARN', () => {

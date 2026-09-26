@@ -1200,7 +1200,7 @@ export function acoperireCitire(o: { gata: boolean; toate: any[]; zoneLipsa: str
   const zone = [...new Set(toate.filter((r: any) => !r?.eroare).map((r: any) => String(r?.eticheta || '').replace('.jpg', '')).filter(Boolean))].sort();
   const dn = dnDin(toate.flatMap((r: any) => [...(r?.tronsoane || []), ...(r?.adnotari || [])].map((t: any) => t?.diametru_mm)));
   const t = o.transfer && typeof o.transfer === 'object' ? o.transfer : {};
-  return { complet: !!o.gata && !erori && !(o.zoneLipsa || []).length && !t.eroare && !t.amanat, zone, dn, cantitati_evaluate: t.evaluat === true };
+  return { complet: !!o.gata && !erori && !(o.zoneLipsa || []).length && !t.eroare && !t.amanat, zone, dn, cantitati_evaluate: t.evaluat === true, pozitii: t.pozitii_evaluate || [] };
 }
 // R5 (Copilot 25.09.2026): un rând scris de un transfer ANTERIOR din planșă (sursa „… citit automat din scanare")
 // sau declarat tip_sursa='plansa' NU e memoriu. Până acum `cantitate` lui era citită drept „dinMemoriu": la o recitire
@@ -1765,7 +1765,14 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
   plasaAprobare(ops, existente || [], refs);
 
   // reparația rundei 1: `evaluat` = rândurile din cantități au fost citite și comparate (acoperirea „pozițiilor” unui conflict anterior)
-  const extra = { ...(doarVerif.length ? { doar_de_verificat: doarVerif } : {}), ...extraTotal, evaluat: true };
+  const extra = { ...(doarVerif.length ? { doar_de_verificat: doarVerif } : {}), ...extraTotal, evaluat: true,
+    // Doar pozițiile efectiv întâlnite la atribuire; nu toate rândurile citite din BD.
+    pozitii_evaluate: [...new Set([
+      ...ops.filter(o => o.op === 'update').map(o => o.id),
+      ...ambigue.flatMap(a => (a.pozitii || []).map((p: any) => p.id)),
+      ...doarVerif.map(p => p.pozitie_id),
+      ...(extraTotal.totaluri_multiple || []).map((p: any) => p.id),
+    ].filter(id => id != null))] };
   if (!peDiametru.size && !ops.length) return { adaugate: 0, actualizate: 0, ambigue, total_m: 0, pe_diametre: {}, ...extra };
   const { data: rez, error } = await supa.rpc('ofertare_transfer_plansa_cantitati',
     { p_doc_id: doc.id, p_rulare: rulare, p_randuri: ops });

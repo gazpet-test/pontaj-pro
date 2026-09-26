@@ -3,7 +3,7 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { handler, rezultatCitire } from './handler.ts'
 import { aceeasiValoare, descrieDiferenta } from './invalidare.js'
-import { CALE_REV, CALE_REZ, REZERVARE_EXPIRA_MS, TOLERANTA_CEAS_MS, fuzioneazaZone, leaseTransferOcupat, rezActiva, rezervariNoi, rezervateDeAltii, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
+import { scrieCAS, rezervaChei, elibereazaRezervari, CALE_REV, CALE_REZ, REZERVARE_EXPIRA_MS, TOLERANTA_CEAS_MS, fuzioneazaZone, leaseTransferOcupat, rezActiva, rezervariNoi, rezervateDeAltii, transferDeReluat, regiuneZona, versiuneIncompatibila } from './concurenta.ts'
 
 // ---- DB simulată cu update real + filtre pe cale JSON (analiza->citire_ai->>rev) ----
 const cale = (row: any, c: string) => {
@@ -31,7 +31,7 @@ function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
     }
     const b: any = {
       select: () => b, order: () => b, limit: () => b,
-      eq: (c: string, v: unknown) => { filtre.push((r) => String(cale(r, c)) === String(v)); return b },
+      eq: (c: string, v: unknown) => { filtre.push((r) => (c === 'analiza' ? JSON.stringify(cale(r, c)) : String(cale(r, c))) === String(v)); return b },
       is: (c: string, v: unknown) => { filtre.push((r) => (cale(r, c) ?? null) === v); return b },
       update: (p: any) => { op = { tip: 'upd', patch: p }; return b },
       insert: (p: any) => { op = { tip: 'ins', patch: p }; return b },
@@ -48,6 +48,17 @@ function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
   }
   // RPC atomic simulat (ofertare_transfer_plansa_cantitati): verificare lease + scrieri + transfer 'facut', fără await intern
   const rpc = async (nume: string, a: any): Promise<{ data: any; error: any }> => {
+    if (nume === 'ofertare_plansa_analiza_cas') {
+      const rows = tabele.ofertare_documente_atribuire || [];
+      if (opt.inainteDeUpdateDoc) opt.inainteDeUpdateDoc(rows);
+      const doc = rows.find(r => r.id === a.p_doc_id);
+      if (!doc || JSON.stringify(doc.analiza ?? null) !== JSON.stringify(a.p_analiza_veche)) {
+        n.conflicte++; return { data: false, error: null };
+      }
+      Object.assign(doc, structuredClone(a.p_patch));
+      n.scrieriDoc++;
+      return { data: true, error: null };
+    }
     if (nume !== 'ofertare_transfer_plansa_cantitati') return { data: null, error: null }
     if (opt.inainteDeRpc) await opt.inainteDeRpc()
     n.rpc++
@@ -1827,9 +1838,9 @@ Deno.test('sarcina 2 (a) E2E: grup sigur AMBIGUU pe două poziții VALIDATE + r�
   assertEquals([tc2.stare, tc2.n, tcDeschis(tc2), 'inchis_prin' in tc2, tc2.inchise_la_recitire], ['conflicte', 1, true, false, 1])
   assertEquals(tc2.conflicte.map((c: any) => [c.tip, c.tip_initial, c.din]), [['nerezolvat_la_recitire', 'ambiguu', tc.id]])
   assert(tc2.conflicte[0].text.includes('ÎNCĂ DESCHIS — recitirea nu a acoperit Dn 110, pozițiile din cantități: Dn110 PE 500 m NESCRIS'), tc2.conflicte[0].text)
-  // omul corectează denumirea poziției #32 (altă stradă, Dn125); recitirea care VEDE Dn110 și îl scrie fără ambiguitate îl închide
+  // F07: după corectarea #32, recitirea trebuie să vadă ambele identități, #31 și #32.
   await tabele.from('ofertare_cantitati').update({ denumire: 'Țeavă PE100 Dn125 — sat B' }).eq('id', 32)
-  const ai3 = aiFelii(n, { z1_1: { tronsoane: [trT('A', 110, 500)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'A', '110', '0,5')] }] } })
+  const ai3 = aiFelii(n, { z1_1: { tronsoane: [trT('A', 110, 500), trT('B', 125, 200)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'A', '110', '0,5'), rdT('2', 'B', '125', '0,2')] }] } })
   assertEquals((await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai3, supa))).status, 200)
   const tc3 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
   assertEquals([tc3.stare, tc3.n, tcDeschis(tc3), tc3.inchis_prin, tc3.inchide], ['fara_conflicte', 0, false, 'recitire_fara_conflicte', tc2.id])
@@ -1869,7 +1880,8 @@ Deno.test('sarcina 2 (a) E2E: transferul CĂZUT (RPC cu eroare) => „neefectuat
   const tc1 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
   assertEquals([tc1.stare, tc1.conflicte.map((c: any) => c.tip)], ['conflicte', ['ambiguu']])
   const rpcVechi = supa.rpc
-  ;(supa as any).rpc = async () => ({ data: null, error: { message: 'deadlock detected' } })
+  ;(supa as any).rpc = async (name: string, args: any) => name === 'ofertare_transfer_plansa_cantitati'
+    ? { data: null, error: { message: 'deadlock detected' } } : rpcVechi(name, args)
   try { await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa)) } finally { (supa as any).rpc = rpcVechi }
   const doc = await citesteDoc130(tabele)
   const tc2 = doc.analiza.transfer_cantitati
@@ -1914,6 +1926,8 @@ async function lic3CitireVeche(randuri: any[], felii: Record<string, any>) {
   const { identitate_randuri: _i, randuri_fara_identitate_n: _r, conflicte: _c, total_sigur_m: _t, ...sumarVechi } = ca.sumar
   const { inregistrare_id: _l, evaluat: _e, ...jurnalVechi } = ca.sumar.cantitati
   const vechi = { ...ca, versiune: { ...ca.versiune, cod: 'v25-vechi', prompt_sha: 'vechi' }, felii: ca.felii.map((f: any) => ({ ...f, _versiune: 'v25-vechi' })),
+    // Fixture istoric: nu poate avea un transfer terminat în aceeași milisecundă cu reevaluarea.
+    transfer: { ...ca.transfer, de_la: '2026-09-01T10:00:00Z', la: '2026-09-01T10:01:00Z' },
     sumar: { ...sumarVechi, cantitati: jurnalVechi, note_lipite: 3, lungime_declarata_m: 777 }, note_lipite: [{ text: 'L=777 m', perechea: 'z1_1+z2_1' }] }
   const { transfer_cantitati: _x, ...an } = d.analiza
   await x.tabele.from('ofertare_documente_atribuire').update({ analiza: { ...an, citire_ai: vechi } }).eq('id', 130)
@@ -1964,3 +1978,34 @@ Deno.test('reparația rundei 1: „reevaluează” pe citirea veche a doc 470 cu
   assertEquals([r3.status, n.ai], [409, 0])
   assertEquals((await citesteDoc130(tabele)).analiza.transfer_cantitati.id, tc.id, 'nimic scris la refuz')
 })
+
+// F08: writer B nu schimbă nici citire_ai.rev, nici rezervari_zone.rev.
+Deno.test('F08: rezervare și eliberare păstrează integritatea scrisă concurent', async () => {
+  const doc = { id: 470, analiza: { plansa: PLANSA, integritate: { sha256: 'vechi' } } };
+  let intervine = true;
+  let hash = 'nou-la-rezervare';
+  const d = db({ ofertare_documente_atribuire: [doc] }, { inainteDeUpdateDoc: rows => {
+    if (intervine) { rows[0].analiza.integritate = { sha256: hash }; intervine = false; }
+  } });
+  const r = await rezervaChei(d, 470, structuredClone(doc), 'A', 'T1', () => ({ lot: ['z1_1'], cand: ['z1_1'] }));
+  assert(r.ok);
+  assertEquals(doc.analiza.integritate.sha256, 'nou-la-rezervare');
+  assertEquals((doc.analiza as any).rezervari_zone.zone.z1_1.rulare, 'A');
+  assertEquals(d.n.conflicte, 1);
+  intervine = true; hash = 'nou-la-eliberare';
+  await elibereazaRezervari(d, 470, 'A', 'T1');
+  assertEquals(doc.analiza.integritate.sha256, hash);
+  assertEquals((doc.analiza as any).rezervari_zone.zone, {});
+  assertEquals(d.n.conflicte, 2);
+});
+
+Deno.test('F08: scrieCAS reface modificarea deținută peste analiza nouă', async () => {
+  const doc = { id: 470, analiza: { citire_ai: { rev: 'initial' }, integritate: { sha256: 'vechi' } } };
+  const stale = structuredClone(doc);
+  doc.analiza.integritate.sha256 = 'B';
+  const d = db({ ofertare_documente_atribuire: [doc] });
+  const r = await scrieCAS(d, 470, stale, x => ({ upd: { analiza: { ...x.analiza, citire_ai: { rev: 'A' } } } }));
+  assert(r.ok);
+  assertEquals(r.incercari, 2);
+  assertEquals(doc.analiza, { citire_ai: { rev: 'A' }, integritate: { sha256: 'B' } });
+});

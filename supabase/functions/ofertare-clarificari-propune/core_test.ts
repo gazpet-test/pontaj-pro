@@ -4,6 +4,31 @@
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { propuneClarificari, randCantitatePentruAI, sectiuneConflictePlanse } from './core.ts'
 
+Deno.test('F02: generatorul persistă propunere, fără aprobare implicită', async () => {
+  const baza = supaFals({ ofertare_licitatii: [{ id: 95 }], ofertare_cerinte: [{ id: 1, text_cerinta: 'Cerință verificabilă' }] });
+  const scrise: any[] = [];
+  const supa = { from(t: string) {
+    const b = baza.from(t);
+    if (t === 'ofertare_clarificari') b.upsert = (rows: any[]) => {
+      scrise.push(...rows);
+      return { select: () => Promise.resolve({ data: [{ id: 1 }], error: null }) };
+    };
+    return b;
+  } };
+  const vechi = globalThis.fetch;
+  globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({
+    clarificari: [{ subiect: 'Termenul de execuție', cerinte_ids: [1], referinta: 'Caiet, p. 2',
+      fragment: 'Durata de execuție diferă între cele două secțiuni ale documentației.',
+      intrebare: 'Vă rugăm să precizați durata de execuție aplicabilă în vederea pregătirii ofertei.', prioritate: 'importanta' }],
+  }) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))) as typeof fetch;
+  try {
+    const r = await propuneClarificari(supa, { licitatie_id: 95 });
+    assertEquals(r.scrise, 1, JSON.stringify(r));
+    assertEquals(scrise.length, 1);
+    assertEquals([scrise[0].origine, scrise[0].status], ['platforma', 'propunere']);
+  } finally { globalThis.fetch = vechi; }
+});
+
 const R1751 = { id: 1751, licitatie_id: 95, obiect: null, categorie: 'Conducte și montaj', denumire: 'Conductă distribuție gaze Dn200', um: 'm',
   cantitate: 17785, cantitate_plansa: 17785, status: 'extras', tip_sursa: null,
   sursa: 'Planșa 1 — tabel de dimensionare, citit automat din scanare',
