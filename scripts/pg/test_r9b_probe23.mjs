@@ -265,9 +265,10 @@ async function draft(observer) {
 }
 
 function state(session, d) {
-  return session.value(`(SELECT to_jsonb(v) || jsonb_build_object('intrebare',c.intrebare,'origine',c.origine,
+  // LEFT JOIN: view-ul exclude ciornele retrase; statusul vine din tabel
+  return session.value(`(SELECT coalesce(to_jsonb(v), '{}'::jsonb) || jsonb_build_object('id',c.id,'status',c.status,'intrebare',c.intrebare,'origine',c.origine,
     'cheie',c.cheie,'baza_generare',c.baza_generare)
-    FROM v_ofertare_clarificari_baza v JOIN ofertare_clarificari c USING(id) WHERE v.id=${d.id})`)
+    FROM ofertare_clarificari c LEFT JOIN v_ofertare_clarificari_baza v USING(id) WHERE c.id=${d.id})`)
 }
 
 async function confirm(session, d, token, note) {
@@ -467,7 +468,9 @@ const tests = [
     await changeQuantity(b, d)
     assert.equal((await state(observer, d)).stare, 'schimbata')
     await a.command(`UPDATE ofertare_clarificari SET status='retrasa' WHERE id=${d.id};`)
-    assert.equal((await state(observer, d)).status, 'retrasa')
+    // v_ofertare_clarificari_baza exclude intenționat ciornele retrase — statusul se citește din tabel
+    assert.equal(await observer.value(`(SELECT to_jsonb(status) FROM ofertare_clarificari WHERE id=${d.id})`), 'retrasa')
+    assert.equal(await observer.value(`(SELECT to_jsonb(count(*)) FROM v_ofertare_clarificari_baza WHERE id=${d.id})`), 0)
     await notifyCheck(observer, a, d, 0)
   }],
 ]
