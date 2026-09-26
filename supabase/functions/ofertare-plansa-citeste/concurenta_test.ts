@@ -1577,3 +1577,82 @@ Deno.test('runda 10: pe calea „doar de verificat”, un rest AMBIGUU între o 
     assertEquals(r.j.cantitati.doar_de_verificat.map((d: any) => [d.dn, d.pozitie_id, d.actiune]), [[90, null, 'ambiguu']], cum)
   }
 })
+
+// ---- 26.09.2026 — runda 11 (verificatorul rundei 10, ADV11): prin handler + RPC simulat. Pică pe 85c53f1 / 7065789. ----
+const nota11 = 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit'
+Deno.test('runda 11 (MAJOR, ADV11-1): subtotal numerotat cu literă / cifre romane / „Cap.” („a) Total conducte PE De 110”) + poziția reală fără material => poziția primește cifra, subtotalul notă; ambele ordini (85c53f1: subtotalul lua 500, poziția păstra TĂCUT 480 „VECHE 3”)', async () => {
+  for (const den of ['a) Total conducte PE De 110', 'II. Total conducte PE De 110', 'Cap. 3 Total conducte PE De 110', 'Art. 2 - Total conducte PE De 110', 'B. Subtotal conducte PE De 110'])
+    for (const ordine of [0, 1]) {
+      const poz = [{ id: 3, denumire: 'Conductă distribuție gaze Dn110', cantitate: 500, cantitate_plansa: 480, status: 'validat', diferenta_nota: 'VECHE 3' },
+        { id: 4, denumire: den, cantitate: 500, cantitate_plansa: 480, status: 'extras', diferenta_nota: 'VECHE 4' }]
+      const r = await ruleaza10(ordine ? [...poz].reverse() : poz, feliiDn110('PE100'))
+      const cum = `${den}, ordine ${ordine}`
+      assertEquals(r.j.cantitati.ambigue, [], cum)
+      assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, 'validat', 'Planșa „PL1.1.pdf” confirmă: 500 m.'], cum)
+      assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [480, 'diferenta'], cum)
+      assert(r.id(4).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(4).diferenta_nota)
+    }
+  // limită documentată (§5.7): „Lungime totală …” nu începe cu „total” => poziție; cu materialul grupului, filtrul pe material îi dă cifra,
+  // iar poziția fără material rămâne neatinsă (identic pe 7a7bf86)
+  const r = await ruleaza10([{ id: 3, denumire: 'Conductă distribuție gaze Dn110', cantitate: 500, cantitate_plansa: 480, status: 'validat', diferenta_nota: 'VECHE 3' },
+    { id: 4, denumire: 'Lungime totală conducte PE De 110', cantitate: 500, cantitate_plansa: 480, status: 'extras', diferenta_nota: 'VECHE 4' }], feliiDn110('PE100'))
+  assertEquals([r.id(4).cantitate_plansa, r.id(3).cantitate_plansa, r.id(3).diferenta_nota], [500, 480, 'VECHE 3'])
+})
+Deno.test('runda 11 (minor, ADV11-2 / 2b): subtotalul OL cedează doar pozițiilor COMPATIBILE ca material — „Total conducte OL De 110” + „Conductă PE Dn110”: grupul OL merge pe subtotalul OL, PE pe poziția PE (85c53f1: OL 40 scris peste poziția PE 500 / coliziune)', async () => {
+  const mk = (dl: string, mat: string, L: number) => ({ de_la: dl, la: 'CT', lungime_m: L, diametru_mm: 110, material: mat, sursa: 'tabel' })
+  const rr = (nr: string, dl: string, mat: string, L: string) => ({ 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': '110', 'Material': mat, 'L (km)': L })
+  for (const ordine of [0, 1]) {
+    const poz = [{ id: 3, denumire: 'Conductă PE Dn110', cantitate: 500, cantitate_plansa: 500, status: 'extras', diferenta_nota: 'VECHE 3' },
+      { id: 4, denumire: 'Total conducte OL De 110', cantitate: 40, cantitate_plansa: null, status: 'extras', diferenta_nota: 'VECHE 4' }]
+    const r = await ruleaza10(ordine ? [...poz].reverse() : poz, { z1_1: { tronsoane: [mk('A', 'OL', 40)], tabele: [{ denumire: 'D', coloane: COLM10, randuri: [rr('1', 'A', 'OL', '0,04')] }] } })
+    const cum = `ADV11-2, ordine ${ordine}`
+    assertEquals(r.j.cantitati.ambigue, [], cum)
+    assertEquals([r.id(4).cantitate_plansa, r.id(4).diferenta_nota], [40, 'Planșa „PL1.1.pdf” confirmă: 40 m.'], cum)
+    assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, 'extras', 'VECHE 3'], cum)
+    const poz2 = [{ id: 3, denumire: 'Conductă PE Dn110', cantitate: 500, cantitate_plansa: 480, status: 'extras', diferenta_nota: 'VECHE 3' },
+      { id: 4, denumire: 'Total conducte OL De 110', cantitate: 40, cantitate_plansa: 30, status: 'extras', diferenta_nota: 'VECHE 4' }]
+    const r2 = await ruleaza10(ordine ? [...poz2].reverse() : poz2, { z1_1: { tronsoane: [mk('A', 'PE100', 500), mk('B', 'OL', 40)],
+      tabele: [{ denumire: 'D', coloane: COLM10, randuri: [rr('1', 'A', 'PE100', '0,5'), rr('2', 'B', 'OL', '0,04')] }] } })
+    const cum2 = `ADV11-2b, ordine ${ordine}`
+    assertEquals(r2.j.cantitati.ambigue, [], cum2)
+    assertEquals([r2.id(3).cantitate_plansa, r2.id(3).diferenta_nota, r2.id(4).cantitate_plansa, r2.id(4).diferenta_nota],
+      [500, 'Planșa „PL1.1.pdf” confirmă: 500 m.', 40, 'Planșa „PL1.1.pdf” confirmă: 40 m.'], cum2)
+    // grupul FĂRĂ material: orice poziție e compatibilă => subtotalul „Total conducte De 110” cedează poziției PE (ca în runda 9)
+    const poz3 = [{ id: 3, denumire: 'Conductă PE Dn110', cantitate: 500, cantitate_plansa: 480, status: 'extras', diferenta_nota: 'VECHE 3' },
+      { id: 4, denumire: 'Total conducte De 110', cantitate: 500, cantitate_plansa: 480, status: 'extras', diferenta_nota: 'VECHE 4' }]
+    const r3 = await ruleaza10(ordine ? [...poz3].reverse() : poz3, feliiDn110(null))
+    assertEquals([r3.id(3).cantitate_plansa, r3.id(4).cantitate_plansa, r3.id(4).status, r3.j.cantitati.ambigue], [500, 480, 'diferenta', []], `fără material, ordine ${ordine}`)
+    assert(r3.id(4).diferenta_nota.startsWith(nota11), r3.id(4).diferenta_nota)
+  }
+})
+Deno.test('runda 11 (MAJOR, ADV11-3 / 3r): subtotal Dn110 urmat de un număr care nu e Dn („, 20 tronsoane”, „și 32 branșamente”, „la 32 case”, „/ 16 bar”) rămâne subtotal: TOTAL-ul real confirmă 1.100, subtotalul primește nota; ambele ordini (85c53f1: subtotalul lua 1.100 sau ieșea din rețea, TOTAL-ul real TĂCUT la 1.000 „VECHE 6”)', async () => {
+  const rd = (nr: string, dl: string, dn: string, L: string) => ({ 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': dn, 'Material': 'PE100', 'L (km)': L })
+  const tr = (dl: string, dn: number, L: number) => ({ de_la: dl, la: 'CT', lungime_m: L, diametru_mm: dn, material: 'PE100', sursa: 'tabel' })
+  const felii = { z1_1: { tronsoane: [tr('A', 110, 900), tr('B', 63, 200)], tabele: [{ denumire: 'D', coloane: COLM10, randuri: [rd('1', 'A', '110', '0,9'), rd('2', 'B', '63', '0,2')] }] } }
+  for (const den of ['Total conducte De 110, 20 tronsoane', 'Total conducte De 110 și 32 branșamente', 'Total conducte Dn110 la 32 case', 'Total conducte De 110 / 16 bar',
+    'Total conducte De 110 la 20 bar', 'Total conducte De 110, 16 bar'])
+    for (const ordine of [0, 1]) {
+      const sub = { id: 4, denumire: den, cantitate: 900, cantitate_plansa: 850, status: ordine ? 'validat' : 'extras', diferenta_nota: 'VECHE 4' }
+      const tot = { id: 6, denumire: 'TOTAL rețea distribuție', cantitate: 1100, cantitate_plansa: 1000, status: 'extras', diferenta_nota: 'VECHE 6' }
+      const d110 = { id: 3, denumire: 'Țeavă PE100 Dn110', cantitate: 900, cantitate_plansa: null, status: 'extras' }
+      const d63 = { id: 5, denumire: 'Țeavă PE100 Dn63', cantitate: 200, cantitate_plansa: null, status: 'extras' }
+      const r = await ruleaza10(ordine ? [tot, d110, sub, d63] : [d110, sub, tot, d63], felii)
+      const cum = `${den}, ordine ${ordine}`
+      assertEquals([r.id(6).cantitate_plansa, r.id(6).diferenta_nota], [1100, 'Planșa „PL1.1.pdf” confirmă totalul: 1.100 m.'], cum)
+      assertEquals([r.id(3).cantitate_plansa, r.id(5).cantitate_plansa, r.j.cantitati.adaugate, r.j.cantitati.ambigue], [900, 200, 0, []], cum)
+      assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [850, ordine ? 'validat' : 'diferenta'], cum)
+      assert(r.id(4).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(4).diferenta_nota)
+    }
+})
+Deno.test('runda 11: subtotal = „total” ca PRIM cuvânt (după numerotare / „Cap.”, „Art.”, „Poz.”, „Pct.” ca prefix întreg) — „Conductă PE Dn110 (total)”, „Poziție total conductă PE Dn110” sunt poziții reale: lângă „Conductă OL Dn110”, grupul fără material e AMBIGUU vizibil, nimic scris', async () => {
+  for (const den of ['Conductă PE Dn110 (total)', 'Poziție total conductă PE Dn110', 'Capac total conductă PE Dn110'])
+    for (const ordine of [0, 1]) {
+      const poz = [{ id: 3, denumire: den, cantitate: 500, cantitate_plansa: 480, status: 'extras', diferenta_nota: 'VECHE 3' },
+        { id: 4, denumire: 'Conductă OL Dn110', cantitate: 500, cantitate_plansa: 20, status: 'extras', diferenta_nota: 'VECHE 4' }]
+      const r = await ruleaza10(ordine ? [...poz].reverse() : poz, feliiDn110(null))
+      const cum = `${den}, ordine ${ordine}`
+      assertEquals(r.j.cantitati.ambigue.map((a: any) => [a.dn, a.material, a.metri, a.pozitii.map((p: any) => p.id).sort()]), [[110, null, 500, [3, 4]]], cum)
+      assertEquals(r.ops.filter((o: any) => o.op === 'update').length, 0, cum)
+      assertEquals([r.id(3).cantitate_plansa, r.id(4).cantitate_plansa, r.id(4).diferenta_nota], [480, 20, 'VECHE 4'], cum)
+    }
+})

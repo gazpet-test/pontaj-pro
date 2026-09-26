@@ -35,7 +35,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-26.14'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-26.15'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -302,13 +302,22 @@ const DN_STANDARD = new Set([16,20,25,32,40,50,63,65,75,80,90,100,110,125,140,15
 // fiecare număr standard din listă e un Dn (≥ 2 Dn => total global). Al doilea capăt / elementul din listă NU e un Dn când e urmat de o
 // unitate sau de zecimale („Dn 63 - 200 m”, „De 110, 12,5 m”, „+ 20%”). „De 110/10” (grosimea peretelui): capătul al doilea mai mic și
 // nestandard => nu e interval (un interval urcă: „De 60–110”; descrescător doar cu ambele capete standard).
+// runda 11 (verificatorul rundei 10, MAJOR — regresie TOTAL-b): numărul FĂRĂ prefix Dn (al doilea capăt / element de listă) e un Dn
+// doar dacă după el vine sfârșitul, o punctuație / un separator, „mm”, alt separator de listă / interval sau un material / SDR
+// („pe”, „ol”, „sdr”). Orice alt cuvânt („, 20 tronsoane”, „și 32 branșamente”, „la 32 case”, „/ 16 bar”, „- 200 metri”, „90 mp”) îl
+// anulează: altfel un SUBTOTAL cu un singur Dn devenea TOTAL global (lua totalul, iar TOTAL-ul real rămânea tăcut pe cifra veche).
+// Pe „/” (grosimea peretelui: „De 225/20”, „De 180/16”) nu se aplică regula „descrescător cu ambele capete standard”: intervalul cu
+// „/” doar crescător („De 63/110”) sau cu prefix pe al doilea capăt („Dn110/Dn63”). Fără prefix, al doilea capăt al intervalului
+// trebuie să fie și el un Dn standard („De 110 - 120” = subtotal Dn110, nu interval).
 const PREF_DN = '(?:\\bdn|\\bde|ø|Ø|φ)';
-const NU_UNITATE = '(?![.,]\\d|\\s*(?:%|(?:m|ml|km|buc|bucati|kg|ore)\\b))';
+// cu prefix Dn, numărul E un Dn și când e urmat de o unitate („De 63 și De 110 m”: m e lungimea totalului); nu doar cu zecimale
+const NU_ZECIMALE = '(?![.,]\\d)';
+const URMARE_FARA_PREFIX = `${NU_ZECIMALE}(?=\\s*(?:$|[),;.:/÷–—+&…-]|mm\\b|(?:si|sau|la|pana|ol)\\b|pe(?:\\d|\\b)|sdr))`;
 const SEP_INTERVAL = '\\s*(?:[-–—÷/]|\\.{2,3}|…|\\b(?:pana\\s+)?la\\b)\\s*';
 const SEP_LISTA = '\\s*(?:[,;+&]|\\bsi\\b|\\bsau\\b)\\s*';
-const RE_DN_DENUMIRE = new RegExp(`${PREF_DN}\\s*(\\d{2,3})\\b` +
-  `(?:${SEP_INTERVAL}(?:${PREF_DN}\\s*)?(\\d{2,3})\\b${NU_UNITATE})?` +
-  `((?:${SEP_LISTA}(?:${PREF_DN}\\s*)?\\d{2,3}\\b${NU_UNITATE})*)`, 'gi');
+const CAPAT_2 = `(?:(${PREF_DN})\\s*(\\d{2,3})\\b${NU_ZECIMALE}|(\\d{2,3})\\b${URMARE_FARA_PREFIX})`;
+const ELEM_LISTA = `(?:${PREF_DN}\\s*\\d{2,3}\\b${NU_ZECIMALE}|\\d{2,3}\\b${URMARE_FARA_PREFIX})`;
+const RE_DN_DENUMIRE = new RegExp(`${PREF_DN}\\s*(\\d{2,3})\\b(?:(${SEP_INTERVAL})${CAPAT_2})?((?:${SEP_LISTA}${ELEM_LISTA})*)`, 'gi');
 export function dnuriDenumire(s: unknown): { dn: number[]; interval: boolean } {
   const dn = new Set<number>(); let interval = false;
   const std = (x: number) => DN_STANDARD.has(x);
@@ -316,10 +325,12 @@ export function dnuriDenumire(s: unknown): { dn: number[]; interval: boolean } {
     const a = Number(m[1]);
     if (std(a)) dn.add(a);
     if (m[2]) {
-      const b = Number(m[2]);
-      if (b > a || (std(a) && std(b) && b !== a)) { interval = true; if (std(b)) dn.add(b); }
+      const cuPrefix = !!m[3], b = Number(m[4] || m[5]);
+      const coboara = std(a) && std(b) && b !== a && (cuPrefix || !m[2].includes('/'));
+      // fără prefix, al doilea capăt trebuie să fie un Dn standard („De 110 - 120” nu e interval; „De 60–110” da)
+      if ((b > a && (cuPrefix || std(b))) || coboara) { interval = true; if (std(b)) dn.add(b); }
     }
-    for (const x of (m[3] || '').matchAll(/(\d{2,3})\b/g)) if (std(Number(x[1]))) dn.add(Number(x[1]));
+    for (const x of (m[6] || '').matchAll(/(\d{2,3})\b/g)) if (std(Number(x[1]))) dn.add(Number(x[1]));
   }
   return { dn: [...dn].sort((a, b) => a - b), interval };
 }
@@ -1164,15 +1175,22 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   // primește nota din bucla „total cu Dn”; (2) minor — subtotal = denumirea care ÎNCEPE cu „total” / „subtotal” (după numerotare sau
   // semne), nu orice „total” din denumire: „Conductă PE Dn110 — lungime totală” e poziție reală (lângă „Conductă OL Dn110”, pe un grup
   // fără material => AMBIGUU vizibil, ca înainte de runda 9, nu cifra pe poziția OL).
-  const eSubtotal = (r: any) => /^[^a-z]*(?:sub\s*-?\s*)?total/.test(faraDiacritice(String(r.denumire || '')).toLowerCase());
-  const preferaFaraTotal = (cs: any[]) => {
+  // runda 11 (verificatorul rundei 10): (1) MAJOR — și numerotarea cu litere / cifre romane („a) Total …”, „II. Total …”) sau cu
+  // prefix („Cap. 3 Total …”, „Art. 2 - Total …”, „Poz. 12. Total …”) e subtotal (înainte doar cifre / semne: subtotalul lua cifra, iar
+  // poziția reală rămânea tăcut pe cifra veche); (2) minor — subtotalul cedează doar în favoarea pozițiilor COMPATIBILE ca material
+  // (același material sau fără material; grupul fără material = oricare): „Total conducte OL De 110” lângă „Conductă PE Dn110”, cu
+  // grupul OL, ia în continuare cifra OL (după filtrul pe material), nu o scrie peste poziția PE.
+  const eSubtotal = (r: any) => /^[^a-z]*(?:(?:[a-z]{1,2}|[ivxlc]+)[.)]\s*|(?:cap|art|poz|pct)\b\.?\s*[\w.]*\s*[-–.:)]?\s*)?(?:sub\s*-?\s*)?total\b/
+    .test(faraDiacritice(String(r.denumire || '')).toLowerCase());
+  const preferaFaraTotal = (cs: any[], mat: string) => {
     if (cs.length < 2) return cs;
     const f = cs.filter((r: any) => !eSubtotal(r));
-    return f.length && f.length < cs.length ? f : cs;
+    const compatibil = (r: any) => !mat || !materialNorm(r.denumire) || materialNorm(r.denumire) === mat;
+    return f.length < cs.length && f.some(compatibil) ? f : cs;
   };
   // candidații unui (Dn, material): întâi pozițiile fără „total” (subtotal), apoi — tot cu mai mulți — departajarea după material
   const candidatiPe = (dn: number, mat: string) => {
-    let cs = preferaFaraTotal(retea.filter((r: any) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || ''))));
+    let cs = preferaFaraTotal(retea.filter((r: any) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || ''))), mat);
     // mai multe poziții pe același diametru => încearcă să departajezi după material, înainte de „ambiguu"
     if (cs.length > 1 && mat) {
       const peMat = cs.filter((r: any) => materialNorm(r.denumire) === mat);

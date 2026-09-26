@@ -918,3 +918,26 @@ Deno.test('runda 9: notaRestTransfer — Nr fără lungime pe cheia (Dn, \'\') (
   assertEquals(r.incomplet, true)
   assertEquals(notaRestTransfer({ faraIdentitate: [], conflicte: [], total_de_verificat_m: 0 }, [], [{ lungime_m: 10 }]).incomplet, true, 'doar DN0 => incomplet')
 })
+Deno.test('runda 11: dnuriDenumire — numărul FĂRĂ prefix Dn e Dn doar urmat de sfârșit / separator / „mm” / material; „/” descrescător fără prefix = grosime (regresia TOTAL-b din runda 10)', () => {
+  // 85c53f1: [20,110], [32,110] sau interval => subtotalul Dn110 devenea TOTAL global
+  for (const s of ['Total conducte De 110, 20 tronsoane', 'Total conducte De 110 și 32 branșamente', 'Total conducte Dn110 la 32 case', 'Total conducte De 110 / 16 bar',
+    'Total conducte De 110 la 20 bar', 'Total conducte De 110, 16 bar', 'Total conducte De 110 - 50 bransamente', 'Total conducte De 110 si 90 mp',
+    'Total conducte De 110-110', 'Total conducte De 110 - 120', 'Total conducte De 110/100', 'Total conducte De 110; 17', 'Total conducte De 110 și 12'])
+    assertEquals(dnuriDenumire(s), { dn: [110], interval: false }, s)
+  assertEquals(dnuriDenumire('Total conducte De 225/20'), { dn: [225], interval: false }, 'grosimea peretelui')
+  assertEquals(dnuriDenumire('Total conducte De 180/16'), { dn: [180], interval: false }, 'grosimea peretelui')
+  assertEquals(dnuriDenumire('Total conducte De 63 - 200 metri'), { dn: [63], interval: false })
+  // formele bune rămân: sfârșit, „mm”, material / SDR, alt separator; „/” cu prefix pe al doilea capăt
+  assertEquals(dnuriDenumire('Total rețea Dn110/Dn63'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea De 63 - 110 SDR11'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea De 63/110 PE100'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea Dn 63 și 110 PE'), { dn: [63, 110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea Dn 32 + 63 + 110'), { dn: [32, 63, 110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea De 110 sau 125'), { dn: [110, 125], interval: false })
+  assertEquals(dnuriDenumire('Total rețea De 110 & 63'), { dn: [63, 110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea Dn 63 la 110 mm'), { dn: [63, 110], interval: true })
+  // cu prefix Dn pe ambele: Dn chiar urmat de unitate (lungimea totalului); fără prefix, „110 m” rămâne limită (subtotal Dn63)
+  assertEquals(dnuriDenumire('Total rețea De 63 și De 110 m'), { dn: [63, 110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea Dn 63 - Dn 110 m'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea Dn 63 și 110 m'), { dn: [63], interval: false })
+})
