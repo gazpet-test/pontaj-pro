@@ -110,7 +110,7 @@ async function versiuneCurenta() {
 
 // Runda 6 (decis în audit 26.09.2026, reversibil — minorul 8): pe ramurile „doar de verificat”, MY-T4 și „total cu Dn”, rândul VALIDAT
 // căruia citirea nu-i dă nicio cifră sigură iese din „validat” (varianta B, ca la coliziune): prefixul de mai jos + nota ramurii.
-const PRE_B = (cifra: string, deCe: string, et = 'planșa „pl1.1.pdf”') => `Rândul era VALIDAT cu cifra din planșă ${cifra} m; ${et} ${deCe}, fără să confirme cifra — validarea se reface. `
+const PRE_B = (cifra: string, deCe: string, et = 'planșa „pl1.1.pdf”') => `Rândul era VALIDAT cu cifra din planșă ${cifra} m; ${et} ${deCe}, fără să confirme cifra — de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); validarea se reface. `
 const DOAR_B = 'nu dă nicio cifră sigură pentru el (doar rânduri de verificat)'
 const MYT4_B = (dn: number) => `are pe Dn${dn} rânduri fără material care pot fi ale lui, iar grupul sigur de pe Dn nu i-a fost atribuit`
 const TOTDN_B = 'nu-i atribuie nicio cifră (rând de total cu Dn, neatribuit)'
@@ -959,9 +959,9 @@ Deno.test('runda 4 transfer: Dn cu toate rândurile de verificat -> nota pe pozi
   // Înainte: rămâneau „validat” cu o cifră pe care n-o verificase nimeni (cazul real lic. 3 din 15.09).
   assertEquals([id(3).cantitate_plansa, id(3).status], [1740, 'diferenta'])
   // runda 1b: nota spune și severitatea (doar text)
-  assert(id(3).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 5.245 m; planșa „pl1.1.pdf” dă acum 1.740 m (diferență mare: -3.505 m, -66,83 %) — validarea se reface. '), id(3).diferenta_nota)
+  assert(id(3).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 5.245 m; planșa „pl1.1.pdf” dă acum 1.740 m (diferență mare: -3.505 m, -66,83 %) — de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); validarea se reface. '), id(3).diferenta_nota)
   assertEquals([id(4).cantitate_plansa, id(4).status], [1740, 'diferenta'])
-  assert(id(4).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 41.920 m; planșa „pl1.1.pdf” dă acum 1.740 m (diferență mare: -40.180 m, -95,85 %) — validarea se reface. '), id(4).diferenta_nota)
+  assert(id(4).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 41.920 m; planșa „pl1.1.pdf” dă acum 1.740 m (diferență mare: -40.180 m, -95,85 %) — de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); validarea se reface. '), id(4).diferenta_nota)
   assert(id(4).diferenta_nota.endsWith('De verificat, NEincluse în cifra din planșă: pe planșă: 3 rânduri de tabel fără identitate sigură (10.950 m).'), id(4).diferenta_nota)
   assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, material: 'PE', pozitie_id: 1, actiune: 'nota' }, { dn: 180, material: 'PE', pozitie_id: 2, actiune: 'golit' }])
 })
@@ -1192,7 +1192,7 @@ Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 fără material 300 SIGU
   // R5 varianta B (26.09.2026): iese din „validat”, cu aprobarea veche numită; validarea se reface (înainte: „validat rămâne validat”)
   const v = await coliziune([{ ...poz[0], cantitate_plansa: 780, status: 'validat' }], rd, true)
   assertEquals(v.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status, y.diferenta_nota]), [[21, 780, 'diferenta',
-    'Rândul era VALIDAT cu cifra din planșă 780 m; planșa „pl1.1.pdf” dă 2 grupuri sigure pe aceeași poziție, fără să confirme cifra — validarea se reface. ' + nota('780')]])
+    'Rândul era VALIDAT cu cifra din planșă 780 m; planșa „pl1.1.pdf” dă 2 grupuri sigure pe aceeași poziție, fără să confirme cifra — de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); validarea se reface. ' + nota('780')]])
 })
 Deno.test('runda 6 transfer (control, trece și pe f1274a1): grupuri pe materiale diferite cu poziții SEPARATE => fiecare își primește cifra, nimic ambiguu', async () => {
   const poz = [{ id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 500, cantitate_plansa: null, status: 'extras' }, { id: 12, denumire: 'Țeavă OL Dn110', cantitate: 90, cantitate_plansa: null, status: 'extras' }]
@@ -1442,7 +1442,7 @@ Deno.test('runda 9 TOTAL-a (V9R-TOTAL-a): „Total conducte De 110” + poziția
     // rebase R5 peste R4 runda 9: poziția primește cifra (intenția R4); cifra din planșă se schimbă 480 → 500 pe un rând VALIDAT =>
     // regula R5 (cifraSchimbata): iese din „validat”, cu aprobarea veche numită în notă
     assertEquals([id(3).cantitate_plansa, id(3).status, id(3).diferenta_nota], [500, 'diferenta',
-      'Rândul era VALIDAT cu cifra din planșă 480 m; planșa „pl1.1.pdf” dă acum 500 m (diferență mare: +20 m, +4,17 %) — validarea se reface. Planșa „PL1.1.pdf” confirmă: 500 m.'])
+      'Rândul era VALIDAT cu cifra din planșă 480 m; planșa „pl1.1.pdf” dă acum 500 m (diferență mare: +20 m, +4,17 %) — de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); validarea se reface. Planșa „PL1.1.pdf” confirmă: 500 m.'])
     assertEquals([id(4).cantitate_plansa, id(4).status], [480, 'diferenta'])
     assertEquals(id(4).diferenta_nota, 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — grupurile sigure de pe Dn-ul lui ' +
       '(Planșa „PL1.1.pdf”): Dn110 PE 500 m e pe poziția „Conductă distribuție gaze Dn110”; nu se completează automat aici; cifra din planșă nu s-a actualizat (480 m e dintr-o citire anterioară).')
@@ -1528,7 +1528,7 @@ const ruleaza10 = async (poz: any[], felii: any) => {
 // planșă se schimbă trece pe „diferenta” (R5 runda 4).
 const fmtT = (x: number) => x.toLocaleString('ro-RO')
 const dupaR5 = (st: string, vechi: number, nou: number, nota: string): [string, string] => st === 'validat'
-  ? ['diferenta', `Rândul era VALIDAT cu cifra din planșă ${fmtT(vechi)} m; planșa „pl1.1.pdf” dă acum ${fmtT(nou)} m${aceeasiValoare(vechi, nou) ? '' : ` (${descrieDiferenta(vechi, nou)})`} — validarea se reface. ${nota}`]
+  ? ['diferenta', `Rândul era VALIDAT cu cifra din planșă ${fmtT(vechi)} m; planșa „pl1.1.pdf” dă acum ${fmtT(nou)} m${aceeasiValoare(vechi, nou) ? '' : ` (${descrieDiferenta(vechi, nou)})`} — de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); validarea se reface. ${nota}`]
   : [aceeasiValoare(vechi, nou) ? st : 'diferenta', nota]
 Deno.test('runda 10 TOTAL-a (ADV10-1): subtotalul cu MATERIALUL grupului („Total conducte PE De 110”) + poziția reală fără material => poziția primește cifra, subtotalul notă; validat și extras, ambele ordini (7a7bf86: subtotalul lua 500, poziția păstra TĂCUT 480 „VECHE 3”)', async () => {
   for (const st of ['validat', 'extras']) for (const ordine of [0, 1]) {
@@ -1795,4 +1795,89 @@ Deno.test('runda 12: fail-safe-ul privește doar rândurile cu „total” NErec
     assertEquals([r.id(4).cantitate_plansa, r.id(4).diferenta_nota, r.id(5).cantitate_plansa, r.id(5).status], [500, 'Planșa „PL1.1.pdf” confirmă: 500 m.', 480, 'diferenta'], cum)
     assert(r.id(5).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(5).diferenta_nota)
   }
+})
+
+// ---- R5 sarcina 2 (Copilot, închiderea R4/R5, condiția 2a — „nimic scris ≠ nicio problemă”): prin handler + RPC simulat ----
+// Conflictele transferului care NU produc niciun rând ajung pe document (analiza.transfer_cantitati), legate de jurnal
+// (citire_ai.sumar.cantitati.inregistrare_id), și se închid DOAR prin recitire fără conflicte sau confirmare umană (SQL).
+import { deschis as tcDeschis } from './transfer_conflicte.ts'
+Deno.test('sarcina 2 (a) E2E: grup sigur AMBIGUU pe două poziții VALIDATE + rând fără identitate => nimic scris, 0 rânduri nevalidate, dar conflictul e PERSISTAT deschis pe document; recitirea curată îl închide cu urmă', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 31, denumire: 'Țeavă PE100 Dn110 — sat A', cantitate: 300, cantitate_plansa: 300, status: 'validat', diferenta_nota: 'VECHE A' },
+    { id: 32, denumire: 'Țeavă PE100 Dn110 — sat B', cantitate: 200, cantitate_plansa: 200, status: 'validat', diferenta_nota: 'VECHE B' },
+  ])
+  const ai = aiFelii(n, { z1_1: { tronsoane: [trT('A', 110, 500), trT('B', 110, 90)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'A', '110', '0,5'), rdT('?', 'B', '110', '0,09')] }] } })
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))).json()
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  assertEquals(rows.map((x: any) => [x.id, x.cantitate_plansa, x.status, x.diferenta_nota]), [[31, 300, 'validat', 'VECHE A'], [32, 200, 'validat', 'VECHE B']], 'nimic scris în cantități')
+  assertEquals(rows.filter((x: any) => x.status !== 'validat').length, 0, 'zero rânduri nevalidate — exact cazul Copilot')
+  const doc = await citesteDoc130(tabele)
+  const tc = doc.analiza.transfer_cantitati
+  assertEquals([tc.stare, tc.n, tcDeschis(tc), tc.conflicte.map((c: any) => c.tip)], ['conflicte', 2, true, ['ambiguu', 'identitate']])
+  assertEquals(doc.analiza.citire_ai.sumar.cantitati.inregistrare_id, tc.id, 'jurnalul e legat de înregistrare')
+  assertEquals(j.cantitati.inregistrare_id, tc.id)
+  assert(tc.conflicte[0].text.startsWith('Dn110 PE 500 m NESCRIS (pozițiile #31, #32)'), tc.conflicte[0].text)
+  // recitire (de la zero) pe care planșa nu mai are Dn110 — doar un Dn160 sigur, fără nimic de verificat => închis prin recitire
+  const ai2 = aiFelii(n, { z1_1: { tronsoane: [trT('C', 160, 1740)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'C', '160', '1,74')] }] } })
+  assertEquals((await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai2, supa))).status, 200)
+  const tc2 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
+  assertEquals([tc2.stare, tc2.n, tcDeschis(tc2), tc2.inchis_prin, tc2.inchide], ['fara_conflicte', 0, false, 'recitire_fara_conflicte', tc.id])
+  assertEquals(tc2.anterior.conflicte, tc.conflicte, 'conflictele închise rămân recuperabile')
+  assertEquals(tc2.istoric.map((h: any) => [h.id, h.stare, h.n]), [[tc.id, 'conflicte', 2]])
+})
+Deno.test('sarcina 2 (a) E2E: transfer AMÂNAT (o zonă căzută) => nimic în cantități, înregistrare „neefectuat” DESCHISĂ; reluarea zonei face transferul și înregistrarea nouă', async () => {
+  const { supa, n, tabele } = await lic3([{ id: 3, denumire: 'Țeavă PE100 SDR11 Dn160 — Coconi', cantitate: 5250, cantitate_plansa: 5245, status: 'validat', diferenta_nota: 'VECHE' }])
+  const bun = aiFelii(n, { z1_1: { tronsoane: [trT('C', 160, 5245)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'C', '160', '5,245')] }] } })
+  const cuCadere = (async (u: unknown, init?: RequestInit) => {
+    const et = /Bucata (\S+)/.exec(JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || '')?.[1]
+    if (et === 'z2_1') { n.ai++; return new Response(JSON.stringify({ error: { message: 'cerere invalidă' } }), { status: 400 }) }
+    return bun(u as any, init)
+  }) as typeof fetch
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, cuCadere, supa))).json()
+  assert(String(j.cantitati?.amanat || '').includes('n-au putut fi citite'), JSON.stringify(j.cantitati))
+  const r3 = (await tabele.from('ofertare_cantitati').select()).data[0]
+  assertEquals([r3.cantitate_plansa, r3.status, r3.diferenta_nota], [5245, 'validat', 'VECHE'], 'rândul validat neatins')
+  const tc = (await citesteDoc130(tabele)).analiza.transfer_cantitati
+  assertEquals([tc.stare, tcDeschis(tc), tc.conflicte[0].tip], ['neefectuat', true, 'transfer_amanat'])
+  assertEquals((await citesteDoc130(tabele)).analiza.citire_ai.sumar.cantitati.inregistrare_id, tc.id)
+  // reluarea zonei căzute: transferul se face (aceeași cifră 5.245 => rândul validat rămâne validat), fără conflicte => închis prin recitire
+  const r = await handler(cerereSvc({ doc_id: 130, mod: 'reia_erori' }), svc(n, bun, supa))
+  assertEquals(r.status, 200)
+  const tc2 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
+  assertEquals([tc2.stare, tcDeschis(tc2), tc2.inchis_prin, tc2.anterior.stare], ['fara_conflicte', false, 'recitire_fara_conflicte', 'neefectuat'])
+  assertEquals((await tabele.from('ofertare_cantitati').select()).data[0].status, 'validat')
+})
+Deno.test('sarcina 2 (a) E2E: transferul CĂZUT (RPC cu eroare) => „neefectuat” deschis, iar conflictele deschise ale citirii anterioare NU dispar (sunt în `anterior`)', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 31, denumire: 'Țeavă PE100 Dn110 — sat A', cantitate: 300, cantitate_plansa: 300, status: 'validat' },
+    { id: 32, denumire: 'Țeavă PE100 Dn110 — sat B', cantitate: 200, cantitate_plansa: 200, status: 'validat' },
+    { id: 33, denumire: 'Țeavă PE100 Dn160', cantitate: 100, cantitate_plansa: null, status: 'extras' },
+  ])
+  const ai = aiFelii(n, { z1_1: { tronsoane: [trT('A', 110, 500), trT('C', 160, 90)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'A', '110', '0,5'), rdT('2', 'C', '160', '0,09')] }] } })
+  await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))
+  const tc1 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
+  assertEquals([tc1.stare, tc1.conflicte.map((c: any) => c.tip)], ['conflicte', ['ambiguu']])
+  const rpcVechi = supa.rpc
+  ;(supa as any).rpc = async () => ({ data: null, error: { message: 'deadlock detected' } })
+  try { await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa)) } finally { (supa as any).rpc = rpcVechi }
+  const doc = await citesteDoc130(tabele)
+  const tc2 = doc.analiza.transfer_cantitati
+  assertEquals([tc2.stare, tcDeschis(tc2), tc2.conflicte[0].tip], ['neefectuat', true, 'transfer_eroare'])
+  assertEquals([tc2.anterior.id, tc2.anterior.conflicte.map((c: any) => c.tip)], [tc1.id, ['ambiguu']])
+  assertEquals(doc.analiza.citire_ai.transfer.stare, 'eroare')
+})
+Deno.test('sarcina 2 (a) E2E: mai multe rânduri TOTAL („TOTAL ambiguu”, lic. 5 are 3) => doar primul primește totalul (neschimbat), dar conflictul „total_ambiguu” e raportat și persistat', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 3, denumire: 'Țeavă PE100 SDR11 Dn160 — Coconi', cantitate: 1740, cantitate_plansa: 1740, status: 'validat' },
+    { id: 4, denumire: 'TOTAL rețea distribuție (declarat în memoriu)', cantitate: 1740, cantitate_plansa: 1740, status: 'validat' },
+    { id: 5, denumire: 'TOTAL Conducta - TOTAL', cantitate: 487, cantitate_plansa: null, status: 'extras', diferenta_nota: 'VECHE 5' },
+  ])
+  const ai = aiFelii(n, { z1_1: { tronsoane: [trT('C', 160, 1740)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'C', '160', '1,74')] }] } })
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))).json()
+  assertEquals(j.cantitati.totaluri_multiple, [{ id: 4, denumire: 'TOTAL rețea distribuție (declarat în memoriu)' }, { id: 5, denumire: 'TOTAL Conducta - TOTAL' }])
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  assertEquals(rows.find((x: any) => x.id === 5).diferenta_nota, 'VECHE 5', 'comportamentul de scriere neschimbat (decizia lic. 5 e la Razvan)')
+  const tc = (await citesteDoc130(tabele)).analiza.transfer_cantitati
+  assertEquals([tc.stare, tcDeschis(tc), tc.conflicte.map((c: any) => c.tip)], ['conflicte', true, ['total_ambiguu']])
+  assert(tc.conflicte[0].text.startsWith('2 rânduri TOTAL în cantități (#4, #5): totalul planșei a mers doar pe #4'), tc.conflicte[0].text)
 })

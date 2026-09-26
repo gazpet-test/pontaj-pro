@@ -200,6 +200,11 @@ export function descrieAprobareaVeche(v) {
 // Orice prefix de invalidare pune o regulă („Rândul era VALIDAT — aprobarea veche (…) …” sau „Rândul era VALIDAT cu … —”, al
 // transferului / CAD) se termină cu „validarea se reface.” — acolo se taie (SQL: aceeași regulă, în trigger).
 const FINAL_PREFIX = 'validarea se reface.'
+// R5 sarcina 2 (Copilot, închiderea R4/R5): prefixul pus de o CITIRE AUTOMATĂ (transferul din planșă, CAD) pe un rând validat — conflictul
+// sau cifra diferită a recitirii justifică „de reverificat”, NU concluzia că aprobarea umană era greșită: valoarea și sursa aprobate rămân
+// în rând (`cantitate`, `sursa`, `tip_sursa` — neatinse de transfer / CAD) și în istoric (aprobare_veche, valori_vechi). Terminatorul
+// FINAL_PREFIX rămâne ultimul (prefixInvalidare / view / v6 recunosc prefixul după el).
+export const DE_REVERIFICAT_CITIRE = 'de reverificat: citirea automată nu infirmă aprobarea (valoarea și sursa aprobate rămân în rând și în istoric); '
 export const prefixInvalidare = nota => {
   const s = String(nota ?? '')
   if (!s.startsWith('Rândul era VALIDAT')) return ''

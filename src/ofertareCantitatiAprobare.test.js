@@ -82,9 +82,11 @@ describe('fronturiDinCantitati — „Propune din cantitati" doar din randuri va
 })
 
 describe('campuriCantitatiNevalidate — view lipsa ≠ zero', () => {
-  it('eroare (view neaplicat) => niciun camp (H2 va spune „nu putem verifica")', () => {
-    expect(campuriCantitatiNevalidate({ error: { message: 'relation does not exist' }, data: null })).toEqual({})
-    expect(campuriCantitatiNevalidate(null)).toEqual({})
+  // sarcina 2 (c): în plus față de „niciun câmp”, motivul explicit — H2 spune „nu putem verifica” și blochează și fără F3
+  it('eroare (view neaplicat) => niciun câmp numeric, doar `cantitati_nevalidate_indisponibil` (H2 va spune „nu putem verifica")', () => {
+    expect(campuriCantitatiNevalidate({ error: { message: 'relation "public.v_ofertare_cantitati_nevalidate" does not exist' }, data: null }))
+      .toEqual({ cantitati_nevalidate_indisponibil: 'relation "public.v_ofertare_cantitati_nevalidate" does not exist' })
+    expect(campuriCantitatiNevalidate(null)).toEqual({ cantitati_nevalidate_indisponibil: 'nicio citire' })
   })
   it('rand lipsa (licitatia n-are randuri de retea) => 0', () =>
     expect(campuriCantitatiNevalidate({ data: null, error: null }).lista_f3_nevalidate).toBe(0))

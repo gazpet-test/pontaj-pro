@@ -22,7 +22,7 @@
 // R5 runda 5 (verificator): (MAJOR 1) rândul INVALIDAT (nevalidat, cu prefixul regulii în notă) își păstrează prefixul când
 // măsurătoarea îi rescrie nota; (MAJOR 2) pe rândul VALIDAT, regula se aplică față de valoarea APROBATĂ (`referinta`, din istoric —
 // cad-parse.js o citește din ofertare_cantitati_istoric; lipsă = rândul de acum).
-import { aplicaRegulaAprobare, descrieDiferenta, fmtRo, pastreazaInvalidarea, schimbariRelevante } from './_cantitatiInvalidare.js'
+import { aplicaRegulaAprobare, DE_REVERIFICAT_CITIRE, descrieDiferenta, fmtRo, pastreazaInvalidarea, schimbariRelevante } from './_cantitatiInvalidare.js'
 export const referintaCitire = r =>
   r?.cantitate_plansa != null ? Number(r.cantitate_plansa) : r?.cantitate != null ? Number(r.cantitate) : null
 export const cifraSchimbata = (r, nou) =>
@@ -52,7 +52,7 @@ function randCantitateCadBrut({ licitatieId, denumire, c, notaAnaliza }, existen
   if (existent.status === 'validat') {
     return { op: 'update', id: existent.id, patch: { cantitate_plansa: l3d,
       diferenta_nota: schimbat
-        ? `Rândul era VALIDAT cu ${ref === null ? 'nicio cifră' : `${deUnde} ${fmt(ref)} m`}; noua măsurătoare diferă${sev(ref, l3d)} — validarea se reface. ` + nota
+        ? `Rândul era VALIDAT cu ${ref === null ? 'nicio cifră' : `${deUnde} ${fmt(ref)} m`}; noua măsurătoare diferă${sev(ref, l3d)} — ${DE_REVERIFICAT_CITIRE}validarea se reface. ` + nota
         : nota,
       ...(schimbat ? { status: 'diferenta' } : {}) } }
   }

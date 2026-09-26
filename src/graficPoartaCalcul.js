@@ -22,15 +22,19 @@ export function durataMaxDinCerinte(cerinte) {
 }
 
 // ── Checklist-ul porții: fiecare rând = {k, titlu, stare: ok|warn|block, detalii} ──
-export function calculeazaPoartaGrafic({ p, cantitati, norme, cerinte, durataMax }) {
+// R5 sarcina 2 (Copilot, închiderea R4/R5): `sursa` = { conflicte (v_ofertare_transfer_conflicte), eroare_conflicte, eroare_istoric } —
+// OBLIGATORIE aici: lipsă (necitită) = „nu putem verifica sursa” => „cant” BLOCK (fail-closed, ca H2), niciodată zero restanțe implicit.
+export function calculeazaPoartaGrafic({ p, cantitati, norme, cerinte, durataMax, sursa }) {
   if (!p) return []
   const out = []
+  const src = sursa === undefined ? null : sursa
   // R5 (Copilot 25.09.2026): „cant" = BLOCK cât timp un rând de rețea nu e validat de om (vezi ofertareCantitatiAprobare.js).
-  const cc = controlCantitatiGrafic(cantitati, p.cantitati_asumate)
+  // Sarcina 2: și cât sursa e incompletă (conflicte de transfer deschise) sau necitită (eroare / view lipsă) — chiar cu 0 rânduri nevalidate.
+  const cc = controlCantitatiGrafic(cantitati, p.cantitati_asumate, src)
   // R5 condiția 2 (26.09.2026): `lista` = rândurile necesare nevalidate / invalidate — afișate integral sub rând și înghețate cu poarta
   out.push({ k: 'cant', titlu: 'Cantități rețea în platformă — validate de om', stare: cc.stare, detalii: cc.detalii, ...(cc.lista?.length ? { lista: cc.lista } : {}) })
   // R5 runda 4: referința = totalul declarat doar dacă e validat; fronturile salvate trebuie să vină din rânduri validate.
-  const cf = controlFronturiGrafic(p, cantitati)
+  const cf = controlFronturiGrafic(p, cantitati, src)
   out.push({ k: 'front', titlu: 'Fronturi de lucru (localități / tronsoane)', stare: cf.stare, detalii: cf.detalii, ...(cf.incomplet ? { incomplet: true } : {}) })
   const nv = (norme || []).filter(n => n.tip_lucrare === p.tip_lucrare)
   const val = nv.filter(n => n.incredere === 'validat')

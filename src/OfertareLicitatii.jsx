@@ -724,13 +724,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const [rezAplic, setRezAplic] = useState(null)
 
   const [eroareDocs, setEroareDocs] = useState(null)
+  // R5 sarcina 2 (a): conflictele transferului planșă → cantități, per document (v_ofertare_transfer_conflicte). Eroare / view lipsă
+  // (codul publicat înainte de migrarea 2) => { eroare } — insigna spune „nu putem verifica”, nu „fără conflicte”.
+  const [conflicteTr, setConflicteTr] = useState({ peDoc: new Map(), eroare: null })
   const load = async () => {
-    const [{ data, error }, { data: c }] = await Promise.all([
+    const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
+      supabase.from('v_ofertare_transfer_conflicte').select('document_id, stare, n, deschis, in_curs, token, sursa, confirmat_la, confirmare_nota, conflicte, motiv')
+        .eq('licitatie_id', licitatie.id).then(r => r, e => ({ data: null, error: e })),
     ])
+    setConflicteTr(rTc?.error ? { peDoc: new Map(), eroare: rTc.error.message || String(rTc.error) } : { peDoc: new Map((rTc?.data || []).map(x => [x.document_id, x])), eroare: null })
     // Eroarea la citire era inghitita: lista ramanea `null`, ecranul arata „se incarca" la nesfarsit
     // si nimeni nu afla de ce. Acum se vede, si intrarea din Clarificari stie ca n-are pe ce lucra.
     if (error) { setEroareDocs(error.message); setWarn('Nu pot incarca documentele: ' + error.message); setDocs([]) }
@@ -944,6 +950,18 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (d.relevanta_verificata_la) return 'sarite'
     if (ignoratTehnic(d, docs)) return 'erori'
     return 'sarite'
+  }
+  // R5 sarcina 2 (a): confirmarea umană EXPLICITĂ a conflictelor transferului unui document — notă obligatorie, pe tokenul văzut
+  // (ofertare_transfer_conflicte_confirma: acces Ofertare, autor = auth.uid(); alt token = conflictele s-au schimbat => refuz)
+  const confirmaConflicte = async (d, tc) => {
+    const lista = (tc.conflicte || []).slice(0, 8).map(x => `• ${x.text}`).join('\n') || '(conflictele citirii vechi — vezi ⚠ pe document)'
+    const nota = window.prompt(`„${String(d.nume_original).split('/').pop()}”: transferul din planșă a lăsat ${tc.n} ${tc.n === 1 ? 'conflict nerezolvat' : 'conflicte nerezolvate'} ` +
+      `(nescrise în cantități):\n${lista}\n\nCe ai verificat? (ex.: „verificat pe planșă: Dn110 e pe lotul 2, cantitatea e deja în poziția #32”). ` +
+      'Confirmarea NU șterge conflictele — le marchează verificate de tine; o recitire cu conflicte le redeschide.')
+    if (nota == null) return
+    const { data, error } = await supabase.rpc('ofertare_transfer_conflicte_confirma', { p_doc_id: d.id, p_token: tc.token, p_nota: nota })
+    if (error || data?.error) { setWarn('Confirmarea nu s-a salvat: ' + (error?.message || data.error)); return }
+    await load()
   }
   const bifeazaRelevanta = async (d, retrage = false) => {
     const nota = retrage ? null : window.prompt(`„${String(d.nume_original).split('/').pop()}" nu a putut fi citit automat.\nCe ai verificat? (ex.: „planșă consultată manual, fără cerințe noi" sau „nerelevant: jurnal de plotare")`)
@@ -1382,6 +1400,17 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                   </span>
                   {/* R5 condiția 2: grupurile NESCRISE în cantități (ambigue) și Dn-urile doar „de verificat” — lista în tooltip */}
                   {d.tip === 'plansa' && (() => { const rp = raportTransferCantitati(d.analiza?.citire_ai?.sumar?.cantitati)
+                    // R5 sarcina 2: starea conflictelor vine din v_ofertare_transfer_conflicte (aceeași definiție ca poarta); insigna veche = doar detaliu
+                    const tc = conflicteTr.peDoc.get(d.id)
+                    const detaliu = [...(tc?.conflicte || []).map(x => `• ${x.text}`), ...(rp ? [rp.text, ...rp.linii] : [])].filter(Boolean).join('\n')
+                    if (conflicteTr.eroare && d.analiza?.citire_ai?.sumar?.cantitati) return <span title={`v_ofertare_transfer_conflicte: ${conflicteTr.eroare}`} style={{ color: G.red, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: nu putem verifica conflictele</span>
+                    if (tc?.in_curs) return <span style={{ color: G.muted, fontSize: 11, whiteSpace: 'nowrap' }}>⏳ transfer în curs</span>
+                    if (tc?.deschis) return <>
+                      <span title={detaliu || (tc.motiv || '')} style={{ color: G.orange, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: {tc.stare === 'neefectuat' ? 'netrecut în cantități' : `${tc.n} ${tc.n === 1 ? 'conflict nerezolvat' : 'conflicte nerezolvate'}`}</span>
+                      <button style={{ ...S.btnS, padding: '2px 8px', fontSize: 11, color: G.orange, borderColor: G.orange + '66' }}
+                        title="Sursa (planșa) e incompletă: poarta graficului și H2 o arată până la o recitire fără conflicte sau o confirmare explicită, cu notă."
+                        onClick={() => confirmaConflicte(d, tc)}>✋ confirmă conflictele</button></>
+                    if (tc?.confirmat_la) return <span title={`${tc.n} conflicte, confirmate ${new Date(tc.confirmat_la).toLocaleString('ro-RO')}: ${tc.confirmare_nota || ''}${detaliu ? `\n${detaliu}` : ''}`} style={{ color: G.green, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>✓ conflicte transfer confirmate</span>
                     return rp && (rp.stare === 'de_verificat' || rp.stare === 'netrecut') && <span title={[rp.text, ...rp.linii].join('\n')} style={{ color: G.orange, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: {rp.stare === 'netrecut' ? 'netrecut în cantități' : `${rp.ambigue ? `${rp.ambigue} nescrise` : ''}${rp.ambigue && rp.de_verificat ? ', ' : ''}${rp.de_verificat ? `${rp.de_verificat} de verificat` : ''}`}</span> })()}
                   {d.tip === 'plansa' && (() => { const e = ETICHETA_REZ[d.analiza?.plansa?.rezultat] || (subPrag(d) ? ['sursă sub 2000px — de randat', G.orange, 'Sursa citită are sub 2000px; nu e dovadă de siglă — retaie (randare pagină completă)'] : null)
                     return e && <span title={e[2] + (d.analiza?.plansa?.rezultat_motiv ? `\n${d.analiza.plansa.rezultat_motiv}` : '')} style={{ color:e[1], fontSize:11, whiteSpace:'nowrap' }}>{e[0]}</span> })()}

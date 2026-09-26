@@ -207,22 +207,36 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   const [norme, setNorme] = useState([])
   const [cerinte, setCerinte] = useState([])
   const [versiuni, setVersiuni] = useState([])
+  // R5 sarcina 2: sursa cantităților — conflictele transferului din planșe + erorile de citire (null = necitită => „nu putem verifica”)
+  const [sursa, setSursa] = useState(null)
   const [deschis, setDeschis] = useState(true)
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
 
   // R5 runda 5 (verificator, MAJOR 1): rândurile invalidate se recunosc după ISTORICUL aprobărilor, nu doar după textul notei (pe care
   // o recitire de planșă îl rescrie). Istoric indisponibil (migrarea neaplicată) => doar prefixul notei, pe care transferul îl păstrează.
+  // R5 sarcina 2 (c): citirea eșuată a istoricului NU mai e „[]” tăcut (ar fi scos rândurile invalidate din lipsă): { data, error } —
+  // eroarea ajunge în poartă ca „nu putem verifica invalidările” (BLOCK). Migrarea istoricului e aplicată (26.09.2026).
   const istoricAprobari = async () => {
     try {
       // runda 6 (minorul verificatorului): DESCRESCĂTOR și paginat — nu se mai pierd tocmai cele mai noi evenimente (plafon PostgREST)
       const { data, error } = await citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv')
         .eq('licitatie_id', licitatieId).order('id', { ascending: false }).range(a, b))
-      return error ? [] : (data || [])
-    } catch { return [] }
+      return error ? { data: [], error: error.message || String(error) } : { data: data || [], error: null }
+    } catch (e) { return { data: [], error: e?.message || String(e) } }
   }
+  // R5 sarcina 2 (a): conflictele transferului planșă → cantități (v_ofertare_transfer_conflicte, migrarea 2). Eroare / view inexistent
+  // (cod publicat înainte de migrare) => eroare_conflicte => „nu putem verifica sursa” (BLOCK), nu zero conflicte.
+  const conflictePlanse = async () => {
+    try {
+      const { data, error } = await supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, in_curs, token')
+        .eq('licitatie_id', licitatieId)
+      return error ? { data: [], error: error.message || String(error) } : { data: data || [], error: null }
+    } catch (e) { return { data: [], error: e?.message || String(e) } }
+  }
+  const sursaDin = (ist, conf) => ({ conflicte: conf.data, eroare_conflicte: conf.error, eroare_istoric: ist.error })
   const load = async () => {
-    const [{ data: par }, { data: cant }, { data: nor }, { data: cer }, { data: ver }, ist] = await Promise.all([
+    const [{ data: par }, { data: cant }, { data: nor }, { data: cer }, { data: ver }, ist, conf] = await Promise.all([
       supabase.from('grafic_parametri').select('*').eq('licitatie_id', licitatieId).maybeSingle(),
       // runda 6: și cantitățile paginat (un plafon PostgREST, implicit 1.000, ar scoate tacit rânduri din poartă)
       citestePaginat((a, b) => supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licitatieId).order('id').range(a, b)),
@@ -231,8 +245,10 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
         .or('document_probant.ilike.%grafic%,text_cerinta.ilike.%grafic%,text_cerinta.ilike.%jalo%,text_cerinta.ilike.%durata de execu%'),
       supabase.from('grafic_versiuni').select('id, versiune, mod, generat_la, generat_de, durata_zile, nota').eq('licitatie_id', licitatieId).order('versiune', { ascending: false }),
       istoricAprobari(),
+      conflictePlanse(),
     ])
-    setCantitati(marcheazaInvalidate(cant || [], ist)); setNorme(nor || []); setCerinte(cer || []); setVersiuni(ver || [])
+    setCantitati(marcheazaInvalidate(cant || [], ist.data)); setNorme(nor || []); setCerinte(cer || []); setVersiuni(ver || [])
+    setSursa(sursaDin(ist, conf))
     setP({ ...PARAM_DEFAULT, ...(par?.parametri || {}) })
   }
   useEffect(() => { load() }, [licitatieId])
@@ -247,7 +263,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   // R5 (Copilot 25.09.2026): la lic. 95 butonul punea ca front Dn200 17.785 m (extras din planșa 470,
   // cu 13.765 m în afara UAT, nevalidați). Un rând 🤖 extras nu devine front până nu-l bifează un om.
   const propuneFronturi = () => {
-    const { fronturi, excluse, m_excluse, lipsa, text_lipsa } = fronturiDinCantitati(cantitati, p.cantitati_asumate)
+    const { fronturi, excluse, m_excluse, lipsa, text_lipsa, text_sursa } = fronturiDinCantitati(cantitati, p.cantitati_asumate, sursa)
     const mEx = Math.round(m_excluse).toLocaleString('ro-RO')
     if (!fronturi.length) {
       showToast(lipsa.length
@@ -258,6 +274,8 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
     setParam('fronturi', fronturi)
     // R5 condiția 2: fronturile propuse sunt INCOMPLETE cât lipsesc rânduri necesare (le numim; poarta le arată ca „de reverificat”)
     if (lipsa.length) showToast(`${fronturi.length} fronturi din rânduri validate — INCOMPLETE: ${text_lipsa}${excluse.length ? ` (${mEx} m nepropuși)` : ''}. Validează-le în 📋 Cantități și re-propune.`, 'err')
+    // R5 sarcina 2: sursa incompletă (conflicte de transfer din planșe) / necitită — fronturile nu sunt prezentate drept complete
+    else if (text_sursa) showToast(`${fronturi.length} fronturi din rânduri validate — INCOMPLETE: ${text_sursa}.`, 'err')
   }
 
   const salveaza = async () => {
@@ -271,7 +289,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   // ── Checklist-ul porții: fiecare rând = {k, titlu, stare: ok|warn|block, detalii} — graficPoartaCalcul.js ──
   // R5 runda 4: rândul „front" ia ca referință totalul declarat DOAR dacă e validat și blochează fronturile salvate
   // care nu vin din rânduri validate cu cifra de acum (salvate înainte de 26.09 / rând redeschis / cifră schimbată).
-  const poarta = useMemo(() => calculeazaPoartaGrafic({ p, cantitati, norme, cerinte, durataMax }), [p, cantitati, norme, cerinte, durataMax])
+  const poarta = useMemo(() => calculeazaPoartaGrafic({ p, cantitati, norme, cerinte, durataMax, sursa }), [p, cantitati, norme, cerinte, durataMax, sursa])
   const blocat = poarta.some(r => r.stare === 'block')
 
   const genereaza = async () => {
@@ -281,22 +299,24 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
     try {
       // R5 (Copilot 25.09.2026): cantitățile se RECITESC din BD înainte de îngheț (ca semnarea propunerii):
       // între încărcare și click cineva poate redeschide (↩) un rând validat sau poate apărea un transfer nou.
-      const [{ data: citite, error: eCant }, ist] = await Promise.all([citestePaginat((a, b) => supabase.from('ofertare_cantitati')
-        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licitatieId).order('id').range(a, b)), istoricAprobari()])
+      // R5 sarcina 2: și sursa (conflictele transferului + istoricul) se recitește; o citire eșuată => poarta se închide („nu putem verifica”)
+      const [{ data: citite, error: eCant }, ist, conf] = await Promise.all([citestePaginat((a, b) => supabase.from('ofertare_cantitati')
+        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licitatieId).order('id').range(a, b)), istoricAprobari(), conflictePlanse()])
       if (eCant) throw new Error('nu s-au putut reciti cantitățile — nu se generează (' + eCant.message + ')')
-      const proaspete = marcheazaInvalidate(citite || [], ist)
+      const proaspete = marcheazaInvalidate(citite || [], ist.data)
+      const sursaProaspata = sursaDin(ist, conf)
       // R5 runda 4 (verificator R3): se recalculează TOATA poarta pe cantitățile proaspete (nu doar rândul „cant") —
       // referința și proveniența fronturilor depind și ele de ce e validat ACUM; ce se îngheață e poarta recalculată.
-      const poartaInghetata = calculeazaPoartaGrafic({ p, cantitati: proaspete || [], norme, cerinte, durataMax })
+      const poartaInghetata = calculeazaPoartaGrafic({ p, cantitati: proaspete || [], norme, cerinte, durataMax, sursa: sursaProaspata })
       const blocate = poartaInghetata.filter(r => r.stare === 'block')
-      if (blocate.length) { setCantitati(proaspete || []); throw new Error('între timp poarta s-a închis — ' + blocate.map(r => `${r.titlu}: ${r.detalii}`).join(' · ')) }
+      if (blocate.length) { setCantitati(proaspete || []); setSursa(sursaProaspata); throw new Error('între timp poarta s-a închis — ' + blocate.map(r => `${r.titlu}: ${r.detalii}`).join(' · ')) }
       if (dirty) await salveaza()
       const { rows: gen, factor, intern, total } = motorPEHD(p, norme)
       // 1. înghețăm versiunea (înainte de a atinge grafic_activitati)
       const versiune = (versiuni[0]?.versiune || 0) + 1
       const { error: ev } = await supabase.from('grafic_versiuni').insert({
         licitatie_id: licitatieId, versiune, mod: p.mod, generat_de: profile?.id || null, durata_zile: total,
-        poarta: poartaInghetata, snapshot: { parametri: p, cantitati: proaspete || [], norme: norme.filter(n => n.tip_lucrare === p.tip_lucrare), cerinte_ids: cerinte.map(c => c.id), factor_intindere: Math.round(factor * 100) / 100, durata_interna_zile: intern },
+        poarta: poartaInghetata, snapshot: { parametri: p, cantitati: proaspete || [], sursa: sursaProaspata, norme: norme.filter(n => n.tip_lucrare === p.tip_lucrare), cerinte_ids: cerinte.map(c => c.id), factor_intindere: Math.round(factor * 100) / 100, durata_interna_zile: intern },
         activitati: gen, nota: `${p.mod === 'oferta' ? 'Ofertă' : 'Intern'} · ${p.fronturi.length} fronturi · ${p.echipe} echipe · factor întindere ${factor.toFixed(2)} (intern ${intern} zile → ${total} zile)`,
       })
       if (ev) throw new Error(ev.message)

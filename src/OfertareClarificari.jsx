@@ -48,6 +48,10 @@ const scorPotrivire = (a, b) => {
 // (ex. '…,revizie_v2_manual'). Parsare pe split(','), nu LIKE: textul liber al sursei conține virgule.
 export const tokeniRevizie = (sursa) => String(sursa || '').split(',').slice(1).map(t => t.trim()).filter(t => /^revizie_[a-z0-9_]+$/i.test(t))
 export const necesitaRevizie = (q) => tokeniRevizie(q?.sursa).length > 0
+// R5 sarcina 2 (e): marcajul pus de ofertare_clarificare_planse_auto v6 pe o ciornă PROTEJATĂ (editată / aprobată de om) care nu mai
+// corespunde planșelor — textul și statusul ei nu se ating automat. Omul îl scoate după revizie („✓ revizuită”); alte marcaje rămân.
+export const MARCAJ_REVIZIE_AUTO = 'revizie_planse_auto'
+export const faraMarcajRevizieAuto = (sursa) => { const p = String(sursa || '').split(','); return [p[0], ...p.slice(1).filter(t => t.trim() !== MARCAJ_REVIZIE_AUTO)].join(',') }
 
 export default function ClarificariPanel({ licitatii, profile, showToast, initialLicId = null, onInapoi = null, onDeschideAnaliza = null }) {
   const active = (licitatii || []).filter(l => !['castigata', 'pierduta', 'abandonata'].includes(l.status))
@@ -495,6 +499,10 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         title="Ai verificat că datele chiar lipsesc (nu sunt în memoriu, F3 sau alt document) — ciorna trece la „de trimis”"
                         onClick={() => { setQ(q.id, 'status', 'de_trimis'); saveQ({ ...q, status: 'de_trimis', _mod: true }) }}>✅ Confirm motivul — de trimis</button>}
                       {necesitaRevizie(q) && <span title={`Marcaj în sursă: ${tokeniRevizie(q.sursa).join(', ')} — exclusă din adresa generată până la revizie`} style={{ fontSize:10.5, fontWeight:700, color:G.red, background:G.red + '1A', border:`1px solid ${G.red}55`, borderRadius:5, padding:'1px 7px' }}>⚠ necesită revizie</span>}
+                      {tokeniRevizie(q.sursa).includes(MARCAJ_REVIZIE_AUTO) && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.green, borderColor:G.green + '66' }}
+                        title="Planșele s-au schimbat după ce ai editat / aprobat ciorna: platforma NU i-a schimbat textul sau statusul. După ce o verifici (și o ajustezi), scoate marcajul — intră din nou în adresă."
+                        onClick={() => { if (!window.confirm('Ai revizuit textul față de planșele de acum? Marcajul „necesită revizie” pus de platformă se scoate, iar întrebarea intră din nou în adresa generată.')) return
+                          const sursa = faraMarcajRevizieAuto(q.sursa); setQ(q.id, 'sursa', sursa); saveQ({ ...q, sursa, _mod: true }) }}>✓ revizuită</button>}
                       {q.sursa && <span style={{ fontSize:11, color:G.dim }}>sursa: {q.sursa}</span>}
                       {q.fisier_path && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={async () => {
                         const { data } = await supabase.storage.from('ofertare').createSignedUrl(q.fisier_path, 600)

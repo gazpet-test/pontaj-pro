@@ -19,7 +19,7 @@ describe('randCantitateCad — o măsurătoare nu se auto-aprobă', () => {
     const r = randCantitateCad(arg, { id: 9, cantitate: 35000, cantitate_plansa: 35000, status: 'validat' })
     expect(r.op).toBe('update'); expect(r.patch).not.toHaveProperty('cantitate')
     expect(r.patch.status).toBe('diferenta'); expect(r.patch.cantitate_plansa).toBe(35620.59)
-    expect(r.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.000 m; noua măsurătoare diferă \(diferență mare: \+620,59 m, \+1,77 %\) — validarea se reface\. Măsurat din desen/)
+    expect(r.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.000 m; noua măsurătoare diferă \(diferență mare: \+620,59 m, \+1,77 %\) — de reverificat: citirea automată nu infirmă aprobarea \(valoarea și sursa aprobate rămân în rând și în istoric\); validarea se reface\. Măsurat din desen/)
   })
   it('ADV2 (lic. 3, rândul 9 real, validat 35.620,59): re-măsurare 41.000 => „diferenta"; runda 1b: 35.621,2 (+0,61 m) tot „diferenta” (mică); doar ACEEAȘI valoare => validarea rămâne', () => {
     const r9 = { id: 9, cantitate: 35620.59, cantitate_plansa: 35620.59, status: 'validat' }
@@ -27,7 +27,7 @@ describe('randCantitateCad — o măsurătoare nu se auto-aprobă', () => {
     expect(alt.patch.status).toBe('diferenta'); expect(alt.patch.cantitate_plansa).toBe(41000)
     const mic = randCantitateCad({ ...arg, c: { numar: 1, lungime_3d_m: 35621.2, lungime_2d_m: 35600 } }, r9)
     expect(mic.patch.status).toBe('diferenta')
-    expect(mic.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.620,59 m; noua măsurătoare diferă \(diferență mică: \+0,61 m, sub 0,01 %\) — validarea se reface\./)
+    expect(mic.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.620,59 m; noua măsurătoare diferă \(diferență mică: \+0,61 m, sub 0,01 %\) — de reverificat: citirea automată nu infirmă aprobarea \(valoarea și sursa aprobate rămân în rând și în istoric\); validarea se reface\./)
     const same = randCantitateCad(arg, r9)
     expect(same.patch).not.toHaveProperty('status'); expect(same.patch.diferenta_nota).not.toMatch(/VALIDAT/)
   })
@@ -69,7 +69,7 @@ describe('randCantitateCad — runda 5', () => {
     expect(randCantitateCad({ ...arg, c: c2 }, acum).patch.status).toBe('diferenta')   // fără referință: tot „diferenta”
     const r = randCantitateCad({ ...arg, c: c2 }, acum, aprobat)
     expect(r.patch.status).toBe('diferenta')
-    expect(r.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.620,59 m; noua măsurătoare diferă \(diferență mare: \+1,51 m, sub 0,01 %\) — validarea se reface\./)
+    expect(r.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.620,59 m; noua măsurătoare diferă \(diferență mare: \+1,51 m, sub 0,01 %\) — de reverificat: citirea automată nu infirmă aprobarea \(valoarea și sursa aprobate rămân în rând și în istoric\); validarea se reface\./)
     // re-măsurarea care revine EXACT la valoarea aprobată (stare veche derivată): nu e o schimbare față de aprobare — ca trigger-ul
     expect(randCantitateCad(arg, acum, aprobat).patch).not.toHaveProperty('status')
   })

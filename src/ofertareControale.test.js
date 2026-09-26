@@ -4,7 +4,7 @@ import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, contr
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 // R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
 // R5 condiția 2: câmpurile noi = 0 (licitație fără rânduri fără tip / invalidate); absente = „control parțial” (teste separate)
-const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0 }
+const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0, transfer_conflicte_docs: 0 }
 const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...NOI0, ...o })
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   it('F3 = grafic, restul egal => ok', () =>
@@ -530,10 +530,12 @@ describe('controlPachetComplet — piesa poate exista la participant si tot sa l
 // ── R5 (Copilot 26.09.2026, condiția 2): H2 nu mai lasă să dispară tacit rândurile invalidate / fără tip ──
 describe('H2 R5 condiția 2 — semnal de lipsă, niciun „ok” verde incomplet', () => {
   const baza = { lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0 }
-  it('F3 validată = fronturi, dar 1 rând F3 INVALIDAT a ieșit din rețea (m → ml, 300 m) => BLOCK, numit cu metrii', () => {
-    const r = controlCantitati({ ...baza, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 1, invalidate_in_afara_retea_m: 300 })
+  // sarcina 2 (d): rândul ieșit prin m → ml e acum în ml — cantitatea lui NU se mai scrie „300 m” (view: *_m = doar rândurile în m, *_pe_um)
+  it('F3 validată = fronturi, dar 1 rând F3 INVALIDAT a ieșit din rețea (m → ml, 300 ml) => BLOCK, numit cu unitatea lui', () => {
+    const r = controlCantitati({ ...baza, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 1, invalidate_in_afara_retea_m: null,
+      invalidate_in_afara_retea_pe_um: { ml: { suma: 300, randuri: 1, fara_cantitate: 0 } } })
     expect(r.stare).toBe('block'); expect(r.incomplet).toBe(true)
-    expect(r.detalii).toMatch(/^700 m în F3 și în grafic · 1 rând INVALIDAT a ieșit din setul de rețea \(300 m; aprobarea veche nu mai e valabilă/)
+    expect(r.detalii).toMatch(/^700 m în F3 și în grafic · 1 rând INVALIDAT a ieșit din setul de rețea \(300 ml; aprobarea veche nu mai e valabilă/)
   })
   it('rânduri de rețea fără tip de sursă, nevalidate (lic. 95: 6 / 48.195 m) => cu F3 ok devine WARN „INCOMPLET, de reverificat”', () => {
     const r = controlCantitati({ ...baza, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: 48195, invalidate_in_afara_retea: 0 })
@@ -556,12 +558,13 @@ describe('H2 R5 condiția 2 — semnal de lipsă, niciun „ok” verde incomple
 describe('H2 runda 6 — TOTAL invalidat, unitate schimbată, unitate de normalizat (decis în audit, reversibil)', () => {
   const baza = { lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0, ...NOI0 }
   it('rând TOTAL invalidat => BLOCK, numit (ca poarta graficului)', () => {
-    const r = controlCantitati({ ...baza, total_invalidate: 1, total_invalidate_m: 48000 })
+    const r = controlCantitati({ ...baza, total_invalidate: 1, total_invalidate_m: 48000, total_invalidate_pe_um: { m: { suma: 48000, randuri: 1, fara_cantitate: 0 } } })
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând TOTAL INVALIDAT \(48\.000 m, referință, nu se adună\)/)
   })
-  it('rând nevalidat ieșit din rețea prin unitate (m → ml) => BLOCK „unitate schimbată”', () => {
-    const r = controlCantitati({ ...baza, unitate_schimbata_in_afara_retea: 1, unitate_schimbata_in_afara_retea_m: 700 })
-    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând nevalidat a ieșit din setul de rețea prin schimbarea unității \(700 m; „unitate schimbată”\)/)
+  it('rând nevalidat ieșit din rețea prin unitate (m → ml) => BLOCK „unitate schimbată”, cu unitatea de acum (700 ml, nu „700 m”)', () => {
+    const r = controlCantitati({ ...baza, unitate_schimbata_in_afara_retea: 1, unitate_schimbata_in_afara_retea_m: null,
+      unitate_schimbata_in_afara_retea_pe_um: { ml: { suma: 700, randuri: 1, fara_cantitate: 0 } } })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând nevalidat a ieșit din setul de rețea prin schimbarea unității \(700 ml; „unitate schimbată”\)/)
   })
   it('unitatea scrisă „M” / „m ” în rețea: în F3 => BLOCK (v_ofertare_pt_stare nu le adună); doar în alte surse => WARN', () => {
     const f = controlCantitati({ ...baza, um_de_normalizat: 2, um_de_normalizat_m: 400, um_de_normalizat_f3: 1 })

@@ -78,11 +78,21 @@ export function randuriLipsa(cantitati, cantitatiAsumate) {
   const retea = randuriFront(cantitati, baza)
   const inRetea = new Set(retea)
   const cifra = c => { const v = c[baza] ?? c.cantitate; return v == null || v === '' ? null : Number(v) }
-  const afara = (cantitati || []).filter(c => !inRetea.has(c))
-  // unitatea afișată normalizată („M” / „m ” = m), ca sumele pe unitate să nu se despartă pe scriere
-  const umAfis = c => (c.um == null || String(c.um).trim() === '' ? '—' : eMetri(c) ? 'm' : String(c.um).trim())
+  // unitatea afișată normalizată („M” / „m ” = m; sarcina 2 (d): și sinonimele exacte — bucata = buc, m cub = mc), ca sumele pe unitate
+  // să nu se despartă pe scriere; unitățile DIFERITE rămân separate (textCantitatiPeUnitati)
+  const umAfis = c => umAfisata(c.um) || '—'
+  // sarcina 2 (d): rândurile de rețea NEVALIDATE fără cantitate determinată (lic. 3 reală: #6, #7 „Tub protecție … Dn250”, m, NULL) nu
+  // intrau în randuriFront (cer cantitate > 0), deci dispăreau TACIT din lipsă (view-ul le număra: memoriu_nevalidate). Acum sunt
+  // listate ca „fără cantitate determinată” — numărate separat, nu „0 m”. Același criteriu de rețea ca randuriFront (titluri / categorie).
+  const eTitlu = c => /titlu/i.test(c.categorie || '') && rxFrontTitlu.test(c.denumire || '')
+  const peTitluri = retea.length > 0 && retea.every(eTitlu)
+  const faraCant = (cantitati || []).filter(c => !inRetea.has(c) && !esteAprobata(c) && eMetri(c) && !/total/i.test(c.obiect || '') &&
+    (c[baza] ?? c.cantitate) == null && (peTitluri ? eTitlu(c) : rxFrontCateg.test(c.categorie || '')))
+  const inFaraCant = new Set(faraCant)
+  const afara = (cantitati || []).filter(c => !inRetea.has(c) && !inFaraCant.has(c))
   const lipsa = [
     ...retea.filter(c => !esteAprobata(c)).map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: 'm', cantitate: cifra(c), motiv: 'nevalidat' })),
+    ...faraCant.map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: 'm', cantitate: null, motiv: 'nevalidat, fără cantitate determinată' })),
     ...afara.filter(c => esteInvalidat(c) && !eRandTotal(c))
       .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: umAfis(c), cantitate: cifra(c), motiv: 'invalidat, ieșit din rețea' })),
     // runda 6 (decis în audit, reversibil; minorul 4 al verificatorului): rândul TOTAL invalidat e LISTAT (ca în view,
@@ -93,17 +103,88 @@ export function randuriLipsa(cantitati, cantitatiAsumate) {
     ...afara.filter(c => !esteInvalidat(c) && esteUnitateSchimbata(c) && !eRandTotal(c))
       .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: umAfis(c), cantitate: cifra(c), motiv: 'unitate schimbată, ieșit din rețea' })),
   ]
-  const peUm = {}
-  for (const x of lipsa) if (x.cantitate != null && !x.referinta) peUm[x.um] = (peUm[x.um] || 0) + x.cantitate
-  return { lipsa, peUm, m: peUm.m || 0 }
+  // sarcina 2 (d): sume pe unitate (fără conversii) + rândurile fără cantitate numărate separat; TOTAL-ul (referinta) nu se adună
+  const { peUm, faraCantitate } = grupeDinRanduri(lipsa.filter(x => !x.referinta))
+  return { lipsa, peUm, faraCantitate, m: peUm.m || 0 }
 }
-const cantPeUm = peUm => Object.entries(peUm).map(([um, v]) => `${fmt(v)} ${um}`).join(' + ') || 'cantitate necunoscută'
-export function textLipsa({ lipsa, peUm }, max = 5) {
+// ── R5 sarcina 2 (d) (Copilot, închiderea R4/R5): mesajele de lipsă NU agregă „X m” peste unități diferite ──
+// Clase: lungimi (m, ml, km, sute m), suprafețe (mp, ha, sute mp), volume (mc, l, sute mc), bucăți, alte unități, fără unitate; fiecare
+// unitate rămâne SEPARATĂ în clasa ei (nicio conversie: „1.000 m + 50 ml”, nu „1.050 m” — Copilot: fără conversie automată m ↔ ml).
+// Doar sinonimele exacte ale aceleiași unități se unesc (bucata = buc, m cub = mc, m2 = mp, m.l. = ml). Rândurile FĂRĂ cantitate se
+// numără separat („N poziții fără cantitate determinată”), nu intră ca 0 în nicio sumă.
+const SIN_UM = { bucata: 'buc', bucati: 'buc', 'bucăți': 'buc', 'buc.': 'buc', bc: 'buc', 'm cub': 'mc', m3: 'mc', 'm³': 'mc', 'm2': 'mp', 'm²': 'mp',
+  'm.l.': 'ml', 'ml.': 'ml', metri: 'm', metru: 'm', 'm.': 'm' }
+export const umAfisata = um => { const u = normUm(um); return u ? (SIN_UM[u] || u) : '' }
+const CLASE_UM = [['lungimi', /^(m|ml|km|sute m)$/], ['suprafete', /^(mp|ha|sute mp)$/], ['volume', /^(mc|l|litri|sute mc)$/], ['bucati', /^buc$/]]
+export const clasaUnitate = um => { const u = umAfisata(um); if (!u) return 'fara_unitate'; for (const [c, rx] of CLASE_UM) if (rx.test(u)) return c; return 'alte' }
+const ETICHETA_CLASA = { lungimi: 'lungimi', suprafete: 'suprafețe', volume: 'volume', bucati: 'bucăți', alte: 'alte unități', fara_unitate: 'fără unitate' }
+const fmtQ = v => (+Number(v).toFixed(2)).toLocaleString('ro-RO')
+// grupe = { peUm: { um: suma }, faraCantitate: n } — din rânduri ([{um, cantitate}]) sau din view (*_pe_um: {um: {suma, randuri, fara_cantitate}})
+export function grupeDinRanduri(items) {
+  const peUm = {}; let faraCantitate = 0
+  for (const x of items || []) {
+    if (x?.cantitate == null || x.cantitate === '' || !Number.isFinite(Number(x.cantitate))) { faraCantitate++; continue }
+    const u = umAfisata(x.um) || '—'
+    peUm[u] = (peUm[u] || 0) + Number(x.cantitate)
+  }
+  return { peUm, faraCantitate }
+}
+export function grupeDinView(peUmView) {
+  const peUm = {}; let faraCantitate = 0
+  for (const [um, v] of Object.entries(peUmView && typeof peUmView === 'object' ? peUmView : {})) {
+    faraCantitate += Number(v?.fara_cantitate) || 0
+    if (v?.suma == null || !Number.isFinite(Number(v.suma))) continue
+    const u = umAfisata(um) || '—'
+    peUm[u] = (peUm[u] || 0) + Number(v.suma)
+  }
+  return { peUm, faraCantitate }
+}
+// „1.000 m” (o singură unitate) | „lungimi 1.000 m + 50 ml; bucăți 3 buc; 2 poziții fără cantitate determinată”
+export function textCantitatiPeUnitati({ peUm = {}, faraCantitate = 0 } = {}) {
+  const intrari = Object.entries(peUm)
+  const fc = faraCantitate > 0 ? `${faraCantitate === 1 ? '1 poziție' : `${faraCantitate} poziții`} fără cantitate determinată` : ''
+  if (!intrari.length) return fc || 'cantitate necunoscută'
+  const fmtU = ([um, v]) => `${fmtQ(v)} ${um === '—' ? '(fără unitate)' : um}`
+  if (intrari.length === 1) return [fmtU(intrari[0]), fc].filter(Boolean).join('; ')
+  const peClasa = {}
+  for (const e of intrari) (peClasa[clasaUnitate(e[0] === '—' ? '' : e[0])] ||= []).push(e)
+  const ordine = ['lungimi', 'suprafete', 'volume', 'bucati', 'alte', 'fara_unitate']
+  return [...ordine.filter(c => peClasa[c]).map(c => `${ETICHETA_CLASA[c]} ${peClasa[c].map(fmtU).join(' + ')}`), fc].filter(Boolean).join('; ')
+}
+export function textLipsa({ lipsa }, max = 5) {
   if (!lipsa.length) return ''
   const den = d => { const t = String(d || ''); return t.length > 60 ? t.slice(0, 59) + '…' : t }
-  const rand = x => `#${x.id} „${den(x.denumire)}” (${x.status || '—'}${x.motiv !== 'nevalidat' ? `, ${x.motiv}` : ''}, ${x.cantitate == null ? '?' : fmt(x.cantitate)} ${x.um})`
-  return `${lipsa.length === 1 ? 'lipsește 1 rând necesar nevalidat' : `lipsesc ${lipsa.length} rânduri necesare nevalidate`} (${cantPeUm(peUm)}): ` +
+  const rand = x => `#${x.id} „${den(x.denumire)}” (${x.status || '—'}${x.motiv !== 'nevalidat' && !x.motiv.startsWith('nevalidat, fără cantitate') ? `, ${x.motiv}` : ''}, ${x.cantitate == null ? 'fără cantitate determinată' : `${fmtQ(x.cantitate)} ${x.um}`})`
+  // rândurile TOTAL (referinta) sunt listate, dar nu intră în sume
+  const cant = textCantitatiPeUnitati(grupeDinRanduri(lipsa.filter(x => !x.referinta)))
+  return `${lipsa.length === 1 ? 'lipsește 1 rând necesar nevalidat' : `lipsesc ${lipsa.length} rânduri necesare nevalidate`} (${cant}): ` +
     lipsa.slice(0, max).map(rand).join('; ') + (lipsa.length > max ? `; … încă ${lipsa.length - max} (📋 Cantități → „N nevalidate”)` : '')
+}
+
+// ── R5 sarcina 2 (a) + (c) (Copilot, închiderea R4/R5): SURSA cantităților ──
+// „Nimic scris ≠ nicio problemă”: conflictele transferului planșă → cantități care NU au produs niciun rând (v_ofertare_transfer_conflicte,
+// deschise = sursă incompletă) și istoricul aprobărilor (ofertare_cantitati_istoric, din care se recunosc rândurile invalidate).
+// `sursa` = { conflicte: rândurile view-ului pe licitație, eroare_conflicte, eroare_istoric } — sau null = NECITITĂ. Orice citire eșuată
+// (eroare, view inexistent — de ex. codul nou publicat înainte de migrarea 2) = „nu putem verifica” => BLOCK, NU zero restanțe.
+const numeDoc = c => { const t = String(c?.nume_original || `document #${c?.document_id ?? '?'}`).split('/').pop(); return t.length > 50 ? t.slice(0, 49) + '…' : t }
+export function textConflicteTransfer(desc) {
+  const n = desc.reduce((q, c) => q + (Number(c.n) || 0), 0)
+  const lista = desc.slice(0, 4).map(c => `„${numeDoc(c)}” (${Number(c.n) || 0}${c.stare === 'neefectuat' ? ', transfer nefăcut' : ''})`).join('; ') +
+    (desc.length > 4 ? `; … încă ${desc.length - 4}` : '')
+  return `sursă incompletă: ${n === 1 ? '1 conflict nerezolvat' : `${n} conflicte nerezolvate`} la transferul din ${desc.length === 1 ? '1 planșă' : `${desc.length} planșe`} (${lista}) — ` +
+    'nescrise în cantități, deci neaprobate de nimeni; recitește planșa sau confirmă explicit (✋ „confirmă conflictele”) în Documente'
+}
+export function stareSursa(sursa) {
+  if (!sursa) return { verificata: false, blocheaza: true, conflicte: [], text: 'nu putem verifica sursa cantităților (conflictele transferului din planșe și istoricul aprobărilor nu s-au citit)' }
+  const parti = []
+  if (sursa.eroare_istoric) parti.push(`nu putem verifica invalidările (istoricul aprobărilor indisponibil: ${sursa.eroare_istoric})`)
+  if (sursa.eroare_conflicte) parti.push(`nu putem verifica sursa (conflictele transferului din planșe indisponibile: ${sursa.eroare_conflicte})`)
+  const toate = Array.isArray(sursa.conflicte) ? sursa.conflicte : []
+  const desc = toate.filter(c => c?.deschis === true)
+  const inCurs = toate.filter(c => c?.in_curs === true)
+  if (desc.length) parti.push(textConflicteTransfer(desc))
+  if (inCurs.length) parti.push(`transfer în curs pe ${inCurs.map(c => `„${numeDoc(c)}”`).join(', ')} — reîncarcă după ce se termină`)
+  return { verificata: !sursa.eroare_istoric && !sursa.eroare_conflicte, blocheaza: parti.length > 0, conflicte: desc, text: parti.join(' · ') }
 }
 
 // ── Rândul „cant" din poarta graficului ──
@@ -113,7 +194,16 @@ export function textLipsa({ lipsa, peUm }, max = 5) {
 // rândul trebuie și validat (alegerea bazei spune CARE coloană, nu că cifra e verificată).
 // R5 condiția 2: textul listează rândurile lipsă (id, denumire, status, cantitate pe unitate) și numără și rândurile invalidate
 // ieșite din rețea; `lista` = toate, pentru afișarea completă în poartă.
-export function controlCantitatiGrafic(cantitati, cantitatiAsumate) {
+// Sarcina 2: al treilea parametru `sursa` (stareSursa) — conflictele transferului / citirile eșuate BLOCHEAZĂ chiar cu zero rânduri
+// nevalidate; `undefined` = apel fără sursă (compatibil), `null` = sursa necitită => „nu putem verifica”.
+export function controlCantitatiGrafic(cantitati, cantitatiAsumate, sursa) {
+  const r = controlCantitatiGraficRanduri(cantitati, cantitatiAsumate)
+  if (sursa === undefined) return r
+  const ss = stareSursa(sursa)
+  if (!ss.blocheaza) return { ...r, sursa: ss }
+  return { ...r, sursa: ss, stare: 'block', detalii: `${r.detalii} · ${ss.text}` }
+}
+function controlCantitatiGraficRanduri(cantitati, cantitatiAsumate) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
   const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && eMetri(c)) || null
@@ -136,7 +226,7 @@ export function controlCantitatiGrafic(cantitati, cantitatiAsumate) {
 // R5 runda 4 (verificator R3): fiecare front poartă PROVENIENȚA — cantitate_id (rândul-sursă), baza (coloana folosită) și
 // lungime_sursa (cifra rândului la propunere). grafic_parametri.parametri e jsonb: câmpurile noi nu cer schimbare de schemă,
 // iar consumatorii fronturilor (motorPEHD, v_ofertare_pt_stare.gp) citesc doar nume / lungime_m / dn / echipe.
-export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
+export function fronturiDinCantitati(cantitati, cantitatiAsumate, sursa) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
   const excluse = retea.filter(c => !esteAprobata(c))
@@ -154,7 +244,10 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
   })
   // R5 condiția 2: și rândurile invalidate ieșite din rețea sunt numite (nu devin fronturi, dar nici nu dispar tacit)
   const L = randuriLipsa(cantitati, cantitatiAsumate)
-  return { fronturi, excluse, m_excluse: excluse.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0), lipsa: L.lipsa, text_lipsa: textLipsa(L, 4) }
+  // sarcina 2: și sursa incompletă (conflicte de transfer / citiri eșuate) face fronturile INCOMPLETE — numită, nu tăcută
+  const ss = sursa === undefined ? null : stareSursa(sursa)
+  return { fronturi, excluse, m_excluse: excluse.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0), lipsa: L.lipsa, text_lipsa: textLipsa(L, 4),
+    text_sursa: ss?.blocheaza ? ss.text : '' }
 }
 
 // ── Rândul „front" din poarta graficului (R5 runda 4, verificator R3) ──
@@ -164,7 +257,7 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
 //     cifră e BLOCK până la re-propunere. Cazuri: salvat înainte de 26.09 fără legătură (lic. 3: 6 fronturi / 29.985 m din
 //     04.09, baza „planșe"), rând-sursă nevalidat / șters / redeschis, altă bază, cifra rândului schimbată de la propunere.
 //     Un front introdus MANUAL (＋, `manual: true`) e decizia omului: trece, dar e numărat în detalii.
-export function controlFronturiGrafic(p, cantitati) {
+export function controlFronturiGrafic(p, cantitati, sursa) {
   const baza = bazaCol(p?.cantitati_asumate)
   const retea = randuriFront(cantitati, baza)
   const totalRetea = (cantitati || []).find(c => /total/i.test(c.obiect || '') && eMetri(c)) || null
@@ -191,14 +284,17 @@ export function controlFronturiGrafic(p, cantitati) {
   })
   // R5 condiția 2: referința (rețeaua validată) și fronturile exclud rândurile nevalidate => rezultatul NU e complet; niciun „ok” verde
   const L = randuriLipsa(cantitati, p?.cantitati_asumate)
-  const incomplet = L.lipsa.length ? `INCOMPLET, de reverificat — ${textLipsa(L, 3)}; ` : ''
-  const base = { k: 'front', ref, lf, probleme, manuale, totalAprobat, lipsa: L.lipsa, incomplet: !!L.lipsa.length }
+  // sarcina 2: sursa incompletă (conflicte de transfer nerezolvate / istoric sau conflicte necitite) — referința NU e completă
+  const ss = sursa === undefined ? null : stareSursa(sursa)
+  const incSursa = !!ss?.blocheaza
+  const incomplet = L.lipsa.length || incSursa ? `INCOMPLET, de reverificat — ${[L.lipsa.length ? textLipsa(L, 3) : '', incSursa ? ss.text : ''].filter(Boolean).join(' · ')}; ` : ''
+  const base = { k: 'front', ref, lf, probleme, manuale, totalAprobat, lipsa: L.lipsa, incomplet: !!(L.lipsa.length || incSursa) }
   if (!fronturi.length) return { ...base, stare: 'block', detalii: incomplet + 'nedefinite — „Propune din cantități" apoi ajustezi' }
   if (probleme.length) return { ...base, stare: 'block',
     detalii: incomplet + `${probleme.length} din ${fronturi.length} fronturi nu vin din cantități validate cu cifra de acum — apasă „Propune din cantități" (sau adaugă-le manual cu ＋): ` +
       probleme.slice(0, 4).join('; ') + (probleme.length > 4 ? `; … încă ${probleme.length - 4}` : '') }
   const dev = ref ? Math.abs(lf - ref) / ref : 1
-  return { ...base, stare: dev > 0.1 || L.lipsa.length ? 'warn' : 'ok',
+  return { ...base, stare: dev > 0.1 || base.incomplet ? 'warn' : 'ok',
     detalii: incomplet + `${fronturi.length} fronturi, ${fmt(lf)} m (${ref ? `${Math.round(lf / ref * 100)}% din ${refTxt}` : 'fără referință validată'})` +
       (manuale ? ` · ${manuale} introduse manual` : '') }
 }
@@ -214,7 +310,7 @@ export function reverificareGraficInghetat(parametri, cantitati) {
   const parti = []
   if (c.probleme.length) parti.push(`${c.probleme.length} din ${parametri.fronturi.length} fronturi nu mai vin din cantități validate cu cifra de acum: ` +
     c.probleme.slice(0, 3).join('; ') + (c.probleme.length > 3 ? `; … încă ${c.probleme.length - 3}` : ''))
-  if (c.lipsa.length) parti.push(textLipsa({ lipsa: c.lipsa, peUm: randuriLipsa(cantitati, parametri.cantitati_asumate).peUm }, 3))
+  if (c.lipsa.length) parti.push(textLipsa({ lipsa: c.lipsa }, 3))
   return { grafic_de_reverificat: c.probleme.length + c.lipsa.length, grafic_de_reverificat_text: parti.join(' · ') }
 }
 
@@ -223,8 +319,11 @@ export function reverificareGraficInghetat(parametri, cantitati) {
 // filtrul de rețea din v_ofertare_pt_stare.qm. Se lipește peste rândul din v_ofertare_pt_stare, ca
 // v_ofertare_pt_cerinte_neconfirmate. Eroare / view lipsă = câmpuri ABSENTE => controlCantitati nu poate
 // verifica F3 și blochează (control indisponibil ≠ zero). Rând lipsă = licitația n-are rânduri de rețea = 0.
+// Sarcina 2 (c): eroare / view lipsă => pe lângă câmpurile absente, `cantitati_nevalidate_indisponibil` (motivul) — controlCantitati spune
+// explicit „nu putem verifica cantitățile / sursa” și blochează (inclusiv când F3 lipsește), nu întoarce zero restanțe.
 export function campuriCantitatiNevalidate(r) {
-  if (!r || r.error) return {}
+  if (!r) return { cantitati_nevalidate_indisponibil: 'nicio citire' }
+  if (r.error) return { cantitati_nevalidate_indisponibil: String(r.error?.message || r.error || 'eroare').slice(0, 160) }
   const d = r.data || {}
   const n = v => (v == null ? 0 : Number(v))
   const m = v => (v == null ? null : Number(v))
@@ -252,5 +351,17 @@ export function campuriCantitatiNevalidate(r) {
     um_de_normalizat: nou('um_de_normalizat', n),
     um_de_normalizat_m: nou('um_de_normalizat_m', m),
     um_de_normalizat_f3: nou('um_de_normalizat_f3', n),
+    // sarcina 2 (d): defalcarea pe unitate a grupurilor din afara rețelei (*_m = doar rândurile în m) + rândurile fără cantitate
+    invalidate_in_afara_retea_pe_um: nou('invalidate_in_afara_retea_pe_um', v => v || {}),
+    total_invalidate_pe_um: nou('total_invalidate_pe_um', v => v || {}),
+    unitate_schimbata_in_afara_retea_pe_um: nou('unitate_schimbata_in_afara_retea_pe_um', v => v || {}),
+    lista_f3_nevalidate_fara_cant: nou('lista_f3_nevalidate_fara_cant', n),
+    fara_tip_nevalidate_fara_cant: nou('fara_tip_nevalidate_fara_cant', n),
+    um_de_normalizat_fara_cant: nou('um_de_normalizat_fara_cant', n),
+    // sarcina 2 (a): planșele cu conflicte de transfer DESCHISE (v_ofertare_transfer_conflicte) — și când nu există niciun rând
+    transfer_conflicte_docs: nou('transfer_conflicte_docs', n),
+    transfer_conflicte_n: nou('transfer_conflicte_n', n),
+    transfer_conflicte_lista: nou('transfer_conflicte_lista', v => v ?? null),
+    transfer_in_curs: nou('transfer_in_curs', n),
   }
 }

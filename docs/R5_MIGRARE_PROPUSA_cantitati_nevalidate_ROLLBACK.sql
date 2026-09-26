@@ -4,8 +4,15 @@
 --    (md5 al corpului fără comentarii și spații = 0875c2200e072289cd5b972b49cabb0c, identic cu pg_proc.prosrc live).
 -- ATENȚIE: după rollback-ul view-ului, codul ramurii claude/cantitati-nevalidate-consumatori (dacă e deja pe main) face H2 să
 -- blocheze cu „nu putem verifica" pe licitațiile cu F3 — rollback-ul de BD se face ÎMPREUNĂ cu revert-ul codului.
+-- Sarcina 2 (26.09.2026): scoate și v_ofertare_transfer_conflicte, ofertare_transfer_conflicte_confirma, ofertare_transfer_stare.
+--   Datele NU se ating: cheia analiza.transfer_cantitati (scrisă de codul nou al ofertare-plansa-citeste) rămâne în documente — e jsonb,
+--   codul vechi o ignoră și o păstrează (toate scrierile fac { ...analiza, ... }); o eventuală reaplicare o citește din nou.
+--   Ciornele marcate ',revizie_planse_auto' de v6 își păstrează marcajul (se scoate din Clarificări, „✓ revizuită”, sau cu SQL, cu GO).
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 DROP VIEW IF EXISTS public.v_ofertare_cantitati_nevalidate;
+DROP VIEW IF EXISTS public.v_ofertare_transfer_conflicte;
+DROP FUNCTION IF EXISTS public.ofertare_transfer_conflicte_confirma(bigint, text, text);
+DROP FUNCTION IF EXISTS public.ofertare_transfer_stare(jsonb);
 
 CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_id bigint)
  RETURNS jsonb

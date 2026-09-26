@@ -77,13 +77,15 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   // R5 runda 5 (verificator, MAJOR 2): pragul se măsoară față de valoarea APROBATĂ (de la ultima validare, din istoric), nu față de
   // valoarea de dinainte: altfel 5 editări de câte 0,99 m mutau cifra fără ca rândul să iasă din „validat”. Istoric indisponibil
   // (migrarea neaplicată) => null => comparația cu rândul de acum (în BD, trigger-ul face aceeași comparație cu istoricul).
+  // R5 sarcina 2 (c): citirea eșuată NU mai e „fără referință” tăcut: { ref, eroare } — saveC cere confirmare explicită (în BD, trigger-ul
+  // compară oricum cu valoarea aprobată din istoric, deci decizia finală nu depinde de citirea de aici).
   const referintaAprobare = async (id) => {
     try {
       // runda 6: descrescător + paginat (citestePaginat) — un plafon PostgREST nu mai poate tăia tocmai ultima validare
       const { data, error } = await citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv, valori_vechi, valori_noi')
         .eq('cantitate_id', id).order('id', { ascending: false }).range(a, b))
-      return error ? null : (referinteDinIstoric(data).get(Number(id)) || null)
-    } catch { return null }
+      return error ? { ref: null, eroare: error.message || String(error) } : { ref: referinteDinIstoric(data).get(Number(id)) || null, eroare: null }
+    } catch (e) { return { ref: null, eroare: e?.message || String(e) } }
   }
   const saveC = async (c) => {
     if (!c._mod) return
@@ -97,7 +99,12 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     // runda 6 (decis în audit, reversibil): rândul NEAPROBAT care își schimbă unitatea din / în „m” (normalizat: „M” = „m”) iese /
     // intră în rețea — nota primește „Unitatea s-a schimbat (…) … de reverificat.”, ca să nu dispară tacit din semnalul de lipsă
     // (după migrare, trigger-ul scrie și evenimentul 'unitate_schimbata' în istoric)
-    const r = aplicaRegulaAprobare(o, aplicaRegulaUnitate(o, patch).patch, o.status === 'validat' ? await referintaAprobare(c.id) : null)
+    const ra = o.status === 'validat' ? await referintaAprobare(c.id) : { ref: null, eroare: null }
+    if (ra.eroare && !window.confirm(`Nu putem verifica valoarea APROBATĂ a rândului (istoricul aprobărilor indisponibil: ${ra.eroare}).\n\n` +
+      'Compar modificarea cu rândul de acum; în baza de date regula se aplică oricum față de valoarea aprobată. Salvezi totuși?')) {
+      setCant(cs => cs.map(x => x.id === c.id ? { ...o, _orig: o } : x)); return
+    }
+    const r = aplicaRegulaAprobare(o, aplicaRegulaUnitate(o, patch).patch, ra.ref)
     if (r.invalidat && !window.confirm(`Rândul e VALIDAT. Modificarea schimbă ce s-a aprobat: ${descrieSchimbari(r.schimbari)}.
 
 ` +

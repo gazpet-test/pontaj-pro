@@ -2,7 +2,7 @@
 // R5 (Copilot 25.09.2026): cantitățile nevalidate nu pleacă spre model ca valori „din listă" / aprobate.
 // Fixture = rândul REAL 1751 al lic. 95 (SELECT pe ofertare_cantitati, 25.09.2026).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
-import { propuneClarificari, randCantitatePentruAI } from './core.ts'
+import { propuneClarificari, randCantitatePentruAI, sectiuneConflictePlanse } from './core.ts'
 
 const R1751 = { id: 1751, licitatie_id: 95, obiect: null, categorie: 'Conducte și montaj', denumire: 'Conductă distribuție gaze Dn200', um: 'm',
   cantitate: 17785, cantitate_plansa: 17785, status: 'extras', tip_sursa: null,
@@ -31,7 +31,7 @@ Deno.test('R5: diferenta / revizuit_clarificare / status lipsă = NU marcat vali
 })
 
 // capăt-la-capăt, fără rețea: supabase simulat + fetch simulat care prinde promptul trimis la model (dry_run: nu scrie nimic)
-function supaFals(tabele: Record<string, any[]>) {
+function supaFals(tabele: Record<string, any[]>, erori: Record<string, string> = {}) {
   const selecturi: Record<string, string> = {}
   return {
     selecturi,
@@ -44,7 +44,8 @@ function supaFals(tabele: Record<string, any[]>) {
         maybeSingle: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
         insert: () => Promise.resolve({ data: null, error: null }),
         upsert: () => ({ select: () => Promise.resolve({ data: [], error: null }) }),
-        then: (ok: any, ko: any) => Promise.resolve({ data: (tabele[t] || []).slice(0, lim), error: null, ...(cuCount ? { count: (tabele[t] || []).length } : {}) }).then(ok, ko),
+        then: (ok: any, ko: any) => Promise.resolve(erori[t] ? { data: null, error: { message: erori[t] } }
+          : { data: (tabele[t] || []).slice(0, lim), error: null, ...(cuCount ? { count: (tabele[t] || []).length } : {}) }).then(ok, ko),
       }
       return b
     },
@@ -100,4 +101,31 @@ Deno.test('R5 condiția 2: 45 de rânduri cu diferențe => promptul spune „40 
   assert(m45.includes('DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (40 din 45 — LISTA E TRUNCHIATĂ: 5 rânduri cu diferențe NU sunt aici'), m45.slice(m45.indexOf('DIFERENȚE'), m45.indexOf('DIFERENȚE') + 160))
   const m3 = await rulare(3)
   assert(m3.includes('DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (3; status_validat'), 'sub limită: fără mențiune')
+})
+
+// R5 sarcina 2 (a) + (c): conflictele transferului din planșe (fără rând) ajung la generator; citirea eșuată e spusă, nu înghițită
+Deno.test('sarcina 2: conflictele transferului fără rând intră în prompt; view-ul lipsă => „NU AU PUTUT FI CITITE”, nu „niciunul”', async () => {
+  const rulare = async (tabele: Record<string, any[]>, erori: Record<string, string> = {}) => {
+    const supa = supaFals({ ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze' }],
+      ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Lungimea rețelei conform planșelor' }], ofertare_acoperire: [], ofertare_cantitati: [],
+      ofertare_verificari: [], ofertare_documente_atribuire: [], ofertare_clarificari: [], ...tabele }, erori)
+    let corp = ''
+    const fetchVechi = globalThis.fetch
+    globalThis.fetch = ((_u: unknown, init?: RequestInit) => {
+      corp = String(init?.body || '')
+      return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: '{"clarificari":[]}' }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))
+    }) as typeof fetch
+    try { await propuneClarificari(supa, { licitatie_id: 95, dry_run: true }) } finally { globalThis.fetch = fetchVechi }
+    return JSON.parse(corp).messages[0].content as string
+  }
+  // doc 470 (lic. 95): derivarea legacy de azi = 2 conflicte deschise (Dn60 nestandard, adnotări pe Dn absent), zero rânduri
+  const m = await rulare({ v_ofertare_transfer_conflicte: [{ document_id: 470, nume_original: 'Schema tehnologica Valcelele alimentare din Stefan Voda.pdf', stare: 'conflicte', n: 2, deschis: true,
+    conflicte: [{ tip: 'dn_nestandard', text: 'Dn nestandard Dn60: 110 m — NU intră în cantități (de verificat Dn-ul pe planșă)' }] },
+    { document_id: 471, nume_original: 'PL5.pdf', stare: 'fara_conflicte', n: 0, deschis: false }] })
+  assert(m.includes('CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE (2 pe 1 planșe; NESCRISE în cantități'), m.slice(m.indexOf('CONFLICTE'), m.indexOf('CONFLICTE') + 160))
+  assert(m.includes('Dn nestandard Dn60: 110 m'))
+  assertFalse(m.includes('PL5.pdf'), 'cele închise nu intră')
+  const e = await rulare({}, { v_ofertare_transfer_conflicte: 'relation "public.v_ofertare_transfer_conflicte" does not exist' })
+  assert(e.includes('CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE: NU AU PUTUT FI CITITE (relation "public.v_ofertare_transfer_conflicte" does not exist) — nu presupune că nu există'))
+  assertEquals(sectiuneConflictePlanse({ data: [], error: null }), 'CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE: niciunul deschis.')
 })

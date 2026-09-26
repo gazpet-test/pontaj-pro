@@ -40,7 +40,9 @@ async function campuriGraficReverificare(licId) {
     ])
     if (rV.error || rC.error) return { grafic_reverificare_eroare: (rV.error || rC.error).message || 'eroare la citire' }
     if (!rV.data?.parametri) return {}
-    return reverificareGraficInghetat(rV.data.parametri, marcheazaInvalidate(rC.data || [], rI.error ? [] : rI.data))
+    // R5 sarcina 2 (c): istoricul necitit NU mai e „[]” tăcut (rândurile invalidate ar fi dispărut din reverificare) => control indisponibil
+    if (rI.error) return { grafic_reverificare_eroare: `istoricul aprobărilor indisponibil: ${rI.error.message || rI.error}` }
+    return reverificareGraficInghetat(rV.data.parametri, marcheazaInvalidate(rC.data || [], rI.data))
   } catch (e) { return { grafic_reverificare_eroare: e?.message || String(e) } }
 }
 // P0 pas 2: rândul „documentatie” al porții. Eroare / lipsă = documentatie_verificata false → poarta spune „nu putem verifica”.
